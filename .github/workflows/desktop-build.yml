@@ -56,6 +56,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.triple }}
+          components: rust-docs
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -83,6 +84,13 @@ jobs:
           set -euo pipefail
           EXT=""; [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
           pnpm --filter @scarlet/server build:sea -- --out "$PWD/apps/desktop/src-tauri/binaries/scarlet-engine-${{ matrix.triple }}$EXT"
+
+      - name: Check Windows engine startup before building native dependencies
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          ./.github/scripts/use-windows-test-owner.ps1
+          node apps/desktop/scripts/smoke-engine-startup.mjs "apps/desktop/src-tauri/binaries/scarlet-engine-${{ matrix.triple }}.exe"
 
       - name: Fetch external media tools for the smoke test
         run: node apps/desktop/scripts/fetch-ffmpeg.mjs --target ${{ matrix.triple }}
@@ -142,21 +150,26 @@ jobs:
           for f in "$APP"/Contents/MacOS/*; do codesign -dv "$f" 2>&1 | grep -E "^(Identifier|Format|flags|Signature)" | sed "s|^|$(basename "$f"): |"; done
           echo "engine entitlements:"; codesign -d --entitlements - "$APP/Contents/MacOS/scarlet-engine"
 
-      - name: Smoke test the bundled engine (ingest, render with captions, MCP)
+      - name: Stage external media tools for the package smoke test
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            DIR="$BUNDLE/macos/Scarlet.app/Contents/MacOS"
-          else
-            DIR="apps/desktop/src-tauri/target/${{ matrix.triple }}/release"
-          fi
           MEDIA_TOOLS="$RUNNER_TEMP/scarlet-media-tools"
           mkdir -p "$MEDIA_TOOLS"
           EXT=""; [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
           for tool in ffmpeg ffprobe; do
             cp "apps/desktop/src-tauri/binaries/$tool-${{ matrix.triple }}$EXT" "$MEDIA_TOOLS/$tool$EXT"
           done
-          node apps/desktop/scripts/smoke-engine.mjs "$DIR" "$MEDIA_TOOLS"
+
+      - name: Smoke test the bundled Mac engine (ingest, render with captions, MCP)
+        if: runner.os == 'macOS'
+        run: node apps/desktop/scripts/smoke-engine.mjs "$BUNDLE/macos/Scarlet.app/Contents/MacOS" "$RUNNER_TEMP/scarlet-media-tools"
+
+      - name: Smoke test the bundled Windows engine (ingest, render with captions, MCP)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          ./.github/scripts/use-windows-test-owner.ps1
+          node apps/desktop/scripts/smoke-engine.mjs "apps/desktop/src-tauri/target/${{ matrix.triple }}/release" "$env:RUNNER_TEMP/scarlet-media-tools"
 
       - name: Sign and notarize the Mac release
         if: inputs.release && runner.os == 'macOS'

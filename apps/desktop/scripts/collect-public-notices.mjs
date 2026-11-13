@@ -158,11 +158,15 @@ async function main() {
   const dest = join(bundled, "runtime");
   const js = await javascriptRecords(), crates = rustRecords(target);
   const node = await nodeNotice();
+  const sysroot = execFileSync("rustc", ["--print", "sysroot"], { encoding: "utf8" }).trim();
+  const standardLibraryNotice = join(sysroot, "share/doc/rust/COPYRIGHT-library.html");
+  if (!existsSync(standardLibraryNotice)) throw new Error("Install the rust-docs component for the release toolchain to include its standard-library notices.");
   rmSync(dest, { recursive: true, force: true });
   mkdirSync(dest, { recursive: true });
   writeFileSync(join(dest, "node.txt"), `Node.js ${process.version}\nhttps://github.com/nodejs/node/blob/${process.version}/LICENSE\n\n${node}\n`);
   writeFileSync(join(dest, "javascript.txt"), renderNotices(js));
   writeFileSync(join(dest, "rust.txt"), renderNotices(crates));
+  cpSync(standardLibraryNotice, join(dest, "rust-standard-library.html"));
   cpSync(join(sources, "whisper-audio-dependencies.txt"), join(dest, "whisper-audio-dependencies.txt"));
   cpSync(join(sources, "sherpa-dependencies.txt"), join(dest, "sherpa-dependencies.txt"));
   cpSync(join(sources, "onnxruntime-1.28.2-third-party.txt"), join(dest, "speaker-onnxruntime-1.28.2-third-party.txt"));

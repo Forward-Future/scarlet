@@ -33,14 +33,14 @@ function requireExternalMediaTools(names, description) {
   if (media) throw new Error(`${description} unexpectedly bundles ${media}`);
 }
 
-const runtimeNotices = ["node.txt", "javascript.txt", "rust.txt", "whisper-audio-dependencies.txt",
+const runtimeNotices = ["node.txt", "javascript.txt", "rust.txt", "rust-standard-library.html", "whisper-audio-dependencies.txt",
   "sherpa-dependencies.txt", "speaker-onnxruntime-1.28.2-third-party.txt"];
 
 function verifyWindowsPayload(names, description) {
   requireExternalMediaTools(names, description);
   // MSI returns short|long file names; NSIS returns paths.
   const files = new Set(names.map(name => name.split(/[\\/|]/).pop().toLowerCase()));
-  for (const required of [...runtimeNotices, "uhm.txt", "ThirdPartyNotices.txt", "LICENSE-CODE.txt"]) {
+  for (const required of [...runtimeNotices, "uhm.txt", "ThirdPartyNotices.txt", "LICENSE-CODE.txt", "LICENSE-LLVM.txt", "nsis-3.13.txt"]) {
     if (!files.has(required.toLowerCase())) throw new Error(`${description} is missing ${required}`);
   }
 }

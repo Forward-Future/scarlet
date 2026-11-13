@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { smokeEnvironment, startSmokeEngine } from "./smoke-engine-startup.mjs";
 import { registerStorage } from "./register-storage.mjs";
 import { createRequire } from "node:module";
 
@@ -52,19 +53,7 @@ try {
   const clip = join(work, "clip.mp4");
   execFileSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=4", "-f", "lavfi", "-i", "sine=frequency=440:duration=4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-y", clip]);
 
-  // Start with the system paths. Public installer tests add only the external media directory.
-  const env = { SCARLET_TELEMETRY_ENABLED: "false", HOME: process.env.HOME ?? work, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
-  if (process.platform === "win32") {
-    // The desktop inherits the OS environment. Windows PowerShell needs those
-    // paths to initialize when the engine protects a new library.
-    for (const key of ["SystemRoot", "WINDIR", "SystemDrive", "COMSPEC", "ProgramData", "ProgramFiles",
-      "ALLUSERSPROFILE", "PSModulePath", "PATHEXT", "USERPROFILE", "LOCALAPPDATA", "APPDATA"]) {
-      if (process.env[key]) env[key] = process.env[key];
-    }
-    env.PATH = `${process.env.SystemRoot}\\System32;${process.env.SystemRoot}`;
-    env.TEMP = work;
-    env.TMP = work;
-  }
+  const env = smokeEnvironment(work);
   if (externalTools) {
     for (const name of ["ffmpeg", "ffprobe"]) {
       if (existsSync(join(dir, name + exe))) fail(`unexpected bundled media tool: ${name}`);
@@ -73,21 +62,8 @@ try {
   }
   execFileSync(whisper, ["--help"], { env, stdio: "ignore" });
   const data = join(work, "data");
-  // The desktop creates both directories before starting the engine.
-  const cwd = join(work, "work");
-  mkdirSync(cwd, { mode: 0o700 });
-  mkdirSync(data, { mode: 0o755 });
-  server = spawn(engine, ["serve", "--solo", "--data", data, "--port", "0"], { cwd, env, stdio: ["pipe", "pipe", "inherit"] });
-  const ready = await new Promise((res, rej) => {
-    const timer = setTimeout(() => rej(new Error("engine did not print SCARLET_READY within 60 s")), 60_000);
-    createInterface({ input: server.stdout }).on("line", (line) => {
-      if (line.startsWith("SCARLET_READY ")) {
-        clearTimeout(timer);
-        res(JSON.parse(line.slice("SCARLET_READY ".length)));
-      }
-    });
-    server.on("exit", (code) => rej(new Error(`engine exited early (${code})`)));
-  });
+  const { child, ready } = await startSmokeEngine(engine, work, env);
+  server = child;
   step(`engine ready on ${ready.url}`);
 
   const api = async (method, path, body) => {
