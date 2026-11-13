@@ -40,7 +40,7 @@ function verifyWindowsPayload(names, description) {
   requireExternalMediaTools(names, description);
   // MSI returns short|long file names; NSIS returns paths.
   const files = new Set(names.map(name => name.split(/[\\/|]/).pop().toLowerCase()));
-  for (const required of [...runtimeNotices, "uhm.txt", "ThirdPartyNotices.txt", "LICENSE-CODE.txt", "LICENSE-LLVM.txt", "nsis-3.13.txt"]) {
+  for (const required of [...runtimeNotices, "uhm.txt", "uhm-model-license.txt", "ThirdPartyNotices.txt", "LICENSE-CODE.txt", "LICENSE-LLVM.txt", "nsis-3.13.txt"]) {
     if (!files.has(required.toLowerCase())) throw new Error(`${description} is missing ${required}`);
   }
 }
@@ -56,6 +56,7 @@ function verifyDmg(dmg, productName, expected, arch) {
     requireExternalMediaTools(readdirSync(join(contents, "MacOS")), dmg);
     const licenses = join(contents, "Resources", "licenses");
     requireFile(join(licenses, "uhm.txt"));
+    requireFile(join(licenses, "uhm-model-license.txt"));
     for (const name of runtimeNotices) requireFile(join(licenses, "runtime", name));
     const version = output("plutil", ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", join(contents, "Info.plist")]);
     checkVersion(dmg, version, expected);

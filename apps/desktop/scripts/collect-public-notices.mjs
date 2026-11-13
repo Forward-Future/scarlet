@@ -87,6 +87,10 @@ async function javascriptRecords() {
   }
   // The CSS and the native ONNX packages are distributed separately from these JS chunks.
   const addPackage = (req, name) => dirs.add(packageDir(req.resolve(name)));
+  // These bundlers emit runtime helper code into the engine and renderer.
+  addPackage(requireServer, "esbuild");
+  addPackage(requireWeb, "vite");
+  addPackage(createRequire(requireWeb.resolve("vite")), "rollup");
   const tailwind = createRequire(requireWeb.resolve("@tailwindcss/vite"));
   addPackage(tailwind, "tailwindcss");
   const speaker = createRequire(requireServer.resolve("sherpa-onnx-node"));

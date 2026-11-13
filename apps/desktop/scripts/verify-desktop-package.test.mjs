@@ -39,7 +39,7 @@ for (const [target, dmgArch, arch, name] of [
       app="$6/Scarlet.app/Contents"
       mkdir -p "$app/MacOS" "$app/Resources/licenses/runtime"
       cp "$7" "$app/Info.plist"
-      cp "$7" "$app/Resources/licenses/uhm.txt"
+      for notice in uhm.txt uhm-model-license.txt; do cp "$7" "$app/Resources/licenses/$notice"; done
       cp "$7" "$app/Resources/licenses/runtime/rust-standard-library.html"
       for name in node javascript rust whisper-audio-dependencies sherpa-dependencies speaker-onnxruntime-1.28.2-third-party; do
         cp "$7" "$app/Resources/licenses/runtime/$name.txt"
@@ -66,12 +66,12 @@ test("checks Windows app and both installer resources before staging either inst
   const setup = join(release, "bundle/nsis/Scarlet_0.1.4_x64-setup.exe");
   const msi = join(release, "bundle/msi/Scarlet_0.1.4_x64_en-US.msi");
   tool("powershell.exe", `case "$SCARLET_VERIFY_FILE" in
-    *.msi) case "$4" in *OpenDatabase*ProductVersion*) ;; *) exit 2;; esac; printf '{"version":"%s","names":["node.txt","JAVASC~1.TXT|javascript.txt","rust.txt","rust-standard-library.html","whisper-audio-dependencies.txt","sherpa-dependencies.txt","speaker-onnxruntime-1.28.2-third-party.txt","uhm.txt","ThirdPartyNotices.txt","LICENSE-CODE.txt","LICENSE-LLVM.txt","nsis-3.13.txt"]}' "$(cat "$SCARLET_VERIFY_FILE")"; exit 0;;
+    *.msi) case "$4" in *OpenDatabase*ProductVersion*) ;; *) exit 2;; esac; printf '{"version":"%s","names":["node.txt","JAVASC~1.TXT|javascript.txt","rust.txt","rust-standard-library.html","whisper-audio-dependencies.txt","sherpa-dependencies.txt","speaker-onnxruntime-1.28.2-third-party.txt","uhm.txt","uhm-model-license.txt","ThirdPartyNotices.txt","LICENSE-CODE.txt","LICENSE-LLVM.txt","nsis-3.13.txt"]}' "$(cat "$SCARLET_VERIFY_FILE")"; exit 0;;
     *.exe) case "$4" in *GetVersionInfo*ProductVersion*) ;; *) exit 2;; esac;;
     *) exit 2;;
   esac
   cat "$SCARLET_VERIFY_FILE"`);
-  tool("7z", 'for file in scarlet-desktop.exe node.txt javascript.txt rust.txt rust-standard-library.html whisper-audio-dependencies.txt sherpa-dependencies.txt speaker-onnxruntime-1.28.2-third-party.txt uhm.txt ThirdPartyNotices.txt LICENSE-CODE.txt LICENSE-LLVM.txt nsis-3.13.txt; do echo "Path = $file"; done');
+  tool("7z", 'for file in scarlet-desktop.exe node.txt javascript.txt rust.txt rust-standard-library.html whisper-audio-dependencies.txt sherpa-dependencies.txt speaker-onnxruntime-1.28.2-third-party.txt uhm.txt uhm-model-license.txt ThirdPartyNotices.txt LICENSE-CODE.txt LICENSE-LLVM.txt nsis-3.13.txt; do echo "Path = $file"; done');
   file(app, "0.1.4.0");
   file(setup);
   file(msi);
