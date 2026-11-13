@@ -668,3 +668,23 @@ describe("describeError and formatZodError", () => {
       .toBe("Scarlet server error 400 (validation_error): request validation failed");
   });
 });
+
+describe("screen_text", () => {
+  it("lists the text on screen in source seconds with its place in the frame, says how much is read, and pages", async () => {
+    const c = await connect();
+    const spans = Array.from({ length: 203 }, (_, i) => ({ start: i, end: i + 1, text: `Line ${i}`, box: [0.1, 0.05, 0.456, 0.08], confidence: 0.9 }));
+    mock.state.extra = (req, res) => req.path.endsWith("/media/m1/screen-text")
+      ? reply(res, { mediaId: "m1", from: 0, to: 120, spans, readSeconds: 60, done: false }) : false;
+    const first = textOf(await ok(c, "screen_text", { mediaId: "m1", query: "Line" }));
+    expect(first.split("\n").slice(0, 2)).toEqual([
+      "m1 0.0-120.0 s, lines with “Line”: 203 lines; 60 of 120 s read so far, still reading: call again for the rest.",
+      "0.0-1.0 [10-46% x, 5-8% y] Line 0"]);
+    expect(first.split("\n").at(-1)).toBe("offset 200 for the next 3.");
+    expect(sent("/projects/prj_test/media/m1/screen-text", "GET").at(-1)?.query.get("q")).toBe("Line");
+    expect(textOf(await ok(c, "screen_text", { mediaId: "m1", offset: 200 })).split("\n").slice(1)).toEqual([
+      "200.0-201.0 [10-46% x, 5-8% y] Line 200", "201.0-202.0 [10-46% x, 5-8% y] Line 201", "202.0-203.0 [10-46% x, 5-8% y] Line 202"]);
+    // A recording without a picture is named, before the engine is asked.
+    expect(textOf(await call(c, "screen_text", { mediaId: "m2" }))).toContain("only a video has a picture to read");
+    expect(toolAnnotations("screen_text").readOnlyHint).toBe(true);
+  });
+});
