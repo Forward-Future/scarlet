@@ -352,10 +352,13 @@ it("reads a run's steps again after the connection comes back, so what Scarlet d
 });
 
 it("takes the engine's list of learnings after the connection comes back, so a rule it saved or sent back meanwhile doesn't stay on Saving", async () => {
-  const { db, project } = open();
-  const rule = (id: string, extra: Partial<Learning> = {}): Learning => ({ id, projectId: PRJ, rule: "Leave the breath before a punchline.",
+  // A reconnect remembers task history by project. Keep this fixture separate from the task-history tests.
+  const projectId = "prj_learnings";
+  const db = buildDb();
+  const project = { ...db.projects.find(p => p.id === PRJ)!, id: projectId };
+  const rule = (id: string, extra: Partial<Learning> = {}): Learning => ({ id, projectId, rule: "Leave the breath before a punchline.",
     said: "Keep the breath before the punchline.", taskId: db.tasks[0]!.id, skillId: "skl_dialogue", state: "saving", ...extra });
-  open({ learnings: [rule("lrn_saved"), rule("lrn_back"), rule("lrn_waiting", { state: "suggested" })] });
+  open({ id: projectId, project, learnings: [rule("lrn_saved"), rule("lrn_back"), rule("lrn_waiting", { state: "suggested" })] });
   vi.spyOn(api, "workspace").mockResolvedValue({ project, timeline: null });
   vi.spyOn(api, "changes").mockResolvedValue({ changes: [] });
   vi.spyOn(api, "notes").mockResolvedValue({ notes: [] });
@@ -363,12 +366,12 @@ it("takes the engine's list of learnings after the connection comes back, so a r
   vi.spyOn(api, "projectUsage").mockResolvedValue({ groups: [] } as never);
   let answer!: (response: { learnings: Learning[] }) => void;
   vi.spyOn(api, "learnings").mockImplementation(() => new Promise(resolve => { answer = resolve; }));
-  await initial.load(PRJ);
+  await initial.load(projectId);
   // Until the engine's list arrives the rules read as they did.
   expect(store().learnings?.map(l => [l.id, l.state])).toEqual([["lrn_saved", "saving"], ["lrn_back", "saving"], ["lrn_waiting", "suggested"]]);
   // What happens here while the list is read is newer than the list: the editor approves a rule, and Scarlet offers another.
-  initial.applyEvent({ type: "learning.updated", projectId: PRJ, learning: rule("lrn_waiting") });
-  initial.applyEvent({ type: "learning.updated", projectId: PRJ, learning: rule("lrn_new", { state: "suggested" }) });
+  initial.applyEvent({ type: "learning.updated", projectId, learning: rule("lrn_waiting") });
+  initial.applyEvent({ type: "learning.updated", projectId, learning: rule("lrn_new", { state: "suggested" }) });
   // While the socket was down Scarlet saved one rule, which it no longer lists, and sent one back. No event said so.
   answer({ learnings: [rule("lrn_back", { state: "suggested", error: "It already says that." }), rule("lrn_waiting", { state: "suggested" })] });
   await vi.waitFor(() => expect(store().learnings?.map(l => [l.id, l.state, l.error])).toEqual([
