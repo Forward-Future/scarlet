@@ -4780,6 +4780,8 @@ it("revises just the applied edit that's showing, even with a pass waiting, and 
     { changeId: "chg_approved_2", spot: 0, label: "Keep the image test", range: { start: 8, end: 12 }, at: 10,
       beforeCut: { version: "v_before", removed: { start: 10, end: 12.4 } }, previous: [] },
   ] });
+  // This case opens the passage while its transcript request is still in flight.
+  vi.spyOn(api, "transcript").mockReturnValue(new Promise(() => {}));
   const beforeTimeline = vi.spyOn(api, "timeline").mockResolvedValue({ timeline: { ...data.timeline!, version: "v_before" } } as never);
   const audition = vi.spyOn(player, "audition");
   await show();
