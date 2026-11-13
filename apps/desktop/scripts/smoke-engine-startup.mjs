@@ -42,8 +42,8 @@ function startupProgress(data) {
 export async function startSmokeEngine(engine, work, env) {
   const data = join(work, "data");
   const cwd = join(work, "work");
-  mkdirSync(cwd, { mode: 0o700 });
-  mkdirSync(data, { mode: 0o755 });
+  mkdirSync(cwd, { mode: 0o700, recursive: true });
+  mkdirSync(data, { mode: 0o755, recursive: true });
   const child = spawn(engine, ["serve", "--solo", "--data", data, "--port", "0"], {
     cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
   });
