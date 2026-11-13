@@ -54,7 +54,7 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
         if (ranges.success) mapRanges(data.version, ranges.data, protectedRanges);
       }
     }
-    // A pending ripple already covers this hearing. It belongs to the pass's review and obeys the retake setting there.
+    // A pending ripple already covers this hearing. It belongs to the pass's review.
     const changes = ctx.repos.changes.select(`project_id = ? AND (json_extract(json,'$.taskId') IN (SELECT value FROM json_each(?)) OR json_extract(json,'$.threadId') = ?)
       AND (state = 'ready' OR json_array_length(json_extract(json,'$.restoredCuts')) > 0)`, [projectId, ids, owner.context.threadId ?? root]);
     for (const change of changes) {
@@ -76,8 +76,6 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
         ids: fresh.map(k => k.id), decisions: fresh } });
       for (const k of fresh) kept.add(k.id);
     }
-    const retakes = ctx.settings().dialogue.aiCuts.retake;
-    const off = retakes === "off";
     const overlaps = (word: TimeRange, ranges: TimeRange[]) => ranges.some(p => p.start < word.end && p.end > word.start);
     // The proposal lives on the picture frame grid. Its first or last speech frame can straddle that grid.
     const frame = 1 / project.settings.fps;
@@ -85,7 +83,7 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
       p.start < w.end && p.end > w.start && p.start <= w.start + frame && p.end >= w.end - frame)));
     const pending = new Set(staged.map(r => r.id));
     const repeats = check.repeats.flatMap(r => {
-      if (off || kept.has(r.id) || pending.has(r.id)) return [];
+      if (kept.has(r.id) || pending.has(r.id)) return [];
       const first = overlaps(r.first, protectedRanges), second = overlaps(r.second, protectedRanges);
       if (first && second) return [];
       return [{ ...r, occurrences: { first: first ? undefined : r.occurrences.first, second: second ? undefined : r.occurrences.second },
@@ -97,10 +95,10 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
     // A join inside a range staged for review isn't played yet; the review reads it.
     const joins = check.joins.filter(j => !stagedRanges.some(r => r.start - frame <= j.at && j.at <= r.end + frame));
     const noFindings = !check.repeats.length && !joins.length && !unavailable.length;
-    saveTask(ctx, { ...owner, state: "running", repeatAudit: { version: tl.version, remaining: repeats.length, retakes, unavailable, returns, noFindings } });
+    saveTask(ctx, { ...owner, state: "running", repeatAudit: { version: tl.version, remaining: repeats.length, unavailable, returns, noFindings } });
     return { version: tl.version, heard: check.repeats.length, staged: staged.length, remaining: repeats.length,
       repeats: repeats.slice(request.offset, request.offset + 25), ...(request.offset + 25 < repeats.length && { nextOffset: request.offset + 25 }),
-      ...(off && { retakes: "off" }), ...(check.unavailable.length && { unavailable: check.unavailable }),
+      ...(check.unavailable.length && { unavailable: check.unavailable }),
       ...(check.joins.length && { joins }) };
   }, "immediate")();
 }

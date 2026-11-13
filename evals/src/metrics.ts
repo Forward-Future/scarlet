@@ -586,12 +586,12 @@ export interface PlanCut extends Range {
   productionQuote?: string;
   reason?: string;
 }
-export interface SubmittedPlan { version: string; cuts: PlanCut[]; range?: Range; only?: string; at?: string }
+export interface SubmittedPlan { version: string; cuts: PlanCut[]; range?: Range; only?: string; crossfadeFrames?: number; at?: string }
 
 export function submittedPlans(events: readonly EventLike[]): SubmittedPlan[] {
   return events.filter(e => e.type === "tool" && toolName(String(e.data?.tool ?? "")) === "dialogue_apply_cuts").flatMap(e => {
-    const input = e.data?.input as { version?: string; cuts?: PlanCut[]; range?: Range; only?: string } | undefined;
-    return input?.version && Array.isArray(input.cuts) ? [{ version: input.version, cuts: input.cuts, range: input.range, only: input.only, at: e.at }] : [];
+    const input = e.data?.input as Partial<SubmittedPlan> | undefined;
+    return input?.version && Array.isArray(input.cuts) ? [{ version: input.version, cuts: input.cuts, range: input.range, only: input.only, crossfadeFrames: input.crossfadeFrames, at: e.at }] : [];
   });
 }
 

@@ -1,9 +1,8 @@
 /**
  * Replay regression: run a stored dialogue_apply_cuts plan through the CURRENT planning code offline —
- * the same planDialogueCuts (packages/mcp/src/dialogue-plan.ts) the tool calls, then the engine's per-kind
- * editor settings — and compare edges and decisions with what the run produced, or with an earlier replay.
+ * the same planDialogueCuts (packages/mcp/src/dialogue-plan.ts) the tool calls — and compare edges and decisions with what the run produced, or with an earlier replay.
  *
- *   tsx evals/src/replay.ts --case <id> [--plan plan.json] [--fingerprint <prefix>] [--tightness natural] [--ai-cuts filler=suggest] [--baseline <replay.json>]
+ *   tsx evals/src/replay.ts --case <id> [--plan plan.json] [--fingerprint <prefix>] [--baseline <replay.json>]
  *
  * The case must be built with --from-task … --with-scan. Scan windows become join evidence through the tool's own
  * dialogueScanPage. Offline there is no live measurement: an edge no scan window covers stays unmeasured.
@@ -14,11 +13,10 @@ import { join } from "node:path";
 import { DialogueEvidence } from "../../packages/mcp/src/dialogue-decisions.ts";
 import { dialogueGate, dialogueScanPage, planDialogueCuts, resolveCutRange, type DialogueCutInput, type DialoguePlanSources, type GateLine } from "../../packages/mcp/src/dialogue-plan.ts";
 import { gapSound, speakingLevel, type GapLevels } from "../../packages/mcp/src/gap-sound.ts";
-import { applyDialoguePreferences, DialoguePreferences, PAUSE_AIR_SCALE, type PauseTightness } from "../../packages/shared/src/dialoguePreferences.ts";
 import { cutAnchorOn } from "../../packages/shared/src/cutScope.ts";
 import { taskDialogueOperation } from "../../packages/shared/src/threads.ts";
 import type { Project, TranscriptWord } from "../../packages/timeline/src/index.ts";
-import { cli, isMain, list, main } from "./args.ts";
+import { cli, isMain, main } from "./args.ts";
 import { loadCase, type LoadedCase } from "./case.ts";
 import { artifactsFromCase, evaluateCaseOrigin } from "./evaluate.ts";
 import { windowKey, type ScanCapture, type ScanWaveforms } from "./evidence.ts";
@@ -28,13 +26,12 @@ import { readJson, REPO_ROOT, resultsDir, timestamp, writeJson, writeText } from
 import { keptSource, sourceSpan, type MediaInfo, type SourceRange } from "./timeline.ts";
 
 const USAGE = `Usage:
-  replay.ts --case <id> [--plan <plan.json>] [--fingerprint <prefix>] [--tightness loose|natural|tight]
-            [--ai-cuts <kind=cut|suggest|off,...>] [--drop-quotes] [--baseline <replay.json>] [--out <dir>]
+  replay.ts --case <id> [--plan <plan.json>] [--fingerprint <prefix>]
+            [--drop-quotes] [--baseline <replay.json>] [--out <dir>]
 
---plan replays another { version, cuts[, range, only] } on the case's source instead of the run's own plan.
+--plan replays another { version, cuts[, range, only, crossfadeFrames] } on the case's source instead of the run's own plan.
 --fingerprint chooses a saved scan-window set; by default every complete set is tried and the one that
 best reproduces the original run is used (the run's own detector settings).
---tightness and --ai-cuts are the editor's dialogue settings (default: natural, every kind "cut").
 --drop-quotes replays the captured plan without optional quotes for an offline comparison.`;
 
 type Tier = "applied" | "review" | "kept";
@@ -51,14 +48,14 @@ export interface ReplayedCut {
 }
 
 export interface ReplayResult {
-  schema: 2;
+  schema: 3;
   kind: "replay";
   generatedAt: string;
   caseId: string;
   taskId?: string;
   planVersion: string;
   code: { commit?: string; dirty: string[] };
-  settings: DialoguePreferences;
+  crossfadeFrames: number;
   fingerprint: string;
   dropQuotes: boolean;
   /** A disputed quote or repeated join goes back to the model before anything is saved. */
@@ -72,8 +69,6 @@ export interface ReplayResult {
   transitions: Record<string, number>;
   edges: { replay: { applied: EdgeSummary; review: EdgeSummary }; original?: { applied: EdgeSummary; review: EdgeSummary } };
   cuts: ReplayedCut[];
-  /** Quiet pauses Scarlet trims on the editor's pause setting, beside the plan's own cuts: source seconds. */
-  trims: Array<SourceRange & { tier: Tier; after: string; before: string; was: number; plays: number }>;
 }
 
 /** The tool's join evidence for each stored scan window. */
@@ -104,7 +99,6 @@ const near = (a: Range, b: Range, tol = 0.001) => Math.abs(a.start - b.start) <=
 export interface ReplayOptions {
   plan?: SubmittedPlan;
   fingerprint?: string;
-  settings?: DialoguePreferences;
   /** Compare the same plan offline with its optional quotes omitted. */
   dropQuotes?: boolean;
 }
@@ -115,7 +109,6 @@ export async function replayCase(loaded: LoadedCase, opts: ReplayOptions = {}): 
   if (!plan) throw new Error("The run submitted no dialogue_apply_cuts plan. Pass --plan.");
   const tl = loaded.timeline(plan.version);
   if (!tl) throw new Error(`Case ${loaded.file.id} lacks timeline ${plan.version}.`);
-  const settings = opts.settings ?? DialoguePreferences.parse({});
   const media: MediaInfo[] = loaded.file.media;
   const project = { id: loaded.file.projectId, name: "eval", settings: { fps: loaded.file.fps }, media } as unknown as Project;
   const context = origin.task.context;
@@ -156,7 +149,7 @@ export async function replayCase(loaded: LoadedCase, opts: ReplayOptions = {}): 
     const sources: DialoguePlanSources = {
       evidence, pages: () => evidence.scans, project: async () => project,
       words: async mediaId => (loaded.evidence.get(mediaId)?.words as TranscriptWord[] | undefined) ?? null,
-      measure: async () => {}, air: PAUSE_AIR_SCALE[settings.pauseTightness], aiCuts: settings.aiCuts,
+      measure: async () => {}, crossfadeFrames: plan.crossfadeFrames,
       sound: async (mediaId, range) => {
         const page = levels.get(mediaId)?.find(p => p.from <= range.start && p.to >= range.end);
         return page && gapSound(page, range, speakingLevel(page), 0);
@@ -173,17 +166,14 @@ export async function replayCase(loaded: LoadedCase, opts: ReplayOptions = {}): 
       error = (err as Error).message;
       planned = { outcome: "preserved" };
     }
-    // The engine then applies the editor's per-kind settings before splitting applied and review cuts.
     const ready = planned.outcome === "ready" ? planned : undefined;
-    const enforced = ready ? applyDialoguePreferences(ready.decisions, settings.aiCuts) : { cuts: [], decisions: [] };
-    // Scarlet's own pause trims go through the same per-kind setting as the agent's pause cuts.
-    const trims = (ready ? applyDialoguePreferences(ready.trims, settings.aiCuts).cuts : []).flatMap(t => {
-      const span = toSource(t);
-      return span ? [{ ...span, tier: (t.review ? "review" : "applied") as Tier, after: t.after, before: t.before, was: t.was, plays: t.plays }] : [];
-    });
-    const gate = ready ? dialogueGate(ready, enforced.decisions) : { unchangedCuts: 0, decisions: [] };
+    const decisions = ready?.decisions ?? [];
+    const gate = ready ? dialogueGate(ready) : { unchangedCuts: 0, decisions: [] };
     const byInput = new Map<number, { tier: Tier; start: number; end: number; reason: string }>();
-    for (const c of enforced.cuts) byInput.set(ready!.removals[c.index]!.input, { tier: c.review ? "review" : "applied", start: c.start, end: c.end, reason: c.reason });
+    ready?.removals.forEach((removal, i) => {
+      const c = decisions[i]!;
+      byInput.set(removal.input, { tier: c.review ? "review" : "applied", start: c.start, end: c.end, reason: c.reason });
+    });
     const cuts: ReplayedCut[] = [];
     for (const [index, c] of cutsIn.entries()) {
       const mine = byInput.get(index);
@@ -203,13 +193,13 @@ export async function replayCase(loaded: LoadedCase, opts: ReplayOptions = {}): 
       });
     }
     const same = cuts.filter(c => c.original!.tier === c.replay.tier && (c.replay.tier === "kept" || near(c.original!, c.replay))).length;
-    return { planned, error, enforced, gate, cuts, trims, agreement: cuts.length ? same / cuts.length : 0 };
+    return { planned, error, decisions, gate, cuts, agreement: cuts.length ? same / cuts.length : 0 };
   };
 
   const tried: Array<{ fp: string; result: Awaited<ReturnType<typeof run>> }> = [];
   for (const fp of candidates) tried.push({ fp, result: await run(fp) });
   const best = [...tried].sort((a, b) => b.result.agreement - a.result.agreement)[0]!;
-  const { planned, error, enforced, gate, cuts, trims } = best.result;
+  const { planned, error, decisions, gate, cuts } = best.result;
 
   const changed: Record<string, number> = {}, transitions: Record<string, number> = {};
   for (const line of gate.decisions) changed[`${line.asked}→${line.outcome}`] = (changed[`${line.asked}→${line.outcome}`] ?? 0) + 1;
@@ -228,10 +218,8 @@ export async function replayCase(loaded: LoadedCase, opts: ReplayOptions = {}): 
     }
     return out;
   };
-  const own = (tier: Tier) => new Map([...new Set(trims.map(t => t.mediaId))].map(id => [id, trims.filter(t => t.mediaId === id && t.tier === tier)]));
-  const less = (kept: Kept, removed: Map<string, Range[]>) => new Map([...kept].map(([id, ranges]) => [id, subtract(ranges, removed.get(id) ?? [])]));
-  const kA = less(without(kS, enforced.cuts.filter(d => !d.review)), own("applied"));
-  const kR = less(without(kA, enforced.cuts.filter(d => d.review)), own("review"));
+  const kA = without(kS, decisions.filter(d => !d.review));
+  const kR = without(kA, decisions.filter(d => d.review));
   const summarize = (before: Kept, after: Kept) => summarizeEdges(classifyEdges(joinEdges(before, after), loaded.evidence, DEFAULT_EDGE_OPTIONS));
   let originalEdges: ReplayResult["edges"]["original"];
   try {
@@ -240,15 +228,15 @@ export async function replayCase(loaded: LoadedCase, opts: ReplayOptions = {}): 
   } catch { /* An origin without changes has no edges to compare. */ }
 
   return {
-    schema: 2, kind: "replay", generatedAt: new Date().toISOString(), caseId: loaded.file.id, taskId: origin.task.id, planVersion: plan.version,
-    code: gitState(), settings, dropQuotes: !!opts.dropQuotes, fingerprint: best.fp,
+    schema: 3, kind: "replay", generatedAt: new Date().toISOString(), caseId: loaded.file.id, taskId: origin.task.id, planVersion: plan.version,
+    code: gitState(), crossfadeFrames: plan.crossfadeFrames ?? 0, dropQuotes: !!opts.dropQuotes, fingerprint: best.fp,
     outcome: error ? "rejected" : planned.outcome, ...(error && { error }),
     ...(planned.outcome === "needsRevision" && { disputedEdges: planned.disputedEdges }),
     agreement: Object.fromEntries(tried.map(t => [t.fp.slice(0, 12), Math.round(t.result.agreement * 1000) / 1000])),
     gate: { changed, moved: gate.decisions.filter(l => l.from).length, unchanged: gate.unchangedCuts },
     transitions,
     edges: { replay: { applied: summarize(kS, kA), review: summarize(kA, kR) }, original: originalEdges },
-    cuts, trims,
+    cuts,
   };
 }
 
@@ -269,11 +257,10 @@ export function replayMarkdown(r: ReplayResult, diff?: ReturnType<typeof compare
   const lines = [
     `# Replay · case ${r.caseId}${r.taskId ? ` · ${r.taskId}` : ""}`, "",
     `Code ${r.code.commit ?? "?"}${r.code.dirty.length ? ` + ${r.code.dirty.length} uncommitted files in packages/` : ""} · plan on ${r.planVersion} · ` +
-      `scan windows ${r.fingerprint.slice(0, 12)}${r.dropQuotes ? " · optional quotes dropped" : ""} · pause tightness ${r.settings.pauseTightness}, AI cuts ${fmt(Object.fromEntries(Object.entries(r.settings.aiCuts).map(([k, v]) => [`${k}=${v}`, 1])))} · ${r.generatedAt}`, "",
+      `scan windows ${r.fingerprint.slice(0, 12)}${r.dropQuotes ? " · optional quotes dropped" : ""} · crossfade ${r.crossfadeFrames} frames · ${r.generatedAt}`, "",
     `Outcome: **${r.outcome}**${r.error ? ` (${r.error})` : ""}${r.disputedEdges ? ` — ${r.disputedEdges.length} disputed edge${r.disputedEdges.length === 1 ? "" : "s"}` : ""}.`, "",
     `Agreement with the original run (tier and edges ±1 ms) by scan-window set: ${Object.entries(r.agreement).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(", ")}.`, "",
     `- Planner changes (gate): ${fmt(r.gate.changed)}; ${r.gate.moved} moved an edge; ${r.gate.unchanged} removals unchanged`,
-    `- Quiet pauses Scarlet trimmed on the editor's setting: ${r.trims.length}${r.trims.length ? ` (${r.trims.reduce((sum, t) => sum + t.end - t.start, 0).toFixed(1)} s)` : ""}`,
     `- Original → replay: ${fmt(r.transitions)}`,
     `- Replayed edges: applied ${e(r.edges.replay.applied)}; review ${e(r.edges.replay.review)}`,
     ...(r.edges.original ? [`- Original edges: applied ${e(r.edges.original.applied)}; review ${e(r.edges.original.review)}`] : []),
@@ -295,18 +282,13 @@ export function replayMarkdown(r: ReplayResult, diff?: ReturnType<typeof compare
   return lines.join("\n") + "\n";
 }
 
-function parseSettings(tightness?: string, aiCuts?: string): DialoguePreferences {
-  const levels = Object.fromEntries(list(aiCuts).map(pair => pair.split("=") as [string, string]));
-  return DialoguePreferences.parse({ ...(tightness && { pauseTightness: tightness as PauseTightness }), aiCuts: levels });
-}
-
 export async function replayCli(argv = process.argv.slice(2)) {
   const { values } = cli({ case: { type: "string" }, plan: { type: "string" }, fingerprint: { type: "string" }, baseline: { type: "string" }, out: { type: "string" },
-    tightness: { type: "string" }, "ai-cuts": { type: "string" }, "drop-quotes": { type: "boolean" } }, USAGE, argv);
+    "drop-quotes": { type: "boolean" } }, USAGE, argv);
   if (!values.case) throw new Error(USAGE);
   const loaded = loadCase(values.case);
   const result = await replayCase(loaded, { plan: values.plan ? readJson<SubmittedPlan>(values.plan) : undefined, fingerprint: values.fingerprint,
-    settings: parseSettings(values.tightness, values["ai-cuts"]), dropQuotes: values["drop-quotes"] });
+    dropQuotes: values["drop-quotes"] });
   const baseline = values.baseline && existsSync(values.baseline) ? readJson<ReplayResult>(values.baseline) : undefined;
   const diff = baseline ? compareReplays(baseline, result) : undefined;
   const dir = values.out ?? join(resultsDir(), "replays", loaded.file.id);

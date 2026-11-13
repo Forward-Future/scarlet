@@ -21,7 +21,7 @@ function fixture() {
   tl.tracks[1]!.clips = [makeMediaClip("mic", 0, 5, 0)];
   const measured: Array<{ mediaId: string; t: number }> = [];
   const sources: DialoguePlanSources = { evidence: new DialogueEvidence(), pages: () => [page], project: async () => p,
-    words: async () => words, measure: async points => { measured.push(...points); }, air: 1 };
+    words: async () => words, measure: async points => { measured.push(...points); } };
   return { tl, sources, measured };
 }
 const cut = (c: Partial<DialogueCutInput>): DialogueCutInput => ({ kind: "retake", decision: "cut", reason: "Earlier take.", ...c });
@@ -110,13 +110,10 @@ describe("dialogue plan", () => {
     expect(await plan({ kind: "coaching" }, [cut({ start: .3, end: .7, kind: "coaching" })])).toMatchObject(conflict);
     expect(await plan({ keepRepeat: "it" })).toMatchObject({ outcome: "ready", decisions: [{ review: true }] });
     expect(await plan({ decision: "review" })).toMatchObject({ outcome: "ready" });
-    // While a neighboring staged removal meets this cut, the engine holds its fade.
+    // The applied cut already plays its fade while the neighboring staged cut waits.
     expect(await plan({ kind: "coaching" }, [cut({ start: 1.2, end: 2, kind: "coaching", decision: "review" })]))
-      .toMatchObject({ outcome: "ready" });
+      .toMatchObject(conflict);
     sources.crossfadeFrames = 0;
-    expect(await plan()).toMatchObject({ outcome: "ready" });
-    sources.crossfadeFrames = 2;
-    sources.aiCuts = { retake: "suggest", pause: "cut", coaching: "cut", filler: "cut" };
     expect(await plan()).toMatchObject({ outcome: "ready" });
   });
 
@@ -164,8 +161,7 @@ describe("dialogue plan", () => {
     // The same restart ending before an outgoing edge.
     expect(await plan({ ...coaching, start: 3.3, end: 4.6 })).toMatchObject({ outcome: "needsRevision",
       disputedEdges: [{ pickup: { ...pickup, side: "start" } }] });
-    sources.aiCuts = { retake: "off", pause: "cut", filler: "cut", coaching: "cut" };
-    expect(await plan(coaching)).toMatchObject({ outcome: "ready" });
+    expect(await plan({ ...coaching, decision: "review" })).toMatchObject({ outcome: "ready" });
   });
 
   it("returns a retake that would double its opening word to the agent, with both timings from the scan", async () => {
@@ -187,11 +183,8 @@ describe("dialogue plan", () => {
     expect(await plan(retake)).toMatchObject(conflict);
     expect(await plan({ ...retake, keepRepeat: "attempt" })).toMatchObject(conflict);
     expect(await plan({ ...retake, keepRepeat: "next!" })).toMatchObject({ outcome: "ready", decisions: [{ review: false }] });
-    // Neither a staged cut nor one disabled in settings makes this join.
+    // A staged cut has not made this join.
     expect(await plan({ ...retake, decision: "review" })).toMatchObject({ outcome: "ready" });
-    sources.aiCuts = { retake: "off", pause: "cut", filler: "cut", coaching: "cut" };
-    expect(await plan(retake)).toMatchObject({ outcome: "ready" });
-    delete sources.aiCuts;
     // Two touching cuts make one join; removing the first saying as well resolves it.
     expect(await plan({ ...retake, end: 2.7 }, cut({ kind: "coaching", start: 2.7, end: 3.3 }))).toMatchObject(conflict);
     expect(await plan(cut({ kind: "coaching", start: .7, end: 1.2 }), retake)).toMatchObject({ outcome: "ready" });
@@ -210,7 +203,7 @@ describe("dialogue plan", () => {
     expect(retake!.start).toBeGreaterThan(1.44);
     expect(retake!.end).toBeLessThan(3.4);
     expect(pause).toEqual({ start: 4.2, end: 4.6, reason: "Earlier take.", review: false, kind: "pause", originalRange: undefined });
-    const gate = dialogueGate(plan, []);
+    const gate = dialogueGate(plan);
     expect(gate.unchangedCuts).toBe(1);
     expect(gate.decisions).toEqual([expect.objectContaining({ cut: 0, asked: "cut", outcome: "review", from: [1.15, 3.6] })]);
   });
@@ -237,7 +230,7 @@ describe("dialogue plan", () => {
     ]) {
       if (plan.outcome !== "ready") throw new Error(plan.outcome);
       expect(plan.decisions).toEqual([expect.objectContaining({ start: 1.81, end: 3.6, review: true, originalRange: undefined })]);
-      expect(dialogueGate(plan, []).decisions[0]?.evidence).toMatch(/measured edge would cross/);
+      expect(dialogueGate(plan).decisions[0]?.evidence).toMatch(/measured edge would cross/);
     }
   });
 
@@ -252,7 +245,7 @@ describe("dialogue plan", () => {
     expect(retake).toMatchObject({ start: 1.81, review: true });
     expect(retake!.originalRange!.start).toBe(1.81);
     expect(DialogueCutsRequest.safeParse({ fromVersion: "v1", description: "Plan", cuts: plan.decisions }).success).toBe(true);
-    expect(dialogueGate(plan, []).decisions).toEqual([expect.objectContaining({ cut: 1, outcome: "review", evidence: expect.stringContaining("Held at the neighboring range at 1.81 s.") })]);
+    expect(dialogueGate(plan).decisions).toEqual([expect.objectContaining({ cut: 1, outcome: "review", evidence: expect.stringContaining("Held at the neighboring range at 1.81 s.") })]);
   });
 
   it("trims a pause named by the word it follows down to the beat, and to the length the agent asks", async () => {
@@ -261,10 +254,10 @@ describe("dialogue plan", () => {
     const plan = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ kind: "pause", mediaId: "mic", afterWord: 1 })] }, sources);
     if (plan.outcome !== "ready") throw new Error(plan.outcome);
     expect(plan.decisions).toEqual([expect.objectContaining({ start: 2.35, end: 3.3, kind: "pause", review: false })]);
-    expect(dialogueGate(plan, []).decisions).toEqual([expect.objectContaining({ cut: 0, words: "pause after “first”", outcome: "cut", range: [2.35, 3.3] })]);
-    // Tight air shortens the beat. A named length holds whatever the tightness.
-    const tight = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ kind: "pause", mediaId: "mic", afterWord: 1 })] }, { ...sources, air: .6 });
-    const asked = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ kind: "pause", mediaId: "mic", afterWord: 1, leave: .6 })] }, { ...sources, air: .6 });
+    expect(dialogueGate(plan).decisions).toEqual([expect.objectContaining({ cut: 0, words: "pause after “first”", outcome: "cut", range: [2.35, 3.3] })]);
+    // The model chooses a shorter or longer beat at this join.
+    const tight = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ kind: "pause", mediaId: "mic", afterWord: 1, leave: .15 })] }, sources);
+    const asked = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ kind: "pause", mediaId: "mic", afterWord: 1, leave: .6 })] }, sources);
     if (tight.outcome !== "ready" || asked.outcome !== "ready") throw new Error("not ready");
     expect(tight.decisions[0]).toMatchObject({ start: 2.29, end: 3.34 });
     expect(asked.decisions[0]!.end - asked.decisions[0]!.start).toBeCloseTo(.6);
@@ -312,65 +305,12 @@ describe("dialogue plan", () => {
     }
   });
 
-  it("applies pause tightness to undecided quiet pauses and honors explicit ranges, durations, and keeps", async () => {
+  it("saves only the submitted cut when another quiet gap falls inside its range", async () => {
     const { tl, sources } = fixture();
-    // “first” to “next” is 1.2 s with nothing in it; the levels say so.
-    const quiet = { ...sources, sound: async () => ({ seconds: 0, runs: [] }) };
-    const other = cut({ start: 4.2, end: 4.6, kind: "pause" });
-    const plan = (cuts: DialogueCutInput[], from: DialoguePlanSources = quiet) => planDialogueCuts({ tl, localPauses: false, range: { start: 0, end: 5 }, cuts }, from)
-      .then(p => { if (p.outcome !== "ready") throw new Error(p.outcome); return p; });
-    // Left alone, it comes down to the beat as Scarlet's own cut, beside the agent's.
-    const alone = await plan([other]);
-    expect(alone.decisions).toHaveLength(1);
-    expect(alone.trims).toEqual([expect.objectContaining({ start: 2.35, end: 3.3, kind: "pause", review: false, reason: "Trimmed a quiet 1.2 s pause after “first”.",
-      mediaId: "mic", afterWord: 1, was: 1.2, plays: expect.closeTo(.25), after: "first", before: "next" })]);
-    // Tight air trims from 0.6 s and leaves less.
-    expect((await plan([other], { ...quiet, air: .6 })).trims.map(t => [t.after, t.plays])).toEqual([["first", expect.closeTo(.15)]]);
-    // Even when the default would trim it further, the pause's explicit one-second beat survives.
-    const asked = await plan([cut({ kind: "pause", mediaId: "mic", afterWord: 1, leave: 1 }), other]);
-    expect(asked.trims).toEqual([]);
-    expect(asked.decisions[0]).toMatchObject({ start: 2.8, end: 3, review: false });
-    expect(dialogueGate(asked, []).decisions[0]).toMatchObject({ outcome: "cut", range: [2.8, 3] });
-    const seconds = await plan([cut({ kind: "pause", start: 2.6, end: 2.7 }), other]);
-    expect(seconds.trims).toEqual([]);
-    expect(seconds.decisions[0]).toMatchObject({ start: 2.6, end: 2.7 });
-    // Half a second is the agent's to ask for, and a pause it keeps or protects stays whole.
-    expect((await plan([cut({ kind: "pause", mediaId: "mic", afterWord: 1, leave: .5 }), other])).decisions[0]!.end).toBeCloseTo(3.2);
-    expect((await plan([cut({ kind: "pause", start: 2.3, end: 3.3, decision: "keep" }), other])).trims).toEqual([]);
-    expect((await plan([cut({ kind: "pause", start: 2.3, end: 3.3, picture: "protect" }), other])).trims).toEqual([]);
-    // Sound in it at speaking level is something said or done: the agent's to read, not a pause to trim.
-    expect((await plan([other], { ...sources, sound: async () => ({ seconds: .4, runs: [{ start: 2.5, end: 2.9 }] }) })).trims).toEqual([]);
-    // Without levels there is no saying it is quiet, and a request about fillers alone leaves pauses be.
-    expect((await plan([other], sources)).trims).toEqual([]);
-    expect((await planDialogueCuts({ tl, localPauses: false, range: { start: 0, end: 5 }, only: "filler", cuts: [cut({ start: 4.2, end: 4.6, kind: "filler" })] }, quiet) as { trims: unknown[] }).trims).toEqual([]);
-  });
-
-  it("requires measured quiet on every audible recording before adding a pause trim", async () => {
-    const { tl, sources } = fixture();
-    (await sources.project()).media.push({ id: "second", kind: "audio", name: "Second mic", path: "second.wav", hasAudio: true });
-    tl.tracks[0]!.clips = [makeMediaClip("second", 0, 3, 1)];
-    sources.words = async id => id === "mic" ? words : null;
-    const quiet = { seconds: 0, runs: [] };
-    for (const other of [undefined, { seconds: .4, runs: [{ start: 1.5, end: 1.9 }] }, quiet]) {
-      const plan = await planDialogueCuts({ tl, localPauses: false, range: { start: 0, end: 5 },
-        cuts: [cut({ start: 4.2, end: 4.6, kind: "pause" })] }, { ...sources, sound: async (mediaId, range) => {
-          if (mediaId === "mic") return quiet;
-          expect(range.start).toBeCloseTo(1.25);
-          expect(range.end).toBeCloseTo(2.35);
-          return other;
-        } });
-      if (plan.outcome !== "ready") throw new Error(plan.outcome);
-      expect(plan.trims).toHaveLength(other === quiet ? 1 : 0);
-    }
-  });
-
-  it("trims an undecided quiet pause only in the selected placement of a reused recording", async () => {
-    const { tl, sources } = fixture();
-    tl.tracks[1]!.clips.push(makeMediaClip("mic", 0, 5, 5));
-    const plan = await planDialogueCuts({ tl, localPauses: false, range: { start: 5, end: 10 },
-      cuts: [cut({ start: 9.2, end: 9.6, kind: "pause" })] }, { ...sources, sound: async () => ({ seconds: 0, runs: [] }) });
-    if (plan.outcome !== "ready") throw new Error(plan.outcome);
-    expect(plan.trims).toMatchObject([{ start: 7.35, end: 8.3 }]);
+    sources.sound = async () => ({ seconds: 0, runs: [] });
+    const decided = cut({ kind: "pause", start: 4.2, end: 4.6 });
+    const plan = await planDialogueCuts({ tl, localPauses: false, range: { start: 0, end: 5 }, cuts: [decided] }, sources);
+    expect(plan).toMatchObject({ outcome: "ready", decisions: [{ kind: "pause", start: 4.2, end: 4.6 }] });
   });
 
   it("places a word reference in the measured silence beside the removed words", async () => {
@@ -381,7 +321,7 @@ describe("dialogue plan", () => {
     expect(d!.start).toBeGreaterThanOrEqual(1.44);
     expect(d!.end).toBeLessThanOrEqual(3.4);
     expect(d!.review).toBe(false);
-    expect(dialogueGate(plan, []).decisions).toEqual([expect.objectContaining({ cut: 0, words: "first", outcome: "cut" })]);
+    expect(dialogueGate(plan).decisions).toEqual([expect.objectContaining({ cut: 0, words: "first", outcome: "cut" })]);
   });
 
   it("measures at the kept words too when a pause is longer than the reading at its middle, and places the word reference beside them", async () => {
@@ -435,7 +375,7 @@ describe("dialogue plan", () => {
     expect(pause).toMatchObject({ start: 2.5, review: false, kind: "pause", originalRange: undefined });
     expect(pause!.end).toBeLessThan(3.4);
     expect(pause!.end).toBeGreaterThan(3);
-    expect(dialogueGate(plan, []).decisions).toEqual([expect.objectContaining({ cut: 0, kind: "pause", asked: "cut", outcome: "cut",
+    expect(dialogueGate(plan).decisions).toEqual([expect.objectContaining({ cut: 0, kind: "pause", asked: "cut", outcome: "cut",
       from: [2.5, 3.45], evidence: expect.stringMatching(/end moved 0\.\d+ s earlier into the pause to preserve “next”/) })]);
     // A pause that starts in the tail of the word before it is narrowed the other way, and one in the quiet is left alone.
     const tail = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ start: 2.22, end: 3.2, kind: "pause" })] }, sources);
@@ -473,7 +413,7 @@ describe("dialogue plan", () => {
       cut({ start: 2.5, end: 3.0, kind: "pause" }), cut({ start: 3.1667, end: 4.4, kind: "coaching" })] }, sources);
     if (plan.outcome !== "ready") throw new Error(plan.outcome);
     expect(plan.decisions.map(d => [d.start, d.end])).toEqual([[2.5, 3], [3.1667, 4.4]]);
-    expect(dialogueGate(plan, []).decisions).toEqual([]);
+    expect(dialogueGate(plan).decisions).toEqual([]);
     // With a word in between, both stay where they were asked.
     const spoken = await planDialogueCuts({ tl, localPauses: false, cuts: [
       cut({ start: 1.5, end: 1.7, kind: "pause" }), cut({ start: 2.3, end: 3.2, kind: "pause" })] }, sources);
@@ -525,14 +465,6 @@ describe("dialogue plan", () => {
     expect(plan.decisions[0]).toMatchObject({ start: 4.2, end: 149 / 30 });
     // Further past the end is still refused.
     await expect(planDialogueCuts({ tl, localPauses: false, cuts: [cut({ start: 4.2, end: 4.98, kind: "pause" })] }, sources)).rejects.toThrow("fall outside the range");
-  });
-
-  it("cites the editor's per-kind setting for a cut the engine staged", async () => {
-    const { tl, sources } = fixture();
-    const plan = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ start: 4.2, end: 4.6, kind: "pause" })] }, sources);
-    if (plan.outcome !== "ready") throw new Error(plan.outcome);
-    const gate = dialogueGate(plan, [{ index: 0, kind: "pause", level: "suggest", outcome: "review", start: 4.2, end: 4.6 }]);
-    expect(gate.decisions[0]).toMatchObject({ cut: 0, outcome: "review", evidence: expect.stringMatching(/Editor set pauses to Suggest/) });
   });
 
   it("lists what the plan keeps on purpose in timeline seconds, a keep by its words and a protected picture included", async () => {
@@ -601,7 +533,7 @@ describe("equivalent removals", () => {
     const rms = Array.from({ length: 250 }, (_, i) => said.some(w => w.start <= i / 50 && i / 50 < w.end) ? .12 : .001);
     const edges = joinEvidence(said, { from: 0, to: 5, peaks: rms, rms, speechActivity: [{ start: .5, end: 1.4 }, { start: 1.8, end: 2.3 }, { start: 2.8, end: 3 }] });
     const sources: DialoguePlanSources = { evidence: new DialogueEvidence(), pages: () => [{ mediaId: "mic", start: 0, end: 5, edges }], project: async () => p,
-      words: async () => said, measure: async () => {}, air: 1 };
+      words: async () => said, measure: async () => {} };
     const ref = { mediaId: "mic", fromWord: 1, toWord: 2 };
     const inspected = await resolveCutRange(tl, ref, "Range", sources, true);
     expect(inspected).toMatchObject({ words: "because when,", problems: expect.any(Array),

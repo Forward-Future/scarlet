@@ -150,6 +150,19 @@ export function migrateGlobalSkills(ctx: Ctx) {
         }
       }
     }
+    // Older libraries recorded the shipped name only in the first version. An editor could have renamed
+    // the skill since, so looking it up by its current command while seeding would miss that history.
+    const origins = ctx.db.prepare(`SELECT skills.id, v.content FROM skills
+      JOIN skill_versions v ON v.skill_id = skills.id AND v.version = 1
+      WHERE json_extract(skills.json, '$.bundledName') IS NULL AND json_extract(v.author, '$.type') = 'scarlet'
+      AND coalesce(json_extract(skills.json, '$.source'), '') IN ('', 'bundled', 'seed')
+      AND (v.content LIKE '%dialogue-pass%' OR v.content LIKE '%first-cut-dialogue%')`).all() as { id: string; content: string }[];
+    for (const origin of origins) {
+      const name = parseFrontmatter(origin.content).name;
+      if (name === "dialogue-pass" || name === "first-cut-dialogue") {
+        ctx.db.prepare("UPDATE skills SET json = json_set(json, '$.bundledName', ?) WHERE id = ?").run(name, origin.id);
+      }
+    }
     ctx.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS skills_name ON skills(name)");
   }, "immediate")();
 }
@@ -405,6 +418,8 @@ export function seedSkillList(ctx: Ctx, list: Array<{ folder: string; content: s
           const deleted = deletedStockSkills(ctx);
           if (deleted.has(name)) return 0;
           if (publicDialogue) {
+            // The editor may have renamed this guide. Its ID still owns the dialogue preferences and history.
+            if (ctx.repos.skills.select("json_extract(json, '$.bundledName') = 'dialogue-pass'").length) return 0;
             if (deleted.has("first-cut-dialogue")) return 0;
             const legacy = withBundledName(ctx, findDuplicate(ctx, "first-cut-dialogue"));
             // Directory seeds can include a personal workflow. Only rename one with a known shipped text.

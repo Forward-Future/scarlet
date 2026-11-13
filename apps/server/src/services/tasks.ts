@@ -288,7 +288,7 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
       const audible = new Set(project.media.filter(m => m.kind === "audio" || (m.kind === "video" && m.hasAudio !== false)).map(m => m.id));
       const plays = timeline.tracks.some(t => !t.muted && t.clips.some(c => c.kind === "media" && c.enabled && c.volume > 0 && audible.has(c.mediaId)));
       const receipt = task.repeatAudit?.version === project.head ? task.repeatAudit : undefined;
-      if (plays && (receipt?.remaining !== 0 || receipt.unavailable?.length || receipt.retakes !== ctx.settings().dialogue.aiCuts.retake)) {
+      if (plays && (receipt?.remaining !== 0 || receipt.unavailable?.length)) {
         if (receipt?.unavailable?.length || (receipt?.returns ?? 0) >= 2) {
           body = { ...body, state: "failed", interrupted: true, error: receipt?.unavailable?.join(" ") ||
             "The final audio check still has repeated dialogue to resolve. Resume to finish checking the saved edit." };
