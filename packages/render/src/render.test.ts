@@ -1817,7 +1817,8 @@ describe("render", () => {
     track.clips = [clip];
     const cache = path.join(dir, "local-segment-keys");
     const out = path.join(dir, "trimmed.mp4");
-    const opts = { mediaRoot: dir, height: 90, segmentSeconds: 2 };
+    // Lossless H.264 lets us compare the exact pictures across independent encodes.
+    const opts = { mediaRoot: dir, height: 90, segmentSeconds: 2, extraArgs: ["-crf", "0"] };
     await renderFullCached(project, timeline, cache, out, opts);
     clip.sourceOut -= 0.2;
     const onCachedRanges = vi.fn();
