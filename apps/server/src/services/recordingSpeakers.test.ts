@@ -106,15 +106,16 @@ it("lets a pass's other audio work wait for every analysis a pass is waiting for
   };
   // Nobody waits for an import's analysis in another project, so a pass's work doesn't either.
   const imported = ctx.speakers.turns(ctx, project.id, await recording("imported"));
+  await vi.waitFor(() => expect(finish).toHaveLength(1));
   await ctx.speakers.awaitedByPass("another project");
+  finish.shift()!();
+  await imported;
   // A pass reads two recordings. Its work waits for both analyses, also when one fails.
   const camera = ctx.speakers.turns(ctx, project.id, await recording("camera"), undefined, true);
+  await vi.waitFor(() => expect(finish).toHaveLength(1));
   const screen = ctx.speakers.turns(ctx, project.id, await recording("screen"), undefined, true).catch((error: Error) => error.message);
   let waited = false;
   const wait = ctx.speakers.awaitedByPass("another project").then(() => { waited = true; });
-  await vi.waitFor(() => expect(finish.length).toBeGreaterThanOrEqual(2));
-  finish.shift()!();
-  await imported;
   finish.shift()!();
   await camera;
   await new Promise(resolve => setTimeout(resolve, 20));

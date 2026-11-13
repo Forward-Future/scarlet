@@ -91,6 +91,7 @@ describe("failures", () => {
     const failed = new FfmpegError("ffmpeg exited with code 1:\nmany\nlines", "ffmpeg", [], 1,
       "[h264 @ 0x1] No device available for decoder\r\n[vist#0:0/h264 @ 0x2] Error initializing\nError opening output files: Cannot allocate memory\n\n");
     expect(failureReason(failed)).toBe("[h264] No device available for decoder; Error opening output files: Cannot allocate memory");
+    expect(failureReason(new FfmpegError("x", "ffmpeg", [], 1, "[libx264 @ 0000029f5043d640] Odd width"))).toBe("[libx264] Odd width");
     expect(failureReason(new FfmpegError("x", "ffmpeg", [], 1, "\nCannot load nvcuda.dll\n"))).toBe("Cannot load nvcuda.dll");
     expect(failureReason(new FfmpegError("failed to start ffmpeg: spawn ffmpeg ENOENT", "ffmpeg", [], null, "", false))).toBe("failed to start ffmpeg: spawn ffmpeg ENOENT");
     expect(failureReason(new Error("No frame decoded\nat 3s"))).toBe("No frame decoded");
