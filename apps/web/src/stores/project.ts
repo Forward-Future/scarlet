@@ -311,7 +311,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
         set({
           status: "ready", error: null,
           current: {
-            id, project: detail.project, timeline: detail.timeline, media: detail.project.media,
+            id, project: detail.project, timeline: sameVersion(prev?.timeline, detail.timeline), media: detail.project.media,
             changes: prev?.changes ?? [], notes: prev?.notes ?? [], learnings: prev?.learnings, tasks: prev?.tasks ?? [], renders: [],
             taskEvents: prev?.taskEvents ?? {}, historyRevision: (prev?.historyRevision ?? 0) + 1, reviewStatus: needsHistory ? "loading" : undefined,
           },
@@ -396,7 +396,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       versionLookup = undefined;
       dropHeadAgain();
       patch(projectId, d => ({
-        timeline: detail.timeline, versions: undefined, historyRevision: (d.historyRevision ?? 0) + 1, project: detail.project,
+        timeline: sameVersion(d.timeline, detail.timeline), versions: undefined, historyRevision: (d.historyRevision ?? 0) + 1, project: detail.project,
         headError: undefined,
       }));
     },
@@ -811,6 +811,14 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
 export function selectRender(d: ProjectData | null, id: string | null | undefined): Render | undefined {
   if (!d || !id) return undefined;
   return d.renders.find((r) => r.id === id);
+}
+
+/**
+ * A version's content never changes, so a second read of the one on screen keeps the object the player was given.
+ * A new object would reopen the playback stream and stop the video on a still.
+ */
+function sameVersion(had: Timeline | null | undefined, read: Timeline | null): Timeline | null {
+  return had && read && had.version === read.version && read.version !== "draft" ? had : read;
 }
 
 export function selectHeadRender(d: Pick<ProjectData, "id" | "project" | "fullRenderKeys" | "renders"> | null, quality?: Render["quality"]): Render | undefined {

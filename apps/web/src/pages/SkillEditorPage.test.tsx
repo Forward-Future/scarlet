@@ -686,3 +686,43 @@ it("stays on the skill on Esc while a request is typed and not sent, and moves t
     await view.close();
   }
 });
+
+it("keeps what was typed while a save was on its way as unsaved", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const db = buildDb();
+  const skill = db.skills[0]!;
+  vi.spyOn(api, "skill").mockImplementation(async () => ({ skill, versions: db.skillVersions[skill.id] ?? [] }));
+  let finish!: () => void;
+  const update = vi.spyOn(api, "updateSkill").mockImplementation(() => new Promise(resolve => { finish = () => resolve({ skill }); }));
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const router = createMemoryRouter([{ path: "/settings/skills/:skillId", element: <SkillEditorPage /> }], { initialEntries: [`/settings/skills/${skill.id}`] });
+  const button = (text: string) => [...el.querySelectorAll("button")].find(b => b.textContent?.trim() === text)!;
+  const type = (field: HTMLTextAreaElement, value: string) => act(async () => {
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value")!.set!.call(field, value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const unsaved = () => [...el.querySelectorAll(".chip")].some(chip => chip.textContent === "Unsaved");
+  try {
+    await act(async () => root.render(<RouterProvider router={router} />));
+    const body = el.querySelector<HTMLTextAreaElement>('[aria-label="Skill markdown"]')!;
+    await type(body, `${body.value}\nNever cut laughter.`);
+    await act(async () => button("Save").click());
+    expect(update).toHaveBeenCalledTimes(1);
+    // The save is still out when another line is typed. It isn't in what was sent.
+    await type(body, `${body.value}\nKeep the pauses.`);
+    await act(async () => finish());
+    expect(unsaved()).toBe(true);
+    expect(button("Save").disabled).toBe(false);
+    expect(localStorage.getItem(`scarlet.skillDraft.v1/${skill.id}`)).toContain("Keep the pauses.");
+  } finally {
+    await act(async () => root.unmount());
+    el.remove();
+    router.dispose();
+    localStorage.clear();
+    useSkillsStore.setState(useSkillsStore.getInitialState());
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});

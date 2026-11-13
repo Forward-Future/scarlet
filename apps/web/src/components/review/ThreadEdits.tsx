@@ -50,7 +50,7 @@ export function UndoEdit({ projectId, thread, target, onSent }: { projectId: str
     }
   }
   useHotkeys(event => {
-    if (event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.key.toLowerCase() !== "u") return;
+    if (event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== "u") return;
     event.preventDefault();
     void undo();
   });

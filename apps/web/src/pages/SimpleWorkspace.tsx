@@ -479,7 +479,7 @@ function CallStanding({ run, answer }: { run?: Task; answer?(): void }) {
 
 function CallActions({ choice, disabled, decide, revise }: { choice?: CutChoice; disabled: boolean; decide(choice: CutChoice): void; revise(): void }) {
   useHotkeys(event => {
-    if (disabled || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (disabled || event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
     const key = event.key.toLowerCase();
     if (key === "r") { event.preventDefault(); revise(); return; }
     const chosen = key === "a" ? "cut" : key === "s" ? "keep" : undefined;
@@ -3167,6 +3167,10 @@ export function SimpleWorkspace() {
   const startBeforeCalls = useProjectStore(s => s.startBeforeCalls);
   // What the tray couldn't do is said in the banner, as Stop's is: most often, Scarlet began the request first.
   const queueAction = (action: Promise<void>) => { setMenuError(""); return action.catch(e => { setMenuError(errorMessage(e)); throw e; }); };
+  // The line is about a request as it stood. Once any request moves on it has nothing left to say, and the tray may
+  // have no row left whose press would take it away.
+  const taskStates = tasks.map(t => `${t.id}:${t.state}`).join();
+  useEffect(() => setMenuError(""), [taskStates]);
   const queued = useMemo(() => queueOrder(tasks, changes).filter(t => waitingToStart(t) && rootOf(t) === t.id), [tasks, changes, rootOf]);
   const queuedItems = useMemo((): QueuedRequest[] => queued.map(t => {
     const target = targetName(t.context);

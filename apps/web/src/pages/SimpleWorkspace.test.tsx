@@ -1748,6 +1748,9 @@ it("undoes the open edit with U, once however long the key is held", async () =>
   await show();
   await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
   await act(async () => {});
+  // U with Shift held is not the shortcut: it sends nothing.
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "U", shiftKey: true, bubbles: true })); });
+  expect(createTask).not.toHaveBeenCalled();
   await press("u");
   // The request is on its way: the icon says so, and another press or a held key sends nothing more.
   expect(undoIcon().disabled).toBe(true);
@@ -8158,6 +8161,25 @@ it("says in the banner why a queued request couldn't be taken out, until one is"
   expect(banner()).toBe("Scarlet has already started on it.");
   await click(remove());
   expect(cancelTask).toHaveBeenCalledTimes(2);
+  expect(banner()).toBeUndefined();
+});
+
+it("takes the banner about a queued request away once that request moves on, with nothing left in the tray to press", async () => {
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  const queued = { ...base, id: "task_waiting", kind: "edit" as const, state: "queued" as const, startedAt: undefined, finishedAt: undefined, hostId: null, summary: null, changeIds: [],
+    instruction: "Add a lower third with my name.", createdAt: new Date(Date.now() + 1000).toISOString(), context: { threadId: "task_waiting", message: "Add a lower third with my name." } };
+  data = { ...data, tasks: [...data.tasks, queued] };
+  const cancelTask = vi.fn().mockRejectedValue(new Error("Scarlet has already started on it."));
+  useProjectStore.setState({ current: data, cancelTask });
+  await show();
+  const banner = () => container.querySelector('.simple-banner[role="status"]')?.textContent;
+  if (!container.querySelector('[aria-label="Queued requests"] .queue-list, [aria-label="Queued requests"] > .queue-row')) await click(container.querySelector(".queue-head")!);
+  await click([...container.querySelectorAll<HTMLElement>('[aria-label="Queued requests"] .queue-row')]
+    .find(r => r.textContent?.includes("Add a lower third with my name."))!.querySelector<HTMLButtonElement>(".queue-remove")!);
+  expect(banner()).toBe("Scarlet has already started on it.");
+  // Scarlet did start it, then finished: the tray is empty, and the line about it has nothing left to say.
+  await act(async () => useProjectStore.setState({ current: { ...data, tasks: data.tasks.map(t => t.id === "task_waiting"
+    ? { ...t, state: "done" as const, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() } : t) } }));
   expect(banner()).toBeUndefined();
 });
 
