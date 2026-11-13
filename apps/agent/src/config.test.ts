@@ -7,7 +7,10 @@ import { main } from "./cli.js";
 
 afterEach(() => vi.unstubAllEnvs());
 
-it("replaces old broad permissions and drops credentials on a destination change", async () => {
+// Each config read or write starts PowerShell to set directory permissions on Windows.
+it("replaces old broad permissions and drops credentials on a destination change", {
+  timeout: process.platform === "win32" ? 30_000 : undefined,
+}, async () => {
   const dir = await mkdtemp(join(tmpdir(), "scarlet-config-"));
   const env = { SCARLET_HOME: dir };
   try {

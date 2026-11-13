@@ -71,15 +71,24 @@ it.runIf(process.platform === "win32")("applies owner-only library access to exi
     "$ErrorActionPreference='Stop'",
     "$id=[System.Security.Principal.WindowsIdentity]::GetCurrent().User",
     "$root=$env:SCARLET_TEST_LIBRARY",
-    "if (!(Get-Acl -LiteralPath $root).AreAccessRulesProtected) { throw 'Library grants are inherited' }",
-    "foreach ($p in @($root, (Join-Path $root 'existing.txt'), (Join-Path $root 'tmp/new.txt'))) {",
-    "  $rules=(Get-Acl -LiteralPath $p).GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])",
+    "$rootAcl=[System.IO.Directory]::GetAccessControl($root)",
+    "if (!$rootAcl.AreAccessRulesProtected) { throw 'Library grants are inherited' }",
+    "$existingAcl=[System.IO.File]::GetAccessControl((Join-Path $root 'existing.txt'))",
+    "$newAcl=[System.IO.File]::GetAccessControl((Join-Path $root 'tmp/new.txt'))",
+    "foreach ($acl in @($rootAcl, $existingAcl, $newAcl)) {",
+    "  $rules=$acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])",
     "  if ($rules.Count -ne 1 -or $rules[0].IdentityReference -ne $id) { throw 'Unexpected principal' }",
     "}",
   ].join("\n");
   windowsFixture(paths.root, check);
   // The runner can also give the newly created file to Administrators. Its inherited grants have been checked.
   rmSync(join(paths.tmp, "new.txt"));
+
+  // Reopening a secured library must preserve the file-change stamp used for previews and dialogue evidence.
+  const existing = join(paths.root, "existing.txt");
+  const stamp = statSync(existing, { bigint: true }).ctimeNs;
+  paths.ensureRoot();
+  expect(statSync(existing, { bigint: true }).ctimeNs).toBe(stamp);
 
   // A protected child keeps its explicit grant when its parent permissions change.
   windowsFixture(paths.root, [
