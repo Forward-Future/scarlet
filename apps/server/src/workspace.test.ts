@@ -1671,6 +1671,7 @@ it("resumes a legacy interruption from its saved edits, answers and scanned rang
   }
   ctx.db.exec("DROP TABLE engines; DROP TABLE learnings; DROP TABLE task_usage; DROP TRIGGER transcription_provider_changed; ALTER TABLE settings DROP COLUMN transcription_revision;");
   ctx.db.exec("ALTER TABLE projects DROP COLUMN completed_threads; DROP TABLE source_cache_requests; ALTER TABLE projects DROP COLUMN media_paused; DROP TABLE dialogue_scan_pages; DROP INDEX renders_pending; ALTER TABLE projects DROP COLUMN review_revision; DROP TABLE storage_purges;");
+  ctx.db.exec("DROP TRIGGER telemetry_preference_changed; ALTER TABLE settings DROP COLUMN telemetry_revision;");
   ctx.db.pragma("user_version = 10");
   await ctx.close();
   workspace = openWorkspace();
@@ -1974,6 +1975,7 @@ it("keeps a resumed import's identity through an older engine updating the recor
   const old = new Db(join(directory, "scarlet.db"));
   try {
     old.exec("DROP TRIGGER IF EXISTS media_keep_import_request");
+    old.exec("DROP TRIGGER telemetry_preference_changed; ALTER TABLE settings DROP COLUMN telemetry_revision;");
     old.pragma("user_version = 23");
     workspace = openWorkspace({ probeMedia: probe });
     // A pre-upgrade engine on the same database saves the complete media shape it understands.

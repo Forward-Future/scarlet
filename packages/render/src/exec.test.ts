@@ -1,7 +1,7 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AbortError,
   FfmpegError,
@@ -19,6 +19,54 @@ import {
   stderrTail,
   withStreamInfoFallback,
 } from "./exec.js";
+
+it.skipIf(process.platform !== "darwin")("prefers each Mac helper executable to PATH for the packaged engine", async () => {
+  const home = await mkdtemp(join(tmpdir(), "scarlet-media-lookup-"));
+  const helper = join(home, ".local", "bin");
+  const other = join(home, "other");
+  try {
+    await mkdir(helper, { recursive: true });
+    await mkdir(other);
+    for (const tool of ["ffmpeg", "ffprobe"]) {
+      await writeFile(join(other, tool), "#!/bin/sh\necho path\n", { mode: 0o755 });
+    }
+    await writeFile(join(helper, "ffmpeg"), "#!/bin/sh\necho helper\n", { mode: 0o755 });
+    await writeFile(join(helper, "ffprobe"), "incomplete install", { mode: 0o644 });
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("PATH", other);
+    for (const key of ["FFMPEG_PATH", "SCARLET_FFMPEG", "FFPROBE_PATH", "SCARLET_FFPROBE", "SCARLET_BIN_DIR"]) {
+      vi.stubEnv(key, undefined);
+    }
+    let packaged = true;
+    vi.doMock("node:sea", () => ({ isSea: () => packaged }));
+    vi.resetModules();
+    const release = await import("./exec.js");
+    expect(release.resolveFfmpeg()).toBe(join(helper, "ffmpeg"));
+    expect((await release.runCapture(release.resolveFfprobe(), [])).stdout.toString().trim()).toBe("path");
+    vi.stubEnv("FFMPEG_PATH", "/selected/ffmpeg");
+    vi.stubEnv("SCARLET_FFPROBE", "/selected/ffprobe");
+    expect(release.resolveFfmpeg()).toBe("/selected/ffmpeg");
+    expect(release.resolveFfprobe()).toBe("/selected/ffprobe");
+    expect(release.resolveFfmpeg("/explicit/ffmpeg")).toBe("/explicit/ffmpeg");
+
+    vi.stubEnv("SCARLET_FFPROBE", undefined);
+    await chmod(join(helper, "ffprobe"), 0o755);
+    vi.resetModules();
+    const restarted = await import("./exec.js");
+    expect(restarted.resolveFfprobe()).toBe(join(helper, "ffprobe"));
+
+    vi.stubEnv("FFMPEG_PATH", undefined);
+    packaged = false;
+    vi.resetModules();
+    const dev = await import("./exec.js");
+    expect((await dev.runCapture(dev.resolveFfmpeg(), [])).stdout.toString().trim()).toBe("path");
+  } finally {
+    vi.doUnmock("node:sea");
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    await rm(home, { recursive: true, force: true });
+  }
+});
 
 it("explains how to install a missing media tool while preserving other startup failures", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scarlet-missing-media-"));

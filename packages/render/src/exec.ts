@@ -4,8 +4,9 @@
  * that tests use to prove the segment cache avoided work.
  */
 import { spawn } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
-import { availableParallelism } from "node:os";
+import { accessSync, constants, statSync } from "node:fs";
+import { availableParallelism, homedir } from "node:os";
+import { isSea } from "node:sea";
 import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 
 // Project assets must be self-contained media. Playlist/concat demuxers can open
@@ -63,6 +64,9 @@ function findBinary(name: string): string | null {
   const cached = binaryCache.get(name);
   if (cached !== undefined) return cached;
   const dirs = [process.env.SCARLET_BIN_DIR, dirname(process.execPath)].filter((d): d is string => !!d);
+  // The Mac setup helper puts its caption-capable build here. A GUI login PATH can
+  // put a different Homebrew FFmpeg first. Only a packaged engine uses the helper.
+  if (process.platform === "darwin" && isSea()) dirs.push(join(homedir(), ".local", "bin"));
   // On Windows spawn("ffmpeg") finds the empty Tauri dev placeholder in the
   // working directory before PATH. Choose a real executable by absolute path.
   if (process.platform === "win32") {
@@ -71,16 +75,21 @@ function findBinary(name: string): string | null {
   let found: string | null = null;
   for (const dir of dirs) {
     const candidate = join(dir, name + EXE);
-    if (existsSync(candidate) && statSync(candidate).size > 0) {
+    try {
+      const info = statSync(candidate);
+      if (!info.isFile() || !info.size) continue;
+      accessSync(candidate, constants.X_OK);
       found = candidate;
       break;
+    } catch {
+      // A missing or unusable candidate leaves this tool to the next directory.
     }
   }
   binaryCache.set(name, found);
   return found;
 }
 
-/** Resolution order: explicit arg → SCARLET_FFMPEG/FFMPEG_PATH → bundled sibling → PATH. */
+/** Explicit arguments and environment overrides precede local binaries, the Mac helper and PATH. */
 export function resolveFfmpeg(explicit?: string): string {
   return explicit ?? process.env.SCARLET_FFMPEG ?? process.env.FFMPEG_PATH ?? findBinary("ffmpeg") ?? "ffmpeg";
 }

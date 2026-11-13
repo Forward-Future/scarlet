@@ -439,7 +439,13 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE settings ADD COLUMN telemetry_revision INTEGER NOT NULL DEFAULT 0;
    CREATE TRIGGER telemetry_preference_changed AFTER UPDATE OF json ON settings
    WHEN coalesce(json_extract(OLD.json, '$.telemetryEnabled'), 1) != coalesce(json_extract(NEW.json, '$.telemetryEnabled'), 1)
-   BEGIN UPDATE settings SET telemetry_revision = telemetry_revision + 1 WHERE id = NEW.id; END;`,
+   BEGIN
+     -- Older engines write only the settings they understand. Preserve an opt-out across such a save.
+     UPDATE settings SET json = json_set(NEW.json, '$.telemetryEnabled', json('false'))
+       WHERE id = NEW.id AND json_type(NEW.json, '$.telemetryEnabled') IS NULL;
+     UPDATE settings SET telemetry_revision = telemetry_revision + 1
+       WHERE id = NEW.id AND json_type(NEW.json, '$.telemetryEnabled') IS NOT NULL;
+   END;`,
 ];
 
 export function openDb(path: string): Db {
