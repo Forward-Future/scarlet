@@ -44,7 +44,9 @@ export async function encodeDirectPicture(graph: FilterGraph, device: NonNullabl
   const args = ["-y", "-hwaccel", device.decoder, "-hwaccel_output_format", device.format,
     ...(indexed ? INDEXED_MP4_INPUT : []), "-ss", fnum(picture.start), "-t", fnum(graph.duration),
     ...LOCAL_MEDIA_INPUT, "-i", picture.file, "-map", "0:v:0", "-map_metadata", "-1", "-map_metadata:s", "-1", "-map_chapters", "-1",
-    "-vf", "select='eq(iw," + graph.width + ")*eq(ih," + graph.height + ")'",
+    // Recheck the canvas whenever the decoder changes format, including immediately after a seek.
+    // setsar only updates frame metadata. An invalid ratio rejects the fast path without downloading GPU frames.
+    "-vf", `setsar='if(eq(w,${graph.width})*eq(h,${graph.height}),sar,-1)'`,
     "-stats_enc_pre:v", stats, "-stats_enc_pre_fmt:v", "{ni} {ptsi} {tbi}", ...outputArgs, output,
     ...avcConfigurationArgs(configuration)];
   try {
