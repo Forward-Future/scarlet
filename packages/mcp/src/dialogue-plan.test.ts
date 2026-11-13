@@ -279,6 +279,24 @@ describe("dialogue plan", () => {
     await expect(plan({ mediaId: "mic", afterWord: 1 })).rejects.toThrow("does not play “first” and “next” (#1, #2) one after the other");
   });
 
+  it("tells the agent when a held word range has a saying of the same words with quiet at both edges", async () => {
+    // “go a, b a, b end”, with a pause only after each “a”. Taking the first “a b” leaves no quiet before it; taking
+    // “b a” leaves the same “go a b end” to play and has the pauses at both its edges.
+    const said = [{ start: 1, end: 1.3, text: "go" }, { start: 1.3, end: 1.6, text: "a" }, { start: 2, end: 2.3, text: "b" },
+      { start: 2.3, end: 2.6, text: "a" }, { start: 3, end: 3.3, text: "b" }, { start: 3.3, end: 3.6, text: "end" }];
+    const talk = [{ start: .98, end: 1.62 }, { start: 2, end: 2.62 }, { start: 3, end: 3.62 }];
+    const rms = Array.from({ length: 250 }, (_, i) => talk.some(v => v.start <= i/50 && i/50 < v.end) ? .12 : .001);
+    const scan: JoinPage = { mediaId: "mic", start: 0, end: 5, edges: joinEvidence(said, { from: 0, to: 5, peaks: rms, rms, speechActivity: talk }) };
+    const { tl, sources } = fixture();
+    const planned = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ mediaId: "mic", fromWord: 1, toWord: 2 })] },
+      { ...sources, pages: () => [scan], words: async () => said });
+    if (planned.outcome !== "ready") throw new Error(planned.outcome);
+    expect(planned.decisions[0]!.review).toBe(true);
+    // The agent reads which range to use; the editor's reason names no word indices.
+    expect(dialogueGate(planned).decisions[0]!.evidence).toContain("Words #2–#3 leave the same words playing and have measured quiet at both edges.");
+    expect(planned.decisions[0]!.reason).not.toContain("#2");
+  });
+
   it("cuts a doubled word that follows the word before it without a pause, at the dip between the two", async () => {
     // “recognized that”, a pause, “that likely”: the first “that” runs straight on from “recognized”.
     const said = [{ start: 1, end: 1.4, text: "recognized" }, { start: 1.4, end: 1.7, text: "that" }, { start: 2.5, end: 2.8, text: "that" }, { start: 2.8, end: 3.2, text: "likely" }];

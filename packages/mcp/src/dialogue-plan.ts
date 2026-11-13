@@ -251,6 +251,8 @@ export type ResolvedCut = Omit<DialogueCutInput, "mediaId" | "fromWord" | "toWor
   notes?: string[];
   /** Where a word reference's words play. Its edges were placed by Scarlet in the silence beyond them. */
   spoken?: TimeRange;
+  /** Other word ranges that leave the same words playing and found measured quiet at both edges. */
+  cleanAlternatives?: Array<{ fromWord: number; toWord: number }>;
 };
 /** One cut as sent to the engine (DialogueCutsRequest). */
 export interface PlannedDecision extends TimeRange {
@@ -297,7 +299,15 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
     const { occurrence: _occurrence, mediaId: _m, fromWord: _f, toWord: _t, afterWord, leave: _l, ...rest } = c;
     if (afterWord !== undefined && c.kind !== "pause") throw new Error(`cuts[${i}]: afterWord names a pause. Give a ${c.kind} as its removed words or in seconds.`);
     const resolved = await resolveCutRange(tl, c, `cuts[${i}]`, sources);
+    // A word range whose edges found no measured quiet goes to the editor. When the same words play from another
+    // saying of them with quiet at both edges, the agent can pick that one and the cut can apply as decided: on one
+    // pass, two of eight such held cuts had one.
+    const clean = c.mediaId !== undefined && c.fromWord !== undefined && c.toWord !== undefined && "problems" in resolved && resolved.problems.length
+      ? await resolveWordCut(tl, { mediaId: c.mediaId, fromWord: c.fromWord, toWord: c.toWord }, sources, true)
+        .then(r => ("alternativeWordRanges" in r ? r.alternativeWordRanges ?? [] : []).filter(a => !a.problems.length)).catch(() => [])
+      : [];
     return { ...rest, start: resolved.start, end: resolved.end, input: i,
+      ...(clean.length && { cleanAlternatives: clean.map(a => ({ fromWord: a.fromWord, toWord: a.toWord })) }),
       ...("wordRef" in resolved && { words: resolved.words, wordEdgeProblems: resolved.problems,
         ...("spoken" in resolved && { spoken: resolved.spoken, wordEdgeDips: resolved.dips }), ...("notes" in resolved && { notes: resolved.notes }) }) };
   }));
@@ -383,7 +393,9 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
     // Word edges without measured silence fall back to word timings, which is not a confident edge.
     const fallback = c.wordEdgeProblems?.length && !decided.review
       ? { review: true, reason: c.reason + " " + c.wordEdgeProblems.join(" ") } : undefined;
-    const base = fallback ? adjust({ ...decided, ...fallback }, c.wordEdgeProblems!.join(" ")) : decided;
+    const alternatives = c.cleanAlternatives?.map(a => `#${a.fromWord}–#${a.toWord}`).join(", ");
+    const base = fallback ? adjust({ ...decided, ...fallback }, [...c.wordEdgeProblems!, ...(alternatives
+      ? [`Words ${alternatives} leave the same words playing and have measured quiet at both edges.`] : [])].join(" ")) : decided;
     if (!edged(c)) return base;
     // Removed words whose two edges Scarlet placed itself, in the measured silence beside them or at the dip between
     // two words that run together, are not checked a second time: that check takes a brief dip for speech and held
