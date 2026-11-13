@@ -133,7 +133,7 @@ export function recoverTasks(ctx: Ctx, starting = false): void {
 }
 
 /**
- * A transcription runs inside the engine, so quitting Scarlet stops it. Start it again from the beginning
+ * A transcription runs inside the engine, so quitting Scarlet stops it. Continue from its last committed audio chunk or alignment turn
  * when the engine is back, or when the project's media processing resumes. Only an interruption restarts:
  * a transcription that failed by itself waits for the editor.
  */
@@ -167,9 +167,9 @@ function resumeTranscriptions(ctx: Ctx): void {
       if (ctx.db.prepare(`SELECT 1 FROM transcripts WHERE media_id = ? AND project_id = ? AND created_at > ?
         AND json_extract(json, '$.speakerAnalysis') IS NULL AND json_extract(json, '$.aligning') IS NULL LIMIT 1`)
         .get(media.id, task.projectId, task.createdAt ?? "")) continue;
-      const { task: restarted, done } = startTranscription(ctx, task.projectId, media, chosen);
+      const { task: restarted, done } = startTranscription(ctx, task.projectId, media, chosen, "interrupt", { interrupted: task });
       ctx.track(done.catch(() => null));
-      ctx.log(`[task] ${task.id} was interrupted; transcribing ${media.id} again as ${restarted.id}`);
+      ctx.log(`[task] ${task.id} was interrupted; continuing transcription of ${media.id} as ${restarted.id}`);
     } catch (err) {
       ctx.log(`[task] ${task.id} couldn’t restart its transcription: ${(err as Error).message}`);
     }
