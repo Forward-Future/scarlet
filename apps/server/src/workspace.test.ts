@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { clipEnd, createProject, isPlayableMedia, sha256, timelineDuration, timelineFromKeepRanges, Transform, type Change, type Clip, type Project } from "@scarlet/timeline";
 import { buildThreads, isThreadDone, taskPlan, threadRevision, type Render, type Task } from "@scarlet/shared";
@@ -61,6 +62,8 @@ beforeEach(() => {
 afterEach(async () => {
   await workspace.ctx.close();
   rmSync(directory, { recursive: true, force: true });
+  // Opening each Windows library checks its ACL synchronously. Let Vitest receive its progress replies between fixtures.
+  if (process.platform === "win32") await setImmediate();
 });
 
 function api(method: string, path: string, body?: unknown) {
