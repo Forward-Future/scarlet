@@ -102,17 +102,7 @@ export async function publishDesktopRelease({ version, directory, repository, sh
       body: [
         "Download the DMG for your Mac’s chip (Apple Silicon or Intel), or choose the Setup EXE or MSI for Windows x64.",
         "### FFmpeg and FFprobe",
-        "These installers include FFmpeg and FFprobe 9.0.2 from the FFmpeg developers. " +
-          "[GNU General Public License v3](https://www.gnu.org/licenses/gpl-3.0.txt) · " +
-          "[FFmpeg 9.0.2 source archive](https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz)",
-        "Martin Riedl built the macOS binaries. " +
-          "[Apple Silicon component versions](https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/versions.txt) · " +
-          "[Intel component versions](https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/versions.txt) · " +
-          "[Build scripts](https://git.martin-riedl.de/ffmpeg/build-script)",
-        "Windows uses Gyan Doshi’s Essentials build. " +
-          "[9.0.2 release and source revision](https://github.com/GyanD/codexffmpeg/releases/tag/9.0.2) · " +
-          "[Corresponding build materials request](https://github.com/GyanD/codexffmpeg/issues/255)",
-        `[Pinned FFmpeg downloads and SHA-256 checksums for this Scarlet release](https://github.com/${repository}/blob/${sha}/apps/desktop/scripts/fetch-ffmpeg.mjs)`,
+        "Install FFmpeg and FFprobe before importing footage. On macOS, use the [Mac setup helper and instructions](https://github.com/Forward-Future/scarlet-releases/releases/tag/v0.1.2-early-access.1). On Windows, open PowerShell and run `winget install --id Gyan.FFmpeg.Essentials --exact`. Restart Scarlet after installation.",
       ].join("\n\n"),
       draft: true, prerelease: false,
     } });

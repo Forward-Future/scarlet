@@ -7,8 +7,8 @@
   "type": "module",
   "scripts": {
     "tauri": "tauri",
-    "dev": "tauri dev",
-    "watch": "tauri dev",
+    "dev": "tauri dev --config src-tauri/tauri.local-media.conf.json",
+    "watch": "tauri dev --config src-tauri/tauri.local-media.conf.json",
     "bundle": "tauri build",
     "bundle:debug": "tauri build --debug",
     "ffmpeg": "node scripts/fetch-ffmpeg.mjs",

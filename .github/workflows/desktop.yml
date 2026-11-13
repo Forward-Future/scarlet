@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      early_access_version:
+        description: "Early Access numeric version, for example 0.1.4. Leave empty for a regular check build."
+        required: false
+        type: string
   pull_request:
     paths:
       - "apps/desktop/**"
@@ -17,12 +22,18 @@ on:
       - "pnpm-lock.yaml"
       - ".github/workflows/desktop*.yml"
       - ".github/scripts/*desktop-release*"
+      - ".github/scripts/sign-*-release.*"
+      - ".github/workflows/ci.yml"
       - ".github/tests/desktop_permissions_test.rb"
 
 permissions:
   contents: read
 
 jobs:
+  ci:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+
   version:
     runs-on: ubuntu-latest
     outputs:
@@ -41,21 +52,28 @@ jobs:
           node --test apps/desktop/scripts/release-version.test.mjs apps/desktop/scripts/verify-desktop-package.test.mjs .github/scripts/publish-desktop-release.test.mjs
       - name: Resolve the version for this commit
         id: number
+        env:
+          EARLY_ACCESS_VERSION: ${{ inputs.early_access_version }}
         run: |
           node apps/desktop/scripts/release-version.mjs check
-          version=$(node apps/desktop/scripts/release-version.mjs for-commit)
+          if [ -n "$EARLY_ACCESS_VERSION" ]; then
+            version=$(node apps/desktop/scripts/release-version.mjs early-access "$EARLY_ACCESS_VERSION")
+          else
+            version=$(node apps/desktop/scripts/release-version.mjs for-commit)
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
     uses: ./.github/workflows/desktop-build.yml
     with:
-      release: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      release: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.SCARLET_STABLE_RELEASES == 'true' }}
       version: ${{ needs.version.outputs.version }}
+      early_access: ${{ github.event_name == 'workflow_dispatch' && inputs.early_access_version != '' }}
 
   publish:
-    needs: [version, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [version, build, ci]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.SCARLET_STABLE_RELEASES == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write

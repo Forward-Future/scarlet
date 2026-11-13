@@ -1,7 +1,9 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { setTimeout as wait } from "node:timers/promises";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { apiKeyVars, cmdShellArgs, defaultExec, detect, detectClaude, detectCodex, detectGemini, findOnPath, formatAvailability, needsCmdShell, runnerEnv, stripVars, type ExecFn } from "./detect.js";
 
 /** Run the rest of the test as if on another OS. Paths and the file system stay this machine's. */
@@ -284,9 +286,21 @@ describe("defaultExec", { timeout: 20_000 }, () => {
     expect(result.code).not.toBe(0);
   });
   it("stops a timed-out probe together with the child holding its output pipe", async () => {
-    const childScript = "setTimeout(() => console.log('child finished'), 2000)";
-    const script = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {stdio:'inherit'});console.log('probing');setInterval(() => {}, 1000)`;
-    const result = await defaultExec(process.execPath, ["-e", script], { timeoutMs: 500 });
+    const marker = join(await tempDir(), "child-ready");
+    const childScript = `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ready"); setTimeout(() => console.log("child finished"), 15_000)`;
+    const script = `process.stdout.write("probing\\n", () => require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { stdio: "inherit" }))`;
+    // Advance the probe timeout only after the real descendant has inherited the output pipe.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const pending = defaultExec(process.execPath, ["-e", script], { timeoutMs: 500 });
+    try {
+      const deadline = Date.now() + 12_000;
+      while (!existsSync(marker) && Date.now() < deadline) await wait(20);
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      vi.advanceTimersByTime(500);
+      vi.useRealTimers();
+    }
+    const result = await pending;
     expect(result.stdout).toBe("probing\n");
     expect(result.code).not.toBe(0);
   });
