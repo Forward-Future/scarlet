@@ -55,22 +55,6 @@ export function useVideoCaching() {
   };
 }
 
-const CACHING_RING_RADIUS = 11.5;
-/** The ring's length, which its dash is measured against. */
-export const CACHING_RING = 2 * Math.PI * CACHING_RING_RADIUS;
-
-/**
- * The ring around the menu's button while videos cache, drawn like the one beside "Updating": an arc as long as the
- * caches have got. Until the engine has a figure it is a quarter that turns.
- */
-export function CachingRing({ progress }: { progress?: number }) {
-  const shown = progress == null ? 0.25 : Math.max(0.02, Math.min(1, progress));
-  return <svg className={`simple-more-ring${progress == null ? " is-unknown" : ""}`} viewBox="0 0 26 26" aria-hidden="true">
-    <circle cx="13" cy="13" r={CACHING_RING_RADIUS} />
-    <circle cx="13" cy="13" r={CACHING_RING_RADIUS} strokeDasharray={CACHING_RING} strokeDashoffset={CACHING_RING * (1 - shown)} />
-  </svg>;
-}
-
 /**
  * Media's rows in the simple view's menu. The Media row says what the videos are doing in a word or two (adding,
  * caching and how far, paused) and carries the mark when a file needs the editor; hover names the problem. Each

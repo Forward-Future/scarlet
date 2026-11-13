@@ -19,7 +19,8 @@ import { Composer } from "../components/agent/Composer";
 import { useImportTranscription } from "../components/media/TranscriptionAction";
 import { Dropzone, useImportCount, useUploader } from "../components/media/UploadDropzone";
 import { MediaDrawer } from "../components/media/MediaDrawer";
-import { CachingRing, MediaMenuItems, useMediaWarning, useVideoCaching } from "../components/media/MediaMenuItems";
+import { MediaMenuItems, useMediaWarning, useVideoCaching } from "../components/media/MediaMenuItems";
+import { ProgressRing } from "../components/ui/ProgressRing";
 import { LearningsPanel, learningsToReview } from "../components/review/LearningsPanel";
 import { usePlaybackCache } from "../components/player/usePlaybackCache";
 import { focusAround } from "../components/player/SimpleProgress";
@@ -33,7 +34,7 @@ import { ignorePageShortcut, useHotkeys } from "../lib/hotkeys";
 import { RunBundle, runEnded, Said } from "../components/review/RunBundle";
 import { OtherTakes } from "../components/review/OtherTakes";
 import { ExportSheet } from "../components/review/ExportVideo";
-import { ExportMenuItem, useExportWarning } from "../components/review/ExportMenuItem";
+import { ExportButton, ExportMenuItem, useExportWarning } from "../components/review/ExportMenuItem";
 import { useThreadTimeline } from "../components/review/useThreadTimeline";
 import { Drawer, Icon, Loading } from "../components/ui/primitives";
 import { api, errorMessage } from "../lib/client";
@@ -3274,10 +3275,10 @@ export function SimpleWorkspace() {
                 cache, a ring fills around it. */}
             <div className="simple-tools">
               <button type="button" className="btn-quiet" aria-haspopup="dialog" onClick={() => setPanel("media")}>Media</button>
-              <button type="button" className="btn-quiet" aria-haspopup="dialog" onClick={() => setPanel("export")}>Export</button>
+              <ExportButton onOpen={() => setPanel("export")} />
               <Dropdown label="More" align="right" width={240} description={menuSays || undefined}
                 button={<span className={`btn-icon simple-more${needsYou.length ? " needs-you" : ""}`} title={menuSays || "More"}>
-                  <Icon name="more" />{caching.active && <CachingRing progress={caching.progress} />}</span>}>
+                  <Icon name="more" />{caching.active && <ProgressRing className="simple-more-ring" progress={caching.progress} />}</span>}>
                 {close => <>
                   <MenuItem onClick={() => { close(); setPanel("learnings"); }} title={toLearn ? `${plural(toLearn, "rule")} to review` : undefined}>
                     <Icon name="bulb" />Learnings{toLearn > 0 && <span className="menu-dot" role="img" aria-label={`${plural(toLearn, "rule")} to review`} />}</MenuItem>
