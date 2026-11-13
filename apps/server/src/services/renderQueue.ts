@@ -1,4 +1,5 @@
 import { mkdirSync, rmSync, statSync } from "node:fs";
+import { quietProgress } from "./progressSave.js";
 import { createHash } from "node:crypto";
 import { basename, join } from "node:path";
 import { DELIVERY_AUDIO_REVISION, lutFileStamps, PROXY_CLOCK_REVISION, RENDER_REVISION, segmentKey, snapRange, usesRevisedProxyClock } from "@scarlet/render";
@@ -639,8 +640,10 @@ export class RenderQueue {
         const t = Date.now();
         if (!cachedRanges && t - last < 500 && progress < 1) return;
         last = t;
-        const upd = this.update(id, r => r.state === "running" ? { progress, ...(cachedRanges && { cachedRanges }) } : undefined);
-        if (upd) this.ctx.bus.publish({ type: "render.updated", projectId: upd.projectId, render: upd });
+        quietProgress(this.ctx, `render progress (${id})`, () => {
+          const upd = this.update(id, r => r.state === "running" ? { progress, ...(cachedRanges && { cachedRanges }) } : undefined);
+          if (upd) this.ctx.bus.publish({ type: "render.updated", projectId: upd.projectId, render: upd });
+        });
       };
       const onProgress = (p: number) => { progress = Math.min(1, Math.max(0, p)); publishProgress(); };
       const onWarning = (warning: string) => this.ctx.log(`[render] ${id} warning: ${clip(warning, 300)}`);
