@@ -177,8 +177,8 @@ jobs:
         run: node apps/desktop/scripts/verify-desktop-package.mjs "${{ matrix.triple }}" "$RELEASE_VERSION" "$RUNNER_TEMP/scarlet-installers"
 
       - name: Inspect public installers and smoke test their engine with external media tools
-        shell: bash
-        run: node apps/desktop/scripts/smoke-engine-public.mjs "$RUNNER_TEMP/scarlet-installers" "$RUNNER_TEMP/scarlet-external-tools"
+        # Git Bash delays the engine's Windows PowerShell permission checks at startup.
+        run: node apps/desktop/scripts/smoke-engine-public.mjs "${{ runner.temp }}/scarlet-installers" "${{ runner.temp }}/scarlet-external-tools"
 
       - name: Upload verified installers
         uses: actions/upload-artifact@v4
