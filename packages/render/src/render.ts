@@ -6,15 +6,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DEFAULT_PREVIEW_HEIGHT, snapToFrame } from "@scarlet/timeline";
 import type { Project, ProjectSettings, Timeline, TimeRange } from "@scarlet/timeline";
-import { FfmpegError, failureReason, ffmpegEncoders, fnum, resolveFfmpeg, runCapture, runFfmpeg, threadedAvcPreview, withStreamInfoFallback } from "./exec.js";
+import { FfmpegError, failureReason, fnum, runFfmpeg, threadedAvcPreview, withStreamInfoFallback } from "./exec.js";
 import type { FontOptions } from "./fonts.js";
 import { buildFilterGraph, type GraphOptions } from "./graph.js";
+import { directDevice, encodeDirectPicture } from "./directPicture.js";
 import type { ProbeResult } from "./probe.js";
 
-export type RenderQuality = "preview" | "delivery";
-
-/** Hardware encoder preference. "auto" tries each in turn and falls back to libx264. */
-export type HwAccel = "none" | "auto" | "nvenc" | "qsv" | "amf" | "videotoolbox";
+import { hardwareEncoderFailure, withRenderEncoder, type VideoEncoder, type HwAccel, type RenderQuality } from "./encoder.js";
+export { encoderArgs, resolveVideoEncoder, type HwAccel, type RenderQuality } from "./encoder.js";
 
 export interface RenderOptions extends FontOptions {
   pictureSource?: GraphOptions["pictureSource"];
@@ -28,7 +27,9 @@ export interface RenderOptions extends FontOptions {
   /** Explicit output size for a user-requested export, independent of encoder quality. */
   exportHeight?: number;
   hwaccel?: HwAccel;
-  /** Retry a preview using the software decoder and scaler. */
+  /** The encoder already probed for this pass. Keep every part in its matching cache. */
+  videoEncoder?: VideoEncoder;
+  /** Read originals with the software decoder and scaler. Encoding may still use hardware. */
   softwareDecode?: boolean;
   /** Set false to force a packet scan on every movie input. */
   indexedInputs?: boolean;
@@ -42,6 +43,8 @@ export interface RenderOptions extends FontOptions {
   probes?: Map<string, ProbeResult>;
   /** Extra ffmpeg output options inserted before the output path. */
   extraArgs?: string[];
+  /** Only a file read by the next local remux can skip relocating its MP4 index. */
+  cacheIntermediate?: boolean;
   /**
    * Write consecutive frame-aligned parts of the range to separate files from one
    * decode, each encoded as if it had been rendered alone. `output` is unused.
@@ -79,87 +82,6 @@ export interface RenderResult {
   elapsedMs: number;
 }
 
-const HW_ENCODERS: Record<Exclude<HwAccel, "none" | "auto">, string> = {
-  nvenc: "h264_nvenc",
-  qsv: "h264_qsv",
-  amf: "h264_amf",
-  videotoolbox: "h264_videotoolbox",
-};
-
-const encoderProbe = new Map<string, Promise<boolean>>();
-
-/**
- * A listed encoder may reject a particular frame size, or the quality flags a render gives it: VideoToolbox takes
- * -q:v on Apple silicon only. Test one frame at the render's dimensions, with the render's own flags, so an encoder
- * that would fail every render is passed over before one starts.
- */
-function encoderWorks(encoder: string, dimensions: string, quality: RenderQuality, ffmpegPath?: string, onFallback?: (reason: string) => void): Promise<boolean> {
-  const bin = resolveFfmpeg(ffmpegPath);
-  const key = `${bin}|${encoder}|${dimensions}|${quality}`;
-  let p = encoderProbe.get(key);
-  if (!p) {
-    p = runCapture(bin, [
-      "-hide_banner", "-nostdin", "-loglevel", "error",
-      "-f", "lavfi", "-i", `color=c=black:s=${dimensions}:r=30`,
-      "-frames:v", "1", "-c:v", encoder, ...encoderArgs(encoder, quality), "-pix_fmt", "yuv420p", "-f", "null", "-",
-    ])
-      .then(() => true)
-      .catch((error: unknown) => {
-        // The answer is kept, so only the caller that asked first hears why. A test that
-        // never started says nothing about the encoder, and the next caller asks again.
-        // One that crashed is an answer: testing it again would crash on every render.
-        if (error instanceof FfmpegError && !error.started) encoderProbe.delete(key);
-        onFallback?.(`${encoder} could not encode a ${dimensions} frame (${failureReason(error)}).`);
-        return false;
-      });
-    encoderProbe.set(key, p);
-  }
-  return p;
-}
-
-/**
- * The encoder a render of this `quality` will use for `hwaccel`; libx264 when nothing hardware works.
- * `onFallback` hears why a hardware encoder this build lists was passed over, once for each
- * encoder, frame size and quality, and why the list itself could not be read.
- */
-export async function resolveVideoEncoder(hwaccel: HwAccel = "none", ffmpegPath?: string, size = { width: 1280, height: 720 },
-  onFallback?: (reason: string) => void, quality: RenderQuality = "preview"): Promise<string> {
-  if (hwaccel === "none") return "libx264";
-  const available = await ffmpegEncoders(ffmpegPath).catch((error: unknown) => {
-    onFallback?.(`Could not list this ffmpeg's encoders (${failureReason(error)}).`);
-    return new Set<string>();
-  });
-  const order: Array<Exclude<HwAccel, "none" | "auto">> =
-    hwaccel === "auto" ? ["nvenc", "amf", "qsv", "videotoolbox"] : [hwaccel];
-  for (const hw of order) {
-    const enc = HW_ENCODERS[hw];
-    if (available.has(enc) && (await encoderWorks(enc, `${size.width}x${size.height}`, quality, ffmpegPath, onFallback))) return enc;
-  }
-  return "libx264";
-}
-
-/** Encoder-specific quality flags. */
-export function encoderArgs(encoder: string, quality: RenderQuality): string[] {
-  const preview = quality === "preview";
-  switch (encoder) {
-    case "h264_nvenc":
-      return preview
-        // Low-latency tuning drops B-frames and lookahead: ~30% faster, same picture at preview quality.
-        ? ["-preset", "p2", "-tune", "ll", "-rc", "vbr", "-cq", "28", "-b:v", "0"]
-        : ["-preset", "p6", "-tune", "hq", "-rc", "vbr", "-cq", "19", "-b:v", "0", "-profile:v", "high"];
-    case "h264_qsv":
-      return preview ? ["-preset", "veryfast", "-global_quality", "28"] : ["-preset", "slow", "-global_quality", "20"];
-    case "h264_amf":
-      return preview
-        ? ["-quality", "speed", "-rc", "cqp", "-qp_i", "26", "-qp_p", "26"]
-        : ["-quality", "quality", "-rc", "cqp", "-qp_i", "18", "-qp_p", "18"];
-    case "h264_videotoolbox":
-      return preview ? ["-q:v", "55"] : ["-q:v", "72"];
-    default:
-      return preview ? ["-preset", "veryfast", "-crf", "23"] : ["-preset", "slow", "-crf", "18"];
-  }
-}
-
 /** Canvas size for a quality level: previews keep aspect and cap the height. */
 export function outputSize(settings: ProjectSettings, quality: RenderQuality, height?: number, exportHeight?: number) {
   const h = Math.min(exportHeight ?? (quality === "delivery" ? settings.height : height ?? DEFAULT_PREVIEW_HEIGHT), settings.height);
@@ -187,18 +109,30 @@ export async function renderRange(
   const quality = opts.quality ?? "preview";
   const snapped = snapRange(range, settings.fps);
   const size = outputSize(settings, quality, opts.height, opts.exportHeight);
-  // What this render fell back from, beside the graph's own warnings.
+  if (!opts.videoEncoder) {
+    return withRenderEncoder({ ...size, fps: settings.fps }, opts,
+      attempt => renderRange(project, timeline, range, output, attempt));
+  }
   const notes: string[] = [];
-  const encoder = await resolveVideoEncoder(opts.hwaccel, opts.ffmpegPath, size, reason => notes.push(reason), quality);
+  const { name: encoder, args: encodingArgs, pixelFormat } = opts.videoEncoder;
 
   let proxyUsed = false;
   const resolver = quality === "preview" ? opts.pictureSource : undefined;
-  let previewDecoder: GraphOptions["decoder"];
-  if (encoder === "h264_nvenc") previewDecoder = "cuda";
+  const exporting = quality === "delivery" || opts.exportHeight !== undefined;
+  // On a high-core Apple Silicon Mac, threaded AVC decoding also wins on verified
+  // full-size delivery. Both routes feed the same hardware encoder.
+  const threadedAvc = encoder === "h264_videotoolbox" && (opts.hwaccel ?? "auto") === "auto" && threadedAvcPreview;
+  const device = exporting && opts.pictureOnly && !opts.softwareDecode && !threadedAvc && !opts.splits?.length && !opts.extraArgs?.length
+    ? directDevice(encoder) : undefined;
+  let decoder: GraphOptions["decoder"];
+  // Keep delivery effects and resizing on the reference compositor. An unchanged
+  // full-size shot can pass the GPU surfaces straight through, including on NVIDIA.
+  if (encoder === "h264_nvenc" && !exporting) decoder = "cuda";
   if (encoder === "h264_videotoolbox") {
-    previewDecoder = opts.hwaccel === "auto" && threadedAvcPreview ? "videotoolbox-hevc" : "videotoolbox";
+    decoder = threadedAvc ? "videotoolbox-hevc" : "videotoolbox";
   }
   const graph = await buildFilterGraph(project, timeline, snapped, {
+    directPicture: !!device,
     indexedInputs: opts.indexedInputs ?? true,
     signal: opts.signal,
     pictureOnly: opts.pictureOnly,
@@ -207,7 +141,7 @@ export async function renderRange(
       if (source) proxyUsed = true;
       return source;
     }),
-    decoder: !opts.softwareDecode && quality === "preview" && opts.exportHeight === undefined ? previewDecoder : undefined,
+    decoder: opts.softwareDecode ? undefined : decoder,
     mediaRoot: opts.mediaRoot,
     width: size.width,
     height: size.height,
@@ -219,21 +153,22 @@ export async function renderRange(
     ffprobePath: opts.ffprobePath,
   });
 
-  const outputArgs = [
+  const outputOptions = (pixelFormat: string) => [
     "-map_chapters", "-1",
     "-c:v", encoder,
-    ...encoderArgs(encoder, quality),
+    ...encodingArgs,
     // Bound the amount of video a random seek must decode in an editor preview.
     ...(quality === "preview" ? ["-g", String(Math.max(1, Math.round(settings.fps / 2)))] : []),
-    "-pix_fmt", "yuv420p",
+    "-pix_fmt", pixelFormat,
     "-r", fnum(settings.fps),
     ...(opts.pictureOnly ? [] : [
       "-c:a", "aac", "-b:a", quality === "delivery" ? "192k" : "128k",
       "-ar", String(settings.sampleRate), "-ac", String(settings.audioChannels),
     ]),
-    "-movflags", "+faststart",
+    ...(opts.cacheIntermediate ? [] : ["-movflags", "+faststart"]),
     ...(opts.extraArgs ?? []),
   ];
+  const outputArgs = outputOptions(pixelFormat);
   let args: string[];
   if (opts.splits?.length) {
     const lines = splitLines(opts.splits, snapped, settings.fps, settings.sampleRate, !opts.pictureOnly);
@@ -257,12 +192,18 @@ export async function renderRange(
       onProgress: opts.onProgress && !opts.splits?.length ? (t: number) => opts.onProgress!(Math.min(1, t / graph.duration)) : undefined,
     };
     try {
-      await withStreamInfoFallback(args, opts.signal, actual => {
+      const directArgs = device && graph.directPicture && await encodeDirectPicture(graph, device,
+        opts.indexedInputs ?? true, outputOptions(device.format), output, execution);
+      if (directArgs) args = directArgs;
+      else await withStreamInfoFallback(args, opts.signal, actual => {
         args = actual;
         return runFfmpeg(actual, execution);
-      }, error => notes.push(`A movie's index could not be used for this range (${failureReason(error)}); scanned the file instead.`));
+      }, error => {
+        if (hardwareEncoderFailure(error, encoder)) throw error;
+        notes.push(`A movie's index could not be used for this range (${failureReason(error)}); scanned the file instead.`);
+      });
     } catch (error) {
-      if (!(error instanceof FfmpegError) || opts.signal?.aborted || !args.includes("-hwaccel")) throw error;
+      if (!(error instanceof FfmpegError) || opts.signal?.aborted || hardwareEncoderFailure(error, encoder) || !args.includes("-hwaccel")) throw error;
       const fallback = await renderRange(project, timeline, range, output, { ...opts, softwareDecode: true });
       // The second try reads the index again and may have said the same of it.
       fallback.warnings.push(...notes.filter(note => !fallback.warnings.includes(note)),

@@ -100,7 +100,7 @@ export const scarletRenderAdapter: RenderAdapter = {
 
   async renderFullCached(project, timeline, cacheDir, outputPath, opts) {
     const inputs = await cacheInputs(project, timeline, opts.mediaRoot);
-    const { warnings } = await R.renderFullCached(inputs, timeline, cacheDir, outputPath, {
+    const { encoder, rendered, warnings } = await R.renderFullCached(inputs, timeline, cacheDir, outputPath, {
       exportHeight: opts.exportHeight,
       exportRange: opts.exportRange,
       onCachedRanges: opts.onCachedRanges,
@@ -115,5 +115,6 @@ export const scarletRenderAdapter: RenderAdapter = {
       concurrency: opts.concurrency,
     });
     for (const warning of warnings) opts.onWarning?.(warning);
+    return { encoder, rendered };
   },
 };
