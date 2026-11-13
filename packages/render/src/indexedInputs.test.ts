@@ -4,6 +4,53 @@ import { tmpdir } from "node:os";
 import { expect, it } from "vitest";
 import { createProject, timelineFromKeepRanges } from "@scarlet/timeline";
 import { buildFilterGraph, extractFrame, probeMedia, probeToAssetFields, renderRange, resolveFfmpeg, runCapture } from "./index.js";
+import type { ProbeResult } from "./probe.js";
+import type { MediaClip } from "@scarlet/timeline";
+
+it("recognizes a frame-aligned unaltered delivery picture and keeps all other pictures in the compositor", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-direct-picture-"));
+  try {
+    const file = join(dir, "camera.mp4"), fps = 30000 / 1001;
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30000/1001:d=1",
+      "-c:v", "libx264", "-threads", "1", file]);
+    const probe = await probeMedia(file);
+    const project = createProject("Original picture", { width: 320, height: 180, fps });
+    project.media.push({ id: "cam", path: file, name: "Camera", kind: "video", ...probeToAssetFields(probe) });
+    const cut = timelineFromKeepRanges(project.id, "cam", [{ start: 2 / fps, end: 29 / fps }]);
+    const range = { start: 4 / fps, end: 19 / fps };
+    const original = cut.tracks[0]!.clips[0] as MediaClip;
+    async function direct(patch: Partial<ProbeResult> = {}, clip: Partial<MediaClip> = {}) {
+      cut.tracks[0]!.clips[0] = { ...original, ...clip };
+      const graph = await buildFilterGraph(project, cut, range, { mediaRoot: dir, pictureOnly: true, directPicture: true,
+        probes: new Map([["cam", { ...probe, ...patch }]]) });
+      try { return graph.directPicture; } finally { await graph.cleanup(); }
+    }
+    expect(await direct()).toMatchObject({ file, frames: 15 });
+    expect((await direct())!.start).toBeCloseTo(6 / fps, 9);
+    for (const patch of [{ hasAlpha: true }, { rotation: 90 }, { displayMatrix: true }, { fps: 25 }, { videoFrameCount: 10 },
+      { videoStart: 0.2 }, { videoDuration: 0.25 }, { width: 640 }, { pixFmt: "yuv420p10le" }, { videoCodec: "prores" },
+      { videoStreamCount: 2 }, { videoTimeBase: undefined }]) expect(await direct(patch)).toBeUndefined();
+    const raw = probe.raw as { streams: Record<string, unknown>[] };
+    for (const patch of [{ color_range: "pc" }, { color_space: "bt2020nc" }, { color_primaries: "bt709" }, { color_transfer: "smpte2084" },
+      { field_order: "tt" }, { sample_aspect_ratio: "4:3" }, { chroma_location: "center" }, { closed_captions: 1 },
+      { film_grain: 1 }, { side_data_list: [{ side_data_type: "Mastering display metadata" }] }]) {
+      expect(await direct({ raw: { ...raw, streams: [{ ...raw.streams[0], ...patch }] } })).toBeUndefined();
+    }
+    for (const patch of [{ opacity: 0.5 }, { speed: 2 }, { videoFadeIn: 0.5 }, { timelineIn: 10 / fps },
+      { sourceIn: 2.5 / fps }, { effects: [{ type: "saturation", params: { value: 0.8 }, enabled: true }] }]) {
+      expect(await direct({}, patch)).toBeUndefined();
+    }
+    cut.tracks[0]!.clips.push({ ...original, timelineIn: 8 / fps });
+    expect(await direct()).toBeUndefined();
+    cut.tracks[0]!.clips.pop();
+    cut.tracks.push({ id: "subs", kind: "caption", name: "Titles", muted: false, hidden: false, clips: [
+      { id: "title", kind: "caption", text: "Title", enabled: true, timelineIn: 0, timelineOut: 1 },
+    ] });
+    expect(await direct()).toBeUndefined();
+    cut.tracks.at(-1)!.hidden = true;
+    expect(await direct()).toBeDefined();
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
 
 it("seeks AVC and AAC from MP4 indices with the same pixels, timestamps and samples, including a delayed rotated stream", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scarlet-index-seek-"));

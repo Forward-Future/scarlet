@@ -229,6 +229,23 @@ describe("ffmpeg", () => {
     }
   });
 
+  it("uses Windows Media Foundation hardware when no vendor encoder works for the export", async () => {
+    const encoders = vi.spyOn(ffmpeg, "ffmpegEncoders").mockResolvedValue(new Set(["h264_mf"]));
+    const probe = vi.spyOn(ffmpeg, "runCapture").mockResolvedValue({ code: 0, stdout: Buffer.alloc(0), stderr: "" });
+    try {
+      const bin = path.join(dir, "mf-ffmpeg");
+      expect(await resolveVideoEncoder("nvenc", bin, undefined, undefined, "delivery")).toBe("h264_mf");
+      const args = probe.mock.calls[0]![1];
+      expect(args[args.indexOf("-hw_encoding") + 1]).toBe("1");
+      expect(args[args.indexOf("-pix_fmt") + 1]).toBe("nv12");
+      expect(await resolveVideoEncoder("none", bin, undefined, undefined, "delivery")).toBe("libx264");
+      expect(probe).toHaveBeenCalledTimes(1);
+    } finally {
+      probe.mockRestore();
+      encoders.mockRestore();
+    }
+  });
+
   it("is available", async () => {
     const check = await checkFfmpeg();
     expect(check.ok).toBe(true);
@@ -1418,32 +1435,123 @@ describe("render", () => {
         expect(reasons.at(-1)).toBe("Could not list this ffmpeg's encoders (spawn EAGAIN).");
         expect(await resolveVideoEncoder("none", bin, undefined, reason => reasons.push(reason))).toBe("libx264");
         expect(reasons).toHaveLength(4);
+        // Session exhaustion is temporary. A later export can use the same GPU and format.
+        probe.mockRejectedValueOnce(new ffmpeg.FfmpegError("busy", bin, [], 1, "OpenEncodeSessionEx failed: out of memory (10)"))
+          .mockResolvedValueOnce({ code: 0, stdout: Buffer.alloc(0), stderr: "" });
+        const exportEncoder = () => resolveVideoEncoder("nvenc", bin, { width: 1920, height: 1080 }, undefined, "delivery");
+        expect(await exportEncoder()).toBe("libx264");
+        expect(await exportEncoder()).toBe("h264_nvenc");
       } finally {
         probe.mockRestore();
         encoders.mockRestore();
       }
     });
 
-    it("tests a hardware encoder with the flags a render gives it, and passes over one that refuses them", async () => {
-      // VideoToolbox on an Intel Mac encodes a plain test frame, then refuses the -q:v every render passes.
+    it("exports with bitrate control when VideoToolbox can encode but cannot use qscale", async () => {
+      const { project, timeline } = fixture();
       const bin = path.join(dir, "qscale-ffmpeg");
       const encoders = vi.spyOn(ffmpeg, "ffmpegEncoders").mockResolvedValue(new Set(["h264_videotoolbox"]));
       const probe = vi.spyOn(ffmpeg, "runCapture").mockImplementation(async (_bin, args) => {
-        if (args.includes("-q:v")) throw new ffmpeg.FfmpegError("ffmpeg exited with code 1", bin, [], 1, "Error: -q:v qscale not available for encoder. Use -b:v bitrate instead.\n");
+        if (args.includes("-q:v")) throw new ffmpeg.FfmpegError("ffmpeg exited with code 1", bin, args, 1,
+          "Error: -q:v qscale not available for encoder. Use -b:v bitrate instead.");
         return { code: 0, stdout: Buffer.alloc(0), stderr: "" };
       });
-      const reasons: string[] = [];
-      const size = { width: 960, height: 540 };
+      const encode = vi.spyOn(ffmpeg, "runFfmpeg").mockResolvedValue({ stderr: "" });
       try {
-        expect(await resolveVideoEncoder("auto", bin, size, reason => reasons.push(reason))).toBe("libx264");
-        expect(await resolveVideoEncoder("auto", bin, size, reason => reasons.push(reason), "delivery")).toBe("libx264");
-        // A preview and an export pass different flags, so each is tested once and its answer kept.
-        expect(await resolveVideoEncoder("auto", bin, size, reason => reasons.push(reason))).toBe("libx264");
-        expect(probe.mock.calls.map(([, args]) => args[args.indexOf("-q:v") + 1])).toEqual(["55", "72"]);
-        expect(reasons).toHaveLength(2);
-        expect(reasons[0]).toContain("h264_videotoolbox could not encode a 960x540 frame");
-        expect(reasons[0]).toContain("qscale not available for encoder");
+        for (const [quality, fps] of [["preview", 30], ["delivery", 60]] as const) {
+          project.settings.fps = fps;
+          const options = { quality, ffmpegPath: bin, exportHeight: 180, mediaRoot: dir, softwareDecode: true };
+          const result = await renderRange(project, timeline, { start: 0, end: 1 }, path.join(dir, "bitrate.mp4"), options);
+          expect(result.encoder).toBe("h264_videotoolbox");
+          expect(result.args).not.toContain("-q:v");
+          const bitrate = result.args[result.args.indexOf("-b:v") + 1];
+          expect(Number(bitrate)).toBeGreaterThan(0);
+          expect(probe.mock.calls.some(([, args]) => args.includes("-b:v") && args.includes(bitrate!))).toBe(true);
+          expect(result.warnings).not.toContainEqual(expect.stringContaining("could not encode"));
+          await renderRange(project, timeline, { start: 0, end: 1 }, path.join(dir, "bitrate-again.mp4"), options);
+        }
+        expect(probe.mock.calls.filter(([, args]) => args.includes("-frames:v"))).toHaveLength(4);
+        expect(encode).toHaveBeenCalledTimes(4);
       } finally {
+        encode.mockRestore();
+        probe.mockRestore();
+        encoders.mockRestore();
+      }
+    });
+
+    it("rechecks VideoToolbox when a later export can acquire a previously unavailable encoder", async () => {
+      const bin = path.join(dir, "vt-busy-ffmpeg");
+      const encoders = vi.spyOn(ffmpeg, "ffmpegEncoders").mockResolvedValue(new Set(["h264_videotoolbox"]));
+      const probe = vi.spyOn(ffmpeg, "runCapture")
+        .mockRejectedValueOnce(new ffmpeg.FfmpegError("unavailable", bin, [], 1,
+          "Error: cannot create compression session: -12908\nTry -allow_sw 1. The hardware encoder may be busy, or not supported."))
+        .mockResolvedValueOnce({ code: 0, stdout: Buffer.alloc(0), stderr: "" });
+      try {
+        expect(await resolveVideoEncoder("auto", bin, undefined, undefined, "delivery")).toBe("libx264");
+        expect(await resolveVideoEncoder("auto", bin, undefined, undefined, "delivery")).toBe("h264_videotoolbox");
+        expect(await resolveVideoEncoder("auto", bin, undefined, undefined, "delivery")).toBe("h264_videotoolbox");
+        expect(probe).toHaveBeenCalledTimes(2);
+      } finally {
+        probe.mockRestore();
+        encoders.mockRestore();
+      }
+    });
+
+    it("retries an export on the next GPU under its own cache key when an encoder fails on footage", async () => {
+      const { project, timeline } = fixture();
+      const bin = path.join(dir, "driver-ffmpeg");
+      const encoders = vi.spyOn(ffmpeg, "ffmpegEncoders").mockResolvedValue(new Set(["h264_qsv", "h264_nvenc"]));
+      const capture = ffmpeg.runCapture, run = ffmpeg.runFfmpeg;
+      const probe = vi.spyOn(ffmpeg, "runCapture").mockImplementation((binary, args, opts) => binary === bin && args.includes("-frames:v")
+        ? Promise.resolve({ code: 0, stdout: Buffer.alloc(0), stderr: "" }) : capture(binary === bin ? "ffmpeg" : binary, args, opts));
+      const actual: string[] = [];
+      let qsvCalls = 0, deviceBusy = false;
+      const encode = vi.spyOn(ffmpeg, "runFfmpeg").mockImplementation((args, opts) => {
+        const pos = args.indexOf("-c:v");
+        if (pos < 0) return run(args, { ...opts, ffmpegPath: "ffmpeg" });
+        const name = args[pos + 1]!;
+        actual.push(name);
+        if (name === "h264_qsv") {
+          qsvCalls++;
+          if (deviceBusy || qsvCalls === 2) return Promise.reject(new ffmpeg.FfmpegError("failed", bin, args, 1,
+            deviceBusy ? "[h264_qsv @ 0x123] device is busy" : "[h264_qsv @ 0x123] Error initializing the MFX video session"));
+        }
+        // Use the local software encoder to produce valid fixture bytes for the simulated NVIDIA driver.
+        const rewritten = [...args];
+        rewritten.splice(pos, args.indexOf("-pix_fmt", pos) - pos, "-c:v", "libx264");
+        return run(rewritten, { ...opts, ffmpegPath: "ffmpeg" });
+      });
+      try {
+        const options = { quality: "delivery" as const, hwaccel: "qsv" as const, ffmpegPath: bin,
+          mediaRoot: dir, softwareDecode: true, segmentSeconds: 1, exportRange: { start: 0, end: 2 } };
+        const exportFile = (name: string, hwaccel: "qsv" | "nvenc" | "none", concurrency = 1) => renderFullCached(project, timeline,
+          path.join(dir, "driver-cache"), path.join(dir, name + ".mp4"), { ...options, hwaccel, concurrency });
+        const switched = await exportFile("switched", "qsv");
+        expect(switched.encoder).toBe("h264_nvenc");
+        expect(actual).toEqual(["h264_qsv", "h264_qsv", ...Array(switched.rendered).fill("h264_nvenc")]);
+        expect(switched.warnings).toContainEqual(expect.stringMatching(/h264_qsv.*h264_nvenc/));
+        const cached = await exportFile("cached", "nvenc");
+        expect(cached.rendered).toBe(0);
+        expect(cached.segments.map(s => s.key)).toEqual(switched.segments.map(s => s.key));
+        expect((await probeOut(cached.output)).duration).toBeCloseTo(2);
+        // Preserve the first GPU's successfully published part under its own key.
+        const restored = await exportFile("recovered", "qsv");
+        expect(restored.reused).toBe(1);
+        expect(restored.encoder).toBe("h264_qsv");
+        expect(restored.segments.map(s => s.key)).not.toEqual(switched.segments.map(s => s.key));
+        // A serial retry on a busy GPU can still fall back if it refuses a single session.
+        await fs.rm(restored.segments[0]!.file);
+        deviceBusy = true;
+        const retried = await exportFile("busy", "qsv", 2);
+        expect(retried.encoder).toBe("h264_nvenc");
+        expect(retried.warnings).toContainEqual(expect.stringContaining("one section at a time"));
+        encoders.mockResolvedValue(new Set(["h264_qsv"]));
+        const software = await exportFile("software", "qsv");
+        expect(software.encoder).toBe("libx264");
+        expect(software.rendered).toBe(switched.rendered);
+        expect((await exportFile("explicit-cpu", "none")).rendered).toBe(0);
+      } finally {
+        encode.mockRestore();
         probe.mockRestore();
         encoders.mockRestore();
       }
@@ -1968,6 +2076,17 @@ describe("render", () => {
     ])).stdout.toString();
     const before = await renderFullCached(project, timeline, cache, output, options);
     expect((await probeMedia(before.segments[0]!.file)).hasAudio).toBe(false);
+    // Only the delivered movie needs a front-loaded index. Private segments go straight to the final remux.
+    for (const file of [before.segments[0]!.file, output]) {
+      const bytes = await fs.readFile(file);
+      const atoms: string[] = [];
+      for (let i = 0; i < bytes.length; i += bytes.readUInt32BE(i)) {
+        expect(bytes.readUInt32BE(i)).toBeGreaterThanOrEqual(8);
+        atoms.push(bytes.toString("ascii", i + 4, i + 8));
+      }
+      expect(atoms).toEqual(expect.arrayContaining(["moov", "mdat"]));
+      expect(atoms.indexOf("moov") < atoms.indexOf("mdat")).toBe(file === output);
+    }
     const picture = await streamHash("v"), sound = await streamHash("a");
     camera.volume = 0.3;
     camera.audioFadeIn = 0.2;
