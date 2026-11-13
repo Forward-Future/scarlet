@@ -204,3 +204,67 @@ test("a shallow clone cannot silently number from incomplete history", t => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /full first-parent history/);
 });
+
+test("a Windows main updater recovers a partial stamp and stages the per-commit installer from clean sources", async t => {
+  const launcher = fixture(t);
+  const cache = join(launcher, "cache");
+  const directory = join(cache, "source");
+  const gitPath = process.platform === "win32"
+    ? execFileSync("where.exe", ["git.exe"], { encoding: "utf8" }).split(/\r?\n/)[0]
+    : execFileSync("/bin/sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  copyFileSync(join(root, "apps/desktop/scripts/windows-main-launcher/update.mjs"), join(launcher, "update.mjs"));
+  writeFileSync(join(launcher, "tools.json"), JSON.stringify({git: gitPath, pnpm: process.execPath}));
+  const previous = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = launcher;
+  t.after(() => { if (previous === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = previous; });
+  const updater = await import(pathToFileURL(join(launcher, "update.mjs")).href);
+
+  const upstream = fixture(t);
+  git(upstream, "init", "-b", "main");
+  git(upstream, "add", ".");
+  git(upstream, "commit", "-m", "Base");
+  git(upstream, "commit", "--allow-empty", "-m", "Next main");
+  const rev = git(upstream, "rev-parse", "HEAD");
+  git(launcher, "clone", "--depth=1", pathToFileURL(upstream).href, directory);
+  const official = "https://github.com/Forward-Future/scarlet.git";
+  git(directory, "remote", "set-url", "origin", official);
+  git(directory, "fetch", "--unshallow", pathToFileURL(upstream).href, "main");
+  assert.notEqual(git(directory, "rev-parse", "--is-shallow-repository"), "true");
+  const version = command(directory, "for-commit").stdout.trim();
+  const baseline = JSON.parse(readFileSync(join(directory, "package.json"), "utf8")).version;
+  assert.notEqual(version, baseline);
+  const journal = join(cache, "build-version.json");
+  const cfg = "apps/desktop/src-tauri/tauri.conf.json";
+  const config = join(directory, cfg);
+  const before = readFileSync(config, "utf8");
+  const stamp = () => writeFileSync(journal, JSON.stringify({ revision: rev, version }));
+
+  stamp();
+  writeFileSync(config, before.replace(baseline, version));
+  const unrelated = join(directory, "personal-note.txt");
+  writeFileSync(unrelated, "preserve");
+  assert.throws(() => updater.restoreStamp(), /clean GitHub revision/);
+  assert.equal(readFileSync(config, "utf8"), before);
+  assert.equal(readFileSync(unrelated, "utf8"), "preserve");
+  rmSync(unrelated);
+  updater.restoreStamp();
+  assert.equal(git(directory, "status", "--porcelain"), "");
+
+  // A user changing the version itself must not be overwritten by recovery.
+  stamp();
+  writeFileSync(config, before.replace(baseline, "12.34.56"));
+  assert.throws(() => updater.restoreStamp());
+  assert.match(readFileSync(config, "utf8"), /12\.34\.56/);
+  writeFileSync(config, before);
+  updater.restoreStamp();
+
+  const release = join(cache, "target", "release");
+  mkdirSync(join(release, "bundle", "nsis"), { recursive: true });
+  mkdirSync(join(release, "deps"));
+  writeFileSync(join(release, "deps", "scarlet_desktop.exe"), "__TAURI_BUNDLE_TYPE_VAR_UNK");
+  writeFileSync(join(release, "scarlet-engine.exe"), "test engine");
+  writeFileSync(join(release, "bundle", "nsis", "Scarlet_" + version + "_x64-setup.exe"), "verified installer");
+  updater.stageVerifiedBuild(directory, release, rev);
+  assert.equal(JSON.parse(readFileSync(join(cache, "ready.json"), "utf8")).revision, rev);
+  assert.equal(readFileSync(join(cache, "ready-setup.exe"), "utf8"), "verified installer");
+});

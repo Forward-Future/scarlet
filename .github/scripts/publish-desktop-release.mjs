@@ -99,7 +99,22 @@ export async function publishDesktopRelease({ version, directory, repository, sh
   if (!release) {
     release = await request("/releases", { method: "POST", body: {
       tag_name: tag, target_commitish: sha, name: `Scarlet ${version}`,
-      body: "Download Scarlet for Apple Silicon, Intel Mac, or Windows x64 below.", draft: true, prerelease: false,
+      body: [
+        "Download the DMG for your Mac’s chip (Apple Silicon or Intel), or choose the Setup EXE or MSI for Windows x64.",
+        "### FFmpeg and FFprobe",
+        "These installers include FFmpeg and FFprobe 9.0.2 from the FFmpeg developers. " +
+          "[GNU General Public License v3](https://www.gnu.org/licenses/gpl-3.0.txt) · " +
+          "[FFmpeg 9.0.2 source archive](https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz)",
+        "Martin Riedl built the macOS binaries. " +
+          "[Apple Silicon component versions](https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/versions.txt) · " +
+          "[Intel component versions](https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/versions.txt) · " +
+          "[Build scripts](https://git.martin-riedl.de/ffmpeg/build-script)",
+        "Windows uses Gyan Doshi’s Essentials build. " +
+          "[9.0.2 release and source revision](https://github.com/GyanD/codexffmpeg/releases/tag/9.0.2) · " +
+          "[Corresponding build materials request](https://github.com/GyanD/codexffmpeg/issues/255)",
+        `[Pinned FFmpeg downloads and SHA-256 checksums for this Scarlet release](https://github.com/${repository}/blob/${sha}/apps/desktop/scripts/fetch-ffmpeg.mjs)`,
+      ].join("\n\n"),
+      draft: true, prerelease: false,
     } });
   }
   const { missing, interrupted } = await inspectRelease(request, release, files);

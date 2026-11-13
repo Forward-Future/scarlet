@@ -1,4 +1,4 @@
-"""Opt-in macOS LaunchAgent that builds the private main branch for this Mac."""
+"""Opt-in macOS LaunchAgent that builds Scarlet main for this Mac."""
 
 import contextlib
 import ctypes
@@ -22,6 +22,7 @@ from pathlib import Path
 APP_ID = "com.forwardfuture.scarlet"
 LABEL = APP_ID + ".main-updater"
 REPO = "https://github.com/Forward-Future/scarlet.git"
+VERSION_SCRIPT = "apps/desktop/scripts/release-version.mjs"
 APP = Path("/Applications/Scarlet.app")
 LIBRARY = Path.home() / "Library"
 CACHE = LIBRARY / "Caches" / (LABEL + ".noindex")
@@ -242,7 +243,7 @@ def build(transcript, head, attend):
     if not SOURCE.exists():
         with tempfile.TemporaryDirectory(dir=CACHE) as folder:
             checkout = Path(folder) / "source"
-            subprocess.run(["git", "clone", "--depth=1", "--branch", "main", "--single-branch", "--no-tags", REPO, checkout],
+            subprocess.run(["git", "clone", "--branch", "main", "--single-branch", "--no-tags", REPO, checkout],
                            check=True, stdout=transcript, stderr=subprocess.STDOUT, timeout=BUILD_STEP_TIMEOUT)
             checkout.rename(SOURCE)
     if SOURCE.is_symlink() or Path(output("git", "rev-parse", "--show-toplevel", cwd=SOURCE)) != SOURCE:
@@ -256,7 +257,8 @@ def build(transcript, head, attend):
 
     try:
         progress.start("source")
-        run("git", "fetch", "--depth=1", "--no-tags", REPO, "refs/heads/main")
+        shallow = output("git", "rev-parse", "--is-shallow-repository", cwd=SOURCE) == "true"
+        run("git", "fetch", *(["--unshallow"] if shallow else []), "--no-tags", REPO, "refs/heads/main")
         commit = progress.commit = output("git", "rev-parse", "FETCH_HEAD", cwd=SOURCE)
         candidate = CACHE / "target/release/bundle/macos/Scarlet.app"
         assemble(run, progress, commit, candidate)
@@ -265,43 +267,86 @@ def build(transcript, head, attend):
         write_status(None)
 
 
+def clean_source(run):
+    """Restore our own interrupted changes, including the plist left by older installed helpers."""
+    old_head = output("git", "rev-parse", "HEAD", cwd=SOURCE)
+    journal = CACHE / "build-version.json"
+    if journal.exists():
+        stamp = json.loads(journal.read_text())
+        if stamp["revision"] != old_head or output("git", "diff", "HEAD", "--", VERSION_SCRIPT, cwd=SOURCE):
+            raise ValueError("The source checkout changed during the previous build. Its files have been left in place.")
+        run("node", VERSION_SCRIPT, "restore-stamp", stamp["version"])
+    extra = SOURCE / "apps/desktop/src-tauri/Info.plist"
+    if output("git", "diff", "--", "apps/desktop/src-tauri/Info.plist", cwd=SOURCE):
+        original = subprocess.check_output(["git", "show", "HEAD:apps/desktop/src-tauri/Info.plist"], cwd=SOURCE)
+        older = dict(plistlib.loads(original), ScarletSourceRevision=old_head)
+        if extra.read_bytes() == plistlib.dumps(older):
+            replacement = CACHE / "build-info.tmp"
+            replacement.write_bytes(original)
+            replacement.replace(extra)
+    if output("git", "status", "--porcelain", "--untracked-files=normal", cwd=SOURCE):
+        raise ValueError("The build checkout contains other changes. Its files have been left in place.")
+    journal.unlink(missing_ok=True)
+
+
 def assemble(run, progress, commit, candidate):
+    clean_source(run)
     run("git", "reset", "--hard", commit)
     keep = []
     for name in ("ffmpeg-*", "ffprobe-*", ".pinned-media-*", "whisper-cli-*"):
         keep.extend(["-e", "/apps/desktop/src-tauri/binaries/" + name])
+    # Other untracked files were rejected above; the -e patterns preserve verified media tool caches.
     run("git", "clean", "-ffdx", *keep)
     native = SOURCE / "apps/desktop/src-tauri"
-    extra = native / "Info.plist"
-    info = plistlib.loads(extra.read_bytes())
-    info["ScarletSourceRevision"] = commit
-    extra.write_bytes(plistlib.dumps(info))
-    triple = {"arm64": "aarch64-apple-darwin", "x86_64": "x86_64-apple-darwin"}[platform.machine()]
-    if candidate.exists():
-        shutil.rmtree(candidate)
+    run("node", VERSION_SCRIPT, "check")
+    version = output(str(node_bin() / "node"), VERSION_SCRIPT, "for-commit", cwd=SOURCE)
+    journal = CACHE / "build-version.json"
+    temp = journal.with_suffix(".tmp")
+    temp.write_text(json.dumps({"revision": commit, "version": version}))
+    temp.replace(journal)
     try:
-        progress.start("install")
-        run("pnpm", "install", "--frozen-lockfile")
-        progress.start("engine")
-        run("pnpm", "--filter", "@scarlet/server...", "run", "build")
-        progress.start("bundle")
-        run("pnpm", "--filter", "@scarlet/server", "build:sea", "--out", native / "binaries" / ("scarlet-engine-" + triple))
-        progress.start("media")
-        run("pnpm", "desktop:ffmpeg")
-        progress.start("app")
-        run("pnpm", "--filter", "@scarlet/desktop", "exec", "tauri", "build", "--bundles", "app")
-        progress.start("verify")
-        if revision(candidate) != commit:
-            raise ValueError("The finished app does not identify the requested main commit")
-        run("/usr/bin/codesign", "--verify", "--deep", "--strict", candidate)
-        run("node", "apps/desktop/scripts/smoke-engine.mjs", candidate / "Contents/MacOS")
+        try:
+            run("node", VERSION_SCRIPT, "set", version)
+            build_app(run, progress, commit, candidate, native, version)
+        finally:
+            clean_source(run)
+        # The old build stays available until both the bundle and its sources have been checked.
         progress.finish()
-        # The build it replaces, if one was still waiting, was on offer until now.
         swap_in(candidate, PENDING)
         log(f"Verified {commit}. Waiting for regular Scarlet to close before installation.")
     finally:
         if candidate.exists():
             shutil.rmtree(candidate)
+
+
+def build_app(run, progress, commit, candidate, native, version):
+    extra = native / "Info.plist"
+    info = plistlib.loads(extra.read_bytes())
+    info["ScarletSourceRevision"] = commit
+    pending_info = CACHE / "build-info.tmp"
+    pending_info.write_bytes(plistlib.dumps(info))
+    pending_info.replace(extra)
+    triple = {"arm64": "aarch64-apple-darwin", "x86_64": "x86_64-apple-darwin"}[platform.machine()]
+    if candidate.exists():
+        shutil.rmtree(candidate)
+    progress.start("install")
+    run("pnpm", "install", "--frozen-lockfile")
+    progress.start("engine")
+    run("pnpm", "--filter", "@scarlet/server...", "run", "build")
+    progress.start("bundle")
+    run("pnpm", "--filter", "@scarlet/server", "build:sea", "--out", native / "binaries" / ("scarlet-engine-" + triple))
+    progress.start("media")
+    run("pnpm", "desktop:ffmpeg")
+    progress.start("app")
+    run("pnpm", "--filter", "@scarlet/desktop", "exec", "tauri", "build", "--bundles", "app")
+    progress.start("verify")
+    if revision(candidate) != commit:
+        raise ValueError("The finished app does not identify the requested main commit")
+    packaged = plistlib.loads((candidate / "Contents/Info.plist").read_bytes())
+    if packaged.get("CFBundleShortVersionString") != version:
+        raise ValueError(f"The finished app does not identify the requested release {version}")
+    run("/usr/bin/codesign", "--verify", "--deep", "--strict", candidate)
+    run("node", "apps/desktop/scripts/smoke-engine.mjs", candidate / "Contents/MacOS")
 
 
 def check(attend):

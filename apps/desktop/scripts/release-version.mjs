@@ -1,4 +1,4 @@
-import { readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -76,8 +76,26 @@ function commitVersion() {
   return current.parts.join(".");
 }
 
+// A local updater runs this only if it recorded the start of its own stamp. Check each
+// changed field before restoring any so a partial stamp is recoverable without undoing local edits.
+function restoreCommitVersions(stamped) {
+  versionParts(stamped);
+  const original = JSON.parse(git("show", "HEAD:package.json")).version;
+  versionParts(original);
+  for (const { file, version } of fields.map(readField)) {
+    if (version !== original && version !== stamped) {
+      throw new Error(`${file}: version differs from the commit and the updater stamp; leaving it in place`);
+    }
+  }
+  return original;
+}
+
 function run(args) {
-  const [command, ...rest] = args;
+  let [command, ...rest] = args;
+  if (command === "restore-stamp" && rest.length === 1) {
+    rest = [restoreCommitVersions(rest[0])];
+    command = "set";
+  }
   if (command === "for-commit" && rest.length === 0) {
     console.log(commitVersion());
     return;
@@ -101,8 +119,12 @@ function run(args) {
     throw new Error(changed.map(({ file, version }) => `${file}: expected ${expected}, found ${version}`).join("\n"));
   }
   if (command === "set") {
+    // The updaters use normal clones. An interrupted write in .git cannot poison the clean-worktree check.
+    const localGitDir = join(root, ".git");
+    const scratch = existsSync(localGitDir) && statSync(localGitDir).isDirectory() ? localGitDir : null;
     for (const { path, contents, start, version } of changed) {
-      const temp = path + ".release-version-" + randomUUID();
+      const prefix = scratch ? join(scratch, "release-version-") : path + ".release-version-";
+      const temp = prefix + randomUUID();
       try {
         writeFileSync(temp, contents.slice(0, start) + expected + contents.slice(start + version.length), {
           mode: statSync(path).mode, flag: "wx",
