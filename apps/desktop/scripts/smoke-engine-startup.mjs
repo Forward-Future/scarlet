@@ -39,7 +39,7 @@ function startupProgress(data) {
   } catch { return "library temporarily unavailable"; }
 }
 
-export async function startSmokeEngine(engine, work, env) {
+export async function startSmokeEngine(engine, work, env, readyTimeoutMs = 60_000) {
   const data = join(work, "data");
   const cwd = join(work, "work");
   mkdirSync(cwd, { mode: 0o700, recursive: true });
@@ -65,8 +65,8 @@ export async function startSmokeEngine(engine, work, env) {
           try { res(JSON.parse(match[1])); } catch { rej(new Error("Invalid SCARLET_READY payload")); }
         });
         timer = setTimeout(() => {
-          rej(new Error(`Engine did not print SCARLET_READY within 60 s. Standalone startup banner: ${standalone}. Test library: ${startupProgress(data)}.`));
-        }, 60_000);
+          rej(new Error(`Engine did not print SCARLET_READY within ${readyTimeoutMs / 1000} s. Standalone startup banner: ${standalone}. Test library: ${startupProgress(data)}.`));
+        }, readyTimeoutMs);
       }),
       exited.then(({ code, signal }) => { throw new Error(`Engine exited before SCARLET_READY (${signal ?? code})`); }),
     ]);
