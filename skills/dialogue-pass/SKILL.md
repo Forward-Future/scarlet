@@ -19,5 +19,3 @@ Apply confident cuts with `dialogue_apply_cuts`. Mark a meaningful pause or prot
 Smooth a change in room tone at a dialogue join with a centered two-frame audio crossfade. Keep the picture cut straight. Set `crossfadeFrames` when submitting cuts with `dialogue_apply_cuts`. When assembling kept takes with `timeline_first_cut`, add the overlap at their joins with `timeline_crossfade_audio` once the assembly is applied. Follow the editor’s preference for another length or straight audio cuts.
 
 Check the joined dialogue in context. Each speaker’s words should play whole, with questions and answers still making sense together. A clipped word or an accidental restart that the cuts introduced or left behind is not finished work. Finish when the requested dialogue cuts and their review are ready.
-
-Acoustic filler detection is [Powered by Desert Ant Labs](https://desertant.com/).

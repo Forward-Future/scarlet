@@ -446,6 +446,8 @@ export interface RenderFileInfo {
   hasAudio: boolean;
   sampleRate?: number;
   channels?: number;
+  /** EBU R128 loudness of the file's sound, as heard with every gain and effect. Silence reads null. */
+  loudness?: { integratedLufs: number | null; loudnessRangeLu: number | null; truePeakDbtp: number | null };
 }
 
 export const RenderKind = z.enum(["segment", "full", "proxy", "preview", "playback", "export"]);

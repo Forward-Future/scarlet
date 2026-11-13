@@ -270,7 +270,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     lines.push(
       "",
       ctx.task?.context?.cutIndex !== undefined
-        ? "The feedback is about one staged cut of this pending pass. The other cuts and the editor's calls on them stay as they are."
+        ? "The feedback is about one staged cut of this pending pass."
         : "Revise it by proposing a NEW change against the current head that addresses the feedback (the original stays in history). Reference the note ids.",
     );
     parts.push(`# Change being revised\n\n${lines.join("\n")}`);

@@ -351,6 +351,11 @@ export function SettingsPage() {
                 <ul className="mt-2 list-disc pl-5">{FEATURE_NAMES.map(name => <li key={name}><code>{name}</code></li>)}</ul>
               </details>
             </section>
+            {/* Credits the app owes whatever skills the editor keeps, so they live here and not in a skill they can edit away. */}
+            <section className="mt-6 max-w-prose space-y-2 text-sm leading-relaxed text-muted" aria-labelledby="credits-heading">
+              <h2 id="credits-heading" className="font-semibold text-fg">Credits</h2>
+              <p>Acoustic filler detection is <a className="underline" href="https://desertant.com/" target="_blank" rel="noreferrer">Powered by Desert Ant Labs</a>.</p>
+            </section>
           </section>
         )}
         {tab === "advanced" && (
