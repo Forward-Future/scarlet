@@ -58,7 +58,15 @@ jobs:
         run: pnpm -r build
 
       - name: Test
+        if: runner.os != 'Windows'
         run: pnpm -r test
+
+      - name: Test with user-owned Windows fixtures
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          ./.github/scripts/use-windows-test-owner.ps1
+          pnpm -r test
 
       - uses: actions/setup-python@v5
         with:

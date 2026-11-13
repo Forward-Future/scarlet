@@ -400,9 +400,13 @@ it("restores committed dialogue evidence after restarting the engine and retries
     await writeFile(source, "different recording at the same path");
     expect(await (await request("checkpoints", 0, 180)).json()).toEqual([]);
   } finally {
-    await app.ctx.close();
-    vi.restoreAllMocks();
-    await rm(dir, { recursive: true, force: true });
+    try {
+      // If reopening failed, app still refers to the engine we already closed.
+      if (!app.ctx.shutdown.aborted) await app.ctx.close();
+    } finally {
+      vi.restoreAllMocks();
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 });
 

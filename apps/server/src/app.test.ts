@@ -63,6 +63,8 @@ describe("scarlet server", () => {
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), "scarlet-test-"));
     seedDir = join(dataDir, "seed-skills");
+    // First launch secures the empty library before the test adds footage.
+    scarlet = createApp({ dataDir, env: {}, log: () => {}, skillsSeedDir: seedDir });
     const mp4 = join(dataDir, "test.mp4");
     execFileSync("ffmpeg", [
       "-hide_banner", "-loglevel", "error", "-y",
@@ -71,7 +73,6 @@ describe("scarlet server", () => {
       "-shortest", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", mp4,
     ]);
     testMp4 = readFileSync(mp4);
-    scarlet = createApp({ dataDir, env: {}, log: () => {}, skillsSeedDir: seedDir });
   });
 
   afterAll(async () => {
