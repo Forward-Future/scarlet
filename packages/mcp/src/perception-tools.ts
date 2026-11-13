@@ -26,6 +26,8 @@ export interface PerceptionDeps {
   /** A media's words in transcript_get order (index = stable word index), or null without a transcript. */
   /** With `through`, only words whose times are final up to that source second: it rejects while alignment hasn't reached it. */
   transcriptWords(mediaId: string, prepareMissing?: boolean, through?: number): Promise<TranscriptWord[] | null>;
+  /** Note the list a tool showed the model word indices from, so a reference read from it resolves against the same list. */
+  showWords?(mediaId: string, words: readonly TranscriptWord[]): void;
   /** The source second up to which a media's word times, as last read, are final. Infinity once they all are, and for a media with no transcript. */
   settledThrough(mediaId: string): number;
   /** 20 ms levels with voice activity for a source window. */
@@ -108,6 +110,7 @@ export function registerPerception(deps: PerceptionDeps) {
     const transcripts = await wordsFor(tl, project);
     if (!transcripts.size) return text(`Version ${tl.version} plays no transcribed speech.`);
     const words = timelineWords(tl, transcripts, range);
+    for (const [id, list] of transcripts) deps.showWords?.(id, list);
     // A join is numbered among all the edit's joins, as timeline_join_audit numbers it.
     const all = timelineJoins(tl, project);
     const joins = all.filter(j => j.at >= range.start - 1e-3 && j.at <= range.end + 1e-3);

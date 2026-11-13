@@ -23,6 +23,7 @@ export async function firstCutRanges(keep: FirstCutKeep[], projectId: string, au
     throw new Error(`Indexed keeps need a timed recording with dialogue on its first audio stream. Give source seconds for ${audio.id}.`);
   const ref = await sources.words(audio.id);
   if (!ref?.length) throw new Error(`No transcript words for ${audio.id}. Use source seconds.`);
+  sources.sameWordsAsRead?.(audio.id, ref);
   let furthest = 0;
   for (const [i, r] of rows.entries()) {
     if (r.fromWord === undefined) continue;
@@ -32,6 +33,7 @@ export async function firstCutRanges(keep: FirstCutKeep[], projectId: string, au
   }
   const words = await sources.words(audio.id, (ref[furthest + 1] ?? ref[furthest]!).end + SETTLED_MARGIN);
   if (!words || words.length !== ref.length) throw new Error(`The transcript of ${audio.id} changed. Read transcript_get and resubmit the word ranges.`);
+  sources.sameWordsAsRead?.(audio.id, words);
   const midpoint = words.map(w => (w.start + w.end) / 2);
   const source = timelineFromKeepRanges(projectId, audio.id, [{ start: 0, end: duration }]);
   // Assembly clips meet at their source edges. Even optional clip fades stay inside each kept range.

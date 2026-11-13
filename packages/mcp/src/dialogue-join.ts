@@ -324,6 +324,11 @@ export function dialogueJoinRepeats(nearby: RepeatReadings, cut: TimeRange, prev
 }
 
 export type ReadKeptWords = (mediaId: string, stream: number | undefined, from: number, to: number, cachedOnly?: true) => Promise<Word[]>;
+/**
+ * A `cachedOnly` read found no reading to answer from, as for a language the aligner has no model for. Nothing failed:
+ * the check that wanted it, the partial-word check, doesn't run.
+ */
+export class NoCachedSpeech extends Error {}
 
 /** Use the engine's ripple and fade operations so unavailable handles and existing edits are respected. */
 export function dialogueCutPreview(tl: Timeline, media: MediaAsset[], ranges: TimeRange[], fadeSeconds: number) {
@@ -385,7 +390,11 @@ async function checkPartialWord(tl: Timeline, project: Pick<Project, "media">, c
       const to = out ? played.source : Math.min(clip.sourceOut, played.source + JOIN_WORD_SECONDS,
         centerSource + (nextStart - at) * clip.speed);
       if (to <= from) return;
-      const words = await read(clip.mediaId, stream, from, to, true);
+      const words = await read(clip.mediaId, stream, from, to, true).catch(err => {
+        if (err instanceof NoCachedSpeech) return undefined;
+        throw err;
+      });
+      if (!words) return;
       const heard = words.filter(w => w.end > w.start && !/^\s*\[.*\]\s*$/.test(w.text)).map(w => [clock(w.start), clock(w.end), w.text] as const);
       return { trackId: track.trackId, clipId: before.id, mediaId: clip.mediaId, audioStream: stream, speed: clip.speed,
         sourceAtEdge: played.source, edge, bounds: { start: clock(from), end: clock(to) }, scan, heard };
@@ -408,6 +417,7 @@ export async function checkKeptWords(tl: Timeline, project: Pick<Project, "media
   const readWindow: ReadKeptWords = async (id, stream, from, to, cachedOnly) => {
     try { return await read(id, stream, from, to, cachedOnly); }
     catch (err) {
+      if (cachedOnly && err instanceof NoCachedSpeech) throw err;
       unread.add(id + ": " + (err instanceof Error ? err.message : String(err)));
       return [];
     }
@@ -770,6 +780,9 @@ export function pauseCutRange(before: Word, after: Word, pageAt: (t: number) => 
   const last = besideWord(between(pageAt(Math.max(after.start - .1, (before.end + after.start) / 2))), "end");
   const inside = (run: TimeRange, t: number) => Math.min(Math.max(t, run.start + quietMargin), run.end - quietMargin);
   let start = before.end + leave * share, end = after.start - leave * (1 - share);
+  // Asked to play its whole length or more, the pause has nothing to trim. With a breath or a click in the middle the
+  // quiet runs either side would each pull an edge in, and the pause lost the sound between them.
+  if (start >= end - 1e-6) return { start, end: start, problems, plays: Math.max(0, after.start - before.end) };
   if (first) start = inside(first, start);
   else problems.push(`No measured silence after “${plain(before)}”. The pause's start uses the word timing.`);
   if (last) end = inside(last, end);

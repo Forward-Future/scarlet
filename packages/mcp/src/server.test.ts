@@ -515,9 +515,14 @@ describe("timeline_propose", () => {
       await c.close();
     }
   }
-  // Ops run in order: half a second comes out at 1 s, then frames 61 to 90, and the edit now ends at 4.5533 s.
+  // Ops run in order, each written on the edit the ones before it leave as asked: half a second comes out at 1 s, then
+  // 1.007 s at 2.013 s, so the model's edit ends at 4.513 s. On whole frames the second removal is frames 61 to 90,
+  // 0.9667 s, so everything after it plays 0.0403 s later than the third op's times assume, and the edit ends at 4.5533 s.
+  // This used to place each op on frames by itself: the third then came out 0.0403 s early on the footage, about a frame
+  // for each removal before it. It now moves by what the earlier rounding left in before it goes on frames.
+  const askedEnd = 6.02 - .5 - 1.007;
   const shortenedEnd = 6.02 - .5 - (3 - 61 / 30);
-  const threeRipples = [{ op: "rippleDelete", start: 1, end: 1.5 }, { op: "rippleDelete", start: 2.013, end: 3.02 }, { op: "rippleDelete", start: 4, end: shortenedEnd }];
+  const threeRipples = [{ op: "rippleDelete", start: 1, end: 1.5 }, { op: "rippleDelete", start: 2.013, end: 3.02 }, { op: "rippleDelete", start: 4, end: askedEnd }];
 
   it("keeps the end of a later ripple that runs to the end of the edit as the earlier ones left it", async () => {
     const { sent, result } = await offFrameEdit(undefined, threeRipples);
@@ -525,18 +530,20 @@ describe("timeline_propose", () => {
     // A removal inside the edit still lands on whole frames.
     expect(sent[1]!.start).toBeCloseTo(61 / 30, 9);
     expect(sent[1]!.end).toBe(3);
-    // The last one runs to the end of the edit as it stands by then, and keeps that end.
-    expect(sent[2]).toMatchObject({ start: 4, end: shortenedEnd });
-    expect(result.onWholeFrames).toEqual([{ asked: [2.013, 3.02], removed: [2.033, 3] }]);
-    expect(result.duration).toBeCloseTo(4, 9);
+    // The last one runs to the end of the edit as it stands by then, and keeps that end. Its start, 4.0403 s on the edit
+    // as made, goes onto the next frame.
+    expect(sent[2]!.start).toBeCloseTo(122 / 30, 9);
+    expect(sent[2]!.end).toBeCloseTo(shortenedEnd, 9);
+    expect(result.onWholeFrames).toEqual([{ asked: [2.013, 3.02], removed: [2.033, 3] }, { asked: [4, askedEnd], removed: [4.067, 4.553], movedBy: 0.04 }]);
+    expect(result.duration).toBeCloseTo(122 / 30, 9);
   });
 
   it("puts that ripple on a whole frame within a task, where the engine would, and says so", async () => {
     // The engine aligns a task's removals by the end of the version the edit starts from. Left to it, the move would go unreported.
     const { sent, result } = await offFrameEdit("task_ripples", threeRipples);
-    expect(sent[2]!.start).toBe(4);
+    expect(sent[2]!.start).toBeCloseTo(122 / 30, 9);
     expect(sent[2]!.end).toBeCloseTo(136 / 30, 9);
-    expect(result.onWholeFrames).toEqual([{ asked: [2.013, 3.02], removed: [2.033, 3] }, { asked: [4, shortenedEnd], removed: [4, 4.533] }]);
+    expect(result.onWholeFrames).toEqual([{ asked: [2.013, 3.02], removed: [2.033, 3] }, { asked: [4, askedEnd], removed: [4.067, 4.533], movedBy: 0.04 }]);
   });
 
   it("goes by the end the edit started with after a ripple on some tracks only, or any other op", async () => {
@@ -2303,6 +2310,48 @@ it("reports a repeated onset that only plays in the fade, then clears it when th
   } finally { Object.assign(mock.state, original); await editor.close(); }
 });
 
+it("skips the partial-word check quietly where no speech reading is cached, and still reports a read that failed", async () => {
+  const original = { timeline: mock.state.timeline, transcripts: mock.state.transcripts, waveform: mock.state.waveform, extra: mock.state.extra };
+  const editor = await connect();
+  const tl = emptyTimeline(mock.state.project.id);
+  tl.tracks[1]!.clips.push(makeMediaClip("m1", 0, 8, 0));
+  mock.state.timeline = tl;
+  const words = [{ text: "step", start: 1.4, end: 1.8 }, { text: "over", start: 2.005, end: 2.25 },
+    { text: "over", start: 5.1, end: 5.35 }, { text: "here", start: 5.4, end: 5.7 }];
+  mock.state.transcripts = { m1: { ...transcript, segments: [{ id: "s", start: 0, end: 8, text: "Step over, over here.", words }] } };
+  mock.state.waveform = (mediaId, from, to, points) => ({ mediaId, from, to, peaks: Array(points).fill(.2), rms: Array(points).fill(.2),
+    speechActivity: [{ start: from, end: to }] });
+  let failing = false;
+  mock.state.extra = (req, res) => {
+    if (!req.path.endsWith("/dialogue-detections")) return false;
+    const { from, to, keptSide } = req.body as { from: number; to: number; keptSide: { cachedOnly?: boolean } };
+    res.setHeader("Content-Type", "application/json");
+    if (failing && !keptSide.cachedOnly) {
+      res.statusCode = 500;
+      res.end(JSON.stringify({ error: { code: "detections_failed", message: "The speech model stopped." } }));
+      return true;
+    }
+    // The aligner has no model for this language, so nothing was ever read to cache.
+    if (keptSide.cachedOnly) res.end(JSON.stringify({ segments: [], acoustic: [], keptSideUnavailable: true }));
+    else res.end(JSON.stringify({ segments: [{ id: "kept", words: words.filter(w => w.end > from && w.start < to) }], acoustic: [] }));
+    return true;
+  };
+  const check = async () => {
+    const result = await editor.callTool({ name: "dialogue_check_join", arguments: { version: tl.version, start: 2, end: 5 } });
+    expect(result.isError).toBeFalsy();
+    return JSON.parse(textOf(result));
+  };
+  try {
+    // No cached reading is not an unread join: the check that needs one just doesn't run.
+    const quiet = await check();
+    expect(quiet.partialWordRepeat).toBeUndefined();
+    expect(quiet.unreadJoinAudio).toBeUndefined();
+    // A reading that fails is still named.
+    failing = true;
+    expect((await check()).unreadJoinAudio).toEqual(expect.arrayContaining([expect.stringContaining("The speech model stopped.")]));
+  } finally { Object.assign(mock.state, original); await editor.close(); }
+});
+
 it("returns an opening trim that leaves two six-word deliveries, then saves the uninterrupted take", async () => {
   const original = { extra: mock.state.extra, waveform: mock.state.waveform, timeline: mock.state.timeline, transcripts: mock.state.transcripts };
   const editor = await connect();
@@ -3215,6 +3264,11 @@ it("refuses a ripple through a sounding word in the general edit tool and points
     expect(textOf(through)).toContain("dialogue_apply_cuts");
     // The same removal from the quiet after the word goes ahead.
     expect((await propose(2.0, 3.4)).isError).toBeFalsy();
+    // 4.54 s is quiet before “the” (4.55–4.7 s), but the removal starts on the next whole frame, 4.5667 s, inside it.
+    // The edge is measured where the removal will actually be.
+    const onFrame = await propose(4.54, 5.5);
+    expect(onFrame.isError).toBe(true);
+    expect(textOf(onFrame)).toContain("at source 4.57 s inside");
   } finally {
     Object.assign(mock.state, original);
     await c.close();
@@ -3330,7 +3384,8 @@ it("reads a transcript whose words are still being placed on the audio, and hold
     // The words and their indices can be read at once. The result says how far their times are final.
     const read = textOf(await editor.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 4, toWord: 4 } }) as CallToolResult);
     expect(read).toContain("#4 2.20-2.40 Um,");
-    expect(read).toContain("Times after 1.0 s are estimates until Scarlet has placed those words on the audio; indices are final.");
+    // Placing the words can add ones the transcript missed (a reread of a stretch without words), so indices aren't promised.
+    expect(read).toContain("Times after 1.0 s are estimates until Scarlet has placed those words on the audio. Placing them can add words the transcript missed");
     // An edge beside “Um,” needs the final times of it and the word after, so neither a check nor a save uses the estimates.
     const ref = { mediaId: "m1", fromWord: 2, toWord: 4 };
     const cut = { ...ref, kind: "retake", decision: "cut", reason: "The second take is cleaner." };
@@ -3345,6 +3400,100 @@ it("reads a transcript whose words are still being placed on the audio, and hold
     const applied = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Remove the first attempt", cuts: [cut] } }) as CallToolResult;
     expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut", range: [1.06, 3.5] }]);
     expect(textOf(await editor.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 4, toWord: 4 } }) as CallToolResult)).toContain("#4 2.50-2.70 Um,");
+  } finally {
+    Object.assign(mock.state, original);
+    await editor.close();
+  }
+});
+
+it("refuses a word reference read from a list that has changed since, instead of cutting beside other words", async () => {
+  const original = { extra: mock.state.extra, timeline: mock.state.timeline, waveform: mock.state.waveform, transcripts: mock.state.transcripts };
+  const tl = emptyTimeline(mock.state.project.id);
+  tl.version = "reread";
+  tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 6, 0)];
+  mock.state.timeline = tl;
+  mock.state.waveform = spokenWaveform;
+  mock.state.extra = (req, res) => {
+    if (!req.path.endsWith("/dialogue-cuts")) return false;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ changes: [] }));
+    return true;
+  };
+  mock.state.transcripts = { m1: estimated };
+  const editor = await connect(undefined, undefined, undefined, undefined, 0);
+  try {
+    // The model reads the words while they are still being placed, and their indices may still change.
+    const read = textOf(await editor.callTool({ name: "transcript_get", arguments: { mediaId: "m1" } }) as CallToolResult);
+    expect(read).toContain("#4 2.20-2.40 Um,");
+    expect(read).not.toContain("indices are final");
+    // Alignment ends, and the reread of a stretch without words finds “so” after “back.”: every later word moves on one.
+    const [segment] = transcript.segments;
+    mock.state.transcripts = { m1: { ...transcript, segments: [{ ...segment!, words: [...segment!.words.slice(0, 4), { text: "so", start: 1.95, end: 2.1 }, ...segment!.words.slice(4)] }] } };
+    await new Promise(resolve => setTimeout(resolve, 1600));
+    // #2–#4 meant “welcome back. Um,” when it was read. Now #4 is “so”: nothing is cut beside the wrong word.
+    const cut = { mediaId: "m1", fromWord: 2, toWord: 4, kind: "retake", decision: "cut", reason: "The second take is cleaner." };
+    const refused = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Remove the first attempt", cuts: [cut] } }) as CallToolResult;
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toContain("The transcript of m1 changed since you read it");
+    expect(mock.requests.some(r => r.path.endsWith("/dialogue-cuts"))).toBe(false);
+    // Read again, its indices hold.
+    expect(textOf(await editor.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 4, toWord: 5 } }) as CallToolResult)).toContain("#5 2.50-2.70 Um,");
+    const applied = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Remove the first attempt", cuts: [{ ...cut, toWord: 5 }] } }) as CallToolResult;
+    expect(applied.isError).toBeFalsy();
+    expect(JSON.parse(textOf(applied)).gate.decisions[0].words).toBe("welcome back. so Um,");
+  } finally {
+    Object.assign(mock.state, original);
+    await editor.close();
+  }
+});
+
+it("reads the level speech sits at from the recording only, not the silence the engine fills in past its end", async () => {
+  const original = { waveform: mock.state.waveform, media: mock.state.project.media };
+  // A six-second recording with a breath (-40 dBFS) between “back.” and “Um,”. Past its end the engine answers zeros.
+  mock.state.project.media = mock.state.project.media.map(m => m.id === "m1" ? { ...m, duration: 6 } : m);
+  mock.state.waveform = (mediaId, from, to, points) => {
+    const levels = Array.from({ length: points }, (_, i) => {
+      const t = from + (i + .5) * (to - from) / points;
+      if (t >= 6) return 0;
+      if (transcript.segments[0]!.words.some(w => w.start <= t && t < w.end)) return .2;
+      return t >= 2 && t < 2.3 ? .01 : .001;
+    });
+    return { mediaId, from, to, peaks: levels, rms: levels };
+  };
+  const editor = await connect();
+  try {
+    // Read over five minutes, 98% of it zeros, the speaking level came out as silence and the breath as speech.
+    const read = textOf(await editor.callTool({ name: "transcript_get", arguments: { mediaId: "m1" } }) as CallToolResult);
+    expect(read).toContain("0.70 s gap, quiet");
+    const levels = mock.requests.filter(r => r.path === "/media/m1/waveform").map(r => Number(r.query.get("to")));
+    expect(levels.every(to => to <= 6)).toBe(true);
+  } finally {
+    Object.assign(mock.state, { waveform: original.waveform });
+    mock.state.project.media = original.media;
+    await editor.close();
+  }
+});
+
+it("holds an edit whose edges need words still being placed, instead of saving it unchecked", async () => {
+  const original = { timeline: mock.state.timeline, waveform: mock.state.waveform, transcripts: mock.state.transcripts };
+  const tl = emptyTimeline(mock.state.project.id);
+  tl.version = "aligning-edges";
+  tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 6, 0)];
+  mock.state.timeline = tl;
+  mock.state.waveform = spokenWaveform;
+  mock.state.transcripts = { m1: estimated };
+  const editor = await connect(undefined, undefined, undefined, undefined, 0);
+  const saves = () => mock.requests.filter(r => r.method === "POST" && r.path === "/projects/prj_test/changes").length;
+  try {
+    const before = saves();
+    // Past the first second the word times are estimates, so neither check can say whether an edge is inside a word yet.
+    const ripple = await editor.callTool({ name: "timeline_propose", arguments: { intent: "requested", fromVersion: tl.version,
+      description: "Cut the filler", ops: [{ op: "rippleDelete", start: 2, end: 3.4 }] } }) as CallToolResult;
+    expect(textOf(ripple)).toContain("Scarlet is still placing the words of m1 on the audio");
+    const assembly = await editor.callTool({ name: "timeline_first_cut", arguments: { mediaId: "m1", intent: "requested", description: "First cut",
+      keep: [{ start: 0, end: 1.7 }, { start: 3.5, end: 5.5 }] } }) as CallToolResult;
+    expect(textOf(assembly)).toContain("Scarlet is still placing the words of m1 on the audio");
+    expect(saves()).toBe(before);
   } finally {
     Object.assign(mock.state, original);
     await editor.close();
