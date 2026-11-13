@@ -671,7 +671,12 @@ describe("pure helpers", () => {
     expect(lutFileStamps(timeline, mediaRoot)).toEqual([["cool.cube", null], ["warm.cube", null]]);
     await fs.writeFile(path.join(mediaRoot, "warm.cube"), "LUT_3D_SIZE 2\n");
     const [, warm] = lutFileStamps(timeline, mediaRoot);
-    expect(warm).toEqual(["warm.cube", [await fs.realpath(path.join(mediaRoot, "warm.cube")), 14, expect.any(Number), expect.any(Number)]]);
+    // Windows may return either the short or long spelling of the same temporary directory.
+    const stamp = warm?.[1];
+    if (!Array.isArray(stamp) || typeof stamp[0] !== "string") throw new Error("Expected an existing LUT file stamp");
+    const stampedFile = stamp[0];
+    expect(await fs.realpath(stampedFile)).toBe(await fs.realpath(path.join(mediaRoot, "warm.cube")));
+    expect(warm).toEqual(["warm.cube", [stampedFile, 14, expect.any(Number), expect.any(Number)]]);
     await fs.appendFile(path.join(mediaRoot, "warm.cube"), "# graded again\n");
     expect(lutFileStamps(timeline, mediaRoot)[1]).not.toEqual(warm);
     // A disabled clip's LUT is not read at all.
