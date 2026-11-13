@@ -77,9 +77,9 @@ describe("scarlet server", () => {
   });
 
   afterAll(async () => {
-    await scarlet.ctx.close();
+    await scarlet?.ctx.close();
     try {
-      rmSync(fixtureDir, { recursive: true, force: true });
+      if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
     } catch {
       /* Windows may still hold the WAL; the OS temp dir cleans up */
     }

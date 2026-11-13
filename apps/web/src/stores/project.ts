@@ -190,6 +190,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
   store.subscribe(({ current }) => {
     if (readAgain && current?.id !== readAgain.id) dropReadAgain();
     if (headAgain && current?.id !== headAgain.id) dropHeadAgain();
+    if (askedEvents && current?.id !== askedEvents.project) askedEvents = undefined;
   });
   const patch = (projectId: string, fn: (d: ProjectData) => Partial<ProjectData>) => {
     const cur = get().current;
@@ -293,7 +294,6 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const same = get().current?.id === id;
       if (!same) {
         set({ status: "loading", error: null, current: null, trashedProject: null });
-        askedEvents = undefined;
       }
       const pending = { id, events: [] as WsEvent[], imports: [] as MediaAsset[] };
       opening = pending;

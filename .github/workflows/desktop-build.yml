@@ -84,6 +84,13 @@ jobs:
           EXT=""; [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
           pnpm --filter @scarlet/server build:sea -- --out "$PWD/apps/desktop/src-tauri/binaries/scarlet-engine-${{ matrix.triple }}$EXT"
 
+      - name: Check Windows engine startup before building native dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.github/scripts/use-windows-test-owner.ps1
+          node apps/desktop/scripts/smoke-engine-startup.mjs "apps/desktop/src-tauri/binaries/scarlet-engine-${{ matrix.triple }}.exe"
+
       - name: Prepare external media tools for the smoke test
         shell: bash
         run: |

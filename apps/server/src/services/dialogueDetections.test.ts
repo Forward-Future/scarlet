@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
@@ -63,7 +64,12 @@ async function cloudScanFixture(env: NodeJS.ProcessEnv = { OPENAI_API_KEY: "test
 it("reads the selected input's existing acoustic words with transcription off", async () => {
   const { ctx, project, media, speaker, client } = await cloudScanFixture({});
   ctx.repos.settings.update({ transcription: { provider: "none", language: "auto" } });
-  const file = fileInDirectory(ctx.paths.media(project.id), media.path)!;
+  const root = ctx.paths.media(project.id);
+  await mkdir(join(root, "takes"));
+  await rename(join(root, media.path), join(root, "takes", media.path));
+  await symlink(join(root, "takes"), join(root, "linked"), "junction");
+  ctx.repos.projects.putMedia(project.id, { ...media, path: join("linked", media.path) }, "ready");
+  const imported = join(root, "linked", media.path), file = await realpath(imported);
   const request = { mediaId: media.id, from: 0, to: 3 };
   const words = (audioStream?: number) => client.dialogueAcousticWords(project.id, { ...request, audioStream });
   const kept = (audioStream?: number, from = 0, to = 3) => client.dialogueDetections(project.id, {
@@ -72,19 +78,31 @@ it("reads the selected input's existing acoustic words with transcription off", 
   const unavailable = { segments: [], acoustic: [], keptSideUnavailable: true };
   expect(await words()).toEqual([]);
   expect(await kept()).toEqual(unavailable);
-  for (const [stream, letter] of [[undefined, "A"], [1, "B"]] as const) {
-    const store = (await EmissionFile.open(await emissionStore(ctx, project.id, file, stream), 3 * SAMPLE_RATE))!;
+  // The older engine used the path as imported. Seed its exact filename independently of the current writer.
+  const info = await stat(imported);
+  const legacy = createHash("sha256").update(JSON.stringify([1, [imported, info.size, info.mtimeMs, info.ctimeMs, 1]])).digest("hex");
+  const legacyFile = join(ctx.paths.waveforms(project.id), `emissions-${legacy.slice(0, 32)}.bin`);
+  const canonical = await emissionStore(ctx, project.id, file, 1);
+  expect(legacyFile).not.toBe(canonical);
+  const save = async (path: string, letter: string) => {
+    const store = (await EmissionFile.open(path, 3 * SAMPLE_RATE))!;
     try {
       const rows = new Float32Array(store.frames * CLASSES);
       rows[CLASSES + 5 + CTC_LETTERS.indexOf(letter)] = 1;
       await store.write(0, rows);
     } finally { await store.close(); }
-  }
+  };
+  await save(await emissionStore(ctx, project.id, file), "A");
+  await save(legacyFile, "B");
   expect(await words()).toEqual([[{ text: "a", start: .02, end: .04 }]]);
   expect(await words(1)).toEqual([[{ text: "b", start: .02, end: .04 }]]);
   expect(await words(0)).toEqual([]);
   expect(await kept()).toMatchObject({ segments: [{ id: "kept", words: [{ text: "a", start: .02, end: .04 }] }] });
   expect(await kept(1)).toMatchObject({ segments: [{ id: "kept", words: [{ text: "b" }] }] });
+  await expect(stat(canonical)).rejects.toMatchObject({ code: "ENOENT" });
+  await save(canonical, "C");
+  expect(await words(1)).toEqual([[{ text: "c", start: .02, end: .04 }]]);
+  expect(await kept(1)).toMatchObject({ segments: [{ id: "kept", words: [{ text: "c" }] }] });
   expect(await kept(0)).toEqual(unavailable);
   expect(await kept(undefined, 1, 2)).toEqual({ segments: [], acoustic: [] });
   await expect(kept(undefined, 1, 9.5)).rejects.toMatchObject({ status: 400 });

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { fullRenderContext, type Learning, type ProjectDetail, type TaskEvent } from "@scarlet/shared";
 import { api } from "../lib/client";
 import { leaveProject, startRealtime } from "../lib/realtime";
@@ -7,6 +7,13 @@ import { buildDb, PRJ } from "../lib/mock/fixtures";
 import { selectHeadRender, useProjectStore, type ProjectData } from "./project";
 
 const initial = useProjectStore.getState();
+beforeEach(() => {
+  vi.spyOn(api, "learnings").mockResolvedValue({ learnings: [] });
+  vi.spyOn(api, "projectUsage").mockResolvedValue({ by: "task", groups: [], total: {
+    runs: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+    totalTokens: 0, firstAt: null, lastAt: null,
+  } });
+});
 afterEach(() => {
   useProjectStore.setState(initial, true);
   // Putting the store back closes the project, which drops the store's wait to read it again: no timer reaches the next test.
@@ -311,7 +318,6 @@ it("opens completed conversations in the task snapshot and retains steps receive
   vi.spyOn(api, "workspace").mockResolvedValue({ project, timeline: null });
   vi.spyOn(api, "changes").mockResolvedValue({ changes: [] });
   vi.spyOn(api, "notes").mockResolvedValue({ notes: [] });
-  vi.spyOn(api, "projectUsage").mockResolvedValue({ groups: [] } as never);
   vi.spyOn(api, "tasks").mockImplementation(async () => {
     initial.applyEvent({ type: "task.event", projectId: project.id, taskId: task.id, event: said("live", 2) });
     return { tasks: [task], conversation: { [task.id]: [said("saved", 1)] } };
@@ -336,7 +342,6 @@ it("reads a run's steps again after the connection comes back, so what Scarlet d
   vi.spyOn(api, "changes").mockResolvedValue({ changes: [] });
   vi.spyOn(api, "notes").mockResolvedValue({ notes: [] });
   vi.spyOn(api, "tasks").mockResolvedValue({ tasks: [task] });
-  vi.spyOn(api, "projectUsage").mockResolvedValue({ groups: [] } as never);
   const read = vi.spyOn(api, "task").mockResolvedValue({ task, events: [said("e1", 1)] });
   await initial.loadTaskEvents("task_run", "conversation");
   await initial.loadTaskEvents("task_run", "all");
@@ -363,7 +368,6 @@ it("takes the engine's list of learnings after the connection comes back, so a r
   vi.spyOn(api, "changes").mockResolvedValue({ changes: [] });
   vi.spyOn(api, "notes").mockResolvedValue({ notes: [] });
   vi.spyOn(api, "tasks").mockResolvedValue({ tasks: [] });
-  vi.spyOn(api, "projectUsage").mockResolvedValue({ groups: [] } as never);
   let answer!: (response: { learnings: Learning[] }) => void;
   vi.spyOn(api, "learnings").mockImplementation(() => new Promise(resolve => { answer = resolve; }));
   await initial.load(projectId);
@@ -387,7 +391,6 @@ it("reads a run's steps again when the project reloaded while they were still be
   vi.spyOn(api, "notes").mockResolvedValue({ notes: [] });
   const finished = { ...task, state: "done" as const };
   vi.spyOn(api, "tasks").mockResolvedValue({ tasks: [finished] });
-  vi.spyOn(api, "projectUsage").mockResolvedValue({ groups: [] } as never);
   const answers: ((response: { task: typeof finished | typeof task; events: TaskEvent[] }) => void)[] = [];
   const read = vi.spyOn(api, "task").mockImplementation(() => new Promise(resolve => { answers.push(resolve); }));
   const lookup = initial.loadTaskEvents("task_run", "all");
@@ -414,7 +417,6 @@ it("doesn't read another project's steps when a project is opened, only when the
   vi.spyOn(api, "changes").mockResolvedValue({ changes: [] });
   vi.spyOn(api, "notes").mockResolvedValue({ notes: [] });
   vi.spyOn(api, "tasks").mockResolvedValue({ tasks: [] });
-  vi.spyOn(api, "projectUsage").mockResolvedValue({ groups: [] } as never);
   const read = vi.spyOn(api, "task").mockResolvedValue({ task, events: [said("e1", 1)] });
   await initial.loadTaskEvents("task_run");
   await initial.load("prj_other");
@@ -422,6 +424,24 @@ it("doesn't read another project's steps when a project is opened, only when the
   await initial.load(PRJ);
   await new Promise(done => setTimeout(done));
   expect(read).toHaveBeenCalledTimes(1);
+});
+
+it("drops the closed project's requests for steps even when the same project opens again", async () => {
+  const { db, project } = open();
+  const task = db.tasks.find(t => t.kind !== "transcribe")!;
+  answering(project);
+  let finish!: (response: { task: typeof task; events: TaskEvent[] }) => void;
+  const read = vi.spyOn(api, "task").mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue({ task, events: [said("new", 2)] });
+  const old = initial.loadTaskEvents(task.id);
+  useProjectStore.setState(initial, true);
+  open();
+  await initial.load(PRJ);
+  expect(read).toHaveBeenCalledTimes(1);
+  await initial.loadTaskEvents(task.id);
+  finish({ task, events: [said("old", 1)] });
+  await old;
+  expect(store().taskEvents[task.id]?.map(event => event.id)).toEqual(["new"]);
 });
 
 it("keeps the last timeline and the conversation when the edit moved on and its new timeline can't be read, reads it again by itself, and says so only if it keeps failing", async () => {
@@ -1066,8 +1086,6 @@ function answering(project: ProjectData["project"]) {
   vi.spyOn(api, "changes").mockResolvedValue({ changes: [] });
   vi.spyOn(api, "notes").mockResolvedValue({ notes: [] });
   const requests = vi.spyOn(api, "tasks").mockResolvedValue({ tasks: [] });
-  vi.spyOn(api, "projectUsage").mockResolvedValue({ groups: [] } as never);
-  vi.spyOn(api, "learnings").mockResolvedValue({ learnings: [] });
   return { snapshot, requests };
 }
 

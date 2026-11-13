@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { windowsAclShell } from "@scarlet/agent/dist/private-files.js";
 
 // A protected or explicit child grant can survive changing the library root. Windows can open a
 // known child path without granting traversal on its parents. Leave such permissions for its owner.
 const checkWindowsChildren = `
-$pending=New-Object 'System.Collections.Generic.Stack[System.IO.DirectoryInfo]'
+$pending=[System.Collections.Generic.Stack[System.IO.DirectoryInfo]]::new()
 $pending.Push([System.IO.DirectoryInfo]::new($env:SCARLET_PRIVATE_PATH))
 while ($pending.Count) {
   foreach ($entry in $pending.Pop().EnumerateFileSystemInfos()) {
@@ -30,21 +30,21 @@ export function restrictWindowsAccess(path: string, kind: "File" | "Directory", 
   const command = [
     "$ErrorActionPreference='Stop'",
     "$id=[System.Security.Principal.WindowsIdentity]::GetCurrent().User",
-    `$acl=New-Object System.Security.AccessControl.${kind}Security`,
+    `$acl=[System.Security.AccessControl.${kind}Security]::new()`,
     "$acl.SetOwner($id)",
     "$acl.SetAccessRuleProtection($true,$false)",
     `$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($id,'FullControl',${inheritance}'Allow'))`,
     `$current=[System.IO.${kind}]::GetAccessControl($env:SCARLET_PRIVATE_PATH)`,
-    // NTFS marks a persisted DACL as automatically inherited. Reapplying the same inheritable ACE on every
-    // open propagates it to the recordings and changes their ctime, invalidating fingerprints and preview caches.
-    // Compare the DACL bytes (including every ACE and its flags), the owner and protection independently.
-    "$wanted=[System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(),0)",
-    "$found=[System.Security.AccessControl.RawSecurityDescriptor]::new($current.GetSecurityDescriptorBinaryForm(),0)",
-    "function DaclBytes($sd) { if ($null -eq $sd.DiscretionaryAcl) { return '' }; $b=[byte[]]::new($sd.DiscretionaryAcl.BinaryLength); $sd.DiscretionaryAcl.GetBinaryForm($b,0); [Convert]::ToBase64String($b) }",
-    `if ($found.Owner -ne $wanted.Owner -or !$current.AreAccessRulesProtected -or (DaclBytes $found) -cne (DaclBytes $wanted)) { if ($env:SCARLET_REFUSE_DACL_CHANGE) { throw $env:SCARLET_REFUSE_DACL_CHANGE }; [System.IO.${kind}]::SetAccessControl($env:SCARLET_PRIVATE_PATH,$acl) }`,
+    // Windows may mark even a protected DACL auto-inherited after persisting it. Rewriting equivalent grants
+    // propagates to the children and changes the NTFS timestamps used to identify cached source media.
+    "$desired=[System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(),0)",
+    "$actual=[System.Security.AccessControl.RawSecurityDescriptor]::new($current.GetSecurityDescriptorBinaryForm(),0)",
+    "$same=$current.AreAccessRulesProtected -and $actual.Owner -eq $id -and $null -ne $actual.DiscretionaryAcl -and $actual.DiscretionaryAcl.Count -eq 1 -and $actual.DiscretionaryAcl[0].Equals($desired.DiscretionaryAcl[0])",
+    `if (!$same) { if ($env:SCARLET_REFUSE_DACL_CHANGE) { throw $env:SCARLET_REFUSE_DACL_CHANGE }; [System.IO.${kind}]::SetAccessControl($env:SCARLET_PRIVATE_PATH,$acl) }`,
     kind === "Directory" ? checkWindowsChildren : "",
   ].join(";");
-  execFileSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe"),
+  const shell = windowsAclShell();
+  execFileSync(shell.executable,
     ["-NoProfile", "-NonInteractive", "-Command", command],
-    { env: { ...process.env, SCARLET_PRIVATE_PATH: path, SCARLET_REFUSE_DACL_CHANGE: refuseChange ?? "" }, windowsHide: true });
+    { env: { ...shell.env, SCARLET_PRIVATE_PATH: path, SCARLET_REFUSE_DACL_CHANGE: refuseChange ?? "" }, windowsHide: true });
 }

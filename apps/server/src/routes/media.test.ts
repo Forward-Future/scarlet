@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -9,7 +9,7 @@ import { accessToken } from "../auth.js";
 import { ffmpeg } from "../render/ffmpeg.js";
 import { OpenAIProvider } from "../transcribe/openai.js";
 import { previewIdentity } from "../services/previewPictures.js";
-import { emissionStore } from "../services/recordingAudio.js";
+import { emissionStorePaths } from "../services/recordingAudio.js";
 import { savedSpeakerTurns } from "../services/recordingSpeakers.js";
 import { sourcePreviews } from "../services/sourcePreviews.js";
 import { createTask, saveTask } from "../services/tasks.js";
@@ -200,6 +200,9 @@ it("shows the first frame of a file that is still being imported, and only of a 
 it("takes a file Scarlet couldn't read out of the project with everything kept for it, and refuses one it read or one the video or its history uses", async () => {
   const { ctx } = workspace;
   ctx.paths.ensureProject(project.id);
+  const linkedMedia = join(directory, "linked-media");
+  symlinkSync(ctx.paths.media(project.id), linkedMedia, "junction");
+  vi.spyOn(ctx.paths, "media").mockReturnValue(linkedMedia);
   const dir = { media: ctx.paths.media(project.id), proxies: ctx.paths.proxies(project.id), waveforms: ctx.paths.waveforms(project.id) };
   const add = (id: string, status: "ready" | "failed") => {
     writeFileSync(join(dir.media, `${id}.mov`), id);
@@ -215,11 +218,15 @@ it("takes a file Scarlet couldn't read out of the project with everything kept f
   for (const kept of [join(dir.waveforms, "broken.json"), join(dir.proxies, "broken.mp4"), join(dir.proxies, `source-${local}`, "v1-480-0.mp4"), join(dir.proxies, `cached-${local}.mp4`)]) writeFileSync(kept, "x");
   ctx.repos.transcripts.put({ id: "trs_broken", projectId: project.id, mediaId: "broken", segments: [] });
   ctx.db.prepare("INSERT INTO dialogue_scan_pages VALUES ('broken', 'f', 0, 60, '{}')").run();
-  // What transcribing it left beside the waveform: the aligner's emissions, which the transcript keeps under the
-  // file's path as given and a scan under its resolved one, and its speaker turns. Another file's stay.
-  const emissions = (id: string) => [join(dir.media, `${id}.mov`), realpathSync(join(dir.media, `${id}.mov`))].map(file => emissionStore(ctx, project.id, file));
-  const others = [...await Promise.all(emissions("read")), (await savedSpeakerTurns(ctx, project.id, ctx.repos.projects.getMedia("read")!))!];
-  for (const kept of [...await Promise.all(emissions("broken")), (await savedSpeakerTurns(ctx, project.id, broken))!, ...others]) writeFileSync(kept, "x");
+  // Emissions include older files named for the import path. Another recording's stores and speaker turns stay.
+  const emissions = (id: string) => {
+    const imported = join(dir.media, `${id}.mov`);
+    return emissionStorePaths(ctx, project.id, realpathSync(imported), imported);
+  };
+  const others = [...await emissions("read"), (await savedSpeakerTurns(ctx, project.id, ctx.repos.projects.getMedia("read")!))!];
+  const brokenStores = await emissions("broken");
+  expect(brokenStores.length).toBeGreaterThan(1);
+  for (const kept of [...brokenStores, (await savedSpeakerTurns(ctx, project.id, broken))!, ...others]) writeFileSync(kept, "x");
   // A clip from a file placed while it was still being added. This version is in the history, not the working video.
   storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "placed", [{ start: 0, end: 4 }]), { parent: null });
   const events: string[] = [];
