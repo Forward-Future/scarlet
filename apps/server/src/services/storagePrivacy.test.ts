@@ -15,8 +15,15 @@ beforeEach(() => { sandbox = mkdtempSync(join(tmpdir(), "scarlet-storage-privacy
 afterEach(() => { rmSync(sandbox, { recursive: true, force: true }); });
 
 function windowsFixture(path: string, command: string) {
-  execFileSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe"),
-    ["-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true, env: { ...process.env, SCARLET_TEST_LIBRARY: path } });
+  return execFileSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe"),
+    ["-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8", windowsHide: true, env: { ...process.env, SCARLET_TEST_LIBRARY: path } }).trim();
+}
+
+function windowsAccessFailure(paths: Paths) {
+  try { paths.ensureRoot(); } catch (error) {
+    // execFileSync's message includes the whole PowerShell source, including error messages for branches it never took.
+    return (error as { stderr?: Buffer }).stderr?.toString().trimStart();
+  }
 }
 
 it.skipIf(process.platform === "win32")("protects new and existing library contents through their root", () => {
@@ -47,6 +54,17 @@ it.runIf(process.platform === "win32")("applies owner-only library access to exi
   mkdirSync(paths.skills);
   openDb(paths.db).close();
   writeFileSync(join(paths.root, "existing.txt"), "fixture");
+  // Elevated Windows runners can give files to Administrators by default. Model an editor-owned library with
+  // the original inherited grants intact, so ensureRoot still has to secure existing files and future children.
+  windowsFixture(paths.root, [
+    "$ErrorActionPreference='Stop'",
+    "$user=[System.Security.Principal.WindowsIdentity]::GetCurrent().User",
+    "foreach ($entry in (Get-ChildItem -LiteralPath $env:SCARLET_TEST_LIBRARY -Force -Recurse)) {",
+    "  $acl=$entry.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Owner)",
+    "  $acl.SetOwner($user)",
+    "  $entry.SetAccessControl($acl)",
+    "}",
+  ].join("\n"));
   paths.ensureRoot();
   writeFileSync(join(paths.tmp, "new.txt"), "fixture");
   const check = [
@@ -60,6 +78,8 @@ it.runIf(process.platform === "win32")("applies owner-only library access to exi
     "}",
   ].join("\n");
   windowsFixture(paths.root, check);
+  // The runner can also give the newly created file to Administrators. Its inherited grants have been checked.
+  rmSync(join(paths.tmp, "new.txt"));
 
   // A protected child keeps its explicit grant when its parent permissions change.
   windowsFixture(paths.root, [
@@ -71,7 +91,27 @@ it.runIf(process.platform === "win32")("applies owner-only library access to exi
     "$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($everyone,'Read','Allow'))",
     "[System.IO.File]::SetAccessControl($file,$acl)",
   ].join(";"));
-  expect(() => paths.ensureRoot()).toThrow(/still grants access to another account/);
+  expect(windowsAccessFailure(paths)).toMatch(/^The Scarlet library still grants access to another account/);
+});
+
+it.runIf(process.platform === "win32")("refuses an existing database owned by another principal", ({ skip }) => {
+  const paths = new Paths(join(sandbox, "library"));
+  // An ordinary user cannot assign an arbitrary owner. Windows CI runs elevated and exercises this case.
+  const admin = windowsFixture(paths.root, [
+    "$principal=[System.Security.Principal.WindowsPrincipal]::new([System.Security.Principal.WindowsIdentity]::GetCurrent())",
+    "$principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)",
+  ].join("\n"));
+  if (admin !== "True") return skip();
+  mkdirSync(paths.root);
+  openDb(paths.db).close();
+  windowsFixture(paths.root, [
+    "$ErrorActionPreference='Stop'",
+    "$file=Join-Path $env:SCARLET_TEST_LIBRARY 'scarlet.db'",
+    "$acl=[System.IO.File]::GetAccessControl($file,[System.Security.AccessControl.AccessControlSections]::Owner)",
+    "$acl.SetOwner([System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))",
+    "[System.IO.File]::SetAccessControl($file,$acl)",
+  ].join("\n"));
+  expect(windowsAccessFailure(paths)).toMatch(/^A Scarlet library item belongs to another account/);
 });
 
 it.skipIf(process.platform === "win32")("sweeps ordinary temporary files and skips linked storage directories", () => {
