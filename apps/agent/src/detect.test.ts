@@ -288,7 +288,10 @@ describe("defaultExec", { timeout: 20_000 }, () => {
   it("stops a timed-out probe together with the child holding its output pipe", async () => {
     const ready = join(await tempDir(), "ready");
     const childScript = `
-      process.stdout.write('probing\\n', () => require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)));
+      const fs = require('node:fs');
+      const ready = ${JSON.stringify(ready)};
+      fs.writeFileSync(ready + '.tmp', String(process.pid));
+      fs.renameSync(ready + '.tmp', ready);
       setTimeout(() => console.log('child finished'), 10_000);
     `;
     const script = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {stdio:'inherit'});setInterval(() => {}, 1000)`;
@@ -311,7 +314,7 @@ describe("defaultExec", { timeout: 20_000 }, () => {
         throw error;
       }
     }, { timeout: 5_000 }).toBe(false);
-    expect(result.stdout).toBe("probing\n");
+    expect(result.stdout).toBe("");
     expect(result.code).not.toBe(0);
   });
 });
