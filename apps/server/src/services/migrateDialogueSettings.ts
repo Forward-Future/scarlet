@@ -32,7 +32,7 @@ function preservePendingSuggestions(ctx: Ctx, levels: LegacyDialogueSettings["ai
   const pending = ctx.repos.changes.select(`state IN ('ready','revising') AND json_extract(json, '$.intent') = 'suggestion'
     AND json_array_length(json_extract(json, '$.cutReasons')) > 0`);
   for (const change of pending) {
-    const settled = [...change.cutChoices ?? [], ...change.cutAssessments ?? []];
+    const settled = [...change.cutChoices ?? [], ...(change.cutAssessments ?? []).filter(a => !a.provisional)];
     const reasons = change.cutReasons!;
     const updated = reasons.map(r => {
       if (!r.kind || levels[r.kind] !== "suggest" || settled.some(a => a.start <= r.start + 1e-5 && a.end >= r.end - 1e-5)) return r;

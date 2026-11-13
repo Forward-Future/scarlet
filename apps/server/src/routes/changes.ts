@@ -1,4 +1,4 @@
-import { appliedReviewChange, CutAssessment, timelineDuration, withHandles, type Change } from "@scarlet/timeline";
+import { appliedReviewChange, CutAssessment, isPublishedCall, timelineDuration, withHandles, type Change } from "@scarlet/timeline";
 import { Hono } from "hono";
 import { z } from "zod/v3";
 import { namedTimelineEdits, ApproveRequest, CutChoicesRequest, ChangeState, DialogueCutsRequest, ProposeChangeRequest, ReviseRequest, StagedCutRevision } from "@scarlet/shared";
@@ -90,7 +90,7 @@ export function changeRoutes(ctx: Ctx) {
 
   r.on("POST", ["/changes/:changeId/cut-assessments", "/projects/:projectId/changes/:changeId/cut-assessments"], async c => {
     const body = await jsonBody(c, z.object({ fromVersion: z.string(), toVersion: z.string(),
-      assessments: z.array(CutAssessment).min(1).max(500) }));
+      assessments: z.array(CutAssessment.omit({ provisional: true, askOrder: true, revised: true })).min(1).max(500) }));
     return c.json(ctx.db.transaction(() => {
       const change = requireChange(c.req.param("changeId"), c.req.param("projectId"));
       const task = requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), change.projectId);
@@ -101,7 +101,8 @@ export function changeRoutes(ctx: Ctx) {
         throw conflict("cut_review_stale", "Reopen the proposal for the current edit.");
       const review = prepareCutReview(ctx, change).review;
       if (!review) throw badRequest("cuts_unsupported", "This edit has no individual cuts.");
-      const byIndex = new Map(change.cutAssessments?.map(a => [a.index, a]));
+      const previous = new Map(change.cutAssessments?.map(a => [a.index, a]));
+      const byIndex = new Map(previous);
       // A cut the editor sent back waits for their call on the revised version, whatever Scarlet recommends on it.
       const heldRevised: number[] = [];
       const heldForEditor: number[] = [];
@@ -117,18 +118,21 @@ export function changeRoutes(ctx: Ctx) {
         if (Math.abs(span.start - given.start) > slack || Math.abs(span.end - given.end) > slack) {
           throw badRequest("wrong_cut", `Cut ${given.index} of this pass is ${span.start.toFixed(3)}–${span.end.toFixed(3)} s, not ${given.start.toFixed(3)}–${given.end.toFixed(3)} s. Give its range, or the index of the cut you mean.`);
         }
-        // Only the engine marks a cut as sent back, or says when it was asked about: the marks are the saved ones, never the caller's.
-        const was = byIndex.get(given.index);
-        const revised = was?.revised || undefined;
-        const item = { ...given, start: span.start, end: span.end, revised, askOrder: undefined };
-        const fromSuggest = item.verdict === "cut" && change.cutReasons?.some(r => r.legacySuggest &&
-          r.start >= span.start - 1e-5 && r.start < span.end);
-        if (fromSuggest) heldForEditor.push(item.index);
-        else if (revised && item.verdict !== "ask") heldRevised.push(item.index);
-        else if (was?.verdict === "ask" && item.verdict !== "ask") heldCalls.push(item.index);
-        // A later listen can update the recommendation on a call. Only the editor decides it.
-        const asks = fromSuggest || revised || was?.verdict === "ask" || item.verdict === "ask";
-        byIndex.set(item.index, asks ? { ...item, verdict: "ask", askOrder: was?.verdict === "ask" ? was.askOrder : undefined } : item);
+        const item = { ...given, start: span.start, end: span.end };
+        const suggestOnly = item.verdict === "cut" && change.cutReasons?.some(r => r.legacySuggest &&
+          r.start >= span.start - 0.00001 && r.start < span.end);
+        if (suggestOnly) heldForEditor.push(item.index);
+        const shown = previous.get(item.index);
+        if (shown && (isPublishedCall(shown) || shown.askOrder !== undefined)) {
+          if (shown.reason !== item.reason || item.verdict !== shown.verdict) {
+            if (shown.revised && item.verdict !== "ask") heldRevised.push(item.index);
+            else heldCalls.push(item.index);
+          } else if (item.inspected && !shown.inspected) {
+            byIndex.set(item.index, { ...shown, inspected: true });
+          }
+          continue;
+        }
+        byIndex.set(item.index, { ...item, verdict: suggestOnly ? "ask" : item.verdict });
       }
       const cutAssessments = [...byIndex.values()].sort((a, b) => a.index - b.index);
       // An ask's note is the one line the editor reads on that call, in the list and on its card. Asks that all carry
@@ -136,14 +140,17 @@ export function changeRoutes(ctx: Ctx) {
       // measured edge needs a listening check." left the editor to open every one to learn what it was (2026-11-11).
       // The save is refused with the cuts named, so each gets a note of its own. Cuts the editor has already been
       // shown under one note aren't held against a save that doesn't touch them.
-      const given = new Set(body.assessments.map(a => a.index));
+      const newCall = (index: number) => {
+        const before = previous.get(index);
+        return !before || !isPublishedCall(before);
+      };
       const byNote = new Map<string, number[]>();
       for (const a of cutAssessments) {
-        if (a.verdict !== "ask") continue;
+        if (!isPublishedCall(a)) continue;
         const words = a.reason.toLowerCase().replace(/\s+/g, " ").trim();
         byNote.set(words, [...(byNote.get(words) ?? []), a.index]);
       }
-      const repeated = [...byNote.values()].find(cuts => cuts.length > 1 && cuts.some(i => given.has(i)));
+      const repeated = [...byNote.values()].find(cuts => cuts.length > 1 && cuts.some(newCall));
       if (repeated) {
         throw badRequest("same_note", `Cuts ${repeated.join(", ")} would reach the editor with the same note: “${byIndex.get(repeated[0]!)!.reason.slice(0, 120)}”. `
           + "The note is the one line the editor reads on each call, so they couldn’t tell these apart. Nothing was saved. "
@@ -155,19 +162,18 @@ export function changeRoutes(ctx: Ctx) {
       // the editor has seen moves. Once a pass numbers its asks, one left without a number is a cut no one checked that
       // the editor sent back, and it stays with those.
       let order = Math.max(0, ...cutAssessments.map(a => a.askOrder ?? 0));
-      const asked = (a: CutAssessment) => change.cutAssessments?.find(b => b.index === a.index)?.verdict === "ask";
-      const unnumbered = (a: CutAssessment) => a.verdict === "ask" && a.askOrder === undefined;
-      const shown = !order && cutAssessments.some(a => unnumbered(a) && !asked(a)) ? cutAssessments.filter(a => unnumbered(a) && asked(a)) : [];
-      for (const a of [...shown, ...cutAssessments.filter(a => unnumbered(a) && !asked(a))]) {
+      const unnumbered = (a: CutAssessment) => isPublishedCall(a) && a.askOrder === undefined;
+      const shown = !order && cutAssessments.some(a => unnumbered(a) && newCall(a.index)) ? cutAssessments.filter(a => unnumbered(a) && !newCall(a.index)) : [];
+      for (const a of [...shown, ...cutAssessments.filter(a => unnumbered(a) && newCall(a.index))]) {
         cutAssessments[cutAssessments.indexOf(a)] = { ...a, askOrder: ++order };
       }
       let firstDecisionPreview = change.firstDecisionPreview;
       if (firstDecisionPreview && firstDecisionPreview.briefToPlayableMs === undefined) {
         const item = byIndex.get(firstDecisionPreview.index);
         const state = ctx.repos.renders.get(firstDecisionPreview.renderId)?.state;
-        if (item?.verdict !== "ask" || !state || state === "failed" || state === "cancelled") firstDecisionPreview = undefined;
+        if (!item || !isPublishedCall(item) || !state || state === "failed" || state === "cancelled") firstDecisionPreview = undefined;
       }
-      const first = cutAssessments.find(a => a.verdict === "ask");
+      const first = cutAssessments.find(isPublishedCall);
       if (!firstDecisionPreview && first) {
         // Audition just this choice on the working cut while the agent assesses its neighbors.
         const restored = review.cuts.flatMap((_, i) => i === first.index ? [] : [i]);
@@ -186,15 +192,18 @@ export function changeRoutes(ctx: Ctx) {
       // A pass set to apply when the run finishes was scheduled on the calls made so far. A cut Scarlet now asks about,
       // with no call from the editor, waits for them: applying on schedule would skip it unseen.
       const called = new Set(change.cutChoices?.map(choice => choice.index));
-      const applyWhenDone = cutAssessments.some(a => a.verdict === "ask" && !called.has(a.index)) ? undefined : change.applyWhenDone;
-      const saved = ctx.repos.changes.put({ ...change, cutAssessments, firstDecisionPreview, applyWhenDone });
-      ctx.bus.publish({ type: "change.updated", projectId: change.projectId, change: saved });
-      if (firstDecisionPreview && firstDecisionPreview.briefToPlayableMs === undefined) recordPlayableDecision(ctx, saved);
-      return { total: review.cuts.length, assessed: byIndex.size,
+      const applyWhenDone = cutAssessments.some(a => isPublishedCall(a) && !called.has(a.index)) ? undefined : change.applyWhenDone;
+      if (firstDecisionPreview !== change.firstDecisionPreview || applyWhenDone !== change.applyWhenDone ||
+          cutAssessments.some(a => a !== previous.get(a.index))) {
+        const saved = ctx.repos.changes.put({ ...change, cutAssessments, firstDecisionPreview, applyWhenDone });
+        ctx.bus.publish({ type: "change.updated", projectId: change.projectId, change: saved });
+        if (firstDecisionPreview && firstDecisionPreview.briefToPlayableMs === undefined) recordPlayableDecision(ctx, saved);
+      }
+      return { total: review.cuts.length, assessed: cutAssessments.filter(a => !a.provisional).length,
         needsDecision: review.cuts.length - cutAssessments.filter(a => a.verdict !== "ask").length,
-        ...(heldForEditor.length && { heldForEditor, editorPreference: "These cuts were staged with the editor’s approval required. Their recommendations are saved for review." }),
-        ...(heldCalls.length ? { heldCalls, existingCalls: "These cuts already reached the editor as calls. The new notes are saved, and the editor's choices stand." } : {}),
-        ...(heldRevised.length ? { heldRevised, editorRequest: "The editor sent these cuts back, so each revised cut waits in Needs your call. Your reason is saved on it." } : {}) };
+        ...(heldCalls.length ? { heldCalls, existingCalls: "These cuts already reached the editor as calls. Their original notes and the editor's choices stand." } : {}),
+        ...(heldForEditor.length ? { heldForEditor, editorPreference: "These cuts were staged with the editor’s approval required." } : {}),
+        ...(heldRevised.length ? { heldRevised, editorRequest: "The editor sent these cuts back, so each revised cut waits in Needs your call. Its revised note is preserved." } : {}) };
     }, "immediate")());
   });
 

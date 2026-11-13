@@ -87,12 +87,13 @@ it("carries a pre-upgrade request to review fillers until its assessment, withou
   };
   const cut = (start: number, kind: string, review = true) => ({ start, end: start + 1, kind, review, reason: `Cut at ${start}.` });
   const original = await submit([cut(1, "retake"), cut(2, "filler"), cut(5, "filler"), cut(8, "pause")]);
-  ctx.repos.changes.put({ ...original, cutChoices: [{ index: 1, start: 5, end: 6, choice: "keep" }] });
+  const placeholder = { index: 0, start: 1, end: 3, verdict: "ask" as const, reason: "A cut to check.", provisional: true as const };
+  ctx.repos.changes.put({ ...original, cutAssessments: [placeholder], cutChoices: [{ index: 1, start: 5, end: 6, choice: "keep" }] });
   ctx.db.prepare("INSERT OR REPLACE INTO settings (id, json) VALUES (1, ?)").run(JSON.stringify({ dialogue: { aiCuts: { filler: "suggest" } } }));
   migrateDialogueSettings(ctx);
   const migrated = ctx.repos.changes.get(original.id)!;
   expect(migrated.cutReasons?.map(c => c.legacySuggest)).toEqual([undefined, true, undefined, undefined]);
-  expect(migrated.cutAssessments).toBeUndefined();
+  expect(migrated.cutAssessments).toEqual([placeholder]);
   // A later batch cannot promote the older pending cut to a confident removal.
   const carried = await submit([cut(2, "filler", false), cut(12, "retake")]);
   expect(ctx.repos.projects.get(project.id)?.head).toBe(base);

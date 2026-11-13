@@ -6,7 +6,7 @@ import { boundedRippleOps, cutAnchorOn, cutScope, selectedRange, selectionPlacem
 import type { ApproveResponse, ProposeChangeRequest, Task, User } from "@scarlet/shared";
 import { z } from "zod/v3";
 import { ReviseRequest as ReviseRequestSchema } from "@scarlet/shared";
-import { frameAligned, frameAlignedRemoval, onFrame, makeStagedCutMapper,
+import { frameAligned, frameAlignedRemoval, isPublishedCall, onFrame, makeStagedCutMapper,
   clipEnd,
   crossfadeJoins,
   type JoinFades,
@@ -303,6 +303,20 @@ function opsOnWholeFrames(ctx: Ctx, projectId: string, body: ProposeChangeReques
   }) };
 }
 
+// A resumed run still owns its earlier parts. A cut the editor sent back can be in a successor made by its own task.
+function dialogueParts(projectId: string, rootId: string) {
+  const ids = `WITH RECURSIVE parts(id) AS (
+    SELECT id FROM changes WHERE project_id = ? AND json_extract(json, '$.taskId') IN
+      (SELECT id FROM tasks WHERE id = ? OR json_extract(json, '$.resumeRootId') = ?)
+    UNION SELECT c.id FROM parts JOIN tasks t ON json_extract(t.json, '$.context.changeId') = parts.id
+      JOIN changes c ON json_extract(c.json, '$.taskId') = t.id
+      WHERE c.project_id = ? AND t.project_id = ? AND json_extract(t.json, '$.context.cutIndex') IS NOT NULL
+    UNION SELECT json_extract(c.json, '$.replacedBy') FROM parts JOIN changes c ON c.id = parts.id
+      WHERE json_extract(c.json, '$.rejectReason') = ? AND json_extract(c.json, '$.replacedBy') IS NOT NULL
+  ) SELECT id FROM parts`;
+  return { ids, args: [projectId, projectId, rootId, rootId, projectId, projectId, REVISED] };
+}
+
 /**
  * Both writes commit together; optional ranges start on the kept version. Stable IDs make response-loss retries safe.
  * `fold` gathers the waiting parts of a run that has finished, with no cuts of its own: only Scarlet's own repair saves under such a run.
@@ -361,27 +375,17 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     // A pass saved in parts: the run's previous parts left their staged cuts waiting. They join this part's review so
     // they stay reviewable once this part's cuts apply. A run resumed after an interruption still owns its earlier parts.
     const rootId = taskId && (ctx.repos.tasks.get(taskId)?.resumeRootId ?? taskId);
-    // A revision can be made by its own queued task. Its current review still belongs to the pass it revised.
-    const parts = `WITH RECURSIVE parts(id) AS (
-        SELECT id FROM changes WHERE project_id = ? AND json_extract(json, '$.taskId') IN
-          (SELECT id FROM tasks WHERE id = ? OR json_extract(json, '$.resumeRootId') = ?)
-        UNION SELECT c.id FROM parts JOIN tasks t ON json_extract(t.json, '$.context.changeId') = parts.id
-          JOIN changes c ON json_extract(c.json, '$.taskId') = t.id
-          WHERE c.project_id = ? AND t.project_id = ? AND json_extract(t.json, '$.context.cutIndex') IS NOT NULL
-        UNION SELECT json_extract(c.json, '$.replacedBy') FROM parts JOIN changes c ON c.id = parts.id
-          WHERE json_extract(c.json, '$.rejectReason') = ? AND json_extract(c.json, '$.replacedBy') IS NOT NULL
-      ) SELECT id FROM parts`;
-    const args = [projectId, projectId, rootId, rootId, projectId, projectId, REVISED];
+    const parts = rootId && dialogueParts(projectId, rootId);
     const pending = new Map<string, Set<number>>();
-    if (rootId) for (const task of ctx.repos.tasks.select(`project_id = ? AND kind IN ('edit','revise','note') AND state IN ('queued','claimed','running','waiting_for_user')
-      AND json_extract(json, '$.context.cutIndex') IS NOT NULL AND json_extract(json, '$.context.changeId') IN (${parts})`, args)) {
+    if (parts) for (const task of ctx.repos.tasks.select(`project_id = ? AND kind IN ('edit','revise','note') AND state IN ('queued','claimed','running','waiting_for_user')
+      AND json_extract(json, '$.context.cutIndex') IS NOT NULL AND json_extract(json, '$.context.changeId') IN (${parts.ids})`, parts.args)) {
       const origin = ctx.repos.changes.get(task.context.changeId!)!;
       const slot = activeStagedCut(ctx, project, origin, task.context.cutIndex!);
       const indices = pending.get(slot.change.id) ?? new Set<number>();
       indices.add(slot.index);
       pending.set(slot.change.id, indices);
     }
-    const waiting = rootId ? ctx.repos.changes.select(`project_id = ? AND state IN ('ready','revising') AND id IN (${parts})`, args)
+    const waiting = parts ? ctx.repos.changes.select(`project_id = ? AND state IN ('ready','revising') AND id IN (${parts.ids})`, parts.args)
       .filter(c => c.intent === "suggestion" && c.id.endsWith("_review") && c.cutReasons?.length &&
         (pending.has(c.id) || c.state === "ready")) : [];
     const recovering = waiting.some(c => c.cutEdits?.length || pending.has(c.id));
@@ -506,9 +510,8 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
         reasons.some(r => r.legacySuggest && covers(span, r))) : [];
       for (const r of reasons) {
         const call = assessmentOf(change, r);
-        if (editorChoice(change, r)) continue;
-        if (call?.verdict === "ask") protectedCuts.set(r, `${change.id}:${call.index}`);
-        else if (!call) {
+        if (call && (isPublishedCall(call) || call.askOrder !== undefined)) protectedCuts.set(r, `${change.id}:${call.index}`);
+        else if ((!call || call.provisional) && !editorChoice(change, r)) {
           const slot = inherited.find(span => covers(span, r));
           if (slot) protectedCuts.set(r, `${change.id}:pending:${slot.start}`);
         }
@@ -538,7 +541,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
         throw conflict("cut_changed", "Two earlier review slots now cover the same footage. Their existing reviews are still saved.");
       if (!choice && (clashes || planned.some(c => overlaps(outer(c), outer(r))))) continue;
       carried.push({ start: r.start, end: r.end, review: true, reason: r.reason, crossfade: r.crossfade ?? change.joinFades?.duration, ...(r.originalRange && { originalRange: r.originalRange }),
-        ...(r.kind && { kind: r.kind }), ...(r.legacySuggest && { legacySuggest: true }), ...(current && { preserveEdges: true }), protectedSlot, ...(recoveredCuts.has(r) && { recovered: true }),
+        ...(r.kind && { kind: r.kind }), ...(r.legacySuggest && { legacySuggest: true }), ...((current || protectedSlot) && { preserveEdges: true }), protectedSlot, ...(recoveredCuts.has(r) && { recovered: true }),
         ...(assessment && { assessment }), ...(choice && !lapsed ? { choice } : { asked: { start: r.start, end: r.end }, ...(lapsed && { lapsed }) }) });
     }
     let cuts: Planned[] = [...planned.map(c => ({ ...c, submitted: true as const })), ...carried].sort((a, b) => a.start - b.start);
@@ -552,6 +555,11 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     if (past) throw badRequest("invalid_cuts", `The range ${span(past)} runs past the end of the timeline at ${duration.toFixed(2)} s.`);
     if (second > 0) throw badRequest("invalid_cuts", `The ranges ${span(sorted[second-1]!)} and ${span(sorted[second]!)} overlap. End the first where the second starts, or merge them.`);
     if (sorted.reduce((n, c) => n + c.end - c.start, 0) >= duration - 1e-7) throw badRequest("invalid_cuts", "These ranges remove the whole timeline. Retain some footage.");
+    // A pass that repeats only calls already on this version has nothing to save or announce.
+    if (!planned.length && held.length && waiting.length === 1 && !alreadyRemoved.length && waiting[0]!.fromVersion === head) {
+      return { changes: waiting, carriedForward: carried.length, heldForReview: held.map(c => c.asked),
+        ...(overruled.length && { editorDecided: overruled.map(c => c.asked) }) };
+    }
     if (toHead) {
       if (!current) cuts = cuts.map(c => ({ ...c, ...moveToHead(c), ...(c.originalRange && { originalRange: moveToHead(c.originalRange) }) }));
       duration = timelineDuration(resolveTimeline(ctx, project, head));
@@ -662,19 +670,11 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       let reopened = false;
       const listed = assessed || optional.some(c => c.choice || c.recovered || c.lapsed) ? prepareCutReview(ctx, change).review?.cuts ?? [] : [];
       const within = ({ start, end }: TimeRange) => optional.filter(c => covers({ start, end }, c));
-      // The asks so far, numbered in the order they reached the editor. A cut that waits for the editor keeps the first
-      // number among the asks it is made of, so its call keeps its number; one that waits only now comes after them all.
-      // A pass that hasn't numbered its asks yet leaves this one without a number too: its first numbered ask numbers
-      // them all, in timeline order.
-      let order = Math.max(0, ...earlier.flatMap(c => c.cutAssessments ?? []).map(a => a.askOrder ?? 0));
-      /** The note on a cut that waits for the editor: what Scarlet staged there. */
-      const ask = (index: number, { start, end }: TimeRange): CutAssessment => {
-        const inside = within({ start, end });
-        const asked = inside.flatMap(c => c.assessment?.verdict === "ask" && c.assessment.askOrder ? [c.assessment.askOrder] : []);
-        const askOrder = asked.length ? Math.min(...asked) : order ? ++order : undefined;
-        return { index, start, end, verdict: "ask", ...(askOrder && { askOrder }),
-          reason: [...new Set(inside.map(c => c.reason))].join(" ").slice(0, 800).trim() || "Staged for a closer look." };
-      };
+      // A replaced assessment still needs a recommendation on its new footage before the editor sees it.
+      const ask = (index: number, { start, end }: TimeRange): CutAssessment => ({
+        index, start, end, verdict: "ask", provisional: true,
+        reason: [...new Set(within({ start, end }).map(c => c.reason))].join(" ").slice(0, 800).trim() || "Staged for a closer look.",
+      });
       for (const [index, { removed: { start, end } }] of listed.entries()) {
         const inside = within({ start, end });
         if (inside.some(c => c.recovered)) {
@@ -892,6 +892,10 @@ export function reviseStagedCut(ctx: Ctx, user: User, named: Change, namedIndex:
       task.context.changeId === named.id && task.context.cutIndex === namedIndex ||
       task.context.changeId === change.id && task.context.cutIndex === index ||
       task.cutConflict?.changeId === change.id && task.cutConflict.index === index);
+    const was = change.cutAssessments?.find(a => a.index === index);
+    const autonomous = !scoped && (!!task || body.author?.type === "agent");
+    if (autonomous && (was && (isPublishedCall(was) || was.askOrder !== undefined) || change.cutChoices?.some(c => c.index === index)))
+      throw conflict("cut_with_editor", `Cut ${index} at ${old.start}–${old.end} s is with the editor. Only a revision they request can change this cut.`);
     const placement = placeRevision(ctx, project, change, review, index, body, range, task, scoped, named.fromVersion);
     if ("conflict" in placement) {
       const { reason, range } = placement.conflict;
@@ -958,20 +962,12 @@ export function reviseStagedCut(ctx: Ctx, user: User, named: Change, namedIndex:
     const assessments: CutAssessment[] = change.cutAssessments?.length ? change.cutAssessments : cuts.map((c, i) => ({
       index: i, ...c, verdict: "cut" as const, reason: change.cutReasons?.find(r => r.start >= c.start - 1e-6 && r.start < c.end)?.reason ?? change.description }));
     const verdict: CutAssessment["verdict"] = placement.keep ? "keep" : approved ? "cut" : "ask";
-    const was = change.cutAssessments?.find(a => a.index === index);
     const sentBack = scoped || was?.revised;
-    const cutAssessments = assessments.filter(a => a.index !== index);
-    // Moving an ordinary staged cut during the pass invalidates its old assessment. Its first
-    // call reaches the editor only if Scarlet asks after checking the new edges.
-    const passIsChecking = task && task.kind !== "revise" && task.context.cutIndex === undefined && !sentBack;
-    const hadCall = was?.verdict === "ask" || latest.cutChoices?.some(c => c.index === index);
-    if (!passIsChecking || hadCall || verdict !== "ask") {
-      const numbered = Math.max(0, ...assessments.map(a => a.askOrder ?? 0));
-      const askOrder = was?.verdict === "ask" ? was.askOrder : (was || !sentBack) && numbered ? numbered + 1 : undefined;
-      cutAssessments.push({ index, start, end, verdict, reason, ...(verdict === "ask" && sentBack && { revised: true }),
-        ...(verdict === "ask" && askOrder && { askOrder }) });
-      cutAssessments.sort((a, b) => a.index - b.index);
-    }
+    // Moving an unchecked candidate invalidates its assessment. Only a recommendation on the new footage publishes it.
+    const provisional = verdict === "ask" && autonomous;
+    const updated: CutAssessment = { index, start, end, verdict, reason, ...(provisional && { provisional: true }),
+      ...(verdict === "ask" && sentBack && { revised: true }), ...(was?.askOrder && { askOrder: was.askOrder }) };
+    const cutAssessments = [...assessments.filter(a => a.index !== index), updated].sort((a, b) => a.index - b.index);
     const decided = new Set(cutChoices.map(c => c.index));
     const done = cuts.every((_, i) => decided.has(i) || cutAssessments.some(a => a.index === i && a.verdict !== "ask"));
     const applyWhenDone = (placement.keep || approved) && done && scoped ? { userId: user.id, at: now() } : undefined;
@@ -1076,36 +1072,47 @@ export function foldStrandedPasses(ctx: Ctx): void {
   }
 }
 
-/**
- * A dialogue pass stages the cuts it isn't sure of, and those are the editor's calls from then on. The same run can go
- * on to save the video another way, as a whole new timeline or a list of steps, and change the footage of a cut that
- * waits: a pass that rewrote the timeline over four staged cuts left the editor's four calls with nothing under them,
- * and they dropped out of the list without a word when its next part came (2026-11-11). A save that leaves nothing of
- * a waiting cut to find is refused, with the cuts it would take away and the way to decide one of them again. A cut
- * with footage still there stands: moved, it is carried, and one the save only trimmed comes back to the editor over
- * what is left of it when the pass's next part lands.
- */
-function assertStagedCallsStand(ctx: Ctx, project: Project, task: Task, next: Timeline): void {
-  const rootId = task.resumeRootId ?? task.id;
-  const waiting = ctx.repos.changes.select(`project_id = ? AND state = 'ready' AND json_extract(json, '$.intent') = 'suggestion'
-    AND json_array_length(coalesce(json_extract(json, '$.cutReasons'), '[]')) > 0
-    AND json_extract(json, '$.taskId') IN (SELECT id FROM tasks WHERE id = ? OR json_extract(json, '$.resumeRootId') = ?)`, [project.id, rootId, rootId]);
-  for (const review of waiting) {
-    const cuts = prepareCutReview(ctx, review).review?.cuts;
-    if (!cuts?.length) continue;
-    const place = makeStagedCutMapper(resolveTimeline(ctx, project, review.fromVersion), next, project.settings.fps);
-    // A sliver is nothing to call: the rewrite that prompted this left 0.08 s of one 3.3 s cut and a millisecond of another.
-    const least = (cut: TimeRange) => Math.max(3 / project.settings.fps, (cut.end - cut.start) / 10);
-    const taken = cuts.flatMap(({ removed }, index) => {
-      const placed = place(removed);
-      const stands = placed.kind === "exact" || (placed.kind === "shortened" && placed.range.end - placed.range.start >= least(removed));
-      return stands ? [] : [{ index, ...removed }];
-    });
-    if (!taken.length) continue;
-    const named = taken.slice(0, 12).map(c => `cut ${c.index} at ${c.start.toFixed(2)}–${c.end.toFixed(2)} s`).join(", ");
-    throw conflict("staged_cuts_changed", `This edit takes away the footage of ${taken.length === 1 ? "a staged cut" : `${taken.length} staged cuts`} that `
-      + `${taken.length === 1 ? "waits" : "wait"} for the editor’s call in ${review.id} (${named}${taken.length > 12 ? ", …" : ""}; times on version ${review.fromVersion}). `
-      + "Nothing was saved. Leave that footage in this edit. Use dialogue_apply_cuts to update a staged cut Scarlet hasn't asked the editor about.");
+/** Later saves by the producing run can move a published call on the timeline but must preserve its footage and edges. */
+function assertStagedCallsStand(ctx: Ctx, project: Project, task: Task, base: Timeline, next: Timeline): void {
+  const parts = dialogueParts(project.id, task.resumeRootId ?? task.id);
+  const waiting = ctx.repos.changes.select(`project_id = ? AND state IN ('ready','revising') AND json_extract(json, '$.intent') = 'suggestion'
+    AND json_array_length(json, '$.cutReasons') > 0 AND id IN (${parts.ids})`, parts.args);
+  if (!waiting.length) return;
+  const place = makeStagedCutMapper(base, next, project.settings.fps);
+  for (const change of waiting) {
+    const review = prepareCutReview(ctx, change).review;
+    if (!review) continue;
+    const before = currentCutRanges(ctx, project, change, review, base);
+    const published = new Set([...(change.cutAssessments ?? []).filter(a => isPublishedCall(a) || a.askOrder !== undefined),
+      ...(change.cutChoices ?? [])].map(c => c.index));
+    const taken: Array<{ index: number } & TimeRange> = [];
+    const located: Array<{ index: number; range: TimeRange }> = [];
+    for (const index of review.cuts.keys()) {
+      const earlier = before(index);
+      if (earlier.kind === "gone" || earlier.kind === "conflict") continue;
+      const moved = place(earlier.range);
+      // A few remaining frames give the editor nothing to judge, even for a cut the pass has yet to check.
+      const least = Math.max(3 / project.settings.fps, (earlier.range.end - earlier.range.start) / 10);
+      if (moved.kind !== "exact" && (moved.kind !== "shortened" || moved.range.end - moved.range.start < least)) {
+        taken.push({ index, ...earlier.range });
+        continue;
+      }
+      if (moved.kind !== "exact" && published.has(index))
+        throw conflict("cut_with_editor", `This edit would change cut ${index} in ${change.id}, which is with the editor. Leave its footage in place.`);
+      located.push({ index, range: moved.range });
+    }
+    if (taken.length) {
+      const named = taken.slice(0, 12).map(c => `cut ${c.index} at ${c.start.toFixed(2)}–${c.end.toFixed(2)} s`).join(", ");
+      throw conflict("staged_cuts_changed", `This edit takes away the footage of ${taken.length === 1 ? "a staged cut" : `${taken.length} staged cuts`} that `
+        + `${taken.length === 1 ? "waits" : "wait"} for the editor’s call in ${change.id} (${named}${taken.length > 12 ? ", …" : ""}; times on version ${base.version}). `
+        + "Nothing was saved. Leave that footage in this edit. Use dialogue_apply_cuts to update a staged cut Scarlet hasn't asked the editor about.");
+    }
+    located.sort((a, b) => a.range.start - b.range.start);
+    for (let i = 1; i < located.length; i++) {
+      const a = located[i - 1]!, b = located[i]!;
+      if (b.range.start < a.range.end + 1e-6 && (published.has(a.index) || published.has(b.index)))
+        throw conflict("cut_with_editor", `This edit would join cuts ${a.index} and ${b.index} in ${change.id}. Leave footage between them to preserve the editor’s call.`);
+    }
   }
 }
 
@@ -1148,7 +1155,7 @@ function persistProposal(ctx: Ctx, user: User, projectId: string, body: ProposeC
   }
   // A pass's own later save can't take a staged cut away from the editor. Only its dialogue cuts, which carry their
   // reasons and decide a staged range again in the open, replace one.
-  if (sourceTask && !cutReasons && !fold && body.intent === "requested" && !sourceTask.context.reviewAllCuts) assertStagedCallsStand(ctx, project, sourceTask, next);
+  if (sourceTask && !cutReasons && !fold && body.intent === "requested" && !sourceTask.context.reviewAllCuts) assertStagedCallsStand(ctx, project, sourceTask, base, next);
   // Dialogue cuts get their requested crossfade on each join they make, staged ones too, so review plays what approving
   // keeps. The ops stay the removals the plan asked for; `joinFades` records the fades on top of them.
   let joinFades: JoinFades | undefined;
@@ -1310,7 +1317,7 @@ export function recordPlayableDecision(ctx: Ctx, change: Change) {
   if (render?.state !== "done" || !render.finishedAt || !task?.createdAt) return;
   const ready = Math.max(Date.parse(preview.queuedAt), Date.parse(render.finishedAt));
   saveChange(ctx, { ...change, firstDecisionPreview: { ...preview, briefToPlayableMs: Math.max(0, ready - Date.parse(task.createdAt)) } });
-  const first = change.cutAssessments?.find(a => a.index === preview.index && a.verdict === "ask");
+  const first = change.cutAssessments?.find(a => a.index === preview.index && isPublishedCall(a));
   if (first && ctx.repos.projects.header(change.projectId)?.head === change.fromVersion)
     notify(ctx, "An edit is ready for review", { projectId: change.projectId, link: reviewItemPath(change.projectId, change.id), body: first.reason });
 }
@@ -1631,7 +1638,7 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
         }
         const former = change.cutAssessments?.find(a => a.index === index);
         const assessments = [...(change.cutAssessments ?? []).filter(a => a.index !== index), {
-          ...former, index, ...review.cuts[index]!.removed, verdict: "ask" as const,
+          index, ...review.cuts[index]!.removed, verdict: "ask" as const, ...(former?.revised && { revised: true }), ...(former?.askOrder && { askOrder: former.askOrder }),
           reason: former?.reason ?? change.cutReasons?.find(c => c.start >= review.cuts[index]!.removed.start - 1e-6 && c.start < review.cuts[index]!.removed.end)?.reason ?? "Check this passage." }];
         const checked = { ...change, cutChoices: [...savedChoices.values()], cutAssessments: assessments.sort((a, b) => a.index - b.index), applyWhenDone: undefined };
         const prior = change.taskId ? ctx.repos.tasks.get(change.taskId) : undefined;
@@ -1712,6 +1719,10 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
   }
 
   const snapshot = ctx.repos.versions.get(project.id, target)!;
+  if (opts.automatic && head !== change.fromVersion && target !== head && !change.cutReasons?.length && change.taskId) {
+    const task = ctx.repos.tasks.get(change.taskId);
+    if (task) assertStagedCallsStand(ctx, project, task, headTl, snapshot.timeline);
+  }
   if (target !== head && (snapshot.parent !== head || snapshot.changeId !== change.id)) {
     target = storeVersion(ctx, project.id, snapshot.timeline, {
       parent: head, changeId: change.id, author: change.author, description: change.description,
