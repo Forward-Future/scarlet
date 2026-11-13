@@ -1,0 +1,8 @@
+{
+  "build": {
+    "beforeBundleCommand": "node scripts/fetch-ffmpeg.mjs --verify-only"
+  },
+  "bundle": {
+    "externalBin": ["binaries/scarlet-engine", "binaries/ffmpeg", "binaries/ffprobe", "binaries/whisper-cli"]
+  }
+}

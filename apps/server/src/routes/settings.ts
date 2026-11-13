@@ -12,7 +12,7 @@ export function settingsRoutes(ctx: Ctx) {
   r.get("/settings", async (c) => {
     const settings = ctx.settings();
     const transcriptionAvailable = !!await availableTranscriptionProvider(ctx);
-    return c.json({ settings, transcriptionAvailable });
+    return c.json({ settings, transcriptionAvailable, telemetryUnavailable: ctx.telemetry.unavailable });
   });
 
   r.get("/settings/local-model", async (c) => c.json(await localRuntimeStatus(ctx)));
@@ -21,6 +21,7 @@ export function settingsRoutes(ctx: Ctx) {
     const patch = await jsonBody(c, z.record(z.unknown()));
     const previous = ctx.settings().render;
     const settings = ctx.repos.settings.update(patch);
+    ctx.telemetry.refreshPreference();
     if (previous.hwaccel !== settings.render.hwaccel || previous.previewHeight !== settings.render.previewHeight) {
       ctx.bus.publish({ type: "render.settings.updated" });
     }

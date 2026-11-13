@@ -1117,7 +1117,10 @@ export type QuickAction = z.infer<typeof QuickAction>;
 
 export { LocalTranscriptionModel };
 
+export type TelemetryUnavailable = "environment" | "unconfigured";
+
 export const ServerSettings = z.object({
+  telemetryEnabled: z.boolean().default(true),
   editingTools: EditingTools.default({}),
   /** Transcription provider: "openai" (API key), "whispercpp" (local binary), "none" (no engine in this build: not a choice the editor can make). */
   transcription: z.object({

@@ -13,11 +13,23 @@ import {
   ffmpegVersion,
   fnum,
   parseProgressLine,
+  mediaToolLaunchError,
   runCapture,
   runFfmpeg,
   stderrTail,
   withStreamInfoFallback,
 } from "./exec.js";
+
+it("explains how to install a missing media tool while preserving other startup failures", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-missing-media-"));
+  try {
+    await expect(runCapture(join(dir, "ffprobe"), ["-version"])).rejects.toThrow(/ffprobe.*restart Scarlet/i);
+    await expect(runCapture(join(dir, "unrelated-tool"), [])).rejects.toThrow(/ENOENT/);
+    expect(mediaToolLaunchError("ffprobe", { code: "EACCES" } as NodeJS.ErrnoException, "permission denied")).toBe("permission denied");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 describe("progress lines", () => {
   it("reads the output time and ignores every other line", () => {

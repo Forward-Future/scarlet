@@ -41,7 +41,9 @@ class DesktopPermissionsTest < Minitest::Test
   def test_only_main_can_publish_after_the_whole_matrix_passes
     publish = @jobs.fetch("publish")
     assert_equal MAIN_PUSH, publish.fetch("if")
-    assert_equal %w[version build], publish.fetch("needs")
+    assert_equal %w[version build ci], publish.fetch("needs")
+    assert_equal "./.github/workflows/ci.yml", @jobs.dig("ci", "uses")
+    assert_equal MAIN_PUSH, @jobs.dig("ci", "if")
     assert_equal({"contents" => "write"}, publish.fetch("permissions"))
     upload = @build.fetch("steps").find { |step| step["uses"].to_s.start_with?("actions/upload-artifact@") }
     refute upload.key?("if"), "Failed native jobs must not upload a release candidate"

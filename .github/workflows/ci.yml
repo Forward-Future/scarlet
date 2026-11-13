@@ -2,11 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [master]
+  workflow_call:
   pull_request:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -38,7 +39,7 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      # The same pinned static builds the desktop app ships.
+      # Test with the supported pinned FFmpeg builds on desktop platforms.
       - name: ffmpeg
         shell: bash
         run: |

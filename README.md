@@ -10,7 +10,7 @@ Scarlet works especially well on dialogue-heavy recordings. Start with an interv
 
 Scarlet renders just the affected section so you can hear what a change sounds like in context. Requested edits go on the working timeline. Suggestions wait for you to apply them. For a first cut of a whole interview, you can jump straight to the cuts the agent flags for a second listen.
 
-[Download Scarlet for macOS or Windows](https://github.com/Forward-Future/scarlet/releases/latest)
+[Download Early Access for macOS or Windows](https://github.com/Forward-Future/scarlet-releases/releases) · [Stable releases](https://github.com/Forward-Future/scarlet/releases)
 
 ## Run from source
 
@@ -47,7 +47,7 @@ pnpm desktop:dev
 
 Scarlet stores projects and renders video on your computer. CrisperWhisper is the default local transcription choice. Until you install its separately licensed weights, Scarlet uses Whisper large-v3-turbo, which downloads on first use. Your connected AI provider receives your editing request and the project context the agent uses, which can include transcript excerpts and video frames. [Choose or add a transcription model](docs/transcription-models.md)
 
-Packaged releases report anonymous usage, edit review decisions, and task and export outcomes to PostHog. Set `SCARLET_TELEMETRY_ENABLED=false` to turn reporting off. [See which events Scarlet sends](docs/telemetry.md)
+Packaged releases report anonymous usage, edit review decisions, and task and export outcomes to PostHog. Turn off **Send usage reports** in **Settings → About**, or set `SCARLET_TELEMETRY_ENABLED=false` before launching Scarlet. Early Access versions through 0.1.3 use the environment setting. [See which events Scarlet sends](docs/telemetry.md)
 
 ## Contributing
 

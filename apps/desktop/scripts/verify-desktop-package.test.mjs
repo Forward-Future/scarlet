@@ -57,11 +57,12 @@ test("checks Windows app and both installer resources before staging either inst
   const setup = join(release, "bundle/nsis/Scarlet_0.1.4_x64-setup.exe");
   const msi = join(release, "bundle/msi/Scarlet_0.1.4_x64_en-US.msi");
   tool("powershell.exe", `case "$SCARLET_VERIFY_FILE" in
-    *.msi) case "$4" in *OpenDatabase*ProductVersion*) ;; *) exit 2;; esac;;
+    *.msi) case "$4" in *OpenDatabase*ProductVersion*) ;; *) exit 2;; esac; printf '{"version":"%s","names":["app.exe"]}' "$(cat "$SCARLET_VERIFY_FILE")"; exit 0;;
     *.exe) case "$4" in *GetVersionInfo*ProductVersion*) ;; *) exit 2;; esac;;
     *) exit 2;;
   esac
   cat "$SCARLET_VERIFY_FILE"`);
+  tool("7z", 'echo "Path = scarlet-desktop.exe"');
   file(app, "0.1.4.0");
   file(setup);
   file(msi);
@@ -72,6 +73,8 @@ test("checks Windows app and both installer resources before staging either inst
     assert.throws(() => verifyDesktopPackage(target, "0.1.4", dest, root), /expected 0.1.4/);
     file(path);
   }
+  tool("7z", 'printf "Path = scarlet-desktop.exe\\nPath = ffmpeg.exe\\n"');
+  assert.throws(() => verifyDesktopPackage(target, "0.1.4", dest, root), /unexpectedly bundles ffmpeg.exe/);
   rmSync(msi);
   assert.throws(() => verifyDesktopPackage(target, "0.1.4", dest, root), /ENOENT/);
 });

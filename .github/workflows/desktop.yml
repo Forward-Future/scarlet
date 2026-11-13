@@ -17,12 +17,18 @@ on:
       - "pnpm-lock.yaml"
       - ".github/workflows/desktop*.yml"
       - ".github/scripts/*desktop-release*"
+      - ".github/scripts/sign-*-release.*"
+      - ".github/workflows/ci.yml"
       - ".github/tests/desktop_permissions_test.rb"
 
 permissions:
   contents: read
 
 jobs:
+  ci:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+
   version:
     runs-on: ubuntu-latest
     outputs:
@@ -54,7 +60,7 @@ jobs:
       version: ${{ needs.version.outputs.version }}
 
   publish:
-    needs: [version, build]
+    needs: [version, build, ci]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

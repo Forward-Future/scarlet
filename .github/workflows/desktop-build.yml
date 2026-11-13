@@ -84,7 +84,7 @@ jobs:
           EXT=""; [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
           pnpm --filter @scarlet/server build:sea -- --out "$PWD/apps/desktop/src-tauri/binaries/scarlet-engine-${{ matrix.triple }}$EXT"
 
-      - name: Fetch ffmpeg/ffprobe (pinned, checksum-verified)
+      - name: Fetch external media tools for the smoke test
         run: node apps/desktop/scripts/fetch-ffmpeg.mjs --target ${{ matrix.triple }}
 
       # Windows also gets a Vulkan whisper-cli for the GPU, built against the SDK's headers, loader and glslc.
@@ -125,25 +125,6 @@ jobs:
         if: runner.os == 'macOS'
         run: node --test apps/desktop/scripts/smoke-engine.test.mjs
 
-      # Without these secrets the Mac app is signed ad hoc: it runs, but macOS asks
-      # before the first launch. Store them only in the main-only release environment for a signed,
-      # notarized build. Only the ones that are set are passed on, because
-      # Tauri treats an empty one as set.
-      - name: Apple signing secrets
-        if: inputs.release && runner.os == 'macOS'
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-            if [ -n "${!v}" ]; then { echo "$v<<__SCARLET_EOF__"; echo "${!v}"; echo "__SCARLET_EOF__"; } >> "$GITHUB_ENV"; echo "$v: set"; fi
-          done
-
       - name: Build installers
         uses: tauri-apps/tauri-action@v0
         with:
@@ -170,7 +151,54 @@ jobs:
           else
             DIR="apps/desktop/src-tauri/target/${{ matrix.triple }}/release"
           fi
-          node apps/desktop/scripts/smoke-engine.mjs "$DIR"
+          MEDIA_TOOLS="$RUNNER_TEMP/scarlet-media-tools"
+          mkdir -p "$MEDIA_TOOLS"
+          EXT=""; [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
+          for tool in ffmpeg ffprobe; do
+            cp "apps/desktop/src-tauri/binaries/$tool-${{ matrix.triple }}$EXT" "$MEDIA_TOOLS/$tool$EXT"
+          done
+          node apps/desktop/scripts/smoke-engine.mjs "$DIR" "$MEDIA_TOOLS"
+
+      - name: Sign and notarize the Mac release
+        if: inputs.release && runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash .github/scripts/sign-macos-release.sh "${{ matrix.triple }}"
+
+      - name: Sign the Windows application and installers
+        if: inputs.release && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+          WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
+          WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in 'AZURE_TENANT_ID','AZURE_CLIENT_ID','AZURE_CLIENT_SECRET','WINDOWS_SIGNING_ENDPOINT','WINDOWS_SIGNING_ACCOUNT','WINDOWS_SIGNING_PROFILE') {
+            if (![Environment]::GetEnvironmentVariable($name)) { throw "Set $name in the release environment to publish Windows installers." }
+          }
+          Install-Module TrustedSigning -RequiredVersion 0.5.8 -Repository PSGallery -Force -Scope CurrentUser
+          $hook = (Resolve-Path .github/scripts/sign-windows-release.ps1).Path
+          $config = Join-Path $env:RUNNER_TEMP 'scarlet-signing.json'
+          @{ bundle = @{ windows = @{ signCommand = @{ cmd = 'pwsh'; args = @('-NoProfile','-NonInteractive','-File',$hook,'%1') } } } } |
+            ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 $config
+          pnpm --filter @scarlet/desktop exec tauri bundle --target ${{ matrix.triple }} --bundles nsis,msi --config "$config"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $installers = @(Get-ChildItem "$env:BUNDLE/nsis/*-setup.exe", "$env:BUNDLE/msi/*.msi")
+          if ($installers.Count -ne 2) { throw 'Expected both Windows installers.' }
+          foreach ($file in $installers) {
+            $sig = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($sig.Status -ne 'Valid' -or !$sig.TimeStamperCertificate) { throw "Invalid Authenticode signature on $file" }
+          }
 
       - name: Verify packaged versions and stage installers
         shell: bash

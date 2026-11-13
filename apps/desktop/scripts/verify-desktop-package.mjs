@@ -1,6 +1,6 @@
 // node apps/desktop/scripts/verify-desktop-package.mjs <target-triple> <marketing-version> [output-directory]
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, statSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +28,11 @@ function checkVersion(label, actual, expected, windows = false) {
   }
 }
 
+function requireExternalMediaTools(names, description) {
+  const media = names.find(name => /^ff(mpeg|probe)(\.exe)?$/i.test(name.split(/[\\/|]/).pop()));
+  if (media) throw new Error(`${description} unexpectedly bundles ${media}`);
+}
+
 function verifyDmg(dmg, productName, expected, arch) {
   requireFile(dmg);
   const mount = mkdtempSync(join(tmpdir(), "scarlet-dmg-"));
@@ -36,6 +41,7 @@ function verifyDmg(dmg, productName, expected, arch) {
     output("hdiutil", ["attach", "-readonly", "-nobrowse", "-noautoopen", "-mountpoint", mount, dmg]);
     mounted = true;
     const contents = join(mount, `${productName}.app`, "Contents");
+    requireExternalMediaTools(readdirSync(join(contents, "MacOS")), dmg);
     const version = output("plutil", ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", join(contents, "Info.plist")]);
     checkVersion(dmg, version, expected);
     const slices = output("lipo", ["-archs", join(contents, "MacOS", "scarlet-desktop")]).split(/\s+/);
@@ -47,20 +53,29 @@ function verifyDmg(dmg, productName, expected, arch) {
 }
 
 // Query the MSI Property table read-only; the MSI isn't installed or executed.
-const msiProductVersion = `
+const msiProperties = `
   $ErrorActionPreference = 'Stop'
   $installer = New-Object -ComObject WindowsInstaller.Installer
   $db = $installer.OpenDatabase($env:SCARLET_VERIFY_FILE, 0)
   $view = $db.OpenView('SELECT \`Value\` FROM \`Property\` WHERE \`Property\` = ''ProductVersion''')
   $view.Execute()
-  $view.Fetch().StringData(1)
+  $version = $view.Fetch().StringData(1)
+  $view.Close()
+  $files = $db.OpenView('SELECT \`FileName\` FROM \`File\`')
+  $files.Execute()
+  $names = while ($row = $files.Fetch()) { $row.StringData(1) }
+  @{ version = $version; names = @($names) } | ConvertTo-Json -Compress
 `;
 
 function windowsVersion(file, msi = false) {
   requireFile(file);
-  const command = msi ? msiProductVersion : "[Diagnostics.FileVersionInfo]::GetVersionInfo($env:SCARLET_VERIFY_FILE).ProductVersion";
-  return output("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command],
+  const command = msi ? msiProperties : "[Diagnostics.FileVersionInfo]::GetVersionInfo($env:SCARLET_VERIFY_FILE).ProductVersion";
+  const result = output("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command],
     { ...process.env, SCARLET_VERIFY_FILE: file });
+  if (!msi) return result;
+  const { version, names } = JSON.parse(result);
+  requireExternalMediaTools(names, file);
+  return version;
 }
 
 export function verifyDesktopPackage(target, expected, destination, root = tauriDir) {
@@ -79,6 +94,10 @@ export function verifyDesktopPackage(target, expected, destination, root = tauri
     const msi = join(bundle, "msi", `${productName}_${expected}_x64_en-US.msi`);
     for (const file of [app, setup]) checkVersion(file, windowsVersion(file), expected, true);
     checkVersion(msi, windowsVersion(msi, true), expected);
+    const listing = output("7z", ["l", "-slt", "-ba", setup]);
+    const names = [...listing.matchAll(/^Path = (.+)$/gm)].map(match => match[1].trim());
+    if (!names.some(name => name.toLowerCase().endsWith("scarlet-desktop.exe"))) throw new Error(`Could not inspect installer payload: ${setup}`);
+    requireExternalMediaTools(names, setup);
     packages.set(setup, `${productName}-${expected}-Windows-x64-Setup.exe`);
     packages.set(msi, `${productName}-${expected}-Windows-x64.msi`);
   } else {

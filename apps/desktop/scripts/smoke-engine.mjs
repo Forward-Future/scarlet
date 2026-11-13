@@ -1,16 +1,16 @@
 // End-to-end check of a built desktop bundle's engine, run in CI on every
 // platform: start the bundled engine the way the app does, ingest a clip,
 // render a change with captions, and list the MCP tools an agent would get.
-// The engine runs with a bare PATH, so it must find the ffmpeg/ffprobe that
-// ship beside it.
+// Public installers find separately installed media tools on PATH. Local updater
+// builds may instead keep the tools beside the engine.
 //
-// Usage: node scripts/smoke-engine.mjs <dir with scarlet-engine and ffmpeg>
+// Usage: node scripts/smoke-engine.mjs <engine directory> [external ffmpeg and ffprobe directory]
 //   macOS:   .../bundle/macos/Scarlet.app/Contents/MacOS
 //   Windows: .../target/<triple>/release
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { registerStorage } from "./register-storage.mjs";
 import { createRequire } from "node:module";
@@ -18,11 +18,13 @@ import { createRequire } from "node:module";
 const dir = resolve(process.argv[2] ?? "");
 const exe = process.platform === "win32" ? ".exe" : "";
 const engine = join(dir, `scarlet-engine${exe}`);
-const ffmpeg = join(dir, `ffmpeg${exe}`);
+const externalTools = process.argv[3] && resolve(process.argv[3]);
+const mediaTools = externalTools || dir;
+const ffmpeg = join(mediaTools, `ffmpeg${exe}`);
 const whisper = join(dir, `whisper-cli${exe}`);
 // fail() exits at once, which skips the `finally` below, so it runs this first.
 let cleanup = () => {};
-for (const f of [engine, ffmpeg, join(dir, `ffprobe${exe}`), whisper]) {
+for (const f of [engine, ffmpeg, join(mediaTools, `ffprobe${exe}`), whisper]) {
   if (!existsSync(f)) fail(`missing ${f}`);
 }
 
@@ -50,7 +52,7 @@ try {
   const clip = join(work, "clip.mp4");
   execFileSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=4", "-f", "lavfi", "-i", "sine=frequency=440:duration=4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-y", clip]);
 
-  // Keep media tools off PATH so the engine has to find its bundled copy.
+  // Start with the system paths. Public installer tests add only the external media directory.
   const env = { SCARLET_TELEMETRY_ENABLED: "false", HOME: process.env.HOME ?? work, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
   if (process.platform === "win32") {
     // The desktop inherits the OS environment. Windows PowerShell needs those
@@ -62,6 +64,12 @@ try {
     env.PATH = `${process.env.SystemRoot}\\System32;${process.env.SystemRoot}`;
     env.TEMP = work;
     env.TMP = work;
+  }
+  if (externalTools) {
+    for (const name of ["ffmpeg", "ffprobe"]) {
+      if (existsSync(join(dir, name + exe))) fail(`unexpected bundled media tool: ${name}`);
+    }
+    env.PATH = externalTools + delimiter + env.PATH;
   }
   execFileSync(whisper, ["--help"], { env, stdio: "ignore" });
   const data = join(work, "data");
@@ -144,7 +152,7 @@ try {
     if (m.status === "failed") fail(`ingest failed: ${m.error}`);
     return m.status === "ready" && m;
   });
-  step(`ingested ${ingested.duration.toFixed(1)} s clip (proxy made with the bundled ffmpeg)`);
+  step(`ingested ${ingested.duration.toFixed(1)} s clip (proxy made with ffmpeg)`);
   const waveform = await api("GET", `/media/${media.id}/waveform?from=0&to=1&points=50&speechActivity=1`);
   if (!Array.isArray(waveform.speechActivity)) fail("bundled voice activity detection unavailable");
   if (existsSync(join(data, "models"))) fail("import with no local transcription started a model download");

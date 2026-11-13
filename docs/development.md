@@ -47,7 +47,7 @@ An English dialogue pass using bundled Whisper can download about 1.1 GB across 
 
 ## Package a desktop build
 
-Build on the target operating system and architecture. The desktop workflow uses Node.js 24. After `pnpm install --frozen-lockfile`, `pnpm build` and `pnpm desktop:ffmpeg`, build the engine sidecar at the path Tauri expects, then build the installer. On Apple Silicon, run the following from the repository root.
+Build on the target operating system and architecture. The desktop workflow uses Node.js 24. After `pnpm install --frozen-lockfile` and `pnpm build`, build the engine sidecar at the path Tauri expects, then build the installer. On Apple Silicon, run the following from the repository root.
 
 ```sh
 pnpm --filter @scarlet/server build:sea -- --out ../desktop/src-tauri/binaries/scarlet-engine-aarch64-apple-darwin
@@ -56,13 +56,13 @@ pnpm desktop:build
 
 On an Intel Mac, use the filename `scarlet-engine-x86_64-apple-darwin`. On Windows x64, use `scarlet-engine-x86_64-pc-windows-msvc.exe`. Local installers are written under `apps/desktop/src-tauri/target/release/bundle/` with the default Cargo target directory.
 
-The app ships the engine, FFmpeg, FFprobe and `whisper-cli`. On Windows, install the Vulkan SDK to include GPU transcription. `VULKAN_SDK` points to the SDK and `node apps/desktop/scripts/build-speaker-gpu.mjs` builds the optional DirectML speaker runtime. Local builds can fall back to the CPU runtimes.
+The installer includes the engine and `whisper-cli`. Install FFmpeg and FFprobe separately before importing media. On macOS, use the [checksum-verified setup helper](https://github.com/Forward-Future/scarlet-releases/releases/tag/v0.1.2-early-access.1). On Windows, run `winget install --id Gyan.FFmpeg.Essentials --exact`. Restart Scarlet after installation. Source development and the local main updaters can use their own pinned copies. On Windows, install the Vulkan SDK to include GPU transcription. `VULKAN_SDK` points to the SDK and `node apps/desktop/scripts/build-speaker-gpu.mjs` builds the optional DirectML speaker runtime. Local builds can fall back to the CPU runtimes.
 
-Every push to public `main` creates a stable [Scarlet release](https://github.com/Forward-Future/scarlet/releases/latest) for that push’s head commit. The Desktop workflow stamps the same version into the Apple Silicon DMG, Intel DMG, Windows x64 setup executable and Windows x64 MSI. It verifies the packaged versions and architectures, runs the engine smoke tests, and publishes the files together. Pull requests and manual runs build and verify the installers with read-only access. If a release fails, rerun its failed jobs from the original workflow run to finish that version.
+Each push to public `main` starts a build for a stable [Scarlet release](https://github.com/Forward-Future/scarlet/releases/latest) for that push’s head commit. The Desktop workflow stamps the same version into the Apple Silicon DMG, Intel DMG, Windows x64 setup executable and Windows x64 MSI. It publishes all four files together once Linux, macOS and Windows CI pass for that commit, the packages pass their smoke and version checks, and the signatures have been verified. Pull requests and manual runs build and verify the installers with read-only access. If a release fails, rerun its failed jobs from the original workflow run to finish that version.
 
 The root package version sets the start of each release series. The patch number increases with the commit’s first-parent distance from the baseline. Reruns reuse the version, concurrent pushes get distinct versions, and a push containing several commits can skip numbers. Run `pnpm release:version for-commit` in a full clone to see a commit’s installer version. To start a new series, run `pnpm release:version set X.Y.Z` and commit all version changes together.
 
-macOS builds use ad hoc signing by default. For Developer ID signing, restrict the `release` environment to branch `main` and configure its `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID` secrets there. Only publication receives repository write access. [Desktop workflow](../.github/workflows/desktop.yml)
+Stable releases use the `release` environment, restricted to `main`. For Apple Developer ID signing and notarization, set the `APPLE_CERTIFICATE` (base64-encoded Developer ID Application P12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (app-specific) and `APPLE_TEAM_ID` secrets there. For Windows, provision an Azure Artifact Signing public-trust certificate profile, grant its app registration the Certificate Profile Signer role, and set `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` as environment secrets. Set `WINDOWS_SIGNING_ENDPOINT`, `WINDOWS_SIGNING_ACCOUNT` and `WINDOWS_SIGNING_PROFILE` as environment variables. Pull requests can run packaging checks without signing credentials. Only publication receives repository write access. [Desktop workflow](../.github/workflows/desktop.yml)
 
 ### Follow `main` on macOS
 

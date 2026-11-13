@@ -103,7 +103,7 @@ const track = (id: string, kind: "video" | "audio" | "caption", name: string, cl
 });
 
 export function buildDb(chatLayouts = false): MockDb {
-  const me: User = { id: "usr_matt", name: "Matt Berman", createdAt: minutesAgo(60 * 24 * 20) };
+  const me: User = { id: "usr_editor", name: "Demo Editor", createdAt: minutesAgo(60 * 24 * 20) };
   const transcript = buildTranscript();
 
   const media: MediaAsset[] = [
@@ -240,10 +240,10 @@ export function buildDb(chatLayouts = false): MockDb {
   const agentClaude = { type: "agent" as const, id: "claude", name: "Claude Code", model: "opus" };
   const agentCodex = { type: "agent" as const, id: "codex", name: "Codex", model: "gpt-5-codex" };
   const agentGemini = { type: "agent" as const, id: "gemini", name: "Gemini CLI", model: "gemini-2.5-pro" };
-  const humanMatt = { type: "human" as const, id: me.id, name: me.name };
+  const editor = { type: "human" as const, id: me.id, name: me.name };
 
   const versions: VersionSummary[] = [
-    { version: "ver_1", parent: null, name: "Main", author: humanMatt, changeId: null, description: "Imported full take", duration: timelineDuration(v1), isHead: false, createdAt: v1.createdAt },
+    { version: "ver_1", parent: null, name: "Main", author: editor, changeId: null, description: "Imported full take", duration: timelineDuration(v1), isHead: false, createdAt: v1.createdAt },
     { version: "ver_2", parent: "ver_1", name: "Main", author: agentClaude, changeId: "chg_approved_1", description: "Cut the false start and the tangent at 14 s", duration: timelineDuration(v2), isHead: false, createdAt: v2.createdAt },
     { version: "ver_2b", parent: "ver_1", name: "Alt cold open", author: agentGemini, changeId: "chg_proposed", description: "Try opening on the hook", duration: timelineDuration(v2b), isHead: false, createdAt: v2b.createdAt },
     { version: "ver_3", parent: "ver_2", name: "Main", author: agentClaude, changeId: "chg_approved_2", description: "Tighten the wrap, add music bed and captions", duration: timelineDuration(v3), isHead: true, createdAt: v3.createdAt },
@@ -251,7 +251,7 @@ export function buildDb(chatLayouts = false): MockDb {
 
   const project: Project = {
     id: PRJ,
-    name: "FF Weekly — AI agents interview",
+    name: "Weekly interview — AI agents",
     settings: { fps: 30, width: 1920, height: 1080, aspect: "16:9", sampleRate: 48000, audioChannels: 2 },
     media,
     head: "ver_3",
@@ -264,7 +264,7 @@ export function buildDb(chatLayouts = false): MockDb {
   timelines.ver_s1 = shortTl;
   const projectShort: Project = {
     id: PRJ_SHORT,
-    name: "Techvestigator — GPU shortage short",
+    name: "Tech brief — GPU shortage",
     settings: { fps: 30, width: 1080, height: 1920, aspect: "9:16", sampleRate: 48000, audioChannels: 2 },
     media: [{ ...media[0]!, id: "med_short_main", transcriptId: "tr_short", name: "gpu-short-vo.mp4", path: "media/gpu-short-vo.mp4" }],
     head: "ver_s1",
@@ -354,7 +354,7 @@ export function buildDb(chatLayouts = false): MockDb {
       ranges: [{ start: 5.0, end: 6.2 }],
       state: "rejected",
       renders: [{ range: { start: 5.0, end: 6.2 }, before: "rnd_pb1", after: "rnd_pa1" }],
-      decidedBy: humanMatt,
+      decidedBy: editor,
       createdAt: minutesAgo(14),
       updatedAt: minutesAgo(13),
     },
@@ -363,7 +363,7 @@ export function buildDb(chatLayouts = false): MockDb {
       projectId: PRJ,
       fromVersion: "ver_3",
       toVersion: "ver_5",
-      description: "Add the Forward Future lower-third over the first three seconds",
+      description: "Add the show’s lower-third over the first three seconds",
       author: agentCodex,
       noteIds: [],
       ranges: [{ start: 0.5, end: 3.5 }],
@@ -462,7 +462,7 @@ export function buildDb(chatLayouts = false): MockDb {
       clipIds: ["clip_b"],
       text: "Tighten the pause before “three things”, it runs about half a second long.",
       voiceTranscript: "um the pause here before three things is too long, tighten it up like half a second",
-      author: humanMatt,
+      author: editor,
       assignedTo: "claude",
       state: "in_progress",
       createdAt: minutesAgo(15),
@@ -476,7 +476,7 @@ export function buildDb(chatLayouts = false): MockDb {
       end: 6.2,
       clipIds: [],
       text: "Too much, it feels jumpy now. Keep about half a second of the pause.",
-      author: humanMatt,
+      author: editor,
       assignedTo: "claude:opus",
       changeId: "chg_pause_v1",
       state: "in_progress",
@@ -490,7 +490,7 @@ export function buildDb(chatLayouts = false): MockDb {
       time: 15.2,
       clipIds: ["clip_c"],
       text: "Can we end on the logo instead of a fade to black?",
-      author: humanMatt,
+      author: editor,
       state: "open",
       createdAt: minutesAgo(40),
       updatedAt: minutesAgo(40),
@@ -503,7 +503,7 @@ export function buildDb(chatLayouts = false): MockDb {
       end: 3.0,
       clipIds: ["clip_a"],
       text: "Music bed under the open, keep it low.",
-      author: humanMatt,
+      author: editor,
       assignedTo: "claude",
       state: "resolved",
       createdAt: minutesAgo(70),
@@ -522,8 +522,8 @@ export function buildDb(chatLayouts = false): MockDb {
       instruction: "Add a quiet music bed, caption the opening, and tighten the wrap so we end on the point.",
       context: { version: "ver_2" },
       state: "done",
-      createdBy: humanMatt,
-      hostId: "host_matt",
+      createdBy: editor,
+      hostId: "host_editor",
       changeIds: ["chg_approved_2"],
       question: null,
       summary: "The music sits under the voice, and the captions come in on the first line. Check the wrap to see how the ending lands.",
@@ -540,8 +540,8 @@ export function buildDb(chatLayouts = false): MockDb {
       instruction: "Find the filler words and let me check each proposed cut before applying the pass.",
       context: { version: "ver_3", reviewAllCuts: true },
       state: "done",
-      createdBy: humanMatt,
-      hostId: "host_matt",
+      createdBy: editor,
+      hostId: "host_editor",
       changeIds: ["chg_fillers"],
       question: null,
       summary: "I found six spots to review.",
@@ -561,8 +561,8 @@ export function buildDb(chatLayouts = false): MockDb {
       instruction: "Find every filler word in the wrap and propose cuts, keeping the sentence rhythm.",
       context: { version: "ver_3", clipIds: ["clip_c"] },
       state: "running",
-      createdBy: humanMatt,
-      hostId: "host_matt",
+      createdBy: editor,
+      hostId: "host_editor",
       changeIds: [],
       question: null,
       summary: null,
@@ -575,13 +575,13 @@ export function buildDb(chatLayouts = false): MockDb {
       kind: "edit",
       agent: "codex",
       model: "gpt-5-codex",
-      instruction: "Add the Forward Future lower-third over the first three seconds.",
+      instruction: "Add the show’s lower-third over the first three seconds.",
       context: { version: "ver_3", time: 0.5 },
       state: "waiting_for_user",
-      createdBy: humanMatt,
-      hostId: "host_matt",
+      createdBy: editor,
+      hostId: "host_editor",
       changeIds: ["chg_rendering"],
-      question: "Should the lower-third use the Forward Future purple (#9333ea) or stay white on the dark frame?",
+      question: "Should the lower-third use the show’s purple (#9333ea) or stay white on the dark frame?",
       summary: null,
       createdAt: minutesAgo(6),
       startedAt: minutesAgo(5),
@@ -595,8 +595,8 @@ export function buildDb(chatLayouts = false): MockDb {
       instruction: "Tighten the pause before “three things”, it runs about half a second long.",
       context: { version: "ver_3", noteIds: ["note_pause"], time: 5.6, clipIds: ["clip_b"] },
       state: "done",
-      createdBy: humanMatt,
-      hostId: "host_matt",
+      createdBy: editor,
+      hostId: "host_editor",
       changeIds: ["chg_ready"],
       question: null,
       summary: "Trimmed 0.4 s from the head of “Point one” and rippled the wrap and music bed earlier. Captions re-timed.",
@@ -614,9 +614,9 @@ export function buildDb(chatLayouts = false): MockDb {
     ],
     task_waiting: [
       { id: "ev4", taskId: "task_waiting", at: minutesAgo(5), type: "log", text: "Reading brand skill ff-brand-lower-thirds" },
-      { id: "ev5", taskId: "task_waiting", at: minutesAgo(4.5), type: "tool", text: "timeline.propose description=\"Add the Forward Future lower-third…\"" },
+      { id: "ev5", taskId: "task_waiting", at: minutesAgo(4.5), type: "tool", text: "timeline.propose description=\"Add the show’s lower-third…\"" },
       { id: "ev6", taskId: "task_waiting", at: minutesAgo(4), type: "change", text: "Proposed change chg_rendering", data: { changeId: "chg_rendering" } },
-      { id: "ev7", taskId: "task_waiting", at: minutesAgo(3), type: "question", text: "Should the lower-third use the Forward Future purple (#9333ea) or stay white on the dark frame?" },
+      { id: "ev7", taskId: "task_waiting", at: minutesAgo(3), type: "question", text: "Should the lower-third use the show’s purple (#9333ea) or stay white on the dark frame?" },
     ],
     task_done: [
       { id: "ev8", taskId: "task_done", at: minutesAgo(14), type: "tool", text: "waveform.get range=5–7" },
@@ -627,9 +627,9 @@ export function buildDb(chatLayouts = false): MockDb {
 
   const hosts: AgentHost[] = [
     {
-      id: "host_matt",
-      userId: "usr_matt",
-      name: "Matt’s MacBook Pro",
+      id: "host_editor",
+      userId: "usr_editor",
+      name: "Editing laptop",
       platform: "darwin-arm64",
       online: true,
       lastSeenAt: minutesAgo(0.1),
@@ -641,7 +641,7 @@ export function buildDb(chatLayouts = false): MockDb {
     },
     {
       id: "host_studio",
-      userId: "usr_matt",
+      userId: "usr_editor",
       name: "Studio PC",
       platform: "win32-x64",
       online: false,
@@ -674,7 +674,7 @@ export function buildDb(chatLayouts = false): MockDb {
   for (const s of skills) {
     const list: SkillVersion[] = [];
     for (let v = 1; v <= s.version; v++) {
-      list.push({ version: v, content: v === s.version ? s.content : s.content.replace("# ", `# (v${v}) `), author: v === 1 ? humanMatt : agentClaude, createdAt: minutesAgo(60 * 24 * (10 - v)) });
+      list.push({ version: v, content: v === s.version ? s.content : s.content.replace("# ", `# (v${v}) `), author: v === 1 ? editor : agentClaude, createdAt: minutesAgo(60 * 24 * (10 - v)) });
     }
     skillVersions[s.id] = list;
   }
@@ -692,6 +692,7 @@ export function buildDb(chatLayouts = false): MockDb {
   ];
 
   const settings: ServerSettings = {
+    telemetryEnabled: true,
     editingTools: {},
     transcription: { provider: "whispercpp", openaiModel: "whisper-1", whisperCppPath: "/opt/whisper.cpp/main", whisperModelPath: "/opt/whisper.cpp/models/ggml-large-v3.bin", language: "en" },
     noteCleanup: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5" },
@@ -707,7 +708,7 @@ export function buildDb(chatLayouts = false): MockDb {
     timelines,
     versions: {
       [PRJ]: versions,
-      [PRJ_SHORT]: [{ version: "ver_s1", parent: null, name: "Main", author: humanMatt, changeId: null, description: "Imported voice-over", duration: 12, isHead: true, createdAt: shortTl.createdAt }],
+      [PRJ_SHORT]: [{ version: "ver_s1", parent: null, name: "Main", author: editor, changeId: null, description: "Imported voice-over", duration: 12, isHead: true, createdAt: shortTl.createdAt }],
     },
     media: { [PRJ]: media, [PRJ_SHORT]: projectShort.media },
     transcripts: { [MED_MAIN]: transcript, med_short_main: { ...transcript, id: "tr_short", mediaId: "med_short_main" } },
@@ -749,7 +750,7 @@ export function buildTranscript(): Transcript {
       return w;
     });
     t += 0.35;
-    segments.push({ id: `seg_${i + 1}`, start, end: segWords[segWords.length - 1]!.end, text: sentence, speaker: "Matt", words: segWords });
+    segments.push({ id: `seg_${i + 1}`, start, end: segWords[segWords.length - 1]!.end, text: sentence, speaker: "Host", words: segWords });
   });
   return { id: "tr_main", mediaId: MED_MAIN, language: "en", provider: "whispercpp", modelLabel: SAMPLE_TRANSCRIPTION_MODEL, segments, createdAt: minutesAgo(60 * 24) };
 }

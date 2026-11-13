@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm --filter @scarlet/web run dev:renderer",
     "devUrl": "http://127.0.0.1:5173",
-    "beforeBundleCommand": "node scripts/fetch-ffmpeg.mjs --verify-only",
+    "beforeBundleCommand": "node scripts/fetch-ffmpeg.mjs --verify-engine",
     "beforeBuildCommand": "node scripts/build-whisper.mjs && node scripts/build-speaker-gpu.mjs && pnpm --filter @scarlet/web build",
     "frontendDist": "../../web/dist"
   },
@@ -39,7 +39,7 @@
     "category": "Video",
     "shortDescription": "Single-user AI video editor",
     "longDescription": "Scarlet: your AI agent edits the cut list, Scarlet renders change clips, you review.",
-    "copyright": "MIT. Forward Future.",
+    "copyright": "Copyright (c) 2026 Matthew Berman and Scarlet contributors",
     "publisher": "Forward Future",
     "icon": [
       "icons/32x32.png",
@@ -50,12 +50,11 @@
     ],
     "externalBin": [
       "binaries/scarlet-engine",
-      "binaries/ffmpeg",
-      "binaries/ffprobe",
       "binaries/whisper-cli"
     ],
     "resources": {
       "licenses/": "licenses/",
+      "../../../LICENSE": "licenses/scarlet.txt",
       "binaries/uhm-runtime/": "uhm-runtime/",
       "binaries/speaker-runtime/": "speaker-runtime/",
       "../../../integrations/transcription/crisperwhisper/install.py": "crisperwhisper-setup/install.py",

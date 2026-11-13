@@ -102,6 +102,7 @@ export function createApp(options: ServerOptions): ScarletApp {
     const { data_version } = dataVersion.get() as { data_version: number };
     if (data_version === seenVersion) return;
     ctx.settings(); // Revoke a provider selected before another engine changed it.
+    ctx.telemetry.refreshPreference();
     for (const [id, worker] of ctx.transcriptions) {
       if (ctx.repos.tasks.get(id)?.state !== "running") worker.controller.abort();
     }
@@ -165,12 +166,7 @@ export function createApp(options: ServerOptions): ScarletApp {
     stopPurge();
     clearInterval(taskRecovery);
     clearInterval(peerChanges);
-    try {
-      await close();
-    } finally {
-      // Last, so work that shutdown interrupted is in the final report.
-      await ctx.telemetry.close();
-    }
+    await close();
   };
   migrateQuickActions(ctx);
   const seeded = options.skillsSeedDir ? seedSkills(ctx, options.skillsSeedDir) : seedSkillList(ctx, BUNDLED_SKILLS);
@@ -180,8 +176,8 @@ export function createApp(options: ServerOptions): ScarletApp {
   if (ctx.telemetry.active) {
     const { projectCount } = ctx.db.prepare("SELECT count(*) AS projectCount FROM projects WHERE deleted_at IS NULL").get() as { projectCount: number };
     ctx.telemetry.record("server.boot.heartbeat", { projectCount });
-    ctx.telemetry.start();
   }
+  ctx.telemetry.start();
 
   const app = new Hono<AppEnv>();
 
