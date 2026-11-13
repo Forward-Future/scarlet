@@ -84,6 +84,12 @@ it.runIf(process.platform === "win32")("applies owner-only library access to exi
   // The runner can also give the newly created file to Administrators. Its inherited grants have been checked.
   rmSync(join(paths.tmp, "new.txt"));
 
+  // Reopening a secured library must preserve the file-change stamp used for previews and dialogue evidence.
+  const existing = join(paths.root, "existing.txt");
+  const stamp = statSync(existing, { bigint: true }).ctimeNs;
+  paths.ensureRoot();
+  expect(statSync(existing, { bigint: true }).ctimeNs).toBe(stamp);
+
   // A protected child keeps its explicit grant when its parent permissions change.
   windowsFixture(paths.root, [
     "$ErrorActionPreference='Stop'",

@@ -35,7 +35,12 @@ export function restrictWindowsAccess(path: string, kind: "File" | "Directory", 
     "$acl.SetAccessRuleProtection($true,$false)",
     `$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($id,'FullControl',${inheritance}'Allow'))`,
     `$current=[System.IO.${kind}]::GetAccessControl($env:SCARLET_PRIVATE_PATH)`,
-    `if ($acl.GetSecurityDescriptorSddlForm('Access,Owner') -ne $current.GetSecurityDescriptorSddlForm('Access,Owner')) { if ($env:SCARLET_REFUSE_DACL_CHANGE) { throw $env:SCARLET_REFUSE_DACL_CHANGE }; [System.IO.${kind}]::SetAccessControl($env:SCARLET_PRIVATE_PATH,$acl) }`,
+    // Windows may mark even a protected DACL auto-inherited after persisting it. Rewriting equivalent grants
+    // propagates to the children and changes the NTFS timestamps used to identify cached source media.
+    "$desired=[System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(),0)",
+    "$actual=[System.Security.AccessControl.RawSecurityDescriptor]::new($current.GetSecurityDescriptorBinaryForm(),0)",
+    "$same=$current.AreAccessRulesProtected -and $actual.Owner -eq $id -and $null -ne $actual.DiscretionaryAcl -and $actual.DiscretionaryAcl.Count -eq 1 -and $actual.DiscretionaryAcl[0].Equals($desired.DiscretionaryAcl[0])",
+    `if (!$same) { if ($env:SCARLET_REFUSE_DACL_CHANGE) { throw $env:SCARLET_REFUSE_DACL_CHANGE }; [System.IO.${kind}]::SetAccessControl($env:SCARLET_PRIVATE_PATH,$acl) }`,
     kind === "Directory" ? checkWindowsChildren : "",
   ].join(";");
   execFileSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe"),
