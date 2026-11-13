@@ -16,12 +16,12 @@ export function usePictureWait(monitor: RefObject<HTMLDivElement | null>) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const clear = () => { clearTimeout(timer); timer = undefined; target = null; setPending(false); };
     const start = (e: Event) => {
-      if (!(e.target instanceof HTMLVideoElement) || e.target.closest("[hidden]")) return;
+      if (!(e.target instanceof HTMLVideoElement) || e.target.closest("[hidden], [data-parked]")) return;
       if (target === e.target) return;
       clear();
       target = e.target;
       timer = setTimeout(() => {
-        if (target?.isConnected && !target.closest("[hidden]") && (target.seeking || target.readyState < 3)) setPending(true);
+        if (target?.isConnected && !target.closest("[hidden], [data-parked]") && (target.seeking || target.readyState < 3)) setPending(true);
         else clear();
       }, 180);
     };
@@ -31,15 +31,15 @@ export function usePictureWait(monitor: RefObject<HTMLDivElement | null>) {
     for (const name of ends) root.addEventListener(name, finish, true);
     let marked: ReturnType<typeof setTimeout> | undefined;
     const readMarks = () => {
-      if ([...root.querySelectorAll("video[data-waiting]")].some(video => !video.closest("[hidden]"))) marked ??= setTimeout(() => setPreparing(true), 180);
+      if ([...root.querySelectorAll("video[data-waiting]")].some(video => !video.closest("[hidden], [data-parked]"))) marked ??= setTimeout(() => setPreparing(true), 180);
       else { clearTimeout(marked); marked = undefined; setPreparing(false); }
     };
     readMarks();
     const observer = new MutationObserver(() => {
-      if (target && (!root.contains(target) || target.closest("[hidden]"))) clear();
+      if (target && (!root.contains(target) || target.closest("[hidden], [data-parked]"))) clear();
       readMarks();
     });
-    observer.observe(root, { subtree: true, childList: true, attributes: true, attributeFilter: ["hidden", "data-waiting"] });
+    observer.observe(root, { subtree: true, childList: true, attributes: true, attributeFilter: ["hidden", "data-parked", "data-waiting"] });
     return () => {
       clearTimeout(timer); clearTimeout(marked); observer.disconnect();
       for (const name of ["seeking", "waiting"]) root.removeEventListener(name, start, true);

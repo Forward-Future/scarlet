@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  appliedCutReview, appliedReviewChange, applyOps, canStartCutReview, Change, cutSummary, describeDialogueRemovals, dialogueReceipt, dialogueRemovals,
-  emptyTimeline, makeMediaClip, planCutReview, reviewedTimeline, reviewReasons, timelineDuration, timelineFromKeepRanges, type MediaAsset,
+  appliedCutReview, appliedReviewChange, applyOps, canStartCutReview, Change, cutPlaybackWindow, cutSummary, describeDialogueRemovals, dialogueReceipt, dialogueRemovals,
+  emptyTimeline, isolatedReviewCut, makeMediaClip, planCutReview, reviewedTimeline, reviewReasons, timelineDuration, timelineFromKeepRanges, type MediaAsset,
 } from "./index.js";
 
 const media: MediaAsset[] = [{ id: "camera", name: "Interview", path: "interview.mp4", kind: "video", duration: 12 },
@@ -9,6 +9,22 @@ const media: MediaAsset[] = [{ id: "camera", name: "Interview", path: "interview
 const empty = emptyTimeline("project");
 const keep = [{ start: 1, end: 3 }, { start: 5, end: 7 }, { start: 9, end: 11 }];
 const proposed = timelineFromKeepRanges("project", "camera", keep, { audioMediaId: "mic", crossfade: 0.06 });
+
+it("gives the decoder its lead-in and final frame within a short file on the source frame grid", () => {
+  expect(cutPlaybackWindow(5, 10, 45, 30)).toEqual({ start: 136 / 30, end: 301 / 30 });
+  expect(cutPlaybackWindow(0, 4.98, 5.01, 30)).toEqual({ start: 0, end: 5 });
+  expect(cutPlaybackWindow(0, 12, 12, 30)).toEqual({ start: 0, end: 12 });
+  expect(cutPlaybackWindow(0, 12, 13, 30)).toBeUndefined();
+});
+
+it("keeps neighboring removals just outside the audition and isolates one that reaches either edge", () => {
+  const review = planCutReview(empty, proposed, media)!;
+  const cut = review.cuts[1]!.removed;
+  // The previous omission ends at 1 and the next begins at 7. A half-open review may touch either.
+  expect(isolatedReviewCut(review, cut, { start: 1, end: 7 })).toBe(true);
+  expect(isolatedReviewCut(review, cut, { start: 0.99999, end: 7 })).toBe(false);
+  expect(isolatedReviewCut(review, cut, { start: 1, end: 7.00001 })).toBe(false);
+});
 
 it("maps first-cut omissions to the original and restores exact source ranges on both tracks", () => {
   const review = planCutReview(empty, proposed, media)!;

@@ -47,20 +47,29 @@ export function joinClock(removed: TimeRange[], duration: number): JoinClock {
   };
 }
 
+// Cuts on the same edit share both immutable timelines and the removal list. Keep the source index and
+// clock for the most recent edited version of each source, while checking each audition on its own.
+const sourceClocks = new WeakMap<Timeline, { media: Timeline; removed: TimeRange[]; fps: number; clock: JoinClock; map: ReturnType<typeof makeTimeMap> }>();
+
 /**
  * The clock for playing `media` in place of `view`, when `media` is `view` with exactly `removed` taken out.
  * Checked against the footage itself at `checkAt` (view times), so a version that differs in any other way
  * gets no clock and the caller keeps its own playback.
  */
 export function verifiedJoinClock(view: Timeline, media: Timeline, removed: TimeRange[], fps: number, checkAt: number[]): JoinClock | undefined {
-  const duration = timelineDuration(view);
-  const clock = joinClock(removed, duration);
-  const total = clock.removed.reduce((sum, r) => sum + r.end - r.start, 0);
+  let checkedPair = sourceClocks.get(view);
+  if (!checkedPair || checkedPair.media !== media || checkedPair.removed !== removed || checkedPair.fps !== fps) {
+    const duration = timelineDuration(view);
+    const clock = joinClock(removed, duration);
+    const total = clock.removed.reduce((sum, r) => sum + r.end - r.start, 0);
+    if (!duration || Math.abs(duration - total - timelineDuration(media)) > 0.5 / fps) return;
+    checkedPair = { media, removed, fps, clock, map: makeTimeMap(view, media, fps) };
+    sourceClocks.set(view, checkedPair);
+  }
+  const { clock, map } = checkedPair;
   const tolerance = 0.5 / fps;
-  if (!duration || Math.abs(duration - total - timelineDuration(media)) > tolerance) return;
-  const map = makeTimeMap(view, media, fps);
   for (const t of checkAt) {
-    if (t < 0 || t > duration || clock.removed.some(r => t > r.start - tolerance && t < r.end + tolerance)) continue;
+    if (t < 0 || t > clock.duration || clock.removed.some(r => t > r.start - tolerance && t < r.end + tolerance)) continue;
     const at = map(t, "right") ?? map(t, "left");
     if (at === null || Math.abs(at - clock.toMedia(t)) > tolerance) return;
   }

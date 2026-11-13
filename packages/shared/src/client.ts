@@ -347,6 +347,11 @@ export class ScarletClient {
   preparePlayback(projectId: string, version: string, times: number[], signal: AbortSignal) {
     return this.request<void>("POST", `/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(version)}/prepare-playback`, { times }, { signal });
   }
+  async cutPlaybackFile(projectId: string, version: string, range: TimeRange, signal: AbortSignal) {
+    const { renderId, ...file } = await this.request<{ renderId: string; start: number; end: number; full?: true }>("POST",
+      `/projects/${apiPathId(projectId)}/versions/${apiPathId(version)}/cut-playback-file`, range, { signal });
+    return { url: this.renderFileUrl(renderId), ...file };
+  }
   versions(projectId: string) {
     return this.get<{ versions: VersionSummary[] }>(`/projects/${projectId}/versions`);
   }
@@ -410,8 +415,9 @@ export class ScarletClient {
   cutReview(changeId: string, restoredCuts?: number[]) {
     return this.withResource("changes", changeId, path => this.post<{ review: CutReview | null; draft?: Timeline }>(`${path}/cut-review`, { restoredCuts }));
   }
-  cutReviewDraft(changeId: string, restoredCuts: number[]) {
-    return this.withResource("changes", changeId, path => this.post<{ draft?: Timeline }>(`${path}/cut-review?view=draft`, { restoredCuts }));
+  cutReviewDraft(changeId: string, restoredCuts: number[], ontoVersion?: string, signal?: AbortSignal) {
+    return this.withResource("changes", changeId, path => this.request<{ draft?: Timeline; ontoVersion?: string; removed?: TimeRange[] }>(
+      "POST", `${path}/cut-review?view=draft`, { restoredCuts, ontoVersion }, { signal }));
   }
   assessCuts(changeId: string, fromVersion: string, toVersion: string, assessments: Omit<import("@scarlet/timeline").CutAssessment, "provisional" | "askOrder" | "revised">[]) {
     // heldForEditor: cut verdicts on a kind the editor set to Suggest, saved as ask so the editor decides them.

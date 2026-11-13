@@ -48,6 +48,7 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
   const loading = new Map<number, AbortController>();
   const staged = new Map<number, ArrayBuffer>();
   let appended = -1;
+  let preroll: { first: number; last: number; finish(error?: Error): void } | undefined;
   let seekTimer: ReturnType<typeof setTimeout> | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let settledAt = -1;
@@ -116,7 +117,9 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
       playbackLog("stream load-failed", { id, section: index, ms: performance.now() - asked, error: String(error) });
       loading.delete(index);
       const time = position();
-      if (failedSections.has(index) && index >= indexAt(time) && index <= indexAt(time + SECTION_EDGE)) stop(error);
+      const required = index >= indexAt(time) && index <= indexAt(time + SECTION_EDGE)
+        || preroll && index >= preroll.first && index <= preroll.last;
+      if (failedSections.has(index) && required) stop(error);
       else { failedSections.add(index); pump(); }
     }).catch(stop);
   }
@@ -127,10 +130,10 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
       const time = position();
       const current = indexAt(time);
       // A seek just before a seam can wait for the first frame on its far side.
-      const neededThrough = indexAt(time + SECTION_EDGE);
+      const landingSection = indexAt(time + SECTION_EDGE);
       // WebKit can finish the previous seek while the next cut is loading. Keep feeding the requested
       // destination until it can play, then correct a stale landing with a seek into buffered media.
-      if (seekState !== "landed" && video.readyState >= 1 && ready.has(current) && ready.has(neededThrough)) {
+      if (seekState !== "landed" && video.readyState >= 1 && ready.has(current) && ready.has(landingSection)) {
         if (Math.abs(video.currentTime - time) <= SEEK_LANDING_TOLERANCE) {
           if (!video.seeking) seekState = "landed";
         } else if (seekState === "pending" || !video.seeking) {
@@ -138,6 +141,13 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
           playbackLog("stream restore-seek", { id, from: video.currentTime, to: time });
           video.currentTime = time;
         }
+      }
+      // A short After audition buffers its lead-in and tail before the media clock starts. Rendering
+      // the section after the join can take longer than the entire lead-in on a cold project.
+      if (preroll) {
+        let firstMissing = preroll.first;
+        while (firstMissing <= preroll.last && ready.has(firstMissing)) firstMissing++;
+        if (firstMissing > preroll.last) preroll.finish();
       }
       let last = current;
       const playing = !video.paused;
@@ -149,6 +159,7 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
         if (settledAt === current) last++;
         else idleTimer ??= setTimeout(() => { idleTimer = undefined; settledAt = current; pump(); }, 450);
       }
+      const neededThrough = Math.max(landingSection, preroll?.last ?? current);
       last = Math.max(neededThrough, Math.min(last, ranges.length - 1));
       // Encoders may finish out of order. Keep native appends ordered and let fetching
       // overlap both the previous append and eviction after a long jump.
@@ -162,9 +173,11 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
           ready.delete(index);
           const range = ranges[index]!;
           playbackLog("stream evict", { id, section: index, at: current, t: position() });
-          // Removing through the seam can erase the next keyframe and every frame depending on it.
-          const margin = Math.min(SECTION_EDGE, (range.end - range.start) / 2);
-          buffer.remove(range.start, range.end - margin);
+          // Removing through either seam can erase the next keyframe or trim the end of the
+          // preceding section. Keep its last samples when that section stays in the buffer.
+          const margin = Math.min(SECTION_EDGE, (range.end - range.start) / 3);
+          const keepPrevious = ready.has(index - 1);
+          buffer.remove(range.start + (keepPrevious ? margin : 0), range.end - margin);
           return;
         }
       }
@@ -247,6 +260,7 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
   function dispose() {
     if (disposed) return;
     disposed = true;
+    preroll?.finish(new DOMException("The stream closed.", "AbortError"));
     playbackLog("stream close", { id, t: position(), playing: !video.paused });
     video.removeEventListener("waiting", starved);
     clearTimeout(seekTimer);
@@ -270,5 +284,21 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
   video.addEventListener("waiting", starved);
   source.addEventListener("sourceopen", open, { once: true });
   video.src = url;
-  return { seek, finishSeek, sourceTime: position, dispose };
+  function bufferThrough(start: number, end: number, signal: AbortSignal) {
+    return new Promise<void>((resolve, reject) => {
+      signal.throwIfAborted();
+      if (disposed) throw new DOMException("The stream closed.", "AbortError");
+      const abort = () => finish(new DOMException("Playback cancelled.", "AbortError"));
+      const finish = (error?: Error) => {
+        signal.removeEventListener("abort", abort);
+        preroll = undefined;
+        if (error) reject(error);
+        else resolve();
+      };
+      preroll = { first: indexAt(start), last: indexAt(Math.max(start, end - SECTION_EDGE)), finish };
+      signal.addEventListener("abort", abort, { once: true });
+      pump();
+    });
+  }
+  return { seek, finishSeek, sourceTime: position, bufferThrough, dispose };
 }
