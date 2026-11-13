@@ -8,6 +8,7 @@ import { engineIsAlive, type Ctx } from "../context.js";
 import { conflict, HttpError } from "../errors.js";
 import { now } from "../db.js";
 import { clip } from "../logText.js";
+import type { RenderEncoding } from "../render/adapter.js";
 import { recordRenderFinished } from "../telemetry/events.js";
 import { prepareSourceProxies } from "./sourcePreviews.js";
 import { resolveTimeline } from "./timeline.js";
@@ -63,12 +64,28 @@ export function renderFailure(error: unknown, sources: ReadonlyArray<{ name: str
   return `Scarlet couldn’t render ${what}: try once more, or export the logs from Settings → Advanced to report it.`;
 }
 
+type RenderFormat = { height: number; hwaccel: NonNullable<Render["hwaccel"]> };
+
+function isVideoExport(input: Pick<Render, "kind" | "quality">): boolean {
+  return input.kind === "export" || (input.kind === "full" && input.quality === "delivery");
+}
+
 const yieldCacheWorker = Symbol("yield cache worker");
 enum Priority { Playback, Requested, Preparation, FullCache }
 // An assembly can expire independently of its encoded picture sections.
 function assemblyRevision(input: Pick<Render, "kind" | "quality">): string {
-  if (input.kind === "export" || (input.kind === "full" && input.quality === "delivery")) return `-mix${DELIVERY_AUDIO_REVISION}`;
+  if (isVideoExport(input)) return `-mix${DELIVERY_AUDIO_REVISION}`;
   return input.kind === "full" ? "-pts1" : "";
+}
+
+// Old assemblies can be rebuilt against the same sources after a delivery mix or proxy clock upgrade.
+function sameQueuedSource(previousKey: string, currentKey: string | undefined, assembly: string): boolean {
+  if (!currentKey) return false;
+  if (currentKey === previousKey) return true;
+  const priorAssembly = assembly.startsWith("-mix") ? previousKey.replace(/-mix3(?=-clock\d+$|$)/, "") : previousKey;
+  const priorSourceKey = priorAssembly.replace(/-clock2$/, "");
+  return [currentKey, currentKey.replace(assembly, "")].some(key =>
+    key === priorAssembly || key === priorSourceKey + `-clock${PROXY_CLOCK_REVISION}`);
 }
 
 /**
@@ -121,7 +138,7 @@ export class RenderQueue {
     this.ctx.db.transaction(() => {
       for (const candidate of candidates) {
         // A peer may have claimed or finished this row between the read and the write lock.
-        const render = this.ctx.repos.renders.get(candidate.id);
+        let render = this.ctx.repos.renders.get(candidate.id);
         if (!render || (render.state !== "queued" && render.state !== "running") || alive(workerPid(render))) continue;
         const project = this.ctx.repos.projects.header(render.projectId);
         if (!project || (project.mediaPaused && render.kind === "full" && render.quality === "preview") || (render.demandPid && !render.export)) {
@@ -137,15 +154,36 @@ export class RenderQueue {
           }
           continue;
         }
-        if (!render.projectSettings || !render.hwaccel) {
+        if (!render.projectSettings || (!render.hwaccel && !isVideoExport(render))) {
           this.finish(render.id, { state: "failed", error: "Interrupted render has no saved settings. Request a new render.", finishedAt: now() });
           continue;
         }
+        // An older engine could queue an export with the preview's software-only setting.
+        // Check its original source identity before changing either of its cache keys.
+        if (isVideoExport(render) && (!render.hwaccel || render.hwaccel === "none")) {
+          try {
+            const saved = { ...this.ctx.repos.projects.get(render.projectId)!, settings: render.projectSettings };
+            const input: RenderInput = { ...render, quality: render.quality ?? "preview" };
+            const mode = render.previewContentKey?.startsWith("local-v1-") ? "local" : undefined;
+            if (render.previewContentKey) {
+              const originalKey = this.renderContentKey(saved, input, render, mode);
+              if (!sameQueuedSource(render.previewContentKey, originalKey, assemblyRevision(render))) {
+                throw conflict("render_source_changed", "A source changed after this render was queued. Request a new render.");
+              }
+            }
+            const format = this.outputFormat(saved, input, render.hwaccel, render.height);
+            render = { ...render, ...format, key: this.keyFor(saved, input, format),
+              previewContentKey: this.renderContentKey(saved, input, format, mode) };
+          } catch (error) {
+            this.finish(render.id, { state: "failed", error: (error as Error).message, finishedAt: now() });
+            continue;
+          }
+        }
         const owner = render.demandPid && render.export?.owner;
-        this.ctx.repos.renders.put({ ...render, state: "queued", progress: 0, queuePid: process.pid, ...(owner && { demandPid: process.pid }) });
+        const queued = this.ctx.repos.renders.put({ ...render, state: "queued", progress: 0, queuePid: process.pid, ...(owner && { demandPid: process.pid }) });
         this.ctx.db.afterCommit(() => {
-          if (owner) this.owners.set(render.id, new Map([[owner, "viewer"]]));
-          this.queue.push({ id: render.id, key: render.previewContentKey ?? render.key });
+          if (owner) this.owners.set(queued.id, new Map([[owner, "viewer"]]));
+          this.queue.push({ id: queued.id, key: queued.previewContentKey ?? queued.key });
         });
       }
     }, "immediate")();
@@ -157,9 +195,12 @@ export class RenderQueue {
     return input.quality === "delivery" ? projectHeight : Math.min(this.ctx.settings().render.previewHeight, projectHeight);
   }
 
-  keyFor(project: Pick<Project, "settings">, input: RenderInput): string {
-    const settings = this.ctx.settings().render;
-    const height = this.outputHeight(project.settings.height, input);
+  private outputFormat(project: Pick<Project, "settings">, input: RenderInput,
+    preference = this.ctx.settings().render.hwaccel, height = this.outputHeight(project.settings.height, input)): RenderFormat {
+    return { height, hwaccel: isVideoExport(input) && preference === "none" ? "auto" : preference };
+  }
+
+  keyFor(project: Pick<Project, "settings">, input: RenderInput, format = this.outputFormat(project, input)): string {
     const key = sha256(
       stableStringify({
         renderer: RENDER_REVISION,
@@ -170,7 +211,7 @@ export class RenderQueue {
         kind: input.kind,
         quality: input.quality,
         projectId: input.projectId,
-        settings: { project: project.settings, height, hwaccel: settings.hwaccel },
+        settings: { project: project.settings, ...format },
       }),
     );
     return key + assemblyRevision(input);
@@ -233,10 +274,10 @@ export class RenderQueue {
     return { ...header, media: this.ctx.repos.projects.assets(header.id, sourceIds) };
   }
 
-  private renderContentKey(project: Project, input: RenderInput, output?: Pick<Render, "height" | "hwaccel">, mode?: "local" | "export"): string | undefined {
+  private renderContentKey(project: Project, input: RenderInput, output: Pick<Render, "height" | "hwaccel"> = this.outputFormat(project, input), mode?: "local" | "export"): string | undefined {
     if (input.kind === "export") {
       const source = this.renderContentKey(project, { ...input, kind: "full", range: null },
-        output ?? { height: this.outputHeight(project.settings.height, input) }, "export");
+        output, "export");
       return source && "export-v1-" + sha256(stableStringify([source, input.version, input.range, input.exportOptions])) + assemblyRevision(input);
     }
     const full = input.kind === "full" && input.range === null;
@@ -338,14 +379,15 @@ export class RenderQueue {
     const project = this.projectFor(input);
     if (!project) throw new Error(`project ${input.projectId} not found`);
     if (project.mediaPaused && input.kind === "full" && input.quality === "preview") throw conflict("media_paused", "Resume caching to cache this edit.");
-    const key = this.keyFor(project, input);
-    const previewContentKey = this.renderContentKey(project, input);
+    const format = this.outputFormat(project, input);
+    const key = this.keyFor(project, input, format);
+    const previewContentKey = this.renderContentKey(project, input, format);
     const kept = owner && save ? { ...save, owner } : undefined;
-    const enqueue = () => this.enqueue(project, input, key, previewContentKey, owner, kept);
+    const enqueue = () => this.enqueue(project, input, format, key, previewContentKey, owner, kept);
     return this.ctx.db.inTransaction ? enqueue() : this.ctx.db.transaction(enqueue, "immediate")();
   }
 
-  private enqueue(project: Project, input: RenderInput, key: string, previewContentKey?: string, owner?: string, kept?: Render["export"]): Render {
+  private enqueue(project: Project, input: RenderInput, format: RenderFormat, key: string, previewContentKey?: string, owner?: string, kept?: Render["export"]): Render {
     const existing = this.ctx.repos.renders.select("key = ? AND version = ? AND state IN ('queued','running','done')", [key, input.version], "created_at DESC");
     const found = existing.find(r =>
       (!r.demandPid || r.state === "done" || this.owners.has(r.id)) &&
@@ -378,8 +420,14 @@ export class RenderQueue {
       }
       return same;
     }
-    const cached = previewContentKey ? this.cachedPreview(previewContentKey) : undefined;
-    const height = this.outputHeight(project.settings.height, input);
+    let cached = previewContentKey ? this.cachedPreview(previewContentKey) : undefined;
+    if (!cached && format.hwaccel === "auto" && isVideoExport(input)) {
+      // A complete software export already on disk can be delivered without encoding again.
+      const legacy = { ...format, hwaccel: "none" as const };
+      cached = this.ctx.repos.renders.select("key = ? AND state = 'done'", [this.keyFor(project, input, legacy)], "created_at DESC")
+        .find(row => row.hwaccel === "none" && row.previewContentKey && this.available(row) && this.isCurrent(row, project));
+    }
+    const { height, hwaccel } = format;
     const width = Math.round((project.settings.width * height) / project.settings.height / 2) * 2;
     const duration = input.range ? input.range.end - input.range.start : undefined;
     const render: Render = this.ctx.repos.renders.put({
@@ -391,7 +439,7 @@ export class RenderQueue {
       exportOptions: input.exportOptions,
       export: kept,
       projectSettings: project.settings,
-      hwaccel: this.ctx.settings().render.hwaccel,
+      hwaccel,
       range: input.range,
       key,
       previewContentKey,
@@ -541,6 +589,7 @@ export class RenderQueue {
     let read = new Set<string>();
     // The failure sentence names the sources this render read, so the project outlives the try.
     let project: Project | undefined;
+    let encoding: RenderEncoding | void = undefined;
     try {
       const current = this.projectFor(render);
       if (!current) throw new Error("project not found");
@@ -555,12 +604,8 @@ export class RenderQueue {
         const assembly = assemblyRevision(render);
         const currentKey = this.renderContentKey(project, { ...render, quality: render.quality ?? "preview" }, render,
           previousKey?.startsWith("local-v1-") ? "local" : undefined);
-        if (previousKey && currentKey !== previousKey && !(oldRange && currentKey)) {
-          // Resume interrupted pre-upgrade jobs when the source identity still matches.
-          const priorAssembly = assembly.startsWith("-mix") ? previousKey.replace(/-mix3(?=-clock\d+$|$)/, "") : previousKey;
-          const priorSourceKey = priorAssembly.replace(/-clock2$/, "");
-          if (!currentKey || ![currentKey, currentKey.replace(assembly, "")].some(key =>
-            key === priorAssembly || key === priorSourceKey + `-clock${PROXY_CLOCK_REVISION}`)) throw conflict("render_source_changed", "A source changed after this render was queued. Request a new render.");
+        if (previousKey && !(oldRange && currentKey) && !sameQueuedSource(previousKey, currentKey, assembly)) {
+          throw conflict("render_source_changed", "A source changed after this render was queued. Request a new render.");
         }
         const upgradeAssembly = assembly && !render.key.endsWith(assembly);
         if (upgradeAssembly || currentKey !== previousKey) {
@@ -604,7 +649,7 @@ export class RenderQueue {
         const custom = render.kind === "export" ? {
           exportHeight: render.height, exportRange: render.range ?? undefined, omitCaptions: render.exportOptions?.omitCaptions,
         } : {};
-        await this.ctx.render.renderFullCached(project, timeline, this.ctx.paths.segments(project.id), output, {
+        encoding = await this.ctx.render.renderFullCached(project, timeline, this.ctx.paths.segments(project.id), output, {
           ...opts, ...custom, concurrency: Math.max(1, this.ctx.settings().render.concurrency),
           onCachedRanges: render.kind === "full" && render.quality === "preview" ? publishProgress : undefined,
         });
@@ -624,6 +669,13 @@ export class RenderQueue {
       const duration = render.range ? render.range.end - render.range.start : timelineDuration(timeline);
       this.finish(id, { state: "done", progress: 1, path: file, durationSeconds: duration, finishedAt: now() });
       unpublished = undefined;
+      if (encoding && isVideoExport(render)) {
+        let mode: string;
+        if (encoding.encoder === "copy") mode = "copied original video";
+        else if (encoding.rendered === 0) mode = "assembled cached video";
+        else mode = (encoding.encoder === "libx264" ? "software encoder " : "hardware encoder ") + encoding.encoder;
+        this.ctx.log(`[render] ${id} export video: ${mode}`);
+      }
     } catch (e) {
       if (signal.aborted) return;
       const message = e instanceof Error ? e.message : String(e);
