@@ -193,11 +193,11 @@ export function audioLane(ctx: { paths: { root: string }; log?: (message: string
 
 /**
  * The lane local Whisper takes its turn in: one of its own when it runs on the GPU beside the CPU models
- * (`TranscriptionProvider.gpu`), and otherwise the engine's audio lane.
+ * (`TranscriptionProvider.separateWhisperLane`), and otherwise the engine's audio lane.
  */
-export function whisperLane(ctx: { paths: { root: string }; log?: (message: string) => void }, gpu: boolean | undefined): AudioLane {
+export function whisperLane(ctx: { paths: { root: string }; log?: (message: string) => void }, separate: boolean | undefined): AudioLane {
   const lane = audioLane(ctx);
-  if (!gpu) return lane;
+  if (!separate) return lane;
   let own = whisperLanes.get(ctx.paths.root);
   if (!own) whisperLanes.set(ctx.paths.root, own = lane.sibling("Whisper lane"));
   return own;

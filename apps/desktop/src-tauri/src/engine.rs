@@ -431,6 +431,7 @@ impl EngineManager {
 
     async fn run_once(&self, launch: &EngineLaunch, generation: u64) -> Result<()> {
         let mut env = child_env(&self.paths.home);
+        crate::crisper::set_adapter_env(&mut env, self.paths.resource_dir.as_deref(), tauri::is_dev());
         if let Some(res) = &self.paths.resource_dir {
             let bin = res.join("bin");
             let ff = bin.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });

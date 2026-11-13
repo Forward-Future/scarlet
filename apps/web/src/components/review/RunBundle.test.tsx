@@ -1,13 +1,15 @@
 // @vitest-environment happy-dom
-import { Fragment, StrictMode, act } from "react";
+import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, expect, it, vi } from "vitest";
-import type { Task, UsageResponse, UsageTotals } from "@scarlet/shared";
+import type { Task, TaskEvent, UsageResponse, UsageTotals } from "@scarlet/shared";
 import { api } from "../../lib/client";
 import { tokenBreakdown, tokenLabel } from "../../lib/format";
 import { useProjectStore, type ProjectData } from "../../stores/project";
 import { useUiStore } from "../../stores/ui";
+import type { MediaAsset } from "@scarlet/timeline";
+import { TranscriptLine } from "../media/TranscriptionAction";
 import { UsageSettings } from "../shell/UsageSettings";
 import { RunBundle, runEnded, Said } from "./RunBundle";
 
@@ -36,7 +38,7 @@ function render(node: React.ReactNode) {
 afterEach(() => {
   host?.remove();
   host = undefined;
-  useProjectStore.setState({ current: null });
+  act(() => useProjectStore.setState({ current: null }));
   useUiStore.getState().setShowRunTokens(false);
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -242,93 +244,37 @@ it("says what Scarlet is doing this moment on one line under its opening sentenc
   bare.unmount();
 });
 
-// Strict mode renders twice, as the app does in development, and the figure has to come out the same.
-it.each([["once", Fragment], ["twice", StrictMode]] as const)("starts the transcripts' figure again when the run goes on to another recording, rendered %s", (_, Mode) => {
-  vi.useFakeTimers({ now: Date.parse("2026-11-05T10:10:00.000Z"), toFake: ["Date", "setInterval", "clearInterval"] });
+it("keeps file progress in Media while the edit reports its latest activity", () => {
+  vi.useFakeTimers({ now: Date.parse("2026-11-05T10:00:10.000Z"), toFake: ["Date", "setInterval", "clearInterval"] });
   const running: Task = { ...task, state: "running", summary: null, finishedAt: undefined };
-  const transcribe = (mediaId: string, over: Partial<Task>): Task => ({ ...task, id: `tsk_${mediaId}`, kind: "transcribe", agent: "api",
-    instruction: `Transcribe ${mediaId}`, context: { mediaId }, startedAt: undefined, finishedAt: undefined, summary: null, ...over });
-  const at = (fraction: number, remainingSeconds: number) => ({ state: "running" as const, progress: { stage: "aligning" as const, fraction, remainingSeconds } });
-  const done = { state: "done" as const, finishedAt: "2026-11-05T10:20:00.000Z" };
-  const media = [{ id: "cam", duration: 3000 }, { id: "screen", duration: 3000 }];
-  const project = (tasks: Task[]) => act(() => useProjectStore.setState({
-    current: { id: "prj_1", tasks: [running, ...tasks], media, taskEvents: {} } as unknown as ProjectData }));
-  const wait = (mediaId: string) => ({ type: "log" as const, at: "2026-11-05T10:00:10.000Z", text: "Waiting for the transcript",
-    data: { kind: "media_wait", wait: "transcript", mediaId } });
-  const run = (...recordings: string[]) => <Mode>
-    <RunBundle task={running} events={recordings.map(wait)} changes={[]} />
-  </Mode>;
-  // How far the transcripts have got, as the line says it while the run waits on them.
-  const figure = (view: { host: HTMLElement }) => /^Transcribing the recordings · (\d+%)$/.exec(view.host.querySelector(".req-now [role=status]")?.textContent ?? "")?.[1];
-  /** The same, or nothing once the run no longer waits on a transcript. */
-  const rows = (view: { host: HTMLElement }) => figure(view) ? [figure(view)] : [];
-  // The run waits on the camera's transcript, half done with 10 minutes left.
-  project([transcribe("cam", at(0.5, 600))]);
-  const view = render(run("cam"));
-  expect(figure(view)).toEqual("50%");
-  // With its transcript in, the line goes back to what Scarlet is doing.
-  project([transcribe("cam", done)]);
-  expect(rows(view)).toEqual([]);
+  const asset = { id: "cam", name: "interview.mp4", duration: 3380, status: "ready" } as MediaAsset;
+  const transcribing: Task = { ...running, id: "tsk_cam", kind: "transcribe", agent: "api", context: { mediaId: asset.id },
+    progress: { stage: "transcribing", fraction: 0.1, remainingSeconds: 3858, words: { fraction: 0.30, remainingSeconds: 1000 } } };
+  useProjectStore.setState({ current: { project: { id: "prj_1" }, tasks: [running, transcribing], media: [asset],
+    taskEvents: {} } as ProjectData });
+  const wait: TaskEvent = { type: "log", at: "2026-11-05T10:00:10.000Z", text: "Waiting for the transcript",
+    data: { kind: "media_wait", wait: "transcript", mediaId: asset.id } };
+  const answer: TaskEvent = { type: "answer", at: "2026-11-05T10:00:40.000Z", text: "Keep the intro" };
+  const run = (events: TaskEvent[]) => <>
+    <div data-media><TranscriptLine asset={asset} available /></div>
+    <RunBundle task={running} events={events} changes={[]} />
+  </>;
+  const view = render(run([wait]));
+  // The old conversation estimate projected 30% to 32% between engine reports.
+  act(() => vi.advanceTimersByTime(30_000));
+  view.rerender(run([wait, answer]));
+  const activity = () => view.host.querySelector(".req-now [role=status]")?.textContent;
+  expect(view.host.querySelector("[data-media]")?.textContent).toBe("Transcribing10%");
+  expect(activity()).toBe("Reading your answer");
 
-  // Then it asks for the screen recording, 10% in with 25 minutes left. The two make a longer job that is 55% done,
-  // rather than a step back from the camera's 100%.
-  project([transcribe("cam", done), transcribe("screen", at(0.1, 1500))]);
-  view.rerender(run("cam", "screen"));
-  expect(figure(view)).toEqual("55%");
-  // The longer job keeps its own pace between reports.
-  act(() => vi.advanceTimersByTime(120_000));
-  expect(figure(view)).toEqual("58%");
-  // A report a little behind what's shown holds the longer job's figure too.
-  project([transcribe("cam", done), transcribe("screen", at(0.15, 1400))]);
-  expect(figure(view)).toEqual("58%");
-  // Both transcripts in: nothing is left to wait for.
-  project([transcribe("cam", done), transcribe("screen", done)]);
-  expect(rows(view)).toEqual([]);
-  // A transcript made again during the run is a new task for the same recording: the same length of job, with most of it ahead again.
-  project([transcribe("cam", done), transcribe("screen", done), transcribe("screen", { id: "tsk_screen_again", ...at(0.1, 1500) })]);
-  expect(rows(view)).toEqual(["55%"]);
+  // A fresh transcript request can block the edit again.
+  view.rerender(run([wait, answer, { ...wait, at: "2026-11-05T10:00:45.000Z" }]));
+  expect(activity()).toBe("Waiting for the transcript");
+  const ready: TaskEvent = { ...wait, at: "2026-11-05T10:00:50.000Z", text: "Ready: the transcript",
+    data: { ...wait.data, done: true } };
+  view.rerender(run([wait, answer, ready]));
+  expect(activity()).toBe("Reading your answer");
   view.unmount();
-
-  // A recording that joins while the first is still being transcribed makes a longer job too. The camera's figure had
-  // moved on to 95% since its last report; with the screen recording waiting its turn behind it, the two are 45% done.
-  project([transcribe("cam", at(0.9, 120))]);
-  const joined = render(run("cam"));
-  act(() => vi.advanceTimersByTime(60_000));
-  expect(rows(joined)).toEqual(["95%"]);
-  project([transcribe("cam", at(0.9, 120)), transcribe("screen", { state: "running", progress: { stage: "queued", fraction: 0 } })]);
-  joined.rerender(run("cam", "screen"));
-  expect(rows(joined)).toEqual(["45%"]);
-  joined.unmount();
-
-  // A transcription that stops takes its figure with it, so a recording of the same length starts from its own.
-  project([transcribe("cam", at(0.8, 240))]);
-  const stopped = render(run("cam"));
-  expect(rows(stopped)).toEqual(["80%"]);
-  project([transcribe("cam", { state: "failed" })]);
-  expect(rows(stopped)).toEqual([]);
-  project([transcribe("cam", { state: "failed" }), transcribe("screen", at(0.1, 1500))]);
-  stopped.rerender(run("cam", "screen"));
-  expect(rows(stopped)).toEqual(["10%"]);
-  stopped.unmount();
-
-  // When the engine restarts, the transcription it interrupted and the task that starts it again arrive together.
-  // The recording is the same length, but the new task has nearly all of it ahead, and shows its own figure.
-  project([transcribe("cam", at(0.97, 60))]);
-  const restarted = render(run("cam"));
-  act(() => vi.advanceTimersByTime(60_000));
-  expect(rows(restarted)).toEqual(["99%"]);
-  project([transcribe("cam", { id: "tsk_cam_again", ...at(0.02, 1470) }), transcribe("cam", { state: "failed", interrupted: true })]);
-  expect(rows(restarted)).toEqual(["2%"]);
-  restarted.unmount();
-
-  // A task that starts a transcription again can happen to report just what the interrupted one last did. Its pace starts from its own report.
-  project([transcribe("cam", at(0.5, 600))]);
-  const same = render(run("cam"));
-  act(() => vi.advanceTimersByTime(120_000));
-  expect(rows(same)).toEqual(["60%"]);
-  project([transcribe("cam", { id: "tsk_cam_again", ...at(0.5, 600) }), transcribe("cam", { state: "failed", interrupted: true })]);
-  expect(rows(same)).toEqual(["50%"]);
-  same.unmount();
 });
 
 it("says a run that ended without its transcripts is paused, and offers to finish it once they're ready", () => {

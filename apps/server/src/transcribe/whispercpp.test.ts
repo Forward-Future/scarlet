@@ -95,6 +95,25 @@ it("reports whisper-cli's progress lines for a full recording", async () => {
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+it("logs just the CrisperWhisper device and fallback markers, even for a window without progress", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-crisper-log-"));
+  try {
+    vi.spyOn(ffmpeg, "run").mockImplementation(async (_bin, args, opts) => {
+      for (const line of ["crisperwhisper device = mps", "GPU recognition failed: model detail",
+        "crisperwhisper fallback = mps", "crisperwhisper device = cpu", "other decoder output"]) {
+        opts?.onStderrLine?.(line);
+      }
+      await writeFile(args[args.indexOf("-of") + 1] + ".json", JSON.stringify({ result: { language: "en" }, transcription: [] }));
+      return Buffer.alloc(0);
+    });
+    const log = vi.fn();
+    const provider = new WhisperCppProvider({ binary: "python", crisperScript: "crisper_cli.py", log });
+    await provider.transcribeWav("sample.wav", dir);
+    expect(log.mock.calls.flat()).toEqual(["[transcribe] crisperwhisper device = mps", "[transcribe] crisperwhisper fallback = mps",
+      "[transcribe] crisperwhisper device = cpu"]);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 it("transcribes with the GPU build first, and on the CPU build once it has finished a run the GPU one failed", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scarlet-whisper-"));
   try {

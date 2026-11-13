@@ -14,6 +14,8 @@ On this Mac, install regular releases at `/Applications/Scarlet.app` and use tha
 
 The local main updater manages that installation while enabled. Let it install verified commits from GitHub `main` after regular Scarlet quits. Use the shared native preview to try uncommitted changes. Create a separate review app only when the user explicitly requests a standalone build or the task requires testing the packaged app itself.
 
+Prefer hardware acceleration for local transcription and playback caching. Honor explicit hardware settings and keep a working CPU fallback. Verify device selection and word timings or playback correctness on a separate fixture when changing these paths.
+
 Keep the interface mostly black, white, and gray. Use small color accents for branding, voice, and status. Use the project's own footage for thumbnails and avoid decorative background images.
 
 The editor chose a few quiet touches, and they stay. Ambient light: the footage's own colours glow softly round the player and under the timeline, following the picture (`AmbientLight`); it is the one light from the footage, not a background image. An edit applied while the editor watches lands with a moment on the timeline: its marker pops in with one ring, after a cut's red closes up where the footage came out. While the mic records, a ring round it moves with the voice. Timeline pictures fade in as they load, the card rises into place as it opens, and the playhead glides to a new position on a seek and jumps instantly across footage the player skips. A project's card flips through a few frames of its footage while the pointer rests on it. With motion reduced, none of it moves.
