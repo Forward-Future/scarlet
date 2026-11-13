@@ -163,7 +163,7 @@ export function dialogueDetector(ctx: Ctx) {
     const work: AudioWork = { mediaId: media.id, kind: "page" };
     const lane = audioLane(ctx);
     const local = provider.name !== "openai";
-    const whisper = local ? whisperLane(ctx, provider.gpu) : undefined;
+    const whisper = local ? whisperLane(ctx, provider.separateWhisperLane) : undefined;
     const inLane = <T>(job: () => Promise<T>) => lane.run(work, signal, job);
     const inWhisperLane = <T>(job: () => Promise<T>) => whisper ? whisper.run(work, signal, job) : job();
     const analyzed = ctx.track((keptSide ? keptWindows : acousticWindows).get(key, async () => {
