@@ -413,9 +413,9 @@ export class ScarletClient {
   cutReviewDraft(changeId: string, restoredCuts: number[]) {
     return this.withResource("changes", changeId, path => this.post<{ draft?: Timeline }>(`${path}/cut-review?view=draft`, { restoredCuts }));
   }
-  assessCuts(changeId: string, fromVersion: string, toVersion: string, assessments: import("@scarlet/timeline").CutAssessment[]) {
+  assessCuts(changeId: string, fromVersion: string, toVersion: string, assessments: Omit<import("@scarlet/timeline").CutAssessment, "provisional" | "askOrder" | "revised">[]) {
     // heldForEditor: cut verdicts on a kind the editor set to Suggest, saved as ask so the editor decides them.
-    // heldRevised: verdicts on a cut the editor sent back for revision, saved as ask for the same reason.
+    // heldRevised: a later verdict on a revised call leaves its published note and decision with the editor.
     return this.withResource("changes", changeId, path => this.post<{ total: number; assessed: number; needsDecision: number; heldForEditor?: number[]; editorPreference?: string;
       heldRevised?: number[]; editorRequest?: string; heldCalls?: number[]; existingCalls?: string }>(
       `${path}/cut-assessments`, { fromVersion, toVersion, assessments }));
