@@ -97,9 +97,9 @@ jobs:
       # Windows also gets a Vulkan whisper-cli for the GPU, built against the SDK's headers, loader and glslc.
       - name: Install the Vulkan SDK
         if: runner.os == 'Windows'
-        uses: jakoch/install-vulkan-sdk-action@v1
+        uses: jakoch/install-vulkan-sdk-action@7fe84289ddbf750f7eff9f8e4588e600e1dd06c8 # v1.8.1
         with:
-          vulkan_version: latest
+          vulkan_version: 1.4.363.1
           install_runtime: true
           cache: true
 
@@ -152,7 +152,7 @@ jobs:
           done
 
       - name: Build installers
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # action-v0.6.2
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri

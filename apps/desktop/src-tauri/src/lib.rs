@@ -169,6 +169,7 @@ pub fn run() {
             if let Some(state) = app_handle.try_state::<AppState>() {
                 log::info!("exiting: cancelling tasks and stopping the engine");
                 state.login.cancel_all();
+                crisper::stop_setups_now();
                 state.host.stop_blocking();
                 state.engine.stop_blocking();
             }

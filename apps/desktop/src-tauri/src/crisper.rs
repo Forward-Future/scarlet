@@ -1,6 +1,8 @@
 //! Installs the editor's licensed local checkpoint using Scarlet's own setup files.
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Mutex;
+use std::time::Duration;
 
 use tauri::State;
 use tokio::process::Command;
@@ -79,10 +81,84 @@ fn setup_command(paths: &Paths, directory: &Path) -> Result<Command, String> {
     Ok(cmd)
 }
 
+/// How long a setup may run. pip downloads PyTorch with its CUDA libraries, a few gigabytes on Windows, which takes
+/// over half an hour on a slow connection, and then installs them. A setup still going after this has hung, on a
+/// package index that stopped answering, say.
+const SETUP_LIMIT: Duration = Duration::from_secs(45 * 60);
+
+/// The setups under way, by process id, so that quitting Scarlet stops them.
+pub struct Setups(Mutex<Vec<u32>>);
+
+static SETUPS: Setups = Setups::new();
+
+impl Setups {
+    pub const fn new() -> Self {
+        Setups(Mutex::new(Vec::new()))
+    }
+
+    #[cfg(test)]
+    fn running(&self) -> Vec<u32> {
+        self.0.lock().unwrap().clone()
+    }
+
+    /// Stop every setup under way, with the pip and Python processes it started.
+    fn stop_now(&self) {
+        for pid in std::mem::take(&mut *self.0.lock().unwrap_or_else(|e| e.into_inner())) {
+            log::info!("stopping CrisperWhisper setup (pid {pid})");
+            crate::host::spawn::kill_group_now(pid);
+        }
+    }
+}
+
+/// A setup's place in `Setups` while it runs.
+struct Tracked(&'static Setups, Option<u32>);
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        if let Some(pid) = self.1 {
+            self.0 .0.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != pid);
+        }
+    }
+}
+
+/// At exit: stop any CrisperWhisper setup under way. Left running, it would install on with no Scarlet to report to.
+pub fn stop_setups_now() {
+    SETUPS.stop_now();
+}
+
+/// Run a setup to its end, or stop it with everything it started once it has run for `limit`.
+async fn run_setup(mut cmd: Command, limit: Duration, setups: &'static Setups) -> Result<std::process::Output, String> {
+    cmd.stderr(Stdio::piped()).kill_on_drop(true);
+    // Its own process group, so a stop also reaches the pip and Python it starts.
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let child = cmd.spawn().map_err(|e| format!("Could not start CrisperWhisper setup. {e}"))?;
+    let pid = child.id();
+    if let Some(pid) = pid {
+        setups.0.lock().unwrap_or_else(|e| e.into_inner()).push(pid);
+    }
+    let _tracked = Tracked(setups, pid);
+    // The child is held here, past the limit: dropped with the timeout, it would be killed alone, and on Windows
+    // `taskkill /T` then finds no tree under it to stop.
+    let output = child.wait_with_output();
+    tokio::pin!(output);
+    match tokio::time::timeout(limit, &mut output).await {
+        Ok(result) => result.map_err(|e| format!("CrisperWhisper setup could not be waited for. {e}")),
+        Err(_) => {
+            log::warn!("CrisperWhisper setup was still running after {} and was stopped", util::human_duration(limit));
+            if let Some(pid) = pid {
+                util::kill_tree(pid).await;
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(10), &mut output).await;
+            Err(format!("CrisperWhisper setup was still running after {} and was stopped. Check the internet connection, then choose the model folder again.", util::human_duration(limit)))
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn install_crisper_model(state: State<'_, AppState>, directory: PathBuf) -> Result<(), String> {
-    let mut cmd = setup_command(&state.paths, &directory)?;
-    let output = cmd.output().await.map_err(|e| format!("Could not start CrisperWhisper setup. {e}"))?;
+    let cmd = setup_command(&state.paths, &directory)?;
+    let output = run_setup(cmd, SETUP_LIMIT, &SETUPS).await?;
     if output.status.success() {
         return Ok(());
     }
@@ -125,6 +201,63 @@ mod tests {
         std::fs::write(&installed, "release adapter").unwrap();
         set_adapter_env(&mut env, Some(&resources), false);
         assert_eq!(Path::new(&env["SCARLET_CRISPER_ADAPTER"]), installed);
+    }
+
+    #[cfg(unix)]
+    fn alive(pid: &str) -> bool {
+        std::process::Command::new("kill").args(["-0", pid]).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_setup_that_runs_past_its_limit_is_stopped_with_what_it_started() {
+        static SETUPS: Setups = Setups::new();
+        let dir = tempfile::tempdir().unwrap();
+        let pids = dir.path().join("pids");
+        // The installer and the pip it starts note their process ids, and both hang.
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-c").arg(format!("echo $$ >> '{0}'; sh -c 'echo $$ >> \"{0}\"; sleep 60' & wait", pids.display()));
+        cmd.stdin(Stdio::null()).stdout(Stdio::null());
+        let started = std::time::Instant::now();
+        let error = run_setup(cmd, Duration::from_secs(3), &SETUPS).await.unwrap_err();
+        assert!(error.contains("still running after 3s"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(20), "gave up after {:?}", started.elapsed());
+        assert!(SETUPS.running().is_empty());
+        let noted: Vec<String> = std::fs::read_to_string(&pids).unwrap().lines().map(String::from).collect();
+        assert_eq!(noted.len(), 2, "{noted:?}");
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        while noted.iter().any(|pid| alive(pid)) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(noted.iter().all(|pid| !alive(pid)), "still running: {noted:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn quitting_stops_a_setup_under_way() {
+        static SETUPS: Setups = Setups::new();
+        let dir = tempfile::tempdir().unwrap();
+        let pids = dir.path().join("pids");
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-c").arg(format!("sh -c 'echo $$ >> \"{0}\"; sleep 60' & wait", pids.display()));
+        cmd.stdin(Stdio::null()).stdout(Stdio::null());
+        let setup = tokio::spawn(run_setup(cmd, Duration::from_secs(3600), &SETUPS));
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !pids.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(SETUPS.running().len(), 1);
+        // Scarlet quits: the setup and the pip it started stop at once.
+        SETUPS.stop_now();
+        let output = tokio::time::timeout(Duration::from_secs(10), setup).await.expect("the setup kept running").unwrap().unwrap();
+        assert!(!output.status.success());
+        let pip = std::fs::read_to_string(&pids).unwrap().trim().to_string();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while alive(&pip) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(!alive(&pip), "pip outlived the quit");
+        assert!(SETUPS.running().is_empty());
     }
 
     #[test]
