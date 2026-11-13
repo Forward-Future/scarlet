@@ -10,7 +10,7 @@
  */
 import { isThreadDone } from "./threadTimeline.js";
 import { isAsideTask, taskRecoveryAction, type Skill, type Task } from "./api.js";
-import { cutSummary, mergeRanges, type Author, type Change, type Note, type TimeRange } from "@scarlet/timeline";
+import { cutSummary, isPublishedCall, mergeRanges, type Author, type Change, type Note, type TimeRange } from "@scarlet/timeline";
 
 export type ThreadStatus = "needs_you" | "working" | "done" | "closed";
 
@@ -134,9 +134,7 @@ export function buildThreads(d: Source): Thread[] {
       status = "needs_you";
       needs = lastTask.interrupted ? "interrupted" : "task_failed";
     } else if (active && latest && sameRun(active, b.tasks.find(t => t.id === latest.taskId)) && latest.state === "ready" && latest.intent === "suggestion" &&
-        !active.context.reviewAllCuts && (latest.cutAssessments?.some(a => a.verdict === "ask") ||
-          // Staged cuts Scarlet hasn't checked yet can be called right away.
-          (latest.cutReasons?.length ?? 0) > (latest.cutAssessments?.length ?? 0))) {
+        !active.context.reviewAllCuts && latest.cutAssessments?.some(a => isPublishedCall(a) && !latest.cutChoices?.some(c => c.index === a.index))) {
       status = "needs_you";
       needs = "decision";
     } else if (active || (latest && WORKING_CHANGE.has(latest.state) && !finishedRevision)) {
@@ -360,18 +358,19 @@ export function queueOrder(tasks: readonly Task[], changes: readonly Change[]): 
  * The number of each call of a dialogue pass, by its cut's index: the order the calls reached the editor in, as the
  * window shows it ("Cut 2"). Anything else that names a call by its number uses this too, so the two can't disagree.
  * Scarlet's asks go in the order it made them, as the engine numbers them (`askOrder`). The cuts it never checked
- * follow, in timeline order, once they are calls: when its run is over (`over`), or the one open on the editor's card
- * (`open`). So an ask that comes later, about a cut earlier in the video, or the cuts a pass hands over when it ends,
- * never renumber the calls the editor has seen. A pass whose asks aren't numbered, as one saved before the engine
+ * follow in timeline order once its run is over (`over`). A later ask about a cut earlier in the video, or the cuts
+ * a pass hands over when it ends, never renumber the calls the editor has seen. A pass whose asks aren't numbered, as one saved before the engine
  * numbered them, has them all in timeline order, as every call was then. Once it numbers them, an ask without a number
  * is a cut no one checked that the editor sent back, and it stays among those. `cuts` is how many cuts the pass's
  * review lists: staged cuts that touch are one.
  */
-export function callNumbers(pass: Pick<Change, "cutAssessments">, cuts: number, over: boolean, open?: number): Map<number, number> {
-  const assessed = new Set(pass.cutAssessments?.map(a => a.index));
-  const calls: Array<{ index: number; askOrder?: number }> = [...pass.cutAssessments?.filter(a => a.verdict === "ask") ?? []];
-  if (over || open !== undefined) {
-    for (let index = 0; index < cuts; index++) if (!assessed.has(index) && (over || index === open)) calls.push({ index });
+export function callNumbers(pass: Pick<Change, "cutAssessments" | "cutChoices">, cuts: number, over: boolean): Map<number, number> {
+  const assessed = pass.cutAssessments?.filter(a => !a.provisional) ?? [];
+  const decided = new Set(pass.cutChoices?.map(c => c.index));
+  const calls: Array<{ index: number; askOrder?: number }> = assessed.filter(a => isPublishedCall(a) || (a.askOrder !== undefined && decided.has(a.index)));
+  if (over) {
+    const checked = new Set(assessed.map(a => a.index));
+    for (let index = 0; index < cuts; index++) if (!checked.has(index)) calls.push({ index });
   }
   calls.sort((a, b) => (a.askOrder ?? Infinity) - (b.askOrder ?? Infinity) || a.index - b.index);
   return new Map(calls.map((call, i) => [call.index, i + 1]));
@@ -421,6 +420,14 @@ function cutInPass(pass: Change, { changeId, cutIndex }: Task["context"], change
     const next = after(change);
     if (!next?.cutReasons) return undefined;
     const cuts = staged(next);
+    // A cut published by this pass keeps its ask order across its replacements, even when both its slot and
+    // its time change. Older passes without this identity still follow their footage.
+    const order = change.cutAssessments?.find(a => a.index === index)?.askOrder;
+    const published = order !== undefined && next.cutAssessments?.find(a => a.askOrder === order);
+    if (published && cuts[published.index]) {
+      change = next; index = published.index; cut = cuts[index];
+      continue;
+    }
     let found = cuts.findIndex(r => same(r, cut!));
     if (found < 0) {
       // The next part can stage a cut that touches this one, and the review then lists the two as one.
@@ -450,9 +457,9 @@ function waitingCalls(pass: Change, { changes, tasks }: Pick<Source, "changes" |
     return index === undefined ? [] : [index];
   }));
   const waits = (index: number) => !called.has(index) && !sentBack.has(index);
-  const asked = pass.cutAssessments?.filter(a => a.verdict === "ask" && waits(a.index)).length ?? 0;
+  const asked = pass.cutAssessments?.filter(a => isPublishedCall(a) && waits(a.index)).length ?? 0;
   if (!passRunOver(pass, changes, tasks)) return asked;
-  const checked = new Set(pass.cutAssessments?.map(a => a.index));
+  const checked = new Set(pass.cutAssessments?.filter(a => !a.provisional).map(a => a.index));
   return asked + mergeRanges(pass.cutReasons ?? []).filter((_, index) => !checked.has(index) && waits(index)).length;
 }
 

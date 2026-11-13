@@ -59,7 +59,7 @@ export function evalExportRoutes(ctx: Ctx) {
         cuts: review.cuts.map((cut, index) => {
           const a = assessments.get(index);
           return { index, removed: cut.removed, sources: sources(project, review.original, cut.removed), reasons: reasons[index] ?? [],
-            ...(a && { assessment: { verdict: a.verdict, reason: a.reason, inspected: a.inspected } }), decision: decision(change, index) };
+            ...(a && !a.provisional && { assessment: { verdict: a.verdict, reason: a.reason, inspected: a.inspected } }), decision: decision(change, index) };
         }),
       }];
     });

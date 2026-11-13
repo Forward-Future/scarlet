@@ -49,7 +49,8 @@ describe("reviewing one thread on the working interview timeline", () => {
       ["refine", "Trim the restarted description", 55], ["batch", "Remove the delivery aside", 99],
       ["batch", "Shorten the wait", 103], ["batch", "Shorten the wait", 240]]);
     // One edit to check where the two saves named one, with the latest reason to look.
-    expect(edits.filter(e => e.check).map(e => e.check)).toEqual(["Edge inside a word", "Listen to the join"]);
+    expect(edits.filter(e => e.check).map(e => [e.check, e.reviewChangeId ?? e.changeId])).toEqual([
+      ["Edge inside a word", "refine"], ["Listen to the join", "refine"]]);
     // The same words somewhere else in the video are another edit, and so are two of one save's own.
     const elsewhere = { ...again, timelineEdits: [{ label: "Shorten the wait", range: { start: 500, end: 500 } }] };
     expect(threadTimeline(thread([first, elsewhere]), head, links, () => earlier, 30)).toHaveLength(4);
@@ -129,7 +130,7 @@ describe("reviewing one thread on the working interview timeline", () => {
     const kept = { ...refined, tracks: cut.tracks };
     const flagged = threadTimeline(thread([pass, flag]), kept, all, v => v === "v2" ? kept : read(v), 30);
     expect(flagged).toMatchObject([{ changeId: "batch", label: "Remove the delivery aside", kind: "cut", at: 99,
-      check: "Tight speech join", summary: "Removed the aside.", beforeCut: { version: "base", removed: { start: 99, end: 101 } } }]);
+      check: "Tight speech join", reviewChangeId: flag.id, summary: "Removed the aside.", beforeCut: { version: "base", removed: { start: 99, end: 101 } } }]);
     expect(flagged).toHaveLength(1);
   });
 
