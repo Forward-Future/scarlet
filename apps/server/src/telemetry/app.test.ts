@@ -29,14 +29,15 @@ interface Booted {
 const booted: Booted[] = [];
 
 afterEach(async () => {
-  for (const engine of booted.splice(0)) {
-    await engine.close();
+  const engines = booted.splice(0);
+  for (const engine of engines) await engine.close();
+  for (const engine of engines) {
     rmSync(engine.dataDir, { recursive: true, force: true });
   }
 });
 
-function boot(options: { env?: NodeJS.ProcessEnv; key?: string } = {}): Booted {
-  const dataDir = mkdtempSync(join(tmpdir(), "scarlet-telemetry-app-"));
+function boot(options: { env?: NodeJS.ProcessEnv; key?: string; dataDir?: string } = {}): Booted {
+  const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), "scarlet-telemetry-app-"));
   const requests: Batch[] = [];
   const fakeFetch = async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
     requests.push(JSON.parse(String(init!.body)) as Batch);
@@ -81,6 +82,49 @@ it("reports that the engine started", async () => {
     { event: "server.boot.heartbeat", properties: expect.objectContaining({ projectCount: 0 }) },
   ].map(event => expect.objectContaining(event)));
   expect(existsSync(join(engine.dataDir, "telemetry-id"))).toBe(true);
+});
+
+it("honors the Settings switch for queued events, other engines, and subsequent launches", async () => {
+  const key = "phc_test";
+  const first = boot({ key });
+  const dataDir = first.dataDir;
+  const peer = boot({ key, dataDir });
+  expect((await first.api("PATCH", "/settings", { telemetryEnabled: false })).status).toBe(200);
+  for (const engine of [first, peer]) {
+    await engine.api("POST", "/projects", { name: "While off" });
+    await engine.close();
+    expect(engine.requests).toEqual([]);
+  }
+  rmSync(join(dataDir, "telemetry-id")); // A disabled launch must not need an ID.
+  const next = boot({ key, dataDir });
+  expect((await next.api("GET", "/settings")).body).toMatchObject({ settings: { telemetryEnabled: false } });
+  expect(next.app.ctx.telemetry.active).toBe(false);
+  expect(existsSync(join(dataDir, "telemetry-id"))).toBe(false);
+  await next.api("PATCH", "/settings", { telemetryEnabled: true });
+  await next.api("POST", "/projects", { name: "After enabling" });
+  await next.close();
+  expect(next.events().map(event => event.properties.feature)).toContain("project.create");
+  expect(next.events("server.boot.heartbeat")).toEqual([]);
+});
+
+it("drops a peer's buffered events even when the editor turns reports back on before its next flush", async () => {
+  const first = boot({ key: "phc_test" });
+  const peer = boot({ key: "phc_test", dataDir: first.dataDir });
+  await first.api("PATCH", "/settings", { telemetryEnabled: false });
+  await first.api("PATCH", "/settings", { telemetryEnabled: true });
+  await peer.api("POST", "/projects", { name: "After enabling" });
+  await peer.close();
+  expect(peer.events().map(event => event.properties.feature)).toEqual(["project.create"]);
+});
+
+it("the environment opt-out takes precedence over a saved opt-in", async () => {
+  const engine = boot({ key: "phc_test", env: { SCARLET_TELEMETRY_ENABLED: "off" } });
+  await engine.api("PATCH", "/settings", { telemetryEnabled: true });
+  expect((await engine.api("GET", "/settings")).body).toMatchObject({ telemetryUnavailable: "environment" });
+  await engine.api("POST", "/projects", { name: "While off" });
+  await engine.close();
+  expect(engine.requests).toEqual([]);
+  expect(existsSync(join(engine.dataDir, "telemetry-id"))).toBe(false);
 });
 
 it("counts a listed request once it succeeds, and nothing else", async () => {

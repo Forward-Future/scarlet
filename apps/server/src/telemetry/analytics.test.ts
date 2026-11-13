@@ -59,6 +59,7 @@ function telemetry(options: {
   reply?: (call: number) => Reply;
   now?: () => number;
   idFile?: string;
+  preference?: () => { enabled: boolean; revision: number };
 } = {}): Telemetry {
   const fakeFetch = async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
     const signal = init!.signal!;
@@ -73,6 +74,7 @@ function telemetry(options: {
   return createTelemetry({
     config: telemetryConfig({ SCARLET_POSTHOG_KEY: "phc_test", ...options.env }),
     idFile: options.idFile ?? idFile,
+    preference: options.preference,
     log: message => logs.push(message),
     fetch: fakeFetch as typeof fetch,
     now: options.now ?? (() => clock.at),
@@ -111,6 +113,44 @@ describe("when telemetry is off", () => {
     t.record("a");
     await t.flush();
     expect(sent).toHaveLength(1);
+  });
+
+  it("aborts the current delivery and drops remaining events when the preference changes", async () => {
+    let preference = { enabled: true, revision: 0 };
+    const t = telemetry({
+      env: { SCARLET_TELEMETRY_FLUSH_BATCH_SIZE: "1" },
+      reply: call => call === 1 ? "hang" : 200,
+      preference: () => preference,
+    });
+    t.record("sending");
+    t.record("queued");
+    const sending = t.flush();
+    expect(sent.map(names)).toEqual([["sending"]]);
+    preference = { enabled: false, revision: 1 };
+    t.refreshPreference();
+    expect(sent[0]!.signal.aborted).toBe(true);
+    t.record("while-off");
+    preference = { enabled: true, revision: 2 };
+    t.record("after");
+    await sending;
+    await t.close();
+    expect(sent.map(names)).toEqual([["sending"], ["after"]]);
+  });
+
+  it("discards the queue if the library preference cannot be read", async () => {
+    let available = true;
+    const t = telemetry({ preference() {
+      if (!available) throw new Error("Library is unavailable");
+      return { enabled: true, revision: 0 };
+    } });
+    t.record("queued");
+    available = false;
+    t.record("unavailable");
+    await t.flush();
+    available = true;
+    t.record("after");
+    await t.close();
+    expect(sent.map(names)).toEqual([["after"]]);
   });
 
   it("stays off when the id can't be kept", async () => {

@@ -213,6 +213,7 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
     telemetry: createTelemetry({
       config: telemetryConfig(env, options.telemetry?.posthogKey),
       idFile: paths.telemetryId,
+      preference: () => repos.settings.telemetryPreference(),
       log,
       fetch: options.telemetry?.fetch,
       now: options.telemetry?.now,
@@ -264,7 +265,12 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
       } catch {
         // It stays, as after a kill.
       }
-      db.close();
+      // Shutdown work can still record an event. Read the final privacy preference before closing the library.
+      try {
+        await ctx.telemetry.close();
+      } finally {
+        db.close();
+      }
     },
   };
   // Reads ctx.log when it happens, so a log set after startup still gets it.
