@@ -1425,6 +1425,63 @@ const earlierRequestOnly = (flagged = true) => {
 };
 const editRows = (changeId: string) => [...turnFor(changeId).querySelectorAll<HTMLElement>(".simple-edits .simple-edit")];
 
+it("waits for a request's final applied edit before flagging it, while an earlier request's flag stays available", async () => {
+  const { change, lists, hold, release } = laterRequest("task_fade");
+  const earlier = data.changes.find(c => c.id === "chg_approved_2")!;
+  const task = { ...data.tasks.find(t => t.id === "task_done")!, id: "task_fade", kind: "edit" as const,
+    instruction: "Fade the outro", context: { threadId: "task_fade", message: "Fade the outro" },
+    state: "running" as const, finishedAt: undefined, changeIds: [change.id] };
+  data = { ...data, changes: [earlier, { ...change, taskId: task.id }], tasks: [task], notes: [] };
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  const fade = () => container.querySelector<HTMLElement>('.unit[data-run="task_fade"]')!;
+  const flag = () => fade().querySelector(".simple-pass-need")?.textContent;
+  expect(turnFor(earlier.id).querySelector(".simple-pass-need")?.textContent).toBe("1 needs you");
+  expect(flag()).toBeUndefined();
+  // It is already on the timeline and can be played from the full list.
+  await click(fade().querySelector(".simple-pass-toggle")!);
+  expect(fade().querySelector(".simple-edit-title")?.textContent).toBe("outro fade");
+  expect(fade().querySelector(".edit-badge.is-check")).toBeNull();
+  expect(numbered()).toEqual([["1", undefined]]);
+  const replaces = { changeId: change.id, spot: 0 };
+  const final = { ...change, id: "chg_final_fade", taskId: task.id, threadId: task.id, toVersion: "ver_final_fade",
+    timelineEdits: [{ label: "shorter fade", check: "Listen to the last beat", range: { start: 14, end: 15 }, replaces }] };
+  hold(task.id);
+  lists[task.id] = [{ ...final.timelineEdits[0], changeId: final.id, spot: 0, previous: [replaces] }];
+  await event(d => ({ ...d, changes: [...d.changes, final], project: { ...d.project, head: final.toVersion },
+    timeline: { ...d.timeline!, version: final.toVersion }, tasks: d.tasks.map(t => ({ ...t, changeIds: [...t.changeIds, final.id] })) }));
+  expect(flag()).toBeUndefined();
+  // Finishing can arrive before the current timeline's edit list does. The older loaded flag must stay hidden.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => ({ ...t, state: "done", finishedAt: new Date().toISOString() })) }));
+  expect(flag()).toBeUndefined();
+  expect(numbered()).toEqual([["1", undefined]]);
+  await release();
+  expect(flag()).toBe("1 needs you");
+  expect(numbered()).toEqual([["1", "check"]]);
+  await click(fade().querySelector(".simple-pass-need")!);
+  expect(fade().querySelector(".simple-edit-title")?.textContent).toBe("shorter fadev2");
+  expect(fade().querySelector(".edit-badge.is-check")).not.toBeNull();
+});
+
+it("holds the applied flags from an earlier attempt until its resumed request ends", async () => {
+  const { change, lists } = laterRequest("task_fade");
+  const first = { ...data.tasks.find(t => t.id === "task_done")!, id: "task_fade", kind: "edit" as const,
+    instruction: "Fade the outro", state: "failed" as const, context: { threadId: "task_fade" }, changeIds: [change.id] };
+  const resumed = { ...first, id: "task_resumed", resumeRootId: first.id, state: "running" as const,
+    finishedAt: undefined, changeIds: [], createdAt: new Date().toISOString() };
+  // The engine merged the flag onto an existing edit. The change that supplied it is linked only from its task.
+  const prior = { ...change, id: "chg_prior_fade", threadId: first.id, timelineEdits: [{ label: "outro fade", range: { start: 13, end: 15 } }] };
+  lists[first.id] = [{ ...change.timelineEdits[0], changeId: prior.id, reviewChangeId: change.id, spot: 0, previous: [] }];
+  data = { ...data, changes: [prior, change], tasks: [first, resumed], notes: [] };
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  expect(container.querySelector(".simple-pass-need")).toBeNull();
+  expect(numbered()).toEqual([["1", undefined]]);
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === resumed.id ? { ...t, state: "cancelled" } : t) }));
+  expect(container.querySelector(".simple-pass-need")?.textContent).toBe("1 needs you");
+  expect(numbered()).toEqual([["1", "check"]]);
+});
+
 it("shares the initial edit-list request between the chat and timeline and refreshes both after the head moves", async () => {
   earlierRequestOnly();
   const read = vi.mocked(api.threadEdits);
@@ -2616,6 +2673,92 @@ const openCall = async (reason: string) => {
   await click(passRows().find(r => r.textContent?.includes(reason))!);
 };
 const onVideo = () => container.querySelector(".simple-on-video")?.textContent;
+
+it("appends published calls while holding back provisional notes and keeps the open row through a new proposal", async () => {
+  const { save } = runningPass();
+  const [early, middle, late] = askAll(STAGED);
+  const provisional = { ...early!, reason: "Edges still being checked.", provisional: true as const };
+  const update = (cutAssessments: NonNullable<ProjectData["changes"][number]["cutAssessments"]>) =>
+    event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments } : c) }));
+  await update([provisional, { ...middle!, verdict: "keep" }]);
+  await showFolded();
+  expect(passRows()).toHaveLength(0);
+  expect(container.querySelector(".simple-timeline-mark.is-numbered")).toBeNull();
+  expect(passCard().querySelector(".simple-pass-need")).toBeNull();
+  expect(buttonIn(passCard(), "Apply when Scarlet finishes")).toBeUndefined();
+  await press("ArrowDown");
+  expect(call()).toBeNull();
+
+  await update([provisional, { ...late!, askOrder: 1 }]);
+  expect(container.querySelectorAll(".simple-timeline-mark.is-numbered")).toHaveLength(1);
+  await reviewCalls();
+  const card = call(), first = passRows()[0];
+  expect(first?.textContent).toBe(`1${late!.reason}`);
+  await update([{ ...early!, verdict: "keep" }, { ...middle!, askOrder: 2 }, { ...late!, askOrder: 1 }]);
+  expect(passRows().map(r => r.textContent)).toEqual([`1${late!.reason}`, `2${middle!.reason}`]);
+  expect(passRows()[0]).toBe(first);
+  expect(call()).toBe(card);
+  expect(passCard().textContent).not.toContain(provisional.reason);
+
+  // This part follows an ordinary timeline change. Its earlier clock cannot be found by adding up dialogue cuts.
+  const changed = STAGED.slice(1).map(r => ({ ...r, start: r.start - 1, end: r.end - 1 }));
+  const [second, carried] = askAll(changed);
+  await nextPart({ fromVersion: "changed_by_an_ordinary_edit", cutReasons: changed,
+    cutAssessments: [{ ...second!, askOrder: 2 }, { ...carried!, askOrder: 1 }] });
+  expect(passRows()[0]).toBe(first);
+  expect(call()).toBe(card);
+  expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 1");
+  await press("s");
+  expect(save).toHaveBeenLastCalledWith("chg_ready_part2", expect.objectContaining({ choices: [{ index: 1, choice: "keep" }] }));
+  expect(call().querySelector(".edit-card-title")?.textContent).toBe(middle!.reason);
+  // The returned cut can be settled by a scoped revision. Keep its row, number and decision when its verdict follows.
+  await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready_part2" ? { ...c,
+    cutAssessments: c.cutAssessments!.map(a => a.index === 1 ? { ...a, verdict: "keep" } : a) } : c) }));
+  expect(passRows()[0]).toBe(first);
+  expect(passRows().map(r => r.textContent)).toEqual([`1${late!.reason}Skipped`, `2${middle!.reason}`]);
+  expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 2");
+});
+
+it("keeps a newly published call when an earlier decision's HTTP response arrives after the project event", async () => {
+  const { save } = runningPass();
+  const asks = askAll(STAGED).map((ask, index) => ({ ...ask, askOrder: index + 1 }));
+  await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: asks.slice(0, 2) } : c) }));
+  let respond!: () => void;
+  let saved!: ReturnType<typeof savedCalls>;
+  save.mockImplementationOnce((id, body) => {
+    saved = savedCalls(id, body);
+    return new Promise(resolve => { respond = () => resolve(saved); });
+  });
+  await showFolded();
+  await reviewCalls();
+  await press("s");
+  // The decision reached the engine. Its next assessment event includes that decision and a third published call;
+  // assessment writes on older engines keep the last decision's timestamp.
+  await event(d => ({ ...d, changes: d.changes.map(c => c.id === saved.change.id ? { ...saved.change, cutAssessments: asks } : c) }));
+  const third = passRows()[2];
+  const card = call();
+  expect(third?.textContent).toBe(`3${asks[2]!.reason}`);
+  await act(async () => respond());
+  expect(passRows()[2]).toBe(third);
+  expect(call()).toBe(card);
+  expect(passCard().querySelector(".simple-pass-need")?.textContent).toBe("2 need you");
+  expect(passRows()[0]?.textContent).toBe(`1${asks[0]!.reason}Skipped`);
+});
+
+it.each(["done", "failed", "cancelled"] as const)("hands provisional and unchecked cuts to the editor when the producer is %s", async state => {
+  runningPass();
+  const [early, , late] = askAll(STAGED);
+  await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready"
+    ? { ...c, cutAssessments: [{ ...early!, provisional: true }, { ...late!, askOrder: 1 }] } : c) }));
+  await showFolded();
+  expect(passRows().map(r => r.textContent)).toEqual([`1${late!.reason}`]);
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_done" ? { ...t, state } : t) }));
+  expect(passRows().map(r => r.textContent)).toEqual([`1${late!.reason}`, `2${early!.reason}`, `3${STAGED[1]!.reason}`]);
+  expect(passCard().querySelector(".simple-pass-need")?.textContent).toBe("3 need you");
+  await click(passRows()[1]!);
+  expect(call().querySelector(".edit-card-title")?.textContent).toBe(`Not checked yet. ${early!.reason}`);
+  expect(buttonIn(passCard(), "Apply")).toBeUndefined();
+});
 
 it.each(["saved", "another call", "unchecked part", "failed"] as const)("uses the last call's save before applying a pass (%s)", async outcome => {
   const { save } = runningPass([STAGED[2]!]);
@@ -3839,6 +3982,8 @@ it("moves a second thought still in the box onto the revised cut, whichever kind
   await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_note1", 0, { kind: "edit" as const })] }));
   await passEnds("chg_ready", STAGED, "task_note1");
   await revisedCut("task_note1", "chg_ready", 0, { start: 1.5, end: 3 }, "Starts in the pause.");
+  expect(container.querySelector(".simple-target")?.textContent).toContain("Revising the cut at 0:02");
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_note1" ? { ...t, state: "done" as const } : t) }));
   expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_revised", cutIndex: 0, time: 1.5, end: 3 });
   expect(container.querySelector(".simple-target")?.textContent).toContain("Revising the cut at 0:01");
   // The revised cut starts earlier on the same working cut. No footage moved, so the playhead stays where it was.
@@ -4223,7 +4368,7 @@ it("marks a revised call v2 in the list and in its card, with the earlier versio
   expect(version.getAttribute("title")).toBe("v1: The corrected image-input take belongs here.\nYou: “The words don't line up.”");
 });
 
-it("schedules the pass on the last call while the revision that staged it is still checking its cut", async () => {
+it("waits for a staged revision to finish while the editor decides the other calls", async () => {
   const { save } = finishedPass();
   const approve = vi.fn().mockResolvedValue({ outcome: "applied" });
   useProjectStore.setState({ approve });
@@ -4236,16 +4381,19 @@ it("schedules the pass on the last call while the revision that staged it is sti
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "revising" as const } : c) }));
   await revisedCut("task_revise", "chg_ready", 0, { start: 1.5, end: 3 }, "Starts in the pause.");
   await act(async () => {});
-  expect(passCard().querySelector(".simple-pass-need")?.textContent).toBe("3 need you");
+  expect(passCard().querySelector(".simple-pass-need")?.textContent).toBe("2 need you");
   await click(passCard().querySelector(".simple-pass-need")!);
   await press("a");
   await press("a");
-  expect(save).toHaveBeenLastCalledWith("chg_revised", expect.objectContaining({ applyWhenDone: false }));
-  await press("a");
-  // Every call is made. The pass goes in when Scarlet finishes, as it does for a pass still on its first check.
-  expect(save).toHaveBeenLastCalledWith("chg_revised", expect.objectContaining({ applyWhenDone: true,
-    choices: [0, 1, 2].map(index => ({ index, choice: "cut" })) }));
+  expect(save).toHaveBeenLastCalledWith("chg_revised", expect.objectContaining({ applyWhenDone: false,
+    choices: [1, 2].map(index => ({ index, choice: "cut" })) }));
   expect(approve).not.toHaveBeenCalled();
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_revise" ? { ...t, state: "done" as const } : t) }));
+  expect(passCard().querySelector(".simple-pass-need")?.textContent).toBe("1 needs you");
+  await reviewCalls();
+  expect(call().querySelector(".edit-card-title")?.textContent).toBe("Starts in the pause.");
+  await press("a");
+  expect(approve).toHaveBeenCalledWith("chg_revised", undefined, []);
 });
 
 it("draws a pass's rows and any other request's rows as one row, and a revised edit's version as one mark", async () => {
@@ -4659,6 +4807,8 @@ it("revises just the applied edit that's showing, even with a pass waiting, and 
     { changeId: "chg_approved_2", spot: 0, label: "Keep the image test", range: { start: 8, end: 12 }, at: 10,
       beforeCut: { version: "v_before", removed: { start: 10, end: 12.4 } }, previous: [] },
   ] });
+  // This case opens the passage while its transcript request is still in flight.
+  vi.spyOn(api, "transcript").mockReturnValue(new Promise(() => {}));
   const beforeTimeline = vi.spyOn(api, "timeline").mockResolvedValue({ timeline: { ...data.timeline!, version: "v_before" } } as never);
   const audition = vi.spyOn(player, "audition");
   await show();
@@ -6147,13 +6297,16 @@ it("says Queued on the card of a cut sent back until Scarlet starts on it, and s
 });
 
 /**
- * An earlier part of the waiting pass's own request applied an edit Scarlet flagged, so the request's "N need you"
- * counts it with the pass's calls. It sits after the last staged cut.
+ * A completed request in the waiting pass's thread applied an edit Scarlet flagged, so "N need you" counts it
+ * with the pass's calls even while the pass runs. It sits after the last staged cut.
  */
 const flaggedPart = () => {
-  const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_done", threadId: undefined, noteIds: [],
+  const pass = data.tasks.find(t => t.id === "task_done")!;
+  const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_wrap", threadId: undefined, noteIds: [],
     timelineEdits: [{ label: "wrap", range: { start: 13, end: 16 }, check: CHECK, summary: SUMMARY }] };
-  data = { ...data, changes: [...data.changes, part], tasks: data.tasks.map(t => t.id === "task_done" ? { ...t, changeIds: [...t.changeIds, part.id] } : t) };
+  const wrap = { ...pass, id: part.taskId, state: "done" as const, changeIds: [part.id],
+    context: { changeId: "chg_ready" }, instruction: "Tighten the wrap", createdAt: part.createdAt, finishedAt: part.updatedAt };
+  data = { ...data, changes: [...data.changes, part], tasks: [...data.tasks, wrap] };
   useProjectStore.setState({ current: data });
   const request = threadWith("chg_ready").id;
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: useProjectStore.getState().current!.project.head!,
@@ -6269,7 +6422,7 @@ it("keeps the number a call or a flagged edit was shown under when another call 
   // It asks about the third. Until 2026-11-11 that call took 3 and the edit moved up to 4, so on a pass still at work
   // every number after a new call changed under the editor. The edit is still 3, and the new call is 4.
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: asked(3) } : c) }));
-  expect([needYou(), numbers()]).toEqual(["4 need you", [["1", "A clean retake."], ["2", "Breath before the price."], ["4", "Repeated aside."], ["3", "wrap"]]]);
+  expect([needYou(), numbers()]).toEqual(["4 need you", [["1", "A clean retake."], ["2", "Breath before the price."], ["3", "wrap"], ["4", "Repeated aside."]]]);
   const marks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")].map(m => m.textContent);
   expect(marks()).toEqual(["1", "2", "4", "3"]);
   // Its number is past the calls' own run, so its dot says the number alone, not "Cut 4 of 3".
@@ -6285,7 +6438,7 @@ it("keeps the number a call or a flagged edit was shown under when another call 
   root = createRoot(container);
   await show();
   await act(async () => {});
-  expect(numbers().map(([n]) => n)).toEqual(["1", "2", "4", "3"]);
+  expect(numbers().map(([n]) => n)).toEqual(["1", "2", "3", "4"]);
 });
 
 it("keeps a revised call's number on its card and on the note about it that waits its turn", async () => {
@@ -6338,6 +6491,23 @@ it("leaves the flagged edit open and playing when the last call applies the pass
   expect(editPanel()?.querySelector(".edit-card-title")?.textContent).toBe(SUMMARY);
 });
 
+it("keeps a previously unnumbered call in place when the engine publishes an earlier cut and backfills its order", async () => {
+  runningPass();
+  const [early, , later] = askAll(STAGED);
+  const update = (cutAssessments: NonNullable<ProjectData["changes"][number]["cutAssessments"]>) =>
+    event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments } : c) }));
+  await update([later!]);
+  await showFolded();
+  await reviewCalls();
+  const first = passRows()[0], card = call();
+  expect(first?.textContent).toBe(`1${later!.reason}`);
+  await update([{ ...early!, askOrder: 2 }, { ...later!, askOrder: 1 }]);
+  expect(passRows().map(r => r.textContent)).toEqual([`1${later!.reason}`, `2${early!.reason}`]);
+  expect(passRows()[0]).toBe(first);
+  expect(call()).toBe(card);
+  expect(card.querySelector(".edit-card-count")?.textContent).toBe("Cut 1");
+});
+
 it("numbers each call in the order it reached the editor, so an ask earlier in the video doesn't renumber the calls before it", async () => {
   runningPass();
   // Scarlet has asked about the cut at 0:11 first, then about the one at 0:06. The cut at 0:02 it hasn't checked yet.
@@ -6349,8 +6519,8 @@ it("numbers each call in the order it reached the editor, so an ask earlier in t
   await act(async () => {});
   const badges = () => passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".simple-pass-label")?.textContent]);
   const dots = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark.is-numbered")].map(d => d.textContent);
-  // The list and the timeline keep to the video's order. Each call has the number it reached the editor with.
-  expect(badges()).toEqual([["2", STAGED[1]!.reason], ["1", STAGED[2]!.reason]]);
+  // The short list follows publication order. The dots sit where the footage is.
+  expect(badges()).toEqual([["1", STAGED[2]!.reason], ["2", STAGED[1]!.reason]]);
   expect(dots()).toEqual(["2", "1"]);
   // A note on the cut at 0:11 waits its turn: it is tagged with that call's number.
   await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_about", 2, { kind: "edit" as const, expectedSeconds: undefined })] }));
@@ -6360,7 +6530,7 @@ it("numbers each call in the order it reached the editor, so an ask earlier in t
   // Scarlet then asks about the cut at 0:02, earlier in the video. It is the third call, and the others keep theirs.
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: asked({ 2: 1, 1: 2, 0: 3 }) } : c) }));
   await act(async () => {});
-  expect(badges()).toEqual([["3", STAGED[0]!.reason], ["2", STAGED[1]!.reason], ["1", STAGED[2]!.reason]]);
+  expect(badges()).toEqual([["1", STAGED[2]!.reason], ["2", STAGED[1]!.reason], ["3", STAGED[0]!.reason]]);
   expect(tag()).toBe("Cut 1");
   await click(passRow(STAGED[1]!.reason));
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 2");
@@ -6375,7 +6545,7 @@ it("numbers the cuts a pass never checked after its asks, in timeline order, onc
   await act(async () => {});
   // The two asks keep their numbers. The cut no one checked is the editor's call now, and comes after them.
   expect(passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".simple-pass-label")?.textContent]))
-    .toEqual([["3", STAGED[0]!.reason], ["1", STAGED[1]!.reason], ["2", STAGED[2]!.reason]]);
+    .toEqual([["1", STAGED[1]!.reason], ["2", STAGED[2]!.reason], ["3", STAGED[0]!.reason]]);
   await click(passRow(STAGED[0]!.reason));
   expect([call().querySelector(".edit-card-count")?.textContent, call().querySelector(".edit-card-title")?.textContent?.startsWith("Not checked yet.")]).toEqual(["Cut 3", true]);
 });
@@ -6667,11 +6837,19 @@ it("keeps a call open on its new version when its revision lands", async () => {
   await reviewCalls();
   await press("ArrowUp");
   expect(call().querySelector(".edit-card-status")?.textContent).toBe("Revising…");
-  // The cut comes back revised. The card the editor was watching stays open, on the new version, with its decisions back.
+  // Scarlet saves a draft revision, then changes it again. The row keeps the note the editor sent back while the
+  // other two calls remain available, until Scarlet finishes the requested revision.
   await revisedCut("task_revise", "chg_ready", 0, { start: 1.5, end: 3 }, "Starts in the pause.");
+  expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual(STAGED.map(r => r.reason));
+  expect(call().querySelector(".edit-card-title")?.textContent).toBe(STAGED[0]!.reason);
+  expect(call().querySelector(".edit-card-status")?.textContent).toBe("Revising…");
+  expect(buttonIn(call(), "Approve")).toBeUndefined();
+  await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_revised"
+    ? { ...c, cutAssessments: c.cutAssessments!.map(a => a.index === 0 ? { ...a, reason: "Keeps the first breath." } : a) } : c) }));
+  expect(passRows()[0]?.textContent).not.toContain("Keeps the first breath.");
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_revise" ? { ...t, state: "done" as const, finishedAt: new Date().toISOString() } : t) }));
   await act(async () => {});
-  expect(call().querySelector(".edit-card-title")?.textContent).toContain("Starts in the pause.");
+  expect(call().querySelector(".edit-card-title")?.textContent).toBe("Keeps the first breath.");
   expect(buttonIn(call(), "Approve")).toBeDefined();
   expect(call().querySelector(".edit-version")?.textContent).toBe("v2");
   // The finished revision has joined the conversation.
@@ -9567,7 +9745,7 @@ it("keeps the call the editor is on, and the list of calls, when another call's 
   const asItWas = () => {
     expect(call()?.querySelector(".edit-card-title")?.textContent).toContain("Breath before the price.");
     expect(buttonIn(call(), "Approve")).toBeDefined();
-    expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual(["Starts in the pause.", "Breath before the price.", "Repeated aside."]);
+    expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual(STAGED.map(c => c.reason));
   };
   await event(d => ({ ...d, changes: [...d.changes, revised] }));
   asItWas();
@@ -9581,5 +9759,5 @@ it("keeps the call the editor is on, and the list of calls, when another call's 
   await runPasses("task_note1", "task_note2");
   await act(async () => {});
   expect(call()?.querySelector(".edit-card-title")?.textContent).toContain("Breath before the price.");
-  expect(passRows()).toHaveLength(3);
+  expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual(["Starts in the pause.", "Breath before the price.", "Repeated aside."]);
 });

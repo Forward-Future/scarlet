@@ -6,8 +6,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import { ChatRail } from "../components/shell/ChatRail";
 import { ConnectionStatus } from "../components/shell/StatusIndicators";
 import { Dropdown, MenuItem } from "../components/shell/WorkspaceNavigation";
-import { appliedReviewChange, canStartCutReview, cutSummary, mapStagedCut, makeTimeMap, rebaseOp, RebaseConflict, reviewReasons, timelineDuration, type Change, type CutAssessment, type CutReview, type TimeMap, type TimeRange, type Timeline } from "@scarlet/timeline";
-import { taskRunKind, callNumbers, changeRemovals, matchesEdit, queueOrder, queueWait, REVISED_CHECK, threadEditList, type EditRef, type Task, type ThreadEdit } from "@scarlet/shared";
+import { appliedReviewChange, canStartCutReview, cutSummary, isPublishedCall, mapStagedCut, makeTimeMap, rebaseOp, RebaseConflict, reviewReasons, timelineDuration, type Change, type CutAssessment, type CutReview, type TimeMap, type TimeRange, type Timeline } from "@scarlet/timeline";
+import { taskRunKind, changeRemovals, matchesEdit, queueOrder, queueWait, REVISED_CHECK, threadEditList, type EditRef, type Task, type ThreadEdit } from "@scarlet/shared";
 import { EditBadge, editGroups, EditVersion, ThreadAction, ThreadEdits, UndoEdit, useReviewed, useRevising, useThreadEdits } from "../components/review/ThreadEdits";
 import { useKeptEdits } from "../lib/keptEdits";
 import { needNumbers } from "../lib/needNumbers";
@@ -121,16 +121,29 @@ type Call = CutAssessment & { unchecked?: boolean };
  * checked are the editor's calls too, whether it stopped early or finished without getting to them: nothing else will
  * check them, and Apply would put them in unseen (2026-11-10). While the pass runs they are still Scarlet's to check,
  * and it settles most of them itself, so they aren't calls yet: a call listed then would be gone again a moment later.
- * The call that's open stays through the moment a new part replaces the proposal, before its notes arrive on it.
+ * A requested revision keeps its earlier call on screen until the author finishes it.
  */
-function reviewCalls(change: Change, cuts: ReadonlyArray<Pick<CutReview["cuts"][number], "removed">> | undefined, over: boolean, open?: number): Call[] {
-  const asks: Call[] = change.cutAssessments?.filter(a => a.verdict === "ask") ?? [];
-  if (!cuts || (!over && open === undefined)) return asks;
-  const assessed = new Set(change.cutAssessments?.map(a => a.index));
-  const reasons = reviewReasons(change, cuts);
-  const unchecked = cuts.flatMap((cut, index) => assessed.has(index) || (!over && index !== open) ? [] : [{ index, start: cut.removed.start, end: cut.removed.end,
-    verdict: "ask" as const, unchecked: true, reason: reasons[index]?.filter(text => text !== change.description).join(" ") || "Staged for a closer look." }]);
-  return [...asks, ...unchecked].sort((a, b) => a.index - b.index);
+function reviewCalls(change: Change, cuts: ReadonlyArray<Pick<CutReview["cuts"][number], "removed">> | undefined, over: boolean, prior?: Call): Call[] {
+  const assessments = change.cutAssessments ?? [];
+  const decided = new Set(change.cutChoices?.map(c => c.index));
+  const calls: Call[] = assessments.filter(a => isPublishedCall(a) || (!a.provisional && a.askOrder !== undefined && decided.has(a.index)));
+  if (over) {
+    for (const a of assessments) if (a.provisional && a.verdict === "ask") calls.push({ ...a, unchecked: true });
+    if (cuts && cuts.length > assessments.length) {
+      const assessed = new Set(assessments.map(a => a.index));
+      const reasons = reviewReasons(change, cuts);
+      cuts.forEach(({ removed }, index) => {
+        if (!assessed.has(index)) calls.push({ ...removed, index, verdict: "ask", unchecked: true,
+          reason: reasons[index]?.filter(text => text !== change.description).join(" ") || "Staged for a closer look." });
+      });
+    }
+  }
+  if (prior) {
+    const at = calls.findIndex(c => c.index === prior.index);
+    if (at >= 0) calls[at] = prior;
+    else calls.push(prior);
+  }
+  return calls.sort((a, b) => (a.askOrder ?? Infinity) - (b.askOrder ?? Infinity) || a.index - b.index);
 }
 
 /** The latest attempt at a run: one that was interrupted carries on under a new task. */
@@ -256,7 +269,19 @@ function useCarryingFootage(projectId: string, working: Timeline | null | undefi
  * the length of every confident cut the parts since applied before it. Undefined when the cut isn't in this pass as it
  * was, or the edit moved on some other way.
  */
-function carriedCall(pass: Change, from: Pick<Listening, "changeId" | "cut">, changes: readonly Change[], footage: Footage): Pick<Listening, "index" | "cut"> | undefined {
+function carriedCall(pass: Change, from: Pick<Listening, "changeId" | "index" | "cut">, changes: readonly Change[], tasks: readonly Task[], footage: Footage): Pick<Listening, "index" | "cut"> | undefined {
+  // A new batch can follow ordinary edits that changed the project's clock. The carried publication number
+  // identifies the exact call on the new version, including after a retry or a requested revision.
+  const previous = changes.find(c => c.id === from.changeId);
+  const order = previous?.cutAssessments?.find(a => a.index === from.index)?.askOrder;
+  if (previous && previous.state !== "approved" && order !== undefined) {
+    const origin = stagingTask(previous, changes, tasks), current = stagingTask(pass, changes, tasks);
+    if (origin && current && (origin.resumeRootId ?? origin.id) === (current.resumeRootId ?? current.id)) {
+      const call = pass.cutAssessments?.find(a => a.askOrder === order &&
+        (isPublishedCall(a) || pass.cutChoices?.some(c => c.index === a.index)));
+      if (call) return { index: call.index, cut: { start: call.start, end: call.end } };
+    }
+  }
   const at = carriedRange(pass, from, changes, footage);
   if (!at) return undefined;
   const { start, end } = at;
@@ -279,7 +304,7 @@ function callNow(pass: Change, named: { changeId?: string; cutIndex?: number }, 
   const part = earlier.find(c => c.id === changeId);
   const cut = part && stagedCuts(part)[cutIndex];
   if (!cut) return undefined;
-  const carried = carriedCall(pass, { changeId, cut }, changes, footage);
+  const carried = carriedCall(pass, { changeId, index: cutIndex, cut }, changes, tasks, footage);
   if (carried) return carried.index;
   // The cut itself came back revised since. Walk back through the revisions that made this pass to the one that
   // revised it: the request is about the revised cut, wherever later revisions left it.
@@ -288,7 +313,7 @@ function callNow(pass: Change, named: { changeId?: string; cutIndex?: number }, 
     if (run?.kind !== "revise" || !run.context.changeId) break;
     if (run.context.changeId === changeId && run.context.cutIndex === cutIndex) {
       const revised = stagedCuts(made)[cutIndex];
-      const index = made === pass ? cutIndex : revised && carriedCall(pass, { changeId: made.id, cut: revised }, changes, footage)?.index;
+      const index = made === pass ? cutIndex : revised && carriedCall(pass, { changeId: made.id, index: cutIndex, cut: revised }, changes, tasks, footage)?.index;
       if (index !== undefined) return index;
       break;
     }
@@ -459,7 +484,7 @@ function CallActions({ choice, disabled, decide, revise }: { choice?: CutChoice;
 
 /** Where a call stands: approved, skipped, still open, or being revised. */
 type CallState = "approved" | "skipped" | "open" | "revising";
-interface PassCall { index: number;
+interface PassCall { index: number; askOrder?: number;
   /** Its number, as on its card and the timeline: the order it reached the editor in. */
   n: number;
   /** Where its row goes in the list. */
@@ -471,6 +496,8 @@ interface PassCall { index: number;
   run?: Task;
   /** What the last version was and the note that sent it back, for a revised call. */
   earlier?: { reason?: string; note: string } }
+
+const callRowKey = (c: PassCall) => `call/${c.n}`;
 
 type Revision = { reason?: string; note: string };
 const noRevisions: Revision[] = [];
@@ -568,8 +595,17 @@ function isOpenPass(change: Change, tasks: readonly Task[]) {
  */
 function openPass(thread: Thread, tasks: readonly Task[]) {
   // Only a staged suggestion holds the queue. A part of the pass on its way to being applied is "ready" for a moment too.
-  return thread.changes.findLast(c => c.intent === "suggestion" && isOpenPass(c, tasks))
-    ?? (thread.latest && isOpenPass(thread.latest, tasks) ? thread.latest : undefined);
+  const waiting = thread.changes.filter(c => c.intent === "suggestion" && isOpenPass(c, tasks));
+  const latest = waiting.at(-1);
+  // A new part is announced before its assessments are carried across. The pass the editor is reading is still
+  // open at this point. Keep it until the successor has its own calls to show.
+  if (latest && latest.cutAssessments === undefined && waiting.length > 1) {
+    const root = stagingTask(latest, thread.changes, tasks);
+    const previous = root && waiting.slice(0, -1).findLast(c => c.cutAssessments?.length &&
+      stagingTask(c, thread.changes, tasks)?.id === root.id);
+    if (previous) return previous;
+  }
+  return latest ?? (thread.latest && isOpenPass(thread.latest, tasks) ? thread.latest : undefined);
 }
 
 /**
@@ -692,7 +728,7 @@ function PassSummary({ projectId, thread, edits, actions, aside, list: listState
   const [host, reveal] = useReveal(open);
   // The list follows the cut or edit that's open, so stepping with the arrows never leaves its row out of sight.
   const list = useRef<HTMLOListElement>(null);
-  const onRow = actions.showing ? editKey(actions.showing) : actions.listening ? `call/${actions.listening.index}` : "";
+  const onRow = actions.showing ? editKey(actions.showing) : actions.listening?.key;
   useEffect(() => { list.current?.querySelector('[aria-current="true"]')?.scrollIntoView?.({ block: "nearest" }); }, [onRow, open]);
   const pass = actions.pass?.threadId === thread.id ? actions.pass : undefined;
   // An edit sent back for revision waits on Scarlet, not on the editor.
@@ -757,7 +793,7 @@ function PassSummary({ projectId, thread, edits, actions, aside, list: listState
         on: !!showing && matchesEdit(showing, e), open: () => actions.openEdit(thread, e) }];
     }),
     // A call goes by its number, as on its card and on the timeline.
-    ...(pass?.calls ?? []).map(c => ({ key: `call/${c.index}`, at: c.start, mark: c.at, label: c.reason, n: c.n, num: c.n as number | undefined, needs: c.state === "open", sentBack: c.state === "revising",
+    ...(pass?.calls ?? []).map(c => ({ key: callRowKey(c), at: c.start, mark: c.at, label: c.reason, n: c.n, num: c.n as number | undefined, needs: c.state === "open", sentBack: c.state === "revising",
       decided: c.state === "approved" || c.state === "skipped",
       state: c.state === "approved" ? "Approved" : c.state === "skipped" ? "Skipped" : c.state === "revising" ? "Revising…" : c.version > 1 ? `v${c.version}` : undefined,
       value: c.state === "approved" ? "Approved" : c.state === "skipped" ? "Skipped" : c.state === "revising" ? "Revising…" : undefined,
@@ -769,6 +805,8 @@ function PassSummary({ projectId, thread, edits, actions, aside, list: listState
   // While the pass waits on the editor, its calls are listed: every one of them, so a call keeps its place once it is
   // decided or sent back, with any edit that asks for a look. N counts only what still waits on the editor.
   const calls = pass ? rows.filter(r => r.n > 0 || r.needs || r.sentBack) : [];
+  // The short list keeps each published row in the order it reached the editor. The full list follows the timeline.
+  if (pass?.calls.some(c => c.askOrder !== undefined)) calls.sort((a, b) => (a.num ?? Infinity) - (b.num ?? Infinity));
   // With no calls to list, "N need you" lists just the edits that ask for a look: the same rows as the full list, only
   // those. `listedNeed` are the rows listed since it was opened: one the editor keeps stays where it was, ticked,
   // until the list closes, so the list doesn't jump under them.
@@ -783,7 +821,7 @@ function PassSummary({ projectId, thread, edits, actions, aside, list: listState
     if (calls.length) setOpen(undefined);
     else if (open === "need") return setOpen(undefined);
     else { reveal(); setOpen("need"); }
-    if (!rows.some(row => row.on && row.needs)) rows.find(row => row.needs)?.open?.();
+    if (!rows.some(row => row.on && row.needs)) (calls.length ? calls : rows).find(row => row.needs)?.open?.();
   };
   // What it came to, once Scarlet is done, while calls still wait too: what it applied so far, with the link that opens
   // every edit after it. Until its cuts are applied, a pass that finished with no call to make says how many it proposes.
@@ -1194,7 +1232,7 @@ function Turn({ projectId, thread, actions, pinned, pinHost, list: passList }: {
     const open = actions.pass?.threadId === thread.id ? actions.pass : undefined;
     const call = open?.calls.find(c => !!c.run && run.attempts.some(t => t.id === c.run!.id))
       ?? (target?.call !== undefined && target.changeId === open?.change.id ? open?.calls.find(c => c.index === target.call) : undefined);
-    return call && `call/${call.index}`;
+    return call && callRowKey(call);
   };
   const nested = new Map(owner && hasRows ? runs.flatMap(run => {
     const key = run !== owner && single(run) && !settled(run) ? rowOf(run) : undefined;
@@ -1498,7 +1536,12 @@ export function SimpleWorkspace() {
       // indices. A project event can beat that response, including one that supersedes this proposal again.
       const held = useProjectStore.getState().current?.changes.find(c => c.id === saved.id);
       const alreadyMoved = held && saved.state === "ready" && ["approved", "rejected", "revising", "failed"].includes(held.state);
-      const live = held && (ts(held.updatedAt) > ts(saved.updatedAt) || (alreadyMoved && ts(held.updatedAt) === ts(saved.updatedAt))) ? held : saved;
+      // An assessment can publish another call at the same updatedAt as the save. Published calls persist: a call
+      // in the live proposal that the response hasn't seen distinguishes the later event even on that clock.
+      const inResponse = new Set(saved.cutAssessments?.filter(isPublishedCall).map(a => a.index));
+      const newerCall = held?.cutAssessments?.some(a => isPublishedCall(a) && !inResponse.has(a.index));
+      const live = held && (ts(held.updatedAt) > ts(saved.updatedAt) ||
+        ((alreadyMoved || newerCall) && ts(held.updatedAt) === ts(saved.updatedAt))) ? held : saved;
       if (live !== held)
         useProjectStore.getState().applyEvent({ type: "change.updated", projectId: saved.projectId, change: saved });
       // The latest save carries every call made so far. Landed, an earlier save's failure lost nothing: its line goes.
@@ -1543,6 +1586,22 @@ export function SimpleWorkspace() {
   const footage = useCarryingFootage(current.id, timeline, carrying, fps);
   const passIndex = (task: Task) => pass && callNow(pass, revisionCut(task), passThread?.changes ?? [], changes, tasks, footage);
   const revisingIndex = revision && passIndex(revision);
+  // A scoped revision can save the same cut several times before it finishes. Show the version the editor sent
+  // back through those saves, including after reloading the project. Calls on its siblings use the live proposal.
+  const revisionInput = useMemo(() => {
+    if (!pass || !passThread || !passMaker || !runIsActive(passMaker) || passMaker.context.cutIndex === undefined) return;
+    const named = changes.find(c => c.id === passMaker.context.changeId);
+    if (!named || named.id === pass.id) return;
+    const previous = revisedFrom(pass, passMaker, passThread.changes).previous ?? named;
+    const namedOrder = named.cutAssessments?.find(a => a.index === passMaker.context.cutIndex)?.askOrder;
+    const current = namedOrder && pass.cutAssessments?.find(a => a.askOrder === namedOrder);
+    const index = callNow(previous, passMaker.context, passThread.changes, changes, tasks, footage);
+    const activeIndex = current ? current.index : passIndex(passMaker) ?? index;
+    if (index === undefined || activeIndex === undefined) return;
+    const cuts = stagedCuts(previous).map(removed => ({ removed }));
+    const call = reviewCalls(previous, cuts, passOver).find(c => c.index === index);
+    if (call) return { call, index: activeIndex, previous };
+  }, [passMaker, pass, passThread, changes, tasks, passOver, footage]); // eslint-disable-line react-hooks/exhaustive-deps
   // A revision sent while the pass still runs can't replace it yet, so it waits in the queue as a request about one cut.
   // That call waits on Scarlet now, not on the editor, just like the cut being revised.
   // For each such cut, the request on it: the one Scarlet has started, else the first one waiting.
@@ -1555,21 +1614,28 @@ export function SimpleWorkspace() {
     if (!had || (had.state === "queued" && t.state !== "queued")) cutRuns.set(index, t);
   }
   if (revision && revisingIndex !== undefined && cutRuns.get(revisingIndex)?.state !== "running") cutRuns.set(revisingIndex, revision);
+  if (revisionInput && passMaker) cutRuns.set(revisionInput.index, passMaker);
   // A pass that saves its next part, or gets one cut revised, comes back as a new proposal. The listen is on its cut
   // there from the first render, so its card stays on the page with its script, note and picker as they were. A listen
   // whose cut is gone from the pass is over.
   const listening = useMemo(() => {
-    if (!listenedTo || !pass || listenedTo.changeId === pass.id) return listenedTo;
+    if (!listenedTo || !pass) return listenedTo;
+    if (revisionInput && ((listenedTo.changeId === revisionInput.previous.id && listenedTo.index === revisionInput.call.index) ||
+        (listenedTo.changeId === pass.id && listenedTo.index === revisionInput.index))) {
+      return { ...listenedTo, changeId: pass.id, index: revisionInput.index, cut: revisionInput.call };
+    }
+    if (listenedTo.changeId === pass.id) return listenedTo;
     if (!passThread?.changes.some(c => c.id === listenedTo.changeId)) return undefined;
     // A call that was sent back and is open when its new version arrives stays open, on that version.
-    const carried = carriedCall(pass, listenedTo, changes, footage) ?? revisedCall(pass, listenedTo, passThread.changes, changes, tasks, footage);
+    const carried = carriedCall(pass, listenedTo, changes, tasks, footage) ?? revisedCall(pass, listenedTo, passThread.changes, changes, tasks, footage);
     return carried && { ...listenedTo, changeId: pass.id, ...carried };
-  }, [listenedTo, pass, passThread, changes, tasks, footage]);
+  }, [listenedTo, pass, passThread, changes, tasks, footage, revisionInput]);
   const cutDuration = useMemo(() => timeline && timelineDuration(timeline), [timeline]);
   // The timeline zooms to the place the player is on, as it does to any edit that opens, with the suggestion's band on it.
   const placeOnScreen = places[shownPlace];
   const suggestionLine = placeOnScreen && focusAround(placeOnScreen, cutDuration ?? 0);
-  const review = cutReview.review;
+  const returningCall = revisionInput && listening?.changeId === pass?.id && listening?.index === revisionInput.index ? revisionInput : undefined;
+  const review = returningCall ? undefined : cutReview.review;
   // The pass's cuts are timed on the version it was staged on. A request in its own thread (an undo, a revision of an
   // applied cut) can move the working cut on while its calls wait: each call is then marked, shaded and played where
   // its footage sits on the working cut, which is the footage Approve takes out. A pass on the head whose working cut
@@ -1603,7 +1669,10 @@ export function SimpleWorkspace() {
   const placed = listening && pass && listening.changeId === pass.id ? placeCut(listening.cut) : listening?.cut;
   // A changed passage can be heard on the working cut when Scarlet asks about it. A subsequent revision
   // can have its own recorded Before and After, even though the other calls still use the original pass.
-  const cutOverride = pass?.id === listening?.changeId ? pass?.cutEdits?.find(c => c.index === listening?.index) : undefined;
+  const overrideForCall = (index: number) => revisionInput?.index === index
+    ? revisionInput.previous.cutEdits?.find(c => c.index === revisionInput.call.index)
+    : pass?.cutEdits?.find(c => c.index === index);
+  const cutOverride = listening && pass?.id === listening.changeId ? overrideForCall(listening.index) : undefined;
   const rechecking = listening && pass?.id === listening.changeId ? cutRuns.get(listening.index) : undefined;
   const conflict = rechecking?.cutConflict;
   const answeringCut = !!conflict && rechecking.state === "waiting_for_user";
@@ -1668,7 +1737,7 @@ export function SimpleWorkspace() {
   const startedListen = useRef<Audition>(undefined);
   const listenPending = !!audition && startedListen.current !== audition && !!pass && listening?.changeId === pass.id && (
     (!cutOverride && !conflict && pass.fromVersion === head && timeline?.version !== head)
-    || (!conflict && !listenJoined && listening.side === "after" && (cutOverride ? !!versionAfter && !savedAfter.timeline && !savedAfter.error : review === undefined && !cutReview.error))
+    || (!conflict && !listenJoined && listening.side === "after" && (cutOverride ? !!versionAfter && !savedAfter.timeline && !savedAfter.error : !returningCall && review === undefined && !cutReview.error))
     || (!!listenJoined && !listenFile.cache));
   // One listen per cut and side. The timeline can scrub anywhere meanwhile. Only the editor starts it: opening the
   // call, choosing a side or pressing the same side again. When the pass or the video around it changes instead,
@@ -1857,7 +1926,7 @@ export function SimpleWorkspace() {
     const aimed = ui.agentContext && ui.agentContext !== "whole" ? ui.agentContext : undefined;
     const index = pass && aimed && aimed.changeId !== pass.id ? callNow(pass, aimed, passThread?.changes ?? [], changes, tasks, footage) : undefined;
     const cut = pass && index !== undefined ? stagedCuts(pass)[index] : undefined;
-    if (pass && aimed && index !== undefined && cut) {
+    if (pass && aimed && index !== undefined && index !== revisionInput?.index && cut) {
       const { target: cutAim, label } = cutTarget(pass, index, cut);
       // Words chosen in the cut's passage still say where the editor was looking: only the cut they're about moves.
       const words = aimed === wordsInCall.current;
@@ -1866,11 +1935,11 @@ export function SimpleWorkspace() {
       ui.setAgentContext(target, aimed);
       setTargetLabel(shown => shown && label);
     }
-    if (!listenedTo || listenedTo.changeId === pass?.id) return;
+    if (!listenedTo || listenedTo.changeId === pass?.id || returningCall) return;
     if (pass && listening) return setListening(listening);
     player.pause();
     setListening(undefined);
-  }, [pass?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pass?.id, revisionInput?.index]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The proposal being applied, by id: the pass or the suggestion in the strip. One applies at a time, and only its
   // own strip says Applying… and waits for it to land.
@@ -1999,10 +2068,11 @@ export function SimpleWorkspace() {
       setReviewId(undefined);
       threadTimeline.clear();
       player.pause();
+      const prior = revisionInput?.index === a.index && pass?.id === change.id ? revisionInput : undefined;
       setListening(prev => {
         // Opened again while it's open, it plays from the top as the video runs: Before is unlit until chosen again.
         const same = prev?.changeId === change.id && prev.index === a.index;
-        return { changeId: change.id, index: a.index, cut: { start: a.start, end: a.end }, side: "after", take: (prev?.take ?? 0) + 1,
+        return { changeId: prior?.previous.id ?? change.id, index: prior?.call.index ?? a.index, cut: { start: a.start, end: a.end }, side: "after", take: (prev?.take ?? 0) + 1,
           key: same ? prev.key : `${change.id}/${a.index}` };
       });
     },
@@ -2115,39 +2185,37 @@ export function SimpleWorkspace() {
   // stays there through the moment a new part or a revised cut replaces the proposal.
   const passCuts = useMemo(() => pass && cutReview.review === undefined ? stagedCuts(pass).map(removed => ({ removed })) : cutReview.review?.cuts,
     [pass, cutReview.review]);
-  const openIndex = pass && listening?.changeId === pass.id ? listening.index : undefined;
-  const allCalls = useMemo(() => pass ? reviewCalls(pass, passCuts, passOver, openIndex) : [], [pass, passCuts, passOver, openIndex]);
+  const allCalls = useMemo(() => pass ? reviewCalls(pass, passCuts, passOver,
+    revisionInput && { ...revisionInput.call, index: revisionInput.index }) : [], [pass, passCuts, passOver, revisionInput]);
   const passEdits = useThreadEdits(current.id, passThread);
   // While a pass waits on the editor, its calls and the edits of its request that ask for a look are one run of
   // numbers: each says the same number in the list, on the timeline and on its card, and is named as what it is,
   // "Cut 6", or "Edit 6" for one that took no footage out. Shown for the first time together, the calls come first, in
-  // the order they reached the editor (`callNumbers`), then the edits in timeline order. From then on each keeps the
+  // the order they reached the editor, then the edits in timeline order. From then on each keeps the
   // number it was shown under (`needNumbers`): a call or an edit that arrives later takes the next one, wherever it is
   // in the video, so nothing the editor has seen is renumbered while the pass is still at work.
   const passRoot = pass ? (stagingTask(pass, changes, tasks) ?? tasks.find(t => t.id === pass.taskId)) : undefined;
   const { callNo, passEditNo } = useMemo(() => {
     const callNo = new Map<number, number>(), passEditNo = new Map<string, { n: number; name: string }>();
     if (!pass || !passThread) return { callNo, passEditNo };
-    const order = callNumbers(pass, passCuts?.length ?? 0, passOver, openIndex);
-    // A call Scarlet asked about is known by the place the engine gave it among the asks, which it keeps from part to
-    // part. A cut nobody checked is known by its place in the pass, which holds once the pass's run is over.
-    const callKey = (index: number) => {
-      const asked = pass.cutAssessments?.find(a => a.index === index && a.verdict === "ask")?.askOrder;
-      return asked ? `ask/${asked}` : `cut/${index}`;
-    };
-    const calls = [...order.keys()].sort((a, b) => order.get(a)! - order.get(b)!);
+    // A legacy pass receives publication numbers on the first new ask. Match the row it already showed by
+    // the slot in that same proposal; the same index in a later proposal can belong to different footage.
+    const callKeys = allCalls.map(a => {
+      const slot = `slot/${pass.id}/${a.index}`;
+      return a.askOrder === undefined ? { key: `cut/${a.index}`, rememberAs: slot } : { key: `ask/${a.askOrder}`, previous: slot };
+    });
     const at = (e: { range: { start: number } }) => (e as { at?: number }).at ?? e.range.start;
     const edits = passEdits.filter(e => !!e.check).sort((a, b) => at(a) - at(b));
     const editKeyOf = (e: (typeof edits)[number]) => `edit/${editKey(e.previous[0] ?? e)}`;
-    const numbers = needNumbers(current.id, passThread.id, passRoot?.resumeRootId ?? passRoot?.id ?? pass.id, [...calls.map(callKey), ...edits.map(editKeyOf)]);
-    for (const index of calls) callNo.set(index, numbers.get(callKey(index))!);
+    const numbers = needNumbers(current.id, passThread.id, passRoot?.resumeRootId ?? passRoot?.id ?? pass.id, [...callKeys, ...edits.map(editKeyOf)]);
+    allCalls.forEach((call, i) => callNo.set(call.index, numbers.get(callKeys[i]!.key)!));
     for (const e of edits) {
       const n = numbers.get(editKeyOf(e))!;
       const name = `${e.beforeCut || editKindWord(e) === "Cut" ? "Cut" : "Edit"} ${n}`;
       for (const ref of [e, ...e.previous]) passEditNo.set(editKey(ref), { n, name });
     }
     return { callNo, passEditNo };
-  }, [pass, passThread?.id, passRoot?.id, passCuts, passOver, openIndex, passEdits, current.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pass, passThread?.id, passRoot?.id, allCalls, passEdits, current.id]); // eslint-disable-line react-hooks/exhaustive-deps
   // A call says its place among the calls ("Cut 2 of 5") while its number is one of theirs. A call that arrived after
   // the edits were numbered has a number past them, and says the number alone.
   const ofCalls = (n?: number) => n !== undefined && n <= allCalls.length ? ` of ${allCalls.length}` : "";
@@ -2158,10 +2226,12 @@ export function SimpleWorkspace() {
   const cutCount = passCuts?.length ?? pass?.cutReasons?.length ?? 0;
   const passChoices = pass ? choicesOf(pass) : {};
   // The calls still waiting on the editor: the ones "N need you" counts.
-  const waitingCalls = asks.filter(a => passChoices[a.index] === undefined);
+  const waiting = (a: Call) => !sentBack(a.index) && passChoices[a.index] === undefined;
+  const waitingCalls = allCalls.filter(waiting);
   const remainingCalls = listening ? waitingCalls.filter(a => a.index !== listening.index) : [];
-  const nextCallAfterDecision = listening ? remainingCalls.find(a => a.start > listening.cut.start) ?? remainingCalls[0] : undefined;
-  // A call's number is the order it reached the editor in (`callNumbers`): a later ask, or the cuts the pass hands over
+  const currentIndex = listening ? allCalls.findIndex(a => a.index === listening.index) : -1;
+  const nextCallAfterDecision = listening ? allCalls.slice(currentIndex + 1).find(waiting) ?? remainingCalls[0] : undefined;
+  // A call's number is the order it reached the editor in: a later ask, or the cuts the pass hands over
   // when it ends, never renumber the calls the editor has seen. A request about that cut, its card, its line in the
   // list and its dot on the timeline all say "Cut 2".
   const callNumber = (about: { changeId?: string; cutIndex?: number }) => {
@@ -2181,20 +2251,22 @@ export function SimpleWorkspace() {
   // their order. Until the pass's version is in, the calls keep the pass's own times.
   const listedAt = new Map<number, number>();
   for (const a of allCalls) {
-    const override = pass?.cutEdits?.find(c => c.index === a.index);
+    const override = overrideForCall(a.index);
     listedAt.set(a.index, override ? override.range.start : placing ? a.start
       : placeCut(a)?.start ?? toWorkingCut?.map(a.start, "right") ?? toWorkingCut?.map(a.end, "left") ?? [...listedAt.values()].at(-1) ?? 0);
   }
   if (pass && passThread) actions.pass = {
     change: pass, threadId: passThread.id, cuts: cutCount,
-    running: passRunning, unchecked: passRunning && !pass.cutAssessments?.length, scheduled: passRunning && applyWhenDone(pass), deciding: deciding === pass.id,
+    running: passRunning, unchecked: passRunning && !allCalls.length &&
+      (!pass.cutAssessments?.length || pass.cutAssessments.some(a => a.provisional)), scheduled: passRunning && applyWhenDone(pass), deciding: deciding === pass.id,
     revising: revision ? `Revising ${cutName(revisionCut(revision))?.toLowerCase() ?? `the cut at ${clockLabel(revision.context.time ?? 0)}`}` : undefined, error: decideError || pass.error || "",
     editNumbers: passEditNo,
     calls: allCalls.map(a => {
-      const past = revisions?.get(a.index) ?? noRevisions;
-      const edit = pass.cutEdits?.find(e => e.index === a.index);
+      const history = revisions?.get(a.index) ?? noRevisions;
+      const past = revisionInput?.index === a.index ? history.slice(0, -1) : history;
+      const edit = overrideForCall(a.index);
       const at = edit ? (edit.version === head ? edit.range.start : undefined) : placeCut(a)?.start;
-      return { index: a.index, n: callNo.get(a.index)!, start: listedAt.get(a.index)!, at, reason: a.reason, version: past.length + 1, earlier: past.at(-1),
+      return { index: a.index, askOrder: a.askOrder, n: callNo.get(a.index)!, start: listedAt.get(a.index)!, at, reason: a.reason, version: past.length + 1, earlier: past.at(-1),
         run: cutRuns.get(a.index),
         state: sentBack(a.index) ? "revising" : passChoices[a.index] === "cut" ? "approved" : passChoices[a.index] === "keep" ? "skipped" : "open" };
     }),
@@ -2496,12 +2568,9 @@ export function SimpleWorkspace() {
   const flaggedRows = useMemo(() => editsByRow.filter(row => row.some(waitingEdit)), [editsByRow, reviewed, revisingEdit]); // eslint-disable-line react-hooks/exhaustive-deps
   const editPlace = reviewingEdit && waitingEdit(reviewingEdit) ? flaggedRows.indexOf(editsByRow[shownRow]!) : -1;
   const shownPassNo = reviewingEdit ? passEditNo.get(editKey(reviewingEdit))?.name : undefined;
-  // The flagged edits of the waiting pass's own request, which "N need you" counts with its calls. With the timeline
-  // on another request, that request's saved list says which they are. A pass can leave hundreds of edits: the list
-  // is worked out only when the request changes.
-  const passSaved = useMemo(() => pass && passThread && passThread.id !== focusThread?.id ? threadEditList(passThread) : undefined,
-    [pass, passThread, focusThread?.id]);
-  const passFlagged = !pass || !passThread ? [] : passSaved ? passSaved.filter(e => !!e.check && !passReviewed(e) && !passRevising(e)) : flaggedEdits;
+  // When the timeline is on another request, use the flags the pass's own review list shows.
+  const passFlagged = !pass || !passThread ? [] : passThread.id === focusThread?.id ? flaggedEdits
+    : passEdits.filter(e => !!e.check && !passReviewed(e) && !passRevising(e));
   const closeEdit = () => { player.pause(); threadTimeline.clear(); };
   function stepEdit(delta: number) {
     // From an edit that leads with its place among the ones still to check ("1 of 3"), ↑ and ↓ step to the others of
@@ -2715,7 +2784,8 @@ export function SimpleWorkspace() {
   // A call the pass wasn't sure about opens the same card, as the same single row: Scarlet's reason, then Revise (R),
   // Approve (A) and Skip (S), the × after them. The last call applies the pass. A call sent back for revision keeps its
   // note and Before/After, and says Scarlet is on it where the decisions were.
-  const callHistory = (openCall && revisions?.get(openCall.index)) ?? noRevisions;
+  const savedHistory = (openCall && revisions?.get(openCall.index)) ?? noRevisions;
+  const callHistory = returningCall ? savedHistory.slice(0, -1) : savedHistory;
   const callLength = heard ? lengthLabel(heard.end - heard.start) : openCall && lengthLabel(openCall.end - openCall.start);
   const callKey = pass && openCall && listening ? listening.key : undefined;
   // A call's range is on the pass's version. Its words are read on the working cut while that is the pass's version,
