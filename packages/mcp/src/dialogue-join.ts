@@ -3,7 +3,7 @@ import { JOIN_WORD_SECONDS, normalizeTranscriptToken } from "@scarlet/shared";
 import { dbfs, round3 } from "./analysis.js";
 import { REPEAT_WITHIN } from "./dialogue-leftovers.js";
 import { partialRepeatAtJoin, type FragmentSide } from "./dialogue-fragment-repeat.js";
-import { MAX_CROSSFADE, timelineJoins, type JoinSide } from "./timeline-perception.js";
+import { MAX_CROSSFADE, QUIET_PEAK, QUIET_RMS, timelineJoins, type JoinSide } from "./timeline-perception.js";
 
 type Word = Pick<TranscriptWord, "text" | "start" | "end">;
 interface Waveform { from: number; to: number; peaks: number[]; rms?: number[]; speechActivity?: TimeRange[] }
@@ -38,7 +38,7 @@ export function joinEvidence(words: Word[], wf: Waveform): JoinPage["edges"] {
   for (let i = 0; i < wf.rms.length; i++) {
     const start = wf.from + i * step, end = wf.from + (i + 1) * step;
     while (voice < wf.speechActivity.length && wf.speechActivity[voice]!.end <= start) voice++;
-    if (wf.rms[i]! <= .01 && wf.peaks[i]! <= .05 && (wf.speechActivity[voice]?.start ?? Infinity) >= end)
+    if (wf.rms[i]! <= QUIET_RMS && wf.peaks[i]! <= QUIET_PEAK && (wf.speechActivity[voice]?.start ?? Infinity) >= end)
       appendInterval(quiet, start, end);
     // A speech detector can stay active through a real inter-word gap. Offer a deep
     // level trough there for audition, but keep that disagreement explicit.
@@ -687,8 +687,8 @@ function betweenWords(page: NonNullable<JoinPage["edges"]>, kept: Word, removed:
   const left = side === "start" ? kept : outer, right = side === "start" ? outer : kept;
   const anchor = (word: Word, fallback: number) => {
     const peak = extremeLevel(page, word.start, word.end, "highest");
-    // Below the same -40 dBFS threshold as quiet runs, the recording cannot locate the word inside its timing.
-    return peak && peak.db > -40 ? peak.at : fallback;
+    // Below the level that counts as quiet, the recording cannot locate the word inside its timing.
+    return peak && peak.db > dbfs(QUIET_RMS) ? peak.at : fallback;
   };
   return { start: anchor(left, left.start), end: anchor(right, right.end) };
 }
