@@ -51,7 +51,7 @@ if ($AsTestUser) {
 
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') { throw 'Run this installer check on the disposable hosted Windows runner.' }
 $suffix = [Guid]::NewGuid().ToString('N').Substring(0,12)
-$name = "ScarletEA$suffix"
+$name = "Scarlet$suffix"
 $base = Join-Path $env:SystemDrive "ScarletEA-$suffix"
 $scripts = Join-Path $PSScriptRoot '..\..\apps\desktop\scripts'
 $password = ConvertTo-SecureString ([guid]::NewGuid().ToString('N') + 'bB9!') -AsPlainText -Force
