@@ -687,4 +687,12 @@ describe("screen_text", () => {
     expect(textOf(await call(c, "screen_text", { mediaId: "m2" }))).toContain("only a video has a picture to read");
     expect(toolAnnotations("screen_text").readOnlyHint).toBe(true);
   });
+
+  it("points a model that can see pictures to the frame a line is on, and doesn't mention pictures to one that can't", async () => {
+    const description = async (c: Client) => (await c.listTools()).tools.find(t => t.name === "screen_text")!.description;
+    expect(await description(await connect())).toContain("media_frame at a line's start second shows that frame");
+    const blind = await connect({ capabilities: { images: false, audio: false, files: false } });
+    expect(await description(blind)).not.toContain("media_frame");
+    expect(await description(await connect({ editingTools: { pictures: false } }))).not.toContain("media_frame");
+  });
 });

@@ -34,6 +34,8 @@ export interface PerceptionDeps {
   readWaveform(mediaId: string, from: number, to: number, points: number): Promise<WaveformResponse>;
   /** Note on stderr a read that failed and was answered without. Media still being prepared is not one. */
   unavailable(what: string, err: unknown): void;
+  /** Whether this run has the frame tools: its harness shows the model images and the editor left them on. */
+  seesFrames: boolean;
 }
 
 const text = (s: string): CallToolResult => ({ content: [{ type: "text", text: s }] });
@@ -206,7 +208,8 @@ export function registerPerception(deps: PerceptionDeps) {
     });
 
   tool("screen_text",
-    "The words shown on screen in a video, read from its picture: one line per line of text, `start-end` in SOURCE seconds while it stays on screen, its box as percent of the frame from the left and from the top, and the words. Frames are looked at once a second and read again only when the picture changes, so text shown for under a second can be missed; the words are read by a text recognizer and can be misspelt, but the box and the times are where it is. With `query`, only lines holding those words (case, punctuation and spacing ignored), across the whole video unless from/to narrow it. A video is read once and kept: a range not read yet is read now, and the answer says how much was read when it returns; call again for the rest. timeline_at maps source seconds to the edit. Lines are listed in time order, 200 at a time; `offset` pages on.",
+    "The words shown on screen in a video, read from its picture: one line per line of text, `start-end` in SOURCE seconds while it stays on screen, its box as percent of the frame from the left and from the top, and the words. Frames are looked at once a second and read again only when the picture changes, so text shown for under a second can be missed; the words are read by a text recognizer and can be misspelt, but the box and the times are where it is. With `query`, only lines holding those words (case, punctuation and spacing ignored), across the whole video unless from/to narrow it. A video is read once and kept: a range not read yet is read now, and the answer says how much was read when it returns; call again for the rest. timeline_at maps source seconds to the edit. Lines are listed in time order, 200 at a time; `offset` pages on." +
+      (deps.seesFrames ? " The reading says where; the picture says what it looks like: media_frame at a line's start second shows that frame, and frame_contact_sheet the window around it, so a search leads to the one or two frames worth looking at." : ""),
     { mediaId: z.string(), from: z.number().min(0).optional(), to: z.number().min(0).optional(),
       query: z.string().min(1).max(200).optional().describe("Words to find on screen"),
       offset: z.number().int().min(0).default(0) },
