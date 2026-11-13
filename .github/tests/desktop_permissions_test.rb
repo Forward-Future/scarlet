@@ -3,6 +3,7 @@ require "yaml"
 
 class DesktopPermissionsTest < Minitest::Test
   MAIN_PUSH = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+  STABLE_RELEASE = "#{MAIN_PUSH} && vars.SCARLET_STABLE_RELEASES == 'true'"
 
   def setup
     workflows = File.expand_path("../workflows", __dir__)
@@ -28,7 +29,7 @@ class DesktopPermissionsTest < Minitest::Test
     %w[build version].each { |name| refute @jobs.fetch(name).key?("permissions") }
     refute @build.key?("permissions")
     refute @jobs.fetch("build").key?("secrets")
-    assert_equal "${{ #{MAIN_PUSH} }}", @jobs.dig("build", "with", "release")
+    assert_equal "${{ #{STABLE_RELEASE} }}", @jobs.dig("build", "with", "release")
     assert_equal "${{ !inputs.release || (#{MAIN_PUSH}) }}", @build.fetch("if")
     assert_equal "${{ inputs.release && 'release' || 'desktop-build' }}", @build.fetch("environment")
     secret_steps = @build.fetch("steps").select { |step| step.to_s.include?("secrets.APPLE_") }
@@ -40,7 +41,7 @@ class DesktopPermissionsTest < Minitest::Test
 
   def test_only_main_can_publish_after_the_whole_matrix_passes
     publish = @jobs.fetch("publish")
-    assert_equal MAIN_PUSH, publish.fetch("if")
+    assert_equal STABLE_RELEASE, publish.fetch("if")
     assert_equal %w[version build ci], publish.fetch("needs")
     assert_equal "./.github/workflows/ci.yml", @jobs.dig("ci", "uses")
     assert_equal MAIN_PUSH, @jobs.dig("ci", "if")
