@@ -37,8 +37,9 @@ The layers improve independently. Models and harnesses change every few months, 
    - Editorial taste goes in skills: who is being addressed, how to group retakes, when a pause earns its time.
    - Scarlet's contract goes in `SCARLET_INTRO`: versions and changes, the time model, safety, and how to talk to the editor.
    - The editable dialogue skill describes which cuts to make or bring back for review, their pacing and the audio blend at their joins. Editor choices about a specific cut travel with the request or its review.
+   - What the editor asked for this time, and where, goes in the task context (the `## Context` lines `buildSystemPrompt` writes). A context line says which cut, edit or passage; it doesn't explain the tool that acts on it.
 
-   If you find the same rule in two of these, delete one.
+   If you find the same rule in two of these, delete one. The [short test](skills-and-tools.md#the-short-test) decides where a sentence goes.
 4. **Write for the next model.** Add instructions only for observed failures, and prefer a better tool or measurement to another sentence. Don't script the order of steps or build a fixed pipeline the model must follow; describe what's available and let it choose. After each model upgrade, run the evals, check which rules the model no longer needs, and remove them.
 
 ### Tools and perception
@@ -113,7 +114,8 @@ The layers improve independently. Models and harnesses change every few months, 
 
 **Changing the prompt or a skill**
 - Is there an observed failure behind it? Could missing context or a better measurement fix it instead (rules 2 and 11)?
-- Put the text in the right layer (rule 3) and delete the duplicate.
+- Put the text in the right layer (rule 3, and the [short test](skills-and-tools.md#the-short-test)) and delete the duplicate.
+- In a skill, name a tool; don't explain it. Don't put scope, permissions or anything Scarlet enforces in a skill.
 - For `SKILL.md`, keep frontmatter `name` and a `description` that says when to use the skill.
 - Run the evals on a real case before and after.
 
@@ -139,6 +141,7 @@ The layers improve independently. Models and harnesses change every few months, 
 |---|---|
 | Prompt contract | `packages/mcp/src/prompt.ts` (`SCARLET_INTRO`, `buildSystemPrompt`) |
 | Prompt route used by both hosts | `apps/server/src/services/tasks.ts` (`taskPrompt`), `routes/tasks.ts` |
+| Instructions the engine writes itself | The repeat check that finishes a dialogue pass (`taskPrompt`), a redo after a conflict and a request about one staged cut (`cutRevisionReference`) in `apps/server/src/services/changes.ts`, a resumed run's recap (`recoveryInstruction` in `taskRecovery.ts`) |
 | Hosts and runners | `apps/agent/src` (TypeScript), `apps/desktop/src-tauri/src/host` (Rust, used by the desktop app) |
 | Capabilities | `packages/shared/src/capabilities.ts` |
 | The agent's own plan | `PlanStep`, `TaskPlan`, `taskPlan` in `packages/shared/src/api.ts`; asked for by `PLAN_STEPS` in `packages/mcp/src/prompt.ts` on the runs `taskPrompt` launches with the tool; read in each runner (`todo_list`, `TaskCreate`/`TaskUpdate`); recorded by `appendTaskEvent`; not shown in the chat |
