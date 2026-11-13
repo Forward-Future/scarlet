@@ -14,7 +14,7 @@ const EPS = 1e-6;
 export interface ClipJoin { leftClipId: string; rightClipId: string }
 
 /** A join that got the crossfade: where it is on the version the crossfade made, and the track its clips sit on. */
-export interface JoinFade { at: number; trackId: string }
+export interface JoinFade { at: number; trackId: string; duration?: number }
 
 /** What the crossfade did at each join: joins faded, and joins left as a straight cut with why. */
 export interface JoinFadeReport {
@@ -57,15 +57,14 @@ function dialogueTrackId(timeline: Timeline, track: Track): { id: string; exists
 }
 
 /** Plans crossfades one join at a time. `assets` absent: replaying fades already checked against the media. */
-function crossfadePlanner(timeline: Timeline, assets: Map<string, MediaAsset> | undefined, duration: number) {
-  const half = duration / 2;
+function crossfadePlanner(timeline: Timeline, assets: Map<string, MediaAsset> | undefined) {
   const plans = new Map<string, { placed: Placed; pre: number; post: number }>();
 
   const extent = (placed: Placed, pre: number, post: number) =>
     ({ start: placed.clip.timelineIn - pre, end: clipEnd(placed.clip) + post });
 
   /** Why one side can't take its half of the overlap, with the half it would add. */
-  const check = (placed: Placed, side: "pre" | "post"): Refusal | undefined => {
+  const check = (placed: Placed, side: "pre" | "post", half: number): Refusal | undefined => {
     const { clip, track } = placed;
     const planned = plans.get(clip.id);
     const pre = side === "pre" ? half : planned?.pre ?? 0;
@@ -76,7 +75,7 @@ function crossfadePlanner(timeline: Timeline, assets: Map<string, MediaAsset> | 
     const sourceIn = clip.sourceIn - pre * clip.speed, sourceOut = clip.sourceOut + post * clip.speed;
     if (sourceIn < -EPS || clip.timelineIn - pre < -EPS || (post && assets && (asset!.duration === undefined || sourceOut > asset!.duration + EPS)))
       return { clipId: clip.id, reason: "handles" };
-    const fadeIn = pre ? duration : clip.audioFadeIn, fadeOut = post ? duration : clip.audioFadeOut;
+    const fadeIn = pre ? 2 * pre : clip.audioFadeIn, fadeOut = post ? 2 * post : clip.audioFadeOut;
     if (fadeIn + fadeOut > clipDuration(clip) + pre + post + EPS) return { clipId: clip.id, reason: "short" };
     if (track.kind !== "audio") {
       const target = dialogueTrackId(timeline, track);
@@ -88,8 +87,9 @@ function crossfadePlanner(timeline: Timeline, assets: Map<string, MediaAsset> | 
 
   return {
     /** Plan the crossfade on one join, or say why it can't take one. Nothing is planned for a join that is refused. */
-    add(left: Placed, right: Placed): Refusal | undefined {
-      const refused = check(left, "post") ?? check(right, "pre");
+    add(left: Placed, right: Placed, duration: number): Refusal | undefined {
+      const half = duration / 2;
+      const refused = check(left, "post", half) ?? check(right, "pre", half);
       if (refused) return refused;
       const l = plans.get(left.clip.id) ?? { placed: left, pre: 0, post: 0 };
       const r = plans.get(right.clip.id) ?? { placed: right, pre: 0, post: 0 };
@@ -101,8 +101,8 @@ function crossfadePlanner(timeline: Timeline, assets: Map<string, MediaAsset> | 
       const ids = new Set(timeline.tracks.flatMap(t => t.clips.map(c => c.id)));
       const added = new Set<string>();
       for (const { placed: { clip, track }, pre, post } of plans.values()) {
-        const audioFadeIn = pre ? duration : clip.audioFadeIn;
-        const audioFadeOut = post ? duration : clip.audioFadeOut;
+        const audioFadeIn = pre ? 2 * pre : clip.audioFadeIn;
+        const audioFadeOut = post ? 2 * post : clip.audioFadeOut;
         const patch = { timelineIn: Math.max(0, clip.timelineIn - pre), sourceIn: Math.max(0, clip.sourceIn - pre * clip.speed),
           sourceOut: clip.sourceOut + post * clip.speed, audioFadeIn, audioFadeOut };
         if (track.kind === "audio") {
@@ -130,7 +130,7 @@ function crossfadePlanner(timeline: Timeline, assets: Map<string, MediaAsset> | 
 /** Expand touching audio clips into real source handles, keeping the picture edit and total runtime intact. */
 export function audioCrossfadeOps(timeline: Timeline, media: MediaAsset[], joins: ClipJoin[], duration: number): TimelineOp[] {
   const clips = audibleClips(timeline);
-  const planner = crossfadePlanner(timeline, new Map(media.map(asset => [asset.id, asset])), duration);
+  const planner = crossfadePlanner(timeline, new Map(media.map(asset => [asset.id, asset])));
   for (const { leftClipId, rightClipId } of joins) {
     const left = clips.get(leftClipId);
     const right = clips.get(rightClipId);
@@ -138,7 +138,7 @@ export function audioCrossfadeOps(timeline: Timeline, media: MediaAsset[], joins
         Math.abs(clipEnd(left.clip) - right.clip.timelineIn) > 1e-7) {
       throw new Error(`Choose touching audible clips on the same track: ${leftClipId}, ${rightClipId}`);
     }
-    const refused = planner.add(left, right);
+    const refused = planner.add(left, right, duration);
     if (refused?.reason === "fade") throw new Error(`The join at ${rightClipId} already has a fade or is selected twice`);
     if (refused?.reason === "audio") throw new Error(`No confirmed audio on ${refused.clipId}`);
     if (refused?.reason === "occupied") throw new Error(`The dialogue track already has sound where ${refused.clipId}'s crossfade would go`);
@@ -174,32 +174,28 @@ function joinsAt(clips: Placed[], at: number, trackId?: string): Array<{ left: P
  * is not a join and isn't reported. `media` absent replays fades already checked: see `replayJoinFades`.
  */
 export function crossfadeJoins(timeline: Timeline, media: MediaAsset[] | undefined, times: readonly number[], duration: number,
-  { only, hold }: {
+  { only, durations }: {
+    /** Requested overlap at individual joins of a combined dialogue review. */
+    durations?: ReadonlyMap<number, number>;
     /** Just these fades, on their own tracks. */
     only?: readonly JoinFade[];
-    /** Why a join must stay a straight cut for now, such as a cut waiting for review that meets it. */
-    hold?: (at: number) => string | undefined;
   } = {}): { timeline: Timeline; fades: JoinFade[]; report: JoinFadeReport } {
   const report: JoinFadeReport = { faded: [], plain: [] };
-  if (!(duration > 0) || (!times.length && !only?.length)) return { timeline, fades: [], report };
+  if (!times.length && !only?.length) return { timeline, fades: [], report };
   const clips = [...audibleClips(timeline).values()];
-  const planner = crossfadePlanner(timeline, media && new Map(media.map(asset => [asset.id, asset])), duration);
+  const planner = crossfadePlanner(timeline, media && new Map(media.map(asset => [asset.id, asset])));
   const fades: JoinFade[] = [];
-  const wanted = only ? only.map(f => ({ at: f.at, trackId: f.trackId as string | undefined }))
-    : [...new Set(times)].sort((a, b) => a - b).map(at => ({ at, trackId: undefined as string | undefined }));
-  for (const { at, trackId } of wanted) {
+  const wanted = only ? only.map(f => ({ at: f.at, trackId: f.trackId as string | undefined, overlap: f.duration ?? duration }))
+    : [...new Set(times)].sort((a, b) => a - b).map(at => ({ at, trackId: undefined as string | undefined, overlap: durations?.get(at) ?? duration }));
+  for (const { at, trackId, overlap } of wanted) {
+    if (!(overlap > 0)) continue;
     const pairs = joinsAt(clips, at, trackId);
     if (!pairs.length) continue;
-    const held = hold?.(at);
-    if (held) {
-      report.plain.push({ at, reason: held });
-      continue;
-    }
     const reasons: string[] = [];
     for (const { left, right } of pairs) {
-      const refused = planner.add(left, right);
+      const refused = planner.add(left, right, overlap);
       if (refused) reasons.push(REASON[refused.reason]);
-      else fades.push({ at, trackId: left.track.id });
+      else fades.push({ at, trackId: left.track.id, ...(overlap !== duration && { duration: overlap }) });
     }
     if (reasons.length) report.plain.push({ at, reason: [...new Set(reasons)].join("; ") });
     else report.faded.push(at);

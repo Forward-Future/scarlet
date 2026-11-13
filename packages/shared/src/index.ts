@@ -4,7 +4,6 @@ export * from "./storage.js";
 export * from "./client.js";
 export * from "./inspection.js";
 export * from "./editingTools.js";
-export * from "./dialoguePreferences.js";
 export * from "./threads.js";
 export * from "./cutScope.js";
 export * from "./threadTimeline.js";
