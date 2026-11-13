@@ -14,6 +14,7 @@ import { accessToken, localUser } from "./auth.js";
 import { Db } from "./db.js";
 import { foldStrandedPasses, proposeChange, recordLeftOutFootage } from "./services/changes.js";
 import { emissionStore } from "./services/recordingAudio.js";
+import { RecordingSpeakers } from "./services/recordingSpeakers.js";
 import { CLASSES, SAMPLE_RATE, SEPARATOR, CTC_LETTERS } from "./transcribe/ctcAlign.js";
 import { EmissionFile } from "./transcribe/emissions.js";
 import { AnalysisCache } from "./services/analysisCache.js";
@@ -38,9 +39,9 @@ let directory: string;
 let workspace: ScarletApp;
 let project: Project;
 
-function openWorkspace(render: Partial<RenderAdapter> = {}) {
+function openWorkspace(render: Partial<RenderAdapter> = {}, env: NodeJS.ProcessEnv = {}) {
   const app = createApp({
-    dataDir: directory, skillsSeedDir: join(directory, "empty-seed"), env: {}, log: () => {},
+    dataDir: directory, skillsSeedDir: join(directory, "empty-seed"), env, log: () => {},
     render: {
       ...scarletRenderAdapter,
       async renderFullCached(p, _tl, _cache, file) {
@@ -207,6 +208,12 @@ it.each(["missing", "removed"] as const)("imports audio without a transcription 
   expect(ctx.repos.tasks.count()).toBe(0);
 });
 
+function transcriptionRows(mediaId: string) {
+  return workspace.ctx.db.prepare(`SELECT
+    (SELECT COUNT(*) FROM transcription_work WHERE media_id = ?) AS work,
+    (SELECT COUNT(*) FROM transcription_chunks WHERE media_id = ?) AS chunks`).get(mediaId, mediaId);
+}
+
 it.each(["local", "peer"])("stops an active cloud transcription after %s task cancellation", async (owner) => {
   const { ctx } = workspace;
   ctx.env.openaiKey = "fixture";
@@ -215,13 +222,16 @@ it.each(["local", "peer"])("stops an active cloud transcription after %s task ca
   const peer = owner === "peer" ? openWorkspace() : undefined;
   const extract = vi.spyOn(ffmpeg, "extractWav").mockImplementation(async (_input, out) => { writeFileSync(out, "fixture"); });
   let signal: AbortSignal | undefined;
-  const upload = vi.spyOn(globalThis, "fetch").mockImplementation((_url, opts) => {
-    signal = opts!.signal!;
-    return new Promise((_resolve, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }));
-  });
+  const upload = vi.spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json({ text: "first", words: [{ word: "first", start: 1, end: 2 }] }))
+    .mockImplementation((_url, opts) => {
+      signal = opts!.signal!;
+      return new Promise((_resolve, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }));
+    });
   try {
     const { task } = await (await api("POST", `/media/${media.id}/transcribe`, {})).json();
-    await vi.waitFor(() => expect(upload).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    expect(transcriptionRows(media.id)).toEqual({ work: 1, chunks: 1 });
     const host = peer ?? workspace;
     const cancelled = await host.app.request(`/api/tasks/${task.id}/cancel`, {
       method: "POST", headers: { Authorization: "Bearer " + accessToken(host.ctx) },
@@ -230,7 +240,8 @@ it.each(["local", "peer"])("stops an active cloud transcription after %s task ca
     await vi.waitFor(() => expect(signal?.aborted).toBe(true), { timeout: 3000 });
     await Promise.allSettled([...ctx.pending]);
     expect(ctx.repos.tasks.get(task.id)?.state).toBe("cancelled");
-    expect(upload).toHaveBeenCalledOnce();
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(transcriptionRows(media.id)).toEqual({ work: 0, chunks: 0 });
     expect(ctx.repos.projects.getMedia(media.id)?.transcriptId).toBeUndefined();
   } finally {
     ctx.repos.settings.update({ transcription: { provider: "none" } });
@@ -435,7 +446,7 @@ it.each([
   const media = ctx.repos.projects.putMedia(project.id, { id: "speech", name: "Interview", path: "interview.wav", kind: "audio" }, "ready");
   writeFileSync(join(ctx.paths.media(project.id), media.path), "source");
   await api("PATCH", "/settings", { transcription: { provider: "whispercpp", whisperModelPath: "fixture" } });
-  const decode = vi.spyOn(ffmpeg, "extractWav").mockImplementation(async (_file, wav) => { writeFileSync(wav, "pcm"); });
+  const decode = vi.spyOn(ffmpeg, "extractWav").mockImplementation(async (_file, wav) => { writeFileSync(wav, silentWav(0.1)); });
   const reader = vi.spyOn(WhisperCppProvider.prototype, "transcribeWav").mockImplementation(async () => {
     if (updateRoles) ctx.repos.projects.putMedia(project.id, { ...media, voiceRoles: { me: 1, other: 2 } }, "ready");
     return { language: "en", segments: [] };
@@ -443,7 +454,7 @@ it.each([
   const models = vi.spyOn(LocalWhisperModel.prototype, "get").mockResolvedValue("model");
   const speaker = vi.spyOn(ffmpeg, "run").mockImplementation(async (_bin, args) => {
     const wav = args[args.indexOf("diarize-audio") + 1]!;
-    expect(readFileSync(wav, "utf8")).toBe("pcm");
+    expect(readFileSync(wav)).toEqual(silentWav(0.1));
     return Buffer.from("[]");
   });
   try {
@@ -462,7 +473,7 @@ it("finds a recording's speakers while it is transcribed when the machine has co
   ctx.paths.ensureProject(project.id);
   await api("PATCH", "/settings", { transcription: { provider: "whispercpp", whisperModelPath: "fixture" } });
   const order: string[] = [];
-  const decode = vi.spyOn(ffmpeg, "extractWav").mockImplementation(async (_file, wav) => { writeFileSync(wav, "pcm"); });
+  const decode = vi.spyOn(ffmpeg, "extractWav").mockImplementation(async (_file, wav) => { writeFileSync(wav, silentWav(0.1)); });
   const models = vi.spyOn(LocalWhisperModel.prototype, "get").mockResolvedValue("model");
   const speaker = vi.spyOn(ffmpeg, "run").mockImplementation(async (_bin, args) => {
     if (args.includes("diarize-audio")) order.push("speakers");
@@ -511,7 +522,7 @@ it("saves a transcription's progress on its task while it runs and clears it whe
   const media = ctx.repos.projects.putMedia(project.id, { id: "speech", name: "Interview", path: "interview.wav", kind: "audio", duration: 600 }, "ready");
   writeFileSync(join(ctx.paths.media(project.id), media.path), "source");
   await api("PATCH", "/settings", { transcription: { provider: "whispercpp", whisperModelPath: "fixture" } });
-  const decode = vi.spyOn(ffmpeg, "extractWav").mockImplementation(async (_file, wav) => { writeFileSync(wav, "pcm"); });
+  const decode = vi.spyOn(ffmpeg, "extractWav").mockImplementation(async (_file, wav) => { writeFileSync(wav, silentWav(0.1)); });
   const seen: Array<Task["progress"]> = [];
   const running = () => ctx.repos.tasks.select("kind = 'transcribe'").at(-1)!;
   const reader = vi.spyOn(WhisperCppProvider.prototype, "transcribeWav").mockImplementation(async (...args) => {
@@ -538,7 +549,7 @@ function twoTurnTranscription(onTurn: (turn: number) => void | Promise<void> = (
   writeFileSync(join(ctx.paths.media(project.id), media.path), "source");
   const segments = [["hello", 10], ["again", 400]].map(([text, start], i) => ({ id: `seg${i}`, start: start as number, end: start as number + 1, text: text as string,
     words: [{ text: text as string, start: start as number, end: start as number + 0.4 }] }));
-  const decode = vi.spyOn(ffmpeg, "extractWav").mockImplementation(async (_file, wav) => { writeFileSync(wav, "pcm"); });
+  const decode = vi.spyOn(ffmpeg, "extractWav").mockImplementation(async (_file, wav) => { writeFileSync(wav, silentWav(0.1)); });
   const reader = vi.spyOn(WhisperCppProvider.prototype, "transcribeWav").mockImplementation(async () => ({ language: "en", segments, modelLabel: adapterModel }));
   const models = vi.spyOn(LocalWhisperModel.prototype, "get").mockResolvedValue("model");
   let turns = 0;
@@ -595,29 +606,163 @@ it.each(["custom", "whispercpp", "crisperwhisper"] as const)("saves the transcri
   } finally { t.restore(); }
 });
 
-it("transcribes again when alignment is interrupted, and keeps the words placed when the aligner fails", async () => {
+it("resumes the remaining alignment turn when the library reopens", async () => {
   await api("PATCH", "/settings", { transcription: { provider: "whispercpp", whisperModelPath: "fixture" } });
-  let mode: "quit" | "fail" | "run" = "quit";
-  const t = twoTurnTranscription(turn => {
-    if (turn !== 2 || mode === "run") return;
-    if (mode === "quit") t.ctx.transcriptions.get(t.task().id)!.controller.abort(new Error("Scarlet quit."));
-    throw new Error("The aligner stopped.");
+  let turns = 0;
+  const t = twoTurnTranscription(async turn => {
+    turns++;
+    if (turn === 2) await new Promise<void>(resolve => t.ctx.shutdown.addEventListener("abort", () => resolve(), { once: true }));
   });
   try {
-    await expect(transcribeMedia(t.ctx, project.id, t.media)).rejects.toThrow("Scarlet quit.");
-    const interrupted = t.task();
-    expect(interrupted).toMatchObject({ state: "failed", interrupted: true });
-    // What was saved is still marked as aligning, so nothing treats its later times as final or the job as done.
-    expect(t.linked()?.aligning).toEqual({ through: 10.5 });
-    mode = "run";
-    recoverTasks(t.ctx);
-    expect(t.task().id).not.toBe(interrupted.id);
-    while (t.ctx.pending.size) await Promise.all([...t.ctx.pending]);
-    expect(t.reader).toHaveBeenCalledTimes(2);
-    expect(t.task().state).toBe("done");
+    expect((await api("POST", "/media/speech/transcribe", {})).status).toBe(202);
+    await vi.waitFor(() => expect(turns).toBe(2));
+    const id = t.linked()!.id;
+    expect(t.linked()).toMatchObject({ aligning: { through: 10.5 }, segments: [{ words: [{ start: 10.1 }] }, { words: [{ start: 400 }] }] });
+    await t.ctx.close();
+    workspace = openWorkspace();
+    while (workspace.ctx.pending.size) await Promise.allSettled([...workspace.ctx.pending]);
+    expect(t.reader).toHaveBeenCalledOnce();
+    // One completed turn, one interrupted attempt, and one turn on reopen.
+    expect(turns).toBe(3);
+    expect(workspace.ctx.repos.transcripts.get(id)).toMatchObject({ segments: [{ words: [{ start: 10.1 }] }, { words: [{ start: 400.1 }] }] });
+    expect(workspace.ctx.repos.transcripts.get(id)?.aligning).toBeUndefined();
+    expect(workspace.ctx.repos.tasks.select("kind = 'transcribe'", [], "created_at, rowid").at(-1)?.state).toBe("done");
+  } finally { t.restore(); }
+});
+
+/** A mono 16 kHz PCM recording like the one FFmpeg hands to the local recognizer. */
+function silentWav(seconds: number) {
+  const samples = Math.round(seconds * SAMPLE_RATE);
+  const wav = Buffer.alloc(44 + samples * 2);
+  wav.write("RIFF", 0);
+  wav.writeUInt32LE(wav.length - 8, 4);
+  wav.write("WAVEfmt ", 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(SAMPLE_RATE, 24);
+  wav.writeUInt32LE(2 * SAMPLE_RATE, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36);
+  wav.writeUInt32LE(samples * 2, 40);
+  return wav;
+}
+
+it.each(["whispercpp", "openai"] as const)("resumes %s recognition after two app restarts without repeating completed audio", async provider => {
+  const { ctx } = workspace;
+  const env = { OPENAI_API_KEY: "fixture" };
+  ctx.env.openaiKey = env.OPENAI_API_KEY;
+  ctx.repos.settings.update({ transcription: { provider, whisperCppPath: process.execPath, localModel: "custom" } });
+  // Each chunk has a distinct pulse. The fake recognizers report its time within the audio they actually receive.
+  const times = provider === "whispercpp" ? [10, 150, 275] : [10, 650, 1240];
+  const audioDuration = times[2]! + 20;
+  // A video's pictures can outlast the audio Whisper actually decoded.
+  const duration = provider === "whispercpp" ? audioDuration * 2 : audioDuration;
+  const words = ["un", "deux", "trois"];
+  const pulses = words.map((_, i) => Buffer.alloc(8, i + 1));
+  const recording = silentWav(audioDuration);
+  times.forEach((time, i) => pulses[i]!.copy(recording, 44 + 2 * SAMPLE_RATE * time));
+  ctx.paths.ensureProject(project.id);
+  const media = ctx.repos.projects.putMedia(project.id, { id: "speech", kind: "video", hasAudio: true, name: "Interview", path: "fixture.wav", duration }, "ready");
+  writeFileSync(join(ctx.paths.media(project.id), media.path), recording);
+
+  const calls: Array<{ word: string; progress?: number }> = [];
+  const interrupted = new Set<string>();
+  async function recognize(wav: Buffer, signal: AbortSignal) {
+    const data = wav.subarray(wav.indexOf("data") + 8);
+    const index = pulses.findIndex(pulse => data.includes(pulse));
+    if (index === -1) throw new Error("Expected speech in this chunk");
+    const word = words[index]!;
+    const start = data.indexOf(pulses[index]!) / (2 * SAMPLE_RATE);
+    const task = workspace.ctx.repos.tasks.select("kind = 'transcribe' AND state = 'running'")[0];
+    calls.push({ word, progress: task?.progress?.words?.fraction });
+    if (index > 0 && !interrupted.has(word)) {
+      interrupted.add(word);
+      signal.throwIfAborted();
+      await new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    }
+    return { word, start, end: start + 0.25 };
+  }
+  const local = vi.spyOn(WhisperCppProvider.prototype, "transcribeWav").mockImplementation(async (file, _tmp, signal) => {
+    const { word: text, start, end } = await recognize(readFileSync(file), signal!);
+    return { language: "fr", segments: [{ id: text, text, start, end, words: [{ text, start, end }] }] };
+  });
+  const cloud = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+    const file = (init!.body as FormData).get("file") as File;
+    const word = await recognize(Buffer.from(await file.arrayBuffer()), init!.signal!);
+    return Response.json({ language: "fr", text: word.word, words: [word] });
+  });
+  const speakers = vi.spyOn(RecordingSpeakers.prototype, "turns").mockResolvedValue([]);
+  try {
+    expect((await api("POST", "/media/speech/transcribe", {})).status).toBe(202);
+    for (const word of words.slice(1)) {
+      await vi.waitFor(() => expect(interrupted.has(word)).toBe(true), { timeout: 8000 });
+      expect(workspace.ctx.repos.projects.getMedia(media.id)?.transcriptId).toBeUndefined();
+      await workspace.ctx.close();
+      workspace = openWorkspace({}, env);
+    }
+    while (workspace.ctx.pending.size) await Promise.allSettled([...workspace.ctx.pending]);
+    expect(calls.map(c => c.word)).toEqual(["un", "deux", "deux", "trois", "trois"]);
+    for (const index of [2, 4]) {
+      expect(calls[index]!.progress).toBeGreaterThan(0);
+      expect(calls[index]!.progress).toBeCloseTo(calls[index - 1]!.progress!, 3);
+    }
+    const final = await (await api("GET", "/media/speech/transcript")).json();
+    expect(final).toMatchObject({ language: "fr", segments: words.map((text, i) => ({ text, words: [{ text, start: times[i], end: times[i]! + 0.25 }] })) });
+    expect(final.aligning).toBeUndefined();
+    expect(transcriptionRows(media.id)).toEqual({ work: 0, chunks: 0 });
+    expect(workspace.ctx.repos.tasks.select("kind = 'transcribe'", [], "created_at, rowid").at(-1)?.state).toBe("done");
+  } finally { speakers.mockRestore(); cloud.mockRestore(); local.mockRestore(); }
+}, 30000);
+
+it("starts a changed recording from the beginning after an interrupted transcription", async () => {
+  const { ctx } = workspace;
+  ctx.repos.settings.update({ transcription: { provider: "whispercpp", whisperCppPath: process.execPath, localModel: "custom" } });
+  ctx.paths.ensureProject(project.id);
+  const media = ctx.repos.projects.putMedia(project.id, { id: "changed", kind: "audio", name: "Changed", path: "recording.wav", duration: 250 }, "ready");
+  const source = join(ctx.paths.media(project.id), media.path);
+  writeFileSync(source, "original audio");
+  const starts: number[] = [];
+  const reader = vi.spyOn(WhisperCppProvider.prototype, "transcribe").mockImplementation(async ({ checkpoint, signal }) => {
+    starts.push(checkpoint!.through);
+    const text = readFileSync(source, "utf8");
+    const chunk = { language: "fr", segments: [{ id: "chunk", text, start: 1, end: 2, words: [] }] };
+    if (starts.length === 1) {
+      checkpoint!.save(120, chunk);
+      await new Promise<never>((_, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }));
+    }
+    return { language: "fr", segments: [...checkpoint!.result.segments, ...chunk.segments] };
+  });
+  const speakers = vi.spyOn(RecordingSpeakers.prototype, "turns").mockResolvedValue([]);
+  try {
+    expect((await api("POST", "/media/changed/transcribe", {})).status).toBe(202);
+    await vi.waitFor(() => expect(starts).toEqual([0]));
+    await ctx.close();
+    writeFileSync(source, "replacement audio");
+    workspace = openWorkspace();
+    while (workspace.ctx.pending.size) await Promise.allSettled([...workspace.ctx.pending]);
+    expect(starts).toEqual([0, 0]);
+    const transcript = await (await api("GET", "/media/changed/transcript")).json();
+    expect(transcript.segments.map((segment: { text: string }) => segment.text)).toEqual(["replacement audio"]);
+  } finally { reader.mockRestore(); speakers.mockRestore(); }
+});
+
+it("finishes a legacy transcript left part-aligned without recognizing its audio again", async () => {
+  await api("PATCH", "/settings", { transcription: { provider: "whispercpp", whisperModelPath: "fixture" } });
+  const t = twoTurnTranscription();
+  const linked = t.ctx.repos.transcripts.put({ id: "legacy", projectId: project.id, mediaId: t.media.id, language: "en", provider: "whispercpp",
+    localModel: "custom", modelLabel: "fixture", createdAt: "2020-01-01T00:00:00.000Z", aligning: { through: 10.5 }, segments: [
+      { id: "first", text: "hello", start: 10.1, end: 10.5, words: [{ text: "hello", start: 10.1, end: 10.5 }] },
+      { id: "second", text: "again", start: 400, end: 401, words: [{ text: "again", start: 400, end: 400.4 }] },
+    ] });
+  t.ctx.repos.projects.putMedia(project.id, { ...t.media, transcriptId: linked.id }, "ready");
+  try {
+    expect(await (await api("GET", "/media/speech/transcript")).json()).toMatchObject({ id: linked.id, aligning: { through: 10.5 } });
+    while (t.ctx.pending.size) await Promise.allSettled([...t.ctx.pending]);
+    expect(t.reader).not.toHaveBeenCalled();
+    expect(t.linked()).toMatchObject({ segments: [{ id: "first", words: [{ start: 10.1 }] }, { id: "second", words: [{ start: 400.1 }] }] });
     expect(t.linked()?.aligning).toBeUndefined();
-    recoverTasks(t.ctx);
-    expect(t.reader).toHaveBeenCalledTimes(2);
   } finally { t.restore(); }
 });
 
@@ -663,6 +808,7 @@ it.each(["failure", "interruption"] as const)("keeps the complete transcript rea
     }
     while (ctx.pending.size) await Promise.allSettled([...ctx.pending]);
     expect(t.task()).toMatchObject({ state: "done", context: { localModel: "custom" } });
+    expect(t.reader).toHaveBeenCalledTimes(outcome === "interruption" ? 1 : 2);
     const replacement = await read();
     expect(replacement.id).not.toBe(old.id);
     expect(peer.ctx.repos.projects.getMedia(t.media.id)?.lastTranscription).toEqual({

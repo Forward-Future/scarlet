@@ -205,7 +205,10 @@ export function mediaRoutes(ctx: Ctx) {
         ? "Transcription isn't available in this build of Scarlet. Waveform analysis is still available."
         : `The selected transcription provider (${provider}) is missing its configuration in Scarlet Settings.`);
     }
-    const { task, done } = startTranscription(ctx, project.id, media);
+    const { task, done } = startTranscription(ctx, project.id, media, undefined, "interrupt", "missing");
+    if (task.state === "done") return c.json({ state: "ready" });
+    if (task.state === "failed" && task.interrupted) throw conflict("transcription_unavailable",
+      "The interrupted transcription cannot resume with the current provider. Retry it from Media.");
     ctx.track(done.catch(() => null));
     return c.json({ state: "processing", taskId: task.id }, 202);
   });
@@ -279,7 +282,7 @@ export function mediaRoutes(ctx: Ctx) {
     const transcript = await transcripts.read(media, from, to, omitWords);
     if (!transcript) throw notFound("transcript");
     if (transcript.aligning) {
-      try { settleAlignment(ctx, media); } catch (err) { ctx.log(`[transcribe] ${media.id}: ${(err as Error).message}`); }
+      try { settleAlignment(ctx, media, transcript.id); } catch (err) { ctx.log(`[transcribe] ${media.id}: ${(err as Error).message}`); }
     }
     void ctx.speakers.ensure(ctx, media.projectId, media, transcript, undefined, transcriptionHeld(ctx, media.projectId));
     const search = c.req.query("search");

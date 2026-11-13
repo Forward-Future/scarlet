@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants, existsSync } from "node:fs";
+import { constants, existsSync, statSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { copyFile, readFile, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
@@ -12,10 +12,11 @@ import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { humanDuration } from "../logText.js";
 import type { MediaWithStatus } from "../repo/projects.js";
 import type { Task, User } from "@scarlet/shared";
-import { cancelTask, createTask, saveTask } from "./tasks.js";
+import { cancelTask, createTask, hasTranscript, saveTask } from "./tasks.js";
 import { recordTaskFinished } from "../telemetry/events.js";
 import { availableTranscriptionProvider, getTranscriptionProvider, effectiveProviderName, type importTranscriptionPolicy, type TranscriptionProvider } from "../transcribe/index.js";
-import { alignsLanguage, alignTranscript } from "../transcribe/wordAlign.js";
+import { claimTranscriptionWork, openTranscriptionWork, transcriptionIdentity, type TranscriptionResume } from "./transcriptionWork.js";
+import { alignsLanguage, alignTranscript, type AlignmentCheckpoint } from "../transcribe/wordAlign.js";
 import { fillTranscriptHoles } from "../transcribe/transcriptHoles.js";
 import { extractWav } from "../render/ffmpeg.js";
 import { audioLane, whisperLane, type AudioWork } from "./audioWork.js";
@@ -390,7 +391,7 @@ async function backgroundIngest(ctx: Ctx, projectId: string, asset: MediaAsset) 
   const provider = await availableTranscriptionProvider(ctx, policy);
   if (!provider || policy.signal.aborted) return;
   // runTranscription logs the outcome.
-  await startWithProvider(ctx, projectId, asset, provider, provider.name).done.catch(() => undefined);
+  await startWithProvider(ctx, projectId, asset, provider, provider.name, undefined, "interrupt", "missing").done.catch(() => undefined);
 }
 
 /**
@@ -469,10 +470,11 @@ export function startTranscription(
   asset: MediaAsset,
   providerOverride?: string,
   whilePaused: "interrupt" | "refuse" = "interrupt",
+  resume?: TranscriptionResume | "missing",
 ): { task: Task; done: Promise<Transcript | null> } {
   const policy = ctx.repos.settings.transcriptionPolicy();
   const name = effectiveProviderName(policy.settings.provider, providerOverride);
-  return startWithProvider(ctx, projectId, asset, getTranscriptionProvider(ctx, providerOverride, policy), name, providerOverride, whilePaused);
+  return startWithProvider(ctx, projectId, asset, getTranscriptionProvider(ctx, providerOverride, policy), name, providerOverride, whilePaused, resume);
 }
 
 /**
@@ -481,27 +483,51 @@ export function startTranscription(
  */
 export function transcribeForDialogue(ctx: Ctx, projectId: string, media: MediaAsset): Task | null {
   if (media.kind === "image" || media.hasAudio === false || transcriptionHeld(ctx, projectId)) return null;
-  if (ctx.db.prepare("SELECT id FROM transcripts WHERE media_id = ? LIMIT 1").get(media.id)) return null;
+  if (hasTranscript(ctx, media.id)) return null;
   const provider = getTranscriptionProvider(ctx);
   if (!provider) return null;
-  const { task, done } = startWithProvider(ctx, projectId, media, provider, provider.name);
+  const { task, done } = startWithProvider(ctx, projectId, media, provider, provider.name, undefined, "interrupt", "missing");
   ctx.track(done.catch(() => null));
-  return task;
+  return task.state === "failed" ? null : task;
 }
 
 /** `chosen`: a provider the editor picked for this run, kept on the task so an interrupted run starts again with it. */
-function startWithProvider(ctx: Ctx, projectId: string, asset: MediaAsset, provider: TranscriptionProvider | null, name: string, chosen?: string, whilePaused: "interrupt" | "refuse" = "interrupt") {
+function startWithProvider(ctx: Ctx, projectId: string, asset: MediaAsset, provider: TranscriptionProvider | null, name: string, chosen?: string, whilePaused: "interrupt" | "refuse" = "interrupt", resume?: TranscriptionResume | "missing") {
   const { task, started } = ctx.db.transaction(() => {
     const project = ctx.repos.projects.header(projectId);
     if (!project) throw notFound(`project ${projectId}`);
     if (whilePaused === "refuse" && project.mediaPaused) throw conflict("media_paused", "Resume caching to transcribe this recording.");
     const [active] = ctx.repos.tasks.select("project_id = ? AND kind = 'transcribe' AND state = 'running' AND json_extract(json, '$.context.mediaId') = ?", [projectId, asset.id]);
     if (active) return { task: active, started: false };
+    let inherit = resume === "missing" ? undefined : resume;
+    if (resume === "missing" || inherit?.interrupted) {
+      // Another engine may have recovered and even finished this job since the recovery sweep listed it.
+      const [latest] = ctx.repos.tasks.select("project_id = ? AND kind = 'transcribe' AND json_extract(json, '$.context.mediaId') = ?",
+        [projectId, asset.id], "created_at DESC, rowid DESC LIMIT 1");
+      if (inherit?.interrupted && latest && latest.id !== inherit.interrupted.id) return { task: latest, started: false };
+      if (resume === "missing" && latest?.state === "done" && hasTranscript(ctx, asset.id)) return { task: latest, started: false };
+      // A resumed pass can ask for its missing transcript while caching is paused, before the recovery sweep runs.
+      // Its preparation is the same interrupted job, including when a pause stops it again before its first chunk.
+      if (resume === "missing" && latest?.state === "failed" && latest.interrupted) {
+        chosen = latest.context.transcriptionProvider;
+        if (chosen && chosen !== name) {
+          const policy = ctx.repos.settings.transcriptionPolicy();
+          name = effectiveProviderName(policy.settings.provider, chosen);
+          provider = getTranscriptionProvider(ctx, chosen, policy);
+        }
+        const ranWith = latest.context.transcribedWith;
+        if (!provider || (name !== "whispercpp" && ranWith && name !== ranWith)) {
+          return { task: latest, started: false };
+        }
+        inherit = { interrupted: latest };
+      }
+    }
     const task = createTask(ctx, {
       projectId, kind: "transcribe", agent: "api", instruction: `Transcribe ${asset.name}`,
       context: { mediaId: asset.id, transcribedWith: name, localModel: provider?.localModel, ...(chosen && { transcriptionProvider: chosen }) }, createdBy: { type: "scarlet", name: "Scarlet" }, state: "running",
     });
     ctx.db.prepare("UPDATE tasks SET worker_pid = ?, worker_seen_at = ? WHERE id = ?").run(process.pid, now(), task.id);
+    claimTranscriptionWork(ctx, asset.id, task, inherit);
     return { task, started: true };
   }, "immediate")();
   if (!started) return { task, done: ctx.transcriptions.get(task.id)?.done ?? Promise.resolve(null) };
@@ -531,21 +557,22 @@ function startWithProvider(ctx: Ctx, projectId: string, asset: MediaAsset, provi
 function transcriptionProgress(ctx: Ctx, task: Task, provider: TranscriptionProvider["name"]) {
   type Stage = NonNullable<Task["progress"]>["stage"];
   const share = provider === "whispercpp" ? 1 / 3 : 1 / 2;
-  let started: number | undefined;
+  let started: { at: number; fraction: number; words: number } | undefined;
   let saved: { stage: Stage; percent: number; at: number } | undefined;
   function save(stage: Stage, fraction: number, words: number) {
     const at = performance.now();
-    if (stage !== "queued") started ??= at;
+    if (stage !== "queued") started ??= { at, fraction, words };
     const percent = Math.floor(fraction * 100);
     // A new stage saves at once. Within one, a whole percent more at most once a second, or a jump of five.
     if (saved?.stage === stage && (percent <= saved.percent || (at - saved.at < 1000 && percent < saved.percent + 5))) return;
     saved = { stage, percent, at };
-    const elapsed = started === undefined ? 0 : (at - started) / 1000;
-    const left = (done: number) => elapsed >= 5 && done >= 0.02 && done < 1 ? Math.ceil(elapsed * (1 - done) / done) : undefined;
+    const elapsed = started === undefined ? 0 : (at - started.at) / 1000;
+    const left = (done: number, initial = 0) => elapsed >= 5 && done - initial >= 0.02 && done < 1
+      ? Math.ceil(elapsed * (1 - done) / (done - initial)) : undefined;
     ctx.db.transaction(() => {
       const current = ctx.repos.tasks.get(task.id);
-      if (current?.state === "running") saveTask(ctx, { ...current, progress: { stage, fraction: Math.min(1, fraction), remainingSeconds: left(fraction),
-        words: { fraction: Math.min(1, words), remainingSeconds: left(words) } } });
+      if (current?.state === "running") saveTask(ctx, { ...current, progress: { stage, fraction: Math.min(1, fraction), remainingSeconds: left(fraction, started?.fraction),
+        words: { fraction: Math.min(1, words), remainingSeconds: left(words, started?.words) } } });
     }, "immediate")();
   }
   return {
@@ -571,24 +598,35 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
   ctx.log(`[transcribe] ${asset.id} started with ${provider.localModel ?? provider.name}${audio} for ${task.id}`);
   try {
     const src = join(ctx.paths.media(projectId), asset.path);
-    const stamp = wav ? await stat(src) : undefined;
+    const stamp = statSync(src, { throwIfNoEntry: false });
+    const checkRunning = () => {
+      ctx.settings(); // Another engine may have changed the selected model or cancelled this job.
+      if (ctx.repos.tasks.get(task.id)?.state !== "running") controller.abort();
+      signal.throwIfAborted();
+    };
+    const identity = await transcriptionIdentity(ctx, asset, stamp, provider);
+    const saved = ctx.db.transaction(() => {
+      checkRunning();
+      return openTranscriptionWork(ctx, task, identity, checkRunning);
+    }, "immediate")();
+    early = !!saved.alignment;
     const work: AudioWork = { mediaId: asset.id, kind: "transcript" };
     const progress = transcriptionProgress(ctx, task, provider.name);
     ctx.speakers.begin(ctx, projectId, asset);
+    const recognized = saved.fraction ?? (asset.duration ? Math.min(1, saved.recognition.through / asset.duration) : 0);
     const transcribe = () => {
-      progress.transcribing(0);
+      progress.transcribing(recognized);
       return provider.transcribe({ path: src, duration: asset.duration, tmpDir: ctx.paths.tmp, signal, keepWavAt: wav,
-        onProgress: progress.transcribing,
-        beforeUpload() {
-          if (ctx.repos.tasks.get(task.id)?.state !== "running") controller.abort();
-        },
+        checkpoint: saved.recognition, onProgress: progress.transcribing, beforeUpload: checkRunning,
       });
     };
     // Local Whisper takes its turn in the audio lane. A cloud provider only uploads, so it runs right away.
-    if (provider.name === "whispercpp") progress.queued();
+    if (saved.alignment) progress.aligning(saved.alignment.fraction ?? 0);
+    else if (recognized > 0) progress.transcribing(recognized);
+    else if (provider.name === "whispercpp") progress.queued();
     // Word alignment follows. In the same lane, the lane waits for it rather than starting another recording.
     const lane = whisperLane(ctx, provider.gpu);
-    const result = provider.name === "whispercpp" ? await lane.run(work, signal, transcribe, { more: lane === audioLane(ctx) }) : await transcribe();
+    const result = saved.aligned ?? (provider.name === "whispercpp" ? await lane.run(work, signal, transcribe, { more: lane === audioLane(ctx) }) : await transcribe());
     // A rerun keeps the readable transcript, including a speaker-labelled revision or an older unlinked one,
     // until the replacement is complete. A first transcript can publish its words while alignment runs.
     const previous = ctx.db.prepare(`SELECT t.id, json_extract(t.json, '$.aligning') IS NULL AS complete
@@ -599,13 +637,17 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     const id = replacing ? newId("trs") : previous?.id ?? newId("trs");
     const model = provider.localModel === "custom" ? result.modelLabel ?? provider.modelLabel : provider.modelLabel;
     /** Save the transcript and link it on the recording. `aligning`: how far its word times are final. Absent, the job is done. */
-    const save = (segments: TranscriptSegment[], aligning?: Transcript["aligning"]) => ctx.db.transaction(() => {
+    const save = (segments: TranscriptSegment[], aligning?: AlignmentCheckpoint) => ctx.db.transaction(() => {
       ctx.settings(); // Observe a model change saved by another engine before committing this revision.
       signal.throwIfAborted();
       if (ctx.repos.tasks.get(task.id)?.state !== "running") return null;
+      if (aligning) {
+        saved.saveAlignment(aligning, { segments, language: result.language, modelLabel: model }, replacing ? undefined : id);
+        if (replacing) return null; // The previous completed transcript remains the readable one.
+      }
       const savedAt = now();
       const transcript: Transcript = { id, mediaId: asset.id, language: result.language, provider: provider.name, localModel: provider.localModel, modelLabel: model, segments,
-        createdAt: savedAt, ...(aligning && { aligning }) };
+        createdAt: savedAt, ...(aligning && { aligning: { through: aligning.through } }) };
       ctx.repos.transcripts.put({ ...transcript, projectId });
       const current = ctx.repos.projects.getMedia(asset.id);
       let speakerSource: MediaAsset | undefined;
@@ -627,8 +669,10 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     // scan pages run while alignment goes on. `aligning.through` says how far the times are final, and whatever
     // turns a word into a cut edge waits for alignment to pass it.
     const alignable = alignsLanguage(result.language) && result.segments.some(s => s.words.length);
-    if (alignable && !replacing) early = !!save(result.segments, { through: 0 });
-    progress.aligning(0);
+    if (alignable && !saved.alignment) early = !!save(result.segments, { through: 0, nextWord: 0, fraction: 0 });
+    progress.aligning(saved.alignment?.fraction ?? 0);
+    // The old process's scratch WAV is gone. Recreate the shared decode before alignment or the gap check reads it.
+    if (saved.aligned && wav) await extractWav(src, wav, { signal });
     // While a pass is reading this recording, its alignment lets the speakers a pass waits for finish first
     // (RecordingSpeakers.awaitedByPass). Nothing a pass reads needs word times before its first page.
     // A pass reading any recording of the project counts: it turns to this one next, and its first page here waits
@@ -653,13 +697,23 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
         return segments;
       } finally { if (!wav) await rm(full, { force: true }); }
     };
-    const aligned = await alignTranscript(ctx, { source: src, wav, language: result.language, segments: result.segments, signal,
+    let publishedThrough = saved.alignment?.through ?? 0;
+    const finishedAlignment = saved.alignment?.complete;
+    const aligned = finishedAlignment ? result.segments : await alignTranscript(ctx, { source: src, wav, language: result.language, segments: result.segments, signal, resume: saved.alignment,
       emissions: alignable ? await emissionStore(ctx, projectId, src) : undefined, hold: speakersFirst,
       work: { mediaId: asset.id, kind: "alignment" }, onProgress: progress.aligning,
-      onTurn: (soFar, through) => { if (!replacing) save(soFar, { through }); } });
+      onTurn: (soFar, through, cursor) => {
+        publishedThrough = through;
+        save(soFar, cursor);
+      } });
+    // A gap reread may still insert words. Keep the public boundary where readers last saw it while saving
+    // the finished alignment so a quit during the reread only repeats that final check.
+    if (alignable && provider.name === "whispercpp" && !finishedAlignment) {
+      save(aligned, { through: publishedThrough, fraction: 1, complete: true });
+    }
     const stored = save(await withoutHoles(aligned));
     // The run was cancelled while it aligned, so nobody will finish: the saved transcript keeps the times it has.
-    if (!stored && early) keepTimes(ctx, asset.id);
+    if (!stored && early) keepTimes(ctx, asset.id, task.id);
     if (stored?.speakerSource) {
       const decoded = wav && stamp && asset.path === stored.speakerSource.path
         ? { wav, size: stamp.size, mtimeMs: stamp.mtimeMs, ctimeMs: stamp.ctimeMs } : undefined;
@@ -676,9 +730,9 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
       recordTaskFinished(ctx, saveTask(ctx, { ...task, state: "failed", interrupted: interrupted.aborted || undefined,
         error: interrupted.aborted ? "Transcription was interrupted." : (e as Error).message, finishedAt: now() }));
     }
-    // An interrupted run starts again and replaces the transcript. Any other ending leaves nobody to finish the
+    // An interruption keeps the cursor. Any other ending leaves nobody to finish the
     // alignment, so the transcript keeps the times it has.
-    if (early && !(running && interrupted.aborted)) keepTimes(ctx, asset.id);
+    if (early && !(running && interrupted.aborted)) keepTimes(ctx, asset.id, task.id);
     throw e;
   } finally {
     if (wav) {
@@ -691,8 +745,10 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
 }
 
 /** Stop waiting for word alignment on a recording's transcript: its times are as final as they will get. */
-function keepTimes(ctx: Ctx, mediaId: string) {
+function keepTimes(ctx: Ctx, mediaId: string, owner?: string) {
   ctx.db.transaction(() => {
+    if (owner && ctx.repos.tasks.select("kind = 'transcribe' AND json_extract(json, '$.context.mediaId') = ?",
+      [mediaId], "created_at DESC, rowid DESC LIMIT 1")[0]?.id !== owner) return;
     for (const { aligning: _a, ...transcript } of ctx.repos.transcripts.select("media_id = ? AND json_extract(json, '$.aligning') IS NOT NULL", [mediaId])) {
       ctx.repos.transcripts.put(transcript);
     }
@@ -701,10 +757,10 @@ function keepTimes(ctx: Ctx, mediaId: string) {
 
 /**
  * A transcript still marked as aligning with no transcription running was left by a run that ended early. Readers
- * wait on that mark, so settle it: transcribe again on this computer when that can start now, as after an interruption,
+ * wait on that mark, so settle it: continue aligning the saved words when that can start now,
  * and otherwise keep the times it has. A paused project resumes its own transcriptions.
  */
-export function settleAlignment(ctx: Ctx, media: MediaWithStatus & { projectId: string }) {
+export function settleAlignment(ctx: Ctx, media: MediaWithStatus & { projectId: string }, transcriptId: string) {
   const { projectId } = media;
   if (ctx.repos.tasks.select("project_id = ? AND kind = 'transcribe' AND state = 'running' AND json_extract(json, '$.context.mediaId') = ?", [projectId, media.id]).length) return;
   if (transcriptionHeld(ctx, projectId)) return;
@@ -712,11 +768,18 @@ export function settleAlignment(ctx: Ctx, media: MediaWithStatus & { projectId: 
   // Reading a transcript never sends a recording to a cloud service, and never repeats a run that failed by itself:
   // both wait for the editor's Retry, and the transcript keeps the times it has.
   const [last] = ctx.repos.tasks.select("project_id = ? AND kind = 'transcribe' AND json_extract(json, '$.context.mediaId') = ?", [projectId, media.id], "created_at DESC, rowid DESC LIMIT 1");
-  if (!provider || provider.name !== "whispercpp" || (last?.state === "failed" && !last.interrupted)) return keepTimes(ctx, media.id);
+  if (!provider || provider.name !== "whispercpp" || last?.state === "cancelled" || (last?.state === "failed" && !last.interrupted)) return keepTimes(ctx, media.id);
+  // A read may continue an existing local transcript, but a different preset is a new transcription request.
+  const partial = ctx.db.prepare(`SELECT json_extract(json, '$.provider') AS provider, json_extract(json, '$.localModel') AS model
+    FROM transcripts WHERE id = ? AND media_id = ? AND json_extract(json, '$.aligning') IS NOT NULL`).get(transcriptId, media.id) as
+    { provider: string | null; model: string | null } | undefined;
+  if (!partial) return;
+  if ((partial.provider && partial.provider !== provider.name) || (partial.model && partial.model !== provider.localModel)) return keepTimes(ctx, media.id);
   const { projectId: _p, status: _s, error: _e, ...asset } = media;
-  const { task, done } = startWithProvider(ctx, projectId, asset, provider, provider.name);
+  const { task, done } = startWithProvider(ctx, projectId, asset, provider, provider.name, undefined, "interrupt",
+    { interrupted: last?.interrupted ? last : undefined, stranded: transcriptId });
   ctx.track(done.catch(() => null));
-  ctx.log(`[transcribe] ${media.id} was left part aligned; transcribing it again as ${task.id}`);
+  ctx.log(`[transcribe] ${media.id} is continuing its word alignment as ${task.id}`);
 }
 
 /**

@@ -1,9 +1,11 @@
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as ffmpeg from "../render/ffmpeg.js";
+import { decodedRecording } from "../services/recordingAudio.js";
 import { bundledWhisperOnGpu, parseWhisperJson, WhisperCppProvider, whisperThreads } from "./whispercpp.js";
+import type { TranscribeResult } from "./index.js";
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -248,4 +250,72 @@ it("counts the bundled whisper as a GPU build only on Apple silicon", () => {
   expect(bundledWhisperOnGpu("darwin", "arm64")).toBe(true);
   expect(bundledWhisperOnGpu("darwin", "x64")).toBe(false);
   expect(bundledWhisperOnGpu("win32", "arm64")).toBe(false);
+});
+
+it("saves finished local windows at pauses, then resumes on the recording's clock with the detected language", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-whisper-resume-"));
+  try {
+    const seconds = 300, rate = 16000;
+    const wav = Buffer.alloc(44 + seconds * rate * 2);
+    wav.write("RIFF"); wav.writeUInt32LE(wav.length - 8, 4); wav.write("WAVEfmt ", 8);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write("data", 36); wav.writeUInt32LE(wav.length - 44, 40);
+    // A pause at 122 s, two seconds after the first target. Areas between pauses contain sustained sound.
+    wav.fill(42, 44);
+    wav.fill(0, 44 + 122 * rate * 2, 44 + 123 * rate * 2);
+    const extract = vi.spyOn(ffmpeg, "extractWav").mockImplementation(async (_file, path) => writeFile(path, wav));
+    const whisper = new WhisperCppProvider({ binary: "custom-adapter", language: "auto" });
+    const lengths: number[] = [];
+    const calls = vi.spyOn(whisper, "transcribeWav").mockImplementation(async (path, _tmp, _signal, _lang, _prompt, onProgress) => {
+      const window = await readFile(path);
+      lengths.push(window.readUInt32LE(40) / 2 / rate);
+      onProgress?.(1);
+      const n = lengths.length;
+      return { language: "fr", modelLabel: "example/model", segments: n === 2 ? [] : [
+        { id: "s" + n, start: 1, end: 2, text: "Bonjour", words: [{ text: "Bonjour", start: 1.1, end: 1.9, confidence: 0.9 }] },
+        // Local adapters can round the final stamp to just beyond the WAV's last sample.
+        { id: "tail" + n, start: lengths[n - 1]! - 0.5, end: lengths[n - 1]! + 0.003, text: "fin", words: [
+          { text: "fin", start: lengths[n - 1]! - 0.4, end: lengths[n - 1]! + 0.003, confidence: 0.8 },
+        ] },
+      ] };
+    });
+    const keepWavAt = join(dir, "kept.wav");
+    // The last 40 s of video has no audio.
+    const input = { path: "interview.mov", tmpDir: dir, duration: seconds + 40, keepWavAt };
+    const saved: Array<{ through: number; chunk: TranscribeResult; fraction?: number }> = [];
+    const save = (through: number, chunk: TranscribeResult, fraction?: number) => saved.push({ through, chunk, fraction });
+    const first = new AbortController();
+    await expect(whisper.transcribe({ ...input, signal: first.signal, checkpoint: { through: 0, result: { segments: [] },
+      save(through, chunk, fraction) { save(through, chunk, fraction); first.abort(new Error("quit")); } } })).rejects.toThrow("quit");
+    const { through, chunk } = saved[0]!;
+    expect(through).toBeGreaterThan(122);
+    expect(through).toBeLessThan(123);
+    const progress: number[] = [];
+    const resumed = await whisper.transcribe({ ...input, checkpoint: { through, result: chunk, save }, onProgress: f => progress.push(f) });
+    expect(extract).toHaveBeenCalledTimes(2); // One source decode per attempt; every window came from that decode.
+    expect(calls.mock.calls.map(args => args[3])).toEqual([undefined, "fr", "fr"]);
+    expect(lengths[0]).toBeCloseTo(through);
+    expect(lengths.reduce((sum, n) => sum + n, 0)).toBeCloseTo(seconds);
+    expect(saved[1]!.chunk.segments).toEqual([]);
+    expect(saved[2]!.through).toBe(seconds);
+    expect(saved.map(s => s.fraction)).toEqual(saved.map(s => s.through / seconds));
+    expect(progress.every(f => f >= through / seconds)).toBe(true);
+    expect(progress.at(-1)).toBe(1);
+    expect(resumed).toEqual({ modelLabel: "example/model", language: "fr", segments: [...chunk.segments, ...saved[2]!.chunk.segments] });
+    expect(chunk.segments[1]).toMatchObject({ id: "tail1", text: "fin", end: through, words: [{ text: "fin", end: through, confidence: 0.8 }] });
+    expect(resumed.segments.at(-1)).toMatchObject({ end: seconds, words: [{ end: seconds }] });
+    const tail = resumed.segments[2]!;
+    expect(tail.start).toBeCloseTo(saved[1]!.through + 1);
+    expect(tail.words[0]!.end).toBeCloseTo(saved[1]!.through + 1.9);
+    expect(await whisper.transcribe({ ...input, checkpoint: { through: seconds, result: resumed, save } })).toEqual(resumed);
+    expect(calls).toHaveBeenCalledTimes(3);
+    expect(await readdir(dir)).toEqual(["kept.wav"]);
+    // A short recording is still transcribed as one file with the adapter's original timestamps.
+    const short = join(dir, "short.wav");
+    await (await decodedRecording(keepWavAt)).writeWindow(short, 0, 9.997);
+    extract.mockImplementation(async (_file, target) => copyFile(short, target));
+    const unsplit = await whisper.transcribe({ ...input, path: short, checkpoint: { through: 0, result: { segments: [] }, save } });
+    expect(unsplit.segments.at(-1)!.end).toBeCloseTo(10, 6);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
