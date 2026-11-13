@@ -14,7 +14,7 @@ import { LocalWhisperModel } from "./localModel.js";
 import { audioWorker } from "./audioWorker.js";
 import { EmissionFile } from "./emissions.js";
 import { readAcousticWindow, readCachedAcousticWords } from "./acousticWords.js";
-import { alignsLanguage, alignTranscript, alignWords, WordAligner, type AlignRequest } from "./wordAlign.js";
+import { alignsLanguage, alignTranscript, alignWords, WordAligner, type AlignmentCheckpoint, type AlignRequest } from "./wordAlign.js";
 
 const letters = "ETAONIHSRDLUMWCFGYPBVK'XJQZ";
 const id = (ch: string) => ch === "_" ? 0 : ch === "|" ? SEPARATOR : 5 + letters.indexOf(ch);
@@ -235,6 +235,54 @@ describe("transcript alignment", () => {
     expect(turns).toEqual([{ through: 271.5, moved: 10 }, { through: 571.5, moved: 20 }]);
     expect(moved(out)).toBe(24);
     expect(hold).toHaveBeenCalledTimes(3);
+  });
+
+  it("resumes across repeated interruptions, including a turn without confident words", async () => {
+    const segments = [segment(0, 860, Array.from({ length: 24 }, (_, k) =>
+      ["word", k * 36, k * 36 + 1] as [string, number, number]))];
+    const requests: AlignRequest[] = [];
+    vi.spyOn(audioWorker, "request").mockImplementation(async message => {
+      const request: AlignRequest = JSON.parse(readFileSync((message as { request: string }).request, "utf8"));
+      requests.push(request);
+      return request.groups.map(g => g.words.map(w => w.start < 324 ? null : { start: w.start + 0.1, end: w.end + 0.1, score: 1 })) as never;
+    });
+    const wav = join(dir, "decoded.wav");
+    let saved = segments;
+    let resume: AlignmentCheckpoint | undefined;
+    const progress: number[] = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const stop = new AbortController();
+      await expect(alignTranscript(ctx(), { source: "talk.mov", wav, segments: saved, resume, signal: stop.signal,
+        onProgress: p => progress.push(p),
+        onTurn: (soFar, _through, checkpoint) => {
+          resume = checkpoint;
+          saved = soFar;
+          stop.abort(new Error("quit"));
+        } })).rejects.toThrow("quit");
+      expect(resume).toEqual(attempt === 0 ? { nextWord: 9, through: 0, fraction: 324 / 860 }
+        : { nextWord: 18, through: 613.1, fraction: 648 / 860 });
+    }
+    const final = await alignTranscript(ctx(), { source: "talk.mov", wav, segments: saved, resume, signal, onProgress: p => progress.push(p) });
+    expect(requests.map(r => [r.groups[0]!.start, r.after])).toEqual([[0, undefined], [324, undefined], [648, 613.1]]);
+    expect(progress).toEqual([324 / 860, 324 / 860, 648 / 860, 648 / 860, 1]);
+    expect(requests.flatMap(r => r.groups.flatMap(g => g.words.map(w => w.start)))).toEqual(segments[0]!.words.map(w => w.start));
+    expect(final[0]!.words.map(w => w.start)).toEqual(segments[0]!.words.map(w => w.start < 324 ? w.start : w.start + 0.1));
+  });
+
+  it("recovers an older time-only checkpoint inside a segment, leaving the confident prefix in place", async () => {
+    const segments = [segment(0, 20, [["done", 1, 1.5], ["through", 2, 2.5], ["next", 2.5, 2.5], ["last", 18, 19]])];
+    const requests: AlignRequest[] = [];
+    vi.spyOn(audioWorker, "request").mockImplementation(async message => {
+      const request: AlignRequest = JSON.parse(readFileSync((message as { request: string }).request, "utf8"));
+      requests.push(request);
+      return request.groups.map(g => g.words.map(w => ({ start: w.start + 0.1, end: w.end + 0.2, score: 1 }))) as never;
+    });
+    const progress: number[] = [];
+    const final = await alignTranscript(ctx(), { source: "talk.mov", wav: join(dir, "decoded.wav"), segments, signal,
+      resume: { through: 2.5 }, onProgress: p => progress.push(p) });
+    expect(requests.map(r => [r.after, r.groups.flatMap(g => g.words.map(w => w.text))])).toEqual([[2.5, ["next", "last"]]]);
+    expect(final[0]!.words.slice(0, 2)).toEqual(segments[0]!.words.slice(0, 2));
+    expect(progress).toEqual([2.5 / 20, 1]);
   });
 
   it("takes its turns in the engine's audio lane, and shorter ones once a dialogue pass reads the recording", async () => {

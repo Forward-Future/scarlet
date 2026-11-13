@@ -8,6 +8,7 @@ import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { ffmpeg } from "../render/ffmpeg.js";
 import { OpenAIProvider } from "../transcribe/openai.js";
+import { transcribeForDialogue } from "../services/ingest.js";
 import { previewIdentity } from "../services/previewPictures.js";
 import { emissionStorePaths } from "../services/recordingAudio.js";
 import { savedSpeakerTurns } from "../services/recordingSpeakers.js";
@@ -39,6 +40,52 @@ function api(method: string, path: string, body?: unknown) {
     headers: { Authorization: `Bearer ${accessToken(workspace.ctx)}`, ...(body !== undefined && { "Content-Type": "application/json" }) } });
 }
 const settle = async () => { while (workspace.ctx.pending.size) await Promise.allSettled([...workspace.ctx.pending]); };
+
+it.each(["prepare", "dialogue"])("continues saved recognition when a resumed edit requests %s with caching still paused", async entry => {
+  const id = "voice";
+  const media = workspace.ctx.repos.projects.putMedia(project.id, { id, name: "Voice", path: "voice.wav", kind: "audio", duration: 1200 }, "ready");
+  const prepare = () => api("POST", `/projects/${project.id}/media/${id}/prepare`, { kind: "transcript" });
+  const first = { id: "segment", text: "bonjour", start: 10, end: 11, words: [] };
+  const offsets: number[] = [];
+  vi.spyOn(OpenAIProvider.prototype, "transcribe").mockImplementation(async ({ checkpoint, signal }) => {
+    offsets.push(checkpoint!.through);
+    if (offsets.length > 1) return checkpoint!.result;
+    checkpoint!.save(600, { language: "fr", segments: [first] }, 0.5);
+    return new Promise((_, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }));
+  });
+  expect((await prepare()).status).toBe(202);
+  await vi.waitFor(() => expect(offsets).toEqual([0]));
+  await api("PATCH", `/projects/${project.id}`, { mediaPaused: true });
+  await settle();
+  await workspace.ctx.close();
+  workspace = createApp({ dataDir: directory, env: { OPENAI_API_KEY: "unused-fixture" }, log: () => {} });
+  // An early prepare while idle is still held. It may transfer ownership but must retain the saved chunk.
+  expect((await prepare()).status).toBe(202);
+  await settle();
+  expect(offsets).toEqual([0]);
+  createTask(workspace.ctx, { projectId: project.id, kind: "edit", agent: "api", instruction: "Read the dialogue", state: "running",
+    createdBy: { type: "scarlet", name: "Scarlet" } });
+  if (entry === "dialogue") expect(transcribeForDialogue(workspace.ctx, project.id, media)?.state).toBe("running");
+  else expect((await prepare()).status).toBe(202);
+  await settle();
+  expect(offsets).toEqual([0, 600]);
+  const savedId = workspace.ctx.repos.projects.getMedia(id)!.transcriptId!;
+  expect(workspace.ctx.repos.transcripts.get(savedId)?.segments).toEqual([first]);
+});
+
+it("keeps an interrupted local recording off the cloud when automatic preparation finds it", async () => {
+  const { ctx } = workspace;
+  const media = ctx.repos.projects.putMedia(project.id, { id: "voice", name: "Voice", path: "voice.wav", kind: "audio" }, "ready");
+  const last = createTask(ctx, { projectId: project.id, kind: "transcribe", agent: "api", instruction: "Transcribe Voice", state: "running",
+    context: { mediaId: media.id, transcribedWith: "whispercpp" }, createdBy: { type: "scarlet", name: "Scarlet" } });
+  saveTask(ctx, { ...last, state: "failed", interrupted: true });
+  const upload = vi.spyOn(OpenAIProvider.prototype, "transcribe").mockResolvedValue({ segments: [] });
+  const response = await api("POST", `/projects/${project.id}/media/${media.id}/prepare`, { kind: "transcript" });
+  expect(response.status).toBe(409);
+  expect(transcribeForDialogue(ctx, project.id, media)).toBeNull();
+  expect(upload).not.toHaveBeenCalled();
+  expect(ctx.repos.tasks.count("kind = 'transcribe'")).toBe(1);
+});
 
 it.each(["waveform", "json"])("keeps a v3 .%s cache available offline and upgrades it when the recording returns", async ext => {
   const { ctx } = workspace;
