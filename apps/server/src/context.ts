@@ -167,6 +167,8 @@ export interface Ctx {
   waveformsAsked: Set<string>;
   waveformReads: AnalysisCache<WaveformCache>;
   transcriptions: Map<string, { controller: AbortController; done: Promise<Transcript | null> }>;
+  /** The adapter shipped with this desktop release, used with an existing CrisperWhisper installation. */
+  crisperAdapter?: string;
   whisperCli?: string;
   /** The bundled GPU build, tried before `whisperCli` when the bundled runtime is in use. */
   whisperGpu?: string;
@@ -239,6 +241,7 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
     waveforms: new Map(),
     waveformsAsked: new Set(),
     waveformReads: new AnalysisCache(w => (w.peaks.length + (w.rms?.length ?? 0)) * (w.peaks instanceof Float32Array ? 4 : 8)),
+    crisperAdapter: env.SCARLET_CRISPER_ADAPTER,
     whisperCli,
     whisperGpu: whisperCli ? bundledWhisperGpu(env) : undefined,
     speakers: new RecordingSpeakers(paths.root),

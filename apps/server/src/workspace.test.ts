@@ -716,9 +716,23 @@ it.each(["whispercpp", "openai"] as const)("resumes %s recognition after two app
   } finally { speakers.mockRestore(); cloud.mockRestore(); local.mockRestore(); }
 }, 30000);
 
-it("starts a changed recording from the beginning after an interrupted transcription", async () => {
+it.each(["source changed", "adapter reinstalled", "adapter changed"] as const)(
+  "recovers only compatible recognition checkpoints after restart (%s)", async change => {
   const { ctx } = workspace;
-  ctx.repos.settings.update({ transcription: { provider: "whispercpp", whisperCppPath: process.execPath, localModel: "custom" } });
+  const env: NodeJS.ProcessEnv = {};
+  if (change === "source changed") {
+    ctx.repos.settings.update({ transcription: { provider: "whispercpp", whisperCppPath: process.execPath, localModel: "custom" } });
+  } else {
+    const base = join(ctx.paths.root, "models", "crisperwhisper");
+    const python = join(base, "venv", ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
+    for (const file of [python, join(base, "crisper_cli.py"), join(base, "model", "model.safetensors")]) {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "fixture", { mode: 0o700 });
+    }
+    ctx.crisperAdapter = join(directory, "release-a.py");
+    writeFileSync(ctx.crisperAdapter, "adapter v1");
+    ctx.repos.settings.update({ transcription: { provider: "whispercpp", localModel: "crisperwhisper" } });
+  }
   ctx.paths.ensureProject(project.id);
   const media = ctx.repos.projects.putMedia(project.id, { id: "changed", kind: "audio", name: "Changed", path: "recording.wav", duration: 250 }, "ready");
   const source = join(ctx.paths.media(project.id), media.path);
@@ -739,12 +753,18 @@ it("starts a changed recording from the beginning after an interrupted transcrip
     expect((await api("POST", "/media/changed/transcribe", {})).status).toBe(202);
     await vi.waitFor(() => expect(starts).toEqual([0]));
     await ctx.close();
-    writeFileSync(source, "replacement audio");
-    workspace = openWorkspace();
+    if (change === "source changed") writeFileSync(source, "replacement audio");
+    else {
+      env.SCARLET_CRISPER_ADAPTER = join(directory, "release-b.py");
+      writeFileSync(env.SCARLET_CRISPER_ADAPTER, change === "adapter changed" ? "adapter v2" : "adapter v1");
+    }
+    workspace = openWorkspace({}, env);
     while (workspace.ctx.pending.size) await Promise.allSettled([...workspace.ctx.pending]);
-    expect(starts).toEqual([0, 0]);
+    expect(starts).toEqual([0, change === "adapter reinstalled" ? 120 : 0]);
     const transcript = await (await api("GET", "/media/changed/transcript")).json();
-    expect(transcript.segments.map((segment: { text: string }) => segment.text)).toEqual(["replacement audio"]);
+    const expected = change === "source changed" ? ["replacement audio"] :
+      change === "adapter reinstalled" ? ["original audio", "original audio"] : ["original audio"];
+    expect(transcript.segments.map((segment: { text: string }) => segment.text)).toEqual(expected);
   } finally { reader.mockRestore(); speakers.mockRestore(); }
 });
 
