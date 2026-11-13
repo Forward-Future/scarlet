@@ -35,7 +35,13 @@ export function restrictWindowsAccess(path: string, kind: "File" | "Directory", 
     "$acl.SetAccessRuleProtection($true,$false)",
     `$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($id,'FullControl',${inheritance}'Allow'))`,
     `$current=[System.IO.${kind}]::GetAccessControl($env:SCARLET_PRIVATE_PATH)`,
-    `if ($acl.GetSecurityDescriptorSddlForm('Access,Owner') -ne $current.GetSecurityDescriptorSddlForm('Access,Owner')) { if ($env:SCARLET_REFUSE_DACL_CHANGE) { throw $env:SCARLET_REFUSE_DACL_CHANGE }; [System.IO.${kind}]::SetAccessControl($env:SCARLET_PRIVATE_PATH,$acl) }`,
+    // NTFS marks a persisted DACL as automatically inherited. Reapplying the same inheritable ACE on every
+    // open propagates it to the recordings and changes their ctime, invalidating fingerprints and preview caches.
+    // Compare the DACL bytes (including every ACE and its flags), the owner and protection independently.
+    "$wanted=[System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(),0)",
+    "$found=[System.Security.AccessControl.RawSecurityDescriptor]::new($current.GetSecurityDescriptorBinaryForm(),0)",
+    "function DaclBytes($sd) { if ($null -eq $sd.DiscretionaryAcl) { return '' }; $b=[byte[]]::new($sd.DiscretionaryAcl.BinaryLength); $sd.DiscretionaryAcl.GetBinaryForm($b,0); [Convert]::ToBase64String($b) }",
+    `if ($found.Owner -ne $wanted.Owner -or !$current.AreAccessRulesProtected -or (DaclBytes $found) -cne (DaclBytes $wanted)) { if ($env:SCARLET_REFUSE_DACL_CHANGE) { throw $env:SCARLET_REFUSE_DACL_CHANGE }; [System.IO.${kind}]::SetAccessControl($env:SCARLET_PRIVATE_PATH,$acl) }`,
     kind === "Directory" ? checkWindowsChildren : "",
   ].join(";");
   execFileSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe"),

@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { ScarletClient } from "@scarlet/shared";
+import { fileInDirectory } from "@scarlet/render";
 import { createProject } from "@scarlet/timeline";
 import { createApp } from "../app.js";
 import { createTask, cancelTask } from "./tasks.js";
@@ -62,7 +63,7 @@ async function cloudScanFixture(env: NodeJS.ProcessEnv = { OPENAI_API_KEY: "test
 it("reads the selected input's existing acoustic words with transcription off", async () => {
   const { ctx, project, media, speaker, client } = await cloudScanFixture({});
   ctx.repos.settings.update({ transcription: { provider: "none", language: "auto" } });
-  const file = await realpath(join(ctx.paths.media(project.id), media.path));
+  const file = fileInDirectory(ctx.paths.media(project.id), media.path)!;
   const request = { mediaId: media.id, from: 0, to: 3 };
   const words = (audioStream?: number) => client.dialogueAcousticWords(project.id, { ...request, audioStream });
   const kept = (audioStream?: number, from = 0, to = 3) => client.dialogueDetections(project.id, {
@@ -101,8 +102,8 @@ it("reads the selected input's existing acoustic words with transcription off", 
 
 it("reads only the kept speech frames, including a word missing from the transcript", async () => {
   const { ctx, project, media, speaker, request } = await cloudScanFixture();
-  const file = join(ctx.paths.media(project.id), media.path);
-  const store = (await EmissionFile.open(await emissionStore(ctx, project.id, await realpath(file)), 5 * SAMPLE_RATE))!;
+  const file = fileInDirectory(ctx.paths.media(project.id), media.path)!;
+  const store = (await EmissionFile.open(await emissionStore(ctx, project.id, file), 5 * SAMPLE_RATE))!;
   try {
     const rows = new Float32Array(store.frames * CLASSES);
     for (const first of [26, 53, 96]) {

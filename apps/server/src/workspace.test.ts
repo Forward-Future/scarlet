@@ -1787,7 +1787,9 @@ it.each(["pause", "trash"])("stops a source encode on %s and resumes its checkpo
   const media = ctx.repos.projects.putMedia(project.id, {
     id: "camera", name: "Camera", path: "camera.mov", kind: "video", duration: 90, previewMode: "on-demand",
   }, "ready");
-  writeFileSync(join(ctx.paths.media(project.id), media.path), "recording");
+  const source = join(ctx.paths.media(project.id), media.path);
+  writeFileSync(source, "recording");
+  const stamp = statSync(source);
   const encode = vi.spyOn(ctx.render, "makeProxy").mockImplementation(async (_, file, options) => {
     writeFileSync(file, "partial");
     await new Promise<void>((_, reject) => options.signal!.addEventListener("abort", () => reject(Error("stopped")), { once: true }));
@@ -1805,6 +1807,8 @@ it.each(["pause", "trash"])("stops a source encode on %s and resumes its checkpo
   const restored = vi.fn<RenderAdapter["makeProxy"]>(async (_, file) => { writeFileSync(file, "complete"); });
   workspace = openWorkspace({ makeProxy: restored });
   await Promise.all(workspace.ctx.pending);
+  // Reopening an already-private library must not change source metadata and invalidate its checkpoint.
+  expect(statSync(source)).toMatchObject({ size: stamp.size, mtimeMs: stamp.mtimeMs, ctimeMs: stamp.ctimeMs });
   expect(restored).not.toHaveBeenCalled();
   if (action === "pause") await api("PATCH", projectsPath(), { mediaPaused: false });
   else await api("POST", projectsPath() + "/restore");

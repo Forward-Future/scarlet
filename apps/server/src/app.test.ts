@@ -17,6 +17,7 @@ import { returnRulesLeftWithQuestions } from "./services/tasks.js";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe("scarlet server", () => {
+  let fixtureDir: string;
   let dataDir: string;
   let seedDir: string;
   let scarlet: ScarletApp;
@@ -61,9 +62,10 @@ describe("scarlet server", () => {
   }
 
   beforeAll(() => {
-    dataDir = mkdtempSync(join(tmpdir(), "scarlet-test-"));
-    seedDir = join(dataDir, "seed-skills");
-    const mp4 = join(dataDir, "test.mp4");
+    fixtureDir = mkdtempSync(join(tmpdir(), "scarlet-test-"));
+    dataDir = join(fixtureDir, "library");
+    seedDir = join(fixtureDir, "seed-skills");
+    const mp4 = join(fixtureDir, "test.mp4");
     execFileSync("ffmpeg", [
       "-hide_banner", "-loglevel", "error", "-y",
       "-f", "lavfi", "-i", "testsrc2=duration=6:size=320x180:rate=30",
@@ -77,7 +79,7 @@ describe("scarlet server", () => {
   afterAll(async () => {
     await scarlet.ctx.close();
     try {
-      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(fixtureDir, { recursive: true, force: true });
     } catch {
       /* Windows may still hold the WAL; the OS temp dir cleans up */
     }
@@ -95,7 +97,7 @@ describe("scarlet server", () => {
       return Response.json({ segments: [] });
     });
     try {
-      await provider.transcribe({ path: join(dataDir, "test.mp4"), tmpDir: dataDir, duration: 6 });
+      await provider.transcribe({ path: join(fixtureDir, "test.mp4"), tmpDir: fixtureDir, duration: 6 });
       expect(request).toHaveBeenCalledTimes(1);
     } finally {
       request.mockRestore();
