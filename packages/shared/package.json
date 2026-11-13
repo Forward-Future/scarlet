@@ -1,6 +1,6 @@
 {
   "name": "@scarlet/shared",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "API contract shared by the Scarlet server, web UI, MCP server and agent host.",
   "license": "MIT",
   "type": "module",

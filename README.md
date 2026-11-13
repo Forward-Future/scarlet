@@ -10,7 +10,7 @@ Scarlet works especially well on dialogue-heavy recordings. Start with an interv
 
 Scarlet renders just the affected section so you can hear what a change sounds like in context. Requested edits go on the working timeline. Suggestions wait for you to apply them. For a first cut of a whole interview, you can jump straight to the cuts the agent flags for a second listen.
 
-[Download the early-access desktop app for macOS or Windows](https://github.com/Forward-Future/scarlet-releases/releases)
+[Download Scarlet for macOS or Windows](https://github.com/Forward-Future/scarlet/releases/latest)
 
 ## Run from source
 

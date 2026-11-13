@@ -358,7 +358,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   const reviewPictures = caps.images && !disabled.has("frame_contact_sheet");
   const authoring = ctx.task?.kind === "skill_from_change" ? ctx.task.context : undefined;
   const server = new McpServer(
-    { name: "scarlet", version: "0.1.0" },
+    { name: "scarlet", version: "0.1.4" },
     {
       instructions: authoring
         ? "Scarlet exposes the approved change and timeline version, communication with the editor, and saving the requested skill."

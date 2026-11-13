@@ -123,7 +123,7 @@ export async function discoverModels(agent: CliAgent, file: string, env: NodeJS.
       proc.child.stdin?.end();
     } else {
       const params = agent === "codex"
-        ? { clientInfo: { name: "scarlet", version: "0.1.0" }, capabilities: { experimentalApi: true } }
+        ? { clientInfo: { name: "scarlet", version: "0.1.4" }, capabilities: { experimentalApi: true } }
         : { protocolVersion: 1, clientCapabilities: {} };
       send({ id: requestId, method: "initialize", params });
     }

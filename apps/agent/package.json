@@ -1,6 +1,6 @@
 {
   "name": "@scarlet/agent",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "Scarlet local agent host: detects installed AI CLIs (Claude Code, Codex, Gemini) and runs Scarlet tasks through them headlessly.",
   "license": "MIT",
   "type": "module",
