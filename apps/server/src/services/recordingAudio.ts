@@ -10,7 +10,12 @@ async function stamp(file: string, audioStream?: number) {
   // Ingestion and inspection can reach the same recording through different spellings of the library path.
   const source = await realpath(file);
   const info = await stat(source);
-  return [source, info.size, info.mtimeMs, info.ctimeMs, audioStream ?? null];
+  return [source, info.size, info.mtimeMs, info.ctimeMs, audioStream ?? null] as const;
+}
+
+function emissionPath(ctx: Paths, projectId: string, identity: readonly unknown[]) {
+  const key = createHash("sha256").update(JSON.stringify([alignmentVersion, identity])).digest("hex");
+  return join(ctx.paths.waveforms(projectId), `emissions-${key.slice(0, 32)}.bin`);
 }
 
 /**
@@ -19,8 +24,13 @@ async function stamp(file: string, audioStream?: number) {
  * recording read and fill the same one.
  */
 export async function emissionStore(ctx: Paths, projectId: string, file: string, audioStream?: number) {
-  const key = createHash("sha256").update(JSON.stringify([alignmentVersion, await stamp(file, audioStream)])).digest("hex");
-  return join(ctx.paths.waveforms(projectId), `emissions-${key.slice(0, 32)}.bin`);
+  return emissionPath(ctx, projectId, await stamp(file, audioStream));
+}
+
+/** Older engines wrote under the import path during transcription and the resolved path during a scan. */
+export async function emissionStorePaths(ctx: Paths, projectId: string, file: string, imported: string, audioStream?: number) {
+  const [source, ...identity] = await stamp(file, audioStream);
+  return [...new Set([source, file, imported])].map(path => emissionPath(ctx, projectId, [path, ...identity]));
 }
 
 /** How long a recording's decode is kept after its last reader, for the next scan page to find it. */
