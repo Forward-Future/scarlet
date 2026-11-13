@@ -9,32 +9,37 @@ type PlayerExample = { aspect: number; markup: string };
 
 /** Measure each rendered player in macOS WebKit. Happy DOM cannot resolve CSS grid, aspect ratios or container units. */
 export function checkPlayerLayout(examples: PlayerExample[]) {
+  // Give each size its own stage so a measurement never depends on reflow after resizing another case.
+  const stages = examples.flatMap(({ aspect, markup }) =>
+    ["tall", "wide"].map(shape =>
+      `<div class="workspace-stage simple-stage" data-shape="${shape}" data-aspect="${aspect}">${markup}</div>`));
   const html = `<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
-    <style>${baseCss}\n${workspaceCss}\n${simpleCss}</style>
-    <div class="workspace-stage simple-stage"></div>
-    ${examples.map(({ aspect, markup }) => `<template data-aspect="${aspect}">${markup}</template>`).join("")}`;
+    <style>${baseCss}\n${workspaceCss}\n${simpleCss}
+      [data-shape] { position: absolute; top: 0; left: 0; }
+      [data-shape=tall] { width: 800px; height: 780px; }
+      [data-shape=wide] { width: 1050px; height: 480px; }
+      [data-measuring] { z-index: 1; }
+    </style>${stages.join("")}`;
   const measure = `(() => {
-    const stage = document.querySelector(".workspace-stage");
     const layouts = [];
-    for (const example of document.querySelectorAll("template")) {
-      stage.replaceChildren(example.content.cloneNode(true));
-      for (const [width, height, wide] of [[800, 780, false], [1050, 480, true]]) {
-        stage.style.width = width + "px";
-        stage.style.height = height + "px";
-        const monitorElement = stage.querySelector(".watch-monitor");
-        const rect = selector => stage.querySelector(selector).getBoundingClientRect();
-        const viewport = rect(".watch-viewport"), monitor = rect(".watch-monitor"), picture = rect(".video-frame");
-        const insetX = picture.left - monitor.left, insetY = picture.top - monitor.top;
-        // Hit the letterbox or pillarbox midway between the picture and the edge of the monitor.
-        const x = insetX > insetY ? monitor.left + insetX / 2 : monitor.left + monitor.width / 2;
-        const y = insetX > insetY ? monitor.top + monitor.height / 2 : monitor.top + insetY / 2;
-        layouts.push({ aspect: Number(example.dataset.aspect), width, height, wide,
-          viewport: viewport.toJSON(), monitor: monitor.toJSON(), picture: picture.toJSON(),
-          surface: rect(".video-surface").toJSON(),
-          background: getComputedStyle(monitorElement).backgroundColor, timelineTop: rect(".cut-transport").top,
-          playback: rect(".monitor-playback").toJSON(), controls: rect(".monitor-controls").toJSON(),
-          surroundTargetsVideo: !!document.elementFromPoint(x, y)?.closest(".video-surface") });
-      }
+    for (const stage of document.querySelectorAll("[data-shape]")) {
+      stage.setAttribute("data-measuring", "");
+      const { width, height } = stage.getBoundingClientRect();
+      const monitorElement = stage.querySelector(".watch-monitor");
+      const surfaceElement = monitorElement.querySelector(".video-surface");
+      const rect = selector => stage.querySelector(selector).getBoundingClientRect();
+      const viewport = rect(".watch-viewport"), monitor = rect(".watch-monitor"), picture = rect(".video-frame");
+      const insetX = picture.left - monitor.left, insetY = picture.top - monitor.top;
+      // Hit the letterbox or pillarbox midway between the picture and the edge of the monitor.
+      const x = insetX > insetY ? monitor.left + insetX / 2 : monitor.left + monitor.width / 2;
+      const y = insetX > insetY ? monitor.top + monitor.height / 2 : monitor.top + insetY / 2;
+      layouts.push({ aspect: Number(stage.dataset.aspect), width, height, wide: stage.dataset.shape === "wide",
+        viewport: viewport.toJSON(), monitor: monitor.toJSON(), picture: picture.toJSON(),
+        surface: rect(".video-surface").toJSON(),
+        background: getComputedStyle(monitorElement).backgroundColor, timelineTop: rect(".cut-transport").top,
+        playback: rect(".monitor-playback").toJSON(), controls: rect(".monitor-controls").toJSON(),
+        surroundTargetsVideo: document.elementFromPoint(x, y)?.closest(".video-surface") === surfaceElement });
+      stage.removeAttribute("data-measuring");
     }
     return layouts;
   })()`;
@@ -46,7 +51,7 @@ export function checkPlayerLayout(examples: PlayerExample[]) {
   expect(layouts).toHaveLength(examples.length * 2);
   for (const layout of layouts) {
     const { aspect, width, height, viewport, monitor, picture, surface } = layout;
-    const context = `aspect ${aspect} in a ${width}×${height} stage`;
+    const context = `aspect ${aspect} in a ${width}×${height} stage (viewport ${viewport.width}×${viewport.height})`;
     // Layout rounds fractional CSS pixels. The picture fits inside the monitor border.
     const near = (actual: number, expected: number, dimension: string) =>
       expect(Math.abs(actual - expected), `${context}: ${dimension} (${actual}, expected ${expected})`).toBeLessThanOrEqual(2);
