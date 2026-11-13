@@ -59,6 +59,19 @@ export interface AlignRequest { measure?: TimeRange[]; groups: Array<{ start: nu
 export interface EmissionSource { file: string; offset?: number; duration?: number; wav: () => Promise<string> }
 export type AlignResponse = Array<Array<WordTiming | null>>;
 
+export interface AlignmentCheckpoint {
+  /** End of the last confidently placed word in source seconds. */
+  through: number;
+  /** First word still to check, in the saved transcript's flat word order. Older transcripts kept only `through`. */
+  nextWord?: number;
+  /** Share of the whole alignment covered by completed turns. */
+  fraction?: number;
+  /** All turns are finished. A local recording may still need its reread of gaps in speech. */
+  complete?: boolean;
+}
+
+type AlignmentTurn = (segments: TranscriptSegment[], through: number, checkpoint: AlignmentCheckpoint) => void;
+
 /** Whisper's English codes and names; an unknown language is attempted and rejected per run when unspellable. */
 export function alignsLanguage(language?: string) {
   return !language?.trim() || /^en(glish)?([-_].*)?$/i.test(language.trim());
@@ -90,27 +103,46 @@ export class WordAligner {
   /** `wav`: 16 kHz mono PCM (as extractWav writes it) in the same time base as `segments`. With `emissions` it is
    * not read: the model's output comes from the recording's store, which infers what it lacks from its own decode. */
   async align(wav: string, segments: TranscriptSegment[], opts: { language?: string; signal: AbortSignal; lane?: { lane: AudioLane; work: AudioWork };
-    emissions?: EmissionSource;
+    emissions?: EmissionSource; resume?: AlignmentCheckpoint;
     /** Asked before each turn: something this alignment should let finish first, or nothing. */
     hold?: () => Promise<unknown> | undefined;
-    onProgress?: (fraction: number) => void; onTurn?: (segments: TranscriptSegment[], through: number) => void;
+    onProgress?: (fraction: number) => void; onTurn?: AlignmentTurn;
     onPlaced?: (placed: number, words: number) => void }) {
     opts.signal.throwIfAborted();
     if (!alignsLanguage(opts.language)) return segments;
-    const groups = alignmentGroups(segments);
+    const words = segments.flatMap(s => s.words);
+    const { resume } = opts;
+    const through = resume?.through ?? 0;
+    const cursor = resume?.nextWord;
+    const hasCursor = cursor !== undefined && Number.isInteger(cursor) && cursor >= 0 && cursor <= words.length;
+    // The saved snapshot fixes every word up to its last confident placement. Later unchecked times, including
+    // estimates from a completed turn, can still be fitted into the gap when the next confident word is found.
+    let fixedPrefix = 0;
+    if (through > 0) {
+      const limit = hasCursor ? cursor : words.length;
+      while (fixedPrefix < limit && words[fixedPrefix]!.end <= through) {
+        const end = words[fixedPrefix++]!.end;
+        // On older snapshots an unchecked estimate can have been clipped to the exact end of that word.
+        if (end === through) break;
+      }
+    }
+    const nextWord = hasCursor ? cursor : fixedPrefix;
+    const groups = alignmentGroups(segments, undefined, nextWord);
     if (!groups.some(g => groupLabels(g.words).spelled)) return segments;
     const timings: Array<WordTiming | undefined> = [];
-    let after: number | undefined;
+    let after = through > 0 ? through : undefined;
     // Progress is how far into the speech alignment has reached. A turn covers up to five minutes of speech,
     // so its worker also reports each 30 s window it finishes.
-    const span = groups.at(-1)!.end - groups[0]!.start;
-    const reached = (index: number) => span <= 0 ? 0 : (groups[index]!.start - groups[0]!.start) / span;
+    const start = Math.min(segments.find(s => s.words.length)!.start, words[0]!.start);
+    const span = groups.at(-1)!.end - start;
+    const reached = (index: number) => span <= 0 ? 0 : (groups[index]!.start - start) / span;
     let reported = 0;
     const report = (fraction: number) => {
-      if (fraction <= reported) return;
-      reported = fraction;
-      opts.onProgress?.(Math.min(1, fraction));
+      if (!Number.isFinite(fraction) || fraction <= reported) return;
+      reported = Math.min(1, fraction);
+      opts.onProgress?.(reported);
     };
+    if (nextWord > 0) report(resume?.fraction ?? reached(0));
     for (let first = 0; first < groups.length;) {
       await opts.hold?.();
       opts.signal.throwIfAborted();
@@ -146,10 +178,13 @@ export class WordAligner {
       }));
       first = last;
       report(first >= groups.length ? 1 : reached(first));
-      if (first < groups.length && opts.onTurn && after !== undefined) opts.onTurn(applyTimings(segments, timings), after);
+      if (first < groups.length && opts.onTurn) {
+        const checkpoint = { through: after ?? 0, nextWord: groups[first]!.index[0]!, fraction: reported };
+        opts.onTurn(applyTimings(segments, timings, MIN_SCORE, fixedPrefix), checkpoint.through, checkpoint);
+      }
     }
-    opts.onPlaced?.(timings.filter(t => t && t.score >= MIN_SCORE && t.end >= t.start).length, segments.reduce((sum, s) => sum + s.words.length, 0));
-    return applyTimings(segments, timings);
+    opts.onPlaced?.(timings.filter(t => t && t.score >= MIN_SCORE && t.end >= t.start).length, words.length - nextWord);
+    return applyTimings(segments, timings, MIN_SCORE, fixedPrefix);
   }
 }
 
@@ -172,8 +207,8 @@ export function measureRecordingWords(ctx: { paths: { root: string } }, mediaId:
  * aligner model cannot be prepared or the worker fails; callers may keep the original segments.
  */
 export function alignWords(ctx: { paths: { root: string } }, wav: string, segments: TranscriptSegment[],
-  opts: { language?: string; signal: AbortSignal; work?: AudioWork; emissions?: EmissionSource; hold?: () => Promise<unknown> | undefined;
-    onProgress?: (fraction: number) => void; onTurn?: (segments: TranscriptSegment[], through: number) => void;
+  opts: { language?: string; signal: AbortSignal; work?: AudioWork; emissions?: EmissionSource; resume?: AlignmentCheckpoint; hold?: () => Promise<unknown> | undefined;
+    onProgress?: (fraction: number) => void; onTurn?: AlignmentTurn;
     onPlaced?: (placed: number, words: number) => void }): Promise<TranscriptSegment[]> {
   const { work, ...rest } = opts;
   return recordingAligner(ctx).align(wav, segments, { ...rest, ...(work && { lane: { lane: audioLane(ctx), work } }) });
@@ -187,14 +222,17 @@ export function alignWords(ctx: { paths: { root: string } }, wav: string, segmen
 export async function alignTranscript(ctx: { paths: { root: string; tmp: string }; log(message: string): void },
   input: { source: string; wav?: string; language?: string; segments: TranscriptSegment[]; signal: AbortSignal; work?: AudioWork;
     /** Where this recording's emissions are kept, so its scan pages and a later transcript reuse them. */
-    emissions?: string;
+    emissions?: string; resume?: AlignmentCheckpoint;
     /** Asked before each turn: something this alignment should let finish first, or nothing. */
     hold?: () => Promise<unknown> | undefined;
-    onProgress?: (fraction: number) => void; onTurn?: (segments: TranscriptSegment[], through: number) => void }) {
+    onProgress?: (fraction: number) => void; onTurn?: AlignmentTurn }) {
   const { source, language, segments, signal, work, onProgress, hold } = input;
   if (!alignsLanguage(language) || !segments.some(s => s.words.length)) return segments;
   let placed = segments;
-  const onTurn = input.onTurn && ((soFar: TranscriptSegment[], through: number) => { placed = soFar; input.onTurn!(soFar, through); });
+  const onTurn: AlignmentTurn | undefined = input.onTurn && ((soFar, through, checkpoint) => {
+    placed = soFar;
+    input.onTurn!(soFar, through, checkpoint);
+  });
   const wav = input.wav ?? join(ctx.paths.tmp, `${randomUUID()}.wav`);
   const started = Date.now();
   const onPlaced = (count: number, words: number) =>
@@ -202,7 +240,7 @@ export async function alignTranscript(ctx: { paths: { root: string; tmp: string 
   try {
     if (!input.wav) await extractWav(source, wav, { signal });
     const emissions = input.emissions === undefined ? undefined : { file: input.emissions, wav: async () => wav };
-    return await alignWords(ctx, wav, segments, { language, signal, work, emissions, hold, onProgress, onTurn, onPlaced });
+    return await alignWords(ctx, wav, segments, { language, signal, work, emissions, resume: input.resume, hold, onProgress, onTurn, onPlaced });
   } catch (error) {
     signal.throwIfAborted();
     ctx.log(`[align] ${basename(source)}: ${(error as Error).message}`);

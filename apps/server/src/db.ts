@@ -444,6 +444,20 @@ export function openDb(path: string): Db {
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
   migrate(db);
+  // These private in-flight results can coexist with a newer library schema used by another Scarlet build.
+  db.exec(`CREATE TABLE IF NOT EXISTS transcription_work (
+    media_id TEXT PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
+    task_id TEXT UNIQUE NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    identity TEXT, alignment TEXT, transcript_id TEXT, result TEXT
+  );
+  CREATE TABLE IF NOT EXISTS transcription_chunks (
+    media_id TEXT NOT NULL REFERENCES transcription_work(media_id) ON DELETE CASCADE,
+    through REAL NOT NULL, fraction REAL, result TEXT NOT NULL, PRIMARY KEY (media_id, through)
+  ) WITHOUT ROWID;
+  CREATE TRIGGER IF NOT EXISTS transcription_work_finished AFTER UPDATE OF state ON tasks
+    WHEN NEW.kind = 'transcribe' AND (NEW.state IN ('done','cancelled') OR
+      (NEW.state = 'failed' AND json_extract(NEW.json, '$.interrupted') IS NOT 1))
+    BEGIN DELETE FROM transcription_work WHERE task_id = NEW.id; END;`);
   ensureReadIndexes(db);
   return db;
 }
