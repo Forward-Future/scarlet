@@ -35,7 +35,15 @@ for (const [target, dmgArch, arch, name] of [
     const { root, release, dest, file, tool } = fixture(t, target);
     const dmg = join(release, "bundle/dmg", `Scarlet_0.1.4_${dmgArch}.dmg`);
     file(dmg);
-    tool("hdiutil", 'if [ "$1" = attach ]; then mkdir -p "$6/Scarlet.app/Contents/MacOS"; cp "$7" "$6/Scarlet.app/Contents/Info.plist"; else rm -r "$2/Scarlet.app"; fi');
+    tool("hdiutil", `if [ "$1" = attach ]; then
+      app="$6/Scarlet.app/Contents"
+      mkdir -p "$app/MacOS" "$app/Resources/licenses/runtime"
+      cp "$7" "$app/Info.plist"
+      cp "$7" "$app/Resources/licenses/uhm.txt"
+      for name in node javascript rust whisper-audio-dependencies sherpa-dependencies speaker-onnxruntime-1.28.2-third-party; do
+        cp "$7" "$app/Resources/licenses/runtime/$name.txt"
+      done
+    else rm -r "$2/Scarlet.app"; fi`);
     tool("plutil", 'cat "$6"');
     tool("lipo", `echo ${arch}`);
     verifyDesktopPackage(target, "0.1.4", dest, root);
@@ -57,12 +65,12 @@ test("checks Windows app and both installer resources before staging either inst
   const setup = join(release, "bundle/nsis/Scarlet_0.1.4_x64-setup.exe");
   const msi = join(release, "bundle/msi/Scarlet_0.1.4_x64_en-US.msi");
   tool("powershell.exe", `case "$SCARLET_VERIFY_FILE" in
-    *.msi) case "$4" in *OpenDatabase*ProductVersion*) ;; *) exit 2;; esac; printf '{"version":"%s","names":["app.exe"]}' "$(cat "$SCARLET_VERIFY_FILE")"; exit 0;;
+    *.msi) case "$4" in *OpenDatabase*ProductVersion*) ;; *) exit 2;; esac; printf '{"version":"%s","names":["node.txt","JAVASC~1.TXT|javascript.txt","rust.txt","whisper-audio-dependencies.txt","sherpa-dependencies.txt","speaker-onnxruntime-1.28.2-third-party.txt","uhm.txt","ThirdPartyNotices.txt","LICENSE-CODE.txt"]}' "$(cat "$SCARLET_VERIFY_FILE")"; exit 0;;
     *.exe) case "$4" in *GetVersionInfo*ProductVersion*) ;; *) exit 2;; esac;;
     *) exit 2;;
   esac
   cat "$SCARLET_VERIFY_FILE"`);
-  tool("7z", 'echo "Path = scarlet-desktop.exe"');
+  tool("7z", 'for file in scarlet-desktop.exe node.txt javascript.txt rust.txt whisper-audio-dependencies.txt sherpa-dependencies.txt speaker-onnxruntime-1.28.2-third-party.txt uhm.txt ThirdPartyNotices.txt LICENSE-CODE.txt; do echo "Path = $file"; done');
   file(app, "0.1.4.0");
   file(setup);
   file(msi);
@@ -73,6 +81,8 @@ test("checks Windows app and both installer resources before staging either inst
     assert.throws(() => verifyDesktopPackage(target, "0.1.4", dest, root), /expected 0.1.4/);
     file(path);
   }
+  tool("7z", 'echo "Path = scarlet-desktop.exe"');
+  assert.throws(() => verifyDesktopPackage(target, "0.1.4", dest, root), /missing node.txt/);
   tool("7z", 'printf "Path = scarlet-desktop.exe\\nPath = ffmpeg.exe\\n"');
   assert.throws(() => verifyDesktopPackage(target, "0.1.4", dest, root), /unexpectedly bundles ffmpeg.exe/);
   rmSync(msi);

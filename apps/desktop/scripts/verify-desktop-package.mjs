@@ -33,6 +33,18 @@ function requireExternalMediaTools(names, description) {
   if (media) throw new Error(`${description} unexpectedly bundles ${media}`);
 }
 
+const runtimeNotices = ["node.txt", "javascript.txt", "rust.txt", "whisper-audio-dependencies.txt",
+  "sherpa-dependencies.txt", "speaker-onnxruntime-1.28.2-third-party.txt"];
+
+function verifyWindowsPayload(names, description) {
+  requireExternalMediaTools(names, description);
+  // MSI returns short|long file names; NSIS returns paths.
+  const files = new Set(names.map(name => name.split(/[\\/|]/).pop().toLowerCase()));
+  for (const required of [...runtimeNotices, "uhm.txt", "ThirdPartyNotices.txt", "LICENSE-CODE.txt"]) {
+    if (!files.has(required.toLowerCase())) throw new Error(`${description} is missing ${required}`);
+  }
+}
+
 function verifyDmg(dmg, productName, expected, arch) {
   requireFile(dmg);
   const mount = mkdtempSync(join(tmpdir(), "scarlet-dmg-"));
@@ -42,6 +54,9 @@ function verifyDmg(dmg, productName, expected, arch) {
     mounted = true;
     const contents = join(mount, `${productName}.app`, "Contents");
     requireExternalMediaTools(readdirSync(join(contents, "MacOS")), dmg);
+    const licenses = join(contents, "Resources", "licenses");
+    requireFile(join(licenses, "uhm.txt"));
+    for (const name of runtimeNotices) requireFile(join(licenses, "runtime", name));
     const version = output("plutil", ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", join(contents, "Info.plist")]);
     checkVersion(dmg, version, expected);
     const slices = output("lipo", ["-archs", join(contents, "MacOS", "scarlet-desktop")]).split(/\s+/);
@@ -74,7 +89,7 @@ function windowsVersion(file, msi = false) {
     { ...process.env, SCARLET_VERIFY_FILE: file });
   if (!msi) return result;
   const { version, names } = JSON.parse(result);
-  requireExternalMediaTools(names, file);
+  verifyWindowsPayload(names, file);
   return version;
 }
 
@@ -97,7 +112,7 @@ export function verifyDesktopPackage(target, expected, destination, root = tauri
     const listing = output("7z", ["l", "-slt", "-ba", setup]);
     const names = [...listing.matchAll(/^Path = (.+)$/gm)].map(match => match[1].trim());
     if (!names.some(name => name.toLowerCase().endsWith("scarlet-desktop.exe"))) throw new Error(`Could not inspect installer payload: ${setup}`);
-    requireExternalMediaTools(names, setup);
+    verifyWindowsPayload(names, setup);
     packages.set(setup, `${productName}-${expected}-Windows-x64-Setup.exe`);
     packages.set(msi, `${productName}-${expected}-Windows-x64.msi`);
   } else {

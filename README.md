@@ -51,7 +51,7 @@ Packaged releases report anonymous usage, edit review decisions, and task and ex
 
 ## Contributing
 
-Bug reports and pull requests are welcome. For a bug, include your operating system, the steps to reproduce it, and what you expected to see or hear. Use generated media for reproductions so your footage and transcripts stay private. [Open an issue](https://github.com/Forward-Future/scarlet/issues)
+Bug reports and pull requests are welcome. For a bug, include your operating system, the steps to reproduce it, and what you expected to see or hear. Use generated media for reproductions so your footage and transcripts stay private. [Open an issue](https://github.com/Forward-Future/scarlet/issues) · [Contributing guide](CONTRIBUTING.md) · [Code of conduct](CODE_OF_CONDUCT.md)
 
 - **Working on the desktop app?** Find the repository layout, test commands, packaging steps and log guide in the [development guide](docs/development.md).
 - **Working on how the agent edits?** Start with the [agent design guide](docs/AI-AGENTS.md) and the [editing evaluations](evals/README.md).

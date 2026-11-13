@@ -121,9 +121,8 @@ jobs:
         if: runner.os == 'macOS'
         run: python3 -B apps/desktop/scripts/test_update_macos.py
 
-      - name: Test engine smoke script
-        if: runner.os == 'macOS'
-        run: node --test apps/desktop/scripts/smoke-engine.test.mjs
+      - name: Test installer notices and engine smoke script
+        run: node --test apps/desktop/scripts/collect-public-notices.test.mjs apps/desktop/scripts/smoke-engine.test.mjs
 
       - name: Build installers
         uses: tauri-apps/tauri-action@v0
