@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { smokeEnvironment, startSmokeEngine } from "./smoke-engine-startup.mjs";
 import { earlyAccessId } from "./early-access-product.mjs";
 
-const [mode, engine, expectedFile] = process.argv.slice(2);
+const [mode, engine, expectedFile, installedVersion] = process.argv.slice(2);
 assert.ok(["seed", "verify"].includes(mode) && engine && expectedFile);
 const appData = process.platform === "win32" ? process.env.APPDATA : join(process.env.HOME, "Library", "Application Support");
 const library = join(appData, earlyAccessId);
@@ -14,7 +14,12 @@ if (process.platform === "win32") {
   // The old engine uses Windows PowerShell's built-in New-Object cmdlet.
   env.PSModulePath = join(env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "Modules");
 }
-const { child, ready, exited } = await startSmokeEngine(resolve(engine), library, env);
+// The released 0.1.3 Windows engine starts several Windows PowerShell processes for ACLs
+// in a fresh profile. Allow that historical build to prepare the fixture for the upgrade.
+const historicalWindows = process.platform === "win32" && installedVersion === "0.1.3";
+const started = Date.now();
+const { child, ready, exited } = await startSmokeEngine(resolve(engine), library, env, historicalWindows ? 240_000 : undefined);
+console.log(`Installed engine ready after ${((Date.now() - started) / 1000).toFixed(1)} seconds.`);
 
 async function api(method, path, body) {
   const response = await fetch(ready.url + "/api" + path, {
