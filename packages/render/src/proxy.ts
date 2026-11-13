@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { DEFAULT_PREVIEW_HEIGHT } from "@scarlet/timeline";
 import { FfmpegError, LOCAL_MEDIA_INPUT, failureReason, runFfmpeg, threadedAvcPreview } from "./exec.js";
 import { probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
-import { encoderArgs, resolveVideoEncoder, type HwAccel } from "./render.js";
+import { resolveEncoding, softwareEncoder, type HwAccel, type VideoEncoder } from "./encoder.js";
 
 export interface ProxyOptions {
   /** Directory keyed by source identity and proxy format. */
@@ -66,7 +66,8 @@ function proxySize(probe: ProbeResult, height: number) {
   return { width: Math.max(2, 2 * Math.round((probe.width * h) / probe.height / 2)), height: h };
 }
 
-function videoArgs(probe: ProbeResult, height: number, encoder: string, opts: ProxyOptions, hardwareDecode: boolean): { input: string[]; output: string[] } {
+function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, opts: ProxyOptions, hardwareDecode: boolean): { input: string[]; output: string[] } {
+  const encoder = encoding.name;
   const scale = `w=-2:h='2*trunc(min(${height},ih)/2)'`;
   // Every half second is a keyframe so a seek decodes at most 15 pictures.
   const keyframes = ["-force_key_frames", "expr:gte(t,n_forced*0.5)"];
@@ -85,7 +86,7 @@ function videoArgs(probe: ProbeResult, height: number, encoder: string, opts: Pr
   const upright = storedAsShown(probe);
   // Not every hardware encoder honours forced keyframes, but all of them bound the GOP.
   const gop = Math.max(1, Math.round((opts.fps ?? (probe.fps || 30)) / 2));
-  const encode = ["-c:v", encoder, ...encoderArgs(encoder, "preview"), ...keyframes, ...clock, "-g", String(gop),
+  const encode = ["-c:v", encoder, ...encoding.args, ...keyframes, ...clock, "-g", String(gop),
     // A forced I-frame is a seek point only when it is also an IDR frame.
     ...(encoder === "h264_nvenc" ? ["-forced-idr", "1"] : encoder === "h264_qsv" ? ["-forced_idr", "1"] : []), "-profile:v", "high"];
   // Keep 4K pictures on the GPU from decode to encode; only the small proxy is written out.
@@ -110,10 +111,12 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
   const height = Math.max(2, Math.round(opts.height ?? DEFAULT_PREVIEW_HEIGHT));
   const hasVideo = probe.hasVideo && !probe.isStillImage;
   const warnings: string[] = [];
-  const encoder = hasVideo && probe.width && probe.height
-    ? await resolveVideoEncoder(opts.hwaccel ?? "none", opts.ffmpegPath, proxySize(probe, height), reason => warnings.push(reason), "preview")
-    : "libx264";
-  const video = hasVideo ? videoArgs(probe, height, encoder, opts, hardwareDecode) : undefined;
+  const encoding = hasVideo && probe.width && probe.height
+    ? await resolveEncoding(opts.hwaccel, opts.ffmpegPath, { ...proxySize(probe, height), fps: opts.fps ?? (probe.fps || 30) },
+      "preview", reason => warnings.push(reason))
+    : softwareEncoder("preview");
+  const encoder = encoding.name;
+  const video = hasVideo ? videoArgs(probe, height, encoding, opts, hardwareDecode) : undefined;
 
   async function retry(error: unknown): Promise<ProxyResult> {
     if (encoder === "libx264" || !(error instanceof FfmpegError) || opts.signal?.aborted) throw error;
@@ -134,7 +137,7 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
   if (opts.checkpointDir && !opts.range && video && pictureDuration > 30 && probe.videoStartPts === 0 && probe.videoStart === 0) {
     // Align each boundary to a picture frame. Mux audio from the original once
     // so independent AAC encodes cannot introduce gaps at those boundaries.
-    const dir = join(opts.checkpointDir, encoder + "-" + height);
+    const dir = join(opts.checkpointDir, encoding.cacheKey + "-" + height);
     await mkdir(dir, { recursive: true });
     const span = checkpointSpan(probe.fps);
     // The final pass re-reads the original for its audio and rewrites the file, so it keeps a share of the bar.

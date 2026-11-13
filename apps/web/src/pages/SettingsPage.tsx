@@ -221,7 +221,7 @@ function ServerSettingsForm({ section }: { section: "general" | "advanced" }) {
             <Field label="Concurrency" htmlFor="rd-conc">
               <input id="rd-conc" type="number" min="1" max="16" className="field" value={typed.concurrency ?? rd.concurrency} onChange={(e) => holdTyped("concurrency", e.target.value)} />
             </Field>
-            <Field label="Hardware acceleration" htmlFor="rd-hw">
+            <Field label="Hardware acceleration" htmlFor="rd-hw" hint="Exports always use hardware encoding when available.">
               <PreferenceSelect id="rd-hw" value={rd.hwaccel}
                 options={(["auto", "none", "nvenc", "qsv", "videotoolbox"] as const).map(value => ({ value, label: value }))}
                 onChange={value => set("render", { ...rd, hwaccel: value })} />
