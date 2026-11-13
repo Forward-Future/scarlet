@@ -1,43 +1,82 @@
 name: Desktop
 
-# Builds the Scarlet desktop app (Tauri 2) for Windows, Apple Silicon Macs and
-# Intel Macs, each on its own architecture so the engine and ffmpeg are native.
-# Every build is then checked for real: the bundled engine ingests and renders
-# a clip, and on macOS the app is launched and screenshotted.
-# Protected `v*` tags publish a draft release; other runs produce unsigned check artifacts.
-
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
   pull_request:
     paths:
       - "apps/desktop/**"
       - "apps/server/**"
+      - "apps/agent/**"
       - "apps/web/**"
       - "packages/**"
+      - "skills/**"
+      - "integrations/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
       - ".github/workflows/desktop*.yml"
+      - ".github/scripts/*desktop-release*"
       - ".github/tests/desktop_permissions_test.rb"
-
-concurrency:
-  group: desktop-${{ github.ref }}
-  # Desktop builds are long; a newer push waits for the running one instead of cancelling it.
-  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  check:
-    if: github.event_name != 'push' || !github.ref_protected
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.number.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test release tooling
+        run: |
+          ruby .github/tests/desktop_permissions_test.rb
+          node --test apps/desktop/scripts/release-version.test.mjs apps/desktop/scripts/verify-desktop-package.test.mjs .github/scripts/publish-desktop-release.test.mjs
+      - name: Resolve the version for this commit
+        id: number
+        run: |
+          node apps/desktop/scripts/release-version.mjs check
+          version=$(node apps/desktop/scripts/release-version.mjs for-commit)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
     uses: ./.github/workflows/desktop-build.yml
     with:
-      release: false
+      release: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      version: ${{ needs.version.outputs.version }}
 
-  release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.ref_protected
-    uses: ./.github/workflows/desktop-build.yml
+  publish:
+    needs: [version, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-    with:
-      release: true
+    # Each push has its own version. Only repeat attempts for that version share a lock.
+    concurrency:
+      group: publish-desktop-${{ needs.version.outputs.version }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: scarlet-desktop-*
+          merge-multiple: true
+          path: installers
+      - name: Publish the verified macOS and Windows installers together
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: node .github/scripts/publish-desktop-release.mjs "$RELEASE_VERSION" installers
