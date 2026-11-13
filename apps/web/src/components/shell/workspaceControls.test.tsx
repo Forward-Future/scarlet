@@ -189,6 +189,7 @@ it("chooses a preference with the keyboard and saves it", async () => {
 });
 
 it("shows the desktop build version and telemetry disclosure under About", async () => {
+  vi.spyOn(api, "settings").mockResolvedValue({ settings: buildDb().settings });
   await mount(<SettingsPage />, "/settings/skills");
   await click(el.querySelector('a[href="/settings#about"]')!);
   const about = el.querySelector('section[aria-label="About Scarlet"]')!;

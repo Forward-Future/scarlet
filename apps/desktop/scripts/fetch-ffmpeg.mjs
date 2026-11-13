@@ -1,10 +1,5 @@
-// Downloads the static ffmpeg/ffprobe builds bundled with the desktop app and
-// puts them where Tauri expects sidecars: src-tauri/binaries/<name>-<triple>[.exe].
-// The installer places them beside the engine, which looks there first.
-//
-// Builds are pinned and checked against SHA-256 so every release ships the
-// same, native binaries: x86_64 for Windows, arm64 for Apple Silicon (no
-// Rosetta needed), x86_64 for Intel Macs.
+// Fetch checksum-pinned media tools for local development, local updaters and CI.
+// Public installers use a separately installed FFmpeg and FFprobe.
 //
 // Usage: node scripts/fetch-ffmpeg.mjs [--target <rust triple>] [--force]
 //        (default target: this machine)
@@ -75,9 +70,9 @@ async function installed() {
     return false;
   }
 }
-if (args.includes("--verify-only")) {
+if (args.includes("--verify-only") || args.includes("--verify-engine")) {
   const engine = join(binDir, `scarlet-engine-${target}${ext}`);
-  if (!await installed()) throw new Error(`Run pnpm desktop:ffmpeg for ${target} before packaging`);
+  if (args.includes("--verify-only") && !await installed()) throw new Error(`Run pnpm desktop:ffmpeg for ${target} before packaging`);
   if (!existsSync(engine) || !statSync(engine).isFile() || !statSync(engine).size) throw new Error("Build the engine sidecar before packaging");
   process.exit(0);
 }

@@ -10,9 +10,7 @@ Share one native preview across chats. Before launching, check for a running dev
 
 The React code in `apps/web` is the embedded Tauri renderer. Vite is its development asset server, and `apps/server` is the headless engine. Neither is a user-facing way to launch Scarlet.
 
-On this Mac, install regular releases at `/Applications/Scarlet.app` and use that path for Dock shortcuts and handoffs. When updating Scarlet, replace the app at that path. After verifying a local build, eject its installer image and clean up staging copies, launchable backups, and superseded installers created by the task. Give intentional review builds a distinct name and bundle identifier, and preserve them while in use.
-
-The local main updater manages that installation while enabled. Let it install verified commits from GitHub `main` after regular Scarlet quits. Use the shared native preview to try uncommitted changes. Create a separate review app only when the user explicitly requests a standalone build or the task requires testing the packaged app itself.
+Use the shared native preview for uncommitted changes. Create a standalone review app when the task requires testing a packaged build or the editor asks for one. Give it a distinct name and bundle identifier.
 
 Prefer hardware acceleration for local transcription and playback caching. Honor explicit hardware settings and keep a working CPU fallback. Verify device selection and word timings or playback correctness on a separate fixture when changing these paths.
 

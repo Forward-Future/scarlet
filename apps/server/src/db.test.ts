@@ -157,6 +157,29 @@ it("doesn't run a migration again when another engine applied it after the versi
   second.close();
 });
 
+it("preserves a telemetry opt-out across upgrades and later settings changes from an older engine", () => {
+  const file = join(directory, "telemetry.db");
+  const old = new Db(file);
+  migrate(old, 26); // Last public schema before the Settings switch.
+  const previous = { transcription: {}, noteCleanup: {}, render: {} };
+  old.prepare("INSERT INTO settings (id, json) VALUES (1, ?)").run(JSON.stringify(previous));
+  const library = openDb(file);
+  try {
+    const { settings } = createRepos(library);
+    expect(settings.telemetryPreference()).toEqual({ enabled: true, revision: 0 });
+    settings.update({ telemetryEnabled: false });
+    // Older releases save the entire settings row, including only keys recognized by their schema.
+    old.prepare("UPDATE settings SET json = ? WHERE id = 1").run(JSON.stringify({ ...previous, render: { concurrency: 3 } }));
+    expect(settings.telemetryPreference()).toEqual({ enabled: false, revision: 1 });
+    expect(settings.get()).toMatchObject({ telemetryEnabled: false, render: { concurrency: 3 } });
+    settings.update({ telemetryEnabled: true });
+    expect(settings.telemetryPreference()).toEqual({ enabled: true, revision: 2 });
+  } finally {
+    library.close();
+    old.close();
+  }
+});
+
 it("backfills only successful transcriptions and preserves them across old writers updating the same transcript", () => {
   const library = new Db(":memory:");
   try {

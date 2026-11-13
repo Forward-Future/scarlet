@@ -42,8 +42,8 @@ function startupProgress(data) {
 export async function startSmokeEngine(engine, work, env) {
   const data = join(work, "data");
   const cwd = join(work, "work");
-  mkdirSync(cwd, { mode: 0o700 });
-  mkdirSync(data, { mode: 0o755 });
+  mkdirSync(cwd, { mode: 0o700, recursive: true });
+  mkdirSync(data, { mode: 0o755, recursive: true });
   const child = spawn(engine, ["serve", "--solo", "--data", data, "--port", "0"], {
     cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
   });
@@ -54,16 +54,18 @@ export async function startSmokeEngine(engine, work, env) {
     child.once("exit", (code, signal) => res({ code, signal }));
   });
   let timer;
+  let standalone = false;
   try {
     const ready = await Promise.race([
       new Promise((res, rej) => {
         lines.on("line", line => {
+          if (line.startsWith("Scarlet engine listening on ")) standalone = true;
           const match = /^\s*SCARLET_READY\s+(.+)$/.exec(line);
           if (!match) return;
           try { res(JSON.parse(match[1])); } catch { rej(new Error("Invalid SCARLET_READY payload")); }
         });
         timer = setTimeout(() => {
-          rej(new Error(`Engine did not print SCARLET_READY within 60 s. Test library: ${startupProgress(data)}.`));
+          rej(new Error(`Engine did not print SCARLET_READY within 60 s. Standalone startup banner: ${standalone}. Test library: ${startupProgress(data)}.`));
         }, 60_000);
       }),
       exited.then(({ code, signal }) => { throw new Error(`Engine exited before SCARLET_READY (${signal ?? code})`); }),
