@@ -268,3 +268,14 @@ test("a Windows main updater recovers a partial stamp and stages the per-commit 
   assert.equal(JSON.parse(readFileSync(join(cache, "ready.json"), "utf8")).revision, rev);
   assert.equal(readFileSync(join(cache, "ready-setup.exe"), "utf8"), "verified installer");
 });
+
+test("Early Access accepts explicit Windows-compatible upgrade versions independently of stable numbering", () => {
+  for (const version of ["0.1.4", "1.0.0", "255.255.65535"]) {
+    const result = command(root, "early-access", version);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), version);
+  }
+  for (const invalid of ["", "0.1.3", "0.0.9", "0.01.4", "0.1.4-early-access.1", "256.0.0", "0.256.1", "0.1.65536"]) {
+    assert.notEqual(command(root, "early-access", invalid).status, 0, invalid);
+  }
+});

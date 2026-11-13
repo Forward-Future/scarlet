@@ -19,7 +19,8 @@ import { Composer } from "../components/agent/Composer";
 import { useImportTranscription } from "../components/media/TranscriptionAction";
 import { Dropzone, useImportCount, useUploader } from "../components/media/UploadDropzone";
 import { MediaDrawer } from "../components/media/MediaDrawer";
-import { CachingRing, MediaMenuItems, useMediaWarning, useVideoCaching } from "../components/media/MediaMenuItems";
+import { MediaMenuItems, useMediaWarning, useVideoCaching } from "../components/media/MediaMenuItems";
+import { ProgressRing } from "../components/ui/ProgressRing";
 import { LearningsPanel, learningsToReview } from "../components/review/LearningsPanel";
 import { usePlaybackCache } from "../components/player/usePlaybackCache";
 import { focusAround } from "../components/player/SimpleProgress";
@@ -33,7 +34,7 @@ import { ignorePageShortcut, useHotkeys } from "../lib/hotkeys";
 import { RunBundle, runEnded, Said } from "../components/review/RunBundle";
 import { OtherTakes } from "../components/review/OtherTakes";
 import { ExportSheet } from "../components/review/ExportVideo";
-import { ExportMenuItem, useExportWarning } from "../components/review/ExportMenuItem";
+import { ExportButton, ExportMenuItem, useExportWarning } from "../components/review/ExportMenuItem";
 import { useThreadTimeline } from "../components/review/useThreadTimeline";
 import { Drawer, Icon, Loading } from "../components/ui/primitives";
 import { api, errorMessage } from "../lib/client";
@@ -677,9 +678,26 @@ type PassList = [open: OpenList, setOpen: Dispatch<SetStateAction<OpenList>>];
 interface Nest { key: string; node: ReactNode }
 const noNests: readonly Nest[] = [];
 
-/** The link that opens every edit a request made. The sentence before it has the count, so it doesn't say it again.
- *  While Scarlet still works there is no sentence, and the link says what it opens: the edits made so far. */
-const seeAll = (n: number, soFar?: boolean) => soFar ? `See ${n} ${n === 1 ? "edit" : "edits"} so far` : n === 1 ? "See it" : n === 2 ? "See both" : "See all";
+/** A finished request with one result opens its edit on the timeline. A collection opens a list to choose from. */
+function EditResultLink({ thread, actions, single, count, soFar, list: [open, setOpen], reveal }: {
+  thread: Thread; actions: ChatActions; single?: EditRef; count: number; soFar?: boolean; list: PassList; reveal(): void;
+}) {
+  const expanded = open === "all";
+  const current = !!single && !!actions.showing && matchesEdit(actions.showing, single);
+  if (single && (!expanded || current)) {
+    const toggleEdit = () => {
+      if (!current) return actions.openEdit(thread, single);
+      setOpen(undefined);
+      actions.stopShowing();
+    };
+    return <button type="button" className="simple-pass-toggle" aria-current={current || undefined}
+      title={current ? "Close this edit (Esc)" : "Show on the timeline"} onClick={letGo(toggleEdit)}>{current ? "Close edit" : "See edit"}</button>;
+  }
+  const label = soFar ? `See ${count} ${count === 1 ? "edit" : "edits"} so far` : count === 2 ? "See both" : "See all";
+  return <button type="button" className="simple-pass-toggle" aria-expanded={expanded}
+    title={expanded ? "Hide the edits" : soFar ? "Show the edits Scarlet has made so far, in order" : "Show the edits in order"}
+    onClick={() => { if (!expanded) reveal(); setOpen(expanded ? undefined : "all"); }}>{expanded ? "Hide" : label}</button>;
+}
 
 /**
  * A list the editor opens is brought into view. The conversation sits at its latest message, so a list opened on the
@@ -692,7 +710,11 @@ function useReveal(open: unknown) {
   useEffect(() => {
     if (!asked.current) return;
     asked.current = false;
-    if (open) host.current?.querySelector(".simple-pass-list, .simple-edits")?.scrollIntoView?.({ block: "nearest" });
+    if (open) {
+      const rows = host.current?.querySelector(".simple-pass-list, .simple-edits");
+      const row = rows?.querySelector(':scope > li > button[aria-current="true"]') ?? rows?.querySelector(":scope > li > button");
+      row?.scrollIntoView?.({ block: "nearest" });
+    }
   }, [open]);
   return [host, () => { asked.current = true; }] as const;
 }
@@ -714,11 +736,12 @@ function Made({ parts, link }: { parts: readonly SentencePart[]; link?: ReactNod
  * or edit that is still in the chat (`nests`) sits directly under that cut's or edit's row. `aside` is what the run
  * used, when that shows.
  */
-function PassSummary({ projectId, thread, edits, actions, aside, list: [open, setOpen], listedNeed, working, nests = noNests }: { projectId: string; thread: Thread; edits: Omit<ThreadEdit, "at">[];
+function PassSummary({ projectId, thread, edits, actions, aside, list: listState, listedNeed, working, nests = noNests }: { projectId: string; thread: Thread; edits: Omit<ThreadEdit, "at">[];
   actions: ChatActions; aside?: ReactNode; list: PassList; listedNeed: RefObject<Set<string>>; working?: boolean; nests?: readonly Nest[] }) {
   const reviewed = useReviewed(projectId, thread);
   const revising = useRevising(thread);
   const kept = useKeptEdits(projectId, thread.id);
+  const [open, setOpen] = listState;
   const [host, reveal] = useReveal(open);
   // The list follows the cut or edit that's open, so stepping with the arrows never leaves its row out of sight.
   const list = useRef<HTMLOListElement>(null);
@@ -731,19 +754,22 @@ function PassSummary({ projectId, thread, edits, actions, aside, list: [open, se
   const need = openCalls + flagged.length;
   // One sent back for revision waits on Scarlet, and keeps its row in the list of what needs the editor until it is back.
   const sentBack = useMemo(() => edits.filter(e => e.check && !reviewed(e) && revising(e)).length, [edits, reviewed, revising]);
-  // Every edit listed: that is what puts the pass's settled edits on the timeline too.
-  const listed = open === "all" && edits.length > 0;
+  const totalRows = edits.length + (pass?.calls.length ?? 0);
+  const single = !working && !pass?.running && totalRows === 1 ? edits[0] : undefined;
+  // A single preview follows the open card. An explicitly opened list keeps the timeline on the whole pass.
+  const fullList = open === "all" && edits.length > 0;
+  const listed = fullList || (!!single && !need && open !== "need" && !!actions.showing && matchesEdit(actions.showing, single));
   // The list of what needs the editor has nothing to show once nothing does.
   useEffect(() => { if (open === "need" && !need && !sentBack) setOpen(undefined); }, [open, need, sentBack]); // eslint-disable-line react-hooks/exhaustive-deps
   // A line mounted with its list already open is the same list, moved with its request between the conversation and
   // the place above the message box. It leaves the timeline where it is, so an edit of another request the editor has
   // open stays open. The list has the timeline back when that edit closes.
-  const moved = useRef(listed);
+  const moved = useRef(fullList);
   useEffect(() => {
-    if (!listed) { moved.current = false; return; }
+    if (!fullList) { moved.current = false; return; }
     actions.listOpen(thread.id, true, moved.current);
     return () => { actions.listOpen(thread.id, false); actions.lightMark(); };
-  }, [listed, thread.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fullList, thread.id]); // eslint-disable-line react-hooks/exhaustive-deps
   // A pass that has only just begun has nothing to sum up yet. Its rows appear with its first calls, or once it is done.
   // Every hook is above this line: the pass's first cuts arriving must not change how many hooks run.
   if (!edits.length && !pass) return null;
@@ -841,15 +867,10 @@ function PassSummary({ projectId, thread, edits, actions, aside, list: [open, se
       {filter !== "calls" && row.word && <span className={`simple-pass-check${row.revised ? "" : " is-kept"}${row.busy ? " working-text" : ""}`}>{row.word}</span>}
     </button>{nests.filter(nest => nest.key === row.key).map(nest => nest.node)}</li>)}
   </ol>;
-  // The link that opens every edit follows the sentence on its line. With no sentence yet, it has the row under the calls.
-  // It is worded for the rows it opens: the pass's calls are listed among its applied edits, so one applied cut and two
-  // calls is "See all", not "See it".
-  // It is left out while every row it would list waits on the editor: "N need you" lists the same ones. While Scarlet
-  // still works it has no sentence before it, and says what it opens and how many: the edits so far ("See 42 edits so far").
-  const totalRows = edits.length + (pass?.calls.length ?? 0);
+  // The full list includes the pass's calls. Leave its link out when “N need you” already lists every row.
   const soFar = (!!working || !!pass?.running) && !made;
-  const seeEvery = edits.length > 0 && (listed || need < totalRows) && <button type="button" className="simple-pass-toggle" aria-expanded={listed} title={listed ? "Hide the edits" : soFar ? "Show the edits Scarlet has made so far, in order" : "Show every edit, in order"}
-    onClick={() => { reveal(); setOpen(o => o === "all" ? undefined : "all"); }}>{listed ? "Hide" : seeAll(totalRows, soFar)}</button>;
+  const seeEvery = edits.length > 0 && (fullList || need < totalRows) &&
+    <EditResultLink thread={thread} actions={actions} single={single} count={totalRows} soFar={soFar} list={listState} reveal={reveal} />;
   return <div ref={host} className="simple-pass" role="group" aria-label="Dialogue pass">
     {made && <Made parts={made} link={seeEvery} />}
     {/* What needs the editor reads in the block's heading, at its right. */}
@@ -891,25 +912,27 @@ function ThreadResult({ projectId, thread, edits, actions, aside, working, nests
   const own = useState<OpenList>();
   const [open, setOpen] = list ?? own;
   const [host, reveal] = useReveal(open);
-  const toggle = () => { reveal(); setOpen(o => o === "all" ? undefined : "all"); };
   // An edit open on the timeline shows in a list: the one that's open, or one that opens with it when none is. For an
   // edit that still waits on the editor that is the list "N need you" opens, where ↑ and ↓ step to the others that
   // wait, as its card's "1 of N" says. For any other edit it is every edit.
-  const showingHere = !!actions.showing && edits.some(e => matchesEdit(actions.showing!, e));
+  const showing = actions.showing;
+  const shownEdit = showing && edits.find(e => matchesEdit(showing, e));
   const flagged = useMemo(() => edits.filter(e => e.check && !reviewed(e) && !revising(e)), [edits, reviewed, revising]);
   // An edit made in several places is one edit, on one row of the list: "N need you" counts the rows that wait.
   const groups = useMemo(() => editGroups(edits), [edits]);
   const need = useMemo(() => groups.filter(group => group.members.some(m => flagged.includes(m.edit))).length, [groups, flagged]);
   // Every edit waits on the editor: "N need you" lists them all, so the link that opens every edit is left out.
   const allNeed = need > 0 && need === groups.length;
+  const single = !working && groups.length === 1 ? shownEdit ?? edits[0] : undefined;
+  const showingInList = !!shownEdit && (!single || allNeed);
   // Only an edit the editor has just opened does that. The same edit still open when its request moves between the
   // conversation and the place above the message box, mounted anew, leaves the lists as they were.
   const ownShowing = useRef(false);
   const wasShowing = heldShowing ?? ownShowing;
   useEffect(() => {
-    if (showingHere && !wasShowing.current) setOpen(o => o ?? (flagged.some(e => matchesEdit(actions.showing!, e)) ? "need" : "all"));
-    wasShowing.current = showingHere;
-  }, [showingHere]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (showingInList && !wasShowing.current) setOpen(o => o ?? (flagged.includes(shownEdit!) ? "need" : "all"));
+    wasShowing.current = showingInList;
+  }, [showingInList]); // eslint-disable-line react-hooks/exhaustive-deps
   // One sent back for revision waits on Scarlet, and keeps its row in the list of what needs the editor until it is back.
   const sentBack = useMemo(() => edits.filter(e => e.check && !reviewed(e) && revising(e)).length, [edits, reviewed, revising]);
   // The list of what needs the editor has nothing to show once nothing does.
@@ -922,12 +945,12 @@ function ThreadResult({ projectId, thread, edits, actions, aside, working, nests
   const only = needing ? (edit: Omit<ThreadEdit, "at">) => (!!edit.check && !reviewed(edit)) || listedNeed.current.has(editKey(edit)) : undefined;
   if (only) for (const edit of edits) if (only(edit)) listedNeed.current.add(editKey(edit));
   const made = useMemo(() => working ? undefined : madeSentence(edits, lengthLabel), [working, edits]);
-  const showsList = open === "all" || needing;
+  const showsList = open === "all" || needing || (!!single && !!shownEdit && !allNeed);
   // An edit made in several places is one row, listed when any of its places is picked, and a request about any of
   // them sits under that row: every place of a row the list shows counts as listed, as the list itself picks its rows.
   const listed = new Set(showsList ? groups.filter(group => !only || group.members.some(m => only(m.edit))).flatMap(group => group.members.map(m => editKey(m.edit))) : []);
-  const seeEvery = (open === "all" || !allNeed) && <button type="button" className="simple-pass-toggle" aria-expanded={open === "all"} title={open === "all" ? "Hide the edits" : working ? "Show the edits Scarlet has made so far" : "Show the edits"} onClick={toggle}>
-    {open === "all" ? "Hide" : seeAll(groups.length, working && !made)}</button>;
+  const seeEvery = (open === "all" || !allNeed) &&
+    <EditResultLink thread={thread} actions={actions} single={single} count={groups.length} soFar={working && !made} list={list ?? own} reveal={reveal} />;
   return <div ref={host} className="simple-pass" role="group" aria-label="Edits">
     {made && <Made parts={made} link={seeEvery} />}
     {flagged.length > 0 && <button type="button" className="simple-pass-need" aria-pressed={needing} title={needing ? "Hide these" : "Show just these"}
@@ -3274,10 +3297,10 @@ export function SimpleWorkspace() {
                 cache, a ring fills around it. */}
             <div className="simple-tools">
               <button type="button" className="btn-quiet" aria-haspopup="dialog" onClick={() => setPanel("media")}>Media</button>
-              <button type="button" className="btn-quiet" aria-haspopup="dialog" onClick={() => setPanel("export")}>Export</button>
+              <ExportButton onOpen={() => setPanel("export")} />
               <Dropdown label="More" align="right" width={240} description={menuSays || undefined}
                 button={<span className={`btn-icon simple-more${needsYou.length ? " needs-you" : ""}`} title={menuSays || "More"}>
-                  <Icon name="more" />{caching.active && <CachingRing progress={caching.progress} />}</span>}>
+                  <Icon name="more" />{caching.active && <ProgressRing className="simple-more-ring" progress={caching.progress} />}</span>}>
                 {close => <>
                   <MenuItem onClick={() => { close(); setPanel("learnings"); }} title={toLearn ? `${plural(toLearn, "rule")} to review` : undefined}>
                     <Icon name="bulb" />Learnings{toLearn > 0 && <span className="menu-dot" role="img" aria-label={`${plural(toLearn, "rule")} to review`} />}</MenuItem>

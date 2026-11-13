@@ -1,6 +1,6 @@
 # Scarlet — Plan
 
-*Started 2026-10-30, principles revised 2026-11-05. Open source, built for the Forward Future editing team first.*
+*Started 2026-10-30, principles revised 2026-11-05. Open source, designed with working video editors.*
 
 ## Principles
 
@@ -93,10 +93,10 @@ At this stage, the next steps were to run the UI against the live server with th
 
 ## The problem
 
-Editing with AI already works. Brian and Alex brief an agent (Codex, Claude Code), it cuts from a word-timed transcript and waveform, and hands back an MP4. What doesn't work is everything around that loop:
+Editing with AI already works. Editors brief an agent (Codex, Claude Code), it cuts from a word-timed transcript and waveform, and hands back an MP4. What doesn't work is everything around that loop:
 
 - **Review is the bottleneck.** 10–30 passes per video, 10–30 minutes each. Every pass is a full re-render and a full re-watch. Past ~10 minutes of runtime, reviewing in a media player is bad enough that editors go back to a timeline.
-- **Nothing is shared.** Footage goes Matt → Google Drive → editor's laptop. Feedback is voice or chat. The edit lives wherever one agent happened to write it.
+- **Nothing is shared.** A producer shares footage through cloud storage, and an editor downloads it. Feedback is voice or chat. The edit lives wherever one agent happened to write it.
 - **Handoffs are manual.** Astra cuts, Opus animates; the bridge is a pasted brief and file paths.
 - **Each pass burns plan allowance** on re-doing work that didn't change.
 
@@ -122,7 +122,7 @@ These change the plan if wrong:
 |---|---|---|
 | A1 | ~~Long-form first~~ **Confirmed: both long and short form in v1.** Same cut list, same loop; shorts add aspect-ratio presets (9:16) and caption styling, long-form leans on transcript navigation in Watch. | — |
 | A2 | **No reusable cut-list artifact exists today.** The agents leave scripts and MP4s, not a structured EDL. We define the format. | If one exists: adopt it as the import path and shape our schema around it. |
-| A3 | ~~Matt reviews before publish~~ ~~**Confirmed: multi-user with an optional reviewer.**~~ **Paused 2026-10-30: single-user for now** (see Status). Earlier design: Accounts and notifications in v1. A project can have an assigned reviewer who gets notified when a cut is ready and can approve, reject, or leave notes; if no reviewer is assigned the editor finishes on their own. | — |
+| A3 | ~~A reviewer approves the video before publication~~ ~~**Confirmed: multi-user with an optional reviewer.**~~ **Paused 2026-10-30: single-user for now** (see Status). Earlier design: Accounts and notifications in v1. A project can have an assigned reviewer who gets notified when a cut is ready and can approve, reject, or leave notes; if no reviewer is assigned the editor finishes on their own. | — |
 
 **Confirmed 2026-10-30: the agent conversation happens inside Scarlet.** The editor never opens a terminal. They watch, click, speak; Scarlet runs their agent (their subscription, their CLI, headlessly) and the result arrives as change clips. Using Codex/Claude Code directly against Scarlet's MCP server remains a power-user path, not the primary one.
 
@@ -137,7 +137,7 @@ These change the plan if wrong:
 └───────────────────────────────────────┬───────────────────────────────────┘
                                         │ HTTPS / WebSocket
 ┌───────────────────────────────────────▼───────────────────────────────────┐
-│  scarlet-server (team box, VPS, or DGX)                                    │
+│  scarlet-server (local or hosted)                                          │
 │  • project store: media, transcripts, cut-list versions, notes, renders    │
 │  • change queue: proposed → rendered → approved/rejected                   │
 │  • render workers: segment renders, full assemblies, proxies, waveforms    │
@@ -172,7 +172,7 @@ The only way agents touch a project. Tools, roughly:
 - `assets.put(file, provenance)`, `render.request(range | full)`, `render.get(id)`
 - `export.otio(version)`
 
-Agents never write MP4s. They propose diffs. Alex's seven skills map onto these tools almost one-to-one (first cut = `transcript.get` + `waveform.get` + `timeline.propose`; smooth audio cuts = propose fades; render = `render.request`).
+Agents never write MP4s. They propose diffs. The original editing skills map onto these tools almost one-to-one (first cut = `transcript.get` + `waveform.get` + `timeline.propose`; smooth audio cuts = propose fades; render = `render.request`).
 
 #### 3. Local agent host (`apps/scarlet-agent`)
 Small daemon on the editor's machine. **This is how the agent runs; the editor never sees a terminal.**
@@ -181,14 +181,14 @@ Small daemon on the editor's machine. **This is how the agent runs; the editor n
 - **Dispatch:** every instruction from the UI (a voice note, a "revise this change", a full brief like "make the first cut as a 9:16 short") becomes a task. The host launches the chosen CLI headlessly (`codex exec`, `claude -p`, `gemini -p`) with the task, the project context, and the Scarlet MCP server attached, streams its progress back to the UI, and the result lands as change clips.
 - Runs the Scarlet MCP server locally; also registers it with the CLIs so power users can drive a project from their own terminal.
 - Streams media from the server with a local cache; serves low-res proxies for the agent's own frame inspection.
-- Per-project agent memory and the editor's skills (Alex's seven, plus ones saved via "turn this into a skill") are passed to the CLI on each task.
+- Per-project agent memory and the editor's skills (bundled workflows and ones saved via "turn this into a skill") are passed to the CLI on each task.
 
 #### 4. Server (`apps/server`)
 - Project store (Postgres for metadata, object storage/filesystem for media).
 - Change queue and state machine: `proposed → rendering → ready → approved | rejected | revising`.
 - Render workers (ffmpeg-based): **segment renders** of a change's affected range plus ~2 s handles; **full assembly** from cached, content-addressed segments so only changed regions re-encode; proxies and waveforms on ingest.
 - Transcription worker: word-timed transcript on ingest (faster-whisper locally, or a provider via API key). Stored once, reused by every agent and every pass.
-- Ingest: drag-and-drop upload, folder watch, Google Drive connector (fits Matt's current flow).
+- Ingest: drag-and-drop upload, folder watch, Google Drive connector.
 - Auth (multi-user design, paused 2026-10-30; today: one local user and an access token): simple team accounts, invite links. Roles per project: **owner**, **editor**, **reviewer** (optional, assignable). Notifications when a cut is marked ready for review, a change is ready, or a note is assigned to you. Projects without a reviewer skip the review gate.
 
 #### 5. UI (`apps/web`, shown in the desktop app)
@@ -211,23 +211,23 @@ Each phase ends with something the team can actually use.
 Cut list schema + validation, OTIO export, ffmpeg segment and full renderer, content-addressed segment cache, word-timed transcription on ingest. CLI only. *Proof: hand-write a cut list, render it, open the OTIO in Resolve.*
 
 **Phase 1 — Agents edit through Scarlet (weeks 3–4)**
-MCP server with the tools above; local agent host; Codex and Claude Code register automatically. Port Alex's `first-cut` skill to use `transcript.get` / `waveform.get` / `timeline.propose`. *Proof: Alex makes a first cut of a real recording through Codex, Scarlet renders it, nothing changes about his prompt.*
+MCP server with the tools above; local agent host; Codex and Claude Code register automatically. Port the original `first-cut` skill to use `transcript.get` / `waveform.get` / `timeline.propose`. *Proof: An editor makes a first cut through Codex with their usual prompt and Scarlet renders it.*
 
 **Phase 2 — Review loop (weeks 5–7)**
-Engine and desktop UI: upload, review player, click-to-note with voice, change feed with partial renders, approve/reject/revise, history. *Proof: Brian does a full edit of a real video without opening a media player or Resolve; Matt reviews in Scarlet.*
+Engine and desktop UI: upload, review player, click-to-note with voice, change feed with partial renders, approve/reject/revise, history. *Proof: An editor cuts a video and a reviewer plays the result in Scarlet.*
 
 **Phase 3 — Team and polish (weeks 8–9)**
 Accounts, notifications, Google Drive ingest, assign-to-agent dispatch, Resolve round-trip (OTIO import back). *Proof: the whole team ships one video through Scarlet end to end.*
 
 **Phase 4 — Open source release (week 10)**
-Docker Compose for the server, installers for the local host, docs, a demo project, the ported skills. Gemini CLI support. License (MIT or Apache-2.0, to match Alex's skills).
+Docker Compose for the server, installers for the local host, docs, a demo project, the ported skills. Gemini CLI support. Retain the licences and credits for adapted workflows.
 
 ## Deliberately out of scope for v1
 
 - A drag-and-drop timeline editor. Resolve does that; we export to it.
 - Scarlet's own models. BYO agent is the point.
 - Real-time multi-user editing on the same timeline. Changes serialize through the queue; branching covers the parallel case.
-- Publishing to YouTube/TikTok. Later, and possibly via the existing techvestigator pipeline.
+- Publishing directly to YouTube or TikTok.
 - Mobile.
 
 ## Stack
@@ -242,7 +242,7 @@ Docker Compose for the server, installers for the local host, docs, a demo proje
 - Captions: Scarlet renders them from the transcript, or the agent generates them as an asset? (Leaning: Scarlet renders from a caption track in the cut list; style is a preset.)
 - Generated graphics/animations: standard as rendered video with alpha, or also keep a source form (e.g. an HTML/Remotion component) so a different model can revise it? (Leaning: store both when available.)
 - How far to go on effects in the cut list. Transform, crop, fades, speed, and opacity are enough for v1; color and Fusion-style compositing go to Resolve.
-- Where the team server lives (DGX box vs VPS) and footage sizes. Affects proxy strategy.
+- How hosting location and footage size affect the proxy strategy.
 
 ## Parallel work, threads and quick actions (2026-10-30)
 

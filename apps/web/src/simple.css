@@ -272,21 +272,22 @@
 .simple-more.needs-you { color: var(--color-fg); }
 .simple-more.needs-you::after { content: ""; position: absolute; top: 4px; right: 2px; width: 5px; height: 5px; border-radius: 50%; background: var(--color-warn);
   box-shadow: 0 0 0 2px var(--color-panel); }
-/* While videos cache, a ring fills around the button, drawn like the one beside "Updating": Media is inside the menu,
-   so this is the only sign of it in the window. It is gray, since it asks nothing of the editor, and the amber mark
-   sits over it. With no figure yet it is a quarter that turns, or a whole ring that fades in and out with motion reduced. */
-.simple-more-ring { position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; transform: rotate(-90deg); pointer-events: none; }
-.simple-more-ring circle { fill: none; stroke: var(--color-line); stroke-width: 1.5; }
-.simple-more-ring circle + circle { stroke: var(--color-muted); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+/* Caching and exporting share the same motion. The cache ring surrounds More, and the export ring sits beside its label. */
+.simple-more-ring { position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; }
+.simple-export-ring { width: 16px; height: 16px; }
+.progress-ring { flex: none; transform: rotate(-90deg); pointer-events: none; }
+.progress-ring circle { fill: none; stroke: var(--color-line); stroke-width: 1.5; }
+.simple-export-ring circle { stroke-width: 2.5; }
+.progress-ring circle + circle { stroke: var(--color-muted); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
 .simple-more.needs-you::after { z-index: 1; }
 @media (prefers-reduced-motion: no-preference) {
-  .simple-more-ring.is-unknown { animation: simple-more-ring-turn 1s linear infinite; }
+  .progress-ring.is-unknown { animation: progress-ring-turn 1s linear infinite; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .simple-more-ring circle + circle { transition: none; }
-  .simple-more-ring.is-unknown circle + circle { stroke-dasharray: none; animation: media-link-breathe 2.4s ease-in-out infinite !important; }
+  .progress-ring circle + circle { transition: none; }
+  .progress-ring.is-unknown circle + circle { stroke-dasharray: none; animation: media-link-breathe 2.4s ease-in-out infinite !important; }
 }
-@keyframes simple-more-ring-turn { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+@keyframes progress-ring-turn { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
 .menu-value { margin-left: auto; min-width: 0; padding-left: 10px; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .menu-dot { flex: none; margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--color-warn); }
 .menu-value + .menu-dot { margin-left: 8px; }
@@ -335,8 +336,10 @@
 /* A dialogue pass in the chat: its calls while they wait, then one sentence and a link that opens its edits. */
 .simple-pass { margin-top: 6px; border: 1px solid var(--color-line); border-radius: 9px; background: rgba(255, 255, 255, .025); font-size: 12.5px; }
 .simple-pass-line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; padding: 8px 8px 8px 12px; }
-.simple-pass-toggle { padding: 0; border: 0; background: none; color: var(--color-muted); font: inherit; text-align: left; cursor: pointer; font-variant-numeric: tabular-nums; }
-.simple-pass-toggle b { color: var(--color-fg); font-weight: 600; }
+.simple-pass-toggle { min-width: 0; padding: 0; border: 0; background: none; color: var(--color-fg); font: inherit; font-weight: 600; text-align: left;
+  cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums; text-decoration: underline; text-underline-offset: 3px; }
+.simple-pass-toggle:is(:hover, :focus-visible) { text-decoration-thickness: 2px; }
+.simple-pass-toggle:focus-visible { outline: 2px solid var(--color-muted); outline-offset: 2px; border-radius: 3px; }
 /* What needs the editor is the amber link, with its rule under it wherever it sits. */
 .simple-pass-need { padding: 0; border: 0; background: none; color: var(--color-warn); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .simple-pass-ok { color: var(--color-ok); }
@@ -638,13 +641,11 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 /* With nothing to open, schedule or report, the row isn't there. */
 .req .simple-pass-line:not(:has(button, .simple-pass-ok, .run-tokens, .simple-action)) { display: none; }
 /* What the request changed: one sentence in the chat's own type, its figures in bold, and after it on the same line
-   the link that opens every edit. A long sentence wraps and the link follows its last word. */
+   the link to the result. A long sentence wraps and the link follows its last word. */
 .simple-made-line { margin: 2px 0 3px; font-size: 13px; line-height: 1.5; color: var(--color-muted); overflow-wrap: anywhere; }
 .simple-made b { font-weight: 600; color: var(--color-fg); font-variant-numeric: tabular-nums; }
 /* The gap is the sentence's own, at its end: a link that wraps to the next line starts at the margin, not 9px in. */
 .simple-made-line > .simple-made { margin-right: 9px; }
-.req .simple-pass-toggle { min-width: 0; font-size: 12.5px; white-space: nowrap; text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; }
-.req .simple-pass-toggle:hover { color: var(--color-fg); }
 .req .simple-pass-need, .req .simple-pass-ok, .req .simple-pass-line > .simple-link { flex: none; white-space: nowrap; }
 .req .simple-pass .req-right { gap: 6px; }
 /* A row is one line. Its title carries the whole note, and the card on the timeline shows it in full. */

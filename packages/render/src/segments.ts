@@ -13,10 +13,13 @@ import { clipRange, mergeRanges, sha256, planPlaybackSegments, planSegments, sna
 import type { Clip, MediaAsset, Project, Timeline, TimeRange, Track } from "@scarlet/timeline";
 import { buildFilterGraph, clipPlacement, fillsFrames, holdsFrame, holdsSample, proxyHeightForClip, videoClockStart } from "./graph.js";
 import { isImagePath } from "./probe.js";
+import { copyOriginalPicture, wholeOriginalPicture } from "./pictureCopy.js";
 import { effectKind } from "./effects.js";
 import { fileInDirectory } from "./assetPath.js";
 import { FfmpegError, failureReason, fnum, runFfmpeg, LOCAL_MEDIA_INPUT } from "./exec.js";
-import { outputSize, renderRange, resolveVideoEncoder, type RenderOptions, type RenderQuality } from "./render.js";
+import { outputSize, renderRange, type RenderOptions, type RenderQuality } from "./render.js";
+
+import { resolveEncoding, withRenderEncoder } from "./encoder.js";
 
 export { planSegments } from "@scarlet/timeline";
 
@@ -306,7 +309,7 @@ async function writeSegment(project: Project, timeline: Timeline, segment: Segme
   }
   const temp = `${segment.file}.${randomUUID()}.part.mp4`;
   try {
-    const result = await renderRange(project, timeline, segment.range, temp, opts);
+    const result = await renderRange(project, timeline, segment.range, temp, { ...opts, cacheIntermediate: true });
     await publishSegment(temp, segment.file);
     return result.warnings;
   } finally {
@@ -355,7 +358,7 @@ async function writeRun(project: Project, timeline: Timeline, segments: SegmentI
   const temps = segments.map(segment => `${segment.file}.${randomUUID()}.part.mp4`);
   try {
     const result = await renderRange(project, part!, range, temps[0]!, {
-      ...opts, onProgress: undefined, splits: segments.map((segment, k) => ({ range: segment.range, output: temps[k]! })),
+      ...opts, cacheIntermediate: true, onProgress: undefined, splits: segments.map((segment, k) => ({ range: segment.range, output: temps[k]! })),
     });
     for (const [k, segment] of segments.entries()) await publishSegment(temps[k]!, segment.file);
     return result.warnings;
@@ -535,12 +538,14 @@ export async function renderPlaybackSegment(project: Project, timeline: Timeline
   const quality = "preview";
   const size = outputSize(project.settings, quality, opts.height, opts.exportHeight);
   const warnings: string[] = [];
-  const encoder = await resolveVideoEncoder(opts.hwaccel, opts.ffmpegPath, size, reason => warnings.push(reason), quality);
+  const videoEncoder = await resolveEncoding(opts.hwaccel, opts.ffmpegPath, { ...size, fps: project.settings.fps }, quality,
+    reason => warnings.push(reason));
+  const encoder = videoEncoder.cacheKey;
   await fs.mkdir(cacheDir, { recursive: true });
   const [part] = segmentTimelines(timeline, [range]);
   const seg = segmentInfo(project, part!, range, cacheDir, { quality, height: size.height, encoder, allowProxy: !!opts.pictureSource }, opts.mediaRoot);
   seg.cached = await fileHasContent(seg.file);
-  warnings.push(...await fillSegment(project, part!, seg, { ...opts, quality, pictureOnly: false }));
+  warnings.push(...await fillSegment(project, part!, seg, { ...opts, videoEncoder, quality, pictureOnly: false }));
   // Decode AAC with its MP4 priming edit intact. FLAC has no encoder delay, so
   // appending the next fragment neither drops nor repeats audio at the join.
   const rate = project.settings.sampleRate;
@@ -561,6 +566,11 @@ export async function renderFullCached(
   opts: CachedRenderOptions,
 ): Promise<CachedRenderResult> {
   const quality = opts.quality ?? "preview";
+  const size = outputSize(project.settings, quality, opts.height, opts.exportHeight);
+  if (!opts.videoEncoder) {
+    return withRenderEncoder({ ...size, fps: project.settings.fps }, opts,
+      attempt => renderFullCached(project, timeline, cacheDir, output, attempt));
+  }
   const pictureOnly = quality === "delivery" || opts.exportHeight !== undefined;
   const visible = opts.omitCaptions ? { ...timeline, tracks: timeline.tracks.filter(t => t.kind !== "caption") } : timeline;
   const picture = pictureOnly ? deliveryPicture(project, visible) : visible;
@@ -568,14 +578,13 @@ export async function renderFullCached(
     ? planPlaybackSegments(project, timeline)
     : planSegments(project, picture, opts.segmentSeconds, timelineDuration(timeline)), opts.exportRange);
   if (!ranges.length) throw new Error("timeline is empty");
-  const size = outputSize(project.settings, quality, opts.height, opts.exportHeight);
   const warnings: string[] = [];
   const warn = (message: string) => { if (!warnings.includes(message)) warnings.push(message); };
-  const encoder = await resolveVideoEncoder(opts.hwaccel, opts.ffmpegPath, size, warn, quality);
+  const encoder = opts.videoEncoder.name;
   await fs.mkdir(cacheDir, { recursive: true });
 
   const parts = segmentTimelines(picture, ranges);
-  const format = { quality, height: size.height, encoder, pictureOnly, allowProxy: !pictureOnly && !!opts.pictureSource };
+  const format = { quality, height: size.height, encoder: opts.videoEncoder.cacheKey, pictureOnly, allowProxy: !pictureOnly && !!opts.pictureSource };
   const media = new Map(project.media.map(asset => [asset.id, asset]));
   const segments = ranges.map((range, i) => segmentInfo(project, parts[i]!, range, cacheDir, format, opts.mediaRoot, media));
   for (let i = 0; i < segments.length; i += 32) {
@@ -599,6 +608,29 @@ export async function renderFullCached(
   const todo = segments.map((s, i) => [s, i] as const).filter(([s]) => !s.cached);
   const concurrency = Math.max(1, opts.concurrency ?? 1);
   const probes = opts.probes ?? new Map();
+  // Never replace reusable encoded sections. A whole, untouched picture with a cold cache can instead be remuxed losslessly.
+  if (quality === "delivery" && todo.length === segments.length && !opts.exportRange && !opts.extraArgs?.length && !opts.splits?.length) {
+    const original = await wholeOriginalPicture(project, picture, total, size, opts);
+    if (original) {
+      const audio = await renderProgramAudio(project, timeline, cacheDir, { ...opts, probes });
+      await fs.mkdir(path.dirname(path.resolve(output)), { recursive: true });
+      const staged = output + "." + randomUUID() + ".assembly.mp4";
+      try {
+        const copied = await copyOriginalPicture(original, audio, staged, project.settings, opts).catch((error: unknown) => {
+          opts.signal?.throwIfAborted();
+          if (!(error instanceof FfmpegError)) throw error;
+          warn(`Could not copy the original picture (${failureReason(error)}); rendered the edit instead.`);
+          return false;
+        });
+        if (copied) {
+          opts.signal?.throwIfAborted();
+          await fs.rename(staged, output);
+          opts.onProgress?.(1);
+          return { output, duration: total, segments: [], rendered: 0, reused: 0, encoder: "copy", warnings };
+        }
+      } finally { await fs.rm(staged, { force: true }); }
+    }
+  }
   // Previews are short sections of long-GOP sources. Decoding each from its keyframe
   // in its own process costs more than the encode, so adjacent sections share one.
   const runs = planRuns(todo, parts, quality === "preview" && !pictureOnly ? RUN_PARTS : 1);

@@ -108,6 +108,7 @@ pub fn augmented_path(env: &HashMap<String, String>, home: &Path) -> String {
             extra.push(PathBuf::from(appdata).join("npm"));
         }
         if let Some(local) = env_get(env, "LOCALAPPDATA") {
+            extra.push(PathBuf::from(local).join("Microsoft/WinGet/Links"));
             extra.push(PathBuf::from(local).join("pnpm"));
             extra.push(PathBuf::from(local).join("Programs").join("nodejs"));
             extra.push(PathBuf::from(local).join("Volta").join("bin"));

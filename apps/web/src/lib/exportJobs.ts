@@ -11,6 +11,7 @@ export interface ExportJob {
   file: ExportFile;
   context: string;
   version: string;
+  projectSettings?: Render["projectSettings"];
   phase: "choosing" | "rendering" | "saving";
   progress: number;
   /** The engine hasn't started the render: it was just asked for, or it waits behind others. There is no progress to show. */
@@ -26,7 +27,8 @@ export const PICTURE_DONE = 97;
  * where the count stops through the audio mix and the final join. It is compared as it reads, so that figure never shows.
  */
 export function exportCounting(job: ExportJob): boolean {
-  return job.phase === "rendering" && !job.waiting && Math.round(job.progress * 100) < PICTURE_DONE;
+  const percent = Math.round(job.progress * 100);
+  return job.phase === "rendering" && !job.waiting && percent > 0 && percent < PICTURE_DONE;
 }
 
 /** How the last export ended. `context` is the video it was for: a saved file is the video's export only until the video changes. */
@@ -88,7 +90,8 @@ async function run(projectId: string, file: ExportFile, context: string, version
   let cancelled = false;
   const owner = resumed?.export?.owner ?? crypto.randomUUID();
   let ownedId = resumed?.id;
-  let job: ExportJob = { file, context, version, phase: resumed ? "rendering" : "choosing", progress: resumed?.progress ?? 0, cancel };
+  let job: ExportJob = { file, context, version, projectSettings: resumed?.projectSettings ?? project?.project.settings,
+    phase: resumed ? "rendering" : "choosing", progress: resumed?.progress ?? 0, cancel };
 
   function update(change: Partial<ExportJob>) {
     job = { ...job, ...change };

@@ -32,11 +32,14 @@ export interface ProbeResult {
   /** True for image2/png_pipe style demuxers or single-frame "video" streams. */
   isStillImage: boolean;
   videoCodec?: string;
+  videoCodecTag?: string;
+  videoBFrames?: number;
   /** Display rotation in degrees (0 when the picture is shown as stored). */
   rotation: number;
   /** The video stream carries a display matrix: a rotation, a flip or both, applied when its frames are shown. */
   displayMatrix?: boolean;
   audioCodec?: string;
+  audioDuration?: number;
   pixFmt?: string;
   sampleRate?: number;
   channels?: number;
@@ -48,11 +51,22 @@ export interface ProbeResult {
 }
 
 interface FfprobeStream {
+  sample_aspect_ratio?: string;
+  field_order?: string;
+  color_range?: string;
+  color_space?: string;
+  color_primaries?: string;
+  color_transfer?: string;
+  chroma_location?: string;
+  closed_captions?: number;
+  film_grain?: number;
+  has_b_frames?: number;
   time_base?: string;
   start_pts?: number;
   start_time?: string;
   codec_type?: string;
   codec_name?: string;
+  codec_tag_string?: string;
   width?: number;
   height?: number;
   pix_fmt?: string;
@@ -102,6 +116,16 @@ export function parseRate(rate: string | undefined): number {
  */
 export const storedAsShown = (probe: Pick<ProbeResult, "rotation" | "displayMatrix" | "isStillImage">) =>
   !probe.isStillImage && !probe.displayMatrix && Math.abs(probe.rotation) % 360 === 0;
+
+/** The unaltered source must carry the same picture and display properties as the compositor's square-pixel canvas. */
+export function matchesCanvasFormat(probe: ProbeResult): boolean {
+  const stream = (probe.raw as FfprobeOutput | undefined)?.streams?.find(s => s.codec_type === "video");
+  return !!stream && storedAsShown(probe) && !probe.hasAlpha && probe.pixFmt === "yuv420p" &&
+    stream.sample_aspect_ratio === "1:1" && stream.field_order === "progressive" &&
+    (!stream.color_range || stream.color_range === "tv") && (!stream.color_space || stream.color_space === "bt709") &&
+    !stream.color_primaries && !stream.color_transfer && (!stream.chroma_location || stream.chroma_location === "left") &&
+    !stream.closed_captions && !stream.film_grain && !stream.side_data_list?.length;
+}
 
 /** `storedAsShown` for a file. A file that can't be probed counts as turned, so it takes the CPU path. */
 export async function isStoredAsShown(file: string, opts: { ffprobePath?: string; signal?: AbortSignal } = {}) {
@@ -192,9 +216,12 @@ export async function probeMedia(
       (video?.tags?.alpha_mode ?? video?.tags?.ALPHA_MODE) === "1",
     isStillImage,
     videoCodec: video?.codec_name,
+    videoCodecTag: video?.codec_tag_string,
+    videoBFrames: video?.has_b_frames,
     rotation: Number.isFinite(rotation) ? rotation : 0,
     displayMatrix: video?.side_data_list?.some(data => data.side_data_type === "Display Matrix") ?? false,
     audioCodec: audio?.codec_name,
+    audioDuration: Number(audio?.duration) || undefined,
     pixFmt: video?.pix_fmt,
     sampleRate: audio?.sample_rate ? Number(audio.sample_rate) : undefined,
     channels: audio?.channels,

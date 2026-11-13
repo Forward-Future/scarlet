@@ -705,7 +705,7 @@ export class ScarletClient {
     return this.get<import("./api.js").LocalModelStatus>("/settings/local-model");
   }
   settings() {
-    return this.get<{ settings: ServerSettings; transcriptionAvailable?: boolean }>("/settings");
+    return this.get<{ settings: ServerSettings; transcriptionAvailable?: boolean; telemetryUnavailable?: import("./api.js").TelemetryUnavailable }>("/settings");
   }
   updateSettings(body: Partial<ServerSettings>) {
     return this.patch<{ settings: ServerSettings }>("/settings", body);
