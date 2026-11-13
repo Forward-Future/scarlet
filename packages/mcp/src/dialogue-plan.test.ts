@@ -443,6 +443,9 @@ describe("dialogue plan", () => {
     expect(pause!.end).toBe(1.75);
     expect(take!.start).toBe(1.75);
     expect(take!.end).toBeCloseTo(3.3, 2);
+    // The agent is told where Scarlet had placed the edge and why it moved.
+    expect(dialogueGate(plan).decisions).toContainEqual(expect.objectContaining({ cut: 1,
+      evidence: expect.stringContaining("Scarlet placed its start at 1.59 s, inside cut 0; it moved to 1.75 s to meet that cut.") }));
     // The other way round: the pause after the word, given in seconds, starts inside the word cut's placed end.
     const after = await planDialogueCuts({ tl, localPauses: false, cuts: [
       { kind: "retake", decision: "cut", reason: "Earlier take.", mediaId: "mic", fromWord: 1, toWord: 1 }, cut({ start: 2.6, end: 3.35, kind: "pause" })] }, sources);
