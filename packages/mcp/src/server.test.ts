@@ -3207,12 +3207,18 @@ it("returns a long list of checked joins whole enough to arrive: quiet joins giv
   tl.version = "long-list";
   tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 120, 0)];
   mock.state.timeline = tl;
-  mock.state.extra = (req, res) => {
+  let activeReads = 0, maxReads = 0;
+  mock.state.extra = async (req, res) => {
     if (!req.path.endsWith("/dialogue-detections")) return false;
-    const { from, to } = req.body as { from: number; to: number };
+    const { from, to, keptSide } = req.body as { from: number; to: number; keptSide?: object };
+    if (keptSide) {
+      maxReads = Math.max(maxReads, ++activeReads);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      activeReads--;
+    }
     const heard = words.filter(w => w.start >= from && w.end <= to);
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ segments: [{ id: "s", start: from, end: to, text: heard.map(w => w.text).join(" "), words: heard }], acoustic: [] }));
+    res.end(JSON.stringify({ segments: [{ id: keptSide ? "kept" : "s", start: from, end: to, text: heard.map(w => w.text).join(" "), words: heard }], acoustic: [] }));
     return true;
   };
   // Each removal takes one word out, from the room tone before it to the room tone after. Every tenth starts inside
@@ -3238,7 +3244,10 @@ it("returns a long list of checked joins whole enough to arrive: quiet joins giv
     // A hundred don't: Claude Code withholds a result that long, and the pass would get nothing at all.
     const long = await check(Array.from({ length: 100 }, (_, k) => cut(k)));
     expect(long.length).toBeLessThanOrEqual(40_000);
-    const listed = JSON.parse(long) as { joins: Array<{ status: string; start: number; end: number; audio?: unknown[]; nearbyWords?: unknown }>; evidenceLeftOut: number[] };
+    const listed = JSON.parse(long) as { joins: Array<{ status: string; start: number; end: number; audio?: unknown[]; nearbyWords?: unknown; unreadJoinAudio?: string[] }>; evidenceLeftOut: number[] };
+    expect(maxReads).toBeGreaterThan(0);
+    expect(maxReads).toBeLessThanOrEqual(8);
+    expect(listed.joins.flatMap(j => j.unreadJoinAudio ?? [])).toEqual([]);
     // Every join still says what the recording has at its edges and the range that results.
     expect(listed.joins.map(j => j.status)).toEqual(Array.from({ length: 100 }, (_, k) => k % 10 === 5 ? "adjusted" : "unchanged"));
     expect(listed.joins[5]).toMatchObject(short.joins[5]);

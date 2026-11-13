@@ -745,17 +745,19 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     (e.fragment ? `: ${Math.round(e.fragment.seconds * 1000)} ms of it would play at ${e.fragment.db} dBFS, and the recording is quiet at ${e.fragment.quietAt.toFixed(2)} s (${e.fragment.quietDb} dBFS)` : "") +
     (e.levels ? ` [dBFS in 20 ms steps: ${e.levels}]` : "");
   const EDGES_IN_SOUND = "Nothing was saved. Move each edge onto quiet (the second given, or one dialogue_check_join measures), or remove dialogue with dialogue_apply_cuts, where a word reference puts each edge in the recording's silence.";
+  // Checking a hundred joins can request hundreds of speech windows. Share the available connections across joins.
+  const keptSpeechReads = new Lanes(8);
   /** Live reads for the dialogue planner (dialogue-plan.ts), which replay feeds from stored evidence instead. */
   const planSources: DialoguePlanSources = {
     evidence, pages: joinPages, project: async () => (await getProject()).project,
     words: (mediaId, through, prepare = true) => transcriptWords(mediaId, prepare, through, edgeWaitMs), measure: measureAround, air, aiCuts: dialoguePrefs.aiCuts, crossfadeFrames: dialoguePrefs.crossfadeFrames,
-    readKeptWords: async (mediaId, audioStream, from, to, cachedOnly) => {
+    readKeptWords: (mediaId, audioStream, from, to, cachedOnly) => keptSpeechReads.run(() => 0, async () => {
       const result = await client.dialogueDetections(ctx.projectId, { mediaId, from, to, keptSide: { audioStream, cachedOnly },
         taskId: ctx.taskId, startedAt: ctx.taskStartedAt });
       if (cachedOnly && (result.keptSideUnavailable || result.segments.some(s => s.id !== "kept")))
         throw new Error("Cached speech measurements are unavailable at this edge.");
       return result.segments.flatMap(s => s.words);
-    },
+    }),
     sound: async (mediaId, range) => (await gapSounds(mediaId, [range], 0))[0],
   };
 
