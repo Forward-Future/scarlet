@@ -4,7 +4,7 @@
  * held two bursts of speech the transcript had missed, a first "see" and a second "you can", and half the restart
  * stayed in the cut. An editor cutting by ear and waveform sees it at once. Scarlet measures; the model decides.
  */
-import type { TimeRange } from "@scarlet/timeline";
+import type { TimeRange, TranscriptWord } from "@scarlet/timeline";
 import { dbfs } from "./analysis.js";
 
 export interface GapLevels { from: number; to: number; rms: number[] }
@@ -22,8 +22,74 @@ const WORD_EDGE = 0.05;
 
 /** The level speech sits at in a stretch of a recording: the 85th percentile of its levels, in dBFS. */
 export function speakingLevel(levels: GapLevels): number {
-  const sorted = levels.rms.map(dbfs).sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length * 0.85)] ?? -99;
+  return typicalLevel([...levels.rms]);
+}
+
+function typicalLevel(samples: number[]) {
+  samples.sort((a, b) => a - b);
+  return dbfs(samples[Math.floor(samples.length * 0.85)] ?? 0);
+}
+
+export interface QuietPhrase extends TimeRange {
+  text: string;
+  fromWord: number;
+  toWord: number;
+  /** 85th-percentile RMS during the timed words, in dBFS. The comparisons use the nearest two seconds of each phrase. */
+  levelDbfs: number;
+  beforeDbfs: number;
+  afterDbfs: number;
+}
+
+const NEIGHBOR_SECONDS = 2, MAX_NEIGHBOR_GAP = 12, MAX_PHRASE_SECONDS = 8;
+const isSpoken = (text: string) => !!text.trim() && !/^\s*\[.*\]\s*$/.test(text);
+/** Enough overlap to compare a phrase at the boundary of two level readings. */
+export const QUIET_PHRASE_CONTEXT = MAX_PHRASE_SECONDS + MAX_NEIGHBOR_GAP + NEIGHBOR_SECONDS;
+
+/** Short transcribed phrases between pauses that are very soft on this recording compared with the words on both sides. */
+export function quietPhrases(words: readonly TranscriptWord[], levels: GapLevels, settledThrough = Infinity): QuietPhrase[] {
+  const step = (levels.to - levels.from) / levels.rms.length;
+  if (!(step > 0 && step <= .031)) return [];
+  const until = Math.min(levels.to, settledThrough);
+  type Phrase = TimeRange & { fromWord: number; toWord: number };
+  const phrases: Phrase[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!;
+    if (w.start >= until) break;
+    if (w.start < levels.from || w.end > until || w.end < w.start || !isSpoken(w.text)) continue;
+    const previous = phrases.at(-1);
+    if (previous && w.start - previous.end < GAP_SECONDS - 1e-6) {
+      previous.toWord = i;
+      previous.end = Math.max(previous.end, w.end);
+    } else phrases.push({ fromWord: i, toWord: i, start: w.start, end: w.end });
+  }
+  // Count each measured bucket inside a word once. The waits between words cannot lower the phrase's level.
+  const measure = (p: Phrase, from: number, to: number) => {
+    const samples: number[] = [];
+    const index = (t: number) => Math.ceil((t - levels.from) / step - .5);
+    let next = Math.max(0, index(from));
+    for (let i = p.fromWord; i <= p.toWord; i++) {
+      const w = words[i]!;
+      if (!isSpoken(w.text)) continue;
+      next = Math.max(next, index(w.start));
+      const until = Math.min(index(Math.min(to, w.end)), levels.rms.length);
+      while (next < until) samples.push(levels.rms[next++]!);
+    }
+    return samples.length * step >= MIN_RUN - 1e-6 ? typicalLevel(samples) : undefined;
+  };
+  const found: QuietPhrase[] = [];
+  for (let i = 1; i < phrases.length - 1; i++) {
+    const p = phrases[i]!, before = phrases[i - 1]!, after = phrases[i + 1]!;
+    if (p.end - p.start > MAX_PHRASE_SECONDS || p.start - before.end > MAX_NEIGHBOR_GAP || after.start - p.end > MAX_NEIGHBOR_GAP) continue;
+    const levelDbfs = measure(p, p.start, p.end);
+    if (levelDbfs === undefined || levelDbfs > QUIETEST_SOUND_DBFS) continue;
+    const beforeDbfs = measure(before, before.end - NEIGHBOR_SECONDS, before.end);
+    const afterDbfs = measure(after, after.start, after.start + NEIGHBOR_SECONDS);
+    // At least eight times quieter in amplitude than both neighboring deliveries.
+    if (beforeDbfs === undefined || afterDbfs === undefined || Math.min(beforeDbfs, afterDbfs) - levelDbfs < 18) continue;
+    const text = words.slice(p.fromWord, p.toWord + 1).filter(w => isSpoken(w.text)).map(w => w.text.trim()).join(" ");
+    found.push({ ...p, text, levelDbfs, beforeDbfs, afterDbfs });
+  }
+  return found;
 }
 
 /**

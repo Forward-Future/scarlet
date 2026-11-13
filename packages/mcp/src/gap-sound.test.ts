@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeGapSound, gapSound, speakingLevel, type GapLevels } from "./gap-sound.js";
+import { describeGapSound, gapSound, quietPhrases, speakingLevel, type GapLevels } from "./gap-sound.js";
 
 /** Ten seconds at 50 levels a second: speech at .1, room tone at .001, and whatever `at` says in between. */
 function levels(at: (t: number) => number | undefined): GapLevels {
@@ -27,5 +27,39 @@ describe("what sounds between two words", () => {
     expect(gapSound(hiss, { start: 2.9, end: 4.6 })).toEqual({ seconds: 0, runs: [] });
     // Levels that do not reach the gap say nothing either way.
     expect(gapSound(hiss, { start: 9.5, end: 10.5 })).toBeUndefined();
+  });
+});
+
+describe("quiet transcribed phrases", () => {
+  const words = [
+    { text: "Watch", start: .8, end: 1.2 }, { text: "here.", start: 1.2, end: 1.6 },
+    { text: "move", start: 2.4, end: 2.65 }, { text: "it", start: 2.65, end: 2.65 },
+    { text: "over", start: 2.7, end: 3 }, { text: "Ready.", start: 5, end: 5.5 },
+  ];
+  const recording = (before: number, phrase: number, after: number) => levels(t => {
+    if (!words.some(w => w.start <= t && w.end > t)) return 0;
+    return t < 2 ? before : t < 4 ? phrase : after;
+  });
+
+  it("reports a soft phrase with both local levels, its whole text and stable word references", () => {
+    const measured = recording(.1, .004, .08);
+    expect(quietPhrases(words, measured)).toEqual([{ start: 2.4, end: 3, text: "move it over", fromWord: 2, toWord: 4,
+      levelDbfs: -48, beforeDbfs: -20, afterDbfs: -22 }]);
+    // A silent pause on a quiet microphone is commonplace; the neighboring speech needs to be louder on both sides.
+    expect(quietPhrases(words, recording(.006, .004, .005))).toEqual([]);
+    expect(quietPhrases(words, recording(.1, .004, .008))).toEqual([]);
+    expect(quietPhrases(words, recording(.1, .07, .08))).toEqual([]);
+    // The waits on either side of ordinary speech are silent even in the last case.
+    expect(quietPhrases(words, { ...measured, rms: [] })).toEqual([]);
+    expect(quietPhrases(words, { ...measured, rms: measured.rms.filter((_, i) => i % 10 === 0) })).toEqual([]);
+  });
+
+  it("requires measured speech on both sides of a candidate within the available reading", () => {
+    const full = recording(.1, .004, .08);
+    expect(quietPhrases(words, { from: 2, to: 10, rms: full.rms.slice(100) })).toEqual([]);
+    expect(quietPhrases(words, { from: 0, to: 4, rms: full.rms.slice(0, 200) })).toEqual([]);
+    // A cached reading can reach the following word before its alignment is final.
+    expect(quietPhrases(words, full, 5.2)).toEqual([]);
+    expect(quietPhrases(words, full, 5.5)).toHaveLength(1);
   });
 });
