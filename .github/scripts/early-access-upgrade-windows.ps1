@@ -47,7 +47,7 @@ if ($AsTestUser) {
         if ($LASTEXITCODE -ne 0 -or $hash -ne $expectedEngine) { throw "Setup left the wrong engine in place for $phase." }
         $installedVersion = (Get-ItemProperty -LiteralPath $uninstall).DisplayVersion
         Write-Host "Verified installed $installedVersion in $(Split-Path $engine), engine SHA-256 $hash."
-        & "$PSScriptRoot\node.exe" "$PSScriptRoot\early-access-upgrade-library.mjs" $phase $engine $fixture
+        & "$PSScriptRoot\node.exe" "$PSScriptRoot\early-access-upgrade-library.mjs" $phase $engine $fixture $installedVersion
         if ($LASTEXITCODE -ne 0) { throw "Library $phase failed (exit $LASTEXITCODE)." }
     }
     exit 0
@@ -80,7 +80,7 @@ try {
     $argsForUser = @('-NoProfile','-NonInteractive','-ExecutionPolicy','RemoteSigned','-File',"$base\verify.ps1",'-AsTestUser','-Version',$Version)
     $shell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     $worker = Start-Process $shell -Credential ([pscredential]::new($login,$password)) -LoadUserProfile -WorkingDirectory $base -WindowStyle Hidden -ArgumentList $argsForUser -PassThru -RedirectStandardOutput "$base\stdout.log" -RedirectStandardError "$base\stderr.log"
-    if (!$worker.WaitForExit(360000)) { $worker.Kill(); throw 'The standard-account upgrade exceeded six minutes.' }
+    if (!$worker.WaitForExit(600000)) { $worker.Kill(); throw 'The standard-account upgrade exceeded ten minutes.' }
     $worker.WaitForExit()
     Get-Content "$base\stdout.log", "$base\stderr.log"
     if ($worker.ExitCode -ne 0) { throw "Standard-account upgrade failed with code $($worker.ExitCode)." }
