@@ -4,6 +4,7 @@ import { pct } from "../../lib/format";
 import { useProjectStore } from "../../stores/project";
 import { MenuItem } from "../shell/WorkspaceNavigation";
 import { Icon } from "../ui/primitives";
+import { ProgressRing } from "../ui/ProgressRing";
 
 /**
  * A reason to open Export, or nothing: the project's export stopped and the Export sheet hasn't shown why yet. The menu
@@ -15,14 +16,25 @@ export function useExportWarning(): string | undefined {
   return stopped ? "The export didn’t finish" : undefined;
 }
 
-/** What the project's export is doing, for its row: a word or two while it runs or once the video as it is now has been exported. */
-function useExportStatus(): { status?: string; file?: string } {
+/** The header button and menu row follow the same job when the editor closes the export sheet. */
+function useExportStatus(): { status?: string; file?: string; running?: boolean; progress?: number } {
   const projectId = useProjectStore(s => s.current?.id);
   const context = useProjectStore(s => s.current && fullRenderContext(s.current.project));
   const job = useExports(s => projectId ? s.jobs[projectId] : undefined);
   // A percent only while it moves, as in the sheet.
-  if (job && "cancel" in job) return { status: exportCounting(job) ? `Exporting ${pct(job.progress)}` : "Exporting" };
+  if (job && "cancel" in job) {
+    const progress = exportCounting(job) ? job.progress : undefined;
+    return { status: progress === undefined ? "Exporting" : `Exporting ${pct(progress)}`, running: job.phase !== "choosing", progress };
+  }
   return job?.phase === "done" && job.context === context ? { status: "Exported", file: job.path.split(/[\\/]/).pop() } : {};
+}
+
+export function ExportButton({ onOpen }: { onOpen(): void }) {
+  const { status, running, progress } = useExportStatus();
+  const description = running ? status : undefined;
+  return <button type="button" className="btn-quiet" aria-haspopup="dialog" title={description} aria-description={description} onClick={onOpen}>
+    {running && <ProgressRing className="simple-export-ring" progress={progress} />}Export
+  </button>;
 }
 
 /**
