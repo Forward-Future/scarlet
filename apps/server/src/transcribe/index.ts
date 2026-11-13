@@ -24,6 +24,9 @@ export interface TranscribeInput {
   keepWavAt?: string;
   /** How much of the recording the provider has transcribed so far, 0..1. */
   onProgress?: (fraction: number) => void;
+  /** Durable prefix of a full recording. Save only the new segments, on the recording's clock,
+   * and advance past completed audio even when a chunk contained no words. */
+  checkpoint?: { through: number; result: TranscribeResult; save(through: number, chunk: TranscribeResult, fraction?: number): void };
 }
 
 export interface TranscribeResult {
