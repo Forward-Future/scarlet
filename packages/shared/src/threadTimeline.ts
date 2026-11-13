@@ -14,6 +14,8 @@ export interface ThreadEdit extends EditRef {
   previous: EditRef[];
   /** What the editor should look or listen for before keeping this edit. */
   check?: string;
+  /** A later change that supplied the review note for this same edit on the working cut. */
+  reviewChangeId?: string;
   /** Scarlet's one sentence on what the edit did. Its card shows this alone. */
   summary?: string;
   /** What the edit did, so the timeline draws a cut, a sound fix or a zoom each for what it is. */
@@ -326,6 +328,7 @@ export function threadTimeline(thread: Thread, head: Timeline, links: Parameters
     const placed: ThreadEdit = range.end === range.start ? { ...edit, at: range.start, range: withHandles(range, 1.5, duration) } : { ...edit, range };
     const first = (still && placed.at !== undefined ? cutThere(placed) : undefined) ?? sameAs(placed, named);
     if (first) {
+      if (placed.check || placed.summary) first.reviewChangeId = placed.changeId;
       if (placed.check) first.check = placed.check;
       if (placed.summary) first.summary = placed.summary;
       continue;
