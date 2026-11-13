@@ -74,6 +74,15 @@ describe("the editor's crossfade on dialogue joins", () => {
     expect(replayJoinFades(timeline, fades, 0.08)).toEqual(faded);
   });
 
+  it.each(["audio", "video"] as const)("replays different recorded overlaps on both sides of one %s clip", kind => {
+    const { timeline, track } = cut(kind);
+    const { timeline: faded, fades } = crossfadeJoins(timeline, media, [1, 2], 0.04, { durations: new Map([[2, 0.12]]) });
+    expect(fades).toEqual([{ trackId: track.id, at: 1 }, { trackId: track.id, at: 2, duration: 0.12 }]);
+    const joined = faded.tracks.at(-1)!;
+    expect(joined.clips[1]).toMatchObject({ audioFadeIn: 0.04, audioFadeOut: 0.12 });
+    expect(replayJoinFades(timeline, fades, 0.04)).toEqual(faded);
+  });
+
   it("leaves a join plain, and says why, when a clip lacks handles or already has a fade", () => {
     const timeline = emptyTimeline("project");
     timeline.tracks[1]!.clips = [

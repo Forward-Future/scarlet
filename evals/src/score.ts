@@ -54,7 +54,7 @@ export interface ReviewTier extends Tier {
   editor: { approved: number; skipped: number; pending: number; unknown: number };
   /** AI recommendation × editor decision, for decided items. */
   aiVsEditor: Record<string, number>;
-  /** Staged cuts the agent submitted as "cut": Scarlet held them, by an edge check or the editor's Suggest setting. */
+  /** Staged cuts the agent submitted as "cut": Scarlet held them for review. */
   heldByScarlet: number;
 }
 export interface PictureScore extends PictureComparison { summary: PictureSummary }

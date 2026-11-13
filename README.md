@@ -37,7 +37,7 @@ pnpm desktop:dev
 
 1. **Bring in your footage.** Click **New project**, name it and choose your files. You can mix video (such as MP4 or MOV), separate audio (WAV or MP3) and still images (PNG or JPEG). The project opens to the media library, where you can see import progress and preview a clip. Click **Media** in the project header to return to your files or add more. In **Settings → General**, connect Claude Code or Codex with your existing subscription.
 
-2. **Ask for a change.** Click a point on the timeline, then type or hold `V` to speak. To work on the whole interview, clear the time tag with `×` and try “Remove the false starts and repeated takes. Keep the pauses before each answer.” Type `/dialogue-pass` for a first dialogue cut, or type `/` to choose another workflow. [Browse the workflows](skills/README.md)
+2. **Ask for a change.** Click a point on the timeline, then type or hold `V` to speak. To work on the whole interview, clear the time tag with `×` and try “Remove the false starts and repeated takes. Keep the pauses before each answer.” Type `/dialogue-pass` for a first dialogue cut, or type `/` to choose another workflow. To change how Scarlet handles dialogue across projects, edit **dialogue-pass** in **Settings → Tools & skills**. [Browse the workflows](skills/README.md)
 
 3. **Review it in context.** Open an edit from the conversation or timeline. On a cut, open the transcript to see the words Scarlet marked for removal. Press `\` to hear the removed footage and press it again to hear the join. When a dialogue pass asks about a cut, approve it, skip it or ask for a revision. You can also revise or undo an applied edit. Earlier versions stay in the project history.
 

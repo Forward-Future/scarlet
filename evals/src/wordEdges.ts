@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { DialogueEvidence } from "../../packages/mcp/src/dialogue-decisions.ts";
 import { joinEvidence } from "../../packages/mcp/src/dialogue-join.ts";
 import { planDialogueCuts, type DialoguePlanSources } from "../../packages/mcp/src/dialogue-plan.ts";
-import { PAUSE_AIR_SCALE, PauseTightness } from "../../packages/shared/src/dialoguePreferences.ts";
 import { frameAligned, timelineToSource, type Project } from "../../packages/timeline/src/index.ts";
 import { cli, isMain, main } from "./args.ts";
 import { loadCase } from "./case.ts";
@@ -26,7 +25,7 @@ interface Row {
   outcome: "backward" | "uncertain" | "pause" | "terminal" | "outside" | "needsRevision" | "applied" | "review";
   fromWord?: number; toWord?: number; placement?: Placement; frameAligned?: Placement;
 }
-interface Result { caseId: string; tightness: PauseTightness; inputs: string; rows: Row[] }
+interface Result { caseId: string; inputs: string; rows: Row[] }
 
 export function wordSelection(midpoints: number[], j: AudioJoin, frame: number) {
   if (j.rawIn <= j.rawOut) return "backward";
@@ -66,13 +65,12 @@ async function readWaveforms(id: string, duration: number, path: string, engineU
   return pages;
 }
 
-const USAGE = "wordEdges.ts --case ID --reference-map match_audio.json [--waveforms cached.json] [--engine URL] [--baseline previous.json] [--out result.json] [--tightness loose|natural|tight]";
+const USAGE = "wordEdges.ts --case ID --reference-map match_audio.json [--waveforms cached.json] [--engine URL] [--baseline previous.json] [--out result.json]";
 
 async function run() {
   const { values } = cli({ case: { type: "string" }, "reference-map": { type: "string" }, waveforms: { type: "string" },
-    tightness: { type: "string" }, engine: { type: "string" }, baseline: { type: "string" }, out: { type: "string" } }, USAGE);
+    engine: { type: "string" }, baseline: { type: "string" }, out: { type: "string" } }, USAGE);
   if (!values.case || !values["reference-map"]) throw new Error(USAGE);
-  const tightness = PauseTightness.parse(values.tightness ?? "natural");
   const loaded = loadCase(values.case), c = loaded.file;
   const tl = loaded.timeline(c.sourceVersion);
   if (!tl) throw new Error("The case lacks its source timeline. Rebuild it from the raw assembly.");
@@ -103,7 +101,7 @@ async function run() {
   if (through < asset.duration - .001) throw new Error("The waveform cache ends before the recording. Refresh it.");
   const project = { id: c.projectId, media: c.media, settings: { fps: c.fps } } as Project;
   const sources: DialoguePlanSources = { pages: () => evidence.scans, evidence, project: async () => project,
-    words: async mediaId => mediaId === id ? words : null, measure: async () => {}, air: PAUSE_AIR_SCALE[tightness] };
+    words: async mediaId => mediaId === id ? words : null, measure: async () => {} };
   const midpoints = words.map(w => (w.start + w.end) / 2);
   const rows: Row[] = [];
   for (const [index, j] of map.joins.entries()) {
@@ -125,7 +123,7 @@ async function run() {
     rows.push({ index, ...picked, outcome: d.review ? "review" : "applied", placement: measure(d), frameAligned: measure(frameAligned(d, c.fps)) });
   }
   const inputs = createHash("sha256").update(JSON.stringify([map, tl, c.fps, words, readings])).digest("hex");
-  const result: Result = { caseId: c.id, tightness, inputs, rows };
+  const result: Result = { caseId: c.id, inputs, rows };
   const summary = summarize(rows);
   const previous = values.baseline ? readJson<Result>(values.baseline) : undefined;
   if (previous && (previous.inputs !== inputs || previous.caseId !== c.id || previous.rows.length !== rows.length ||
@@ -134,9 +132,9 @@ async function run() {
   }
   const shared = previous && rows.filter((r, i) => r.frameAligned && previous.rows[i]?.frameAligned).map(r => r.index);
   const paired = previous && shared && { shared: shared.length, baseline: summarize(shared.map(i => previous.rows[i]!)), candidate: summarize(shared.map(i => rows[i]!)) };
-  const out = values.out ?? join(resultsDir(), "word-edges", c.id, timestamp() + "-" + tightness + ".json");
+  const out = values.out ?? join(resultsDir(), "word-edges", c.id, timestamp() + ".json");
   writeJson(out, { ...result, summary, paired });
-  console.log(JSON.stringify({ case: c.id, tightness, summary, paired, out }, null, 2));
+  console.log(JSON.stringify({ case: c.id, summary, paired, out }, null, 2));
 }
 
 if (isMain(import.meta.url)) void main(run);

@@ -229,7 +229,7 @@ it("holds Restart to update while a change is unsaved, as the skill editor does"
   expect(restartAllowed()).toBe(true);
 });
 
-it("saves a General dropdown as it is chosen, like the dialogue ones under it, with no Save to press", async () => {
+it("saves a General dropdown as it is chosen, with no Save to press", async () => {
   const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } as typeof settings }));
   await open();
   expect(el.querySelector('button[type="submit"]')).toBeNull();
