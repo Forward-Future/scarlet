@@ -78,6 +78,8 @@ it.runIf(process.platform === "win32")("applies owner-only library access to exi
     "}",
   ].join("\n");
   windowsFixture(paths.root, check);
+  // The runner can also give the newly created file to Administrators. Its inherited grants have been checked.
+  rmSync(join(paths.tmp, "new.txt"));
 
   // A protected child keeps its explicit grant when its parent permissions change.
   windowsFixture(paths.root, [
