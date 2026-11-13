@@ -268,6 +268,8 @@ mod tests {
 
     #[test]
     fn lists_registered_build_folders_largest_first_and_skips_bad_records() {
+        use std::io::Write;
+
         let tmp = tempfile::tempdir().unwrap();
         let registry = tmp.path().join("registry");
         // No registry yet: nothing registered, not an error.
@@ -276,8 +278,9 @@ mod tests {
         // Written out before it is measured: a file takes no space of its own until then.
         let write = |file: PathBuf, bytes: usize| {
             fs::create_dir_all(file.parent().unwrap()).unwrap();
-            fs::write(&file, vec![7; bytes]).unwrap();
-            fs::File::open(&file).unwrap().sync_all().unwrap();
+            let mut output = fs::File::create(file).unwrap();
+            output.write_all(&vec![7; bytes]).unwrap();
+            output.sync_all().unwrap();
         };
         let cargo = tmp.path().join("target-debug");
         for (folder, bytes) in [("deps", 300), ("build", 200), ("bundle", 1_000_000)] {
