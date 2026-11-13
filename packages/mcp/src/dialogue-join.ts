@@ -45,7 +45,7 @@ export function joinEvidence(words: Word[], wf: Waveform): JoinPage["edges"] {
     if (wf.rms[i]! <= .002 && wf.peaks[i]! <= .012) appendInterval(valleys, start, end);
   }
   const db = wf.rms.map(dbfs);
-  return { voice: wf.speechActivity, valleys, words: words.filter(w => w.end > w.start && w.text.trim() && !/^\s*\[.*\]\s*$/.test(w.text)),
+  return { voice: wf.speechActivity, valleys, words: words.filter(w => w.end > w.start && w.text.trim() && !isTag(w.text)),
     quiet, levels: { from: wf.from, step, db } };
 }
 
@@ -81,6 +81,10 @@ interface SourceEdge { clip: MediaClip; page: NonNullable<JoinPage["edges"]>; at
 interface Edge { at: number; label?: string; problem?: string; note?: string; snapped?: boolean; unmeasured?: boolean; dip?: boolean }
 type Sound = "quiet" | "valley" | "sound";
 
+/** The instant is inside the word's timing, clear of both its edges. */
+const inWord = (w: Word, t: number) => w.start + wordMargin < t && t < w.end - wordMargin;
+/** A transcript tag such as [music], which names no spoken word. */
+const isTag = (text: string) => /^\s*\[.*\]\s*$/.test(text);
 const plain = (w: Pick<Word, "text">) => w.text.trim().replace(/[.,;:!?]+$/u, "") || w.text.trim();
 const quote = (words: string[]) => [...new Set(words)].map(w => "“" + w + "”").join(" / ");
 
@@ -102,14 +106,14 @@ function soundAt(page: SourceEdge["page"], t: number): Sound {
   const inside = (q: TimeRange) => q.start + quietMargin <= t && t <= q.end - quietMargin;
   const run = gaps(page).find(inside);
   if (run) {
-    const spoken = page.words.some(w => w.start + wordMargin < t && t < w.end - wordMargin);
+    const spoken = page.words.some(w => inWord(w, t));
     return spoken && run.end - run.start < inWordGap ? "valley" : "quiet";
   }
   return page.valleys.some(inside) ? "valley" : "sound";
 }
 
-// In page overlaps use the reading with the most context around this instant.
-function pageAt(pages: JoinPage[], mediaId: string, stream: number | undefined, t: number) {
+/** The scan's reading of one recording at a source instant. In page overlaps, the one with the most context around it. */
+export function pageAt(pages: JoinPage[], mediaId: string, stream: number | undefined, t: number) {
   let best: JoinPage | undefined;
   for (const p of pages) {
     if (p.mediaId !== mediaId || (p.audioStream ?? 0) !== stream || !p.edges || p.start > t || p.end < t) continue;
@@ -128,11 +132,14 @@ function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: Joi
     const stream = dialogueAudioStream(clip) ?? streams.get(clip.mediaId);
     const edges = pageAt(pages, clip.mediaId, stream, t);
     if (!edges) return { at, problem: "A dialogue source at this boundary has no timed acoustic scan.", unmeasured: true };
-    const clipped = edges.words.filter(w => w.start + wordMargin < t && t < w.end - wordMargin);
+    const clipped = edges.words.filter(w => inWord(w, t));
     // The edge belongs to any word it touches. Moving onto silence beside that word skips nothing.
     const touching = edges.words.filter(w => w.start - wordMargin <= t && t <= w.end + wordMargin);
     sources.push({ clip, page: edges, at: t, clipped, touching });
   }
+  // Crossing a clip transition could introduce an unexamined mic or a different source clock.
+  const crossesClip = (a: number, b: number) => nearby.some(c => [c.timelineIn, c.timelineIn + clipDuration(c)].some(e =>
+    e >= Math.min(a, b) - 1e-6 && e <= Math.max(a, b) + 1e-6));
   const sound = (timeline: number) => sources.reduce<Sound>((worst, s) => {
     const here = soundAt(s.page, timelineToSource(s.clip, timeline));
     return worst === "sound" || here === "sound" ? "sound" : worst === "valley" || here === "valley" ? "valley" : "quiet";
@@ -169,9 +176,7 @@ function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: Joi
     for (let f = Math.ceil((run.start + quietMargin) * fps - 1e-7); f / fps <= run.end - quietMargin + 1e-7; f++) {
       if (Math.abs(f / fps - target) < Math.abs(best - target)) best = f / fps;
     }
-    const crossesClip = nearby.some(c => [c.timelineIn, c.timelineIn + clipDuration(c)].some(e =>
-      e >= Math.min(t, best) - 1e-6 && e <= Math.max(t, best) + 1e-6));
-    return !crossesClip && sound(best) === "quiet" ? best : t;
+    return !crossesClip(t, best) && sound(best) === "quiet" ? best : t;
   };
   const lowest = Math.ceil((at - reach) * fps - 1e-7), highest = Math.floor((at + reach) * fps + 1e-7);
   const frames: number[] = [];
@@ -191,11 +196,10 @@ function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: Joi
   // Not inside a word, and not past a whole one: a dip moves an edge to a word boundary, never across a word.
   const betweenWords = (timeline: number) => sources.every(s => {
     const t = timelineToSource(s.clip, timeline), from = Math.min(s.at, t), to = Math.max(s.at, t);
-    return !s.page.words.some(w => (w.start + wordMargin < t && t < w.end - wordMargin) || (from <= w.start && w.end <= to));
+    return !s.page.words.some(w => inWord(w, t) || (from <= w.start && w.end <= to));
   });
   for (const next of [at, ...frames]) {
-    if (Math.abs(next - at) > snapLimit + 1e-7 || nearby.some(c => [c.timelineIn, c.timelineIn + clipDuration(c)].some(e =>
-      e >= Math.min(at, next) - 1e-6 && e <= Math.max(at, next) + 1e-6) && next !== at) || !betweenWords(next)) continue;
+    if (Math.abs(next - at) > snapLimit + 1e-7 || (next !== at && crossesClip(at, next)) || !betweenWords(next)) continue;
     // An edge inside a word goes to the boundary it is nearer: in the half by the removal, the word was meant to go;
     // in the half by the kept side, it was meant to stay.
     if (Math.sign(next - at) === -direction && sources.some(s => s.clipped.some(w =>
@@ -209,9 +213,7 @@ function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: Joi
     const narrowing = Math.sign(next - at) === direction, distance = Math.abs(next - at);
     // Removing kept sound is only a fragment trim. Anything longer may take a kept word.
     if (!narrowing && distance > snapLimit + 1e-7) continue;
-    // Crossing a clip transition could introduce an unexamined mic or a different source clock.
-    if (nearby.some(c => [c.timelineIn,c.timelineIn + clipDuration(c)].some(t =>
-      t >= Math.min(at,next)-1e-6 && t <= Math.max(at,next)+1e-6))) continue;
+    if (crossesClip(at, next)) continue;
     const crossed: string[] = [];
     const fits = sources.every(s => {
       const t = timelineToSource(s.clip, next);
@@ -254,7 +256,7 @@ function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: Joi
 export function dialogueClips(tl: Timeline, project: Pick<Project, "media">) {
   const streams = new Map(project.media.filter(m => m.kind === "audio" || m.hasAudio).map(m =>
     [m.id, dialogueAudioStream(m) ?? 0] as const));
-  return { clips: audibleClips(tl, streams), streams };
+  return { clips: audibleMediaClips(tl).filter(c => streams.has(c.mediaId)), streams };
 }
 
 /** Exact timeline word edges from the same scan that judges the join. */
@@ -386,7 +388,7 @@ async function checkPartialWord(tl: Timeline, project: Pick<Project, "media">, c
         centerSource + (nextStart - at) * clip.speed);
       if (to <= from) return;
       const words = await read(clip.mediaId, stream, from, to, true);
-      const heard = words.filter(w => w.end > w.start && !/^\s*\[.*\]\s*$/.test(w.text)).map(w => [clock(w.start), clock(w.end), w.text] as const);
+      const heard = words.filter(w => w.end > w.start && !isTag(w.text)).map(w => [clock(w.start), clock(w.end), w.text] as const);
       return { trackId: track.trackId, clipId: before.id, mediaId: clip.mediaId, audioStream: stream, speed: clip.speed,
         sourceAtEdge: played.source, edge, bounds: { start: clock(from), end: clock(to) }, scan, heard };
     };
@@ -430,7 +432,7 @@ export async function checkKeptWords(tl: Timeline, project: Pick<Project, "media
       const words = to > from + 1e-6 ? await readWindow(clip.mediaId, stream, from, to) : [];
       const time = (s: number) => lo + (s - clip.sourceIn) / clip.speed;
       return { mediaId: clip.mediaId, ...(stream && { audioStream: stream }),
-        words: words.filter(w => w.start >= from - 1e-6 && w.end <= to + 1e-6 && w.end > w.start && normalizeTranscriptToken(w.text) && !/^\s*\[.*\]\s*$/.test(w.text))
+        words: words.filter(w => w.start >= from - 1e-6 && w.end <= to + 1e-6 && w.end > w.start && normalizeTranscriptToken(w.text) && !isTag(w.text))
           .map(w => [time(w.start), time(w.end), w.text] as const) };
     }));
   };
@@ -492,9 +494,10 @@ export function checkDialogueJoin(tl: Timeline, project: Project, range: TimeRan
       snapped ? "" : "Preview the join in context."].filter(Boolean).join(" ") };
 }
 
-function audibleClips(tl: Timeline, streams: Map<string, number>) {
+/** Every clip of a recording that sounds on this version. */
+export function audibleMediaClips(tl: Timeline) {
   return tl.tracks.filter(t => t.kind !== "caption" && !t.muted).flatMap(t => t.clips)
-    .filter((c): c is MediaClip => c.kind === "media" && c.enabled && c.volume > 0 && streams.has(c.mediaId));
+    .filter((c): c is MediaClip => c.kind === "media" && c.enabled && c.volume > 0);
 }
 
 export interface EdgeAudio {
@@ -529,7 +532,7 @@ export function joinAudio(tl: Timeline, project: Project, range: TimeRange, page
       const confirmed = (q: TimeRange) => q.end - q.start >= 2 * quietMargin;
       const before = gaps(page).filter(q => confirmed(q) && q.start + quietMargin <= t).at(-1);
       const after = gaps(page).find(q => confirmed(q) && q.end - quietMargin >= t);
-      const split = page.words.find(w => w.start + wordMargin < t && t < w.end - wordMargin);
+      const split = page.words.find(w => inWord(w, t));
       out.push({ edge, mediaId: clip.mediaId, at: round3(t), sound: soundAt(page, t), ...(levels && { levels }),
         ...(before && { quietBefore: round3(Math.min(t, before.end - quietMargin)) }),
         ...(after && { quietAfter: round3(Math.max(t, after.start + quietMargin)) }),
@@ -587,7 +590,7 @@ function edgeFragment(page: NonNullable<JoinPage["edges"]>, t: number, side: "in
       // The sound that plays, up to where the quiet begins. Under a level step of it is the step's own rounding.
       const seconds = Math.abs(from + (toward > 0 ? i : i + 1) * step - t);
       if (seconds < step - 1e-6) return;
-      if (page.words.some(w => (w.start + wordMargin < quietAt && quietAt < w.end - wordMargin) ||
+      if (page.words.some(w => inWord(w, quietAt) ||
         Math.min(w.end, hi) - Math.max(w.start, lo) > .5 * (w.end - w.start))) return;
       return { seconds: round3(seconds), db: Math.round(peak), quietAt: round3(quietAt), quietDb: Math.round(level) };
     }
@@ -606,7 +609,7 @@ export function clipEdgeSound(pages: JoinPage[], mediaId: string, stream: number
   // Room tone under the edge, too brief to be a run of silence: the instant between two words said in one breath.
   const levels = page.levels, here = levels && levels.db[Math.floor((t - levels.from) / levels.step)];
   if (here !== undefined && here <= DIP_DBFS) return;
-  const split = page.words.find(w => w.start + wordMargin < t && t < w.end - wordMargin);
+  const split = page.words.find(w => inWord(w, t));
   const fragment = edgeFragment(page, t, side);
   if (!split && !fragment) return;
   return { ...(split && { word: plain(split) }), ...(fragment && { fragment }), ...(page.levels && { levels: levelStrip(page.levels, t) }) };

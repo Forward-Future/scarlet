@@ -5,12 +5,12 @@
  * offline replay (evals/src/replay.ts) supplies stored ones, so both run the same code.
  */
 import { normalizeTranscriptToken, type RepeatOccurrence, type DialogueCutKind, type DialogueDetections, type Task } from "@scarlet/shared";
-import { clipsAt, frameAlignedRemoval, mergeRanges, timelineDuration, timelineToSource, type MediaClip, type Project, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
+import { clipsAt, frameAlignedRemoval, mergeRanges, timelineDuration, timelineToSource, type Project, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
 import { round3 } from "./analysis.js";
 import { cutScope, selectedRange } from "./cut-scope.js";
 import type { GapSound } from "./gap-sound.js";
 import type { DialogueEvidence } from "./dialogue-decisions.js";
-import { checkKeptWords, type ReadKeptWords, checkDialogueJoin, checkResumeQuote, dialogueCutPreview, dialogueJoinWords, joinEvidence, pageReaches, pauseCutRange, PAUSE_BEAT, wordCutRange, type JoinPage } from "./dialogue-join.js";
+import { audibleMediaClips, pageAt as scanPageAt, checkKeptWords, type ReadKeptWords, checkDialogueJoin, checkResumeQuote, dialogueCutPreview, dialogueJoinWords, joinEvidence, pageReaches, pauseCutRange, PAUSE_BEAT, wordCutRange, type JoinPage } from "./dialogue-join.js";
 
 /** One range as the agent submits it: timeline seconds, or the removed words of a transcript. */
 export interface DialogueCutInput {
@@ -125,15 +125,13 @@ async function placeWordCut(tl: Timeline, words: TranscriptWord[], ref: { mediaI
   const sides = [...(before ? [{ kept: before.end, middle: (before.end + words[fromWord]!.start) / 2 }] : []),
     ...(after ? [{ kept: after.start, middle: (words[toWord]!.end + after.start) / 2 }] : [])];
   await sources.measure(sides.map(s => ({ mediaId: ref.mediaId, t: s.middle })));
-  const pageAt = (t: number) => sources.pages().filter(p => p.mediaId === ref.mediaId && (p.audioStream ?? 0) === 0 && p.edges && p.start <= t && p.end >= t)
-    .sort((a, b) => Math.min(t - b.start, b.end - t) - Math.min(t - a.start, a.end - t))[0]?.edges;
+  const pageAt = (t: number) => scanPageAt(sources.pages(), ref.mediaId, 0, t);
   // A pause longer than the page read at its middle is placed from the page at the kept word's edge (wordCutRange),
   // so the recording is measured there as well. Every other gap is read once, at its middle.
   const beyond = sides.filter(s => { const page = pageAt(s.middle); return page && !pageReaches(page, s.kept); });
   if (beyond.length) await sources.measure(beyond.map(s => ({ mediaId: ref.mediaId, t: s.kept })));
   const cut = wordCutRange(words, fromWord, toWord, pageAt);
-  const clips = tl.tracks.filter(t => t.kind !== "caption" && !t.muted).flatMap(t => t.clips)
-    .filter((c): c is MediaClip => c.kind === "media" && c.enabled && c.volume > 0 && c.mediaId === ref.mediaId && (!ref.clipId || c.id === ref.clipId));
+  const clips = audibleMediaClips(tl).filter(c => c.mediaId === ref.mediaId && (!ref.clipId || c.id === ref.clipId));
   if (ref.clipId && clips[0]) {
     // No neighboring recognized word can justify removing a long unmeasured lead-in or tail at a clip boundary.
     const { sourceIn, sourceOut } = clips[0];
@@ -181,14 +179,12 @@ export async function resolvePauseCut(tl: Timeline, ref: { mediaId: string; afte
   const said = `“${before.text.trim()}” and “${after.text.trim()}” (#${ref.afterWord}, #${ref.afterWord + 1})`;
   const middle = (before.end + after.start) / 2;
   await sources.measure([Math.min(before.end + .1, middle), Math.max(after.start - .1, middle)].map(t => ({ mediaId: ref.mediaId, t })));
-  const pageAt = (t: number) => sources.pages().filter(p => p.mediaId === ref.mediaId && (p.audioStream ?? 0) === 0 && p.edges && p.start <= t && p.end >= t)
-    .sort((a, b) => Math.min(t - b.start, b.end - t) - Math.min(t - a.start, a.end - t))[0]?.edges;
+  const pageAt = (t: number) => scanPageAt(sources.pages(), ref.mediaId, 0, t);
   const leave = ref.leave ?? PAUSE_BEAT;
   const cut = pauseCutRange(before, after, pageAt, leave);
   if (cut.end - cut.start < .04) throw new NoPauseToTrim(`The pause between ${said} plays ${cut.plays.toFixed(2)} s, which leaves nothing to trim down to ${leave.toFixed(2)} s.`);
   // One clip plays both words: across a join the pause is the join's, and there is no stretch of the recording to take out.
-  const clip = tl.tracks.filter(t => t.kind !== "caption" && !t.muted).flatMap(t => t.clips)
-    .find((c): c is MediaClip => c.kind === "media" && c.enabled && c.volume > 0 && c.mediaId === ref.mediaId &&
+  const clip = audibleMediaClips(tl).find(c => c.mediaId === ref.mediaId &&
       before.start + before.end >= 2 * c.sourceIn && after.start + after.end < 2 * c.sourceOut);
   if (!clip) throw new Error(`Version ${tl.version} does not play ${said} one after the other. Read timeline_transcript for the words this version plays.`);
   const place = (source: number) => round3(clip.timelineIn + (Math.min(Math.max(source, clip.sourceIn), clip.sourceOut) - clip.sourceIn) / (clip.speed ?? 1));
