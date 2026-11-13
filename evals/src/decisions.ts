@@ -28,7 +28,7 @@ export function reviewExport(change: Change, base: Timeline, proposed: Timeline,
         index, removed: cut.removed,
         sources: timelineRangeToSource(review.original, media, cut.removed),
         reasons: reasons[index] ?? [],
-        ...(a && { assessment: { verdict: a.verdict, reason: a.reason, inspected: a.inspected } }),
+        ...(a && !a.provisional && { assessment: { verdict: a.verdict, reason: a.reason, inspected: a.inspected } }),
         decision: editorDecision(change, index),
       };
     }),
