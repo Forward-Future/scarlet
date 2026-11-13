@@ -28,7 +28,7 @@ node_modules/.bin/tsc -p evals/tsconfig.json
 Times are seconds on the dialogue recording's source clock, so runs from different versions can be compared.
 
 **Removals** (`metrics.ts`, `score.ts`). Seconds and cuts for each category: retake, filler, pause,
-coaching, and the fillers and pauses Scarlet adds by itself. Results are split by tier:
+coaching, and automatic removals in historical runs. Results are split by tier:
 
 - **Applied:** confident cuts.
 - **Review:** staged cuts. This tier also records the AI's second-pass verdict (cut, keep, or ask) and the
@@ -60,8 +60,7 @@ version's timeline: the source, the applied cut, the proposed cut and the refere
   starts must be within 25 seconds of each other. The reference count includes deliberate emphasis ("very, very").
 - A typed or silent demonstration is a gap here. The reference's own count is the floor a cut can reach.
 
-**Held by Scarlet.** Staged cuts the agent submitted as `cut`: an edge check or the editor's Suggest setting put
-them in front of the editor.
+**Held by Scarlet.** Staged cuts the agent submitted as `cut`: the measured edit needs review.
 
 **Against a reference** (the editor's final or approved cut). This section is scored at three operating points:
 
@@ -202,7 +201,7 @@ A waveform map from `evals/tools/match_audio.py` can also supply the exact remov
 
 ```sh
 node --import tsx evals/src/wordEdges.ts --case my-case --reference-map /private/path/audio-map.json --out /private/path/baseline.json
-node --import tsx evals/src/wordEdges.ts --case my-case --reference-map /private/path/audio-map.json --baseline /private/path/baseline.json --tightness tight
+node --import tsx evals/src/wordEdges.ts --case my-case --reference-map /private/path/audio-map.json --baseline /private/path/baseline.json
 ```
 
 The first run reads and caches the recording's waveform, peaks and voice activity from the engine. Subsequent runs replay offline on the same measurements. `--engine URL` selects the engine and `--waveforms PATH` selects a private cache. The output records how many joins removed a different set of word midpoints and the mean absolute error in the gap between the kept words, in milliseconds, before and after the timeline's frame rounding. A baseline comparison scores common joins on identical case inputs. Each result also includes every eligible join for that version. Use the full task benchmark to measure the agent's choice of words.
@@ -247,14 +246,10 @@ The replay runs a stored `dialogue_apply_cuts` plan offline through the planning
 - Edge checks, snapping and padding.
 - Review staging and the gate report.
 
-After planning, replay applies the engine's per-kind editor settings (`applyDialoguePreferences`). Nothing is
-mirrored, so code edits show up directly.
-
 ```sh
 $TSX evals/src/replay.ts --case my-case                       # vs. what the run produced
 $TSX evals/src/replay.ts --case my-case --baseline <earlier replay.json>   # vs. before your code edit
 $TSX evals/src/replay.ts --case my-case --plan edited-plan.json           # a different plan
-$TSX evals/src/replay.ts --case my-case --tightness tight --ai-cuts filler=suggest   # editor settings
 $TSX evals/src/replay.ts --case my-case --drop-quotes   # compare the same plan offline without its optional quotes
 ```
 

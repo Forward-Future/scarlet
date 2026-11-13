@@ -12,6 +12,6 @@ Every project uses the same library. A skill command pins its guide to the task.
 | Picture and graphics | [Visual pass](visual-pass/SKILL.md) | Add supplied cutaways, titles or graphics while keeping dialogue timing. |
 | Picture and graphics | [Add captions](add-captions/SKILL.md) | Caption retained speech in short, readable lines. |
 
-The built-in `/tighten-pauses-here` command limits the request to local pauses. Reading the dialogue guide supplies editorial guidance. Project context, cut settings, permissions and scope belong to Scarlet. [Skill and tool ownership](../docs/skills-and-tools.md)
+The built-in `/tighten-pauses-here` command limits the request to local pauses. The dialogue guide sets the editorial defaults for what to cut, what to review, how much space to leave around speech and how to blend the sound at a join. Project context, permissions and scope belong to Scarlet. [Skill and tool ownership](../docs/skills-and-tools.md)
 
 Scarlet includes workflows adapted from Alex’s editing skills. [Upstream snapshot](https://github.com/Forward-Future/alexs-davinci-editing-skills/tree/984c321a45debcd7c207953dc3169d6992d14b15/skills) · [MIT license](../apps/desktop/src-tauri/licenses/alex-editing-skills.txt)

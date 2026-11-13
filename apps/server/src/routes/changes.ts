@@ -46,16 +46,16 @@ export function changeRoutes(ctx: Ctx) {
     const body = await jsonBody(c, DialogueCutsRequest);
     const attempt = requestAttempt(c.req.raw), projectId = c.req.param("id");
     body.taskId ??= attempt?.taskId;
-    const { changes, editorPreferences, carriedForward, editorDecided, heldForReview, alreadyRemoved, joinCrossfades } = submitDialogueCuts(ctx, c.var.user, projectId, body,
+    const { changes, carriedForward, editorDecided, heldForReview, alreadyRemoved, joinCrossfades } = submitDialogueCuts(ctx, c.var.user, projectId, body,
       { checkAttempt: () => requireProjectEditAttempt(ctx, attempt, projectId, body.taskId) });
     return c.json({ changes: changes.map(change => {
       const { id, state, fromVersion, toVersion, description, intent } = change;
       return { id, state, fromVersion, toVersion, description, intent, timelineEdits: namedTimelineEdits(change) };
-    }), editorPreferences, ...(carriedForward && { carriedForward }),
+    }), ...(carriedForward && { carriedForward }),
       // Ranges the editor already called in an earlier part. Their call stands: this part's cuts there were left out, and
       // a staged cut they hadn't called that now sits right against footage they chose to keep is kept with it.
       ...(editorDecided && { editorDecided }), ...(heldForReview && { heldForReview }), ...(alreadyRemoved && { alreadyRemoved }),
-      // The editor's crossfade on the joins these cuts made: how many got it, and each join left a straight cut with why.
+      // The requested crossfade on the joins these cuts made: how many got it, and each join left a straight cut with why.
       ...(joinCrossfades && { joinCrossfades }),
       // The version to build on next: where the confident cuts left the edit.
       head: ctx.repos.projects.get(c.req.param("id"))?.head }, 201);
@@ -105,11 +105,9 @@ export function changeRoutes(ctx: Ctx) {
       if (!review) throw badRequest("cuts_unsupported", "This edit has no individual cuts.");
       const previous = new Map(change.cutAssessments?.map(a => [a.index, a]));
       const byIndex = new Map(previous);
-      // A kind the editor set to Suggest is the editor's call on every cut, so a cut verdict waits for them.
-      const levels = ctx.settings().dialogue.aiCuts;
-      const heldForEditor: number[] = [];
       // A cut the editor sent back waits for their call on the revised version, whatever Scarlet recommends on it.
       const heldRevised: number[] = [];
+      const heldForEditor: number[] = [];
       const heldCalls: number[] = [];
       // The range guards against a recommendation landing on another cut after the indices shift. Cuts sit on whole
       // frames, so a range within a frame names this one: an agent that copied 18.9667 for 18.96666… was refused,
@@ -123,7 +121,7 @@ export function changeRoutes(ctx: Ctx) {
           throw badRequest("wrong_cut", `Cut ${given.index} of this pass is ${span.start.toFixed(3)}–${span.end.toFixed(3)} s, not ${given.start.toFixed(3)}–${given.end.toFixed(3)} s. Give its range, or the index of the cut you mean.`);
         }
         const item = { ...given, start: span.start, end: span.end };
-        const suggestOnly = item.verdict === "cut" && change.cutReasons?.some(r => r.kind && levels[r.kind] !== "cut" &&
+        const suggestOnly = item.verdict === "cut" && change.cutReasons?.some(r => r.legacySuggest &&
           r.start >= span.start - 0.00001 && r.start < span.end);
         if (suggestOnly) heldForEditor.push(item.index);
         const shown = previous.get(item.index);
@@ -203,7 +201,7 @@ export function changeRoutes(ctx: Ctx) {
       return { total: review.cuts.length, assessed: cutAssessments.filter(a => !a.provisional).length,
         needsDecision: review.cuts.length - cutAssessments.filter(a => a.verdict !== "ask").length,
         ...(heldCalls.length ? { heldCalls, existingCalls: "These cuts already reached the editor as calls. Their original notes and the editor's choices stand." } : {}),
-        ...(heldForEditor.length ? { heldForEditor, editorPreference: "The editor set these kinds to Suggest, so each cut waits in Needs your call." } : {}),
+        ...(heldForEditor.length ? { heldForEditor, editorPreference: "These cuts were staged with the editor’s approval required." } : {}),
         ...(heldRevised.length ? { heldRevised, editorRequest: "The editor sent these cuts back, so each revised cut waits in Needs your call. Its revised note is preserved." } : {}) };
     }, "immediate")());
   });

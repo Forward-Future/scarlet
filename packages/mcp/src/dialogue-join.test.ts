@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { createProject, emptyTimeline, makeMediaClip, type MediaAsset } from "@scarlet/timeline";
-import { PAUSE_AIR_SCALE } from "@scarlet/shared";
 import { AIR_AFTER_SPEECH, AIR_BEFORE_SPEECH, checkDialogueJoin, clipEdgeSound, joinAudio, joinEvidence, padEdge, pauseCutRange, wordCutRange, type JoinPage } from "./dialogue-join.js";
 
 const words = [
@@ -144,37 +143,6 @@ describe("native retake boundaries", () => {
     const end = checkDialogueJoin(tl,p,{start:2.4,end:3.45},[page]);
     expect(end.status).toBe("snapped");
     expect(end.end).toBeCloseTo(3.3);
-  });
-  it("scales the air it leaves by the editor's pause tightness", () => {
-    const { loose, natural, tight } = PAUSE_AIR_SCALE;
-    expect(natural).toBe(1);
-    const run = { start: 1, end: 2 };
-    expect(padEdge(run, "start", tight)).toBeCloseTo(1 + AIR_AFTER_SPEECH * .6);
-    expect(padEdge(run, "end", tight)).toBeCloseTo(2 - AIR_BEFORE_SPEECH * .6);
-    expect(padEdge(run, "start", loose)).toBeCloseTo(1 + AIR_AFTER_SPEECH * 1.5);
-    expect(padEdge(run, "end", loose)).toBeCloseTo(2 - AIR_BEFORE_SPEECH * 1.5);
-    expect(padEdge(run, "start", natural)).toBe(padEdge(run, "start"));
-    // A short pause still splits in proportion, and never leaves the quiet run's interior.
-    expect(padEdge({ start: 1, end: 1.2 }, "start", loose)).toBeCloseTo(1.12);
-    expect(padEdge({ start: 1, end: 1.1 }, "end", 3)).toBeCloseTo(1.06);
-    // Word cuts: the gap after “finish” and before “next”.
-    const at = () => page.edges;
-    const tightCut = wordCutRange(words, 1, 1, at, tight), looseCut = wordCutRange(words, 1, 1, at, loose);
-    expect(tightCut.start).toBeCloseTo(1.44 + AIR_AFTER_SPEECH * .6);
-    expect(tightCut.end).toBeCloseTo(3.4 - AIR_BEFORE_SPEECH * .6);
-    // The 0.36 s gap after “finish” is shorter than loose air on both sides, so it splits in proportion.
-    expect(looseCut.start).toBeCloseTo(1.44 + .36 * AIR_AFTER_SPEECH / (AIR_AFTER_SPEECH + AIR_BEFORE_SPEECH));
-    expect(looseCut.end).toBeCloseTo(3.4 - AIR_BEFORE_SPEECH * 1.5);
-    // A moved edge lands on the frame nearest the scaled air. Whether it snapped depends only on the move onto silence.
-    const { p, tl } = fixture();
-    const tighter = checkDialogueJoin(tl, p, { start: 2.4, end: 3.45 }, [page], tight);
-    const looser = checkDialogueJoin(tl, p, { start: 2.4, end: 3.45 }, [page], loose);
-    expect([tighter.status, looser.status]).toEqual(["snapped", "snapped"]);
-    expect(tighter.end).toBeCloseTo(100 / 30);
-    expect(looser.end).toBeLessThan(3.3);
-    expect(looser.end).toBeGreaterThan(3.2);
-    // An edge already in silence stays put at any tightness.
-    expect(checkDialogueJoin(tl, p, { start: 1.7, end: 2.8 }, [page], tight)).toMatchObject({ status: "unchanged", start: 1.7, end: 2.8 });
   });
   it("puts an edge beside the kept word when a deep trough lies inside the quiet run", () => {
     // The room goes almost silent from 2.5 to 2.9 s, inside the quiet that runs from “first” to “next”. The trough is
