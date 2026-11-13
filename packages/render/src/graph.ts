@@ -40,10 +40,12 @@ import type {
 import { INDEXED_MP4_INPUT, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, ffmpegMajor, fnum } from "./exec.js";
 import { effectFilters, effectKind, escapeFilterPath } from "./effects.js";
 import { resolveFontFile, type FontOptions } from "./fonts.js";
-import { hasIndexedAvc, isImagePath, probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
+import { hasIndexedAvc, isImagePath, matchesCanvasFormat, probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
 
 export interface GraphOptions extends FontOptions {
   decoder?: "videotoolbox" | "videotoolbox-hevc" | "cuda";
+  /** Look for an original picture the delivery encoder can read directly. */
+  directPicture?: boolean;
   /** Reuse probed movie headers for seeks when the caller supports discovery fallback. */
   indexedInputs?: boolean;
   signal?: AbortSignal;
@@ -73,6 +75,8 @@ export interface GraphOptions extends FontOptions {
 }
 
 export interface FilterGraph {
+  /** A candidate for direct encoding. The encoder must verify its decoded frame clock before publishing. */
+  directPicture?: { file: string; start: number; frames: number };
   /** ffmpeg argv after the binary: inputs, the filter script option and output maps. */
   args: string[];
   /** Input files in `-i` order (one per media clip). */
@@ -443,6 +447,22 @@ export function coversCanvas(clip: Clip, p: Placement, media: Map<string, MediaA
   return w >= W && h >= H;
 }
 
+/** A single opaque original can bypass the compositor when its unmodified frames occupy the entire section. */
+export function directExportPicture(clip: MediaClip, p: Placement, asset: MediaAsset, probe: ProbeResult | undefined,
+  width: number, height: number, fps: number, duration: number): boolean {
+  if (asset.kind !== "video" || asset.hasAlpha !== false || asset.fps !== fps || clip.speed !== 1 || clip.opacity !== 1 ||
+      clip.keyframes?.length || clip.videoFadeIn || clip.videoFadeOut || clip.effects.some(e => e.enabled && effectKind(e.type) !== "audio") ||
+      p.pos !== 0 || Math.abs(p.vis - duration) > 1e-7) return false;
+  if (clip.transform) return false;
+  if (!probe || !matchesCanvasFormat(probe) || probe.width !== width || probe.height !== height || probe.videoStreamCount !== 1 ||
+      probe.videoCodec !== "h264" || probe.videoCodecTag !== "avc1" || !probe.formatName?.split(",").includes("mov") ||
+      probe.previewClock?.startPts !== 0 || probe.videoStart !== 0 || probe.fps !== fps || !probe.videoTimeBase ||
+      !probe.videoDuration || !probe.videoFrameCount || Math.abs(probe.videoDuration * fps - probe.videoFrameCount) > 0.001) return false;
+  const start = (clip.sourceIn + p.local0) * fps, frames = duration * fps;
+  return Math.abs(start - Math.round(start)) < 1e-5 && Math.abs(frames - Math.round(frames)) < 1e-5 &&
+    Math.round(start) + Math.round(frames) <= probe.videoFrameCount;
+}
+
 // ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
@@ -535,8 +555,10 @@ async function writeFilterGraph(
   let stack = "[base]";
   const audioLabels: string[] = [];
   const includeAudio = !opts.singleFrame && !opts.pictureOnly;
+  let directPicture: FilterGraph["directPicture"];
 
   const overlay = (layer: string, x: string, y: string, p: Placement, filled = false) => {
+    directPicture = undefined;
     const out = label("s");
     // The layer's own end stops it. Its start needs the test: overlay shows a layer from the base frame
     // nearest its first picture, which can be the frame before. A filled layer holds its last picture for as
@@ -650,7 +672,10 @@ async function writeFilterGraph(
   const covered = (trackIndex: number, p: Placement) =>
     covers.some(c => c.track > trackIndex && c.start <= p.pos + 1e-6 && c.end >= p.pos + p.vis - 1e-6);
 
-  const sharedReads = opts.indexedInputs && opts.pictureOnly && !opts.singleFrame && !opts.pictureSource && !opts.decoder && W * H <= 1920 * 1080
+  // The high-core Mac policy uses software for AVC and hardware for HEVC.
+  // Nearby AVC cuts can still share their source read under that policy.
+  const sharedReads = opts.indexedInputs && opts.pictureOnly && !opts.singleFrame && !opts.pictureSource &&
+    (!opts.decoder || opts.decoder === "videotoolbox-hevc") && W * H <= 1920 * 1080
     ? await adjacentPictureReads(timeline, range, media, fps, covered, verifiedProbe) : undefined;
   // Video and audio tracks, bottom first so later tracks composite on top.
   for (const [trackIndex, track] of timeline.tracks.entries()) {
@@ -729,9 +754,14 @@ async function writeFilterGraph(
           : still ? addInput(["-loop", "1", "-framerate", fnum(fps), "-t", fnum(p.vis)], file)
           : shared ? open(file, shared.start / fps, true, (shared.end - shared.start) / fps)
           : open(proxy?.file ?? file, Math.max(0, pictureSeek - (proxy?.start ?? 0)), !proxy, visible.vis * speed);
+        const firstLayer = stack === "[base]";
         // A single frame already seeks to the picture shown at its time.
         videoForMedia(clip, idx, still, visible, cudaScale && !proxy, shared ? pictureSeek - shared.start / fps : undefined, held,
           !opts.singleFrame && fillsFrames(clip, asset, fps));
+        if (opts.directPicture && opts.pictureOnly && !opts.pictureFilter && !opts.singleFrame && firstLayer && !shared && !proxy && !still &&
+            directExportPicture(clip, visible, asset, await verifiedProbe(asset), W, H, fps, D)) {
+          directPicture = { file, start: pictureSeek, frames: Math.round(D * fps) };
+        }
       }
       if (wantAudio) {
         // Seeking before a movie's first video keyframe can discard earlier
@@ -824,6 +854,7 @@ async function writeFilterGraph(
   }
 
   return {
+    directPicture: drawtexts.length ? undefined : directPicture,
     args: [...inputArgs, flag, scriptPath, ...(opts.audioOnly ? [] : ["-map", "[vout]"]), ...(includeAudio ? ["-map", "[aout]"] : [])],
     inputs,
     warnings,

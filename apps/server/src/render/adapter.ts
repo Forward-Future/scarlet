@@ -66,6 +66,9 @@ export interface RenderOptions {
   concurrency?: number;
 }
 
+/** How the completed render produced its video. A zero count means the picture was copied or cached. */
+export interface RenderEncoding { encoder: string; rendered: number }
+
 export interface RenderAdapter {
   probeMedia(path: string, signal?: AbortSignal): Promise<ProbeResult>;
   hashFile(path: string, onBytesRead?: (bytes: number) => void, signal?: AbortSignal): Promise<string>;
@@ -78,7 +81,7 @@ export interface RenderAdapter {
   renderRange(project: Project, timeline: Timeline, range: TimeRange, outputPath: string, opts: RenderOptions): Promise<void>;
   renderPlaybackSegment: typeof renderPlaybackSegment;
   renderFullCached(project: Project, timeline: Timeline, cacheDir: string, outputPath: string,
-    opts: RenderOptions & { onCachedRanges?(ranges: TimeRange[]): void }): Promise<void>;
+    opts: RenderOptions & { onCachedRanges?(ranges: TimeRange[]): void }): Promise<RenderEncoding | void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +349,7 @@ async function renderFullCached(project: Project, timeline: Timeline, _cacheDir:
   // The fallback has no segment cache.
   const range = opts.exportRange ?? { start: 0, end: timelineDuration(timeline) };
   await renderRange(project, timeline, range, outputPath, opts);
+  return { encoder: "libx264", rendered: 1 };
 }
 
 export const fallbackAdapter: RenderAdapter = {
