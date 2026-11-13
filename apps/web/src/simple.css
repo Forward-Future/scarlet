@@ -272,21 +272,22 @@
 .simple-more.needs-you { color: var(--color-fg); }
 .simple-more.needs-you::after { content: ""; position: absolute; top: 4px; right: 2px; width: 5px; height: 5px; border-radius: 50%; background: var(--color-warn);
   box-shadow: 0 0 0 2px var(--color-panel); }
-/* While videos cache, a ring fills around the button, drawn like the one beside "Updating": Media is inside the menu,
-   so this is the only sign of it in the window. It is gray, since it asks nothing of the editor, and the amber mark
-   sits over it. With no figure yet it is a quarter that turns, or a whole ring that fades in and out with motion reduced. */
-.simple-more-ring { position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; transform: rotate(-90deg); pointer-events: none; }
-.simple-more-ring circle { fill: none; stroke: var(--color-line); stroke-width: 1.5; }
-.simple-more-ring circle + circle { stroke: var(--color-muted); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+/* Caching and exporting share the same motion. The cache ring surrounds More, and the export ring sits beside its label. */
+.simple-more-ring { position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; }
+.simple-export-ring { width: 16px; height: 16px; }
+.progress-ring { flex: none; transform: rotate(-90deg); pointer-events: none; }
+.progress-ring circle { fill: none; stroke: var(--color-line); stroke-width: 1.5; }
+.simple-export-ring circle { stroke-width: 2.5; }
+.progress-ring circle + circle { stroke: var(--color-muted); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
 .simple-more.needs-you::after { z-index: 1; }
 @media (prefers-reduced-motion: no-preference) {
-  .simple-more-ring.is-unknown { animation: simple-more-ring-turn 1s linear infinite; }
+  .progress-ring.is-unknown { animation: progress-ring-turn 1s linear infinite; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .simple-more-ring circle + circle { transition: none; }
-  .simple-more-ring.is-unknown circle + circle { stroke-dasharray: none; animation: media-link-breathe 2.4s ease-in-out infinite !important; }
+  .progress-ring circle + circle { transition: none; }
+  .progress-ring.is-unknown circle + circle { stroke-dasharray: none; animation: media-link-breathe 2.4s ease-in-out infinite !important; }
 }
-@keyframes simple-more-ring-turn { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+@keyframes progress-ring-turn { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
 .menu-value { margin-left: auto; min-width: 0; padding-left: 10px; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .menu-dot { flex: none; margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--color-warn); }
 .menu-value + .menu-dot { margin-left: 8px; }
