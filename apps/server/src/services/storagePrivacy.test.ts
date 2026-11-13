@@ -94,6 +94,20 @@ it.runIf(process.platform === "win32")("applies owner-only library access to exi
   expect(windowsAccessFailure(paths)).toMatch(/^The Scarlet library still grants access to another account/);
 });
 
+it.runIf(process.platform === "win32")("leaves an owner-only library's files untouched when it opens again", () => {
+  const paths = new Paths(join(sandbox, "library"));
+  paths.ensureRoot();
+  const source = join(paths.root, "camera.mov");
+  writeFileSync(source, "recording");
+  const before = statSync(source);
+  // Preview, checkpoint and render stamps include ctime. On Windows that is ChangeTime, which a DACL rewrite of the
+  // root moves on every file it propagates to.
+  execFileSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe"),
+    ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Milliseconds 50"], { windowsHide: true });
+  paths.ensureRoot();
+  expect(statSync(source).ctimeMs).toBe(before.ctimeMs);
+});
+
 it.runIf(process.platform === "win32")("refuses an existing database owned by another principal", ({ skip }) => {
   const paths = new Paths(join(sandbox, "library"));
   // An ordinary user cannot assign an arbitrary owner. Windows CI runs elevated and exercises this case.

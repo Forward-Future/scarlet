@@ -35,7 +35,11 @@ export function restrictWindowsAccess(path: string, kind: "File" | "Directory", 
     "$acl.SetAccessRuleProtection($true,$false)",
     `$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($id,'FullControl',${inheritance}'Allow'))`,
     `$current=[System.IO.${kind}]::GetAccessControl($env:SCARLET_PRIVATE_PATH)`,
-    `if ($acl.GetSecurityDescriptorSddlForm('Access,Owner') -ne $current.GetSecurityDescriptorSddlForm('Access,Owner')) { if ($env:SCARLET_REFUSE_DACL_CHANGE) { throw $env:SCARLET_REFUSE_DACL_CHANGE }; [System.IO.${kind}]::SetAccessControl($env:SCARLET_PRIVATE_PATH,$acl) }`,
+    // Windows reads a protected DACL back with its auto-inherit flags ("D:PAI(...)"), which a new descriptor lacks
+    // ("D:P(...)"). Compare without them, or every start rewrites the root, and Windows then re-propagates it to every
+    // file in the library, moving each file's ChangeTime and with it every source's preview and render stamps.
+    "$sddl={ param($s) $s.GetSecurityDescriptorSddlForm('Access,Owner') -replace '(D:P?)(?:AR|AI)+','$1' }",
+    `if ((& $sddl $acl) -ne (& $sddl $current)) { if ($env:SCARLET_REFUSE_DACL_CHANGE) { throw $env:SCARLET_REFUSE_DACL_CHANGE }; [System.IO.${kind}]::SetAccessControl($env:SCARLET_PRIVATE_PATH,$acl) }`,
     kind === "Directory" ? checkWindowsChildren : "",
   ].join(";");
   execFileSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe"),
