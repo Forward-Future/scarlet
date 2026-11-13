@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, resolveFfmpeg, resolveFfprobe } from "@scarlet/render";
+import { LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, mediaToolLaunchError, resolveFfmpeg, resolveFfprobe } from "@scarlet/render";
 
 // Same resolution as the renderer: env override → binary beside the engine → PATH.
 export const FFMPEG = resolveFfmpeg();
@@ -81,7 +81,7 @@ export function run(bin: string, args: string[], opts: RunOptions = {}): Promise
     });
     child.on("error", (e) => {
       opts.signal?.removeEventListener("abort", onAbort);
-      reject(new FfmpegError(`${bin} failed to start: ${e.message}`, args, err));
+      reject(new FfmpegError(mediaToolLaunchError(bin, e, `${bin} failed to start: ${e.message}`), args, err));
     });
     child.on("close", (code) => {
       opts.signal?.removeEventListener("abort", onAbort);

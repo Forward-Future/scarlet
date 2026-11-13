@@ -59,7 +59,7 @@ for (const windows of [false, true]) {
     mkdirSync(dir, { recursive: true });
     mkdirSync(join(licenses, "runtime"), { recursive: true });
     writeFileSync(join(dir, windows ? "scarlet-engine.exe" : "scarlet-engine"), "engine");
-    copyFileSync(new URL("../../../LICENSE", import.meta.url), join(licenses, "Scarlet-MIT.txt"));
+    copyFileSync(new URL("../../../LICENSE", import.meta.url), join(licenses, "scarlet.txt"));
     for (const name of ["node.txt", "javascript.txt", "rust.txt"]) writeFileSync(join(licenses, "runtime", name), "notice");
     if (windows) {
       mkdirSync(join(licenses, "runtime/DirectML"));
@@ -87,7 +87,7 @@ for (const windows of [false, true]) {
       assert.throws(() => inspectPublicPayload(root, false), /helper differs/);
       copyFileSync(new URL("./Install-Scarlet-FFmpeg-macOS.sh", import.meta.url), helper);
     }
-    writeFileSync(join(licenses, "Scarlet-MIT.txt"), "wrong license");
+    writeFileSync(join(licenses, "scarlet.txt"), "wrong license");
     assert.throws(() => inspectPublicPayload(root, windows), /license differs/);
   });
 }

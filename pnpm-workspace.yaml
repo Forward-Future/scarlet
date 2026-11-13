@@ -6,6 +6,10 @@ packages:
 patchedDependencies:
   zod@4.6.6: packages/shared/patches/zod@4.6.6.patch
 
+# ONNX Runtime 1.22 uses the ZIP reader only in its install script.
+overrides:
+  onnxruntime-node@1.22.0>adm-zip: 0.6.1
+
 allowBuilds:
   onnxruntime-node: false # CPU binaries are included in the package.
   better-sqlite3: true

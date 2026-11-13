@@ -32,7 +32,7 @@ export function inspectPublicPayload(root, windows) {
     }
   }
   const licenses = join(resources, "licenses");
-  if (!readFileSync(join(licenses, "Scarlet-MIT.txt")).equals(mit)) throw new Error("Packaged Scarlet license differs from the source license");
+  if (!readFileSync(join(licenses, "scarlet.txt")).equals(mit)) throw new Error("Packaged Scarlet license differs from the source license");
   const platformNotices = windows ? ["DirectML/LICENSE.txt", "DirectML/LICENSE-CODE.txt", "DirectML/ThirdPartyNotices.txt",
     "Vulkan-Headers/MIT.txt", "Vulkan-Headers/NOTICE.txt"] : [];
   for (const file of ["node.txt", "javascript.txt", "rust.txt", ...platformNotices]) {

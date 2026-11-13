@@ -87,6 +87,10 @@ async function javascriptRecords() {
   }
   // The CSS and the native ONNX packages are distributed separately from these JS chunks.
   const addPackage = (req, name) => dirs.add(packageDir(req.resolve(name)));
+  // These bundlers emit runtime helper code into the engine and renderer.
+  addPackage(requireServer, "esbuild");
+  addPackage(requireWeb, "vite");
+  addPackage(createRequire(requireWeb.resolve("vite")), "rollup");
   const tailwind = createRequire(requireWeb.resolve("@tailwindcss/vite"));
   addPackage(tailwind, "tailwindcss");
   const speaker = createRequire(requireServer.resolve("sherpa-onnx-node"));
@@ -149,18 +153,24 @@ async function nodeNotice() {
 }
 
 async function main() {
-  const [flag, target] = process.argv.slice(2);
-  if (flag !== "--target" || !["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc"].includes(target)) {
+  const [flag, explicitTarget] = process.argv.slice(2);
+  const target = flag === "--target" ? explicitTarget : process.env.TAURI_ENV_TARGET_TRIPLE
+    ?? execFileSync("rustc", ["-vV"], { encoding: "utf8" }).match(/^host: (\S+)/m)?.[1];
+  if ((flag && flag !== "--target") || !["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc"].includes(target)) {
     throw new Error("Pass --target followed by a supported desktop target triple");
   }
-  const dest = join(tauri, "binaries/public-notices");
+  const dest = join(bundled, "runtime");
   const js = await javascriptRecords(), crates = rustRecords(target);
   const node = await nodeNotice();
+  const sysroot = execFileSync("rustc", ["--print", "sysroot"], { encoding: "utf8" }).trim();
+  const standardLibraryNotice = join(sysroot, "share/doc/rust/COPYRIGHT-library.html");
+  if (!existsSync(standardLibraryNotice)) throw new Error("Install the rust-docs component for the release toolchain to include its standard-library notices.");
   rmSync(dest, { recursive: true, force: true });
   mkdirSync(dest, { recursive: true });
   writeFileSync(join(dest, "node.txt"), `Node.js ${process.version}\nhttps://github.com/nodejs/node/blob/${process.version}/LICENSE\n\n${node}\n`);
   writeFileSync(join(dest, "javascript.txt"), renderNotices(js));
   writeFileSync(join(dest, "rust.txt"), renderNotices(crates));
+  cpSync(standardLibraryNotice, join(dest, "rust-standard-library.html"));
   cpSync(join(sources, "whisper-audio-dependencies.txt"), join(dest, "whisper-audio-dependencies.txt"));
   cpSync(join(sources, "sherpa-dependencies.txt"), join(dest, "sherpa-dependencies.txt"));
   cpSync(join(sources, "onnxruntime-1.28.2-third-party.txt"), join(dest, "speaker-onnxruntime-1.28.2-third-party.txt"));

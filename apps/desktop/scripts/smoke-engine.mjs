@@ -1,9 +1,10 @@
 // End-to-end check of a built desktop bundle's engine, run in CI on every
 // platform: start the bundled engine the way the app does, ingest a clip,
 // render a change with captions, and list the MCP tools an agent would get.
-// Give public builds their external FFmpeg tools. Local builds use the copies beside the engine.
+// Public installers find separately installed media tools on PATH. Local updater
+// builds may instead keep the tools beside the engine.
 //
-// Usage: node scripts/smoke-engine.mjs <engine directory> [external FFmpeg directory]
+// Usage: node scripts/smoke-engine.mjs <engine directory> [external ffmpeg and ffprobe directory]
 //   macOS:   .../bundle/macos/Scarlet.app/Contents/MacOS
 //   Windows: .../target/<triple>/release
 import { execFileSync, spawn } from "node:child_process";
@@ -11,8 +12,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { registerStorage } from "./register-storage.mjs";
 import { smokeEnvironment, startSmokeEngine } from "./smoke-engine-startup.mjs";
+import { registerStorage } from "./register-storage.mjs";
 import { createRequire } from "node:module";
 
 const dir = resolve(process.argv[2] ?? "");
@@ -53,7 +54,12 @@ try {
   execFileSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=4", "-f", "lavfi", "-i", "sine=frequency=440:duration=4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-y", clip]);
 
   const env = smokeEnvironment(work);
-  if (externalTools) env.PATH = externalTools + delimiter + env.PATH;
+  if (externalTools) {
+    for (const name of ["ffmpeg", "ffprobe"]) {
+      if (existsSync(join(dir, name + exe))) fail(`unexpected bundled media tool: ${name}`);
+    }
+    env.PATH = externalTools + delimiter + env.PATH;
+  }
   execFileSync(whisper, ["--help"], { env, stdio: "ignore" });
   const data = join(work, "data");
   const { child, ready } = await startSmokeEngine(engine, work, env);

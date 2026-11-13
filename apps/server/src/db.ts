@@ -435,6 +435,17 @@ const MIGRATIONS: string[] = [
      BEGIN
        UPDATE media SET json = json_set(json, '$.lastTranscription', json_extract(OLD.json, '$.lastTranscription')) WHERE id = NEW.id;
      END;`,
+  // An engine can miss a brief opt-out in another engine. Its buffered events still belong to the old preference.
+  `ALTER TABLE settings ADD COLUMN telemetry_revision INTEGER NOT NULL DEFAULT 0;
+   CREATE TRIGGER telemetry_preference_changed AFTER UPDATE OF json ON settings
+   WHEN coalesce(json_extract(OLD.json, '$.telemetryEnabled'), 1) != coalesce(json_extract(NEW.json, '$.telemetryEnabled'), 1)
+   BEGIN
+     -- Older engines write only the settings they understand. Preserve an opt-out across such a save.
+     UPDATE settings SET json = json_set(NEW.json, '$.telemetryEnabled', json('false'))
+       WHERE id = NEW.id AND json_type(NEW.json, '$.telemetryEnabled') IS NULL;
+     UPDATE settings SET telemetry_revision = telemetry_revision + 1
+       WHERE id = NEW.id AND json_type(NEW.json, '$.telemetryEnabled') IS NOT NULL;
+   END;`,
 ];
 
 export function openDb(path: string): Db {

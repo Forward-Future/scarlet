@@ -338,7 +338,7 @@ def build_app(run, progress, commit, candidate, native, version):
     progress.start("media")
     run("pnpm", "desktop:ffmpeg")
     progress.start("app")
-    run("pnpm", "--filter", "@scarlet/desktop", "exec", "tauri", "build", "--bundles", "app")
+    run("pnpm", "--filter", "@scarlet/desktop", "exec", "tauri", "build", "--bundles", "app", "--config", "src-tauri/tauri.local-media.conf.json")
     progress.start("verify")
     if revision(candidate) != commit:
         raise ValueError("The finished app does not identify the requested main commit")
