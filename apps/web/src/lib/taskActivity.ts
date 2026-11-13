@@ -73,7 +73,7 @@ export function isDialogueScanTool(event: TaskEvent) {
 }
 
 const waitLabels: Record<string, string> = { transcript: "the transcript", sound: "the sound analysis", dialogue: "dialogue analysis" };
-/** The live line while a run waits for a transcript, which then shows the transcript's progress. */
+/** The live line while a run waits for a transcript. */
 export const TRANSCRIPT_WAIT = `Waiting for ${waitLabels.transcript}`;
 /** Tools an agent calls again to collect media work that is still being prepared. */
 const waitTools: Record<string, string> = { transcript_get: "transcript", transcript_search: "transcript", waveform_get: "sound", dialogue_scan: "dialogue" };

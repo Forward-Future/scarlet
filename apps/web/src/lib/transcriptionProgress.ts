@@ -51,67 +51,6 @@ export function transcriptsProgress(tasks: readonly Task[], media: readonly Pick
   return { stage, fraction: Math.min(1, fraction), ...(remaining !== undefined && { remainingSeconds: remaining }) };
 }
 
-/** The transcripts a run waits on before it can read its dialogue, as one stage of its progress. */
-export interface TranscriptStage {
-  /** How much is done, weighted by recording length. */
-  fraction: number;
-  /** About how long until all of them are done, once one has an estimate. */
-  remainingSeconds?: number;
-  /** Seconds of recording they cover. */
-  total: number;
-  /** None has started: other audio work runs first. */
-  queued: boolean;
-  done: boolean;
-  /** The transcription tasks counted, in the recordings' order. One that starts again is a new task, so the key changes with it. */
-  key: string;
-}
-
-/**
- * The transcripts of a run's recordings that were still being made after the run started. A dialogue pass can't read until
- * their words are saved, which on long recordings is most of the wait. Word alignment goes on after that while the pass
- * reads, so a transcript counts as done here once it has its words. They take turns in the engine's audio lane, so one
- * still waiting its turn is counted at the pace of the one running.
- */
-export function runTranscripts(tasks: readonly Task[], media: readonly Pick<MediaAsset, "id" | "duration">[],
-  mediaIds: readonly string[], since: string | null | undefined): TranscriptStage | undefined {
-  const start = Date.parse(since ?? "");
-  if (!start) return;
-  const parts = mediaIds.flatMap(id => {
-    // The newest counts, by when it was asked for. The list's order doesn't say: tasks loaded with the project come newest first, and ones created since follow them.
-    const task = tasks.filter(t => t.kind === "transcribe" && t.context.mediaId === id &&
-      (["queued", "claimed", "running"].includes(t.state) || (t.state === "done" && Date.parse(t.finishedAt ?? "") >= start)))
-      .reduce<Task | undefined>((latest, t) => !latest || (t.createdAt ?? "") >= (latest.createdAt ?? "") ? t : latest, undefined);
-    if (!task) return [];
-    const duration = media.find(m => m.id === id)?.duration || 1;
-    if (task.state === "done") return [{ taskId: task.id, duration, fraction: 1, remaining: 0 as number | undefined, started: true, done: true }];
-    const started = !!task.progress && task.progress.stage !== "queued";
-    // An engine that doesn't report the words alone saves the transcript only when the whole job is done.
-    const words = task.progress?.words ?? task.progress;
-    if (started && task.progress!.words && words!.fraction >= 1) return [{ taskId: task.id, duration, fraction: 1, remaining: 0 as number | undefined, started: true, done: true }];
-    return [{ taskId: task.id, duration, fraction: started ? words!.fraction : 0, remaining: started ? words!.remainingSeconds : undefined, started, done: false }];
-  });
-  if (!parts.length) return;
-  const total = parts.reduce((sum, p) => sum + p.duration, 0);
-  const fraction = Math.min(1, parts.reduce((sum, p) => sum + p.duration * p.fraction, 0) / total);
-  // Seconds of work per second of recording still to transcribe, from the transcripts that have an estimate.
-  const timed = parts.filter(p => !p.done && p.remaining !== undefined && p.fraction < 1);
-  const pace = timed.length ? timed.reduce((sum, p) => sum + p.remaining! / ((1 - p.fraction) * p.duration), 0) / timed.length : undefined;
-  const remaining = pace === undefined ? undefined : parts.reduce((sum, p) => sum + (p.remaining ?? pace * (1 - p.fraction) * p.duration), 0);
-  return { fraction, total, queued: parts.every(p => !p.started), done: parts.every(p => p.done), key: parts.map(p => p.taskId).join(),
-    ...(remaining !== undefined && !parts.every(p => p.done) && { remainingSeconds: remaining }) };
-}
-
-/**
- * A figure between its reports. Whisper reports in 5% steps and word alignment once per five minutes of speech, so a
- * long transcript's bar would sit still for minutes while the work goes on. In between, it moves at the pace its own
- * time left implies, for at most `horizon` seconds after the last report and never past 99%.
- */
-export function projectedFraction(fraction: number, remainingSeconds: number | undefined, secondsSinceReport: number, horizon = 240) {
-  if (!remainingSeconds || remainingSeconds <= 0 || fraction >= 1) return fraction;
-  const seconds = Math.min(horizon, Math.max(0, secondsSinceReport));
-  return Math.max(fraction, Math.min(0.99, fraction + (1 - fraction) * seconds / remainingSeconds));
-}
-
 /** A media asset's transcription tasks, including ones from older servers that named it only in the instruction. */
 export function transcriptionTasks(tasks: readonly Task[], media: readonly Pick<MediaAsset, "id" | "name">[], asset: Pick<MediaAsset, "id" | "name">): Task[] {
   return tasks.filter(t => {

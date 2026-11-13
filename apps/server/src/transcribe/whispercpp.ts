@@ -96,7 +96,7 @@ export class WhisperCppProvider implements TranscriptionProvider {
   readonly name = "whispercpp";
   constructor(private readonly opts: {
     binary: string; model?: string | ((signal?: AbortSignal) => Promise<string>); language?: string;
-    binaryArgs?: string[];
+    crisperScript?: string;
     beforeRun?: () => void;
     /** Tried first. A run that fails there, for example without a Vulkan driver, runs again on `binary`. */
     gpuBinary?: string;
@@ -174,7 +174,7 @@ export class WhisperCppProvider implements TranscriptionProvider {
     onProgress?: (fraction: number) => void) {
     const base = join(tmpDir, newId("wcpp"));
     try {
-      const args = [...(this.opts.binaryArgs ?? [])];
+      const args = this.opts.crisperScript ? ["-I", "-B", this.opts.crisperScript] : [];
       if (model) args.push("-m", model);
       args.push("-f", wav, "-ojf", "-of", base, "-np", "-l", language || this.opts.language || "auto", "-t", String(whisperThreads()));
       // Conditioning on earlier text can lock long recordings into repeating one sentence for minutes.
@@ -182,12 +182,15 @@ export class WhisperCppProvider implements TranscriptionProvider {
       if (prompt) args.push("--prompt", prompt);
       else args.push("-mc", "0");
       if (onProgress) args.push("-pp");
-      const onStderrLine = onProgress && ((line: string) => {
+      const onStderrLine = (line: string) => {
+        if (this.opts.crisperScript && /^crisperwhisper (?:device = (?:mps|cuda|cpu)|fallback = (?:mps|cuda))$/.test(line)) {
+          this.opts.log?.(`[transcribe] ${line}`);
+        }
         const percent = /progress\s*=\s*(\d+)%/.exec(line)?.[1];
-        if (percent) onProgress(Math.min(1, Number(percent) / 100));
-      });
+        if (percent) onProgress?.(Math.min(1, Number(percent) / 100));
+      };
       this.opts.beforeRun?.();
-      await run(binary, args, { signal, onStderrLine });
+      await run(binary, args, { signal, onStderrLine: onProgress || this.opts.crisperScript ? onStderrLine : undefined });
       const json = readOutput(await readFile(base + ".json", "utf8"));
       const modelLabel = adapterModelLabel(json.result?.model);
       return { language: json.result?.language, segments: parseWhisperJson(json), ...(modelLabel && { modelLabel }) };

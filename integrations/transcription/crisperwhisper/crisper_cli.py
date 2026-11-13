@@ -3,6 +3,7 @@ import argparse
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+import gc
 from itertools import accumulate
 import json
 import logging
@@ -181,6 +182,54 @@ def save_json(data, prefix):
         stream.write(payload)
 
 
+def preferred_device(torch):
+    if torch.backends.mps.is_available():
+        return "mps"
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def recognize(pcm, model, cache, language, device):
+    import torch
+    from crisperwhisper import CrisperWhisperModel
+
+    recognizer = CrisperWhisperModel(str(model.parent), backend="transformers", device=device,
+                                     compute_type="float32" if device == "cpu" else "float16", cache_dir=str(cache))
+    engine = recognizer._engine
+    print(f"crisperwhisper device = {engine.device.type}", file=sys.stderr, flush=True)
+    if language == "auto":
+        with torch.inference_mode():
+            detected = engine.model.detect_language(input_features=engine.extract_features(pcm[:480_000]))
+        language = engine.tokenizer.convert_ids_to_tokens(int(detected.item()))[2:-2]
+    if engine.get_language_id(language) is None:
+        raise ValueError(f"Unsupported CrisperWhisper language code: {language}")
+    return recognizer.transcribe(pcm, sr=16000, language=language, mode="verbatim", word_timestamps=True)
+
+
+def recognize_locally(pcm, model, cache, language, torch, progress):
+    device = preferred_device(torch)
+    if device != "cpu":
+        try:
+            return recognize(pcm, model, cache, language, device)
+        except (RuntimeError, TypeError) as error:
+            # Unavailable operations and GPU allocation failures are RuntimeError. An unsupported
+            # MPS tensor dtype raises TypeError during tensor transfer instead.
+            # Leave the exception scope before reloading so its traceback releases the model tensors.
+            print(f"crisperwhisper fallback = {device}", file=sys.stderr, flush=True)
+            reason = str(error).partition("\n")[0][:300] or type(error).__name__
+            print(f"GPU recognition failed: {reason}", file=sys.stderr, flush=True)
+        gc.collect()
+        try:
+            getattr(torch, device).empty_cache()
+        except RuntimeError:
+            # A device which became unavailable can also refuse cache cleanup.
+            pass
+        if progress:
+            print("progress = 0%", file=sys.stderr, flush=True)
+    return recognize(pcm, model, cache, language, "cpu")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", action="version", version="CrisperWhisper 2.0 local Scarlet adapter")
@@ -205,13 +254,12 @@ def main():
         parser.error(f"Input audio does not exist: {args.f}")
     if not args.of.parent.is_dir():
         parser.error(f"Output folder does not exist: {args.of.parent}")
-    cache = Path(__file__).resolve().parent / "cache"
+    cache = model.parent.parent / "cache"
     cache.mkdir(exist_ok=True)
     os.environ.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1",
                       HF_HOME=str(cache / "hf"), XDG_CACHE_HOME=str(cache), TORCH_HOME=str(cache / "torch"),
                       MPLCONFIGDIR=str(cache / "matplotlib"), TOKENIZERS_PARALLELISM="false")
     import torch
-    from crisperwhisper import CrisperWhisperModel
     from crisperwhisper.audio import load_audio
 
     torch.set_num_threads(args.t)
@@ -223,22 +271,14 @@ def main():
         logger.propagate = False
 
     pcm = load_audio(str(args.f))
-    recognizer = CrisperWhisperModel(str(model.parent), backend="transformers", device="cpu",
-                                     compute_type="float32", cache_dir=str(cache))
     language = args.l.lower()
-    if language == "auto" and len(pcm):
-        engine = recognizer._engine
-        with torch.inference_mode():
-            detected = engine.model.detect_language(input_features=engine.extract_features(pcm[:480_000]))
-        language = engine.tokenizer.convert_ids_to_tokens(int(detected.item()))[2:-2]
-    if not len(pcm):
-        save_json(whisper_json(language, []), args.of)
+    if len(pcm):
+        result = recognize_locally(pcm, model, cache, language, torch, args.pp)
+        language = result.language
+        words = reconcile(result.text, result.words, len(pcm) / 16000, language)
     else:
-        if recognizer._engine.get_language_id(language) is None:
-            parser.error(f"Unsupported CrisperWhisper language code: {language}")
-        result = recognizer.transcribe(pcm, sr=16000, language=language, mode="verbatim", word_timestamps=True)
-        words = reconcile(result.text, result.words, len(pcm) / 16000, result.language)
-        save_json(whisper_json(result.language, words), args.of)
+        words = []
+    save_json(whisper_json(language, words), args.of)
     if args.pp:
         print("progress = 100%", file=sys.stderr, flush=True)
 

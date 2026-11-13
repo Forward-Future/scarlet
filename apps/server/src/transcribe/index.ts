@@ -41,8 +41,8 @@ export interface TranscriptionProvider {
   readonly localModel?: LocalTranscriptionModel;
   /** Human-readable identity of the model or adapter selected for this run, without local directories. */
   readonly modelLabel?: string;
-  /** Local Whisper that runs on the GPU while Scarlet's other audio models run on the CPU, so it need not wait for them. */
-  readonly gpu?: boolean;
+  /** Schedule recognition separately when the backend can share the machine with other audio work. */
+  readonly separateWhisperLane?: boolean;
   transcribe(input: TranscribeInput): Promise<TranscribeResult>;
 }
 
@@ -66,7 +66,7 @@ export function getTranscriptionProvider(ctx: Ctx, override?: string, snapshot =
   let provider: TranscriptionProvider;
   let localModel: LocalTranscriptionModel | undefined;
   let modelLabel: string | undefined;
-  let gpu = false;
+  let separateWhisperLane = false;
   switch (name) {
     case "openai":
       if (s.provider !== "openai" || !ctx.env.openaiKey) return null;
@@ -79,11 +79,11 @@ export function getTranscriptionProvider(ctx: Ctx, override?: string, snapshot =
       localModel = runtime.active;
       modelLabel = presetLabel(localModel) ?? (runtime.model ? win32.basename(runtime.model)
         : runtime.adapterOwnsModel ? `Model not reported by ${win32.basename(runtime.binary)}` : bundledWhisperModel.displayName);
-      gpu = runtime.gpu ?? false;
+      separateWhisperLane = runtime.separateWhisperLane ?? false;
       const model = runtime.model || (runtime.adapterOwnsModel ? undefined
         : (signal?: AbortSignal) => ctx.whisperModel.get(signal ?? AbortSignal.any([policy, ctx.shutdown])));
       provider = new WhisperCppProvider({
-        binary: runtime.binary, model, binaryArgs: runtime.script ? ["-I", "-B", runtime.script] : undefined,
+        binary: runtime.binary, model, crisperScript: runtime.script,
         beforeRun: runtime.script ? () => {
           // The audio lane or decoding may have taken minutes since this run captured its model identity.
           if (!hasCrisperWhisper(ctx.paths.root)) throw new Error("The CrisperWhisper installation changed while this recording waited. Retry transcription after setup finishes.");
@@ -100,7 +100,7 @@ export function getTranscriptionProvider(ctx: Ctx, override?: string, snapshot =
     name: provider.name,
     localModel,
     modelLabel,
-    gpu,
+    separateWhisperLane,
     async transcribe(input) {
       const signals = [policy, ctx.shutdown];
       if (input.signal && input.signal !== ctx.shutdown) signals.push(input.signal);
