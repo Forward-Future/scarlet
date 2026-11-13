@@ -1,10 +1,8 @@
-import { mergeRanges, type CutReview, type TimeRange, type Timeline } from "@scarlet/timeline";
+import { CUT_LEAD_SECONDS, CUT_TAIL_SECONDS, mergeRanges, type TimeRange, type Timeline } from "@scarlet/timeline";
 import type { Audition } from "./player";
 import { verifiedJoinClock } from "./joinClock";
 
-/** Seconds of context before a cut, and after it once the footage resumes. */
-const LEAD = 2;
-const CUT_TAIL = 3;
+export { isolatedReviewCut } from "@scarlet/timeline";
 /** Removals longer than this play only their edges. */
 const LONG_CUT = 10;
 
@@ -16,15 +14,16 @@ const LONG_CUT = 10;
  * an applied cut plays all of it, since its shaded passage on the timeline lets the editor click ahead.
  */
 export function cutAudition(cut: TimeRange, side: "before" | "after", duration: number,
-  { others = [], whole = false, tailFrom }: { others?: TimeRange[]; whole?: boolean; tailFrom?: number } = {}): Audition {
+  { others = [], whole = false, tailFrom, merged }: { others?: TimeRange[]; whole?: boolean; tailFrom?: number; merged?: Iterable<TimeRange> } = {}): Audition {
   const at = (t: number) => Math.max(0, Math.min(duration, t));
-  const start = at(cut.start - LEAD);
+  const start = at(cut.start - CUT_LEAD_SECONDS);
   if (side === "after") {
     const resume = Math.max(cut.end, tailFrom ?? cut.end);
-    let end = at(resume + CUT_TAIL);
+    let end = at(resume + CUT_TAIL_SECONDS);
     const skips: Audition["skips"] = [];
     // Each removal in the tail moves the stopping point forward and may bring another removal into earshot.
-    for (const range of mergeRanges([cut, ...others])) {
+    // An indexed pass supplies its already-merged ranges starting at the first overlap.
+    for (const range of merged ?? mergeRanges([cut, ...others])) {
       if (range.start >= end - 1e-6) {
         // Fractional frame times can put an exact stop a few ulps beyond the next join.
         end = Math.min(end, range.start);
@@ -36,14 +35,8 @@ export function cutAudition(cut: TimeRange, side: "before" | "after", duration: 
     }
     return { start, end, skips };
   }
-  const end = at(Math.max(cut.end + LEAD, tailFrom === undefined ? 0 : tailFrom + CUT_TAIL));
-  return { start, end, skips: !whole && cut.end - cut.start > LONG_CUT ? [{ start: cut.start + CUT_TAIL, end: cut.end - CUT_TAIL }] : [] };
-}
-
-/** A proposed pass can play this call's After only if it leaves the surrounding dialogue in place. */
-export function isolatedReviewCut(review: CutReview, cut: TimeRange, listen: TimeRange) {
-  return review.cuts.every(({ removed }) => (Math.abs(removed.start - cut.start) < 1e-6 && Math.abs(removed.end - cut.end) < 1e-6)
-    || removed.end <= listen.start || removed.start >= listen.end);
+  const end = at(Math.max(cut.end + CUT_LEAD_SECONDS, tailFrom === undefined ? 0 : tailFrom + CUT_TAIL_SECONDS));
+  return { start, end, skips: !whole && cut.end - cut.start > LONG_CUT ? [{ start: cut.start + CUT_TAIL_SECONDS, end: cut.end - CUT_TAIL_SECONDS }] : [] };
 }
 
 /** The edited file can play the audition only if its joins account for every passage the player skips. */

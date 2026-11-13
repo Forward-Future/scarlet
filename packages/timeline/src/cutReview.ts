@@ -2,7 +2,7 @@ import { stableStringify } from "./ids.js";
 import { intervalCandidates } from "./intervals.js";
 import { applyOps } from "./ops.js";
 import type { Change, MediaAsset, MediaClip, Timeline, TimeRange } from "./schema.js";
-import { mergeRanges, timelineDuration, withHandles } from "./time.js";
+import { mergeRanges, snapToFrame, timelineDuration, withHandles } from "./time.js";
 
 /** Both coordinates are immutable: at is on the proposal, removed is on the original. */
 export interface ReviewCut {
@@ -18,6 +18,34 @@ export interface CutReview {
   /** First cuts only: tracks holding a second recording synced to the first, by track id. */
   layers?: Record<string, SyncedSpan>;
 }
+/** Seconds of dialogue heard on either side of a cut during review. */
+export const CUT_LEAD_SECONDS = 2;
+export const CUT_TAIL_SECONDS = 3;
+export const CUT_DECODER_PREROLL_SECONDS = 0.45;
+export const MAX_CUT_PLAYBACK_SECONDS = 12;
+
+/** The exact short preview file a review decoder can play, in this version's media clock. */
+export function cutPlaybackWindow(start: number, end: number, duration: number, fps: number): TimeRange | undefined {
+  const first = Math.max(0, Math.floor((start - CUT_DECODER_PREROLL_SECONDS) * fps + 1e-6) / fps);
+  const last = Math.min(snapToFrame(duration, fps), (Math.ceil(end * fps - 1e-6) + 1) / fps);
+  if (last > first && last - first <= MAX_CUT_PLAYBACK_SECONDS + 1e-6) return { start: first, end: last };
+}
+
+
+// One interval index per immutable cut list, shared by all of that pass's review windows.
+const reviewIntervals = new WeakMap<ReviewCut[], ReturnType<typeof intervalCandidates<ReviewCut>>>();
+
+/** A proposed pass can play this call's After only if it leaves the surrounding dialogue in place. */
+export function isolatedReviewCut(review: CutReview, cut: TimeRange, listen: TimeRange) {
+  let overlapping = reviewIntervals.get(review.cuts);
+  if (!overlapping) {
+    overlapping = intervalCandidates(review.cuts, c => c.removed.start, c => c.removed.end);
+    reviewIntervals.set(review.cuts, overlapping);
+  }
+  return overlapping(listen.start, listen.end).every(({ removed }) => (Math.abs(removed.start - cut.start) < 1e-6 && Math.abs(removed.end - cut.end) < 1e-6)
+    || removed.end <= listen.start || removed.start >= listen.end);
+}
+
 /** Where a synced recording's footage lies on the first recording's clock: it has footage from start to end, and its own clock reads `offset` less. */
 export interface SyncedSpan { offset: number; start: number; end: number }
 

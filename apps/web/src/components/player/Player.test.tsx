@@ -123,7 +123,7 @@ it("plays a long clip section by section, and the edit as a stream until its fil
   expect(opened).toHaveBeenCalledTimes(1);
   expect(opened.mock.calls[0]![1]).toMatchObject({ duration: 600 });
   // The edit has no saved file yet: it streams, opened only once the editor plays.
-  const stream = vi.spyOn(cutStream, "openCutStream").mockImplementation(el => ({ seek() {}, finishSeek() {}, sourceTime: () => el.currentTime, dispose() {} }));
+  const stream = vi.spyOn(cutStream, "openCutStream").mockImplementation(el => ({ seek() {}, finishSeek() {}, async bufferThrough() {}, sourceTime: () => el.currentTime, dispose() {} }));
   vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => new Promise(() => {}));
   await show({ cut: true });
   expect(video()?.getAttribute("aria-label")).toBe("The current edit");
@@ -142,7 +142,7 @@ it("plays the timeline on screen as itself while the edit's new timeline hasn't 
   const saved = { ...full, id: "new-file", projectId: PRJ, version: "v_new", range: null, key: "preview-key", state: "done" as const };
   open({ project: { ...project, head: "v_new" }, timeline: shown, renders: [saved], fullRenderKeys: keys });
   const loader = vi.spyOn(cutStream, "playbackLoader");
-  const stream = vi.spyOn(cutStream, "openCutStream").mockImplementation(el => ({ seek() {}, finishSeek() {}, sourceTime: () => el.currentTime, dispose() {} }));
+  const stream = vi.spyOn(cutStream, "openCutStream").mockImplementation(el => ({ seek() {}, finishSeek() {}, async bufferThrough() {}, sourceTime: () => el.currentTime, dispose() {} }));
   vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => new Promise(() => {}));
   await show({ cut: true });
   expect(video()?.hasAttribute("src")).toBe(false);

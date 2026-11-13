@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startAppLog, stopAppLog } from "../../lib/appLog";
 import * as cutStream from "../../lib/cutStream";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
+import { joinClock } from "../../lib/joinClock";
 import { player } from "../../lib/player";
 import { usePlayerStore } from "../../stores/player";
 import { CutStream } from "./CutStream";
@@ -64,7 +65,7 @@ type Opened = { start: number; fail(reason: unknown): void; session: ReturnType<
 const streams = () => {
   const opened: Opened[] = [];
   const open = vi.spyOn(cutStream, "openCutStream").mockImplementation((video, _ranges, start, _load, fail) => {
-    const session = { seek: vi.fn(), finishSeek: vi.fn(), dispose: vi.fn(), sourceTime: () => video.currentTime };
+    const session = { bufferThrough: vi.fn(async () => {}), seek: vi.fn(), finishSeek: vi.fn(), dispose: vi.fn(), sourceTime: () => video.currentTime };
     opened.push({ start, fail, session });
     return session;
   });
@@ -102,6 +103,32 @@ it("opens the stream on the first play, from where the editor is, and says a sec
   expect(usePlayerStore.getState().time).toBe(9);
   await act(async () => root.render(null));
   expect(opened[0]!.session.dispose).toHaveBeenCalledTimes(1);
+});
+
+it.each([false, true])("marks the joined audition as loading through its last required fragment (cancel: %s)", async cancel => {
+  const { opened } = streams();
+  const cut = { start: 5, end: 7 };
+  await act(async () => root.render(<CutStream project={project} timeline={timeline} version={project.head!} onStart={onStart}
+    joins={joinClock([cut], 30)} />));
+  await act(async () => player.prepare());
+  const session = opened[0]!.session;
+  let finish!: () => void;
+  vi.spyOn(session, "bufferThrough").mockImplementation((_start, _end, signal) => new Promise<void>((resolve, reject) => {
+    finish = resolve;
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  }));
+  let release!: () => void;
+  try {
+    await act(async () => { release = player.audition({ start: 3, end: 10, skips: [{ ...cut, removed: true }] }, 30); });
+    await act(async () => {
+      video().dispatchEvent(new Event("loadeddata"));
+      video().dispatchEvent(new Event("canplay"));
+    });
+    expect(waiting()).toBe(true);
+    await act(async () => { if (cancel) player.toggle(); else finish(); });
+    expect(waiting()).toBe(false);
+    expect(video().play).toHaveBeenCalledTimes(cancel ? 0 : 1);
+  } finally { await act(async () => release?.()); }
 });
 
 it("says why a stream that couldn't open didn't, logs it as a failure, and opens one again on Retry playback", async () => {
@@ -159,4 +186,17 @@ it("keeps the open stream through a project update that leaves the frame rate as
   // A new frame rate plans the stream again.
   await act(async () => root.render(<CutStream project={{ ...project, settings: { ...project.settings, fps: 25 } }} timeline={timeline} version={project.head!} onStart={onStart} />));
   expect(opened[0]!.session.dispose).toHaveBeenCalledTimes(1);
+});
+
+it("promotes the parked stream when the cut opens from another copy of its timeline", async () => {
+  const { open, opened } = streams();
+  await act(async () => root.render(<CutStream project={project} timeline={timeline} version={project.head!} onStart={onStart} parkedAt={4} />));
+  const parked = video();
+  expect(player.element()).not.toBe(parked);
+  expect(open).toHaveBeenCalledOnce();
+  await act(async () => root.render(<CutStream project={project} timeline={structuredClone(timeline)} version={project.head!} onStart={onStart} />));
+  expect(player.element()).toBe(parked);
+  await act(async () => player.prepare());
+  expect(open).toHaveBeenCalledOnce();
+  expect(opened[0]!.session.dispose).not.toHaveBeenCalled();
 });

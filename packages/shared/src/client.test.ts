@@ -235,6 +235,16 @@ describe("a query", () => {
     expect(await paths(c => c.diff("p1", "draft 1", "v2"))).toEqual(["/projects/p1/versions/draft%201/diff/v2"]);
   });
 
+  it("opens the prepared review MP4 using the returned timeline boundaries", async () => {
+    const { client, calls } = engine(() => json({ renderId: "r1", start: 4, end: 8 }));
+    expect(await client.cutPlaybackFile("p1", "draft 1", { start: 4.01, end: 7.99 }, new AbortController().signal))
+      .toEqual({ url: "http://127.0.0.1:4000/api/renders/r1/file?token=secret", start: 4, end: 8 });
+    expect(calls[0]).toMatchObject({ method: "POST", path: "/projects/p1/versions/draft%201/cut-playback-file", body: { start: 4.01, end: 7.99 } });
+    const completed = engine(() => json({ renderId: "full", start: 0, end: 48, full: true }));
+    expect(await completed.client.cutPlaybackFile("p1", "draft 1", { start: 4, end: 8 }, new AbortController().signal))
+      .toEqual({ url: "http://127.0.0.1:4000/api/renders/full/file?token=secret", start: 0, end: 48, full: true });
+  });
+
   it("puts the token on a file's address, after any query the address already has", () => {
     const { client } = engine();
     expect(client.fileUrl("/media/m1/file")).toBe("http://127.0.0.1:4000/api/media/m1/file?token=secret");

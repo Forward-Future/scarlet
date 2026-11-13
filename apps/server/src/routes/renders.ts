@@ -2,7 +2,7 @@ import { join, resolve } from "node:path";
 import { statSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { extractFrame, extractFilmstrip, fileInDirectory, probeMedia, renderTimelineFrame } from "@scarlet/render";
-import { clipEnd, FILMSTRIP_SEEK_BATCH, planPlaybackSegments, planSegments, snapToFrame, timelineDuration, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
+import { clipEnd, FILMSTRIP_SEEK_BATCH, MAX_CUT_PLAYBACK_SECONDS, planPlaybackSegments, planSegments, snapToFrame, timelineDuration, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
 import { Hono } from "hono";
 import { z } from "zod/v3";
 import { fullRenderContext, RenderKind, RenderRequest, type Render } from "@scarlet/shared";
@@ -10,7 +10,7 @@ import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { requestAttempt, requireProjectEditAttempt } from "../services/taskAttempt.js";
 import { badRequest, conflict, notFound } from "../errors.js";
-import { waitFor } from "../events.js";
+import { requestCutPlaybackFile, waitForPlayback } from "../services/playback.js";
 import { serveFile } from "../files.js";
 import { clip, throttledLog } from "../logText.js";
 import { ensureHead } from "../services/timeline.js";
@@ -175,18 +175,8 @@ export function renderRoutes(ctx: Ctx) {
     if (!render || (projectId !== undefined && render.projectId !== projectId)) throw notFound(`render ${renderId}`);
     return render;
   }
-  async function waitForPlayback(render: Render, signal: AbortSignal) {
-    while (!signal.aborted && (render.state === "queued" || render.state === "running")) {
-      // Other engine processes can publish into the same database without firing our bus.
-      await waitFor(ctx.bus, "render.finished", 1000, e => e.renderId === render.id, signal);
-      if (!signal.aborted) render = requireRender(render.id);
-    }
-    if (signal.aborted) return;
-    if (render.state !== "done" || !render.path) throw conflict("playback_unavailable", render.error || "Couldn’t prepare this section.");
-    return join(ctx.paths.renders(render.projectId), render.path);
-  }
   async function playbackFile(request: Request, render: Render) {
-    const file = await waitForPlayback(render, AbortSignal.any([request.signal, ctx.shutdown]));
+    const file = await waitForPlayback(ctx, render, AbortSignal.any([request.signal, ctx.shutdown]));
     if (!file) return new Response(null, { status: ctx.shutdown.aborted ? 503 : 499 });
     return serveFile(request, file, {
       cacheControl: request.method === "GET" ? "private, max-age=31536000, immutable" : "private, no-store",
@@ -210,14 +200,39 @@ export function renderRoutes(ctx: Ctx) {
       for (const range of ranges) {
         if (signal.aborted) break;
         const current = ctx.repos.projects.header(project.id);
-        if (!current || current.mediaPaused || current.settings.fps !== project.settings.fps || ctx.renders.hasFullPreview(current, version)) break;
+        if (!current || current.mediaPaused || current.settings.fps !== project.settings.fps || ctx.renders.fullPreview(current, version)) break;
         const render = ctx.renders.request({ projectId: project.id, version, range, kind: "playback", quality: "preview", speculative: true }, owner);
-        try { await waitForPlayback(render, signal); }
+        try { await waitForPlayback(ctx, render, signal); }
         finally { ctx.renders.release(render.id, owner); }
       }
     })());
     if (ctx.shutdown.aborted || c.req.raw.signal.aborted) return new Response(null, { status: ctx.shutdown.aborted ? 503 : 499 });
     return c.body(null, 204);
+  });
+
+  // A self-contained review movie lets the player decode both sides of the join before the editor opens it.
+  r.post("/projects/:id/versions/:version/cut-playback-file", async c => {
+    const seconds = z.number().finite().nonnegative();
+    const desired = await jsonBody(c, z.object({ start: seconds, end: seconds }));
+    const project = requireProjectHeader(ctx, c.req.param("id"));
+    const version = c.req.param("version");
+    const savedDuration = ctx.repos.versions.duration(project.id, version);
+    if (savedDuration === undefined) throw notFound(`version ${version}`);
+    const fps = project.settings.fps;
+    const duration = snapToFrame(savedDuration, fps);
+    if (desired.end <= desired.start || desired.end - desired.start > MAX_CUT_PLAYBACK_SECONDS + 1e-6 || desired.start >= duration || desired.end > duration + 1 / fps)
+      throw badRequest("invalid_review_window", "Choose up to 12 seconds within the cut.");
+    if (project.mediaPaused) throw conflict("media_paused", "Media preparation is paused.");
+    const range = { start: Math.floor(desired.start * fps + 1e-6) / fps,
+      end: Math.min(duration, Math.ceil(desired.end * fps - 1e-6) / fps) };
+    const owner = randomUUID();
+    const render = requestCutPlaybackFile(ctx, project, version, range, owner);
+    const signal = AbortSignal.any([c.req.raw.signal, ctx.mediaSignal(project.id)]);
+    try {
+      const file = await ctx.track(waitForPlayback(ctx, render, signal));
+      if (!file) return new Response(null, { status: ctx.shutdown.aborted ? 503 : 499 });
+      return c.json({ renderId: render.id, ...(render.range ?? { start: 0, end: duration, full: true }) });
+    } finally { ctx.renders.release(render.id, owner); }
   });
 
   r.post("/projects/:id/renders", async (c) => {

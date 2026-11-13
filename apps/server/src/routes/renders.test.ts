@@ -92,6 +92,33 @@ it("checks prepare positions before warming and skips paused projects and comple
   expect(encode).not.toHaveBeenCalled();
 });
 
+it("opens a standalone review file at frame boundaries, reuses it on replay, and bounds background work", async () => {
+  const { ctx } = workspace;
+  const encode = vi.spyOn(ctx.render, "renderRange");
+  const request = (start: number, end: number) => workspace.app.request(`/api/projects/${project.id}/versions/${version}/cut-playback-file`, {
+    method: "POST", headers: { Authorization: `Bearer ${accessToken(ctx)}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ start, end }),
+  });
+  expect((await request(0, 20)).status).toBe(400);
+  expect((await request(30, 31)).status).toBe(400);
+  expect((await request(2, 2)).status).toBe(400);
+  const first = await request(6.001, 7.999);
+  expect(first.status).toBe(200);
+  const preview = await first.json();
+  // Versions saved before duration metadata was introduced can open the same prepared clip.
+  ctx.db.prepare("UPDATE timeline_versions SET duration = NULL WHERE project_id = ? AND version = ?").run(project.id, version);
+  expect(preview).toMatchObject({ start: 6, end: 8 });
+  expect(ctx.repos.renders.get(preview.renderId)).toMatchObject({ version, kind: "segment", range: { start: 6, end: 8 }, state: "done" });
+  expect(await (await request(6, 8)).json()).toEqual(preview);
+  vi.spyOn(ctx.render, "renderFullCached").mockImplementation(async (_p, _t, _c, file) => { writeFileSync(file, "full"); });
+  const full = ctx.renders.request({ projectId: project.id, version, kind: "full", quality: "preview", range: null });
+  await settle();
+  expect(await (await request(9, 10)).json()).toEqual({ renderId: full.id, start: 0, end: 30, full: true });
+  ctx.repos.projects.update(project.id, { mediaPaused: true });
+  expect((await request(9, 10)).status).toBe(409);
+  expect(encode).toHaveBeenCalledTimes(1);
+});
+
 it("stops a disconnected preparation in its first fragment without starting the following one", async () => {
   const { ctx } = workspace;
   const encode = vi.spyOn(ctx.render, "renderPlaybackSegment").mockImplementation(async (_p, _t, _r, _c, _file, opts) => {

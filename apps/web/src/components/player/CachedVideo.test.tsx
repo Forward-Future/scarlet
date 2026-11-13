@@ -149,7 +149,7 @@ it("plays on when it takes over from a video that is playing, also one paused an
 it("is the player's video while it is on the page, and toggles on a click", async () => {
   const attach = vi.spyOn(player, "attach"), detach = vi.spyOn(player, "detach"), toggle = vi.spyOn(player, "toggle").mockImplementation(() => {});
   await show();
-  expect(attach).toHaveBeenCalledWith(video());
+  expect(attach.mock.calls[0]?.[0]).toBe(video());
   expect(video().getAttribute("aria-label")).toBe("The current edit");
   await act(async () => video().click());
   expect(toggle).toHaveBeenCalledTimes(1);

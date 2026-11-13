@@ -24,7 +24,7 @@ export function pictureRect(box: { width: number; height: number }, video: { vid
 
 /** The picture on top in the monitor: a clip that plays over the video is later in it than the video it covers. */
 export function shownVideo(monitor: HTMLElement) {
-  const videos = [...monitor.querySelectorAll("video")].filter(v => v.readyState >= 2 && v.videoWidth > 0
+  const videos = [...monitor.querySelectorAll("video")].filter(v => !v.closest("[data-parked]") && v.readyState >= 2 && v.videoWidth > 0
     && v.getClientRects().length > 0 && getComputedStyle(v).visibility !== "hidden");
   return videos.at(-1);
 }
