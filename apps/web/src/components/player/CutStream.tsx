@@ -8,65 +8,98 @@ import { playbackLog } from "../../lib/playbackLog";
 import type { JoinClock } from "../../lib/joinClock";
 import { usePlayerStore } from "../../stores/player";
 import { Icon } from "../ui/primitives";
+import { decoderLeadIn, parkVideo } from "./parkVideo";
 import { FramedVideo } from "./FramedVideo";
 
-export function CutStream({ project, timeline, version, onStart, draft = false, proposed = false, joins }: { project: Project; timeline: Timeline; version: string; onStart(): void; draft?: boolean; proposed?: boolean; joins?: JoinClock }) {
+export function CutStream({ project, timeline, version, onStart, draft = false, proposed = false, joins, parkedAt }: { project: Project; timeline: Timeline; version: string; onStart(): void; draft?: boolean; proposed?: boolean; joins?: JoinClock; parkedAt?: number }) {
   const video = useRef<HTMLVideoElement>(null);
+  const parkedFrame = useRef<number>(undefined);
+  const wasActive = useRef(false);
   // Planned from the frame rate alone. Any other update to the project, such as media processing pausing or a
   // reconnect, brings a new settings object, and reopening the stream for it would stop playback on a still.
   const plan = useMemo(() => {
     try { return { ranges: planPlaybackSegments({ settings: project.settings }, timeline) }; }
     catch (reason) { return { ranges: [], error: errorMessage(reason) }; }
-  }, [project.settings.fps, timeline]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Activating a prepared cut can deliver a separately loaded copy of the same immutable timeline.
+  // Keep the native buffer and its prepared frame when its version and frame grid still match.
+  }, [project.id, project.settings.fps, timeline.version, version]); // eslint-disable-line react-hooks/exhaustive-deps
   const { ranges } = plan;
   const [status, setStatus] = useState<"idle" | "waiting" | "ready">("idle");
+  const [preroll, setPreroll] = useState<AbortSignal>();
   const poster = useMemo(() => {
     const time = usePlayerStore.getState().time;
     return interactiveFrameUrl(thumbUrl(timeline, joins ? joins.toMedia(time) : time, 960));
   }, [timeline, version]); // eslint-disable-line react-hooks/exhaustive-deps
   const [error, setError] = useState<string>();
 
+  const session = useRef<ReturnType<typeof openCutStream>>(undefined);
+  useLayoutEffect(() => {
+    setStatus("idle");
+    setError(undefined);
+    return () => { session.current?.dispose(); session.current = undefined; };
+  }, [project.id, ranges, version]);
+
   useLayoutEffect(() => {
     const el = video.current!;
-    let session: ReturnType<typeof openCutStream> | undefined;
     const failed = (reason: unknown) => {
-      session = undefined;
+      session.current = undefined;
       setStatus("idle");
       setError(errorMessage(reason));
     };
-    setStatus("idle");
-    setError(undefined);
+    const prepare = (start: number) => {
+      if (plan.error || session.current) return;
+      setError(undefined);
+      setStatus("waiting");
+      try {
+        el.playbackRate = usePlayerStore.getState().rate;
+        session.current = openCutStream(el, ranges, start, playbackLoader(project.id, version), failed);
+      } catch (reason) {
+        playbackLog("stream open-failed", { version, sections: ranges.length, error: String(reason) });
+        failed(reason);
+      }
+    };
+    if (parkedAt !== undefined) {
+      parkedFrame.current = parkedAt;
+      const outgoing = wasActive.current;
+      wasActive.current = false;
+      if (!session.current) prepare(decoderLeadIn(parkedAt));
+      return parkVideo(el, parkedAt, project.settings.fps, time => {
+        session.current?.seek(time);
+        el.currentTime = time;
+        session.current?.finishSeek();
+      }, outgoing ? player.element : undefined);
+    }
     player.attach(el, {
       duration: ranges.at(-1)?.end,
       prepare() {
-        if (plan.error || session) return;
+        if (plan.error || session.current) return;
         onStart();
-        setError(undefined);
-        setStatus("waiting");
-        try {
-          const saved = usePlayerStore.getState();
-          el.playbackRate = saved.rate;
-          session = openCutStream(el, ranges, player.mediaTime(saved.time), playbackLoader(project.id, version), failed);
-        } catch (reason) {
-          // A stream logs its own failures. One that couldn't open has no stream to say so.
-          playbackLog("stream open-failed", { version, sections: ranges.length, error: String(reason) });
-          failed(reason);
-        }
+        prepare(player.mediaTime(usePlayerStore.getState().time));
       },
-      seek(time) { session?.seek(time); },
-      finishSeek() { session?.finishSeek(); },
-      sourceTime() { return session?.sourceTime() ?? el.currentTime; },
-    });
+      bufferThrough(start, end, signal) {
+        if (!session.current) return;
+        setPreroll(signal);
+        // The first fragment may already have fired canplay while the other side of the join is still rendering.
+        return session.current.bufferThrough(start, end, signal).finally(() => {
+          setPreroll(current => current === signal ? undefined : current);
+        });
+      },
+      seek(time) { session.current?.seek(time); },
+      finishSeek() { session.current?.finishSeek(); },
+      sourceTime() { return session.current?.sourceTime() ?? el.currentTime; },
+    }, parkedFrame.current);
+    wasActive.current = true;
+    parkedFrame.current = undefined;
     if (draft) { player.seek(0); player.play(); }
     return () => {
-      player.detach();
-      session?.dispose();
+      if (player.element() === el) player.detach();
+      if (!el.paused) el.pause();
     };
-  }, [project.id, ranges, plan.error, version, onStart, draft]);
-  useLayoutEffect(() => player.setJoins(video.current, joins), [joins, project.id, ranges, version, onStart, draft]);
+  }, [project.id, ranges, plan.error, version, onStart, draft, parkedAt]);
+  useLayoutEffect(() => player.setJoins(video.current, joins), [joins, project.id, ranges, version, onStart, draft, parkedAt]);
 
   // A section on its way is marked on the video. The monitor's play button shows the wait, in place of its icon.
-  const waiting = status === "waiting" && !error;
+  const waiting = (status === "waiting" || !!preroll) && !error;
   return <>
     <FramedVideo ref={video} aria-label={draft || proposed ? "Proposed draft" : "The current edit"}
       poster={poster} playsInline preload="auto" data-waiting={waiting || undefined} onClick={() => player.toggle()} onPlaying={() => setStatus("ready")}

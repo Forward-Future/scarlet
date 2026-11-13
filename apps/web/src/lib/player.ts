@@ -11,13 +11,18 @@ import { calledBy, logId, playbackLog } from "./playbackLog";
 let video: HTMLVideoElement | null = null;
 interface StreamControls {
   prepare(): void;
+  bufferThrough?(start: number, end: number, signal: AbortSignal): Promise<void> | undefined;
   seek(time: number, previewFrame?: boolean): boolean | void;
   finishSeek?(): void;
   pause?(): void;
   sourceTime?(): number;
   duration?: number;
+  /** A bounded rendered file starts at zero on the element and at this offset on its version. */
+  offset?: number;
 }
 let stream: StreamControls | undefined;
+/** First seek after attaching a parked decoder can use its already decoded starting frame. */
+let parkedFrame: number | undefined;
 /** The attached media plays a version with footage removed while the transport shows the version before it. */
 let clock: JoinClock | undefined;
 let raf: number | null = null;
@@ -53,7 +58,14 @@ let carry = false;
  * put the playhead back where the media stopped.
  */
 let borrower: { pause(): void } | undefined;
-const isPlaying = () => !!video && !video.paused && !video.ended;
+let pendingPlay: AbortController | undefined;
+const isPlaying = () => !!pendingPlay || (!!video && !video.paused && !video.ended);
+function cancelPendingPlay() {
+  if (!pendingPlay) return;
+  pendingPlay.abort();
+  pendingPlay = undefined;
+  usePlayerStore.getState().setPlaying(false);
+}
 function letGo() {
   const was = isPlaying();
   player.pause();
@@ -62,7 +74,7 @@ function letGo() {
 
 function readClock(el: HTMLVideoElement) {
   if (el !== video || el.readyState < 1 || borrower) return;
-  const media = stream?.sourceTime?.() ?? el.currentTime;
+  const media = stream?.sourceTime?.() ?? el.currentTime + (stream?.offset ?? 0);
   const t = clock ? clock.toView(media) : media;
   if (passage && !atOut && t >= passage.end && (!el.paused || el.ended) && !el.seeking) {
     playbackLog("transport passage-end", { t, end: passage.end });
@@ -136,22 +148,28 @@ function tick() {
 }
 
 export const player = {
-  attach(el: HTMLVideoElement | null, controls?: StreamControls) {
+  attach(el: HTMLVideoElement | null, controls?: StreamControls, preparedAt?: number) {
     if (video && video !== el) this.detach();
     video = el;
     stream = controls;
+    parkedFrame = preparedAt;
     clock = undefined;
     if (!el) return;
     playbackLog("transport attach", { el: logId(el), name: el.getAttribute("aria-label"), streamed: !!controls, at: usePlayerStore.getState().time });
     const st = usePlayerStore.getState();
     // The speed the editor picked is this element's own from the start. A source set on it later puts its speed back
     // to the element's default, which on a new element is 1×: the video and the picker would both drop to it.
-    if (st.rate > 0) el.defaultPlaybackRate = el.playbackRate = st.rate;
+    if (st.rate > 0) {
+      if (el.defaultPlaybackRate !== st.rate) el.defaultPlaybackRate = st.rate;
+      if (el.playbackRate !== st.rate) el.playbackRate = st.rate;
+    }
     const onPlay = () => {
       st.setPlaying(true);
       if (raf === null) raf = requestAnimationFrame(tick);
     };
     const onPause = () => {
+      // Pausing the previous listen queues a native event. A newer, buffering listen owns Play now.
+      if (pendingPlay) return;
       st.setPlaying(false);
       readClock(el);
     };
@@ -199,6 +217,7 @@ export const player = {
   },
   detach() {
     if (video) playbackLog("transport detach", { el: logId(video), playing: isPlaying(), at: usePlayerStore.getState().time });
+    cancelPendingPlay();
     detachFn?.();
     detachFn = null;
     if (raf !== null) cancelAnimationFrame(raf);
@@ -259,6 +278,8 @@ export const player = {
     };
   },
   seek(t: number, previewFrame = false) {
+    const resume = !!pendingPlay;
+    cancelPendingPlay();
     const st = usePlayerStore.getState();
     const max = st.duration > 0 ? st.duration : Infinity;
     let target = passage ? Math.max(passage.start, Math.min(t, passage.end)) : t;
@@ -282,28 +303,63 @@ export const player = {
     const clamped = Math.max(0, Math.min(max, atOut && passage
       ? Math.max(passage.start, (Math.ceil(passage.end * passage.fps - 1e-6) - 1) / passage.fps) : target));
     const media = clock ? clock.toMedia(clamped) : clamped;
-    const handled = stream?.seek(media, previewFrame);
-    if (!handled && video && video.readyState >= 1) video.currentTime = media;
+    const halfFrame = 0.5 / (audition?.fps ?? passage?.fps ?? 30);
+    const prepared = parkedFrame !== undefined && Math.abs(media - parkedFrame) < halfFrame && video && video.paused && !video.seeking
+      && video.readyState >= 2 && Math.abs(video.currentTime + (stream?.offset ?? 0) - media) < halfFrame;
+    parkedFrame = undefined;
+    if (!prepared) {
+      const handled = stream?.seek(media, previewFrame);
+      if (!handled && video && video.readyState >= 1) video.currentTime = media - (stream?.offset ?? 0);
+    }
     playbackLog("transport seek", { to: clamped, media: clock ? media : undefined, asked: t === clamped ? undefined : t, playing: isPlaying(),
       scrub: !!st.scrubGesture || undefined, ready: video?.readyState }, "transport seek");
     st.setTime(atOut && passage ? passage.end : clamped);
     // Keyboard steps and edit links are committed positions. Only a moving
     // pointer needs the decoder's debounce before preparing a missing frame.
     if (previewFrame && !st.scrubGesture) stream?.finishSeek?.();
+    if (resume) this.play();
   },
   prepare() { stream?.prepare(); },
   play() {
     if (passage && atOut) this.seek(passage.start, true);
     if (audition && finished) this.seek(audition.start, true);
+    if (pendingPlay) return;
     this.prepare();
     playbackLog("transport play", { at: usePlayerStore.getState().time, el: video ? logId(video) : "none", ready: video?.readyState, by: calledBy() });
     // A pause or a new source before playback began ends the attempt, which is ordinary. Anything else is a refusal.
-    if (video) void video.play().catch(error => playbackLog(error instanceof DOMException && error.name === "AbortError"
-      ? "transport play-interrupted" : "transport play-failed", { error: String(error) }));
+    const el = video;
+    if (!el) return;
+    const refused = (error: unknown) => playbackLog(error instanceof DOMException && error.name === "AbortError"
+      ? "transport play-interrupted" : "transport play-failed", { error: String(error) });
+    const at = usePlayerStore.getState().time;
+    if (clock && audition && stream?.bufferThrough && el.paused && at >= audition.start && at < audition.end) {
+      const controller = new AbortController();
+      const start = clock.toMedia(at);
+      // A scrub may extend the audition far beyond its original cut. Keep preroll bounded on that timeline too.
+      const end = Math.min(clock.toMedia(audition.end), start + 5);
+      const ready = stream.bufferThrough(start, end, controller.signal);
+      if (ready) {
+        pendingPlay = controller;
+        usePlayerStore.getState().setPlaying(true);
+        void ready.then(() => {
+          if (controller.signal.aborted) return;
+          pendingPlay = undefined;
+          return el.play();
+        }).catch(error => {
+          if (controller.signal.aborted) return;
+          if (pendingPlay === controller) pendingPlay = undefined;
+          if (el === video && el.paused) usePlayerStore.getState().setPlaying(false);
+          refused(error);
+        });
+        return;
+      }
+    }
+    void el.play().catch(refused);
   },
   pause() {
     if (isPlaying()) playbackLog("transport pause", { at: usePlayerStore.getState().time, by: calledBy() });
     carry = false;
+    cancelPendingPlay();
     stream?.pause?.();
     video?.pause();
     // Whatever stops the video stops what is on screen: a clip playing over the monitor too.
@@ -324,7 +380,7 @@ export const player = {
   },
   toggle() {
     if (!video) return;
-    if (video.paused || video.ended) this.play();
+    if (!pendingPlay && (video.paused || video.ended)) this.play();
     else this.pause();
   },
   setRate(rate: number) {
@@ -351,6 +407,26 @@ export const player = {
   /** Where the attached media should be for transport time `t`. */
   mediaTime(t: number) {
     return clock ? clock.toMedia(t) : t;
+  },
+  elementTime(t: number) { return this.mediaTime(t) - (stream?.offset ?? 0); },
+  /** A bounded file can naturally end before another clock sample. Honor the listen's stop
+   * before deciding whether a stretched passage needs the rest of the timeline. */
+  endOfWindow(el: HTMLVideoElement, end: number) {
+    if (el !== video || borrower) return false;
+    const view = clock ? clock.toView(end) : end;
+    if (passage && view >= passage.end - 0.5 / passage.fps) {
+      this.pause();
+      this.seek(passage.end, true);
+      ranOut = true;
+      return false;
+    }
+    if (audition && view >= audition.end - 0.5 / audition.fps) {
+      this.pause();
+      this.seek(audition.end, true);
+      finished = true;
+      return false;
+    }
+    return true;
   },
 };
 

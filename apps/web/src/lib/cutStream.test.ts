@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from "vitest";
 import { usePlayerStore } from "../stores/player";
+import { joinClock } from "./joinClock";
 import { openCutStream } from "./cutStream";
 import { pauseForScrub, player } from "./player";
 
@@ -206,6 +207,37 @@ it("keeps buffered sections until a seek across a cut lands, even when the next 
   } finally { stream.dispose(); }
 });
 
+it("keeps the preceding fragment's tail when scrubbing back and evicting an upcoming fragment", async () => {
+  const fixture = mediaFixture();
+  const { video, remove, offsets } = fixture;
+  const ranges = Array.from({ length: 12 }, (_, i) => ({ start: i * 4, end: (i + 1) * 4 }));
+  const load = vi.fn(async () => new ArrayBuffer(1));
+  const stream = openCutStream(video, ranges, 6, load, vi.fn());
+  try {
+    fixture.media.dispatchEvent(new Event("sourceopen"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(offsets).toEqual([4, 8, 12, 16, 20]);
+
+    // Moving back one section evicts the last lookahead fragment. At the exact seam WebKit
+    // also discarded 216 ms from the preceding fragment, even after we reappended its neighbor.
+    stream.seek(2);
+    video.currentTime = 2;
+    stream.finishSeek();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(remove.mock.calls).toHaveLength(1);
+    const [from, to] = remove.mock.calls[0]!;
+    expect(from).toBeGreaterThan(20);
+    expect(from).toBeLessThan(20 + 1 / 30);
+    expect(to).toBeLessThan(24);
+
+    video.currentTime = 6;
+    video.dispatchEvent(new Event("timeupdate"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(offsets).toEqual([4, 8, 12, 16, 20, 0, 20]);
+    expect(load).toHaveBeenCalledTimes(6);
+  } finally { stream.dispose(); }
+});
+
 it.each([false, true])("retries the section needed to land a fractional seek, then reports a persistent failure (%s)", async persistent => {
   const fixture = mediaFixture();
   const { video, offsets } = fixture;
@@ -264,6 +296,42 @@ it("streams only the canonical sections intersecting the review and keeps its lo
   expect(fixture.media.endOfStream).toHaveBeenCalledOnce();
   expect(fail).not.toHaveBeenCalled();
   stream.dispose();
+});
+
+it("buffers the entire joined audition before starting and lets the editor cancel a cold replay", async () => {
+  const fixture = mediaFixture();
+  const { video } = fixture;
+  vi.spyOn(video, "paused", "get").mockRestore();
+  const ranges = Array.from({ length: 5 }, (_, i) => ({ start: i * 4, end: (i + 1) * 4 }));
+  let supply!: (data: ArrayBuffer) => void;
+  const late = new Promise<ArrayBuffer>(resolve => { supply = resolve; });
+  const stream = openCutStream(video, ranges, 2, async range => range.start === 4 ? late : new ArrayBuffer(1), vi.fn());
+  player.attach(video, { duration: 20, prepare() {}, seek: stream.seek, finishSeek: stream.finishSeek, bufferThrough: stream.bufferThrough });
+  player.setJoins(video, joinClock([{ start: 4, end: 7 }], 23));
+  const play = vi.spyOn(video, "play");
+  const release = player.audition({ start: 2, end: 10, skips: [{ start: 4, end: 7, removed: true }] }, 30);
+  try {
+    fixture.media.dispatchEvent(new Event("sourceopen"));
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(fixture.offsets).toEqual([0]);
+    // A pause event from the previous listen can arrive after this replay asked for its media.
+    video.dispatchEvent(new Event("pause"));
+    expect(play).not.toHaveBeenCalled();
+    expect(usePlayerStore.getState().playing).toBe(true);
+    player.toggle();
+    supply(new ArrayBuffer(1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(play).not.toHaveBeenCalled();
+    expect(usePlayerStore.getState().playing).toBe(false);
+    player.play();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fixture.offsets.slice(0, 2)).toEqual([0, 4]);
+    expect(play).toHaveBeenCalledOnce();
+  } finally {
+    release();
+    player.detach();
+    stream.dispose();
+  }
 });
 
 it("warms one adjacent section after settling and reuses recently visited sections", async () => {

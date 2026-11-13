@@ -80,6 +80,16 @@ export class VersionsRepo {
     return row ? toRow(row, this.readTimeline(row)) : null;
   }
 
+  /** Older versions have no stored duration; only those need the full timeline to calculate it. */
+  duration(projectId: string, version: string): number | undefined {
+    const row = this.db.prepare("SELECT duration FROM timeline_versions WHERE project_id = ? AND version = ?")
+      .get(projectId, version) as { duration: number | null } | undefined;
+    if (!row) return;
+    if (row.duration !== null) return row.duration;
+    const saved = this.get(projectId, version);
+    return saved ? timelineDuration(saved.timeline) : undefined;
+  }
+
   exists(projectId: string, version: string): boolean {
     return !!this.db
       .prepare("SELECT 1 FROM timeline_versions WHERE project_id = ? AND version = ?")
