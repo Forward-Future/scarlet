@@ -175,9 +175,9 @@ function removedLabel(edit: ListedEdit) {
  * left the chat. With `only`, the list is just the edits it picks, such as the ones that need the editor, each with
  * the number it has in the whole list.
  */
-export function ThreadEdits({ projectId, thread, edits, showing, onPlay, under, only }: {
+export function ThreadEdits({ projectId, thread, edits, showing, onPlay, onHover, under, only }: {
   projectId: string; thread: Thread; edits: ListedEdit[]; showing?: ThreadEdit;
-  onPlay(ref: EditRef): void; under?(edit: ListedEdit): ReactNode[]; only?(edit: ListedEdit): boolean;
+  onPlay(ref: EditRef): void; onHover?(ref?: EditRef): void; under?(edit: ListedEdit): ReactNode[]; only?(edit: ListedEdit): boolean;
 }) {
   const reviewed = useReviewed(projectId, thread);
   const revising = useRevising(thread);
@@ -216,6 +216,7 @@ export function ThreadEdits({ projectId, thread, edits, showing, onPlay, under, 
         // Clicked, the row lets go of the focus (WebView2 leaves it there), or Space would press the row again and start
         // the edit over, instead of playing the video.
         className={on ? "simple-edit is-on" : "simple-edit"} onClick={e => { if (e.detail) e.currentTarget.blur(); onPlay(edit); }}
+        onPointerEnter={() => onHover?.(edit)} onPointerLeave={() => onHover?.()}
         // Why an edit asks for a look is on its card, in Scarlet's sentence. Its row keeps to the amber number and says
         // the reason on hover, as a pass's row does.
         title={revised ? undefined : edit.check}
