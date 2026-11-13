@@ -5,6 +5,16 @@ import { chmod, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
+/** OS-only ACL scripts run in Windows PowerShell, regardless of the launching shell's module paths. */
+export function windowsAclShell() {
+  const dir = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0");
+  const env = { ...process.env };
+  // Node passes only the first case-insensitive match when a Windows environment has duplicate keys.
+  for (const key of Object.keys(env)) if (key.toLowerCase() === "psmodulepath") delete env[key];
+  env.PSModulePath = join(dir, "Modules");
+  return { executable: join(dir, "powershell.exe"), env };
+}
+
 export async function privateDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
   if (!(await lstat(path)).isDirectory()) throw new Error("Expected a private directory");
@@ -13,14 +23,15 @@ export async function privateDirectory(path: string): Promise<void> {
   const script = [
     "$ErrorActionPreference='Stop'",
     "$id=[System.Security.Principal.WindowsIdentity]::GetCurrent().User",
-    "$acl=New-Object System.Security.AccessControl.DirectorySecurity",
+    "$acl=[System.Security.AccessControl.DirectorySecurity]::new()",
     "$acl.SetOwner($id)",
     "$acl.SetAccessRuleProtection($true,$false)",
     "$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($id,'FullControl','ContainerInherit,ObjectInherit','None','Allow'))",
     "[System.IO.Directory]::SetAccessControl($env:SCARLET_PRIVATE_DIRECTORY,$acl)",
   ].join(";");
-  await promisify(execFile)("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-    windowsHide: true, env: { ...process.env, SCARLET_PRIVATE_DIRECTORY: path },
+  const shell = windowsAclShell();
+  await promisify(execFile)(shell.executable, ["-NoProfile", "-NonInteractive", "-Command", script], {
+    windowsHide: true, env: { ...shell.env, SCARLET_PRIVATE_DIRECTORY: path },
   });
 }
 
