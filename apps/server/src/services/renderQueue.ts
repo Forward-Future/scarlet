@@ -291,11 +291,11 @@ export class RenderQueue {
     return this.renderContentKey(project, { projectId: project.id, version, kind: "full", quality: "preview", range: null }, undefined, "local");
   }
 
-  hasFullPreview(project: Pick<Project, "id" | "settings">, version: string): boolean {
+  fullPreview(project: Pick<Project, "id" | "settings">, version: string): Render | undefined {
     const key = this.keyFor(project, { projectId: project.id, version, kind: "full", range: null, quality: "preview" });
     const candidates = this.ctx.repos.renders.select("project_id = ? AND key = ? AND state = 'done'", [project.id, key]);
     let inputs: Project | null | undefined;
-    return candidates.some(render => {
+    return candidates.find(render => {
       if (!this.available(render)) return false;
       inputs ??= this.ctx.repos.projects.get(project.id);
       return !!inputs && this.isCurrent(render, inputs);

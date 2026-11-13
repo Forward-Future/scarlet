@@ -5,7 +5,7 @@
  * tasks stream log lines, a change becomes ready, uploads finish ingesting.
  */
 import { dialogueCommand, AGENT_LABEL, beginRevision, buildThreads, restoredReviewState, threadRevision, threadTimeline, countReviewDecisions, fullRenderContext, taskNeedsTranscripts, taskRecoveryAction, reviewItemPath, splitAgentTarget, ScarletApiError, SkillSlug, isAsideTask, isSkillEdit, ReviseLearningRequest } from "@scarlet/shared";
-import { appliedCutReview, appliedReviewChange, contentHash, planCutReview, reviewedTimeline } from "@scarlet/timeline";
+import { appliedCutReview, appliedReviewChange, applyReviewRemovals, makeStagedCutMapper, contentHash, planCutReview, reviewedTimeline } from "@scarlet/timeline";
 import type { ApproveLearningRequest, EditSkillRequest, Learning, RunChoice, UsageGroupBy, UsageResponse, UsageTotals } from "@scarlet/shared";
 import type {
   AgentHost,
@@ -31,7 +31,7 @@ import type {
   VersionSummary,
   WsEvent,
 } from "@scarlet/shared";
-import type { Author, Change, MediaAsset, Note, Project, Timeline, TimelineDiff, Transcript } from "@scarlet/timeline";
+import type { Author, Change, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript } from "@scarlet/timeline";
 import { planRevert, fromOtio, otioSourceVersion, OtioImportError, toOtio, applyOps, canApproveSpots, clipEnd, withHandles, describeDiff, diffTimelines, emptyTimeline, formatTimecode, newId, planApply, timelineDuration, ASPECT_PRESETS, TimelineOp } from "@scarlet/timeline";
 import type { ActivityEntry, ApproveResponse, TrashedProject } from "@scarlet/shared";
 import type { ScarletApi } from "../api";
@@ -639,25 +639,61 @@ export class MockClient implements ScarletApi {
     return { change: { ...change } };
   }
 
-  async cutReviewDraft(changeId: string, restoredCuts: number[]) {
-    const { draft } = await this.cutReview(changeId, restoredCuts);
-    return { draft };
+  async cutReviewDraft(changeId: string, restoredCuts: number[], ontoVersion?: string) {
+    const { review: _, ...result } = await this.cutReview(changeId, restoredCuts, ontoVersion);
+    return result;
   }
 
-  async cutReview(changeId: string, restoredCuts?: number[]) {
+  async cutReview(changeId: string, restoredCuts?: number[], ontoVersion?: string) {
     this.requireAuth();
     const change = this.db.changes.find(c => c.id === changeId);
     if (!change) throw notFound("Change");
+    const project = this.projectById(change.projectId);
+    const stale = (reason: string) => new ScarletApiError(409, "cut_review_stale", reason, { currentVersion: project.head });
+    if (ontoVersion !== undefined && ontoVersion !== project.head) throw stale("The working edit changed during review.");
     const base = this.db.timelines[change.fromVersion], proposed = this.db.timelines[change.toVersion];
     const review = base && proposed ? planCutReview(base, proposed, this.db.media[change.projectId] ?? [], change.ops, change.firstCut) : null;
     if (!review) return { review: null };
-    const save = (tl: Timeline) => {
+    const save = (tl: Timeline, parent = change.fromVersion) => {
       if (tl === base || tl === proposed) return tl;
       const version = contentHash(tl, ["version", "parent", "createdAt"]).slice(0, 16);
-      return this.db.timelines[version] ??= { ...tl, version, parent: change.fromVersion };
+      return this.db.timelines[version] ??= { ...tl, version, parent };
     };
     if (review.firstCut) review.original = save(review.original);
-    return { review, draft: restoredCuts && save(reviewedTimeline(review, restoredCuts)) };
+    if (ontoVersion === undefined) return { review, draft: restoredCuts && save(reviewedTimeline(review, restoredCuts)) };
+    const restored = new Set(restoredCuts);
+    if (!restoredCuts || restored.size !== restoredCuts.length || restoredCuts.some(i => !Number.isInteger(i) || i < 0 || i >= review.cuts.length))
+      throw new ScarletApiError(400, "invalid_cut_selection", "Unknown or duplicate cut in review.");
+    if (ontoVersion === change.fromVersion && !change.cutEdits?.length) {
+      const removed = review.cuts.flatMap((cut, i) => restored.has(i) ? [] : [cut.removed]);
+      return { review, draft: save(reviewedTimeline(review, restoredCuts)), ontoVersion, removed };
+    }
+    if (review.firstCut) throw stale("The opening assembly changed during review.");
+    const head = this.db.timelines[ontoVersion];
+    if (!head) throw notFound("Version");
+    const selected: { index: number; range: TimeRange }[] = [];
+    const mappers = new Map<string, ReturnType<typeof makeStagedCutMapper>>();
+    for (const [i, cut] of review.cuts.entries()) {
+      if (restored.has(i)) continue;
+      const edit = change.cutEdits?.find(e => e.index === i);
+      const from = edit ? this.db.timelines[edit.version] : base;
+      if (!from) throw notFound("Version");
+      const range = edit?.range ?? cut.removed;
+      if (range.start === range.end) continue;
+      let map = mappers.get(from.version);
+      if (!map) {
+        map = makeStagedCutMapper(from, head, project.settings.fps);
+        mappers.set(from.version, map);
+      }
+      const location = map(range);
+      if (location.kind === "conflict") throw stale(location.reason);
+      if (location.kind !== "gone") selected.push({ index: i, range: location.range });
+    }
+    selected.sort((a, b) => a.range.start - b.range.start);
+    const removed = selected.map(c => c.range);
+    if (removed.some((r, i) => i > 0 && r.start < removed[i - 1]!.end - 1e-6)) throw stale("Two proposed cuts now cover the same footage.");
+    const draft = selected.length ? save(applyReviewRemovals(head, removed, review.proposed.version), ontoVersion) : head;
+    return { review, draft, ontoVersion, removed };
   }
   async approveChange(changeId: string, spots?: number[], restoredCuts?: number[]): Promise<ApproveResponse> {
     this.requireAuth();
@@ -875,6 +911,11 @@ export class MockClient implements ScarletApi {
   }
   // The demo plays a bundled sample with no fragments to prepare.
   async preparePlayback(): Promise<void> {}
+  async cutPlaybackFile(projectId: string, version: string, _range: TimeRange, signal: AbortSignal) {
+    const { timeline } = await this.timeline(projectId, version);
+    signal.throwIfAborted();
+    return { url: this.renderFileUrl(version), start: 0, end: timelineDuration(timeline), full: true as const };
+  }
 
   async requestRender(projectId: string, body: Partial<RenderRequest>): Promise<{ render: Render }> {
     this.requireAuth();

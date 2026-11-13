@@ -1,11 +1,11 @@
-import { appliedReviewChange, CutAssessment, isPublishedCall, timelineDuration, withHandles, type Change } from "@scarlet/timeline";
+import { appliedReviewChange, CutAssessment, isPublishedCall, type Change } from "@scarlet/timeline";
 import { Hono } from "hono";
 import { z } from "zod/v3";
 import { namedTimelineEdits, ApproveRequest, CutChoicesRequest, ChangeState, DialogueCutsRequest, ProposeChangeRequest, ReviseRequest, StagedCutRevision } from "@scarlet/shared";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest, conflict, notFound } from "../errors.js";
-import { approveChange, changeDiff, saveCutChoices, prepareCutReview, proposeChange, recordPlayableDecision, scheduleSpotCheck, submitDialogueCuts, rejectChange, reopenChange, reviseChange, reviseStagedCut, unapproveChange, withSpotCapability } from "../services/changes.js";
+import { approveChange, changeDiff, saveCutChoices, prepareCutReview, prepareFirstDecision, proposeChange, recordPlayableDecision, scheduleSpotCheck, submitDialogueCuts, rejectChange, reopenChange, reviseChange, reviseStagedCut, unapproveChange, withSpotCapability } from "../services/changes.js";
 import { jsonBody, requireProjectHeader, TIMELINE_JSON_BYTES } from "./util.js";
 import { requestAttempt, requireProjectEditAttempt } from "../services/taskAttempt.js";
 import { requireUnscopedEdit } from "../services/changes.js";
@@ -82,10 +82,12 @@ export function changeRoutes(ctx: Ctx) {
   });
 
   r.on("POST", ["/changes/:changeId/cut-review", "/projects/:projectId/changes/:changeId/cut-review"], async (c) => {
-    const { restoredCuts } = await jsonBody(c, z.object({ restoredCuts: z.array(z.number().int().min(0)).optional() }));
+    const { restoredCuts, ontoVersion } = await jsonBody(c, z.object({
+      restoredCuts: z.array(z.number().int().min(0)).optional(), ontoVersion: z.string().min(1).optional(),
+    }));
     const change = requireChange(c.req.param("changeId"), c.req.param("projectId"));
-    const result = prepareCutReview(ctx, change, restoredCuts);
-    return c.json(c.req.query("view") === "draft" ? { draft: result.draft } : result);
+    const result = prepareCutReview(ctx, change, restoredCuts, ontoVersion);
+    return c.json(c.req.query("view") === "draft" ? { draft: result.draft, ontoVersion: result.ontoVersion, removed: result.removed } : result);
   });
 
   r.on("POST", ["/changes/:changeId/cut-assessments", "/projects/:projectId/changes/:changeId/cut-assessments"], async c => {
@@ -173,18 +175,14 @@ export function changeRoutes(ctx: Ctx) {
         const state = ctx.repos.renders.get(firstDecisionPreview.renderId)?.state;
         if (!item || !isPublishedCall(item) || !state || state === "failed" || state === "cancelled") firstDecisionPreview = undefined;
       }
-      const first = cutAssessments.find(isPublishedCall);
+      // A later assessment can land earlier on the timeline while media preparation is paused.
+      // Cue the first call in the order the editor sees when preparation resumes.
+      const calls = cutAssessments.filter(isPublishedCall);
+      const first = calls.reduce<CutAssessment | undefined>((earliest, item) =>
+        !earliest || (item.askOrder ?? Infinity) < (earliest.askOrder ?? Infinity) ? item : earliest, undefined);
       if (!firstDecisionPreview && first) {
-        // Audition just this choice on the working cut while the agent assesses its neighbors.
-        const restored = review.cuts.flatMap((_, i) => i === first.index ? [] : [i]);
         try {
-          const draft = restored.length ? prepareCutReview(ctx, change, restored).draft : review.proposed;
-          if (draft) {
-            const at = first.start;
-            const render = ctx.renders.request({ projectId: change.projectId, version: draft.version, kind: "segment",
-              quality: "preview", range: withHandles({ start: at, end: at }, 2, timelineDuration(draft)) });
-            firstDecisionPreview = { index: first.index, renderId: render.id, queuedAt: new Date().toISOString() };
-          }
+          firstDecisionPreview = prepareFirstDecision(ctx, change, review, first.index);
         } catch (error) {
           ctx.log(`[review] Could not prefetch the first decision for ${change.id}: ${error}`);
         }
@@ -193,9 +191,10 @@ export function changeRoutes(ctx: Ctx) {
       // with no call from the editor, waits for them: applying on schedule would skip it unseen.
       const called = new Set(change.cutChoices?.map(choice => choice.index));
       const applyWhenDone = cutAssessments.some(a => isPublishedCall(a) && !called.has(a.index)) ? undefined : change.applyWhenDone;
-      if (firstDecisionPreview !== change.firstDecisionPreview || applyWhenDone !== change.applyWhenDone ||
+      const assessedForReview = first ? true : change.assessedForReview;
+      if (assessedForReview !== change.assessedForReview || firstDecisionPreview !== change.firstDecisionPreview || applyWhenDone !== change.applyWhenDone ||
           cutAssessments.some(a => a !== previous.get(a.index))) {
-        const saved = ctx.repos.changes.put({ ...change, cutAssessments, firstDecisionPreview, applyWhenDone });
+        const saved = ctx.repos.changes.put({ ...change, cutAssessments, assessedForReview, firstDecisionPreview, applyWhenDone });
         ctx.bus.publish({ type: "change.updated", projectId: change.projectId, change: saved });
         if (firstDecisionPreview && firstDecisionPreview.briefToPlayableMs === undefined) recordPlayableDecision(ctx, saved);
       }

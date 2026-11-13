@@ -202,6 +202,40 @@ it("reports the recorded overlap for a pre-upgrade retry that had no crossfade a
   expect((await submit({})).joinCrossfades).toEqual({ frames: 6, faded: 1, plain: [] });
 });
 
+it("caches a review draft with the recorded fade for its selected cut", async () => {
+  const { ctx } = workspace;
+  const { task, base } = dialogueTask();
+  const cuts = [2, 7].map(start => ({ start, end: start + 1, review: true, reason: `Retake at ${start}.` }));
+  const result = await api("POST", `/projects/${project.id}/dialogue-cuts`, { fromVersion: base, description: "Stage both retakes", crossfadeFrames: 6, cuts }, task);
+  expect(result.status, await result.clone().text()).toBe(201);
+  const change = ctx.repos.changes.get((await result.json()).changes[0].id)!;
+  const preview = async (ontoVersion = base) => {
+    const response = await api("POST", `/changes/${change.id}/cut-review?view=draft`, { ontoVersion, restoredCuts: [0] });
+    expect(response.status, await response.clone().text()).toBe(200);
+    const { draft, removed } = await response.json();
+    expect(removed).toEqual([{ start: 7, end: 8 }]);
+    return ctx.repos.versions.get(project.id, draft.version)!.timeline;
+  };
+  const legacy = ctx.repos.changes.put({ ...change, cutReasons: change.cutReasons!.map(({ crossfade, ...r }) => r) });
+  const first = await preview();
+  expect(first.tracks.find(t => t.id === "a1")!.clips).toMatchObject([{ audioFadeOut: 6 / 30 }, { audioFadeIn: 6 / 30 }]);
+  const lookup = vi.spyOn(ctx.reviewDrafts, "set");
+  expect((await preview()).version).toBe(first.version);
+  expect(lookup).not.toHaveBeenCalled();
+
+  const mixed = ctx.repos.changes.put({ ...legacy,
+    cutReasons: legacy.cutReasons!.map((r, i) => ({ ...r, crossfade: i === 1 ? 0 : 6 / 30 })) });
+  const after = await preview();
+  expect(after.version).not.toBe(first.version);
+  expect(after.tracks.find(t => t.id === "a1")!.clips).toMatchObject([{ audioFadeOut: 0 }, { audioFadeIn: 0 }]);
+  const head = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", autoApprove: true, description: "Mark the last line",
+    ops: [{ op: "addMarker", marker: { id: "line", time: 12, text: "Last line" } }] }).change.toVersion;
+  const moved = await preview(head);
+  const approval = approveChange(ctx, localUser(ctx), mixed, { restoredCuts: [0] });
+  expect(ctx.repos.versions.get(project.id, approval.change.appliedVersion!)!.timeline.tracks).toEqual(moved.tracks);
+  expect(moved.tracks.find(t => t.id === "a1")!.clips).toMatchObject([{ audioFadeOut: 0 }, { audioFadeIn: 0 }]);
+});
+
 it("reapplies an earlier fade choice to the right review slot after adjacent reasons combine", async () => {
   const { ctx } = workspace;
   const { task, base } = dialogueTask();

@@ -15,6 +15,10 @@ import { frameAligned, frameAlignedRemoval, isPublishedCall, onFrame, makeStaged
   replayHistoryEdit,
   type ApplyPlan,
   planCutReview,
+  cutPlaybackWindow,
+  CUT_LEAD_SECONDS,
+  CUT_TAIL_SECONDS,
+  isolatedReviewCut,
   leftOutJoins,
   applyReviewRemovals,
   appliedCutReview,
@@ -48,6 +52,7 @@ import { frameAligned, frameAlignedRemoval, isPublishedCall, onFrame, makeStaged
 } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import type { BusEvents } from "../events.js";
+import { requestCutPlaybackFile, waitForPlayback } from "./playback.js";
 import { now } from "../db.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { notify } from "./notify.js";
@@ -1309,6 +1314,41 @@ export function wireChangeRenderCompletion(ctx: Ctx) {
   });
 }
 
+/** Queue the actual edited media the first call will open, including the footage on both sides of the join. */
+export function prepareFirstDecision(ctx: Ctx, change: Change, review: CutReview, index: number): Change["firstDecisionPreview"] {
+  const project = ctx.repos.projects.header(change.projectId);
+  const call = review.cuts[index];
+  if (!project?.head || project.mediaPaused || !call) return;
+  const revised = change.cutEdits?.find(edit => edit.index === index);
+  let after: Timeline, join: number;
+  if (revised) {
+    if (!revised.previewVersion) return;
+    after = resolveTimeline(ctx, project, revised.previewVersion);
+    join = revised.range.start;
+  } else if (project.head === review.original.version && isolatedReviewCut(review, call.removed, {
+    start: call.removed.start - CUT_LEAD_SECONDS, end: call.removed.end + CUT_TAIL_SECONDS,
+  })) {
+    after = review.proposed;
+    join = call.at;
+  } else {
+    const restored = review.cuts.flatMap((_, i) => i === index ? [] : [i]);
+    const selected = prepareCutReview(ctx, change, restored, project.head);
+    if (!selected.draft || selected.removed?.length !== 1) return;
+    after = selected.draft;
+    join = selected.removed[0]!.start;
+  }
+  const range = cutPlaybackWindow(join - CUT_LEAD_SECONDS, join + CUT_TAIL_SECONDS, timelineDuration(after), project.settings.fps);
+  if (!range) return;
+  const owner = newId("prep");
+  const render = requestCutPlaybackFile(ctx, project, after.version, range, owner);
+  if (render.state !== "done") ctx.db.afterCommit(() => {
+    const signal = ctx.mediaSignal(project.id);
+    void ctx.track(waitForPlayback(ctx, render, signal).finally(() => ctx.renders.release(render.id, owner)))
+      .catch(error => { if (!signal.aborted) ctx.log(`[review] Could not prepare a file for ${change.id}: ${error}`); });
+  });
+  return { index, renderId: render.id, queuedAt: now() };
+}
+
 export function recordPlayableDecision(ctx: Ctx, change: Change) {
   const preview = change.firstDecisionPreview;
   if (!preview || preview.briefToPlayableMs !== undefined || !change.taskId) return;
@@ -1348,11 +1388,15 @@ type ApproveResult = Omit<ApproveResponse, "task"> & { task?: Task };
  * onto it through the footage; if they touch the same moments, the change goes
  * back to its agent to redo on the current cut instead of failing.
  */
-export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number[]): { review: CutReview | null; draft?: Timeline;
-  /** The requested crossfade on the draft's joins, when the draft is a version of its own rather than the proposal. */
+export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number[], ontoVersion?: string): {
+  review: CutReview | null; draft?: Timeline; ontoVersion?: string; removed?: TimeRange[];
+  /** The requested crossfades on the draft's joins when it differs from the proposal. */
   joinFades?: JoinFades } {
   const project = ctx.repos.projects.get(change.projectId);
   if (!project) throw notFound("project");
+  if (ontoVersion && !restoredCuts) throw badRequest("invalid_cut_selection", "Choose the cuts to preview.");
+  if (ontoVersion && project.head !== ontoVersion)
+    throw conflict("cut_review_stale", "The working edit changed during review.", { currentVersion: project.head });
   const base = resolveTimeline(ctx, project, change.fromVersion);
   const proposed = resolveTimeline(ctx, project, change.toVersion);
   const review = planCutReview(base, proposed, project.media, change.ops, change.firstCut);
@@ -1362,7 +1406,8 @@ export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number
     parent: change.fromVersion, description: "Original footage for cut review",
   });
   if (!restoredCuts) return { review };
-  if (change.cutEdits?.length) {
+  if (change.cutEdits?.length || (ontoVersion && ontoVersion !== change.fromVersion)) {
+    if (ontoVersion && review.firstCut) throw conflict("cut_review_stale", "The opening assembly changed during review.");
     const head = resolveTimeline(ctx, project);
     const placed = reviewedCutsOnHead(ctx, project, change, review, head, restoredCuts);
     if ("conflict" in placed) throw conflict("cut_review_stale", placed.conflict.reason, { currentVersion: head.version, ...placed.conflict });
@@ -1370,16 +1415,19 @@ export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number
       : fadeJoins(project, placed.timeline, placed.applied.joins.map(j => ({ at: j.at, duration: cutCrossfade(change, review.cuts[j.reviewIndex!]!.removed) })));
     const draft = timeline === head ? head : storeVersion(ctx, project.id, timeline, {
       parent: head.version, description: "Preview the reviewed cuts" });
-    return { review, draft, joinFades };
+    return { review, draft, joinFades, ...(ontoVersion && { ontoVersion, removed: placed.applied.joins.map(j => j.removed) }) };
   }
+  const placement = ontoVersion && { ontoVersion, removed: appliedCutReview(review, restoredCuts).joins.map(j => j.removed) };
   // Preview and Approve often request the same selection. Keep only its saved
-  // version ID. Source durations and legacy review geometry can change on reopen.
+  // version ID. Include the saved per-cut overlaps and the single duration on older proposals.
+  const fadeSettings = change.cutReasons?.map(({ start, end, crossfade }) => [start, end, crossfade]);
   const draftKey = createHash("sha256").update(JSON.stringify([project.id, change.id, change.fromVersion,
-    review.original.version, change.toVersion, review.firstCut, review.cuts, [...restoredCuts].sort((a, b) => a - b)])).digest("hex");
+    review.original.version, change.toVersion, review.firstCut, review.cuts, [...restoredCuts].sort((a, b) => a - b),
+    fadeSettings, change.joinFades?.duration])).digest("hex");
   const cachedDraft = ctx.reviewDrafts.get(draftKey);
   if (cachedDraft) {
     const cached = ctx.repos.versions.get(project.id, cachedDraft.version);
-    if (cached) return { review, draft: cached.timeline, joinFades: cachedDraft.joinFades };
+    if (cached) return { review, draft: cached.timeline, joinFades: cachedDraft.joinFades, ...placement };
   }
   let result: Timeline;
   try { result = reviewedTimeline(review, restoredCuts); }
@@ -1395,7 +1443,7 @@ export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number
     ctx.reviewDrafts.set(draftKey, { version: draft.version, joinFades });
     if (ctx.reviewDrafts.size > 32) ctx.reviewDrafts.delete(ctx.reviewDrafts.keys().next().value!);
   });
-  return { review, draft, joinFades };
+  return { review, draft, joinFades, ...placement };
 }
 
 /** The editor's call on each staged cut, or what Approve does without one: Scarlet's verdict once it has assessed the pass, else cut. */
@@ -1584,7 +1632,8 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
   }
   const { project, head, timeline: headTl } = ensureHead(ctx, change.projectId);
   if (alternativeAlreadyChosen(ctx, change, head)) throw conflict("alternative_chosen", "Undo the chosen alternative before applying another on this branch.");
-  const reviewTask = change.firstDecisionPreview ? latestAttempt(ctx, change.taskId) : undefined;
+  // Older assessments recorded the first preview as their only indication that the pass had published a call.
+  const reviewTask = change.assessedForReview || change.firstDecisionPreview ? latestAttempt(ctx, change.taskId) : undefined;
   if (change.state === "revising" && change.revisionFrom) {
     const checking = ctx.repos.tasks.get(change.revisionFrom.taskId);
     if (checking?.cutConflict && ACTIVE_TASK.has(checking.state))

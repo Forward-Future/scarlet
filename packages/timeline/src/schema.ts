@@ -487,7 +487,9 @@ export const Change = z.object({
   cutChoices: z.array(CutChoice).optional(),
   /** Apply the editor's calls as soon as the pass that staged them finishes. */
   applyWhenDone: z.object({ userId: Id, at: z.string().datetime() }).optional(),
-  /** First decision's proposed playback. Its render completion and the task creation time measure brief-to-playable latency. */
+  /** This pass has published calls while its run is checking cuts. It can apply after the run finishes even if media preparation was paused. */
+  assessedForReview: z.literal(true).optional(),
+  /** First decision’s self-contained review movie. Its completion and the task creation time measure brief-to-playable latency. */
   firstDecisionPreview: z.object({ index: z.number().int().nonnegative(), renderId: Id, queuedAt: z.string().datetime(),
     briefToPlayableMs: z.number().nonnegative().optional() }).optional(),
   /** Note(s) this change responds to. */

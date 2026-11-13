@@ -18,6 +18,17 @@ async function finish<T>(request: Promise<T>, ms = 350) {
   return request;
 }
 
+it("previews a pending demo cut on the named working edit after an unrelated overlay was added", async () => {
+  await finish(api.checkout(PRJ, "ver_5"));
+  const restored = [0, 1, 3, 4, 5];
+  await expect(api.cutReviewDraft("chg_fillers", restored, "ver_3")).rejects.toMatchObject({ code: "cut_review_stale" });
+  const preview = await api.cutReviewDraft("chg_fillers", restored, "ver_5");
+  expect(preview).toMatchObject({ ontoVersion: "ver_5", removed: [{ start: 6.4, end: 6.8 }] });
+  expect(preview.draft?.tracks.find(t => t.id === "v2")?.clips[0]?.id).toBe("clip_logo");
+  expect((await api.cutReviewDraft("chg_fillers", restored, "ver_5")).draft?.version).toBe(preview.draft?.version);
+  expect((await finish(api.timeline(PRJ))).timeline.version).toBe("ver_5");
+});
+
 it("returns a stopped, unreplaced demo revision to preview, apply and done", async () => {
   const { task } = await finish(api.reviseChange("chg_ready", { text: "Try a longer pause" }));
   await finish(api.cancelTask(task!.id));

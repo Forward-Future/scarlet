@@ -63,6 +63,7 @@ export type ScarletApi = Pick<
   | "replyNote"
   | "requestRender"
   | "preparePlayback"
+  | "cutPlaybackFile"
   | "releaseRender"
   | "exports"
   | "render"
