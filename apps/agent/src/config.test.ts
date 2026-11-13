@@ -7,6 +7,9 @@ import { main } from "./cli.js";
 
 afterEach(() => vi.unstubAllEnvs());
 
+// Reading and writing the private config starts a separate ACL process on Windows.
+const configFileTimeout = process.platform === "win32" ? 30_000 : undefined;
+
 it("replaces old broad permissions and drops credentials on a destination change", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scarlet-config-"));
   const env = { SCARLET_HOME: dir };
@@ -35,7 +38,7 @@ it("replaces old broad permissions and drops credentials on a destination change
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
+}, configFileTimeout);
 
 describe("config", () => {
   async function home(): Promise<NodeJS.ProcessEnv> {
@@ -74,7 +77,7 @@ describe("config", () => {
     await saveConfig({ server: "http://localhost:4000", token: "file-token", hostId: "h1", stallMinutes: 5 }, env);
     expect(await loadConfig(env)).toEqual({ server: "http://localhost:4000", token: "file-token", hostId: "h1", stallMinutes: 5 });
     expect(await loadConfig({ ...env, SCARLET_TOKEN: "env-token" })).toMatchObject({ token: "env-token", hostId: "h1" });
-  });
+  }, configFileTimeout);
 
   it.skipIf(process.platform === "win32")("closes a config file others could read as it loads it", async () => {
     const env = await home();
