@@ -5512,6 +5512,46 @@ it("plays an applied cut's After from the version the cut made, so the join soun
   expect(playhead()).toBe(11);
 });
 
+it("keeps the selected cut centered and its playhead in view through the whole After audition", async () => {
+  const cut = { start: 45.75, end: 46.25 };
+  const next = { start: 47.75, end: 51.5 };
+  const before = { ...data.timeline!, version: "v_before", tracks: [
+    { ...makeTrack("video", "Video"), clips: [makeMediaClip(data.media.find(m => m.kind === "video")!.id, 0, 120, 0)] },
+  ] };
+  const ops = [next, cut].map(range => ({ op: "rippleDelete" as const, ...range }));
+  const working = { ...applyOps(before, ops), version: data.project.head! };
+  const edits = [cut, next].map((removed, spot) => ({
+    changeId: "chg_approved_2", spot, label: `Trim pause ${spot + 1}`, beforeCut: { version: before.version, removed },
+    range: removed, at: removed.start - (spot ? 0.5 : 0), previous: [],
+  }));
+  data = { ...data, timeline: working, changes: data.changes.map(c => c.id === "chg_approved_2"
+    ? { ...c, ops, fromVersion: before.version, toVersion: working.version, appliedVersion: working.version,
+      timelineEdits: undefined, approvedSpots: undefined, appliedReview: undefined, cutReasons: undefined } : c) };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "timeline").mockImplementation(async (_, version) => ({ timeline: version === before.version ? before : working }));
+  vi.spyOn(api, "threadEdits").mockResolvedValue({ version: working.version, edits });
+  await show();
+  await click(appliedRows()[0]!);
+  const band = () => container.querySelector<HTMLElement>(".simple-timeline-band");
+  const initial = band()!.getAttribute("style");
+  expect(parseFloat(band()!.style.left) + parseFloat(band()!.style.width) / 2).toBeCloseTo(50);
+  // The three seconds of kept audio run from 46.25 to 53 on the source clock, across the second removal.
+  vi.spyOn(HTMLMediaElement.prototype, "readyState", "get").mockReturnValue(4);
+  for (const time of [45.7, 46.3, 47.7, 51.6, 52.96, 53.02]) {
+    await act(async () => {
+      const video = player.element()!;
+      video.currentTime = player.mediaTime(time);
+      video.dispatchEvent(new Event("timeupdate"));
+    });
+    expect(band()?.getAttribute("style")).toBe(initial);
+    expect(container.querySelector(".timeline-playhead")).not.toBeNull();
+  }
+  expect(playhead()).toBe(53);
+  expect(player.element()!.paused).toBe(true);
+  await press("\\");
+  expect(band()?.getAttribute("style")).toBe(initial);
+});
+
 it("starts an applied cut's After once, on the player it stays on, and plays nothing on the working edit meanwhile", async () => {
   const cut = { op: "rippleDelete" as const, start: 10, end: 12.4 };
   const before = { ...data.timeline!, version: "v_before" };

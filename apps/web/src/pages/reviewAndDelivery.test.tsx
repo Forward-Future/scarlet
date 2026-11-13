@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { selectOption } from "../../test/selectOption";
-import { act, useRef, type ReactNode } from "react";
+import { act, StrictMode, useRef, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Link, MemoryRouter, Outlet } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -399,6 +399,21 @@ it("zooms to an open change once: a new working cut under it leaves the timeline
   // Another change opening along with the new cut is zoomed to, as any change is when it opens.
   await render("ver_c", open(40));
   expect(stamps()[0]).toMatch(/0:36$/);
+});
+
+it("holds the fitted review window until the playhead changes to the open cut's clock", async () => {
+  const highlight = { view: { start: 96, end: 114 }, band: { start: 104.75, end: 105.25 } };
+  const render = (time: number) => show(<StrictMode><TimelineScrubber playhead={time} duration={300} highlight={highlight}
+    frameAt={() => undefined} onSeek={vi.fn()} /></StrictMode>);
+  const band = () => container.querySelector<HTMLElement>(".simple-timeline-band");
+  await render(0);
+  const fitted = band()?.style.left;
+  expect(parseFloat(fitted!)).toBeCloseTo(48.61, 2);
+  for (const t of [103, 105.25, 111.5, 113]) {
+    await render(t);
+    expect(band()?.style.left).toBe(fitted);
+    expect(container.querySelector(".timeline-playhead")).not.toBeNull();
+  }
 });
 
 it("draws crowded edits as one pill, names its first edit on hover, and opens that edit on a press instead of scrubbing", async () => {

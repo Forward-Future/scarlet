@@ -139,11 +139,12 @@ export function useTimelineZoom(track: RefObject<HTMLDivElement | null>, start: 
       fitRange(Math.max(start, passage.start - padding), Math.min(end, passage.end + padding), false);
     } else stopZoom();
   }, [previewRequest, passage?.start, passage?.end, start, end, fitRange, stopZoom]);
-  // A carried view is where the editor left it, playhead in sight or not. It turns to the playhead once that moves.
-  const left = useRef(carried ? position : undefined);
+  // Opening a review can fit or carry a view before the transport leaves the previous video's time.
+  // Re-running the effect at that same time must not page away from the newly centered band.
+  const lastPosition = useRef(position);
   useLayoutEffect(() => {
-    if (left.current === position) return;
-    left.current = undefined;
+    if (lastPosition.current === position) return;
+    lastPosition.current = position;
     const { view, target } = live.current;
     if (dragging.current || target) return;
     if (inspecting.current && usePlayerStore.getState().playing &&

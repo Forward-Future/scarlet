@@ -10,6 +10,8 @@ Make the conversation easier to follow with cuts alone. Keep the speaker’s mea
 
 An abandoned start can come out when the next take completes the thought. A retake can begin just beyond the passage under review. Compare what each delivery actually says, particularly corrections, qualifications and changes of mind. Keep repetition used for emphasis and the other speaker’s reply. A direction to the recording crew can come out when the surrounding dialogue makes its purpose clear.
 
+When a line is barely audible beside the dialogue on either side, usually cut the whole line and the wait around it. Keep a deliberate whisper or a quiet reply the audience needs to follow the exchange.
+
 Match a pause to the exchange around it. Leave room for someone to think, react, breathe or show the audience what they mean. A filler can carry hesitation or hold a speaker’s turn. Use the words, measured sound and picture to decide whether removing it helps. A gap in the transcript can contain speech or action. With `/tighten-pauses-here`, consider only pauses in the requested passage.
 
 Use `dialogue_apply_cuts` to record cut, keep and review decisions on the working edit. Mark a meaningful pause or protected phrase as a keep. For staged cuts, use `dialogue_review_inspect` and `dialogue_review_save` to record a recommendation. If two readings remain plausible, name the words or reaction that would change and leave the choice to the editor.

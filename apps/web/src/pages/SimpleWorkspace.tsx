@@ -2247,13 +2247,17 @@ export function SimpleWorkspace() {
     ? [{ at: clockLabel(e.at ?? e.range.start), label: e.label, removed: e.beforeCut.removed }] : []) : [], [appliedCut, threadEdits, reviewingEdit, beforeCut]);
   const otherCuts = useMemo(() => otherEdits.map(o => o.removed), [otherEdits]);
   const othersKey = useMemo(() => JSON.stringify(otherCuts), [otherCuts]);
+  // Both sides use the same review window. After can travel farther on the source clock to play its kept tail.
+  const afterListen = useMemo(() => appliedCut && cutAudition(appliedCut, "after", beforeDuration, { others: otherCuts }),
+    [cutKey, appliedCut?.start, appliedCut?.end, beforeDuration, othersKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const appliedListen = useMemo(() => {
     if (!appliedCut) return;
+    if (appliedSide === "after" && shownSide?.at === undefined) return afterListen;
     const listen = cutAudition(appliedCut, appliedSide, beforeDuration, {
       others: otherCuts, whole: true, tailFrom: shownSide?.visit?.end ?? shownSide?.at,
     });
     return shownSide?.at === undefined ? listen : { ...listen, from: shownSide.at };
-  }, [cutKey, appliedCut?.start, appliedCut?.end, appliedSide, shownSide?.take, beforeDuration, othersKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [afterListen, appliedSide, shownSide?.take]); // eslint-disable-line react-hooks/exhaustive-deps
   // After plays the version the cut made, where its join is inside the rendered media, through a clock that keeps
   // the timeline on the version before it. Seeking past the shaded passage while it played let the removed
   // footage's first sounds through before the jump landed.
@@ -2295,7 +2299,7 @@ export function SimpleWorkspace() {
     playedApplied.current = { pick: openPick, chosen };
     heardPick.current = openPick;
     return again ? player.audition(appliedListen, fps, true) : player.audition(appliedListen, fps);
-  }, [appliedListen, fps, joinPending, appliedJoined?.version, openPick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [appliedListen, fps, joinPending, appliedJoined?.version, openPick, shownSide?.take]); // eslint-disable-line react-hooks/exhaustive-deps
   // Pressing the side on screen again plays it from the top. Back to After from another cut's footage picks up at
   // that cut's join, so it plays as the edit does.
   const chooseCutSide = (side: Side) => {
@@ -2365,7 +2369,7 @@ export function SimpleWorkspace() {
   // A call's passage is shaded where its footage is on the working cut. One that can't be placed there shades nothing.
   const lineFocus = listening ? heard && callTimeline && focusAround(heard, callDuration ?? 0, conflict ? "Current passage" : `Removed · ${lengthLabel(heard.end - heard.start)}`)
     : places.length ? suggestionLine
-    : appliedCut ? focusAround(appliedCut, beforeDuration, `Removed · ${lengthLabel(appliedCut.end - appliedCut.start)}`)
+    : appliedCut ? focusAround(appliedCut, beforeDuration, `Removed · ${lengthLabel(appliedCut.end - appliedCut.start)}`, { playbackEnd: afterListen?.end })
     // Until the earlier version arrives, a line marks the join in the working cut and says how much came out there.
     : shownEdit?.beforeCut ? focusAround({ start: shownAt!, end: shownAt! }, cutDuration ?? 0,
       `Removed · ${lengthLabel(shownEdit.beforeCut.removed.end - shownEdit.beforeCut.removed.start)}`)
