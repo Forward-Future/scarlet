@@ -38,6 +38,8 @@ export async function firstCutRanges(keep: FirstCutKeep[], projectId: string, au
   const retained = cutLevel === "cut" ? undefined : midpoint.map((at, n) => rows.some(r =>
     r.fromWord !== undefined ? r.fromWord <= n && n <= r.toWord! : r.start! <= at && at < r.end!));
   const source = timelineFromKeepRanges(projectId, audio.id, [{ start: 0, end: duration }]);
+  // Assembly clips meet at their source edges. Even optional clip fades stay inside each kept range.
+  const assemblySources = { ...sources, crossfadeFrames: 0 };
   const issues: string[] = [];
   // One boundary between successive pieces, with a one-sided boundary at the head and tail.
   for (let i = 0; i <= rows.length; i++) {
@@ -82,7 +84,7 @@ export async function firstCutRanges(keep: FirstCutKeep[], projectId: string, au
       kind, decision: "cut" as const, reason: "Place the edges of the selected words." };
     try {
       const plan = await planDialogueCuts({ tl: source, cuts: [cut], only: kind, localPauses: false,
-        repeatHint: "Revise the kept word indices to keep one occurrence. If both belong, inspect the source and supply these handles in exact source seconds." }, sources);
+        repeatHint: "Revise the kept word indices to keep one occurrence. If both belong, inspect the source and supply these handles in exact source seconds." }, assemblySources);
       if (plan.outcome === "ready") {
         if (plan.decisions.length !== 1 || plan.trims.length) {
           issues.push(`${handles}: placement produced additional or missing removals. Inspect the source and supply exact seconds for these handles.`);

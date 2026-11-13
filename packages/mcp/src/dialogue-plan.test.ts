@@ -4,6 +4,7 @@ import { createProject, emptyTimeline, makeMediaClip, type MediaAsset } from "@s
 import { DialogueEvidence } from "./dialogue-decisions.js";
 import { joinEvidence, type JoinPage } from "./dialogue-join.js";
 import { cutsReach, dialogueGate, equivalentShifts, planDialogueCuts, resolveCutRange, type DialogueCutInput, type DialoguePlanSources } from "./dialogue-plan.js";
+import { firstCutRanges } from "./first-cut-ranges.js";
 
 const words = [
   { start: 1, end: 1.38, text: "finish" }, { start: 1.8, end: 2.2, text: "first" },
@@ -24,6 +25,19 @@ function fixture() {
   return { tl, sources, measured };
 }
 const cut = (c: Partial<DialogueCutInput>): DialogueCutInput => ({ kind: "retake", decision: "cut", reason: "Earlier take.", ...c });
+
+function partialWordFixture() {
+  const { sources, tl } = fixture();
+  const scan = [{ start: 1.4, end: 1.88, text: "set" }, { start: 2.008, end: 2.2, text: "it" },
+    { start: 3.26, end: 3.50, text: "it" }, { start: 3.55, end: 3.73, text: "down" }];
+  const acoustic = [{ start: 1.44, end: 1.84, text: "set" }, { start: 2.012, end: 2.04, text: "i" },
+    { start: 3.28, end: 3.46, text: "it" }, { start: 3.58, end: 3.70, text: "down" }];
+  sources.crossfadeFrames = 2;
+  sources.words = async () => scan;
+  sources.readKeptWords = async (_id, _stream, from, to) => acoustic.filter(w => w.start < to && w.end > from)
+    .map(w => ({ ...w, start: Math.max(from, w.start), end: Math.min(to, w.end) }));
+  return { tl, sources, scan };
+}
 
 describe("dialogue plan", () => {
   it("keeps short named words inside a removal when the only quiet is on their far sides", async () => {
@@ -85,18 +99,10 @@ describe("dialogue plan", () => {
   });
 
   it("returns the fragment audible inside a real crossfade to the author of the cut, including an automatically staged retake", async () => {
-    const { tl, sources } = fixture();
+    const { tl, sources, scan } = partialWordFixture();
     (await sources.project()).media[0]!.duration = 5;
-    const scan = [{ start: 1.4, end: 1.88, text: "set" }, { start: 2.008, end: 2.2, text: "it" },
-      { start: 3.26, end: 3.50, text: "it" }, { start: 3.55, end: 3.73, text: "down" }];
-    const acoustic = [{ start: 1.44, end: 1.84, text: "set" }, { start: 2.012, end: 2.04, text: "i" },
-      { start: 3.28, end: 3.46, text: "it" }, { start: 3.58, end: 3.70, text: "down" }];
-    sources.crossfadeFrames = 2;
-    sources.words = async () => scan;
     const rms = Array<number>(250).fill(.2);
     sources.pages = () => [{ ...page, edges: joinEvidence(scan, { from: 0, to: 5, rms, peaks: rms, speechActivity: [{ start: 0, end: 5 }] }) }];
-    sources.readKeptWords = async (_id, _stream, from, to) => acoustic.filter(w => w.start < to && w.end > from)
-      .map(w => ({ ...w, start: Math.max(from, w.start), end: Math.min(to, w.end) }));
     const plan = (options: Partial<DialogueCutInput> = {}, others: DialogueCutInput[] = []) => planDialogueCuts({
       tl, localPauses: false, cuts: [...others, cut({ start: 2, end: 3.2, ...options })] }, sources);
     const conflict = { outcome: "needsRevision", disputedEdges: [{ partialWordRepeat: { side: "start", word: "it", heard: "i" } }] };
@@ -112,6 +118,21 @@ describe("dialogue plan", () => {
     sources.crossfadeFrames = 2;
     sources.aiCuts = { retake: "suggest", pause: "cut", coaching: "cut", filler: "cut" };
     expect(await plan()).toMatchObject({ outcome: "ready" });
+  });
+
+  it("keeps an indexed assembly when the repeated fragment is audible only in a centered crossfade", async () => {
+    const { sources, scan } = partialWordFixture();
+    const project = await sources.project();
+    const mic = project.media[0]!;
+    mic.duration = 5;
+    const speech = [{ start: 1.4, end: 1.96 }, { start: 2.02, end: 2.2 }, ...scan.slice(2)];
+    const rms = Array.from({ length: 250 }, (_, i) => speech.some(w => w.start <= (i + .5) / 50 && (i + .5) / 50 < w.end) ? .2 : .001);
+    sources.pages = () => [{ ...page, edges: joinEvidence(scan, { from: 0, to: 5, rms, peaks: rms, speechActivity: speech }) }];
+    const keep = [{ fromWord: 0, toWord: 0 }, { fromWord: 2, toWord: 3 }];
+    const straight = await firstCutRanges(keep, project.id, mic, { ...sources, crossfadeFrames: 0 });
+    expect(straight.ranges[0]!.end).toBeLessThan(2.012);
+    expect(straight.ranges[1]!.start).toBeGreaterThan(2.04);
+    await expect(firstCutRanges(keep, project.id, mic, sources)).resolves.toEqual(straight);
   });
 
   it("checks an automatically staged cut with unrelated words without decoding new audio", async () => {
