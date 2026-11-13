@@ -5781,7 +5781,7 @@ it("warms and opens the actual saved After for a named removal alongside restore
   vi.spyOn(api, "timeline").mockImplementation(async (_, version) => ({ timeline: version === before.version ? before : after }));
   await show();
   expect(api.preparePlayback).toHaveBeenCalledWith(PRJ, after.version, [10, 12, 15 - 1 / data.project.settings.fps], expect.any(AbortSignal));
-  await click(appliedRows()[0]!);
+  await click(buttonIn(turnFor(id), "See edit")!);
   expect([player.mediaTime(8), player.mediaTime(11), player.mediaTime(13)]).toEqual([10, 12, 13]);
   await press("\\");
   expect(player.mediaTime(11)).toBe(11);
