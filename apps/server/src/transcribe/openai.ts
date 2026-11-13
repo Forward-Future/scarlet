@@ -64,22 +64,29 @@ export class OpenAIProvider implements TranscriptionProvider {
       return { language: json.language, segments: toSegments(json, 0) };
     }
     const duration = input.duration ?? (await fallbackAdapter.probeMedia(input.path)).duration;
-    const segments: TranscriptSegment[] = [];
-    let language: string | undefined;
+    const { checkpoint } = input;
+    const segments = [...(checkpoint?.result.segments ?? [])];
+    let language = checkpoint?.result.language;
+    const length = duration > 0 ? duration : 1;
     // Send only the audio track, including for small videos and screen recordings.
-    for (let offset = 0; offset < Math.max(duration, 1); offset += CHUNK_SECONDS) {
+    for (let offset = checkpoint?.through ?? 0; offset < length; offset += CHUNK_SECONDS) {
       input.signal?.throwIfAborted();
       const out = join(input.tmpDir, `${newId("chunk")}.wav`);
       try {
         await extractWav(input.path, out, { start: offset, duration: CHUNK_SECONDS, signal: input.signal });
         // A file can run past its audio. A later chunk that starts there holds no speech, and uploading it would
         // fail the whole transcript.
+        let chunk: TranscriptSegment[] = [];
         if (offset === 0 || !await emptyDecode(out)) {
           const json = await this.call(out, input.language ?? this.opts.language, input);
           language ??= json.language;
-          segments.push(...toSegments(json, offset));
+          chunk = toSegments(json, offset);
         }
-        input.onProgress?.(Math.min(1, (offset + CHUNK_SECONDS) / Math.max(duration, 1)));
+        const through = Math.min(offset + CHUNK_SECONDS, length);
+        input.signal?.throwIfAborted();
+        checkpoint?.save(through, { language, segments: chunk }, through / length);
+        segments.push(...chunk);
+        input.onProgress?.(through / length);
       } finally {
         await rm(out, { force: true });
       }
