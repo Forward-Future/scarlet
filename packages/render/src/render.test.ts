@@ -661,7 +661,8 @@ describe("pure helpers", () => {
   });
 
   it("stamps each LUT a cut uses, so a changed file is a different picture", async () => {
-    const mediaRoot = await fs.mkdtemp(path.join(dir, "stamps-"));
+    // A Windows temp directory may be reported with its short (8.3) name.
+    const mediaRoot = await fs.realpath(await fs.mkdtemp(path.join(dir, "stamps-")));
     const { timeline } = fixture();
     const clips = timeline.tracks[0]!.clips as MediaClip[];
     expect(lutFileStamps(timeline, mediaRoot)).toEqual([]);
