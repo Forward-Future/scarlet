@@ -153,6 +153,8 @@ it("is the player's video while it is on the page, and toggles on a click", asyn
   expect(video().getAttribute("aria-label")).toBe("The current edit");
   await act(async () => video().click());
   expect(toggle).toHaveBeenCalledTimes(1);
+  await act(async () => container.querySelector<HTMLElement>(".video-surface")!.click());
+  expect(toggle).toHaveBeenCalledTimes(2);
   detach.mockClear();
   await act(async () => root.render(null));
   expect(detach).toHaveBeenCalled();

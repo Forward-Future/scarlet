@@ -26,6 +26,8 @@ export default defineConfig(({ command, mode }) => ({
     chunkSizeWarningLimit: 900,
   },
   test: {
+    // The native player layout test measures the same compiled styles as the desktop renderer.
+    css: { include: [/\.css\?inline$/] },
     environment: "node",
     setupFiles: ["src/lib/domTestSetup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
