@@ -84,6 +84,13 @@ jobs:
           EXT=""; [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
           pnpm --filter @scarlet/server build:sea -- --out "$PWD/apps/desktop/src-tauri/binaries/scarlet-engine-${{ matrix.triple }}$EXT"
 
+      - name: Check Windows engine startup before building native dependencies
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          ./.github/scripts/use-windows-test-owner.ps1
+          node apps/desktop/scripts/smoke-engine-startup.mjs "apps/desktop/src-tauri/binaries/scarlet-engine-${{ matrix.triple }}.exe"
+
       - name: Fetch ffmpeg/ffprobe (pinned, checksum-verified)
         run: node apps/desktop/scripts/fetch-ffmpeg.mjs --target ${{ matrix.triple }}
 
@@ -162,16 +169,17 @@ jobs:
           for f in "$APP"/Contents/MacOS/*; do codesign -dv "$f" 2>&1 | grep -E "^(Identifier|Format|flags|Signature)" | sed "s|^|$(basename "$f"): |"; done
           echo "engine entitlements:"; codesign -d --entitlements - "$APP/Contents/MacOS/scarlet-engine"
 
-      - name: Smoke test the bundled macOS engine
+      - name: Smoke test the bundled engine (ingest, render with captions, MCP)
         if: runner.os == 'macOS'
         shell: bash
         run: node apps/desktop/scripts/smoke-engine.mjs "$BUNDLE/macos/Scarlet.app/Contents/MacOS"
 
-      - name: Smoke test the bundled Windows engine
+      - name: Smoke test the Windows bundled engine (ingest, render with captions, MCP)
         if: runner.os == 'Windows'
-        # Git Bash rewrites PSModulePath, delaying the engine's Windows PowerShell permission checks.
-        shell: pwsh
-        run: node apps/desktop/scripts/smoke-engine.mjs "apps/desktop/src-tauri/target/${{ matrix.triple }}/release"
+        shell: powershell
+        run: |
+          ./.github/scripts/use-windows-test-owner.ps1
+          node apps/desktop/scripts/smoke-engine.mjs "apps/desktop/src-tauri/target/${{ matrix.triple }}/release"
 
       - name: Verify packaged versions and stage installers
         shell: bash

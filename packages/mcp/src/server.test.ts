@@ -3207,8 +3207,16 @@ it("returns a long list of checked joins whole enough to arrive: quiet joins giv
   tl.version = "long-list";
   tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 120, 0)];
   mock.state.timeline = tl;
-  // This checks result packing. Serve the synthetic speech directly so 100 joins can read both edges concurrently.
+  // Yield each kept-side read so a large batch exercises the concurrency limit.
+  let activeReads = 0;
+  let maxReads = 0;
   const detections = vi.spyOn(ScarletClient.prototype, "dialogueDetections").mockImplementation(async (_projectId, { from, to, keptSide }) => {
+    if (keptSide) {
+      activeReads++;
+      maxReads = Math.max(maxReads, activeReads);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      activeReads--;
+    }
     const heard = words.filter(w => w.start >= from && w.end <= to);
     return { segments: [{ id: keptSide ? "kept" : "s", start: from, end: to, text: heard.map(w => w.text).join(" "), words: heard }], acoustic: [] };
   });
@@ -3239,6 +3247,8 @@ it("returns a long list of checked joins whole enough to arrive: quiet joins giv
     // Every join still says what the recording has at its edges and the range that results.
     expect(listed.joins.map(j => j.status)).toEqual(Array.from({ length: 100 }, (_, k) => k % 10 === 5 ? "adjusted" : "unchanged"));
     expect(listed.joins.every(j => j.unreadJoinAudio === undefined)).toBe(true);
+    expect(maxReads).toBeGreaterThan(0);
+    expect(maxReads).toBeLessThanOrEqual(8);
     expect(listed.joins[5]).toMatchObject(short.joins[5]);
     const { audio: _audio, nearbyWords: _words, ...settled } = short.joins[4];
     expect(listed.joins[4]).toEqual(settled);

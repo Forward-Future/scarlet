@@ -20,7 +20,7 @@ import { otherVoiceTurns } from "./otherVoiceTurns.js";
 import { appendTaskEvent } from "./tasks.js";
 import { AnalysisCache } from "./analysisCache.js";
 import { audioLane, whisperLane, type AudioWork } from "./audioWork.js";
-import { emissionStore, recordingWav } from "./recordingAudio.js";
+import { emissionStore, emissionStorePaths, recordingWav } from "./recordingAudio.js";
 
 const verbatim = "Um, well, uh, I think, I think we should go ahead. Hmm. Yeah.";
 
@@ -84,10 +84,13 @@ export function dialogueDetector(ctx: Ctx) {
     stream: number | undefined, defaultLanguage: string | undefined): Promise<DialogueDetections | undefined> {
     const language = transcriptLanguage(ctx, projectId, media) || defaultLanguage;
     if (language !== "auto" && !alignsLanguage(language)) return;
-    const words = await readAcousticWindow(await emissionStore(ctx, projectId, file, stream), from, to);
-    if (words) return { acoustic: [], segments: words.length ? [{
-      id: "kept", start: from, end: to, text: words.map(w => w.text).join(" "), words,
-    }] : [] };
+    const imported = join(ctx.paths.media(projectId), media.path);
+    for (const path of await emissionStorePaths(ctx, projectId, file, imported, stream)) {
+      const words = await readAcousticWindow(path, from, to);
+      if (words) return { acoustic: [], segments: words.length ? [{
+        id: "kept", start: from, end: to, text: words.map(w => w.text).join(" "), words,
+      }] : [] };
+    }
   }
   async function source(projectId: string, media: MediaAsset, to: number, settings: ServerSettings["transcription"]) {
     if (settings.provider === "none") throw conflict("transcription_unavailable", "Transcription isn't available in this build of Scarlet.");
