@@ -90,6 +90,21 @@ describe("the skills Scarlet comes with", () => {
     expect(app.ctx.repos.skills.select().some(s => s.name === "dialogue-preferences")).toBe(false);
   });
 
+  it("keeps the two-frame crossfade an editor had by default when their own dialogue guide doesn't ask for one", async () => {
+    await upgrade();
+    // Before preferences moved into the guide, Scarlet added the crossfade at every join by itself.
+    const content = "House rules for this interview.\nKeep the host's first take.\n";
+    const mine = updateSkill(app.ctx, editor, publicGuide()!, { content });
+    oldSettings({ aiCuts: { pause: "cut", filler: "cut", retake: "cut", coaching: "cut" }, pauseTightness: "natural", crossfadeFrames: 2 });
+    await upgrade();
+    const migrated = app.ctx.repos.skills.get(mine.id)!;
+    expect(migrated.content.startsWith(content)).toBe(true);
+    expect(migrated.content).toContain("Use a 2-frame audio crossfade at dialogue joins.");
+    // One saved before the setting existed had the same default.
+    await upgrade();
+    expect(app.ctx.repos.skills.get(mine.id)).toEqual(migrated);
+  });
+
   it("carries preferences into a renamed disabled guide without replacing its content, identity or state", async () => {
     await upgrade();
     const content = "House rules for this interview.\r\nKeep the host’s first take.\r\n";
