@@ -162,15 +162,16 @@ jobs:
           for f in "$APP"/Contents/MacOS/*; do codesign -dv "$f" 2>&1 | grep -E "^(Identifier|Format|flags|Signature)" | sed "s|^|$(basename "$f"): |"; done
           echo "engine entitlements:"; codesign -d --entitlements - "$APP/Contents/MacOS/scarlet-engine"
 
-      - name: Smoke test the bundled engine (ingest, render with captions, MCP)
+      - name: Smoke test the bundled macOS engine
+        if: runner.os == 'macOS'
         shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            DIR="$BUNDLE/macos/Scarlet.app/Contents/MacOS"
-          else
-            DIR="apps/desktop/src-tauri/target/${{ matrix.triple }}/release"
-          fi
-          node apps/desktop/scripts/smoke-engine.mjs "$DIR"
+        run: node apps/desktop/scripts/smoke-engine.mjs "$BUNDLE/macos/Scarlet.app/Contents/MacOS"
+
+      - name: Smoke test the bundled Windows engine
+        if: runner.os == 'Windows'
+        # Git Bash rewrites PSModulePath, delaying the engine's Windows PowerShell permission checks.
+        shell: pwsh
+        run: node apps/desktop/scripts/smoke-engine.mjs "apps/desktop/src-tauri/target/${{ matrix.triple }}/release"
 
       - name: Verify packaged versions and stage installers
         shell: bash
