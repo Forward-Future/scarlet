@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { join } from "node:path";
 import { Hono } from "hono";
 import { audition, soundPicture, contactSheet, fileInDirectory, pictureActivity, PREVIEW_COPY_ACTIVITY_THRESHOLD, qualityEvents, snapRange, type PictureActivity } from "@scarlet/render";
 import { AcousticWordsRequest, InspectionReviewRequest, PictureActivityRequest, SheetRequest, SourceAudioRequest, SoundPictureRequest, DialogueRangeRequest, DialogueScanRequest, DialogueWindowRequest, type CutEvent, type InspectionResult, type InspectionWindow, type PictureActivityWindow } from "@scarlet/shared";
@@ -14,7 +15,7 @@ import { pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 import { resolveTimeline } from "../services/timeline.js";
-import { emissionStore } from "../services/recordingAudio.js";
+import { emissionStorePaths } from "../services/recordingAudio.js";
 import { transcriptLanguage } from "../services/transcriptReader.js";
 import { readCachedAcousticWords } from "../transcribe/acousticWords.js";
 import { alignsLanguage } from "../transcribe/wordAlign.js";
@@ -212,7 +213,12 @@ export function inspectionRoutes(ctx: Ctx) {
     if (language !== "auto" && !alignsLanguage(language)) return c.json([]);
     const file = fileInDirectory(ctx.paths.media(media.projectId), media.path);
     if (!file) throw notFound("source file");
-    return c.json(await readCachedAcousticWords(await emissionStore(ctx, media.projectId, file, audioStream), from, to));
+    const imported = join(ctx.paths.media(media.projectId), media.path);
+    for (const path of await emissionStorePaths(ctx, media.projectId, file, imported, audioStream)) {
+      const runs = await readCachedAcousticWords(path, from, to);
+      if (runs.length) return c.json(runs);
+    }
+    return c.json([]);
   });
 
   r.post("/projects/:id/dialogue-scan", async c => {
