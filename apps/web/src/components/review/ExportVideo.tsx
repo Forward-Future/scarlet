@@ -3,7 +3,7 @@ import { fullRenderContext, type RenderRequest } from "@scarlet/shared";
 import { snapToFrame, timelineDuration } from "@scarlet/timeline";
 import { errorMessage, IS_MOCK } from "../../lib/client";
 import { desktop } from "../../lib/desktop";
-import { exportCounting, exportFailureSeen, exportFile, useExports, type ExportFile } from "../../lib/exportJobs";
+import { exportCounting, exportFailureSeen, exportFile, PICTURE_DONE, useExports, type ExportFile } from "../../lib/exportJobs";
 import { pct, playbackClock } from "../../lib/format";
 import { useProjectStore, type ProjectData } from "../../stores/project";
 import { ActivityProgress, Field, Icon, InlineError, Modal } from "../ui/primitives";
@@ -23,12 +23,14 @@ export function ExportSheet({ hasCut, onClose }: { hasCut: boolean; onClose(): v
 
 function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut: boolean; onClose(): void }) {
   const { project } = current;
-  const { width, height, fps } = project.settings;
+  const job = useExports(s => s.jobs[current.id]);
+  const busy = job && "cancel" in job ? job : undefined;
+  const running = busy?.phase === "rendering" || busy?.phase === "saving";
+  const { width, height, fps } = busy?.projectSettings ?? project.settings;
   // The video as it is now. An edit applied while the sheet is open is the one exported: the sheet follows it.
   const context = fullRenderContext(project);
   const duration = useMemo(() => current.timeline ? snapToFrame(timelineDuration(current.timeline), fps) : 0, [current.timeline, fps]);
-  const job = useExports(s => s.jobs[current.id]);
-  const previous = job && "file" in job && job.context === context ? job.file : undefined;
+  const previous = busy?.file ?? (job?.phase === "failed" && job.context === context ? job.file : undefined);
   // The file the last export saved, while the video is still the one it was made from.
   const exported = job?.phase === "done" && job.context === context ? job : undefined;
   const [format, setFormat] = useState<ExportFile["format"]>(previous?.format ?? "mp4");
@@ -44,7 +46,6 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
   const [targetHeight, setTargetHeight] = useState(previous?.video.exportOptions?.height ?? 0);
   const [quality, setQuality] = useState<RenderRequest["quality"]>(previous?.video.quality ?? "delivery");
   const [revealError, setRevealError] = useState("");
-  const busy = job && "cancel" in job ? job : undefined;
   // A percent shows only while it moves.
   const counting = !!busy && exportCounting(busy);
   // An export that stopped is explained here, so the menu's mark for it goes once this is open.
@@ -67,12 +68,14 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
     const name = `${project.name.replace(/[\\/:*?"<>|]+/g, " ").trim() || "Scarlet"}.${format}`;
     void exportFile(current, { format, name, video });
   };
-  return <Modal open title="Export" width={600} onClose={onClose} footer={<>
+  return <Modal open title="Export" width={600} onClose={onClose} footer={running ? <>
+    {busy.phase === "rendering" && <button type="button" className="btn-quiet" onClick={busy.cancel}>Cancel export</button>}
+    <button type="button" className="btn-primary" onClick={onClose}>Continue editing</button>
+  </> : <>
     <button type="button" className="btn-ghost" onClick={onClose}>{busy || exported ? "Close" : "Cancel"}</button>
-    {busy?.phase === "rendering" ? <button className="btn-quiet" onClick={busy.cancel}>Cancel export</button> :
-      <button type="submit" form="export-working-cut" className="btn-primary" disabled={!!busy || !!invalid}>
-        {failed ? "Retry" : "Export"}
-      </button>}
+    <button type="submit" form="export-working-cut" className="btn-primary" disabled={!!busy || !!invalid}>
+      {failed ? "Retry" : "Export"}
+    </button>
   </>}>
     <form id="export-working-cut" onSubmit={event => { event.preventDefault(); submit(); }}>
       <fieldset disabled={!!busy} className="min-w-0">
@@ -107,14 +110,15 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
         </details> : <p className="text-xs text-muted">The timeline links to the original media. The receiving editor needs access to those files.</p>}
       </fieldset>
     </form>
-    <InlineError>{!hasCut ? "There’s no video to export yet." :
-      invalidRange ? `Enter a range between 0:00 and ${playbackClock(duration)}, at least one frame long.` : sampleOnly ? "The isolated demo saves its included MP4. Custom video settings are available in library projects." : ""}</InlineError>
+    {!running && <InlineError>{!hasCut ? "There’s no video to export yet." :
+      invalidRange ? `Enter a range between 0:00 and ${playbackClock(duration)}, at least one frame long.` : sampleOnly ? "The isolated demo saves its included MP4. Custom video settings are available in library projects." : ""}</InlineError>}
     {busy && <div className="mt-3">
       {busy.phase === "choosing" ? <p className="text-xs text-muted" role="status">Choose a location…</p> :
         <ActivityProgress label={`Export progress for ${busy.file.name}`} value={counting ? busy.progress : undefined}>
-          {busy.phase === "saving" ? "Saving file…" : busy.waiting ? "Waiting to start" : !counting ? "Finishing…"
-            : `Exporting${busy.version !== project.head ? " an earlier version" : ""} · ${pct(busy.progress)}`}
+          {busy.phase === "saving" ? "Saving file…" : busy.waiting ? "Waiting to start" : Math.round(busy.progress * 100) >= PICTURE_DONE ? "Finishing…"
+            : `Exporting${busy.version !== project.head ? " an earlier version" : ""}${counting ? ` · ${pct(busy.progress)}` : ""}`}
         </ActivityProgress>}
+      {running && <p className="mt-2 text-xs text-muted">Your export continues in the background while you edit.</p>}
     </div>}
     {exported && <p className="mt-3 flex items-center gap-2 text-xs" role="status"><Icon name="check" />
       <span className="truncate" title={exported.path}>{exported.path.split(/[\\/]/).pop()}</span>

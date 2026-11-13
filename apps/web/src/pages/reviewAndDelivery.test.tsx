@@ -957,36 +957,6 @@ it("seeks to an exact time in a distant window and plays into the next window wi
   expect(container.querySelector('[role="slider"]')?.getAttribute("aria-valuenow")).toBe("33");
 });
 
-it("keeps the range, quality and resolution attached to a running export when the sheet reopens", async () => {
-  vi.spyOn(desktop, "chooseVideoExport").mockResolvedValue({ ticket: 9, path: "/chosen/cut.mp4" });
-  vi.spyOn(desktop, "discardVideoExport").mockResolvedValue();
-  const release = vi.spyOn(api, "releaseRender").mockResolvedValue();
-  const request = vi.spyOn(api, "requestRender").mockImplementation(async (_id, body) => ({ render: {
-    ...data.renders[0]!, id: "custom-export", kind: body.kind!, version: body.version!, quality: body.quality,
-    range: body.range!, exportOptions: body.exportOptions, state: "running", progress: 0.42,
-  } }));
-  const sheet = <ExportSheet hasCut onClose={() => {}} />;
-  await show(sheet);
-  const field = (id: string) => container.querySelector<HTMLButtonElement>(id)!;
-  await selectOption(field("#export-range"), "Custom range");
-  await click(container.querySelector("summary")!);
-  expect(field("#export-captions")).toBeNull();
-  await selectOption(field("#export-quality"), "Smaller file");
-  await selectOption(field("#export-resolution"), / × 480$/);
-  await click(exportButton()!);
-  expect(request).toHaveBeenCalledWith(PRJ, expect.objectContaining({ kind: "export", quality: "preview",
-    exportOptions: { height: 480 }, range: { start: 0, end: timelineDuration(data.timeline!) } }));
-  await show(<></>);
-  await show(sheet);
-  expect(field("#export-resolution").textContent).toMatch(/ × 480$/);
-  expect(field("#export-range").textContent).toBe("Custom range");
-  expect(container.querySelector<HTMLProgressElement>("progress.activity-progress")?.position).toBe(0.42);
-  expect(container.textContent).toContain("Exporting · 42%");
-  await click(button("Cancel export")!);
-  expect(container.querySelector("progress")).toBeNull();
-  expect(release).toHaveBeenCalledWith("custom-export", request.mock.calls[0]![1].owner);
-});
-
 it("shows an export again after a reload or restart, saves it to the destination chosen before, and releases it", async () => {
   const owner = "5b0f0c52-6d0f-4f0e-9a52-3f1f7a1f0c11";
   const kept: Render = { ...data.renders[0]!, id: "kept-export", version: data.project.head!, kind: "export", quality: "preview", range: { start: 0, end: 4 },

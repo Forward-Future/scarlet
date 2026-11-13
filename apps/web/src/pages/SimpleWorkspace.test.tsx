@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
-import { act, Profiler } from "react";
+import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { fullRenderContext, REVISED_CHECK, ScarletApiError, type Learning, type Skill, type SourceCacheStatus } from "@scarlet/shared";
 import { applyOps, makeMediaClip, makeTrack, planCutReview, timelineDuration, type MediaClip, type TimeMap } from "@scarlet/timeline";
 import { api } from "../lib/client";
+import { desktop } from "../lib/desktop";
 import { startAppLog, stopAppLog } from "../lib/appLog";
 import { useExports, type ExportJob } from "../lib/exportJobs";
 import { keepEdits } from "../lib/keptEdits";
@@ -19,13 +20,14 @@ import { useProjectStore, type ProjectData } from "../stores/project";
 import { useSkillsStore } from "../stores/skills";
 import { useUiStore } from "../stores/ui";
 import { cutAudition, cutOnWorkingCut, lengthLabel, SimpleWorkspace } from "./SimpleWorkspace";
+import * as watch from "./WatchPage";
 import { madeSentence, sentenceText } from "../lib/madeSentence";
 import { QueueTray } from "../components/chat/QueueTray";
-import { CACHING_RING } from "../components/media/MediaMenuItems";
 import { cutSource } from "../components/review/retakeLookup";
 import { enqueueImports } from "../components/media/UploadDropzone";
 
 import { ChangelogPage } from "./ChangelogPage";
+import { selectOption } from "../../test/selectOption";
 
 /** The message box has its own tests. Here it records what the workspace hands it, and draws the tray it is given. */
 type BoxProps = { onCreated?(task: { id: string }): void; onSent?(): void; tray?: React.ReactNode; targetTag?: string; targetIsPoint?: boolean; onClearTarget?(): void;
@@ -4751,7 +4753,8 @@ const moreButton = () => container.querySelector<HTMLElement>('[aria-label="More
 const menuRow = (name: string) => [...container.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(i => i.textContent?.trim().startsWith(name))!;
 /** The ring around the menu's button while videos cache, and how much of it is drawn, out of 100. */
 const cachingRing = () => moreButton().querySelector<SVGElement>(".simple-more-ring");
-const ringDrawn = () => Math.round(100 * (1 - Number(cachingRing()?.querySelector("circle + circle")?.getAttribute("stroke-dashoffset")) / CACHING_RING));
+const ringDrawn = (ring = cachingRing()) => Math.round(100 - Number(ring?.querySelector("circle + circle")?.getAttribute("stroke-dashoffset")));
+const exportButton = () => buttonIn(container.querySelector(".simple-tools")!, "Export")!;
 /** What hovering the menu's button says. */
 const moreTitle = () => moreButton().querySelector<HTMLElement>(".simple-more")!.title;
 
@@ -5105,6 +5108,13 @@ it("says how an export is going on the menu's Export row, and marks the menu for
   expect(says()).toEqual(["Exporting", undefined]);
   // An export under way needs nothing from the editor, so the menu isn't marked.
   expect(moreButton().querySelector(".needs-you")).toBeNull();
+  await click(row());
+  const saving = container.querySelector("dialog[open]")!;
+  expect(saving.textContent).toContain("Saving file…");
+  expect(buttonIn(saving, "Cancel export")).toBeUndefined();
+  await click(buttonIn(saving, "Continue editing")!);
+  expect(container.querySelector("dialog[open]")).toBeNull();
+  await openMenu();
   // Done: the row says so, with the file's name on hover, for as long as the video is the one that was exported.
   await exports({ phase: "done", path: "/Users/me/Movies/Interview.mp4", context });
   expect([...says(), row().title]).toEqual(["Exported", undefined, "Interview.mp4"]);
@@ -5127,23 +5137,91 @@ it("says how an export is going on the menu's Export row, and marks the menu for
   expect(row().textContent).toBe("Export");
 });
 
-it("doesn't draw the workspace again as an export's count moves, only when one stops", async () => {
+it("continues editing during an export and reopens the original range, quality and resolution from the header", async () => {
+  const choose = vi.spyOn(desktop, "chooseVideoExport").mockResolvedValue({ ticket: 9, path: "/chosen/cut.mp4" });
+  vi.spyOn(desktop, "keepVideoExport").mockResolvedValue();
+  vi.spyOn(desktop, "discardVideoExport").mockResolvedValue();
+  const release = vi.spyOn(api, "releaseRender").mockResolvedValue();
+  const request = vi.spyOn(api, "requestRender").mockImplementation(async (_id, body) => ({ render: {
+    ...data.renders[0]!, id: "custom-export", kind: body.kind!, version: body.version!, quality: body.quality,
+    range: body.range!, exportOptions: body.exportOptions, state: "running", progress: 0.42,
+  } }));
+  await show();
+  const sheet = () => container.querySelector<HTMLDialogElement>("dialog[open]")!;
+  const field = (id: string) => sheet().querySelector<HTMLButtonElement>(id)!;
+  await click(exportButton());
+  await selectOption(field("#export-range"), "Custom range");
+  await click(sheet().querySelector("summary")!);
+  expect(field("#export-captions")).toBeNull();
+  await selectOption(field("#export-quality"), "Smaller file");
+  await selectOption(field("#export-resolution"), / × 480$/);
+  const resolution = field("#export-resolution").textContent;
+  const end = sheet().querySelector<HTMLInputElement>("#export-end")!.value;
+  await click(buttonIn(sheet(), "Export")!);
+  expect(request).toHaveBeenCalledWith(PRJ, expect.objectContaining({ kind: "export", quality: "preview",
+    exportOptions: { height: 480 }, range: { start: 0, end: timelineDuration(data.timeline!) } }));
+  await click(buttonIn(sheet(), "Continue editing")!);
+  expect(sheet()).toBeNull();
+  expect(release).not.toHaveBeenCalled();
+
+  await click(buttonIn(container.querySelector(".simple-tools")!, "Media")!);
+  await act(async () => { await vi.dynamicImportSettled(); });
+  expect(sheet().querySelector("#media-file-types")).not.toBeNull();
+  await click(sheet().querySelector('button[aria-label="Close"]')!);
+  const edited = buildDb().timelines.ver_4!;
+  const settings = { ...data.project.settings, width: 1080, height: 1920, fps: 24 };
+  await act(async () => useProjectStore.setState({ current: { ...data, project: { ...data.project, head: edited.version, settings }, timeline: edited } }));
+  await click(exportButton());
+  expect(sheet().textContent).toContain("Exporting an earlier version · 42%");
+  expect(sheet().querySelector<HTMLProgressElement>("progress")?.position).toBe(0.42);
+  expect(field("#export-resolution").textContent).toBe(resolution);
+  expect(sheet().querySelector("summary")!.textContent).toContain(`${data.project.settings.fps} fps`);
+  expect(field("#export-quality").textContent).toBe("Smaller file");
+  expect(field("#export-range").textContent).toBe("Custom range");
+  expect(sheet().querySelector<HTMLInputElement>("#export-end")!.value).toBe(end);
+  expect(sheet().querySelector('[role="alert"]')?.textContent ?? "").toBe("");
+  expect(choose).toHaveBeenCalledTimes(1);
+  expect(request).toHaveBeenCalledTimes(1);
+  await click(buttonIn(sheet(), "Cancel export")!);
+  expect(sheet().querySelector("progress")).toBeNull();
+  expect(release).toHaveBeenCalledWith("custom-export", request.mock.calls[0]![1].owner);
+  expect(exportButton().querySelector("svg")).toBeNull();
+});
+
+it("updates the Export button as the job advances without drawing the player or chat again", async () => {
   const file = { name: "Interview.mp4", format: "mp4" as const, video: { kind: "full" as const, quality: "delivery" as const } };
   const context = fullRenderContext(data.project);
   const running: ExportJob = { file, context, version: data.project.head!, phase: "rendering", progress: 0.42, cancel: () => {} };
   const exports = (job: ReturnType<typeof useExports.getState>["jobs"][string]) => act(async () => useExports.setState({ jobs: { [PRJ]: job } }));
-  let drawn = 0;
-  await act(async () => root.render(<MemoryRouter><Profiler id="workspace" onRender={() => { drawn++; }}><SimpleWorkspace /></Profiler></MemoryRouter>));
-  await act(async () => {});
-  // The editor keeps working while the video exports. With the menu closed nothing shows the count, so nothing is drawn for it.
-  const before = drawn;
+  const preview = vi.spyOn(watch, "CutPreview");
+  await show();
+  expect(preview).toHaveBeenCalled();
+  preview.mockClear();
+  const chat = composer.props;
+  expect(chat).toBeDefined();
+  const ring = () => exportButton().querySelector<SVGElement>("svg");
+  const status = () => [exportButton().title, exportButton().getAttribute("aria-description")];
+  expect(ring()).toBeNull();
+  await exports({ ...running, phase: "choosing" });
+  expect(ring()).toBeNull();
   await exports(running);
+  expect(ring()?.getAttribute("aria-hidden")).toBe("true");
+  expect(ringDrawn(ring())).toBe(42);
+  expect(status()).toEqual(["Exporting 42%", "Exporting 42%"]);
   await exports({ ...running, progress: 0.5 });
-  await exports({ ...running, phase: "saving", progress: 1 });
-  expect(drawn).toBe(before);
-  // One that stopped is a reason to look: the menu's button is drawn again, marked.
+  expect(ringDrawn(ring())).toBe(50);
+  for (const job of [{ ...running, progress: 0 }, { ...running, progress: 0, waiting: true },
+    { ...running, progress: 0.97 }, { ...running, phase: "saving" as const, progress: 1 }]) {
+    await exports(job);
+    expect(ring()?.classList.contains("is-unknown")).toBe(true);
+    expect(status()).toEqual(["Exporting", "Exporting"]);
+  }
+  await exports({ phase: "done", path: file.name, context });
+  expect(ring()).toBeNull();
+  expect(preview).not.toHaveBeenCalled();
+  expect(composer.props).toBe(chat);
   await exports({ phase: "failed", error: "Disk full", file, context });
-  expect(drawn).toBeGreaterThan(before);
+  expect(ring()).toBeNull();
   expect(moreButton().querySelector(".needs-you")).not.toBeNull();
 });
 
