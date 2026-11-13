@@ -108,8 +108,8 @@ it.each([
   await show();
   await type("Tighten the opening");
   await submit();
-  expect(useProjectStore.getState().createNote).toHaveBeenCalledWith(PRJ, expect.objectContaining({
-    text: "Tighten the opening", time: 3.5, assignTo: "claude", effort: undefined, serviceTier: undefined,
+  expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
+    instruction: "Tighten the opening", agent: "claude", model: undefined, effort: undefined, serviceTier: undefined,
   }));
 });
 
