@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -16,12 +16,27 @@ export function smokeEnvironment(work) {
       "USERNAME", "USERDOMAIN", "COMPUTERNAME", "PROCESSOR_ARCHITECTURE"]) {
       if (process.env[key]) env[key] = process.env[key];
     }
-    // Let Windows PowerShell build its native module search path, independent of the shell running CI.
+    // A desktop started outside PowerShell may have no module search path.
     env.HOME = env.USERPROFILE ?? work;
     env.PATH = [join(env.SystemRoot, "System32"), env.SystemRoot].join(";");
     env.TEMP = env.TMP = work;
   }
   return env;
+}
+
+// Only report known milestones and file lengths. Never read the credentials or log their temporary names.
+function startupProgress(data) {
+  try {
+    const files = readdirSync(data);
+    const markers = ["scarlet.db", "skills"].filter(name => files.includes(name));
+    for (const target of ["access-token", "desktop-session.json"]) {
+      for (const name of files.filter(name => name === target || name.startsWith(`${target}.`))) {
+        const stat = statSync(join(data, name), { throwIfNoEntry: false });
+        if (stat) markers.push(`${target}${name === target ? "" : " (temporary)"} ${stat.size} B`);
+      }
+    }
+    return markers.join(", ") || "empty";
+  } catch { return "library temporarily unavailable"; }
 }
 
 export async function startSmokeEngine(engine, work, env) {
@@ -48,9 +63,7 @@ export async function startSmokeEngine(engine, work, env) {
           try { res(JSON.parse(match[1])); } catch { rej(new Error("Invalid SCARLET_READY payload")); }
         });
         timer = setTimeout(() => {
-          const files = ["scarlet.db", "skills", "access-token", "desktop-session.json"];
-          const created = files.filter(file => existsSync(join(data, file)));
-          rej(new Error(`Engine did not print SCARLET_READY within 60 s. Created in the test library: ${created.join(", ") || "nothing"}.`));
+          rej(new Error(`Engine did not print SCARLET_READY within 60 s. Test library: ${startupProgress(data)}.`));
         }, 60_000);
       }),
       exited.then(({ code, signal }) => { throw new Error(`Engine exited before SCARLET_READY (${signal ?? code})`); }),
