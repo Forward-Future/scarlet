@@ -420,6 +420,14 @@ function cutInPass(pass: Change, { changeId, cutIndex }: Task["context"], change
     const next = after(change);
     if (!next?.cutReasons) return undefined;
     const cuts = staged(next);
+    // A cut published by this pass keeps its ask order across its replacements, even when both its slot and
+    // its time change. Older passes without this identity still follow their footage.
+    const order = change.cutAssessments?.find(a => a.index === index)?.askOrder;
+    const published = order !== undefined && next.cutAssessments?.find(a => a.askOrder === order);
+    if (published && cuts[published.index]) {
+      change = next; index = published.index; cut = cuts[index];
+      continue;
+    }
     let found = cuts.findIndex(r => same(r, cut!));
     if (found < 0) {
       // The next part can stage a cut that touches this one, and the review then lists the two as one.

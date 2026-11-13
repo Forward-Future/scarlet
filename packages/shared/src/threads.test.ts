@@ -183,6 +183,16 @@ describe("buildThreads", () => {
     expect(countReviewDecisions(source, { [one!.id]: threadRevision({ ...one!, changes: one!.changes.slice(0, 1) }) })).toBe(2);
   });
 
+  it("keeps a sent-back call out of the project count when a later part moves it to another time and slot", () => {
+    const staged = (index: number, start: number, askOrder: number) => ({ index, start, end: start + 1, verdict: "ask" as const, reason: "Retake", askOrder });
+    const old = [staged(0, 1, 2), staged(1, 20, 1)];
+    const current = [staged(0, 5, 1), staged(1, 25, 2)];
+    const before = pass({ id: "before", state: "rejected", replacedBy: "pass", cutReasons: old, cutAssessments: old, createdAt: at(0) });
+    const after = pass({ fromVersion: "moved", cutReasons: current, cutAssessments: current });
+    const revision = task("revision", { state: "queued", context: { threadId: "request", changeId: "before", cutIndex: 1 }, createdAt: at(3) });
+    expect(countReviewDecisions({ notes: [], tasks: [task("run"), revision], changes: [before, after] })).toBe(1);
+  });
+
   it("counts what the chat counts: a pass's calls that still wait, and a question as one", () => {
     const reasons = Array.from({ length: 8 }, (_, i) => ({ start: i * 10, end: i * 10 + 1, reason: "Retake" }));
     const looked = (index: number, verdict: string) => ({ index, start: index * 10, end: index * 10 + 1, verdict, reason: "Looked" });
