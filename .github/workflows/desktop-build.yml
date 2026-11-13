@@ -86,7 +86,7 @@ jobs:
 
       - name: Check Windows engine startup before building native dependencies
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           ./.github/scripts/use-windows-test-owner.ps1
           node apps/desktop/scripts/smoke-engine-startup.mjs "apps/desktop/src-tauri/binaries/scarlet-engine-${{ matrix.triple }}.exe"
