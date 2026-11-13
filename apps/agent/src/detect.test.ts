@@ -1,7 +1,9 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { apiKeyVars, cmdShellArgs, defaultExec, detect, detectClaude, detectCodex, detectGemini, findOnPath, formatAvailability, needsCmdShell, runnerEnv, stripVars, type ExecFn } from "./detect.js";
 
 /** Run the rest of the test as if on another OS. Paths and the file system stay this machine's. */
@@ -284,9 +286,31 @@ describe("defaultExec", { timeout: 20_000 }, () => {
     expect(result.code).not.toBe(0);
   });
   it("stops a timed-out probe together with the child holding its output pipe", async () => {
-    const childScript = "setTimeout(() => console.log('child finished'), 2000)";
-    const script = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {stdio:'inherit'});console.log('probing');setInterval(() => {}, 1000)`;
-    const result = await defaultExec(process.execPath, ["-e", script], { timeoutMs: 500 });
+    const ready = join(await tempDir(), "ready");
+    const childScript = `
+      process.stdout.write('probing\\n', () => require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)));
+      setTimeout(() => console.log('child finished'), 10_000);
+    `;
+    const script = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {stdio:'inherit'});setInterval(() => {}, 1000)`;
+    // Start the real process tree before firing the probe deadline, even on a busy Windows runner.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const probe = defaultExec(process.execPath, ["-e", script], { timeoutMs: 500 });
+    try {
+      const startup = AbortSignal.timeout(15_000);
+      while (!existsSync(ready)) await delay(10, undefined, { signal: startup });
+    } finally {
+      vi.advanceTimersByTime(500);
+      vi.useRealTimers();
+    }
+    const result = await probe;
+    const childPid = Number(await readFile(ready, "utf8"));
+    expect(childPid).toBeGreaterThan(0);
+    await expect.poll(() => {
+      try { process.kill(childPid, 0); return true; } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+        throw error;
+      }
+    }, { timeout: 5_000 }).toBe(false);
     expect(result.stdout).toBe("probing\n");
     expect(result.code).not.toBe(0);
   });
