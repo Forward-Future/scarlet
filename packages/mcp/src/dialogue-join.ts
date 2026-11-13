@@ -120,7 +120,7 @@ function pageAt(pages: JoinPage[], mediaId: string, stream: number | undefined, 
   return best?.edges;
 }
 
-function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: JoinPage[], fps: number, streams: Map<string, number>, air: number): Edge {
+function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: JoinPage[], fps: number, streams: Map<string, number>, air: number, namedEdge?: number): Edge {
   const sources: SourceEdge[] = [];
   const nearby = clips.filter(c => c.timelineIn <= at + reach && c.timelineIn + clipDuration(c) >= at - reach);
   for (const clip of nearby) {
@@ -234,6 +234,8 @@ function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: Joi
     const words = quote(narrowing ? sources.flatMap(s => s.clipped.map(plain)) : crossed);
     // Whether the move keeps every word is decided by the nearest silent frame; the padding only moves within that silence.
     const placed = state === "quiet" ? padInRun(next, side) : next;
+    // A word-addressed removal must still contain the words the agent named after a repair.
+    if (namedEdge !== undefined && (placed - namedEdge) * direction > 1e-6) continue;
     const move = Math.abs(placed - at), way = placed > at ? "later" : "earlier";
     const note = side+" moved "+move.toFixed(2)+" s "+way+" into the pause" +
       (words ? (narrowing ? " to preserve " : ", trimming the remaining sound of ") + words : "");
@@ -472,11 +474,11 @@ export function checkResumeQuote(tl: Timeline, project: Project, end: number, pa
  * Only narrow a retake by more than a fragment. The caller still owns its meaning, visual review and approval.
  * `air` scales the padding Scarlet leaves at an edge it moves (the editor's pause tightness).
  */
-export function checkDialogueJoin(tl: Timeline, project: Project, range: TimeRange, pages: JoinPage[], air = 1): JoinCheck {
+export function checkDialogueJoin(tl: Timeline, project: Project, range: TimeRange, pages: JoinPage[], air = 1, namedWords?: TimeRange): JoinCheck {
   const { clips, streams } = dialogueClips(tl, project);
   const fps = project.settings.fps;
-  const left: Edge = range.start > 1e-6 ? checkEdge(range.start, 1, clips, pages, fps, streams, air) : { at: range.start };
-  const right: Edge = range.end < timelineDuration(tl) - 1e-6 ? checkEdge(range.end, -1, clips, pages, fps, streams, air) : { at: range.end };
+  const left: Edge = range.start > 1e-6 ? checkEdge(range.start, 1, clips, pages, fps, streams, air, namedWords?.start) : { at: range.start };
+  const right: Edge = range.end < timelineDuration(tl) - 1e-6 ? checkEdge(range.end, -1, clips, pages, fps, streams, air, namedWords?.end) : { at: range.end };
   const problems = [...new Set([left.problem, right.problem].filter(Boolean))].join(" ");
   if (!left.note && !right.note && problems) return { ...range, status: "review", reason: problems,
     ...([left, right].every(e => !e.problem || e.unmeasured) && { unmeasured: true }) };
@@ -662,17 +664,34 @@ export interface WordCut extends TimeRange {
  */
 export const DIP_DBFS = -55;
 
-/** The lowest level between a kept word and the removed word beside it, when it is low enough to cut in. */
-function dipBetween(page: NonNullable<JoinPage["edges"]>, from: number, to: number) {
+/** A level and its frame centre, read from the same buckets that locate silence. */
+function extremeLevel(page: NonNullable<JoinPage["edges"]>, from: number, to: number, kind: "lowest" | "highest") {
   const levels = page.levels;
   if (!levels) return;
   let best: { at: number; db: number } | undefined;
   for (let i = Math.max(0, Math.ceil((from - levels.from) / levels.step - .5)); i < levels.db.length; i++) {
-    const at = levels.from + (i + .5) * levels.step;
+    const at = levels.from + (i + .5) * levels.step, db = levels.db[i]!;
     if (at > to) break;
-    if (!best || levels.db[i]! < best.db) best = { at, db: levels.db[i]! };
+    if (!best || (kind === "lowest" ? db < best.db : db > best.db)) best = { at, db };
   }
-  return best && best.db <= DIP_DBFS ? best : undefined;
+  return best;
+}
+
+/** A short word's far side can fall inside ASR's slack. Keep its strongest sound on the side the agent named. */
+function betweenWords(page: NonNullable<JoinPage["edges"]>, kept: Word, removed: Word, side: "start" | "end"): TimeRange {
+  // A stretched timing can contain several attempts at the same word. The first and last resolved utterances
+  // bound the removal even if the transcript counted them as one.
+  const same = normalizeTranscriptToken(removed.text);
+  const spoken = page.words.filter(w => w.start >= removed.start - wordMargin && w.end <= removed.end + wordMargin &&
+    (w.start + w.end) / 2 >= removed.start && (w.start + w.end) / 2 < removed.end && normalizeTranscriptToken(w.text) === same);
+  const outer = (side === "start" ? spoken[0] : spoken.at(-1)) ?? removed;
+  const left = side === "start" ? kept : outer, right = side === "start" ? outer : kept;
+  const anchor = (word: Word, fallback: number) => {
+    const peak = extremeLevel(page, word.start, word.end, "highest");
+    // Below the same -40 dBFS threshold as quiet runs, the recording cannot locate the word inside its timing.
+    return peak && peak.db > -40 ? peak.at : fallback;
+  };
+  return { start: anchor(left, left.start), end: anchor(right, right.end) };
 }
 
 /**
@@ -690,16 +709,13 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
     const lo = side === "start" ? kept.end : removed.end, hi = side === "start" ? removed.start : kept.start;
     const inGap = (page: JoinPage["edges"]) => {
       if (!page || timed) return [];
-      // A saved word can span several starts of a take. The verbatim scan may resolve the first and last
-      // utterances inside that timing. A pause beyond a whole utterance would leave that utterance playing.
-      const inside = page.words.filter(w => w.start >= removed.start - wordMargin && w.end <= removed.end + wordMargin &&
-        (w.start + w.end) / 2 >= removed.start && (w.start + w.end) / 2 < removed.end);
-      const spoken = inside.length > 1 ? inside.filter(w => normalizeTranscriptToken(w.text) === normalizeTranscriptToken(removed.text)) : [];
-      const limit = side === "start" ? spoken[0]?.end : spoken.at(-1)?.start;
-      return gaps(page).filter(q => q.end - q.start >= 2 * quietMargin && (side === "start"
-        ? q.end > lo - keptSlack && q.start < hi + removedSlack
-        : q.start < hi + keptSlack && q.end > lo - removedSlack) &&
-        (limit === undefined || (side === "start" ? padEdge(q, side, air) < limit : padEdge(q, side, air) > limit)));
+      const bounds = betweenWords(page, kept, removed, side);
+      return gaps(page).filter(q => {
+        if (q.end - q.start < 2 * quietMargin) return false;
+        const fits = side === "start" ? q.end > lo - keptSlack && q.start < hi + removedSlack : q.start < hi + keptSlack && q.end > lo - removedSlack;
+        const at = padEdge(q, side, air);
+        return fits && bounds.start < at && at < bounds.end;
+      });
     };
     // The run beside the kept word: the air after kept speech, or the air before it resumes. A deep trough is listed
     // beside the quiet run it lies in, so the run that reaches furthest toward the kept word is the one beside it:
@@ -715,8 +731,9 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
     if (run) { used[side] = seen ?? run; return padEdge(run, side, air); }
     // No run of silence: the two words run together. The lowest level between them, reaching a little way into each
     // word's timing and no further into the kept one than a quiet run may.
-    const low = page ? dipBetween(page, Math.min(lo, hi) - keptSlack, Math.max(lo, hi) + keptSlack) : undefined;
-    if (low) {
+    const bounds = page && betweenWords(page, kept, removed, side);
+    const low = page && bounds && extremeLevel(page, Math.max(bounds.start, Math.min(lo, hi) - keptSlack), Math.min(bounds.end, Math.max(lo, hi) + keptSlack), "lowest");
+    if (low && low.db <= DIP_DBFS) {
       dips.push(`No pause between “${plain(side === "start" ? kept : removed)}” and “${plain(side === "start" ? removed : kept)}”: the ${side} is at the lowest level between them (${Math.round(low.db)} dBFS).`);
       return low.at;
     }

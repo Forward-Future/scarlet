@@ -26,6 +26,22 @@ function fixture() {
 const cut = (c: Partial<DialogueCutInput>): DialogueCutInput => ({ kind: "retake", decision: "cut", reason: "Earlier take.", ...c });
 
 describe("dialogue plan", () => {
+  it("keeps short named words inside a removal when the only quiet is on their far sides", async () => {
+    const { tl, sources } = fixture();
+    const said = [
+      { text: "ready", start: .50, end: .90 }, { text: "now", start: .90, end: 1.06 },
+      { text: "start", start: 1.36, end: 1.60 }, { text: "over", start: 1.96, end: 2.18 },
+      { text: "again", start: 2.18, end: 2.55 },
+    ];
+    // “now” follows “ready” without a pause; “over” runs into “again”. Both pauses are inside the removal.
+    const rms = Array.from({ length: 250 }, (_, i) => said.some(w => w.start <= (i + .5) / 50 && (i + .5) / 50 < w.end) ? .1 : .001);
+    sources.pages = () => [{ ...page, edges: joinEvidence(said, { from: 0, to: 5, rms, peaks: rms, speechActivity: said }) }];
+    sources.words = async () => said;
+    const plan = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ mediaId: "mic", fromWord: 1, toWord: 3 })] }, sources);
+    expect(plan).toMatchObject({ outcome: "ready", decisions: [{ start: .9, end: 2.18, review: true }] });
+    if (plan.outcome === "ready") expect(plan.gate.get(0)?.evidence).toContain("No measured silence");
+  });
+
   it("returns an edit that leaves a single word doubled immediately after the cut", async () => {
     const { tl, sources } = fixture();
     const heard = ["Okay.", "Take", "two.", "the", "the", "answer."].map((text, i) => ({ text, start: .5 * i, end: .5 * i + .15 }));

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { pacing } from "../src/metrics.ts";
-import { publishedReference } from "../src/published.ts";
+import { comparePublishedJoinSpacing, publishedReference } from "../src/published.ts";
 import { scoreRun } from "../src/score.ts";
 import { playedWords } from "../src/timeline.ts";
 import { cut, media, recording } from "./fixtures.ts";
@@ -39,7 +39,33 @@ describe("a published video as the reference", () => {
     expect(score.reference!.operatingPoints.applied.cut!.words).toMatchObject({ tp: 2, fp: 0, fn: 1 });
     expect(score.reference!.published).toMatchObject({ matchedWords: 17 });
     expect(score.pacing.reference).toMatchObject({ joins: 1 });
+    expect(score.pacing.sharedJoins!.applied).toMatchObject({ eligible: 1, shared: 0, medianAbsErrorMs: null });
     expect(score.headline.edgeF1At20ms).toBeNull();
+    for (const point of Object.values(score.reference!.operatingPoints)) expect(point.cut!.edges).toBeNull();
     expect(score.headline.wordF1).toBe(0.8);
+  });
+
+  it("compares actual output spacing between the same surviving words", () => {
+    const ref = publishedReference(finished([[0, 8], [11, 20]]), evidence, [MIC]);
+    const candidate = playedWords(cut("A", MIC, [[0, 8.1], [11, 20]]), info, evidence);
+    expect(comparePublishedJoinSpacing(ref, candidate)).toMatchObject({
+      referenceJoins: 1, eligible: 1, shared: 1, unedited: 0, medianErrorMs: 100, p90AbsErrorMs: 100,
+      matched: [{ after: "word7", before: "word11", referenceMs: 500, candidateMs: 600 }],
+    });
+    // The same words in another take and an ambiguous use of the same take twice don't establish a match.
+    const otherTake = candidate.map(w => ({ ...w, sourceStart: w.sourceStart + 20, sourceEnd: w.sourceEnd + 20 }));
+    expect(comparePublishedJoinSpacing(ref, otherTake).shared).toBe(0);
+    const replayed = candidate.map(w => ({ ...w, piece: w.piece + 2, start: w.start + 20, end: w.end + 20 }));
+    expect(comparePublishedJoinSpacing(ref, [...candidate, ...replayed]).shared).toBe(0);
+  });
+
+  it("counts pause trims left unedited and excludes joins with unaligned speech", () => {
+    const ref = publishedReference(finished([[0, 7.8], [8, 20]]), evidence, [MIC]);
+    const candidate = playedWords(cut("split-for-picture", MIC, [[0, 8], [8, 20]]), info, evidence);
+    expect(comparePublishedJoinSpacing(ref, candidate)).toMatchObject({ eligible: 1, candidateJoins: 0, shared: 0, unedited: 1 });
+
+    const extra = { text: "extra", start: 7.72, end: 7.79, mediaId: "published", piece: 0 };
+    const withExtra = { ...ref, played: [...ref.played, extra] };
+    expect(comparePublishedJoinSpacing(withExtra, candidate)).toMatchObject({ referenceJoins: 1, eligible: 0, shared: 0, unedited: 0 });
   });
 });

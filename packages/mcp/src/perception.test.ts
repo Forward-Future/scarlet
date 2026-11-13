@@ -48,11 +48,19 @@ describe("timeline perception", () => {
     expect(placed.map(w => [w.index, w.text, w.start])).toEqual([[0, "So", .5], [1, "today", .8], [2, "we", 1.2], [4, "Today", 4.3], [5, "we", 4.7], [6, "build.", 4.9]]);
     const text = formatTimelineTranscript(placed, timelineJoins(tl), { detail: "lines", fps: 30 });
     expect(text.split("\n")).toEqual([
+      "mediaId mic",
       "0.50 #0 So today we",
       "‖ join 1 at 4.00 (0:04.00) mic 4.00→6.00 “we” | “Today”",
       "4.30 #4 Today we build.",
     ]);
     expect(formatTimelineTranscript(placed, timelineJoins(tl), { detail: "words", fps: 30 })).toContain("4.30-4.60 #4 Today");
+    const page = [placed[3]!, { ...placed[4]!, mediaId: "guest", index: 0 }, placed[5]!];
+    for (const detail of ["lines", "words"] as const) {
+      const listed = formatTimelineTranscript(page, [], { detail, fps: 30 }).split("\n");
+      expect(listed.filter(line => line.startsWith("mediaId "))).toEqual(["mediaId mic", "mediaId guest", "mediaId mic"]);
+      expect(listed[1]).toContain("#4 Today"); // The source index survives the cut and the page offset.
+      expect(listed[3]).toContain("#0 we");
+    }
   });
 });
 

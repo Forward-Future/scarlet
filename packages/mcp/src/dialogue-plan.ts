@@ -171,6 +171,8 @@ async function placeWordCut(tl: Timeline, words: TranscriptWord[], ref: { mediaI
   return { start, end, words: cut.text, problems: cut.problems, dips: cut.dips, spoken, source: { start: round3(cut.start), end: Number.isFinite(cut.end) ? round3(cut.end) : null } };
 }
 
+export class NoPauseToTrim extends Error {}
+
 /**
  * Resolve a pause named by the word it follows to a timeline range on `tl`: the pause between that word and the next
  * comes down to `leave` seconds, or to the beat at the editor's tightness, with both edges in the measured quiet.
@@ -188,7 +190,7 @@ export async function resolvePauseCut(tl: Timeline, ref: { mediaId: string; afte
     .sort((a, b) => Math.min(t - b.start, b.end - t) - Math.min(t - a.start, a.end - t))[0]?.edges;
   const leave = ref.leave ?? PAUSE_BEAT * sources.air;
   const cut = pauseCutRange(before, after, pageAt, leave);
-  if (cut.end - cut.start < .04) throw new Error(`The pause between ${said} plays ${cut.plays.toFixed(2)} s, which leaves nothing to trim down to ${leave.toFixed(2)} s.`);
+  if (cut.end - cut.start < .04) throw new NoPauseToTrim(`The pause between ${said} plays ${cut.plays.toFixed(2)} s, which leaves nothing to trim down to ${leave.toFixed(2)} s.`);
   // One clip plays both words: across a join the pause is the join's, and there is no stretch of the recording to take out.
   const clip = tl.tracks.filter(t => t.kind !== "caption" && !t.muted).flatMap(t => t.clips)
     .find((c): c is MediaClip => c.kind === "media" && c.enabled && c.volume > 0 && c.mediaId === ref.mediaId &&
@@ -291,6 +293,8 @@ export interface PauseTrim extends PlannedDecision {
 export interface DialoguePlanRequest {
   tl: Timeline;
   cuts: DialogueCutInput[];
+  /** What the calling tool accepts to resolve a repeated phrase, when it takes keeps instead of removals. */
+  repeatHint?: string;
   range?: TimeRange;
   only?: DialogueCutKind;
   /** /tighten-pauses-here: pauses only, in a local passage. */
@@ -406,7 +410,7 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
     // two words that run together, are not checked a second time: that check takes a brief dip for speech and held
     // every cut of a doubled word for the editor. What was measured at a dip goes back to the agent.
     if (c.spoken && !c.wordEdgeProblems?.length) return c.wordEdgeDips?.length ? adjust(decided, c.wordEdgeDips.join(" ")) : base;
-    const join = checkDialogueJoin(tl, project, { start: c.start, end: c.end }, sources.pages(), sources.air);
+    const join = checkDialogueJoin(tl, project, { start: c.start, end: c.end }, sources.pages(), sources.air, c.spoken);
     // Without a measurement at the edge there is nothing to act on. The agent's own evidence stands.
     if (join.status === "unchanged" || join.unmeasured) return base;
     // A pause is quiet from end to end, so one whose edge is on sound was placed from a word's timing, which often
@@ -573,7 +577,7 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
               reason: `The ${side === "start" ? "outgoing" : "incoming"} audio plays “${heard}” from a cut-off “${word}” beside another “${word}”.` });
         }
         return issues.map(({ cut, words, reason, ...evidence }) => ({ ...range, cut, ...evidence,
-          reason: reason + ` Include one occurrence in the removal using word indices or new edges. If both belong, include “${words}” in keepRepeat on cut ${cut}.` }));
+          reason: reason + " " + (req.repeatHint ?? `Include one occurrence in the removal using word indices or new edges. If both belong, include “${words}” in keepRepeat on cut ${cut}.`) }));
       });
     }));
     const disputedEdges = issuesByJoin.flat();
