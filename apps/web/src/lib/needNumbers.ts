@@ -38,15 +38,26 @@ function read(key: string, root: string): Kept {
  * The number of each of `keys`, which are in the order they would be numbered from nothing. One already numbered
  * keeps its number; the rest take the next ones in that order.
  */
-export function needNumbers(projectId: string, threadId: string, root: string, keys: readonly string[]): ReadonlyMap<string, number> {
+type NumberKey = string | { key: string; previous?: string; rememberAs?: string };
+export function needNumbers(projectId: string, threadId: string, root: string, keys: readonly NumberKey[]): ReadonlyMap<string, number> {
   const key = `${PREFIX}/${projectId}/${threadId}`;
   const kept = read(key, root);
   let next = Math.max(0, ...kept.numbers.values());
   let numbers = kept.numbers;
-  for (const item of keys) {
-    if (numbers.has(item)) continue;
-    if (numbers === kept.numbers) numbers = new Map(numbers);
-    numbers.set(item, ++next);
+  for (const entry of keys) {
+    const item = typeof entry === "string" ? entry : entry.key;
+    const alias = typeof entry === "object" ? entry.rememberAs : undefined;
+    let number = numbers.get(item);
+    if (number === undefined) {
+      const previous = typeof entry === "object" && entry.previous ? numbers.get(entry.previous) : undefined;
+      number = previous ?? ++next;
+      if (numbers === kept.numbers) numbers = new Map(numbers);
+      numbers.set(item, number);
+    }
+    if (alias && !numbers.has(alias)) {
+      if (numbers === kept.numbers) numbers = new Map(numbers);
+      numbers.set(alias, number);
+    }
   }
   if (numbers !== kept.numbers) {
     const raw = JSON.stringify({ root, numbers: [...numbers] });

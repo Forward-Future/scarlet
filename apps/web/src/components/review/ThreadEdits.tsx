@@ -3,7 +3,7 @@ import { historyLineage } from "@scarlet/timeline";
 import { matchesEdit, threadEditList, threadRevision, isThreadDone, REVISED_CHECK, type EditRef, type Thread, type ThreadEdit, type VersionSummary } from "@scarlet/shared";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
-import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
+import { requestThreadEdits, useReviewableEditFlags, useThreadEditKey } from "./threadEditRequest";
 import { removedSeconds } from "../../lib/format";
 import { editKindWord } from "../../lib/editKind";
 import { editKey, keepEdits, useKeptEdits } from "../../lib/keptEdits";
@@ -103,11 +103,14 @@ export function useThreadEdits(projectId: string, thread: Thread | undefined): L
     });
     return () => { live = false; };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!applied || !thread) return [];
-  if (loaded?.key === key) return loaded.edits ?? saved;
-  // While the list for a change that just landed loads, the last list stays. The saved list counts differently (an
-  // edit made in several places, a cut two parts share), so showing it for a moment makes the request's line flicker.
-  return loaded?.threadId === thread.id && loaded.edits ? loaded.edits : saved;
+  // While a new list loads, keep the engine's numbering and the flags the editor saw. Finishing a task can arrive
+  // before the read for its final version, which may have replaced one of its earlier flagged edits.
+  const shown = useRef<{ key: string; edits: ListedEdit[] }>(undefined);
+  const current = loaded?.key === key;
+  const previous = loaded && loaded.threadId === thread?.id && shown.current?.key === loaded.key ? shown.current.edits : undefined;
+  const edits = useReviewableEditFlags(thread, (current ? loaded.edits : previous) ?? saved);
+  useEffect(() => { if (current && loaded.edits) shown.current = { key, edits }; }, [current, loaded, key, edits]);
+  return applied ? edits : [];
 }
 
 /** Whether the editor has reviewed an edit: kept here, or decided cut by cut when the pass was applied. */
