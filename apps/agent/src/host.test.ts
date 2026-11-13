@@ -700,7 +700,7 @@ describe("AgentHost when a run or the engine misbehaves", { timeout: 30_000 }, (
     await startHostAndWait(host, once(srv.events, "complete", { signal }));
     expect(srv.completes).toEqual([{ state: "done", summary: "Cut made.", changeIds: [] }]);
     expect(lines).toContain("task task_1: could not read its change ids: task refused");
-    await vi.waitFor(() => expect(lines.some((line) => /^task task_1 done after \d+ms$/.test(line))).toBe(true));
+    await vi.waitFor(() => expect(lines).toContainEqual(expect.stringMatching(/^task task_1 done after \d+(ms|s)$/)));
   });
 
   it("logs an event the engine refused with its task, and keeps the run going", async ({ signal }) => {

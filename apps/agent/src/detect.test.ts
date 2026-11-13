@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { apiKeyVars, cmdShellArgs, defaultExec, detect, detectClaude, detectCodex, detectGemini, findOnPath, formatAvailability, needsCmdShell, runnerEnv, stripVars, type ExecFn } from "./detect.js";
 
@@ -46,8 +46,9 @@ describe("detect", () => {
   });
 
   it("findOnPath resolves node on this machine", async () => {
-    expect(await findOnPath("node")).toBeTruthy();
-    expect(await findOnPath("definitely-not-a-real-cli-xyz")).toBeNull();
+    const env = { PATH: dirname(process.execPath) };
+    expect(await findOnPath("node", env)).toBeTruthy();
+    expect(await findOnPath("definitely-not-a-real-cli-xyz", env)).toBeNull();
   });
 
   it("reads subscription sign-in, plan and signed-out exit codes", async () => {

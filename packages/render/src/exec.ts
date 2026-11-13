@@ -125,7 +125,7 @@ export function stderrTail(stderr: string, lines = 40): string {
  */
 export function failureReason(error: unknown): string {
   const wrote = error instanceof FfmpegError
-    ? error.stderr.split(/\r?\n/).map(line => line.replace(/ @ 0x[0-9a-f]+/gi, "").trim()).filter(Boolean)
+    ? error.stderr.split(/\r?\n/).map(line => line.replace(/ @ (?:0x[0-9a-f]+|[0-9a-f]{8,16})(?=\])/gi, "").trim()).filter(Boolean)
     : [];
   const first = wrote[0], last = wrote.at(-1);
   const line = first ? (last === first ? first : `${first}; ${last}`)
