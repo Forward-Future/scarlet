@@ -392,6 +392,83 @@ class UpdateTest(unittest.TestCase):
         shutil.rmtree(updater.PENDING)
         updater.Attendant().answer(-0.01)
 
+    def test_build_migrates_a_shallow_clone_to_full_main_history(self):
+        root = updater.CACHE.resolve()
+        origin, source = root / "upstream", root / "source"
+
+        def git(*args, cwd=origin):
+            return subprocess.check_output(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                                            "-c", "commit.gpgsign=false", "-c", "core.hooksPath=", *args],
+                                           cwd=cwd, stderr=subprocess.DEVNULL, text=True).strip()
+
+        origin.mkdir()
+        git("init", "-b", "main")
+        git("commit", "--allow-empty", "-m", "First")
+        previous = git("rev-parse", "HEAD")
+        git("commit", "--allow-empty", "-m", "Second")
+        expected = git("rev-parse", "HEAD")
+        git("clone", "--depth=1", origin.as_uri(), str(source))
+        self.assertEqual(git("rev-parse", "--is-shallow-repository", cwd=source), "true")
+
+        def assemble(run, progress, commit, candidate):
+            self.assertEqual(expected, commit)
+            self.assertEqual(git("rev-parse", "--is-shallow-repository", cwd=source), "false")
+            self.assertEqual(git("rev-parse", "FETCH_HEAD^", cwd=source), previous)
+
+        with patch.multiple(updater, REPO=origin.as_uri(), SOURCE=source, node_bin=lambda: source, assemble=assemble), \
+                (root / "build.log").open("w") as transcript:
+            updater.build(transcript, expected, lambda seconds: time.sleep(min(0.02, seconds)))
+
+    def test_assemble_verifies_stamped_version_and_keeps_the_clean_checkout(self):
+        root = updater.CACHE.resolve()
+        source = root / "source"
+        def git(*args):
+            return subprocess.check_output(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                                            "-c", "commit.gpgsign=false", "-c", "core.hooksPath=", *args],
+                                           cwd=source, stderr=subprocess.DEVNULL, text=True).strip()
+
+        fixture_root = Path(__file__).resolve().parents[3]
+        files = ["package.json", "apps/desktop/src-tauri/Cargo.toml", "apps/desktop/src-tauri/Cargo.lock",
+                 "apps/desktop/src-tauri/Info.plist", "apps/desktop/src-tauri/tauri.conf.json",
+                 "apps/server/src/telemetry/config.ts", "apps/agent/src/modelCatalog.ts", "packages/mcp/src/server.ts",
+                 updater.VERSION_SCRIPT]
+        files += [str(pack.relative_to(fixture_root)) for scope in ("packages", "apps")
+                  for pack in (fixture_root / scope).glob("*/package.json")]
+        for file in files:
+            destination = source / file
+            destination.parent.mkdir(exist_ok=True, parents=True)
+            shutil.copy(fixture_root / file, destination)
+        git("init", "-b", "main")
+        git("add", ".")
+        git("commit", "-m", "Baseline")
+        git("commit", "--allow-empty", "-m", "Release")
+        rev = git("rev-parse", "HEAD")
+        node = Path(shutil.which("node"))
+        version = subprocess.check_output([node, updater.VERSION_SCRIPT, "for-commit"], cwd=source, text=True).strip()
+        candidate = root / "candidate.app"
+        progress = updater.Progress(rev)
+        info = source / "apps/desktop/src-tauri/Info.plist"
+        info.write_bytes(plistlib.dumps(dict(plistlib.loads(info.read_bytes()), ScarletSourceRevision=rev)))
+        def run(*args):
+            if args[0] == "git" or args[:2] == ("node", updater.VERSION_SCRIPT):
+                subprocess.run(args, cwd=source, check=True, stdout=subprocess.DEVNULL)
+            elif "tauri" in args:
+                config = json.loads((source / "apps/desktop/src-tauri/tauri.conf.json").read_text())
+                self.assertEqual(config["version"], version)
+                (candidate / "Contents").mkdir(parents=True)
+                metadata = dict(plistlib.loads(info.read_bytes()), CFBundleIdentifier=updater.APP_ID,
+                                CFBundleShortVersionString=version)
+                (candidate / "Contents/Info.plist").write_bytes(plistlib.dumps(metadata))
+
+        with patch.multiple(updater, SOURCE=source, node_bin=lambda: node.parent, swap_in=lambda a, b: a.rename(root / "done.app")):
+            updater.assemble(run, progress, rev, candidate)
+            self.assertEqual(git("status", "--porcelain"), "")
+            self.assertFalse((updater.CACHE / "build-version.json").exists())
+            (source / "personal.txt").write_text("save this")
+            with self.assertRaisesRegex(ValueError, "other changes"):
+                updater.assemble(run, progress, rev, candidate)
+            self.assertEqual((source / "personal.txt").read_text(), "save this")
+
     def test_a_build_runs_under_the_workers_attendant_and_leaves_the_verified_build_on_offer(self):
         address = updater.CACHE / "ready.sock"
         source = updater.CACHE / "source"

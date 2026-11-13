@@ -498,7 +498,8 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     <section ref={stage} className="cut-preview" aria-label={view} data-expanded={expanded || undefined}>
       <AmbientLight stage={stage} monitor={monitor} />
       <div className="watch-viewport">
-        <div ref={monitor} className="watch-monitor" style={{ "--picture-aspect": pictureAspect } as CSSProperties}
+        <div ref={monitor} className="watch-monitor" data-landscape={pictureAspect > 1 || undefined}
+          style={{ "--picture-aspect": pictureAspect } as CSSProperties}
           onLoadedMetadataCapture={readSourceSize}>
           {fullVideoUrl ? <CachedVideo key={fullVideoUrl} url={fullVideoUrl} label={source?.name ?? (draftVersion ? "Proposed draft" : "The current edit")}
             hidden={false} active={active} autoPlay={!!source && autoPlaySource} joins={joined?.clock} />

@@ -1,7 +1,9 @@
-import { clipDuration, timelineDuration, timelineToSource, type MediaClip, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
+import { applyReviewRemovals, clipDuration, crossfadeJoins, timelineDuration, timelineToSource, type MediaAsset, type MediaClip, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 import { JOIN_WORD_SECONDS, normalizeTranscriptToken } from "@scarlet/shared";
 import { dbfs, round3 } from "./analysis.js";
 import { REPEAT_WITHIN } from "./dialogue-leftovers.js";
+import { partialRepeatAtJoin, type FragmentSide } from "./dialogue-fragment-repeat.js";
+import { MAX_CROSSFADE, timelineJoins, type JoinSide } from "./timeline-perception.js";
 
 type Word = Pick<TranscriptWord, "text" | "start" | "end">;
 interface Waveform { from: number; to: number; peaks: number[]; rms?: number[]; speechActivity?: TimeRange[] }
@@ -118,7 +120,7 @@ function pageAt(pages: JoinPage[], mediaId: string, stream: number | undefined, 
   return best?.edges;
 }
 
-function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: JoinPage[], fps: number, streams: Map<string, number>, air: number): Edge {
+function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: JoinPage[], fps: number, streams: Map<string, number>, air: number, namedEdge?: number): Edge {
   const sources: SourceEdge[] = [];
   const nearby = clips.filter(c => c.timelineIn <= at + reach && c.timelineIn + clipDuration(c) >= at - reach);
   for (const clip of nearby) {
@@ -232,6 +234,8 @@ function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: Joi
     const words = quote(narrowing ? sources.flatMap(s => s.clipped.map(plain)) : crossed);
     // Whether the move keeps every word is decided by the nearest silent frame; the padding only moves within that silence.
     const placed = state === "quiet" ? padInRun(next, side) : next;
+    // A word-addressed removal must still contain the words the agent named after a repair.
+    if (namedEdge !== undefined && (placed - namedEdge) * direction > 1e-6) continue;
     const move = Math.abs(placed - at), way = placed > at ? "later" : "earlier";
     const note = side+" moved "+move.toFixed(2)+" s "+way+" into the pause" +
       (words ? (narrowing ? " to preserve " : ", trimming the remaining sound of ") + words : "");
@@ -266,13 +270,15 @@ export function dialogueJoinWords(tl: Timeline, project: Pick<Project, "media">,
     const words = page?.words.filter(w => w.end > t - JOIN_WORD_SECONDS && w.start < t + JOIN_WORD_SECONDS && w.start >= clip.sourceIn && w.end <= clip.sourceOut);
     if (!words?.length) return [];
     const timelineAt = (source: number) => clip.timelineIn + (source - clip.sourceIn) / clip.speed;
-    return [{ mediaId: clip.mediaId, ...(stream && { audioStream: stream }), words: words.map(w => [timelineAt(w.start), timelineAt(w.end), w.text] as const) }];
+    return [{ mediaId: clip.mediaId, clipId: clip.id, ...(stream && { audioStream: stream }), words: words.map(w => [timelineAt(w.start), timelineAt(w.end), w.text] as const) }];
   });
   return { start: wordsAt(range.start), end: wordsAt(range.end) };
 }
 
 type TimedWord = readonly [start: number, end: number, text: string];
 type NearbyWords = ReturnType<typeof dialogueJoinWords>;
+type RepeatReadings = { start: Pick<NearbyWords["start"][number], "mediaId" | "audioStream" | "words">[];
+  end: Pick<NearbyWords["end"][number], "mediaId" | "audioStream" | "words">[] };
 interface JoinRepeat { mediaId: string; words: string; before: TimeRange; after: TimeRange }
 interface PickupRepeat { mediaId: string; words: string; side: "start" | "end"; first: TimeRange; second: TimeRange }
 
@@ -288,8 +294,8 @@ function samePhrase(left: TimedWord[], right: TimedWord[], removedSeconds = 0) {
 }
 
 /** Words doubled across an edit, or an immediately repeated phrase at the beginning or end of a kept take. */
-export function dialogueJoinRepeats(nearby: NearbyWords, cut: TimeRange, previousEnd = 0, nextStart = Infinity) {
-  const kept = (readings: NearbyWords["start"], side: "start" | "end") => readings.map(r => ({
+export function dialogueJoinRepeats(nearby: RepeatReadings, cut: TimeRange, previousEnd = 0, nextStart = Infinity) {
+  const kept = (readings: RepeatReadings["start"], side: "start" | "end") => readings.map(r => ({
     ...r, words: r.words.filter(([s, e]) => side === "start"
       ? s >= previousEnd && (s + e) / 2 < cut.start : (s + e) / 2 >= cut.end && e <= nextStart),
   })).filter(r => r.words.length && (side === "start" ? r.words.at(-1)![1] <= cut.start + wordMargin : r.words[0]![0] >= cut.end - wordMargin));
@@ -319,14 +325,98 @@ export function dialogueJoinRepeats(nearby: NearbyWords, cut: TimeRange, previou
   return { repeatAtJoin, pickupRepeats };
 }
 
-export type ReadKeptWords = (mediaId: string, stream: number | undefined, from: number, to: number) => Promise<Word[]>;
+export type ReadKeptWords = (mediaId: string, stream: number | undefined, from: number, to: number, cachedOnly?: true) => Promise<Word[]>;
+
+/** Use the engine's ripple and fade operations so unavailable handles and existing edits are respected. */
+export function dialogueCutPreview(tl: Timeline, media: MediaAsset[], ranges: TimeRange[], fadeSeconds: number,
+  hold?: (at: number) => string | undefined) {
+  const straight = applyReviewRemovals(tl, ranges, "join");
+  let removed = 0;
+  const joins = ranges.map(r => {
+    const at = r.start - removed;
+    removed += r.end - r.start;
+    return at;
+  });
+  return crossfadeJoins(straight, media, joins, fadeSeconds, { hold }).timeline;
+}
+
+type JoinPlayback = { preview: () => Timeline; at: number; partialOnly?: boolean };
+
+/** Read the real handles only for a join whose aligned words could put the same word on both sides. */
+async function checkPartialWord(tl: Timeline, project: Pick<Project, "media">, cut: TimeRange, nearby: NearbyWords,
+  read: ReadKeptWords, playback: JoinPlayback, previousEnd: number, nextStart: number) {
+  // A physical edge may sit half an overlap beyond the picture cut. Avoid building a preview for unrelated words.
+  const handle = MAX_CROSSFADE / 2;
+  const plausible = nearby.start.some(left => nearby.end.some(right => {
+    if (left.mediaId !== right.mediaId || left.audioStream !== right.audioStream) return false;
+    const outgoing = left.words.filter(([s, e]) => s < cut.start + handle && e > cut.start - REPEAT_WITHIN);
+    const incoming = right.words.filter(([s, e]) => s < cut.end + REPEAT_WITHIN && e > cut.end - handle);
+    return outgoing.some(a => incoming.some(b =>
+      (a[1] >= cut.start || b[0] <= cut.end) && normalizeTranscriptToken(a[2]) === normalizeTranscriptToken(b[2])));
+  }));
+  if (!plausible) return;
+  const preview = playback.preview();
+  const join = timelineJoins(preview).find(j => Math.abs(j.at - playback.at) < .001);
+  if (!join) return;
+  const originals = new Map(dialogueClips(tl, project).clips.map(c => [c.id, c]));
+  for (const track of join.tracks) {
+    if (track.gap || track.out.mediaId !== track.in.mediaId) continue;
+    const clips = preview.tracks.find(t => t.id === track.trackId)!.clips;
+    const side = async (which: "start" | "end", played: JoinSide): Promise<FragmentSide | undefined> => {
+      const out = which === "start", at = cut[which];
+      const clip = clips.find(c => c.id === played.clipId);
+      if (clip?.kind !== "media") return;
+      const asset = project.media.find(m => m.id === clip.mediaId);
+      if (!asset) return;
+      const stream = dialogueAudioStream(clip) ?? dialogueAudioStream(asset);
+      // Scan words describe the asset's selected stream. A different clip override needs its own transcript.
+      if (stream !== dialogueAudioStream(asset)) return;
+      const centerSource = timelineToSource(clip, playback.at);
+      // Match by placement as well as recording. A ripple can split a clip, and a fade can move its sound to another track.
+      const candidates = nearby[which].filter(r => r.mediaId === played.mediaId).flatMap(r => {
+        const before = originals.get(r.clipId);
+        if (!before || before.speed !== clip.speed || (dialogueAudioStream(before) ?? dialogueAudioStream(asset)) !== stream ||
+          Math.abs(timelineToSource(before, at) - centerSource) > 1e-5) return [];
+        return [{ before, scan: r.words }];
+      });
+      if (candidates.length !== 1) return;
+      const { before, scan } = candidates[0]!;
+      const clock = (source: number) => at + (source - centerSource) / clip.speed;
+      const edge = clock(played.source);
+      const from = out ? Math.max(clip.sourceIn, played.source - JOIN_WORD_SECONDS,
+        centerSource + (previousEnd - at) * clip.speed) : played.source;
+      const to = out ? played.source : Math.min(clip.sourceOut, played.source + JOIN_WORD_SECONDS,
+        centerSource + (nextStart - at) * clip.speed);
+      if (to <= from) return;
+      const words = await read(clip.mediaId, stream, from, to, true);
+      const heard = words.filter(w => w.end > w.start && !/^\s*\[.*\]\s*$/.test(w.text)).map(w => [clock(w.start), clock(w.end), w.text] as const);
+      return { trackId: track.trackId, clipId: before.id, mediaId: clip.mediaId, audioStream: stream, speed: clip.speed,
+        sourceAtEdge: played.source, edge, bounds: { start: clock(from), end: clock(to) }, scan, heard };
+    };
+    const [out, incoming] = await Promise.all([side("start", track.out), side("end", track.in)]);
+    if (out && incoming) {
+      const found = partialRepeatAtJoin(cut, out, incoming);
+      if (found) return found;
+    }
+  }
+}
 
 /** Read the two pieces that would play, clipping the listening windows at adjacent removals and source clip edges. */
 export async function checkKeptWords(tl: Timeline, project: Pick<Project, "media">, cut: TimeRange, nearby: NearbyWords,
-  read?: ReadKeptWords, previousEnd = 0, nextStart = Infinity) {
-  const scan = dialogueJoinRepeats(nearby, cut, previousEnd, nextStart);
+  read?: ReadKeptWords, previousEnd = 0, nextStart = Infinity, playback?: JoinPlayback) {
+  const scan = playback?.partialOnly ? { repeatAtJoin: undefined, pickupRepeats: [] }
+    : dialogueJoinRepeats(nearby, cut, previousEnd, nextStart);
   const unread = new Set<string>();
-  if (!read) return { ...scan, unread: [...unread] };
+  if (!read) return { ...scan, partialWordRepeat: undefined, unread: [...unread] };
+  const readWindow: ReadKeptWords = async (id, stream, from, to, cachedOnly) => {
+    try { return await read(id, stream, from, to, cachedOnly); }
+    catch (err) {
+      unread.add(id + ": " + (err instanceof Error ? err.message : String(err)));
+      return [];
+    }
+  };
+  const partial = playback && checkPartialWord(tl, project, cut, nearby, readWindow, playback, previousEnd, nextStart);
+  if (playback?.partialOnly) return { ...scan, partialWordRepeat: await partial, unread: [...unread] };
   const { clips } = dialogueClips(tl, project);
   const side = async (which: "start" | "end") => {
     const at = cut[which], out = which === "start";
@@ -340,18 +430,14 @@ export async function checkKeptWords(tl: Timeline, project: Pick<Project, "media
       const to = out ? edge : Math.min(edge + JOIN_WORD_SECONDS, timelineToSource(clip, Math.min(nextStart, hi)));
       const asset = project.media.find(m => m.id === clip.mediaId)!;
       const stream = dialogueAudioStream(clip) ?? dialogueAudioStream(asset);
-      let words: Word[] = [];
-      if (to > from + 1e-6) {
-        try { words = await read(clip.mediaId, stream, from, to); }
-        catch (err) { unread.add(clip.mediaId + ": " + (err instanceof Error ? err.message : String(err))); }
-      }
+      const words = to > from + 1e-6 ? await readWindow(clip.mediaId, stream, from, to) : [];
       const time = (s: number) => lo + (s - clip.sourceIn) / clip.speed;
       return { mediaId: clip.mediaId, ...(stream && { audioStream: stream }),
         words: words.filter(w => w.start >= from - 1e-6 && w.end <= to + 1e-6 && w.end > w.start && normalizeTranscriptToken(w.text) && !/^\s*\[.*\]\s*$/.test(w.text))
           .map(w => [time(w.start), time(w.end), w.text] as const) };
     }));
   };
-  const [start, end] = await Promise.all([side("start"), side("end")]);
+  const [start, end, partialWordRepeat] = await Promise.all([side("start"), side("end"), partial]);
   const heard = dialogueJoinRepeats({ start, end }, cut, previousEnd, nextStart);
   // Both are readings of the same take. Give the agent the scan's spelling when both find its repeat.
   const pickupRepeats = [...scan.pickupRepeats];
@@ -359,7 +445,7 @@ export async function checkKeptWords(tl: Timeline, project: Pick<Project, "media
     if (!pickupRepeats.some(s => s.mediaId === p.mediaId && s.side === p.side &&
       s.first.start < p.second.end && p.first.start < s.second.end)) pickupRepeats.push(p);
   }
-  return { repeatAtJoin: scan.repeatAtJoin ?? heard.repeatAtJoin, pickupRepeats, unread: [...unread] };
+  return { repeatAtJoin: scan.repeatAtJoin ?? heard.repeatAtJoin, pickupRepeats, partialWordRepeat, unread: [...unread] };
 }
 
 /** Check the start of the chosen delivery, including the continuation that distinguishes it from a rehearsal. */
@@ -388,11 +474,11 @@ export function checkResumeQuote(tl: Timeline, project: Project, end: number, pa
  * Only narrow a retake by more than a fragment. The caller still owns its meaning, visual review and approval.
  * `air` scales the padding Scarlet leaves at an edge it moves (the editor's pause tightness).
  */
-export function checkDialogueJoin(tl: Timeline, project: Project, range: TimeRange, pages: JoinPage[], air = 1): JoinCheck {
+export function checkDialogueJoin(tl: Timeline, project: Project, range: TimeRange, pages: JoinPage[], air = 1, namedWords?: TimeRange): JoinCheck {
   const { clips, streams } = dialogueClips(tl, project);
   const fps = project.settings.fps;
-  const left: Edge = range.start > 1e-6 ? checkEdge(range.start, 1, clips, pages, fps, streams, air) : { at: range.start };
-  const right: Edge = range.end < timelineDuration(tl) - 1e-6 ? checkEdge(range.end, -1, clips, pages, fps, streams, air) : { at: range.end };
+  const left: Edge = range.start > 1e-6 ? checkEdge(range.start, 1, clips, pages, fps, streams, air, namedWords?.start) : { at: range.start };
+  const right: Edge = range.end < timelineDuration(tl) - 1e-6 ? checkEdge(range.end, -1, clips, pages, fps, streams, air, namedWords?.end) : { at: range.end };
   const problems = [...new Set([left.problem, right.problem].filter(Boolean))].join(" ");
   if (!left.note && !right.note && problems) return { ...range, status: "review", reason: problems,
     ...([left, right].every(e => !e.problem || e.unmeasured) && { unmeasured: true }) };
@@ -578,17 +664,34 @@ export interface WordCut extends TimeRange {
  */
 export const DIP_DBFS = -55;
 
-/** The lowest level between a kept word and the removed word beside it, when it is low enough to cut in. */
-function dipBetween(page: NonNullable<JoinPage["edges"]>, from: number, to: number) {
+/** A level and its frame centre, read from the same buckets that locate silence. */
+function extremeLevel(page: NonNullable<JoinPage["edges"]>, from: number, to: number, kind: "lowest" | "highest") {
   const levels = page.levels;
   if (!levels) return;
   let best: { at: number; db: number } | undefined;
   for (let i = Math.max(0, Math.ceil((from - levels.from) / levels.step - .5)); i < levels.db.length; i++) {
-    const at = levels.from + (i + .5) * levels.step;
+    const at = levels.from + (i + .5) * levels.step, db = levels.db[i]!;
     if (at > to) break;
-    if (!best || levels.db[i]! < best.db) best = { at, db: levels.db[i]! };
+    if (!best || (kind === "lowest" ? db < best.db : db > best.db)) best = { at, db };
   }
-  return best && best.db <= DIP_DBFS ? best : undefined;
+  return best;
+}
+
+/** A short word's far side can fall inside ASR's slack. Keep its strongest sound on the side the agent named. */
+function betweenWords(page: NonNullable<JoinPage["edges"]>, kept: Word, removed: Word, side: "start" | "end"): TimeRange {
+  // A stretched timing can contain several attempts at the same word. The first and last resolved utterances
+  // bound the removal even if the transcript counted them as one.
+  const same = normalizeTranscriptToken(removed.text);
+  const spoken = page.words.filter(w => w.start >= removed.start - wordMargin && w.end <= removed.end + wordMargin &&
+    (w.start + w.end) / 2 >= removed.start && (w.start + w.end) / 2 < removed.end && normalizeTranscriptToken(w.text) === same);
+  const outer = (side === "start" ? spoken[0] : spoken.at(-1)) ?? removed;
+  const left = side === "start" ? kept : outer, right = side === "start" ? outer : kept;
+  const anchor = (word: Word, fallback: number) => {
+    const peak = extremeLevel(page, word.start, word.end, "highest");
+    // Below the same -40 dBFS threshold as quiet runs, the recording cannot locate the word inside its timing.
+    return peak && peak.db > -40 ? peak.at : fallback;
+  };
+  return { start: anchor(left, left.start), end: anchor(right, right.end) };
 }
 
 /**
@@ -606,16 +709,13 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
     const lo = side === "start" ? kept.end : removed.end, hi = side === "start" ? removed.start : kept.start;
     const inGap = (page: JoinPage["edges"]) => {
       if (!page || timed) return [];
-      // A saved word can span several starts of a take. The verbatim scan may resolve the first and last
-      // utterances inside that timing. A pause beyond a whole utterance would leave that utterance playing.
-      const inside = page.words.filter(w => w.start >= removed.start - wordMargin && w.end <= removed.end + wordMargin &&
-        (w.start + w.end) / 2 >= removed.start && (w.start + w.end) / 2 < removed.end);
-      const spoken = inside.length > 1 ? inside.filter(w => normalizeTranscriptToken(w.text) === normalizeTranscriptToken(removed.text)) : [];
-      const limit = side === "start" ? spoken[0]?.end : spoken.at(-1)?.start;
-      return gaps(page).filter(q => q.end - q.start >= 2 * quietMargin && (side === "start"
-        ? q.end > lo - keptSlack && q.start < hi + removedSlack
-        : q.start < hi + keptSlack && q.end > lo - removedSlack) &&
-        (limit === undefined || (side === "start" ? padEdge(q, side, air) < limit : padEdge(q, side, air) > limit)));
+      const bounds = betweenWords(page, kept, removed, side);
+      return gaps(page).filter(q => {
+        if (q.end - q.start < 2 * quietMargin) return false;
+        const fits = side === "start" ? q.end > lo - keptSlack && q.start < hi + removedSlack : q.start < hi + keptSlack && q.end > lo - removedSlack;
+        const at = padEdge(q, side, air);
+        return fits && bounds.start < at && at < bounds.end;
+      });
     };
     // The run beside the kept word: the air after kept speech, or the air before it resumes. A deep trough is listed
     // beside the quiet run it lies in, so the run that reaches furthest toward the kept word is the one beside it:
@@ -631,8 +731,9 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
     if (run) { used[side] = seen ?? run; return padEdge(run, side, air); }
     // No run of silence: the two words run together. The lowest level between them, reaching a little way into each
     // word's timing and no further into the kept one than a quiet run may.
-    const low = page ? dipBetween(page, Math.min(lo, hi) - keptSlack, Math.max(lo, hi) + keptSlack) : undefined;
-    if (low) {
+    const bounds = page && betweenWords(page, kept, removed, side);
+    const low = page && bounds && extremeLevel(page, Math.max(bounds.start, Math.min(lo, hi) - keptSlack), Math.min(bounds.end, Math.max(lo, hi) + keptSlack), "lowest");
+    if (low && low.db <= DIP_DBFS) {
       dips.push(`No pause between “${plain(side === "start" ? kept : removed)}” and “${plain(side === "start" ? removed : kept)}”: the ${side} is at the lowest level between them (${Math.round(low.db)} dBFS).`);
       return low.at;
     }

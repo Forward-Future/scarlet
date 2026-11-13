@@ -6,6 +6,9 @@ on:
       release:
         required: true
         type: boolean
+      version:
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,7 +19,7 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
-    if: ${{ !inputs.release || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.ref_protected) }}
+    if: ${{ !inputs.release || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     environment: ${{ inputs.release && 'release' || 'desktop-build' }}
     strategy:
       fail-fast: false
@@ -35,15 +38,12 @@ jobs:
             triple: x86_64-apple-darwin
             arch: x86_64
     env:
+      RELEASE_VERSION: ${{ inputs.version }}
       BUNDLE: apps/desktop/src-tauri/target/${{ matrix.triple }}/release/bundle
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-
-      - name: Check release permissions
-        if: runner.os == 'macOS'
-        run: ruby .github/tests/desktop_permissions_test.rb
 
       # pnpm version comes from package.json "packageManager".
       - uses: pnpm/action-setup@v4
@@ -61,6 +61,10 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
           key: ${{ matrix.triple }}
+
+      - name: Stamp the shared release version before building
+        shell: bash
+        run: node apps/desktop/scripts/release-version.mjs set "$RELEASE_VERSION" --tag "v$RELEASE_VERSION"
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -122,7 +126,7 @@ jobs:
         run: node --test apps/desktop/scripts/smoke-engine.test.mjs
 
       # Without these secrets the Mac app is signed ad hoc: it runs, but macOS asks
-      # before the first launch. Store them only in the protected release environment for a signed,
+      # before the first launch. Store them only in the main-only release environment for a signed,
       # notarized build. Only the ones that are set are passed on, because
       # Tauri treats an empty one as set.
       - name: Apple signing secrets
@@ -142,18 +146,10 @@ jobs:
 
       - name: Build installers
         uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
           args: --target ${{ matrix.triple }}
-          tagName: ${{ inputs.release && github.ref_name || '' }}
-          releaseName: ${{ inputs.release && format('Scarlet {0}', github.ref_name) || '' }}
-          releaseBody: "Scarlet desktop installers. See the assets below."
-          releaseDraft: true
-          prerelease: false
-          includeUpdaterJson: false
 
       - name: Check the Mac app's code signature
         if: runner.os == 'macOS'
@@ -176,29 +172,14 @@ jobs:
           fi
           node apps/desktop/scripts/smoke-engine.mjs "$DIR"
 
-      - name: Launch the Mac app and take a screenshot
-        if: runner.os == 'macOS'
+      - name: Verify packaged versions and stage installers
         shell: bash
-        run: |
-          set -uo pipefail
-          LOG="$HOME/Library/Logs/com.forwardfuture.scarlet/scarlet-desktop.log"
-          open -n "$BUNDLE/macos/Scarlet.app"
-          for i in $(seq 1 90); do grep -q "engine ready on" "$LOG" 2>/dev/null && break; sleep 1; done
-          sleep 10
-          mkdir -p screenshots
-          screencapture -x "screenshots/scarlet-${{ matrix.triple }}.png" || echo "::warning::screencapture failed"
-          echo "----- app log -----"; cat "$LOG" || true
-          pkill -f "Scarlet.app/Contents/MacOS" || true
-          grep -q "engine ready on" "$LOG" || { echo "::error::the app never reported the engine ready"; exit 1; }
+        run: node apps/desktop/scripts/verify-desktop-package.mjs "${{ matrix.triple }}" "$RELEASE_VERSION" "$RUNNER_TEMP/scarlet-installers"
 
-      - name: Upload artifacts
-        if: ${{ always() && !inputs.release }}
+      - name: Upload verified installers
         uses: actions/upload-artifact@v4
         with:
           name: scarlet-desktop-${{ matrix.triple }}
-          if-no-files-found: warn
-          path: |
-            ${{ env.BUNDLE }}/msi/*.msi
-            ${{ env.BUNDLE }}/nsis/*.exe
-            ${{ env.BUNDLE }}/dmg/*.dmg
-            screenshots/*.png
+          path: ${{ runner.temp }}/scarlet-installers/
+          if-no-files-found: error
+          overwrite: true

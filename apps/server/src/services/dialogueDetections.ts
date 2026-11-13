@@ -73,12 +73,25 @@ export function dialogueDetector(ctx: Ctx) {
    * work Scarlet does unasked.
    */
   const stops = (projectId: string, edit?: ScanEdit) => edit ? ctx.projectSignal(projectId) : ctx.mediaSignal(projectId);
-  async function source(projectId: string, media: MediaAsset, to: number, settings: ServerSettings["transcription"]) {
-    if (settings.provider === "none") throw conflict("transcription_unavailable", "Transcription isn't available in this build of Scarlet.");
+  function sourceFile(projectId: string, media: MediaAsset, to: number) {
     if (media.kind !== "audio" && !media.hasAudio) throw badRequest("no_audio", "Choose a source with dialogue.");
     if (!media.duration || to > media.duration + 0.000001) throw badRequest("outside_media", "Window exceeds source duration.");
     const file = fileInDirectory(ctx.paths.media(projectId), media.path);
     if (!file) throw notFound("source file");
+    return file;
+  }
+  async function cachedSpeech(projectId: string, media: MediaAsset, file: string, from: number, to: number,
+    stream: number | undefined, defaultLanguage: string | undefined): Promise<DialogueDetections | undefined> {
+    const language = transcriptLanguage(ctx, projectId, media) || defaultLanguage;
+    if (language !== "auto" && !alignsLanguage(language)) return;
+    const words = await readAcousticWindow(await emissionStore(ctx, projectId, file, stream), from, to);
+    if (words) return { acoustic: [], segments: words.length ? [{
+      id: "kept", start: from, end: to, text: words.map(w => w.text).join(" "), words,
+    }] : [] };
+  }
+  async function source(projectId: string, media: MediaAsset, to: number, settings: ServerSettings["transcription"]) {
+    if (settings.provider === "none") throw conflict("transcription_unavailable", "Transcription isn't available in this build of Scarlet.");
+    const file = sourceFile(projectId, media, to);
     // Bump the format for changes to the bundled models, prompt, VAD or detection algorithm.
     const runtime = settings.provider === "whispercpp" ? resolveLocalRuntime(ctx, settings) : undefined;
     const model = runtime ? await localModelIdentity(runtime) : ["openai", settings.openaiModel];
@@ -96,10 +109,17 @@ export function dialogueDetector(ctx: Ctx) {
   }
 
   async function openPage(projectId: string, media: MediaAsset, from: number, to: number, edit?: ScanEdit,
-    policy = ctx.repos.settings.transcriptionPolicy(), keptSide?: { audioStream?: number }) {
+    policy = ctx.repos.settings.transcriptionPolicy(), keptSide?: { audioStream?: number; cachedOnly?: true }) {
     const signal = AbortSignal.any([stops(projectId, edit), policy.signal]);
     signal.throwIfAborted();
     if (edit && !activeEdit(edit)) throw conflict("edit_inactive", "This edit is no longer running.");
+    if (keptSide?.cachedOnly) {
+      // Never reuse a transcribed reading. A missing emissions window may be filled between checks.
+      const file = sourceFile(projectId, media, to);
+      const ready = ctx.track(cachedSpeech(projectId, media, file, from, to, keptSide.audioStream, policy.settings.language)
+        .then(result => result ?? { acoustic: [], segments: [], keptSideUnavailable: true as const }));
+      return { analyzed: ready, ready };
+    }
     const { file, fingerprint, runtime } = await source(projectId, media, to, policy.settings);
     const params = [media.id, fingerprint, from, to];
     const saved = keptSide ? undefined : ctx.db.prepare("SELECT result FROM dialogue_scan_pages WHERE media_id = ? AND fingerprint = ? AND start = ? AND end = ?")
@@ -150,13 +170,8 @@ export function dialogueDetector(ctx: Ctx) {
       signal.throwIfAborted();
       const stream = keptSide?.audioStream;
       if (keptSide) {
-        const language = transcriptLanguage(ctx, projectId, media) || policy.settings.language;
-        if (language === "auto" || alignsLanguage(language)) {
-          const words = await readAcousticWindow(await emissionStore(ctx, projectId, file, stream), from, to);
-          if (words) return { acoustic: [], segments: words.length ? [{
-            id: "kept", start: from, end: to, text: words.map(w => w.text).join(" "), words,
-          }] : [] };
-        }
+        const measured = await cachedSpeech(projectId, media, file, from, to, stream, policy.settings.language);
+        if (measured) return measured;
       }
       const wav = join(ctx.paths.tmp, randomUUID() + ".wav");
       // The page's minute, its speech detection and any emissions its alignment lacks all come from one decode of
@@ -262,7 +277,7 @@ export function dialogueDetector(ctx: Ctx) {
     return page;
   }
 
-  async function detect(projectId: string, media: MediaAsset, from: number, to: number, taskId?: string, startedAt?: string, keptSide?: { audioStream?: number }) {
+  async function detect(projectId: string, media: MediaAsset, from: number, to: number, taskId?: string, startedAt?: string, keptSide?: { audioStream?: number; cachedOnly?: true }) {
     return (await openPage(projectId, media, from, to, taskId ? scanEdit(projectId, taskId, startedAt) : undefined, undefined, keptSide)).ready;
   }
   // The engine owns the requested range. A slow reader or an MCP timeout does

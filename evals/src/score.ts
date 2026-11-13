@@ -13,7 +13,7 @@ import {
 } from "./metrics.ts";
 import { pictureAt } from "./layout.ts";
 import { comparePicture, summarizePicture, type PictureComparison, type PictureSample, type PictureSummary } from "./picture.ts";
-import type { PublishedReference } from "./published.ts";
+import { comparePublishedJoinSpacing, type PublishedReference } from "./published.ts";
 import { keptSource, playedWords, sourceSpan, timelineRangeToSource, type MediaInfo, type SourceRange } from "./timeline.ts";
 
 export interface ScoreInput {
@@ -58,6 +58,7 @@ export interface ReviewTier extends Tier {
   heldByScarlet: number;
 }
 export interface PictureScore extends PictureComparison { summary: PictureSummary }
+type ScoredReference = Omit<ReferenceComparison, "edges"> & { edges: ReferenceComparison["edges"] | null };
 
 /** The dead air and doubled words each version plays. The lists are the applied version's, longest gaps first. */
 export interface PacingScore {
@@ -65,6 +66,7 @@ export interface PacingScore {
   applied: PacingSummary;
   proposed: PacingSummary;
   reference?: PacingSummary;
+  sharedJoins?: Record<"applied" | "proposed", ReturnType<typeof comparePublishedJoinSpacing>>;
   appliedGaps: PacingGap[];
   appliedRepeats: PacingRepeat[];
 }
@@ -81,7 +83,7 @@ export interface Score {
     label: string;
     /** A published video is the reference: its words say what was kept, and where its cut edges sat is not known. */
     published?: Omit<PublishedReference, "kept" | "played" | "pieces" | "picture">;
-    operatingPoints: Record<"applied" | "recommended" | "proposed", { cut?: ReferenceComparison; decisions?: ReturnType<typeof compareToDecisions> }>;
+    operatingPoints: Record<"applied" | "recommended" | "proposed", { cut?: ScoredReference; decisions?: ReturnType<typeof compareToDecisions> }>;
   };
   headline: Record<string, number | null>;
 }
@@ -188,13 +190,17 @@ export function scoreRun(input: ScoreInput): Score {
     };
   }
 
-  const paced = (tl: Timeline) => pacing(playedWords(tl, media, evidence));
-  const { gapList, repeatList, ...appliedPacing } = paced(timelines.applied);
-  const summary = ({ gapList: _gaps, repeatList: _repeats, ...rest }: ReturnType<typeof paced>): PacingSummary => rest;
+  const words = (tl: Timeline) => playedWords(tl, media, evidence);
+  const appliedWords = words(timelines.applied), proposedWords = words(timelines.proposed);
+  const { gapList, repeatList, ...appliedPacing } = pacing(appliedWords);
+  const summary = ({ gapList: _gaps, repeatList: _repeats, ...rest }: ReturnType<typeof pacing>): PacingSummary => rest;
+  const published = input.reference?.published;
   const pacingScore: PacingScore = {
-    source: summary(paced(timelines.source)), applied: appliedPacing, proposed: summary(paced(timelines.proposed)),
-    ...(input.reference?.published ? { reference: summary(pacing(input.reference.published.played)) }
-      : input.reference?.timeline && { reference: summary(paced(input.reference.timeline)) }),
+    source: summary(pacing(words(timelines.source))), applied: appliedPacing, proposed: summary(pacing(proposedWords)),
+    ...(published ? {
+      reference: summary(pacing(published.played)),
+      sharedJoins: { applied: comparePublishedJoinSpacing(published, appliedWords), proposed: comparePublishedJoinSpacing(published, proposedWords) },
+    } : input.reference?.timeline && { reference: summary(pacing(words(input.reference.timeline))) }),
     appliedGaps: gapList.sort((a, b) => b.seconds - a.seconds).slice(0, 60), appliedRepeats: repeatList,
   };
 
@@ -207,12 +213,15 @@ export function scoreRun(input: ScoreInput): Score {
 
   let reference: Score["reference"] = null;
   if (input.reference && (input.reference.published || input.reference.timeline || input.reference.labels?.length)) {
-    const published = input.reference.published;
     const kRef: Kept | undefined = published ? new Map(Object.entries(published.kept)) : input.reference.timeline && keptSource(input.reference.timeline, media);
-    const point = (candidate: Kept) => ({
-      ...(kRef && { cut: compareToReference(kS, candidate, kRef, evidence) }),
-      ...(input.reference!.labels?.length && { decisions: compareToDecisions(kS, candidate, input.reference!.labels) }),
-    });
+    const point = (candidate: Kept) => {
+      const cut = kRef && compareToReference(kS, candidate, kRef, evidence);
+      // The transcript locates words, but its inferred silence padding is not an observed edit edge.
+      return {
+        ...(cut && { cut: published ? { ...cut, edges: null } : cut }),
+        ...(input.reference!.labels?.length && { decisions: compareToDecisions(kS, candidate, input.reference!.labels) }),
+      };
+    };
     const { kept: _kept, played: _played, pieces: _pieces, picture: _picture, ...matched } = published ?? ({} as PublishedReference);
     reference = { label: input.reference.label, ...(published && { published: matched }), operatingPoints: { applied: point(kA), recommended: point(recommended), proposed: point(kR) } };
   }
@@ -254,13 +263,15 @@ export function scoreRun(input: ScoreInput): Score {
       deadAirSeconds: appliedPacing.gaps.excessSeconds,
       repeatsLeft: appliedPacing.repeats.total,
       repeatsAtJoins: appliedPacing.repeats.atJoins,
+      sharedAppliedJoins: pacingScore.sharedJoins?.applied.shared ?? null,
+      sharedAppliedJoinGapMedianAbsErrorMs: pacingScore.sharedJoins?.applied.medianAbsErrorMs ?? null,
       layoutAgreement: picture?.applied.layoutAgreement ?? null,
       framingAgreement: picture?.applied.main?.sameFraming ?? null,
       clippedWordsOnSound: applied.edges.clippedOnSound + (review?.edges.clippedOnSound ?? 0),
       checkJoinCoverage: plan?.checkJoinCoverage ?? null,
       wordF1: proposedRef?.words.f1 ?? null,
       timeF1: proposedRef?.time.f1 ?? null,
-      edgeF1At20ms: reference?.published ? null : proposedRef?.edges.f1["20ms"]?.f1 ?? null,
+      edgeF1At20ms: proposedRef?.edges?.f1["20ms"]?.f1 ?? null,
       requiredLinesMissing: proposedRef?.requiredLines.missing ?? null,
       toolCalls: trace?.toolCalls ?? null,
       toolErrors: trace?.errors ?? null,

@@ -1,6 +1,6 @@
 {
   "name": "@scarlet/desktop",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "private": true,
   "description": "Scarlet for macOS and Windows with an embedded renderer, engine sidecar, and local agent host.",
   "license": "MIT",

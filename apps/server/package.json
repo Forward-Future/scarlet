@@ -1,6 +1,6 @@
 {
   "name": "@scarlet/server",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "Scarlet desktop engine: project store, change queue, render workers, and review API.",
   "license": "MIT",
   "type": "module",

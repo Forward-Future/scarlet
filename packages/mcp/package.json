@@ -1,6 +1,6 @@
 {
   "name": "@scarlet/mcp",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "Scarlet MCP server: the tools an AI agent uses to read a project and propose changes.",
   "license": "MIT",
   "type": "module",

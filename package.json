@@ -1,7 +1,7 @@
 {
   "name": "scarlet",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "Single-user AI video editor. Agents edit, Scarlet renders.",
   "license": "MIT",
   "packageManager": "pnpm@12.16.1",
@@ -17,6 +17,7 @@
     "test": "pnpm -r test",
     "mcp": "node packages/mcp/dist/cli.js",
     "agent": "node apps/agent/dist/cli.js",
+    "release:version": "node apps/desktop/scripts/release-version.mjs",
     "desktop:dev": "pnpm -r --parallel --filter \"./packages/*\" --filter @scarlet/server --filter @scarlet/desktop run watch",
     "desktop:build": "pnpm --filter @scarlet/desktop bundle",
     "desktop:ffmpeg": "pnpm --filter @scarlet/desktop ffmpeg",

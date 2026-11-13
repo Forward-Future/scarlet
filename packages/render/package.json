@@ -1,6 +1,6 @@
 {
   "name": "@scarlet/render",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "ffmpeg-based renderer for Scarlet cut lists: probe, proxies, waveforms, segment and full renders.",
   "license": "MIT",
   "type": "module",

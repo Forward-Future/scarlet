@@ -21,9 +21,11 @@ export interface ProgressFocus {
 const MOST_OF_THE_VIDEO = 0.8;
 
 /** The context to show around a change: enough to see what comes before and after it. */
-export function focusAround(range: TimeRange, duration: number, bandLabel?: string, tone?: ProgressFocus["tone"]): ProgressFocus | undefined {
+export function focusAround(range: TimeRange, duration: number, bandLabel?: string,
+  { tone, playbackEnd }: { tone?: ProgressFocus["tone"]; playbackEnd?: number } = {}): ProgressFocus | undefined {
   if (duration > 0 && range.end - range.start >= duration * MOST_OF_THE_VIDEO) return undefined;
-  const pad = Math.max(5, (range.end - range.start) * 0.15);
+  // Center the band with room past the last played frame, including any neighboring cuts the audition skips.
+  const pad = Math.max(5, (range.end - range.start) * 0.15, (playbackEnd ?? range.end) - range.end + 2);
   return {
     view: { start: Math.max(0, range.start - pad), end: Math.min(duration || range.end + pad, range.end + pad) },
     band: range, bandLabel, tone,

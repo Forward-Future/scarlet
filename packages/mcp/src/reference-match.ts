@@ -9,7 +9,7 @@
  */
 import { round3 } from "./analysis.js";
 
-export const REFERENCE_MATCH_VERSION = 1;
+export const REFERENCE_MATCH_VERSION = 2;
 
 export interface MatchWord { text: string; start: number; end: number }
 export interface MatchSource { mediaId: string; words: readonly MatchWord[] }
@@ -189,12 +189,16 @@ function measureRate(final: Side, sources: Side[], runs: Run[]): number {
   const ratios: number[] = [];
   for (const run of runs) {
     const src = sources[run.source]!;
-    for (let i = 8; i < run.pairs.length; i += 8) {
-      const [a0, b0] = run.pairs[i - 8]!, [a1, b1] = run.pairs[i]!;
+    // In a tightly edited video an eight-word span often crosses a cut even when every word is kept.
+    // Measure shorter, consecutive phrases. Skip any span where the text matcher jumped over words.
+    const span = 3;
+    for (let i = span; i < run.pairs.length; i += span) {
+      const [a0, b0] = run.pairs[i - span]!, [a1, b1] = run.pairs[i]!;
+      if (a1 - a0 !== span || b1 - b0 !== span) continue;
       const f = final.words[final.index[a1]!]!.start - final.words[final.index[a0]!]!.start;
       const s = src.words[src.index[b1]!]!.start - src.words[src.index[b0]!]!.start;
       // A cut inside the span changes one side only; the median ignores those.
-      if (f > 1 && s > 0) ratios.push(s / f);
+      if (f > 0.5 && s > 0) ratios.push(s / f);
     }
   }
   if (ratios.length < 5) return 1;

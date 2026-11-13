@@ -7,9 +7,11 @@
  * long a pause the finished video plays there.
  */
 import { matchReference, type MatchSource } from "../../packages/mcp/src/reference-match.ts";
-import { merge, type Range } from "./intervals.ts";
+import { normalizeTranscriptToken as token } from "../../packages/shared/src/transcriptSearch.ts";
+import { merge, quantile, type Range } from "./intervals.ts";
 import { round, type MediaEvidence, type PlayedWord, type Word } from "./metrics.ts";
 import type { PictureSample } from "./picture.ts";
+import type { TimelineWord } from "./timeline.ts";
 
 /** The id the finished video's own words carry, where a recording's would be. */
 export const PUBLISHED = "published";
@@ -38,6 +40,72 @@ export interface PublishedReference {
   pieces: PublishedPiece[];
   /** Where each recording sits in the published frame at regular moments, when its picture was measured. */
   picture?: PictureSample[];
+}
+
+function rememberUnique<K, V>(map: Map<K, V | null>, key: K, value: V) {
+  map.set(key, map.has(key) ? null : value);
+}
+
+function spokenInOrder<W extends PlayedWord>(words: readonly W[]): W[] {
+  return words.filter(w => token(w.text) && !/^\[.*\]$/.test(w.text.trim())).sort((a, b) => a.start - b.start);
+}
+
+/** Compare the silence between the very same two retained words on both playback clocks.
+ * Source times and text distinguish repeated takes. The published alignment only identifies the
+ * outer words of a stretch with certainty. A seam with an unmatched word is left unscored.
+ */
+export function comparePublishedJoinSpacing(reference: PublishedReference, candidate: readonly TimelineWord[]) {
+  const millis = (s: number) => Math.round(1000 * s);
+  const key = (media: string, out: number, left: string, into: number, right: string) =>
+    JSON.stringify([media, millis(out), token(left), millis(into), token(right)]);
+  const ending = new Map<number, PublishedPiece | null>(), starting = new Map<number, PublishedPiece | null>();
+  for (const piece of reference.pieces) {
+    rememberUnique(ending, millis(piece.finalEnd), piece);
+    rememberUnique(starting, millis(piece.finalStart), piece);
+  }
+  const anchors = new Map<string, { at: number; after: string; before: string; referenceMs: number } | null>();
+  const published = spokenInOrder(reference.played);
+  let referenceJoins = 0;
+  for (let i = 1; i < published.length; i++) {
+    const left = published[i - 1]!, right = published[i]!;
+    if (left.piece === right.piece) continue;
+    referenceJoins++;
+    const a = ending.get(millis(left.end)), b = starting.get(millis(right.start));
+    if (!a || !b || a.mediaId !== b.mediaId || left.end <= left.start || right.end <= right.start) continue;
+    rememberUnique(anchors, key(a.mediaId, a.sourceEnd, left.text, b.sourceStart, right.text), {
+      at: left.end, after: left.text, before: right.text, referenceMs: millis(Math.max(0, right.start - left.end)),
+    });
+  }
+
+  const pairs = new Map<string, { edited: boolean; candidateMs: number } | null>();
+  const played = spokenInOrder(candidate);
+  let candidateJoins = 0;
+  for (let i = 1; i < played.length; i++) {
+    const left = played[i - 1]!, right = played[i]!;
+    if (left.mediaId !== right.mediaId) continue;
+    const edited = left.piece !== right.piece;
+    if (edited) candidateJoins++;
+    const id = key(left.mediaId, left.sourceEnd, left.text, right.sourceStart, right.text);
+    if (anchors.has(id)) rememberUnique(pairs, id, { edited, candidateMs: millis(Math.max(0, right.start - left.end)) });
+  }
+
+  let eligible = 0, unedited = 0;
+  const matched = [];
+  for (const [id, anchor] of anchors) {
+    if (!anchor) continue;
+    eligible++;
+    const pair = pairs.get(id);
+    if (!pair) continue;
+    if (!pair.edited) { unedited++; continue; }
+    matched.push({ ...anchor, candidateMs: pair.candidateMs, errorMs: pair.candidateMs - anchor.referenceMs });
+  }
+  const errors = matched.map(m => m.errorMs), absolute = errors.map(Math.abs);
+  const percentile = (values: number[], q: number) => values.length ? Math.round(quantile(values, q)!) : null;
+  return {
+    referenceJoins, eligible, candidateJoins, shared: matched.length, unedited,
+    medianErrorMs: percentile(errors, 0.5), medianAbsErrorMs: percentile(absolute, 0.5), p90AbsErrorMs: percentile(absolute, 0.9),
+    matched,
+  };
 }
 
 /**

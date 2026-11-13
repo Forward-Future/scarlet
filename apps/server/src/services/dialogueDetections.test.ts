@@ -65,8 +65,12 @@ it("reads the selected input's existing acoustic words with transcription off", 
   const file = await realpath(join(ctx.paths.media(project.id), media.path));
   const request = { mediaId: media.id, from: 0, to: 3 };
   const words = (audioStream?: number) => client.dialogueAcousticWords(project.id, { ...request, audioStream });
+  const kept = (audioStream?: number, from = 0, to = 3) => client.dialogueDetections(project.id, {
+    ...request, from, to, keptSide: { audioStream, cachedOnly: true } });
   const decode = vi.spyOn(ffmpeg, "extractWav");
+  const unavailable = { segments: [], acoustic: [], keptSideUnavailable: true };
   expect(await words()).toEqual([]);
+  expect(await kept()).toEqual(unavailable);
   for (const [stream, letter] of [[undefined, "A"], [1, "B"]] as const) {
     const store = (await EmissionFile.open(await emissionStore(ctx, project.id, file, stream), 3 * SAMPLE_RATE))!;
     try {
@@ -78,11 +82,19 @@ it("reads the selected input's existing acoustic words with transcription off", 
   expect(await words()).toEqual([[{ text: "a", start: .02, end: .04 }]]);
   expect(await words(1)).toEqual([[{ text: "b", start: .02, end: .04 }]]);
   expect(await words(0)).toEqual([]);
+  expect(await kept()).toMatchObject({ segments: [{ id: "kept", words: [{ text: "a", start: .02, end: .04 }] }] });
+  expect(await kept(1)).toMatchObject({ segments: [{ id: "kept", words: [{ text: "b" }] }] });
+  expect(await kept(0)).toEqual(unavailable);
+  expect(await kept(undefined, 1, 2)).toEqual({ segments: [], acoustic: [] });
+  await expect(kept(undefined, 1, 9.5)).rejects.toMatchObject({ status: 400 });
+  await expect(client.dialogueDetections(project.id, { ...request, keptSide: { cachedOnly: true },
+    taskId: "missing-edit" })).rejects.toMatchObject({ status: 404 });
   await expect(client.dialogueAcousticWords("another-project", request)).rejects.toMatchObject({ status: 404 });
   await expect(client.dialogueAcousticWords(project.id, { ...request, to: 86 })).rejects.toMatchObject({ status: 400 });
   // Sources imported before a selected transcript was recorded use their latest saved transcript.
   ctx.repos.transcripts.put({ id: "trs_mic", projectId: project.id, mediaId: media.id, language: "es", segments: [] });
   expect(await words()).toEqual([]);
+  expect(await kept()).toEqual(unavailable);
   expect(decode).not.toHaveBeenCalled();
   expect(speaker).not.toHaveBeenCalled();
 });
@@ -109,7 +121,7 @@ it("reads only the kept speech frames, including a word missing from the transcr
 });
 
 it("transcribes and caches just the surviving window when acoustic frames are unavailable", async () => {
-  const { request, speaker } = await cloudScanFixture();
+  const { request, client, project, media, speaker } = await cloudScanFixture();
   const upload = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ text: "the the", words: [
     { word: "the", start: .1, end: .3 }, { word: "the", start: .4, end: .6 }] }));
   const check = () => request("detections", 8, undefined, { to: 10, keptSide: { audioStream: 0 } });
@@ -119,6 +131,9 @@ it("transcribes and caches just the surviving window when acoustic frames are un
     expect(segments[0].words).toMatchObject([{ text: "the", start: 8.1 }, { text: "the", start: 8.4 }]);
   }
   expect((await check()).status).toBe(200);
+  // A previous ASR fallback for the exact same range must not satisfy a request for cached emissions.
+  expect(await client.dialogueDetections(project.id, { mediaId: media.id, from: 8, to: 10,
+    keptSide: { audioStream: 0, cachedOnly: true } })).toEqual({ segments: [], acoustic: [], keptSideUnavailable: true });
   expect(upload).toHaveBeenCalledTimes(1);
   expect(speaker).not.toHaveBeenCalled();
   expect(await (await request("checkpoints", 0)).json()).toEqual([]);

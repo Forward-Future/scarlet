@@ -31,29 +31,37 @@ export interface Artifacts {
 export const mediaInfo = (m: { id: string; kind: string; name?: string; duration?: number; hasAudio?: boolean; hash?: string; path?: string }): MediaInfo =>
   ({ id: m.id, kind: m.kind, name: m.name, duration: m.duration, hasAudio: m.hasAudio, hash: m.hash, path: m.path });
 
-const isDialogueApply = (c: Change) => c.intent === "requested" && !!c.cutReasons?.length;
-
 type Decide = (review: Change, timeline: (v: string) => Promise<Timeline>) => Promise<{ source: "engine" | "local"; changes: ReviewChangeExport[] }>;
 
 async function assemble(task: TaskRecord, events: EventLike[], changes: Change[], project: { id: string; fps: number; media: MediaInfo[] },
   load: (v: string) => Promise<Timeline>, decide: Decide): Promise<Artifacts> {
-  const applied = changes.find(isDialogueApply);
-  // A run saved in parts applies a chain: each part starts where the previous one left the edit.
-  const parts = applied ? [applied] : [];
-  for (let next: Change | undefined; (next = changes.find(c => isDialogueApply(c) && !parts.includes(c) &&
-    c.fromVersion === (parts.at(-1)!.appliedVersion ?? parts.at(-1)!.toVersion)));) parts.push(next);
-  const review = changes.filter(c => c.intent === "suggestion" && c.ops?.length)
-    .sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? "")).at(-1);
+  const owned = changes.filter(c => !c.taskId || c.taskId === task.id);
+  const requested = owned.filter(c => c.intent === "requested" && c.state === "approved")
+    .sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
+  const reviews = owned.filter(c => c.intent === "suggestion" && c.ops?.length)
+    .sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
   const submitted = submittedPlans(events);
-  const source = applied?.fromVersion ?? submitted.at(-1)?.version ?? review?.fromVersion ?? task.context.version;
+  // Some runs assemble the raw footage themselves. Grade the cut from that assembly.
+  const first = requested.find(c => c.cutReasons?.length);
+  const source = first?.appliedOnto ?? first?.fromVersion ?? submitted[0]?.version ?? reviews[0]?.fromVersion
+    ?? requested[0]?.appliedOnto ?? requested[0]?.fromVersion ?? task.context.version;
   if (!source) throw new Error(`Task ${task.id} produced no dialogue cut to evaluate and names no source version.`);
+  // A normal timeline edit can polish the pass after its last dialogue submission.
+  let appliedVersion = source;
+  const parts: Change[] = [];
+  for (const change of requested) {
+    if ((change.appliedOnto ?? change.fromVersion) !== appliedVersion) continue;
+    parts.push(change);
+    appliedVersion = change.appliedVersion ?? change.toVersion;
+  }
+  const applied = parts[0];
+  // A staged version from an earlier head would also undo the later changes in a proposed score.
+  const review = reviews.filter(c => c.fromVersion === appliedVersion).at(-1);
   // The last submission on each version of the chain is the plan that version's part applied.
   const chain = [source, ...parts.map(p => p.appliedVersion ?? p.toVersion)];
   const plans = chain.flatMap(v => submitted.filter(p => p.version === v).slice(-1));
   if (!plans.length && submitted.length) plans.push(submitted.at(-1)!);
   const plan = plans[0];
-  const last = parts.at(-1);
-  const appliedVersion = last ? last.appliedVersion ?? last.toVersion : source;
   const proposed = review?.toVersion ?? appliedVersion;
   const timelines = new Map<string, Timeline>();
   const timeline = async (v: string) => {
@@ -61,7 +69,7 @@ async function assemble(task: TaskRecord, events: EventLike[], changes: Change[]
     timelines.set(v, tl);
     return tl;
   };
-  for (const v of new Set([source, appliedVersion, proposed, review?.fromVersion, ...chain, ...plans.map(p => p.version)].filter((v): v is string => !!v))) await timeline(v);
+  for (const v of new Set([source, appliedVersion, proposed, review?.fromVersion, ...chain, ...parts.map(p => p.fromVersion), ...plans.map(p => p.version)].filter((v): v is string => !!v))) await timeline(v);
   // Versions the run checked joins on, to compare those checks with later parts. A case may not store them.
   const checked = events.flatMap(e => e.type === "tool" && toolName(String(e.data?.tool ?? "")) === "dialogue_check_join"
     && typeof (e.data?.input as { version?: unknown } | undefined)?.version === "string" ? [(e.data!.input as { version: string }).version] : []);

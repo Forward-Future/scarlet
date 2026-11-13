@@ -121,8 +121,16 @@ and the published video's own words, which give its pacing: the gaps and doubled
 
 - The build prints how many of the published video's words were found in the recordings and warns under 80%.
   Speech no recording has (an intro recorded later, a sponsor read) is set apart and never scored.
-- Words say what was kept, not where each edge sat in the silence between two words, so edge agreement is not
-  scored against a published video. A kept piece reaches half the published pause past its outer words.
+- For each join whose two adjacent words can be identified in one recording, the score checks whether Scarlet
+  joins those exact takes. It reports the median signed, median absolute, and p90 absolute difference in the
+  time between words on the two playback clocks. The coverage count lists joins shared by both cuts and pairs
+  Scarlet left unedited. Added narration, ambiguous repeated pairs, and unmatched boundary words cannot establish
+  a comparison. The JSON includes the individual matched joins and their published times.
+- Word timing estimates the material kept. Each kept piece extends half the published pause past its outer
+  words, so removed-time scores inherit that approximation. Exact source-edge scores have no ground truth in a
+  transcript-only case. The JSON records `edges: null` for all three operating points. In older saved results,
+  any edge metrics accompanied by `reference.published` were computed against estimated padding and should
+  be excluded from comparisons.
 - Recovering a known 22-minute cut of 169 pieces from its words alone labelled 6275 of 6284 words correctly. Where
   the two transcripts hear a word differently at the edge of a piece, that word is lost from the piece.
 
@@ -149,6 +157,55 @@ Review decisions come from `GET /api/projects/:id/review-decisions[?taskId=]`
 (`apps/server/src/routes/evalExport.ts`). Engines that predate the route are handled by computing the same
 records locally from changes and timelines. Choices the editor has staged in the review UI but not yet
 applied live in the app's local storage. They count as pending.
+
+### Match a finished soundtrack to its source
+
+Use `match_audio.py` to locate the original samples behind each passage in an export. It needs Python 3.9+ with NumPy 1.20+, `ffmpeg` and `ffprobe` on PATH. Both inputs stay local. The first audio stream is used by default. Select a microphone or mix with `--raw-track` and `--final-track` (zero-based).
+
+```sh
+python3 evals/tools/match_audio.py /path/to/raw.mp4 /path/to/final.mp4 \
+  --output "$SCARLET_EVAL_DATA/reference.json"
+```
+
+The script retrieves candidate passages by their sound spectrum, checks the waveform at its native speed and refines each join in a second frequency band. The final may reorder and reuse passages, add music, change gain or replace the picture. Matching requires enough of the original audio to survive. The tool assumes a constant frame rate for locating edges and a single source recording. Speed changes, voiceovers, missing sources and indistinguishable duplicate takes can leave regions unmapped.
+
+`segments` lists source and final start/end times in seconds, in final playback order. `joins` records the source edges and the range of plausible boundary times on the final clock. Quiet boundaries can be uncertain by several frames. `keptSource` merges repeated source time. When any final passage lacks a reliable source match, the tool records it in `unmappedFinal`, sets `removedSource` to `null` and exits with status 2. Use the map to inspect these passages before selecting the pair for full-video removal scoring.
+
+Run `python3 -B -m unittest discover -s evals/test -p test_match_audio.py` for synthetic checks of reordered and reused material, gain, noise and unmatched audio.
+
+### Score a waveform-matched final
+
+For a cut of one audible source at its native speed, `score_audio_reference.py` reads an audio correlation map,
+the raw source's word timings and an actual Scarlet timeline. It runs offline with Python 3's standard library.
+
+```sh
+python3 evals/score_audio_reference.py --reference "$SCARLET_EVAL_DATA/reference.json" \
+  --case-dir "$SCARLET_EVAL_DATA/cases/my-case" --timeline "$SCARLET_EVAL_DATA/candidate.json" \
+  > "$SCARLET_EVAL_DATA/candidate-score.json"
+```
+
+An evidence JSON with `mediaId` and a `words` array can be supplied with `--evidence` in place of the case.
+With a stored case, `--evaluation evaluation.json --tier applied` (or `proposed`) resolves its saved timeline.
+The reference must account for the full published soundtrack. The score brackets each reference edge using its
+earliest and latest plausible time, any independent high-band bounds, and one frame of margin.
+
+The JSON reports precision, recall and F1 for removed words and seconds within the confidently labeled source.
+It includes the words cut or kept in error, the kept sentences lost, and how many pairs of shared source words
+play in reverse order. Spacing is the end-to-start gap at actual joins with the same two identifiable source
+words on both playback clocks. Its report includes coverage, pairs left unedited, signed and absolute gap errors
+in milliseconds, and each matched instance. `python3 -m unittest discover -s evals/test -p 'test_audio_reference.py'`
+checks these metrics against synthetic timelines with known answers.
+
+## Replay published word choices at the join
+
+A waveform map from `evals/tools/match_audio.py` can also supply the exact removed words for a conditional test of Scarlet's edge placement. Use a case built from one raw dialogue clip at normal speed. Each mapped forward join between two kept words is submitted separately as a word-index removal. A join is excluded when the measured uncertainty at its edges, plus one final-video frame on either side, changes any word's keep/cut label. Counts show pause-only, backward and other excluded joins, along with the applied, review and returned-for-revision totals.
+
+```sh
+node --import tsx evals/src/wordEdges.ts --case my-case --reference-map /private/path/audio-map.json --out /private/path/baseline.json
+node --import tsx evals/src/wordEdges.ts --case my-case --reference-map /private/path/audio-map.json --baseline /private/path/baseline.json --tightness tight
+```
+
+The first run reads and caches the recording's waveform, peaks and voice activity from the engine. Subsequent runs replay offline on the same measurements. `--engine URL` selects the engine and `--waveforms PATH` selects a private cache. The output records how many joins removed a different set of word midpoints and the mean absolute error in the gap between the kept words, in milliseconds, before and after the timeline's frame rounding. A baseline comparison scores common joins on identical case inputs. Each result also includes every eligible join for that version. Use the full task benchmark to measure the agent's choice of words.
 
 ## Run
 
