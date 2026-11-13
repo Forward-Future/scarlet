@@ -446,8 +446,9 @@ export const CutChoice = z.object({
 export type CutChoice = z.infer<typeof CutChoice>;
 
 export const JoinFades = z.object({
+  /** Total overlap in seconds. A join with a different recorded overlap carries its own duration. */
   duration: Seconds,
-  fades: z.array(z.object({ at: Seconds, trackId: Id })),
+  fades: z.array(z.object({ at: Seconds, trackId: Id, duration: Seconds.optional() })),
   plain: z.array(z.object({ at: Seconds, reason: z.string() })).default([]),
 });
 export type JoinFades = z.infer<typeof JoinFades>;
@@ -467,7 +468,10 @@ export const Change = z.object({
   author: Author,
   /** Editorial reasons on the pre-proposal timeline. Adjacent removals can share one review item. */
   cutReasons: z.array(z.object({ start: Seconds, end: Seconds, reason: z.string(), originalRange: TimeRange.optional(),
-    /** The dialogue cut kind, so the editor's per-kind settings still apply when the cut is assessed. */
+    /** Requested overlap in seconds at submission time. Older changes have one duration in joinFades. */
+    crossfade: Seconds.optional(),
+    /** An unassessed cut staged under the retired Suggest setting still needs the editor if recommended. */
+    legacySuggest: z.literal(true).optional(),
     kind: z.enum(["pause", "filler", "retake", "coaching"]).optional() })).optional(),
   /** Second-pass recommendations on the immutable chronological cut-review plan. */
   cutAssessments: z.array(CutAssessment).optional(),
@@ -534,7 +538,7 @@ export const Change = z.object({
     duration: Seconds,
   }).optional(),
   /**
-   * The editor's crossfade on the dialogue joins this change made on `toVersion`: the overlap in seconds, each join
+   * The requested crossfades on the dialogue joins this change made on `toVersion`: the overlap in seconds, each join
    * faded and each join left a straight cut with why. Its ops hold only the removals; undoing an earlier edit replays
    * the removals and then these fades.
    */

@@ -372,8 +372,6 @@ export class ScarletClient {
   // Changes
   submitDialogueCuts(projectId: string, body: import("./api.js").DialogueCutsRequest) {
     return this.post<{ changes: Array<Pick<Change, "id" | "state" | "fromVersion" | "toVersion" | "description" | "intent" | "timelineEdits">>;
-      /** What the editor's per-kind settings changed. Older engines omit it. */
-      editorPreferences?: import("./dialoguePreferences.js").DialoguePreferenceDecision[];
       /** Staged cuts from the run's previous part that joined this part's review. */
       carriedForward?: number;
       /** Proposed ranges covered by an editor decision on an earlier part. */
@@ -382,8 +380,8 @@ export class ScarletClient {
       heldForReview?: TimeRange[];
       /** Earlier review slots whose footage is already out. Each join is on its named version. */
       alreadyRemoved?: { changeId: string; index: number; version: string; at: number }[];
-      /** The editor's crossfade on the joins these cuts made. Older engines omit it. */
-      joinCrossfades?: import("./dialoguePreferences.js").JoinCrossfades;
+      /** The requested crossfade on the joins these cuts made. Older engines omit it. */
+      joinCrossfades?: import("./api.js").JoinCrossfades;
       /** The project head after this submission. Older engines omit it. */
       head?: string }>(
       `/projects/${encodeURIComponent(projectId)}/dialogue-cuts`, body);
@@ -414,10 +412,9 @@ export class ScarletClient {
     return this.withResource("changes", changeId, path => this.post<{ draft?: Timeline }>(`${path}/cut-review?view=draft`, { restoredCuts }));
   }
   assessCuts(changeId: string, fromVersion: string, toVersion: string, assessments: import("@scarlet/timeline").CutAssessment[]) {
-    // heldForEditor: cut verdicts on a kind the editor set to Suggest, saved as ask so the editor decides them.
-    // heldRevised: verdicts on a cut the editor sent back for revision, saved as ask for the same reason.
-    return this.withResource("changes", changeId, path => this.post<{ total: number; assessed: number; needsDecision: number; heldForEditor?: number[]; editorPreference?: string;
-      heldRevised?: number[]; editorRequest?: string; heldCalls?: number[]; existingCalls?: string }>(
+    // heldRevised: verdicts on a cut the editor sent back for revision, saved as ask for the editor.
+    return this.withResource("changes", changeId, path => this.post<{ total: number; assessed: number; needsDecision: number;
+      heldForEditor?: number[]; editorPreference?: string; heldRevised?: number[]; editorRequest?: string; heldCalls?: number[]; existingCalls?: string }>(
       `${path}/cut-assessments`, { fromVersion, toVersion, assessments }));
   }
   saveCutChoices(changeId: string, body: import("./api.js").CutChoicesRequest) {

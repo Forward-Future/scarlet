@@ -2,14 +2,13 @@ import { createHash } from "node:crypto";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { run } from "../render/ffmpeg.js";
-import { boundedRippleOps, cutAnchorOn, cutScope, selectedRange, selectionPlacements, taskDialogueOperation, applyDialoguePreferences, type DialogueCutsRequest, type DialoguePreferenceDecision, type JoinCrossfades, reviewItemPath, type StagedCutRevision } from "@scarlet/shared";
+import { boundedRippleOps, cutAnchorOn, cutScope, selectedRange, selectionPlacements, taskDialogueOperation, type DialogueCutsRequest, type JoinCrossfades, reviewItemPath, type StagedCutRevision } from "@scarlet/shared";
 import type { ApproveResponse, ProposeChangeRequest, Task, User } from "@scarlet/shared";
 import { z } from "zod/v3";
 import { ReviseRequest as ReviseRequestSchema } from "@scarlet/shared";
 import { frameAligned, frameAlignedRemoval, onFrame, makeStagedCutMapper,
   clipEnd,
   crossfadeJoins,
-  rippleJoins,
   type JoinFades,
   applyOps,
   historyLineage,
@@ -58,7 +57,6 @@ import { actorFor, authorName, logActivity, quote } from "./activity.js";
 import { beginRevision, proposalAfterRevisions, resumeReviewState } from "./revisionState.js";
 import { currentCutRanges, placeRevision, reviewedCutsOnHead } from "./stagedCutRecovery.js";
 import { removalOutsideSelection, rippleOutsideSelection } from "./selectedRemoval.js";
-import { removesRecordedFootage } from "./dialogueRemoval.js";
 
 export function authorFor(user: User, override?: Partial<Author>): Author {
   const base: Author = { type: "human", id: user.id, name: user.name };
@@ -144,40 +142,59 @@ function assertMediaExists(project: Project, tl: Timeline) {
   }
 }
 
-/** The editor's crossfade on dialogue joins, in seconds of total overlap: 0 when they turned it off. */
-function crossfadeSeconds(ctx: Ctx, fps: number): number {
-  return ctx.settings().dialogue.crossfadeFrames / fps;
+type FadedJoin = { at: number; duration: number };
+type CutReason = NonNullable<Change["cutReasons"]>[number];
+
+/** A pre-upgrade dialogue proposal recorded one overlap for all its joins. */
+function cutCrossfade(change: Change, range: TimeRange): number {
+  const reasons = change.cutReasons ?? [];
+  return Math.max(0, ...reasons.filter(r => r.end > range.start + 1e-6 && r.start < range.end - 1e-6)
+    .map(r => r.crossfade ?? change.joinFades?.duration ?? 0));
 }
 
-const HELD_FOR_REVIEW = "meets a cut waiting for review; it gets the crossfade once that cut is decided";
-
-/**
- * Give the joins at these times the editor's crossfade, from real source handles. A join that can't take it keeps its
- * cut, and the record says why: a dialogue cut is never refused for its crossfade.
- */
-function fadeJoins(ctx: Ctx, project: Project, timeline: Timeline, times: readonly number[],
-  hold?: (at: number) => string | undefined): { timeline: Timeline; joinFades?: JoinFades } {
-  const duration = crossfadeSeconds(ctx, project.settings.fps);
-  if (!duration || !times.length) return { timeline };
-  const faded = crossfadeJoins(timeline, project.media, times, duration, { hold });
+/** Adjacent removals make one join. Apply the longer requested overlap once, using real source handles. */
+function fadeJoins(project: Project, timeline: Timeline, joins: readonly FadedJoin[]): { timeline: Timeline; joinFades?: JoinFades } {
+  const durations = new Map<number, number>();
+  for (const { at, duration } of joins) {
+    if (duration > 0) durations.set(at, Math.max(durations.get(at) ?? 0, duration));
+  }
+  if (!durations.size) return { timeline };
+  const duration = durations.values().next().value!;
+  const faded = crossfadeJoins(timeline, project.media, [...durations.keys()], duration, { durations });
   if (!faded.fades.length && !faded.report.plain.length) return { timeline };
   return { timeline: faded.timeline, joinFades: { duration, fades: faded.fades, plain: faded.report.plain } };
 }
 
-/** Where review cuts leave joins once some are restored: each applied cut's join, and both edges of footage put back. */
-function reviewedJoins(review: CutReview, restored: readonly number[]): number[] {
-  const kept = new Set(restored);
+/** Reasons are stored in chronological order on the base timeline. */
+function proposalJoins(reasons: CutReason[]): FadedJoin[] {
   let shift = 0;
-  return review.cuts.flatMap((cut, i) => {
-    const at = cut.at + shift;
-    if (!kept.has(i)) return [at];
-    shift += cut.removed.end - cut.removed.start;
-    return [at, at + cut.removed.end - cut.removed.start];
+  let previousEnd = -1, previousAt = 0;
+  return reasons.map(cut => {
+    const at = Math.abs(cut.start - previousEnd) < 1e-6 ? previousAt : cut.start - shift;
+    previousAt = at;
+    previousEnd = cut.end;
+    shift += cut.end - cut.start;
+    return { at, duration: cut.crossfade ?? 0 };
   });
 }
 
-/** What the editor's crossfade did on the joins these dialogue changes made, for the agent that made them. */
-function joinCrossfadeReport(ctx: Ctx, changes: readonly Change[]): JoinCrossfades | undefined {
+function reviewedJoins(change: Change, review: CutReview, restored: readonly number[]): FadedJoin[] {
+  const kept = new Set(restored);
+  // Older passes deferred the fade on an applied cut touching a staged cut. A restored
+  // cut can expose that join again on its boundary.
+  const legacy = !!change.joinFades && !change.cutReasons?.some(r => r.crossfade !== undefined);
+  let shift = 0;
+  return review.cuts.flatMap((cut, i) => {
+    const at = cut.at + shift;
+    const duration = cutCrossfade(change, cut.removed);
+    if (!kept.has(i)) return [{ at, duration }];
+    shift += cut.removed.end - cut.removed.start;
+    return legacy ? [{ at, duration }, { at: at + cut.removed.end - cut.removed.start, duration }] : [];
+  });
+}
+
+/** What the requested crossfades did on the joins these dialogue changes made, for the agent that made them. */
+function joinCrossfadeReport(frames: number, changes: readonly Change[]): JoinCrossfades | undefined {
   if (!changes.length) return;
   let faded = 0;
   const plain: JoinCrossfades["plain"] = [];
@@ -188,7 +205,7 @@ function joinCrossfadeReport(ctx: Ctx, changes: readonly Change[]): JoinCrossfad
     faded += new Set(record.fades.map(f => f.at).filter(at => !held.has(at))).size;
     plain.push(...record.plain.map(p => ({ version: change.toVersion, ...p })));
   }
-  return { frames: ctx.settings().dialogue.crossfadeFrames, faded, plain };
+  return { frames, faded, plain };
 }
 
 export interface ProposeResult {
@@ -288,14 +305,12 @@ function opsOnWholeFrames(ctx: Ctx, projectId: string, body: ProposeChangeReques
 
 /**
  * Both writes commit together; optional ranges start on the kept version. Stable IDs make response-loss retries safe.
- * The editor's per-kind settings apply here, the one door every dialogue plan passes through: Off drops that kind's cuts
- * and Suggest stages them for the editor. `editorPreferences` reports each cut a setting changed. `fold` gathers the
- * waiting parts of a run that has finished, with no cuts of its own: only Scarlet's own repair saves under such a run.
+ * `fold` gathers the waiting parts of a run that has finished, with no cuts of its own: only Scarlet's own repair saves under such a run.
  */
 export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body: DialogueCutsRequest, { fold = false, checkAttempt }: { fold?: boolean; checkAttempt?: () => void } = {}): {
-  changes: Change[]; editorPreferences: DialoguePreferenceDecision[]; carriedForward?: number; editorDecided?: TimeRange[]; heldForReview?: TimeRange[];
+  changes: Change[]; carriedForward?: number; editorDecided?: TimeRange[]; heldForReview?: TimeRange[];
   alreadyRemoved?: { changeId: string; index: number; version: string; at: number }[];
-  /** The editor's crossfade on the joins these cuts made. Absent when nothing was saved. */
+  /** The requested crossfade on the joins these cuts made. Absent when nothing was saved. */
   joinCrossfades?: JoinCrossfades;
 } {
   return ctx.db.transaction(() => ctx.bus.asSaved(() => {
@@ -308,16 +323,18 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       throw badRequest("invalid_note", "Choose a note attached to this request.");
     if (local && body.cuts.some(cut => cut.kind !== "pause"))
       throw badRequest("local_pauses", "Only classified pause removals belong to this request.");
+    const frames = body.crossfadeFrames ?? 0;
     const token = createHash("sha256").update(JSON.stringify([projectId, user.id, taskId, fromVersion, [...body.cuts].sort((a, b) => a.start - b.start),
-      ...(body.range || body.kept?.length ? [body.range, body.kept] : [])])).digest("hex");
-    const levels = ctx.settings().dialogue.aiCuts;
-    const enforced = applyDialoguePreferences(body.cuts, levels);
-    const editorPreferences = enforced.decisions;
+      ...(body.range || body.kept?.length ? [body.range, body.kept] : []), ...(frames ? [{ crossfadeFrames: frames }] : [])])).digest("hex");
     const ids = ["applied", "review"].map(s => `chg_${token}_${s}`);
     const saved = ids.flatMap(id => ctx.repos.changes.get(id) ?? []);
-    if (saved.length) return { changes: saved, editorPreferences, joinCrossfades: joinCrossfadeReport(ctx, saved) };
-    if ((taskId || author?.type === "agent") && body.cuts.some(c => !c.kind) && Object.values(levels).some(level => level !== "cut"))
-      throw badRequest("dialogue_kind_required", "Classify each dialogue removal as pause, retake, filler or coaching so Scarlet can apply the editor's settings.");
+    if (saved.length) {
+      // Older submissions used the same ID as a straight cut but read the overlap from Settings.
+      // A stored receipt from that engine describes the fade those cuts actually made.
+      const old = body.crossfadeFrames === undefined && saved.find(c => c.joinFades && !c.cutReasons?.some(r => r.crossfade !== undefined));
+      const savedFrames = old && old.joinFades ? Math.round(old.joinFades.duration * (ctx.repos.projects.header(projectId)?.settings.fps ?? 0)) : frames;
+      return { changes: saved, joinCrossfades: joinCrossfadeReport(savedFrames, saved) };
+    }
     const project = ctx.repos.projects.get(projectId);
     if (!project) throw notFound("project");
     if (!project.head) throw conflict("cut_changed", "Reread the current timeline and map the candidates again.");
@@ -403,7 +420,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       const cutReasons = change.cutReasons!.flatMap(r => {
         const moved = move(r), range = r.originalRange && move(r.originalRange);
         if (moved && (!r.originalRange || range)) return [{ ...moved, ...(range && { originalRange: range }) }];
-        if (!editorChoice(change, r) && assessmentOf(change, r)?.verdict !== "ask") return [];
+        if (!r.legacySuggest && !editorChoice(change, r) && assessmentOf(change, r)?.verdict !== "ask") return [];
         const rest = left(r), around = r.originalRange && left(r.originalRange);
         if (!rest || (r.originalRange && !around)) return [];
         const placed = { ...rest, ...(around && { originalRange: around }) };
@@ -445,7 +462,9 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
           const range = edited ? placed : move(reason);
           if (!range) continue;
           const originalRange = !edited && reason.originalRange ? move(reason.originalRange) : undefined;
-          const entry = { ...reason, ...range, originalRange };
+          const slotFade = edited ? cutCrossfade(change, cut.removed) : reason.crossfade;
+          const entry = { ...reason, ...range, originalRange, ...(slotFade !== undefined && { crossfade: slotFade }),
+            ...(edited && parts.some(part => part.legacySuggest) && { legacySuggest: true as const }) };
           reasons.push(entry);
           if (edited || pending.get(change.id)?.has(index)) protectedCuts.set(entry, `${change.id}:${index}`);
           if (edited) {
@@ -463,7 +482,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     const outer = (c: { start: number; end: number; originalRange?: { start: number; end: number } }) => c.originalRange ?? c;
     const overlaps = (a: { start: number; end: number }, b: { start: number; end: number }) => a.start < b.end - 1e-6 && a.end > b.start + 1e-6;
     /** `asked` is where the plan put a cut the editor hasn't called, before it is moved onto the frame grid and the current version. */
-    type Planned = DialogueCutsRequest["cuts"][number] & { assessment?: CutAssessment; choice?: CutChoice["choice"]; asked?: TimeRange;
+    type Planned = DialogueCutsRequest["cuts"][number] & { crossfade?: number; legacySuggest?: true; assessment?: CutAssessment; choice?: CutChoice["choice"]; asked?: TimeRange;
       submitted?: true; recovered?: boolean; preserveEdges?: boolean; protectedSlot?: string; lapsed?: true };
     // The editor's call on a staged cut stands: a later part doesn't decide that range again.
     const moveToHead = (r: TimeRange) => {
@@ -480,15 +499,26 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     const decided = earlier.flatMap(change => change.cutReasons!.filter(r => editorChoice(change, r)).map(outer));
     // A call belongs to the editor as soon as Scarlet asks. Bulk plans often repeat the same
     // footage as a new staged or confident cut. Carry the call and its number in either case.
-    for (const change of earlier) for (const r of change.cutReasons!) {
-      const call = assessmentOf(change, r);
-      if (call?.verdict === "ask" && !editorChoice(change, r)) protectedCuts.set(r, `${change.id}:${call.index}`);
+    for (const change of earlier) {
+      const reasons = change.cutReasons!;
+      // A migrated Suggest obligation belongs to the full review slot, including any touching reasons.
+      const inherited = reasons.some(r => r.legacySuggest) ? mergeRanges(reasons, 1e-5).filter(span =>
+        reasons.some(r => r.legacySuggest && covers(span, r))) : [];
+      for (const r of reasons) {
+        const call = assessmentOf(change, r);
+        if (editorChoice(change, r)) continue;
+        if (call?.verdict === "ask") protectedCuts.set(r, `${change.id}:${call.index}`);
+        else if (!call) {
+          const slot = inherited.find(span => covers(span, r));
+          if (slot) protectedCuts.set(r, `${change.id}:pending:${slot.start}`);
+        }
+      }
     }
     const heldRanges = [...protectedCuts.keys()];
     const task = taskId && ctx.repos.tasks.get(taskId);
     const requested = task && task.createdBy.type === "human" && ["edit", "revise", "note"].includes(task.kind) &&
       task.context.branch === project.branch && !task.context.reviewAllCuts;
-    const candidates = enforced.cuts.map(c => ({ ...c, ...(current && { ...moveToHead(c), ...(c.originalRange && { originalRange: moveToHead(c.originalRange) }) }),
+    const candidates = body.cuts.map(c => ({ ...c, crossfade: frames / fps, ...(current && { ...moveToHead(c), ...(c.originalRange && { originalRange: moveToHead(c.originalRange) }) }),
       asked: { start: c.start, end: c.end } }));
     const overruled = candidates.filter(c => decided.some(d => overlaps(outer(c), d)));
     const held = candidates.filter(c => !overruled.includes(c) && heldRanges.some(r => overlaps(outer(c), outer(r)) ||
@@ -507,11 +537,11 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       if (protectedSlot && clashes)
         throw conflict("cut_changed", "Two earlier review slots now cover the same footage. Their existing reviews are still saved.");
       if (!choice && (clashes || planned.some(c => overlaps(outer(c), outer(r))))) continue;
-      carried.push({ start: r.start, end: r.end, review: true, reason: r.reason, ...(r.originalRange && { originalRange: r.originalRange }),
-        ...(r.kind && { kind: r.kind }), ...(current && { preserveEdges: true }), protectedSlot, ...(recoveredCuts.has(r) && { recovered: true }),
+      carried.push({ start: r.start, end: r.end, review: true, reason: r.reason, crossfade: r.crossfade ?? change.joinFades?.duration, ...(r.originalRange && { originalRange: r.originalRange }),
+        ...(r.kind && { kind: r.kind }), ...(r.legacySuggest && { legacySuggest: true }), ...(current && { preserveEdges: true }), protectedSlot, ...(recoveredCuts.has(r) && { recovered: true }),
         ...(assessment && { assessment }), ...(choice && !lapsed ? { choice } : { asked: { start: r.start, end: r.end }, ...(lapsed && { lapsed }) }) });
     }
-    let cuts: Planned[] = [...planned.map(({ index: _index, ...c }) => ({ ...c, submitted: true as const })), ...carried].sort((a, b) => a.start - b.start);
+    let cuts: Planned[] = [...planned.map(c => ({ ...c, submitted: true as const })), ...carried].sort((a, b) => a.start - b.start);
     let duration = timelineDuration(base);
     const sorted = [...body.cuts].sort((a, b) => a.start - b.start);
     // Say which range is wrong: the agent sees only this message, and a plan it can't place it submits again unchanged.
@@ -572,9 +602,8 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       return start === c.originalRange.start && end === c.originalRange.end ? c : { ...c, originalRange: { start, end } };
     });
     const onto = head;
-    // Every cut of a kind the editor turned off stays in. Nothing is left to propose.
     const satisfied = alreadyRemoved.length ? { alreadyRemoved } : {};
-    if (!cuts.length) return { changes: [], editorPreferences, ...satisfied };
+    if (!cuts.length) return { changes: [], ...satisfied };
     const applied = cuts.filter(c => requested && !c.review);
     if (protectedCuts.size) {
       let prior: Planned | undefined, removedBetween = 0;
@@ -606,13 +635,8 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     let version = onto;
     const changes: Change[] = [];
     if (applied.length) {
-      // A join a staged cut meets, or comes within half the crossfade of, stays a straight cut until the editor calls
-      // that cut: the staged cut would take one side of the overlap away. Approving or skipping it fades the join then.
-      const half = crossfadeSeconds(ctx, fps) / 2 + 1e-6;
-      const hold = (at: number) => optional.some(o => at >= o.start - half && at <= o.end + half) ? HELD_FOR_REVIEW : undefined;
       const { change } = persistProposal(ctx, user, projectId, { fromVersion: onto, intent: "requested", ops: ops(applied),
-        description: whole && own ? own : describeDialogueRemovals(applied), taskId, author, noteIds }, ids[0], applied.map(({ start, end, reason, kind }) => ({ start, end, reason, ...(kind && { kind }) })),
-        { hold });
+        description: whole && own ? own : describeDialogueRemovals(applied), taskId, author, noteIds }, ids[0], applied.map(({ start, end, reason, kind, crossfade }) => ({ start, end, reason, ...(kind && { kind }), ...(crossfade && { crossfade }) })));
       if (change.state !== "approved") throw conflict("cut_changed", "The confident cuts could not be applied to this version.");
       changes.push(change);
       version = change.appliedVersion ?? change.toVersion;
@@ -620,7 +644,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     // Staged cuts the editor hasn't called that now sit against footage they chose to keep. Their call covers them.
     const joined: TimeRange[] = [];
     if (optional.length) {
-      const reasons = optional.map(({ start, end, reason, originalRange, kind }) => ({ start, end, reason, originalRange, ...(kind && { kind }) }));
+      const reasons = optional.map(({ start, end, reason, originalRange, kind, crossfade, legacySuggest }) => ({ start, end, reason, originalRange, ...(kind && { kind }), ...(crossfade && { crossfade }), ...(legacySuggest && { legacySuggest }) }));
       const { change } = persistProposal(ctx, user, projectId, { fromVersion: version, intent: "suggestion", autoApprove: false,
         ops: ops(optional), description: whole && own ? own : `Review ${optional.length} optional dialogue ${optional.length === 1 ? "cut" : "cuts"}`,
         taskId, author, noteIds }, ids[1], reasons, { fold });
@@ -655,7 +679,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
         const inside = within({ start, end });
         if (inside.some(c => c.recovered)) {
           const source = resolveTimeline(ctx, project, version);
-          const previewVersion = storeVersion(ctx, project.id, fadeJoins(ctx, project, applyReviewRemovals(source, [{ start, end }], change.toVersion), [start]).timeline,
+          const previewVersion = storeVersion(ctx, project.id, fadeJoins(project, applyReviewRemovals(source, [{ start, end }], change.toVersion), [{ at: start, duration: cutCrossfade(change, { start, end }) }]).timeline,
             { parent: version, description: "Preview this revised cut" }).version;
           cutEdits.push({ index, version, range: { start, end }, previewVersion });
         }
@@ -688,8 +712,8 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
         replacedBy: (changes.find(c => c.intent === "suggestion") ?? changes[0]!).id });
     }
     const editorDecided = [...overruled.map(c => c.asked), ...joined].sort((a, b) => a.start - b.start);
-    return { changes, editorPreferences, ...satisfied, ...(held.length && { heldForReview: held.map(c => c.asked) }), ...(carried.length && { carriedForward: carried.length }), ...(editorDecided.length && { editorDecided }),
-      joinCrossfades: joinCrossfadeReport(ctx, changes) };
+    return { changes, ...satisfied, ...(held.length && { heldForReview: held.map(c => c.asked) }), ...(carried.length && { carriedForward: carried.length }), ...(editorDecided.length && { editorDecided }),
+      joinCrossfades: joinCrossfadeReport(frames, changes) };
   }), "immediate")();
 }
 
@@ -804,7 +828,7 @@ export function reviseStagedCut(ctx: Ctx, user: User, named: Change, namedIndex:
     }
     const range = frameAligned(body, project.settings.fps);
     const write = ["staged-cut", named.id, taskId, namedIndex, range.start, range.end,
-      ...(body.version ? [body.version] : []), ...(body.keep ? ["keep"] : [])];
+      ...(body.version ? [body.version] : []), ...(body.keep ? ["keep"] : []), ...(body.crossfadeFrames !== undefined ? [{ crossfadeFrames: body.crossfadeFrames }] : [])];
     const idFor = (attempt: number) => `chg_${createHash("sha256").update(JSON.stringify(attempt ? [...write, attempt] : write)).digest("hex")}_review`;
     let attempt = 0, id = idFor(attempt);
     let saved: Change | null = null;
@@ -818,8 +842,11 @@ export function reviseStagedCut(ctx: Ctx, user: User, named: Change, namedIndex:
       if (!successor || successor.state !== "ready" || successor.taskId !== taskId) return receipt(saved, recorded);
       // The same run can move one cut twice, then decide its first boundary played better.
       // A repeated batch needs its original receipt to identify the next move in the batch.
-      const sameSlot = (c: Change) => JSON.stringify([c.cutReasons?.[recorded.index]?.start, c.cutReasons?.[recorded.index]?.end,
-        c.cutEdits?.find(e => e.index === recorded.index), c.cutChoices?.find(choice => choice.index === recorded.index)?.choice]);
+      const sameSlot = (c: Change) => {
+        const span = prepareCutReview(ctx, c).review?.cuts[recorded.index]?.removed;
+        return JSON.stringify([span, span && cutCrossfade(c, span), c.cutEdits?.find(e => e.index === recorded.index),
+          c.cutChoices?.find(choice => choice.index === recorded.index)?.choice]);
+      };
       if (sameSlot(saved) === sameSlot(successor)) return receipt(saved, recorded);
     }
     // Queued requests identify the pass as it was when they were sent. Use its latest waiting revision
@@ -882,7 +909,14 @@ export function reviseStagedCut(ctx: Ctx, user: User, named: Change, namedIndex:
     const ranges = cuts.map((c, i) => i === index ? { start, end } : c);
     const overlapsOld = (r: { start: number; end: number }) => r.start < old.end - 1e-6 && r.end > old.start + 1e-6;
     const kind = (change.cutReasons ?? []).find(r => overlapsOld(r) && r.kind)?.kind;
-    const cutReasons = [...(change.cutReasons ?? []).filter(r => !overlapsOld(r)), { start, end, reason, ...(kind && { kind }) }].sort((a, b) => a.start - b.start);
+    const crossfade = body.crossfadeFrames !== undefined ? body.crossfadeFrames / project.settings.fps : cutCrossfade(change, old);
+    const legacySuggest = change.cutReasons?.some(r => overlapsOld(r) && r.legacySuggest);
+    const cutReasons = (change.cutReasons ?? []).filter(r => !overlapsOld(r)).map(r => {
+      const duration = r.crossfade ?? change.joinFades?.duration;
+      return duration ? { ...r, crossfade: duration } : r;
+    });
+    cutReasons.push({ start, end, reason, ...(kind && { kind }), ...(crossfade && { crossfade }), ...(legacySuggest && { legacySuggest }) });
+    cutReasons.sort((a, b) => a.start - b.start);
     const { change: revised } = persistProposal(ctx, user, change.projectId, { fromVersion: change.fromVersion, intent: "suggestion", autoApprove: false,
       ops: [...ranges].reverse().map(r => ({ op: "rippleDelete" as const, start: r.start, end: r.end })),
       description: change.description, taskId, author, noteIds: [...new Set([...change.noteIds, ...(noteIds ?? [])])] }, id, cutReasons);
@@ -911,7 +945,7 @@ export function reviseStagedCut(ctx: Ctx, user: User, named: Change, namedIndex:
       let previewVersion = edit.previewVersion;
       if (!placement.keep && edit.range.end > edit.range.start) {
         const source = resolveTimeline(ctx, project, edit.version);
-        previewVersion = storeVersion(ctx, project.id, fadeJoins(ctx, project, applyReviewRemovals(source, [edit.range], revised.toVersion), [edit.range.start]).timeline,
+        previewVersion = storeVersion(ctx, project.id, fadeJoins(project, applyReviewRemovals(source, [edit.range], revised.toVersion), [{ at: edit.range.start, duration: crossfade }]).timeline,
           { parent: source.version, description: "Preview this revised cut" }).version;
       }
       cutEdits.push({ ...edit, previewVersion });
@@ -1076,7 +1110,7 @@ function assertStagedCallsStand(ctx: Ctx, project: Project, task: Task, next: Ti
 }
 
 function persistProposal(ctx: Ctx, user: User, projectId: string, body: ProposeChangeRequest, changeId = newId("chg"), cutReasons?: Change["cutReasons"],
-  { fold = false, hold }: { fold?: boolean; hold?: (at: number) => string | undefined } = {}): ProposeResult {
+  { fold = false }: { fold?: boolean } = {}): ProposeResult {
   const sourceTask = body.taskId ? ctx.repos.tasks.get(body.taskId) : null;
   if (body.taskId && sourceTask?.projectId !== projectId) throw badRequest("invalid_task", "task must belong to this project");
   if (sourceTask && !fold && FINISHED_TASK.has(sourceTask.state)) throw conflict("task_finished", "this task has already finished");
@@ -1112,23 +1146,17 @@ function persistProposal(ctx: Ctx, user: User, projectId: string, body: ProposeC
       throw badRequest("cut_scope", (error as Error).message);
     }
   }
-  // A generic proposal can express the same removal through a ripple, a clip trim or just the ranges
-  // placed on a new timeline. Enforce against the actual result before writing a version.
-  if (!cutReasons && !fold && (sourceTask || body.author?.type === "agent") &&
-      Object.values(ctx.settings().dialogue.aiCuts).some(level => level !== "cut")) {
-    const dialoguePass = sourceTask && isDialoguePass(sourceTask);
-    if ((dialoguePass || !body.nonDialogueRemoval) && removesRecordedFootage(base, next, project, sourceTask?.context))
-      throw badRequest("dialogue_kind_required", "The editor has dialogue cut restrictions. Assemble the source untrimmed, then submit dialogue removals by kind with dialogue_apply_cuts." +
-        (dialoguePass ? "" : " For an edit outside dialogue cleanup, such as removing a scene or trimming music, set nonDialogueRemoval to true."));
-  }
   // A pass's own later save can't take a staged cut away from the editor. Only its dialogue cuts, which carry their
   // reasons and decide a staged range again in the open, replace one.
   if (sourceTask && !cutReasons && !fold && body.intent === "requested" && !sourceTask.context.reviewAllCuts) assertStagedCallsStand(ctx, project, sourceTask, next);
-  // Dialogue cuts get the editor's crossfade on each join they make, staged ones too, so review plays what approving
+  // Dialogue cuts get their requested crossfade on each join they make, staged ones too, so review plays what approving
   // keeps. The ops stay the removals the plan asked for; `joinFades` records the fades on top of them.
   let joinFades: JoinFades | undefined;
+  // Keep explicit straight joins in a review that also carries fades. Older changes stored one duration
+  // for the whole proposal and have no crossfade on any of their reasons.
+  if (cutReasons?.some(c => c.crossfade)) cutReasons = cutReasons.map(c => ({ ...c, crossfade: c.crossfade ?? 0 }));
   if (cutReasons?.length && body.ops?.length && body.ops.every(op => op.op === "rippleDelete" && op.trackIds === undefined)) {
-    ({ timeline: next, joinFades } = fadeJoins(ctx, project, next, rippleJoins(body.ops as Array<Record<string, unknown>>), hold));
+    ({ timeline: next, joinFades } = fadeJoins(project, next, proposalJoins(cutReasons)));
   }
 
   const author = authorFor(user, body.author);
@@ -1314,7 +1342,7 @@ type ApproveResult = Omit<ApproveResponse, "task"> & { task?: Task };
  * back to its agent to redo on the current cut instead of failing.
  */
 export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number[]): { review: CutReview | null; draft?: Timeline;
-  /** The editor's crossfade on the draft's joins, when the draft is a version of its own rather than the proposal. */
+  /** The requested crossfade on the draft's joins, when the draft is a version of its own rather than the proposal. */
   joinFades?: JoinFades } {
   const project = ctx.repos.projects.get(change.projectId);
   if (!project) throw notFound("project");
@@ -1332,16 +1360,15 @@ export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number
     const placed = reviewedCutsOnHead(ctx, project, change, review, head, restoredCuts);
     if ("conflict" in placed) throw conflict("cut_review_stale", placed.conflict.reason, { currentVersion: head.version, ...placed.conflict });
     const { timeline, joinFades } = placed.timeline === head ? { timeline: head, joinFades: undefined }
-      : fadeJoins(ctx, project, placed.timeline, placed.applied.joins.map(j => j.at));
+      : fadeJoins(project, placed.timeline, placed.applied.joins.map(j => ({ at: j.at, duration: cutCrossfade(change, review.cuts[j.reviewIndex!]!.removed) })));
     const draft = timeline === head ? head : storeVersion(ctx, project.id, timeline, {
       parent: head.version, description: "Preview the reviewed cuts" });
     return { review, draft, joinFades };
   }
   // Preview and Approve often request the same selection. Keep only its saved
   // version ID. Source durations and legacy review geometry can change on reopen.
-  const crossfade = crossfadeSeconds(ctx, project.settings.fps);
   const draftKey = createHash("sha256").update(JSON.stringify([project.id, change.id, change.fromVersion,
-    review.original.version, change.toVersion, review.firstCut, review.cuts, [...restoredCuts].sort((a, b) => a - b), crossfade])).digest("hex");
+    review.original.version, change.toVersion, review.firstCut, review.cuts, [...restoredCuts].sort((a, b) => a - b)])).digest("hex");
   const cachedDraft = ctx.reviewDrafts.get(draftKey);
   if (cachedDraft) {
     const cached = ctx.repos.versions.get(project.id, cachedDraft.version);
@@ -1354,7 +1381,7 @@ export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number
   // none put back the draft is the proposal, faded already; with all put back nothing was cut.
   let joinFades: JoinFades | undefined;
   if (restoredCuts.length && restoredCuts.length < review.cuts.length && !review.firstCut)
-    ({ timeline: result, joinFades } = fadeJoins(ctx, project, result, reviewedJoins(review, restoredCuts)));
+    ({ timeline: result, joinFades } = fadeJoins(project, result, reviewedJoins(change, review, restoredCuts)));
   const draft = storeVersion(ctx, project.id, result, { parent: change.fromVersion, author: change.author, changeId: change.id,
     description: `${change.description} · ${restoredCuts.length} restored` });
   ctx.db.afterCommit(() => {
@@ -1619,7 +1646,7 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
       }
       appliedReview = placed.applied;
       const faded = placed.timeline === headTl ? { timeline: headTl, joinFades: undefined }
-        : fadeJoins(ctx, project, placed.timeline, placed.applied.joins.map(j => j.at));
+        : fadeJoins(project, placed.timeline, placed.applied.joins.map(j => ({ at: j.at, duration: cutCrossfade(change, review.cuts[j.reviewIndex!]!.removed) })));
       appliedJoinFades = faded.joinFades ?? { duration: 0, fades: [], plain: [] };
       target = faded.timeline === headTl ? head : storeVersion(ctx, project.id, faded.timeline, {
         parent: head, changeId: change.id, author: change.author, description: change.description }).version;
@@ -1662,8 +1689,12 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
       if (change.joinFades?.fades.length) {
         // The removals landed on a cut that moved: each join they made gets the crossfade there, as far as it can.
         const map = makeTimeMap(to, timeline, project.settings.fps);
-        const times = [...new Set(change.joinFades.fades.map(f => f.at))].flatMap(at => map(at, "right") ?? []);
-        const faded = fadeJoins(ctx, project, timeline, times);
+        const record = change.joinFades;
+        const joins = record.fades.flatMap(f => {
+          const at = map(f.at, "right");
+          return at === null ? [] : [{ at, duration: f.duration ?? record.duration }];
+        });
+        const faded = fadeJoins(project, timeline, joins);
         timeline = faded.timeline;
         appliedJoinFades = faded.joinFades;
       }

@@ -89,7 +89,6 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     throw new Error("This task attempt is no longer active.");
   const server = createScarletMcpServer(client, {
     editingTools: settings.editingTools,
-    dialogue: settings.dialogue,
     projectId: opts.project,
     taskId: opts.task,
     taskStartedAt,

@@ -31,7 +31,6 @@ export interface RepeatAuditResult {
   repeats: RepeatEvidence[];
   staged: number;
   nextOffset?: number;
-  retakes?: "off";
   unavailable?: { mediaId: string; reason: string }[];
   /** Joins in scope that sound cut through a kept word or play a leftover of a removed one. */
   joins?: JoinHearing[];

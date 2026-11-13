@@ -7,6 +7,7 @@ import { createApp, type ScarletApp } from "./app.js";
 import { accessToken, localUser } from "./auth.js";
 import { approveChange, proposeChange } from "./services/changes.js";
 import { createTask } from "./services/tasks.js";
+import { migrateDialogueSettings } from "./services/migrateDialogueSettings.js";
 import { ATTEMPT_HEADER, TASK_HEADER, type Task } from "@scarlet/shared";
 
 let directory: string;
@@ -46,90 +47,62 @@ function dialogueTask() {
   return { task, base };
 }
 
-it("stores the dialogue settings with defaults and merges partial updates", async () => {
+it("directs old dialogue settings writes to the editable skill", async () => {
   const initial = (await (await api("GET", "/settings")).json()).settings;
-  expect(initial.dialogue).toEqual({ aiCuts: { pause: "cut", filler: "cut", retake: "cut", coaching: "cut" }, pauseTightness: "natural", crossfadeFrames: 2 });
-  const patched = await (await api("PATCH", "/settings", { dialogue: { aiCuts: { filler: "suggest" } } })).json();
-  expect(patched.settings.dialogue).toEqual({ aiCuts: { pause: "cut", filler: "suggest", retake: "cut", coaching: "cut" }, pauseTightness: "natural", crossfadeFrames: 2 });
-  const tight = await (await api("PATCH", "/settings", { dialogue: { pauseTightness: "tight" } })).json();
-  expect(tight.settings.dialogue.aiCuts.filler).toBe("suggest");
-  expect(tight.settings.dialogue.pauseTightness).toBe("tight");
-  expect((await api("PATCH", "/settings", { dialogue: { aiCuts: { filler: "maybe" } } })).status).toBe(400);
-  const off = await (await api("PATCH", "/settings", { dialogue: { crossfadeFrames: 0 } })).json();
-  expect(off.settings.dialogue).toMatchObject({ crossfadeFrames: 0, pauseTightness: "tight" });
-  expect((await api("PATCH", "/settings", { dialogue: { crossfadeFrames: 1.5 } })).status).toBe(400);
+  expect(initial).not.toHaveProperty("dialogue");
+  const response = await api("PATCH", "/settings", { dialogue: { aiCuts: { filler: "suggest" } } });
+  expect(response.status).toBe(400);
+  expect((await response.json()).error).toMatchObject({ code: "dialogue_settings_moved" });
 });
 
-it("stages Suggest kinds for the editor, drops Off kinds, and reports both", async () => {
+it("applies and stages the model’s choices with an empty skill library", async () => {
   const { ctx } = workspace;
-  ctx.repos.settings.update({ dialogue: { aiCuts: { filler: "suggest", pause: "off" } } });
   const { task, base } = dialogueTask();
-  const submitted = await api("POST", `/projects/${project.id}/dialogue-cuts`, { taskId: task.id, fromVersion: base, description: "Tighten the opening", cuts: [
-    { start: 1, end: 3, review: false, reason: "Restarted line.", kind: "retake" },
-    { start: 5, end: 5.4, review: false, reason: "An um.", kind: "filler" },
-    { start: 8, end: 9, review: false, reason: "Long pause.", kind: "pause" },
-    { start: 12, end: 13, review: false, reason: "Direction to the camera.", kind: "coaching" },
-  ] }, task);
+  const submitted = await api("POST", `/projects/${project.id}/dialogue-cuts`, { fromVersion: base, description: "Tighten the opening",
+    kept: [{ start: 8, end: 9 }], cuts: [
+      { start: 1, end: 3, review: false, reason: "Restarted line.", kind: "retake" },
+      { start: 5, end: 5.4, review: true, reason: "An um.", kind: "filler" },
+      { start: 12, end: 13, review: false, reason: "Direction to the camera.", kind: "coaching" },
+    ] }, task);
   expect(submitted.status).toBe(201);
-  const { changes, editorPreferences } = await submitted.json() as { changes: Change[]; editorPreferences: unknown[] };
-  expect(editorPreferences).toEqual([
-    { index: 1, kind: "filler", level: "suggest", outcome: "review", start: 5, end: 5.4 },
-    { index: 2, kind: "pause", level: "off", outcome: "dropped", start: 8, end: 9 },
-  ]);
+  const { changes } = await submitted.json() as { changes: Change[] };
   expect(changes.map(c => c.state)).toEqual(["approved", "ready"]);
-  // The agent's sentence covered cuts the editor kept, so each part gets its own receipt.
-  expect(changes[0]!.description).toBe("Removed 3 s across 2 cuts.");
   const applied = ctx.repos.changes.get(changes[0]!.id)!;
-  expect(applied.cutReasons).toEqual([{ start: 1, end: 3, reason: "Restarted line.", kind: "retake" }, { start: 12, end: 13, reason: "Direction to the camera.", kind: "coaching" }]);
+  expect(applied.cutReasons).toEqual([{ start: 1, end: 3, reason: "Restarted line.", kind: "retake" },
+    { start: 12, end: 13, reason: "Direction to the camera.", kind: "coaching" }]);
   const staged = ctx.repos.changes.get(changes[1]!.id)!;
-  // On the kept version the filler sits 2 s earlier. The pause is still in the edit.
   expect(staged.cutReasons).toEqual([{ start: 3, end: expect.closeTo(3.4), reason: "An um.", kind: "filler" }]);
-  // Only the retake and the direction came out of the working timeline.
-  const kept = (await (await api("GET", `/projects/${project.id}/timeline?version=${applied.toVersion}`)).json()).timeline;
-  expect(kept.tracks.flatMap((t: { clips: unknown[] }) => t.clips)).toHaveLength(3);
-
-  // A second-pass cut verdict on a Suggest kind still waits for the editor.
-  const assess = await api("POST", `/changes/${staged.id}/cut-assessments`, { fromVersion: staged.fromVersion, toVersion: staged.toVersion,
-    assessments: [{ index: 0, start: 3, end: staged.cutReasons![0]!.end, verdict: "cut", inspected: true, reason: "Clean filler." }] });
-  expect(assess.status).toBe(200);
-  expect(await assess.json()).toMatchObject({ total: 1, assessed: 1, needsDecision: 1, heldForEditor: [0] });
-  expect(ctx.repos.changes.get(staged.id)!.cutAssessments).toMatchObject([{ index: 0, verdict: "ask", reason: "Clean filler." }]);
+  const check = await api("POST", `/changes/${staged.id}/cut-assessments`, { fromVersion: staged.fromVersion, toVersion: staged.toVersion,
+    assessments: [{ index: 0, start: 3, end: staged.cutReasons![0]!.end, verdict: "ask", inspected: true, reason: "Keep the hesitation?" }] });
+  expect(await check.json()).toMatchObject({ total: 1, assessed: 1, needsDecision: 1 });
 });
 
-it("applies dialogue preferences to generic removals, clip trims and replacement timelines before saving a version", async () => {
+it("carries a pre-upgrade request to review fillers until its assessment, without changing the editor's other calls", async () => {
   const { ctx } = workspace;
   const { task, base } = dialogueTask();
-  ctx.repos.settings.update({ dialogue: { aiCuts: { filler: "off" } } });
-  const url = `/projects/${project.id}`;
-  const timeline = (await (await api("GET", url + "/timeline")).json()).timeline;
-  const trimmed = structuredClone(timeline);
-  trimmed.tracks.find((t: { id: string }) => t.id === "a1").clips[0].sourceIn = 1;
-  const versions = ctx.repos.versions.links(project.id).length;
-  for (const proposal of [
-    { ops: [{ op: "rippleDelete", start: 0, end: 1 }] },
-    { ops: [{ op: "updateClip", clipId: "raw", patch: { sourceIn: 1 } }] },
-    { timeline: trimmed },
-    { timeline: trimmed, firstCut: true },
-    { timeline: trimmed, nonDialogueRemoval: true }, // A full dialogue pass must classify its dialogue removals.
-  ]) {
-    const response = await api("POST", url + "/changes", { ...proposal, description: "Shorter", intent: "requested", fromVersion: base }, task);
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: { code: "dialogue_kind_required" } });
-  }
-  const missingKind = await api("POST", url + "/dialogue-cuts", { fromVersion: base, description: "A cut",
-    cuts: [{ start: 1, end: 2, review: false, reason: "A removal" }] }, task);
-  expect(missingKind.status).toBe(400);
-  expect(ctx.repos.versions.links(project.id)).toHaveLength(versions);
+  const submit = async (cuts: object[]) => {
+    const response = await api("POST", `/projects/${project.id}/dialogue-cuts`, { fromVersion: base, description: "Tighten", cuts }, task);
+    expect(response.status, await response.clone().text()).toBe(201);
+    return ctx.repos.changes.get((await response.json()).changes[0].id)!;
+  };
+  const cut = (start: number, kind: string, review = true) => ({ start, end: start + 1, kind, review, reason: `Cut at ${start}.` });
+  const original = await submit([cut(1, "retake"), cut(2, "filler"), cut(5, "filler"), cut(8, "pause")]);
+  ctx.repos.changes.put({ ...original, cutChoices: [{ index: 1, start: 5, end: 6, choice: "keep" }] });
+  ctx.db.prepare("INSERT OR REPLACE INTO settings (id, json) VALUES (1, ?)").run(JSON.stringify({ dialogue: { aiCuts: { filler: "suggest" } } }));
+  migrateDialogueSettings(ctx);
+  const migrated = ctx.repos.changes.get(original.id)!;
+  expect(migrated.cutReasons?.map(c => c.legacySuggest)).toEqual([undefined, true, undefined, undefined]);
+  expect(migrated.cutAssessments).toBeUndefined();
+  // A later batch cannot promote the older pending cut to a confident removal.
+  const carried = await submit([cut(2, "filler", false), cut(12, "retake")]);
   expect(ctx.repos.projects.get(project.id)?.head).toBe(base);
-
-  // Direct editor changes and an explicit story edit retain their ordinary timeline operations.
-  const ops = [{ op: "rippleDelete", start: 1, end: 2 }];
-  const direct = await api("POST", url + "/changes", { fromVersion: base, description: "Manual removal", ops, skipRender: true });
-  expect(direct.status).toBe(201);
-  const story = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Remove the opening scene",
-    createdBy: { type: "human", name: "Editor" } });
-  const attempt = ctx.repos.tasks.put({ ...story, state: "running", startedAt: new Date().toISOString() });
-  expect((await api("POST", url + "/changes", { fromVersion: base, description: "Opening scene", ops, nonDialogueRemoval: true, intent: "requested" }, attempt)).status).toBe(201);
+  expect(carried.cutChoices).toEqual(migrated.cutChoices);
+  expect(carried.cutReasons?.[1]?.legacySuggest).toBe(true);
+  const decision = await api("POST", `/changes/${carried.id}/cut-assessments`, { fromVersion: carried.fromVersion, toVersion: carried.toVersion,
+    assessments: [{ index: 0, start: 1, end: 3, verdict: "cut", reason: "A clean filler cut." },
+      { index: 2, start: 8, end: 9, verdict: "cut", reason: "Tighten the gap." }] });
+  expect(await decision.json()).toMatchObject({ heldForEditor: [0] });
+  expect(ctx.repos.changes.get(carried.id)?.cutAssessments).toMatchObject([{ verdict: "ask" }, { verdict: "cut" }]);
 });
 
 it("saves bounded ripple operations on the frames inside the selection, including its shortened end", async () => {
@@ -153,7 +126,7 @@ it("saves bounded ripple operations on the frames inside the selection, includin
   expect((await outside.json()).error.code).toBe("cut_scope");
 });
 
-it("crossfades each join it applies or stages, keeps the cut where a join can't take one, and fades a join again once its call is made", async () => {
+it("crossfades each join it applies or stages, keeps the cut where a join can't take one, and preserves applied fades when a staged cut is skipped", async () => {
   const { ctx } = workspace;
   vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
   const queued = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue",
@@ -165,7 +138,7 @@ it("crossfades each join it applies or stages, keeps the cut where a join can't 
     ({ op: "addClip", trackId: "a1", clip: { id, kind: "media", mediaId: "mic", timelineIn, sourceIn, sourceOut, ...extra } });
   const base = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: task.id, description: "Assemble",
     ops: [clip("a", 10, 16, 0), clip("b", 0, 6, 6, { audioFadeIn: 0.2 }), clip("c", 0, 8, 12)] }).change.toVersion;
-  const submitted = await api("POST", `/projects/${project.id}/dialogue-cuts`, { taskId: task.id, fromVersion: base, description: "Tighten", cuts: [
+  const submitted = await api("POST", `/projects/${project.id}/dialogue-cuts`, { taskId: task.id, fromVersion: base, description: "Tighten", crossfadeFrames: 2, cuts: [
     { start: 2, end: 3, review: false, reason: "Inside a take." },
     { start: 5, end: 6, review: false, reason: "Into the faded take." },
     { start: 11, end: 12, review: false, reason: "Onto a take with nothing recorded before it." },
@@ -178,10 +151,9 @@ it("crossfades each join it applies or stages, keeps the cut where a join can't 
   const [applied, staged] = body.changes.map(c => ctx.repos.changes.get(c.id)!);
   // 2 frames at 30 fps: each side reaches a frame into its handle.
   const half = 1 / 30;
-  expect(body.joinCrossfades).toEqual({ frames: 2, faded: 3, plain: [
+  expect(body.joinCrossfades).toEqual({ frames: 2, faded: 4, plain: [
     { version: applied!.toVersion, at: 4, reason: "already has a fade" },
     { version: applied!.toVersion, at: 9, reason: "not enough recorded sound past the cut for the crossfade" },
-    { version: applied!.toVersion, at: 11, reason: "meets a cut waiting for review; it gets the crossfade once that cut is decided" },
   ] });
   // The ops are still the removals the plan asked for. The timeline has the fades on top.
   expect(applied!.ops!.every(op => op.op === "rippleDelete")).toBe(true);
@@ -191,24 +163,23 @@ it("crossfades each join it applies or stages, keeps the cut where a join can't 
     { timelineIn: expect.closeTo(2 - half), sourceIn: expect.closeTo(13 - half), sourceOut: 15, audioFadeIn: expect.closeTo(2 * half) },
     // The plain joins keep their edges and the editor's own fade.
     { timelineIn: 4, sourceIn: 0, sourceOut: 5, audioFadeIn: 0.2 },
-    { timelineIn: 9, sourceIn: 0, audioFadeIn: 0, audioFadeOut: 0 },
-    { timelineIn: 11, sourceIn: 3, audioFadeIn: 0 },
+    { timelineIn: 9, sourceIn: 0, audioFadeIn: 0, audioFadeOut: expect.closeTo(2 * half) },
+    { timelineIn: expect.closeTo(11 - half), sourceIn: expect.closeTo(3 - half), audioFadeIn: expect.closeTo(2 * half) },
   ]);
   // Review plays the staged cuts with their crossfades, as approving them would keep them.
   expect(staged!.ops!.every(op => op.op === "rippleDelete")).toBe(true);
   expect(staged!.joinFades!.fades.map(f => f.at)).toEqual([11, 13]);
 
-  // The editor keeps the first staged cut's footage: the join it held back is faded now, with the other cut's.
+  // Keeping the first staged cut preserves the fade that was already playing. Only the other join is new.
   const approval = approveChange(ctx, localUser(ctx), staged!, { restoredCuts: [0] });
   expect(approval.change.state).toBe("approved");
-  expect(approval.change.appliedJoinFades!.fades.map(f => f.at)).toEqual([11, 14]);
+  expect(approval.change.appliedJoinFades!.fades.map(f => f.at)).toEqual([14]);
   const after = clips(approval.change.appliedVersion!);
   expect(after.find(c => c.kind === "media" && c.audioFadeOut && Math.abs(clipEnd(c) - (11 + half)) < 1e-6)).toBeTruthy();
 });
 
-it("leaves every join a straight cut when the editor turned the crossfade off", async () => {
+it("leaves the joins straight when the plan omits a crossfade", async () => {
   const { ctx } = workspace;
-  ctx.repos.settings.update({ dialogue: { crossfadeFrames: 0 } });
   const { task, base } = dialogueTask();
   const submitted = await (await api("POST", `/projects/${project.id}/dialogue-cuts`, { taskId: task.id, fromVersion: base, description: "Tighten",
     cuts: [{ start: 2, end: 3, review: false, reason: "Restart." }] }, task)).json() as { changes: Change[]; joinCrossfades: unknown };
@@ -219,19 +190,67 @@ it("leaves every join a straight cut when the editor turned the crossfade off", 
     .toMatchObject([{ sourceOut: 2, audioFadeOut: 0 }, { timelineIn: 2, sourceIn: 3, audioFadeIn: 0 }]);
 });
 
-it("proposes nothing when the editor turned off every kind in the plan", async () => {
+it("reports the recorded overlap for a pre-upgrade retry that had no crossfade argument", async () => {
   const { ctx } = workspace;
-  ctx.repos.settings.update({ dialogue: { aiCuts: { pause: "off" } } });
   const { task, base } = dialogueTask();
-  const before = ctx.repos.changes.select("project_id = ?", [project.id]).length;
-  const submitted = await api("POST", `/projects/${project.id}/dialogue-cuts`, { taskId: task.id, fromVersion: base, description: "Pauses", cuts: [
-    { start: 2, end: 3, review: false, reason: "Pause.", kind: "pause" }, { start: 6, end: 7, review: true, reason: "Pause?", kind: "pause" }] }, task);
-  expect(submitted.status).toBe(201);
-  expect(await submitted.json()).toEqual({ changes: [], editorPreferences: [
-    { index: 0, kind: "pause", level: "off", outcome: "dropped", start: 2, end: 3 },
-    { index: 1, kind: "pause", level: "off", outcome: "dropped", start: 6, end: 7 }], head: base });
-  expect(ctx.repos.changes.select("project_id = ?", [project.id])).toHaveLength(before);
-  expect(ctx.repos.projects.get(project.id)!.head).toBe(base);
+  const body = { fromVersion: base, description: "Retake", cuts: [{ start: 2, end: 3, review: true, reason: "A repeat." }] };
+  const submit = async (extra: object) => (await (await api("POST", `/projects/${project.id}/dialogue-cuts`, { ...body, ...extra }, task)).json());
+  const oldId = (await submit({})).changes[0].id;
+  const withFade = ctx.repos.changes.get((await submit({ crossfadeFrames: 6 })).changes[0].id)!;
+  ctx.repos.changes.put({ ...withFade, id: oldId, cutReasons: withFade.cutReasons!.map(({ crossfade, ...reason }) => reason) });
+  expect((await submit({})).joinCrossfades).toEqual({ frames: 6, faded: 1, plain: [] });
+});
+
+it("reapplies an earlier fade choice to the right review slot after adjacent reasons combine", async () => {
+  const { ctx } = workspace;
+  const { task, base } = dialogueTask();
+  const cuts = [2, 3, 7].map(start => ({ start, end: start + 1, review: true, reason: `Retake at ${start}.` }));
+  const submission = await api("POST", `/projects/${project.id}/dialogue-cuts`, { fromVersion: base, description: "Retakes", cuts }, task);
+  const original = (await submission.json()).changes[0].id;
+  const revise = async (crossfadeFrames: number) => {
+    const response = await api("POST", `/changes/${original}/staged-cuts/1`, { start: 7, end: 8.2, crossfadeFrames, reason: "Keep this breath." }, task);
+    expect(response.status, await response.clone().text()).toBe(201);
+    return (await response.json()).change as Change;
+  };
+  const first = await revise(2);
+  await revise(4);
+  const retry = await revise(2);
+  expect(retry.id).not.toBe(first.id);
+  expect(retry.state).toBe("ready");
+  expect(retry.cutReasons?.at(-1)?.crossfade).toBe(2 / 30);
+  expect(ctx.repos.changes.get(first.id)?.state).toBe("rejected");
+});
+
+it("keeps different requested overlaps when staged parts combine, a cut is revised and the editor decides", async () => {
+  const { ctx } = workspace;
+  const { task, base } = dialogueTask();
+  const submit = async (start: number, crossfadeFrames?: number) => {
+    const result = await api("POST", `/projects/${project.id}/dialogue-cuts`, { fromVersion: base, description: "First pass", crossfadeFrames,
+      cuts: [{ start, end: start + 1, review: true, reason: "Retake." }] }, task);
+    expect(result.status, await result.clone().text()).toBe(201);
+    return ctx.repos.changes.get((await result.json()).changes[0].id)!;
+  };
+  const first = await submit(2, 2);
+  // Pre-upgrade changes stored their overlap once, in seconds, on joinFades.
+  ctx.repos.changes.put({ ...first, cutReasons: first.cutReasons!.map(({ crossfade, ...c }) => c) });
+  const combined = await submit(7, 4);
+  expect((await submit(7, 4)).id).toBe(combined.id);
+  const three = await submit(14);
+  expect(three.cutReasons?.map(r => r.crossfade)).toEqual([2 / 30, 4 / 30, 0]);
+  const revised = await api("POST", `/changes/${three.id}/staged-cuts/1`, { start: 7, end: 8.2, reason: "Keep the breath." }, task);
+  expect(revised.status, await revised.clone().text()).toBe(201);
+  const { change } = await revised.json() as { change: Change };
+  const audio = (version: string) => ctx.repos.versions.get(project.id, version)!.timeline.tracks.find(t => t.id === "a1")!.clips;
+  expect(audio(change.toVersion)).toMatchObject([{ audioFadeOut: 2 / 30 }, { audioFadeIn: 2 / 30, audioFadeOut: 4 / 30 },
+    { audioFadeIn: 4 / 30, audioFadeOut: 0 }, { audioFadeIn: 0 }]);
+  const straight = await api("POST", `/changes/${change.id}/staged-cuts/0`, { start: 2, end: 3, crossfadeFrames: 0, reason: "Straight cut here." }, task);
+  expect(straight.status, await straight.clone().text()).toBe(201);
+  const updated = (await straight.json()).change as Change;
+  expect(updated.cutReasons?.map(r => r.crossfade)).toEqual([0, 4 / 30, 0]);
+  expect(audio(updated.toVersion)).toMatchObject([{ audioFadeOut: 0 }, { audioFadeIn: 0, audioFadeOut: 4 / 30 },
+    { audioFadeIn: 4 / 30, audioFadeOut: 0 }, { audioFadeIn: 0 }]);
+  const approval = approveChange(ctx, localUser(ctx), updated, { restoredCuts: [0] });
+  expect(audio(approval.change.appliedVersion!)).toMatchObject([{ audioFadeOut: 4 / 30 }, { audioFadeIn: 4 / 30, audioFadeOut: 0 }, { audioFadeIn: 0 }]);
 });
 
 it("accepts edits only from the current claim before, during and after an editor question", async () => {
