@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { fullRenderContext, REVISED_CHECK, ScarletApiError, type Learning, type Skill, type SourceCacheStatus } from "@scarlet/shared";
-import { applyOps, makeMediaClip, makeTrack, planCutReview, timelineDuration, type MediaClip, type TimeMap } from "@scarlet/timeline";
+import { applyOps, makeMediaClip, makeTimeMap, makeTrack, planCutReview, timelineDuration, timelineFromKeepRanges, type MediaClip, type TimeMap } from "@scarlet/timeline";
 import { api } from "../lib/client";
 import { desktop } from "../lib/desktop";
 import { startAppLog, stopAppLog } from "../lib/appLog";
@@ -63,6 +63,8 @@ beforeEach(() => {
   const db = buildDb();
   vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
   vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+  // Exercises projects that stream while their short standalone file is unavailable.
+  vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
   vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
   vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
   vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
@@ -215,7 +217,7 @@ it("turns the Before clip's play button while its stream waits for a section, an
   // The version before the edit has the same footage. "music bed" runs the whole video, longer than one prepared
   // section, so its Before plays as a stream.
   vi.spyOn(api, "timeline").mockImplementation(async (_, version = "head") => ({ timeline: { ...data.timeline!, version } }));
-  vi.spyOn(await import("../lib/cutStream"), "openCutStream").mockReturnValue({ seek() {}, finishSeek() {}, dispose() {} } as never);
+  vi.spyOn(await import("../lib/cutStream"), "openCutStream").mockReturnValue({ seek() {}, finishSeek() {}, dispose() {}, sourceTime: () => 0, bufferThrough: async () => {} });
   await show();
   const monitor = container.querySelector(".watch-monitor")!;
   const play = () => monitor.querySelector(".monitor-playback > button")!;
@@ -2604,6 +2606,17 @@ const runningPass = (cuts: Staged[] = STAGED) => {
       startedAt: new Date(Date.now() - 60_000).toISOString() } : t) };
   useProjectStore.setState({ current: data });
   const stored = (id: string) => useProjectStore.getState().current!.changes.find(c => c.id === id)!;
+  const initial = data.timeline!;
+  vi.spyOn(api, "cutReviewDraft").mockImplementation(async (id, restored, head) => {
+    const change = stored(id), current = useProjectStore.getState().current!, working = current.timeline!;
+    const cuts = askAll(change.cutReasons!);
+    const call = cuts.find(c => !restored.includes(c.index))!;
+    const onto = change.fromVersion !== head && head !== initial.version
+      ? { map: makeTimeMap(initial, working, current.project.settings.fps), timeline: working } : undefined;
+    const range = cutOnWorkingCut(call, onto, current.project.settings.fps)!;
+    const draft = { ...applyOps(working, [{ op: "rippleDelete", start: range.start, end: range.end }]), version: `only-${id}-${call.index}-${head}` };
+    return { draft, ontoVersion: head, removed: [{ start: range.start, end: range.end }] };
+  });
   let held: string | undefined;
   let arrive = () => {};
   vi.spyOn(api, "cutReview").mockImplementation(async id => {
@@ -2927,8 +2940,7 @@ it("plays a call's cut footage from a click inside its passage on the timeline",
   expect(listen).toHaveBeenLastCalledWith({ start: 4, end: 10, skips: [{ start: 6, end: 7, removed: true }] }, expect.any(Number));
 });
 
-it("leaves a listen that steps over its cut alone when the pass saves a part that doesn't move it", async () => {
-  // Another staged cut sits inside the listen, so After steps over just this cut on the working video.
+it("plays just the selected call when another is within earshot and keeps playing when the pass saves a part", async () => {
   const cuts = [STAGED[0]!, STAGED[1]!, { start: 8.5, end: 9.5, reason: "A second try at the line." }, STAGED[2]!];
   const { hold, release } = runningPass(cuts);
   const listen = vi.spyOn(player, "audition");
@@ -2939,6 +2951,9 @@ it("leaves a listen that steps over its cut alone when the pass saves a part tha
   await openCall("Breath before the price.");
   expect(listen).toHaveBeenLastCalledWith({ start: 4, end: 10, skips: [{ start: 6, end: 7, removed: true }] }, expect.any(Number));
   expect(listen).toHaveBeenCalledTimes(1);
+  expect(api.cutReviewDraft).toHaveBeenCalledWith("chg_ready", [0, 2, 3], data.timeline!.version, expect.any(AbortSignal));
+  expect(player.mediaTime(6.5)).toBe(6);
+  expect(player.mediaTime(9.5)).toBe(8.5);
   hold("chg_ready_part2");
   await nextPart({ cutReasons: [...cuts, { start: 14, end: 15, reason: "A cough." }] });
   await release();
@@ -3076,13 +3091,17 @@ it("places a staged cut on the working cut by its footage, as the engine carries
   expect(cutOnWorkingCut(cut, onto(t => t > 6.5 ? t + 0.05 : t), 30)).toBeUndefined();
 });
 
-it("prepares the next waiting call during playback and skips a call the editor already decided", async () => {
+it("prepares waiting calls before the first click and skips a call the editor already decided", async () => {
   const prepare = vi.mocked(api.preparePlayback);
   const listen = vi.spyOn(player, "audition");
   runningPass();
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready"
     ? { ...c, cutChoices: [{ index: 1, start: STAGED[1]!.start, end: STAGED[1]!.end, choice: "keep" }] } : c) }));
   await show();
+  expect(call()).toBeNull();
+  expect(listen).not.toHaveBeenCalled();
+  const warmed = prepare.mock.calls.filter(([, version]) => version === data.timeline!.version).map(([, , positions]) => positions[0]);
+  expect(warmed).toEqual([0, 9]);
   await reviewCalls();
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 1");
   const listens = listen.mock.calls.length;
@@ -3109,11 +3128,22 @@ it("marks, shades and plays a waiting call where its footage sits once the worki
   expect(staged).not.toBe("ver_moved");
   // Each dot is on the footage its call would take out, a second earlier than the pass's own clock says.
   expect(callDots()).toEqual([1, 5, 10]);
-  // The open call's listen and the label on the video are there too: Approve takes out what was played.
+  // Both the splice and the uncut source are prepared on the new head before the first click.
+  const draft = vi.mocked(api.cutReviewDraft);
+  const warmRequestCount = draft.mock.calls.length;
+  expect(draft).toHaveBeenCalledWith("chg_ready", [0, 1], "ver_moved", expect.any(AbortSignal));
+  expect(api.preparePlayback).toHaveBeenCalledWith(PRJ, "only-chg_ready-2-ver_moved", expect.arrayContaining([8]), expect.any(AbortSignal));
+  // Cut 3 isn't parked. Its verified plan still starts it synchronously while the next cache lookup is pending.
+  const readFiles = vi.spyOn(api, "renders").mockImplementation(async () => new Promise(() => {}));
   await openCall("Repeated aside.");
+  expect(draft.mock.calls.length).toBe(warmRequestCount);
+  readFiles.mockResolvedValue({ renders: [] });
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 3");
   expect(onVideo()).toBe("Showing cut at 0:10 · 3 of 3 · After");
   expect(listen).toHaveBeenLastCalledWith({ start: 8, end: 14, skips: [{ start: 10, end: 11, removed: true }] }, expect.any(Number));
+  expect(api.cutReviewDraft).toHaveBeenCalledWith("chg_ready", [0, 1], "ver_moved", expect.any(AbortSignal));
+  expect(player.mediaTime(10.5)).toBe(10);
+  expect(player.mediaTime(12)).toBe(11);
   // So is its shaded passage: a click inside it plays the cut footage from the passage's first frame.
   await clickBand();
   expect(listen).toHaveBeenLastCalledWith({ start: 8, end: 13, skips: [], from: 10 }, expect.any(Number));
@@ -3126,6 +3156,52 @@ it("marks, shades and plays a waiting call where its footage sits once the worki
   await press("r");
   expect(container.querySelector(".simple-target")?.textContent).toContain("Revising the cut at 0:10");
   expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_ready", cutIndex: 2, version: staged, time: 11, end: 12 });
+});
+
+it("starts a streamed audition on first opening a call under StrictMode", async () => {
+  runningPass();
+  const open = vi.spyOn(await import("../lib/cutStream"), "openCutStream").mockImplementation(() => ({
+    seek: vi.fn(), finishSeek: vi.fn(), dispose: vi.fn(), sourceTime: () => 0, bufferThrough: vi.fn(async () => {}),
+  }));
+  const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  await act(async () => root.render(<StrictMode><MemoryRouter><SimpleWorkspace /></MemoryRouter></StrictMode>));
+  await openEdits();
+  await openCall("Repeated aside.");
+  // StrictMode may dispose an idle preparation and the parked Before can open its own
+  // decoder. The transport must start the live After on the visible element exactly once.
+  const visible = player.element();
+  expect(visible?.closest("[data-parked]")).toBeNull();
+  const sessions = open.mock.calls.flatMap(([element], i) => element === visible ? [open.mock.results[i]!.value!] : []);
+  const live = sessions.filter(session => !vi.mocked(session.dispose).mock.calls.length);
+  expect(live).toHaveLength(1);
+  expect(live[0]!.bufferThrough).toHaveBeenCalledTimes(1);
+  expect(play.mock.contexts.filter(el => el === visible)).toHaveLength(1);
+});
+
+it("holds After for a single-call preview, lets Before play, and retries a failed preview", async () => {
+  runningPass();
+  await event(d => ({ ...d, project: { ...d.project, mediaPaused: true } }));
+  await show();
+  await workingCutMoves(0.2, 1.2);
+  const listen = vi.spyOn(player, "audition");
+  let finish!: () => void;
+  const draft = vi.mocked(api.cutReviewDraft);
+  draft.mockImplementationOnce(async () => { await new Promise<void>(resolve => { finish = resolve; }); return {}; });
+  await openCall("Repeated aside.");
+  expect(listen).not.toHaveBeenCalled();
+  await press("\\");
+  expect(listen).toHaveBeenCalledTimes(1);
+  expect(player.mediaTime(10.5)).toBe(10.5);
+  await act(async () => finish());
+  expect(listen).toHaveBeenCalledTimes(1);
+  draft.mockRejectedValueOnce(new Error("Preview unavailable"));
+  await press("\\");
+  expect(listen).toHaveBeenCalledTimes(1);
+  const monitor = container.querySelector(".watch-monitor")!;
+  expect(monitor.textContent).toContain("Couldn’t open this version.");
+  await click(buttonIn(monitor, "Retry")!);
+  expect(listen).toHaveBeenCalledTimes(2);
+  expect(player.mediaTime(10.5)).toBe(10);
 });
 
 it("keeps an open call's listen on its footage when the working cut moves under it", async () => {
@@ -4733,7 +4809,7 @@ it("uses the reviewed footage and preview for a call revised on a newer timeline
   await show();
   await reviewCalls();
   await click(passRow(STAGED[0]!.reason));
-  expect(load).toHaveBeenCalledWith(PRJ, preview.version);
+  expect(load.mock.calls.filter(([project, version]) => project === PRJ && version === preview.version)).toHaveLength(1);
   expect(onVideo()).toBe("Showing cut at 0:08 · 1 of 3 · After");
   expect(listen).toHaveBeenLastCalledWith({ start: 6, end: 13, skips: [{ ...range, removed: true }] }, expect.any(Number));
   expect(useUiStore.getState().agentContext).toMatchObject({ cutIndex: 0, version: before.version, time: 8, end: 10 });
@@ -5740,17 +5816,40 @@ it("plays an applied cut's After from the version the cut made, so the join soun
   expect(playhead()).toBe(11);
 });
 
+it("warms and opens the actual saved After for a named removal alongside restored footage elsewhere", async () => {
+  const make = (version: string, spans: number[][]) => ({ ...timelineFromKeepRanges(PRJ, "camera", spans.map(([start, end]) => ({ start: start!, end: end! }))), version });
+  // Camera 4–6 was missing on Before. The editor restored it while removing camera 12–14.
+  const before = make("before", [[0, 4], [6, 30]]);
+  const after = make(data.project.head!, [[0, 12], [14, 30]]);
+  const id = "chg_approved_2";
+  data = { ...data, timeline: after, changes: data.changes.filter(c => c.id === id).map(c => ({
+    ...c, fromVersion: before.version, toVersion: after.version, appliedVersion: after.version,
+    ops: undefined, timelineEdits: [{ label: "Take out the aside", range: { start: 12, end: 12 } }],
+  })), tasks: data.tasks.filter(t => t.changeIds.includes(id)), notes: [] };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockResolvedValue({ version: after.version, edits: [{ changeId: id, spot: 0, previous: [],
+    label: "Take out the aside", at: 12, range: { start: 12, end: 12 }, beforeCut: { version: before.version, removed: { start: 10, end: 12 } } }] });
+  vi.spyOn(api, "timeline").mockImplementation(async (_, version) => ({ timeline: version === before.version ? before : after }));
+  await show();
+  expect(api.preparePlayback).toHaveBeenCalledWith(PRJ, after.version, [10, 12, 15 - 1 / data.project.settings.fps], expect.any(AbortSignal));
+  await click(appliedRows()[0]!);
+  expect([player.mediaTime(8), player.mediaTime(11), player.mediaTime(13)]).toEqual([10, 12, 13]);
+  await press("\\");
+  expect(player.mediaTime(11)).toBe(11);
+});
+
 it("keeps the selected cut centered and its playhead in view through the whole After audition", async () => {
   const cut = { start: 45.75, end: 46.25 };
   const next = { start: 47.75, end: 51.5 };
+  const outside = { start: 80, end: 82 };
   const before = { ...data.timeline!, version: "v_before", tracks: [
     { ...makeTrack("video", "Video"), clips: [makeMediaClip(data.media.find(m => m.kind === "video")!.id, 0, 120, 0)] },
   ] };
-  const ops = [next, cut].map(range => ({ op: "rippleDelete" as const, ...range }));
+  const ops = [outside, next, cut].map(range => ({ op: "rippleDelete" as const, ...range }));
   const working = { ...applyOps(before, ops), version: data.project.head! };
-  const edits = [cut, next].map((removed, spot) => ({
+  const edits = [cut, next, outside].map((removed, spot) => ({
     changeId: "chg_approved_2", spot, label: `Trim pause ${spot + 1}`, beforeCut: { version: before.version, removed },
-    range: removed, at: removed.start - (spot ? 0.5 : 0), previous: [],
+    range: removed, at: removed.start - [0, 0.5, 4.25][spot]!, previous: [],
   }));
   data = { ...data, timeline: working, changes: data.changes.map(c => c.id === "chg_approved_2"
     ? { ...c, ops, fromVersion: before.version, toVersion: working.version, appliedVersion: working.version,
@@ -5758,8 +5857,22 @@ it("keeps the selected cut centered and its playhead in view through the whole A
   useProjectStore.setState({ current: data });
   vi.spyOn(api, "timeline").mockImplementation(async (_, version) => ({ timeline: version === before.version ? before : working }));
   vi.spyOn(api, "threadEdits").mockResolvedValue({ version: working.version, edits });
+  // The cut belongs to the selected timeline request, and is the first visible row before a card opens.
+  await event(d => ({ ...d, changes: d.changes.filter(c => c.id === "chg_approved_2"),
+    tasks: d.tasks.filter(t => t.changeIds.includes("chg_approved_2")), notes: [] }));
   await show();
+  expect(api.preparePlayback).toHaveBeenCalledWith(PRJ, working.version, expect.arrayContaining([43.75]), expect.any(AbortSignal));
+  expect(api.preparePlayback).toHaveBeenCalledWith(PRJ, before.version, expect.arrayContaining([43.75]), expect.any(AbortSignal));
   await click(appliedRows()[0]!);
+  // Deliberately hovering a different settled row prepares its own cut without moving or replaying this one.
+  const audition = vi.spyOn(player, "audition"), currentRow = appliedRows()[0]!;
+  await act(async () => usePlayerStore.setState({ playing: true, playbackReady: true }));
+  expect(api.preparePlayback).not.toHaveBeenCalledWith(PRJ, before.version, expect.arrayContaining([78]), expect.any(AbortSignal));
+  await act(async () => appliedRows()[2]!.dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 150)); });
+  expect(api.preparePlayback).toHaveBeenCalledWith(PRJ, before.version, expect.arrayContaining([78]), expect.any(AbortSignal));
+  expect(currentRow.getAttribute("aria-current")).toBe("true");
+  expect(audition).not.toHaveBeenCalled();
   const band = () => container.querySelector<HTMLElement>(".simple-timeline-band");
   const initial = band()!.getAttribute("style");
   expect(parseFloat(band()!.style.left) + parseFloat(band()!.style.width) / 2).toBeCloseTo(50);
@@ -6880,6 +6993,7 @@ it("shows a request about one cut as its work while Scarlet is on it, without wh
 
 it("keeps a call open on its new version when its revision lands", async () => {
   finishedPass();
+  const windows = vi.mocked(api.cutPlaybackFile).mockImplementation(async (_, version, range) => ({ ...range, url: `file/${version}` }));
   await show();
   await act(async () => {});
   await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_revise", 0, { kind: "revise" as const, state: "running" as const, startedAt: new Date().toISOString(), expectedSeconds: undefined })] }));
@@ -6890,7 +7004,14 @@ it("keeps a call open on its new version when its revision lands", async () => {
   expect(call().querySelector(".edit-card-status")?.textContent).toBe("Revising…");
   // Scarlet saves a draft revision, then changes it again. The row keeps the note the editor sent back while the
   // other two calls remain available, until Scarlet finishes the requested revision.
+  windows.mockClear();
+  vi.mocked(api.cutReview).mockClear();
   await revisedCut("task_revise", "chg_ready", 0, { start: 1.5, end: 3 }, "Starts in the pause.");
+  await act(async () => usePlayerStore.setState({ playing: false, playbackReady: true }));
+  // The card still plays the original proposal while a sibling is prepared from the live one.
+  expect(api.cutReview).toHaveBeenCalledWith("chg_ready");
+  expect(windows.mock.calls.map(([, version, range]) => [version, range.start])).toEqual(expect.arrayContaining([["ver_revised", expect.any(Number)]]));
+  expect(windows.mock.calls.some(([, version, range]) => version === "ver_revised" && range.start === 0)).toBe(false);
   expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual(STAGED.map(r => r.reason));
   expect(call().querySelector(".edit-card-title")?.textContent).toBe(STAGED[0]!.reason);
   expect(call().querySelector(".edit-card-status")?.textContent).toBe("Revising…");
@@ -8990,8 +9111,7 @@ it("folds a call's words again when the call is opened again", async () => {
 });
 
 it("plays a call again when its open row is pressed again, and leaves it open with its words and the timeline where they are", async () => {
-  flagged();
-  useProjectStore.setState({ current: data });
+  finishedPass();
   const audition = vi.spyOn(player, "audition");
   await show();
   await act(async () => {});
@@ -9663,7 +9783,7 @@ it("comes back from Settings or a restart to update at the speed the editor was 
 
 it("keeps the conversation and the cut on screen when the edit moves on and its new timeline can't be read, and says so after them only if it keeps failing", async () => {
   const loader = vi.spyOn(await import("../lib/cutStream"), "playbackLoader");
-  vi.spyOn(await import("../lib/cutStream"), "openCutStream").mockReturnValue({ seek() {}, finishSeek() {}, dispose() {} } as never);
+  vi.spyOn(await import("../lib/cutStream"), "openCutStream").mockReturnValue({ seek() {}, finishSeek() {}, dispose() {}, sourceTime: () => 0, bufferThrough: async () => {} });
   vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => new Promise(() => {}));
   // The editor can start a new request while the new timeline is loading.
   idle();

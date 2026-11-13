@@ -17,6 +17,7 @@ import { WindowActions } from "../components/shell/WorkspaceNavigation";
 import { api } from "../lib/client";
 import { buildDb, mc, PRJ } from "../lib/mock/fixtures";
 import { joinClock } from "../lib/joinClock";
+import { player } from "../lib/player";
 import { scrubFrameUrl } from "../components/review/thumbs";
 import { dispatchWsEvent } from "../lib/realtime";
 import { useProjectStore, type ProjectData } from "../stores/project";
@@ -706,6 +707,146 @@ it("samples the displayed timeline when the monitor is playing a version with a 
   expect(container.querySelector(".timeline-track video")?.getAttribute("src")).toBe("/before.mp4");
 });
 
+it("releases standby media behind a drawer, a hidden window or paused processing and keeps the selected decoder", async () => {
+  const timeline = data.timeline!;
+  const clock = joinClock([{ start: 3, end: 4 }], timelineDuration(timeline));
+  const joined = { version: "after", timeline, clock, file: "/after.mp4" };
+  const draw = (active: boolean) => show(<MemoryRouter><CutPreview simple={{ marks: [], cutPlayback: { key: "cut", start: 1, side: "after" } }}
+    workingCache={{ cache: { state: "ready", url: "/before.mp4" }, startCache: () => {} }} joined={joined} active={active}
+    hasCut spot={0} autoPlaySource={false} onRetryDraft={() => {}} onMedia={() => {}} /></MemoryRouter>);
+  const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+  const standby = () => container.querySelector(".watch-monitor [data-parked] video");
+  await draw(true);
+  const current = player.element();
+  expect(current?.getAttribute("src")).toBe("/after.mp4");
+  expect(standby()).not.toBeNull();
+  await draw(false);
+  expect(standby()).toBeNull();
+  await draw(true);
+  expect(player.element()).toBe(current);
+  expect(standby()).not.toBeNull();
+  await act(() => { hidden.mockReturnValue(true); document.dispatchEvent(new Event("visibilitychange")); });
+  expect(standby()).toBeNull();
+  expect(player.element()).toBe(current);
+  await act(() => {
+    hidden.mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    useProjectStore.setState({ current: { ...data, project: { ...data.project, mediaPaused: true } } });
+  });
+  expect(standby()).toBeNull();
+  expect(player.element()).toBe(current);
+});
+
+it("keeps both prepared decoders when opening a historical cut before its live render lookup returns", async () => {
+  const timeline = { ...data.timeline!, version: "historical" };
+  const cut = { start: 3, end: 4 };
+  const clock = joinClock([cut], timelineDuration(timeline));
+  const before = { version: timeline.version, timeline, start: 1, file: "/historical.mp4" };
+  const after = { version: "after", timeline: { ...timeline, version: "after" }, start: 1, end: 6, file: "/after.mp4", clock };
+  const pending = { key: "cut", cut, before, after };
+  vi.mocked(api.renders).mockImplementation(() => new Promise(() => {}));
+  const draw = (side?: "before" | "after") => show(<MemoryRouter><CutPreview
+    simple={{ marks: [], cutPlayback: side ? { key: "cut", start: 1, side } : undefined, nextCutPlayback: side ? undefined : pending }}
+    workingCache={{ cache: { state: "ready", url: "/working.mp4" }, startCache: () => {} }}
+    hasCut active draftVersion={side ? before.version : undefined} draft={side ? timeline : undefined} joined={side === "after" ? after : undefined}
+    spot={0} autoPlaySource={false} onRetryDraft={() => {}} onMedia={() => {}} /></MemoryRouter>);
+  await draw();
+  const original = container.querySelector('video[src="/historical.mp4"]');
+  const edited = container.querySelector('video[src="/after.mp4"]');
+  expect(original).not.toBeNull();
+  expect(edited).not.toBeNull();
+  await draw("after");
+  expect(player.element()).toBe(edited);
+  await draw("before");
+  expect(player.element()).toBe(original);
+});
+
+it("keeps the current audition running when a full file completes and uses it on the next listen", async () => {
+  const timeline = data.timeline!;
+  const clock = joinClock([{ start: 3, end: 4 }], timelineDuration(timeline));
+  const draw = (side: "before" | "after", afterFile?: string) => show(<MemoryRouter><CutPreview
+    simple={{ marks: [], cutPlayback: { key: "cut", start: 1, side, afterFile, afterWindow: { url: "/window.mp4", start: 0, end: 7 } } }}
+    workingCache={{ cache: { state: "ready", url: "/before.mp4" }, startCache: () => {} }}
+    joined={side === "after" ? { version: "after", timeline, clock } : undefined}
+    active hasCut spot={0} autoPlaySource={false} onRetryDraft={() => {}} onMedia={() => {}} /></MemoryRouter>);
+  await draw("after");
+  const current = player.element();
+  expect(current?.getAttribute("src")).toBe("/window.mp4");
+  await draw("after", "/new-full.mp4");
+  expect(player.element()).toBe(current);
+  await draw("before", "/new-full.mp4");
+  const standby = container.querySelector('video[src="/new-full.mp4"]');
+  expect(standby?.closest("[data-parked]")).not.toBeNull();
+  await draw("after", "/new-full.mp4");
+  expect(player.element()).toBe(standby);
+});
+
+it("prepares only After for the next decision and promotes that decoder when the editor steps down", async () => {
+  const timeline = data.timeline!;
+  const clock = joinClock([{ start: 3, end: 4 }], timelineDuration(timeline));
+  const cut = (key: string) => ({ key, cut: { start: 3, end: 4 },
+    before: { timeline, version: timeline.version, start: 1, file: "/before.mp4" },
+    after: { timeline, version: key, start: 1, end: 6, file: `/${key}.mp4`, clock } });
+  const first = cut("first"), next = cut("next");
+  const draw = (plan: typeof first, queued?: typeof next) => show(<MemoryRouter><CutPreview simple={{ marks: [],
+    cutPlayback: { key: plan.key, start: 1, side: "after" }, nextCutPlayback: queued }}
+    workingCache={{ cache: { state: "ready", url: "/before.mp4" }, startCache: () => {} }}
+    joined={plan.after} active hasCut spot={0} autoPlaySource={false} onRetryDraft={() => {}} onMedia={() => {}} /></MemoryRouter>);
+  const queued = () => container.querySelector('.watch-monitor video[src="/next.mp4"]');
+  await draw(first, next);
+  expect(container.querySelectorAll(".watch-monitor video")).toHaveLength(3);
+  expect(queued()?.closest("[data-parked]")).not.toBeNull();
+  await act(() => usePlayerStore.setState({ playing: true, playbackReady: false }));
+  expect(queued()).toBeNull();
+  await act(() => usePlayerStore.setState({ playbackReady: true }));
+  const prepared = queued();
+  expect(prepared).not.toBeNull();
+  await draw(next);
+  expect(player.element()).toBe(prepared);
+  expect(prepared?.closest("[data-parked]")).toBeNull();
+});
+
+it("plays a short cut file on its version clock and hands an out-of-window seek back to the full edit", async () => {
+  const timeline = data.timeline!;
+  const duration = timelineDuration(timeline);
+  const clock = joinClock([{ start: 4, end: 5 }], duration);
+  const session = { seek: vi.fn(), finishSeek: vi.fn(), dispose: vi.fn(), sourceTime: () => 0, bufferThrough: vi.fn(async () => {}) };
+  const open = vi.spyOn(cutStream, "openCutStream").mockReturnValue(session);
+  const file = { url: "/cut-window.mp4", start: 1, end: 6 };
+  await show(<MemoryRouter><CutPreview simple={{ marks: [], cutPlayback: { key: "cut", start: 2, side: "after", afterWindow: file } }}
+    workingCache={{ cache: { state: "ready", url: "/before.mp4" }, startCache: () => {} }} joined={{ version: timeline.version, timeline, clock }}
+    active hasCut spot={0} autoPlaySource={false} onRetryDraft={() => {}} onMedia={() => {}} /></MemoryRouter>);
+  const video = player.element()!;
+  expect(video.getAttribute("src")).toBe(file.url);
+  expect(video.getAttribute("crossorigin")).toBeNull();
+  expect(container.querySelector<HTMLVideoElement>('video[src="/before.mp4"]')!.getAttribute("crossorigin")).toBeNull();
+  Object.defineProperty(video, "readyState", { configurable: true, value: 4 });
+  await act(() => player.seek(5.5));
+  expect(video.currentTime).toBe(3.5);
+  expect(player.elementTime(5.5)).toBe(3.5);
+  await act(() => { video.dispatchEvent(new Event("timeupdate")); });
+  expect(usePlayerStore.getState().time).toBe(5.5);
+  expect(usePlayerStore.getState().duration).toBe(duration);
+  expect(open).not.toHaveBeenCalled();
+  const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+  let release!: () => void;
+  // A faster playback rate or a late animation frame can reach the physical file end before
+  // the pulsing transport checks the audition's planned stop. It must still stop exactly there.
+  await act(() => { release = player.audition({ start: 2, end: 6.98, skips: [{ start: 4, end: 5, removed: true }] }, 30); });
+  await act(() => { video.dispatchEvent(new Event("ended")); });
+  expect(usePlayerStore.getState().time).toBeCloseTo(6.98);
+  expect(open).not.toHaveBeenCalled();
+  expect(player.element()).toBe(video);
+  await act(() => release());
+  await act(() => usePlayerStore.setState({ playing: false }));
+  await act(() => player.seek(8));
+  expect(player.element()).not.toBe(video);
+  expect(open).toHaveBeenCalledOnce();
+  expect(session.seek).toHaveBeenLastCalledWith(7);
+  expect(usePlayerStore.getState().time).toBe(8);
+  expect(play.mock.contexts.filter(el => el !== video)).toHaveLength(0);
+});
+
 function drawPlayerFormat(source?: ProjectData["media"][number]) {
   const noop = () => {};
   return show(<MemoryRouter><CutPreview simple={{ marks: [] }}
@@ -924,7 +1065,7 @@ it("keeps one decoder and an absolute timeline clock across long cut-review sect
   const original = data.timeline!;
   const cut = { original, before: { range: { start: 3, end: 38 } }, removed: { start: 5, end: 36 },
     after: { range: { start: 2, end: 6 } }, at: 4 };
-  const session = { seek: vi.fn(), finishSeek: vi.fn(), dispose: vi.fn(), sourceTime: vi.fn<() => number>() };
+  const session = { seek: vi.fn(), finishSeek: vi.fn(), bufferThrough: vi.fn(async () => {}), dispose: vi.fn(), sourceTime: vi.fn<() => number>() };
   const open = vi.spyOn(cutStream, "openCutStream").mockImplementation(video => {
     session.sourceTime.mockImplementation(() => video.currentTime);
     return session;
