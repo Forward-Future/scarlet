@@ -71,9 +71,10 @@ it.runIf(process.platform === "win32")("applies owner-only library access to exi
     "$ErrorActionPreference='Stop'",
     "$id=[System.Security.Principal.WindowsIdentity]::GetCurrent().User",
     "$root=$env:SCARLET_TEST_LIBRARY",
-    "if (!(Get-Acl -LiteralPath $root).AreAccessRulesProtected) { throw 'Library grants are inherited' }",
+    "if (!([System.IO.Directory]::GetAccessControl($root)).AreAccessRulesProtected) { throw 'Library grants are inherited' }",
     "foreach ($p in @($root, (Join-Path $root 'existing.txt'), (Join-Path $root 'tmp/new.txt'))) {",
-    "  $rules=(Get-Acl -LiteralPath $p).GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])",
+    "  $acl=(Get-Item -LiteralPath $p).GetAccessControl()",
+    "  $rules=$acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])",
     "  if ($rules.Count -ne 1 -or $rules[0].IdentityReference -ne $id) { throw 'Unexpected principal' }",
     "}",
   ].join("\n");
