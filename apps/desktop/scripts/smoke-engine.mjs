@@ -50,9 +50,19 @@ try {
   const clip = join(work, "clip.mp4");
   execFileSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=4", "-f", "lavfi", "-i", "sine=frequency=440:duration=4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-y", clip]);
 
-  // A bare environment: no ffmpeg on PATH, no overrides.
-  const env = { SCARLET_TELEMETRY_ENABLED: "false", HOME: process.env.HOME ?? work, PATH: process.platform === "win32" ? `${process.env.SystemRoot}\\System32;${process.env.SystemRoot}` : "/usr/bin:/bin:/usr/sbin:/sbin" };
-  if (process.platform === "win32") Object.assign(env, { SystemRoot: process.env.SystemRoot, USERPROFILE: process.env.USERPROFILE, TEMP: work, TMP: work, LOCALAPPDATA: process.env.LOCALAPPDATA, APPDATA: process.env.APPDATA });
+  // Keep media tools off PATH so the engine has to find its bundled copy.
+  const env = { SCARLET_TELEMETRY_ENABLED: "false", HOME: process.env.HOME ?? work, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
+  if (process.platform === "win32") {
+    // The desktop inherits the OS environment. Windows PowerShell needs those
+    // paths to initialize when the engine protects a new library.
+    for (const key of ["SystemRoot", "WINDIR", "SystemDrive", "COMSPEC", "ProgramData", "ProgramFiles",
+      "ALLUSERSPROFILE", "PSModulePath", "PATHEXT", "USERPROFILE", "LOCALAPPDATA", "APPDATA"]) {
+      if (process.env[key]) env[key] = process.env[key];
+    }
+    env.PATH = `${process.env.SystemRoot}\\System32;${process.env.SystemRoot}`;
+    env.TEMP = work;
+    env.TMP = work;
+  }
   execFileSync(whisper, ["--help"], { env, stdio: "ignore" });
   const data = join(work, "data");
   // The desktop creates both directories before starting the engine.
