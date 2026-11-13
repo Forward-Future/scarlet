@@ -38,7 +38,7 @@ export async function checkFfmpeg(paths: ToolPaths = {}): Promise<FfmpegCheck> {
   }
   if (!out.ffmpeg.error) {
     const enc = await ffmpegEncoders(ffmpegPath).catch(() => new Set<string>());
-    out.hwEncoders = ["h264_nvenc", "h264_qsv", "h264_amf", "h264_videotoolbox", "h264_vaapi"].filter((e) => enc.has(e));
+    out.hwEncoders = ["h264_nvenc", "h264_qsv", "h264_amf", "h264_videotoolbox", "h264_mf", "h264_vaapi"].filter((e) => enc.has(e));
   }
   out.ok = !out.ffmpeg.error && !out.ffprobe.error;
   return out;

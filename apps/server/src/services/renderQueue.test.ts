@@ -4,8 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { FfmpegError } from "@scarlet/render";
-import { createProject, makeMediaClip, timelineFromKeepRanges, type Project } from "@scarlet/timeline";
+import { DELIVERY_AUDIO_REVISION, FfmpegError } from "@scarlet/render";
+import { createProject, makeMediaClip, sha256, stableStringify, timelineFromKeepRanges, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
 import { scarletRenderAdapter } from "../render/scarletRender.js";
 import { storeVersion } from "./timeline.js";
@@ -175,6 +175,104 @@ it.each([
       path: ctx.repos.renders.get(replacement.id)!.path });
   }
   expect(encode).toHaveBeenCalledTimes(2);
+});
+
+it("always tries hardware for exports while keeping the saved policy for previews", async () => {
+  const { ctx } = workspace;
+  ctx.repos.settings.update({ render: { hwaccel: "none" } });
+  const encode = vi.spyOn(ctx.render, "renderFullCached").mockImplementation(async (_project, _timeline, _cache, file) => {
+    writeFileSync(file, "video");
+  });
+  const base = { ...section(), range: null };
+  for (const input of [
+    { ...base, kind: "export" as const, quality: "preview" as const, exportOptions: { height: 720 } },
+    { ...base, kind: "full" as const },
+  ]) {
+    ctx.repos.settings.update({ render: { hwaccel: "none" } });
+    const queued = ctx.renders.request(input);
+    await settle();
+    expect(queued.hwaccel).toBe("auto");
+    expect(encode.mock.lastCall?.[4].hwaccel).toBe("auto");
+    ctx.repos.settings.update({ render: { hwaccel: "auto" } });
+    const equivalent = ctx.renders.request(input);
+    expect(equivalent).toMatchObject({ id: queued.id, key: queued.key, previewContentKey: queued.previewContentKey });
+  }
+  ctx.repos.settings.update({ render: { hwaccel: "none" } });
+  expect(ctx.renders.request({ ...base, kind: "full", quality: "preview" }).hwaccel).toBe("none");
+  await settle();
+  expect(encode.mock.lastCall?.[4].hwaccel).toBe("none");
+  ctx.repos.settings.update({ render: { hwaccel: "qsv" } });
+  expect(ctx.renders.request({ ...base, kind: "export" }).hwaccel).toBe("qsv");
+  await settle();
+  expect(encode.mock.lastCall?.[4].hwaccel).toBe("qsv");
+});
+
+it.each([
+  [{ encoder: "h264_videotoolbox", rendered: 1 }, "hardware encoder h264_videotoolbox"],
+  [{ encoder: "libx264", rendered: 1 }, "software encoder libx264"],
+  [{ encoder: "copy", rendered: 0 }, "copied original video"],
+  [{ encoder: "h264_nvenc", rendered: 0 }, "assembled cached video"],
+] as const)("logs how the completed export produced its picture", async (result, message) => {
+  const { ctx } = workspace;
+  vi.spyOn(ctx.render, "renderFullCached").mockImplementation(async (_project, _timeline, _cache, file) => {
+    writeFileSync(file, "video");
+    return result;
+  });
+  const render = ctx.renders.request({ ...section(), kind: "export" });
+  await settle();
+  expect(lines.filter(line => line.includes("export video:"))).toEqual([`[render] ${render.id} export video: ${message}`]);
+});
+
+it("adopts interrupted software exports with their original settings and verifies completed software files before reuse", async () => {
+  const { ctx } = workspace;
+  const encode = vi.spyOn(ctx.render, "renderFullCached").mockImplementation(async (_project, _timeline, _cache, file) => {
+    writeFileSync(file, "export");
+  });
+  ctx.repos.settings.update({ render: { hwaccel: "none" } });
+  const base = { ...section(), range: null, quality: "preview" as const };
+  const preview = ctx.renders.request({ ...base, kind: "full" });
+  await settle();
+  // An explicit preview-quality export previously wrapped the same local source fingerprint
+  // as the software preview at the identical height, plus its own range and output options.
+  const input = { ...base, kind: "export" as const, exportOptions: { height: preview.height! } };
+  const legacyKey = ctx.renders.keyFor(project, input, { height: preview.height!, hwaccel: "none" });
+  const sourceFingerprint = preview.previewContentKey!.replace(/-pts1$/, "");
+  const legacyContent = "export-v1-" + sha256(stableStringify([sourceFingerprint, version, null, input.exportOptions])) + `-mix${DELIVERY_AUDIO_REVISION}`;
+  const legacy = { ...preview, ...input, id: "rnd_saved", key: legacyKey, previewContentKey: legacyContent,
+    state: "running" as const, queuePid: undefined, demandPid: undefined, progress: 0.4 };
+  // This export was interrupted before the delivery mix and encoder policy both changed.
+  const oldAssembly = `-mix${DELIVERY_AUDIO_REVISION}`;
+  const interrupted = { ...legacy, key: legacy.key.replace(oldAssembly, "-mix3"),
+    previewContentKey: legacy.previewContentKey.replace(oldAssembly, "-mix3") };
+  ctx.repos.renders.put(interrupted);
+  ctx.renders.recover();
+  await settle();
+  const resumed = ctx.repos.renders.get(legacy.id)!;
+  expect(resumed).toMatchObject({ id: legacy.id, state: "done", key: ctx.renders.keyFor(project, input), hwaccel: "auto" });
+  expect(encode.mock.lastCall?.[4].hwaccel).toBe("auto");
+  expect(ctx.renders.request(input).id).toBe(legacy.id);
+  expect(ctx.renders.request(input).previewContentKey).not.toBe(legacyContent);
+
+  // A finished old export can satisfy the same request without consuming an encoder.
+  const old = ctx.repos.renders.put({ ...legacy, state: "done", path: resumed.path, progress: 1 });
+  expect(ctx.renders.isCurrent(old, ctx.repos.projects.get(project.id)!)).toBe(true);
+  encode.mockClear();
+  const reused = ctx.renders.request(input);
+  expect(reused).toMatchObject({ state: "done", hwaccel: "auto", path: old.path, key: resumed.key, previewContentKey: resumed.previewContentKey });
+  expect(encode).not.toHaveBeenCalled();
+
+  // A changed source must not acquire a new matching fingerprint during migration.
+  ctx.repos.renders.put({ ...interrupted, id: "rnd_changed" });
+  mkdirSync(ctx.paths.media(project.id), { recursive: true });
+  writeFileSync(join(ctx.paths.media(project.id), "camera.mp4"), "new camera bytes");
+  ctx.renders.recover();
+  await settle();
+  expect(ctx.repos.renders.get("rnd_changed")).toMatchObject({ state: "failed", error: expect.stringContaining("A source changed") });
+  expect(encode).not.toHaveBeenCalled();
+  const fresh = ctx.renders.request(input);
+  expect(fresh.state).toBe("queued");
+  await settle();
+  expect(encode).toHaveBeenCalledTimes(1);
 });
 
 it("keeps a finished render finished when updating the edits that waited on it throws", async () => {
