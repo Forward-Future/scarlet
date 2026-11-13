@@ -2,15 +2,73 @@
 
 # Scarlet
 
-Scarlet is an open-source AI video editor for macOS and Windows. Tell Claude Code or Codex what you want to change, by voice or in writing, then play the edit on your timeline. Your original footage stays intact.
+Scarlet is an open-source AI video editor for macOS and Windows. Ask Claude Code or Codex to keep the best take of an interview answer, caption a podcast intro or zoom in on a menu in a screen recording. Type or speak your request in Scarlet, then play the change on your timeline. Your original footage stays intact.
 
-Scarlet works especially well on dialogue-heavy recordings. Start with an interview, a video podcast or a talking-head take. Ask it to shorten long pauses, remove a repeated phrase or keep the clearest take of an answer. Tell it where the timing matters to you, such as a pause before a punchline.
+[Download Scarlet for macOS or Windows](https://github.com/Forward-Future/scarlet/releases/latest) · [Early-access installers](https://github.com/Forward-Future/scarlet-releases/releases) · [Run from source](#run-from-source)
 
 > “Tighten the pause before ‘three things.’ Let me hear it both ways.”
 
-Scarlet renders just the affected section so you can hear what a change sounds like in context. Requested edits go on the working timeline. Suggestions wait for you to apply them. For a first cut of a whole interview, you can jump straight to the cuts the agent flags for a second listen.
+![Scarlet shows three edit requests beside the interview. The timeline highlights a suggested 0.4-second trim, with After selected and Revise and Apply available.](assets/review-suggestion.png)
 
-[Download Scarlet for macOS or Windows](https://github.com/Forward-Future/scarlet/releases/latest)
+Here, Scarlet suggests taking out four tenths of a second. Switch between **Before** and **After** to hear how the next line lands. Choose **Apply** to use that timing, or **Revise** to ask for a little more breathing room. Scarlet renders just the affected section for review.
+
+## Make your first edit
+
+### Bring in your footage
+
+Connect Claude Code or Codex with your existing subscription in **Settings → General**. Choose **New project**, name it and add your files. Open **Media** to see the camera recording, separate audio and still images together. Click the interview thumbnail to preview the source, or check its row to see whether the transcript is ready.
+
+<img src="assets/media-library.png" width="600" alt="The media library shows a transcribed interview clip, a separate music track and a logo image.">
+
+### Tell Scarlet what to change
+
+For a first cut of a whole interview, try “Keep the clearest take of each answer. Leave the pause before the punchline.” If the message box shows a time, clear the tag with `×` to address the whole video. For a change at one moment, click the timeline, then type or hold `V` to speak.
+
+You can also work from the words. Open **Transcript** from the project’s **More** menu, select a phrase such as “Three things today,” and choose **Ask about this**. Your next request will include that passage.
+
+<img src="assets/transcript-selection.png" width="319" alt="Three words are selected in the interview transcript. The selection shows its time range and the Ask about this button.">
+
+<details>
+<summary>Choose a workflow for dialogue, sound, framing or captions</summary>
+
+Type `/` in the message box to pick a workflow. Use `/dialogue-pass` for a first cut. Its guide helps choose takes and pauses. The screenshot shows its earlier name, `/first-cut-dialogue`. The audio guides can even out a speaker’s level or smooth a splice where the room tone changes. [Browse the editing workflows](skills/README.md)
+
+<img src="assets/editing-workflows.png" width="728" alt="The workflow picker offers guides for cleaning dialogue, making a first dialogue cut and smoothing audio cuts.">
+
+</details>
+
+### Listen to the cuts that need your ear
+
+Requested edits go on the working timeline. When Scarlet flags a cut for your decision, open it from the conversation or its timeline marker. Open the cut’s transcript to see which words would come out. In this cut, removing “So, um, let me start that again” makes “Welcome back” the opening line.
+
+![The cut card crosses out the false start and shows the three seconds it would remove on the timeline below.](assets/dialogue-cut-review.png)
+
+Press `\` to hear the original and press it again to hear the cut. **Approve** takes the words out, **Skip** keeps them in, and **Revise** lets you describe a different cut. You can also revise or undo an edit after it’s been applied.
+
+<details>
+<summary>Choose which dialogue cuts Scarlet should ask about</summary>
+
+In **Settings → General**, set **Retakes** to **Suggest** if you want to hear each proposed retake cut before it comes out. Set **Filler words** to **Off** to keep a speaker’s ums and uhs. **Pause tightness** controls how much room a cut leaves around the words.
+
+<img src="assets/dialogue-preferences.png" width="720" alt="Dialogue preferences have separate controls for pauses, filler words, retakes and production talk. Pause tightness is set to Natural.">
+
+</details>
+
+### Check the history and export
+
+Open **History** from the project’s **More** menu to see how the video changed from the imported take. Expand a version to see its individual edits and their times. In this interview, one request added music and captions at the opening and tightened the ending at 0:11.
+
+<img src="assets/edit-history.png" width="560" alt="History lists the imported take and two later versions. The current version is expanded to show music and captions at 0:00 and an edit at 0:11.">
+
+Choose **Export** in the project header to save the whole video or a selected range as an MP4. To continue cutting in DaVinci Resolve, choose **Resolve timeline (.otio)** to export an editable OpenTimelineIO timeline.
+
+<img src="assets/export-formats.png" width="600" alt="The Export dialog offers Video (.mp4) and Resolve timeline (.otio), with the whole edit selected.">
+
+## Projects and privacy
+
+Scarlet stores projects and renders video on your computer. CrisperWhisper is the default local transcription choice. Until you install its separately licensed weights, Scarlet uses Whisper large-v3-turbo, which downloads on first use. Your connected AI provider receives your editing request and the project context the agent uses, which can include transcript excerpts and video frames. [Choose or add a transcription model](docs/transcription-models.md)
+
+Packaged releases report anonymous usage, edit review decisions, and task and export outcomes to PostHog. Set `SCARLET_TELEMETRY_ENABLED=false` to turn reporting off. [See which events Scarlet sends](docs/telemetry.md)
 
 ## Run from source
 
@@ -32,22 +90,6 @@ pnpm desktop:ffmpeg
 node apps/desktop/scripts/build-whisper.mjs
 pnpm desktop:dev
 ```
-
-## Make your first edit
-
-1. **Bring in your footage.** Click **New project**, name it and choose your files. You can mix video (such as MP4 or MOV), separate audio (WAV or MP3) and still images (PNG or JPEG). The project opens to the media library, where you can see import progress and preview a clip. Click **Media** in the project header to return to your files or add more. In **Settings → General**, connect Claude Code or Codex with your existing subscription.
-
-2. **Ask for a change.** Click a point on the timeline, then type or hold `V` to speak. To work on the whole interview, clear the time tag with `×` and try “Remove the false starts and repeated takes. Keep the pauses before each answer.” Type `/dialogue-pass` for a first dialogue cut, or type `/` to choose another workflow. [Browse the workflows](skills/README.md)
-
-3. **Review it in context.** Open an edit from the conversation or timeline. On a cut, open the transcript to see the words Scarlet marked for removal. Press `\` to hear the removed footage and press it again to hear the join. When a dialogue pass asks about a cut, approve it, skip it or ask for a revision. You can also revise or undo an applied edit. Earlier versions stay in the project history.
-
-4. **Export the cut.** Click **Export** in the project header to save the whole video or a selected range as an MP4. To keep editing in DaVinci Resolve, export the timeline as an OpenTimelineIO (`.otio`) file.
-
-   <img src="assets/export-formats.png" width="600" alt="Scarlet’s Export dialog shows the whole edit selected, with Video (.mp4) and Resolve timeline (.otio) in the format menu.">
-
-Scarlet stores projects and renders video on your computer. CrisperWhisper is the default local transcription choice. Until you install its separately licensed weights, Scarlet uses Whisper large-v3-turbo, which downloads on first use. Your connected AI provider receives your editing request and the project context the agent uses, which can include transcript excerpts and video frames. [Choose or add a transcription model](docs/transcription-models.md)
-
-Packaged releases report anonymous usage, edit review decisions, and task and export outcomes to PostHog. Set `SCARLET_TELEMETRY_ENABLED=false` to turn reporting off. [See which events Scarlet sends](docs/telemetry.md)
 
 ## Contributing
 
