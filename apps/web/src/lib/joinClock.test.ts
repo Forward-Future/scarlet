@@ -39,6 +39,13 @@ describe("verifiedJoinClock", () => {
     expect(clock?.toMedia(23)).toBe(13);
   });
 
+  it("reuses the source index but verifies each audition on its own part of the footage", () => {
+    const wrongTail = timeline("v_wrong_tail", [clip("a", 0, 0, 10), clip("b", 10, 21, 61)]);
+    const removed = [{ start: 10, end: 20 }];
+    expect(verifiedJoinClock(before, wrongTail, removed, 30, [8])).toBeDefined();
+    expect(verifiedJoinClock(before, wrongTail, removed, 30, [23])).toBeUndefined();
+  });
+
   it("refuses one that differs in any other way, so the caller keeps its own playback", () => {
     expect(verifiedJoinClock(before, after, [{ start: 10, end: 19 }], 30, [8, 23])).toBeUndefined();
     const shifted = timeline("v_shifted", [clip("a", 0, 0, 10), clip("b", 10, 21, 61)]);

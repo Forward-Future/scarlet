@@ -1,9 +1,9 @@
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import type { ThreadEdit } from "@scarlet/shared";
-import { isPlayableMedia, timelineDuration, type Change, type MediaAsset, type TimeRange, type Timeline } from "@scarlet/timeline";
+import { isPlayableMedia, timelineDuration, type Change, type MediaAsset, type Project, type TimeRange, type Timeline } from "@scarlet/timeline";
 import { arrowSeekTime, handleCutArrow, useHotkeys } from "../lib/hotkeys";
 import { canPlayOriginal, isPreparingMedia } from "../lib/upload";
 import { isLink } from "../lib/pendingImports";
@@ -21,6 +21,7 @@ import { PreferenceSelect } from "../components/ui/PreferenceSelect";
 import { CachedVideo } from "../components/player/CachedVideo";
 import { MonitorPlayback, PlayerTime } from "../components/player/MonitorPlayback";
 import { usePictureWait } from "../components/player/usePictureWait";
+import { useCutAudio } from "../components/player/useCutAudio";
 import { usePlaybackCache } from "../components/player/usePlaybackCache";
 import { CutStream } from "../components/player/CutStream";
 import { Player } from "../components/player/Player";
@@ -31,6 +32,7 @@ import { useApprovalComparison } from "../components/review/SideBySideComparison
 import type { EditCue } from "../components/review/EditReferences";
 import { PlayerTimeline, type TimelineDot, type TimelineGap } from "../components/review/TimelineScrubber";
 import { BeforeToggle } from "../components/review/BeforeToggle";
+import type { CutPlaybackWindow, PreparedCut } from "../components/review/usePrepareNextCut";
 import { FramingPreview } from "../components/review/FramingPreview";
 import { useNotePositions } from "../lib/useNotePositions";
 import type { ProgressFocus } from "../components/player/SimpleProgress";
@@ -38,6 +40,11 @@ import { editFocus } from "../lib/editKind";
 import { editKey } from "../lib/keptEdits";
 
 const noop = () => {};
+const documentVisible = () => !document.hidden;
+const onVisibility = (read: () => void) => {
+  document.addEventListener("visibilitychange", read);
+  return () => document.removeEventListener("visibilitychange", read);
+};
 
 /** The edit or call that's open on the player, and how the page steps to another. */
 interface ThreadTimelineView {
@@ -94,13 +101,14 @@ function SelectedCutFrame({ url, time, fps }: { url: string; time: number; fps: 
   const [needed, setNeeded] = useState(false);
   useLayoutEffect(() => {
     const video = player.element();
-    const decoded = () => !!video && !video.seeking && video.readyState >= 2 && Math.abs(video.currentTime - time) < 0.5 / fps;
+    const target = player.elementTime(time);
+    const decoded = () => !!video && !video.seeking && video.readyState >= 2 && Math.abs(video.currentTime - target) < 0.5 / fps;
     if (decoded()) { setNeeded(false); return; }
     // A local file or buffered fragment often wins the race against a JPEG.
     // An unbuffered edit fragment must first render; request its exact still now.
     const buffered = video?.buffered;
     const missingFragment = video?.currentSrc.startsWith("blob:") && buffered &&
-      !Array.from({ length: buffered.length }, (_, i) => i).some(i => buffered.start(i) <= time && time < buffered.end(i));
+      !Array.from({ length: buffered.length }, (_, i) => i).some(i => buffered.start(i) <= target && target < buffered.end(i));
     const timer = video?.readyState && !missingFragment ? setTimeout(() => setNeeded(!decoded()), 120) : undefined;
     if (timer === undefined) setNeeded(true);
     const ready = () => {
@@ -128,6 +136,7 @@ interface PreviewProps {
   draftVersion?: string;
   draft?: Timeline;
   draftFailed?: boolean;
+  openingJoin?: boolean;
   onRetryDraft(): void;
   source?: MediaAsset;
   hasCut: boolean;
@@ -152,7 +161,9 @@ interface PreviewProps {
    * `above` sits right on top of the timeline, as the card for the edit on screen.
    * `gaps` marks footage other cuts took out, and `onGap` takes a click into one the playing side can't play.
    */
-  simple: { marks: TimelineDot[]; focus?: ProgressFocus; label?: string; compareHost?: HTMLElement | null; above?: ReactNode;
+  simple: { cutPlayback?: { key: string; start: number; side: "before" | "after"; beforeFile?: string; afterFile?: string; beforeWindow?: CutPlaybackWindow; afterWindow?: CutPlaybackWindow };
+    nextCutPlayback?: PreparedCut;
+    marks: TimelineDot[]; focus?: ProgressFocus; label?: string; compareHost?: HTMLElement | null; above?: ReactNode;
     gaps?: TimelineGap[]; skippedRanges?: TimeRange[]; onGap?(gap: TimelineGap, time: number): void;
     /** A click inside the shaded passage, when the playing side steps over it. */
     onBand?(time: number): void;
@@ -176,7 +187,44 @@ interface PreviewProps {
 /** How far past a click after an edit's passage the stretched passage plays. */
 const REACH_AFTER_SECONDS = 2;
 
-export function CutPreview({ threadView, workingCache, draftVersion, draft, draftFailed, onRetryDraft, source, autoPlaySource, hasCut, change, spot, cue, approval = false, playChange, playFullCut = false, active,
+/** Mount the bounded file only before an audition starts or while its side is parked. Seeking
+ * outside it hands the same version clock back to the full segmented player at the editor's point. */
+function CutSide({ project, timeline, url, window, parkedAt, active, fps, label, joins }: {
+  project: Project; timeline: Timeline; url?: string; window?: CutPlaybackWindow; parkedAt?: number;
+  active: boolean; fps: number; label: string; joins?: JoinClock;
+}) {
+  const [outside, setOutside] = useState(false);
+  const handoff = useRef<{ time: number; resume: boolean }>(undefined);
+  const displayed = useRef<{ active: boolean; url?: string; file?: CutPlaybackWindow }>(undefined);
+  const isActive = parkedAt === undefined;
+  const current = isActive && displayed.current?.active ? displayed.current : { url, file: url ? undefined : window };
+  const { file } = current;
+  const fileDuration = useMemo(() => file ? timelineDuration(timeline) : 0, [file, timeline]);
+  useLayoutEffect(() => {
+    displayed.current = { active: isActive, url: current.url, file };
+    if (!isActive) setOutside(false);
+  }, [isActive, current.url, file]);
+  useLayoutEffect(() => {
+    if (!outside || !isActive || !handoff.current) return;
+    const { time, resume } = handoff.current;
+    handoff.current = undefined;
+    player.prepare();
+    player.seek(time, true);
+    if (resume) player.play();
+  }, [outside, isActive, joins]);
+  if (current.url || (file && !outside)) {
+    const path = current.url ?? file!.url;
+    return <CachedVideo key={path} url={path} label={label} fps={fps} active={active} hidden={false} autoPlay={false} joins={joins} parkedAt={parkedAt}
+      windowed={file ? { file, duration: fileDuration, outOfRange(time, resume) {
+        handoff.current = { time: joins ? joins.toView(time) : time, resume };
+        setOutside(true);
+      } } : undefined} />;
+  }
+  return <CutStream project={project} timeline={timeline} version={timeline.version} joins={joins}
+    proposed={label === "Proposed draft"} onStart={noop} parkedAt={parkedAt} />;
+}
+
+export function CutPreview({ threadView, workingCache, draftVersion, draft, draftFailed, openingJoin, onRetryDraft, source, autoPlaySource, hasCut, change, spot, cue, approval = false, playChange, playFullCut = false, active,
   onMedia, resumeTime, simple, joined }: PreviewProps) {
   const current = useProjectStore(useShallow(s => {
     if (!s.current) return null;
@@ -187,6 +235,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const cut = hasCut && !source && !draftVersion;
   const videoDuration = usePlayerStore((s) => s.duration);
   const playing = usePlayerStore((s) => s.playing);
+  const playbackReady = usePlayerStore((s) => s.playbackReady);
   const rate = usePlayerStore((s) => s.rate);
   const [params] = useSearchParams();
   const { hash } = useLocation();
@@ -199,7 +248,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const pair = (comparisonChange ?? change)?.renders[spot];
   const [rejectedOriginal, rejectOriginal] = useState<string>();
   const head = cut ? current.project.head : null;
-  const playable = draftVersion ? !!draft : source ? source.id !== rejectedOriginal || isPlayableMedia(source) : !!head;
+  const playable = !openingJoin && (draftVersion ? !!draft : source ? source.id !== rejectedOriginal || isPlayableMedia(source) : !!head);
   const monitor = useRef<HTMLDivElement>(null);
   // Whichever play button is on the monitor shows that its picture is loading, in place of its icon.
   const loading = usePictureWait(monitor);
@@ -222,7 +271,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     ? previous.url : readyUrl;
   useLayoutEffect(() => { displayed.current = { selection, url: fullVideoUrl }; }, [selection, fullVideoUrl]);
   // Which player is on screen and why. A change here swaps the video element, which is a flicker if it happens mid-listen.
-  const shownBy = fullVideoUrl ? "file" : joined ? "joined-stream" : draftVersion ? draft ? "version-stream" : "version-opening" : "player";
+  const shownBy = openingJoin ? "join-opening" : fullVideoUrl ? "file" : joined ? "joined-stream" : draftVersion ? draft ? "version-stream" : "version-opening" : "player";
   const cacheState = cache?.state, joinedCacheState = joined?.cache;
   useEffect(() => {
     playbackLog("monitor", { shows: shownBy, selection, file: fullVideoUrl?.split("?")[0]?.split("/").slice(-2).join("/"), version: draftVersion, joined: joined?.version,
@@ -248,6 +297,52 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const fps = source?.fps || settings.fps;
   const lastFrame = Math.max(0, (Math.ceil(duration * fps - 1e-6) - 1) / fps);
   const displayedTimeline = draftVersion ? draft : current.timeline?.version === head ? current.timeline : null;
+  const reviewCut = !source ? simple.cutPlayback : undefined;
+  const visible = useSyncExternalStore(onVisibility, documentVisible);
+  const allowStandby = active && visible && !current.project.mediaPaused;
+  // Retain the selected cut's edited decoder when switching to its original footage. Only the
+  // active side owns the transport. Park the other at the lead-in so a replay needn't seek.
+  type EditedSide = { joined: NonNullable<PreviewProps["joined"]>; url?: string };
+  const comparison = useRef<{ key: string; revision?: number; before?: PreparedCut["before"]; after?: EditedSide }>(undefined);
+  // Before the first call opens the queued preview can warm its decoder without taking the working transport.
+  const canWarmNext = allowStandby && !source && (!playing || (!!reviewCut && playbackReady));
+  const nextCut = canWarmNext ? simple.nextCutPlayback : undefined;
+  useCutAudio(allowStandby && !!(reviewCut || nextCut));
+  const pairKey = reviewCut?.key ?? nextCut?.key;
+  const revision = current.renderSettingsRevision;
+  const upcoming = useRef<{ revision?: number; plan: PreparedCut }>(undefined);
+  const nextSelected = nextCut?.key === pairKey ? nextCut : upcoming.current?.plan.key === pairKey &&
+    upcoming.current?.revision === revision ? upcoming.current?.plan : undefined;
+  useLayoutEffect(() => { upcoming.current = nextCut && { revision, plan: nextCut }; }, [revision, nextCut]);
+  const held = comparison.current?.key === pairKey && comparison.current?.revision === revision ? comparison.current : undefined;
+  const beforeMedia = nextSelected?.before ?? held?.before;
+  const currentAfter = reviewCut && joined ? joined : nextSelected?.after;
+  const currentAfterUrl = reviewCut && joined ? reviewCut.afterFile ?? fullVideoUrl : nextSelected?.after.file;
+  const editedSide = currentAfter ? { joined: currentAfter, url: currentAfterUrl } : held?.after;
+  useLayoutEffect(() => {
+    comparison.current = pairKey ? { key: pairKey, revision, before: beforeMedia, after: editedSide } : undefined;
+  }, [pairKey, revision, beforeMedia, editedSide?.joined, editedSide?.url]);
+  const pairTimeline = beforeMedia?.timeline ?? displayedTimeline;
+  const pausedForJoin = !!openingJoin || (reviewCut?.side === "after" && !joined);
+  const showBefore = reviewCut?.side === "before" && !pausedForJoin;
+  const showAfter = reviewCut?.side === "after" && !pausedForJoin;
+  const paired = reviewCut && pairTimeline && (showBefore || showAfter);
+  const leadIn = reviewCut?.start ?? nextSelected?.before.start;
+  const knownBeforeUrl = reviewCut?.beforeFile ?? beforeMedia?.file;
+  const originalUrl = knownBeforeUrl ?? (reviewCut?.side === "before" ? fullVideoUrl : pairTimeline?.version === cacheVersion
+    ? cache?.url ?? (IS_MOCK && draftVersion ? api.renderFileUrl(draftVersion) : undefined) : undefined);
+  // The normal card opens on After. Keep just that decoder for the next decision while the
+  // current comparison is ready. Its keyed layer becomes the selected layer on Down/Approve/Keep.
+  const layers = [];
+  if (pairKey && pairTimeline && leadIn !== undefined) {
+    layers.push({ key: pairKey, before: pairTimeline, beforeUrl: originalUrl, beforeWindow: reviewCut?.beforeWindow ?? beforeMedia?.window,
+      edited: editedSide, afterWindow: reviewCut?.afterWindow ?? nextSelected?.after.window, leadIn,
+      showBefore, showAfter });
+  }
+  if (reviewCut && nextCut && nextCut.key !== pairKey) {
+    layers.push({ key: nextCut.key, edited: { joined: nextCut.after, url: nextCut.after.file }, afterWindow: nextCut.after.window, leadIn: nextCut.before.start,
+      showBefore: false, showAfter: false });
+  }
   // A joined audition can play a different file with gaps skipped. Hovering
   // samples the version drawn on the timeline, including footage in those gaps.
   const originalHoverUrl = source?.kind === "video" && source.id !== rejectedOriginal && canPlayOriginal(source)
@@ -501,18 +596,34 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
         <div ref={monitor} className="watch-monitor" data-landscape={pictureAspect > 1 || undefined}
           style={{ "--picture-aspect": pictureAspect } as CSSProperties}
           onLoadedMetadataCapture={readSourceSize}>
-          {fullVideoUrl ? <CachedVideo key={fullVideoUrl} url={fullVideoUrl} label={source?.name ?? (draftVersion ? "Proposed draft" : "The current edit")}
+          {layers.map(({ key, before, beforeUrl, beforeWindow, edited, afterWindow, leadIn, showBefore, showAfter }) => <div key={key} className="absolute inset-0"
+            inert={!showBefore && !showAfter} data-parked={(!showBefore && !showAfter) || undefined}
+            style={{ isolation: "isolate", zIndex: showBefore || showAfter ? 0 : -1 }} aria-hidden={(!showBefore && !showAfter) || undefined}>
+            {before && (showBefore || allowStandby) && <div className="absolute inset-0 bg-black" inert={!showBefore} data-parked={!showBefore || undefined}
+              style={{ zIndex: showBefore ? 1 : 0 }} aria-hidden={!showBefore || undefined}>
+              <CutSide project={current.project} timeline={before} url={beforeUrl} window={beforeWindow}
+                label={draftVersion ? "Proposed draft" : "The current edit"} fps={settings.fps} active={active} parkedAt={!showBefore ? leadIn : undefined} />
+            </div>}
+            {edited && (showAfter || allowStandby) && <div className="absolute inset-0 bg-black" inert={!showAfter} data-parked={!showAfter || undefined}
+              style={{ zIndex: showAfter ? 1 : 0 }} aria-hidden={!showAfter || undefined}>
+              <CutSide key={edited.joined.version} project={current.project} timeline={edited.joined.timeline} url={edited.url} window={afterWindow}
+                joins={edited.joined.clock} label={edited.url ? "The current edit" : "Proposed draft"} fps={settings.fps} active={active}
+                parkedAt={!showAfter ? edited.joined.clock.toMedia(leadIn) : undefined} />
+            </div>}
+            {!showBefore && !showAfter && <div className="absolute inset-0 z-10 bg-black" />}
+          </div>)}
+          {!paired && (openingJoin || (draftVersion && !draft && !fullVideoUrl && !joined) ? <div className="absolute inset-0 grid place-content-center gap-2 text-sm text-muted" role="status">
+            {draftFailed ? <>Couldn’t open this version.<button className="btn-ghost" onClick={onRetryDraft}>Retry</button></>
+              : !openingJoin && "Opening the suggestion…"}
+          </div> : fullVideoUrl ? <CachedVideo key={fullVideoUrl} url={fullVideoUrl} label={source?.name ?? (draftVersion ? "Proposed draft" : "The current edit")}
             hidden={false} active={active} autoPlay={!!source && autoPlaySource} joins={joined?.clock} />
           : joined ? <div className="absolute inset-0">
             <CutStream key={joined.version} project={current.project} timeline={joined.timeline} version={joined.version} joins={joined.clock} proposed onStart={noop} />
-          </div> : draftVersion ? <div className="absolute inset-0">
-            {draft ? <CutStream project={current.project} timeline={draft} version={draftVersion} proposed onStart={noop} />
-              : <div className="absolute inset-0 grid place-content-center gap-2 text-sm text-muted" role="status">
-                {draftFailed ? <>Couldn’t open this version.<button className="btn-ghost" onClick={onRetryDraft}>Retry</button></> : "Opening the suggestion…"}
-              </div>}
+          </div> : draftVersion && draft ? <div className="absolute inset-0">
+            <CutStream project={current.project} timeline={draft} version={draftVersion} proposed onStart={noop} />
           </div> : !source && !cut && !change && (pendingImports > 0 || preparing) ? <ImportPreview projectId={current.id} preparing={preparing} onMedia={onMedia} />
             : <Player key={source ? `source-${source.id}` : head ?? "cut"} source={source} autoPlaySource={autoPlaySource} cut={cut} hidden={false}
-            active={active} rejectedOriginal={rejectedOriginal} onRejectOriginal={rejectOriginal} onMedia={onMedia} />}
+            active={active} rejectedOriginal={rejectedOriginal} onRejectOriginal={rejectOriginal} onMedia={onMedia} />)}
           {atSelectedFrame && selectedTime !== undefined && selectedFrameUrl &&
             <SelectedCutFrame key={JSON.stringify([fullVideoUrl, selectedFrameUrl])} time={selectedTime} url={selectedFrameUrl} fps={fps} />}
           {simple.label && <div className="simple-on-video" role="status">{simple.label}</div>}
@@ -522,7 +633,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
             : framing && displayedTimeline ? <FramingPreview
             key={JSON.stringify([selection, threadView?.threadId, threadView?.selected?.changeId, threadView?.request])}
             project={current.project} timeline={displayedTimeline} original={original} duration={duration} before={before} loading={loading} coarse onAfter={after} />
-            : (source || cut || change || draftVersion) && <MonitorPlayback playing={playing} playable={playable} loading={loading}
+            : (source || cut || change || draftVersion) && <MonitorPlayback playing={playing} playable={playable} loading={loading || (!!openingJoin && !draftFailed)}
             onToggle={() => player.toggle()}>
             <PlayerTime end={duration} coarse />
           </MonitorPlayback>}

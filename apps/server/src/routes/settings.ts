@@ -19,9 +19,10 @@ export function settingsRoutes(ctx: Ctx) {
 
   r.patch("/settings", async (c) => {
     const patch = await jsonBody(c, z.record(z.unknown()));
-    const previous = ctx.settings().render;
+    const previous = ctx.settings();
     const settings = ctx.repos.settings.update(patch);
-    if (previous.hwaccel !== settings.render.hwaccel || previous.previewHeight !== settings.render.previewHeight) {
+    if (previous.render.hwaccel !== settings.render.hwaccel || previous.render.previewHeight !== settings.render.previewHeight ||
+        previous.dialogue.crossfadeFrames !== settings.dialogue.crossfadeFrames) {
       ctx.bus.publish({ type: "render.settings.updated" });
     }
     return c.json({ settings });
