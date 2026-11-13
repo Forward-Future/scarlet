@@ -10,7 +10,7 @@ import { round3 } from "./analysis.js";
 import { cutScope, selectedRange } from "./cut-scope.js";
 import type { GapSound } from "./gap-sound.js";
 import type { DialogueEvidence } from "./dialogue-decisions.js";
-import { audibleMediaClips, pageAt as scanPageAt, checkKeptWords, type ReadKeptWords, checkDialogueJoin, checkResumeQuote, dialogueCutPreview, dialogueJoinWords, joinEvidence, pageReaches, pauseCutRange, PAUSE_BEAT, wordCutRange, type JoinPage } from "./dialogue-join.js";
+import { audibleMediaClips, edgeOnFrame, pageAt as scanPageAt, checkKeptWords, type ReadKeptWords, checkDialogueJoin, checkResumeQuote, dialogueCutPreview, dialogueJoinWords, joinEvidence, pageReaches, pauseCutRange, PAUSE_BEAT, wordCutRange, type JoinPage } from "./dialogue-join.js";
 
 /** One range as the agent submits it: timeline seconds, or the removed words of a transcript. */
 export interface DialogueCutInput {
@@ -149,15 +149,17 @@ async function placeWordCut(tl: Timeline, words: TranscriptWord[], ref: { mediaI
     cut.end = words[toWord]!.end;
     cut.problems.push("The measured gaps do not bracket the spoken occurrence. Review its word boundaries.");
   }
-  const place = (source: number, side: "start" | "end", word: TranscriptWord) => {
+  const fps = (await sources.project()).settings.fps;
+  const place = (source: number, side: "start" | "end", word: TranscriptWord, room?: TimeRange) => {
     // The word itself must play on this version; the edge then maps through the same clip.
     const clip = clips.find(c => word.start + word.end >= 2 * c.sourceIn && word.start + word.end < 2 * c.sourceOut);
     if (!clip) throw new Error(`Word #${side === "start" ? fromWord : toWord} “${word.text.trim()}” is not in version ${tl.version}. Read timeline_transcript for the words this version plays.`);
-    const s = Math.min(Math.max(source, clip.sourceIn), clip.sourceOut);
-    return round3(clip.timelineIn + (s - clip.sourceIn) / (clip.speed ?? 1));
+    const on = (s: number) => clip.timelineIn + (Math.min(Math.max(s, clip.sourceIn), clip.sourceOut) - clip.sourceIn) / (clip.speed ?? 1);
+    // Saved on the frame inside the measured quiet that is nearest the padded instant, so the engine's rounding keeps it there.
+    return round3(edgeOnFrame(on(source), room, fps, on));
   };
   // The last words of an edit end where the timeline does. Rounding to the millisecond must not carry the range past it.
-  const start = place(cut.start, "start", words[fromWord]!), end = Math.min(place(cut.end, "end", words[toWord]!), timelineDuration(tl));
+  const start = place(cut.start, "start", words[fromWord]!, cut.room.start), end = Math.min(place(cut.end, "end", words[toWord]!, cut.room.end), timelineDuration(tl));
   if (end <= start) throw new Error(`Words #${fromWord}–#${toWord} do not form one forward range on version ${tl.version}.`);
   // Where the words themselves play: the edges sit in the silence either side of them.
   const spoken = { start: Math.max(start, place(words[fromWord]!.start, "start", words[fromWord]!)), end: Math.min(end, place(words[toWord]!.end, "end", words[toWord]!)) };
@@ -187,13 +189,15 @@ export async function resolvePauseCut(tl: Timeline, ref: { mediaId: string; afte
   const clip = audibleMediaClips(tl).find(c => c.mediaId === ref.mediaId &&
       before.start + before.end >= 2 * c.sourceIn && after.start + after.end < 2 * c.sourceOut);
   if (!clip) throw new Error(`Version ${tl.version} does not play ${said} one after the other. Read timeline_transcript for the words this version plays.`);
-  const place = (source: number) => round3(clip.timelineIn + (Math.min(Math.max(source, clip.sourceIn), clip.sourceOut) - clip.sourceIn) / (clip.speed ?? 1));
+  const on = (source: number) => clip.timelineIn + (Math.min(Math.max(source, clip.sourceIn), clip.sourceOut) - clip.sourceIn) / (clip.speed ?? 1);
+  const fps = (await sources.project()).settings.fps;
+  const place = (source: number, room?: TimeRange) => round3(edgeOnFrame(on(source), room, fps, on));
   // The transcript has no word here, which is not the same as nothing being said. What comes out with the pause goes
   // back to the agent: a pause that held a missed "see" and a second "you can" was trimmed with half the restart left in.
   const held = await sources.sound?.(ref.mediaId, { start: cut.start, end: cut.end }).catch(() => undefined);
   const notes = held?.runs.length ? [`This pause holds ${held.seconds.toFixed(2)} s of sound at speaking level that no word explains (${
     held.runs.map(r => `${r.start.toFixed(2)}–${r.end.toFixed(2)}`).join(", ")} s in ${ref.mediaId}). It comes out with the pause.`] : [];
-  return { start: place(cut.start), end: place(cut.end), words: `pause after “${before.text.trim()}”`, problems: cut.problems, notes,
+  return { start: place(cut.start, cut.room.start), end: place(cut.end, cut.room.end), words: `pause after “${before.text.trim()}”`, problems: cut.problems, notes,
     source: { start: round3(cut.start), end: round3(cut.end) }, plays: round3(cut.plays) };
 }
 

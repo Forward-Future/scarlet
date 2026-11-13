@@ -2530,7 +2530,7 @@ it("reports the pauses and doubled words a saved part still plays, and trims a p
     expect(second).not.toHaveProperty("keptPauses");
     expect(second).not.toHaveProperty("repeatedWords");
     const sent = (mock.requests.filter(r => r.path.endsWith("/dialogue-cuts")).at(-1)!.body as { cuts: Array<{ start: number; end: number; kind: string }> }).cuts;
-    expect(sent.find(c => c.kind === "pause" && c.start < 5)).toMatchObject({ start: expect.closeTo(3.55, 2), end: expect.closeTo(4.2, 2), review: false });
+    expect(sent.find(c => c.kind === "pause" && c.start < 5)).toMatchObject({ start: expect.closeTo(3.533, 2), end: expect.closeTo(4.2, 2), review: false });
     expect(second.gate.decisions).toContainEqual(expect.objectContaining({ words: "pause after “have”", outcome: "cut" }));
   } finally {
     Object.assign(mock.state, original);
@@ -2975,7 +2975,7 @@ it("cuts by word reference: edges go in the measured gaps, and every gate decisi
     const ref = { mediaId: "m1", fromWord: 2, toWord: 4 };
     const check = JSON.parse(textOf(await editor.callTool({ name: "dialogue_check_join", arguments: { version: tl.version, ...ref } }) as CallToolResult));
     // “everyone” ends at 1.0 and “welcome” starts at 1.1: a 0.1 s gap splits 60/40. The retake leaves 0.10 s before the second “welcome”.
-    expect(check).toMatchObject({ status: "unchanged", words: "welcome back. Um,", originalRange: { start: 1.06, end: 3.5 } });
+    expect(check).toMatchObject({ status: "unchanged", words: "welcome back. Um,", originalRange: { start: 1.067, end: 3.5 } });
     expect(check.alternativeWordRanges).toContainEqual(expect.objectContaining({ mediaId: "m1", fromWord: 4, toWord: 6, problems: [], dips: [] }));
     const both = await editor.callTool({ name: "dialogue_check_join", arguments: { version: tl.version, start: 1, end: 2, ...ref } }) as CallToolResult;
     expect(textOf(both)).toContain("not both");
@@ -2983,7 +2983,7 @@ it("cuts by word reference: edges go in the measured gaps, and every gate decisi
     expect(textOf(missing)).toContain("outside m1's transcript (#0–#9)");
     const pause = { mediaId: "m1", afterWord: 4, leave: .35 };
     const pauseCheck = JSON.parse(textOf(await editor.callTool({ name: "dialogue_check_join", arguments: { version: tl.version, ...pause } }) as CallToolResult));
-    expect(pauseCheck).toMatchObject({ words: "pause after “Um,”", originalRange: { start: 2.91, end: 3.46 } });
+    expect(pauseCheck).toMatchObject({ words: "pause after “Um,”", originalRange: { start: 2.9, end: 3.467 } });
     const descriptions = (await editor.listTools()).tools.filter(t => t.name === "dialogue_apply_cuts" || t.name === "transcript_get");
     for (const tool of descriptions) expect(tool.description).not.toContain("${");
     // A list checks every removal in one call, in order. A range that can't be checked reports its own error.
@@ -3002,10 +3002,10 @@ it("cuts by word reference: edges go in the measured gaps, and every gate decisi
       cuts: [{ ...ref, kind: "retake", decision: "cut", reason: "The second take is cleaner." }] } }) as CallToolResult;
     expect(applied.isError).toBeFalsy();
     expect(mock.requests.find(r => r.path.endsWith("/dialogue-cuts"))?.body).toMatchObject({
-      description: "Remove the first attempt", cuts: [{ start: 1.06, end: 3.5, review: false }] });
+      description: "Remove the first attempt", cuts: [{ start: 1.067, end: 3.5, review: false }] });
     // Both edges sit in measured silence, so the cut applies as decided; the report names the resolved words and range.
     expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut",
-      range: [1.06, 3.5] }]);
+      range: [1.07, 3.5] }]);
     // Without measured silence beside the words, the edge falls back to word timings and Scarlet stages the cut, saying why.
     mock.state.waveform = (mediaId, from, to, points) => ({ mediaId, from, to, peaks: Array(points).fill(.2), rms: Array(points).fill(.2),
       speechActivity: [{ start: from, end: to }] });
@@ -3036,7 +3036,7 @@ it("places a word reference beside the kept words when a pause is longer than th
   try {
     const check = JSON.parse(textOf(await editor.callTool({ name: "dialogue_check_join", arguments: { version: tl.version, mediaId: "m1", fromWord: 1, toWord: 2 } }) as CallToolResult));
     // 0.15 s after “one” and 0.10 s before “four”. The readings at the middles of the two pauses start at 3 s and end at 17 s.
-    expect(check).toMatchObject({ status: "unchanged", words: "two three", sourceRange: { start: 1.55, end: 18.5 }, originalRange: { start: 1.55, end: 18.5 } });
+    expect(check).toMatchObject({ status: "unchanged", words: "two three", sourceRange: { start: 1.55, end: 18.5 }, originalRange: { start: 1.533, end: 18.5 } });
     // Each pause was read at its middle, then at the kept word its middle reading stops short of.
     expect(mock.requests.filter(r => r.path.endsWith("/media/m1/waveform")).map(r => `${r.query.get("from")}–${r.query.get("to")}`).sort())
       .toEqual(["0–4", "12–17", "16–21", "3–8"]);
@@ -3343,7 +3343,7 @@ it("reads a transcript whose words are still being placed on the audio, and hold
     mock.state.transcripts = { m1: transcript };
     await new Promise(resolve => setTimeout(resolve, 1600));
     const applied = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Remove the first attempt", cuts: [cut] } }) as CallToolResult;
-    expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut", range: [1.06, 3.5] }]);
+    expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut", range: [1.07, 3.5] }]);
     expect(textOf(await editor.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 4, toWord: 4 } }) as CallToolResult)).toContain("#4 2.50-2.70 Um,");
   } finally {
     Object.assign(mock.state, original);
