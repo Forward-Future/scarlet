@@ -625,7 +625,7 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     else if (recognized > 0) progress.transcribing(recognized);
     else if (provider.name === "whispercpp") progress.queued();
     // Word alignment follows. In the same lane, the lane waits for it rather than starting another recording.
-    const lane = whisperLane(ctx, provider.gpu);
+    const lane = whisperLane(ctx, provider.separateWhisperLane);
     const result = saved.aligned ?? (provider.name === "whispercpp" ? await lane.run(work, signal, transcribe, { more: lane === audioLane(ctx) }) : await transcribe());
     // A rerun keeps the readable transcript, including a speaker-labelled revision or an older unlinked one,
     // until the replacement is complete. A first transcript can publish its words while alignment runs.

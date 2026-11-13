@@ -44,13 +44,13 @@ describe("choosing a transcription provider", () => {
   });
 
   /** As much of the engine as a provider reads: the transcription settings with their policy signal, keys and bundled programs. */
-  function engine(transcription: Partial<ServerSettings["transcription"]>, parts: { openaiKey?: string; whisperCli?: string; whisperGpu?: string } = {}) {
+  function engine(transcription: Partial<ServerSettings["transcription"]>, parts: { openaiKey?: string; whisperCli?: string; whisperGpu?: string; crisperAdapter?: string } = {}) {
     const policy = new AbortController(), shutdown = new AbortController();
     const settings = vi.fn();
     const model = vi.fn(async (_signal: AbortSignal) => "bundled-model.bin");
     const ctx = {
       repos: { settings: { transcriptionPolicy: () => ({ settings: { provider: "none", openaiModel: "whisper-1", ...transcription }, signal: policy.signal, revision: 7 }) } },
-      paths: { root: dir }, env: { openaiKey: parts.openaiKey }, whisperCli: parts.whisperCli, whisperGpu: parts.whisperGpu,
+      paths: { root: dir }, env: { openaiKey: parts.openaiKey }, whisperCli: parts.whisperCli, whisperGpu: parts.whisperGpu, crisperAdapter: parts.crisperAdapter,
       whisperModel: { get: model }, shutdown: shutdown.signal, settings, log: vi.fn(),
     } as unknown as Ctx;
     return { ctx, policy, shutdown, settings, model };
@@ -84,7 +84,7 @@ describe("choosing a transcription provider", () => {
     // Audio leaves the machine only when the editor chose OpenAI in Settings, whatever a request asks for.
     expect(getTranscriptionProvider(engine({ provider: "whispercpp" }, { openaiKey: "key", whisperCli: "/bin/whisper-cli" }).ctx, "openai")).toBeNull();
     expect(getTranscriptionProvider(engine({ provider: "whispercpp" }, { whisperCli: "/bin/whisper-cli" }).ctx, "deepgram")).toBeNull();
-    expect(getTranscriptionProvider(engine({ provider: "openai" }, { openaiKey: "key" }).ctx)).toMatchObject({ name: "openai", gpu: false });
+    expect(getTranscriptionProvider(engine({ provider: "openai" }, { openaiKey: "key" }).ctx)).toMatchObject({ name: "openai", separateWhisperLane: false });
   });
 
   it("runs the bundled whisper with the bundled model, or the program and model the editor chose in Settings", async () => {
@@ -93,14 +93,14 @@ describe("choosing a transcription provider", () => {
     const bundled = engine({ provider: "whispercpp", language: "de" }, { whisperCli: "/app/whisper-cli" });
     const provider = getTranscriptionProvider(bundled.ctx)!;
     // On Apple silicon the bundled build runs on the GPU, so it need not wait for the CPU's audio models.
-    expect(provider).toMatchObject({ name: "whispercpp", gpu: true });
+    expect(provider).toMatchObject({ name: "whispercpp", separateWhisperLane: true });
     await provider.transcribe({ path: window, tmpDir: dir, dialogueWindow: {} });
     expect(runs.at(-1)).toEqual({ binary: "/app/whisper-cli", model: "bundled-model.bin", language: "de" });
     expect(bundled.model).toHaveBeenCalledTimes(1);
 
     const chosen = engine({ provider: "whispercpp", whisperCppPath: "/opt/whisper-cli", whisperModelPath: "/opt/large.bin" }, { whisperCli: "/app/whisper-cli", whisperGpu: "/app/gpu/whisper-cli" });
     const own = getTranscriptionProvider(chosen.ctx)!;
-    expect(own.gpu).toBe(false);
+    expect(own.separateWhisperLane).toBe(false);
     await own.transcribe({ path: window, tmpDir: dir, dialogueWindow: {} });
     expect(runs.at(-1)).toEqual({ binary: "/opt/whisper-cli", model: "/opt/large.bin", language: "auto" });
     expect(chosen.model).not.toHaveBeenCalled();
@@ -112,7 +112,7 @@ describe("choosing a transcription provider", () => {
     // The bundled GPU build goes first where there is one, and the bundled build is not a GPU build off Apple silicon.
     onMachine("win32", "x64");
     const windows = getTranscriptionProvider(engine({ provider: "whispercpp" }, { whisperCli: "C:/app/whisper-cli.exe", whisperGpu: "C:/app/whisper-gpu/whisper-cli.exe" }).ctx)!;
-    expect(windows.gpu).toBe(false);
+    expect(windows.separateWhisperLane).toBe(false);
     await windows.transcribe({ path: window, tmpDir: dir, dialogueWindow: {} });
     expect(runs.at(-1)!.binary).toBe("C:/app/whisper-gpu/whisper-cli.exe");
   });
@@ -139,7 +139,7 @@ describe("choosing a transcription provider", () => {
     await expect(getTranscriptionProvider(mine.ctx)!.transcribe({ path: window, tmpDir: dir, dialogueWindow: {} })).rejects.toThrow("whisper-cli exited with code 3");
   });
 
-  it.each(["darwin", "win32"])("runs the installed CrisperWhisper preset in its isolated CPU runtime on %s", async platform => {
+  it.each(["darwin", "win32"])("runs the installed CrisperWhisper preset using the desktop adapter and the installed Python and weights on %s", async platform => {
     onMachine(platform, platform === "darwin" ? "arm64" : "x64");
     const base = join(dir, "models", "crisperwhisper"), model = join(base, "model", "model.safetensors");
     const binary = join(base, "venv", ...(platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
@@ -148,26 +148,33 @@ describe("choosing a transcription provider", () => {
       await mkdir(dirname(file), { recursive: true });
       await writeFile(file, "fixture", { mode: 0o700 });
     }
+    const releaseScript = join(dir, "release resources", "crisper_cli.py");
+    await mkdir(dirname(releaseScript));
+    await writeFile(releaseScript, "fixture");
     const runs = whisper();
-    const parts = { whisperCli: "/app/whisper-cli", whisperGpu: "/app/gpu/whisper-cli" };
+    const parts = { whisperCli: "/app/whisper-cli", whisperGpu: "/app/gpu/whisper-cli", crisperAdapter: releaseScript };
     const preset = engine({ provider: "whispercpp" }, parts);
     const legacyCli = join(base, platform === "win32" ? "crisper-cli.exe" : "crisper-cli");
     const paths = { whisperCppPath: legacyCli, whisperModelPath: model };
     const legacy = engine({ provider: "whispercpp", ...paths }, parts);
     for (const install of [preset, legacy]) {
       const provider = getTranscriptionProvider(install.ctx)!;
-      expect(provider.gpu).toBe(false);
+      expect(provider.separateWhisperLane).toBe(false);
       await provider.transcribe({ path: window, tmpDir: dir, dialogueWindow: {} });
       expect(runs.at(-1)).toMatchObject({ binary, model });
-      expect(vi.mocked(ffmpeg.run).mock.lastCall![1].slice(0, 5)).toEqual(["-I", "-B", script, "-m", model]);
+      expect(vi.mocked(ffmpeg.run).mock.lastCall![1].slice(0, 5)).toEqual(["-I", "-B", releaseScript, "-m", model]);
       expect(install.model).not.toHaveBeenCalled();
     }
+    // A standalone engine can still use the adapter installed alongside the weights.
+    const standalone = getTranscriptionProvider(engine({ provider: "whispercpp" }).ctx)!;
+    await standalone.transcribe({ path: window, tmpDir: dir, dialogueWindow: {} });
+    expect(vi.mocked(ffmpeg.run).mock.lastCall![1].slice(0, 5)).toEqual(["-I", "-B", script, "-m", model]);
     const waiting = getTranscriptionProvider(preset.ctx)!;
     const marker = join(base, ".building-venv");
     await writeFile(marker, "");
     expect(getTranscriptionProvider(preset.ctx)?.localModel).toBe("whispercpp");
     await expect(waiting.transcribe({ path: window, tmpDir: dir, dialogueWindow: {} })).rejects.toThrow("Retry transcription");
-    expect(runs).toHaveLength(2);
+    expect(runs).toHaveLength(3);
     await rm(marker);
     expect(getTranscriptionProvider(preset.ctx)?.localModel).toBe("crisperwhisper");
     // An explicit selection ignores the old preset paths, even if they are still saved.
