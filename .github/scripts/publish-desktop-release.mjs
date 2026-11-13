@@ -101,18 +101,11 @@ export async function publishDesktopRelease({ version, directory, repository, sh
       tag_name: tag, target_commitish: sha, name: `Scarlet ${version}`,
       body: [
         "Download the DMG for your Mac’s chip (Apple Silicon or Intel), or choose the Setup EXE or MSI for Windows x64.",
-        "### FFmpeg and FFprobe",
-        "These installers include FFmpeg and FFprobe 9.0.2 from the FFmpeg developers. " +
-          "[GNU General Public License v3](https://www.gnu.org/licenses/gpl-3.0.txt) · " +
-          "[FFmpeg 9.0.2 source archive](https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz)",
-        "Martin Riedl built the macOS binaries. " +
-          "[Apple Silicon component versions](https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/versions.txt) · " +
-          "[Intel component versions](https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/versions.txt) · " +
-          "[Build scripts](https://git.martin-riedl.de/ffmpeg/build-script)",
-        "Windows uses Gyan Doshi’s Essentials build. " +
-          "[9.0.2 release and source revision](https://github.com/GyanD/codexffmpeg/releases/tag/9.0.2) · " +
-          "[Corresponding build materials request](https://github.com/GyanD/codexffmpeg/issues/255)",
-        `[Pinned FFmpeg downloads and SHA-256 checksums for this Scarlet release](https://github.com/${repository}/blob/${sha}/apps/desktop/scripts/fetch-ffmpeg.mjs)`,
+        "Scarlet uses FFmpeg and FFprobe to import and export footage. If you already installed them for Early Access, you can use the same tools.",
+        "**macOS.** Drag Scarlet into Applications. To install the media tools, run `bash /Applications/Scarlet.app/Contents/Resources/Install-Scarlet-FFmpeg-macOS.sh` in Terminal, then open Scarlet. " +
+          `[View the helper source](https://github.com/${repository}/blob/${sha}/apps/desktop/scripts/Install-Scarlet-FFmpeg-macOS.sh)`,
+        "**Windows.** Run `winget install --id Gyan.FFmpeg.Essentials --exact` in PowerShell, then run Scarlet Setup and open Scarlet from your regular Windows account.",
+        "Early Access and stable Scarlet use separate project libraries. Continue opening existing Early Access projects in Scarlet Early Access.",
       ].join("\n\n"),
       draft: true, prerelease: false,
     } });
