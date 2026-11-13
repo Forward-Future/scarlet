@@ -14,6 +14,8 @@ const appDir = path.join(process.env.LOCALAPPDATA, 'Scarlet');
 const cache = path.join(root, 'cache'), src = path.join(cache, 'source');
 const target = path.join(cache, 'target'), setup = path.join(cache, 'ready-setup.exe');
 const installed = path.join(root, 'installed.json'), ready = path.join(cache, 'ready.json');
+const stampFile = path.join(cache, 'build-version.json');
+const versionScript = 'apps/desktop/scripts/release-version.mjs';
 const tools = JSON.parse(fs.readFileSync(path.join(root, 'tools.json'), 'utf8').replace(/^\uFEFF/, ''));
 const logFile = path.join(root, 'launch.log');
 const env = { ...process.env, GIT_TERMINAL_PROMPT:'0', GCM_INTERACTIVE:'Never', CI:'true', CARGO_TARGET_DIR:target };
@@ -73,10 +75,25 @@ function assertSource(checkout,rev) {
   if (git('remote','get-url','origin')!==remote || git('rev-parse','HEAD')!==rev ||
       git('status','--porcelain','--untracked-files=normal')) throw Error('The release checkout does not match the clean GitHub revision.');
 }
+
+export function restoreStamp() {
+  if (!fs.existsSync(stampFile)) return;
+  const stamp = JSON.parse(fs.readFileSync(stampFile, 'utf8'));
+  if (run(tools.git,['rev-parse','HEAD'],src,true) !== stamp.revision ||
+      run(tools.git,['diff','HEAD','--',versionScript],src,true)) {
+    throw Error('The checkout changed during the previous build. Its files have been left in place.');
+  }
+  run(process.execPath, [versionScript,'restore-stamp',stamp.version], src);
+  // Only the version strings were reversed. Staged, untracked, or otherwise modified sources still fail this guard.
+  assertSource(src, stamp.revision);
+  fs.unlinkSync(stampFile);
+}
+
 export function stageVerifiedBuild(checkout,release,rev) {
   assertSource(checkout,rev);
   const cfg = JSON.parse(fs.readFileSync(path.join(checkout,'apps/desktop/src-tauri/tauri.conf.json'),'utf8'));
-  const installer = path.join(release,'bundle','nsis',cfg.productName+'_'+cfg.version+'_x64-setup.exe');
+  const version = run(process.execPath,[versionScript,'for-commit'],checkout,true);
+  const installer = path.join(release,'bundle','nsis',cfg.productName+'_'+version+'_x64-setup.exe');
   const desktop = fs.readFileSync(path.join(release,'deps','scarlet_desktop.exe'));
   const marker = '__TAURI_BUNDLE_TYPE_VAR_UNK';
   const off = desktop.indexOf(marker);
@@ -99,7 +116,9 @@ function checkoutMain(rev) {
   }
   if (run(tools.git,['remote','get-url','origin'],src,true)===movedFrom) run(tools.git,['remote','set-url','origin',remote],src);
   if (run(tools.git,['remote','get-url','origin'],src,true)!==remote) throw Error('Unexpected origin in the private build checkout.');
-  run(tools.git,['fetch','--no-tags','origin','+refs/heads/main:refs/remotes/origin/main'],src);
+  restoreStamp();
+  const shallow = run(tools.git,['rev-parse','--is-shallow-repository'],src,true) === 'true';
+  run(tools.git,['fetch',...(shallow ? ['--unshallow'] : []),'--no-tags','origin','+refs/heads/main:refs/remotes/origin/main'],src);
   if (run(tools.git,['rev-parse','refs/remotes/origin/main'],src,true)!==rev) return false;
   run(tools.git,['checkout','--detach',rev],src);
   assertSource(src,rev);
@@ -107,6 +126,18 @@ function checkoutMain(rev) {
 }
 function build(rev) {
   if (!checkoutMain(rev)) return;
+  run(process.execPath,[versionScript,'check'],src);
+  const version = run(process.execPath,[versionScript,'for-commit'],src,true);
+  write(stampFile, JSON.stringify({revision:rev,version}));
+  try {
+    run(process.execPath,[versionScript,'set',version],src);
+    buildInstaller(rev);
+  } finally {
+    restoreStamp();
+  }
+  stageVerifiedBuild(src,path.join(target,triple,'release'),rev);
+}
+function buildInstaller(rev) {
   status('Installing dependencies for Scarlet '+rev.slice(0,7)+'…');
   run(tools.pnpm,['install','--frozen-lockfile'],src);
   status('Building the Scarlet engine…');
@@ -121,7 +152,6 @@ function build(rev) {
   const release=path.join(target,triple,'release');
   status('Verifying the rebuilt engine…');
   run(process.execPath,['apps/desktop/scripts/smoke-engine.mjs',release],src);
-  stageVerifiedBuild(src,release,rev);
 }
 function install(m) {
   const ps=path.join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/powershell.exe');
