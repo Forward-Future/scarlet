@@ -21,11 +21,14 @@ pub fn private_directory(path: &Path) -> Result<()> {
         use std::os::windows::process::CommandExt;
         let script = concat!(
             "$ErrorActionPreference='Stop';$id=[System.Security.Principal.WindowsIdentity]::GetCurrent().User;",
-            "$acl=New-Object System.Security.AccessControl.DirectorySecurity;$acl.SetOwner($id);$acl.SetAccessRuleProtection($true,$false);",
+            "$acl=[System.Security.AccessControl.DirectorySecurity]::new();$acl.SetOwner($id);$acl.SetAccessRuleProtection($true,$false);",
             "$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($id,'FullControl','ContainerInherit,ObjectInherit','None','Allow'));",
             "[System.IO.Directory]::SetAccessControl($env:SCARLET_PRIVATE_DIRECTORY,$acl)"
         );
-        let status = std::process::Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", script])
+        let powershell = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()))
+            .join(r"System32\WindowsPowerShell\v1.0");
+        let status = std::process::Command::new(powershell.join("powershell.exe"))
+            .args(["-NoProfile", "-NonInteractive", "-Command", script]).env("PSModulePath", powershell.join("Modules"))
             .env("SCARLET_PRIVATE_DIRECTORY", path).creation_flags(0x08000000).status()?;
         anyhow::ensure!(status.success(), "could not restrict workspace permissions");
     }

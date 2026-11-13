@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -45,6 +45,18 @@ it("decodes a recording once for every reader and cuts windows from that decode"
   expect([bytes.toString("latin1", 0, 4), bytes.toString("latin1", 36, 40), bytes.readUInt32LE(24), bytes.readUInt32LE(40)]).toEqual(["RIFF", "data", 16000, 32000]);
   expect([bytes.readInt16LE(44), bytes.readInt16LE(44 + 31998)]).toEqual([16000, 31999 % 30000]);
   first.release(); second.release();
+});
+
+it("shares emissions across directory aliases while keeping different audio streams separate", async () => {
+  const media = join(dir, "media");
+  const alias = join(dir, "linked-media");
+  await mkdir(media);
+  await symlink(media, alias, "junction");
+  const source = join(media, "interview.wav"), otherPath = join(alias, "interview.wav");
+  await writeFile(source, "recording");
+  const store = await emissionStore(ctx(), "p", source, 1);
+  expect(await emissionStore(ctx(), "p", otherPath, 1)).toBe(store);
+  expect(await emissionStore(ctx(), "p", otherPath, 0)).not.toBe(store);
 });
 
 it("keeps the decode for the next reader, then removes it once nobody has read it for two minutes", async () => {

@@ -23,7 +23,7 @@ import { decodeWaveformCache, encodeWaveformCache, fileInDirectory, MAX_WAVEFORM
 import type { WaveformCache } from "../render/adapter.js";
 import { actorFor, logActivity, quote } from "./activity.js";
 import { matchesSpeakerStream, savedSpeakerTurns } from "./recordingSpeakers.js";
-import { emissionStore } from "./recordingAudio.js";
+import { emissionStore, emissionStorePaths } from "./recordingAudio.js";
 import { prepareSourceProxies, sourcePreviews } from "./sourcePreviews.js";
 
 export const WAVEFORM_POINTS_PER_SECOND = 50;
@@ -441,9 +441,9 @@ export async function removeUnreadableMedia(ctx: Ctx, projectId: string, id: str
   const original = fileInDirectory(ctx.paths.media(projectId), media.path);
   const waveform = waveformBase(ctx, projectId, id);
   // Its previews, aligner emissions and speaker turns are named for the file as it is on disk, so they are found
-  // before the file goes. The emissions are kept under the file's path as given and as resolved.
+  // before the file goes. This includes stores kept under an older spelling of the source path.
   const named = (await Promise.all([sourcePreviews.filesOf(ctx, media), savedSpeakerTurns(ctx, projectId, media),
-    ...[join(ctx.paths.media(projectId), media.path), original].map(file => file && emissionStore(ctx, projectId, file).catch(() => undefined))])).flat();
+    original && emissionStorePaths(ctx, projectId, original, join(ctx.paths.media(projectId), media.path)).catch(() => [])])).flat();
   ctx.db.transaction(() => {
     removable();
     ctx.db.prepare("DELETE FROM transcripts WHERE media_id = ?").run(id);
