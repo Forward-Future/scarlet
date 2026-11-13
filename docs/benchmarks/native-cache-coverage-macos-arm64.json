@@ -1,0 +1,615 @@
+{
+  "method": "Prepared means the last prior independent sample covered the target, or its project already had a finished preview file. A join is prepared only if the primer and the frames on both sides of the boundary were prepared. Play uses the actual button timestamp. Before-primer uses play time minus observed primer duration and a 50ms guard. Cache sampling is approximately once per second. CPU is an OS process sample. Ordinals follow the native measurement order.",
+  "before": {
+    "samples": 602,
+    "wallSeconds": 713.7,
+    "sourceClaimedSamples": 602,
+    "sourceProgressStartEnd": [
+      0,
+      0.39899354894277894
+    ],
+    "fullRenderRunningSamples": 504,
+    "lastPublishedCutSeconds": 984.45,
+    "windows": 90,
+    "windowsBracketed": 90,
+    "windowsWithContinuousSourceClaim": 90,
+    "medianFFmpegProcesses": 5.0,
+    "medianSampledFFmpegCpuPercent": 918.5,
+    "samplesWithSourceProxyProcess": 601,
+    "samplesWithSegmentProcess": 596
+  },
+  "after": {
+    "samples": 403,
+    "wallSeconds": 468.4,
+    "sourceClaimedSamples": 403,
+    "sourceProgressStartEnd": [
+      0,
+      0.27586509226225925
+    ],
+    "fullRenderRunningSamples": 260,
+    "lastPublishedCutSeconds": 542.04,
+    "windows": 90,
+    "windowsBracketed": 90,
+    "windowsWithContinuousSourceClaim": 90,
+    "medianFFmpegProcesses": 4,
+    "medianSampledFFmpegCpuPercent": 902,
+    "samplesWithSourceProxyProcess": 402,
+    "samplesWithSegmentProcess": 395
+  },
+  "scrub": {
+    "cohorts": {
+      "cold-cold": {
+        "attempts": 49,
+        "before": {
+          "completed": 45,
+          "censored": 4,
+          "completedMedianMs": 5189
+        },
+        "after": {
+          "completed": 49,
+          "censored": 0,
+          "completedMedianMs": 2539.0
+        }
+      },
+      "prepared-cold": {
+        "attempts": 10,
+        "before": {
+          "completed": 10,
+          "censored": 0,
+          "completedMedianMs": 131.0
+        },
+        "after": {
+          "completed": 10,
+          "censored": 0,
+          "completedMedianMs": 1820.0
+        }
+      },
+      "prepared-prepared": {
+        "attempts": 5,
+        "before": {
+          "completed": 5,
+          "censored": 0,
+          "completedMedianMs": 76.0
+        },
+        "after": {
+          "completed": 5,
+          "censored": 0,
+          "completedMedianMs": 110
+        }
+      }
+    },
+    "stateByScheduleOrdinal": [
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "prepared-prepared",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "prepared-prepared",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "prepared-cold",
+      "prepared-cold",
+      "cold-cold",
+      "prepared-cold",
+      "cold-cold",
+      "prepared-cold",
+      "cold-cold",
+      "cold-cold",
+      "prepared-prepared",
+      "cold-cold",
+      "prepared-cold",
+      "cold-cold",
+      "prepared-cold",
+      "cold-cold",
+      "cold-cold",
+      "prepared-prepared",
+      "cold-cold",
+      "prepared-cold",
+      "cold-cold",
+      "prepared-cold",
+      "cold-cold",
+      "cold-cold",
+      "prepared-prepared",
+      "cold-cold",
+      "prepared-cold",
+      "cold-cold",
+      "prepared-cold"
+    ]
+  },
+  "cutsAtPlay": {
+    "cohorts": {
+      "cold-cold": {
+        "attempts": 11,
+        "before": {
+          "playToFirst": {
+            "completed": 11,
+            "censored": 0,
+            "completedMedianMs": 2366
+          },
+          "primer": {
+            "completed": 7,
+            "censored": 4,
+            "completedMedianMs": 4694
+          },
+          "finished": 4,
+          "consecutiveCrossings": 5,
+          "qualityWindows": 11,
+          "dropped": 5,
+          "totalFrames": 658
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 11,
+            "censored": 0,
+            "completedMedianMs": 4184.0
+          },
+          "primer": {
+            "completed": 11,
+            "censored": 0,
+            "completedMedianMs": 2378
+          },
+          "finished": 4,
+          "consecutiveCrossings": 3,
+          "qualityWindows": 11,
+          "dropped": 0,
+          "totalFrames": 744
+        }
+      },
+      "mixed-cold": {
+        "attempts": 1,
+        "before": {
+          "playToFirst": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 242
+          },
+          "primer": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 145
+          },
+          "finished": 1,
+          "consecutiveCrossings": 0,
+          "qualityWindows": 1,
+          "dropped": 0,
+          "totalFrames": 85
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 2679
+          },
+          "primer": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 2735
+          },
+          "finished": 1,
+          "consecutiveCrossings": 0,
+          "qualityWindows": 1,
+          "dropped": 0,
+          "totalFrames": 79
+        }
+      },
+      "prepared-cold": {
+        "attempts": 3,
+        "before": {
+          "playToFirst": {
+            "completed": 3,
+            "censored": 0,
+            "completedMedianMs": 304.0
+          },
+          "primer": {
+            "completed": 3,
+            "censored": 0,
+            "completedMedianMs": 126
+          },
+          "finished": 3,
+          "consecutiveCrossings": 3,
+          "qualityWindows": 3,
+          "dropped": 13,
+          "totalFrames": 223
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 3,
+            "censored": 0,
+            "completedMedianMs": 3877
+          },
+          "primer": {
+            "completed": 3,
+            "censored": 0,
+            "completedMedianMs": 2572
+          },
+          "finished": 2,
+          "consecutiveCrossings": 0,
+          "qualityWindows": 3,
+          "dropped": 5,
+          "totalFrames": 343
+        }
+      },
+      "prepared-mixed": {
+        "attempts": 1,
+        "before": {
+          "playToFirst": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 275.0
+          },
+          "primer": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 125
+          },
+          "finished": 1,
+          "consecutiveCrossings": 1,
+          "qualityWindows": 1,
+          "dropped": 0,
+          "totalFrames": 57
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 2212.0
+          },
+          "primer": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 3134.0
+          },
+          "finished": 1,
+          "consecutiveCrossings": 0,
+          "qualityWindows": 1,
+          "dropped": 0,
+          "totalFrames": 9
+        }
+      },
+      "prepared-prepared": {
+        "attempts": 8,
+        "before": {
+          "playToFirst": {
+            "completed": 8,
+            "censored": 0,
+            "completedMedianMs": 275.0
+          },
+          "primer": {
+            "completed": 8,
+            "censored": 0,
+            "completedMedianMs": 132.0
+          },
+          "finished": 8,
+          "consecutiveCrossings": 7,
+          "qualityWindows": 8,
+          "dropped": 9,
+          "totalFrames": 549
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 8,
+            "censored": 0,
+            "completedMedianMs": 279.5
+          },
+          "primer": {
+            "completed": 8,
+            "censored": 0,
+            "completedMedianMs": 148.0
+          },
+          "finished": 8,
+          "consecutiveCrossings": 8,
+          "qualityWindows": 8,
+          "dropped": 20,
+          "totalFrames": 561
+        }
+      }
+    },
+    "stateByScheduleOrdinal": [
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "prepared-cold",
+      "prepared-prepared",
+      "cold-cold",
+      "prepared-prepared",
+      "cold-cold",
+      "prepared-prepared",
+      "cold-cold",
+      "prepared-cold",
+      "cold-cold",
+      "prepared-prepared",
+      "mixed-cold",
+      "prepared-prepared",
+      "prepared-prepared",
+      "prepared-mixed",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "prepared-cold",
+      "prepared-prepared",
+      "prepared-prepared"
+    ]
+  },
+  "cutsBeforePrimerApprox": {
+    "cohorts": {
+      "cold-cold": {
+        "attempts": 7,
+        "before": {
+          "playToFirst": {
+            "completed": 7,
+            "censored": 0,
+            "completedMedianMs": 3386
+          },
+          "primer": {
+            "completed": 7,
+            "censored": 0,
+            "completedMedianMs": 4694
+          },
+          "finished": 2,
+          "consecutiveCrossings": 4,
+          "qualityWindows": 7,
+          "dropped": 5,
+          "totalFrames": 399
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 7,
+            "censored": 0,
+            "completedMedianMs": 5080
+          },
+          "primer": {
+            "completed": 7,
+            "censored": 0,
+            "completedMedianMs": 2378
+          },
+          "finished": 1,
+          "consecutiveCrossings": 3,
+          "qualityWindows": 7,
+          "dropped": 0,
+          "totalFrames": 371
+        }
+      },
+      "mixed-cold": {
+        "attempts": 1,
+        "before": {
+          "playToFirst": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 242
+          },
+          "primer": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 145
+          },
+          "finished": 1,
+          "consecutiveCrossings": 0,
+          "qualityWindows": 1,
+          "dropped": 0,
+          "totalFrames": 85
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 2679
+          },
+          "primer": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 2735
+          },
+          "finished": 1,
+          "consecutiveCrossings": 0,
+          "qualityWindows": 1,
+          "dropped": 0,
+          "totalFrames": 79
+        }
+      },
+      "prepared-cold": {
+        "attempts": 3,
+        "before": {
+          "playToFirst": {
+            "completed": 3,
+            "censored": 0,
+            "completedMedianMs": 304.0
+          },
+          "primer": {
+            "completed": 3,
+            "censored": 0,
+            "completedMedianMs": 126
+          },
+          "finished": 3,
+          "consecutiveCrossings": 3,
+          "qualityWindows": 3,
+          "dropped": 13,
+          "totalFrames": 223
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 3,
+            "censored": 0,
+            "completedMedianMs": 3877
+          },
+          "primer": {
+            "completed": 3,
+            "censored": 0,
+            "completedMedianMs": 2572
+          },
+          "finished": 2,
+          "consecutiveCrossings": 0,
+          "qualityWindows": 3,
+          "dropped": 5,
+          "totalFrames": 343
+        }
+      },
+      "prepared-mixed": {
+        "attempts": 1,
+        "before": {
+          "playToFirst": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 275.0
+          },
+          "primer": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 125
+          },
+          "finished": 1,
+          "consecutiveCrossings": 1,
+          "qualityWindows": 1,
+          "dropped": 0,
+          "totalFrames": 57
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 2212.0
+          },
+          "primer": {
+            "completed": 1,
+            "censored": 0,
+            "completedMedianMs": 3134.0
+          },
+          "finished": 1,
+          "consecutiveCrossings": 0,
+          "qualityWindows": 1,
+          "dropped": 0,
+          "totalFrames": 9
+        }
+      },
+      "prepared-prepared": {
+        "attempts": 8,
+        "before": {
+          "playToFirst": {
+            "completed": 8,
+            "censored": 0,
+            "completedMedianMs": 275.0
+          },
+          "primer": {
+            "completed": 8,
+            "censored": 0,
+            "completedMedianMs": 132.0
+          },
+          "finished": 8,
+          "consecutiveCrossings": 7,
+          "qualityWindows": 8,
+          "dropped": 9,
+          "totalFrames": 549
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 8,
+            "censored": 0,
+            "completedMedianMs": 279.5
+          },
+          "primer": {
+            "completed": 8,
+            "censored": 0,
+            "completedMedianMs": 148.0
+          },
+          "finished": 8,
+          "consecutiveCrossings": 8,
+          "qualityWindows": 8,
+          "dropped": 20,
+          "totalFrames": 561
+        }
+      },
+      "unknown-cold": {
+        "attempts": 4,
+        "before": {
+          "playToFirst": {
+            "completed": 4,
+            "censored": 0,
+            "completedMedianMs": 2081.0
+          },
+          "primer": {
+            "completed": 0,
+            "censored": 4,
+            "completedMedianMs": null
+          },
+          "finished": 2,
+          "consecutiveCrossings": 1,
+          "qualityWindows": 4,
+          "dropped": 0,
+          "totalFrames": 259
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 4,
+            "censored": 0,
+            "completedMedianMs": 2647.5
+          },
+          "primer": {
+            "completed": 4,
+            "censored": 0,
+            "completedMedianMs": 2312.5
+          },
+          "finished": 3,
+          "consecutiveCrossings": 0,
+          "qualityWindows": 4,
+          "dropped": 0,
+          "totalFrames": 373
+        }
+      }
+    },
+    "stateByScheduleOrdinal": [
+      "unknown-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "prepared-cold",
+      "prepared-prepared",
+      "cold-cold",
+      "prepared-prepared",
+      "unknown-cold",
+      "prepared-prepared",
+      "unknown-cold",
+      "prepared-cold",
+      "unknown-cold",
+      "prepared-prepared",
+      "mixed-cold",
+      "prepared-prepared",
+      "prepared-prepared",
+      "prepared-mixed",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "prepared-cold",
+      "prepared-prepared",
+      "prepared-prepared"
+    ]
+  }
+}

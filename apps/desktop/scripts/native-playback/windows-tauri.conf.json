@@ -1,0 +1,6 @@
+{
+  "productName": "Scarlet Playback Benchmark",
+  "identifier": "com.forwardfuture.scarlet.playbackbench.portable.v1",
+  "build": { "beforeBuildCommand": "pnpm --filter @scarlet/web build" },
+  "app": { "appDirectoriesOverride": ".." }
+}

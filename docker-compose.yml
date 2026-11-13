@@ -1,0 +1,24 @@
+services:
+  scarlet:
+    build: .
+    image: scarlet/server:local
+    ports:
+      - "127.0.0.1:4000:4000"
+    environment:
+      SCARLET_DATA: /data
+      # OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      - scarlet-data:/data
+    restart: unless-stopped
+    # For NVENC rendering on a GPU box (requires the NVIDIA container toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu, video]
+
+volumes:
+  scarlet-data:

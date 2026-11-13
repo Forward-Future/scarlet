@@ -1,0 +1,222 @@
+diff --git a/src/v3/types.ts b/src/v3/types.ts
+--- a/src/v3/types.ts
++++ b/src/v3/types.ts
+@@ -2265,6 +2265,7 @@
+           exact: true,
+           message: def.exactLength.message,
+         });
++        if (tooBig) return INVALID;
+         status.dirty();
+       }
+     }
+@@ -2293,25 +2294,30 @@
+           exact: false,
+           message: def.maxLength.message,
+         });
+-        status.dirty();
+-      }
+-    }
+-
++        return INVALID;
++      }
++    }
++
++    // Bound diagnostics for collections without a declared maximum, including async parsing.
++    const issueLimit = ctx.common.issues.length + 64;
++    const results: SyncParseReturnType[] = [];
++    const item = (i: number) => new ParseInputLazyPath(ctx, ctx.data[i], ctx.path, i);
+     if (ctx.common.async) {
+-      return Promise.all(
+-        ([...ctx.data] as any[]).map((item, i) => {
+-          return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+-        })
+-      ).then((result) => {
+-        return ParseStatus.mergeArray(status, result);
+-      });
+-    }
+-
+-    const result = ([...ctx.data] as any[]).map((item, i) => {
+-      return def.type._parseSync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+-    });
+-
+-    return ParseStatus.mergeArray(status, result);
++      return (async () => {
++        for (let i = 0; i < ctx.data.length; i += 64) {
++          const count = Math.min(64, ctx.data.length - i);
++          const batch = Array.from({ length: count }, (_, offset) => def.type._parseAsync(item(i + offset)));
++          results.push(...await Promise.all(batch));
++          if (ctx.common.issues.length >= issueLimit) return INVALID;
++        }
++        return ParseStatus.mergeArray(status, results);
++      })();
++    }
++    for (let i = 0; i < ctx.data.length; i++) {
++      results.push(def.type._parseSync(item(i)));
++      if (ctx.common.issues.length >= issueLimit) return INVALID;
++    }
++    return ParseStatus.mergeArray(status, results);
+   }
+ 
+   get element() {
+@@ -3431,7 +3437,7 @@
+         exact: false,
+         type: "array",
+       });
+-      status.dirty();
++      return INVALID;
+     }
+ 
+     const items = ([...ctx.data] as any[])
+@@ -3727,7 +3733,7 @@
+           exact: false,
+           message: def.maxSize.message,
+         });
+-        status.dirty();
++        return INVALID;
+       }
+     }
+ 
+diff --git a/v3/types.js b/v3/types.js
+--- a/v3/types.js
++++ b/v3/types.js
+@@ -1771,6 +1771,7 @@
+                     exact: true,
+                     message: def.exactLength.message,
+                 });
++                if (tooBig) return INVALID;
+                 status.dirty();
+             }
+         }
+@@ -1797,20 +1798,29 @@
+                     exact: false,
+                     message: def.maxLength.message,
+                 });
+-                status.dirty();
+-            }
+-        }
++                return INVALID;
++            }
++        }
++        // Bound diagnostics for collections without a declared maximum, including async parsing.
++        const issueLimit = ctx.common.issues.length + 64;
++        const results = [];
++        const item = (i) => new ParseInputLazyPath(ctx, ctx.data[i], ctx.path, i);
+         if (ctx.common.async) {
+-            return Promise.all([...ctx.data].map((item, i) => {
+-                return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+-            })).then((result) => {
+-                return ParseStatus.mergeArray(status, result);
+-            });
+-        }
+-        const result = [...ctx.data].map((item, i) => {
+-            return def.type._parseSync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+-        });
+-        return ParseStatus.mergeArray(status, result);
++            return (async () => {
++                for (let i = 0; i < ctx.data.length; i += 64) {
++                    const count = Math.min(64, ctx.data.length - i);
++                    const batch = Array.from({ length: count }, (_, offset) => def.type._parseAsync(item(i + offset)));
++                    results.push(...await Promise.all(batch));
++                    if (ctx.common.issues.length >= issueLimit) return INVALID;
++                }
++                return ParseStatus.mergeArray(status, results);
++            })();
++        }
++        for (let i = 0; i < ctx.data.length; i++) {
++            results.push(def.type._parseSync(item(i)));
++            if (ctx.common.issues.length >= issueLimit) return INVALID;
++        }
++        return ParseStatus.mergeArray(status, results);
+     }
+     get element() {
+         return this._def.type;
+@@ -2624,7 +2634,7 @@
+                 exact: false,
+                 type: "array",
+             });
+-            status.dirty();
++            return INVALID;
+         }
+         const items = [...ctx.data]
+             .map((item, itemIndex) => {
+@@ -2820,7 +2830,7 @@
+                     exact: false,
+                     message: def.maxSize.message,
+                 });
+-                status.dirty();
++                return INVALID;
+             }
+         }
+         const valueType = this._def.valueType;
+diff --git a/v3/types.cjs b/v3/types.cjs
+--- a/v3/types.cjs
++++ b/v3/types.cjs
+@@ -1792,6 +1792,7 @@
+                     exact: true,
+                     message: def.exactLength.message,
+                 });
++                if (tooBig) return parseUtil_js_1.INVALID;
+                 status.dirty();
+             }
+         }
+@@ -1818,20 +1819,29 @@
+                     exact: false,
+                     message: def.maxLength.message,
+                 });
+-                status.dirty();
+-            }
+-        }
++                return parseUtil_js_1.INVALID;
++            }
++        }
++        // Bound diagnostics for collections without a declared maximum, including async parsing.
++        const issueLimit = ctx.common.issues.length + 64;
++        const results = [];
++        const item = (i) => new ParseInputLazyPath(ctx, ctx.data[i], ctx.path, i);
+         if (ctx.common.async) {
+-            return Promise.all([...ctx.data].map((item, i) => {
+-                return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+-            })).then((result) => {
+-                return parseUtil_js_1.ParseStatus.mergeArray(status, result);
+-            });
+-        }
+-        const result = [...ctx.data].map((item, i) => {
+-            return def.type._parseSync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+-        });
+-        return parseUtil_js_1.ParseStatus.mergeArray(status, result);
++            return (async () => {
++                for (let i = 0; i < ctx.data.length; i += 64) {
++                    const count = Math.min(64, ctx.data.length - i);
++                    const batch = Array.from({ length: count }, (_, offset) => def.type._parseAsync(item(i + offset)));
++                    results.push(...await Promise.all(batch));
++                    if (ctx.common.issues.length >= issueLimit) return parseUtil_js_1.INVALID;
++                }
++                return parseUtil_js_1.ParseStatus.mergeArray(status, results);
++            })();
++        }
++        for (let i = 0; i < ctx.data.length; i++) {
++            results.push(def.type._parseSync(item(i)));
++            if (ctx.common.issues.length >= issueLimit) return parseUtil_js_1.INVALID;
++        }
++        return parseUtil_js_1.ParseStatus.mergeArray(status, results);
+     }
+     get element() {
+         return this._def.type;
+@@ -2650,7 +2660,7 @@
+                 exact: false,
+                 type: "array",
+             });
+-            status.dirty();
++            return parseUtil_js_1.INVALID;
+         }
+         const items = [...ctx.data]
+             .map((item, itemIndex) => {
+@@ -2849,7 +2859,7 @@
+                     exact: false,
+                     message: def.maxSize.message,
+                 });
+-                status.dirty();
++                return parseUtil_js_1.INVALID;
+             }
+         }
+         const valueType = this._def.valueType;

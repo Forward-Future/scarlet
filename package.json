@@ -1,0 +1,33 @@
+{
+  "name": "scarlet",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Single-user AI video editor. Agents edit, Scarlet renders.",
+  "license": "MIT",
+  "packageManager": "pnpm@12.16.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm desktop:dev",
+    "dev:agent": "pnpm --filter @scarlet/agent dev",
+    "start": "pnpm desktop:dev",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "mcp": "node packages/mcp/dist/cli.js",
+    "agent": "node apps/agent/dist/cli.js",
+    "desktop:dev": "pnpm -r --parallel --filter \"./packages/*\" --filter @scarlet/server --filter @scarlet/desktop run watch",
+    "desktop:build": "pnpm --filter @scarlet/desktop bundle",
+    "desktop:ffmpeg": "pnpm --filter @scarlet/desktop ffmpeg",
+    "desktop:test": "pnpm --filter @scarlet/desktop test:rust",
+    "desktop:demo": "pnpm --filter @scarlet/desktop run demo"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

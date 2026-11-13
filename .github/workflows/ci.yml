@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+          - name: macOS
+            os: macos-15
+          - name: Windows
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm version comes from package.json "packageManager".
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The same pinned static builds the desktop app ships.
+      - name: ffmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fonts-dejavu-core >/dev/null
+            exit 0
+          fi
+          node apps/desktop/scripts/fetch-ffmpeg.mjs
+          EXT=""; [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
+          mkdir -p "$RUNNER_TEMP/ffmpeg"
+          for t in ffmpeg ffprobe; do cp apps/desktop/src-tauri/binaries/$t-*$EXT "$RUNNER_TEMP/ffmpeg/$t$EXT"; done
+          echo "$RUNNER_TEMP/ffmpeg" >> "$GITHUB_PATH"
+
+      - name: Build (the desktop package's build script is a no-op here)
+        run: pnpm -r build
+
+      - name: Test
+        run: pnpm -r test
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Test transcription adapter and installer
+        run: python -B -m unittest discover -s integrations/transcription/crisperwhisper
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: github.event_name == 'push' && runner.os != 'Linux'
+
+      - uses: swatinem/rust-cache@v2
+        if: github.event_name == 'push' && runner.os != 'Linux'
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+
+      - name: Rust tests
+        if: github.event_name == 'push' && runner.os != 'Linux'
+        working-directory: apps/desktop/src-tauri
+        env:
+          CARGO_PROFILE_TEST_DEBUG: 0
+        run: cargo test --locked
+
+      - name: Typecheck
+        if: runner.os == 'Linux'
+        run: pnpm -r typecheck

@@ -1,0 +1,20 @@
+# Inputs for the headless engine in Dockerfile.
+**
+!.npmrc
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.base.json
+!apps/agent/**
+!apps/server/**
+!packages/**
+!skills/**
+
+**/node_modules
+**/dist
+**/build
+**/data
+**/coverage
+**/.env*
+**/*.tsbuildinfo
+**/*.log

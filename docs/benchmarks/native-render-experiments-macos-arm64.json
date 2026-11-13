@@ -1,0 +1,652 @@
+{
+  "method": "Apple silicon macOS with the packaged FFmpeg. Original paths, absolute times and source identifiers have been removed. Durations are milliseconds unless specified.",
+  "fixtureCacheAudit": {
+    "complex4k": {
+      "segments": 443,
+      "matches": 0,
+      "previewHeight": 360
+    },
+    "second4k": {
+      "segments": 866,
+      "matches": 0,
+      "previewHeight": 720
+    },
+    "historical1080p": {
+      "segments": 499,
+      "matches": 0,
+      "previewHeight": 720
+    },
+    "active1080p": {
+      "segments": 867,
+      "matches": 867,
+      "previewHeight": 720
+    }
+  },
+  "legacyStill": {
+    "command": "SCARLET_BIN_DIR=<media-tools> node packages/render/bench/native-composition.mjs <clone> <frame-list> sw,indexed 2",
+    "description": "Three-layer 960x540 output from a 4K edit; two 4K AVC cameras with 250-frame GOPs plus a 1080p video. This isolates backend compute from the native UI. Production-graph runs include the cost of source validation. All raw YUV SHA-256 values were compared to normal decoding.",
+    "alternatingProductionGate": [
+      {
+        "target": 1,
+        "pass": 0,
+        "mode": "sw",
+        "ms": 1067,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 1,
+        "pass": 0,
+        "mode": "indexed",
+        "ms": 1144,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 2,
+        "pass": 0,
+        "mode": "indexed",
+        "ms": 857,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 2,
+        "pass": 0,
+        "mode": "sw",
+        "ms": 1559,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 3,
+        "pass": 0,
+        "mode": "sw",
+        "ms": 1067,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 3,
+        "pass": 0,
+        "mode": "indexed",
+        "ms": 689,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 1,
+        "pass": 1,
+        "mode": "indexed",
+        "ms": 927,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 1,
+        "pass": 1,
+        "mode": "sw",
+        "ms": 1442,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 2,
+        "pass": 1,
+        "mode": "sw",
+        "ms": 1224,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 2,
+        "pass": 1,
+        "mode": "indexed",
+        "ms": 957,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 3,
+        "pass": 1,
+        "mode": "indexed",
+        "ms": 746,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 3,
+        "pass": 1,
+        "mode": "sw",
+        "ms": 923,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      }
+    ],
+    "onePairUnderActiveRealCache": [
+      {
+        "target": 1,
+        "pass": 0,
+        "mode": "sw",
+        "ms": 3954,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 1,
+        "pass": 0,
+        "mode": "indexed",
+        "ms": 3192,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      }
+    ],
+    "exploratoryDecoderSwitch": [
+      {
+        "target": 1,
+        "pass": 0,
+        "mode": "sw",
+        "ms": 2908,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 1,
+        "pass": 0,
+        "mode": "indexed",
+        "ms": 1562,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 1,
+        "pass": 0,
+        "mode": "vt",
+        "ms": 2108,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 1,
+        "pass": 0,
+        "mode": "vt-indexed",
+        "ms": 1500,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 2,
+        "pass": 0,
+        "mode": "indexed",
+        "ms": 720,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 2,
+        "pass": 0,
+        "mode": "vt",
+        "ms": 1879,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 2,
+        "pass": 0,
+        "mode": "vt-indexed",
+        "ms": 1558,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 2,
+        "pass": 0,
+        "mode": "sw",
+        "ms": 1092,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 3,
+        "pass": 0,
+        "mode": "vt",
+        "ms": 1749,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 3,
+        "pass": 0,
+        "mode": "vt-indexed",
+        "ms": 1427,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 3,
+        "pass": 0,
+        "mode": "sw",
+        "ms": 880,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 3,
+        "pass": 0,
+        "mode": "indexed",
+        "ms": 587,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      }
+    ],
+    "exploratoryDeviceOnlyThroughTrim": [
+      {
+        "target": 1,
+        "pass": 0,
+        "mode": "indexed",
+        "ms": 1455,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 1,
+        "pass": 0,
+        "mode": "vt-device-indexed",
+        "ms": 1515,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 1,
+        "pass": 0,
+        "mode": "sw",
+        "ms": 1043,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 2,
+        "pass": 0,
+        "mode": "vt-device-indexed",
+        "ms": 1462,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      },
+      {
+        "target": 2,
+        "pass": 0,
+        "mode": "sw",
+        "ms": 1031,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 0
+      },
+      {
+        "target": 2,
+        "pass": 0,
+        "mode": "indexed",
+        "ms": 702,
+        "decodedPictureMatchesNormal": true,
+        "inputs": 3,
+        "indexedInputs": 3
+      }
+    ]
+  },
+  "warmFile": {
+    "description": "58-minute active edit with 867/867 matching original 720p ranges. Two independently published files validated through the normal authenticated HTTP range route. Readiness sampled approximately once per second.",
+    "runs": [
+      {
+        "run": "before",
+        "firstObservedReadyMs": 7383,
+        "publishedSeconds": 3469.3,
+        "verifiedRangeStatus": 206,
+        "fileBytes": 498305632,
+        "height": 720,
+        "containerDuration": 3469.321354
+      },
+      {
+        "run": "after",
+        "firstObservedReadyMs": 8463,
+        "publishedSeconds": 3469.3,
+        "verifiedRangeStatus": 206,
+        "fileBytes": 498305632,
+        "height": 720,
+        "containerDuration": 3469.321354
+      }
+    ]
+  },
+  "mixedInputs": {
+    "description": "Two genuine four-second 640x360 preview ranges with separate audio stems, two alternating passes. Timing measures FFmpeg execution after graph/eligibility setup. Debug scans are recorded only on pass zero. Normal, separated picture-input indexing, and forced shared-input splitting were qualified on controlled fixtures.",
+    "command": "node packages/render/bench/mixed-index.mjs <clone> <frame-list> 2 normal,separate",
+    "qualification": [
+      {
+        "case": "combined-normal",
+        "modes": [
+          "normal",
+          "separate",
+          "split"
+        ],
+        "allDecodedPicturesSamplesAndPacketTimestampsEqual": true,
+        "indexedInputCountByMode": {
+          "normal": 0,
+          "separate": 0,
+          "split": 1
+        }
+      },
+      {
+        "case": "delayed",
+        "modes": [
+          "normal",
+          "separate",
+          "split"
+        ],
+        "allDecodedPicturesSamplesAndPacketTimestampsEqual": true,
+        "indexedInputCountByMode": {
+          "normal": 0,
+          "separate": 0,
+          "split": 0
+        }
+      },
+      {
+        "case": "multi-video",
+        "modes": [
+          "normal",
+          "separate",
+          "split"
+        ],
+        "allDecodedPicturesSamplesAndPacketTimestampsEqual": true,
+        "indexedInputCountByMode": {
+          "normal": 0,
+          "separate": 0,
+          "split": 0
+        }
+      },
+      {
+        "case": "rotated",
+        "modes": [
+          "normal",
+          "separate",
+          "split"
+        ],
+        "allDecodedPicturesSamplesAndPacketTimestampsEqual": true,
+        "indexedInputCountByMode": {
+          "normal": 0,
+          "separate": 0,
+          "split": 0
+        }
+      },
+      {
+        "case": "separate-normal",
+        "modes": [
+          "normal",
+          "separate",
+          "split"
+        ],
+        "allDecodedPicturesSamplesAndPacketTimestampsEqual": true,
+        "indexedInputCountByMode": {
+          "normal": 0,
+          "separate": 1,
+          "split": 1
+        }
+      },
+      {
+        "case": "variable",
+        "modes": [
+          "normal",
+          "separate",
+          "split"
+        ],
+        "allDecodedPicturesSamplesAndPacketTimestampsEqual": true,
+        "indexedInputCountByMode": {
+          "normal": 0,
+          "separate": 0,
+          "split": 0
+        }
+      }
+    ],
+    "realRanges": [
+      {
+        "range": 1,
+        "pass": 0,
+        "mode": "normal",
+        "ms": 1866,
+        "inputCount": 5,
+        "indexedPictures": 0,
+        "ffmpegConfirmedDiscoveryScans": 5,
+        "pictureFrames": 120,
+        "audioPackets": 188,
+        "rawVideoPCMAndPacketTimestampsMatchNormal": true
+      },
+      {
+        "range": 1,
+        "pass": 0,
+        "mode": "separate",
+        "ms": 1554,
+        "inputCount": 5,
+        "indexedPictures": 3,
+        "ffmpegConfirmedDiscoveryScans": 2,
+        "pictureFrames": 120,
+        "audioPackets": 188,
+        "rawVideoPCMAndPacketTimestampsMatchNormal": true
+      },
+      {
+        "range": 2,
+        "pass": 0,
+        "mode": "separate",
+        "ms": 2156,
+        "inputCount": 9,
+        "indexedPictures": 5,
+        "ffmpegConfirmedDiscoveryScans": 4,
+        "pictureFrames": 120,
+        "audioPackets": 190,
+        "rawVideoPCMAndPacketTimestampsMatchNormal": true
+      },
+      {
+        "range": 2,
+        "pass": 0,
+        "mode": "normal",
+        "ms": 2689,
+        "inputCount": 9,
+        "indexedPictures": 0,
+        "ffmpegConfirmedDiscoveryScans": 9,
+        "pictureFrames": 120,
+        "audioPackets": 190,
+        "rawVideoPCMAndPacketTimestampsMatchNormal": true
+      },
+      {
+        "range": 1,
+        "pass": 1,
+        "mode": "separate",
+        "ms": 1948,
+        "inputCount": 5,
+        "indexedPictures": 3,
+        "ffmpegConfirmedDiscoveryScans": null,
+        "pictureFrames": 120,
+        "audioPackets": 188,
+        "rawVideoPCMAndPacketTimestampsMatchNormal": true
+      },
+      {
+        "range": 1,
+        "pass": 1,
+        "mode": "normal",
+        "ms": 1732,
+        "inputCount": 5,
+        "indexedPictures": 0,
+        "ffmpegConfirmedDiscoveryScans": null,
+        "pictureFrames": 120,
+        "audioPackets": 188,
+        "rawVideoPCMAndPacketTimestampsMatchNormal": true
+      },
+      {
+        "range": 2,
+        "pass": 1,
+        "mode": "normal",
+        "ms": 2595,
+        "inputCount": 9,
+        "indexedPictures": 0,
+        "ffmpegConfirmedDiscoveryScans": null,
+        "pictureFrames": 120,
+        "audioPackets": 190,
+        "rawVideoPCMAndPacketTimestampsMatchNormal": true
+      },
+      {
+        "range": 2,
+        "pass": 1,
+        "mode": "separate",
+        "ms": 2117,
+        "inputCount": 9,
+        "indexedPictures": 5,
+        "ffmpegConfirmedDiscoveryScans": null,
+        "pictureFrames": 120,
+        "audioPackets": 190,
+        "rawVideoPCMAndPacketTimestampsMatchNormal": true
+      }
+    ]
+  },
+  "backgroundPriority": {
+    "description": "Rejected experiment. Two identical concurrent HTTP monitor-frame and playback-fragment requests on freshly staged copies with active source and full-edit caches. Each case won one target. Source/segment nice values are sampled from actual owned FFmpeg children.",
+    "runs": [
+      {
+        "mode": "ordinary",
+        "trials": [
+          {
+            "target": 1,
+            "stillHeadersMs": 2184,
+            "fileHeadersMs": 7077,
+            "sourceProgressDuringRequest": [
+              0.0012797816470599091,
+              0.005850429850989028
+            ]
+          },
+          {
+            "target": 2,
+            "stillHeadersMs": 1601,
+            "fileHeadersMs": 7983,
+            "sourceProgressDuringRequest": [
+              0.005850429850989028,
+              0.008814134495252285
+            ]
+          }
+        ],
+        "sourceProgressAtEnd": 0.009718641852941195,
+        "publishedSecondsAtEnd": 14.180833333333334,
+        "observedNice": {
+          "sourceProxies": [
+            0
+          ],
+          "editSegments": [
+            0
+          ],
+          "other": [
+            0
+          ]
+        }
+      },
+      {
+        "mode": "below",
+        "trials": [
+          {
+            "target": 1,
+            "stillHeadersMs": 1581,
+            "fileHeadersMs": 6303,
+            "sourceProgressDuringRequest": [
+              0.0009141295831089944,
+              0.005215350284361187
+            ]
+          },
+          {
+            "target": 2,
+            "stillHeadersMs": 2033,
+            "fileHeadersMs": 9320,
+            "sourceProgressDuringRequest": [
+              0.005215350284361187,
+              0.009429969322655813
+            ]
+          }
+        ],
+        "sourceProgressAtEnd": 0.009429969322655813,
+        "publishedSecondsAtEnd": 14.180833333333334,
+        "observedNice": {
+          "sourceProxies": [
+            10
+          ],
+          "editSegments": [
+            0,
+            10
+          ],
+          "other": [
+            0
+          ]
+        }
+      }
+    ],
+    "encodedFragmentChecks": [
+      {
+        "v": {
+          "counts": [
+            120,
+            120
+          ],
+          "samePTSAndSize": true,
+          "equalHashes": 120
+        },
+        "a": {
+          "counts": [
+            188,
+            188
+          ],
+          "samePTSAndSize": true,
+          "equalHashes": 188
+        }
+      },
+      {
+        "v": {
+          "counts": [
+            120,
+            120
+          ],
+          "samePTSAndSize": true,
+          "equalHashes": 39
+        },
+        "a": {
+          "counts": [
+            188,
+            188
+          ],
+          "samePTSAndSize": true,
+          "equalHashes": 188
+        }
+      }
+    ]
+  }
+}

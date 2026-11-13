@@ -1,0 +1,24 @@
+{
+  "name": "@scarlet/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Scarlet for macOS and Windows with an embedded renderer, engine sidecar, and local agent host.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "watch": "tauri dev",
+    "bundle": "tauri build",
+    "bundle:debug": "tauri build --debug",
+    "ffmpeg": "node scripts/fetch-ffmpeg.mjs",
+    "build": "node -e \"console.log(\\\"@scarlet/desktop: skipped in pnpm -r build; run pnpm desktop:build for the Tauri bundle\\\")\"",
+    "test": "node -e \"console.log(\\\"@scarlet/desktop: Rust tests run via pnpm desktop:test (cargo test)\\\")\"",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "typecheck": "node -e \"process.exit(0)\"",
+    "demo": "tauri dev --config src-tauri/tauri.demo.conf.json"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4"
+  }
+}

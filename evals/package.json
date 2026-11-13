@@ -1,0 +1,14 @@
+{
+  "name": "@scarlet/evals",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Offline evaluation of Scarlet's AI first cut. Not a workspace package: run with the root tsx/vitest binaries.",
+  "type": "module",
+  "scripts": {
+    "test": "../node_modules/.bin/vitest run --config vitest.config.ts",
+    "typecheck": "../node_modules/.bin/tsc -p tsconfig.json",
+    "dataset": "../node_modules/.bin/tsx src/dataset.ts",
+    "run": "../node_modules/.bin/tsx src/run.ts",
+    "replay": "../node_modules/.bin/tsx src/replay.ts"
+  }
+}

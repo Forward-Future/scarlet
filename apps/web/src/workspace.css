@@ -1,0 +1,336 @@
+.edit-workspace {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+.workspace-stage {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--color-bg);
+}
+/* While the update shows at the window's top right, the player starts lower, so the two never touch. */
+:root:has(.update-corner) .workspace-stage { padding-top: 18px; }
+.cut-preview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0 clamp(16px, 2vw, 28px) 16px;
+  background: var(--color-bg);
+  overflow: auto;
+}
+/* The simple view drops the heading row, so give the player the same room on top as below. */
+.simple-stage .cut-preview { padding-top: 16px; }
+/* Ambient light: the footage's own colours glow softly into the dark round the player and under the timeline. The canvas
+   holds a coarse, blurred copy of the picture where it sits on screen. The monitor and the timeline's panel are a little
+   see-through so it shows behind them, and unlit they look as they did. */
+.cut-preview { position: relative; isolation: isolate; }
+.ambient-light { position: absolute; inset: 0; z-index: -1; width: 100%; height: 100%; pointer-events: none;
+  filter: saturate(1.4) brightness(.8); opacity: 0; transition: opacity .6s ease; }
+.ambient-light[data-lit="true"] { opacity: .8; }
+.cut-preview .watch-monitor { background: rgb(0 0 0 / 50%); }
+.cut-preview .timeline-panel { background: rgb(26 25 24 / 82%); }
+@media (prefers-reduced-transparency: reduce) { .ambient-light { display: none; } }
+.cut-preview[data-expanded="true"] { position: fixed; inset: 0; z-index: 45; }
+.cut-preview:fullscreen { width: 100%; height: 100%; }
+.cut-transport { flex: none; width: 100%; min-width: 0; margin-top: 8px; }
+.thread-review-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.thread-review-tools .edit-card-before { margin-left: auto; }
+.timeline-edit-description { flex: 1 1 16rem; min-width: 0; margin: 0; overflow-wrap: anywhere; line-height: 1.4; }
+.workspace-rail {
+  display: flex;
+  flex-direction: column;
+  width: clamp(280px, 24vw, 350px);
+  flex: none;
+  min-height: 0;
+  border-left: 1px solid var(--color-line);
+  background: var(--color-panel);
+}
+/* Keep the conversation and its composer together while the history scrolls. */
+.requests-panel { position: relative; border-left: 0; border-right: 1px solid var(--color-line); }
+.chat-divider { position: absolute; inset-block: 0; right: -5px; width: 10px; touch-action: none; user-select: none; cursor: col-resize; z-index: 3; }
+.chat-divider::after { content: ""; position: absolute; inset-block: 0; left: 4px; width: 2px; }
+.chat-divider:is(:hover, :focus-visible, :active)::after { background: var(--color-muted); }
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .working-text {
+    background: linear-gradient(90deg, var(--color-muted) calc(50% - 5ch), var(--color-fg) 50%, var(--color-muted) calc(50% + 5ch)) 100% 0 / calc(200% + 12ch) 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: working-text-sweep 2s linear infinite;
+  }
+  @keyframes working-text-sweep { to { background-position: 0% 0; } }
+}
+.activity-progress { display: block; appearance: none; width: 100%; height: 3px; margin-top: 6px; border: 0; border-radius: 2px; overflow: hidden; background: var(--color-raised); }
+.activity-progress::-webkit-progress-bar { background: var(--color-raised); }
+.activity-progress::-webkit-progress-value { background: var(--color-muted); border-radius: 2px; }
+.activity-progress:indeterminate {
+  background: linear-gradient(90deg, var(--color-raised) 35%, var(--color-muted) 50%, var(--color-raised) 65%) 50% / 220% 100%;
+}
+.activity-progress:indeterminate::-webkit-progress-bar { background: transparent; }
+@media (prefers-reduced-motion: no-preference) {
+  .activity-progress:indeterminate { animation: scan-pending 1.6s ease-in-out infinite alternate; }
+  @keyframes scan-pending { from { background-position: 100%; } to { background-position: 0%; } }
+}
+.composer-dock { --model-row-gap: 9px; flex: none; padding: 12px; border-top: 1px solid var(--color-line); }
+.composer-input { position: relative; --text-inset: 10px; display: grid; grid-template-columns: minmax(0,1fr); gap: var(--model-row-gap); width: 100%; min-width: 0; }
+.composer-context-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.composer-context-row:not(:has(.composer-scope, .composer-model > *)), .composer-model:empty { display: none; }
+.composer-scope { display: inline-flex; min-width: 0; max-width: 100%; align-items: center; gap: 5px; margin: 2px 0; padding: 2px 6px; border-radius: 4px; background: var(--color-raised); color: var(--color-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.composer-scope > svg { flex: none; }
+.composer-target-clear { flex: none; padding: 3px; }
+.composer-target-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-scope:hover { color: var(--color-fg); }
+/* What the message revises, as a tag inside the box before the text. Its × makes the message a new edit. */
+.composer-tag { flex: none; align-self: center; display: inline-flex; align-items: center; gap: 3px; max-width: 55%; margin-right: 4px; padding: 0 2px 0 7px;
+  border: 1px solid var(--color-line); border-radius: 4px; font-size: 11.5px; line-height: 20px; color: var(--color-muted); white-space: nowrap; }
+.composer-tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.composer-tag-clear { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--color-dim); cursor: pointer; }
+.composer-tag-clear:hover:not(:disabled) { background: var(--color-raised); color: var(--color-fg); }
+.composer-tag-clear:disabled { opacity: .5; cursor: default; }
+.composer-tag-clear:focus-visible { outline-offset: 1px; }
+.composer-edit-here { flex: none; align-self: center; padding: 4px; color: var(--color-muted); font-size: 12px; white-space: nowrap; text-decoration: underline; text-underline-offset: 3px; }
+.composer-edit-here:hover { color: var(--color-fg); }
+.composer-skills { position: absolute; z-index: 5; inset: auto 0 calc(100% + 6px); padding: 5px; border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-panel); box-shadow: 0 6px 20px #0005; }
+.composer-skill-list { overflow-y: auto; max-height: min(16rem, 32vh); }
+.composer-skill-list button { display: block; width: 100%; padding: 5px 8px; border-radius: 5px; text-align: left; }
+.composer-skills [role="option"]:is([aria-selected="true"], :hover) { background: var(--color-raised); }
+.composer-skill-footer { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--color-line); }
+.composer-skill-footer button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 5px 8px; border-radius: 5px; font-weight: 500; }
+.composer-box {
+  grid-column: 1 / -1;
+  padding: 4px 6px 4px var(--text-inset);
+  border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-bg);
+}
+.composer-box.first-edit-hint {
+  border-color: color-mix(in srgb, var(--color-accent-soft) 45%, var(--color-line));
+  box-shadow: 0 0 10px 2px var(--color-accent-dim);
+}
+.composer-box:focus-within { border-color: var(--color-muted); }
+.composer-model { display: flex; justify-content: flex-end; margin-left: auto; min-width: 0; max-width: min(50%, 16rem); }
+.composer-model > div { position: static; display: flex; min-width: 0; }
+.composer-model [aria-haspopup="dialog"] { max-width: 100%; }
+.composer-model [role="dialog"] { left: auto; right: 0; max-width: 100%; }
+.composer-model [aria-haspopup="dialog"] { min-width: 0; min-height: 30px; padding: 2px 6px; border-color: transparent; }
+.composer-model [aria-haspopup="dialog"]:hover { border-color: var(--color-line); }
+.composer-row { display: flex; align-items: flex-end; gap: 5px; }
+/* The hidden text sizes the field as its value or available width changes. */
+.composer-message { position: relative; flex: 1; min-width: 0; max-height: min(10rem, 26vh); overflow: hidden; }
+.composer-message > * { display: block; padding: 6px 0; font: 14px/20px var(--font-sans); white-space: pre-wrap; overflow-wrap: anywhere; }
+.composer-message > span { visibility: hidden; }
+.composer-message > textarea { position: absolute; inset: 0; width: 100%; height: 100%; resize: none; border: 0; outline: none; background: transparent; overflow-y: auto; }
+.composer-send { width: 30px; padding: 0; border-radius: 50%; }
+.composer-send svg { transform: rotate(-90deg); }
+@media (max-width: 767px) {
+  .edit-workspace { flex-direction: column; }
+  .workspace-rail { width: 100%; border-left: 0; }
+  .requests-panel { order: 1; max-height: 55%; border-right: 0; }
+  .requests-panel .composer-dock { --model-row-gap: 7px; padding: 7px 8px; }
+  .cut-preview { padding: 0 12px 12px; }
+  .cut-transport { margin-top: 8px; }
+}
+
+.monitor-playback { position: absolute; bottom: 10px; left: 10px; display: flex; flex-wrap: wrap; align-items: center; max-width: calc(100% - 20px); gap: 2px; padding: 1px 9px 1px 2px; border-radius: 7px; background: rgb(16 16 16 / 86%); }
+.monitor-clock { color: #b6b3ac; font: 11px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.monitor-clock strong { font-weight: 500; color: #f4f0e8; }
+.watch-viewport { container-type: size; flex: 1; min-height: 135px; display: grid; place-items: center; grid-template: 100% / 100%; }
+.watch-monitor { position: relative; width: min(100%, calc(100cqh * var(--picture-aspect))); aspect-ratio: var(--picture-aspect); }
+.watch-monitor, .clip-monitor > div:first-child { container-type: size; }
+.video-surface { position: absolute; inset: 0; display: grid; place-items: center; grid-template: 100% / 100%; }
+.video-frame { position: relative; width: min(100%, calc(100cqh * var(--picture-aspect))); aspect-ratio: var(--picture-aspect); }
+@container (max-width: 280px) {
+  .watch-monitor .monitor-controls { top: 6px; bottom: auto; right: 6px; }
+  .watch-monitor .monitor-playback { left: 6px; bottom: 6px; max-width: calc(100% - 12px); }
+  .watch-monitor .monitor-clock { white-space: normal; }
+}
+.scrub-preview { width: max(96px, var(--scrub-picture-width)); }
+.scrub-preview :is(video, img) { width: var(--scrub-picture-width); }
+@media (hover: hover) {
+  .watch-monitor { border-color: transparent; }
+  .video-frame[data-picture]::after {
+    content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+    border: 1px solid rgb(255 255 255 / 22%); opacity: 0; transition: opacity .15s ease;
+  }
+  .video-frame:hover::after { opacity: 1; }
+  .watch-monitor :is(.monitor-playback, .monitor-controls) { opacity: 0; transition: opacity .3s ease 1.2s; }
+  .watch-monitor:hover :is(.monitor-playback, .monitor-controls),
+  .watch-monitor:has(:focus-visible, [aria-expanded="true"]) :is(.monitor-playback, .monitor-controls) { opacity: 1; transition-duration: .15s; transition-delay: 0s; }
+  /* While the picture loads, the play button turning is the one sign of it: the playback controls show until it is in. */
+  .watch-monitor .monitor-playback[data-loading] { opacity: 1; transition-duration: .15s; transition-delay: 0s; }
+}
+.timeline-panel { --timeline-tools-space: 32px; position: relative; width: 100%; min-width: 0; padding: 0 11px 11px; border: 1px solid #383735; border-radius: 9px; background: #1a1918; }
+.timeline-track { --ruler-height: 30px; --lane-height: clamp(78px, 9.8vh, 96px); --wave-height: calc(var(--lane-height) * .3); position: relative; }
+.timeline-slider { position: relative; height: calc(var(--ruler-height) + var(--lane-height)); border-radius: 4px; cursor: ew-resize; touch-action: none; user-select: none; -webkit-user-select: none; }
+.timeline-ruler { position: absolute; inset: 0 0 auto; height: calc(var(--ruler-height) - 4px); overflow: hidden; pointer-events: none; }
+.timeline-ruler > span { position: absolute; bottom: 0; width: 1px; }
+.ruler-major { height: 6px; background: #87847f; }
+.ruler-minor { height: 2px; background: #65615d; }
+.ruler-major > span { position: absolute; left: 3px; bottom: 9px; color: #aaa69e; font: 11px/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.timeline-lanes {
+  position: absolute; inset: var(--ruler-height) 0 0; display: flex; flex-direction: column; overflow: hidden;
+  border-radius: inherit; background: #2d2b28; pointer-events: none;
+}
+.timeline-media { display: flex; flex-direction: column; width: 100%; height: 100%; transform-origin: left center; }
+.timeline-media + .timeline-media { position:absolute; inset:0; }
+.timeline-filmstrip { flex: 1 1 auto; min-height: 0; display: grid; grid-auto-flow: column; grid-template-rows: minmax(0, 1fr); grid-auto-columns: minmax(0, 1fr); overflow: hidden; }
+.timeline-waveform { flex: 0 0 var(--wave-height); min-height: 0; width: 100%; color: #e1d9c5; background: #35332e; border-top: 1px solid #292824; }
+.timeline-waveform > svg { display: block; }
+.timeline-waveform.is-loading { background-image: linear-gradient(rgb(225 217 197 / 15%), rgb(225 217 197 / 15%)); background-size: 100% 1px; background-position: center; background-repeat: no-repeat; }
+.waveform-ripple {
+  height: 100%; opacity: .37;
+  background: repeating-linear-gradient(90deg, currentColor 0 1.5px, transparent 1.5px 5px);
+  mask-image: radial-gradient(ellipse 32% 22% at 42% 50%, #000 50%, transparent),
+              radial-gradient(ellipse 18% 14% at 80% 50%, #000 40%, transparent);
+  mask-size: 50% 100%;
+  mask-repeat: repeat-x;
+}
+/* While the picture loads, its frame slots wait under the same two glows as the ripple, stretched to the lane's height
+   and started at the same point (--wave-phase), so one wave crosses both lanes whichever finishes first. */
+.timeline-filmstrip { position: relative; }
+.filmstrip-wait {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: 0; transition: opacity .3s ease;
+  background: repeating-linear-gradient(90deg, var(--color-raised) 0 calc(100% / var(--frames, 1) - 1px), transparent 0 calc(100% / var(--frames, 1)));
+}
+.filmstrip-wait > i {
+  position: absolute; inset: 0; background: rgb(225 217 197 / 12%);
+  mask-image: radial-gradient(ellipse 32% 120% at 42% 100%, #000 30%, transparent),
+              radial-gradient(ellipse 18% 100% at 80% 100%, #000 20%, transparent);
+  mask-size: 50% 100%;
+  mask-repeat: repeat-x;
+}
+.timeline-filmstrip.is-loading .filmstrip-wait { opacity: 1; transition: opacity .22s ease-out .15s; }
+@starting-style { .timeline-filmstrip.is-loading .filmstrip-wait { opacity: 0; } }
+@media (prefers-reduced-motion: no-preference) {
+  .waveform-ripple { animation: waveform-appear .22s ease-out .15s backwards, waveform-travel 4.8s linear var(--wave-phase, 0s) infinite; }
+  .timeline-filmstrip.is-loading .filmstrip-wait > i { animation: waveform-travel 4.8s linear var(--wave-phase, 0s) infinite; }
+  /* After a wait the bars grow out of the line the ripple ran along. */
+  .timeline-waveform > svg.is-arriving { transform-origin: center; animation: waveform-grow .32s cubic-bezier(.2, .7, .3, 1); }
+  /* After a wait the stills fade in from left to right. */
+  .timeline-filmstrip.is-arriving img { transition-delay: calc(var(--at, 0) * 280ms); }
+}
+@keyframes waveform-appear { from { opacity: 0; } }
+@keyframes waveform-grow { from { transform: scaleY(.15); opacity: .35; } }
+/* A half-width tile advances exactly one repeat so the ripple loops without a jump. */
+@keyframes waveform-travel { from { mask-position: 0% center; } to { mask-position: 100% center; } }
+/* The zoom control sits quietly at the ruler's right end, centred in its strip, like the card's small icons. The ruler
+   fades out under it so no tick or label runs beneath the icon. */
+.timeline-view-controls { position: absolute; top: 2px; right: 7px; z-index: 12; color: #eceae5; }
+.timeline-view-trigger { display: grid; place-items: center; width: 24px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--color-dim); cursor: pointer; transition: background-color .12s, color .12s; }
+.timeline-view-trigger:hover, .timeline-view-trigger[aria-expanded="true"] { background: var(--color-raised); color: var(--color-fg); }
+.timeline-view-trigger:focus-visible { outline-offset: -2px; }
+.timeline-panel:has(> .timeline-view-controls) .timeline-ruler { mask-image: linear-gradient(to left, transparent 22px, #000 38px); }
+.timeline-tools { position: absolute; right: 0; bottom: calc(100% + 6px); width: 178px; padding: 5px 7px; border: 1px solid #53534e; border-radius: 7px; background: #262625; box-shadow: 0 3px 10px #0007; font-size: 12px; }
+.timeline-tools::after { content: ""; position: absolute; bottom: -4px; right: 8px; width: 6px; height: 6px; transform: rotate(45deg); background: inherit; border-right: 1px solid #53534e; border-bottom: 1px solid #53534e; }
+.timeline-zoom-row { display: flex; align-items: center; gap: 2px; }
+.timeline-tools button { min-height: 24px; border-radius: 4px; }
+.timeline-tools button:enabled:hover { background: #44443e; }
+.timeline-tools button:disabled { color: #97958f; }
+.timeline-zoom-step { width: 27px; background: #343432; font-size: 16px; line-height: 1; }
+.timeline-zoom-level { min-width: 33px; text-align: center; font: 11px var(--font-mono); }
+.timeline-fit { margin-left: auto; padding: 0 8px; border: 1px solid #53534e; }
+.timeline-markers { position: absolute; inset: 16px 0 auto; height: 14px; pointer-events: none; }
+.timeline-marker { position: absolute; top: 0; width: 16px; height: 14px; transform: translateX(-50%); display: grid; place-items: center; pointer-events: auto; }
+.timeline-marker::after { content: ""; width: 6px; height: 6px; transform: rotate(45deg); border-radius: 1px; background: #e99884; box-shadow: 0 0 0 1px #252321; }
+.timeline-marker:hover::after, .timeline-marker:focus-visible::after { background: #ffd4c9; }
+.timeline-marker-tip { position: absolute; bottom: 100%; z-index: 5; width: fit-content; max-height: 9rem; overflow: auto; pointer-events: auto; padding: 7px 9px; background: var(--color-panel); color: var(--color-fg); border: 1px solid var(--color-line); border-radius: 5px; box-shadow: 0 2px 8px #0005; }
+.timeline-marker-note { max-width: 16rem; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.timeline-marker-note + .timeline-marker-note { margin-top: 6px; }
+.timeline-marker-note > span { display: flex; align-items: center; gap: 4px; color: var(--color-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.timeline-filmstrip > div { min-width: 0; overflow: hidden; background: var(--color-raised); }
+.timeline-filmstrip img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.timeline-filmstrip img[hidden] { display: none; }
+/* A picture fades in once it has loaded instead of popping in, and once the whole lane has, unless it waited too long. */
+.timeline-filmstrip img { position: relative; opacity: 0; transition: opacity .25s ease; }
+.timeline-sheet-cell { display: flex; align-items: center; justify-content: center; container-type: size; }
+.timeline-sheet-cell > span { flex: none; position: relative; overflow: hidden; }
+.timeline-sheet-cell img { position: absolute; top: 0; max-width: none; object-fit: fill; }
+.timeline-filmstrip:not(.is-loading) img[data-loaded] { opacity: 1; }
+.timeline-playhead-time {
+  position: absolute; top: 1px; padding: 1px 4px; border-radius: 3px; background: #f4f1e9; color: #1a1918;
+  font: 11px/14px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
+}
+.timeline-playhead {
+  position: absolute; z-index: 1; inset-block: calc(var(--ruler-height) - 6px) -2px; width: 1.5px; transform: translateX(-50%); pointer-events: none;
+  background: #f4f1e9; box-shadow: 0 0 0 .5px rgb(0 0 0 / 45%); border-radius: 1px;
+}
+/* A jump glides: the playhead and its time slide to the new place (GLIDE_MS in TimelineScrubber). */
+.timeline-playhead.is-gliding, .timeline-playhead-time.is-gliding { transition: left .26s cubic-bezier(.3, .7, .3, 1), transform .26s cubic-bezier(.3, .7, .3, 1); }
+.timeline-playhead::before {
+  content: ""; position: absolute; left: 50%; top: -5px; transform: translateX(-50%);
+  width: 9px; height: 9px; background: #f4f1e9; clip-path: polygon(0 0, 100% 0, 100% 54%, 50% 100%, 0 54%);
+}
+.edit-card-icon { display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none;
+  color: var(--color-dim); cursor: pointer; }
+.edit-card-icon:enabled:hover { background: var(--color-raised); color: var(--color-fg); }
+.edit-card-icon[aria-expanded="true"], .edit-card-icon[aria-pressed="true"] { background: var(--color-raised); color: var(--color-fg); }
+.edit-card-icon:disabled { opacity: .35; cursor: default; }
+.edit-card-icon:focus-visible { outline-offset: -2px; }
+.edit-card-before[aria-pressed="true"], .edit-card-before[aria-pressed="true"]:enabled:hover { background: var(--color-hi); color: var(--color-bg); }
+.edit-card-before.is-flash { box-shadow: 0 0 0 2px rgba(244, 241, 233, .22); }
+@media (prefers-reduced-motion: no-preference) {
+  .edit-card-before.is-flash { animation: before-toggle-flash 1.6s ease-out; }
+}
+@keyframes before-toggle-flash {
+  0%, 35% { box-shadow: 0 0 0 3px rgba(244, 241, 233, .4), 0 0 16px rgba(244, 241, 233, .3); }
+  100% { box-shadow: 0 0 0 2px rgba(244, 241, 233, .22), 0 0 16px rgba(244, 241, 233, 0); }
+}
+
+/* Review one proposal in the conversation, alongside its replies. */
+.thread-decision { display: grid; justify-items: start; gap: 8px; min-width: 0; }
+.review-tools, .review-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.review-tools { font-size: 12px; color: var(--color-muted); }
+.review-tools { font-variant-numeric: tabular-nums; }
+.review-tool { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; }
+.review-tool:hover { color: var(--color-fg); }
+.review-tools .btn-icon { width: 26px; height: 26px; }
+.review-copy { display: grid; gap: 5px; }
+.review-copy h2 { font-size: 14px; font-weight: 600; }
+.review-passage { border-left: 2px solid var(--color-line); padding-left: 9px; color: var(--color-muted); }
+.review-voice { margin-right: 5px; font-size: 11px; white-space: nowrap; }
+/* A staged cut's words, struck through between the kept words either side. */
+.review-struck .review-kept { color: var(--color-dim); }
+.review-removed { color: var(--color-fg); text-decoration: line-through; text-decoration-color: var(--color-bad); text-decoration-thickness: 1.5px; }
+.other-takes { display: grid; gap: 2px; color: var(--color-muted); }
+.other-takes-head { font-size: 11.5px; color: var(--color-dim); }
+.other-takes ul { display: grid; gap: 2px; }
+.other-takes li { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.other-take-time { font: 11px var(--font-mono); color: var(--color-dim); font-variant-numeric: tabular-nums; text-align: left; }
+button.other-take-time:hover, button.other-take-time:focus-visible { color: var(--color-fg); }
+.other-take-text { overflow-wrap: anywhere; }
+.review-actions { gap: 6px; }
+.review-scheduled { display: inline-grid; align-items: center; padding: 6px 12px; border-radius: 8px; font-size: 13px; color: var(--color-ok); background: transparent; }
+.review-scheduled > span { grid-area: 1 / 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+/* Both labels share one cell, so the button keeps the width of the longer one and doesn't jump on hover. */
+.review-scheduled-cancel { visibility: hidden; color: var(--color-fg); }
+.review-scheduled:is(:hover, :focus-visible):not(:disabled) { background: color-mix(in srgb, currentColor 10%, transparent); }
+.review-scheduled:is(:hover, :focus-visible):not(:disabled) .review-scheduled-state { visibility: hidden; }
+.review-scheduled:is(:hover, :focus-visible):not(:disabled) .review-scheduled-cancel { visibility: visible; }
+
+.reading-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 12px 16px; border-bottom: 1px solid var(--color-line); }
+.reading-title { min-width: 0; flex: 1 1 145px; }
+.reading-title h2 { margin: 0; font-size: 14px; font-weight: 650; line-height: 1.4; }
+.reading-title > span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--color-muted); font-size: 11px; }
+.reading-tools, .reading-keys { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.reading-window, .reading-time { color: var(--color-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.reading-keys { padding: 7px 16px; border-bottom: 1px solid var(--color-line); gap: 12px; font-size: 11px; color: var(--color-muted); }
+.reading-keys kbd { color: var(--color-fg); }
+.reading-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 clamp(14px, 3%, 24px) 20px; }
+.reading-turn { max-width: 70ch; padding: 13px 0 14px; margin-inline: auto; }
+.reading-turn-head { display: flex; align-items: center; gap: 12px; margin-bottom: 5px; }
+.reading-speaker { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 650; color: var(--color-fg); }
+.reading-speaker[data-known="false"] { color: var(--color-muted); font-weight: 450; }
+.reading-speaker i { width: 6px; height: 6px; border-radius: 50%; background: #9eb6ca; }
+.reading-speaker i[data-tone="2"] { background: #c6ac92; }
+.reading-speaker i[data-tone="3"] { background: #aaa1bd; }
+.reading-speaker i[data-tone="host"], .reading-speaker i[data-tone="0"] { background: #9db9aa; }
+.reading-speaker i[data-tone="unknown"] { background: transparent; border: 1px solid var(--color-dim); }
+.reading-time { margin-left: auto; padding: 1px 3px; font-family: var(--font-mono, monospace); border-radius: 3px; }
+.reading-time:only-child { margin-left: 0; }
+.reading-time:hover, .reading-time:focus-visible { color: var(--color-fg); background: var(--color-raised); }
+.reading-passage { margin: 0; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.reading-passage + .reading-passage { margin-top: 7px; }
+
+.review-actions button[data-key]::after { content: attr(data-key); font-size: 10px; opacity: .65; }

@@ -1,0 +1,43 @@
+{
+  "name": "@scarlet/server",
+  "version": "0.1.0",
+  "description": "Scarlet desktop engine: project store, change queue, render workers, and review API.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "scarlet-server": "./dist/cli.js",
+    "scarlet-engine": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/cli.ts",
+    "watch": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "prebuild": "node scripts/gen-skills.mjs",
+    "build:sea": "node scripts/build-sea.mjs"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.0",
+    "@remix-run/multipart-parser": "1.1.0",
+    "@scarlet/agent": "workspace:*",
+    "@scarlet/mcp": "workspace:*",
+    "@scarlet/render": "workspace:*",
+    "@scarlet/shared": "workspace:*",
+    "@scarlet/timeline": "workspace:*",
+    "hono": "^4.9.0",
+    "ipaddr.js": "^2.5.0",
+    "onnxruntime-node": "1.22.0",
+    "sherpa-onnx-node": "2.0.1",
+    "ws": "^8.18.0",
+    "zod": "4.6.6"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "@types/ws": "^8.18.0",
+    "esbuild": "^0.28.0",
+    "postject": "^1.0.0-alpha.6"
+  }
+}

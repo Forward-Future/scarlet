@@ -1,0 +1,30 @@
+{
+  "name": "@scarlet/render",
+  "version": "0.1.0",
+  "description": "ffmpeg-based renderer for Scarlet cut lists: probe, proxies, waveforms, segment and full renders.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "watch": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ozymandiasthegreat/vad": "2.0.7",
+    "@scarlet/timeline": "workspace:*",
+    "zod": "4.6.6"
+  }
+}

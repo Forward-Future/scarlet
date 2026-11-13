@@ -1,0 +1,26 @@
+{
+  "name": "@scarlet/agent",
+  "version": "0.1.0",
+  "description": "Scarlet local agent host: detects installed AI CLIs (Claude Code, Codex, Gemini) and runs Scarlet tasks through them headlessly.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": { "scarlet-agent": "./dist/cli.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/cli.ts",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@scarlet/mcp": "workspace:*",
+    "@scarlet/shared": "workspace:*",
+    "@scarlet/timeline": "workspace:*",
+    "ws": "^8.18.0",
+    "zod": "4.6.6"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.0"
+  }
+}

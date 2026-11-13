@@ -1,0 +1,83 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Scarlet",
+  "version": "0.1.0",
+  "identifier": "com.forwardfuture.scarlet",
+  "build": {
+    "beforeDevCommand": "pnpm --filter @scarlet/web run dev:renderer",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBundleCommand": "node scripts/fetch-ffmpeg.mjs --verify-only",
+    "beforeBuildCommand": "node scripts/build-whisper.mjs && node scripts/build-speaker-gpu.mjs && pnpm --filter @scarlet/web build",
+    "frontendDist": "../../web/dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Scarlet",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1100,
+        "minHeight": 700,
+        "center": true,
+        "resizable": true,
+        "theme": "Dark",
+        "backgroundColor": "#101010",
+        "visible": true,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": false,
+    "category": "Video",
+    "shortDescription": "Single-user AI video editor",
+    "longDescription": "Scarlet: your AI agent edits the cut list, Scarlet renders change clips, you review.",
+    "copyright": "MIT. Forward Future.",
+    "publisher": "Forward Future",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/scarlet-engine",
+      "binaries/ffmpeg",
+      "binaries/ffprobe",
+      "binaries/whisper-cli"
+    ],
+    "resources": {
+      "licenses/": "licenses/",
+      "binaries/uhm-runtime/": "uhm-runtime/",
+      "binaries/speaker-runtime/": "speaker-runtime/",
+      "../../../integrations/transcription/crisperwhisper/install.py": "crisperwhisper-setup/install.py",
+      "../../../integrations/transcription/crisperwhisper/crisper_cli.py": "crisperwhisper-setup/crisper_cli.py",
+      "../../../integrations/transcription/crisperwhisper/checkpoint.json": "crisperwhisper-setup/checkpoint.json",
+      "../../../integrations/transcription/crisperwhisper/requirements.txt": "crisperwhisper-setup/requirements.txt"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "macOS": {
+      "files": { "Resources/Credits.rtf": "Credits.rtf" },
+      "minimumSystemVersion": "13.0",
+      "signingIdentity": "-",
+      "hardenedRuntime": true,
+      "entitlements": "Entitlements.plist"
+    }
+  },
+  "plugins": {}
+}

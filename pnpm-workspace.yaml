@@ -1,0 +1,13 @@
+packages:
+  - packages/*
+  - apps/*
+
+# Scarlet's stored schemas use the v3 API. Apply the collection limits to that compatibility entry too.
+patchedDependencies:
+  zod@4.6.6: packages/shared/patches/zod@4.6.6.patch
+
+allowBuilds:
+  onnxruntime-node: false # CPU binaries are included in the package.
+  better-sqlite3: true
+  esbuild: true
+  "@parcel/watcher": true

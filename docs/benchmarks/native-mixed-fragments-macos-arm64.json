@@ -1,0 +1,2111 @@
+{
+  "method": "Prepared means the last prior independent sample covered the target, or its project already had a finished preview file. A join is prepared only if the primer and the frames on both sides of the boundary were prepared. Play uses the actual button timestamp. Before-primer uses play time minus observed primer duration and a 50ms guard. Cache sampling is approximately once per second. CPU is an OS process sample. Ordinals follow the native measurement order.",
+  "before": {
+    "samples": 74,
+    "wallSeconds": 84.6,
+    "sourceClaimedSamples": 74,
+    "sourceProgressStartEnd": [
+      0,
+      0.05347177512265699
+    ],
+    "fullRenderRunningSamples": 36,
+    "lastPublishedCutSeconds": 59.86,
+    "windows": 5,
+    "windowsBracketed": 5,
+    "windowsWithContinuousSourceClaim": 5,
+    "medianFFmpegProcesses": 4.0,
+    "medianSampledFFmpegCpuPercent": 905.5,
+    "samplesWithSourceProxyProcess": 73,
+    "samplesWithSegmentProcess": 71
+  },
+  "after": {
+    "samples": 65,
+    "wallSeconds": 75.7,
+    "sourceClaimedSamples": 65,
+    "sourceProgressStartEnd": [
+      0,
+      0.04324314513287828
+    ],
+    "fullRenderRunningSamples": 33,
+    "lastPublishedCutSeconds": 59.86,
+    "windows": 5,
+    "windowsBracketed": 5,
+    "windowsWithContinuousSourceClaim": 5,
+    "medianFFmpegProcesses": 4,
+    "medianSampledFFmpegCpuPercent": 914,
+    "samplesWithSourceProxyProcess": 64,
+    "samplesWithSegmentProcess": 62
+  },
+  "scrub": {
+    "cohorts": {},
+    "stateByScheduleOrdinal": []
+  },
+  "cutsAtPlay": {
+    "cohorts": {
+      "cold-cold": {
+        "attempts": 5,
+        "before": {
+          "playToFirst": {
+            "completed": 5,
+            "censored": 0,
+            "completedMedianMs": 5645.0
+          },
+          "primer": {
+            "completed": 5,
+            "censored": 0,
+            "completedMedianMs": 1976
+          },
+          "finished": 0,
+          "consecutiveCrossings": 2,
+          "qualityWindows": 5,
+          "dropped": 10,
+          "totalFrames": 267
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 5,
+            "censored": 0,
+            "completedMedianMs": 3366
+          },
+          "primer": {
+            "completed": 5,
+            "censored": 0,
+            "completedMedianMs": 3284
+          },
+          "finished": 4,
+          "consecutiveCrossings": 3,
+          "qualityWindows": 5,
+          "dropped": 6,
+          "totalFrames": 321
+        }
+      }
+    },
+    "stateByScheduleOrdinal": [
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold"
+    ]
+  },
+  "cutsBeforePrimerApprox": {
+    "cohorts": {
+      "cold-cold": {
+        "attempts": 5,
+        "before": {
+          "playToFirst": {
+            "completed": 5,
+            "censored": 0,
+            "completedMedianMs": 5645.0
+          },
+          "primer": {
+            "completed": 5,
+            "censored": 0,
+            "completedMedianMs": 1976
+          },
+          "finished": 0,
+          "consecutiveCrossings": 2,
+          "qualityWindows": 5,
+          "dropped": 10,
+          "totalFrames": 267
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 5,
+            "censored": 0,
+            "completedMedianMs": 3366
+          },
+          "primer": {
+            "completed": 5,
+            "censored": 0,
+            "completedMedianMs": 3284
+          },
+          "finished": 4,
+          "consecutiveCrossings": 3,
+          "qualityWindows": 5,
+          "dropped": 6,
+          "totalFrames": 321
+        }
+      }
+    },
+    "stateByScheduleOrdinal": [
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold"
+    ]
+  },
+  "cutsAtRecordedPrimer": {
+    "cohorts": {
+      "cold-cold": {
+        "attempts": 5,
+        "before": {
+          "playToFirst": {
+            "completed": 5,
+            "censored": 0,
+            "completedMedianMs": 5645.0
+          },
+          "primer": {
+            "completed": 5,
+            "censored": 0,
+            "completedMedianMs": 1976
+          },
+          "finished": 0,
+          "consecutiveCrossings": 2,
+          "qualityWindows": 5,
+          "dropped": 10,
+          "totalFrames": 267
+        },
+        "after": {
+          "playToFirst": {
+            "completed": 5,
+            "censored": 0,
+            "completedMedianMs": 3366
+          },
+          "primer": {
+            "completed": 5,
+            "censored": 0,
+            "completedMedianMs": 3284
+          },
+          "finished": 4,
+          "consecutiveCrossings": 3,
+          "qualityWindows": 5,
+          "dropped": 6,
+          "totalFrames": 321
+        }
+      }
+    },
+    "stateByScheduleOrdinal": [
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold",
+      "cold-cold"
+    ]
+  },
+  "pressureAtRecordedPrimer": {
+    "before": [
+      {
+        "sources": [
+          {
+            "state": "ready",
+            "progress": null
+          },
+          {
+            "state": "caching",
+            "progress": 0.014500983341874312
+          },
+          {
+            "state": "caching",
+            "progress": 0.014692151994770742
+          }
+        ],
+        "claimed": true,
+        "fullEdit": "running",
+        "publishedSeconds": 22.188833333333335,
+        "ffmpegProcessCount": 4
+      },
+      {
+        "sources": [
+          {
+            "state": "ready",
+            "progress": null
+          },
+          {
+            "state": "caching",
+            "progress": 0.022718528037331518
+          },
+          {
+            "state": "caching",
+            "progress": 0.025013244256644585
+          }
+        ],
+        "claimed": true,
+        "fullEdit": "queued",
+        "publishedSeconds": 25.4921333333333,
+        "ffmpegProcessCount": 4
+      },
+      {
+        "sources": [
+          {
+            "state": "ready",
+            "progress": null
+          },
+          {
+            "state": "caching",
+            "progress": 0.030098922394961123
+          },
+          {
+            "state": "caching",
+            "progress": 0.03462187324586867
+          }
+        ],
+        "claimed": true,
+        "fullEdit": "queued",
+        "publishedSeconds": 32.49913333333302,
+        "ffmpegProcessCount": 4
+      },
+      {
+        "sources": [
+          {
+            "state": "ready",
+            "progress": null
+          },
+          {
+            "state": "caching",
+            "progress": 0.0348716417546022
+          },
+          {
+            "state": "caching",
+            "progress": 0.03984981461753349
+          }
+        ],
+        "claimed": true,
+        "fullEdit": "queued",
+        "publishedSeconds": 32.49913333333302,
+        "ffmpegProcessCount": 4
+      },
+      {
+        "sources": [
+          {
+            "state": "ready",
+            "progress": null
+          },
+          {
+            "state": "caching",
+            "progress": 0.04325276745442641
+          },
+          {
+            "state": "caching",
+            "progress": 0.04728254148069748
+          }
+        ],
+        "claimed": true,
+        "fullEdit": "queued",
+        "publishedSeconds": 47.84779999999978,
+        "ffmpegProcessCount": 4
+      }
+    ],
+    "after": [
+      {
+        "sources": [
+          {
+            "state": "uncached",
+            "progress": null
+          },
+          {
+            "state": "caching",
+            "progress": 0
+          },
+          {
+            "state": "uncached",
+            "progress": null
+          }
+        ],
+        "claimed": true,
+        "fullEdit": "running",
+        "publishedSeconds": null,
+        "ffmpegProcessCount": 2
+      },
+      {
+        "sources": [
+          {
+            "state": "ready",
+            "progress": null
+          },
+          {
+            "state": "caching",
+            "progress": 0.007187946004106013
+          },
+          {
+            "state": "caching",
+            "progress": 0.005584173200355029
+          }
+        ],
+        "claimed": true,
+        "fullEdit": "queued",
+        "publishedSeconds": 3.303299999999922,
+        "ffmpegProcessCount": 4
+      },
+      {
+        "sources": [
+          {
+            "state": "ready",
+            "progress": null
+          },
+          {
+            "state": "caching",
+            "progress": 0.01125822877725795
+          },
+          {
+            "state": "caching",
+            "progress": 0.01229480871384157
+          }
+        ],
+        "claimed": true,
+        "fullEdit": "queued",
+        "publishedSeconds": 10.31029999999987,
+        "ffmpegProcessCount": 4
+      },
+      {
+        "sources": [
+          {
+            "state": "ready",
+            "progress": null
+          },
+          {
+            "state": "caching",
+            "progress": 0.017301106981770564
+          },
+          {
+            "state": "caching",
+            "progress": 0.018716607687457126
+          }
+        ],
+        "claimed": true,
+        "fullEdit": "queued",
+        "publishedSeconds": 18.251566666666577,
+        "ffmpegProcessCount": 4
+      },
+      {
+        "sources": [
+          {
+            "state": "ready",
+            "progress": null
+          },
+          {
+            "state": "caching",
+            "progress": 0.023238138591845207
+          },
+          {
+            "state": "caching",
+            "progress": 0.0259664049344015
+          }
+        ],
+        "claimed": true,
+        "fullEdit": "queued",
+        "publishedSeconds": 25.65896666666663,
+        "ffmpegProcessCount": 4
+      }
+    ]
+  },
+  "decodedOutputChecks": {
+    "description": "Rendered every corresponding completed native playback fragment to the same interleaved PCM representation and compared the complete byte stream and sample-PTS intervals. The FLAC playback path contains the encoded AAC edit audio resampled to S16. A separate graph probe compares the uncompressed original-picture/float-audio inputs before the lossy encoder.",
+    "finishedFilesInBothArms": 10,
+    "finishedFilesWithIdenticalFullPCMAndClocks": 10,
+    "completedFragmentAndTimingByOrdinal": [
+      {
+        "ordinal": 1,
+        "primerFragmentMatches": true,
+        "postBoundaryFragmentMatches": false,
+        "beforePrimerMs": 3086,
+        "afterPrimerMs": 3284,
+        "beforePlayToFirstMs": 5254,
+        "afterPlayToFirstMs": 3828
+      },
+      {
+        "ordinal": 2,
+        "primerFragmentMatches": true,
+        "postBoundaryFragmentMatches": true,
+        "beforePrimerMs": 1591,
+        "afterPrimerMs": 3206,
+        "beforePlayToFirstMs": 5721,
+        "afterPlayToFirstMs": 3366
+      },
+      {
+        "ordinal": 3,
+        "primerFragmentMatches": true,
+        "postBoundaryFragmentMatches": true,
+        "beforePrimerMs": 2175,
+        "afterPrimerMs": 4334,
+        "beforePlayToFirstMs": 8535,
+        "afterPlayToFirstMs": 3218
+      },
+      {
+        "ordinal": 4,
+        "primerFragmentMatches": true,
+        "postBoundaryFragmentMatches": true,
+        "beforePrimerMs": 1976,
+        "afterPrimerMs": 3445,
+        "beforePlayToFirstMs": 5645,
+        "afterPlayToFirstMs": 3397
+      },
+      {
+        "ordinal": 5,
+        "primerFragmentMatches": true,
+        "postBoundaryFragmentMatches": true,
+        "beforePrimerMs": 1693,
+        "afterPrimerMs": 2833,
+        "beforePlayToFirstMs": 3950,
+        "afterPlayToFirstMs": 2383
+      }
+    ],
+    "firstExactPrimerRange": {
+      "frames": 99,
+      "sampleClock": [
+        [
+          0,
+          158558
+        ]
+      ],
+      "floatBytesPerArm": 1268464,
+      "ordinaryMixedOrdinaryFloatAndPictureEqual": true,
+      "rawS16HarnessPacketCounts": [
+        230,
+        243,
+        246
+      ],
+      "rawS16HarnessClocksEqual": true,
+      "directS16Diagnostic": [
+        {
+          "comparison": "unchanged-ordinary-repeat",
+          "changedValues": 270,
+          "interleavedValues": 317116,
+          "maxAbsoluteDifferenceS16": 1
+        },
+        {
+          "comparison": "ordinary-to-mixed",
+          "changedValues": 566,
+          "interleavedValues": 317116,
+          "maxAbsoluteDifferenceS16": 1
+        }
+      ],
+      "note": "The optional direct float-to-S16 test harness differs at one bit with the unchanged engine as well as across arms. The original F32 mix sent to the native AAC encoder is identical in all three controls."
+    },
+    "exactRangeValidation": [
+      {
+        "ordinal": 1,
+        "window": "left",
+        "decodedFrames": 99,
+        "decodedStereoSamples": 158558,
+        "presentationTimebase": "16333/31328032",
+        "audioTimebase": "1/48000",
+        "identicalFullFloatPCMRawPicturesAndPTS": true
+      },
+      {
+        "ordinal": 1,
+        "window": "right",
+        "decodedFrames": 113,
+        "decodedStereoSamples": 180981,
+        "presentationTimebase": "16333/31328032",
+        "audioTimebase": "1/48000",
+        "identicalFullFloatPCMRawPicturesAndPTS": true
+      }
+    ]
+  },
+  "pausedScrubGuard": {
+    "method": "Matched randomized native paused seeks. Camera opens are counted in the actual foreground range graph, independent of measured timings. Repeated means at least two separate FFmpeg input seeks to the same 4K camera. Pixel or callback favors an independently captured matching picture if present, otherwise uses an exact native video callback. Quantiles are nearest-rank p95 and median of observed values.",
+    "pressure": {
+      "ordinary": {
+        "samples": 120,
+        "wallSeconds": 143.1,
+        "sourceClaimedSamples": 120,
+        "sourceProgressStartEnd": [
+          0,
+          0.06920442792708226
+        ],
+        "fullRenderRunningSamples": 120,
+        "lastPublishedCutSeconds": 136.07,
+        "windows": 40,
+        "windowsBracketed": 40,
+        "windowsWithContinuousSourceClaim": 40,
+        "medianFFmpegProcesses": 6.0,
+        "medianSampledFFmpegCpuPercent": 845.0,
+        "samplesWithSourceProxyProcess": 119,
+        "samplesWithSegmentProcess": 119
+      },
+      "mixed": {
+        "samples": 121,
+        "wallSeconds": 144.8,
+        "sourceClaimedSamples": 121,
+        "sourceProgressStartEnd": [
+          0,
+          0.06210308358593381
+        ],
+        "fullRenderRunningSamples": 121,
+        "lastPublishedCutSeconds": 136.07,
+        "windows": 40,
+        "windowsBracketed": 40,
+        "windowsWithContinuousSourceClaim": 40,
+        "medianFFmpegProcesses": 6,
+        "medianSampledFFmpegCpuPercent": 884,
+        "samplesWithSourceProxyProcess": 120,
+        "samplesWithSegmentProcess": 120
+      }
+    },
+    "groups": {
+      "all": {
+        "all": {
+          "n": 40,
+          "cacheTransitions": {
+            "cold-cold": 39,
+            "prepared-prepared": 1
+          },
+          "nativeElapsed": {
+            "ordinary": {
+              "n": 40,
+              "p50": 2337.0,
+              "p95": 5063
+            },
+            "mixed": {
+              "n": 40,
+              "p50": 3131.0,
+              "p95": 4894.0
+            }
+          },
+          "pixelOrCallback": {
+            "ordinary": {
+              "n": 38,
+              "p50": 2358.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 38,
+              "p50": 3140.8,
+              "p95": 5846.6
+            }
+          },
+          "pairedNativeVerified": {
+            "ordinary": {
+              "n": 38,
+              "p50": 2358.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 38,
+              "p50": 3140.8,
+              "p95": 5846.6
+            }
+          },
+          "pairedPixelMatched": {
+            "ordinary": {
+              "n": 37,
+              "p50": 2381.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 37,
+              "p50": 3154.5,
+              "p95": 5846.6
+            }
+          },
+          "pixelMatches": {
+            "ordinary": {
+              "n": 37,
+              "p50": 2381.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 37,
+              "p50": 3154.5,
+              "p95": 5846.6
+            }
+          },
+          "pairedFasterCount": 11,
+          "endpointCounts": {
+            "ordinary": {
+              "videoCallback": 1,
+              "stillPaintEstimate": 39
+            },
+            "mixed": {
+              "videoCallback": 1,
+              "stillPaintEstimate": 39
+            }
+          }
+        },
+        "bothCold": {
+          "n": 39,
+          "cacheTransitions": {
+            "cold-cold": 39
+          },
+          "nativeElapsed": {
+            "ordinary": {
+              "n": 39,
+              "p50": 2367,
+              "p95": 5256
+            },
+            "mixed": {
+              "n": 39,
+              "p50": 3142.0,
+              "p95": 5840
+            }
+          },
+          "pixelOrCallback": {
+            "ordinary": {
+              "n": 37,
+              "p50": 2381.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 37,
+              "p50": 3154.5,
+              "p95": 5846.6
+            }
+          },
+          "pairedNativeVerified": {
+            "ordinary": {
+              "n": 37,
+              "p50": 2381.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 37,
+              "p50": 3154.5,
+              "p95": 5846.6
+            }
+          },
+          "pairedPixelMatched": {
+            "ordinary": {
+              "n": 37,
+              "p50": 2381.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 37,
+              "p50": 3154.5,
+              "p95": 5846.6
+            }
+          },
+          "pixelMatches": {
+            "ordinary": {
+              "n": 37,
+              "p50": 2381.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 37,
+              "p50": 3154.5,
+              "p95": 5846.6
+            }
+          },
+          "pairedFasterCount": 11,
+          "endpointCounts": {
+            "ordinary": {
+              "stillPaintEstimate": 39
+            },
+            "mixed": {
+              "stillPaintEstimate": 39
+            }
+          }
+        },
+        "bothPrepared": {
+          "n": 1,
+          "cacheTransitions": {
+            "prepared-prepared": 1
+          },
+          "nativeElapsed": {
+            "ordinary": {
+              "n": 1,
+              "p50": 119,
+              "p95": 119
+            },
+            "mixed": {
+              "n": 1,
+              "p50": 167,
+              "p95": 167
+            }
+          },
+          "pixelOrCallback": {
+            "ordinary": {
+              "n": 1,
+              "p50": 119,
+              "p95": 119
+            },
+            "mixed": {
+              "n": 1,
+              "p50": 167,
+              "p95": 167
+            }
+          },
+          "pairedNativeVerified": {
+            "ordinary": {
+              "n": 1,
+              "p50": 119,
+              "p95": 119
+            },
+            "mixed": {
+              "n": 1,
+              "p50": 167,
+              "p95": 167
+            }
+          },
+          "pairedPixelMatched": {
+            "ordinary": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            },
+            "mixed": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "pixelMatches": {
+            "ordinary": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            },
+            "mixed": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "pairedFasterCount": 0,
+          "endpointCounts": {
+            "ordinary": {
+              "videoCallback": 1
+            },
+            "mixed": {
+              "videoCallback": 1
+            }
+          }
+        }
+      },
+      "single": {
+        "all": {
+          "n": 35,
+          "cacheTransitions": {
+            "cold-cold": 35
+          },
+          "nativeElapsed": {
+            "ordinary": {
+              "n": 35,
+              "p50": 2692,
+              "p95": 5256
+            },
+            "mixed": {
+              "n": 35,
+              "p50": 3333,
+              "p95": 5840
+            }
+          },
+          "pixelOrCallback": {
+            "ordinary": {
+              "n": 34,
+              "p50": 2702.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 34,
+              "p50": 3256.9,
+              "p95": 5846.6
+            }
+          },
+          "pairedNativeVerified": {
+            "ordinary": {
+              "n": 34,
+              "p50": 2702.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 34,
+              "p50": 3256.9,
+              "p95": 5846.6
+            }
+          },
+          "pairedPixelMatched": {
+            "ordinary": {
+              "n": 34,
+              "p50": 2702.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 34,
+              "p50": 3256.9,
+              "p95": 5846.6
+            }
+          },
+          "pixelMatches": {
+            "ordinary": {
+              "n": 34,
+              "p50": 2702.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 34,
+              "p50": 3256.9,
+              "p95": 5846.6
+            }
+          },
+          "pairedFasterCount": 11,
+          "endpointCounts": {
+            "ordinary": {
+              "stillPaintEstimate": 35
+            },
+            "mixed": {
+              "stillPaintEstimate": 35
+            }
+          }
+        },
+        "bothCold": {
+          "n": 35,
+          "cacheTransitions": {
+            "cold-cold": 35
+          },
+          "nativeElapsed": {
+            "ordinary": {
+              "n": 35,
+              "p50": 2692,
+              "p95": 5256
+            },
+            "mixed": {
+              "n": 35,
+              "p50": 3333,
+              "p95": 5840
+            }
+          },
+          "pixelOrCallback": {
+            "ordinary": {
+              "n": 34,
+              "p50": 2702.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 34,
+              "p50": 3256.9,
+              "p95": 5846.6
+            }
+          },
+          "pairedNativeVerified": {
+            "ordinary": {
+              "n": 34,
+              "p50": 2702.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 34,
+              "p50": 3256.9,
+              "p95": 5846.6
+            }
+          },
+          "pairedPixelMatched": {
+            "ordinary": {
+              "n": 34,
+              "p50": 2702.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 34,
+              "p50": 3256.9,
+              "p95": 5846.6
+            }
+          },
+          "pixelMatches": {
+            "ordinary": {
+              "n": 34,
+              "p50": 2702.2,
+              "p95": 5285.9
+            },
+            "mixed": {
+              "n": 34,
+              "p50": 3256.9,
+              "p95": 5846.6
+            }
+          },
+          "pairedFasterCount": 11,
+          "endpointCounts": {
+            "ordinary": {
+              "stillPaintEstimate": 35
+            },
+            "mixed": {
+              "stillPaintEstimate": 35
+            }
+          }
+        },
+        "bothPrepared": {
+          "n": 0,
+          "cacheTransitions": {},
+          "nativeElapsed": {
+            "ordinary": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            },
+            "mixed": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "pixelOrCallback": {
+            "ordinary": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            },
+            "mixed": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "pairedNativeVerified": {
+            "ordinary": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            },
+            "mixed": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "pairedPixelMatched": {
+            "ordinary": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            },
+            "mixed": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "pixelMatches": {
+            "ordinary": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            },
+            "mixed": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "pairedFasterCount": 0,
+          "endpointCounts": {
+            "ordinary": {},
+            "mixed": {}
+          }
+        }
+      },
+      "repeated": {
+        "all": {
+          "n": 5,
+          "cacheTransitions": {
+            "cold-cold": 4,
+            "prepared-prepared": 1
+          },
+          "nativeElapsed": {
+            "ordinary": {
+              "n": 5,
+              "p50": 1873.0,
+              "p95": 2367
+            },
+            "mixed": {
+              "n": 5,
+              "p50": 3105,
+              "p95": 4274
+            }
+          },
+          "pixelOrCallback": {
+            "ordinary": {
+              "n": 4,
+              "p50": 1383.9,
+              "p95": 2381.2
+            },
+            "mixed": {
+              "n": 4,
+              "p50": 1888.9,
+              "p95": 4311.2
+            }
+          },
+          "pairedNativeVerified": {
+            "ordinary": {
+              "n": 4,
+              "p50": 1383.9,
+              "p95": 2381.2
+            },
+            "mixed": {
+              "n": 4,
+              "p50": 1888.9,
+              "p95": 4311.2
+            }
+          },
+          "pairedPixelMatched": {
+            "ordinary": {
+              "n": 3,
+              "p50": 2127.2,
+              "p95": 2381.2
+            },
+            "mixed": {
+              "n": 3,
+              "p50": 3127.0,
+              "p95": 4311.2
+            }
+          },
+          "pixelMatches": {
+            "ordinary": {
+              "n": 3,
+              "p50": 2127.2,
+              "p95": 2381.2
+            },
+            "mixed": {
+              "n": 3,
+              "p50": 3127.0,
+              "p95": 4311.2
+            }
+          },
+          "pairedFasterCount": 0,
+          "endpointCounts": {
+            "ordinary": {
+              "videoCallback": 1,
+              "stillPaintEstimate": 4
+            },
+            "mixed": {
+              "videoCallback": 1,
+              "stillPaintEstimate": 4
+            }
+          }
+        },
+        "bothCold": {
+          "n": 4,
+          "cacheTransitions": {
+            "cold-cold": 4
+          },
+          "nativeElapsed": {
+            "ordinary": {
+              "n": 4,
+              "p50": 1986.5,
+              "p95": 2367
+            },
+            "mixed": {
+              "n": 4,
+              "p50": 3123.5,
+              "p95": 4274
+            }
+          },
+          "pixelOrCallback": {
+            "ordinary": {
+              "n": 3,
+              "p50": 2127.2,
+              "p95": 2381.2
+            },
+            "mixed": {
+              "n": 3,
+              "p50": 3127.0,
+              "p95": 4311.2
+            }
+          },
+          "pairedNativeVerified": {
+            "ordinary": {
+              "n": 3,
+              "p50": 2127.2,
+              "p95": 2381.2
+            },
+            "mixed": {
+              "n": 3,
+              "p50": 3127.0,
+              "p95": 4311.2
+            }
+          },
+          "pairedPixelMatched": {
+            "ordinary": {
+              "n": 3,
+              "p50": 2127.2,
+              "p95": 2381.2
+            },
+            "mixed": {
+              "n": 3,
+              "p50": 3127.0,
+              "p95": 4311.2
+            }
+          },
+          "pixelMatches": {
+            "ordinary": {
+              "n": 3,
+              "p50": 2127.2,
+              "p95": 2381.2
+            },
+            "mixed": {
+              "n": 3,
+              "p50": 3127.0,
+              "p95": 4311.2
+            }
+          },
+          "pairedFasterCount": 0,
+          "endpointCounts": {
+            "ordinary": {
+              "stillPaintEstimate": 4
+            },
+            "mixed": {
+              "stillPaintEstimate": 4
+            }
+          }
+        },
+        "bothPrepared": {
+          "n": 1,
+          "cacheTransitions": {
+            "prepared-prepared": 1
+          },
+          "nativeElapsed": {
+            "ordinary": {
+              "n": 1,
+              "p50": 119,
+              "p95": 119
+            },
+            "mixed": {
+              "n": 1,
+              "p50": 167,
+              "p95": 167
+            }
+          },
+          "pixelOrCallback": {
+            "ordinary": {
+              "n": 1,
+              "p50": 119,
+              "p95": 119
+            },
+            "mixed": {
+              "n": 1,
+              "p50": 167,
+              "p95": 167
+            }
+          },
+          "pairedNativeVerified": {
+            "ordinary": {
+              "n": 1,
+              "p50": 119,
+              "p95": 119
+            },
+            "mixed": {
+              "n": 1,
+              "p50": 167,
+              "p95": 167
+            }
+          },
+          "pairedPixelMatched": {
+            "ordinary": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            },
+            "mixed": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "pixelMatches": {
+            "ordinary": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            },
+            "mixed": {
+              "n": 0,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "pairedFasterCount": 0,
+          "endpointCounts": {
+            "ordinary": {
+              "videoCallback": 1
+            },
+            "mixed": {
+              "videoCallback": 1
+            }
+          }
+        }
+      }
+    },
+    "pairedByOrdinal": [
+      {
+        "ordinal": 1,
+        "nativeGraphInputs": 4,
+        "cameraOpens": 1,
+        "distinctCameras": 1,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 628,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 640.5,
+          "pixelsMs": 640.5,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 1359.0000000000018,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 1369.1,
+          "pixelsMs": 1369.1,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 2,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 3725,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3754.5,
+          "pixelsMs": 3754.5,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 3530.999999999998,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3545.6,
+          "pixelsMs": 3545.6,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 3,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 1870,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 1890.1,
+          "pixelsMs": 1890.1,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 2573,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2591.9,
+          "pixelsMs": 2591.9,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 4,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 2295,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2326.4,
+          "pixelsMs": 2326.4,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 3438,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3461.0,
+          "pixelsMs": 3461.0,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 5,
+        "nativeGraphInputs": 7,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 3594,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3604.6,
+          "pixelsMs": 3604.6,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 3905,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3948.5,
+          "pixelsMs": 3948.5,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 6,
+        "nativeGraphInputs": 6,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 1542,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 1564.7,
+          "pixelsMs": 1564.7,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 2365.9999999999964,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2398.9,
+          "pixelsMs": 2398.9,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 7,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 2692,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2721.8,
+          "pixelsMs": 2721.8,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 2895,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2914.3,
+          "pixelsMs": 2914.3,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 8,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 3259,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3301.4,
+          "pixelsMs": 3301.4,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 4537,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 4579.9,
+          "pixelsMs": 4579.9,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 9,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 2239,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2275.9,
+          "pixelsMs": 2275.9,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 3635,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3650.5,
+          "pixelsMs": 3650.5,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 10,
+        "nativeGraphInputs": 4,
+        "cameraOpens": 1,
+        "distinctCameras": 1,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 641.9999999999927,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 667.8,
+          "pixelsMs": 667.8,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 827.0000000000073,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 861.2,
+          "pixelsMs": 861.2,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 11,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 2694,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2715.8,
+          "pixelsMs": 2715.8,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 2361,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2370.9,
+          "pixelsMs": 2370.9,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 12,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 2110.9999999999927,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2154.3,
+          "pixelsMs": 2154.3,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 3514.9999999999927,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3530.5,
+          "pixelsMs": 3530.5,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 13,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 5256,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 5285.9,
+          "pixelsMs": 5285.9,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 4894.000000000007,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 4911.1,
+          "pixelsMs": 4911.1,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 14,
+        "nativeGraphInputs": 9,
+        "cameraOpens": 4,
+        "distinctCameras": 2,
+        "group": "repeated",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 2367,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2381.2,
+          "pixelsMs": 2381.2,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 4274,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 4311.2,
+          "pixelsMs": 4311.2,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 15,
+        "nativeGraphInputs": 3,
+        "cameraOpens": 1,
+        "distinctCameras": 1,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 1915,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 1939.8,
+          "pixelsMs": 1939.8,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 1602,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 1642.0,
+          "pixelsMs": 1642.0,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 16,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 3584,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3612.6,
+          "pixelsMs": 3612.6,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 3714.9999999999927,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3746.2,
+          "pixelsMs": 3746.2,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 17,
+        "nativeGraphInputs": 9,
+        "cameraOpens": 4,
+        "distinctCameras": 2,
+        "group": "repeated",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 1873.0000000000073,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": null,
+          "pixelsMs": null,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 3141.9999999999854,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": null,
+          "pixelsMs": null,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 18,
+        "nativeGraphInputs": 9,
+        "cameraOpens": 3,
+        "distinctCameras": 2,
+        "group": "repeated",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 2100,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2127.2,
+          "pixelsMs": 2127.2,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 3105,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3127.0,
+          "pixelsMs": 3127.0,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 19,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 2125,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2169.6,
+          "pixelsMs": 2169.6,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 3685,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3716.1,
+          "pixelsMs": 3716.1,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 20,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 2175,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2191.9,
+          "pixelsMs": 2191.9,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 2340.9999999999854,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2361.3,
+          "pixelsMs": 2361.3,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 21,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 3825,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3848.4,
+          "pixelsMs": 3848.4,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 4667,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 4707.9,
+          "pixelsMs": 4707.9,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 22,
+        "nativeGraphInputs": 4,
+        "cameraOpens": 1,
+        "distinctCameras": 1,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 820,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 832.7,
+          "pixelsMs": 832.7,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 941.0000000000146,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 980.4,
+          "pixelsMs": 980.4,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 23,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 5063,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": null,
+          "pixelsMs": null,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 4656,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": null,
+          "pixelsMs": null,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 24,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 2307,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2335.3,
+          "pixelsMs": 2335.3,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 3120,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3154.5,
+          "pixelsMs": 3154.5,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 25,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 2925,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2944.4,
+          "pixelsMs": 2944.4,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 2419.9999999999854,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2464.4,
+          "pixelsMs": 2464.4,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 26,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 3787,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3823.4,
+          "pixelsMs": 3823.4,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 2523,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2559.6,
+          "pixelsMs": 2559.6,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 27,
+        "nativeGraphInputs": 7,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 2666.0000000000146,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2688.7,
+          "pixelsMs": 2688.7,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 3613,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3628.3,
+          "pixelsMs": 3628.3,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 28,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 4189,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 4221.9,
+          "pixelsMs": 4221.9,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 4038.0000000000146,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 4048.5,
+          "pixelsMs": 4048.5,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 29,
+        "nativeGraphInputs": 6,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 3339.9999999999854,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3376.3,
+          "pixelsMs": 3376.3,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 2815,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2855.7,
+          "pixelsMs": 2855.7,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 30,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 1812,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 1836.4,
+          "pixelsMs": 1836.4,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 4471.000000000015,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 4491.4,
+          "pixelsMs": 4491.4,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 31,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 3227,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3240.4,
+          "pixelsMs": 3240.4,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 2670,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2693.0,
+          "pixelsMs": 2693.0,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 32,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 2225,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2251.7,
+          "pixelsMs": 2251.7,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 2335,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2371.1,
+          "pixelsMs": 2371.1,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 33,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 1422,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 1437.7,
+          "pixelsMs": 1437.7,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 2315,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2360.0,
+          "pixelsMs": 2360.0,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 34,
+        "nativeGraphInputs": 9,
+        "cameraOpens": 4,
+        "distinctCameras": 2,
+        "group": "repeated",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 119,
+          "endpoint": "videoCallback",
+          "nativeMs": 119,
+          "pixelsMs": null,
+          "cache": "prepared"
+        },
+        "mixed": {
+          "elapsedMs": 167,
+          "endpoint": "videoCallback",
+          "nativeMs": 167,
+          "pixelsMs": null,
+          "cache": "prepared"
+        }
+      },
+      {
+        "ordinal": 35,
+        "nativeGraphInputs": 7,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 3485,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3508.9,
+          "pixelsMs": 3508.9,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 4694.000000000015,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 4711.3,
+          "pixelsMs": 4711.3,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 36,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 4374.000000000015,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 4396.0,
+          "pixelsMs": 4396.0,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 2061.9999999999854,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 2087.1,
+          "pixelsMs": 2087.1,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 37,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 4934,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 4971.8,
+          "pixelsMs": 4971.8,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 6805.999999999985,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 6823.0,
+          "pixelsMs": 6823.0,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 38,
+        "nativeGraphInputs": 6,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 1585,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 1611.4,
+          "pixelsMs": 1611.4,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 3333,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 3359.4,
+          "pixelsMs": 3359.4,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 39,
+        "nativeGraphInputs": 5,
+        "cameraOpens": 2,
+        "distinctCameras": 2,
+        "group": "single",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 5711,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 5756.2,
+          "pixelsMs": 5756.2,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 5840,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 5846.6,
+          "pixelsMs": 5846.6,
+          "cache": "cold"
+        }
+      },
+      {
+        "ordinal": 40,
+        "nativeGraphInputs": 7,
+        "cameraOpens": 2,
+        "distinctCameras": 1,
+        "group": "repeated",
+        "sameTargetFrame": true,
+        "ordinary": {
+          "elapsedMs": 614,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 640.7,
+          "pixelsMs": 640.7,
+          "cache": "cold"
+        },
+        "mixed": {
+          "elapsedMs": 632,
+          "endpoint": "stillPaintEstimate",
+          "nativeMs": 650.8,
+          "pixelsMs": 650.8,
+          "cache": "cold"
+        }
+      }
+    ],
+    "ordinaryWorstFive": [
+      39,
+      13,
+      23,
+      37,
+      36
+    ]
+  },
+  "shippingDecision": "Rejected after the general paused-seek median regressed. All native playback, cache pressure, and output comparisons here describe a private experiment."
+}

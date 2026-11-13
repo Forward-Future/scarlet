@@ -1,0 +1,2414 @@
+{
+  "platform": "macOS arm64, Apple M5 Max",
+  "unit": "ms",
+  "trials": {
+    "complexLoaded": {
+      "summary": {
+        "runs": [
+          {
+            "fps": 29.97002997002997,
+            "documentHidden": false,
+            "animationFrameP50Ms": 34,
+            "input": "native",
+            "driverInputFailures": 0,
+            "cacheSamples": 66,
+            "sourceCacheActiveSamples": 66,
+            "scrubs": {
+              "attempts": 64,
+              "timeouts": 4,
+              "p50Ms": 4765,
+              "p95Ms": {
+                "lowerBoundMs": 8738,
+                "upperBoundMs": null
+              },
+              "videoFrames": 17,
+              "observedAtCallback": 17,
+              "stillPaintEstimates": 43
+            },
+            "cuts": {
+              "attempts": 24,
+              "crossed": 20,
+              "observed": 16,
+              "unobserved": 8,
+              "observedExcessP50Ms": 0,
+              "observedExcessP95Ms": 0.6,
+              "overOneExtraFrame": 0
+            },
+            "playback": {
+              "started": 26,
+              "attempts": 26,
+              "playToFirstFrameP95Ms": 5423,
+              "worstObservedGapMs": 341,
+              "stationaryWaits": {
+                "count": 7,
+                "totalMs": 20204,
+                "maxMs": 4852,
+                "nearKnownCut": 3,
+                "openWaitEvents": 1,
+                "maxOpenWaitAgeMs": 1169
+              }
+            },
+            "cutWindowDrops": {
+              "validWindows": 24,
+              "finished": 17,
+              "attemptedWindows": 24,
+              "total": 1572,
+              "dropped": 27,
+              "droppedPercent": 1.718
+            },
+            "sustainedDrops": {
+              "validWindows": 2,
+              "finished": 2,
+              "attemptedWindows": 2,
+              "total": 798,
+              "dropped": 0,
+              "droppedPercent": 0
+            }
+          },
+          {
+            "fps": 29.97002997002997,
+            "documentHidden": false,
+            "animationFrameP50Ms": 33,
+            "input": "native",
+            "driverInputFailures": 0,
+            "cacheSamples": 66,
+            "sourceCacheActiveSamples": 66,
+            "scrubs": {
+              "attempts": 64,
+              "timeouts": 0,
+              "p50Ms": 2312,
+              "p95Ms": 4229,
+              "videoFrames": 5,
+              "observedAtCallback": 5,
+              "stillPaintEstimates": 59
+            },
+            "cuts": {
+              "attempts": 24,
+              "crossed": 19,
+              "observed": 11,
+              "unobserved": 13,
+              "observedExcessP50Ms": 0,
+              "observedExcessP95Ms": 0.6,
+              "overOneExtraFrame": 0
+            },
+            "playback": {
+              "started": 26,
+              "attempts": 26,
+              "playToFirstFrameP95Ms": 5637,
+              "worstObservedGapMs": 340,
+              "stationaryWaits": {
+                "count": 6,
+                "totalMs": 12065,
+                "maxMs": 2758,
+                "nearKnownCut": 0,
+                "openWaitEvents": 1,
+                "maxOpenWaitAgeMs": 222
+              }
+            },
+            "cutWindowDrops": {
+              "validWindows": 24,
+              "finished": 16,
+              "attemptedWindows": 24,
+              "total": 1736,
+              "dropped": 25,
+              "droppedPercent": 1.44
+            },
+            "sustainedDrops": {
+              "validWindows": 2,
+              "finished": 1,
+              "attemptedWindows": 2,
+              "total": 866,
+              "dropped": 0,
+              "droppedPercent": 0
+            }
+          }
+        ],
+        "slowestCompletedBaselineTargets": {
+          "baselineHadTimeouts": true,
+          "before": {
+            "attempts": 3,
+            "timeouts": 0,
+            "p50Ms": 10195,
+            "p95Ms": 10813,
+            "videoFrames": 1,
+            "observedAtCallback": 1,
+            "stillPaintEstimates": 2
+          },
+          "after": {
+            "attempts": 3,
+            "timeouts": 0,
+            "p50Ms": 2709,
+            "p95Ms": 3099,
+            "videoFrames": 0,
+            "observedAtCallback": 0,
+            "stillPaintEstimates": 3
+          }
+        },
+        "matchedDeadlines": [
+          {
+            "timeoutMs": 5500,
+            "before": {
+              "attempts": 16,
+              "timeouts": 4,
+              "p50Ms": 4732,
+              "p95Ms": {
+                "lowerBoundMs": 5500,
+                "upperBoundMs": null
+              },
+              "videoFrames": 1,
+              "observedAtCallback": 1,
+              "stillPaintEstimates": 11
+            },
+            "after": {
+              "attempts": 16,
+              "timeouts": 0,
+              "p50Ms": 2214,
+              "p95Ms": 4629,
+              "videoFrames": 1,
+              "observedAtCallback": 1,
+              "stillPaintEstimates": 15
+            }
+          },
+          {
+            "timeoutMs": 12000,
+            "before": {
+              "attempts": 48,
+              "timeouts": 0,
+              "p50Ms": 4765,
+              "p95Ms": 10111,
+              "videoFrames": 16,
+              "observedAtCallback": 16,
+              "stillPaintEstimates": 32
+            },
+            "after": {
+              "attempts": 48,
+              "timeouts": 0,
+              "p50Ms": 2312,
+              "p95Ms": 4229,
+              "videoFrames": 4,
+              "observedAtCallback": 4,
+              "stillPaintEstimates": 44
+            }
+          }
+        ],
+        "pairedDistinctPixels": {
+          "matched": 49,
+          "p50Ms": [4702.8, 2373.4],
+          "p95Ms": [7545.5, 4245.1]
+        }
+      },
+      "before": {
+        "scrubColumns": ["frame", "endpoint", "deadlineMs", "inputToFrameMs", "distinctWindowPixelMs", "decoderWidth", "targetBufferedAtReturn"],
+        "scrubs": [
+          [403, "stillPaintUpperBound", 5500, 5113, 5145.2, 640, false],
+          [30195, null, 5500, null, null, 640, false],
+          [8455, "stillPaintUpperBound", 5500, 5204, 5216.5, 640, false],
+          [38247, null, 5500, null, null, 640, false],
+          [16507, "stillPaintUpperBound", 5500, 3102, 3119.4, 640, false],
+          [46299, "stillPaintUpperBound", 5500, 4894, 4918.2, 640, false],
+          [24559, "stillPaintUpperBound", 5500, 3855, 3883.4, 640, false],
+          [2818, "stillPaintUpperBound", 5500, 5453, 5474.2, 640, false],
+          [32611, "stillPaintUpperBound", 5500, 4582, 4617.1, 640, false],
+          [10870, "stillPaintUpperBound", 5500, 2141, 2150.7, 640, false],
+          [40663, "stillPaintUpperBound", 5500, 4387, 4428.1, 640, false],
+          [18922, null, 5500, null, null, 640, false],
+          [48715, "stillPaintUpperBound", 5500, 4732, 4767.5, 640, false],
+          [26974, null, 5500, null, null, 640, false],
+          [5234, "stillPaintUpperBound", 5500, 4384, 4406.2, 640, false],
+          [35026, "videoCallback", 5500, 45, 34.0, 640, true],
+          [13286, "stillPaintUpperBound", 12000, 8738, 8753.3, 640, false],
+          [43078, "stillPaintUpperBound", 12000, 10813.00000000003, 10848.5, 640, false],
+          [21338, "stillPaintUpperBound", 12000, 5007, 5039.1, 640, false],
+          [51130, "stillPaintUpperBound", 12000, 3375, 3425.9, 640, false],
+          [29390, "stillPaintUpperBound", 12000, 6703, 6737.3, 640, false],
+          [7649, "stillPaintUpperBound", 12000, 4765, 4805.9, 640, false],
+          [37442, "stillPaintUpperBound", 12000, 3985.999999999971, 4012.1, 640, false],
+          [15701, "stillPaintUpperBound", 12000, 5845, 5875.3, 640, false],
+          [45494, "stillPaintUpperBound", 12000, 5695.000000000029, 5718.8, 640, false],
+          [23753, "stillPaintUpperBound", 12000, 4375, 4411.7, 640, false],
+          [2013, "videoCallback", 12000, 50, null, 640, true],
+          [31806, "stillPaintUpperBound", 12000, 4660, 4702.8, 640, false],
+          [10065, "stillPaintUpperBound", 12000, 2612, 2641.4, 640, false],
+          [39858, "stillPaintUpperBound", 12000, 6445.999999999971, null, 640, false],
+          [18117, "stillPaintUpperBound", 12000, 6945, 6974.7, 640, false],
+          [47910, "stillPaintUpperBound", 12000, 4651, 4690.5, 640, false],
+          [48278, "stillPaintUpperBound", 12000, 7164, 7196.5, 0, false],
+          [42776, "stillPaintUpperBound", 12000, 6538, 6567.5, 0, false],
+          [29007, "stillPaintUpperBound", 12000, 4755, 4793.2, 0, false],
+          [34706, "stillPaintUpperBound", 12000, 6417, 6452.6, 0, false],
+          [31336, "stillPaintUpperBound", 12000, 6446, 6465.1, 0, false],
+          [8731, "videoCallback", 12000, 95, 119.3, 640, true],
+          [10476, "videoCallback", 12000, 109, null, 640, true],
+          [36195, "videoCallback", 12000, 6735, null, 640, true],
+          [6844, "videoCallback", 12000, 75, 97.4, 640, true],
+          [36637, "stillPaintUpperBound", 12000, 6637, 6675.3, 640, false],
+          [14896, "videoCallback", 12000, 154, null, 640, true],
+          [44689, "stillPaintUpperBound", 12000, 7524.000000000015, 7545.5, 640, false],
+          [22948, "stillPaintUpperBound", 12000, 5189, 5223.7, 640, false],
+          [1208, "videoCallback", 12000, 76.00000000001455, 78.4, 640, true],
+          [31000, "stillPaintUpperBound", 12000, 2829, 2837.0, 640, false],
+          [9260, "videoCallback", 12000, 68, 81.5, 640, true],
+          [39052, "stillPaintUpperBound", 12000, 4667.000000000015, 4680.6, 640, false],
+          [17312, "videoCallback", 12000, 223, 211.8, 640, true],
+          [47104, "stillPaintUpperBound", 12000, 10111.000000000015, null, 640, true],
+          [25364, "stillPaintUpperBound", 12000, 6040, 6068.8, 640, false],
+          [3623, "videoCallback", 12000, 233, null, 640, true],
+          [33416, "videoCallback", 12000, 10195, null, 640, true],
+          [11675, "videoCallback", 12000, 160, 182.6, 640, true],
+          [41468, "stillPaintUpperBound", 12000, 4862.000000000015, 4881.8, 640, false],
+          [19727, "videoCallback", 12000, 96, 102.1, 640, true],
+          [49520, "stillPaintUpperBound", 12000, 5570, 5592.9, 640, false],
+          [27780, "stillPaintUpperBound", 12000, 4827, null, 640, false],
+          [6039, "videoCallback", 12000, 123, 102.0, 640, true],
+          [35832, "stillPaintUpperBound", 12000, 6818.999999999985, 6862.9, 640, false],
+          [14091, "videoCallback", 12000, 152.9999999999709, 133.8, 640, true],
+          [43884, "stillPaintUpperBound", 12000, 5219, 5239.7, 640, false],
+          [22143, "videoCallback", 12000, 158, 147.7, 640, true]
+        ],
+        "cuts": [
+          {
+            "cut": 1174.073,
+            "start": 1171.382,
+            "primerTimedOut": true,
+            "firstPlaybackFrameMs": 1695,
+            "observedFrames": 67,
+            "total": 32,
+            "dropped": 0,
+            "crossed": false,
+            "consecutive": false,
+            "worstFrameGapMs": 336,
+            "finished": false,
+            "events": [
+              ["waiting", 3, 1171.3819],
+              ["playing", 1687, 1171.3819],
+              ["waiting", 2496, 1171.8208],
+              ["waiting", 2690, 1171.8208],
+              ["stalled", 4956, 1171.8208],
+              ["playing", 6811, 1171.8208]
+            ]
+          },
+          {
+            "cut": 672.172,
+            "start": 669.48,
+            "primerMs": 3351,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 5423,
+            "observedFrames": 91,
+            "total": 14,
+            "dropped": 5,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 313.0,
+            "finished": false,
+            "events": [
+              ["waiting", 2, 669.4805],
+              ["playing", 5403, 669.4805]
+            ]
+          },
+          {
+            "cut": 1635.601,
+            "start": 1632.91,
+            "primerMs": 3026,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 5525,
+            "observedFrames": 89,
+            "total": 22,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 333,
+            "finished": false,
+            "events": [
+              ["waiting", 3, 1632.9096],
+              ["playing", 5508.0, 1632.9096]
+            ]
+          },
+          {
+            "cut": 1073.072,
+            "start": 1070.381,
+            "primerMs": 4694,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 1810.0,
+            "observedFrames": 95,
+            "total": 94,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": false,
+            "worstFrameGapMs": 308.0,
+            "finished": false,
+            "events": [
+              ["waiting", 3.0, 1070.381],
+              ["playing", 1773.0, 1070.381],
+              ["waiting", 4865.0, 1073.0807],
+              ["stalled", 5257.0, 1073.0807],
+              ["playing", 8234.0, 1073.0807]
+            ]
+          },
+          {
+            "cut": 456.456,
+            "start": 453.765,
+            "primerMs": 126,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 304.0,
+            "observedFrames": 98,
+            "total": 77,
+            "dropped": 4,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 34.0,
+            "finished": true,
+            "events": [
+              ["playing", 3, 453.765]
+            ]
+          },
+          {
+            "cut": 97.931,
+            "start": 95.24,
+            "primerMs": 108,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 253,
+            "observedFrames": 98,
+            "total": 76,
+            "dropped": 6,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 3, 95.2401]
+            ]
+          },
+          {
+            "cut": 1249.248,
+            "start": 1246.557,
+            "primerMs": 5444,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 1820,
+            "observedFrames": 99,
+            "total": 75,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 311,
+            "finished": true,
+            "events": [
+              ["waiting", 3, 1246.557],
+              ["playing", 1789, 1246.557]
+            ]
+          },
+          {
+            "cut": 144.144,
+            "start": 141.453,
+            "primerMs": 204,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 314,
+            "observedFrames": 98,
+            "total": 51,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 35.0,
+            "finished": true,
+            "events": [
+              ["playing", 3, 141.453]
+            ]
+          },
+          {
+            "cut": 888.888,
+            "start": 886.197,
+            "primerTimedOut": true,
+            "firstPlaybackFrameMs": 2366,
+            "observedFrames": 87,
+            "total": 93,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": false,
+            "worstFrameGapMs": 309,
+            "finished": true,
+            "events": [
+              ["waiting", 3, 886.197],
+              ["playing", 2328, 886.197],
+              ["waiting", 2328, 886.197],
+              ["playing", 2347, 886.197],
+              ["waiting", 3805, 887.3348],
+              ["playing", 5284.0, 887.3348]
+            ]
+          },
+          {
+            "cut": 68.702,
+            "start": 66.011,
+            "primerMs": 102,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 246.0,
+            "observedFrames": 88,
+            "total": 68,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 2.0, 66.0109]
+            ]
+          },
+          {
+            "cut": 1105.304,
+            "start": 1102.613,
+            "primerTimedOut": true,
+            "firstPlaybackFrameMs": 1796,
+            "observedFrames": 78,
+            "total": 87,
+            "dropped": 0,
+            "crossed": false,
+            "consecutive": false,
+            "worstFrameGapMs": 251,
+            "finished": false,
+            "events": [
+              ["waiting", 2, 1102.6132],
+              ["playing", 1759, 1102.6132],
+              ["waiting", 4625, 1105.1297],
+              ["stalled", 5236, 1105.1297],
+              ["playing", 8575, 1105.1297]
+            ]
+          },
+          {
+            "cut": 700.8,
+            "start": 698.109,
+            "primerMs": 104,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 334,
+            "observedFrames": 98,
+            "total": 71,
+            "dropped": 4,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 32,
+            "excessMs": 0,
+            "worstFrameGapMs": 35.0,
+            "finished": true,
+            "events": [
+              ["playing", 3, 698.1091]
+            ]
+          },
+          {
+            "cut": 1689.221,
+            "start": 1686.53,
+            "primerTimedOut": true,
+            "firstPlaybackFrameMs": 2911,
+            "observedFrames": 98,
+            "total": 47,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 337,
+            "finished": true,
+            "events": [
+              ["waiting", 3, 1686.5298],
+              ["playing", 2888, 1686.5298]
+            ]
+          },
+          {
+            "cut": 341.107,
+            "start": 338.416,
+            "primerMs": 139.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 319,
+            "observedFrames": 97,
+            "total": 77,
+            "dropped": 3,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 34.0,
+            "finished": true,
+            "events": [
+              ["playing", 3, 338.4164]
+            ]
+          },
+          {
+            "cut": 815.615,
+            "start": 812.924,
+            "primerMs": 145,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 242,
+            "observedFrames": 93,
+            "total": 85,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": false,
+            "worstFrameGapMs": 67.0,
+            "finished": true,
+            "events": [
+              ["playing", 3, 812.9238],
+              ["waiting", 3102, 815.7142],
+              ["stalled", 3331, 815.7142],
+              ["playing", 5335.0, 815.7142]
+            ]
+          },
+          {
+            "cut": 1174.04,
+            "start": 1171.349,
+            "primerMs": 112.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 297,
+            "observedFrames": 96,
+            "total": 107,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 3, 1171.3485],
+              ["stalled", 3275.0, 1174.3867]
+            ]
+          },
+          {
+            "cut": 282.816,
+            "start": 280.125,
+            "primerMs": 162,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 243,
+            "observedFrames": 86,
+            "total": 51,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": false,
+            "worstFrameGapMs": 203,
+            "finished": true,
+            "events": [
+              ["playing", 2.0, 280.1248],
+              ["waiting", 282, 280.1629],
+              ["playing", 288, 280.1629]
+            ]
+          },
+          {
+            "cut": 696.696,
+            "start": 694.005,
+            "primerMs": 125,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 275.0,
+            "observedFrames": 97,
+            "total": 57,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 3.0, 694.005]
+            ]
+          },
+          {
+            "cut": 1297.296,
+            "start": 1294.605,
+            "primerMs": 5007.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 2251,
+            "observedFrames": 37,
+            "total": 53,
+            "dropped": 0,
+            "crossed": false,
+            "consecutive": false,
+            "worstFrameGapMs": 310.0,
+            "finished": false,
+            "events": [
+              ["waiting", 3, 1294.605],
+              ["playing", 2210, 1294.605],
+              ["waiting", 2834, 1294.8591],
+              ["waiting", 3014.0, 1294.8591],
+              ["stalled", 5485, 1294.8591],
+              ["playing", 7686, 1294.8591]
+            ]
+          },
+          {
+            "cut": 944.243,
+            "start": 941.552,
+            "primerMs": 3341,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 4439,
+            "observedFrames": 81,
+            "total": 83,
+            "dropped": 0,
+            "crossed": false,
+            "consecutive": false,
+            "worstFrameGapMs": 308,
+            "finished": false,
+            "events": [
+              ["waiting", 2, 941.5523],
+              ["playing", 4412, 941.5523],
+              ["waiting", 7591, 944.3722],
+              ["stalled", 7680, 944.3722],
+              ["waiting", 7776, 944.3722]
+            ]
+          },
+          {
+            "cut": 1272.638,
+            "start": 1269.947,
+            "primerMs": 5094,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 3386,
+            "observedFrames": 92,
+            "total": 58,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 308,
+            "finished": true,
+            "events": [
+              ["waiting", 3, 1269.947],
+              ["playing", 3366, 1269.947]
+            ]
+          },
+          {
+            "cut": 576.576,
+            "start": 573.885,
+            "primerMs": 160.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 238,
+            "observedFrames": 97,
+            "total": 75,
+            "dropped": 5,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 2, 573.885]
+            ]
+          },
+          {
+            "cut": 213.78,
+            "start": 211.089,
+            "primerMs": 125,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 317,
+            "observedFrames": 95,
+            "total": 66,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 35.0,
+            "finished": true,
+            "events": [
+              ["playing", 3, 211.0892]
+            ]
+          },
+          {
+            "cut": 34.768,
+            "start": 32.077,
+            "primerMs": 150,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 238,
+            "observedFrames": 98,
+            "total": 53,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 35.0,
+            "finished": true,
+            "events": [
+              ["playing", 2, 32.077]
+            ]
+          }
+        ],
+        "sustained": [
+          {
+            "cut": 60.5,
+            "start": 57.803,
+            "primerMs": 3527.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 5104,
+            "observedFrames": 414,
+            "total": 366,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 341,
+            "finished": true,
+            "events": [
+              ["waiting", 2, 57.8027],
+              ["playing", 5077, 57.8027],
+              ["stalled", 8512, 60.9161],
+              ["stalled", 14112, 66.5167]
+            ]
+          },
+          {
+            "cut": 700.5,
+            "start": 697.809,
+            "primerMs": 111,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 285,
+            "observedFrames": 426,
+            "total": 432,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34.0,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 3, 697.8088],
+              ["stalled", 6213.0, 703.7792],
+              ["stalled", 10071, 707.6369],
+              ["stalled", 14275, 711.8412]
+            ]
+          }
+        ],
+        "pointer": "native",
+        "inputFailures": 0,
+        "cacheChecks": 66,
+        "checksWithActiveSource": 66,
+        "postStartStalls": [
+          {
+            "window": "cuts",
+            "target": 1174.0729000000001,
+            "media": 1171.820839383,
+            "durationMs": 4315,
+            "rightCensored": false,
+            "sameMediaOnResume": true,
+            "savedCutOffsetSeconds": -2.218693950333318,
+            "nativeSamples": 117,
+            "identicalNativePixels": true
+          },
+          {
+            "window": "cuts",
+            "target": 1073.0720000000001,
+            "media": 1073.080702008,
+            "durationMs": 3369.0,
+            "rightCensored": false,
+            "sameMediaOnResume": true,
+            "savedCutOffsetSeconds": 0.008702007999772832,
+            "nativeSamples": 89,
+            "identicalNativePixels": true
+          },
+          {
+            "window": "cuts",
+            "target": 888.888,
+            "media": 887.3348063,
+            "durationMs": 1479.000000000029,
+            "rightCensored": false,
+            "sameMediaOnResume": true,
+            "savedCutOffsetSeconds": -1.5531937000000653,
+            "nativeSamples": 34,
+            "identicalNativePixels": true
+          },
+          {
+            "window": "cuts",
+            "target": 1105.3042,
+            "media": 1105.12973926,
+            "durationMs": 3950,
+            "rightCensored": false,
+            "sameMediaOnResume": true,
+            "savedCutOffsetSeconds": 0.025739259999909336,
+            "nativeSamples": 107,
+            "identicalNativePixels": true
+          },
+          {
+            "window": "cuts",
+            "target": 815.6148000000001,
+            "media": 815.71419951,
+            "durationMs": 2233.000000000029,
+            "rightCensored": false,
+            "sameMediaOnResume": true,
+            "savedCutOffsetSeconds": 0.09939950999989833,
+            "nativeSamples": 56,
+            "identicalNativePixels": true
+          },
+          {
+            "window": "cuts",
+            "target": 282.8158666666667,
+            "media": 280.162933004,
+            "durationMs": 6,
+            "rightCensored": false,
+            "sameMediaOnResume": true,
+            "savedCutOffsetSeconds": -2.652933662666669,
+            "nativeSamples": 0,
+            "identicalNativePixels": false
+          },
+          {
+            "window": "cuts",
+            "target": 1297.296,
+            "media": 1294.859125008,
+            "durationMs": 4852,
+            "rightCensored": false,
+            "sameMediaOnResume": true,
+            "savedCutOffsetSeconds": -2.1699416586666302,
+            "nativeSamples": 135,
+            "identicalNativePixels": true
+          },
+          {
+            "window": "cuts",
+            "target": 944.2433,
+            "media": 944.372183675,
+            "durationMs": 1169.0000000000582,
+            "rightCensored": true,
+            "sameMediaOnResume": false,
+            "savedCutOffsetSeconds": 0.1288836749999973,
+            "nativeSamples": 26,
+            "identicalNativePixels": true
+          }
+        ]
+      },
+      "after": {
+        "scrubColumns": ["frame", "endpoint", "deadlineMs", "inputToFrameMs", "distinctWindowPixelMs", "decoderWidth", "targetBufferedAtReturn"],
+        "scrubs": [
+          [403, "stillPaintUpperBound", 5500, 3167, 3192.8, 640, false],
+          [30195, "stillPaintUpperBound", 5500, 4629, 4658.0, 640, false],
+          [8455, "stillPaintUpperBound", 5500, 2214, 2231.6, 640, false],
+          [38247, "stillPaintUpperBound", 5500, 1694, 1736.2, 640, false],
+          [16507, "stillPaintUpperBound", 5500, 2614, 2623.4, 640, false],
+          [46299, "stillPaintUpperBound", 5500, 3520, 3539.1, 640, false],
+          [24559, "stillPaintUpperBound", 5500, 1184.0000000000146, 1199.0, 640, false],
+          [2818, "stillPaintUpperBound", 5500, 2913, 2947.4, 640, false],
+          [32611, "stillPaintUpperBound", 5500, 2965, 3006.1, 640, false],
+          [10870, "stillPaintUpperBound", 5500, 745, 767.4, 640, false],
+          [40663, "stillPaintUpperBound", 5500, 2099, 2134.8, 640, false],
+          [18922, "stillPaintUpperBound", 5500, 3209, 3242.0, 640, false],
+          [48715, "stillPaintUpperBound", 5500, 2174.0000000000146, 2203.4, 640, false],
+          [26974, "stillPaintUpperBound", 5500, 1651, 1665.7, 640, false],
+          [5234, "stillPaintUpperBound", 5500, 2619, 2655.1, 640, false],
+          [35026, "videoCallback", 5500, 52, 41.8, 640, true],
+          [13286, "stillPaintUpperBound", 12000, 3576, 3616.4, 640, false],
+          [43078, "stillPaintUpperBound", 12000, 2232, 2248.8, 640, false],
+          [21338, "stillPaintUpperBound", 12000, 3259, 3268.2, 640, false],
+          [51130, "stillPaintUpperBound", 12000, 1262, 1277.3, 640, false],
+          [29390, "stillPaintUpperBound", 12000, 2311.999999999971, 2324.3, 640, false],
+          [7649, "stillPaintUpperBound", 12000, 1741, 1759.4, 640, false],
+          [37442, "stillPaintUpperBound", 12000, 2553, 2583.2, 640, false],
+          [15701, "stillPaintUpperBound", 12000, 2848, 2878.7, 640, false],
+          [45494, "stillPaintUpperBound", 12000, 4228.999999999971, 4245.1, 640, false],
+          [23753, "stillPaintUpperBound", 12000, 1724.000000000029, 1762.2, 640, false],
+          [2013, "videoCallback", 12000, 27, null, 640, true],
+          [31806, "stillPaintUpperBound", 12000, 2220, 2260.8, 640, false],
+          [10065, "stillPaintUpperBound", 12000, 1226.999999999971, 1241.1, 640, false],
+          [39858, "stillPaintUpperBound", 12000, 4211, null, 640, false],
+          [18117, "stillPaintUpperBound", 12000, 2362, 2373.4, 640, false],
+          [47910, "stillPaintUpperBound", 12000, 2229, 2244.3, 640, false],
+          [48278, "stillPaintUpperBound", 12000, 2340.999999999971, null, 640, false],
+          [42776, "stillPaintUpperBound", 12000, 3471, 3499.7, 640, false],
+          [29007, "stillPaintUpperBound", 12000, 2108, null, 640, false],
+          [34706, "stillPaintUpperBound", 12000, 3668, 3688.4, 640, false],
+          [31336, "stillPaintUpperBound", 12000, 2844, 2856.3, 640, false],
+          [8731, "stillPaintUpperBound", 12000, 1125, 1165.5, 640, false],
+          [10476, "stillPaintUpperBound", 12000, 523, null, 640, false],
+          [36195, "stillPaintUpperBound", 12000, 3137.999999999971, 3150.5, 640, false],
+          [6844, "stillPaintUpperBound", 12000, 4780, 4791.8, 640, false],
+          [36637, "stillPaintUpperBound", 12000, 3989, 4020.4, 640, false],
+          [14896, "stillPaintUpperBound", 12000, 1396, 1422.4, 640, false],
+          [44689, "stillPaintUpperBound", 12000, 3774, 3787.3, 640, false],
+          [22948, "stillPaintUpperBound", 12000, 1614, 1654.6, 640, false],
+          [1208, "videoCallback", 12000, 121.0000000000291, 110.4, 640, true],
+          [31000, "stillPaintUpperBound", 12000, 1545.999999999971, 1582.7, 640, false],
+          [9260, "stillPaintUpperBound", 12000, 703, 732.7, 640, false],
+          [39052, "stillPaintUpperBound", 12000, 2503, 2527.2, 640, false],
+          [17312, "stillPaintUpperBound", 12000, 2642, 2669.4, 640, false],
+          [47104, "stillPaintUpperBound", 12000, 3098.999999999971, 3126.6, 640, false],
+          [25364, "stillPaintUpperBound", 12000, 4271, 4295.3, 640, false],
+          [3623, "videoCallback", 12000, 110, null, 640, true],
+          [33416, "stillPaintUpperBound", 12000, 2709, 2745.1, 640, false],
+          [11675, "stillPaintUpperBound", 12000, 110, 149.1, 640, false],
+          [41468, "stillPaintUpperBound", 12000, 2539.000000000029, 2567.5, 640, false],
+          [19727, "stillPaintUpperBound", 12000, 2516, 2554.4, 640, false],
+          [49520, "stillPaintUpperBound", 12000, 2117.000000000029, 2155.4, 640, false],
+          [27780, "stillPaintUpperBound", 12000, 1826, null, 640, false],
+          [6039, "videoCallback", 12000, 125.9999999999709, 131.6, 640, true],
+          [35832, "stillPaintUpperBound", 12000, 1530, 1559.2, 640, false],
+          [14091, "stillPaintUpperBound", 12000, 2244.000000000029, 2286.7, 640, false],
+          [43884, "stillPaintUpperBound", 12000, 2938.999999999971, 2963.4, 640, false],
+          [22143, "stillPaintUpperBound", 12000, 2411, 2450.6, 640, false]
+        ],
+        "cuts": [
+          {
+            "cut": 1174.073,
+            "start": 1171.382,
+            "primerMs": 2492,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 4184.0,
+            "observedFrames": 72,
+            "total": 76,
+            "dropped": 0,
+            "crossed": false,
+            "consecutive": false,
+            "worstFrameGapMs": 340,
+            "finished": false,
+            "events": [
+              ["waiting", 4.0, 1171.3819],
+              ["stalled", 609.0, 1171.3819],
+              ["playing", 4182.0, 1171.3819],
+              ["waiting", 4992.0, 1171.8205],
+              ["playing", 6684.0, 1171.8205]
+            ]
+          },
+          {
+            "cut": 672.172,
+            "start": 669.48,
+            "primerMs": 3181,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 7948,
+            "observedFrames": 16,
+            "total": 10,
+            "dropped": 0,
+            "crossed": false,
+            "consecutive": false,
+            "worstFrameGapMs": 339,
+            "finished": false,
+            "events": [
+              ["waiting", 3, 669.4805],
+              ["playing", 7932, 669.4805]
+            ]
+          },
+          {
+            "cut": 1635.601,
+            "start": 1632.91,
+            "primerMs": 1528,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 5571,
+            "observedFrames": 88,
+            "total": 14,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 309,
+            "finished": false,
+            "events": [
+              ["waiting", 4, 1632.9096],
+              ["stalled", 3019, 1632.9096],
+              ["playing", 5546.0, 1632.9096]
+            ]
+          },
+          {
+            "cut": 1073.072,
+            "start": 1070.381,
+            "primerMs": 1423,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 1762,
+            "observedFrames": 31,
+            "total": 103,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": false,
+            "worstFrameGapMs": 312.0,
+            "finished": false,
+            "events": [
+              ["waiting", 3, 1070.381],
+              ["playing", 1750, 1070.381],
+              ["waiting", 5215, 1073.3827],
+              ["stalled", 5215, 1073.3827],
+              ["playing", 7973, 1073.3827]
+            ]
+          },
+          {
+            "cut": 456.456,
+            "start": 453.765,
+            "primerMs": 1440.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 2731,
+            "observedFrames": 33,
+            "total": 143,
+            "dropped": 5,
+            "crossed": true,
+            "consecutive": false,
+            "worstFrameGapMs": 308.0,
+            "finished": true,
+            "events": [
+              ["waiting", 3, 453.765],
+              ["playing", 2690, 453.765]
+            ]
+          },
+          {
+            "cut": 97.931,
+            "start": 95.24,
+            "primerMs": 174,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 324,
+            "observedFrames": 104,
+            "total": 68,
+            "dropped": 3,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 3, 95.2401]
+            ]
+          },
+          {
+            "cut": 1249.248,
+            "start": 1246.557,
+            "primerMs": 3044,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 2677,
+            "observedFrames": 30,
+            "total": 129,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 34,
+            "finished": false,
+            "events": [
+              ["waiting", 2, 1246.557],
+              ["playing", 2648, 1246.557]
+            ]
+          },
+          {
+            "cut": 144.144,
+            "start": 141.453,
+            "primerMs": 147,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 273,
+            "observedFrames": 105,
+            "total": 53,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 3, 141.453]
+            ]
+          },
+          {
+            "cut": 888.888,
+            "start": 886.197,
+            "primerMs": 2133,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 3081,
+            "observedFrames": 29,
+            "total": 95,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": false,
+            "worstFrameGapMs": 34,
+            "finished": true,
+            "events": [
+              ["waiting", 3, 886.197],
+              ["playing", 3052, 886.197],
+              ["waiting", 4642, 887.2267],
+              ["playing", 5546.0, 887.2267]
+            ]
+          },
+          {
+            "cut": 68.702,
+            "start": 66.011,
+            "primerMs": 108,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 238,
+            "observedFrames": 106,
+            "total": 77,
+            "dropped": 5,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 3, 66.0109]
+            ]
+          },
+          {
+            "cut": 1105.304,
+            "start": 1102.613,
+            "primerMs": 2119,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 2110,
+            "observedFrames": 20,
+            "total": 115,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": false,
+            "worstFrameGapMs": 282,
+            "finished": true,
+            "events": [
+              ["waiting", 3, 1102.6132],
+              ["playing", 2049, 1102.6132],
+              ["stalled", 5528, 1105.7],
+              ["waiting", 5571, 1105.7947],
+              ["playing", 8218, 1105.7947]
+            ]
+          },
+          {
+            "cut": 700.8,
+            "start": 698.109,
+            "primerMs": 2572,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 3877,
+            "observedFrames": 34,
+            "total": 83,
+            "dropped": 0,
+            "crossed": false,
+            "consecutive": false,
+            "worstFrameGapMs": 337,
+            "finished": false,
+            "events": [
+              ["waiting", 3, 698.1091],
+              ["playing", 3836, 698.1091],
+              ["waiting", 6564, 700.4142],
+              ["waiting", 6795, 700.4142],
+              ["stalled", 7501, 700.4142],
+              ["playing", 8346, 700.4142]
+            ]
+          },
+          {
+            "cut": 1689.221,
+            "start": 1686.53,
+            "primerMs": 3500,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 2214,
+            "observedFrames": 54,
+            "total": 87,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": false,
+            "worstFrameGapMs": 309,
+            "finished": true,
+            "events": [
+              ["waiting", 3, 1686.5298],
+              ["playing", 2171, 1686.5298]
+            ]
+          },
+          {
+            "cut": 341.107,
+            "start": 338.416,
+            "primerMs": 149,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 277,
+            "observedFrames": 102,
+            "total": 82,
+            "dropped": 7,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 35.0,
+            "finished": true,
+            "events": [
+              ["playing", 3, 338.4164],
+              ["stalled", 3401, 341.5671]
+            ]
+          },
+          {
+            "cut": 815.615,
+            "start": 812.924,
+            "primerMs": 2735,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 2679,
+            "observedFrames": 45,
+            "total": 79,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": false,
+            "worstFrameGapMs": 261,
+            "finished": true,
+            "events": [
+              ["waiting", 2, 812.9238],
+              ["playing", 2559, 812.9238],
+              ["waiting", 2559, 812.9238],
+              ["playing", 2599.0, 812.9238]
+            ]
+          },
+          {
+            "cut": 1174.04,
+            "start": 1171.349,
+            "primerMs": 92,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 248,
+            "observedFrames": 106,
+            "total": 109,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34.0,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 2, 1171.3485],
+              ["stalled", 3486, 1174.628]
+            ]
+          },
+          {
+            "cut": 282.816,
+            "start": 280.125,
+            "primerMs": 158,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 282,
+            "observedFrames": 106,
+            "total": 69,
+            "dropped": 5,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 3, 280.1248]
+            ]
+          },
+          {
+            "cut": 696.696,
+            "start": 694.005,
+            "primerMs": 3134.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 2212.0,
+            "observedFrames": 38,
+            "total": 9,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": false,
+            "worstFrameGapMs": 34,
+            "finished": true,
+            "events": [
+              ["waiting", 3, 694.005],
+              ["playing", 2165, 694.005],
+              ["waiting", 2165, 694.005],
+              ["playing", 2199, 694.005],
+              ["stalled", 5677, 697.2843]
+            ]
+          },
+          {
+            "cut": 1297.296,
+            "start": 1294.605,
+            "primerMs": 3771.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 4788,
+            "observedFrames": 8,
+            "total": 21,
+            "dropped": 0,
+            "crossed": false,
+            "consecutive": false,
+            "finished": false,
+            "events": [
+              ["waiting", 2, 1294.605],
+              ["playing", 4104.0, 1294.605],
+              ["waiting", 5040, 1295.0065],
+              ["stalled", 6715, 1295.0065],
+              ["playing", 7322, 1295.0065]
+            ]
+          },
+          {
+            "cut": 944.243,
+            "start": 941.552,
+            "primerMs": 2378,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 5080,
+            "observedFrames": 12,
+            "total": 84,
+            "dropped": 0,
+            "crossed": false,
+            "consecutive": false,
+            "worstFrameGapMs": 310,
+            "finished": false,
+            "events": [
+              ["waiting", 3, 941.5523],
+              ["playing", 5058.0, 941.5523],
+              ["waiting", 8787, 944.8395],
+              ["stalled", 8787, 944.8395]
+            ]
+          },
+          {
+            "cut": 1272.638,
+            "start": 1269.947,
+            "primerMs": 2128,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 5530,
+            "observedFrames": 24,
+            "total": 10,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["waiting", 3, 1269.947],
+              ["playing", 5503, 1269.947],
+              ["stalled", 8998.0, 1273.1504]
+            ]
+          },
+          {
+            "cut": 576.576,
+            "start": 573.885,
+            "primerMs": 3331,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 3999,
+            "observedFrames": 20,
+            "total": 117,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": false,
+            "worstFrameGapMs": 34.0,
+            "finished": true,
+            "events": [
+              ["waiting", 2, 573.885],
+              ["playing", 3982, 573.885],
+              ["waiting", 5231, 574.7331],
+              ["waiting", 5596, 574.7331],
+              ["playing", 6136, 574.8075]
+            ]
+          },
+          {
+            "cut": 213.78,
+            "start": 211.089,
+            "primerMs": 192,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 286,
+            "observedFrames": 106,
+            "total": 52,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34.0,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 2, 211.0892]
+            ]
+          },
+          {
+            "cut": 34.768,
+            "start": 32.077,
+            "primerMs": 109.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 318,
+            "observedFrames": 106,
+            "total": 51,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 35.0,
+            "finished": true,
+            "events": [
+              ["playing", 3, 32.077]
+            ]
+          }
+        ],
+        "sustained": [
+          {
+            "cut": 60.5,
+            "start": 57.803,
+            "primerMs": 2672,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 5637,
+            "observedFrames": 152,
+            "total": 433,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": false,
+            "worstFrameGapMs": 35,
+            "finished": false,
+            "events": [
+              ["waiting", 3, 57.8027],
+              ["playing", 5601, 57.8027],
+              ["stalled", 12601, 64.5081],
+              ["stalled", 17692, 69.5995]
+            ]
+          },
+          {
+            "cut": 700.5,
+            "start": 697.809,
+            "primerMs": 63,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 301,
+            "observedFrames": 199,
+            "total": 433,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 3, 697.8088],
+              ["stalled", 3205, 700.7563],
+              ["stalled", 10041.0, 707.5922]
+            ]
+          }
+        ],
+        "pointer": "native",
+        "inputFailures": 0,
+        "cacheChecks": 66,
+        "checksWithActiveSource": 66,
+        "postStartStalls": [
+          {
+            "window": "cuts",
+            "target": 1174.0729000000001,
+            "media": 1171.820541633,
+            "durationMs": 1692.0,
+            "rightCensored": false,
+            "sameMediaOnResume": true,
+            "savedCutOffsetSeconds": -2.2189917003333903,
+            "nativeSamples": 41,
+            "identicalNativePixels": true
+          },
+          {
+            "window": "cuts",
+            "target": 1073.0720000000001,
+            "media": 1073.382724717,
+            "durationMs": 2758,
+            "rightCensored": false,
+            "sameMediaOnResume": true,
+            "savedCutOffsetSeconds": 0.31072471699985726,
+            "nativeSamples": 68,
+            "identicalNativePixels": true
+          },
+          {
+            "window": "cuts",
+            "target": 888.888,
+            "media": 887.226655211,
+            "durationMs": 904.0000000000582,
+            "rightCensored": false,
+            "sameMediaOnResume": true,
+            "savedCutOffsetSeconds": -1.6613447890000543,
+            "nativeSamples": 8,
+            "identicalNativePixels": true
+          },
+          {
+            "window": "cuts",
+            "target": 1105.3042,
+            "media": 1105.794707633,
+            "durationMs": 2647,
+            "rightCensored": false,
+            "sameMediaOnResume": true,
+            "savedCutOffsetSeconds": 0.4905076329998792,
+            "nativeSamples": 68,
+            "identicalNativePixels": true
+          },
+          {
+            "window": "cuts",
+            "target": 700.8001,
+            "media": 700.414192591,
+            "durationMs": 1782,
+            "rightCensored": false,
+            "sameMediaOnResume": true,
+            "savedCutOffsetSeconds": -0.38590740900008313,
+            "nativeSamples": 44,
+            "identicalNativePixels": true
+          },
+          {
+            "window": "cuts",
+            "target": 1297.296,
+            "media": 1295.006495384,
+            "durationMs": 2282,
+            "rightCensored": false,
+            "sameMediaOnResume": true,
+            "savedCutOffsetSeconds": -2.0225712826668314,
+            "nativeSamples": 58,
+            "identicalNativePixels": true
+          },
+          {
+            "window": "cuts",
+            "target": 944.2433,
+            "media": 944.8395003,
+            "durationMs": 222,
+            "rightCensored": true,
+            "sameMediaOnResume": false,
+            "savedCutOffsetSeconds": -0.5048997000000099,
+            "nativeSamples": 0,
+            "identicalNativePixels": false
+          },
+          {
+            "window": "cuts",
+            "target": 576.576,
+            "media": 574.733088925,
+            "durationMs": 905,
+            "rightCensored": false,
+            "sameMediaOnResume": false,
+            "savedCutOffsetSeconds": -1.8429110750000746,
+            "nativeSamples": 10,
+            "identicalNativePixels": true
+          }
+        ]
+      }
+    },
+    "twoCamerasIdle": {
+      "summary": {
+        "runs": [
+          {
+            "fps": 29.97002997002997,
+            "documentHidden": false,
+            "animationFrameP50Ms": 33,
+            "input": "native",
+            "driverInputFailures": 0,
+            "cacheSamples": 38,
+            "sourceCacheActiveSamples": 0,
+            "scrubs": {
+              "attempts": 32,
+              "timeouts": 0,
+              "p50Ms": 797,
+              "p95Ms": 1252,
+              "videoFrames": 0,
+              "observedAtCallback": 0,
+              "stillPaintEstimates": 32
+            },
+            "cuts": {
+              "attempts": 12,
+              "crossed": 12,
+              "observed": 12,
+              "unobserved": 0,
+              "observedExcessP50Ms": 0,
+              "observedExcessP95Ms": 0.6,
+              "overOneExtraFrame": 0
+            },
+            "playback": {
+              "started": 14,
+              "attempts": 14,
+              "playToFirstFrameP95Ms": 1170,
+              "worstObservedGapMs": 310,
+              "stationaryWaits": {
+                "count": 0,
+                "totalMs": 0,
+                "maxMs": null,
+                "nearKnownCut": 0,
+                "openWaitEvents": 0,
+                "maxOpenWaitAgeMs": null
+              }
+            },
+            "cutWindowDrops": {
+              "validWindows": 12,
+              "finished": 12,
+              "attemptedWindows": 12,
+              "total": 1940,
+              "dropped": 1,
+              "droppedPercent": 0.052
+            },
+            "sustainedDrops": {
+              "validWindows": 2,
+              "finished": 2,
+              "attemptedWindows": 2,
+              "total": 981,
+              "dropped": 0,
+              "droppedPercent": 0
+            }
+          },
+          {
+            "fps": 29.97002997002997,
+            "documentHidden": false,
+            "animationFrameP50Ms": 33,
+            "input": "native",
+            "driverInputFailures": 0,
+            "cacheSamples": 38,
+            "sourceCacheActiveSamples": 0,
+            "scrubs": {
+              "attempts": 32,
+              "timeouts": 0,
+              "p50Ms": 374,
+              "p95Ms": 604,
+              "videoFrames": 0,
+              "observedAtCallback": 0,
+              "stillPaintEstimates": 32
+            },
+            "cuts": {
+              "attempts": 12,
+              "crossed": 12,
+              "observed": 12,
+              "unobserved": 0,
+              "observedExcessP50Ms": 0,
+              "observedExcessP95Ms": 1.6,
+              "overOneExtraFrame": 0
+            },
+            "playback": {
+              "started": 14,
+              "attempts": 14,
+              "playToFirstFrameP95Ms": 1532,
+              "worstObservedGapMs": 314,
+              "stationaryWaits": {
+                "count": 0,
+                "totalMs": 0,
+                "maxMs": null,
+                "nearKnownCut": 0,
+                "openWaitEvents": 0,
+                "maxOpenWaitAgeMs": null
+              }
+            },
+            "cutWindowDrops": {
+              "validWindows": 12,
+              "finished": 12,
+              "attemptedWindows": 12,
+              "total": 1800,
+              "dropped": 5,
+              "droppedPercent": 0.278
+            },
+            "sustainedDrops": {
+              "validWindows": 2,
+              "finished": 2,
+              "attemptedWindows": 2,
+              "total": 963,
+              "dropped": 0,
+              "droppedPercent": 0
+            }
+          }
+        ],
+        "slowestCompletedBaselineTargets": {
+          "baselineHadTimeouts": false,
+          "before": {
+            "attempts": 2,
+            "timeouts": 0,
+            "p50Ms": 1252,
+            "p95Ms": 1346,
+            "videoFrames": 0,
+            "observedAtCallback": 0,
+            "stillPaintEstimates": 2
+          },
+          "after": {
+            "attempts": 2,
+            "timeouts": 0,
+            "p50Ms": 584,
+            "p95Ms": 604,
+            "videoFrames": 0,
+            "observedAtCallback": 0,
+            "stillPaintEstimates": 2
+          }
+        },
+        "matchedDeadlines": [
+          {
+            "timeoutMs": 12000,
+            "before": {
+              "attempts": 32,
+              "timeouts": 0,
+              "p50Ms": 797,
+              "p95Ms": 1252,
+              "videoFrames": 0,
+              "observedAtCallback": 0,
+              "stillPaintEstimates": 32
+            },
+            "after": {
+              "attempts": 32,
+              "timeouts": 0,
+              "p50Ms": 374,
+              "p95Ms": 604,
+              "videoFrames": 0,
+              "observedAtCallback": 0,
+              "stillPaintEstimates": 32
+            }
+          }
+        ],
+        "pairedDistinctPixels": {
+          "matched": 29,
+          "p50Ms": [831.1, 423.3],
+          "p95Ms": [1265.3, 643.7]
+        }
+      },
+      "before": {
+        "scrubColumns": ["frame", "endpoint", "deadlineMs", "inputToFrameMs", "distinctWindowPixelMs", "decoderWidth", "targetBufferedAtReturn"],
+        "scrubs": [
+          [812, "stillPaintEstimate", 12000, 1142, 1156.5, 1280, false],
+          [60906, "stillPaintEstimate", 12000, 542, 569.2, 1280, false],
+          [17054, "stillPaintEstimate", 12000, 1040, 1052.3, 1280, false],
+          [77148, "stillPaintEstimate", 12000, 797.0000000000073, 826.4, 1280, false],
+          [33296, "stillPaintEstimate", 12000, 1152, 1173.1, 1280, false],
+          [93390, "stillPaintEstimate", 12000, 631, 668.7, 1280, false],
+          [49537, "stillPaintEstimate", 12000, 1041, 1060.0, 1280, false],
+          [5685, "stillPaintEstimate", 12000, 797, 831.1, 1280, false],
+          [65779, "stillPaintEstimate", 12000, 1252, 1265.3, 1280, false],
+          [21926, "stillPaintEstimate", 12000, 666, 691.2, 1280, false],
+          [82021, "stillPaintEstimate", 12000, 1174.0000000000146, 1193.4, 1280, false],
+          [38168, "stillPaintEstimate", 12000, 615, 642.4, 1280, false],
+          [98262, "stillPaintEstimate", 12000, 1152, 1165.9, 1280, false],
+          [54410, "stillPaintEstimate", 12000, 678, 706.2, 1280, false],
+          [10557, "stillPaintEstimate", 12000, 976, 1019.5, 1280, false],
+          [70651, "stillPaintEstimate", 12000, 712, 737.5, 1280, false],
+          [26799, "stillPaintEstimate", 12000, 1006, 1016.2, 1280, false],
+          [86893, "stillPaintEstimate", 12000, 610, null, 1280, false],
+          [43041, "stillPaintEstimate", 12000, 1117, 1129.7, 1280, false],
+          [103135, "stillPaintEstimate", 12000, 548, 575.4, 1280, false],
+          [59282, "stillPaintEstimate", 12000, 777.9999999999854, 789.4, 1280, false],
+          [15430, "stillPaintEstimate", 12000, 629, 654.3, 1280, false],
+          [75524, "stillPaintEstimate", 12000, 1115.0000000000146, 1127.4, 1280, false],
+          [31671, "stillPaintEstimate", 12000, 550, 573.0, 1280, false],
+          [91766, "stillPaintEstimate", 12000, 1135, null, 1280, false],
+          [47913, "stillPaintEstimate", 12000, 848, null, 1280, false],
+          [4060, "stillPaintEstimate", 12000, 1346, 1383.0, 1280, false],
+          [64155, "stillPaintEstimate", 12000, 571, 584.0, 1280, false],
+          [20302, "stillPaintEstimate", 12000, 1107.0000000000146, 1143.7, 1280, false],
+          [80397, "stillPaintEstimate", 12000, 561, 575.7, 1280, false],
+          [36544, "stillPaintEstimate", 12000, 1007, 1045.4, 1280, false],
+          [96638, "stillPaintEstimate", 12000, 594.0000000000146, 607.6, 1280, false]
+        ],
+        "cuts": [
+          {
+            "cut": 1164.53,
+            "start": 1159.303,
+            "primerMs": 801,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 1129,
+            "observedFrames": 175,
+            "total": 187,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 310,
+            "finished": true,
+            "events": [
+              ["waiting", 3, 1159.3031],
+              ["playing", 1131.0, 1159.3031]
+            ]
+          },
+          {
+            "cut": 3466.697,
+            "start": 3461.47,
+            "primerMs": 782,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 359,
+            "observedFrames": 174,
+            "total": 183,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 286,
+            "finished": true,
+            "events": [
+              ["waiting", 2.0, 3461.4697],
+              ["playing", 302, 3461.4697]
+            ]
+          },
+          {
+            "cut": 3.67,
+            "start": 0.012,
+            "primerMs": 221,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 328,
+            "observedFrames": 128,
+            "total": 110,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 235.0,
+            "finished": true,
+            "events": [
+              ["waiting", 2, 0.0117],
+              ["playing", 318, 0.0117]
+            ]
+          },
+          {
+            "cut": 1164.53,
+            "start": 1159.303,
+            "primerMs": 39,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 329,
+            "observedFrames": 174,
+            "total": 187,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 35.0,
+            "finished": true,
+            "events": [
+              ["playing", 2, 1159.3031]
+            ]
+          },
+          {
+            "cut": 3466.697,
+            "start": 3461.47,
+            "primerMs": 93.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 296.0,
+            "observedFrames": 174,
+            "total": 177,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 35.0,
+            "finished": true,
+            "events": [
+              ["playing", 2.0, 3461.4697]
+            ]
+          },
+          {
+            "cut": 3.67,
+            "start": 0.012,
+            "primerMs": 182,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 265,
+            "observedFrames": 127,
+            "total": 115,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 35.0,
+            "finished": true,
+            "events": [
+              ["playing", 1, 0.0117]
+            ]
+          },
+          {
+            "cut": 1164.53,
+            "start": 1159.303,
+            "primerMs": 51.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 249,
+            "observedFrames": 167,
+            "total": 177,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 1, 1159.3031]
+            ]
+          },
+          {
+            "cut": 3466.697,
+            "start": 3461.47,
+            "primerMs": 123.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 238,
+            "observedFrames": 174,
+            "total": 194,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 2, 3461.4697]
+            ]
+          },
+          {
+            "cut": 3.67,
+            "start": 0.012,
+            "primerMs": 129.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 262,
+            "observedFrames": 127,
+            "total": 122,
+            "dropped": 1,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 1, 0.0117]
+            ]
+          },
+          {
+            "cut": 1164.53,
+            "start": 1159.303,
+            "primerMs": 18,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 297,
+            "observedFrames": 174,
+            "total": 192,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34.0,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 1.0, 1159.3031]
+            ]
+          },
+          {
+            "cut": 3466.697,
+            "start": 3461.47,
+            "primerMs": 154,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 295.0,
+            "observedFrames": 174,
+            "total": 177,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 2, 3461.4697]
+            ]
+          },
+          {
+            "cut": 3.67,
+            "start": 0.012,
+            "primerMs": 79,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 289,
+            "observedFrames": 127,
+            "total": 119,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 35.0,
+            "finished": true,
+            "events": [
+              ["playing", 1, 0.0117]
+            ]
+          }
+        ],
+        "sustained": [
+          {
+            "cut": 60.5,
+            "start": 55.3,
+            "primerMs": 954,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 1170,
+            "observedFrames": 486,
+            "total": 513,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 286,
+            "finished": true,
+            "events": [
+              ["waiting", 2, 55.3002],
+              ["playing", 1103, 55.3002]
+            ]
+          },
+          {
+            "cut": 700.5,
+            "start": 695.273,
+            "primerMs": 917,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 595,
+            "observedFrames": 503,
+            "total": 468,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 288,
+            "finished": true,
+            "events": [
+              ["waiting", 1.0, 695.2729],
+              ["playing", 554.0, 695.2729]
+            ]
+          }
+        ],
+        "pointer": "native",
+        "inputFailures": 0,
+        "cacheChecks": 38,
+        "checksWithActiveSource": 0,
+        "postStartStalls": []
+      },
+      "after": {
+        "scrubColumns": ["frame", "endpoint", "deadlineMs", "inputToFrameMs", "distinctWindowPixelMs", "decoderWidth", "targetBufferedAtReturn"],
+        "scrubs": [
+          [812, "stillPaintEstimate", 12000, 484, 498.5, 1280, false],
+          [60906, "stillPaintEstimate", 12000, 264.0000000000073, 282.5, 1280, false],
+          [17054, "stillPaintEstimate", 12000, 396.9999999999927, 423.3, 1280, false],
+          [77148, "stillPaintEstimate", 12000, 283, 314.3, 1280, false],
+          [33296, "stillPaintEstimate", 12000, 417, 453.2, 1280, false],
+          [93390, "stillPaintEstimate", 12000, 305, 317.5, 1280, false],
+          [49537, "stillPaintEstimate", 12000, 844.9999999999927, 878.5, 1280, false],
+          [5685, "stillPaintEstimate", 12000, 440.0000000000073, 453.0, 1280, false],
+          [65779, "stillPaintEstimate", 12000, 604, 643.7, 1280, false],
+          [21926, "stillPaintEstimate", 12000, 374.00000000001455, 391.0, 1280, false],
+          [82021, "stillPaintEstimate", 12000, 591, 618.2, 1280, false],
+          [38168, "stillPaintEstimate", 12000, 264, 296.0, 1280, false],
+          [98262, "stillPaintEstimate", 12000, 532, 571.2, 1280, false],
+          [54410, "stillPaintEstimate", 12000, 301, 315.6, 1280, false],
+          [10557, "stillPaintEstimate", 12000, 404, 424.9, 1280, false],
+          [70651, "stillPaintEstimate", 12000, 322, 351.6, 1280, false],
+          [26799, "stillPaintEstimate", 12000, 454, 472.9, 1280, false],
+          [86893, "stillPaintEstimate", 12000, 313, null, 1280, false],
+          [43041, "stillPaintEstimate", 12000, 484, 517.9, 1280, false],
+          [103135, "stillPaintEstimate", 12000, 279, 314.9, 1280, false],
+          [59282, "stillPaintEstimate", 12000, 317, 329.4, 1280, false],
+          [15430, "stillPaintEstimate", 12000, 322, 341.0, 1280, false],
+          [75524, "stillPaintEstimate", 12000, 431, 461.1, 1280, false],
+          [31671, "stillPaintEstimate", 12000, 252, 283.7, 1280, false],
+          [91766, "stillPaintEstimate", 12000, 515, null, 1280, false],
+          [47913, "stillPaintEstimate", 12000, 307, null, 1280, false],
+          [4060, "stillPaintEstimate", 12000, 584, 617.5, 1280, false],
+          [64155, "stillPaintEstimate", 12000, 280.00000000001455, 317.9, 1280, false],
+          [20302, "stillPaintEstimate", 12000, 524, 541.2, 1280, false],
+          [80397, "stillPaintEstimate", 12000, 282, 313.4, 1280, false],
+          [36544, "stillPaintEstimate", 12000, 484, 523.6, 1280, false],
+          [96638, "stillPaintEstimate", 12000, 314.99999999998545, 331.2, 1280, false]
+        ],
+        "cuts": [
+          {
+            "cut": 1164.53,
+            "start": 1159.303,
+            "primerMs": 326.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 1123,
+            "observedFrames": 175,
+            "total": 187,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 314,
+            "finished": true,
+            "events": [
+              ["waiting", 2, 1159.3031],
+              ["playing", 1109, 1159.3031]
+            ]
+          },
+          {
+            "cut": 3466.697,
+            "start": 3461.47,
+            "primerMs": 511.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 910.0,
+            "observedFrames": 175,
+            "total": 166,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 32,
+            "excessMs": 0,
+            "worstFrameGapMs": 281,
+            "finished": true,
+            "events": [
+              ["waiting", 1.0, 3461.4697],
+              ["playing", 769.0, 3461.4697]
+            ]
+          },
+          {
+            "cut": 3.67,
+            "start": 0.012,
+            "primerMs": 115.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 451,
+            "observedFrames": 128,
+            "total": 109,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 258,
+            "finished": true,
+            "events": [
+              ["waiting", 1.0, 0.0117],
+              ["playing", 433, 0.0117]
+            ]
+          },
+          {
+            "cut": 1164.53,
+            "start": 1159.303,
+            "primerMs": 16,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 332,
+            "observedFrames": 174,
+            "total": 24,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 36,
+            "finished": true,
+            "events": [
+              ["playing", 1.0, 1159.3031]
+            ]
+          },
+          {
+            "cut": 3466.697,
+            "start": 3461.47,
+            "primerMs": 91.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 292,
+            "observedFrames": 174,
+            "total": 177,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34.0,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 2, 3461.4697]
+            ]
+          },
+          {
+            "cut": 3.67,
+            "start": 0.012,
+            "primerMs": 50.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 44.0,
+            "observedFrames": 128,
+            "total": 123,
+            "dropped": 2,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 35,
+            "excessMs": 1.633,
+            "worstFrameGapMs": 287,
+            "finished": true,
+            "events": [
+              ["waiting", 1, 0.0117],
+              ["playing", 21, 0.0117],
+              ["waiting", 21, 0.0117],
+              ["playing", 34, 0.0117]
+            ]
+          },
+          {
+            "cut": 1164.53,
+            "start": 1159.303,
+            "primerMs": 10,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 297.0,
+            "observedFrames": 174,
+            "total": 192,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 35,
+            "finished": true,
+            "events": [
+              ["playing", 1, 1159.3031]
+            ]
+          },
+          {
+            "cut": 3466.697,
+            "start": 3461.47,
+            "primerMs": 49,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 118,
+            "observedFrames": 175,
+            "total": 192,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 287,
+            "finished": true,
+            "events": [
+              ["waiting", 1, 3461.4697],
+              ["playing", 92, 3461.4697]
+            ]
+          },
+          {
+            "cut": 3.67,
+            "start": 0.012,
+            "primerMs": 49.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 18,
+            "observedFrames": 128,
+            "total": 123,
+            "dropped": 3,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 287,
+            "finished": true,
+            "events": [
+              ["waiting", 1, 0.0117],
+              ["playing", 11, 0.0117]
+            ]
+          },
+          {
+            "cut": 1164.53,
+            "start": 1159.303,
+            "primerMs": 30,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 263,
+            "observedFrames": 174,
+            "total": 197,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 34,
+            "excessMs": 0.633,
+            "worstFrameGapMs": 34.0,
+            "finished": true,
+            "events": [
+              ["playing", 1, 1159.3031]
+            ]
+          },
+          {
+            "cut": 3466.697,
+            "start": 3461.47,
+            "primerMs": 64,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 23.0,
+            "observedFrames": 175,
+            "total": 193,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 32,
+            "excessMs": 0,
+            "worstFrameGapMs": 286,
+            "finished": true,
+            "events": [
+              ["playing", 1, 3461.4697]
+            ]
+          },
+          {
+            "cut": 3.67,
+            "start": 0.012,
+            "primerMs": 52.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 16,
+            "observedFrames": 128,
+            "total": 117,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 286,
+            "finished": true,
+            "events": [
+              ["waiting", 1, 0.0117],
+              ["playing", 1, 0.0117]
+            ]
+          }
+        ],
+        "sustained": [
+          {
+            "cut": 60.5,
+            "start": 55.3,
+            "primerMs": 352,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 1532,
+            "observedFrames": 492,
+            "total": 504,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33,
+            "excessMs": 0,
+            "worstFrameGapMs": 281,
+            "finished": true,
+            "events": [
+              ["waiting", 2, 55.3002],
+              ["playing", 1471, 55.3002]
+            ]
+          },
+          {
+            "cut": 700.5,
+            "start": 695.273,
+            "primerMs": 451.0,
+            "primerTimedOut": false,
+            "firstPlaybackFrameMs": 835.0,
+            "observedFrames": 503,
+            "total": 459,
+            "dropped": 0,
+            "crossed": true,
+            "consecutive": true,
+            "gapMs": 33.0,
+            "excessMs": 0,
+            "worstFrameGapMs": 287,
+            "finished": true,
+            "events": [
+              ["waiting", 1, 695.2729],
+              ["playing", 775.0, 695.2729]
+            ]
+          }
+        ],
+        "pointer": "native",
+        "inputFailures": 0,
+        "cacheChecks": 38,
+        "checksWithActiveSource": 0,
+        "postStartStalls": []
+      }
+    }
+  },
+  "finalShippingIdleFirstTen": {
+    "backgroundCache": "paused; no source-cache claims in either trial",
+    "before": {
+      "attempts": 10,
+      "timeouts": 0,
+      "p50Ms": 1643.0,
+      "medianMs": 1667.5,
+      "p95Ms": 2498
+    },
+    "finalOrdinary": {
+      "attempts": 10,
+      "timeouts": 0,
+      "p50Ms": 435,
+      "medianMs": 451.5,
+      "p95Ms": 724
+    },
+    "faster": 10,
+    "beforeMs": [2220, 2498, 1429.0, 1981, 1493, 1643.0, 1630.0, 1692, 1981, 567.0],
+    "afterMs": [596, 705, 468, 435, 333.0, 724, 391, 491, 435.0, 218],
+    "finalNativePixelEvidence": {
+      "requested": 10,
+      "compared": 10,
+      "distinctPixelMatches": 5,
+      "matchingStillPaints": 5,
+      "nativeFrameOrPixelMatches": 5,
+      "nativeVerifiedP50Ms": 442.5,
+      "nativeVerifiedP95Ms": 504.8,
+      "pixelMatchesP50Ms": 442.5,
+      "pixelMatchesP95Ms": 504.8
+    },
+    "endpoint": "versioned composed monitor still with matched DOM frame and double-rAF paint estimate. The baseline ten preceded independent screen capture.",
+    "method": "Matched native Tauri editor seeks on the 268-clip 4K edit. Percentiles use nearest rank; native-pixel summaries are limited to verified positions."
+  }
+}

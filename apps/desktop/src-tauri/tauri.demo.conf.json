@@ -1,0 +1,7 @@
+{
+  "identifier": "com.forwardfuture.scarlet.demo",
+  "build": {
+    "beforeDevCommand": "pnpm --filter @scarlet/web run dev:renderer --mode desktop-demo --port 5174",
+    "devUrl": "http://127.0.0.1:5174/p/prj_demo?thread=task_chat_direct"
+  }
+}

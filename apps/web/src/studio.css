@@ -1,0 +1,453 @@
+/* Keep application chrome neutral so footage and status indicators read clearly. */
+.demo-tag {
+  color: var(--color-muted);
+  font: 10px var(--font-mono);
+  padding: 3px 7px;
+  border: 1px solid var(--color-line);
+  border-radius: 4px;
+}
+.library-page { max-width: 1352px; margin: auto; padding: clamp(24px, 4vw, 58px) clamp(18px, 5vw, 72px) 48px; }
+/* The 8px above and under the row are its own, taken back out of its margins: where it stays in view, they are its
+   room at the window's edge. */
+.library-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: -8px 0 20px; padding-block: 8px; }
+.library-heading h1 {
+  font-size: clamp(26px, 2.7vw, 36px);
+  font-weight: 600;
+  letter-spacing: -.045em;
+  line-height: 1.2;
+}
+.library-welcome {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 100dvh;
+}
+.library-welcome .library-heading { margin-bottom: 0; padding-bottom: 18px; border-bottom: 1px solid #292929; }
+.library-first-edit {
+  place-self: center;
+  padding-block: 42px clamp(56px, 10vh, 108px);
+  text-align: center;
+}
+.library-first-edit h2 {
+  font-size: clamp(34px, 5.2vw, 68px);
+  font-weight: 560;
+  letter-spacing: -.055em;
+  line-height: 1.02;
+  text-wrap: balance;
+}
+.library-first-edit > p { margin-top: 18px; font-size: 16px; line-height: 1.55; color: var(--color-muted); text-wrap: balance; }
+.first-edit-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; margin-top: 24px; }
+.first-edit-actions button { min-height: 40px; padding-inline: 16px; gap: 8px; }
+.first-edit-steps { list-style: decimal; padding-inline-start: 1.5rem; }
+.first-edit-steps li { padding-inline-start: .4rem; }
+.first-edit-steps li + li { margin-top: 18px; }
+.first-edit-steps li::marker { color: var(--color-dim); font-variant-numeric: tabular-nums; }
+.first-edit-steps h3 { font-size: 15px; font-weight: 600; }
+.first-edit-steps p { margin-top: 4px; color: var(--color-muted); line-height: 1.5; }
+.first-edit-steps strong, .first-edit-skills strong { color: var(--color-fg); font-weight: 500; }
+.first-edit-skills { margin-top: 20px; border-top: 1px solid var(--color-line); }
+.first-edit-skills summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding-block: 14px 4px; color: var(--color-muted); font-weight: 500; cursor: pointer;
+}
+.first-edit-skills summary::-webkit-details-marker { display: none; }
+.first-edit-skills summary:hover, .first-edit-skills[open] summary { color: var(--color-fg); }
+.first-edit-skills[open] summary svg { transform: rotate(90deg); }
+.first-edit-skills p { margin-top: 8px; color: var(--color-muted); line-height: 1.5; }
+.first-edit-skills blockquote { margin-top: 8px; border-left: 2px solid var(--color-line); padding-left: 10px; }
+.view-switch { display: inline-flex; padding: 2px; border: 1px solid var(--color-line); border-radius: 8px; }
+.view-switch button {
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 26px;
+  color: var(--color-dim);
+  border-radius: 5px;
+}
+.view-switch button[aria-pressed="true"] { color: var(--color-fg); background: var(--color-raised); }
+.view-switch.library-filter button { width: auto; padding-inline: 9px; font-size: 12px; }
+/* How many are selected and what can be done with them. It lies over the words of the row that holds the box for every
+   project and takes no room of its own, so no project moves when it comes in. */
+.library-selection-bar {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-fg);
+  white-space: nowrap;
+  background: var(--color-bg);
+}
+/* In the grid that row is the page's top row: the bar lies over the title. */
+.library-heading { position: relative; }
+.library-heading .library-selection-bar { inset: 0 auto 0 0; padding-right: 12px; }
+/* In the list it is the heading row: the bar lies over the headings, on their line as the box is. */
+.project-columns .library-selection-bar { inset: calc(50% + 2px) 0 auto 48px; height: 32px; transform: translateY(-50%); }
+/* The row that holds the box stays in view as the projects scroll under it, selected or not, so the bar never comes in
+   over a project. Its room at the window's edge is its own padding, which takes a press as the row does: none reaches
+   a project under it. */
+.project-columns, .library-heading:has(.library-select-all) { position: sticky; top: 0; z-index: 4; background: var(--color-bg); }
+/* The box that selects every project: beside the layout switch in the grid, in the heading row in the list. */
+.library-select-all { display: grid; place-items: center; width: 32px; height: 32px; cursor: pointer; }
+.library-select-all input, .project-selector input { width: 16px; height: 16px; accent-color: var(--color-hi); cursor: pointer; }
+.project-entry { position: relative; }
+.project-selector { position: absolute; z-index: 1; display: grid; place-items: center; width: 32px; height: 32px; cursor: pointer; }
+.list .project-selector { left: 4px; top: 50%; transform: translateY(-50%); }
+.grid .project-selector { top: 8px; left: 8px; background: var(--color-panel); border-radius: 6px; }
+.project-actions { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); }
+.project-actions:focus-within, .project-actions:has([aria-expanded="true"]) { z-index: 5; }
+.grid .project-actions { top: 8px; right: 8px; transform: none; background: var(--color-panel); border-radius: 6px; }
+.project-collection { --row-columns: 92px minmax(0, 1fr) minmax(120px, 16%) minmax(84px, 11%) 28px; }
+.project-columns, .list .project-link {
+  display: grid;
+  grid-template-columns: var(--row-columns);
+  align-items: center;
+  column-gap: 18px;
+}
+/* The 12px under the headings leaves the bar's buttons, which are taller than the headings, clear of the first project.
+   The 16px above them, taken back out of the row's margin, leaves the bar clear of the window's edge. */
+.project-columns { margin-top: -16px; padding: 16px 14px 12px; font-size: 11.5px; color: var(--color-dim); }
+/* An error above the list keeps its line: the row's padding would lie over it. */
+[role="alert"] + .project-collection .project-columns { margin-top: 0; }
+/* On the line of the headings, which sit between the row's 16px and 12px of padding. */
+.project-columns .project-selector { top: calc(50% + 2px); }
+.project-columns > span:first-of-type { grid-column: span 2; }
+.list .project-card { border-top: 1px solid var(--color-line); }
+.list .project-card:last-child { border-bottom: 1px solid var(--color-line); }
+.project-link { color: var(--color-fg); cursor: pointer; user-select: none; }
+.list .project-link { padding: 14px; transition: background .15s ease; }
+.project-columns, .list .project-link { padding-left: 48px; }
+.list .project-link:hover, .list .project-link:focus-visible { background: var(--color-panel); }
+.list .is-selected .project-link { background: var(--color-raised); }
+.project-still {
+  position: relative;
+  overflow: hidden;
+  background: #070707;
+  border-radius: 5px;
+  aspect-ratio: 16 / 9;
+}
+.project-still img { width: 100%; height: 100%; object-fit: cover; }
+.project-still img.portrait { width: auto; aspect-ratio: 9/16; object-fit: cover; margin: auto; }
+.project-still .project-flip { position: absolute; inset: 0; }
+.project-placeholder {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--color-dim);
+  background: var(--color-raised);
+}
+.project-caption { min-width: 0; }
+.project-caption h2 {
+  font-size: 15px;
+  line-height: 1.38;
+  font-weight: 550;
+  letter-spacing: -.02em;
+  overflow-wrap: anywhere;
+}
+.project-caption p { margin-top: 4px; color: var(--color-muted); font-size: 12px; }
+.project-caption p span { color: var(--color-dim); margin: 0 6px; }
+/* What Scarlet is doing in the project, under its details: the chat's turning ring, then each job in a word or two. */
+.project-caption .project-activity { display: flex; align-items: center; flex-wrap: wrap; gap: 0 7px; margin-top: 5px; color: var(--color-dim);
+  font-variant-numeric: tabular-nums; }
+.project-caption .project-activity span { margin: 0; color: inherit; }
+.project-caption .project-activity .is-editing { color: var(--color-muted); }
+.project-activity i { margin-right: 7px; font-style: normal; color: var(--color-dim); }
+/* The ring of a chat step under way (simple.css's .req-mark), smaller for the row's type. Held by a pause, it stays still. */
+.project-activity-mark { flex: none; width: 11px; height: 11px; margin-right: 1px; border-radius: 50%; border: 1.5px solid #4c4c4c; }
+.project-activity-mark[data-state="working"] { border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
+@media (prefers-reduced-motion: no-preference) {
+  .project-activity-mark[data-state="working"] { animation: project-activity-turn 1s linear infinite; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .project-activity-mark[data-state="working"] { animation: project-activity-breathe 2.4s ease-in-out infinite !important; }
+}
+@keyframes project-activity-turn { to { transform: rotate(360deg); } }
+@keyframes project-activity-breathe { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+.project-review, .project-date { font-size: 12px; color: var(--color-muted); }
+.project-date { font-variant-numeric: tabular-nums; }
+.review-badge { display: inline-flex; align-items: center; gap: 7px; color: var(--color-fg); }
+.review-badge i { width: 6px; height: 6px; border-radius: 50%; background: var(--color-warn); }
+.grid.project-collection {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr));
+  gap: 16px;
+}
+.grid .project-card {
+  border: 1px solid var(--color-line);
+  background: var(--color-panel);
+  border-radius: 10px;
+  transition: border-color .16s ease;
+}
+.grid .project-card:hover { border-color: var(--color-dim); }
+.grid .project-card.is-selected { border-color: var(--color-fg); background: var(--color-raised); }
+.grid .project-link { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 0 16px 14px; }
+.grid .project-still { aspect-ratio: 2.1; grid-column: 1 / -1; margin-inline: -16px; border-radius: 9px 9px 0 0; }
+.grid .project-caption { grid-column: 1 / -1; }
+.project-card ul { padding: 0 12px; }
+.empty-state {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 8px;
+  padding: 36px 20px;
+  text-align: center;
+  border: 1px solid var(--color-line);
+  border-radius: 14px;
+  background: var(--color-panel);
+}
+.empty-glyph {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  margin-bottom: 5px;
+  border-radius: 14px;
+  border: 1px solid var(--color-line);
+  color: var(--color-muted);
+  background: var(--color-raised);
+}
+.studio-dialog { border-radius: 16px; }
+.studio-dialog::backdrop, .studio-drawer::backdrop { background: #0008; }
+.studio-dialog h2, .studio-drawer h2 { font-size: 17px; letter-spacing: -.035em; }
+.studio-dialog > div { padding-left: 20px; padding-right: 20px; }
+.studio-dialog > div:first-child { min-height: 57px; }
+.page-wrap { max-width: 1100px; margin: auto; padding: clamp(22px, 3.4vw, 48px) clamp(16px, 4.2vw, 58px) 40px; }
+.page-heading {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 15px 24px;
+  margin-bottom: 24px;
+}
+.page-heading h1 {
+  font-size: clamp(26px, 2.7vw, 36px);
+  line-height: 1.13;
+  font-weight: 600;
+  letter-spacing: -.045em;
+}
+.page-heading p { margin-top: 7px; color: var(--color-muted); font-size: 13px; }
+.heading-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.control-tabs {
+  gap: 2px;
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px;
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  background: var(--color-bg);
+}
+.control-tabs button[aria-current="true"] { box-shadow: 0 1px 3px #0004; }
+@media (max-width: 767px) {
+  .demo-tag { display: none; }
+  .page-heading { margin-bottom: 18px; }
+}
+@media (max-width: 640px) {
+  .project-columns { display: none; }
+  .list .project-link { grid-template-columns: 70px minmax(0, 1fr) auto; gap: 4px 12px; padding: 14px 0; }
+  .list .project-still { grid-row: 1 / 3; }
+  .list .project-caption { grid-column: 2; }
+  .list .project-review { grid-row: 2; grid-column: 2; }
+  .list .project-date { grid-column: 3; grid-row: 1 / 3; align-self: start; }
+  .list .project-link { padding-inline: 40px 42px; }
+  .project-actions { right: 3px; }
+  .library-heading { gap: 7px; }
+  .library-heading h1 { font-size: 26px; }
+  .library-heading .btn-primary { padding-inline: 9px; }
+}
+/* With motion reduced nothing moves. A mark that says work is going on still fades in and out, since held still it
+   would read as stuck: its rule for reduced motion carries !important to get past this one. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+.request-list { padding: 14px 12px; }
+.watch-monitor, .clip-monitor {
+  background: #080808;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+/* Speed and full screen, at the monitor's bottom right: the pair of the play button and time on its left. */
+.monitor-controls {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  padding: 1px 2px;
+  border-radius: 7px;
+  background: rgb(16 16 16 / 86%);
+}
+.monitor-controls button:enabled { color: #f4f0e8; }
+.monitor-controls .preference-select.compact {
+  min-height: 28px; padding: 0 4px 0 8px; gap: 3px; border: 0; background: none;
+  font: 11px var(--font-mono); font-variant-numeric: tabular-nums;
+}
+.monitor-controls .preference-select:enabled:hover, .monitor-controls .preference-select[aria-expanded="true"] { background: rgb(255 255 255 / 10%); }
+.mic-ready {
+  background: var(--color-raised);
+  color: var(--color-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--color-line);
+}
+.mic-ready:not(:disabled):hover { color: #e5cef8; background: #302b35; }
+/* While recording, a ring round the mic moves with the voice (--voice, 0 to 1, set by the button each frame). */
+.mic-voice { box-shadow: 0 0 0 calc(1.5px + var(--voice, 0) * 6px) color-mix(in srgb, var(--color-bad) 32%, transparent); }
+.skill-search { margin-bottom: 24px; padding-block: 12px; border-block: 1px solid var(--color-line); }
+.skill-list { overflow: hidden; }
+.skill-row, .media-row { display: flex; align-items: center; gap: 12px; padding: 14px; }
+.skill-row:hover { background: #ffffff04; }
+.skill-date { flex: none; width: 62px; text-align: right; font-size: 11.5px; color: var(--color-dim); }
+/* A row is the file at the left, its name and under it its length, and its jobs at the right: reading the file, then
+   its cache, then its transcript. A job is one line: a word or two, a bar and a percent while it runs, a gray tick and
+   its word once done (Cached, Transcribed). A row too narrow for both puts the jobs under the file. */
+.media-row { flex-wrap: wrap; padding: 10px 14px; }
+.media-file { flex: 1 1 180px; min-width: 0; }
+.media-meta { margin-top: 2px; font-size: 11.5px; color: var(--color-dim); }
+.media-jobs { flex: 0 0 232px; min-width: 0; display: grid; gap: 5px; }
+.media-jobs:empty { display: none; }
+.media-jobs .media-cache-line { flex-wrap: nowrap; min-width: 0; margin-top: 0; }
+.media-status.has-bar { display: grid; grid-template-columns: minmax(74px, max-content) minmax(0, 1fr) 30px; align-items: center; gap: 8px; }
+.media-status.has-bar .activity-progress { max-width: none; margin-top: 0; }
+.media-pct { text-align: right; font-size: 11.5px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+/* A failure keeps to its line, cut short with the whole reason on hover, so Retry stays beside it. */
+.media-jobs .media-cache.is-bad { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.media-jobs .simple-link { flex: none; }
+.media-retranscribe { display: inline-flex; position: relative; flex: none; }
+.media-retranscribe .edit-card-icon { width: 22px; height: 22px; }
+.media-retranscribe .edit-card-icon[aria-disabled="true"] { opacity: .4; background: none; cursor: default; }
+.media-transcription-tip {
+  position: absolute; z-index: 5; right: 0; bottom: 100%; display: grid; gap: 2px;
+  width: max-content; max-width: min(260px, 75vw); padding: 5px 9px; overflow-wrap: anywhere;
+  border: 1px solid var(--color-line); border-radius: 6px; background: var(--color-raised);
+  box-shadow: 0 3px 12px #0005; font-size: 12px; line-height: 1.4; color: var(--color-muted);
+}
+.media-transcription-tip strong { font-weight: 500; color: var(--color-fg); }
+/* A file Scarlet couldn't read ends in a small × that takes it out of the project. The × has the right end of the
+   jobs' column, so the row's jobs still start where the other rows' do. */
+.media-row:has(> .media-remove) .media-jobs { flex-basis: 194px; }
+.media-row .simple-link { font-size: 11.5px; }
+/* The thumbnail previews the source. */
+.media-thumb-button { position: relative; flex: none; padding: 0; border: 0; border-radius: 5px; background: none; cursor: pointer; }
+.media-thumb-button img { display: block; }
+.media-thumb-play { position: absolute; inset: 0; display: grid; place-items: center; border-radius: 5px; background: #0008; color: #fff; opacity: 0; transition: opacity .12s; }
+.media-thumb-button:hover .media-thumb-play, .media-thumb-button:focus-visible .media-thumb-play { opacity: 1; }
+.media-thumb { flex: none; width: 68px; height: 40px; border-radius: 5px; }
+.media-glyph { display: grid; place-items: center; background: var(--color-raised); color: var(--color-muted); }
+.settings-page { max-width: 930px; }
+/* Esc with unsaved settings lands on Save instead of leaving, so Save shows that the keyboard is on it. Focus set from a key handler isn't always :focus-visible.
+   A skill's page does the same: Esc lands on its Save while something is unsaved, or on Send while a request is typed and not sent. Its page marks the
+   button Esc landed on, so a click on Save or Send shows no outline. */
+.settings-page form[data-unsaved] button[type="submit"]:focus,
+.skill-editor-toolbar[data-unsaved] > .btn-primary[data-esc-focus]:focus,
+.skill-chat .composer-send[data-esc-focus]:focus { outline: 2px solid var(--color-muted); outline-offset: 2px; }
+.tools-subheading, .tool-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.tools-subheading { margin-bottom: 8px; }
+.tools-subheading h4 { font-size: 14px; font-weight: 600; }
+.tools-subheading p, .tool-inventory p { color: var(--color-muted); font-size: 12px; }
+.tool-setting-row { padding-block: 12px; }
+.tool-inventory { margin-top: 8px; border-top: 1px solid var(--color-line); font-size: 12px; }
+.tool-inventory summary { padding-top: 12px; color: var(--color-muted); cursor: pointer; }
+.tool-inventory dl { display: grid; gap: 12px; margin: 15px 0; }
+.tool-inventory dt { display: flex; align-items: baseline; gap: 6px; font-weight: 500; }
+.tool-inventory dt span { color: var(--color-dim); font-size: 11px; font-weight: 400; }
+.tool-inventory dd { display: flex; gap: 4px 8px; flex-wrap: wrap; margin-top: 3px; color: var(--color-muted); }
+.tool-inventory code { font-size: 11px; }
+.skill-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--color-line);
+  background: var(--color-panel);
+}
+/* While the update shows at the window's top right, the toolbar starts under it, so Save and Delete stay clear of it. */
+:root:has(.update-corner) .skill-editor-toolbar { padding-top: 34px; }
+/* The window's own status ends the row. With nothing to say it takes no room, so Save stays at the row's edge. */
+.skill-editor-toolbar > :last-child:empty { display: none; }
+.skill-editor-body { display: flex; flex: 1; min-height: 0; min-width: 0; }
+/* Left of a skill's instructions: the conversation that changes it, with the message box at the bottom. Its requests
+   are a project chat's (simple.css): the editor's words in a band, and what came of each as plain lines under it. */
+.skill-chat { display: flex; flex-direction: column; flex: none; width: clamp(320px, 27vw, 400px); min-height: 0; border-right: 1px solid var(--color-line); background: var(--color-panel); }
+/* A skill's name, edited in the toolbar where it reads. It looks like a field only when pointed at or typed in. */
+.skill-name { min-width: 0; max-width: 100%; margin: 0 -4px; padding: 3px 7px; border: 1px solid transparent; border-radius: 6px; background: none;
+  font: 13px var(--font-mono); text-overflow: ellipsis; }
+.skill-name:hover:not(:disabled) { border-color: var(--color-line); }
+.skill-name:focus { border-color: var(--color-muted); background: var(--color-bg); outline: none; }
+/* Over a skill's instructions: when to use it, and whether it's on. */
+.skill-details { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; flex: none; padding: 10px 16px 14px;
+  border-bottom: 1px solid var(--color-line); background: var(--color-panel); }
+.skill-details > [role="alert"] { grid-column: 1 / -1; margin: 0; }
+.skill-enabled { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--color-muted); }
+/* The field is as tall as its text: a hidden copy of the text sizes the box the textarea fills. */
+.skill-when { grid-column: 1 / -1; display: grid; }
+.skill-when > * { grid-area: 1 / 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.skill-when > span { visibility: hidden; }
+.skill-when > textarea { resize: none; overflow: hidden; }
+/* The heading over the instructions. After it, when the skill was saved again since the editor's unsaved changes were
+   made: one line that says so, then its two actions as plain text links. The line is no taller than the heading. */
+.skill-instructions-head { display: flex; align-items: center; gap: 14px; flex: none; min-width: 0; padding: 8px 16px; border-bottom: 1px solid var(--color-line); background: var(--color-panel); }
+.skill-kept { display: flex; align-items: center; gap: 12px; min-width: 0; font-size: 12.5px; line-height: 15px; color: var(--color-muted); white-space: nowrap; }
+.skill-kept .simple-link { color: var(--color-fg); }
+.version-row {
+  padding: 10px 12px;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+}
+.version-row:hover { border-color: #555; }
+
+@media (max-width: 767px) {
+  .skill-editor-toolbar > .preference-select.compact { max-width: 160px; }
+  .skill-editor-body { display: block; overflow-y: auto; }
+  .skill-chat { width: 100%; max-height: 50vh; border: 0; border-bottom: 1px solid var(--color-line); }
+}
+@media (max-width: 540px) {
+  .media-row { gap: 7px 10px; }
+  .media-jobs { flex-basis: 100%; }
+  .skill-row { display: grid; grid-template-columns: auto minmax(0,1fr); padding: 12px; gap: 7px 12px; }
+  .skill-date { display: none; }
+  .skill-row a > .truncate { overflow: visible; white-space: normal; }
+  .skill-search input { width: 100%; }
+}
+
+.preference-select {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%;
+  min-width: 0; min-height: 36px; padding: 6px 12px; text-align: left; cursor: pointer;
+  border: 1px solid var(--color-line); border-radius: 8px; background: var(--color-bg); color: var(--color-fg);
+}
+.preference-select.compact { width: auto; max-width: 100%; min-height: 26px; padding: 3px 8px; gap: 6px; font-size: 12px; }
+.preference-select > span:last-child { flex: none; color: var(--color-muted); }
+.preference-select:enabled:hover, .preference-select[aria-expanded="true"] { background: var(--color-raised); }
+.preference-select:disabled { color: var(--color-dim); cursor: not-allowed; }
+.preference-options {
+  position: fixed; z-index: 60; width: max-content; max-width: min(36rem, calc(100vw - 16px)); overflow-y: auto;
+  overscroll-behavior: contain; padding: 4px; border: 1px solid var(--color-line); color: var(--color-fg); font-size: 13px;
+  border-radius: 10px; background: var(--color-panel); box-shadow: 0 8px 24px #0006;
+}
+.preference-options [role="option"] {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 32px; padding: 5px 8px; border-radius: 6px; cursor: pointer; overflow-wrap: anywhere;
+}
+.preference-options svg { flex: none; }
+.preference-options [data-active="true"] { background: var(--color-raised); }
+
+/* Each edit a version made, such as every cut of a dialogue pass, with its revisions. */
+.version-edits { display: grid; gap: 4px; font-size: 12.5px; }
+.version-edits-head { font-size: 11.5px; color: var(--color-dim); }
+.version-edits ol { display: grid; }
+.version-edits li { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 5px 0;
+  border-top: 1px solid var(--color-line); }
+.version-edit-time { font: 11px var(--font-mono); color: var(--color-dim); font-variant-numeric: tabular-nums; }
+.version-edit-label { color: var(--color-fg); overflow-wrap: anywhere; }
+.version-edit-label small { display: block; margin-top: 2px; font-size: 11.5px; color: var(--color-muted); }
+.version-edit-value { color: var(--color-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* The full history's entries keep one colour. A small mark before the words says which were approved, put back or went wrong. */
+.history-mark { display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; vertical-align: 0.14em; }

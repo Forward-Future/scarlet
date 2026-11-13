@@ -1,0 +1,31 @@
+{
+  "name": "@scarlet/mcp",
+  "version": "0.1.0",
+  "description": "Scarlet MCP server: the tools an AI agent uses to read a project and propose changes.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": { "scarlet-mcp": "./dist/cli.js" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./cli": { "types": "./dist/cli.d.ts", "import": "./dist/cli.js" },
+    "./prompt": { "types": "./dist/prompt.d.ts", "import": "./dist/prompt.js" },
+    "./media-profile": { "types": "./dist/media-profile.d.ts", "import": "./dist/media-profile.js" },
+    "./gap-sound": { "types": "./dist/gap-sound.d.ts", "import": "./dist/gap-sound.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "watch": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "@scarlet/shared": "workspace:*",
+    "@scarlet/timeline": "workspace:*",
+    "zod": "4.6.6"
+  }
+}

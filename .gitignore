@@ -1,0 +1,25 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+data/
+*.log
+.DS_Store
+Thumbs.db
+coverage/
+
+# local scratch
+tmp/
+/output/
+/.worktrees/
+/.claude/worktrees/
+.pnpm-store/
+
+# desktop (Tauri)
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/binaries/*
+!apps/desktop/src-tauri/binaries/.gitkeep
+__pycache__/

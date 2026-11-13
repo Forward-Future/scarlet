@@ -1,0 +1,703 @@
+/* The simple workspace: one conversation on the left, then the player with its card and timeline. */
+.simple-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: clamp(380px, 32vw, 480px);
+  flex: none;
+  min-height: 0;
+  border-right: 1px solid var(--color-line);
+  background: var(--color-panel);
+}
+.simple-header { display: flex; align-items: center; gap: 8px; min-height: 54px; padding: 0 10px 0 18px; border-bottom: 1px solid var(--color-line); }
+.simple-header h1 { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.simple-tools { display: flex; align-items: center; gap: 2px; }
+.simple-tools .btn-quiet { font-size: 12px; }
+
+.simple-thread { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.simple-chat { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 18px 12px; display: flex; flex-direction: column; gap: 16px; }
+/* The conversation sits at the bottom, by the message box. A request still in the queue is an empty section, so the
+   space above is a spacer and not a margin on the first one. It gives back the gap after it with a margin on top,
+   not underneath: one underneath leaves the spacer's box poking past the bottom padding, so a chat that fits still
+   scrolls a few pixels and shows a scrollbar. */
+.simple-chat::before { content: ""; flex: 1 0 0; margin-top: -16px; }
+
+.thread-passage { padding: 10px 12px 11px; border: 1px solid var(--color-line); border-radius: 9px; background: rgba(255, 255, 255, .025); }
+.thread-passage .edit-passage .review-spoken { font-size: 14px; }
+.simple-empty { color: var(--color-dim); line-height: 1.5; }
+.simple-turn { display: flex; flex-direction: column; gap: 12px; }
+
+.simple-msg { font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.simple-msg p { margin: 0; }
+.simple-who { display: block; margin-bottom: 1px; font-size: 11px; color: var(--color-dim); }
+.simple-msg.from-you p { color: var(--color-muted); }
+/* What a sent message revised. The same words the box showed above it before sending. */
+.simple-revising { display: inline-block; margin: 1px 0 3px; padding: 0 6px; border: 1px solid var(--color-line); border-radius: 4px; font-size: 11.5px; color: var(--color-muted); }
+.simple-msg.from-scarlet p { color: var(--color-fg); }
+.simple-note { font-size: 12px; color: var(--color-dim); display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.simple-note.is-bad { color: var(--color-bad); }
+
+/* A suggestion waiting to be played: its own line is the control, the play mark before its words. */
+.simple-suggest { display: flex; align-items: baseline; gap: 7px; width: 100%; padding: 0; border: 0; background: none; color: var(--color-fg); font: inherit; text-align: left; cursor: pointer; }
+.simple-msg:has(> .simple-suggest) { min-width: 0; }
+.simple-suggest > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.simple-suggest > svg { flex: none; color: var(--color-muted); transform: translateY(1px); }
+.simple-suggest:hover > span, .simple-suggest.is-on > span { text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; }
+.simple-suggest:hover > svg, .simple-suggest.is-on > svg { color: var(--color-fg); }
+/* A word or two that acts is a link, and every link rests one way: muted, with a rule under it, as "See all" has.
+   It is amber, rule and all, when it is what needs the editor. Words that only say where a request stands have no rule. */
+.simple-link { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; color: var(--color-muted); font-size: 12.5px; cursor: pointer;
+  text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; }
+.simple-link:hover:not(:disabled), .simple-link.is-on { color: var(--color-fg); }
+.simple-link:disabled { opacity: .6; cursor: default; }
+.simple-link.is-warn, .simple-link.is-warn:hover:not(:disabled) { color: var(--color-warn); text-decoration-color: currentColor; }
+.simple-link-quiet { font-size: 12.5px; color: var(--color-dim); }
+.simple-error { font-size: 12px; color: var(--color-bad); }
+/* Retry stands clear of the words it follows. */
+.simple-error > .simple-link { margin-left: 8px; }
+
+.simple-row-text { color: var(--color-fg); overflow-wrap: anywhere; }
+
+.simple-target { display: flex; align-items: center; gap: 10px; padding: 8px 18px 0; font-size: 12px; color: var(--color-muted); border-top: 1px solid var(--color-line); }
+/* The box is aimed at what the chat shows, which the list already marks: the line is there for screen readers only. */
+.simple-target.is-quiet { position: absolute; width: 1px; height: 1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.simple-target.is-quiet + .composer-dock { border-top: 1px solid var(--color-line); padding-top: 12px; }
+.simple-pin:has(> .unit:not([hidden])) + .simple-target.is-quiet + .composer-dock { border-top: 0; padding-top: 9px; }
+.simple-target span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.simple-target + .composer-dock { border-top: 0; padding-top: 6px; }
+
+.simple-progress { position: relative; height: 30px; margin: 4px 2px 0; cursor: pointer; touch-action: none; }
+.simple-progress-line, .simple-progress-done { position: absolute; left: 0; top: 9px; height: 2px; border-radius: 1px; }
+.simple-progress-line { right: 0; background: var(--color-line); }
+.simple-progress-done { background: var(--color-dim); }
+.simple-progress-mark { position: absolute; top: 6px; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; background: var(--color-muted); }
+.simple-progress-mark.is-on { background: var(--color-fg); box-shadow: 0 0 0 3px rgba(255, 255, 255, .16); }
+.simple-progress-head { position: absolute; top: 2px; width: 2px; height: 16px; margin-left: -1px; background: var(--color-fg); border-radius: 1px; }
+.simple-progress-time, .simple-progress-total { position: absolute; top: 19px; font: 10.5px var(--font-mono); color: var(--color-dim); font-variant-numeric: tabular-nums; }
+.simple-progress-time { left: 0; }
+.simple-progress-total { right: 0; }
+
+.simple-decide { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 clamp(16px, 2vw, 28px) 16px; padding: 9px 10px 9px 14px;
+  border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-panel); font-size: 12.5px; color: var(--color-muted); }
+.simple-decide-text { flex: 1 1 14rem; min-width: 0; color: var(--color-fg); }
+.simple-workspace .composer-dock .composer-scope { display: none; }
+.simple-workspace .composer-dock .composer-context-row { display: none; }
+.simple-header .simple-back { display: inline-flex; align-items: center; gap: 5px; margin-left: -8px; color: var(--color-muted); font-size: 12.5px; }
+.simple-header .simple-back:hover { color: var(--color-fg); }
+.simple-header .simple-back + h1 { padding-left: 10px; border-left: 1px solid var(--color-line); }
+.simple-subhead { display: flex; align-items: center; gap: 10px; padding: 10px 18px; border-bottom: 1px solid var(--color-line); font-size: 12.5px; color: var(--color-muted); }
+.simple-subhead strong { flex: 0 1 auto; min-width: 5.5em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--color-fg); font-weight: 600; }
+/* The transcript's figures and help mark, on its heading, in the room its name leaves. Where the figures don't fit they
+   go whole, never cut short: they wrap onto a line of their own, which is out of sight. */
+.simple-subhead-tools { flex: 1 1 24px; display: flex; flex-wrap: wrap-reverse; align-content: flex-end; justify-content: flex-end; align-items: center; column-gap: 4px;
+  height: 24px; min-width: 24px; margin: -3px 0; overflow: hidden; }
+.simple-subhead-tools:empty { display: none; }
+.simple-subhead-tools .reading-window { line-height: 24px; white-space: nowrap; }
+.simple-subhead-tools .btn-icon { flex: none; width: 24px; height: 24px; }
+/* Back to chat keeps the right edge while the pane has put nothing on the heading: the tools are then out of the row. */
+.simple-subhead .simple-link { flex: none; margin-left: auto; }
+.simple-banner { display: flex; align-items: center; gap: 10px; padding: 7px 18px; border-bottom: 1px solid var(--color-line); font-size: 12px; color: var(--color-warn); }
+.simple-transcript { flex: 1; min-height: 0; overflow-y: auto; }
+
+.simple-progress.is-focused { height: 40px; }
+.simple-progress.is-focused .simple-progress-line { top: 13px; height: 2px; }
+.simple-progress.is-focused .simple-progress-head { top: 2px; height: 24px; }
+.simple-progress.is-focused .simple-progress-mark { top: 10px; }
+.simple-progress.is-focused :is(.simple-progress-time, .simple-progress-total, .simple-progress-now) { top: 28px; }
+.simple-progress-band { position: absolute; top: 4px; height: 20px; min-width: 2px; border-radius: 3px;
+  background: repeating-linear-gradient(135deg, rgba(255, 160, 156, .30) 0 5px, rgba(255, 160, 156, .12) 5px 10px);
+  border: 1px solid rgba(255, 160, 156, .55); overflow: hidden; }
+.simple-progress-band span { display: block; padding: 2px 6px; font-size: 10.5px; line-height: 14px; color: var(--color-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A join where footage came out: a line at the spot, labelled with how much. */
+.simple-progress-cut { position: absolute; top: 4px; height: 20px; width: 2px; margin-left: -1px; border-radius: 1px; background: rgba(255, 160, 156, .9); }
+.simple-progress-cut span { position: absolute; left: 6px; top: 2px; padding: 0 6px; border-radius: 3px; border: 1px solid rgba(255, 160, 156, .55);
+  background: rgba(255, 160, 156, .16); font-size: 10.5px; line-height: 14px; color: var(--color-fg); white-space: nowrap; }
+.simple-progress-now { position: absolute; left: 50%; transform: translateX(-50%); font: 10.5px var(--font-mono); color: var(--color-fg); }
+
+/* Names what the player is showing for screen readers. The card or strip under the picture already says it on screen. */
+.simple-on-video { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.simple-decide-text small { display: block; font-size: 11.5px; color: var(--color-dim); }
+
+/* The simple view's highlight and change dots, drawn over the classic timeline. */
+.simple-timeline-band { position: absolute; z-index: 1; top: var(--ruler-height); bottom: 0; min-width: 2px; pointer-events: none; border-radius: 3px;
+  background: repeating-linear-gradient(135deg, rgba(255, 160, 156, .30) 0 5px, rgba(255, 160, 156, .12) 5px 10px);
+  border: 1px solid rgba(255, 160, 156, .7); overflow: hidden; }
+/* While the playing side steps over the passage, a click inside it plays it in Before from that point. It sits over the
+   strip that picks the nearest marker, so its top edge takes the click too while other edits' markers are drawn. */
+.simple-timeline-band.is-live { z-index: 3; pointer-events: auto; cursor: pointer; }
+.simple-timeline-band span { display: inline-block; max-width: 100%; margin: 3px; padding: 1px 6px; border-radius: 4px; background: rgba(12, 12, 12, .78);
+  font-size: 10.5px; line-height: 14px; color: var(--color-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* An edit that keeps its footage (a sound fix, a zoom, a title): outlined, not hatched red, since After plays it.
+   Footage an edit put back is green. */
+.simple-timeline-band.is-kept, .simple-progress-band.is-kept { background: rgba(244, 241, 233, .06); border: 1.5px solid rgba(244, 241, 233, .55); }
+.simple-timeline-band.is-added, .simple-progress-band.is-added { background: color-mix(in srgb, var(--color-ok) 14%, transparent);
+  border: 1.5px solid color-mix(in srgb, var(--color-ok) 70%, transparent); }
+/* Footage another cut in the same pass took out. On After it isn't in the media, so it greys out instead of looking
+   playable, and a click hears it in Before. On Before it plays, so it's only outlined. Hovered, it lifts over the
+   playhead and the markers so its note isn't struck through. */
+.simple-timeline-gap { position: absolute; z-index: 1; top: var(--ruler-height); bottom: 0; min-width: 2px; pointer-events: none; border-radius: 3px;
+  border: 1.5px dashed rgba(244, 241, 233, .5); }
+.simple-timeline-gap.is-skipped { pointer-events: auto; cursor: pointer; border: 1px solid #4d4b48;
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, .07) 0 5px, transparent 5px 10px);
+  -webkit-backdrop-filter: grayscale(1) brightness(.42); backdrop-filter: grayscale(1) brightness(.42); }
+.simple-timeline-gap.is-skipped:hover { z-index: 4; border-color: #9b9893; -webkit-backdrop-filter: grayscale(1) brightness(.55); backdrop-filter: grayscale(1) brightness(.55); }
+.simple-timeline-gap-label { display: block; box-sizing: border-box; width: max-content; max-width: calc(100% - 6px); margin: 3px; padding: 1px 6px;
+  border-radius: 4px; background: rgba(12, 12, 12, .8); font-size: 10.5px; line-height: 14px; color: var(--color-fg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.simple-timeline-gap.is-skipped .simple-timeline-gap-label { color: var(--color-muted); }
+.simple-timeline-cut { position: absolute; z-index: 1; top: var(--ruler-height); bottom: 0; width: 2px; margin-left: -1px; pointer-events: none; background: rgba(255, 160, 156, .9); }
+.simple-timeline-cut span { position: absolute; left: 6px; top: 3px; padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(255, 160, 156, .55);
+  background: rgba(40, 22, 21, .9); font-size: 10.5px; line-height: 14px; color: var(--color-fg); white-space: nowrap; }
+.simple-timeline-mark { position: absolute; z-index: 1; pointer-events: none; }
+/* Each edit is a thin tick where they crowd, so none hides another. Kept ticks are white, ones asking for a look amber. */
+.simple-timeline-mark.is-tick { top: calc(var(--ruler-height) - 6px); width: 2px; height: 12px; margin-left: -1px; border-radius: 1px;
+  background: var(--color-muted); box-shadow: 0 0 0 1px #1a1918; }
+.simple-timeline-mark.is-tick[data-state="check"] { background: var(--color-warn); }
+.simple-timeline-mark.is-tick[data-state="kept"] { background: var(--color-fg); }
+/* A settled edit, shown only while its list is open in the chat: short and faint, so the ones that need a look stand out. */
+.simple-timeline-mark.is-tick.is-quiet { top: calc(var(--ruler-height) - 3px); width: 1px; height: 6px; margin-left: -.5px; background: #6b6864; box-shadow: none; }
+.simple-timeline-mark.is-tick.is-hot, .simple-timeline-mark.is-tick.is-on { top: calc(var(--ruler-height) - 9px); width: 3px; height: 18px; margin-left: -1.5px; background: var(--color-fg); }
+/* The hovered or selected tick names its edit in a small flag above it. */
+.simple-timeline-mark.is-tick .simple-timeline-number { position: absolute; bottom: calc(100% + 2px); left: 50%; transform: translateX(-50%);
+  padding: 2px 5px; border-radius: 8px; background: var(--color-fg); color: var(--color-bg); }
+.simple-timeline-mark.is-dot { top: calc(var(--ruler-height) - 4px); width: 8px; height: 8px; margin-left: -4px; border-radius: 50%;
+  background: var(--color-muted); box-shadow: 0 0 0 1px #1a1918; }
+/* A dot with no number is amber too while it asks for a look. */
+.simple-timeline-mark.is-dot[data-state="check"] { background: var(--color-warn); }
+.simple-timeline-mark.is-dot.is-hot, .simple-timeline-mark.is-dot.is-on { background: var(--color-fg); }
+.simple-timeline-mark.is-dot.is-on { box-shadow: 0 0 0 3px rgba(255, 255, 255, .16); }
+/* Hovering anywhere along the markers picks the nearest one, and lifts it over the playhead and the others. */
+.simple-timeline-hover { position: absolute; z-index: 2; left: 0; right: 0; top: calc(var(--ruler-height) - 12px); height: 24px; }
+/* Over a marker that opens its edit, the pointer says a press opens it instead of scrubbing. */
+.simple-timeline-hover.is-aimed { cursor: pointer; }
+.simple-timeline-mark.is-hot, .simple-timeline-mark.is-on { z-index: 4; }
+.simple-timeline-tip { position: absolute; z-index: 6; top: 14px; display: none; flex-direction: column; gap: 8px; width: max-content; max-width: 18rem; padding: 7px 10px;
+  border: 1px solid var(--color-line); border-radius: 6px; background: var(--color-panel); box-shadow: 0 3px 12px rgb(0 0 0 / 35%);
+  font-size: 12px; font-style: normal; line-height: 1.35; color: var(--color-fg); pointer-events: none; }
+/* A hovered marker's note sits under the frame in the scrub preview: one card, not a second popup below the track. */
+.simple-timeline-tip.is-joined { position: static; display: flex; width: auto; max-width: none; padding: 7px 10px 8px; border: 0; border-top: 1px solid var(--color-line);
+  border-radius: 0; background: none; box-shadow: none; text-align: left; }
+.simple-timeline-tip > span { display: flex; flex-direction: column; gap: 2px; }
+.simple-timeline-tip b { font-weight: 600; font-size: 11px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.simple-timeline-tip-summary, .simple-timeline-tip em { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.simple-timeline-tip small { font-size: 11px; color: var(--color-dim); font-variant-numeric: tabular-nums; }
+.simple-timeline-tip em { margin-top: 3px; padding-top: 4px; border-top: 1px solid var(--color-line); font-style: normal; font-size: 11.5px; color: var(--color-muted); }
+
+/* What a request's rows share: the row that carries Stop when there is no heading, a quiet figure, and the steps so far. */
+.run-stop { margin-left: auto; }
+.run-summary { color: var(--color-muted); }
+.run-dim { color: var(--color-dim); font-variant-numeric: tabular-nums; }
+.run-list { margin-top: 2px; }
+.run-row { display: flex; }
+.run-row .simple-row-text { flex: 1 1 auto; min-width: 0; }
+.run-row .simple-row-text { color: var(--color-muted); white-space: pre-wrap; }
+.run-live .simple-row-text { color: var(--color-fg); }
+@media (prefers-reduced-motion: no-preference) {
+  .run-row:not(.run-live) { animation: run-in 220ms ease-out; }
+  @keyframes run-in { from { opacity: 0; transform: translateY(3px); } }
+}
+
+/* The editor's and Scarlet's names on a message are for screen readers: the chat has no labels. */
+.simple-who { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.simple-msg.from-you .simple-revising { margin-top: 0; }
+
+/* One badge column for the whole list, so a kept edit's wider badge moves every title together. Each item passes the
+   list's columns on to its row, which is the row of a pass's list with the edit's number where that one has a time. */
+.simple-edits { display: grid; grid-template-columns: minmax(18px, max-content) minmax(0, 1fr) auto; column-gap: 8px; margin-top: 2px; }
+.simple-edits > li { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; justify-items: start; }
+.simple-edits > li > * { grid-column: 1 / -1; }
+.simple-edit { display: grid; grid-template-columns: subgrid; align-items: center; justify-self: stretch; width: calc(100% + 16px); margin: 0 -8px; }
+.simple-edit-title { grid-column: 2; min-width: 0; overflow-wrap: anywhere; }
+.simple-edit-value { grid-column: 3; }
+.simple-edit-check, .simple-pass-check { grid-column: 2 / -1; font-size: 12px; line-height: 1.35; color: var(--color-warn); }
+.simple-edit-check.is-kept, .simple-pass-check.is-kept { color: var(--color-dim); }
+/* The edit's number; amber while it asks for a look. Kept: filled, widened to a pill with a check beside the number. */
+.edit-badge { justify-self: start; display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; border: 1.2px solid var(--color-muted);
+  background: var(--color-raised); color: var(--color-fg); font-size: 10px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.edit-badge.is-check { border-color: var(--color-warn); color: var(--color-warn); }
+.edit-badge.is-kept { display: inline-flex; align-items: center; gap: 1.5px; width: auto; padding: 0 4px 0 5px; border-radius: 9px;
+  border-color: var(--color-fg); background: var(--color-fg); color: var(--color-bg); }
+.edit-badge.is-kept svg { stroke-width: 2.6; }
+/* Which version a revised edit or call is on ("v2"): plain small text, as a row's figure is. The same after a row's
+   words in either kind of list, where a call's row ends in it, and before the note on a call's card, where hovering it
+   shows the earlier version and the note that sent it back. */
+.edit-version { flex: none; font-size: 12px; color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+:is(.simple-pass-label, .simple-edit-title) > .edit-version { margin-left: 7px; }
+
+.simple-action { display: flex; align-items: center; gap: 10px; margin-top: 4px; font-size: 12.5px; }
+.simple-action.is-done { color: var(--color-dim); }
+.simple-action-main { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: var(--color-fg); font: inherit; font-weight: 600; cursor: pointer; }
+.simple-action-main:disabled { opacity: .6; cursor: default; }
+.simple-action-more { display: inline-grid; place-items: center; width: 24px; height: 20px; border-radius: 5px; color: var(--color-dim); }
+.simple-action-more:hover { background: var(--color-raised); color: var(--color-fg); }
+/* A thread's menu (⋯) shows while the pointer is on the thread, or while the menu has focus or is open. */
+.simple-turn .simple-action-more { opacity: 0; transition: opacity .12s; }
+.simple-turn:hover .simple-action-more, .simple-action button:focus-visible .simple-action-more, .simple-action [aria-expanded="true"] .simple-action-more { opacity: 1; }
+/* When the menu is a thread's only action it takes no row: the ⋯ sits in the gap below the thread. */
+.simple-turn > .simple-action:not(.is-done):not(:has(.simple-action-main, .simple-link-quiet, [role="status"], [role="alert"])) { height: 0; margin-top: -12px; overflow: visible; justify-content: flex-end; }
+.simple-turn > .simple-action:not(.is-done):not(:has(.simple-action-main, .simple-link-quiet, [role="status"], [role="alert"])) .simple-action-more { height: 16px; }
+
+/* An applied edit's Before/After sits in the review panel's toolbar. */
+.review-compare { display: inline-flex; }
+.review-compare:empty { display: none; }
+
+/* An applied edit's dot and a waiting call's carry their number, as in the chat: filled once kept, amber while it asks for a look. */
+.simple-timeline-mark.is-numbered { top: calc(var(--ruler-height) - 9px); width: 17px; height: 17px; margin-left: -8.5px; display: grid; place-items: center;
+  border: 1.2px solid var(--color-muted); border-radius: 9px; background: var(--color-raised); box-shadow: 0 0 0 1px #1a1918; }
+.simple-timeline-number { white-space: nowrap; font-size: 10px; font-weight: 600; line-height: 1; font-style: normal; color: var(--color-fg); font-variant-numeric: tabular-nums; pointer-events: none; }
+.simple-timeline-mark.is-numbered[data-state="check"] { border-color: var(--color-warn); }
+.simple-timeline-mark.is-numbered[data-state="check"] .simple-timeline-number { color: var(--color-warn); }
+.simple-timeline-mark.is-numbered[data-state="kept"] { border-color: var(--color-fg); background: var(--color-fg); }
+.simple-timeline-mark.is-numbered[data-state="kept"] .simple-timeline-number { color: var(--color-bg); }
+.simple-timeline-mark.is-numbered.is-hot, .simple-timeline-mark.is-numbered.is-on { border-color: var(--color-fg); }
+.simple-timeline-mark.is-numbered.is-hot:not([data-state="kept"]), .simple-timeline-mark.is-numbered.is-on:not([data-state="kept"]) { background: #3a3a3a; }
+.simple-timeline-mark.is-numbered.is-on { box-shadow: 0 0 0 3px rgba(255, 255, 255, .16); }
+/* An edit applied a moment ago arrives with a moment: its marker pops in with one ring that spreads and fades. A cut's
+   red first closes up where the footage came out. With motion reduced, the marker is simply there. */
+.simple-timeline-mark[data-landed] { animation: timeline-land .42s cubic-bezier(.2, .9, .3, 1.35) both; }
+.simple-timeline-mark[data-landed="cut"] { animation-delay: .26s; }
+.simple-timeline-mark[data-landed]::after { content: ""; position: absolute; inset: -1.5px; border: 1.5px solid rgba(244, 241, 233, .75);
+  border-radius: inherit; pointer-events: none; animation: timeline-land-ring .7s ease-out both; animation-delay: inherit; }
+.simple-timeline-mark.is-dot[data-landed]::after { border-radius: 50%; }
+.simple-timeline-closing { position: absolute; z-index: 1; top: var(--ruler-height); bottom: 0; width: 44px; margin-left: -22px; pointer-events: none;
+  border-radius: 3px; border: 1px solid rgba(255, 160, 156, .7); background: rgba(255, 160, 156, .26);
+  transform: scaleX(0); animation: timeline-close .3s cubic-bezier(.5, 0, .75, 0) both; }
+@keyframes timeline-land { from { transform: scale(.35); opacity: 0; } 60% { transform: scale(1.18); opacity: 1; } to { transform: none; opacity: 1; } }
+@keyframes timeline-land-ring { from { transform: scale(1); opacity: .8; } to { transform: scale(2.4); opacity: 0; } }
+@keyframes timeline-close { from { transform: scaleX(1); opacity: 1; } to { transform: scaleX(0); opacity: .5; } }
+
+/* The simple view's menu holds everything that isn't the edit: learnings, media, history, the model. Its button is
+   marked when something inside needs the editor, and the row that does carries the same mark. */
+.simple-more { position: relative; }
+.simple-more.needs-you { color: var(--color-fg); }
+.simple-more.needs-you::after { content: ""; position: absolute; top: 4px; right: 2px; width: 5px; height: 5px; border-radius: 50%; background: var(--color-warn);
+  box-shadow: 0 0 0 2px var(--color-panel); }
+/* While videos cache, a ring fills around the button, drawn like the one beside "Updating": Media is inside the menu,
+   so this is the only sign of it in the window. It is gray, since it asks nothing of the editor, and the amber mark
+   sits over it. With no figure yet it is a quarter that turns, or a whole ring that fades in and out with motion reduced. */
+.simple-more-ring { position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; transform: rotate(-90deg); pointer-events: none; }
+.simple-more-ring circle { fill: none; stroke: var(--color-line); stroke-width: 1.5; }
+.simple-more-ring circle + circle { stroke: var(--color-muted); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+.simple-more.needs-you::after { z-index: 1; }
+@media (prefers-reduced-motion: no-preference) {
+  .simple-more-ring.is-unknown { animation: simple-more-ring-turn 1s linear infinite; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .simple-more-ring circle + circle { transition: none; }
+  .simple-more-ring.is-unknown circle + circle { stroke-dasharray: none; animation: media-link-breathe 2.4s ease-in-out infinite !important; }
+}
+@keyframes simple-more-ring-turn { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+.menu-value { margin-left: auto; min-width: 0; padding-left: 10px; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.menu-dot { flex: none; margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--color-warn); }
+.menu-value + .menu-dot { margin-left: 8px; }
+/* Learnings: the rules that wait for the editor, in a card under the header. One rule to a block: the rule, the words
+   it came from, what the skill says that it replaces, then the skill it goes to with Revise, Approve and a small ×
+   that declines, as on a call's card. */
+.learn-panel { position: absolute; z-index: 40; top: 58px; left: 12px; right: 12px; max-height: calc(100% - 74px); overflow-y: auto; padding: 4px 14px 6px;
+  border: 1px solid var(--color-line); border-radius: 12px; background: var(--color-panel); box-shadow: 0 18px 40px rgb(0 0 0 / 45%); outline: none; }
+.learn-title { margin: 10px 0 2px; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--color-dim); }
+.learn-list { margin: 0; padding: 0; list-style: none; }
+.learn-item { padding: 11px 0 10px; }
+.learn-item + .learn-item { border-top: 1px solid var(--color-line); }
+.learn-rule { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--color-fg); overflow-wrap: anywhere; }
+/* Revise turns the rule into a line to reword in place. Its text sits exactly where the rule's did, so nothing under it moves. */
+.learn-rule-edit { display: block; box-sizing: border-box; width: calc(100% + 14px); margin: -4px -7px; padding: 4px 7px; border: 0; border-radius: 6px;
+  background: var(--color-bg); box-shadow: inset 0 0 0 1px var(--color-line); font: inherit; font-size: 13.5px; line-height: 1.45; color: var(--color-fg);
+  resize: none; overflow: hidden; }
+.learn-rule-edit:focus { box-shadow: inset 0 0 0 1px var(--color-muted); }
+.learn-revise[aria-pressed="true"] { color: var(--color-fg); }
+/* Revise is plain text, as on a call's card: only its colour answers the pointer. */
+.learn-revise:hover { background: none; }
+.learn-said { margin: 2px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--color-dim); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.learn-replaces { margin: 2px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--color-muted); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+.learn-replaces-label { color: var(--color-warn); }
+.learn-problem { margin: 5px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--color-warn); overflow-wrap: anywhere; }
+.learn-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-height: 34px; margin-top: 9px; }
+.learn-to { flex: none; font-size: 12.5px; color: var(--color-muted); }
+/* The skill's name takes the room the decisions leave it, up to its whole length, and reads in full on hover. Where
+   that room would leave it only a few letters, the decisions go together to a line of their own, at the right. */
+.learn-actions > .preference-select.compact { flex: 1 1 6em; min-width: 0; max-width: max-content; }
+.learn-decide { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.learn-saving { font-size: 12.5px; }
+.learn-empty { padding: 11px 0 12px; }
+.learn-empty p { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--color-fg); }
+.learn-empty p + p { margin-top: 2px; font-size: 12.5px; color: var(--color-dim); }
+.media-cache { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--color-dim); white-space: nowrap; }
+.media-cache .animate-spin { width: 10px; height: 10px; border-width: 1.5px; }
+.media-cache.is-ok { color: var(--color-ok); }
+.media-cache.is-busy { color: var(--color-fg); }
+.media-cache.is-bad { color: var(--color-warn); }
+.media-cache-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 3px; }
+@keyframes media-link-breathe { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+
+/* A dialogue pass in the chat: its calls while they wait, then one sentence and a link that opens its edits. */
+.simple-pass { margin-top: 6px; border: 1px solid var(--color-line); border-radius: 9px; background: rgba(255, 255, 255, .025); font-size: 12.5px; }
+.simple-pass-line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; padding: 8px 8px 8px 12px; }
+.simple-pass-toggle { padding: 0; border: 0; background: none; color: var(--color-muted); font: inherit; text-align: left; cursor: pointer; font-variant-numeric: tabular-nums; }
+.simple-pass-toggle b { color: var(--color-fg); font-weight: 600; }
+/* What needs the editor is the amber link, with its rule under it wherever it sits. */
+.simple-pass-need { padding: 0; border: 0; background: none; color: var(--color-warn); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.simple-pass-ok { color: var(--color-ok); }
+/* Keep offscreen rows' absolute screen-reader labels in the list's scroll area. */
+.simple-pass-list { position: relative; max-height: 320px; overflow-y: auto; margin: 0 4px 4px; border-top: 1px solid var(--color-line); }
+/* One row for every list of edits in the chat: a pass's calls, every edit of a pass, any other request's edits. Its
+   type, its box and what the pointer does to it are the same. Only what leads a row differs: a time, or a number. */
+.simple-pass-list > li > button, .simple-edit { padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--color-fg); font: inherit; font-size: 12.5px;
+  text-align: left; cursor: pointer; }
+.simple-pass-list > li > button:hover:not(:disabled), .simple-edit:hover { background: rgba(255, 255, 255, .04); }
+.simple-pass-list > li > button.is-on, .simple-edit.is-on { background: var(--color-raised); }
+.simple-pass-list > li > button { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; width: 100%; }
+/* Past an hour a time is two characters longer ("1:02:07" against "12:34"). Every row of that list takes the wider
+   column, so a time never runs into its words, amber tint and all, and the words keep one edge down the list. */
+.simple-pass-list.has-hours > li > button { grid-template-columns: 52px minmax(0, 1fr) auto; }
+.simple-pass-list > li > button:disabled { cursor: default; color: var(--color-muted); }
+/* A row fills the list from edge to edge, so the ring that says the keyboard is on it sits inside the row. */
+.simple-pass-list > li > button:focus-visible { outline-offset: -2px; }
+.simple-pass-time { font: 11px var(--font-mono); color: var(--color-dim); font-variant-numeric: tabular-nums; }
+.simple-pass-label { overflow-wrap: anywhere; }
+/* A row that needs the editor has its time in bold amber on a faint amber tint. Its words for a screen reader aren't drawn. */
+.simple-pass-time.is-need { justify-self: start; margin: -1px -5px; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--color-warn) 16%, transparent);
+  color: var(--color-warn); font-weight: 600; }
+.simple-pass-time > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* What a row ends in: how much came out, what the edit did, or where it stands. */
+.simple-pass-value, .simple-edit-value { font-size: 12px; color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* Where a card's cut or edit stands among the ones still waiting: "Cut 2", "1 of 3". */
+.edit-card-count { flex: none; font-size: 12px; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* The open edit's card sits right on top of the timeline, above the passage it cut: the change, the join and the
+   decision in one place. Words first: Scarlet's note as a caption, the passage, then one row of controls. It reads whole
+   sentences either side of the cut, so it grows with the passage and the video gives way. */
+/* The card rises a few pixels into place as it opens. */
+.edit-card { animation: edit-card-rise .2s cubic-bezier(.2, .8, .3, 1) both; }
+@keyframes edit-card-rise { from { opacity: 0; transform: translateY(6px); } }
+.edit-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-bottom: 14px; padding: 10px 12px; border: 1px solid #44423f; border-radius: 10px; background: #1f1e1c;
+  max-height: 45vh; overflow: auto; }
+.edit-card-title { margin: 0; min-width: 0; font-size: 12.5px; font-weight: 400; line-height: 1.4; color: var(--color-dim); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+/* Scarlet's note sits in the card's row after the picker, on up to two lines. One longer than that opens in full on a
+   click: no button, only the pointer says so. */
+.edit-card-bar .edit-card-title { flex: 1 1 12rem; }
+.edit-card-bar .edit-card-title.is-clipped, .edit-card-bar .edit-card-title.is-open { cursor: pointer; }
+.edit-card-bar .edit-card-title.is-open { display: block; }
+.edit-card-unchecked { color: var(--color-muted); }
+.edit-card-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; color: var(--color-dim); }
+.edit-card-side { display: inline-flex; align-items: center; gap: 10px; font-size: 12px; color: var(--color-muted); }
+/* Revise is plain text beside the decision, on a card and on a suggestion's strip. */
+.edit-card .review-actions .btn-ghost[data-key="R"] { border-color: transparent; background: none; color: var(--color-muted); }
+.edit-card .review-actions .btn-ghost[data-key="R"]:enabled:hover { color: var(--color-fg); }
+.edit-card-bar .review-actions { margin-left: auto; }
+/* An applied edit's Undo edit is a small icon ahead of Revise, with its decisions at the row's end. */
+.edit-card-acts { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
+.edit-card-acts .review-actions { margin-left: 0; }
+/* The cut's words open under the card's row and scroll inside it, so a long passage never pushes the timeline away. */
+.edit-card > .thread-passage { max-height: 30vh; overflow-y: auto; }
+/* Keys show on hover (each control's title), not in boxes. */
+.edit-card .review-actions button[data-key]::after { content: none; }
+/* What an edit that removed nothing did: "Audio", "Zoom". Neutral, since its footage stays; green for footage put back. */
+.edit-card-length { padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; line-height: 17px; white-space: nowrap; }
+/* A click into another cut's footage on the timeline switched to Before: the card says whose footage it is. The way
+   back is the lit icon in the card's row. */
+.edit-card-switched { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 9px; padding: 6px 10px; border: 1px solid #5b5852;
+  border-radius: 8px; background: #2a2826; font-size: 12.5px; }
+.edit-card-switched-side { padding: 0 7px; border-radius: 999px; background: var(--color-hi); color: var(--color-bg); font-size: 11px; font-weight: 600; line-height: 18px; }
+.edit-card-switched-text { flex: 1 1 14rem; min-width: 0; }
+.edit-card-side:has(> .edit-card-icon) { gap: 4px; }
+/* The passage leads: the words as they'll play, at reading size. */
+.edit-passage .review-spoken { margin: 0; font-size: 15px; line-height: 1.6; color: var(--color-fg); overflow-wrap: anywhere; }
+.edit-passage .review-kept { color: var(--color-fg); }
+.edit-passage .review-removed { padding: 1px 2px; border-radius: 3px; background: rgba(255, 160, 156, .12); color: var(--color-bad);
+  -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+/* Words another edit removes from the same passage: struck, but quieter than this edit's. */
+.edit-passage .review-removed.is-other { padding: 0; background: none; color: var(--color-dim); text-decoration-color: color-mix(in srgb, var(--color-bad) 55%, transparent); }
+/* Where the cut joins: ✂ and its length, or ✂ and the few words it took. A long one opens its words beside it. */
+.edit-passage-cut { display: inline-flex; align-items: center; gap: 5px; margin: 0 1px; padding: 0 7px; border: 0; border-radius: 6px;
+  background: rgba(255, 160, 156, .12); color: var(--color-bad); font: inherit; font-size: 13px; font-weight: 500; line-height: 21px;
+  vertical-align: 1px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.edit-passage-cut svg { flex: none; }
+.edit-passage-wait { font-size: 13px; }
+button.edit-passage-cut { cursor: pointer; }
+button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { background: rgba(255, 160, 156, .2); }
+.edit-passage-cut.is-words { display: inline; padding: 1px 6px; font-size: 15px; line-height: inherit; white-space: normal; vertical-align: baseline;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.edit-passage-cut.is-words svg { display: inline-block; margin-right: 5px; vertical-align: -1px; }
+.edit-passage .edit-passage-cut .review-removed { padding: 0; background: none; }
+.edit-card-length.is-kind { background: rgba(244, 241, 233, .08); color: var(--color-muted); }
+.edit-card-length.is-added { background: color-mix(in srgb, var(--color-ok) 15%, transparent); color: var(--color-ok); }
+/* A call hasn't come out yet, so its mark and words are amber, not red. */
+.thread-passage.is-call .edit-passage-cut { background: rgba(237, 194, 133, .12); color: var(--color-warn); }
+.thread-passage.is-call button.edit-passage-cut:hover, .thread-passage.is-call button.edit-passage-cut[aria-expanded="true"] { background: rgba(237, 194, 133, .2); }
+.thread-passage.is-call .edit-passage .review-removed { background: rgba(237, 194, 133, .12); color: var(--color-warn); text-decoration-color: var(--color-warn); }
+.thread-passage.is-call .edit-passage .edit-passage-cut .review-removed { background: none; }
+/* Where the decisions were, on a call that's with Scarlet. */
+.edit-card-status { margin-left: auto; padding: 0 4px; font-size: 12.5px; color: var(--color-muted); white-space: nowrap; }
+.edit-card-status.is-ask { color: var(--color-warn); }
+.edit-card .review-actions [aria-pressed="true"].btn-ghost { border-color: var(--color-fg); color: var(--color-fg); }
+
+/* The player's clock says where the playhead is. The exact time on the timeline shows while the pointer is on it or it has focus. */
+.simple-stage .timeline-playhead-time { opacity: 0; transition: opacity .12s; }
+.simple-stage .timeline-track:hover .timeline-playhead-time, .simple-stage .timeline-slider:focus-visible .timeline-playhead-time { opacity: 1; }
+
+/*
+ * One request is a section of the chat: a band across the chat with its name, the editor's words and where it stands,
+ * then what Scarlet is doing about it or what it made, as plain lines under the band. No card. The request Scarlet is
+ * on now is fixed above the message box, and the ones waiting behind it sit in a tray attached to the box.
+ */
+/* A thread whose only request is pinned or still queued has nothing to show in the chat yet. */
+.simple-turn:empty { display: none; }
+.unit { position: relative; display: flex; flex-direction: column; min-width: 0; }
+/* A request's heading is a band from one edge of the chat to the other: the editor's words on up to two lines, after
+   the tag of the cut or edit they were about, and at the right where it stands. The whole message is in its title. */
+.simple-chat, .simple-pin { --chat-gutter: 18px; }
+.unit > .unit-msg { display: flex; align-items: baseline; gap: 10px; min-width: 0; margin: 0 calc(-1 * var(--chat-gutter, 18px)); padding: 8px var(--chat-gutter, 18px);
+  border-top: 1px solid var(--color-line); border-bottom: 1px solid var(--color-line); background: rgba(255, 255, 255, .04); }
+.unit > .req { padding-top: 6px; }
+/* Where the request stands: a dot while Scarlet asks, a word once it stopped early or left a suggestion. A finished
+   request has nothing here. While Scarlet has the request, Stop follows as the heading's last word. */
+.unit-state { flex: none; align-self: center; display: inline-flex; align-items: center; font-size: 12.5px; line-height: 19px; color: var(--color-muted); white-space: nowrap; }
+.unit-state:empty { display: none; }
+.unit-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-warn); }
+/* What needs the editor takes that place: "N need you" sits at the band's right, on its first line, and the band's
+   words keep clear of it. It is drawn by the rows that count it, so it is placed from here. */
+.unit:has(> .unit-msg) .simple-pass-need { position: absolute; top: 9px; right: 0; z-index: 1; font-size: 12.5px; line-height: 19px;
+  text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; }
+/* While it lists just the ones that need the editor it reads heavier, with a thicker rule under it, so the list under
+   the sentence reads as its own. It stays a link: the editor turned down a pill here. */
+.unit:has(> .unit-msg) .simple-pass-need[aria-pressed="true"] { font-weight: 600; text-decoration-thickness: 2px; }
+.unit:has(.simple-pass-need) > .unit-msg { padding-right: calc(var(--chat-gutter, 18px) + 96px); }
+/* It takes the dot's place. A word for how the run ended stays, before it: with calls or edits still waiting, the
+   action under them ("Resume") would otherwise have nothing that says the run stopped. */
+.unit:has(.simple-pass-need) > .unit-msg > .unit-state:has(> .unit-dot) { display: none; }
+/* Stop is the heading's last word while Scarlet has the request, where its ring was. "N need you" sits before it. */
+.unit-stop { flex: none; align-self: center; font-size: 12.5px; line-height: 19px; }
+.unit-state:not(:empty) + .unit-stop { margin-left: -2px; }
+.unit:has(> .unit-msg > .unit-stop) .simple-pass-need { right: 42px; }
+.unit:has(.simple-pass-need):has(> .unit-msg > .unit-stop) > .unit-msg { padding-right: var(--chat-gutter, 18px); }
+.unit:has(.simple-pass-need) > .unit-msg > .unit-stop { margin-left: 96px; }
+/* Stop, or the word for where it stands, sits on the first line of the editor's words, on their baseline, however
+   many lines they take: level with "N need you". A dot has no baseline of its own, so it sits in the middle of that
+   line, beside the Stop after it. */
+.unit > .unit-msg > .unit-stop, .unit > .unit-msg > .unit-state:not(:has(> .unit-dot)) { align-self: baseline; }
+.unit > .unit-msg > .unit-state:has(> .unit-dot) { align-self: flex-start; height: 19px; }
+/* A request about one cut or edit, inside the block that lists it and directly under that cut's or edit's row: a rule
+   at its left, its name and the editor's words, then its work. It leaves when it's done. */
+.subunit { min-width: 0; margin: 4px 0 8px 31px; padding: 1px 0 1px 10px; border-left: 2px solid var(--color-line); font-size: 12.5px; text-align: left; }
+.simple-pass > .subunit { margin-left: 3px; }
+/* Under its row the rule hangs from the middle of the row's number, or sits before the row's words where the row
+   leads with a time, and the request's own words start where the row's do. */
+.simple-pass-list.is-short > li > .subunit { margin-left: 16px; padding-left: 16px; }
+.simple-pass-list:not(.is-short) > li > .subunit { margin-left: 44px; padding-left: 8px; }
+.simple-pass-list.has-hours > li > .subunit { margin-left: 58px; }
+.simple-edits > li > .subunit { margin-left: 8px; padding-left: 16px; }
+/* The last row's request ends the list, so the line under the list isn't pushed off by both their margins. */
+.simple-pass-list > li:last-child > .subunit { margin-bottom: 3px; }
+/* In the edits' grid it spans every column. Its own width counts for nothing there, or its words would widen the
+   column of amounts and push the titles into wrapping. */
+.simple-edits > li > .subunit { justify-self: stretch; contain: inline-size; }
+.subunit-msg { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.subunit-msg .simple-who { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* The editor's words are the bright line under the row, and what Scarlet says about the request is quieter, so the
+   request reads first. A question stays bright: it needs the editor. */
+.subunit-msg p { flex: 1; min-width: 0; margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--color-fg); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+/* Stop, or the word for where it stands, sits on the first line of the editor's words, on their baseline, however
+   many lines they take. A dot has no baseline of its own and stays centred. */
+.subunit-msg > .unit-stop, .subunit-msg > .unit-state:not(:has(> .unit-dot)) { align-self: baseline; line-height: 1.45; }
+.subunit .req-row { min-height: 24px; }
+/* The editor's words stand a little clear of Scarlet's under them. Nothing in here is set larger than the row it sits
+   under, and its steps are as close as its rows. */
+.subunit-msg { padding-bottom: 3px; }
+.subunit .req-say, .subunit .req-now { font-size: 12.5px; }
+.subunit .req-say.said { color: var(--color-muted); }
+/* Under the row it is about, that row names it: its own tag shows only where it sits apart from its row. */
+.subunit-msg .simple-revising { margin: 0 7px 0 0; }
+.simple-pass-list .subunit-msg .simple-revising, .simple-edits > li > .subunit .subunit-msg .simple-revising { display: none; }
+/* The list's rows reach 8px past the text on each side: a request under one ends where the row's own words do. */
+.simple-pass-list > li > .subunit { margin-right: 8px; }
+.unit-msg p { flex: 1; min-width: 0; margin: 0; font-size: 13px; line-height: 1.45; color: var(--color-muted); white-space: pre-wrap; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.unit-msg .simple-revising { margin: 0 7px 0 0; }
+/* Something the editor said that belongs to no request of its own, such as a note left on a change: their words, set
+   off by a rule at the left like an answer, not a bubble. */
+.simple-turn > .simple-msg.from-you { align-self: stretch; max-width: none; padding: 0 0 0 10px; border-left: 2px solid var(--color-line); border-radius: 0; background: none; }
+/* A long one keeps to two lines, as a request's words do, and its title has the rest. */
+.simple-turn > .simple-msg.from-you p { color: var(--color-muted); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.simple-pin { flex: none; max-height: 62vh; overflow-y: auto; padding: 0 18px; border-top: 1px solid var(--color-line); }
+/* Over the Transcript it keeps to a third of the height, so a pass with many calls waiting leaves the words room. */
+.simple-transcript ~ .simple-pin { max-height: 34vh; }
+/* Give the rows the space left below the request's heading and summary, including while a revision runs in a row. */
+.simple-pin:has(.simple-pass-list, .simple-edits),
+.simple-pin :is(.unit, .req, .simple-pass):has(.simple-pass-list, .simple-edits) { display: flex; flex-direction: column; min-height: 0; }
+.simple-pin :is(.simple-pass-list, .simple-edits) { max-height: none; overflow-y: auto; }
+/* Fixed above the message box, the band's own top rule would double the spot's. */
+.simple-pin > .unit > .unit-msg { border-top: 0; }
+/* Scarlet's closing words come up here with their request's block, with the room the conversation gives them. */
+.simple-pin > .simple-msg { padding: 2px 0 10px; }
+/* Why Stop, Resume or Retry failed, as the last line of the request it was pressed on. */
+.unit-error { margin: 0; padding: 2px 0 8px; }
+.simple-pin > .unit:has(> .unit-msg) .simple-pass-need { top: 8px; }
+/* With nothing under way and no pass waiting on the editor, nothing is fixed here. */
+.simple-pin:not(:has(> .unit:not([hidden]))) { display: none; }
+.simple-pin:has(> .unit:not([hidden])) + .composer-dock { border-top: 0; padding-top: 9px; }
+.simple-pin:has(> .unit:not([hidden])) + .simple-target { border-top: 0; }
+/* Fixed here, a long message keeps to two lines so the spot holds its place. Its title carries the rest. */
+.simple-pin .unit-msg p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+
+.req { min-width: 0; font-size: 12.5px; }
+.req-row { display: flex; align-items: center; gap: 7px; min-height: 28px; font-variant-numeric: tabular-nums; }
+.req-right { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 10px; color: var(--color-dim); white-space: nowrap; }
+.req-right .simple-link { font-size: 12.5px; }
+.req-status { color: var(--color-muted); }
+.req-toggle { display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.req-toggle:disabled { cursor: default; }
+.req-toggle > [role="status"] { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.req-dot { flex: none; width: 6px; height: 6px; margin-right: 3px; border-radius: 50%; background: var(--color-warn); }
+/* Under a band the dot is the band's. */
+.unit > .req > .req-status .req-dot { display: none; }
+/* What a stopped run saved, and on the same line its one action. */
+.req-result:has(> .req-recover) > .req-summary { flex: none; color: var(--color-muted); }
+.req-result > .req-recover { margin-left: 6px; }
+.req-ask { color: var(--color-warn); }
+.req-state.is-bad { color: var(--color-bad); }
+/* What Scarlet is doing this moment, while it works: a turning ring, then its words on up to two lines. Each step
+   listed under a question's line has the same mark: a filled tick once done, a turning ring while under way. */
+.req-now { align-items: flex-start; gap: 9px; padding: 4px 0; font-size: 13px; line-height: 1.45; }
+.req-now > .req-mark { margin-top: 2px; }
+.req-now-text { flex: 1; min-width: 0; color: var(--color-fg); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.req-now > .req-right { align-self: center; }
+.req-mark { flex: none; display: grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid #4c4c4c; }
+.req-mark[data-state="done"] { border: 0; background: #9a9a9a; color: var(--color-panel); }
+.req-mark[data-state="done"] svg { width: 11px; height: 11px; }
+.req-mark[data-state="working"] { border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
+.req-mark-gap { flex: none; width: 15px; }
+@media (prefers-reduced-motion: no-preference) {
+  .req-mark[data-state="working"] { animation: req-mark-turn 1s linear infinite; }
+}
+/* With motion reduced the ring doesn't turn. It fades in and out, so it still reads as work going on. !important gets
+   it past the rule that stills every animation (studio.css). */
+@media (prefers-reduced-motion: reduce) {
+  .req-mark[data-state="working"] { animation: media-link-breathe 2.4s ease-in-out infinite !important; }
+}
+@keyframes req-mark-turn { to { transform: rotate(360deg); } }
+.req-result { color: var(--color-muted); }
+.req-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; border: 0; background: none; color: var(--color-fg); font: inherit; text-align: left; }
+/* A row that opens its edit on the timeline is a button across the row. */
+button.req-summary { flex: 1; align-self: stretch; margin: 0; cursor: pointer; }
+.req-summary.is-note { padding-top: 3px; padding-bottom: 3px; white-space: normal; line-height: 1.45; }
+.req-summary.is-note > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+button.req-summary:hover > span { text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; }
+/* While a request's row has its cut or edit open on the timeline, the rest of the chat steps back, its own message
+   included. Nothing is added to the row itself. */
+.simple-chat :is(.simple-turn, .simple-turn > *, .unit-msg) { transition: opacity .15s; }
+.simple-chat:has(button.req-summary[aria-current]) .simple-turn:not(:has(button.req-summary[aria-current])),
+.simple-chat .simple-turn:has(button.req-summary[aria-current]) > :not(:has(button.req-summary[aria-current])),
+.simple-chat .unit:has(button.req-summary[aria-current]) > .unit-msg { opacity: .35; }
+/* Scarlet's words for the editor: a reply, a question and its answer, why it stopped. */
+.req-said { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 3px 0 6px; }
+.req-status + .req-said, .run-wait + .req-said { padding-top: 0; }
+/* What Scarlet said the whole request will come to, before it began: first under the heading, above its stages or
+   steps, in the type of its replies. It stays as it is while they go by and leaves with them. */
+.req-lead { padding: 4px 0 5px; }
+/* Its lines are kept: a question asked as a list reads as one, as a loose message's does. */
+.req-say { margin: 0; font-size: 13px; line-height: 1.5; color: var(--color-fg); overflow-wrap: anywhere; white-space: pre-wrap; }
+.req-say.is-quiet { color: var(--color-muted); }
+/* Scarlet's reply keeps to two lines, however much it wrote. A longer one opens in full on a click and folds on the
+   next; only the pointer changes over it. */
+.said { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+/* The one sentence Scarlet said before it began reads on up to three lines, and folds the same way past them. */
+.req-lead .said { -webkit-line-clamp: 3; }
+.said.is-open { display: block; }
+.said.is-clipped, .said.is-open { cursor: pointer; }
+.req-say.is-note { font-size: 12.5px; color: var(--color-dim); }
+.req-say.is-bad { color: var(--color-bad); }
+/* The editor's answer is their message: it keeps to two lines, as their request does, and its title has the rest. */
+.req-say.is-yours { padding-left: 10px; border-left: 2px solid var(--color-line); color: var(--color-muted);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.req-say .simple-link { margin-left: 10px; }
+/* Answer sits on its own line under Scarlet's question. */
+.req-say .simple-link.is-warn { display: flex; margin: 5px 0 0; }
+.req-said .simple-msg.from-scarlet { font-size: 13px; }
+/* The steps so far, one click from the line that's shimmering. Scarlet's own updates read in full; the rest stay quiet. */
+.req-steps { margin: 0 0 4px; }
+.req-step { display: flex; align-items: flex-start; gap: 9px; padding: 4px 0; font-size: 12.5px; line-height: 1.45; }
+.req-step .req-mark { margin-top: 1.5px; }
+.req-step .simple-row-text { flex: 1 1 auto; min-width: 0; color: var(--color-dim); white-space: pre-wrap; }
+.req-step.is-note .simple-row-text { color: var(--color-fg); }
+.req-step.run-live .simple-row-text { color: var(--color-muted); }
+/* Under a run that ended without its transcripts: how far along they are, and its one action after those words, as
+   a stopped run's follows what it saved. */
+.req .run-wait { min-height: 30px; }
+.req .run-wait .simple-link { margin-left: 6px; }
+/* What the request made, as its rows. */
+.req .simple-pass { margin: 0; border: 0; border-radius: 0; background: none; }
+/* What doesn't fit on the line goes to the next, as words do: while a scheduled pass still runs, "See 2 edits so far",
+   "Goes in when Scarlet finishes" can be wider than a narrow chat, and none may run over another. */
+.req .simple-pass-line { flex-wrap: wrap; align-items: baseline; gap: 0 12px; min-height: 26px; padding: 0; }
+/* With nothing to open, schedule or report, the row isn't there. */
+.req .simple-pass-line:not(:has(button, .simple-pass-ok, .run-tokens, .simple-action)) { display: none; }
+/* What the request changed: one sentence in the chat's own type, its figures in bold, and after it on the same line
+   the link that opens every edit. A long sentence wraps and the link follows its last word. */
+.simple-made-line { margin: 2px 0 3px; font-size: 13px; line-height: 1.5; color: var(--color-muted); overflow-wrap: anywhere; }
+.simple-made b { font-weight: 600; color: var(--color-fg); font-variant-numeric: tabular-nums; }
+/* The gap is the sentence's own, at its end: a link that wraps to the next line starts at the margin, not 9px in. */
+.simple-made-line > .simple-made { margin-right: 9px; }
+.req .simple-pass-toggle { min-width: 0; font-size: 12.5px; white-space: nowrap; text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; }
+.req .simple-pass-toggle:hover { color: var(--color-fg); }
+.req .simple-pass-need, .req .simple-pass-ok, .req .simple-pass-line > .simple-link { flex: none; white-space: nowrap; }
+.req .simple-pass .req-right { gap: 6px; }
+/* A row is one line. Its title carries the whole note, and the card on the timeline shows it in full. */
+.req .simple-pass-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A revised row keeps its "v2" in view: long words give way before it, not the version after them. */
+.req .simple-pass-label:has(> .edit-version) { display: flex; align-items: baseline; }
+.req .simple-pass-label > .simple-pass-tick, .req .simple-pass-label > .edit-version { flex: none; }
+.simple-pass-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.simple-pass-list > li > button.is-decided .simple-pass-label, .simple-pass-list > li > button.is-decided .simple-pass-time { color: var(--color-dim); }
+.simple-pass-tick { display: inline-block; margin-right: 6px; vertical-align: -1px; color: var(--color-muted); }
+.simple-pass-tick svg { display: inline; }
+/* "Need you" is the short list: a call's number, Scarlet's note, and a word once it's settled or sent back. */
+.simple-pass-list.is-short > li > button { grid-template-columns: minmax(18px, max-content) minmax(0, 1fr) auto; align-items: center; }
+.simple-pass-list > li > button:is(.is-decided, :disabled) .edit-badge { border-color: var(--color-line); color: var(--color-dim); }
+.req .simple-edits { margin: 0 0 6px; padding-top: 0; border-top: 0; }
+.simple-action.is-menu { margin: 0; gap: 6px; font-size: 12px; color: var(--color-dim); }
+
+/* The requests waiting their turn: a tray on top of the message box, in running order. It opens upward. */
+.queue-tray { min-width: 0; margin-bottom: calc(-1 * var(--model-row-gap, 9px)); padding: 2px 4px; border: 1px solid var(--color-line); border-bottom: 0;
+  border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); font-size: 12.5px; color: var(--color-muted); }
+.queue-tray + .composer-box { border-top-left-radius: 0; border-top-right-radius: 0; }
+.queue-head, .queue-row { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 30px; padding: 0 4px 0 6px; border: 0; border-radius: 6px;
+  background: none; color: inherit; font: inherit; text-align: left; }
+button.queue-head { cursor: pointer; }
+button.queue-head:hover { color: var(--color-fg); }
+/* The heading fills the tray from edge to edge, so the keyboard's ring sits inside it, as on a list's row. */
+.queue-head:focus-visible { outline-offset: -2px; }
+.queue-tray.is-open .queue-head { justify-content: space-between; }
+.queue-next { flex: none; width: 30px; color: var(--color-dim); }
+.queue-next.is-waiting { width: auto; white-space: nowrap; }
+.queue-next.is-waiting, .queue-waits { color: var(--color-warn); }
+/* On a line too tight for all of it, the tag and the words give way together, each cut short with an ellipsis, so the
+   words keep a share beside a long tag. Next, or what the request waits for, stays whole, and nothing pushes the count,
+   the chevron, the pencil or the × out of the tray. */
+.queue-target { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0 6px; border: 1px solid var(--color-line); border-radius: 4px;
+  font-size: 11.5px; line-height: 17px; white-space: nowrap; }
+.queue-text { flex: 1 1 6em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-count { flex: none; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.queue-chevron { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; color: var(--color-dim); transform: rotate(90deg); }
+.queue-tray.is-open .queue-chevron { transform: rotate(-90deg); }
+/* A long queue scrolls inside the tray, so it never pushes the message box out of the window. */
+.queue-list { max-height: min(40vh, 248px); overflow-y: auto; margin: 2px -4px 0; padding: 3px 4px 2px; border-top: 1px solid var(--color-line); }
+.queue-row:hover, .queue-row:focus-within { background: var(--color-raised); color: var(--color-fg); }
+.queue-remove, .queue-reword, .queue-start { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: none;
+  color: var(--color-dim); cursor: pointer; }
+.queue-row:hover :is(.queue-remove, .queue-reword, .queue-start), :is(.queue-remove, .queue-reword, .queue-start):focus-visible { color: var(--color-muted); }
+:is(.queue-remove, .queue-reword, .queue-start):hover { background: var(--color-line); color: var(--color-fg); }
+/* A queued request's pencil, or a click on its words, puts them in the message box to change. Its row stays lit
+   meanwhile, and so does its pencil, which puts them back. */
+.queue-text.is-rewordable { cursor: text; }
+.queue-row.is-rewording { background: var(--color-raised); color: var(--color-fg); }
+.queue-reword[aria-pressed="true"], .queue-row:hover .queue-reword[aria-pressed="true"] { background: var(--color-line); color: var(--color-fg); }
+/* The box's send saves a queued request's words then: a tick, upright, where the arrow points up. */
+.composer-send.is-save svg { transform: none; }
+/* A pass's list sits under its line without a rule, its rows in line with the text above. */
+.req .simple-pass-list { margin: 0 -8px 4px; border-top: 0; }

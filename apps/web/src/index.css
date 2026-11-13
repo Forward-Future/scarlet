@@ -1,0 +1,196 @@
+@import "tailwindcss";
+@import "./studio.css";
+
+@theme {
+  --color-accent: #7445b8;
+  --color-accent-soft: #b89ada;
+  --color-accent-dim: rgba(165, 122, 214, .12);
+  /* Keep editing surfaces achromatic. Color identifies voice input and status. */
+  --color-hi: #f3f3f3;
+  --color-hi-dim: rgba(255, 255, 255, .08);
+  --color-bg: #101010;
+  --color-panel: #181818;
+  --color-raised: #272727;
+  --color-line: #333333;
+  --color-fg: #f1f1f1;
+  --color-muted: #b2b2b2;
+  --color-dim: #929292;
+  --color-ok: #7ed4b3;
+  --color-warn: #edc285;
+  --color-bad: #ffa09c;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* The window itself never scrolls; each pane scrolls on its own. Without this, anything that pokes past the
+   bottom (a tall row, a hidden tip) lets the wheel or a scrollIntoView slide the whole app up and leave blank space.
+   `clip` (not `hidden`) on #root also stops scripts from scrolling it. */
+html,
+body {
+  overflow: hidden;
+}
+#root {
+  overflow: clip;
+}
+
+body {
+  color-scheme: dark;
+  @apply bg-bg text-fg font-sans text-[13px] antialiased;
+  overscroll-behavior: none;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #454545 transparent;
+}
+
+/* Where the keyboard is, on anything that can be pressed: one thin ring, the same on every button, link and
+   checkbox. A press with the mouse shows none. A menu's row lights up instead, as it does under the pointer. The
+   base layer, so a control's own rule or a utility can move the ring or leave it out. */
+@layer base {
+  :focus {
+    outline: none;
+  }
+
+  /* The ring has its colour before the keyboard arrives and only its width is new, or it would fade in from the
+     colour of the button's words wherever a button's colours change gradually. */
+  :is(button, a, summary, input[type="checkbox"]):not([role="menuitem"]) {
+    outline: 0 solid var(--color-muted);
+    outline-offset: 2px;
+
+    &:focus-visible {
+      outline-width: 2px;
+    }
+  }
+}
+
+:where(input:not([type]), input[type="text"], input[type="search"], input[type="number"], textarea, select) {
+  border-bottom: 2px solid transparent;
+
+  &:focus-visible {
+    border-bottom-color: var(--color-muted);
+  }
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+input[type="range"] {
+  accent-color: var(--color-hi);
+}
+
+/* A button that can be pressed shows the hand, as a link does: Tailwind leaves it the arrow. The base layer, so a
+   control's own rule or a utility can still say otherwise. */
+@layer base {
+  button:enabled {
+    cursor: pointer;
+  }
+}
+
+/*
+ * Shared component classes live in the components layer so per-element
+ * utilities (w-auto, py-1, text-sm …) can still override them.
+ *
+ * Type scale: 11 (meta) · 12 (secondary) · 13 (body) · 15 (titles) · 18 (page).
+ */
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium leading-none whitespace-nowrap transition-colors select-none disabled:cursor-not-allowed bg-hi text-bg hover:bg-white disabled:bg-raised disabled:text-dim;
+    min-height: 32px;
+    box-shadow: inset 0 1px 0 #ffffff60, 0 2px 5px #0002;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium leading-none whitespace-nowrap transition-colors select-none disabled:cursor-not-allowed bg-transparent text-fg border border-line hover:bg-raised disabled:text-dim disabled:hover:bg-transparent;
+    min-height: 32px;
+  }
+  .btn-quiet {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium leading-none whitespace-nowrap transition-colors select-none disabled:cursor-not-allowed bg-transparent text-muted hover:text-fg hover:bg-raised disabled:text-dim disabled:hover:bg-transparent;
+  }
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium leading-none whitespace-nowrap transition-colors select-none disabled:cursor-not-allowed bg-transparent text-bad border border-bad/40 hover:bg-bad/10 disabled:opacity-40;
+  }
+  .btn-icon {
+    @apply inline-flex items-center justify-center rounded-md size-8 text-muted hover:text-fg hover:bg-raised transition-colors disabled:opacity-40 disabled:hover:bg-transparent;
+  }
+  .field {
+    @apply w-full rounded-lg bg-bg px-3 py-2 text-[13px] text-fg placeholder:text-dim disabled:opacity-50;
+  }
+  .label {
+    @apply block text-[12px] font-medium text-muted mb-1.5;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 whitespace-nowrap;
+  }
+  .card {
+    @apply rounded-xl bg-panel border border-line;
+  }
+  .kbd {
+    @apply inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded border border-current/30 text-[10.5px] font-mono leading-none opacity-80;
+  }
+  /* The update: dim while it builds, a quiet button once it can restart. At the window's top right over any page it
+     sits in the margin above the page's content, in line with the content's right edge. The Projects page has it
+     again in its heading's row. */
+  .update-control { @apply flex h-6 items-center; }
+  .update-corner {
+    @apply fixed top-[5px] z-20;
+    right: calc(clamp(16px, 2vw, 28px) - 8px);
+  }
+  .update-button {
+    @apply inline-flex h-6 shrink-0 items-center gap-2 rounded-md px-2 text-[12px] leading-none whitespace-nowrap text-dim select-none;
+  }
+  button.update-button {
+    @apply font-medium text-muted transition-colors hover:bg-raised hover:text-fg disabled:text-dim disabled:hover:bg-transparent;
+  }
+  .update-button-dot { @apply size-1.5 shrink-0 rounded-full bg-ok; }
+  .update-button-figure { font-variant-numeric: tabular-nums; }
+  .update-button-ring { @apply size-3.5 shrink-0; transform: rotate(-90deg); }
+  .update-button-ring circle { fill: none; stroke: var(--color-line); stroke-width: 1.5; }
+  .update-button-ring circle + circle { stroke: var(--color-muted); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+  /* What hovering the update says, under it and in line with its right edge. Built like the toolbar's hints. */
+  .update-hint { @apply absolute right-0 top-full w-max max-w-[280px] pt-[5px]; }
+  .update-hint > span {
+    @apply flex flex-col gap-0.5 rounded-md border border-line bg-raised px-[9px] py-[5px] text-[12px] leading-[1.4] text-muted;
+    box-shadow: 0 3px 12px rgb(0 0 0 / 30%);
+  }
+  .update-control:not(:hover, :focus-within) > .update-hint { display: none; }
+  @media (prefers-reduced-motion: no-preference) {
+    .update-control:hover > .update-hint { animation: update-hint-in 90ms ease-out 220ms backwards; }
+    @keyframes update-hint-in { from { opacity: 0; } to { opacity: 1; } }
+  }
+  .update-button-error {
+    @apply absolute right-0 top-full mt-1 w-max max-w-[260px] rounded-md border border-line bg-panel px-2.5 py-1.5 text-[12px] leading-snug text-muted;
+    box-shadow: 0 6px 18px #0006;
+  }
+  .eyebrow {
+    @apply text-[10px] font-mono font-medium uppercase tracking-[0.12em] text-dim;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.pulse {
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+/* With motion reduced the dot fades slowly, and a spinner fades with it instead of turning. !important gets them past
+   the rule that stills every animation (studio.css). */
+@media (prefers-reduced-motion: reduce) {
+  .pulse,
+  .animate-spin {
+    animation: pulse-dot 2.4s ease-in-out infinite !important;
+  }
+}
+

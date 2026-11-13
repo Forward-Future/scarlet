@@ -1,0 +1,19 @@
+{
+  "repository": "nyralabs/CrisperWhisper2.0_large",
+  "revision": "f4334f6e8193f2691212d49b20fa12d370e13896",
+  "sha256": {
+    "LICENSE.md": "42f43bf4dc72ef422f91f6ca143f4514e21a68b353940d99091c1addcd0aee79",
+    "README.md": "ddc82a301a1b59035eefcc1a8b2ec90d56257104df7365b00493c58135a6b029",
+    "added_tokens.json": "54e87fd086baa530e05082c11feacf9df5439453c5fae279611f3099ec844dc5",
+    "config.json": "efd226b2b7a57109ef2ecdde8f9ccc95d44ee5f9057847d1478af9315c5834bd",
+    "generation_config.json": "07cc1f4e95f03c10f47939f69579efbe19e3ccd1ce901bb01b32600038618a88",
+    "merges.txt": "2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6",
+    "model.safetensors": "f097f853b6992e66fcae802a15770a8242670351198d68dad577db3209fe3fcc",
+    "normalizer.json": "bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd",
+    "preprocessor_config.json": "994838f1fa6462c8b9b3c90edada831f11f3dd8b4664634e18f4694d005c9dbf",
+    "special_tokens_map.json": "e67ae3a0aaa99abcd9f187138e12db1f65c16a14761c50ef10eef2c174a7a691",
+    "tokenizer.json": "567da8c8a5b7df02555deecfcb3a7f6acd315844dc5e2fde883fe7ced8467317",
+    "tokenizer_config.json": "5fa089926c8c2535c622d09a5992fb57c63cbc3514e18cf40bc535bee2a23827",
+    "vocab.json": "8f680bba319e01a653d2e8a5dbc17a9157179e0576e6ce74ce0c06356c6e24f9"
+  }
+}
