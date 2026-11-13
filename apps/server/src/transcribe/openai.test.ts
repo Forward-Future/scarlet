@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fallbackAdapter } from "../render/adapter.js";
 import * as ffmpeg from "../render/ffmpeg.js";
 import { OpenAIProvider, toSegments } from "./openai.js";
+import type { TranscribeResult } from "./index.js";
 
 it("applies the chunk offset once to a transcript containing only words", () => {
   const [segment] = toSegments({ text: "Hello", words: [{ word: "Hello", start: 2, end: 3 }] }, 600);
@@ -163,6 +164,31 @@ describe("OpenAI transcription", () => {
     await expect(provider().transcribe({ path: "talk.mov", duration: 1300, tmpDir: dir, signal: stop.signal, onProgress })).rejects.toThrow("cancelled");
     expect(decode).toHaveBeenCalledTimes(1);
     expect(uploads).toHaveLength(1);
+  });
+
+  it("resumes after the last saved upload, including a later window with no audio", async () => {
+    const decode = decodes(1180); // The video continues to 1300 s.
+    api({ language: "english", text: "First", words: [{ word: "First", start: 1, end: 2 }] },
+      { text: "Next", words: [{ word: "Next", start: 3, end: 4 }] });
+    const saved: Array<{ through: number; chunk: TranscribeResult; fraction?: number }> = [];
+    const stop = new AbortController();
+    const save = (through: number, chunk: TranscribeResult, fraction?: number) => saved.push({ through, chunk, fraction });
+    const input = { path: "interview.mov", duration: 1300, tmpDir: dir };
+    await expect(provider().transcribe({ ...input, signal: stop.signal,
+      checkpoint: { through: 0, result: { segments: [] }, save }, onProgress: () => stop.abort(new Error("quit")) })).rejects.toThrow("quit");
+    expect(saved).toHaveLength(1);
+    const { through, chunk: result } = saved[0]!;
+    const resumed = await provider().transcribe({ ...input, checkpoint: { through, result, save } });
+    expect(saved.map(s => s.through)).toEqual([600, 1200, 1300]);
+    expect(saved.map(s => s.fraction)).toEqual([600 / 1300, 1200 / 1300, 1]);
+    expect(saved[2]!.chunk.segments).toEqual([]);
+    expect(decode.mock.calls.map(([, , opts]) => opts?.start)).toEqual([0, 600, 1200]);
+    expect(uploads).toHaveLength(2);
+    expect(resumed.language).toBe("english");
+    expect(resumed.segments).toEqual([result.segments[0], saved[1]!.chunk.segments[0]]);
+    expect(resumed.segments[1]!.words).toEqual([{ text: "Next", start: 603, end: 604 }]);
+    expect(await provider().transcribe({ ...input, checkpoint: { through: 1300, result: resumed, save } })).toEqual(resumed);
+    expect(decode).toHaveBeenCalledTimes(3);
   });
 
   describe("of a dialogue window", () => {
