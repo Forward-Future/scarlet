@@ -58,6 +58,18 @@ export function evaluationMarkdown(ev: Evaluation): string {
     lines.push(row("Median gap at a join", x => x.medianJoinGapSeconds === null ? "–" : `${x.medianJoinGapSeconds.toFixed(2)} s`));
     lines.push(row("Doubled words / phrases", x => `${x.repeats.singleWords} / ${x.repeats.phrases}`));
     lines.push(row("Doubled across a join", x => String(x.repeats.atJoins)), "");
+    if (p.sharedJoins) {
+      const { applied, proposed } = p.sharedJoins;
+      lines.push(`Of ${applied.referenceJoins} published joins, ${applied.eligible} have both adjacent words identified in one recording. ` +
+        "Gap error uses the playback time between those words when both edits make that join. Positive error means Scarlet left more space.", "",
+        "| Cut | Shared joins | Same words left unedited | Median error | Median absolute error | P90 absolute error |",
+        "|---|---:|---:|---:|---:|---:|");
+      for (const [name, spacing] of [["Applied", applied], ["Proposed", proposed]] as const) {
+        const ms = (v: number | null) => v === null ? "–" : `${v} ms`;
+        lines.push(`| ${name} | ${spacing.shared} | ${spacing.unedited} | ${ms(spacing.medianErrorMs)} | ${ms(spacing.medianAbsErrorMs)} | ${ms(spacing.p90AbsErrorMs)} |`);
+      }
+      lines.push("");
+    }
     if (p.appliedRepeats.length) {
       lines.push(`**Doubled in the applied cut (${p.appliedRepeats.length}).** ` +
         p.appliedRepeats.map(x => `${clock(x.at)} “${x.text.replace(/\|/g, "/")}”${x.join ? " (join)" : ""}`).join(" · "), "");
@@ -122,7 +134,7 @@ export function evaluationMarkdown(ev: Evaluation): string {
       const c = p.cut;
       lines.push(`| ${name} | ${c ? `${f(c.words.precision)} / ${f(c.words.recall)} / ${f(c.words.f1)}` : "–"} | ` +
         `${c ? `${f(c.time.precision)} / ${f(c.time.recall)} / ${f(c.time.f1)}` : "–"} | ` +
-        `${c && !pub ? `${f(c.edges.f1["20ms"]?.f1)} / ${f(c.edges.f1["100ms"]?.f1)}` : "–"} | ${c && !pub ? `${c.edges.medianAbsErrorMs ?? "–"} ms` : "–"} | ` +
+        `${c?.edges && !pub ? `${f(c.edges.f1["20ms"]?.f1)} / ${f(c.edges.f1["100ms"]?.f1)}` : "–"} | ${c?.edges && !pub ? `${c.edges.medianAbsErrorMs ?? "–"} ms` : "–"} | ` +
         `${c ? `${c.requiredLines.missing}/${c.requiredLines.required}` : "–"} | ${p.decisions ? `${f(p.decisions.agreement)} (${p.decisions.scored})` : "–"} |`);
     }
     lines.push("");
@@ -146,7 +158,7 @@ export function runMarkdown(title: string, rows: TrialRow[]): string {
   const groups = new Map<string, TrialRow[]>();
   for (const row of rows) groups.set(`${row.caseId}\u0000${row.config}`, [...(groups.get(`${row.caseId}\u0000${row.config}`) ?? []), row]);
   const keys = ["appliedSeconds", "reviewSeconds", "appliedSpeechEdges", "reviewSpeechEdges", "clippedWordsOnSound", "needsYourCall", "heldByScarlet", "gapsLeft", "looseJoins",
-    "deadAirSeconds", "repeatsLeft", "repeatsAtJoins", "checkJoinCoverage",
+    "deadAirSeconds", "repeatsLeft", "repeatsAtJoins", "sharedAppliedJoins", "sharedAppliedJoinGapMedianAbsErrorMs", "checkJoinCoverage",
     "wordF1", "timeF1", "edgeF1At20ms", "requiredLinesMissing", "toolErrors", "activeMinutes", "tokens"];
   const lines = [`# ${title}`, "", `| Case | Config | Trials (done) | ${keys.join(" | ")} |`, `|---|---|---|${keys.map(() => "---").join("|")}|`];
   for (const [key, group] of groups) {

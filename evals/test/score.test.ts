@@ -1,12 +1,34 @@
 import { describe, expect, it } from "vitest";
 import type { Change } from "../../packages/timeline/src/index.ts";
 import type { ReviewChangeExport } from "../src/engine.ts";
+import { artifactsFromCase } from "../src/evaluate.ts";
 import { scoreRun } from "../src/score.ts";
 import { cut, lines, media } from "./fixtures.ts";
 
 const MIC = "med_mic";
 const change = (c: Partial<Change>) => ({ noteIds: [], ranges: [], renders: [], state: "ready", author: { type: "agent", name: "test" },
   description: "", projectId: "prj_test", ...c }) as Change;
+
+it("scores a task's final applied polish and excludes a staged version from before it", async () => {
+  const assembly = change({ id: "assembly", taskId: "task", intent: "requested", state: "approved", fromVersion: "empty", toVersion: "S" });
+  const applied = change({ id: "dialogue", taskId: "task", intent: "requested", state: "approved", fromVersion: "S", toVersion: "A",
+    cutReasons: [{ start: 1, end: 2, reason: "Retake" }] });
+  const stale = change({ id: "staged", taskId: "task", intent: "suggestion", fromVersion: "A", toVersion: "R", ops: [{}] });
+  const polish = change({ id: "polish", taskId: "task", intent: "requested", state: "approved", fromVersion: "A", toVersion: "P" });
+  const unrelated = change({ id: "other", taskId: "another", intent: "requested", state: "approved", fromVersion: "P", toVersion: "X" });
+  const pending = change({ id: "pending", taskId: "task", intent: "requested", state: "ready", fromVersion: "P", toVersion: "Q" });
+  const changes = [assembly, applied, stale, polish, unrelated, pending];
+  const task = { id: "task", projectId: "project", kind: "agent", state: "done", instruction: "", context: { version: "S" }, changeIds: changes.map(c => c.id) };
+  const run = await artifactsFromCase({
+    dir: "", evidence: new Map(), scans: () => undefined, origin: () => ({ task, events: [], changes }),
+    file: { schema: 1, id: "case", suite: "capability", createdAt: "", projectId: "project", fps: 30, media: [media(MIC)],
+      sourceVersion: "S", dialogueMedia: [MIC], request: { instruction: "", skillIds: [], skillNames: [] } },
+    timeline: version => cut(version, MIC, [[0, 5]]),
+  });
+  expect(run.versions).toEqual({ source: "S", applied: "P", proposed: "P" });
+  expect(run.parts!.map(c => c.id)).toEqual(["dialogue", "polish"]);
+  expect(run.review).toBeUndefined();
+});
 
 describe("a plan given as words", () => {
   it("takes each cut's kind and decision from the words it names", () => {

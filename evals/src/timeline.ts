@@ -16,6 +16,7 @@ export interface MediaInfo {
 }
 
 export interface SourceRange extends Range { mediaId: string }
+export interface TimelineWord extends PlayedWord { sourceStart: number; sourceEnd: number }
 
 export function carriesAudio(media: MediaInfo | undefined): boolean {
   return !!media && (media.kind === "audio" || (media.kind === "video" && media.hasAudio !== false));
@@ -52,8 +53,8 @@ export function keptSource(tl: Timeline, media: readonly MediaInfo[]): Map<strin
  * The words a version plays, on its timeline, each with the piece of its recording it sits in. A clip that carries
  * straight on from the one before it, as after a split for a change of framing, stays in the same piece.
  */
-export function playedWords(tl: Timeline, media: readonly MediaInfo[], evidence: ReadonlyMap<string, MediaEvidence>): PlayedWord[] {
-  const out: PlayedWord[] = [];
+export function playedWords(tl: Timeline, media: readonly MediaInfo[], evidence: ReadonlyMap<string, MediaEvidence>): TimelineWord[] {
+  const out: TimelineWord[] = [];
   const last = new Map<string, { clip: MediaClip; piece: number }>();
   let pieces = 0;
   for (const clip of audibleClips(tl, media).sort((a, b) => a.timelineIn - b.timelineIn)) {
@@ -65,7 +66,9 @@ export function playedWords(tl: Timeline, media: readonly MediaInfo[], evidence:
     const at = (source: number) => clip.timelineIn + (Math.min(Math.max(source, clip.sourceIn), clip.sourceOut) - clip.sourceIn) / speed;
     for (const w of evidence.get(clip.mediaId)?.words ?? []) {
       const middle = (w.start + w.end) / 2;
-      if (middle >= clip.sourceIn && middle < clip.sourceOut) out.push({ text: w.text, start: at(w.start), end: at(w.end), mediaId: clip.mediaId, piece });
+      if (middle >= clip.sourceIn && middle < clip.sourceOut) {
+        out.push({ text: w.text, start: at(w.start), end: at(w.end), sourceStart: w.start, sourceEnd: w.end, mediaId: clip.mediaId, piece });
+      }
     }
   }
   return out;

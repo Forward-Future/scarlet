@@ -112,4 +112,14 @@ describe("matching a finished video to its recordings", () => {
     expect(m.unmatched.map(u => u.finalWords)).toEqual([[51, 80]]);
     expect(m.stretches).toHaveLength(1);
   });
+
+  it.each([1, 1.12])("distinguishes frequent pause cuts from a playback rate of %s", rate => {
+    const raw = recording(125, 120).map((word, i) => {
+      const pause = Math.floor(i / 8) * 0.9;
+      return { ...word, start: word.start + pause, end: word.end + pause };
+    });
+    const pieces = Array.from({ length: 15 }, (_, i) => ({ words: raw, from: i * 8, to: i * 8 + 7 }));
+    const final = finished(pieces).map(w => ({ ...w, start: w.start / rate, end: w.end / rate }));
+    expect(matchReference(final, [{ mediaId: "camera", words: raw }]).rate).toBeCloseTo(rate, 2);
+  });
 });

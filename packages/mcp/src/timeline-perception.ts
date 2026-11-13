@@ -180,6 +180,10 @@ export function formatTimelineTranscript(words: TimelineWord[], joins: TimelineJ
       lines.push(joinLine(joins[j]!, previous, w));
       j++;
     }
+    if (w.mediaId !== previous?.mediaId) {
+      flush();
+      lines.push(`mediaId ${w.mediaId}`);
+    }
     const gap = previous ? w.start - previous.end : 0;
     if (opts.detail === "words") {
       if (previous && gap >= pause) lines.push(`  (${gap.toFixed(2)} s)`);
