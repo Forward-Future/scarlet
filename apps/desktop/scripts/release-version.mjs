@@ -96,6 +96,16 @@ function run(args) {
     rest = [restoreCommitVersions(rest[0])];
     command = "set";
   }
+  if (command === "early-access" && rest.length === 1) {
+    const [major, minor, patch] = versionParts(rest[0]);
+    // MSI ProductVersion uses an 8-bit major/minor and a 16-bit build number.
+    if (major > 255n || minor > 255n || patch > 65535n) throw new Error("Version exceeds Windows installer limits");
+    if (major === 0n && (minor === 0n || (minor === 1n && patch < 4n))) {
+      throw new Error("An Early Access upgrade must be newer than 0.1.3");
+    }
+    console.log(rest[0]);
+    return;
+  }
   if (command === "for-commit" && rest.length === 0) {
     console.log(commitVersion());
     return;
@@ -103,7 +113,7 @@ function run(args) {
   const target = command === "set" ? rest.shift() : undefined;
   const tag = rest[0] === "--tag" && rest.length === 2 ? rest[1] : undefined;
   if (!["check", "set"].includes(command) || (command === "set" && !target) || (rest.length && tag === undefined)) {
-    throw new Error("Usage: release-version.mjs for-commit | check [--tag <release-tag>] | set <major.minor.patch> [--tag <release-tag>]");
+    throw new Error("Usage: release-version.mjs for-commit | early-access <major.minor.patch> | check [--tag <release-tag>] | set <major.minor.patch> [--tag <release-tag>]");
   }
 
   // Read every field before writing any of them. A missing or moved field must never produce a partial bump.

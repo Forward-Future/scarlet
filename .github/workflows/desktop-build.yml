@@ -6,6 +6,9 @@ on:
       release:
         required: true
         type: boolean
+      early_access:
+        type: boolean
+        default: false
       version:
         required: true
         type: string
@@ -19,7 +22,7 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
-    if: ${{ !inputs.release || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    if: ${{ !inputs.release || (!inputs.early_access && github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     environment: ${{ inputs.release && 'release' || 'desktop-build' }}
     strategy:
       fail-fast: false
@@ -38,6 +41,7 @@ jobs:
             triple: x86_64-apple-darwin
             arch: x86_64
     env:
+      EARLY_ACCESS: ${{ inputs.early_access }}
       RELEASE_VERSION: ${{ inputs.version }}
       BUNDLE: apps/desktop/src-tauri/target/${{ matrix.triple }}/release/bundle
     steps:
@@ -65,7 +69,15 @@ jobs:
 
       - name: Stamp the shared release version before building
         shell: bash
-        run: node apps/desktop/scripts/release-version.mjs set "$RELEASE_VERSION" --tag "v$RELEASE_VERSION"
+        run: |
+          if [ "$EARLY_ACCESS" = true ]; then
+            node apps/desktop/scripts/release-version.mjs set "$RELEASE_VERSION"
+            node apps/desktop/scripts/early-access-product.mjs
+          else
+            node apps/desktop/scripts/release-version.mjs set "$RELEASE_VERSION" --tag "v$RELEASE_VERSION"
+          fi
+          product=$(node -p 'require("./apps/desktop/src-tauri/tauri.conf.json").productName')
+          echo "DESKTOP_PRODUCT=$product" >> "$GITHUB_ENV"
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -144,7 +156,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APP="$BUNDLE/macos/Scarlet.app"
+          APP="$BUNDLE/macos/$DESKTOP_PRODUCT.app"
           ls -la "$APP/Contents/MacOS"
           codesign --verify --deep --strict --verbose=2 "$APP"
           for f in "$APP"/Contents/MacOS/*; do codesign -dv "$f" 2>&1 | grep -E "^(Identifier|Format|flags|Signature)" | sed "s|^|$(basename "$f"): |"; done
@@ -162,7 +174,7 @@ jobs:
 
       - name: Smoke test the bundled Mac engine (ingest, render with captions, MCP)
         if: runner.os == 'macOS'
-        run: node apps/desktop/scripts/smoke-engine.mjs "$BUNDLE/macos/Scarlet.app/Contents/MacOS" "$RUNNER_TEMP/scarlet-media-tools"
+        run: node apps/desktop/scripts/smoke-engine.mjs "$BUNDLE/macos/$DESKTOP_PRODUCT.app/Contents/MacOS" "$RUNNER_TEMP/scarlet-media-tools"
 
       - name: Smoke test the bundled Windows engine (ingest, render with captions, MCP)
         if: runner.os == 'Windows'
@@ -214,12 +226,16 @@ jobs:
 
       - name: Verify packaged versions and stage installers
         shell: bash
-        run: node apps/desktop/scripts/verify-desktop-package.mjs "${{ matrix.triple }}" "$RELEASE_VERSION" "$RUNNER_TEMP/scarlet-installers"
+        run: |
+          node apps/desktop/scripts/verify-desktop-package.mjs "${{ matrix.triple }}" "$RELEASE_VERSION" "$RUNNER_TEMP/scarlet-installers"
+          if [ "$EARLY_ACCESS" = true ] && [ "${{ matrix.triple }}" = aarch64-apple-darwin ]; then
+            cp apps/desktop/scripts/Install-Scarlet-FFmpeg-macOS.sh "$RUNNER_TEMP/scarlet-installers/"
+          fi
 
       - name: Upload verified installers
         uses: actions/upload-artifact@v4
         with:
-          name: scarlet-desktop-${{ matrix.triple }}
+          name: ${{ inputs.early_access && format('scarlet-early-access-{0}', inputs.version) || 'scarlet-desktop' }}-${{ matrix.triple }}
           path: ${{ runner.temp }}/scarlet-installers/
           if-no-files-found: error
           overwrite: true

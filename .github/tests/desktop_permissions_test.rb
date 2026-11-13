@@ -30,13 +30,26 @@ class DesktopPermissionsTest < Minitest::Test
     refute @build.key?("permissions")
     refute @jobs.fetch("build").key?("secrets")
     assert_equal "${{ #{STABLE_RELEASE} }}", @jobs.dig("build", "with", "release")
-    assert_equal "${{ !inputs.release || (#{MAIN_PUSH}) }}", @build.fetch("if")
+    assert_equal "${{ !inputs.release || (!inputs.early_access && #{MAIN_PUSH}) }}", @build.fetch("if")
     assert_equal "${{ inputs.release && 'release' || 'desktop-build' }}", @build.fetch("environment")
     secret_steps = @build.fetch("steps").select { |step| step.to_s.include?("secrets.APPLE_") }
     assert_equal ["inputs.release && runner.os == 'macOS'"], secret_steps.map { |step| step.fetch("if") }
     [@jobs.fetch("version"), @build, @jobs.fetch("publish")].each do |job|
       assert_equal false, job.fetch("steps").first.fetch("with").fetch("persist-credentials")
     end
+  end
+
+  def test_early_access_is_an_explicit_read_only_dispatch
+    trigger = @entry["on"] || @entry.fetch(true)
+    input = trigger.fetch("workflow_dispatch").fetch("inputs").fetch("early_access_version")
+    assert_equal "string", input.fetch("type")
+    assert_equal false, input.fetch("required")
+    assert_equal "${{ github.event_name == 'workflow_dispatch' && inputs.early_access_version != '' }}",
+      @jobs.dig("build", "with", "early_access")
+    resolve = @jobs.fetch("version").fetch("steps").last
+    assert_equal "${{ inputs.early_access_version }}", resolve.dig("env", "EARLY_ACCESS_VERSION")
+    assert_includes resolve.fetch("run"), 'release-version.mjs early-access "$EARLY_ACCESS_VERSION"'
+    assert_includes @build.fetch("if"), "!inputs.early_access &&"
   end
 
   def test_only_main_can_publish_after_the_whole_matrix_passes
