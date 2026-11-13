@@ -66,7 +66,7 @@ function proxySize(probe: ProbeResult, height: number) {
   return { width: Math.max(2, 2 * Math.round((probe.width * h) / probe.height / 2)), height: h };
 }
 
-function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, opts: ProxyOptions): { input: string[]; output: string[] } {
+function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, opts: ProxyOptions, hardwareDecode: boolean): { input: string[]; output: string[] } {
   const encoder = encoding.name;
   const scale = `w=-2:h='2*trunc(min(${height},ih)/2)'`;
   // Every half second is a keyframe so a seek decodes at most 15 pictures.
@@ -90,19 +90,23 @@ function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, o
     // A forced I-frame is a seek point only when it is also an IDR frame.
     ...(encoder === "h264_nvenc" ? ["-forced-idr", "1"] : encoder === "h264_qsv" ? ["-forced_idr", "1"] : []), "-profile:v", "high"];
   // Keep 4K pictures on the GPU from decode to encode; only the small proxy is written out.
-  if (encoder === "h264_nvenc" && nativeCodec && upright && !probe.hasAlpha && !opts.fps) {
+  if (hardwareDecode && encoder === "h264_nvenc" && nativeCodec && upright && !probe.hasAlpha && !opts.fps) {
     return { input: ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
       output: ["-vf", `scale_cuda=${scale}:format=yuv420p:interp_algo=bicubic`, ...encode] };
   }
   const filters = [`scale=${scale}`, ...(opts.fps ? [`fps=${opts.fps}`] : [])];
   const threaded = opts.hwaccel === "auto" && threadedAvcPreview && probe.videoCodec === "h264";
   return {
-    input: encoder === "h264_videotoolbox" && nativeCodec && !threaded ? ["-hwaccel", "videotoolbox"] : [],
+    input: hardwareDecode && encoder === "h264_videotoolbox" && nativeCodec && !threaded ? ["-hwaccel", "videotoolbox"] : [],
     output: ["-vf", filters.join(","), ...encode, "-pix_fmt", "yuv420p"],
   };
 }
 
 export async function makeProxy(input: string, output: string, opts: ProxyOptions = {}): Promise<ProxyResult> {
+  return encodeProxy(input, output, opts, true);
+}
+
+async function encodeProxy(input: string, output: string, opts: ProxyOptions, hardwareDecode: boolean): Promise<ProxyResult> {
   const probe = await probeMedia(input, { ffprobePath: opts.ffprobePath, signal: opts.signal });
   const height = Math.max(2, Math.round(opts.height ?? DEFAULT_PREVIEW_HEIGHT));
   const hasVideo = probe.hasVideo && !probe.isStillImage;
@@ -112,12 +116,20 @@ export async function makeProxy(input: string, output: string, opts: ProxyOption
       "preview", reason => warnings.push(reason))
     : softwareEncoder("preview");
   const encoder = encoding.name;
-  // A driver can list an encoder or decoder it cannot run for this stream. Use the CPU instead.
-  const onCpu = async (error: unknown): Promise<ProxyResult> => {
-    const result = await makeProxy(input, output, { ...opts, hwaccel: "none" });
+  const video = hasVideo ? videoArgs(probe, height, encoding, opts, hardwareDecode) : undefined;
+
+  async function retry(error: unknown): Promise<ProxyResult> {
+    if (encoder === "libx264" || !(error instanceof FfmpegError) || opts.signal?.aborted) throw error;
+    // The decoder or scale filter can reject this stream even though the encoder works. Completed
+    // checkpoints have the same codec and clock, so this retry picks up at the failed part.
+    if (video?.input.includes("-hwaccel")) {
+      const result = await encodeProxy(input, output, opts, false);
+      if (result.encoder === encoder) warnings.push(`The accelerated input failed (${failureReason(error)}); decoded on the CPU and encoded with ${encoder}.`);
+      return { ...result, warnings: [...warnings, ...result.warnings] };
+    }
+    const result = await encodeProxy(input, output, { ...opts, hwaccel: "none" }, false);
     return { ...result, warnings: [...warnings, `${encoder} could not make this preview copy (${failureReason(error)}); used libx264.`, ...result.warnings] };
-  };
-  const video = hasVideo ? videoArgs(probe, height, encoding, opts) : undefined;
+  }
 
   const pictureDuration = probe.videoDuration ?? probe.duration;
   // Phone recordings whose frame rate drifts a little are saved in parts too, so a restart keeps them; only the
@@ -146,8 +158,7 @@ export async function makeProxy(input: string, output: string, opts: ProxyOption
           });
           await rename(temp, path);
         } catch (error) {
-          if (encoder !== "libx264" && error instanceof FfmpegError && !opts.signal?.aborted) return onCpu(error);
-          throw error;
+          return retry(error);
         } finally { await rm(temp, { force: true }); }
       }
       // A VFR screen capture may hold a picture for this entire part. An empty MP4 stops concat at that point.
@@ -196,8 +207,7 @@ export async function makeProxy(input: string, output: string, opts: ProxyOption
         : undefined,
     });
   } catch (error) {
-    if (encoder === "libx264" || !(error instanceof FfmpegError) || opts.signal?.aborted) throw error;
-    return onCpu(error);
+    return retry(error);
   }
   opts.onProgress?.(1);
   return { output, duration, hasVideo, hasAudio: probe.hasAudio, encoder, warnings };

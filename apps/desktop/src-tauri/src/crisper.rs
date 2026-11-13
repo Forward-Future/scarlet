@@ -9,25 +9,33 @@ use crate::{config::Paths, util, AppState};
 
 const NEED_PYTHON: &str = "Install 64-bit CPython 3.12, then choose the model folder again.";
 
-fn installer(resources: Option<&Path>) -> Result<PathBuf, String> {
-    // A dev build can run from a custom Cargo target without a Tauri resource directory.
-    #[cfg(debug_assertions)]
-    {
+fn setup_file(resources: Option<&Path>, name: &str, development: bool) -> Option<PathBuf> {
+    if development {
+        // A dev build can run from a custom Cargo target without a Tauri resource directory.
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../integrations/transcription/crisperwhisper/install.py");
+            .join("../../../integrations/transcription/crisperwhisper").join(name);
         if source.is_file() {
-            return Ok(source);
+            return Some(source);
         }
     }
-    resources.map(|dir| dir.join("crisperwhisper-setup/install.py")).filter(|path| path.is_file())
-        .ok_or_else(|| "Scarlet’s CrisperWhisper setup files are missing. Reinstall Scarlet and try again.".into())
+    resources.map(|dir| dir.join("crisperwhisper-setup").join(name)).filter(|path| path.is_file())
+}
+
+/// Existing libraries keep their verified weights and venv. The desktop release supplies the adapter to new workers.
+pub fn set_adapter_env(env: &mut std::collections::HashMap<String, String>, resources: Option<&Path>, development: bool) {
+    const KEY: &str = "SCARLET_CRISPER_ADAPTER";
+    env.retain(|key, _| !key.eq_ignore_ascii_case(KEY));
+    if let Some(adapter) = setup_file(resources, "crisper_cli.py", development) {
+        env.insert(KEY.into(), adapter.to_string_lossy().into_owned());
+    }
 }
 
 fn setup_command(paths: &Paths, directory: &Path) -> Result<Command, String> {
     if !directory.is_absolute() || !directory.is_dir() {
         return Err("Choose the folder that contains the local CrisperWhisper checkpoint.".into());
     }
-    let script = installer(paths.resource_dir.as_deref())?;
+    let script = setup_file(paths.resource_dir.as_deref(), "install.py", tauri::is_dev())
+        .ok_or("Scarlet’s CrisperWhisper setup files are missing. Reinstall Scarlet and try again.")?;
     let script_dir = script.parent().expect("installer path includes a directory");
     let inherited = util::env_map();
     let path = util::augmented_path(&inherited, &paths.home);
@@ -103,6 +111,23 @@ mod tests {
     }
 
     #[test]
+    fn packaged_workers_use_the_adapter_supplied_by_the_app_update() {
+        let temp = tempfile::tempdir().unwrap();
+        let resources = temp.path().join("Release resources");
+        let installed = resources.join("crisperwhisper-setup/crisper_cli.py");
+        let mut env = std::collections::HashMap::from([
+            ("scarlet_crisper_adapter".into(), "inherited.py".into()),
+            ("SCARLET_CRISPER_ADAPTER".into(), "old.py".into()),
+        ]);
+        set_adapter_env(&mut env, Some(&resources), false);
+        assert!(env.is_empty());
+        std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        std::fs::write(&installed, "release adapter").unwrap();
+        set_adapter_env(&mut env, Some(&resources), false);
+        assert_eq!(Path::new(&env["SCARLET_CRISPER_ADAPTER"]), installed);
+    }
+
+    #[test]
     fn requires_an_existing_absolute_snapshot_folder() {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(temp.path());
@@ -132,7 +157,7 @@ mod tests {
         std::fs::write(resources.join("install.py"), "").unwrap();
         let cmd = setup_command(&paths, &snapshot).unwrap();
         let args: Vec<_> = cmd.as_std().get_args().collect();
-        let script = installer(paths.resource_dir.as_deref()).unwrap();
+        let script = setup_file(paths.resource_dir.as_deref(), "install.py", tauri::is_dev()).unwrap();
         assert_ne!(script, snapshot.join("install.py"));
         assert!(args.ends_with(&[
             "-I".as_ref(), "-B".as_ref(), script.as_os_str(), "--model".as_ref(),

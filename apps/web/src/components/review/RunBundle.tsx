@@ -6,20 +6,8 @@ import { useProjectStore } from "../../stores/project";
 import { useUiStore } from "../../stores/ui";
 import { runProgress } from "../../lib/runProgress";
 import { runNow } from "../../lib/runNow";
-import { projectedFraction, runningTranscription, runTranscripts, transcriptionProgressLabel, transcriptsProgress,
-  type TranscriptStage } from "../../lib/transcriptionProgress";
+import { runningTranscription, transcriptionProgressLabel, transcriptsProgress } from "../../lib/transcriptionProgress";
 import { runAim, runIsActive, runItems, runLines, runSummary, type RunItem, type RunLine } from "../../lib/taskRun";
-
-function useNow(ticking: boolean) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!ticking) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [ticking]);
-  return now;
-}
 
 /** Tokens the agent used on this request, with the full breakdown on hover. Shown only when turned on in Settings → Usage. */
 function Tokens({ usage }: { usage?: UsageTotals }) {
@@ -31,28 +19,6 @@ const voicePhase: Record<SpeakerProgress["phase"], string> = {
   audio: "Preparing audio", models: "Finding voices", segmenting: "Finding voices", identifying: "Finding voices",
   grouping: "Finding voices", matching: "Matching voices",
 };
-
-/**
- * A stage's figure between reports, from `projectedFraction`. It never moves back: when a report lands below what's
- * shown, the figure holds until the work catches up. The hold lasts one job, which is the same transcription tasks. When
- * a recording joins, a transcription starts again as a new task, or the stage goes away, what follows is a different job
- * rather than a step back, and its figure starts from what's reported.
- */
-function useSteady(stage: TranscriptStage | undefined, now: number) {
-  const fraction = stage?.fraction ?? 0, remaining = stage?.remainingSeconds;
-  // When this figure was reported. `now` ticks once a second while the run works.
-  const reportedAt = useMemo(() => Date.now(), [fraction, remaining, stage?.key]);
-  // The figure on show, and the job it is a share of: the transcription tasks counted.
-  const shown = useRef(0), key = useRef(stage?.key);
-  if (key.current !== stage?.key) {
-    key.current = stage?.key;
-    shown.current = 0;
-  }
-  if (!stage) return undefined;
-  shown.current = Math.max(shown.current, projectedFraction(fraction, remaining, (now - reportedAt) / 1000));
-  const left = remaining === undefined || stage.done ? undefined : remaining * (1 - shown.current) / Math.max(1e-6, 1 - fraction);
-  return { ...stage, fraction: stage.done ? 1 : shown.current, remainingSeconds: left };
-}
 
 /**
  * Scarlet's words in the chat: two lines at most. A longer reply opens in full on a click and folds again on the
@@ -140,18 +106,8 @@ function useRunUsage(taskId: string) {
 function WorkingRun({ task, events, changes, callNumber, say, result, stopAbove, onStop }: RunBundleProps) {
   const aim = useMemo(() => runAim(events), [events]);
   const progress = useMemo(() => runProgress(events), [events]);
-  const tasks = useProjectStore(s => s.current?.tasks);
-  const media = useProjectStore(s => s.current?.media);
   const voices = useProjectStore(s => s.current?.speakerProgress);
-  const recordings = progress.recordings ?? [];
-  const transcribing = useMemo(() => runTranscripts(tasks ?? [], media ?? [], recordings, task.startedAt),
-    // `recordings` is a fresh array on every event; its contents are what matter.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tasks, media, recordings.join(), task.startedAt]);
-  const now = useNow(!!transcribing && !transcribing.done && transcribing.remainingSeconds !== undefined);
-  const transcripts = useSteady(transcribing, now);
-  // Before a page is read, the recording's voices are found: say so, rather than a read that hasn't started.
-  const voice = progress.read && !progress.read.seconds && !(transcripts && !transcripts.done) ? recordings.map(id => voices?.[id]).find(Boolean) : undefined;
+  const voice = progress.read && !progress.read.seconds ? progress.recordings?.map(id => voices?.[id]).find(Boolean) : undefined;
   // A call goes by the number the window shows for it, which it keeps; one the window hasn't numbered, by its place among the asks.
   const numberOf = useRef(callNumber);
   numberOf.current = callNumber;
@@ -159,9 +115,7 @@ function WorkingRun({ task, events, changes, callNumber, say, result, stopAbove,
     const pass = changes.find(c => c.id === changeId);
     return numberOf.current?.(String(changeId), Number(index)) ?? (pass && callNumbers(pass, 0, false).get(index));
   }), [events, aim, changes]);
-  // While the recordings are transcribed, or their voices found, nothing else moves: that is what Scarlet is doing.
-  const words = transcripts && !transcripts.done ? `Transcribing the recordings · ${Math.floor(transcripts.fraction * 100)}%`
-    : voice ? voicePhase[voice.phase] : doing ?? (task.state === "claimed" ? "Getting started" : WORKING);
+  const words = doing ?? (voice ? voicePhase[voice.phase] : task.state === "claimed" ? "Getting started" : WORKING);
   return <div className="req" data-state="working" aria-label="Scarlet’s work" aria-busy>
     {aim && <div className="req-said req-lead"><Said className="req-say" text={aim.text} /></div>}
     <div className="req-row req-now">

@@ -1572,6 +1572,32 @@ describe("render", () => {
       } finally { encoders.mockRestore(); }
     });
 
+    it.each([["videotoolbox", "h264_videotoolbox"], ["nvenc", "h264_nvenc"]] as const)(
+      "keeps the %s encoder for a clip its hardware decoder cannot read", async (hwaccel, encoder) => {
+        const capture = ffmpeg.runCapture;
+        const probe = vi.spyOn(ffmpeg, "runCapture").mockImplementation((bin, args, opts) => args.includes(encoder)
+          ? Promise.resolve({ code: 0, stdout: Buffer.alloc(0), stderr: "" }) : capture(bin, args, opts));
+        const encoders = vi.spyOn(ffmpeg, "ffmpegEncoders").mockResolvedValue(new Set([encoder]));
+        const encode = vi.spyOn(ffmpeg, "runFfmpeg").mockImplementation(async args => {
+          if (args.includes("-hwaccel")) throw new ffmpeg.FfmpegError("decode failed", "ffmpeg", args, 1, "Unsupported decoder profile");
+          return { stderr: "" };
+        });
+        try {
+          const result = await makeProxy(src, path.join(dir, "hardware-copy.mp4"), { height: 100, hwaccel });
+          expect(encode.mock.calls.map(([args]) => args[args.indexOf("-c:v") + 1])).toEqual([encoder, encoder]);
+          const [retry] = encode.mock.calls[1]!;
+          expect(retry).not.toContain("-hwaccel");
+          expect(retry[retry.indexOf("-vf") + 1]).toMatch(/^scale=/);
+          expect(result.encoder).toBe(encoder);
+          expect(result.warnings.join(" ")).toContain("Unsupported decoder profile");
+        } finally {
+          encode.mockRestore();
+          encoders.mockRestore();
+          probe.mockRestore();
+        }
+      },
+    );
+
     it("makes a preview copy on the CPU when the hardware encoder gives up, and says why", async () => {
       const capture = ffmpeg.runCapture, run = ffmpeg.runFfmpeg;
       const encoders = vi.spyOn(ffmpeg, "ffmpegEncoders").mockResolvedValue(new Set(["h264_nvenc"]));
