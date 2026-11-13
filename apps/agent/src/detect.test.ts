@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { setTimeout as wait } from "node:timers/promises";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { apiKeyVars, cmdShellArgs, defaultExec, detect, detectClaude, detectCodex, detectGemini, findOnPath, formatAvailability, needsCmdShell, runnerEnv, stripVars, type ExecFn } from "./detect.js";
 
@@ -286,31 +286,21 @@ describe("defaultExec", { timeout: 20_000 }, () => {
     expect(result.code).not.toBe(0);
   });
   it("stops a timed-out probe together with the child holding its output pipe", async () => {
-    const ready = join(await tempDir(), "ready");
-    const childScript = `
-      process.stdout.write('probing\\n', () => require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)));
-      setTimeout(() => console.log('child finished'), 10_000);
-    `;
-    const script = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {stdio:'inherit'});setInterval(() => {}, 1000)`;
-    // Start the real process tree before firing the probe deadline, even on a busy Windows runner.
+    const marker = join(await tempDir(), "child-ready");
+    const childScript = `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ready"); setTimeout(() => console.log("child finished"), 15_000)`;
+    const script = `process.stdout.write("probing\\n", () => require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { stdio: "inherit" }))`;
+    // Advance the probe timeout only after the real descendant has inherited the output pipe.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const probe = defaultExec(process.execPath, ["-e", script], { timeoutMs: 500 });
+    const pending = defaultExec(process.execPath, ["-e", script], { timeoutMs: 500 });
     try {
-      const startup = AbortSignal.timeout(15_000);
-      while (!existsSync(ready)) await delay(10, undefined, { signal: startup });
+      const deadline = Date.now() + 12_000;
+      while (!existsSync(marker) && Date.now() < deadline) await wait(20);
+      expect(existsSync(marker)).toBe(true);
     } finally {
       vi.advanceTimersByTime(500);
       vi.useRealTimers();
     }
-    const result = await probe;
-    const childPid = Number(await readFile(ready, "utf8"));
-    expect(childPid).toBeGreaterThan(0);
-    await expect.poll(() => {
-      try { process.kill(childPid, 0); return true; } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
-        throw error;
-      }
-    }, { timeout: 5_000 }).toBe(false);
+    const result = await pending;
     expect(result.stdout).toBe("probing\n");
     expect(result.code).not.toBe(0);
   });

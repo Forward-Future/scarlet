@@ -47,6 +47,30 @@ const transcribeWith = () => el.querySelector<HTMLButtonElement>("#tr-provider")
 // Advanced is the tab with a Save: its dropdowns wait for it, as its typed fields do.
 const previewHeight = () => el.querySelector<HTMLButtonElement>("#rd-height")!;
 
+it("saves the telemetry switch from About and links the filler-word model credit", async () => {
+  const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } }));
+  const browse = vi.spyOn(desktop, "openUrl").mockResolvedValue();
+  await open("/settings#about");
+  const toggle = el.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Send usage reports"]')!;
+  expect(toggle.getAttribute("aria-checked")).toBe("true");
+  await act(async () => toggle.click());
+  expect(save).toHaveBeenCalledExactlyOnceWith({ telemetryEnabled: false });
+  expect(toggle.getAttribute("aria-checked")).toBe("false");
+  const credit = el.querySelector<HTMLAnchorElement>('a[href="https://desertant.com"]')!;
+  expect(credit.textContent).toBe("Uhm by Desert Ant Labs");
+  await act(async () => credit.click());
+  expect(browse).toHaveBeenCalledExactlyOnceWith("https://desertant.com");
+});
+
+it("shows reporting locked off by the environment even with a saved opt-in", async () => {
+  vi.mocked(api.settings).mockResolvedValue({ settings, telemetryUnavailable: "environment" });
+  await open("/settings#about");
+  const toggle = el.querySelector<HTMLButtonElement>('[aria-label="Send usage reports"]')!;
+  expect(toggle.disabled).toBe(true);
+  expect(toggle.getAttribute("aria-checked")).toBe("false");
+  expect(el.textContent).toContain("turned off by the engine environment");
+});
+
 it("leaves Settings on Esc when nothing is unsaved", async () => {
   await open("/settings#advanced");
   expect(saveButton().disabled).toBe(true);

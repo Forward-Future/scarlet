@@ -4,9 +4,10 @@
  * that tests use to prove the segment cache avoided work.
  */
 import { spawn } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
-import { availableParallelism } from "node:os";
-import { delimiter, dirname, isAbsolute, join } from "node:path";
+import { accessSync, constants, statSync } from "node:fs";
+import { availableParallelism, homedir } from "node:os";
+import { isSea } from "node:sea";
+import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 
 // Project assets must be self-contained media. Playlist/concat demuxers can open
 // additional files or URLs, bypassing the import boundary on the next decode.
@@ -55,14 +56,17 @@ const EXE = process.platform === "win32" ? ".exe" : "";
 const binaryCache = new Map<string, string | null>();
 
 /**
- * A binary shipped next to the running executable (the desktop app bundles
- * ffmpeg/ffprobe beside the engine), or under SCARLET_BIN_DIR. Null when absent.
+ * Look for a local/development build beside the engine or under SCARLET_BIN_DIR.
+ * Public installers use the separately installed media tools on PATH.
  * Empty files are dev-build placeholders and don't count.
  */
 function findBinary(name: string): string | null {
   const cached = binaryCache.get(name);
   if (cached !== undefined) return cached;
   const dirs = [process.env.SCARLET_BIN_DIR, dirname(process.execPath)].filter((d): d is string => !!d);
+  // The Mac setup helper puts its caption-capable build here. A GUI login PATH can
+  // put a different Homebrew FFmpeg first. Only a packaged engine uses the helper.
+  if (process.platform === "darwin" && isSea()) dirs.push(join(homedir(), ".local", "bin"));
   // On Windows spawn("ffmpeg") finds the empty Tauri dev placeholder in the
   // working directory before PATH. Choose a real executable by absolute path.
   if (process.platform === "win32") {
@@ -71,22 +75,38 @@ function findBinary(name: string): string | null {
   let found: string | null = null;
   for (const dir of dirs) {
     const candidate = join(dir, name + EXE);
-    if (existsSync(candidate) && statSync(candidate).size > 0) {
+    try {
+      const info = statSync(candidate);
+      if (!info.isFile() || !info.size) continue;
+      accessSync(candidate, constants.X_OK);
       found = candidate;
       break;
+    } catch {
+      // A missing or unusable candidate leaves this tool to the next directory.
     }
   }
   binaryCache.set(name, found);
   return found;
 }
 
-/** Resolution order: explicit arg → SCARLET_FFMPEG/FFMPEG_PATH → bundled sibling → PATH. */
+/** Explicit arguments and environment overrides precede local binaries, the Mac helper and PATH. */
 export function resolveFfmpeg(explicit?: string): string {
   return explicit ?? process.env.SCARLET_FFMPEG ?? process.env.FFMPEG_PATH ?? findBinary("ffmpeg") ?? "ffmpeg";
 }
 
 export function resolveFfprobe(explicit?: string): string {
   return explicit ?? process.env.SCARLET_FFPROBE ?? process.env.FFPROBE_PATH ?? findBinary("ffprobe") ?? "ffprobe";
+}
+
+/** Show the prerequisite at the import or render that needs it. Other launch errors keep their diagnostics. */
+export function mediaToolLaunchError(bin: string, error: NodeJS.ErrnoException, fallback: string): string {
+  if (error.code !== "ENOENT" || !/^ff(mpeg|probe)(\.exe)?$/i.test(basename(bin))) return fallback;
+  const install = process.platform === "win32"
+    ? "In PowerShell, run winget install --id Gyan.FFmpeg.Essentials --exact."
+    : process.platform === "darwin"
+      ? "Run the FFmpeg setup helper linked in the Scarlet download instructions."
+      : "Install the FFmpeg package from your system’s package manager.";
+  return `${fallback}. ${install} Then restart Scarlet and retry.`;
 }
 
 export class FfmpegError extends Error {
@@ -224,7 +244,7 @@ export function runCapture(bin: string, args: string[], opts: CaptureOptions = {
     });
     child.on("error", (e) => {
       opts.signal?.removeEventListener("abort", onAbort);
-      reject(new FfmpegError(`failed to start ${bin}: ${e.message}`, bin, args, null, err, false));
+      reject(new FfmpegError(mediaToolLaunchError(bin, e, `failed to start ${bin}: ${e.message}`), bin, args, null, err, false));
     });
     child.on("close", (code) => {
       opts.signal?.removeEventListener("abort", onAbort);
@@ -295,7 +315,7 @@ export function runFfmpeg(args: string[], opts: RunFfmpegOptions = {}): Promise<
     });
     child.on("error", (e) => {
       opts.signal?.removeEventListener("abort", onAbort);
-      reject(new FfmpegError(`failed to start ${bin}: ${e.message}`, bin, full, null, err, false));
+      reject(new FfmpegError(mediaToolLaunchError(bin, e, `failed to start ${bin}: ${e.message}`), bin, full, null, err, false));
     });
     child.on("close", (code) => {
       opts.signal?.removeEventListener("abort", onAbort);
