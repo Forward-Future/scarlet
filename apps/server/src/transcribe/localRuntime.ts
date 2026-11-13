@@ -48,12 +48,12 @@ export interface LocalRuntime {
   model?: string;
   /** Legacy binary-only overrides use the bundled GGML weights. Explicit adapters may own their weights. */
   adapterOwnsModel?: boolean;
-  gpu?: boolean;
+  separateWhisperLane?: boolean;
   gpuBinary?: string;
   reason?: string;
 }
 
-export function resolveLocalRuntime(ctx: Pick<Ctx, "paths" | "whisperCli" | "whisperGpu">, settings: Settings): LocalRuntime {
+export function resolveLocalRuntime(ctx: Pick<Ctx, "paths" | "whisperCli" | "whisperGpu" | "crisperAdapter">, settings: Settings): LocalRuntime {
   const paths = crisperPaths(ctx.paths.root);
   // A release without presets could still use the installer-provided launcher and weights.
   const legacyPreset = !settings.localModel && settings.whisperCppPath && settings.whisperModelPath &&
@@ -61,8 +61,9 @@ export function resolveLocalRuntime(ctx: Pick<Ctx, "paths" | "whisperCli" | "whi
   const selected = legacyPreset ? "crisperwhisper" : selectedLocalModel(settings);
   const installation = selected === "crisperwhisper" ? crisperInstallation(paths) : undefined;
   if (installation === "ready") {
-    // The pinned Transformers adapter runs on the CPU, including on Apple silicon.
-    return { selected, active: selected, binary: paths.binary, script: paths.script, model: paths.model, gpu: false };
+    // The worker selects the device at runtime. Keep it in the shared audio lane since the aligner
+    // can use the same GPU and a failed GPU run can continue on the CPU.
+    return { selected, active: selected, binary: paths.binary, script: ctx.crisperAdapter ?? paths.script, model: paths.model };
   }
   if (selected === "custom" && !settings.whisperCppPath && !settings.whisperModelPath) {
     return { selected, reason: "Choose a local model file or adapter executable in Advanced settings." };
@@ -81,7 +82,7 @@ export function resolveLocalRuntime(ctx: Pick<Ctx, "paths" | "whisperCli" | "whi
   const bundledBinary = !customBinary && binary === ctx.whisperCli;
   return { selected, active: selected === "custom" ? "custom" : "whispercpp", binary, model,
     adapterOwnsModel: settings.localModel === "custom" && !!customBinary && !model,
-    gpu: bundledBinary && bundledWhisperOnGpu(), gpuBinary: bundledBinary ? ctx.whisperGpu : undefined,
+    separateWhisperLane: bundledBinary && bundledWhisperOnGpu(), gpuBinary: bundledBinary ? ctx.whisperGpu : undefined,
     reason: presetIssue ? presetIssue + "Scarlet is using bundled Whisper." : undefined };
 }
 

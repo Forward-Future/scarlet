@@ -1,6 +1,6 @@
 # CrisperWhisper 2.0 large
 
-Scarlet can run a locally installed CrisperWhisper checkpoint through PyTorch on the CPU. Setup downloads Python libraries and uses the checkpoint you supply. During transcription the adapter runs offline.
+Scarlet runs a locally installed CrisperWhisper checkpoint through PyTorch. On Apple silicon, the adapter tries the Metal GPU through PyTorch MPS and uses the CPU when acceleration is unavailable. Setup downloads Python libraries and uses the checkpoint you supply. During transcription the adapter runs offline.
 
 ## Install
 
@@ -24,7 +24,7 @@ The pinned PyTorch wheel requires macOS 14 or later on Apple silicon. On Intel M
 
 Add `--data-dir "/path/to/Scarlet/data"` for a custom library. By default the installer uses `~/Library/Application Support/com.forwardfuture.scarlet/data` on macOS and `%APPDATA%\com.forwardfuture.scarlet\data` on Windows. It verifies the local model files against the pinned SHA-256 manifest, installs the versions in `requirements.txt` in a dedicated environment, and selects the Windows CPU wheel automatically.
 
-Run the same command to retry or update the adapter. Setup reuses a verified existing model and working runtime. A different checkpoint at the destination is left in place with an error identifying the file. The editor can select CrisperWhisper in Scarlet’s local transcription settings once setup completes.
+Desktop releases include the adapter used for new transcriptions. Updating Scarlet reuses your installed checkpoint and Python environment. Run the setup command again to repair an installation or update its standalone adapter. A different checkpoint at the destination is left in place with an error identifying the file. The editor can select CrisperWhisper in Scarlet’s local transcription settings once setup completes.
 
 ## Engine interface
 

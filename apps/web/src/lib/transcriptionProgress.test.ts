@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "@scarlet/shared";
 import type { MediaAsset } from "@scarlet/timeline";
-import { mediaProblems, mediaWarningLabel, projectedFraction, runTranscripts, transcriptionProgressLabel, transcriptsProgress } from "./transcriptionProgress";
+import { mediaProblems, mediaWarningLabel, transcriptionProgressLabel, transcriptsProgress } from "./transcriptionProgress";
 
 const task = (mediaId: string, progress?: Task["progress"], state: Task["state"] = "running") => ({
   id: `tsk_${mediaId}`, projectId: "prj", kind: "transcribe", agent: "api", instruction: `Transcribe ${mediaId}`, context: { mediaId },
@@ -71,70 +71,7 @@ describe("transcription progress", () => {
   });
 });
 
-describe("the transcripts a run waits on", () => {
-  const media = [{ id: "cam", duration: 3000 }, { id: "mic", duration: 1000 }];
-  const since = "2026-11-06T21:43:33.000Z";
-  const finished = (mediaId: string, finishedAt: string) => ({ ...task(mediaId, undefined, "done"), finishedAt });
-
-  it("counts a transcript still waiting its turn at the pace of the one running", () => {
-    // 30% of the camera in, 1260 s left: 0.6 s of work per second of recording. The mic adds 600 s.
-    expect(runTranscripts([task("cam", { stage: "aligning", fraction: 0.3, remainingSeconds: 1260 }), task("mic", { stage: "queued", fraction: 0 })],
-      media, ["cam", "mic"], since)).toEqual({ fraction: 0.225, total: 4000, queued: false, done: false, remainingSeconds: 1860, key: "tsk_cam,tsk_mic" });
-    // Before either has an estimate there is no time left to show.
-    expect(runTranscripts([task("cam", { stage: "transcribing", fraction: 0.01 }), task("mic", { stage: "queued", fraction: 0 })],
-      media, ["cam", "mic"], since)).toEqual({ fraction: 0.0075, total: 4000, queued: false, done: false, key: "tsk_cam,tsk_mic" });
-    expect(runTranscripts([task("cam", { stage: "queued", fraction: 0 })], media, ["cam"], since)?.queued).toBe(true);
-  });
-
-  it("keeps a transcript finished during the run as done, and leaves out one finished before it", () => {
-    expect(runTranscripts([finished("cam", "2026-11-06T22:10:00.000Z"), task("mic", { stage: "aligning", fraction: 0.5, remainingSeconds: 60 })],
-      media, ["cam", "mic"], since)).toEqual({ fraction: 0.875, total: 4000, queued: false, done: false, remainingSeconds: 60, key: "tsk_cam,tsk_mic" });
-    expect(runTranscripts([finished("cam", "2026-11-06T22:10:00.000Z")], media, ["cam"], since)).toEqual({ fraction: 1, total: 3000, queued: false, done: true, key: "tsk_cam" });
-    expect(runTranscripts([finished("cam", "2026-11-06T20:00:00.000Z")], media, ["cam"], since)).toBeUndefined();
-    expect(runTranscripts([task("cam", { stage: "queued", fraction: 0 })], media, ["cam"], undefined)).toBeUndefined();
-  });
-
-  it("counts a transcript as done once its words are saved, while their alignment goes on", () => {
-    // Whisper is a third of the job, and all a pass waits for: 40% of the words in, 90 s of Whisper left.
-    const whisper = task("cam", { stage: "transcribing", fraction: 0.13, remainingSeconds: 900, words: { fraction: 0.4, remainingSeconds: 90 } });
-    expect(runTranscripts([whisper], media, ["cam"], since)).toEqual({ fraction: 0.4, total: 3000, queued: false, done: false, remainingSeconds: 90, key: "tsk_cam" });
-    // The words are saved and the pass reads them. Alignment has ten minutes to go, and the run doesn't wait for it.
-    const aligning = task("cam", { stage: "aligning", fraction: 0.4, remainingSeconds: 600, words: { fraction: 1 } });
-    expect(runTranscripts([aligning], media, ["cam"], since)).toEqual({ fraction: 1, total: 3000, queued: false, done: true, key: "tsk_cam" });
-    expect(runTranscripts([aligning, task("mic", { stage: "queued", fraction: 0, words: { fraction: 0 } })], media, ["cam", "mic"], since))
-      .toMatchObject({ fraction: 0.75, done: false, queued: false });
-  });
-
-  it("names the transcriptions it counts, so one that starts again as a new task is a different job", () => {
-    const mic = task("mic", { stage: "queued", fraction: 0 });
-    const key = (tasks: Task[]) => runTranscripts(tasks, media, ["cam", "mic"], since)?.key;
-    // The same tasks are the same job however far along they are, named in the order the run asked for its recordings.
-    expect(key([task("cam", { stage: "aligning", fraction: 0.3, remainingSeconds: 1260 }), mic])).toBe("tsk_cam,tsk_mic");
-    expect(key([mic, task("cam", { stage: "aligning", fraction: 0.97, remainingSeconds: 60 })])).toBe("tsk_cam,tsk_mic");
-    // An interrupted transcription isn't counted. The task that starts it again is, under its own id.
-    const restarted = { ...task("cam", { stage: "aligning", fraction: 0.02, remainingSeconds: 1470 }), id: "tsk_cam_again" };
-    expect(key([restarted, task("cam", undefined, "failed"), mic])).toBe("tsk_cam_again,tsk_mic");
-  });
-
-  it("counts a recording's newest transcription whichever way the task list is ordered", () => {
-    // The camera's transcript finished during the run, and the editor then asked for it again.
-    const first = { ...finished("cam", "2026-11-06T22:10:00.000Z"), createdAt: "2026-11-06T21:50:00.000Z" };
-    const again = { ...task("cam", { stage: "transcribing", fraction: 0.1, remainingSeconds: 900 }), id: "tsk_cam_again", createdAt: "2026-11-06T22:15:00.000Z" };
-    const stage = { fraction: 0.1, total: 3000, queued: false, done: false, remainingSeconds: 900, key: "tsk_cam_again" };
-    expect(runTranscripts([first, again], media, ["cam"], since)).toEqual(stage);
-    // After a reload the list is newest first.
-    expect(runTranscripts([again, first], media, ["cam"], since)).toEqual(stage);
-  });
-
-  it("moves a figure between reports at the pace its time left implies, for a while, and never past 99%", () => {
-    expect(projectedFraction(0.3, 700, 0)).toBe(0.3);
-    expect(projectedFraction(0.3, 700, 70)).toBeCloseTo(0.37);
-    // Past the horizon the bar stops, so a stalled transcript shows as stalled.
-    expect(projectedFraction(0.3, 700, 600)).toBeCloseTo(projectedFraction(0.3, 700, 240));
-    expect(projectedFraction(0.98, 10, 200)).toBe(0.99);
-    expect(projectedFraction(0.3, undefined, 70)).toBe(0.3);
-  });
-
+describe("media problems", () => {
   it("flags media whose last transcription failed or that couldn't be read, but not a retried or finished one", () => {
     const asset = (id: string, extra: Partial<MediaAsset> = {}) => ({ id, name: `${id}.mov`, kind: "video", status: "ready", ...extra }) as MediaAsset;
     const at = (t: Task, createdAt: string) => ({ ...t, createdAt });
