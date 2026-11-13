@@ -1,6 +1,6 @@
 {
   "name": "@scarlet/timeline",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "Scarlet cut-list schema, operations, diffing and interchange (OTIO).",
   "license": "MIT",
   "type": "module",

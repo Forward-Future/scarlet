@@ -1,12 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Scarlet",
-  "version": "0.1.0",
-  "identifier": "com.forwardfuture.scarlet",
+  "productName": "Scarlet Early Access",
+  "version": "0.1.3",
+  "identifier": "com.forwardfuture.scarlet.earlyaccess",
   "build": {
     "beforeDevCommand": "pnpm --filter @scarlet/web run dev:renderer",
     "devUrl": "http://127.0.0.1:5173",
-    "beforeBundleCommand": "node scripts/fetch-ffmpeg.mjs --verify-only",
     "beforeBuildCommand": "node scripts/build-whisper.mjs && node scripts/build-speaker-gpu.mjs && pnpm --filter @scarlet/web build",
     "frontendDist": "../../web/dist"
   },
@@ -15,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Scarlet",
+        "title": "Scarlet Early Access",
         "width": 1440,
         "height": 900,
         "minWidth": 1100,
@@ -50,8 +49,6 @@
     ],
     "externalBin": [
       "binaries/scarlet-engine",
-      "binaries/ffmpeg",
-      "binaries/ffprobe",
       "binaries/whisper-cli"
     ],
     "resources": {

@@ -47,7 +47,7 @@ An English dialogue pass using bundled Whisper can download about 1.1 GB across 
 
 ## Package a desktop build
 
-Build on the target operating system and architecture. The desktop workflow uses Node.js 24. After `pnpm install --frozen-lockfile`, `pnpm build` and `pnpm desktop:ffmpeg`, build the engine sidecar at the path Tauri expects, then build the installer. On Apple Silicon, run the following from the repository root.
+Build on the target operating system and architecture. The desktop workflow uses Node.js 24. After `pnpm install --frozen-lockfile` and `pnpm build`, build the engine sidecar at the path Tauri expects, then build the installer. On Apple Silicon, run the following from the repository root.
 
 ```sh
 pnpm --filter @scarlet/server build:sea -- --out ../desktop/src-tauri/binaries/scarlet-engine-aarch64-apple-darwin
@@ -56,7 +56,7 @@ pnpm desktop:build
 
 On an Intel Mac, use the filename `scarlet-engine-x86_64-apple-darwin`. On Windows x64, use `scarlet-engine-x86_64-pc-windows-msvc.exe`. Local installers are written under `apps/desktop/src-tauri/target/release/bundle/` with the default Cargo target directory.
 
-The app ships the engine, FFmpeg, FFprobe and `whisper-cli`. On Windows, install the Vulkan SDK to include GPU transcription. `VULKAN_SDK` points to the SDK and `node apps/desktop/scripts/build-speaker-gpu.mjs` builds the optional DirectML speaker runtime. Local builds can fall back to the CPU runtimes.
+Early Access ships the engine and `whisper-cli`. It uses system FFmpeg and FFprobe. On macOS, run `bash apps/desktop/scripts/Install-Scarlet-FFmpeg-macOS.sh` to install the pinned media tools. On Windows, run `winget install --id Gyan.FFmpeg.Essentials --exact` and reopen Scarlet after installation. On Windows, install the Vulkan SDK to include GPU transcription. `VULKAN_SDK` points to the SDK and `node apps/desktop/scripts/build-speaker-gpu.mjs` builds the optional DirectML speaker runtime. Local builds can fall back to the CPU runtimes.
 
 GitHub Actions builds the Windows x64 and both Mac installers. It runs an engine smoke test that ingests and renders a captioned clip and lists the MCP tools. The Mac jobs also verify the code signature. The default macOS signature is ad hoc. For signed and notarized releases, the workflow accepts `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID` as secrets in the `release` environment. Restrict that environment to protected `v*` tags. Move existing signing secrets out of repository or organization scope so a pull request cannot request them. Pull requests and manual checks run unsigned with read-only permissions. Pushes of protected `v*` tags attach installers to a draft release. [Desktop build workflow](../.github/workflows/desktop.yml)
 

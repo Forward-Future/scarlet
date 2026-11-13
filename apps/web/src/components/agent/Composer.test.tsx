@@ -96,6 +96,23 @@ it("switches models above the draft and sends the edit with the selected model",
   }));
 });
 
+it.each([
+  { kind: "missing", catalog: {} },
+  { kind: "empty", catalog: { models: [] } },
+  { kind: "default-only", catalog: { models: [], modelLabels: { "": "Default" }, modelOptions: { "": { efforts: [{ id: "high" }], speeds: [] } } } },
+])("sends through signed-in Claude when its model list is $kind", async ({ catalog }) => {
+  useHostsStore.setState({ hosts: [{ ...db.hosts[0]!, online: true, agents: [
+    { id: "claude", installed: true, loggedIn: true, auth: "subscription", ...catalog },
+  ] }] });
+  useUiStore.setState({ agent: { agent: "claude", model: "previous-model", effort: "max", serviceTier: "fast" } });
+  await show();
+  await type("Tighten the opening");
+  await submit();
+  expect(useProjectStore.getState().createNote).toHaveBeenCalledWith(PRJ, expect.objectContaining({
+    text: "Tighten the opening", time: 3.5, assignTo: "claude", effort: undefined, serviceTier: undefined,
+  }));
+});
+
 it("names Scarlet, not a browser, where the window can’t record", async () => {
   // This test window has no recorder, as a webview without one.
   await show();

@@ -3,7 +3,7 @@ name: Desktop
 # Builds the Scarlet desktop app (Tauri 2) for Windows, Apple Silicon Macs and
 # Intel Macs, each on its own architecture so the engine and ffmpeg are native.
 # Every build is then checked for real: the bundled engine ingests and renders
-# a clip, and on macOS the app is launched and screenshotted.
+# a clip, and the macOS jobs verify the packaged app’s signature.
 # Protected `v*` tags publish a draft release; other runs produce unsigned check artifacts.
 
 on:

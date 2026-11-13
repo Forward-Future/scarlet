@@ -152,7 +152,7 @@ jobs:
           releaseName: ${{ inputs.release && format('Scarlet {0}', github.ref_name) || '' }}
           releaseBody: "Scarlet desktop installers. See the assets below."
           releaseDraft: true
-          prerelease: false
+          prerelease: true
           includeUpdaterJson: false
 
       - name: Check the Mac app's code signature
@@ -160,7 +160,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APP="$BUNDLE/macos/Scarlet.app"
+          APP="$BUNDLE/macos/Scarlet Early Access.app"
           ls -la "$APP/Contents/MacOS"
           codesign --verify --deep --strict --verbose=2 "$APP"
           for f in "$APP"/Contents/MacOS/*; do codesign -dv "$f" 2>&1 | grep -E "^(Identifier|Format|flags|Signature)" | sed "s|^|$(basename "$f"): |"; done
@@ -170,26 +170,17 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then
-            DIR="$BUNDLE/macos/Scarlet.app/Contents/MacOS"
+            DIR="$BUNDLE/macos/Scarlet Early Access.app/Contents/MacOS"
           else
             DIR="apps/desktop/src-tauri/target/${{ matrix.triple }}/release"
           fi
-          node apps/desktop/scripts/smoke-engine.mjs "$DIR"
-
-      - name: Launch the Mac app and take a screenshot
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -uo pipefail
-          LOG="$HOME/Library/Logs/com.forwardfuture.scarlet/scarlet-desktop.log"
-          open -n "$BUNDLE/macos/Scarlet.app"
-          for i in $(seq 1 90); do grep -q "engine ready on" "$LOG" 2>/dev/null && break; sleep 1; done
-          sleep 10
-          mkdir -p screenshots
-          screencapture -x "screenshots/scarlet-${{ matrix.triple }}.png" || echo "::warning::screencapture failed"
-          echo "----- app log -----"; cat "$LOG" || true
-          pkill -f "Scarlet.app/Contents/MacOS" || true
-          grep -q "engine ready on" "$LOG" || { echo "::error::the app never reported the engine ready"; exit 1; }
+          MEDIA_TOOLS="$RUNNER_TEMP/scarlet-media-tools"
+          mkdir -p "$MEDIA_TOOLS"
+          EXT=""; [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
+          for tool in ffmpeg ffprobe; do
+            cp "apps/desktop/src-tauri/binaries/$tool-${{ matrix.triple }}$EXT" "$MEDIA_TOOLS/$tool$EXT"
+          done
+          node apps/desktop/scripts/smoke-engine.mjs "$DIR" "$MEDIA_TOOLS"
 
       - name: Upload artifacts
         if: ${{ always() && !inputs.release }}
@@ -201,4 +192,3 @@ jobs:
             ${{ env.BUNDLE }}/msi/*.msi
             ${{ env.BUNDLE }}/nsis/*.exe
             ${{ env.BUNDLE }}/dmg/*.dmg
-            screenshots/*.png

@@ -1,7 +1,7 @@
 {
   "name": "scarlet",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "Single-user AI video editor. Agents edit, Scarlet renders.",
   "license": "MIT",
   "packageManager": "pnpm@12.16.1",

@@ -3,7 +3,7 @@ export const DEFAULT_POSTHOG_KEY = "phc_xWw7KkqDL4iYF6fd4E4bm7WDNADN2AsAd5nzDUjh
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com";
 
 /** Kept in step with package.json by a test: the packaged engine is one file and can't read it at run time. */
-export const SCARLET_VERSION = "0.1.0";
+export const SCARLET_VERSION = "0.1.3";
 
 export interface TelemetryConfig {
   enabled: boolean;
