@@ -243,17 +243,20 @@ export const MIN_SCORE = 0.2;
 /**
  * Consecutive segments joined into runs of at most `maxSeconds` (Whisper's segment edges are themselves
  * approximate). A longer segment splits between words. `index` holds each word's position in the flat
- * word order of `segments`.
+ * word order of `segments`. A resumed alignment starts a fresh group at its first unfinished word.
  */
-export function alignmentGroups(segments: readonly TranscriptSegment[], maxSeconds = 30) {
+export function alignmentGroups(segments: readonly TranscriptSegment[], maxSeconds = 30, fromWord = 0) {
   type Group = { start: number; end: number; words: AlignWord[]; index: number[] };
   const groups: Group[] = [];
   let current: Group | undefined;
   let flat = 0;
   for (const seg of segments) {
-    const words = seg.words;
+    const skipped = Math.min(seg.words.length, Math.max(0, fromWord - flat));
+    flat += skipped;
+    const words = skipped ? seg.words.slice(skipped) : seg.words;
     if (!words.length) continue;
-    const lo = Math.min(seg.start, words[0]!.start), hi = words.reduce((end, w) => Math.max(end, w.end), seg.end);
+    const lo = skipped ? words[0]!.start : Math.min(seg.start, words[0]!.start);
+    const hi = words.reduce((end, w) => Math.max(end, w.end), seg.end);
     if (!current || hi - current.start > maxSeconds) {
       current = undefined;
       for (const w of words) {
@@ -278,11 +281,11 @@ export function alignmentGroups(segments: readonly TranscriptSegment[], maxSecon
  * into the gap between their aligned neighbors so that word order holds. Segment bounds widen to cover
  * their words.
  */
-export function applyTimings(segments: readonly TranscriptSegment[], timings: ReadonlyArray<WordTiming | null | undefined>, minScore = MIN_SCORE): TranscriptSegment[] {
+export function applyTimings(segments: readonly TranscriptSegment[], timings: ReadonlyArray<WordTiming | null | undefined>, minScore = MIN_SCORE, fixedPrefix = 0): TranscriptSegment[] {
   const words = segments.flatMap(s => s.words);
   const times = words.map((w, i) => {
     const t = timings[i];
-    return t && t.score >= minScore && t.end >= t.start ? { start: t.start, end: t.end, aligned: true } : { start: w.start, end: w.end, aligned: false };
+    return t && t.score >= minScore && t.end >= t.start ? { start: t.start, end: t.end, aligned: true } : { start: w.start, end: w.end, aligned: i < fixedPrefix };
   });
   for (let i = 0; i < times.length;) {
     if (times[i]!.aligned) { i++; continue; }

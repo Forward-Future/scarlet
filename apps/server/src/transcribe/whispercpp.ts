@@ -4,6 +4,8 @@ import { join, win32 } from "node:path";
 import { z } from "zod/v3";
 import { newId, type TranscriptSegment, type TranscriptWord } from "@scarlet/timeline";
 import { extractWav, run } from "../render/ffmpeg.js";
+import { decodedRecording } from "../services/recordingAudio.js";
+import { SAMPLE_RATE } from "./ctcAlign.js";
 import type { TranscribeInput, TranscribeResult, TranscriptionProvider } from "./index.js";
 
 const offsets = z.object({ from: z.number().finite(), to: z.number().finite() });
@@ -63,6 +65,32 @@ export function bundledWhisperOnGpu(platform: string = process.platform, arch: s
 /** GPU builds that failed a run the CPU build then finished. Each falls back to the CPU build until the engine restarts. */
 const failedGpu = new Set<string>();
 
+/** Save roughly two minutes per turn. Look for a pause either side before cutting the next WAV. */
+const CHUNK_SECONDS = 120;
+const SEARCH_SECONDS = 4;
+
+async function chunkEnd(audio: Awaited<ReturnType<typeof decodedRecording>>, start: number, duration: number) {
+  const target = start + CHUNK_SECONDS;
+  if (target + SEARCH_SECONDS >= duration) return duration;
+  const from = target - SEARCH_SECONDS;
+  const pcm = await audio.pcm(from, target + SEARCH_SECONDS);
+  // The middle of the lowest-energy 200 ms makes a natural break in speech. When several windows
+  // are silent, choose the one nearest the target. Avoid a fixed split in the middle of a word.
+  const width = SAMPLE_RATE / 5;
+  const step = SAMPLE_RATE / 50;
+  let best = target, bestEnergy = Infinity;
+  for (let at = 0; at + width <= pcm.length; at += step) {
+    let energy = 0;
+    for (let i = at; i < at + width; i++) energy += pcm[i]! ** 2;
+    const middle = from + (at + width / 2) / SAMPLE_RATE;
+    if (energy < bestEnergy || (energy === bestEnergy && Math.abs(middle - target) < Math.abs(best - target))) {
+      bestEnergy = energy;
+      best = middle;
+    }
+  }
+  return best;
+}
+
 /** Local whisper.cpp: `whisper-cli -m model -f wav -ojf -of prefix`. */
 export class WhisperCppProvider implements TranscriptionProvider {
   readonly name = "whispercpp";
@@ -82,8 +110,42 @@ export class WhisperCppProvider implements TranscriptionProvider {
     const wav = input.keepWavAt ?? join(input.tmpDir, newId("wcpp") + ".wav");
     try {
       await extractWav(input.path, wav, { signal: input.signal });
+      if (input.checkpoint) return await this.transcribeChunks(wav, input, input.checkpoint);
       return await this.transcribeWav(wav, input.tmpDir, input.signal, input.language, undefined, input.onProgress);
     } finally { if (!input.keepWavAt) await rm(wav, { force: true }); }
+  }
+
+  private async transcribeChunks(wav: string, input: TranscribeInput, checkpoint: NonNullable<TranscribeInput["checkpoint"]>): Promise<TranscribeResult> {
+    const audio = await decodedRecording(wav);
+    const duration = audio.samples / SAMPLE_RATE;
+    const { onProgress } = input;
+    const result = { ...checkpoint.result, segments: [...checkpoint.result.segments] };
+    const part = join(input.tmpDir, newId("wcpp") + ".wav");
+    try {
+      for (let from = checkpoint.through; from < duration;) {
+        input.signal?.throwIfAborted();
+        const end = await chunkEnd(audio, from, duration);
+        const whole = from === 0 && end === duration;
+        if (!whole) await audio.writeWindow(part, from, end);
+        const selectedLanguage = input.language || this.opts.language;
+        const language = selectedLanguage && selectedLanguage !== "auto" ? selectedLanguage : result.language;
+        const chunk = await this.transcribeWav(whole ? wav : part, input.tmpDir, input.signal, language, undefined,
+          onProgress && (fraction => onProgress((from + (end - from) * fraction) / duration)));
+        input.signal?.throwIfAborted();
+        // Whisper's 10 ms times can round past the last sample of a window. Keep its words inside the
+        // audio it heard and place them on the original recording's clock.
+        const at = (seconds: number) => Math.min(end, Math.max(from, from + seconds));
+        const absolute = whole ? chunk.segments : chunk.segments.map(s => ({ ...s, start: at(s.start), end: at(s.end),
+          words: s.words.map(w => ({ ...w, start: at(w.start), end: at(w.end) })) }));
+        result.language ??= chunk.language;
+        result.modelLabel ??= chunk.modelLabel;
+        checkpoint.save(end, { language: result.language, modelLabel: result.modelLabel, segments: absolute }, end / duration);
+        result.segments.push(...absolute);
+        onProgress?.(end / duration);
+        from = end;
+      }
+      return result;
+    } finally { await rm(part, { force: true }); }
   }
 
   async transcribeWav(wav: string, tmpDir: string, signal?: AbortSignal, language?: string, prompt?: string, onProgress?: (fraction: number) => void) {
