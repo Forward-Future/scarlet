@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { clipEnd, createProject, isPlayableMedia, sha256, timelineDuration, timelineFromKeepRanges, Transform, type Change, type Clip, type Project } from "@scarlet/timeline";
+import { clipEnd, createProject, isPlayableMedia, cutPlaybackWindow, sha256, timelineDuration, timelineFromKeepRanges, Transform, type Change, type Clip, type Project } from "@scarlet/timeline";
 import { buildThreads, isThreadDone, taskPlan, threadRevision, type Render, type Task } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "./app.js";
 import { BUNDLED_SKILLS } from "./bundledSkills.js";
@@ -3708,7 +3708,7 @@ it("reverts an older edit on its branch, keeps the later edit and records revers
 
 it("applies verified trims once and offers uncertain cuts at their remapped times on the kept version", async () => {
   const { ctx } = workspace;
-  vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
+  const encode = vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
   const author = { type: "human" as const, name: "Editor" };
   const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: author });
   ctx.repos.projects.putMedia(project.id,{ id:"mic",name:"mic",path:"mic.wav",kind:"audio",duration:12,hasAudio:true },"ready");
@@ -3753,6 +3753,12 @@ it("applies verified trims once and offers uncertain cuts at their remapped time
   expect((await wrongRange.json()).error.message).toBe("Cut 0 of this pass is 5.000–6.000 s, not 5.000–7.000 s. Give its range, or the index of the cut you mean.");
   // A range copied with fewer digits, or the range asked for before the cut went onto whole frames, still names this
   // cut, and the cut's own range is what is saved.
+  // Pausing background media work still lets the editor stage calls while the pass is running.
+  ctx.repos.projects.update(project.id, { mediaPaused: true });
+  expect((await assess(6, "ask", false)).status).toBe(200);
+  expect(ctx.repos.changes.get(saved.id)!.firstDecisionPreview).toBeUndefined();
+  expect((await api("POST", `/changes/${saved.id}/approve`, { restoredCuts: [] })).status).toBe(409);
+  ctx.repos.projects.update(project.id, { mediaPaused: false });
   expect((await assess(6.004, "ask", false)).status).toBe(200);
   expect((await assess(6.03, "ask", false)).status).toBe(200);
   expect((await assess(6.05, "ask", false)).status).toBe(400);
@@ -3761,8 +3767,13 @@ it("applies verified trims once and offers uncertain cuts at their remapped time
   expect(ctx.repos.changes.get(saved.id)!.firstDecisionPreview?.index).toBe(0);
   expect(await (await assess(6, "ask")).json()).toEqual({ total: 1, assessed: 1, needsDecision: 1 });
   const preview = ctx.repos.changes.get(saved.id)!.firstDecisionPreview!;
-  expect(ctx.repos.renders.get(preview.renderId)).toMatchObject({ version: saved.toVersion, kind: "segment", range: { start: 3, end: 7 } });
+  const expected = cutPlaybackWindow(3, 8, 9, project.settings.fps)!;
+  expect(ctx.repos.renders.get(preview.renderId)).toMatchObject({ version: saved.toVersion, kind: "segment", range: expected });
   await vi.waitFor(() => expect(ctx.repos.changes.get(saved.id)!.firstDecisionPreview!.briefToPlayableMs).toBeGreaterThanOrEqual(0));
+  const encodes = encode.mock.calls.length;
+  const play = await api("POST", projectsPath() + `/versions/${saved.toVersion}/cut-playback-file`, expected);
+  expect(await play.json()).toEqual({ renderId: preview.renderId, ...expected });
+  expect(encode).toHaveBeenCalledTimes(encodes);
   expect((await assess(6, "ask")).status).toBe(200);
   expect(ctx.repos.changes.get(saved.id)!.firstDecisionPreview?.renderId).toBe(preview.renderId);
   expect((await api("POST", `/changes/${saved.id}/approve`, {})).status).toBe(409);
@@ -4040,16 +4051,19 @@ it("publishes finished calls in order and preserves the passage and note through
   const note = (index: number, verdict: "ask" | "keep", reason: string) => ({ index, start: index * 4 + 1, end: index * 4 + 2, verdict, reason });
   const draft = note(0, "ask", "Recheck the combined range.");
   const late = note(2, "ask", "Keep the pause before the last line?");
+  ctx.repos.projects.update(project.id, { mediaPaused: true });
   ctx.repos.changes.put({ ...review, cutAssessments: [{ ...draft, provisional: true }] });
   expect(await (await assess(review, [late])).json()).toMatchObject({ total: 3, assessed: 1 });
   const saved = () => ctx.repos.changes.get(review.id)!;
-  expect(saved().firstDecisionPreview?.index).toBe(2);
+  expect(saved().firstDecisionPreview).toBeUndefined();
+  ctx.repos.projects.update(project.id, { mediaPaused: false });
   const middle = note(1, "ask", "Keep this second reading?");
   const early = note(0, "ask", "Does this breath help the opening?");
   const result = await assess(review, [
     { ...late, reason: "A different question about the last line." }, middle, { ...early, provisional: true, askOrder: 99 },
   ]);
   expect(await result.json()).toMatchObject({ assessed: 3, heldCalls: [2] });
+  expect(saved().firstDecisionPreview?.index).toBe(2);
   expect(saved().cutAssessments).toEqual([
     { ...early, askOrder: 2 }, { ...middle, askOrder: 3 }, { ...late, askOrder: 1 },
   ]);
@@ -5785,6 +5799,32 @@ it("carries both recovered cuts when a second request opens the first revision a
   const final = ctx.repos.versions.get(project.id, ctx.repos.projects.get(project.id)!.head!)!.timeline;
   expect(straightCuts(final.tracks.find(t => t.id === "a1")!.clips)).toMatchObject([
     { sourceIn: 0, sourceOut: 0.5 }, { sourceIn: 1.5, sourceOut: 7.5 }, { sourceIn: 10, sourceOut: 11.5 }, { sourceIn: 14, sourceOut: 20 }]);
+});
+
+it("previews one pending cut on the requested head with the same footage as approving that cut", async () => {
+  const { ctx } = workspace;
+  const { base, staged, submit } = dialoguePassInParts();
+  const { review } = await submit(base, [staged(7, 8), staged(9, 10)]);
+  const path = `/changes/${review.id}`;
+  const preview = (ontoVersion: string) => api("POST", path + "/cut-review?view=draft", { ontoVersion, restoredCuts: [1] });
+  expect(await (await preview(base)).json()).toMatchObject({ ontoVersion: base, removed: [{ start: 7, end: 8 }] });
+
+  const moved = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", autoApprove: true,
+    description: "Shorten the opening.", ops: [{ op: "rippleDelete", start: 0, end: 1 }] }).change.toVersion;
+  expect((await preview(base)).status).toBe(409);
+  const result = await preview(moved);
+  expect(result.status).toBe(200);
+  const { draft, ontoVersion, removed } = await result.json();
+  expect(ontoVersion).toBe(moved);
+  expect(removed).toEqual([{ start: 6, end: 7 }]);
+  expect(straightCuts(draft.tracks.find((t: { id: string }) => t.id === "a1").clips)).toMatchObject([
+    { sourceIn: 1, sourceOut: 7 }, { sourceIn: 8, sourceOut: 20 },
+  ]);
+  expect(ctx.repos.projects.header(project.id)!.head).toBe(moved);
+  const approval = await api("POST", path + "/approve", { restoredCuts: [1] });
+  expect(approval.status).toBe(200);
+  const { project: applied } = await approval.json();
+  expect(ctx.repos.versions.get(project.id, applied.head)!.timeline.tracks).toEqual(draft.tracks);
 });
 
 it("shortens a staged cut revision when a frame inside its requested extension has already been removed", async () => {
