@@ -1,4 +1,4 @@
-"""Install Scarlet's CPU runtime and a user-supplied CrisperWhisper checkpoint."""
+"""Install Scarlet's local transcription runtime and a user-supplied CrisperWhisper checkpoint."""
 import argparse
 from contextlib import contextmanager
 import hashlib
@@ -108,7 +108,7 @@ def ensure_runtime(env):
         try:
             if env.exists():  # Interrupted installation still owned by this setup.
                 shutil.rmtree(env)
-            print("Installing the pinned CPU transcription libraries…", flush=True)
+            print("Installing the pinned transcription libraries…", flush=True)
             prepare_runtime(env)
         except BaseException:
             if env.exists():
