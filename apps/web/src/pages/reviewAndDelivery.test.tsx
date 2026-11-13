@@ -3,7 +3,7 @@ import { selectOption } from "../../test/selectOption";
 import { act, StrictMode, useRef, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Link, MemoryRouter, Outlet } from "react-router-dom";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { fullRenderContext, type Render } from "@scarlet/shared";
 import { timelineDuration } from "@scarlet/timeline";
 import { MonitorPlayback } from "../components/player/MonitorPlayback";
@@ -706,19 +706,46 @@ it("samples the displayed timeline when the monitor is playing a version with a 
   expect(container.querySelector(".timeline-track video")?.getAttribute("src")).toBe("/before.mp4");
 });
 
-it("uses the full monitor for landscape and fits the picture to the project or selected source", async () => {
+function drawPlayerFormat(source?: ProjectData["media"][number]) {
   const noop = () => {};
-  vi.spyOn(api, "sourceCache").mockResolvedValue({ state: "ready", fileKey: "source" });
-  const draw = (source?: ProjectData["media"][number]) => show(<MemoryRouter><CutPreview simple={{ marks: [] }}
+  return show(<MemoryRouter><CutPreview simple={{ marks: [] }}
     workingCache={{ cache: { state: "ready", url: "/edit.mp4" }, startCache: noop }} active hasCut source={source} spot={0} autoPlaySource={false}
     onRetryDraft={noop} onMedia={noop} /></MemoryRouter>);
+}
+
+it("fills the landscape monitor and fits portrait and square monitors to their pictures", async () => {
+  const style = document.createElement("style");
+  style.textContent = (await import("../workspace.css?inline")).default;
+  document.head.append(style);
+  onTestFinished(() => style.remove());
+
+  const examples = [];
+  for (const [aspect, width, height] of [["16:9", 1920, 1080], ["9:16", 1080, 1920], ["1:1", 1080, 1080]] as const) {
+    const settings = { ...data.project.settings, width, height, aspect };
+    await act(() => useProjectStore.setState({ current: { ...data, project: { ...data.project, settings } } }));
+    await drawPlayerFormat();
+    const size = getComputedStyle(container.querySelector(".watch-monitor")!);
+    examples.push({ aspect: width / height, markup: container.innerHTML,
+      fillsMonitor: size.width === "100%" && size.height === "100%" });
+  }
+  if (process.platform === "darwin") {
+    const { checkPlayerLayout } = await import("../../test/playerLayout");
+    checkPlayerLayout(examples);
+  }
+  for (const example of examples) {
+    expect(example.fillsMonitor, `Full monitor at aspect ${example.aspect}`).toBe(example.aspect > 1);
+  }
+}, 120_000);
+
+it("uses the full monitor for landscape and fits the picture to the project or selected source", async () => {
+  vi.spyOn(api, "sourceCache").mockResolvedValue({ state: "ready", fileKey: "source" });
   const expectMonitor = (aspect: number, landscape: boolean) => {
     const monitor = container.querySelector<HTMLElement>(".watch-monitor")!;
     expect(Number(monitor.style.getPropertyValue("--picture-aspect"))).toBe(aspect);
     expect(monitor.hasAttribute("data-landscape")).toBe(landscape);
   };
   const frame = () => new URL(container.querySelector<HTMLImageElement>('img[alt="Selected edit frame"]')!.src).searchParams;
-  await draw();
+  await drawPlayerFormat();
   expectMonitor(16 / 9, true);
   await act(() => labeled("Position in the video").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
   expect(frame().get("format")).toBe("1920x1080@30");
@@ -728,14 +755,14 @@ it("uses the full monitor for landscape and fits the picture to the project or s
   expectMonitor(9 / 16, false);
   expect([frame().get("format"), frame().get("frame")]).toEqual(["1080x1920@30", selected]);
 
-  await draw({ ...data.media[0]!, width: 1000, height: 1000 });
+  await drawPlayerFormat({ ...data.media[0]!, width: 1000, height: 1000 });
   expectMonitor(1, false);
-  await draw({ ...data.media[0]!, width: undefined, height: undefined });
+  await drawPlayerFormat({ ...data.media[0]!, width: undefined, height: undefined });
   const video = container.querySelector<HTMLVideoElement>(".watch-monitor video")!;
   Object.defineProperties(video, { videoWidth: { value: 1280 }, videoHeight: { value: 720 }, duration: { value: 60 } });
   await act(() => video.dispatchEvent(new Event("loadedmetadata")));
   expectMonitor(16 / 9, true);
-  await draw();
+  await drawPlayerFormat();
   expectMonitor(9 / 16, false);
 });
 
