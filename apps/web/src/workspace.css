@@ -150,6 +150,8 @@
 .monitor-clock strong { font-weight: 500; color: #f4f0e8; }
 .watch-viewport { container-type: size; flex: 1; min-height: 135px; display: grid; place-items: center; grid-template: 100% / 100%; }
 .watch-monitor { position: relative; width: min(100%, calc(100cqh * var(--picture-aspect))); aspect-ratio: var(--picture-aspect); }
+/* The landscape picture fits inside the full monitor, including its dark surround and controls. */
+.watch-monitor[data-landscape] { width: 100%; height: 100%; }
 .watch-monitor, .clip-monitor > div:first-child { container-type: size; }
 .video-surface { position: absolute; inset: 0; display: grid; place-items: center; grid-template: 100% / 100%; }
 .video-frame { position: relative; width: min(100%, calc(100cqh * var(--picture-aspect))); aspect-ratio: var(--picture-aspect); }

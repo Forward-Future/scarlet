@@ -706,33 +706,37 @@ it("samples the displayed timeline when the monitor is playing a version with a 
   expect(container.querySelector(".timeline-track video")?.getAttribute("src")).toBe("/before.mp4");
 });
 
-it("fits the monitor and its paused timeline frame to the project, and a source preview to the source", async () => {
+it("uses the full monitor for landscape and fits the picture to the project or selected source", async () => {
   const noop = () => {};
   vi.spyOn(api, "sourceCache").mockResolvedValue({ state: "ready", fileKey: "source" });
   const draw = (source?: ProjectData["media"][number]) => show(<MemoryRouter><CutPreview simple={{ marks: [] }}
     workingCache={{ cache: { state: "ready", url: "/edit.mp4" }, startCache: noop }} active hasCut source={source} spot={0} autoPlaySource={false}
     onRetryDraft={noop} onMedia={noop} /></MemoryRouter>);
-  const aspect = () => Number(container.querySelector<HTMLElement>(".watch-monitor")!.style.getPropertyValue("--picture-aspect"));
+  const expectMonitor = (aspect: number, landscape: boolean) => {
+    const monitor = container.querySelector<HTMLElement>(".watch-monitor")!;
+    expect(Number(monitor.style.getPropertyValue("--picture-aspect"))).toBe(aspect);
+    expect(monitor.hasAttribute("data-landscape")).toBe(landscape);
+  };
   const frame = () => new URL(container.querySelector<HTMLImageElement>('img[alt="Selected edit frame"]')!.src).searchParams;
   await draw();
-  expect(aspect()).toBe(16 / 9);
+  expectMonitor(16 / 9, true);
   await act(() => labeled("Position in the video").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
   expect(frame().get("format")).toBe("1920x1080@30");
   const selected = frame().get("frame");
   const settings = { ...data.project.settings, width: 1080, height: 1920, aspect: "9:16" as const };
   await act(() => useProjectStore.setState({ current: { ...data, project: { ...data.project, settings } } }));
-  expect(aspect()).toBe(9 / 16);
+  expectMonitor(9 / 16, false);
   expect([frame().get("format"), frame().get("frame")]).toEqual(["1080x1920@30", selected]);
 
   await draw({ ...data.media[0]!, width: 1000, height: 1000 });
-  expect(aspect()).toBe(1);
+  expectMonitor(1, false);
   await draw({ ...data.media[0]!, width: undefined, height: undefined });
   const video = container.querySelector<HTMLVideoElement>(".watch-monitor video")!;
   Object.defineProperties(video, { videoWidth: { value: 1280 }, videoHeight: { value: 720 }, duration: { value: 60 } });
   await act(() => video.dispatchEvent(new Event("loadedmetadata")));
-  expect(aspect()).toBe(16 / 9);
+  expectMonitor(16 / 9, true);
   await draw();
-  expect(aspect()).toBe(9 / 16);
+  expectMonitor(9 / 16, false);
 });
 
 it("moves the clock and the timeline as the video plays", async () => {
