@@ -48,15 +48,23 @@ export function accessToken(ctx: Ctx): string {
     // Publish a fully written file even if two engines open this workspace together.
     const tmp = file + "." + randomUUID();
     const fd = openSync(tmp, "wx", 0o600);
+    let published: string | undefined;
     try {
       protectToken(tmp, fd);
-      writeFileSync(fd, "sct_" + randomBytes(32).toString("hex") + "\n");
+      const token = "sct_" + randomBytes(32).toString("hex");
+      writeFileSync(fd, token + "\n");
       linkSync(tmp, file);
+      published = token;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
     } finally {
       closeSync(fd);
       unlinkSync(tmp);
+    }
+    // The new hard link is the same file we already protected. A racing engine reads the winner below.
+    if (published) {
+      workspaceTokens.set(ctx, published);
+      return published;
     }
   }
   if (!lstatSync(file).isFile()) throw new Error("Invalid workspace access-token file");
