@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { open, rm, stat, writeFile } from "node:fs/promises";
+import { open, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { extractWav } from "../render/ffmpeg.js";
 import { alignmentVersion } from "../transcribe/wordAlign.js";
@@ -7,8 +7,10 @@ import { alignmentVersion } from "../transcribe/wordAlign.js";
 type Paths = { paths: { tmp: string; waveforms(projectId: string): string } };
 
 async function stamp(file: string, audioStream?: number) {
-  const info = await stat(file);
-  return [file, info.size, info.mtimeMs, info.ctimeMs, audioStream ?? null];
+  // Ingestion and inspection can reach the same recording through different spellings of the library path.
+  const source = await realpath(file);
+  const info = await stat(source);
+  return [source, info.size, info.mtimeMs, info.ctimeMs, audioStream ?? null];
 }
 
 /**
