@@ -68,6 +68,47 @@ describe("dialogue plan", () => {
     await expect(resolveCutRange(tl, { occurrence: ref, start: 0, end: 1 }, "cut", sources)).rejects.toThrow("already identifies");
   });
 
+  it("returns the fragment audible inside a real crossfade to the author of the cut, including an automatically staged retake", async () => {
+    const { tl, sources } = fixture();
+    (await sources.project()).media[0]!.duration = 5;
+    const scan = [{ start: 1.4, end: 1.88, text: "set" }, { start: 2.008, end: 2.2, text: "it" },
+      { start: 3.26, end: 3.50, text: "it" }, { start: 3.55, end: 3.73, text: "down" }];
+    const acoustic = [{ start: 1.44, end: 1.84, text: "set" }, { start: 2.012, end: 2.04, text: "i" },
+      { start: 3.28, end: 3.46, text: "it" }, { start: 3.58, end: 3.70, text: "down" }];
+    sources.crossfadeFrames = 2;
+    sources.words = async () => scan;
+    const rms = Array<number>(250).fill(.2);
+    sources.pages = () => [{ ...page, edges: joinEvidence(scan, { from: 0, to: 5, rms, peaks: rms, speechActivity: [{ start: 0, end: 5 }] }) }];
+    sources.readKeptWords = async (_id, _stream, from, to) => acoustic.filter(w => w.start < to && w.end > from)
+      .map(w => ({ ...w, start: Math.max(from, w.start), end: Math.min(to, w.end) }));
+    const plan = (options: Partial<DialogueCutInput> = {}, others: DialogueCutInput[] = []) => planDialogueCuts({
+      tl, localPauses: false, cuts: [...others, cut({ start: 2, end: 3.2, ...options })] }, sources);
+    const conflict = { outcome: "needsRevision", disputedEdges: [{ partialWordRepeat: { side: "start", word: "it", heard: "i" } }] };
+    expect(await plan()).toMatchObject(conflict);
+    expect(await plan({ kind: "coaching" }, [cut({ start: .3, end: .7, kind: "coaching" })])).toMatchObject(conflict);
+    expect(await plan({ keepRepeat: "it" })).toMatchObject({ outcome: "ready", decisions: [{ review: true }] });
+    expect(await plan({ decision: "review" })).toMatchObject({ outcome: "ready" });
+    // While a neighboring staged removal meets this cut, the engine holds its fade.
+    expect(await plan({ kind: "coaching" }, [cut({ start: 1.2, end: 2, kind: "coaching", decision: "review" })]))
+      .toMatchObject({ outcome: "ready" });
+    sources.crossfadeFrames = 0;
+    expect(await plan()).toMatchObject({ outcome: "ready" });
+    sources.crossfadeFrames = 2;
+    sources.aiCuts = { retake: "suggest", pause: "cut", coaching: "cut", filler: "cut" };
+    expect(await plan()).toMatchObject({ outcome: "ready" });
+  });
+
+  it("checks an automatically staged cut with unrelated words without decoding new audio", async () => {
+    const { tl, sources } = fixture();
+    const rms = Array<number>(250).fill(.2);
+    sources.pages = () => [{ ...page, edges: joinEvidence(words, { from: 0, to: 5, rms, peaks: rms, speechActivity: [{ start: 0, end: 5 }] }) }];
+    let reads = 0;
+    sources.readKeptWords = async () => { reads++; return []; };
+    expect(await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ start: .5, end: 4.5 })] }, sources))
+      .toMatchObject({ outcome: "ready", decisions: [{ review: true }] });
+    expect(reads).toBe(0);
+  });
+
   it("catches both copies of a pickup on the kept side of a production cut even when the transcript drops one", async () => {
     const { tl, sources } = fixture();
     const tokens = ["Okay.", "Pack", "up.", "Let's", "go,", "let's", "go", "outside."];

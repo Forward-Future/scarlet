@@ -78,6 +78,8 @@ export interface AcousticFiller extends TimeRange { confidence: number }
 export interface DialogueDetections {
   segments: TranscriptSegment[];
   acoustic: AcousticFiller[];
+  /** The requested cached speech frames are unavailable. An empty measured window has no such flag. */
+  keptSideUnavailable?: true;
   speechActivity?: TimeRange[];
   /** Stable recording-local speaker numbers, in source seconds. */
   speakerTurns?: Array<TimeRange & { speaker: number }>;
@@ -96,7 +98,9 @@ export const JOIN_WORD_SECONDS = 8;
 export const DialogueWindowRequest = DialogueRangeRequest
   .and(z.object({ taskId: z.string().min(1).optional(), startedAt: z.string().datetime().optional(),
     /** Decode just the speech surviving on one side of a proposed join, in its source clock. */
-    keptSide: z.object({ audioStream: z.number().int().nonnegative().optional() }).optional() }))
+    keptSide: z.object({ audioStream: z.number().int().nonnegative().optional(),
+      /** Read only prepared character emissions. Never fall back to transcription. */
+      cachedOnly: z.literal(true).optional() }).optional() }))
   .refine(v => !v.keptSide || v.to <= v.from + JOIN_WORD_SECONDS + 1e-6, `A kept-side reading covers up to ${JOIN_WORD_SECONDS} seconds`)
   .refine(v => v.to <= v.from + 60, "Choose up to sixty source seconds");
 export const SourceAudioRequest = z.object(SourceAudioOptions)

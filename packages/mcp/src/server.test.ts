@@ -2130,6 +2130,42 @@ it("checks each surviving side independently before preview and save, then accep
   } finally { Object.assign(mock.state, original); await editor.close(); }
 });
 
+it("reports a repeated onset that only plays in the fade, then clears it when the outgoing edge moves", async () => {
+  const original = { timeline: mock.state.timeline, transcripts: mock.state.transcripts, waveform: mock.state.waveform, extra: mock.state.extra };
+  const editor = await connect();
+  const tl = emptyTimeline(mock.state.project.id);
+  tl.tracks[1]!.clips.push(makeMediaClip("m1", 0, 8, 0));
+  mock.state.timeline = tl;
+  const words = [{ text: "step", start: 1.4, end: 1.8 }, { text: "over", start: 2.005, end: 2.25 },
+    { text: "over", start: 5.1, end: 5.35 }, { text: "here", start: 5.4, end: 5.7 }];
+  mock.state.transcripts = { m1: { ...transcript, segments: [{ id: "s", start: 0, end: 8, text: "Step over, over here.", words }] } };
+  mock.state.waveform = (mediaId, from, to, points) => ({ mediaId, from, to, peaks: Array(points).fill(.2), rms: Array(points).fill(.2),
+    speechActivity: [{ start: from, end: to }] });
+  // The first vowel falls entirely after the picture cut, within the one-frame outgoing audio handle.
+  const acoustic = [words[0]!, { text: "o", start: 2.011, end: 2.04 }, ...words.slice(2)];
+  mock.state.extra = (req, res) => {
+    if (!req.path.endsWith("/dialogue-detections")) return false;
+    const { from, to } = req.body as { from: number; to: number };
+    const heard = acoustic.filter(w => w.end > from && w.start < to)
+      .map(w => ({ ...w, start: Math.max(from, w.start), end: Math.min(to, w.end) }));
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ segments: [{ id: "kept", words: heard }], acoustic: [] }));
+    return true;
+  };
+  const check = async (start: number) => {
+    const result = await editor.callTool({ name: "dialogue_check_join", arguments: { version: tl.version, start, end: 5 } });
+    expect(result.isError).toBeFalsy();
+    return JSON.parse(textOf(result));
+  };
+  try {
+    expect(await check(2)).toMatchObject({ partialWordRepeat: { side: "start", word: "over", heard: "o",
+      fragment: { start: 2.011, end: expect.closeTo(2 + 1 / 30, 5) }, complete: { start: 5.1, end: 5.35 } } });
+    const revised = await check(2 - 4 / 30);
+    expect(revised.partialWordRepeat).toBeUndefined();
+    expect(revised.unreadJoinAudio).toBeUndefined();
+  } finally { Object.assign(mock.state, original); await editor.close(); }
+});
+
 it("returns an opening trim that leaves two six-word deliveries, then saves the uninterrupted take", async () => {
   const original = { extra: mock.state.extra, waveform: mock.state.waveform, timeline: mock.state.timeline, transcripts: mock.state.transcripts };
   const editor = await connect();
