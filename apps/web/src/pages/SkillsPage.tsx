@@ -2,12 +2,10 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { errorMessage } from "../lib/client";
 import { splitFrontmatter } from "../lib/frontmatter";
-import type { Skill } from "@scarlet/shared";
+import { SKILL_CATEGORIES, type Skill } from "@scarlet/shared";
 import { relTime } from "../lib/format";
 import { useSkillsStore } from "../stores/skills";
 import { Chip, EmptyState, ErrorState, Icon, Loading, SectionTitle, Toggle, InlineError } from "../components/ui/primitives";
-
-const categories = ["Getting started", "Story and pacing", "Sound", "Picture and graphics", "Delivery"];
 
 export function SkillsPage() {
   const skills = useSkillsStore((s) => s.skills);
@@ -26,7 +24,7 @@ export function SkillsPage() {
   const filtered = skills.filter(s => s.name.toLowerCase().includes(query) || s.description.toLowerCase().includes(query))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const groups = new Map<string, Skill[]>(categories.map(category => [category, []]));
+  const groups = new Map<string, Skill[]>(SKILL_CATEGORIES.map(category => [category, []]));
   for (const skill of filtered) {
     const category = splitFrontmatter(skill.content).frontmatter.category?.trim() || "Other skills";
     const group = groups.get(category);

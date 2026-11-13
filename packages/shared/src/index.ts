@@ -12,3 +12,4 @@ export * from "./transcriptSearch.js";
 export * from "./adjacentRepeats.js";
 export * from "./capabilities.js";
 export * from "./editKind.js";
+export * from "./skillCategories.js";
