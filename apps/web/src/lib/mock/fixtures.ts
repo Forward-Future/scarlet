@@ -686,7 +686,7 @@ export function buildDb(chatLayouts = false): MockDb {
     { id: "lrn_pause", projectId: PRJ, rule: "Bring every pause between sentences down to about a quarter second.", said: "Tighten the pause before “three things”. A quarter second between sentences, always.",
       taskId: "task_done", skillId: dialogueSkill.id, state: "suggested", createdAt: minutesAgo(11),
       // What the sample's dialogue skill says that the rule would change, as a check quotes it.
-      replaces: ["Match a pause to the exchange around it."] },
+      replaces: ["Aim for a natural pace."] },
     { id: "lrn_laugh", projectId: PRJ, rule: "Keep a laugh in. Cut only the dead air after it.", said: "Don’t cut the laugh.",
       taskId: "task_done", skillId: dialogueSkill.id, state: "suggested", createdAt: minutesAgo(10) },
   ];
@@ -698,7 +698,6 @@ export function buildDb(chatLayouts = false): MockDb {
     noteCleanup: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5" },
     render: { handleSeconds: 1.5, previewHeight: DEFAULT_PREVIEW_HEIGHT, concurrency: 2, hwaccel: "auto" },
     defaultAgent: "claude",
-    dialogue: { aiCuts: { pause: "cut", filler: "cut", retake: "cut", coaching: "cut" }, pauseTightness: "natural", crossfadeFrames: 2 },
   };
 
   return {

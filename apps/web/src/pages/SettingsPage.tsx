@@ -12,7 +12,6 @@ import { Link, Navigate, Outlet, useBlocker, useLocation, useMatch, useNavigate 
 import { ModelSettings } from "../components/shell/ModelSettings";
 import { DesktopAgents, DesktopDiagnostics, ExportLogs } from "../components/shell/DesktopSettings";
 import { EditingToolsSettings } from "../components/shell/EditingToolsSettings";
-import { DialogueSettings } from "../components/shell/DialogueSettings";
 import { useUiStore } from "../stores/ui";
 import { ErrorState, Field, InlineError, Loading, Modal, PageHeading, SectionTitle, Spinner, Toggle } from "../components/ui/primitives";
 
@@ -64,8 +63,7 @@ function ServerSettingsForm({ section }: { section: "general" | "advanced" }) {
       .catch((e) => setError(errorMessage(e)));
   };
   useEffect(() => void load(), []);
-  // General's dropdown saves as it is chosen, like the dialogue ones under it. Advanced has fields to type in and
-  // the Save for them, and is unsaved while what those fields show differs from what was loaded.
+  // General saves each choice immediately. Advanced keeps typed values until Save.
   const retyped = (field: keyof typeof typed) => typed[field] !== undefined && typed[field] !== String(saved?.render[field]);
   const dirty = section === "advanced" && !!settings && !!saved
     && (shown(settings) !== shown(saved) || retyped("handleSeconds") || retyped("concurrency"));
@@ -361,7 +359,6 @@ export function SettingsPage() {
           <>
             <DesktopAgents />
             <ServerSettingsForm section="general" />
-            <section className="card p-5" aria-label="Dialogue edits"><DialogueSettings /></section>
           </>
         )}
         {tab === "models" && <ModelSettings />}

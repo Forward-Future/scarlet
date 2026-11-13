@@ -34,6 +34,7 @@ import { foldStrandedPasses, recordLeftOutFootage, retireLeftoverPasses, wireCha
 import { RenderQueue } from "./services/renderQueue.js";
 import { migrateQuickActions } from "./services/migrateQuickActions.js";
 import { retireMergedSkills, migrateGlobalSkills, seedSkillList, seedSkills } from "./services/skills.js";
+import { migrateDialogueSettings } from "./services/migrateDialogueSettings.js";
 import { BUNDLED_SKILLS } from "./bundledSkills.js";
 import { featureForRequest } from "@scarlet/shared";
 
@@ -170,6 +171,7 @@ export function createApp(options: ServerOptions): ScarletApp {
   };
   migrateQuickActions(ctx);
   const seeded = options.skillsSeedDir ? seedSkills(ctx, options.skillsSeedDir) : seedSkillList(ctx, BUNDLED_SKILLS);
+  migrateDialogueSettings(ctx);
   retireMergedSkills(ctx);
   migrateDialogueOperations(ctx);
   if (seeded) ctx.log(`[skills] seeded ${seeded} skill(s) from ${options.skillsSeedDir ?? "the bundled set"}`);

@@ -3347,9 +3347,6 @@ it.each(["a1", "alternate"])("requires an audio check of the version that plays,
   const found = await (await check(version)).json();
   expect(found.unavailable).toBeUndefined();
   expect(found).toMatchObject({ heard: 2, remaining: 2, repeats: [{ phrase: "go", atJoin: true }, { phrase: "very", atJoin: false }] });
-  ctx.repos.settings.update({ dialogue: { aiCuts: { retake: "off" } } });
-  expect(await (await check(version)).json()).toMatchObject({ heard: 2, remaining: 0, retakes: "off" });
-  ctx.repos.settings.update({ dialogue: { aiCuts: { retake: "cut" } } });
   expect((await finish()).state).toBe("queued");
   await claim();
   const keep = [{ id: found.repeats[1].id, reason: "Spoken emphasis" }];
@@ -3924,7 +3921,7 @@ function dialoguePassInParts(length = 20) {
 }
 
 /**
- * A track's clips as straight cuts: the crossfade Scarlet puts on each dialogue join (two clips overlapping by the fades
+ * A track's clips as straight cuts: the requested crossfade on a dialogue join (two clips overlapping by the fades
  * they carry there) read back to the cut it smooths. Tests about which footage a pass keeps compare these.
  */
 function straightCuts(clips: Clip[]): Clip[] {
@@ -4885,8 +4882,6 @@ it("carries a note saved with its range rounded to five decimals, on the cuts it
 
 it("saves a pass's next part after an applied cut leaves the edit a rounding error shorter than a staged cut's original range", async () => {
   const { ctx } = workspace;
-  // Straight cuts: a crossfade's arithmetic on the join leaves the edit a different hair long.
-  ctx.repos.settings.update({ dialogue: { crossfadeFrames: 0 } });
   const { base, staged, submit, listed } = dialoguePassInParts();
   const fps = ctx.repos.projects.get(project.id)!.settings.fps;
   const frame = (n: number) => n / fps;
@@ -5298,7 +5293,6 @@ it("preserves picture between a new cut and the join made by an earlier part", a
     expect(res.status).toBe(201);
     const version = ((await res.json()).changes as Change[])[0]!.toVersion;
     const { timeline } = await (await api("GET", projectsPath() + "/timeline?version=" + version)).json();
-    // Each join has Scarlet's crossfade: its clips are read as the straight cut it smooths.
     const clips = (timeline.tracks as Array<{ clips: Clip[] }>)
       .flatMap(t => straightCuts(t.clips).map(c => [c.timelineIn, c.kind === "media" ? c.sourceIn : 0, c.kind === "media" ? c.sourceOut : 0]));
     return { version, clips };

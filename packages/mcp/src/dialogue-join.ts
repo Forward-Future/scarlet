@@ -52,22 +52,20 @@ export function joinEvidence(words: Word[], wf: Waveform): JoinPage["edges"] {
 const reach = .75, wordMargin = .02, quietMargin = .03;
 
 /**
- * Edge padding, the editor's craft rule. When Scarlet places an edge in a quiet run, it leaves
+ * Default padding for a word-addressed removal. When Scarlet places an edge in a quiet run, it leaves
  * AIR_AFTER_SPEECH of room tone after the last kept word (its decay and release) and
  * AIR_BEFORE_SPEECH before kept speech resumes (a natural entrance, no clipped breath onset).
  * A run shorter than both splits proportionally. An edge the model already put in silence stays put:
  * pacing is the model's call, and timeline_join_audit reports the air either side.
- * These are the Natural amounts. The editor's pause tightness scales both (PAUSE_AIR_SCALE).
  */
 export const AIR_AFTER_SPEECH = .15;
 export const AIR_BEFORE_SPEECH = .10;
 
 /**
  * Where an edge sits in quiet run `run`. A `start` edge follows kept speech; an `end` edge precedes it.
- * `air` scales the padding: 1 is Natural, below 1 is tighter, above 1 looser.
  */
-export function padEdge(run: TimeRange, side: "start" | "end", air = 1): number {
-  const after = AIR_AFTER_SPEECH * air, before = AIR_BEFORE_SPEECH * air;
+export function padEdge(run: TimeRange, side: "start" | "end"): number {
+  const after = AIR_AFTER_SPEECH, before = AIR_BEFORE_SPEECH;
   const length = run.end - run.start;
   const target = length < after + before
     ? run.start + length * after / (after + before)
@@ -120,7 +118,7 @@ function pageAt(pages: JoinPage[], mediaId: string, stream: number | undefined, 
   return best?.edges;
 }
 
-function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: JoinPage[], fps: number, streams: Map<string, number>, air: number, namedEdge?: number): Edge {
+function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: JoinPage[], fps: number, streams: Map<string, number>, namedEdge?: number): Edge {
   const sources: SourceEdge[] = [];
   const nearby = clips.filter(c => c.timelineIn <= at + reach && c.timelineIn + clipDuration(c) >= at - reach);
   for (const clip of nearby) {
@@ -166,7 +164,7 @@ function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: Joi
   const padInRun = (t: number, side: "start" | "end") => {
     const run = runAt(t);
     if (!run) return t;
-    const target = padEdge(run, side, air);
+    const target = padEdge(run, side);
     let best = t;
     for (let f = Math.ceil((run.start + quietMargin) * fps - 1e-7); f / fps <= run.end - quietMargin + 1e-7; f++) {
       if (Math.abs(f / fps - target) < Math.abs(best - target)) best = f / fps;
@@ -328,8 +326,7 @@ export function dialogueJoinRepeats(nearby: RepeatReadings, cut: TimeRange, prev
 export type ReadKeptWords = (mediaId: string, stream: number | undefined, from: number, to: number, cachedOnly?: true) => Promise<Word[]>;
 
 /** Use the engine's ripple and fade operations so unavailable handles and existing edits are respected. */
-export function dialogueCutPreview(tl: Timeline, media: MediaAsset[], ranges: TimeRange[], fadeSeconds: number,
-  hold?: (at: number) => string | undefined) {
+export function dialogueCutPreview(tl: Timeline, media: MediaAsset[], ranges: TimeRange[], fadeSeconds: number) {
   const straight = applyReviewRemovals(tl, ranges, "join");
   let removed = 0;
   const joins = ranges.map(r => {
@@ -337,7 +334,7 @@ export function dialogueCutPreview(tl: Timeline, media: MediaAsset[], ranges: Ti
     removed += r.end - r.start;
     return at;
   });
-  return crossfadeJoins(straight, media, joins, fadeSeconds, { hold }).timeline;
+  return crossfadeJoins(straight, media, joins, fadeSeconds).timeline;
 }
 
 type JoinPlayback = { preview: () => Timeline; at: number; partialOnly?: boolean };
@@ -472,13 +469,12 @@ export function checkResumeQuote(tl: Timeline, project: Project, end: number, pa
 
 /**
  * Only narrow a retake by more than a fragment. The caller still owns its meaning, visual review and approval.
- * `air` scales the padding Scarlet leaves at an edge it moves (the editor's pause tightness).
  */
-export function checkDialogueJoin(tl: Timeline, project: Project, range: TimeRange, pages: JoinPage[], air = 1, namedWords?: TimeRange): JoinCheck {
+export function checkDialogueJoin(tl: Timeline, project: Project, range: TimeRange, pages: JoinPage[], namedWords?: TimeRange): JoinCheck {
   const { clips, streams } = dialogueClips(tl, project);
   const fps = project.settings.fps;
-  const left: Edge = range.start > 1e-6 ? checkEdge(range.start, 1, clips, pages, fps, streams, air, namedWords?.start) : { at: range.start };
-  const right: Edge = range.end < timelineDuration(tl) - 1e-6 ? checkEdge(range.end, -1, clips, pages, fps, streams, air, namedWords?.end) : { at: range.end };
+  const left: Edge = range.start > 1e-6 ? checkEdge(range.start, 1, clips, pages, fps, streams, namedWords?.start) : { at: range.start };
+  const right: Edge = range.end < timelineDuration(tl) - 1e-6 ? checkEdge(range.end, -1, clips, pages, fps, streams, namedWords?.end) : { at: range.end };
   const problems = [...new Set([left.problem, right.problem].filter(Boolean))].join(" ");
   if (!left.note && !right.note && problems) return { ...range, status: "review", reason: problems,
     ...([left, right].every(e => !e.problem || e.unmeasured) && { unmeasured: true }) };
@@ -697,10 +693,10 @@ function betweenWords(page: NonNullable<JoinPage["edges"]>, kept: Word, removed:
 /**
  * The source range that removes words[from..to] (indices into one transcript, sorted by start).
  * Each edge goes in the measured silence between a removed word and its kept neighbor, padded by
- * the craft rule, scaled by `air`. `pageAt` returns measured evidence covering a source time. Without a kept
+ * the default edge padding. `pageAt` returns measured evidence covering a source time. Without a kept
  * neighbor the edge runs to the start or end of the material.
  */
-export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t: number) => JoinPage["edges"] | undefined, air = 1): WordCut {
+export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t: number) => JoinPage["edges"] | undefined): WordCut {
   const first = words[from]!, last = words[to]!, before = words[from - 1], after = words[to + 1];
   const problems: string[] = [], dips: string[] = [];
   const used: { start?: TimeRange; end?: TimeRange } = {};
@@ -713,7 +709,7 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
       return gaps(page).filter(q => {
         if (q.end - q.start < 2 * quietMargin) return false;
         const fits = side === "start" ? q.end > lo - keptSlack && q.start < hi + removedSlack : q.start < hi + keptSlack && q.end > lo - removedSlack;
-        const at = padEdge(q, side, air);
+        const at = padEdge(q, side);
         return fits && bounds.start < at && at < bounds.end;
       });
     };
@@ -728,7 +724,7 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
     // The page that reaches the kept word shows the pause from the word itself. Which gap the edge found is still
     // told by the middle page's run, the one both edges of a stray word would share.
     const run = (page && !pageReaches(page, beside) ? nearest(inGap(pageAt(beside))) : undefined) ?? seen;
-    if (run) { used[side] = seen ?? run; return padEdge(run, side, air); }
+    if (run) { used[side] = seen ?? run; return padEdge(run, side); }
     // No run of silence: the two words run together. The lowest level between them, reaching a little way into each
     // word's timing and no further into the kept one than a quiet run may.
     const bounds = page && betweenWords(page, kept, removed, side);
@@ -756,17 +752,8 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
   return { start, end, problems, dips, text };
 }
 
-/**
- * The beat a trimmed pause plays when the agent names none, word to word, at Natural tightness: what Scarlet's own
- * edges leave either side of a join.
- */
+/** Default word-to-word duration when a pause is explicitly shortened without a target. */
 export const PAUSE_BEAT = AIR_AFTER_SPEECH + AIR_BEFORE_SPEECH;
-/**
- * At Natural tightness this is the minimum length of an undecided quiet pause for automatic trimming.
- * Explicit pause durations and protected passages take precedence.
- */
-export const PAUSE_TRIM_OVER = 1;
-
 /**
  * The source range that trims the pause between two neighboring words down to `leave` seconds, word to word. The
  * beat is split as edge padding is, more after the outgoing word than before the incoming one, and each edge stays

@@ -47,7 +47,7 @@
  *   POST   /changes/:changeId/unapprove                  → { change: Change, project: Project } (undo, while nothing was approved on top)
  *   POST   /changes/:changeId/reject   { reason? }       → { change: Change }
  *   POST   /changes/:changeId/revise   ReviseRequest     → { change: Change, note: Note, task?: Task }
- *   POST   /projects/:id/dialogue-cuts DialogueCutsRequest → { changes, editorPreferences: DialoguePreferenceDecision[], joinCrossfades?: JoinCrossfades } (Settings → dialogue applied per cut kind and on each join)
+ *   POST   /projects/:id/dialogue-cuts DialogueCutsRequest → { changes, joinCrossfades?: JoinCrossfades }
  *
  *  Notes
  *   POST   /projects/:id/notes      CreateNoteRequest    → { note: Note, task?: Task }
@@ -116,7 +116,6 @@
  */
 import { z } from "zod/v3";
 import { EditingTools } from "./editingTools.js";
-import { AiCutLevel, DialogueCutKind, DialoguePreferences } from "./dialoguePreferences.js";
 import {
   Author,
   Change,
@@ -256,8 +255,6 @@ export type VersionSummary = z.infer<typeof VersionSummary>;
 export const ProposeChangeRequest = z.object({
   intent: EditIntent.optional(),
   firstCut: z.boolean().optional(),
-  /** A content/arrangement removal outside the dialogue cleanup categories, on an ordinary edit. */
-  nonDialogueRemoval: z.literal(true).optional(),
   /** Synchronized ripple removals in the coordinates of the base version. */
   range: TimeRange.optional(),
   fromVersion: Id.optional(),
@@ -275,14 +272,29 @@ export const ProposeChangeRequest = z.object({
 });
 export type ProposeChangeRequest = z.infer<typeof ProposeChangeRequest>;
 
+export const DialogueCutKind = z.enum(["pause", "filler", "retake", "coaching"]);
+export type DialogueCutKind = z.infer<typeof DialogueCutKind>;
+
+export const CrossfadeFrames = z.number().int().min(0).max(12);
+
+/** Outcome of the requested audio crossfade, including cuts carried into the submission's review. */
+export interface JoinCrossfades {
+  /** Total overlap requested for the new cuts in this submission, in project frames. */
+  frames: number;
+  faded: number;
+  plain: Array<{ version: string; at: number; reason: string }>;
+}
+
 export const DialogueCutsRequest = ProposeChangeRequest.pick({ description: true, taskId: true, author: true, noteIds: true }).extend({
   fromVersion: Id,
+  /** Centered audio overlap in project frames at new joins. Omitted or zero gives a straight cut. */
+  crossfadeFrames: CrossfadeFrames.optional(),
   /** Scope and explicitly preserved passages on fromVersion. */
   range: TimeRange.optional(),
   kept: z.array(TimeRange).optional(),
   cuts: z.array(z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().positive(),
     originalRange: TimeRange.optional(), review: z.boolean(), reason: z.string().min(1),
-    /** Which editor preference governs this cut. Scarlet enforces Settings → "What Scarlet cuts on its own" by kind. */
+    /** Editorial classification, also used to enforce the scope of a local pause edit. */
     kind: DialogueCutKind.optional() })
     .refine(c => !c.originalRange || (c.review && c.originalRange.start <= c.start && c.end <= c.originalRange.end),
       "A repaired range must be staged inside its originally proposed removal.")).min(1),
@@ -292,6 +304,8 @@ export type DialogueCutsRequest = z.infer<typeof DialogueCutsRequest>;
 /** Move one staged cut. Without an explicit inspected version, times are on the original pass. */
 export const StagedCutRevision = ProposeChangeRequest.pick({ taskId: true, author: true, noteIds: true }).extend({
   version: Id.optional(),
+  /** Omitted keeps this cut’s recorded overlap. */
+  crossfadeFrames: CrossfadeFrames.optional(),
   /** Relative moves are measured from the named cut's two edges. Return the successor before applying one there. */
   requireCurrentCut: z.literal(true).optional(),
   keep: z.boolean().optional(),
@@ -668,7 +682,7 @@ export const Task = z.object({
     version: z.string(), remaining: z.number().int().nonnegative().optional(),
     /** Every audible passage in scope was checked and there were no repeats or joins to review. */
     noFindings: z.boolean().optional(),
-    retakes: AiCutLevel.optional(), unavailable: z.array(z.string()).optional(), returns: z.number().int().nonnegative().default(0),
+    unavailable: z.array(z.string()).optional(), returns: z.number().int().nonnegative().default(0),
   }).optional(),
   /** Change(s) produced. */
   changeIds: z.array(Id).default([]),
@@ -1147,8 +1161,6 @@ export const ServerSettings = z.object({
   }),
   /** Default agent for new tasks when the UI doesn't pick one. */
   defaultAgent: AgentId.default("claude"),
-  /** What the AI may cut on its own in a dialogue pass, and how much air it leaves at edges it places. */
-  dialogue: DialoguePreferences.default({}),
 });
 export type ServerSettings = z.infer<typeof ServerSettings>;
 

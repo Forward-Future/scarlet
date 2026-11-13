@@ -2,6 +2,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createProject } from "@scarlet/timeline";
+import { isDialogueGuide } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { BUNDLED_SKILLS } from "../bundledSkills.js";
@@ -44,6 +46,84 @@ describe("the skills Scarlet comes with", () => {
     await app.ctx.close();
     app = createApp({ dataDir, env: {}, log: () => {} });
   };
+  const oldSettings = (dialogue: unknown) => app.ctx.db.prepare("INSERT OR REPLACE INTO settings (id, json) VALUES (1, ?)")
+    .run(JSON.stringify({ dialogue, render: { handleSeconds: 4 } }));
+
+  it("carries existing dialogue preferences into the editable skill once and keeps other settings", async () => {
+    oldSettings({ aiCuts: { filler: "off", pause: "suggest", retake: "cut", coaching: "suggest" }, pauseTightness: "tight", crossfadeFrames: 6 });
+    await upgrade();
+    const guide = publicGuide()!;
+    expect(guide.source).toBeUndefined();
+    expect(isDialogueGuide(guide)).toBe(true);
+    expect(guide.content).toContain("Keep all filler words.");
+    expect(guide.content).toContain("Leave the final decision on each proposed removal of pauses to the editor, even after you check the cut.");
+    expect(guide.content).toContain("Leave the final decision on each proposed removal of production talk to the editor, even after you check the cut.");
+    expect(guide.content).toContain("Keep pauses tight");
+    expect(guide.content).toContain("Use a 6-frame audio crossfade");
+    expect(guide.content.split("## Editor preferences")[1]).not.toContain("retakes");
+    const row = app.ctx.db.prepare("SELECT json FROM settings WHERE id = 1").get() as { json: string };
+    expect(JSON.parse(row.json)).toEqual({ render: { handleSeconds: 4 } });
+    const project = app.ctx.repos.projects.insert(createProject("Interview"));
+    const nextDialoguePrompt = async () => {
+      const task = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/dialogue-pass",
+        context: { skillIds: [guide.id] }, createdBy: { type: "human", name: "Editor" } });
+      const response = await app.app.request(`/api/tasks/${task.id}/prompt`, { headers: { Authorization: `Bearer ${accessToken(app.ctx)}` } });
+      expect(response.status).toBe(200);
+      return (await response.json()).systemPrompt as string;
+    };
+    const firstPrompt = await nextDialoguePrompt();
+    expect(firstPrompt).toContain("Keep all filler words.");
+    expect(firstPrompt).toContain("Leave the final decision on each proposed removal of pauses to the editor, even after you check the cut.");
+    const mine = updateSkill(app.ctx, editor, guide, { content: guide.content.replace("Keep all filler words.", "Cut an um when the line drags.") });
+    await upgrade();
+    expect(publicGuide()).toEqual(mine);
+    const prompt = await nextDialoguePrompt();
+    expect(prompt).toContain("Cut an um when the line drags.");
+    expect(prompt).not.toContain("Keep all filler words.");
+  });
+
+  it("leaves stock dialogue updatable when an older engine only saved defaults", async () => {
+    oldSettings({ aiCuts: { pause: "cut", filler: "cut", retake: "cut", coaching: "cut" }, pauseTightness: "natural", crossfadeFrames: 2 });
+    await upgrade();
+    expect(publicGuide()).toMatchObject({ version: 1, source: "bundled" });
+    expect(publicGuide()!.content).toBe(BUNDLED_SKILLS.find(s => s.folder === "dialogue-pass")!.content);
+    expect(app.ctx.repos.skills.select().some(s => s.name === "dialogue-preferences")).toBe(false);
+  });
+
+  it("carries preferences into a renamed disabled guide without replacing its content, identity or state", async () => {
+    await upgrade();
+    const content = "House rules for this interview.\r\nKeep the host’s first take.\r\n";
+    const mine = updateSkill(app.ctx, editor, publicGuide()!, { name: "my-interview", enabled: false, content });
+    // This library predates bundledName. The first revision still identifies the guide the editor renamed.
+    app.ctx.repos.skills.put({ ...mine, bundledName: undefined });
+    oldSettings({ aiCuts: { retake: "suggest" }, pauseTightness: "loose", crossfadeFrames: 0 });
+    await upgrade();
+    const migrated = app.ctx.repos.skills.get(mine.id)!;
+    expect(migrated).toMatchObject({ name: mine.name, enabled: false, bundledName: mine.bundledName, version: mine.version + 1 });
+    expect(migrated.content.startsWith(content)).toBe(true);
+    expect(migrated.content).toContain("Leave the final decision on each proposed removal of retakes to the editor, even after you check the cut.");
+    expect(migrated.content).toContain("Leave generous breathing room");
+    expect(migrated.content).toContain("Use straight audio cuts");
+    expect(publicGuide()).toBeUndefined();
+    await upgrade();
+    expect(app.ctx.repos.skills.get(mine.id)).toEqual(migrated);
+    expect(publicGuide()).toBeUndefined();
+  });
+
+  it("keeps preferences recoverable when the workflow was deleted, preserving an unrelated skill of the same name", async () => {
+    await upgrade();
+    deleteSkill(app.ctx, publicGuide()!, editor);
+    const own = createSkill(app.ctx, editor, { name: "dialogue-preferences", content: "Personal dialogue notes." });
+    oldSettings({ aiCuts: { filler: "suggest" } });
+    await upgrade();
+    expect(publicGuide()).toBeUndefined();
+    const recovery = app.ctx.repos.skills.select("name = 'dialogue-preferences-2'")[0]!;
+    expect(recovery).toMatchObject({ enabled: false, version: 1 });
+    expect(recovery.content).toContain("Leave the final decision on each proposed removal of filler words to the editor, even after you check the cut.");
+    expect(app.ctx.repos.skills.get(own.id)).toEqual(own);
+    await upgrade();
+    expect(app.ctx.repos.skills.select("name LIKE 'dialogue-preferences%'")).toHaveLength(2);
+  });
 
   it("adds each one once, as an ordinary skill", async () => {
     const fresh = createApp({ dataDir: join(dataDir, "fresh"), env: {}, log: () => {} });

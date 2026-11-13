@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { DialoguePreferences, ProposeChangeRequest, ScarletApiError, ScarletClient, Task, type EditingTools } from "@scarlet/shared";
+import { ProposeChangeRequest, ScarletApiError, ScarletClient, Task, type EditingTools } from "@scarlet/shared";
 import type { Transcript } from "@scarlet/timeline";
 import { emptyTimeline, makeMediaClip } from "@scarlet/timeline";
 import { createScarletMcpServer, describeError, SCARLET_TOOL_NAMES } from "./server.js";
@@ -248,10 +248,9 @@ describe("timeline_first_cut", () => {
       // Keep ranges cut both at the same moments, and the first recording stays the sound unless the layer is chosen.
       const framing = { scale: 0.4, x: -0.25, y: 0.1, cropLeft: .12, cropRight: .12, cropTop: .04, cornerRadius: .06 };
       await call({ mediaId: "cam", offset: -1.5, framing }, {
-        keep: [{ start: 0, end: 10 }, { start: 20, end: 30 }], description: "Use the opening and closing scenes.", nonDialogueRemoval: true,
+        keep: [{ start: 0, end: 10 }, { start: 20, end: 30 }], description: "Use the opening and closing scenes.",
       });
       const proposal = ProposeChangeRequest.parse(posts().at(-1)!.body);
-      expect(proposal.nonDialogueRemoval).toBe(true);
       const cut = proposal.timeline!;
       expect(cut.tracks[0]!.clips).toMatchObject([{ volume: 1 }, { volume: 1 }]);
       expect(cut.tracks[1]!.clips).toMatchObject([{ sourceIn: 1.5, sourceOut: 11.5, timelineIn: 0, volume: 0, transform: framing },
@@ -292,9 +291,9 @@ describe("timeline_first_cut indexed keeps", () => {
   beforeEach(async () => { mock = await startMockServer(makeState({ transcripts: { m1: transcript } })); });
   afterEach(async () => { await mock.close(); });
 
-  async function connectEditor(dialogue?: DialoguePreferences) {
+  async function connectEditor() {
     const server = createScarletMcpServer(new ScarletClient({ baseUrl: mock.url, token: "tok" }), {
-      projectId: "prj_test", agent: "claude", author: { type: "agent", name: "claude" }, dialogue,
+      projectId: "prj_test", agent: "claude", author: { type: "agent", name: "claude" },
     });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);
@@ -391,44 +390,6 @@ describe("timeline_first_cut indexed keeps", () => {
       expect(changes(), textOf(result)).toHaveLength(1);
       const clips = ProposeChangeRequest.parse(changes()[0]!.body).timeline!.tracks[0]!.clips;
       expect(clips).toMatchObject([{ sourceIn: 3.5, sourceOut: 5.4 }, { sourceIn: 0.1, sourceOut: 1.9 }, { sourceIn: 15, sourceOut: 18 }]);
-    } finally { await editor.close(); }
-  });
-
-  it.each(["suggest", "off"] as const)("honors %s for indexed omissions and pause trims", async level => {
-    const editor = await connectEditor(DialoguePreferences.parse({ aiCuts: { retake: level, pause: level } }));
-    const call = (keep: object[]) => editor.callTool({ name: "timeline_first_cut", arguments: {
-      intent: "requested", mediaId: "m1", description: "Edit the talk.", keep,
-    } }) as Promise<CallToolResult>;
-    const changes = () => mock.requests.filter(r => r.method === "POST" && r.path === "/projects/prj_test/changes");
-    try {
-      for (const keep of [
-        [{ fromWord: 0, toWord: 3, end: 1.9 }, { fromWord: 5, toWord: 9, start: 3.5 }],
-        [{ fromWord: 1, toWord: 9 }],
-        [{ fromWord: 0, toWord: 8 }],
-        [{ fromWord: 0, toWord: 3, end: 1.9 }, { fromWord: 4, toWord: 9, start: 2.4 }],
-      ]) {
-        const result = await call(keep);
-        expect(result.isError).toBe(true);
-        expect(textOf(result)).toContain(level);
-        expect(textOf(result)).toContain("dialogue_apply_cuts");
-      }
-      expect(changes()).toHaveLength(0);
-      const continuous = await call([{ fromWord: 0, toWord: 3 }, { fromWord: 4, toWord: 9 }]);
-      expect(continuous.isError, textOf(continuous)).toBeFalsy();
-      const [first, second] = ProposeChangeRequest.parse(changes()[0]!.body).timeline!.tracks[0]!.clips.filter(c => c.kind === "media");
-      expect(first!.sourceOut).toBe(second!.sourceIn);
-      expect(first!.sourceIn).toBe(0);
-      expect(second!.sourceOut).toBe(120);
-      const exact = await call([{ start: 3.5, end: 5.4 }, { start: 0.1, end: 1.9 }]);
-      expect(exact.isError, textOf(exact)).toBeFalsy();
-      expect(ProposeChangeRequest.parse(changes()[1]!.body).timeline!.tracks[0]!.clips).toMatchObject([
-        { sourceIn: 3.5, sourceOut: 5.4 }, { sourceIn: 0.1, sourceOut: 1.9 },
-      ]);
-      const reordered = await call([{ fromWord: 5, toWord: 9, start: 3.5, end: 5.4 }, { fromWord: 0, toWord: 4, start: 0.1, end: 2.8 }]);
-      expect(reordered.isError, textOf(reordered)).toBeFalsy();
-      expect(ProposeChangeRequest.parse(changes()[2]!.body).timeline!.tracks[0]!.clips).toMatchObject([
-        { sourceIn: 3.5, sourceOut: 5.4 }, { sourceIn: 0.1, sourceOut: 2.8 },
-      ]);
     } finally { await editor.close(); }
   });
 
@@ -591,11 +552,11 @@ describe("timeline_propose", () => {
     expect(mixed.result.onWholeFrames).toEqual([{ asked: [4, 5.52], removed: [4, 5.5] }]);
   });
 
-  it("measures and submits the same frame-bounded ripples it reports, and passes the content classification", async () => {
+  it("measures and submits the same frame-bounded ripples it reports, including the scope", async () => {
     const range = { start: 0.5005, end: 2.4995 };
-    const { sent, result } = await offFrameEdit("task_scoped", [{ op: "rippleDelete", ...range }], { range, nonDialogueRemoval: true });
+    const { sent, result } = await offFrameEdit("task_scoped", [{ op: "rippleDelete", ...range }], { range });
     const body = mock.requests.findLast(q => q.method === "POST" && q.path === "/projects/prj_test/changes")!.body;
-    expect(body).toMatchObject({ range, nonDialogueRemoval: true });
+    expect(body).toMatchObject({ range });
     expect(sent).toEqual([{ op: "rippleDelete", start: 16 / 30, end: 74 / 30 }]);
     expect(result.onWholeFrames).toEqual([{ asked: [range.start, range.end], removed: [16 / 30, 74 / 30] }]);
   });
@@ -1555,7 +1516,7 @@ it.each(["first cut", "ordinary edit", "closed review", "superseded review", "pa
     let result;
     if (req.path.endsWith("/dialogue-detections")) result = { segments: transcript.segments, acoustic: [] };
     else if (req.path.endsWith("/dialogue-cuts")) result = { changes: [{ id: "pass1", projectId: "prj_test", intent: "suggestion", state: "ready",
-      description: "Review 3 optional dialogue cuts", fromVersion: "staged", toVersion: "staged-review" }], editorPreferences: [] };
+      description: "Review 3 optional dialogue cuts", fromVersion: "staged", toVersion: "staged-review" }] };
     else if (req.path === "/projects/prj_test/changes/pass1") result = { change: { id: "pass1", projectId: "prj_test", intent: "suggestion",
       state, replacedBy, fromVersion: "staged", toVersion: "staged-review",
       cutAssessments: [...assessed].map(index => ({ index, ...removed[index], verdict: "ask", reason: "Close call." })) } };
@@ -1845,64 +1806,31 @@ it("inspects a split word and submits only the exact timing and disposition the 
   }
 });
 
-it("shows the editor's dialogue settings before planning and reports what the engine enforced", async () => {
+it("submits the chosen cut, review and fade and preserves engine receipts", async () => {
   const original = { extra: mock.state.extra, timeline: mock.state.timeline };
-  const sc = new ScarletClient({ baseUrl: mock.url, token: "tok" });
-  const server = createScarletMcpServer(sc, { projectId: "prj_test", agent: "claude", author: { type: "agent", id: "claude", name: "claude" },
-    dialogue: { aiCuts: { pause: "off", filler: "suggest", retake: "cut", coaching: "off" }, pauseTightness: "tight" } });
-  const [a, b] = InMemoryTransport.createLinkedPair();
-  await server.connect(a);
-  const editor = new Client({ name: "test", version: "0" });
-  await editor.connect(b);
+  const editor = await connect();
   const tl = emptyTimeline(mock.state.project.id);
-  tl.version = "prefs";
+  tl.version = "dialogue";
   tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 6, 0)];
   mock.state.timeline = tl;
   mock.state.extra = (req, res) => {
-    if (!req.path.endsWith("/dialogue-detections") && !req.path.endsWith("/dialogue-cuts")) return false;
+    if (!req.path.endsWith("/dialogue-cuts")) return false;
     res.setHeader("Content-Type", "application/json");
-    if (req.path.endsWith("/dialogue-detections")) {
-      res.end(JSON.stringify({ segments: transcript.segments, acoustic: [] }));
-      return true;
-    }
-    // The engine applies the editor's levels by kind and reports each cut it changed.
-    const { cuts } = req.body as { cuts: Array<{ kind: "pause" | "filler" | "coaching"; start: number; end: number; review: boolean }> };
-    const levels = { pause: "off", filler: "suggest", coaching: "off" } as const;
-    res.end(JSON.stringify({ changes: [], heldForReview: [{ start: 1, end: 1.4 }], alreadyRemoved: [{ changeId: "earlier_pass", index: 1, version: "current", at: 2 }],
-      editorPreferences: cuts.flatMap((c, index) => levels[c.kind] === "off"
-      ? [{ index, kind: c.kind, level: "off", outcome: "dropped", start: c.start, end: c.end }]
-      : c.review ? [] : [{ index, kind: c.kind, level: "suggest", outcome: "review", start: c.start, end: c.end }]) }));
+    res.end(JSON.stringify({ changes: [], heldForReview: [{ start: 1, end: 1.4 }],
+      alreadyRemoved: [{ changeId: "earlier_pass", index: 1, version: "current", at: 2 }] }));
     return true;
   };
   try {
-    const project = JSON.parse(textOf(await editor.callTool({ name: "project_get", arguments: {} })));
-    expect(project.editorPreferences).toContain("pauses off, fillers suggest, retakes cut, production talk off");
-    expect(project.editorPreferences).toContain("Pause air: tight");
-    const { tools } = await editor.listTools();
-    expect(tools.find(t => t.name === "dialogue_check_join")?.description).toContain("about 0.09 s of air after the last kept word and 0.06 s before speech resumes");
-    const first = JSON.parse(textOf(await editor.callTool({ name: "dialogue_scan", arguments: { mediaId: "m1", from: 0, until: 6 } })));
-    expect(first.editorPreferences).toBe(project.editorPreferences);
-    const again = JSON.parse(textOf(await editor.callTool({ name: "dialogue_scan", arguments: { mediaId: "m1", from: 0, until: 6 } })));
-    expect(again.editorPreferences).toBeUndefined();
-
-    const result = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Tighten",
+    const result = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Tighten", crossfadeFrames: 4,
       cuts: [{ start: 1, end: 1.4, kind: "pause", decision: "cut", reason: "Long pause." },
-        { start: 3, end: 3.3, kind: "filler", decision: "cut", reason: "An um." },
-        { start: 4, end: 4.5, kind: "coaching", decision: "review", reason: "Off-mic note." }] } });
-    expect(result.isError).toBeFalsy();
-    const sent = mock.requests.filter(r => r.path.endsWith("/dialogue-cuts")).at(-1)?.body as { cuts: Array<{ kind: string }> };
-    // Every range carries its kind. Scan detections stay information, so only the agent's ranges are sent.
-    expect(sent.cuts.map(c => c.kind)).toEqual(["pause", "filler", "coaching"]);
-    const { gate, editorPreferences, alreadyRemoved, heldForReview } = JSON.parse(textOf(result));
-    expect(heldForReview).toEqual([{ start: 1, end: 1.4 }]);
-    expect(alreadyRemoved).toEqual([{ changeId: "earlier_pass", index: 1, version: "current", at: 2 }]);
-    expect(editorPreferences).toBeUndefined();
-    const byCut = new Map(gate.decisions.map((d: { cut: number }) => [d.cut, d]));
-    expect(byCut.get(0)).toMatchObject({ kind: "pause", outcome: "kept", evidence: expect.stringContaining("Editor set pauses to Off, so Scarlet keeps this footage.") });
-    // The coaching cut was already a review the gate left alone. The setting adds its own line.
-    expect(byCut.get(2)).toEqual({ cut: 2, kind: "coaching", asked: "review", outcome: "kept", range: [4, 4.5],
-      evidence: "Editor set production talk to Off, so Scarlet keeps this footage." });
-    expect(gate.unchangedCuts).toBe(0);
+        { start: 3, end: 3.3, kind: "filler", decision: "keep", reason: "Keep her hesitation." },
+        { start: 4, end: 4.5, kind: "coaching", decision: "review", reason: "Off-mic note." }] } }) as CallToolResult;
+    expect(result.isError, textOf(result)).toBeFalsy();
+    const sent = mock.requests.filter(r => r.path.endsWith("/dialogue-cuts")).at(-1)?.body;
+    expect(sent).toMatchObject({ crossfadeFrames: 4, cuts: [{ kind: "pause" }, { kind: "coaching", review: true }] });
+    const receipt = JSON.parse(textOf(result));
+    expect(receipt.heldForReview).toEqual([{ start: 1, end: 1.4 }]);
+    expect(receipt.alreadyRemoved).toEqual([{ changeId: "earlier_pass", index: 1, version: "current", at: 2 }]);
   } finally {
     Object.assign(mock.state, original);
     await editor.close();
@@ -1959,10 +1887,10 @@ it("moves the staged cut being revised past its old edges and steers the other e
     ] } });
     expect(mixed.isError).toBe(true);
     expect(saved).toBeUndefined();
-    const moved = await scoped.callTool({ name: "dialogue_revise_cut", arguments: { changeId: "pass", index: 1, start: 1.6, end: 3,
+    const moved = await scoped.callTool({ name: "dialogue_revise_cut", arguments: { changeId: "pass", index: 1, start: 1.6, end: 3, crossfadeFrames: 3,
       reason: "Starts in the pause after “weights” so the first “I” is gone." } });
     expect(moved.isError).toBeFalsy();
-    expect(saved).toMatchObject({ start: 1.6, end: 3, taskId: "revise-cut", noteIds: ["n1"], reason: "Starts in the pause after “weights” so the first “I” is gone." });
+    expect(saved).toMatchObject({ start: 1.6, end: 3, crossfadeFrames: 3, taskId: "revise-cut", noteIds: ["n1"], reason: "Starts in the pause after “weights” so the first “I” is gone." });
     expect(JSON.parse(textOf(moved as CallToolResult))).toMatchObject({ changeId: "pass2", start: 1.6, end: 3 });
     expect(JSON.parse(textOf(moved as CallToolResult))).not.toHaveProperty("movedOn");
     expect(mock.state.events.at(-1)).toMatchObject({ type: "change", data: { changeId: "pass2" } });
@@ -2360,15 +2288,16 @@ it("reports a repeated onset that only plays in the fade, then clears it when th
     res.end(JSON.stringify({ segments: [{ id: "kept", words: heard }], acoustic: [] }));
     return true;
   };
-  const check = async (start: number) => {
-    const result = await editor.callTool({ name: "dialogue_check_join", arguments: { version: tl.version, start, end: 5 } });
+  const check = async (start: number, crossfadeFrames?: number) => {
+    const result = await editor.callTool({ name: "dialogue_check_join", arguments: { version: tl.version, start, end: 5, crossfadeFrames } });
     expect(result.isError).toBeFalsy();
     return JSON.parse(textOf(result));
   };
   try {
-    expect(await check(2)).toMatchObject({ partialWordRepeat: { side: "start", word: "over", heard: "o",
+    expect((await check(2)).partialWordRepeat).toBeUndefined();
+    expect(await check(2, 2)).toMatchObject({ partialWordRepeat: { side: "start", word: "over", heard: "o",
       fragment: { start: 2.011, end: expect.closeTo(2 + 1 / 30, 5) }, complete: { start: 5.1, end: 5.35 } } });
-    const revised = await check(2 - 4 / 30);
+    const revised = await check(2 - 4 / 30, 2);
     expect(revised.partialWordRepeat).toBeUndefined();
     expect(revised.unreadJoinAudio).toBeUndefined();
   } finally { Object.assign(mock.state, original); await editor.close(); }
@@ -2545,10 +2474,9 @@ it("lists a silence the pauses miss with what its picture does, and reports it w
 
     const apply = (cuts: object[]) => call("dialogue_apply_cuts", { version: tl.version, description: "Tightened the tour", range: { start: 0, end: 30 }, cuts });
     const pause = { kind: "pause", picture: "safe", reason: "Static page." };
-    // Left alone, nothing sounds in it by its levels, so the editor's pause setting brings it down to the beat, and the result says so.
+    // The undecided passage stays in the edit and is reported for the next decision.
     const left = await apply([{ ...pause, start: 1.4, end: 2.5, decision: "cut" }]);
-    expect(left.keptSilences).toBeUndefined();
-    expect(left.trimmedPauses).toEqual([{ mediaId: "m1", afterWord: 8, after: "note.", before: "You", was: expect.closeTo(12.25 - end, 3), plays: expect.closeTo(.25, 2) }]);
+    expect(left.keptSilences).toContainEqual(expect.objectContaining({ after: "note.", before: "You" }));
     // Cut to the result, staged for the editor or kept on purpose, it is decided and not reported.
     for (const decision of ["cut", "review"]) {
       expect((await apply([{ ...pause, start: end + .3, end: 11.95, decision }])).keptSilences).toBeUndefined();
@@ -2591,7 +2519,6 @@ it("reports the pauses and doubled words a saved part still plays, and trims a p
   try {
     const first = await apply(tail);
     expect(first.keptPauses).toEqual([{ at: 3.4, mediaId: "m1", seconds: .9, after: "have", before: "signatures.", afterWord: 4 }]);
-    expect(first).not.toHaveProperty("trimmedPauses");
     expect(first.repeatedWords).toEqual([{ at: 2.5, mediaId: "m1", text: "have have", fromWord: 3, toWord: 3 }]);
     // Saved again without touching them, they are not listed a second time: a save lists what is new.
     const again = await apply(tail);
@@ -2753,19 +2680,18 @@ it("counts a silence as decided when its keep names words or its range is protec
   const pause = { kind: "pause", reason: "He is typing the note." };
   const cut = { ...pause, start: 6.1, end: 6.8, decision: "cut" };
   try {
-    // Left alone and quiet, the editor's pause setting trims it to the beat: Scarlet's own cut, saved with the agent's and reported.
+    // The tool reports the quiet gap and submits only the requested removal.
     const alone = await apply(cut);
-    expect(alone.keptSilences).toBeUndefined();
-    expect(alone.trimmedPauses).toEqual([{ mediaId: "m1", afterWord: 1, after: "note.", before: "You", was: 3.6, plays: expect.closeTo(.25, 2) }]);
+    expect(alone.keptSilences).toContainEqual(expect.objectContaining({ after: "note.", before: "You" }));
     // Kept on purpose by naming the words either side of it: it stays whole, and nothing is reported.
     const named = await apply({ ...pause, decision: "keep", mediaId: "m1", fromWord: 1, toWord: 2 }, cut);
-    expect([named.keptSilences, named.trimmedPauses]).toEqual([undefined, undefined]);
+    expect(named.keptSilences).toBeUndefined();
     // Marked for removal but protected for what the picture does: Scarlet keeps it, and it is decided.
     const guarded = await apply({ ...pause, start: 1.6, end: 4.8, decision: "cut", picture: "protect" }, cut);
-    expect([guarded.keptSilences, guarded.trimmedPauses]).toEqual([undefined, undefined]);
+    expect(guarded.keptSilences).toBeUndefined();
     const mine = expect.objectContaining({ start: 6.1, end: 6.8, review: false });
     expect(mock.requests.filter(r => r.path.endsWith("/dialogue-cuts")).map(r => (r.body as { cuts: unknown[] }).cuts)).toEqual([
-      [{ start: expect.closeTo(1.55, 2), end: expect.closeTo(4.9, 2), review: false, kind: "pause", reason: "Trimmed a quiet 3.6 s pause after “note.”." }, mine], [mine], [mine]]);
+      [mine], [mine], [mine]]);
   } finally {
     Object.assign(mock.state, original);
     await editor.close();
@@ -2804,7 +2730,7 @@ it("accepts only bounded pause decisions for the local dialogue shortcut", async
   mock.state.extra = (req, res) => {
     if (!req.path.endsWith("/dialogue-cuts")) return false;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ changes: [], editorPreferences: [], head: timeline.version }));
+    res.end(JSON.stringify({ changes: [], head: timeline.version }));
     return true;
   };
   try {
@@ -3601,7 +3527,7 @@ it("tells the editor how many cuts a newly staged review has, counting recommend
     cutAssessments: [{ index: 0, start: 1, end: 1.4, verdict: "cut", reason: "Carried from the first part.", inspected: true }] };
   mock.state.extra = (req, res) => {
     let result;
-    if (req.path.endsWith("/dialogue-cuts")) result = { changes: [change], editorPreferences: [] };
+    if (req.path.endsWith("/dialogue-cuts")) result = { changes: [change] };
     else if (req.path === "/projects/prj_test/changes/part2") result = { change };
     else if (req.path.endsWith("/cut-review")) result = { review: { original: tl, proposed: tl, firstCut: false, cuts: [
       { at: 1, removed: { start: 1, end: 1.4 }, beforeClip: 1 }, { at: 2, removed: { start: 2, end: 2.4 }, beforeClip: 1 },
