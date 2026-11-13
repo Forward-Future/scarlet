@@ -224,6 +224,21 @@ describe("native retake boundaries", () => {
     expect(check.start).toBeCloseTo(119 / 30);
   });
 
+  it("moves an edge given in quiet onto a quiet frame when the frame the engine rounds to has the next word's sound", () => {
+    const { p, tl } = fixture();
+    // “one”, a pause, “next”, a pause, “end” at 4.0 s.
+    const said = [{ start: 1, end: 1.4, text: "one" }, { start: 2.32, end: 2.8, text: "next" }, { start: 4, end: 4.5, text: "end" }];
+    const rms = Array.from({ length: 250 }, (_, i) => (i >= 50 && i < 70) || (i >= 116 && i < 140) || (i >= 200 && i < 225) ? .12 : .001);
+    const edges = joinEvidence(said, { from: 0, to: 5, peaks: rms, rms, speechActivity: [{ start: 1, end: 1.4 }, { start: 2.32, end: 2.8 }, { start: 4, end: 4.5 }] });
+    const pages: JoinPage[] = [{ mediaId: "mic", start: 0, end: 5, edges }];
+    // An end at 2.255 s is rounded down to frame 67 (2.233 s), which is quiet too: it stays as given.
+    expect(checkDialogueJoin(tl, p, { start: 1.6, end: 2.255 }, pages)).toMatchObject({ status: "unchanged", start: 1.6, end: 2.255 });
+    // A start at 3.97 s is rounded up to frame 120 (4.0 s), where “end” begins: it goes on frame 119, inside the quiet.
+    const check = checkDialogueJoin(tl, p, { start: 3.97, end: 4.9 }, pages);
+    expect(check.status).toBe("unchanged");
+    expect(check.start).toBeCloseTo(119 / 30);
+  });
+
   it("resolves a word range to padded edges in the measured gaps beside it", () => {
     const at = () => page.edges;
     // Remove “first”: kept “finish” ends at 1.44 by the recording, “next” resumes at 3.4.

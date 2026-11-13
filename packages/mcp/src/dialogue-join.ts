@@ -75,6 +75,8 @@ export function padEdge(run: TimeRange, side: "start" | "end"): number {
 }
 /** An audio-confirmed move this short trims a breath or a consonant fragment, never a whole word. */
 const snapLimit = .12;
+/** An edge this close to a frame is on it, as the engine's frame rounding treats it (FRAME_SLACK in @scarlet/timeline). */
+const FRAME_TOLERANCE = .001;
 /** A shorter quiet run inside a transcript word may be a stop consonant's closure, not a gap between words. */
 const inWordGap = .1;
 interface SourceEdge { clip: MediaClip; page: NonNullable<JoinPage["edges"]>; at: number; clipped: Word[]; touching: Word[] }
@@ -144,16 +146,6 @@ function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: Joi
     const here = soundAt(s.page, timelineToSource(s.clip, timeline));
     return worst === "sound" || here === "sound" ? "sound" : worst === "valley" || here === "valley" ? "valley" : "quiet";
   }, "quiet");
-  // The measured audio decides. A quiet gap is a clean edge even if a stretched word timing spans it.
-  if (sound(at) === "quiet") return { at };
-
-  const clippedLabel = quote(sources.flatMap(s => s.clipped.map(plain)));
-  const fail = (problem: string): Edge => ({ at, problem: clippedLabel ? "A boundary falls inside "+clippedLabel+". "+problem : problem });
-  // Voice activity and word timings place an edge that is on sound, so they are asked of the sources that sound here.
-  // One that is quiet at the edge, such as a screen capture's silent audio track, only has to be quiet where the edge lands.
-  if (sources.some(s => soundAt(s.page, s.at) !== "quiet" && (!s.page.voice.length || !s.page.words.length)))
-    return { ...fail("The scan lacks the voice activity or word timings to place this edge."), unmeasured: true };
-
   /** The quiet run under timeline time `t`, shared by every audible source and kept inside each clip. */
   const runAt = (t: number): TimeRange | undefined => {
     let lo = -Infinity, hi = Infinity;
@@ -167,6 +159,24 @@ function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: Joi
     }
     return Number.isFinite(lo) && Number.isFinite(hi) && hi > lo ? { start: lo, end: hi } : undefined;
   };
+  // The measured audio decides. A quiet gap is a clean edge even if a stretched word timing spans it. The engine saves
+  // a removal on whole frames, rounded inward, and the inward frame can be the first sound of the word beside it.
+  if (sound(at) === "quiet") {
+    // The frame the engine would round to: later for a start, earlier for an end. When it is quiet too, the edge stays as given.
+    const inward = (direction === 1 ? Math.ceil((at - FRAME_TOLERANCE) * fps) : Math.floor((at + FRAME_TOLERANCE) * fps)) / fps;
+    const run = runAt(at);
+    if (!run || (sound(inward) === "quiet" && !crossesClip(at, inward))) return { at };
+    const framed = edgeOnFrame(at, { start: run.start + quietMargin, end: run.end - quietMargin }, fps, t => t);
+    return { at: framed !== at && sound(framed) === "quiet" && !crossesClip(at, framed) ? framed : at };
+  }
+
+  const clippedLabel = quote(sources.flatMap(s => s.clipped.map(plain)));
+  const fail = (problem: string): Edge => ({ at, problem: clippedLabel ? "A boundary falls inside "+clippedLabel+". "+problem : problem });
+  // Voice activity and word timings place an edge that is on sound, so they are asked of the sources that sound here.
+  // One that is quiet at the edge, such as a screen capture's silent audio track, only has to be quiet where the edge lands.
+  if (sources.some(s => soundAt(s.page, s.at) !== "quiet" && (!s.page.voice.length || !s.page.words.length)))
+    return { ...fail("The scan lacks the voice activity or word timings to place this edge."), unmeasured: true };
+
   /** Move a quiet frame to the padded position in its run, on the frame grid, without crossing a clip edge. */
   const padInRun = (t: number, side: "start" | "end") => {
     const run = runAt(t);
@@ -480,7 +490,7 @@ export function checkDialogueJoin(tl: Timeline, project: Project, range: TimeRan
   const problems = [...new Set([left.problem, right.problem].filter(Boolean))].join(" ");
   if (!left.note && !right.note && problems) return { ...range, status: "review", reason: problems,
     ...([left, right].every(e => !e.problem || e.unmeasured) && { unmeasured: true }) };
-  if (!left.note && !right.note) return { ...range, status: "unchanged", reason: "The recording is quiet at both boundaries." };
+  if (!left.note && !right.note) return { start: left.at, end: right.at, status: "unchanged", reason: "The recording is quiet at both boundaries." };
   if (right.at-left.at < Math.max(.10, 2/fps))
     return { ...range, status: "review", reason: "Preserving the neighboring words leaves too little of this retake to trim." };
   const notes = [left.note, right.note].filter(Boolean);

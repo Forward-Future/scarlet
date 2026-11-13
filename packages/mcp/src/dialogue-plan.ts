@@ -403,7 +403,15 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
     if (c.spoken && !c.wordEdgeProblems?.length) return c.wordEdgeDips?.length ? adjust(decided, c.wordEdgeDips.join(" ")) : base;
     const join = checkDialogueJoin(tl, project, { start: c.start, end: c.end }, sources.pages(), c.spoken);
     // Without a measurement at the edge there is nothing to act on. The agent's own evidence stands.
-    if (join.status === "unchanged" || join.unmeasured) return base;
+    if (join.unmeasured) return base;
+    // Both edges in quiet: one whose frame would round onto sound goes on a quiet frame, which the engine's rounding
+    // keeps. A move of under a frame that would meet a neighbor, the selection's edge or footage marked to keep stays.
+    if (join.status === "unchanged") {
+      const i = sorted.indexOf(c), frame = 1 / project.settings.fps;
+      const start = (!i || sorted[i-1]!.end <= join.start - frame) && join.start >= scope.start && !kept.some(k => k.end > join.start && k.end <= c.start) ? join.start : c.start;
+      const end = (i === sorted.length - 1 || join.end + frame <= sorted[i+1]!.start) && join.end <= scope.end && !kept.some(k => k.start < join.end && k.start >= c.end) ? join.end : c.end;
+      return end > start ? { ...base, start, end } : base;
+    }
     // A pause is quiet from end to end, so one whose edge is on sound was placed from a word's timing, which often
     // starts a tenth of a second after the word does. Its edges go onto the measured quiet beside them: that keeps
     // the word and leaves a little more air, so it stays the cut the agent decided. An edge with no quiet in reach
