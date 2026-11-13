@@ -1,6 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { flushSync } from "react-dom";
-import { agentTarget, isDialogueGuide, type Task } from "@scarlet/shared";
+import { agentTarget, type Task } from "@scarlet/shared";
 import { canStartCutReview, cutSummary, type Project } from "@scarlet/timeline";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
@@ -77,7 +76,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const inputId = useId();
   const library = useSkillsStore(s => s.skills);
-  const skillStatus = useSkillsStore(s => s.status);
   const skills = useMemo(() => enabledSkills(library), [library]);
 
   // A key that gives the box the cursor (N, R) may still be held as it arrives. Its repeats are that same press, not
@@ -122,12 +120,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const head = project.head ?? undefined;
   const displayAnchor = context === "whole" ? null : context ?? selectedEdit ?? null;
   const replying = !!thread;
-  const firstImport = firstEditHint && !draft && !replying && !rewording && !displayAnchor && !targetTag &&
-    media?.some(m => (m.kind === "video" || m.kind === "audio") && m.status !== "failed");
-  useEffect(() => {
-    if (firstImport && skillStatus === "idle") void useSkillsStore.getState().load();
-  }, [firstImport, skillStatus]);
-  const firstCut = firstImport && skillStatus === "ready" && skills.find(s => s.name === "dialogue-pass" && isDialogueGuide(s));
   const question = replying && (!displayAnchor?.changeId || selectedEdit) ? thread.question : undefined;
   // An answer goes to the agent that asked. Anything else needs an agent and a model to send to.
   const unavailable = !question && none;
@@ -297,18 +289,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         </div>}
         {modelPicker && <div className="composer-model"><AgentChip threadInput={thread ? question ? "answer" : "reply" : undefined} /></div>}
       </div>
-      {firstCut && <button type="button" className="composer-first-cut" aria-label="Make a first cut"
-        aria-description="Add /dialogue-pass to the message box. You can add directions before sending."
-        onClick={() => {
-          const text = `/${firstCut.name} `;
-          flushSync(() => changeText(text));
-          inputRef.current?.focus();
-          inputRef.current?.setSelectionRange(text.length, text.length);
-        }}>
-        <span className="composer-first-cut-icon"><Icon name="scissors" size={15} /></span>
-        <span className="composer-first-cut-copy"><strong>Make a first cut</strong><span>Trim false starts, retakes and distracting pauses.</span></span>
-        <span aria-hidden="true" className="composer-first-cut-insert">↵</span>
-      </button>}
       {tray}
       {/* Esc leaves a queued request's words as they were, unless the skill list took it first. */}
       {/* While an input method composes, Esc is its own: it puts away its candidates, and the words stay in the box. */}

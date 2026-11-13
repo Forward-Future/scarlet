@@ -244,7 +244,7 @@ it("says what Scarlet is doing this moment on one line under its opening sentenc
   bare.unmount();
 });
 
-it("keeps file progress in Media while the edit reports its latest activity", () => {
+it("says how far the transcripts it waits on are, and keeps file progress in Media", () => {
   vi.useFakeTimers({ now: Date.parse("2026-11-05T10:00:10.000Z"), toFake: ["Date", "setInterval", "clearInterval"] });
   const running: Task = { ...task, state: "running", summary: null, finishedAt: undefined };
   const asset = { id: "cam", name: "interview.mp4", duration: 3380, status: "ready" } as MediaAsset;
@@ -260,15 +260,19 @@ it("keeps file progress in Media while the edit reports its latest activity", ()
     <RunBundle task={running} events={events} changes={[]} />
   </>;
   const view = render(run([wait]));
-  // The old conversation estimate projected 30% to 32% between engine reports.
+  const activity = () => view.host.querySelector(".req-now [role=status]")?.textContent;
+  // While the run waits on the transcript, the line says so with how far along it is: the words the run reads.
+  expect(activity()).toBe("Transcribing the recordings · 30%");
   act(() => vi.advanceTimersByTime(30_000));
   view.rerender(run([wait, answer]));
-  const activity = () => view.host.querySelector(".req-now [role=status]")?.textContent;
   expect(view.host.querySelector("[data-media]")?.textContent).toBe("Transcribing10%");
   expect(activity()).toBe("Reading your answer");
 
   // A fresh transcript request can block the edit again.
   view.rerender(run([wait, answer, { ...wait, at: "2026-11-05T10:00:45.000Z" }]));
+  expect(activity()).toBe("Transcribing the recordings · 30%");
+  // Waiting its turn behind other audio work, there is no figure yet.
+  act(() => useProjectStore.setState(s => ({ current: { ...s.current!, tasks: [running, { ...transcribing, progress: { stage: "queued", fraction: 0 } }] } })));
   expect(activity()).toBe("Waiting for the transcript");
   const ready: TaskEvent = { ...wait, at: "2026-11-05T10:00:50.000Z", text: "Ready: the transcript",
     data: { ...wait.data, done: true } };

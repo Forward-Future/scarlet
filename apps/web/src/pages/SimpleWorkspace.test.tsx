@@ -1375,6 +1375,27 @@ it("lands an edit applied while the editor watches with a moment, and leaves the
   expect(container.querySelector("[data-landed]")).toBeNull();
 });
 
+it("leaves the edits quiet when the project's history arrives slowly, after the moment it opened", async () => {
+  appliedEdits();
+  const history = { ...data, changes: data.changes.filter(c => c.id === "chg_approved_1" || c.id === "chg_approved_2"), tasks: [], notes: [] };
+  let now = 1_000_000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  // The project opens before its history is read: no changes yet.
+  data = { ...history, changes: [], reviewStatus: "loading" as const };
+  useProjectStore.setState({ current: data });
+  await show();
+  await act(async () => {});
+  // The history takes longer than the moment changes are given to arrive.
+  now += 10_000;
+  data = history;
+  await act(async () => { useProjectStore.setState({ current: data }); });
+  await act(async () => {});
+  await act(async () => {});
+  // Every edit in it was applied before the project opened: none of them lands with a moment.
+  expect(numbered()).toHaveLength(3);
+  expect(container.querySelector("[data-landed], .simple-timeline-closing")).toBeNull();
+});
+
 it("marks only the flagged cut of a dialogue pass that is the latest request, from the start", async () => {
   appliedEdits();
   data = { ...data, tasks: [...data.tasks, { ...data.tasks.find(t => t.id === "task_done")!, id: "task_pass", kind: "edit" as const,
@@ -1427,7 +1448,7 @@ const earlierRequestOnly = (flagged = true) => {
 };
 const editRows = (changeId: string) => [...turnFor(changeId).querySelectorAll<HTMLElement>(".simple-edits .simple-edit")];
 
-it("waits for a request's final applied edit before flagging it, while an earlier request's flag stays available", async () => {
+it("flags a request's applied edit while Scarlet still works on it, and follows it to the final version", async () => {
   const { change, lists, hold, release } = laterRequest("task_fade");
   const earlier = data.changes.find(c => c.id === "chg_approved_2")!;
   const task = { ...data.tasks.find(t => t.id === "task_done")!, id: "task_fade", kind: "edit" as const,
@@ -1439,12 +1460,12 @@ it("waits for a request's final applied edit before flagging it, while an earlie
   const fade = () => container.querySelector<HTMLElement>('.unit[data-run="task_fade"]')!;
   const flag = () => fade().querySelector(".simple-pass-need")?.textContent;
   expect(turnFor(earlier.id).querySelector(".simple-pass-need")?.textContent).toBe("1 needs you");
-  expect(flag()).toBeUndefined();
-  // It is already on the timeline and can be played from the full list.
-  await click(fade().querySelector(".simple-pass-toggle")!);
+  // "N need you" sits in the band whenever a flagged edit waits on the editor, Scarlet still at work or not.
+  expect(flag()).toBe("1 needs you");
+  expect(numbered()).toEqual([["1", "check"]]);
+  await click(fade().querySelector(".simple-pass-need")!);
   expect(fade().querySelector(".simple-edit-title")?.textContent).toBe("outro fade");
-  expect(fade().querySelector(".edit-badge.is-check")).toBeNull();
-  expect(numbered()).toEqual([["1", undefined]]);
+  expect(fade().querySelector(".edit-badge.is-check")).not.toBeNull();
   const replaces = { changeId: change.id, spot: 0 };
   const final = { ...change, id: "chg_final_fade", taskId: task.id, threadId: task.id, toVersion: "ver_final_fade",
     timelineEdits: [{ label: "shorter fade", check: "Listen to the last beat", range: { start: 14, end: 15 }, replaces }] };
@@ -1452,20 +1473,17 @@ it("waits for a request's final applied edit before flagging it, while an earlie
   lists[task.id] = [{ ...final.timelineEdits[0], changeId: final.id, spot: 0, previous: [replaces] }];
   await event(d => ({ ...d, changes: [...d.changes, final], project: { ...d.project, head: final.toVersion },
     timeline: { ...d.timeline!, version: final.toVersion }, tasks: d.tasks.map(t => ({ ...t, changeIds: [...t.changeIds, final.id] })) }));
-  expect(flag()).toBeUndefined();
-  // Finishing can arrive before the current timeline's edit list does. The older loaded flag must stay hidden.
+  // While the new list loads, the flag the editor saw stays.
+  expect(flag()).toBe("1 needs you");
   await event(d => ({ ...d, tasks: d.tasks.map(t => ({ ...t, state: "done", finishedAt: new Date().toISOString() })) }));
-  expect(flag()).toBeUndefined();
-  expect(numbered()).toEqual([["1", undefined]]);
+  expect(flag()).toBe("1 needs you");
   await release();
   expect(flag()).toBe("1 needs you");
-  expect(numbered()).toEqual([["1", "check"]]);
-  await click(fade().querySelector(".simple-pass-need")!);
   expect(fade().querySelector(".simple-edit-title")?.textContent).toBe("shorter fadev2");
   expect(fade().querySelector(".edit-badge.is-check")).not.toBeNull();
 });
 
-it("holds the applied flags from an earlier attempt until its resumed request ends", async () => {
+it("flags an edit an earlier attempt applied while its resumed request runs", async () => {
   const { change, lists } = laterRequest("task_fade");
   const first = { ...data.tasks.find(t => t.id === "task_done")!, id: "task_fade", kind: "edit" as const,
     instruction: "Fade the outro", state: "failed" as const, context: { threadId: "task_fade" }, changeIds: [change.id] };
@@ -1477,8 +1495,8 @@ it("holds the applied flags from an earlier attempt until its resumed request en
   data = { ...data, changes: [prior, change], tasks: [first, resumed], notes: [] };
   useProjectStore.setState({ current: data });
   await showFolded();
-  expect(container.querySelector(".simple-pass-need")).toBeNull();
-  expect(numbered()).toEqual([["1", undefined]]);
+  expect(container.querySelector(".simple-pass-need")?.textContent).toBe("1 needs you");
+  expect(numbered()).toEqual([["1", "check"]]);
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === resumed.id ? { ...t, state: "cancelled" } : t) }));
   expect(container.querySelector(".simple-pass-need")?.textContent).toBe("1 needs you");
   expect(numbered()).toEqual([["1", "check"]]);
@@ -2787,6 +2805,49 @@ it.each(["saved", "another call", "unchecked part", "failed"] as const)("uses th
   }
 });
 
+it("keeps the last call's decision made while the pass's cut list loads, and applies the pass once it is in", async () => {
+  const { save, hold, release } = finishedPass([STAGED[2]!]);
+  const approve = vi.fn().mockResolvedValue({ outcome: "applied" });
+  useProjectStore.setState({ approve });
+  hold("chg_ready");
+  await show();
+  await reviewCalls();
+  await press("s");
+  // The skip is saved at once, not dropped while the list is on its way.
+  expect(save).toHaveBeenCalledWith("chg_ready", expect.objectContaining({ choices: [{ index: 0, choice: "keep" }] }));
+  expect(approve).not.toHaveBeenCalled();
+  expect(passCard().querySelector('[role="alert"]')).toBeNull();
+  await release();
+  await act(async () => {});
+  // With the list in, the pass goes in with the skipped footage kept.
+  expect(approve.mock.calls).toEqual([["chg_ready", undefined, [0]]]);
+});
+
+it("keeps saying a call's save failed while that call is undecided, though a later call's save lands", async () => {
+  const { save } = finishedPass();
+  const approve = vi.fn().mockResolvedValue({ outcome: "applied" });
+  useProjectStore.setState({ approve });
+  save.mockRejectedValueOnce(new Error("Couldn’t save this call."));
+  await show();
+  await reviewCalls();
+  const alert = () => passCard().querySelector('[role="alert"]')?.textContent;
+  await press("s");
+  expect(alert()).toBe("Couldn’t save this call.");
+  // The editor goes on to the next call, and its save lands. The skip that didn't reach the engine is back with the
+  // editor, and the line saying why stays: the decision doesn't vanish without a word.
+  await press("a");
+  expect(save.mock.lastCall![1].choices).toEqual([{ index: 1, choice: "cut" }]);
+  expect(alert()).toBe("Couldn’t save this call.");
+  expect(passCard().querySelector(".simple-pass-need")?.textContent).toBe("2 need you");
+  expect(approve).not.toHaveBeenCalled();
+  // Made again and saved, the line goes.
+  await click(passRow(STAGED[0]!.reason));
+  await press("s");
+  expect(save.mock.lastCall![1].choices).toEqual(expect.arrayContaining([{ index: 0, choice: "keep" }, { index: 1, choice: "cut" }]));
+  expect(alert()).toBeUndefined();
+  expect(passCard().querySelector(".simple-pass-need")?.textContent).toBe("1 needs you");
+});
+
 it("keeps the call on screen on its cut when the pass saves its next part", async () => {
   const { save, hold, release } = runningPass();
   const listen = vi.spyOn(player, "audition");
@@ -3179,7 +3240,7 @@ it("starts a streamed audition on first opening a call under StrictMode", async 
   expect(play.mock.contexts.filter(el => el === visible)).toHaveLength(1);
 });
 
-it("holds After for a single-call preview, lets Before play, and retries a failed preview", async () => {
+it("holds After for a single-call preview, lets Before play, and plays After over the working cut when the preview fails", async () => {
   runningPass();
   await event(d => ({ ...d, project: { ...d.project, mediaPaused: true } }));
   await show();
@@ -3195,14 +3256,13 @@ it("holds After for a single-call preview, lets Before play, and retries a faile
   expect(player.mediaTime(10.5)).toBe(10.5);
   await act(async () => finish());
   expect(listen).toHaveBeenCalledTimes(1);
-  draft.mockRejectedValueOnce(new Error("Preview unavailable"));
+  draft.mockRejectedValue(new Error("Preview unavailable"));
   await press("\\");
-  expect(listen).toHaveBeenCalledTimes(1);
-  const monitor = container.querySelector(".watch-monitor")!;
-  expect(monitor.textContent).toContain("Couldn’t open this version.");
-  await click(buttonIn(monitor, "Retry")!);
+  // The engine couldn't build the one-cut version. After isn't held behind a Retry that asks for it again: it plays
+  // over the working cut, stepping over the cut's footage, as it did before the engine built these.
   expect(listen).toHaveBeenCalledTimes(2);
-  expect(player.mediaTime(10.5)).toBe(10);
+  expect(listen).toHaveBeenLastCalledWith({ start: 8, end: 14, skips: [{ start: 10, end: 11, removed: true }] }, expect.any(Number));
+  expect(container.querySelector(".watch-monitor")!.textContent).not.toContain("Couldn’t open this version.");
 });
 
 it("keeps an open call's listen on its footage when the working cut moves under it", async () => {
@@ -6386,16 +6446,13 @@ it("says Queued on the card of a cut sent back until Scarlet starts on it, and s
 });
 
 /**
- * A completed request in the waiting pass's thread applied an edit Scarlet flagged, so "N need you" counts it
- * with the pass's calls even while the pass runs. It sits after the last staged cut.
+ * An earlier part of the waiting pass's own request applied an edit Scarlet flagged, so the request's "N need you"
+ * counts it with the pass's calls, while Scarlet still works on the pass too. It sits after the last staged cut.
  */
 const flaggedPart = () => {
-  const pass = data.tasks.find(t => t.id === "task_done")!;
-  const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_wrap", threadId: undefined, noteIds: [],
+  const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_done", threadId: undefined, noteIds: [],
     timelineEdits: [{ label: "wrap", range: { start: 13, end: 16 }, check: CHECK, summary: SUMMARY }] };
-  const wrap = { ...pass, id: part.taskId, state: "done" as const, changeIds: [part.id],
-    context: { changeId: "chg_ready" }, instruction: "Tighten the wrap", createdAt: part.createdAt, finishedAt: part.updatedAt };
-  data = { ...data, changes: [...data.changes, part], tasks: [...data.tasks, wrap] };
+  data = { ...data, changes: [...data.changes, part], tasks: data.tasks.map(t => t.id === "task_done" ? { ...t, changeIds: [...t.changeIds, part.id] } : t) };
   useProjectStore.setState({ current: data });
   const request = threadWith("chg_ready").id;
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: useProjectStore.getState().current!.project.head!,
