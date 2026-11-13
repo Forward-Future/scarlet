@@ -184,7 +184,7 @@ it("keeps the ring of the work under way fading with motion reduced, and the rin
   const reduced = (sheet: string, mark: string) => [...readFileSync(`${import.meta.dirname}/../../${sheet}`, "utf8")
     .matchAll(/@media \(prefers-reduced-motion: reduce\) \{((?:[^{}]|\{[^{}]*\})*)\}/g)]
     .flatMap(block => [...block[1]!.matchAll(/([^{}]+)\{([^{}]*)\}/g)]).find(rule => rule[1]!.includes(mark))?.[2]?.trim();
-  for (const [sheet, mark] of [["simple.css", '.req-mark[data-state="working"]'], ["simple.css", ".simple-more-ring.is-unknown"], ["index.css", ".animate-spin"], ["index.css", ".pulse"]] as const)
+  for (const [sheet, mark] of [["simple.css", '.req-mark[data-state="working"]'], ["simple.css", ".progress-ring.is-unknown"], ["index.css", ".animate-spin"], ["index.css", ".pulse"]] as const)
     expect(reduced(sheet, mark), mark).toMatch(/(^|; )animation: .+ infinite !important;$/);
 });
 
