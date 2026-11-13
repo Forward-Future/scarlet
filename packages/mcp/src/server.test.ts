@@ -3197,7 +3197,7 @@ it("measures the sound beside an edge once, also within a second of where a reco
 });
 
 it("returns a long list of checked joins whole enough to arrive: quiet joins give up their evidence first, and each join that lost some is named", async () => {
-  const original = { extra: mock.state.extra, timeline: mock.state.timeline, waveform: mock.state.waveform, transcripts: mock.state.transcripts };
+  const original = { timeline: mock.state.timeline, waveform: mock.state.waveform, transcripts: mock.state.transcripts };
   const editor = await connect();
   // Two minutes at three words a second: each word lasts 0.2 s, with 0.13 s of room tone before the next.
   const words = Array.from({ length: 360 }, (_, i) => ({ text: `word${i}`, start: Math.round((i / 3 + .05) * 1000) / 1000, end: Math.round((i / 3 + .25) * 1000) / 1000 }));
@@ -3207,20 +3207,19 @@ it("returns a long list of checked joins whole enough to arrive: quiet joins giv
   tl.version = "long-list";
   tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 120, 0)];
   mock.state.timeline = tl;
-  let activeReads = 0, maxReads = 0;
-  mock.state.extra = async (req, res) => {
-    if (!req.path.endsWith("/dialogue-detections")) return false;
-    const { from, to, keptSide } = req.body as { from: number; to: number; keptSide?: object };
+  // Yield each kept-side read so a large batch exercises the concurrency limit.
+  let activeReads = 0;
+  let maxReads = 0;
+  const detections = vi.spyOn(ScarletClient.prototype, "dialogueDetections").mockImplementation(async (_projectId, { from, to, keptSide }) => {
     if (keptSide) {
-      maxReads = Math.max(maxReads, ++activeReads);
-      await new Promise(resolve => setTimeout(resolve, 5));
+      activeReads++;
+      maxReads = Math.max(maxReads, activeReads);
+      await new Promise<void>(resolve => setImmediate(resolve));
       activeReads--;
     }
     const heard = words.filter(w => w.start >= from && w.end <= to);
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ segments: [{ id: keptSide ? "kept" : "s", start: from, end: to, text: heard.map(w => w.text).join(" "), words: heard }], acoustic: [] }));
-    return true;
-  };
+    return { segments: [{ id: keptSide ? "kept" : "s", start: from, end: to, text: heard.map(w => w.text).join(" "), words: heard }], acoustic: [] };
+  });
   // Each removal takes one word out, from the room tone before it to the room tone after. Every tenth starts inside
   // the word before instead, so Scarlet has to move that edge.
   const cut = (k: number) => ({ start: k % 10 === 5 ? k + .15 : k + .317, end: k + .65 });
@@ -3245,11 +3244,11 @@ it("returns a long list of checked joins whole enough to arrive: quiet joins giv
     const long = await check(Array.from({ length: 100 }, (_, k) => cut(k)));
     expect(long.length).toBeLessThanOrEqual(40_000);
     const listed = JSON.parse(long) as { joins: Array<{ status: string; start: number; end: number; audio?: unknown[]; nearbyWords?: unknown; unreadJoinAudio?: string[] }>; evidenceLeftOut: number[] };
-    expect(maxReads).toBeGreaterThan(0);
-    expect(maxReads).toBeLessThanOrEqual(8);
-    expect(listed.joins.flatMap(j => j.unreadJoinAudio ?? [])).toEqual([]);
     // Every join still says what the recording has at its edges and the range that results.
     expect(listed.joins.map(j => j.status)).toEqual(Array.from({ length: 100 }, (_, k) => k % 10 === 5 ? "adjusted" : "unchanged"));
+    expect(listed.joins.every(j => j.unreadJoinAudio === undefined)).toBe(true);
+    expect(maxReads).toBeGreaterThan(0);
+    expect(maxReads).toBeLessThanOrEqual(8);
     expect(listed.joins[5]).toMatchObject(short.joins[5]);
     const { audio: _audio, nearbyWords: _words, ...settled } = short.joins[4];
     expect(listed.joins[4]).toEqual(settled);
@@ -3266,6 +3265,7 @@ it("returns a long list of checked joins whole enough to arrive: quiet joins giv
     expect(alone.joins[0]).toMatchObject(listed.joins[95]!);
     expect(alone.joins[0].nearbyWords.start[0].words.length).toBeGreaterThan(10);
   } finally {
+    detections.mockRestore();
     Object.assign(mock.state, original);
     await editor.close();
   }
