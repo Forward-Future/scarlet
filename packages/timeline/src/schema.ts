@@ -428,6 +428,8 @@ export const CutAssessment = z.object({
   verdict: z.enum(["cut", "keep", "ask"]), reason: z.string().trim().min(1).max(800),
   /** Set by the agent host after inspecting this exact range and version. */
   inspected: z.boolean().optional(),
+  /** A fallback note carried onto a staged cut that the pass still has to check. */
+  provisional: z.literal(true).optional(),
   /** Set by the engine on a cut the editor sent back, once revised: it waits for their call whatever the recommendation. */
   revised: z.boolean().optional(),
   /**
@@ -438,6 +440,10 @@ export const CutAssessment = z.object({
   askOrder: z.number().int().positive().optional(),
 });
 export type CutAssessment = z.infer<typeof CutAssessment>;
+
+export function isPublishedCall(assessment: CutAssessment): boolean {
+  return assessment.verdict === "ask" && !assessment.provisional;
+}
 
 /** cut removes the staged range; keep leaves its footage in. Range is the cut's original range, as on its assessment. */
 export const CutChoice = z.object({

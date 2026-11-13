@@ -158,14 +158,15 @@ describe("buildThreads", () => {
     expect(status({ tasks: [task("t"), revision("done")], changes: [made("revising")] })).toBe("closed");
   });
 
-  it("asks for a decision while a pass still runs, once it has a cut to call or a staged cut it hasn't checked", () => {
+  it("asks for a decision while a pass still runs, once it has a finished call for the editor", () => {
     const running = task("t", { state: "running" });
     const staged = (fields: Record<string, unknown>) => change("c", { taskId: "t", intent: "suggestion", ...fields });
     const reasons = [{ start: 1, end: 2, reason: "Retake" }, { start: 5, end: 6, reason: "Pause" }];
     const assessed = (verdict: string, index: number) => ({ index, start: 1, end: 2, verdict, reason: "Looked" });
     const needs = (fields: Record<string, unknown>, run = running) => only({ tasks: [run], changes: [staged(fields)] }).needs;
     expect(needs({ cutReasons: reasons, cutAssessments: [assessed("cut", 0), assessed("ask", 1)] })).toBe("decision");
-    expect(needs({ cutReasons: reasons, cutAssessments: [assessed("cut", 0)] })).toBe("decision");
+    expect(needs({ cutReasons: reasons, cutAssessments: [assessed("cut", 0)] })).toBeUndefined();
+    expect(needs({ cutReasons: reasons, cutAssessments: [{ ...assessed("ask", 0), provisional: true }] })).toBeUndefined();
     expect(needs({ cutReasons: reasons, cutAssessments: [assessed("cut", 0), assessed("keep", 1)] })).toBeUndefined();
     // A run asked to review every cut itself doesn't hand any to the editor until it is done.
     expect(needs({ cutReasons: reasons }, task("t", { state: "running", context: { reviewAllCuts: true } }))).toBeUndefined();
@@ -239,11 +240,16 @@ describe("callNumbers", () => {
     expect(numbers(callNumbers({ cutAssessments: [ask(1, 3), ask(3, 1), ask(7, 2)] }, 9, false))).toEqual([[1, 3], [3, 1], [7, 2]]);
   });
 
-  it("numbers the cuts a pass never checked after its asks, in timeline order, once its run is over or one of them is open", () => {
-    const pass = { cutAssessments: [ask(3, 1), { ...ask(5), verdict: "cut" as const }, ask(7, 2)] };
+  it("numbers the cuts a pass never checked after its asks, in timeline order, once its run is over", () => {
+    const pass = { cutAssessments: [{ ...ask(0), provisional: true as const }, ask(3, 1), { ...ask(5), verdict: "cut" as const }, ask(7, 2)] };
     expect(numbers(callNumbers(pass, 9, false))).toEqual([[3, 1], [7, 2]]);
-    expect(numbers(callNumbers(pass, 9, false, 8))).toEqual([[3, 1], [7, 2], [8, 3]]);
     expect(numbers(callNumbers(pass, 9, true))).toEqual([[0, 3], [1, 4], [2, 5], [3, 1], [4, 6], [6, 7], [7, 2], [8, 8]]);
+  });
+
+  it("reserves a decided call’s number after a revision keeps its footage", () => {
+    const pass = { cutAssessments: [{ ...ask(2, 1), verdict: "keep" as const }, ask(3, 2)],
+      cutChoices: [{ index: 2, start: 2, end: 2.5, choice: "keep" as const }] };
+    expect(numbers(callNumbers(pass, 4, false))).toEqual([[2, 1], [3, 2]]);
   });
 
   it("numbers asks saved before the engine numbered them by their place in the video, after the ones it did", () => {
