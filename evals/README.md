@@ -251,7 +251,15 @@ $TSX evals/src/replay.ts --case my-case                       # vs. what the run
 $TSX evals/src/replay.ts --case my-case --baseline <earlier replay.json>   # vs. before your code edit
 $TSX evals/src/replay.ts --case my-case --plan edited-plan.json           # a different plan
 $TSX evals/src/replay.ts --case my-case --drop-quotes   # compare the same plan offline without its optional quotes
+$TSX evals/src/replay.ts --case my-case --parts          # every part of a pass that saved as it went
+$TSX evals/src/replay.ts --case my-case --parts --baseline <earlier …-parts.json>
 ```
+
+A pass that saves as it goes submits a plan for each part, each on the version the part before it left. `--parts`
+replays the last plan on each version and totals them, so the replay covers the pass and not its first few
+removals. Edges are also measured as the engine saves them, each removal rounded inward to whole frames, and each
+result lists the applied edges that land on speech (`appliedOnSpeech`), in source seconds. A case that stores only
+some of the run's versions replays the parts it has and names the rest.
 
 Scan windows become join evidence through the tool's `dialogueScanPage`. Offline there is no live
 measurement, so an edge that no scan window covers stays unmeasured.
