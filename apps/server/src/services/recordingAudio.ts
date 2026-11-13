@@ -100,35 +100,44 @@ export async function recordingWav(ctx: Paths, file: string, signal: AbortSignal
     held.timer.unref?.();
   };
   try {
-    const { wav, samples, data } = await held.decoded;
+    const decoded = await held.decoded;
     signal.throwIfAborted();
-    const bytes = async (from: number, to: number) => {
-      const first = Math.min(samples, Math.max(0, Math.round(from * RATE))), last = Math.min(samples, Math.max(first, Math.round(to * RATE)));
-      const out = Buffer.alloc((last - first) * 2);
-      if (out.length) {
-        const handle = await open(wav, "r");
-        try { await handle.read(out, 0, out.length, data + first * 2); } finally { await handle.close(); }
-      }
-      return out;
-    };
-    return {
-      wav, samples, release,
-      async pcm(from, to) {
-        const out = await bytes(from, to);
-        return new Int16Array(out.buffer, out.byteOffset, out.length / 2);
-      },
-      async writeWindow(target, from, to) {
-        const pcm = await bytes(from, to);
-        const head = Buffer.alloc(44);
-        head.write("RIFF", 0); head.writeUInt32LE(36 + pcm.length, 4); head.write("WAVEfmt ", 8);
-        head.writeUInt32LE(16, 16); head.writeUInt16LE(1, 20); head.writeUInt16LE(1, 22);
-        head.writeUInt32LE(RATE, 24); head.writeUInt32LE(RATE * 2, 28); head.writeUInt16LE(2, 32); head.writeUInt16LE(16, 34);
-        head.write("data", 36); head.writeUInt32LE(pcm.length, 40);
-        await writeFile(target, Buffer.concat([head, pcm]));
-      },
-    };
+    return { ...pcmWindows(decoded), release };
   } catch (error) {
     release();
     throw error;
   }
+}
+
+/** Seekable samples and WAV windows in an already decoded recording. The caller owns the file. */
+export async function decodedRecording(wav: string) {
+  return pcmWindows({ wav, ...await wavLayout(wav) });
+}
+
+function pcmWindows({ wav, samples, data }: Decode): Omit<RecordingAudio, "release"> {
+  const bytes = async (from: number, to: number) => {
+    const first = Math.min(samples, Math.max(0, Math.round(from * RATE))), last = Math.min(samples, Math.max(first, Math.round(to * RATE)));
+    const out = Buffer.alloc((last - first) * 2);
+    if (out.length) {
+      const handle = await open(wav, "r");
+      try { await handle.read(out, 0, out.length, data + first * 2); } finally { await handle.close(); }
+    }
+    return out;
+  };
+  return {
+    wav, samples,
+    async pcm(from, to) {
+      const out = await bytes(from, to);
+      return new Int16Array(out.buffer, out.byteOffset, out.length / 2);
+    },
+    async writeWindow(target, from, to) {
+      const pcm = await bytes(from, to);
+      const head = Buffer.alloc(44);
+      head.write("RIFF", 0); head.writeUInt32LE(36 + pcm.length, 4); head.write("WAVEfmt ", 8);
+      head.writeUInt32LE(16, 16); head.writeUInt16LE(1, 20); head.writeUInt16LE(1, 22);
+      head.writeUInt32LE(RATE, 24); head.writeUInt32LE(RATE * 2, 28); head.writeUInt16LE(2, 32); head.writeUInt16LE(16, 34);
+      head.write("data", 36); head.writeUInt32LE(pcm.length, 40);
+      await writeFile(target, Buffer.concat([head, pcm]));
+    },
+  };
 }
