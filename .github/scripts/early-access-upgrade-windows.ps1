@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 
 if ($AsTestUser) {
     # Start-Process -Credential can inherit the runner's environment. Use the loaded test account's profile.
+    $env:PSModulePath = "$PSHOME\Modules"
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if ($principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) { throw 'Expected a standard account.' }
@@ -42,7 +43,10 @@ if ($AsTestUser) {
             $engine = Install-And-Check "$PSScriptRoot\candidate.exe" $Version
             $expectedEngine = Get-Content "$PSScriptRoot\candidate-engine-sha256.txt"
         }
-        if ((Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash -ne $expectedEngine) { throw "Setup left the wrong engine in place for $phase." }
+        $hash = & "$PSScriptRoot\node.exe" -e "console.log(require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync(process.argv[1])).digest('hex'))" $engine
+        if ($LASTEXITCODE -ne 0 -or $hash -ne $expectedEngine) { throw "Setup left the wrong engine in place for $phase." }
+        $installedVersion = (Get-ItemProperty -LiteralPath $uninstall).DisplayVersion
+        Write-Host "Verified installed $installedVersion in $(Split-Path $engine), engine SHA-256 $hash."
         & "$PSScriptRoot\node.exe" "$PSScriptRoot\early-access-upgrade-library.mjs" $phase $engine $fixture
         if ($LASTEXITCODE -ne 0) { throw "Library $phase failed (exit $LASTEXITCODE)." }
     }
