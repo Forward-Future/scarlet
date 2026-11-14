@@ -15,8 +15,11 @@ export interface ModelChoice {
 
 export function modelChoices(agents: OnlineAgent[]): ModelChoice[] {
   return agents.flatMap((agent) => {
-    return agent.models.map((model) => {
-      const info = agent.modelLabels[model ?? ""];
+    // Choose the provider default only when no host offers a named model, before applying visibility preferences.
+    const models = !agent.models.length && agent.modelOptions[""] ? [undefined] : agent.models;
+    return models.map((model) => {
+      // A request without a model can reach hosts with different local defaults.
+      const info = model === undefined && agent.hostNames.length > 1 ? undefined : agent.modelLabels[model ?? ""];
       const name = info?.name ?? model ?? "Provider default";
       const profiles = agent.modelOptions[model ?? ""] ?? [];
       const defaultEffort = profiles[0]?.defaultEffort;

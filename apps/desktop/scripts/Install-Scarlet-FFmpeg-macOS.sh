@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install the two upstream media tools Scarlet Early Access uses.
+# Install the two upstream media tools Scarlet uses.
 set -euo pipefail
 
 case "$(uname -m)" in
@@ -50,4 +50,4 @@ fetch_tool ffmpeg "$ffmpeg_sha"
 fetch_tool ffprobe "$ffprobe_sha"
 mkdir -p "$dest"
 install -m 755 ffmpeg ffprobe "$dest/"
-printf 'Installed FFmpeg and FFprobe in %s. Open Scarlet Early Access to start editing.\n' "$dest"
+printf 'Installed FFmpeg and FFprobe in %s. Restart the editor to use them.\n' "$dest"
