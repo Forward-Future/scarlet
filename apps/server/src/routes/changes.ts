@@ -36,7 +36,8 @@ export function changeRoutes(ctx: Ctx) {
     if (c.req.query("summary") === "true") {
       const viewed = appliedReviewChange(result.change);
       const { id, state, description, fromVersion, toVersion, ranges, timelineEdits } = viewed;
-      return c.json({ change: { id, state, description, fromVersion, toVersion, ranges, timelineEdits }, duration: result.duration, diffDescription: result.diffDescription }, 201);
+      return c.json({ change: { id, state, description, fromVersion, toVersion, ranges, timelineEdits }, duration: result.duration, diffDescription: result.diffDescription,
+        ...(result.onWholeFrames && { onWholeFrames: result.onWholeFrames }) }, 201);
     }
     // The proposal is saved by now, so a failed check must not read as a failed proposal.
     return c.json({ ...result, change: await withSpots(result.change, result.change.state === "ready") }, 201);
@@ -46,7 +47,7 @@ export function changeRoutes(ctx: Ctx) {
     const body = await jsonBody(c, DialogueCutsRequest);
     const attempt = requestAttempt(c.req.raw), projectId = c.req.param("id");
     body.taskId ??= attempt?.taskId;
-    const { changes, carriedForward, editorDecided, heldForReview, alreadyRemoved, joinCrossfades } = submitDialogueCuts(ctx, c.var.user, projectId, body,
+    const { changes, carriedForward, editorDecided, heldForReview, alreadyRemoved, joinCrossfades, stagedForEditor, onFrames, droppedFromReview } = submitDialogueCuts(ctx, c.var.user, projectId, body,
       { checkAttempt: () => requireProjectEditAttempt(ctx, attempt, projectId, body.taskId) });
     return c.json({ changes: changes.map(change => {
       const { id, state, fromVersion, toVersion, description, intent } = change;
@@ -57,6 +58,8 @@ export function changeRoutes(ctx: Ctx) {
       ...(editorDecided && { editorDecided }), ...(heldForReview && { heldForReview }), ...(alreadyRemoved && { alreadyRemoved }),
       // The requested crossfade on the joins these cuts made: how many got it, and each join left a straight cut with why.
       ...(joinCrossfades && { joinCrossfades }),
+      // What Scarlet changed on its own: confident cuts it staged, edges it put on frames, earlier staged cuts it let go.
+      ...(stagedForEditor && { stagedForEditor }), ...(onFrames && { onFrames }), ...(droppedFromReview && { droppedFromReview }),
       // The version to build on next: where the confident cuts left the edit.
       head: ctx.repos.projects.get(c.req.param("id"))?.head }, 201);
   });

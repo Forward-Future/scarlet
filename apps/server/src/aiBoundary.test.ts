@@ -490,3 +490,19 @@ it("enforces the selected footage across mixed ripples, individual tracks, clip 
   expect((await submit(edit, { ops: [marker, { op: "rippleDelete", start: 5, end: 6 }] })).status).toBe(201);
   expect(ctx.repos.projects.get(project.id)?.head).toBe(reused);
 });
+
+it("says when it holds confident cuts for the editor and how far it moved them onto frames", async () => {
+  const { ctx } = workspace;
+  const { task, base } = dialogueTask();
+  // The editor asked to review every cut, so a cut the agent sends as confident waits for them, and the agent is told why.
+  const reviewing = ctx.repos.tasks.put({ ...task, context: { ...task.context, reviewAllCuts: true } });
+  const fps = project.settings.fps;
+  const submitted = await (await api("POST", `/projects/${project.id}/dialogue-cuts`, { taskId: reviewing.id, fromVersion: base,
+    description: "Tighten", cuts: [{ start: 2 + 0.3 / fps, end: 3, review: false, kind: "retake", reason: "Restart." }] }, reviewing)).json();
+  expect(submitted.changes.map((c: Change) => c.intent)).toEqual(["suggestion"]);
+  expect(submitted.stagedForEditor).toEqual({ cuts: 1, why: "The editor asked to review every cut." });
+  expect(submitted.onFrames).toMatchObject({ cuts: 1 });
+  expect(submitted.onFrames.largestShift).toBeGreaterThan(0);
+  expect(submitted.onFrames.largestShift).toBeLessThan(1 / fps);
+  expect(submitted).not.toHaveProperty("droppedFromReview");
+});
