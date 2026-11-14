@@ -131,16 +131,15 @@ pub fn augmented_path(env: &HashMap<String, String>, home: &Path) -> String {
             extra.push(apps.join("ChatGPT.app/Contents/Resources/codex-cli/bin"));
             extra.push(apps.join("Codex.app/Contents/Resources"));
         }
-        // nvm / fnm: newest installed node first.
+        // nvm / fnm: newest installed node first, by version number (v22.20.0 before v22.9.0), anything else after.
+        let number = |v: &PathBuf| -> Option<Vec<u64>> { v.file_name()?.to_str()?.strip_prefix('v')?.split('.').map(|n| n.parse().ok()).collect() };
         for base in [home.join(".nvm/versions/node"), home.join(".local/share/fnm/node-versions")] {
             if let Ok(rd) = std::fs::read_dir(&base) {
                 let mut versions: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
-                versions.sort();
+                versions.sort_by_cached_key(|v| (number(v), v.clone()));
                 versions.reverse();
-                for v in versions.into_iter().take(3) {
-                    let bin = if v.join("bin").is_dir() { v.join("bin") } else { v.join("installation/bin") };
-                    extra.push(bin);
-                }
+                let bins = versions.into_iter().filter_map(|v| [v.join("bin"), v.join("installation/bin")].into_iter().find(|bin| bin.is_dir()));
+                extra.extend(bins.take(3));
             }
         }
     }
@@ -545,6 +544,29 @@ mod tests {
             let nodes: Vec<&str> = path.split(sep).filter(|p| p.contains(".nvm")).map(|p| p.rsplit('/').nth(1).unwrap()).collect();
             assert_eq!(nodes, ["v22.11.0", "v20.9.0", "v18.20.0"], "three newest, newest first");
         }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn nvm_and_fnm_keep_the_three_newest_nodes_by_version_number() {
+        let home = tempfile::tempdir().unwrap();
+        let nvm = home.path().join(".nvm/versions/node");
+        let fnm = home.path().join(".local/share/fnm/node-versions");
+        // As text, v9 sorts after v24 and v22.9 after v22.20.
+        for version in ["v6.17.1", "v8.17.0", "v9.11.2", "v24.11.0"] {
+            std::fs::create_dir_all(nvm.join(version).join("bin")).unwrap();
+        }
+        for version in ["v8.17.0", "v22.9.0", "v22.20.0", "v10.0.0"] {
+            std::fs::create_dir_all(fnm.join(version).join("installation/bin")).unwrap();
+        }
+        // An entry that isn't a version never takes the place of one.
+        std::fs::create_dir_all(nvm.join("zz-not-a-version").join("bin")).unwrap();
+        // Neither does a newer version without a bin or installation/bin directory: a folder left by an install that stopped, or a file.
+        std::fs::create_dir_all(nvm.join("v26.0.0")).unwrap();
+        std::fs::write(fnm.join("v26.0.0"), "").unwrap();
+        let path = augmented_path(&HashMap::new(), home.path());
+        let nodes = |under: &Path| path.split(':').filter_map(|p| Path::new(p).strip_prefix(under).ok()?.iter().next()?.to_str()).collect::<Vec<_>>();
+        assert_eq!([nodes(&nvm), nodes(&fnm)], [["v24.11.0", "v9.11.2", "v8.17.0"], ["v22.20.0", "v22.9.0", "v10.0.0"]], "three newest, newest first");
     }
 
     #[test]
