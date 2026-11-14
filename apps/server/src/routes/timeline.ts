@@ -1,7 +1,7 @@
 import { z } from "zod/v3";
 import { recordHistoryEdit } from "../services/cutHistory.js";
 import { Hono } from "hono";
-import { describeDiff, diffTimelines, newId, toOtio, type Change } from "@scarlet/timeline";
+import { clipById, describeDiff, diffTimelines, newId, toOtio, type Change } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { requestAttempt, requireProjectEditAttempt } from "../services/taskAttempt.js";
@@ -74,7 +74,7 @@ export function timelineRoutes(ctx: Ctx) {
     const a = resolveTimeline(ctx, project, c.req.param("a"));
     const b = resolveTimeline(ctx, project, c.req.param("b"));
     const diff = diffTimelines(a, b, project.settings.fps);
-    return c.json({ diff, description: describeDiff(diff) });
+    return c.json({ diff, description: describeDiff(diff, undefined, c.req.query("clipNames") === "id" ? clipById : undefined) });
   });
 
   r.post("/projects/:id/versions/:v/checkout", (c) => ctx.db.transaction(() => {

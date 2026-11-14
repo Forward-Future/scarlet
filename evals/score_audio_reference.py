@@ -53,6 +53,8 @@ def stats(tp, fp, fn):
 def reference_pieces(ref):
     if ref['unmappedFinal']:
         raise ValueError('The final contains unexplained audio. Source-wide cut labels require complete mapping.')
+    if ref.get('externalFinal') or ref.get('uncertainRetainedSource') or ref.get('excludeJoinsTouchingFinalIntervals'):
+        raise ValueError('This single-source scorer does not interpret external passages or annotated source/join exclusions.')
     frame = 1 / ref['frameRate'] if 'frameRate' in ref else ref['frameDuration']
     shifts = {}
     for j in ref['joins']:
@@ -125,6 +127,7 @@ def quant(values, q):
 
 
 def pair_gap(words, a, b, left, right):
+    # playback() clamps a partially retained word to the edge of its piece.
     return 1000 * max(0, b.playback(words[right]['start']) - a.playback(words[left]['end']))
 
 
@@ -154,6 +157,8 @@ def join_spacing(words, reference, candidate):
         if i == j:
             shared_words_uncut += 1
             continue
+        if j != i + 1:
+            continue
         ref_gap = pair_gap(words, p, q, left, right)
         cand_gap = pair_gap(words, candidate[i], candidate[j], left, right)
         matched.append(dict(after=words[left]['text'], before=words[right]['text'], afterWord=left, beforeWord=right,
@@ -161,8 +166,13 @@ def join_spacing(words, reference, candidate):
                             errorMs=round(cand_gap - ref_gap, 2)))
     errors = [m['errorMs'] for m in matched]
     absolute = [abs(e) for e in errors]
+    longer = sum(e > 200 for e in errors)
+    shorter = sum(e < -200 for e in errors)
     return dict(referenceJoins=max(len(reference) - 1, 0), eligibleJoins=lexical_known,
                 candidateJoins=max(len(candidate) - 1, 0), sharedJoins=len(matched), sameWordsUnedited=shared_words_uncut,
+                longerByOver200Ms=longer, shorterByOver200Ms=shorter,
+                longerByOver200MsPct=100 * longer / len(errors) if errors else None,
+                shorterByOver200MsPct=100 * shorter / len(errors) if errors else None,
                 referenceMedianMs=quant([m['referenceMs'] for m in matched], .5),
                 candidateMedianMs=quant([m['candidateMs'] for m in matched], .5),
                 medianErrorMs=quant(errors, .5), medianAbsErrorMs=quant(absolute, .5),

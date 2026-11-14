@@ -60,6 +60,7 @@ export function ProjectLayout() {
   const status = useProjectStore((s) => s.status);
   const error = useProjectStore((s) => s.error);
   const opened = useProjectStore(s => !!id && s.current?.id === id);
+  const projectLoad = useProjectStore(s => s.current?.id === id ? s.current?.loadRevision : undefined);
   const reviewStatus = useProjectStore(s => s.current?.reviewStatus);
   const reviewError = useProjectStore(s => s.current?.reviewError);
   const trashedProject = useProjectStore((s) => s.trashedProject);
@@ -99,7 +100,7 @@ export function ProjectLayout() {
     if (!opened || !id) return;
     rememberProject(id);
     void resumeImports(id, useProjectStore.getState().current?.media ?? []);
-  }, [opened, id]);
+  }, [opened, id, projectLoad]);
 
   // A playhead, pinned transcript span and draft belong to one project.
   useLayoutEffect(() => () => {
@@ -123,7 +124,8 @@ export function ProjectLayout() {
     },
   );
 
-  const needsHistory = /\/review\/?$/.test(location.pathname) || ["thread", "item", "note", "audition", "cuts"].some(key => query.has(key)) || query.get("panel") === "history";
+  // A note's link and the history panel show the edit history, so they wait for it.
+  const needsHistory = query.has("note") || query.get("panel") === "history";
   const failed = trashedProject?.id === id || (status === "error" && !opened);
   const waiting = failed ? null : !opened ? "Opening project…" : needsHistory && reviewStatus === "loading" ? "Loading edit history…" : null;
   // Scarlet reopening its last project is still starting, so the startup screen stays up until the project can show

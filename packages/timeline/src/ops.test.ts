@@ -59,6 +59,22 @@ describe("setTimeline", () => {
     expect(applyOps(changed, [{ op: "setTimeline", patch: {} }])).toEqual(changed);
   });
 
+  it("changes only the caption style settings a patch names, on the timeline and on a track", () => {
+    const base = cut();
+    base.captionStyle = { color: "#FFFF00", outlineWidth: 0.08 };
+    base.tracks[2]!.captionStyle = { y: 0.2, uppercase: true };
+    const changed = applyOps(base, [
+      { op: "setTimeline", patch: { captionStyle: { fontSize: 0.06 } } },
+      { op: "updateTrack", trackId: "cap", patch: { captionStyle: { y: 0.3 } } },
+    ]);
+    expect(changed.captionStyle).toEqual({ color: "#FFFF00", outlineWidth: 0.08, fontSize: 0.06 });
+    expect(changed.tracks[2]!.captionStyle).toEqual({ y: 0.3, uppercase: true });
+    expect(base.captionStyle).toEqual({ color: "#FFFF00", outlineWidth: 0.08 });
+    // Code can still clear the whole style by naming it with no value.
+    const cleared = applyOp(changed, { op: "setTimeline", patch: { captionStyle: undefined } });
+    expect(cleared.captionStyle).toBeUndefined();
+  });
+
   it("refuses a background that isn't a color", () => {
     expect(() => applyOps(cut(), [{ op: "setTimeline", patch: { background: "red,negate" } }])).toThrow(ZodError);
   });

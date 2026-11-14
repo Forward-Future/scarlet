@@ -118,6 +118,15 @@ export function formatTimecode(seconds: number, fps = 30): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}.${pad(f)}` : `${m}:${pad(s)}.${pad(f)}`;
 }
 
+/** Where something is in the video, for people, to the second: 0:05, 1:02:07. Minutes alone would read 62:07 past an hour. */
+export function clock(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds + 1e-6));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${r}` : `${m}:${r}`;
+}
+
 /**
  * Split the timeline into render segments of roughly `segmentSeconds`,
  * preferring to cut at a clip boundary in the second half of each segment.

@@ -129,6 +129,14 @@ function summarize(runDir: string, title: string): TrialRow[] {
   return rows;
 }
 
+/** A count or a limit from the command line. One that isn't a number would run no trials, or never time out. */
+export function positiveNumber(flag: string, value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const n = value.trim() ? Number(value) : NaN;
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`${flag} takes a number above zero, not “${value}”.`);
+  return n;
+}
+
 export async function runCli(argv = process.argv.slice(2)) {
   const { values } = cli({
     "evaluate-task": { type: "string" }, "evaluate-case": { type: "string" }, case: { type: "string" }, cases: { type: "string" }, suite: { type: "string" },
@@ -161,7 +169,8 @@ export async function runCli(argv = process.argv.slice(2)) {
 
   const caseIds = values.cases ? list(values.cases) : values.suite ? listCases().filter(c => c.suite === values.suite).map(c => c.id) : [];
   const configs = list(values.configs).map(parseConfig);
-  const trials = Math.max(1, Number(values.trials ?? 3));
+  const trials = Math.max(1, Math.floor(positiveNumber("--trials", values.trials, 3)));
+  const timeoutMs = positiveNumber("--timeout-min", values["timeout-min"], 120) * 60_000;
   if (!caseIds.length || !configs.length) throw new Error("Choose --cases or --suite, and --configs.\n\n" + USAGE);
   const cases = caseIds.map(loadCase);
   const total = cases.length * configs.length * trials;
@@ -189,7 +198,6 @@ export async function runCli(argv = process.argv.slice(2)) {
   }
 
   const engine = await Engine.connect({ url: values.engine });
-  const timeoutMs = Number(values["timeout-min"] ?? 120) * 60_000;
   const rows: TrialRow[] = [];
   for (const loaded of cases) for (const config of configs) for (let t = 1; t <= trials; t++) {
     const dir = join(runDir, loaded.file.id, slug(configLabel(config)), `trial-${t}`);

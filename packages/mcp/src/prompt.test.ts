@@ -106,6 +106,12 @@ describe("an editing prompt", () => {
     expect(source).toContain("- Source position referenced: 77.00 s (1:17.00) to 80.50 s (1:20.15)");
     // On the timeline the project's 24 fps counts the frames: half a second is frame 12.
     expect(buildSystemPrompt({ ...base, task: task({ time: 80.5 }) })).toContain("- Timeline position referenced: 80.50 s (1:20.12)");
+    // A stretch marked on the ruler with an edit open is said besides the edit's own place, on the version it was marked on.
+    const marked = buildSystemPrompt({ ...base, task: task({ time: 10, end: 12, markedRange: { start: 42, end: 51.5, version: "v5" } }) });
+    expect(marked).toContain("- Timeline position referenced: 10.00 s (0:10.00) to 12.00 s (0:12.00)");
+    expect(marked).toContain("- Stretch the editor marked on the timeline: 42.00 s (0:42.00) to 51.50 s (0:51.12) on version v5");
+    // Marked with nothing open it is the position itself, said once.
+    expect(buildSystemPrompt({ ...base, task: task({ time: 42, end: 51.5, markedRange: { start: 42, end: 51.5 } }) })).not.toContain("Stretch the editor marked");
     // With nothing recorded there is no context section.
     expect(buildSystemPrompt({ ...base, task: task({}) })).not.toContain("## Context");
   });
@@ -139,6 +145,13 @@ describe("an editing prompt", () => {
     expect(buildSystemPrompt({ ...base, change: { change }, task: task({ changeId: "chg_other", editIndex: 1 }) })).toContain("- Selected edit index: 1\n");
     // An index means nothing without the change it belongs to.
     expect(buildSystemPrompt({ ...base, task: task({ editIndex: 2, cutIndex: 1 }) })).not.toMatch(/Selected edit index|Staged cut being revised/);
+  });
+
+  it("gives the model the tool names its harness exposes", () => {
+    expect(buildSystemPrompt({ ...base, task: task({}) })).toContain("call `mcp__scarlet__project_get`");
+    for (const agent of ["codex", "gemini", "another"]) {
+      expect(buildSystemPrompt({ ...base, task: { ...task({}), agent } })).not.toContain("mcp__scarlet__");
+    }
   });
 
   it("mentions the artifact directory only to a harness that can write files there", () => {

@@ -164,7 +164,9 @@ it("measures a finished render's file when asked to, and only then", async () =>
   expect(fileInfo).toMatchObject({ width: 160, height: 90, fps: 25, videoCodec: "h264", audioCodec: "aac", hasAudio: true, sampleRate: 48000, channels: 1 });
   expect(fileInfo!.duration).toBeCloseTo(2, 1);
   expect(fileInfo!.bitrate).toBeGreaterThan(0);
-  expect(Object.keys(fileInfo!).sort()).toEqual(["audioCodec", "bitrate", "channels", "duration", "fps", "hasAudio", "height", "sampleRate", "videoCodec", "width"]);
+  expect(Object.keys(fileInfo!).sort()).toEqual(["audioCodec", "bitrate", "channels", "duration", "fps", "hasAudio", "height", "loudness", "sampleRate", "videoCodec", "width"]);
+  // The sound as rendered, with its gain and effects, measured the way media_profile measures a source.
+  expect(Object.keys(fileInfo!.loudness!).sort()).toEqual(["integratedLufs", "loudnessRangeLu", "truePeakDbtp"]);
 });
 
 it("has no file to measure for a render that failed, and says so when a finished one's file is gone", async () => {

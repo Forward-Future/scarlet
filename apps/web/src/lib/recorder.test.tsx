@@ -258,3 +258,11 @@ it("rings the mic with the voice while it records, and lets it go when it stops"
   expect(close).toHaveBeenCalled();
   host.remove();
 });
+
+it("names the V key only on the mic that follows it", async () => {
+  const el = document.createElement("div");
+  const host = createRoot(el);
+  await act(async () => host.render(<><MicButton followHold onResult={result} label="Talk to Scarlet" /><MicButton onResult={result} /></>));
+  expect([...el.querySelectorAll("button")].map(b => b.title)).toEqual(["Talk to Scarlet (hold V)", "Record a voice note"]);
+  await act(async () => host.unmount());
+});

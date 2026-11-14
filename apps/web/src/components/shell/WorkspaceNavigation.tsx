@@ -36,6 +36,9 @@ export function Dropdown({ button, children, align = "left", width = 260, label,
     <div ref={ref} className="relative" onBlur={e => {
       if (e.relatedTarget && !e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false);
     }} onKeyDown={e => {
+      // A key the page has already taken is the page's: ↓ steps edits while a card is open, and a menu's button that
+      // kept the focus opened its menu on the same press.
+      if (e.defaultPrevented) return;
       if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key) || e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
       // A panel one of the rows opened, such as the model selector, has its own arrow keys.
       if (ref.current?.querySelector('[role="dialog"]')?.contains(e.target as Node)) return;

@@ -35,7 +35,7 @@ beforeEach(() => {
   useProjectStore.setState({ current: project, status: "ready" });
   useExports.setState({ jobs: {} });
   localStorage.clear();
-  useUiStore.setState({ notifications: [], exportStarNotice: "unseen" });
+  useUiStore.setState({ exportStarNotice: "unseen" });
   lines = [];
   levels = [];
   startAppLog((batch, level) => { for (const line of batch) { lines.push(line.replace(/^(\[\w+\]) \S+ \S+ /, "$1 ")); levels.push(level); } });
@@ -277,7 +277,6 @@ it("picks up an export left over from the last session, and tells the editor how
   expect(desktop.chooseVideoExport).not.toHaveBeenCalled();
   expect(asked.request).not.toHaveBeenCalled();
   await vi.waitFor(() => expect(asked.release).toHaveBeenCalledExactlyOnceWith("rnd_kept", owner));
-  expect(useUiStore.getState().notifications[0]).toMatchObject({ title: "Export didn’t finish", body: `${NAME}: The encoder crashed`, projectId: PRJ });
   expect(lines).toEqual(['[error] export phase=rendering format=mp4 resumed=true error="The encoder crashed"']);
 });
 
@@ -288,7 +287,6 @@ it("treats a left-over export whose destination is gone as already settled, with
   await resumeExports();
   await vi.waitFor(() => expect(asked.release).toHaveBeenCalledTimes(1));
   expect(job()).toBeUndefined();
-  expect(useUiStore.getState().notifications).toEqual([]);
   expect(lines).toEqual([]);
 });
 

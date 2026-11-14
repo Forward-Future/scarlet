@@ -117,12 +117,15 @@ it("saves bounded ripple operations on the frames inside the selection, includin
     intent: "suggestion", description: "Tighten this passage.", ops: [
       { op: "rippleDelete", start: range.start, end: 2 }, { op: "rippleDelete", start, end },
     ] }, task);
-  const saved = await send(2.5, 3.0328);
+  // The second op is written on the edit as the first one asked to leave it, where the selection now ends at 3 s. The
+  // first came out a little short on whole frames (0.9667 s of 0.9995 s), so the second moves later by the difference
+  // before it goes onto frames, and still ends inside the shortened selection.
+  const saved = await send(2.5, 3);
   expect(saved.status).toBe(201);
-  expect((await saved.json()).change.ops).toEqual([
-    { op: "rippleDelete", start: 31 / 30, end: 2 }, { op: "rippleDelete", start: 2.5, end: 3 },
-  ]);
-  const outside = await send(2.5, 3.04);
+  const [first, second] = (await saved.json()).change.ops;
+  expect(first).toEqual({ op: "rippleDelete", start: 31 / 30, end: 2 });
+  expect(second).toMatchObject({ op: "rippleDelete", start: expect.closeTo(76 / 30, 9), end: expect.closeTo(3, 9) });
+  const outside = await send(2.5, 3.01);
   expect(outside.status).toBe(400);
   expect((await outside.json()).error.code).toBe("cut_scope");
 });
@@ -489,4 +492,20 @@ it("enforces the selected footage across mixed ripples, individual tracks, clip 
   const edit = task({ version: base, time: 0, end: 3, changeId: "prior", editIndex: 0 });
   expect((await submit(edit, { ops: [marker, { op: "rippleDelete", start: 5, end: 6 }] })).status).toBe(201);
   expect(ctx.repos.projects.get(project.id)?.head).toBe(reused);
+});
+
+it("says when it holds confident cuts for the editor and how far it moved them onto frames", async () => {
+  const { ctx } = workspace;
+  const { task, base } = dialogueTask();
+  // The editor asked to review every cut, so a cut the agent sends as confident waits for them, and the agent is told why.
+  const reviewing = ctx.repos.tasks.put({ ...task, context: { ...task.context, reviewAllCuts: true } });
+  const fps = project.settings.fps;
+  const submitted = await (await api("POST", `/projects/${project.id}/dialogue-cuts`, { taskId: reviewing.id, fromVersion: base,
+    description: "Tighten", cuts: [{ start: 2 + 0.3 / fps, end: 3, review: false, kind: "retake", reason: "Restart." }] }, reviewing)).json();
+  expect(submitted.changes.map((c: Change) => c.intent)).toEqual(["suggestion"]);
+  expect(submitted.stagedForEditor).toEqual({ cuts: 1, why: "The editor asked to review every cut." });
+  expect(submitted.onFrames).toMatchObject({ cuts: 1 });
+  expect(submitted.onFrames.largestShift).toBeGreaterThan(0);
+  expect(submitted.onFrames.largestShift).toBeLessThan(1 / fps);
+  expect(submitted).not.toHaveProperty("droppedFromReview");
 });

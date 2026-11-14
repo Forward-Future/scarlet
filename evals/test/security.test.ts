@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { loadCase, timelinePath } from "../src/case.ts";
 import { buildCase } from "../src/dataset.ts";
 import { Engine } from "../src/engine.ts";
-import { caseDir, fileComponent, writeJson, writeText } from "../src/paths.ts";
+import { caseDir, fileComponent, writeChosenJson, writeJson, writeText } from "../src/paths.ts";
 import { cut, media } from "./fixtures.ts";
 
 let scratch: string;
@@ -107,4 +107,12 @@ it("captures and reloads a published reference under the selected case directory
   expect(saved.file.reference?.published?.matchedWords).toBe(words.length);
   expect(saved.timeline("v1")).toEqual(timeline);
   expect(saved.evidence.get(recording.id)?.words).toEqual(words);
+});
+
+it("writes a result to the file the operator named, outside the data directory, and still not through a link", () => {
+  const chosen = join(scratch, "selected-output", "baseline.json");
+  writeChosenJson(chosen, { rows: 1 }, chosen);
+  expect(JSON.parse(readFileSync(chosen, "utf8"))).toEqual({ rows: 1 });
+  // With no file named, the path is one of Scarlet's own and stays inside the data directory.
+  expect(() => writeChosenJson(join(scratch, "elsewhere.json"), {}, undefined)).toThrow(/leaves/);
 });

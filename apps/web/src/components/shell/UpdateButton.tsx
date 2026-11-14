@@ -62,7 +62,8 @@ export function UpdateButton() {
     }
   }
 
-  if (restarting || (ready && !showProgress)) return <aside className="update-control update-corner" aria-label="Scarlet update">
+  if (restarting || (ready && !showProgress)) return <aside className="update-control update-corner" aria-label="Scarlet update"
+    onPointerLeave={() => { if (error) setRestart({ error: "" }); }} onBlur={() => { if (error) setRestart({ error: "" }); }}>
     <button type="button" className="update-button" disabled={restarting} onClick={install}
       aria-describedby={ready && !error ? hint : undefined}>
       <span className="update-button-dot" aria-hidden="true" />

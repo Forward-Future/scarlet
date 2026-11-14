@@ -3,7 +3,7 @@ import { z } from "zod/v3";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest } from "../errors.js";
-import { clearSegments, storageProjects, validateSelection } from "../services/storage.js";
+import { clearSegments, segmentFiles, storageProjects, validateSelection } from "../services/storage.js";
 import { purgeDate, removeTrashed } from "../services/trash.js";
 import { jsonBody } from "./util.js";
 
@@ -22,12 +22,14 @@ export function storageRoutes(ctx: Ctx) {
         projects.some(p => (kind === "trash") !== (p.deletedAt !== null))) {
       throw badRequest("storage_selection", "Invalid storage selection.");
     }
-    if (kind === "trash") removeTrashed(ctx, projects);
+    if (kind === "trash") await removeTrashed(ctx, projects);
     else {
-      ctx.db.transaction(() => {
+      // What to delete is decided with the selection checked; the files go after, so the engine isn't held up meanwhile.
+      const files = ctx.db.transaction(() => {
         for (const p of projects) validateSelection(ctx, p);
-        for (const p of projects) clearSegments(ctx, p.id);
+        return projects.map(p => segmentFiles(ctx, p.id));
       }, "immediate")();
+      await Promise.all(projects.map((p, i) => clearSegments(ctx, p.id, files[i])));
       ctx.log(`[storage] cleared the cached renders of ${projects.length} ${projects.length === 1 ? "project" : "projects"}: ${projects.map(p => p.id).join(", ")}`);
     }
     return c.json({ projects: projects.length });

@@ -176,8 +176,3 @@ export function runProgress(events: readonly TaskEvent[]): RunProgress {
   if (Object.keys(since).length) progress.since = since;
   return progress;
 }
-
-/** A finished count, allowing for the half-second a scan page can stop short of the end. */
-export function readComplete(read: NonNullable<RunProgress["read"]>) {
-  return read.seconds >= read.total - 0.5;
-}

@@ -52,6 +52,9 @@ it("reads a clock for people: minutes and seconds, with hours only when there ar
   expect(clock(5.9)).toBe("0:05");
   expect(clock(62)).toBe("1:02");
   expect(clock(3727)).toBe("1:02:07");
+  expect(clock(3599)).toBe("59:59");
+  expect(clock(3600)).toBe("1:00:00");
+  expect(clock(4503)).toBe("1:15:03");
   // A time a hair under the second, as arithmetic leaves it, is that second. Nothing reads before zero.
   expect(clock(59.9999999)).toBe("1:00");
   expect(clock(-3)).toBe("0:00");

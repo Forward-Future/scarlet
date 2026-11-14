@@ -4,6 +4,7 @@ import { AnalysisCache } from "./services/analysisCache.js";
 import type { ServerSettings } from "@scarlet/shared";
 import type { JoinFades, Transcript } from "@scarlet/timeline";
 import { openDb, type Db } from "./db.js";
+import { startWalCheckpointer } from "./walCheckpointer.js";
 import { Bus } from "./events.js";
 import { humanDuration } from "./logText.js";
 import { Paths } from "./paths.js";
@@ -12,7 +13,7 @@ import type { RenderAdapter, WaveformCache } from "./render/adapter.js";
 import { scarletRenderAdapter as defaultAdapter } from "./render/scarletRender.js";
 import type { RenderQueue } from "./services/renderQueue.js";
 import { execFile } from "node:child_process";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createTelemetry, type Telemetry } from "./telemetry/analytics.js";
 import { telemetryConfig } from "./telemetry/config.js";
 import { bundledWhisperCli, bundledWhisperGpu, LocalWhisperModel } from "./transcribe/localModel.js";
@@ -128,6 +129,8 @@ export interface ServerOptions {
   render?: RenderAdapter;
   /** Make complete GPU proxies for footage in the background (the desktop engine). */
   prepareSourceProxies?: boolean;
+  /** Move SQLite checkpoints off the serving thread while the engine is running. */
+  backgroundCheckpoints?: boolean;
   telemetry?: {
     /** Default project token for the packaged engine. SCARLET_POSTHOG_KEY takes precedence. */
     posthogKey?: string;
@@ -193,6 +196,10 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
   const pending = new Set<Promise<unknown>>();
   const shutdown = new AbortController();
   const log = options.log ?? ((m: string) => console.log(m));
+  if (whisperCli && process.platform === "linux") {
+    log(`[whisper] Bundled CPU runtime: ${basename(dirname(whisperCli)) === "whisper-cpu" ? "AVX2" : "baseline"}`);
+  }
+  const checkpointer = options.backgroundCheckpoints ? startWalCheckpointer(db, paths.db, log) : undefined;
   const projectControllers = new Map<string, AbortController>();
   const mediaControllers = new Map<string, AbortController>();
   function workerSignal(controllers: Map<string, AbortController>, id: string) {
@@ -265,6 +272,7 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
       } catch {
         // It stays, as after a kill.
       }
+      await checkpointer?.stop();
       // Shutdown work can still record an event. Read the final privacy preference before closing the library.
       try {
         await ctx.telemetry.close();

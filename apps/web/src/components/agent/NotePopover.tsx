@@ -29,7 +29,7 @@ export function NotePopover() {
   const createVoiceNote = useProjectStore((s) => s.createVoiceNote);
   const { effective, none, unavailableReason } = useAgentAvailability();
   const [text, setText] = useState("");
-  const [assign, setAssign] = useState(() => localStorage.getItem("scarlet.noteAssign") !== "off");
+  const [assign, setAssign] = useState(() => { try { return localStorage.getItem("scarlet.noteAssign") !== "off"; } catch { return true; } });
   const [busy, setBusy] = useState(false);
   const saving = useRef(false);
   // The note stays up while it saves (a voice note is transcribed inside the request), so a failure is said where it
@@ -56,7 +56,7 @@ export function NotePopover() {
 
   const onAssign = (v: boolean) => {
     setAssign(v);
-    localStorage.setItem("scarlet.noteAssign", v ? "on" : "off");
+    try { localStorage.setItem("scarlet.noteAssign", v ? "on" : "off"); } catch { /* Storage is optional. */ }
   };
 
   const save = async (write: () => Promise<unknown>) => {

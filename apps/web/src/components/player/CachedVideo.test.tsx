@@ -128,7 +128,7 @@ it("plays on when it takes over from a video that is playing, also one paused an
   // A new working cut, or its saved file, arriving while the video plays: nothing paused it.
   let before = videoBefore();
   void before.el.play();
-  before.heard();
+  expect(usePlayerStore.getState().playing).toBe(false);
   await show();
   await opens(60);
   expect(play).toHaveBeenCalledTimes(1);
