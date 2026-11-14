@@ -331,14 +331,14 @@ function opsOnWholeFrames(ctx: Ctx, projectId: string, body: ProposeChangeReques
 function dialogueParts(projectId: string, rootId: string) {
   const ids = `WITH RECURSIVE parts(id) AS (
     SELECT id FROM changes WHERE project_id = ? AND json_extract(json, '$.taskId') IN
-      (SELECT id FROM tasks WHERE id = ? OR json_extract(json, '$.resumeRootId') = ?)
+      (SELECT id FROM tasks WHERE project_id = ? AND (id = ? OR json_extract(json, '$.resumeRootId') = ?))
     UNION SELECT c.id FROM parts JOIN tasks t ON json_extract(t.json, '$.context.changeId') = parts.id
       JOIN changes c ON json_extract(c.json, '$.taskId') = t.id
       WHERE c.project_id = ? AND t.project_id = ? AND json_extract(t.json, '$.context.cutIndex') IS NOT NULL
     UNION SELECT json_extract(c.json, '$.replacedBy') FROM parts JOIN changes c ON c.id = parts.id
       WHERE json_extract(c.json, '$.rejectReason') = ? AND json_extract(c.json, '$.replacedBy') IS NOT NULL
   ) SELECT id FROM parts`;
-  return { ids, args: [projectId, projectId, rootId, rootId, projectId, projectId, REVISED] };
+  return { ids, args: [projectId, projectId, projectId, rootId, rootId, projectId, projectId, REVISED] };
 }
 
 /**
@@ -1613,7 +1613,7 @@ const SAVED_AGAIN = "Scarlet saved this work again on the video as it was by the
 export function retireStaleSaves(ctx: Ctx, task: Task): void {
   const rootId = task.resumeRootId ?? task.id;
   const own = ctx.repos.changes.select(`project_id = ? AND json_extract(json, '$.taskId') IN
-    (SELECT id FROM tasks WHERE id = ? OR json_extract(json, '$.resumeRootId') = ?)`, [task.projectId, rootId, rootId], "created_at ASC, rowid ASC");
+    (SELECT id FROM tasks WHERE project_id = ? AND (id = ? OR json_extract(json, '$.resumeRootId') = ?))`, [task.projectId, task.projectId, rootId, rootId], "created_at ASC, rowid ASC");
   // In the order they were saved: two saves can share a millisecond, and only one made after the refused save replaces it.
   for (const [at, stale] of own.entries()) {
     if (stale.state !== "ready" || stale.intent !== "requested" || !stale.error?.startsWith(STALE_SAVE)) continue;
