@@ -9,18 +9,6 @@ import { VersionsRepo } from "./versions.js";
 import { SettingsRepo, type DefaultProvider } from "./settings.js";
 import { UsageRepo } from "./usage.js";
 
-export const Notification = z.object({
-  id: z.string(),
-  userId: z.string(),
-  title: z.string(),
-  body: z.string().optional(),
-  projectId: z.string().optional(),
-  link: z.string().optional(),
-  read: z.boolean().default(false),
-  createdAt: z.string(),
-});
-export type Notification = z.infer<typeof Notification>;
-
 /** Transcript plus the owning project (for the project_id index column). */
 export const StoredTranscript = Transcript.extend({ projectId: z.string() });
 export type StoredTranscript = z.infer<typeof StoredTranscript>;
@@ -160,11 +148,6 @@ export function createRepos(db: Db, defaultProvider: DefaultProvider = "none") {
       scope: a.scope,
       owner_id: a.ownerId,
       created_at: a.createdAt ?? now(),
-    })),
-    notifications: new JsonStore<Notification>(db, "notifications", Notification, (n) => ({
-      user_id: n.userId,
-      read: n.read ? 1 : 0,
-      created_at: n.createdAt,
     })),
   };
 }

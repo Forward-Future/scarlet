@@ -255,6 +255,7 @@ const MIGRATIONS: string[] = [
     id INTEGER PRIMARY KEY CHECK (id = 1),
     json TEXT NOT NULL
   );
+  -- No longer written: notifications are only pushed over WS. Kept because older engines share the library.
   CREATE TABLE notifications (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

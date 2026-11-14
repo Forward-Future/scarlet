@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
@@ -17,13 +17,26 @@ beforeEach(async () => {
   workspace.ctx.paths.ensureProject(id);
   await Promise.all([...workspace.ctx.pending]);
 });
+// Folders a test made undeletable, made deletable again before cleanup.
+const locked: string[] = [];
 afterEach(async () => {
+  for (const dir of locked.splice(0)) chmodSync(dir, 0o755);
   await workspace.ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
 function api(method: string, path: string, body?: unknown) {
   return workspace.app.request("/api" + path, { method, headers: { Authorization: "Bearer " + accessToken(workspace.ctx), "Content-Type":"application/json" }, body: JSON.stringify(body) });
 }
+const settle = async () => { while (workspace.ctx.pending.size) await Promise.allSettled([...workspace.ctx.pending]); };
+/** A folder holding a file that can't be deleted, as a file in use is on Windows. */
+function undeletable(dir: string) {
+  const inner = join(dir, "in-use");
+  mkdirSync(inner, { recursive: true });
+  writeFileSync(join(inner, "open.mp4"), "data");
+  chmodSync(inner, 0o555);
+  locked.push(inner);
+}
+const lockable = process.platform !== "win32" && process.getuid?.() !== 0;
 const clear = () => api("POST", "/storage/cleanup", {kind:"cache",projects:[{id,deletedAt:null}]});
 it("allows permanently deleting a trashed project with an unclaimed edit", async () => {
   const created = await api("POST", `/projects/${id}/tasks`, { kind: "edit", agent: "codex", instruction: "Trim the intro" });
@@ -82,6 +95,7 @@ it("rejects stale Trash selections and retries interrupted file removal",async()
   mkdirSync(ctx.paths.project(orphan));
   ctx.db.prepare("INSERT INTO storage_purges VALUES (?)").run(orphan);
   purgeTrash(ctx);
+  await settle();
   expect(existsSync(ctx.paths.project(orphan))).toBe(false);
 });
 it.skipIf(process.platform === "win32")("does not follow a linked segment directory",async()=>{
@@ -125,9 +139,52 @@ it("removes a project that has been in the trash for 30 days, and logs that it d
   expect(existsSync(ctx.paths.project(id))).toBe(true);
   expect(lines).toEqual([]);
   expect(purgeTrash(ctx, deletedAt + 30 * day + 1000)).toBe(1);
+  await settle();
   expect(existsSync(ctx.paths.project(id))).toBe(false);
   expect(ctx.repos.projects.listDeleted()).toEqual([]);
   expect(lines).toEqual([`[trash] removed 1 project for good after 30 days in the trash: ${id}`]);
   expect(purgeTrash(ctx, deletedAt + 31 * day)).toBe(0);
   expect(lines).toHaveLength(1);
+});
+
+it.runIf(lockable)("removes the other projects for good when one folder can't be deleted, and retries that one later", async () => {
+  const ctx = workspace.ctx;
+  const stuck = ctx.repos.projects.insert(createProject("In use")).id;
+  ctx.paths.ensureProject(stuck);
+  undeletable(ctx.paths.project(stuck));
+  for (const project of [stuck, id]) ctx.repos.projects.softDelete(project);
+  const trashed = ctx.repos.projects.listDeleted().map(p => ({ id: p.id, deletedAt: p.deletedAt }));
+  expect((await api("POST", "/storage/cleanup", { kind: "trash", projects: trashed })).status).toBe(200);
+  await settle();
+  expect(ctx.repos.projects.listDeleted()).toEqual([]);
+  expect(existsSync(ctx.paths.project(id))).toBe(false);
+  expect(existsSync(ctx.paths.project(stuck))).toBe(true);
+  // A later project still goes while the stuck one can't.
+  const later = ctx.repos.projects.insert(createProject("Later")).id;
+  ctx.paths.ensureProject(later);
+  ctx.repos.projects.softDelete(later);
+  const [again] = ctx.repos.projects.listDeleted();
+  expect((await api("POST", "/storage/cleanup", { kind: "trash", projects: [{ id: later, deletedAt: again!.deletedAt }] })).status).toBe(200);
+  await settle();
+  expect(existsSync(ctx.paths.project(later))).toBe(false);
+  expect(ctx.db.prepare("SELECT project_id FROM storage_purges").all()).toEqual([{ project_id: stuck }]);
+  // Once the file is let go, the next sweep finishes it.
+  for (const dir of locked.splice(0)) chmodSync(dir, 0o755);
+  purgeTrash(ctx);
+  await settle();
+  expect(existsSync(ctx.paths.project(stuck))).toBe(false);
+  expect(ctx.db.prepare("SELECT project_id FROM storage_purges").all()).toEqual([]);
+});
+it.runIf(lockable)("clears the other projects' cached renders when one project's files can't be deleted", async () => {
+  const ctx = workspace.ctx;
+  const stuck = ctx.repos.projects.insert(createProject("In use")).id;
+  ctx.paths.ensureProject(stuck);
+  const segment = "c".repeat(64) + ".mp4";
+  for (const project of [stuck, id]) writeFileSync(join(ctx.paths.segments(project), segment), "data");
+  chmodSync(ctx.paths.segments(stuck), 0o555);
+  locked.push(ctx.paths.segments(stuck));
+  const res = await api("POST", "/storage/cleanup", { kind: "cache", projects: [{ id: stuck, deletedAt: null }, { id, deletedAt: null }] });
+  expect(res.status).toBe(200);
+  expect(existsSync(join(ctx.paths.segments(id), segment))).toBe(false);
+  expect(existsSync(join(ctx.paths.segments(stuck), segment))).toBe(true);
 });

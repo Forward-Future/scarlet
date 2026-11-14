@@ -1,6 +1,6 @@
 import { isLearningCheck, isSkillEdit, type ApproveLearningRequest, type Learning, type ReviseLearningRequest, type RunChoice, type Skill, type SuggestLearningRequest, type TaskSkillDraft, type Task, type User } from "@scarlet/shared";
 import { stripFrontmatter, type LearningCheckContext } from "@scarlet/mcp/prompt";
-import { newId } from "@scarlet/timeline";
+import { clock, newId } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { clip } from "../logText.js";
@@ -68,7 +68,7 @@ export function learningCheckContext(ctx: Ctx, check: Task): LearningCheckContex
   const skills = enabledSkills(ctx);
   const named = (id: string) => ctx.repos.skills.get(id)?.name ?? "a skill since deleted";
   const c = asked.context;
-  const at = c.time !== undefined ? ` at ${Math.floor(c.time / 60)}:${String(Math.floor(c.time % 60)).padStart(2, "0")}` : "";
+  const at = c.time !== undefined ? ` at ${clock(Math.floor(c.time))}` : "";
   const about = c.changeId && (c.cutIndex !== undefined || c.editIndex !== undefined)
     ? `They said it about one ${c.cutIndex !== undefined ? "cut" : "edit"} Scarlet made${at}.`
     : c.changeId ? "They said it about an edit Scarlet made."

@@ -67,10 +67,17 @@ const failedGpu = new Set<string>();
 
 /** Save roughly two minutes per turn. Look for a pause either side before cutting the next WAV. */
 const CHUNK_SECONDS = 120;
+/**
+ * Each window is a new process that loads its model again. For the CrisperWhisper adapter that is a Python start, a
+ * torch import and its weights moved to the GPU, so it takes ten-minute windows: an hour is 6 loads rather than 30,
+ * and a quit still keeps all but the window under way. It reads a whole recording in one run as well, so a longer
+ * window is nothing it hasn't done.
+ */
+const CRISPER_CHUNK_SECONDS = 600;
 const SEARCH_SECONDS = 4;
 
-async function chunkEnd(audio: Awaited<ReturnType<typeof decodedRecording>>, start: number, duration: number) {
-  const target = start + CHUNK_SECONDS;
+async function chunkEnd(audio: Awaited<ReturnType<typeof decodedRecording>>, start: number, duration: number, seconds: number) {
+  const target = start + seconds;
   if (target + SEARCH_SECONDS >= duration) return duration;
   const from = target - SEARCH_SECONDS;
   const pcm = await audio.pcm(from, target + SEARCH_SECONDS);
@@ -124,7 +131,7 @@ export class WhisperCppProvider implements TranscriptionProvider {
     try {
       for (let from = checkpoint.through; from < duration;) {
         input.signal?.throwIfAborted();
-        const end = await chunkEnd(audio, from, duration);
+        const end = await chunkEnd(audio, from, duration, this.opts.crisperScript ? CRISPER_CHUNK_SECONDS : CHUNK_SECONDS);
         const whole = from === 0 && end === duration;
         if (!whole) await audio.writeWindow(part, from, end);
         const selectedLanguage = input.language || this.opts.language;

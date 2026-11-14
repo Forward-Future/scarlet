@@ -311,7 +311,7 @@ function applyToDraft(tl: Timeline, op: TimelineOp): Timeline {
     case "updateTrack": {
       const track = tl.tracks.find((t) => t.id === op.trackId);
       if (!track) throw new OpError(`track ${op.trackId} not found`, op);
-      Object.assign(track, op.patch);
+      Object.assign(track, withCaptionStyle(track.captionStyle, op.patch));
       return tl;
     }
     case "addMarker": {
@@ -335,10 +335,17 @@ function applyToDraft(tl: Timeline, op: TimelineOp): Timeline {
       return tl;
     }
     case "setTimeline": {
-      Object.assign(tl, op.patch);
+      Object.assign(tl, withCaptionStyle(tl.captionStyle, op.patch));
       return tl;
     }
   }
+}
+
+/**
+ * A caption style in a patch changes only the settings it names. Naming the style with no value still clears it.
+ */
+function withCaptionStyle<P extends { captionStyle?: Partial<CaptionStyle> }>(current: Partial<CaptionStyle> | undefined, patch: P): P {
+  return patch.captionStyle ? { ...patch, captionStyle: { ...current, ...patch.captionStyle } } : patch;
 }
 
 /**

@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
 import { statSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { extractFrame, extractFilmstrip, fileInDirectory, probeMedia, renderTimelineFrame } from "@scarlet/render";
+import { extractFrame, extractFilmstrip, fileInDirectory, fileInDirectoryAsync, probeMedia, renderTimelineFrame } from "@scarlet/render";
 import { clipEnd, FILMSTRIP_SEEK_BATCH, MAX_CUT_PLAYBACK_SECONDS, planPlaybackSegments, planSegments, snapToFrame, timelineDuration, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
 import { Hono } from "hono";
 import { z } from "zod/v3";
@@ -18,6 +18,7 @@ import { AnalysisCache } from "../services/analysisCache.js";
 import { pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
 import { jsonBody, numberParam, requireProject, requireProjectHeader } from "./util.js";
+import { measureLoudness } from "./perception.js";
 
 /** Index visible clip intervals once so one still stats only the files that can contribute to its pixels. */
 function frameSources(timeline: Timeline) {
@@ -139,7 +140,7 @@ export function renderRoutes(ctx: Ctx) {
       const time = frame / fps;
       const targetHeight = Math.min(height, ctx.settings().render.previewHeight, Math.ceil(size * height / Math.max(width, height)));
       const preview = ctx.renders.coveringPreview(project, version, range, targetHeight);
-      const file = preview?.path && fileInDirectory(ctx.paths.renders(project.id), preview.path);
+      const file = preview?.path && await fileInDirectoryAsync(ctx.paths.renders(project.id), preview.path);
       if (file) {
         try {
           const local = time - (preview.range?.start ?? 0);
@@ -301,10 +302,12 @@ export function renderRoutes(ctx: Ctx) {
   r.on("GET", ["/renders/:renderId", "/projects/:projectId/renders/:renderId"], async (c) => {
     const render = requireRender(c.req.param("renderId"), c.req.param("projectId"));
     if (c.req.query("inspectFile") !== "true" || render.state !== "done") return c.json({ render });
-    const file = render.path && fileInDirectory(ctx.paths.renders(render.projectId), render.path);
+    const file = render.path && await fileInDirectoryAsync(ctx.paths.renders(render.projectId), render.path);
     if (!file) throw notFound("render file");
     const { duration, width, height, fps, bitrate, videoCodec, audioCodec, hasAudio, sampleRate, channels } = await probeMedia(file);
-    return c.json({ render, fileInfo: { duration, width, height, fps, bitrate, videoCodec, audioCodec, hasAudio, sampleRate, channels } });
+    // The rendered sound's loudness, with every gain and effect applied: what processing did, beside the source's figures.
+    const loudness = hasAudio ? await ctx.track(measureLoudness(file, undefined, undefined, c.req.raw.signal)) : undefined;
+    return c.json({ render, fileInfo: { duration, width, height, fps, bitrate, videoCodec, audioCodec, hasAudio, sampleRate, channels, ...(loudness && { loudness }) } });
   });
 
   r.get("/renders/:renderId/filmstrip", async c => {

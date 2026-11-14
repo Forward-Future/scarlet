@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { clipEnd, createProject, isPlayableMedia, cutPlaybackWindow, sha256, timelineDuration, timelineFromKeepRanges, Transform, type Change, type Clip, type Project } from "@scarlet/timeline";
 import { buildThreads, isThreadDone, taskPlan, threadRevision, type Render, type Task } from "@scarlet/shared";
@@ -62,6 +63,8 @@ beforeEach(() => {
 afterEach(async () => {
   await workspace.ctx.close();
   rmSync(directory, { recursive: true, force: true });
+  // Opening each Windows library checks its ACL synchronously. Let Vitest receive its progress replies between fixtures.
+  if (process.platform === "win32") await setImmediate();
 });
 
 function api(method: string, path: string, body?: unknown) {
@@ -1644,6 +1647,9 @@ it("recovers dead workers, keeps saved proposals and lets follow-ups run exactly
   const proposal = await api("POST", `/projects/${saved.projectId}/changes`, { description: "End", ops: marker, taskId: saved.id, skipRender: true });
   expect(proposal.status).toBe(201);
   const { change } = await proposal.json();
+  // An earlier proposal of the same run, which Scarlet closed when this one took its cuts over.
+  ctx.repos.changes.put({ ...ctx.repos.changes.get(change.id)!, id: "chg_carried", state: "rejected", rejectedFrom: "ready",
+    rejectReason: "Carried into a later part of the same dialogue pass.", replacedBy: change.id });
   // Simulate stopping between persisting the change and updating the task.
   ctx.repos.tasks.put({ ...ctx.repos.tasks.get(saved.id)!, changeIds: [] });
   const unstarted = make("Adjust the title", undefined, elsewhere());
@@ -1656,12 +1662,15 @@ it("recovers dead workers, keeps saved proposals and lets follow-ups run exactly
   const repos = workspace.ctx.repos;
   expect(repos.tasks.get(live.id)?.state).toBe("claimed");
   expect(repos.tasks.get(unstarted.id)?.state).toBe("queued");
-  expect(repos.tasks.get(saved.id)).toMatchObject({ state: "failed", interrupted: true, changeIds: [change.id] });
+  expect(repos.tasks.get(saved.id)).toMatchObject({ state: "failed", interrupted: true, changeIds: [change.id, "chg_carried"] });
   expect(repos.tasks.get(interrupted.id)).toMatchObject({ state: "failed", interrupted: true });
   // Scarlet closed mid-run, so each run carries on by itself, ahead of the follow-up asked while it worked.
   const resumed = repos.tasks.get(repos.tasks.get(saved.id)!.retryTaskId!)!;
   expect(resumed).toMatchObject({ state: "queued", resumeRootId: saved.id, changeIds: [], context: { threadId: saved.id } });
   expect(resumed.instruction).toContain(`Saved change ${change.id} [ready]`);
+  // The proposal Scarlet closed isn't told as one the editor turned down.
+  expect(resumed.instruction).toContain(`Saved change chg_carried [replaced by ${change.id}, which holds its cuts now; the editor made no decision on it]`);
+  expect(resumed.instruction).not.toContain("[rejected]");
   const retry = async () => (await (await api("POST", `/tasks/${interrupted.id}/retry`)).json()).task;
   const [a, b] = await Promise.all([retry(), retry()]);
   expect(a.id).toBe(b.id);
@@ -1671,7 +1680,7 @@ it("recovers dead workers, keeps saved proposals and lets follow-ups run exactly
   expect(repos.tasks.get(follow.id)?.state).toBe("queued");
   expect((await api("POST", projectsPath() + "/changes", { description: "Late result", ops: marker, taskId: interrupted.id })).status).toBe(409);
   expect((await api("POST", `/tasks/${interrupted.id}/complete`, { state: "done" })).status).toBe(409);
-  expect(repos.changes.select().map(c => c.id)).toEqual([change.id]);
+  expect(repos.changes.select().map(c => c.id)).toEqual([change.id, "chg_carried"]);
   // The surviving host confirms only its actual jobs. A stale claim expires even under the same host id.
   workspace.ctx.db.prepare("UPDATE tasks SET worker_seen_at = '2000-01-01' WHERE id IN (?,?)").run(live.id, a.id);
   await api("POST", `/hosts/${host.id}/heartbeat`, { running: [live.id] });
@@ -1954,7 +1963,9 @@ it.each(["pause", "trash"])("stops a source encode on %s and resumes its checkpo
   const media = ctx.repos.projects.putMedia(project.id, {
     id: "camera", name: "Camera", path: "camera.mov", kind: "video", duration: 90, previewMode: "on-demand",
   }, "ready");
-  writeFileSync(join(ctx.paths.media(project.id), media.path), "recording");
+  const source = join(ctx.paths.media(project.id), media.path);
+  writeFileSync(source, "recording");
+  const stamp = statSync(source);
   const encode = vi.spyOn(ctx.render, "makeProxy").mockImplementation(async (_, file, options) => {
     writeFileSync(file, "partial");
     await new Promise<void>((_, reject) => options.signal!.addEventListener("abort", () => reject(Error("stopped")), { once: true }));
@@ -1972,6 +1983,8 @@ it.each(["pause", "trash"])("stops a source encode on %s and resumes its checkpo
   const restored = vi.fn<RenderAdapter["makeProxy"]>(async (_, file) => { writeFileSync(file, "complete"); });
   workspace = openWorkspace({ makeProxy: restored });
   await Promise.all(workspace.ctx.pending);
+  // Reopening an already-private library must not change source metadata and invalidate its checkpoint.
+  expect(statSync(source)).toMatchObject({ size: stamp.size, mtimeMs: stamp.mtimeMs, ctimeMs: stamp.ctimeMs });
   expect(restored).not.toHaveBeenCalled();
   if (action === "pause") await api("PATCH", projectsPath(), { mediaPaused: false });
   else await api("POST", projectsPath() + "/restore");
@@ -3264,14 +3277,20 @@ it("encodes one preview across ten simultaneous versions and keeps their identit
   const base = ensureHead(ctx, project.id).head;
   for (let i = 0; i < 10; i++) {
     const response = await api("POST", projectsPath() + "/changes?summary=true", { description: "Cards", fromVersion: base,
-      ops: [{ op: "addClip", trackId: "v1", clip: { id: "intro", kind: "color", color: "red", timelineIn: 0, timelineOut: 10 } },
+      ops: [{ op: "addClip", trackId: "v1", clip: { id: "intro", label: "Opening card", kind: "color", color: "red", timelineIn: 0, timelineOut: 10 } },
         { op: "addClip", trackId: "v1", clip: { id: "later", kind: "color", color: "blue", timelineIn: 20, timelineOut: 21 + i } }] });
     expect(response.status).toBe(201);
     const summary = await response.json();
     expect(summary).not.toHaveProperty("timeline");
     expect(summary.change).not.toHaveProperty("ops");
     expect(summary.duration).toBe(21 + i);
-    expect(summary.diffDescription.length).toBeGreaterThan(0);
+    // The agent reads this diff, and an op takes a clip's id: a labelled clip is named by its id, with the label after it.
+    expect(summary.diffDescription[0]).toBe("Added color clip intro “Opening card” at 0.00");
+    if (i === 0) {
+      const path = projectsPath() + `/versions/${base}/diff/${summary.change.toVersion}`;
+      expect((await (await api("GET", path)).json()).description[0]).toBe("Added color clip Opening card at 0.00");
+      expect((await (await api("GET", path + "?clipNames=id")).json()).description[0]).toBe(summary.diffDescription[0]);
+    }
     versions.push(summary.change.toVersion);
   }
   const request = (version: string, start = 0) => ctx.renders.request({ projectId: project.id, version, quality: "preview",
@@ -3591,9 +3610,9 @@ it("passes explicitly chosen skills through notes, revisions, and answers to the
   seedSkillList(workspace.ctx, BUNDLED_SKILLS);
   const path = projectsPath();
   const library = (await (await api("GET", "/skills?projectId=" + project.id)).json()).skills;
-  const first = library.find((s: { name: string }) => s.name === "visual-pass");
+  const first = library.find((s: { name: string }) => s.name === "add-captions");
   const second = library.find((s: { name: string }) => s.name === "frame-screen");
-  const { task } = await (await api("POST", path + "/notes", { time: 0, text: "/visual-pass", assignTo: "codex", skillIds: [first.id] })).json();
+  const { task } = await (await api("POST", path + "/notes", { time: 0, text: "/add-captions", assignTo: "codex", skillIds: [first.id] })).json();
   const promptSkills = async (taskId: string) => (await (await api("GET", `/skills?projectId=${project.id}&taskId=${taskId}&view=prompt`)).json()).skills;
   expect(await promptSkills(task.id)).toEqual([first]);
   const available = await (await api("GET", `/skills?projectId=${project.id}&taskId=${task.id}&view=assistant`)).json();
@@ -3602,7 +3621,7 @@ it("passes explicitly chosen skills through notes, revisions, and answers to the
   await api("POST", `/tasks/${task.id}/answer`, { text: "/frame-screen", skillIds: [second.id] });
   expect(await promptSkills(task.id)).toEqual(expect.arrayContaining([first, second]));
   const { change } = await (await api("POST", path + "/changes", { description: "Marker", ops: marker, skipRender: true })).json();
-  const revision = await (await api("POST", `/changes/${change.id}/revise`, { text: "/visual-pass Keep the chart.", skillIds: [first.id] })).json();
+  const revision = await (await api("POST", `/changes/${change.id}/revise`, { text: "/add-captions Keep the chart.", skillIds: [first.id] })).json();
   expect(await promptSkills(revision.task.id)).toEqual([first]);
 });
 
@@ -3611,7 +3630,7 @@ it("loads stock workflows on demand and leaves explicit selections and custom in
   seedSkillList(ctx, BUNDLED_SKILLS);
   const url = "/skills?projectId=" + project.id;
   const list = async (query: string) => (await (await api("GET", url + query)).json()).skills as Array<{ id: string; name: string; content: string }>;
-  const stock = (await list("")).find(s => s.name === "visual-pass")!;
+  const stock = (await list("")).find(s => s.name === "add-captions")!;
   expect((await list("&view=prompt")).find(s => s.id === stock.id)?.content).toContain("skills_list");
   expect((await list("&view=assistant")).find(s => s.id === stock.id)?.content).toBe(stock.content);
   const task = createTask(ctx, { projectId: project.id, agent: "codex", kind: "edit", instruction: "Reframe",
@@ -3636,6 +3655,7 @@ it("loads stock workflows on demand and leaves explicit selections and custom in
 it("applies requested edits and keeps suggestions and competing alternatives out of the cut until chosen", async () => {
   const path = projectsPath();
   const { ctx } = workspace;
+  const publish = vi.spyOn(ctx.bus, "publish");
   const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Add a marker",
     createdBy: { type: "human", name: "Editor" } });
   const submit = async (id: string, intent: string, taskId: string | undefined = task.id) => {
@@ -3646,7 +3666,7 @@ it("applies requested edits and keeps suggestions and competing alternatives out
   };
   const requested = await submit("requested", "requested");
   expect(requested).toMatchObject({ state: "approved", autoApplied: true, decidedBy: { type: "scarlet" } });
-  expect(ctx.repos.notifications.count()).toBe(0);
+  expect(publish.mock.calls.filter(([event]) => event.type === "notification")).toEqual([]);
   const suggestion = await submit("suggestion", "suggestion");
   const one = await submit("one", "alternative");
   const two = await submit("two", "alternative");
@@ -5361,6 +5381,29 @@ it("reads an agent's time within a millisecond of a frame as that frame, so late
   for (const edge of edges) expect(Math.abs(edge * 30 - Math.round(edge * 30))).toBeLessThan(1e-6);
   expect(put.timeline.tracks.flatMap(t => t.clips).every(c => clipEnd(c) - c.timelineIn > 0.01)).toBe(true);
   expect(put.change.ops![0]).toEqual({ op: "rippleInsertGap", at: 263 / 30, duration: 167 / 30 });
+});
+
+it("approves a fully assessed pass by the editor's calls first, then Scarlet's verdicts, as applying it when done does", async () => {
+  const { ctx } = workspace;
+  vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
+  const author = { type: "human" as const, name: "Editor" };
+  const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: author });
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "mic", path: "mic.wav", kind: "audio", duration: 20, hasAudio: true }, "ready");
+  const base = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: task.id, description: "Assemble",
+    ops: [{ op: "addClip", trackId: "a1", clip: { id: "raw", kind: "media", mediaId: "mic", timelineIn: 0, sourceIn: 0, sourceOut: 20 } }] }).change.toVersion;
+  const submitted = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: base, description: "Pass", cuts: [
+    { start: 2, end: 3, review: true, reason: "First retake." }, { start: 6, end: 8, review: true, reason: "Second retake." },
+    { start: 12, end: 13, review: true, reason: "Third retake." }] });
+  const pass = ((await submitted.json()).changes as Change[]).find(c => c.intent === "suggestion")!;
+  const versions = { fromVersion: pass.fromVersion, toVersion: pass.toVersion };
+  // The editor keeps the second cut before Scarlet checks it. Scarlet then checks every cut and asks about none.
+  expect((await api("PUT", `/changes/${pass.id}/cut-choices`, { ...versions, choices: [{ index: 1, choice: "keep" }] })).status).toBe(200);
+  const assessments = [{ index: 0, start: 2, end: 3, verdict: "keep", reason: "Keep it." }, { index: 1, start: 6, end: 8, verdict: "cut", reason: "Clean." },
+    { index: 2, start: 12, end: 13, verdict: "cut", reason: "Also clean." }].map(a => ({ ...a, inspected: true }));
+  expect((await api("POST", `/changes/${pass.id}/cut-assessments`, { ...versions, assessments })).status).toBe(200);
+  const approved = await api("POST", `/changes/${pass.id}/approve`, {});
+  expect(approved.status).toBe(200);
+  expect((await approved.json()).change.restoredCuts).toEqual([0, 1]);
 });
 
 it("moves one staged cut of a pending pass past its old edges and keeps the other cuts and their calls", async () => {

@@ -82,6 +82,8 @@ it("shows a build under way with how far along it is, then becomes the button th
     window.removeEventListener("beforeunload", dirty);
     await act(async () => button.click());
     expect(container.querySelector("[role=alert]")!.textContent).toBe("An edit is running.");
+    await act(async () => { button.dispatchEvent(new PointerEvent("pointerout", { bubbles: true, relatedTarget: document.body })); });
+    expect(container.querySelector("[role=alert]")).toBeNull();
     await act(async () => button.click());
     expect(restart).toHaveBeenLastCalledWith(newer.revision);
     expect(button.disabled).toBe(true);

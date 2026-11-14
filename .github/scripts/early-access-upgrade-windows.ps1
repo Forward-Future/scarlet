@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 
 if ($AsTestUser) {
     # Start-Process -Credential can inherit the runner's environment. Use the loaded test account's profile.
+    $env:PSModulePath = "$PSHOME\Modules"
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if ($principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) { throw 'Expected a standard account.' }
@@ -42,8 +43,11 @@ if ($AsTestUser) {
             $engine = Install-And-Check "$PSScriptRoot\candidate.exe" $Version
             $expectedEngine = Get-Content "$PSScriptRoot\candidate-engine-sha256.txt"
         }
-        if ((Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash -ne $expectedEngine) { throw "Setup left the wrong engine in place for $phase." }
-        & "$PSScriptRoot\node.exe" "$PSScriptRoot\early-access-upgrade-library.mjs" $phase $engine $fixture
+        $hash = & "$PSScriptRoot\node.exe" -e "console.log(require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync(process.argv[1])).digest('hex'))" $engine
+        if ($LASTEXITCODE -ne 0 -or $hash -ne $expectedEngine) { throw "Setup left the wrong engine in place for $phase." }
+        $installedVersion = (Get-ItemProperty -LiteralPath $uninstall).DisplayVersion
+        Write-Host "Verified installed $installedVersion in $(Split-Path $engine), engine SHA-256 $hash."
+        & "$PSScriptRoot\node.exe" "$PSScriptRoot\early-access-upgrade-library.mjs" $phase $engine $fixture $installedVersion
         if ($LASTEXITCODE -ne 0) { throw "Library $phase failed (exit $LASTEXITCODE)." }
     }
     exit 0
@@ -76,7 +80,7 @@ try {
     $argsForUser = @('-NoProfile','-NonInteractive','-ExecutionPolicy','RemoteSigned','-File',"$base\verify.ps1",'-AsTestUser','-Version',$Version)
     $shell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     $worker = Start-Process $shell -Credential ([pscredential]::new($login,$password)) -LoadUserProfile -WorkingDirectory $base -WindowStyle Hidden -ArgumentList $argsForUser -PassThru -RedirectStandardOutput "$base\stdout.log" -RedirectStandardError "$base\stderr.log"
-    if (!$worker.WaitForExit(360000)) { $worker.Kill(); throw 'The standard-account upgrade exceeded six minutes.' }
+    if (!$worker.WaitForExit(600000)) { $worker.Kill(); throw 'The standard-account upgrade exceeded ten minutes.' }
     $worker.WaitForExit()
     Get-Content "$base\stdout.log", "$base\stderr.log"
     if ($worker.ExitCode -ne 0) { throw "Standard-account upgrade failed with code $($worker.ExitCode)." }

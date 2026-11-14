@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { TaskEvent } from "@scarlet/shared";
-import { readComplete, runProgress } from "./runProgress";
+import { runProgress } from "./runProgress";
 
 const page = (from: number, to: number | undefined, end = 3467.6, mediaId = "med_1"): TaskEvent =>
   ({ type: "log", text: "Dialogue scan · a.mp4", data: { kind: "editor_progress", scanPage: { mediaId, from, end, ...(to !== undefined && { to }) } } });
@@ -13,10 +13,8 @@ it("counts the dialogue read against what the scan covers, without double-counti
   expect(runProgress([page(0, undefined)]).read).toEqual({ seconds: 0, total: 3467.6 });
   const events = [page(0, undefined), page(0, 60), page(58, 118), page(58, 118), page(116, 176)];
   expect(runProgress(events).read).toEqual({ seconds: 176, total: 3467.6 });
-  expect(readComplete(runProgress(events).read!)).toBe(false);
   // The last page can stop a hair short of the end.
-  const read = runProgress([page(0, undefined, 120), page(0, 60, 120), page(58, 119.7, 120)]).read!;
-  expect(readComplete(read)).toBe(true);
+  expect(runProgress([page(0, undefined, 120), page(0, 60, 120), page(58, 119.7, 120)]).read).toEqual({ seconds: 119.7, total: 120 });
 });
 
 it("adds up separate recordings", () => {

@@ -40,6 +40,8 @@ export interface HostStatus {
   configured: boolean;
 }
 
+export type DesktopPlatform = "macos" | "windows" | "linux";
+
 export interface DesktopInfo {
   localUpdates?: boolean;
   customOpenaiModels?: string[];

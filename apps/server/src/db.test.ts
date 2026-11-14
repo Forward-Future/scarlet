@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -6,6 +6,7 @@ import { createProject } from "@scarlet/timeline";
 import { createRepos } from "./repo/index.js";
 import { createApp } from "./app.js";
 import { Db, migrate, openDb } from "./db.js";
+import { startWalCheckpointer } from "./walCheckpointer.js";
 
 let directory: string;
 let db: Db;
@@ -22,6 +23,40 @@ afterEach(() => {
 });
 
 const bodies = () => (db.prepare("SELECT body FROM notes ORDER BY id").all() as { body: string | null }[]).map(row => row.body);
+
+it("checkpoints a busy library off the writer thread and preserves committed edits on close", async () => {
+  const file = join(directory, "library.db");
+  const library = openDb(file);
+  const sync = library.pragma("synchronous", { simple: true });
+  const initialSize = statSync(file).size;
+  library.pragma("wal_autocheckpoint = 517");
+  const worker = startWalCheckpointer(library, file, () => {}, 50);
+  try {
+    await expect.poll(() => library.pragma("wal_autocheckpoint", { simple: true })).toBe(0);
+    library.exec("CREATE TABLE edits (body TEXT)");
+    const save = library.prepare("INSERT INTO edits VALUES (?)");
+    library.transaction(() => { for (let i = 0; i < 300; i++) save.run("x".repeat(4000)); })();
+    await expect.poll(() => statSync(file).size, { timeout: 5000 }).toBeGreaterThan(initialSize + 1_000_000);
+    expect(library.pragma("synchronous", { simple: true })).toBe(sync);
+  } finally {
+    await worker?.stop();
+    library.close();
+  }
+  const reopened = openDb(file);
+  try {
+    expect(reopened.prepare("SELECT count(*) AS n FROM edits").get()).toEqual({ n: 300 });
+  } finally { reopened.close(); }
+});
+
+it("keeps automatic checkpoints when the background connection cannot open", async () => {
+  const log = vi.fn();
+  db.pragma("wal_autocheckpoint = 517");
+  const worker = startWalCheckpointer(db, join(directory, "missing", "library.db"), log);
+  try {
+    await expect.poll(() => log.mock.calls.length).toBe(1);
+  } finally { await worker?.stop(); }
+  expect(db.pragma("wal_autocheckpoint", { simple: true })).toBe(517);
+});
 
 it("stores a missing value as NULL and a boolean as 0 or 1", () => {
   db.prepare("INSERT INTO notes (body, pinned) VALUES (?, ?), (?, ?)").run(undefined, true, "kept", false);

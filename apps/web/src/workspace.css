@@ -87,6 +87,8 @@
 /* What the message revises, as a tag inside the box before the text. Its × makes the message a new edit. */
 .composer-tag { flex: none; align-self: center; display: inline-flex; align-items: center; gap: 3px; max-width: 55%; margin-right: 4px; padding: 0 2px 0 7px;
   border: 1px solid var(--color-line); border-radius: 4px; font-size: 11.5px; line-height: 20px; color: var(--color-muted); white-space: nowrap; }
+/* The stretch marked on the timeline: lit like its band there, so the two read as one thing. */
+.composer-range { border-color: rgba(244, 241, 233, .55); color: var(--color-fg); font-variant-numeric: tabular-nums; }
 .composer-tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .composer-tag-clear { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--color-dim); cursor: pointer; }
 .composer-tag-clear:hover:not(:disabled) { background: var(--color-raised); color: var(--color-fg); }
@@ -100,18 +102,6 @@
 .composer-skills [role="option"]:is([aria-selected="true"], :hover) { background: var(--color-raised); }
 .composer-skill-footer { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--color-line); }
 .composer-skill-footer button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 5px 8px; border-radius: 5px; font-weight: 500; }
-.composer-first-cut {
-  display: flex; align-items: center; gap: 11px; min-width: 0; min-height: 43px; padding: 3px 5px;
-  border-radius: 6px; color: var(--color-fg); text-align: left;
-}
-.composer-first-cut:hover { background: var(--color-raised); }
-.composer-first-cut-icon {
-  flex: none; display: grid; place-items: center; width: 30px; height: 30px;
-  border: 1px solid var(--color-line); border-radius: 7px; background: var(--color-raised);
-}
-.composer-first-cut-copy { display: grid; gap: 2px; min-width: 0; color: var(--color-muted); font-size: 12px; line-height: 17px; }
-.composer-first-cut-copy strong { color: var(--color-fg); font-size: 13px; font-weight: 600; }
-.composer-first-cut-insert { margin-left: auto; padding-right: 3px; color: var(--color-muted); }
 .composer-box {
   grid-column: 1 / -1;
   padding: 4px 6px 4px var(--text-inset);
@@ -253,7 +243,7 @@
 .timeline-marker-note { max-width: 16rem; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .timeline-marker-note + .timeline-marker-note { margin-top: 6px; }
 .timeline-marker-note > span { display: flex; align-items: center; gap: 4px; color: var(--color-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.timeline-filmstrip > div { min-width: 0; overflow: hidden; background: var(--color-raised); }
+.timeline-filmstrip > div, .filmstrip-held > div { min-width: 0; overflow: hidden; background: var(--color-raised); }
 .timeline-filmstrip img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .timeline-filmstrip img[hidden] { display: none; }
 /* A picture fades in once it has loaded instead of popping in, and once the whole lane has, unless it waited too long. */
@@ -262,6 +252,14 @@
 .timeline-sheet-cell > span { flex: none; position: relative; overflow: hidden; }
 .timeline-sheet-cell img { position: absolute; top: 0; max-width: none; object-fit: fill; }
 .timeline-filmstrip:not(.is-loading) img[data-loaded] { opacity: 1; }
+/* A rebuilt lane keeps the stills it replaced over its slots until its own land, then fades them out as those fade in. */
+.filmstrip-held {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  display: grid; grid-auto-flow: column; grid-template-rows: minmax(0, 1fr); grid-auto-columns: minmax(0, 1fr);
+  transition: opacity .25s ease .28s;
+}
+.filmstrip-held[data-leaving] { opacity: 0; }
+.timeline-filmstrip .filmstrip-held img { opacity: 1; transition: none; }
 .timeline-playhead-time {
   position: absolute; top: 1px; padding: 1px 4px; border-radius: 3px; background: #f4f1e9; color: #1a1918;
   font: 11px/14px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
@@ -271,6 +269,36 @@
   background: #f4f1e9; box-shadow: 0 0 0 .5px rgb(0 0 0 / 45%); border-radius: 1px;
 }
 /* A jump glides: the playhead and its time slide to the new place (GLIDE_MS in TimelineScrubber). */
+/* A stretch the editor marks for their message: a drag along the ruler draws it, and each end has a handle. */
+.timeline-range-zone { position: absolute; inset: 0 0 auto; height: var(--ruler-height); cursor: crosshair; }
+.timeline-range { position: absolute; z-index: 2; inset-block: 0; min-width: 2px; pointer-events: none; border-radius: 3px;
+  background: rgba(244, 241, 233, .1); border-inline: 1.5px solid #f4f1e9; }
+.timeline-range.is-live { background: rgba(244, 241, 233, .16); }
+.timeline-range-handle { position: absolute; z-index: 4; top: 2px; width: 12px; height: calc(var(--ruler-height) - 4px); margin-left: -6px; padding: 0; border: 0;
+  border-radius: 4px; background: #f4f1e9; box-shadow: 0 0 0 .5px rgb(0 0 0 / 45%); cursor: ew-resize; touch-action: none; }
+/* Two grip lines, and a wider place to press than the handle is drawn. */
+.timeline-range-handle::before { content: ""; position: absolute; inset: 7px 4px; border-inline: 1px solid #1a1918; }
+.timeline-range-handle::after { content: ""; position: absolute; inset: -6px -10px; }
+.timeline-range-handle:focus-visible { outline: 2px solid var(--color-fg); outline-offset: 2px; }
+.timeline-range-handle.is-held { box-shadow: 0 0 0 3px rgba(244, 241, 233, .3); }
+.timeline-range-handle.is-snapped { box-shadow: 0 0 0 3px rgba(255, 160, 156, .75); }
+.timeline-range-time { position: absolute; z-index: 5; top: 1px; transform: translateX(-50%); padding: 1px 5px; border-radius: 3px; background: #f4f1e9; color: #1a1918;
+  font: 11px/14px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+/* While a range is drawn, its own times are the ones to read: the bubble under the pointer steps aside. */
+.timeline-track.is-marking .scrub-preview { display: none; }
+.timeline-track.is-marking .timeline-playhead-time { visibility: hidden; }
+.timeline-range-loupe { position: absolute; z-index: 11; bottom: calc(100% + 8px); width: 220px; transform: translateX(-50%); display: grid; gap: 6px; padding: 8px 10px;
+  border: 1px solid #55524e; border-radius: 8px; background: #1a1918; box-shadow: 0 8px 24px rgb(0 0 0 / 45%); pointer-events: none; }
+.timeline-range-loupe-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.timeline-range-loupe-head b { color: var(--color-fg); font: 600 13px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
+.timeline-range-loupe-head small { color: #aaa69e; font-size: 11px; }
+.timeline-range-loupe-strip { position: relative; height: 22px; border-radius: 3px; overflow: hidden; background: #2d2b28; }
+.timeline-range-loupe-strip[data-inside="before"] { background: linear-gradient(to right, rgba(244, 241, 233, .2) 50%, #2d2b28 50%); }
+.timeline-range-loupe-strip[data-inside="after"] { background: linear-gradient(to left, rgba(244, 241, 233, .2) 50%, #2d2b28 50%); }
+.timeline-range-loupe-strip i { position: absolute; bottom: 0; width: 1px; height: 6px; background: #87847f; }
+.timeline-range-loupe-strip i.is-second { height: 12px; background: #c9c5bd; }
+.timeline-range-loupe-strip i.is-edge { height: 100%; background: rgba(255, 160, 156, .9); }
+.timeline-range-loupe-strip i.is-now { top: 0; width: 2px; height: auto; margin-left: -1px; background: #f4f1e9; }
 .timeline-playhead.is-gliding, .timeline-playhead-time.is-gliding { transition: left .26s cubic-bezier(.3, .7, .3, 1), transform .26s cubic-bezier(.3, .7, .3, 1); }
 .timeline-playhead::before {
   content: ""; position: absolute; left: 50%; top: -5px; transform: translateX(-50%);

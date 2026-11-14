@@ -57,6 +57,10 @@ it("decides once for a held key, and not at all while typing or while the decisi
   await act(async () => { field.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true })); });
   await press("a", { metaKey: true });
   expect(approve).not.toHaveBeenCalled();
+  // With Shift held it is not the plain key the card names.
+  await press("A", { shiftKey: true });
+  await press("R", { shiftKey: true });
+  expect([revise.mock.calls.length, approve.mock.calls.length]).toEqual([0, 0]);
   field.remove();
   // While it applies, neither decision can be made, by key or by button.
   await show({ disabled: true });

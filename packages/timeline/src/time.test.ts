@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  clampRange, clipDuration, clipEnd, clipRange, clipsAt, emptyTimeline, frameAlignedRemoval, filmstripBatches, FILMSTRIP_SEEK_BATCH, makeMediaClip, planSegments,
+  clampRange, clipDuration, clock, clipEnd, clipRange, clipsAt, emptyTimeline, frameAlignedRemoval, filmstripBatches, FILMSTRIP_SEEK_BATCH, makeMediaClip, planSegments,
   rangesOverlap, mergeRanges, snapToFrame, sourceClockAnchors, sparseFilmstrip, timelineDuration, timelineToSource, trackDuration, withHandles,
   MAX_TIMELINE_SECONDS, planPlaybackSegments, WritableTimeline, type ColorClip, type Timeline,
 } from "./index.js";
@@ -20,6 +20,16 @@ it("rejects new and historical versions beyond the planning budget before enumer
   expect(() => planSegments(settings, stored)).toThrow("24 hours");
   const shortEdit = timeline(makeMediaClip("m", 0, 24, 0, { speed: 2 }));
   expect(() => sourceClockAnchors(shortEdit, 4, 3)).toThrow("too many playback sections");
+});
+
+it("reads a clock for people to the second, with hours only past an hour", () => {
+  expect(clock(0)).toBe("0:00");
+  expect(clock(125.9)).toBe("2:05");
+  expect(clock(3599)).toBe("59:59");
+  expect(clock(3600)).toBe("1:00:00");
+  expect(clock(4503)).toBe("1:15:03");
+  expect(clock(59.9999999)).toBe("1:00");
+  expect(clock(-3)).toBe("0:00");
 });
 
 describe("clip and timeline lengths", () => {

@@ -2,7 +2,7 @@ import { stableStringify } from "./ids.js";
 import { intervalCandidates } from "./intervals.js";
 import { applyOps } from "./ops.js";
 import type { Change, MediaAsset, MediaClip, Timeline, TimeRange } from "./schema.js";
-import { mergeRanges, snapToFrame, timelineDuration, withHandles } from "./time.js";
+import { clock, mergeRanges, snapToFrame, timelineDuration, withHandles } from "./time.js";
 
 /** Both coordinates are immutable: at is on the proposal, removed is on the original. */
 export interface ReviewCut {
@@ -273,8 +273,7 @@ export function describeDialogueRemovals(cuts: readonly TimeRange[]): string {
   const seconds = cuts.reduce((total, cut) => total + cut.end - cut.start, 0);
   const duration = Number(seconds.toFixed(2));
   if (cuts.length === 1) {
-    const at = Math.floor(cuts[0]!.start);
-    return `Removed ${duration} s at ${Math.floor(at / 60)}:${String(at % 60).padStart(2, "0")}.`;
+    return `Removed ${duration} s at ${clock(Math.floor(cuts[0]!.start))}.`;
   }
   return `Removed ${duration} s across ${cuts.length} cuts.`;
 }

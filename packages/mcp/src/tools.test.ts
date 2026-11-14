@@ -477,11 +477,48 @@ describe("what goes to stderr when a read fails and the tool answers without it"
       : req.path === "/projects/prj_test/timeline" && req.query.get("version") === "applied" ? reply(res, { error: { code: "engine_error", message: "The database is busy." } }, 500) : false;
     const c = await connect();
     try {
-      const saved = JSON.parse(textOf(await ok(c, "dialogue_apply_cuts", { version: "typing", description: "Tightened", range: { start: 0, end: 10 },
-        cuts: [{ start: 6.6, end: 7.6, kind: "pause", decision: "cut", reason: "A long wait." }] })));
+      const result = await ok(c, "dialogue_apply_cuts", { version: "typing", description: "Tightened", range: { start: 0, end: 10 },
+        cuts: [{ start: 6.6, end: 7.6, kind: "pause", decision: "cut", reason: "A long wait." }] });
+      const saved = JSON.parse((result.content[0] as { text: string }).text);
       expect(saved).toMatchObject({ continueFrom: "applied" });
       expect(saved).not.toHaveProperty("keptSilences");
       expect(logged()).toEqual(["[scarlet-mcp] failed to place the kept silences on applied: Scarlet server error 500 (engine_error): The database is busy."]);
+      // The result says what it was answered without, so its silence about kept silences isn't read as none.
+      expect(result.content.at(-1)).toEqual({ type: "text",
+        text: "Not measured: failed to place the kept silences on applied (Scarlet server error 500 (engine_error): The database is busy.)." });
+    } finally { await c.close(); }
+  });
+
+  it("says in the result of each call, and only that call, which edges it saved without measuring", async () => {
+    const tl = emptyTimeline("prj_test");
+    tl.version = "unmeasured";
+    tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 6, 0)];
+    mock.state.timeline = tl;
+    // The levels fail a moment after they are asked for, and the project is read slowly: a read made meanwhile by
+    // another call must not carry this call's line.
+    mock.state.extra = (req, res) => {
+      if (req.path.endsWith("/media/m1/waveform")) {
+        setTimeout(() => reply(res, { error: { code: "engine_error", message: "The waveform cache is locked." } }, 500), 50);
+        return true;
+      }
+      return false;
+    };
+    const c = await connect();
+    try {
+      const [proposed, read] = await Promise.all([
+        ok(c, "timeline_propose", { intent: "requested", fromVersion: "unmeasured", ops: [{ op: "rippleDelete", start: 2, end: 2.5 }], description: "Tighten the pause." }),
+        (async () => { await new Promise(r => setTimeout(r, 20)); return await ok(c, "notes_list", {}); })(),
+      ]);
+      expect(proposed.content.at(-1)).toEqual({ type: "text",
+        text: "Not measured: failed to measure the edges of ripple 0 (Scarlet server error 500 (engine_error): The waveform cache is locked.); "
+          + "failed to measure the edit's new clip edges (Scarlet server error 500 (engine_error): The waveform cache is locked.)." });
+      expect(textOf(read)).not.toContain("Not measured");
+      // The stderr line stays.
+      expect(logged()).toContain("[scarlet-mcp] failed to measure the edit's new clip edges: Scarlet server error 500 (engine_error): The waveform cache is locked.");
+      // A call that measured everything ends with its own answer.
+      mock.state.extra = undefined;
+      const clean = await ok(c, "timeline_propose", { intent: "requested", fromVersion: "unmeasured", ops: [{ op: "rippleDelete", start: 2, end: 2.5 }], description: "Tighten the pause." });
+      expect(textOf(clean)).not.toContain("Not measured");
     } finally { await c.close(); }
   });
 
@@ -666,5 +703,33 @@ describe("describeError and formatZodError", () => {
     // Details that are not a list of issues add nothing to an engine error.
     expect(describeError(new ScarletApiError(400, "validation_error", "request validation failed", { reason: "unknown" })))
       .toBe("Scarlet server error 400 (validation_error): request validation failed");
+  });
+});
+
+describe("screen_text", () => {
+  it("lists the text on screen in source seconds with its place in the frame, says how much is read, and pages", async () => {
+    const c = await connect();
+    const spans = Array.from({ length: 203 }, (_, i) => ({ start: i, end: i + 1, text: `Line ${i}`, box: [0.1, 0.05, 0.456, 0.08], confidence: 0.9 }));
+    mock.state.extra = (req, res) => req.path.endsWith("/media/m1/screen-text")
+      ? reply(res, { mediaId: "m1", from: 0, to: 120, spans, readSeconds: 60, done: false }) : false;
+    const first = textOf(await ok(c, "screen_text", { mediaId: "m1", query: "Line" }));
+    expect(first.split("\n").slice(0, 2)).toEqual([
+      "m1 0.0-120.0 s, lines with “Line”: 203 lines; 60 of 120 s read so far, still reading: call again for the rest.",
+      "0.0-1.0 [10-46% x, 5-8% y] Line 0"]);
+    expect(first.split("\n").at(-1)).toBe("offset 200 for the next 3.");
+    expect(sent("/projects/prj_test/media/m1/screen-text", "GET").at(-1)?.query.get("q")).toBe("Line");
+    expect(textOf(await ok(c, "screen_text", { mediaId: "m1", offset: 200 })).split("\n").slice(1)).toEqual([
+      "200.0-201.0 [10-46% x, 5-8% y] Line 200", "201.0-202.0 [10-46% x, 5-8% y] Line 201", "202.0-203.0 [10-46% x, 5-8% y] Line 202"]);
+    // A recording without a picture is named, before the engine is asked.
+    expect(textOf(await call(c, "screen_text", { mediaId: "m2" }))).toContain("only a video has a picture to read");
+    expect(toolAnnotations("screen_text").readOnlyHint).toBe(true);
+  });
+
+  it("points a model that can see pictures to the frame a line is on, and doesn't mention pictures to one that can't", async () => {
+    const description = async (c: Client) => (await c.listTools()).tools.find(t => t.name === "screen_text")!.description;
+    expect(await description(await connect())).toContain("media_frame at a line's start second shows that frame");
+    const blind = await connect({ capabilities: { images: false, audio: false, files: false } });
+    expect(await description(blind)).not.toContain("media_frame");
+    expect(await description(await connect({ editingTools: { pictures: false } }))).not.toContain("media_frame");
   });
 });

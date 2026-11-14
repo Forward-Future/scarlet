@@ -167,7 +167,9 @@ describe("a dialogue pass's receipt", () => {
   it("says how much came out, and where when it was one cut", () => {
     expect(describeDialogueRemovals([{ start: 125.9, end: 127.4 }])).toBe("Removed 1.5 s at 2:05.");
     expect(describeDialogueRemovals([{ start: 3, end: 3.333333 }])).toBe("Removed 0.33 s at 0:03.");
-    expect(describeDialogueRemovals([{ start: 3600, end: 3601 }])).toBe("Removed 1 s at 60:00.");
+    expect(describeDialogueRemovals([{ start: 3599.5, end: 3600.5 }])).toBe("Removed 1 s at 59:59.");
+    expect(describeDialogueRemovals([{ start: 3600, end: 3601 }])).toBe("Removed 1 s at 1:00:00.");
+    expect(describeDialogueRemovals([{ start: 4503, end: 4504 }])).toBe("Removed 1 s at 1:15:03.");
     expect(describeDialogueRemovals([{ start: 125.9, end: 127.4 }, { start: 300, end: 301.75 }])).toBe("Removed 3.25 s across 2 cuts.");
   });
 

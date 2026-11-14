@@ -9,7 +9,10 @@ export function PlaybackTime({ time, end, loop }: { time: number; end: number; l
 
 /** `coarse` shows whole seconds (1:05 / 3:20); the timeline still gives the exact time where the pointer is. */
 export function PlayerTime({ end, coarse = false }: { end: number; coarse?: boolean }) {
-  const time = usePlayerStore(s => coarse ? Math.floor(s.time + 1e-6) : s.time);
+  const time = usePlayerStore(s => {
+    const at = end > 0 ? Math.min(s.time, end) : s.time;
+    return coarse ? Math.floor(at + 1e-6) : at;
+  });
   if (coarse) return <><strong>{clock(time)}</strong> / {clock(end)}</>;
   return <PlaybackTime time={time} end={end} />;
 }

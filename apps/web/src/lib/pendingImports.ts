@@ -6,7 +6,7 @@ import { MediaAsset } from "@scarlet/timeline";
  * new project's first files, whose first video gives the project its format. `started` says whether its copy had
  * begun: only such a file can have reached the project before a quit. An entry saved by an older Scarlet has none.
  */
-export interface PendingImport { projectId: string; source: string; at: string; setsFormat?: boolean; started?: boolean; importId?: string }
+export interface PendingImport { projectId: string; source: string; at: string; setsFormat?: boolean; started?: boolean; importId?: string; interrupted?: boolean }
 
 const KEY = "scarlet.imports.v1";
 
@@ -16,8 +16,8 @@ function read(): PendingImport[] {
     return Array.isArray(saved) ? saved.filter((i): i is PendingImport =>
       !!i && typeof i.projectId === "string" && typeof i.source === "string" && typeof i.at === "string")
       // Only `true` marks a first file. An entry saved with anything else there is still an import to carry on with.
-      .map(({ projectId, source, at, setsFormat, started, importId }) => ({ projectId, source, at, ...(setsFormat === true && { setsFormat }),
-        ...(typeof started === "boolean" && { started }), ...(importId && MediaAsset.shape.importId.safeParse(importId).success && { importId }) })) : [];
+      .map(({ projectId, source, at, setsFormat, started, importId, interrupted }) => ({ projectId, source, at, ...(setsFormat === true && { setsFormat }),
+        ...(interrupted === true && { interrupted: true }), ...(typeof started === "boolean" && { started }), ...(importId && MediaAsset.shape.importId.safeParse(importId).success && { importId }) })) : [];
   } catch {
     return [];
   }
@@ -48,6 +48,15 @@ export function markImportStarted(projectId: string, source: string) {
   const importId = crypto.randomUUID();
   if (entry) write(list.map(i => i === entry ? { ...i, started: true, importId } : i));
   return importId;
+}
+
+/** Give an interrupted copy one retry, including after Scarlet itself restarts. */
+export function retryInterruptedImport(projectId: string, source: string) {
+  const list = read();
+  const entry = list.find(i => i.projectId === projectId && i.source === source);
+  if (!entry || entry.interrupted) return false;
+  write(list.map(i => i === entry ? { ...i, interrupted: true } : i));
+  return true;
 }
 
 export function removePendingImport(projectId: string, source: string) {

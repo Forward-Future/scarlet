@@ -39,12 +39,23 @@ let ranOut = false;
 export interface Audition extends TimeRange {
   /** Removed footage is never shown, even after a seek into it. Other skips only shorten the listen. */
   skips: (TimeRange & { removed?: boolean })[];
-  /** Where this listen starts, when it isn't `start`. Play at the end still goes back to `start`. */
+  /** Where this listen starts, when it isn't `start`. */
   from?: number;
+  /** Removed footage outside the listen, stepped over once the editor plays on beyond it. */
+  beyond?: TimeRange[];
+  /** The editor picked this listen's starting point on the timeline, so it plays on past `end`. */
+  through?: boolean;
 }
 let audition: (Audition & { fps: number }) | undefined;
-/** Playback stopped at the audition's end. Play starts the listen again. */
+/** Playback stopped at the audition's end. Play carries on from there. */
 let finished = false;
+/**
+ * The listen has made its one stop, or the editor picked a point on the timeline. From then on the video plays
+ * until they pause it: a listen stops at its end once, and never again while it is open.
+ */
+let through = false;
+/** Every passage After steps over: the listen's own skips, and once the editor plays on, the removed footage beyond it. */
+const stepped = (a: Audition) => through && a.beyond?.length ? [...a.skips, ...a.beyond.map(r => ({ ...r, removed: true })) ] : a.skips;
 /** The clock at the previous reading while playing, to see playback cross a boundary. */
 let lastClock: number | undefined;
 /**
@@ -52,6 +63,8 @@ let lastClock: number | undefined;
  * as it was: it plays only if this is set or the video is playing, so a paused video stays paused.
  */
 let carry = false;
+// A passage set up again after its cleanup keeps whether it stopped upon reaching its end.
+let endedPassage = false;
 /**
  * A clip that plays over the monitor has the playhead and says where it is: Before on an edit that isn't a cut.
  * The attached media waits under it, and its clock isn't read: a pause or a seek of its own that lands late would
@@ -106,17 +119,23 @@ function auditionStep(t: number) {
   const crossed = (at: number) => prev !== undefined && prev < at && reach >= at;
   // Playback just after a join can read a hair before the resume point. That is the join, not removed footage.
   // Under a join clock the removed footage isn't in the media at all, so playback runs through the join untouched.
-  const skip = a.skips.find(s => s.removed ? !clock?.removed.some(r => r.start <= s.start + 1e-6 && r.end >= s.end - 1e-6)
-    && reach >= s.start && t < s.end - 0.5 / a.fps : crossed(s.start));
-  if (skip && skip.end < a.end) {
+  const skip = stepped(a).find(s => s.removed ? !clock?.removed.some(r => r.start <= s.start + 1e-6 && r.end >= s.end - 1e-6)
+    && reach >= s.start && t < s.end - 0.5 / a.fps : !through && crossed(s.start));
+  const last = through ? usePlayerStore.getState().duration || Infinity : a.end;
+  if (skip && skip.end < last) {
     // A join made by seeking the playing element: the sound and picture break here until the seek lands.
     playbackLog("transport step-over", { t, from: skip.start, to: skip.end, removed: skip.removed, joined: !!clock });
     player.seek(skip.end, true);
+  } else if (through) {
+    if (!skip) return false;
+    // Removed footage runs to the end of the video: nothing is left to play.
+    player.pause();
   } else if (skip || crossed(a.end)) {
     playbackLog("transport listen-end", { t, end: a.end });
     player.pause();
     player.seek(a.end, true);
     finished = true;
+    through = true;
   } else return false;
   return true;
 }
@@ -124,10 +143,11 @@ function auditionStep(t: number) {
 /**
  * A press on the timeline pauses while the pointer is down, then carries on as it was. A listen or passage that
  * played to its end and stopped there was still being played: the editor didn't pause it, so it plays from the
- * point they pick.
+ * point they pick. A listen plays on from that point until the editor pauses it, past its own end.
  */
 export function pauseForScrub(gesture: AbortSignal) {
   const resume = usePlayerStore.getState().playing || (!!audition && finished) || (!!passage && ranOut);
+  if (audition) through = true;
   usePlayerStore.setState({ scrubGesture: gesture });
   gesture.addEventListener("abort", () => {
     if (usePlayerStore.getState().scrubGesture === gesture) usePlayerStore.setState({ scrubGesture: undefined });
@@ -234,6 +254,8 @@ export const player = {
    */
   previewRange(range: TimeRange, fps: number, stillAt?: number, again = false) {
     const resume = again && (carry || isPlaying());
+    const ended = again && (ranOut || endedPassage);
+    endedPassage = false;
     playbackLog("transport passage", { start: range.start, end: range.end, stillAt, again, resume, at: usePlayerStore.getState().time, by: calledBy(2) });
     this.pause();
     audition = undefined;
@@ -242,8 +264,10 @@ export const player = {
     ranOut = false;
     this.seek(again ? usePlayerStore.getState().time : stillAt ?? owned.start, true);
     if (again ? resume : stillAt === undefined) this.play();
+    else if (ended && atOut) ranOut = true;
     return () => {
       if (passage !== owned) return;
+      endedPassage = ranOut;
       letGo();
       passage = undefined;
       atOut = false;
@@ -262,11 +286,15 @@ export const player = {
     passage = undefined;
     atOut = false;
     ranOut = false;
+    endedPassage = false;
     const owned = { ...next, fps };
     audition = owned;
+    // The same listen set up again keeps what the editor did with it. A new one stops at its end, unless they
+    // picked where it starts.
+    through = again ? through : !!next.through;
     const time = usePlayerStore.getState().time;
     this.seek(again ? time : owned.from ?? owned.start, true);
-    // A listen that had played to its end still starts over on Play.
+    // A listen that had played to its end is still at its end: Play carries on from there.
     finished = again && Math.abs(time - owned.end) < 0.5 / fps;
     if (again ? resume : true) this.play();
     return () => {
@@ -286,7 +314,8 @@ export const player = {
     if (audition) {
       // Removed footage closes up on After. A point inside it lands where the footage resumes,
       // or just before the cut when a key or reverse play steps back into it.
-      const removed = audition.skips.find(s => s.removed && target > s.start && target < s.end);
+      const removed = (audition.beyond?.length ? [...audition.skips, ...audition.beyond.map(r => ({ ...r, removed: true }))] : audition.skips)
+        .find(s => s.removed && target > s.start && target < s.end);
       if (removed) target = !st.scrubGesture && t < st.time ? removed.start : removed.end;
       finished = false;
       lastClock = undefined;
@@ -322,7 +351,16 @@ export const player = {
   prepare() { stream?.prepare(); },
   play() {
     if (passage && atOut) this.seek(passage.start, true);
-    if (audition && finished) this.seek(audition.start, true);
+    if (audition && (finished || through)) {
+      // The listen stopped at its end by itself. Play carries on from there, and nothing stops it again but the
+      // editor or the end of the video, where Play listens from the top.
+      const st = usePlayerStore.getState();
+      if (st.duration > 0 && st.time >= st.duration - 1 / audition.fps) {
+        this.seek(audition.start, true);
+        through = !!audition.through;
+      } else through = true;
+      finished = false;
+    }
     if (pendingPlay) return;
     this.prepare();
     playbackLog("transport play", { at: usePlayerStore.getState().time, el: video ? logId(video) : "none", ready: video?.readyState, by: calledBy() });
@@ -420,10 +458,11 @@ export const player = {
       ranOut = true;
       return false;
     }
-    if (audition && view >= audition.end - 0.5 / audition.fps) {
+    if (audition && !through && view >= audition.end - 0.5 / audition.fps) {
       this.pause();
       this.seek(audition.end, true);
       finished = true;
+      through = true;
       return false;
     }
     return true;

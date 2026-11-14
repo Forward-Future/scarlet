@@ -71,7 +71,10 @@
       }
     },
     "macOS": {
-      "files": { "Resources/Credits.rtf": "Credits.rtf" },
+      "files": {
+        "Resources/Credits.rtf": "Credits.rtf",
+        "Resources/Install-Scarlet-FFmpeg-macOS.sh": "../scripts/Install-Scarlet-FFmpeg-macOS.sh"
+      },
       "minimumSystemVersion": "13.0",
       "signingIdentity": "-",
       "hardenedRuntime": true,

@@ -195,6 +195,39 @@ words on both playback clocks. Its report includes coverage, pairs left unedited
 in milliseconds, and each matched instance. `python3 -m unittest discover -s evals/test -p 'test_audio_reference.py'`
 checks these metrics against synthetic timelines with known answers.
 
+In `spacing`, `longerByOver200Ms` and `shorterByOver200Ms` count matched joins where the candidate pause
+exceeds or falls short of the human pause by more than 200 ms. The signed error is rounded to 0.01 ms before
+thresholding. Exactly +200 and −200 ms count toward neither total. The corresponding `Pct` fields use
+`sharedJoins` as their denominator and are `null` when there are no matches. Report `sharedJoins` alongside
+`eligibleJoins` so a run that cut differently retains its coverage. To compare two runs on identical joins,
+intersect their `matched` rows on `afterWord`, `beforeWord` and `finalAt` using the same source word list and reference.
+The two flanks must lie in adjacent pieces in both edits. An intervening wordless piece spans two cuts and is
+excluded. If a trim crosses a retained word, the scorer clamps its transcript boundary to the portion that plays.
+The resulting gap measures time between retained word intervals and inherits the uncertainty of their alignment.
+This scorer accepts a completely mapped single-source final. It rejects maps containing external passages,
+uncertain retained-source regions or annotated reference-join exclusions that require a specialized scorer.
+
+### Score both pictures at a cut
+
+`score_frame_pairs.py` compares verified picture cuts with the candidate edit at tolerances of 0, 5 and 10
+source frames. Supply one reference file and one candidate file for the same original recording and frame clock.
+Each file identifies the source and lists zero-based presentation-order indices of the **last outgoing** and
+**first incoming** source picture at each cut. For example, a cut from frame 100 to 200 is represented by
+`{"sourceId":"camera-a","pairs":[[100,200]]}`.
+
+```sh
+python3 -B evals/score_frame_pairs.py --reference "$SCARLET_EVAL_DATA/verified-frame-pairs.json" \
+  --candidate "$SCARLET_EVAL_DATA/candidate-frame-pairs.json"
+```
+
+Measure the displayed source pictures from the exports or an independently verified source-frame mapping.
+The audio correlation map locates audio boundaries; it cannot supply these picture indices. Within each tolerance
+the scorer finds the largest one-to-one set of matches where **both** source pictures of the same cut fall inside
+the tolerance, inclusive. A continuous split such as `[100,101]` is ignored in the candidate. Report the
+matched count and percentage of **verified reference cuts** with `candidateCuts` and the number of human cuts
+for which pictures were verified. An empty reference yields a null percentage. This measures recall on the
+verified subset. `python3 -B -m unittest discover -s evals/test -p test_frame_pairs.py` runs the synthetic controls.
+
 ## Replay published word choices at the join
 
 A waveform map from `evals/tools/match_audio.py` can also supply the exact removed words for a conditional test of Scarlet's edge placement. Use a case built from one raw dialogue clip at normal speed. Each mapped forward join between two kept words is submitted separately as a word-index removal. A join is excluded when the measured uncertainty at its edges, plus one final-video frame on either side, changes any word's keep/cut label. Counts show pause-only, backward and other excluded joins, along with the applied, review and returned-for-revision totals.
@@ -251,7 +284,15 @@ $TSX evals/src/replay.ts --case my-case                       # vs. what the run
 $TSX evals/src/replay.ts --case my-case --baseline <earlier replay.json>   # vs. before your code edit
 $TSX evals/src/replay.ts --case my-case --plan edited-plan.json           # a different plan
 $TSX evals/src/replay.ts --case my-case --drop-quotes   # compare the same plan offline without its optional quotes
+$TSX evals/src/replay.ts --case my-case --parts          # every part of a pass that saved as it went
+$TSX evals/src/replay.ts --case my-case --parts --baseline <earlier …-parts.json>
 ```
+
+A pass that saves as it goes submits a plan for each part, each on the version the part before it left. `--parts`
+replays the last plan on each version and totals them, so the replay covers the pass and not its first few
+removals. Edges are also measured as the engine saves them, each removal rounded inward to whole frames, and each
+result lists the applied edges that land on speech (`appliedOnSpeech`), in source seconds. A case that stores only
+some of the run's versions replays the parts it has and names the rest.
 
 Scan windows become join evidence through the tool's `dialogueScanPage`. Offline there is no live
 measurement, so an edge that no scan window covers stays unmeasured.

@@ -135,7 +135,7 @@ export function DialogSurface({ children, onDismiss, focusSelf, ...props }: Comp
       e.stopPropagation();
       onDismiss();
     }}
-      onPointerDown={(e) => { pressedOutside.current = e.target === e.currentTarget && outside(e); }}
+      onPointerDown={(e) => { pressedOutside.current = e.target === e.currentTarget && outside(e) && !e.currentTarget.querySelector("[data-shortcut-overlay]"); }}
       onClick={(e) => {
         if (e.target !== e.currentTarget) return;
         if (pressedOutside.current && outside(e)) onDismiss();

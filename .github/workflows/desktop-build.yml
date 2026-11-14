@@ -110,9 +110,9 @@ jobs:
       # Windows also gets a Vulkan whisper-cli for the GPU, built against the SDK's headers, loader and glslc.
       - name: Install the Vulkan SDK
         if: runner.os == 'Windows'
-        uses: jakoch/install-vulkan-sdk-action@v1
+        uses: jakoch/install-vulkan-sdk-action@7fe84289ddbf750f7eff9f8e4588e600e1dd06c8 # v1.8.1
         with:
-          vulkan_version: latest
+          vulkan_version: 1.4.363.1
           install_runtime: true
           cache: true
 
@@ -145,7 +145,7 @@ jobs:
         run: node --test apps/desktop/scripts/collect-public-notices.test.mjs apps/desktop/scripts/smoke-engine.test.mjs
 
       - name: Build installers
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # action-v0.6.2
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
@@ -173,11 +173,11 @@ jobs:
           done
 
       - name: Smoke test the bundled Mac engine (ingest, render with captions, MCP)
-        if: runner.os == 'macOS'
+        if: inputs.early_access && runner.os == 'macOS'
         run: node apps/desktop/scripts/smoke-engine.mjs "$BUNDLE/macos/$DESKTOP_PRODUCT.app/Contents/MacOS" "$RUNNER_TEMP/scarlet-media-tools"
 
       - name: Smoke test the bundled Windows engine (ingest, render with captions, MCP)
-        if: runner.os == 'Windows'
+        if: inputs.early_access && runner.os == 'Windows'
         shell: powershell
         run: |
           ./.github/scripts/use-windows-test-owner.ps1
@@ -231,6 +231,11 @@ jobs:
           if [ "$EARLY_ACCESS" = true ] && [ "${{ matrix.triple }}" = aarch64-apple-darwin ]; then
             cp apps/desktop/scripts/Install-Scarlet-FFmpeg-macOS.sh "$RUNNER_TEMP/scarlet-installers/"
           fi
+
+      - name: Inspect the staged public installers and smoke test their engine with external media tools
+        if: ${{ !inputs.early_access }}
+        # On Windows, native pwsh starts the engine with the same environment used by the desktop shell.
+        run: node apps/desktop/scripts/smoke-engine-public.mjs "${{ runner.temp }}/scarlet-installers" "${{ runner.temp }}/scarlet-media-tools"
 
       - name: Download the previous Early Access installer for the upgrade test
         if: inputs.early_access

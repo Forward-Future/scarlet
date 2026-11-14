@@ -159,7 +159,7 @@ input[type="range"] {
     @apply flex flex-col gap-0.5 rounded-md border border-line bg-raised px-[9px] py-[5px] text-[12px] leading-[1.4] text-muted;
     box-shadow: 0 3px 12px rgb(0 0 0 / 30%);
   }
-  .update-control:not(:hover, :focus-within) > .update-hint { display: none; }
+  .update-control:not(:hover, :has(:focus-visible)) > .update-hint { display: none; }
   @media (prefers-reduced-motion: no-preference) {
     .update-control:hover > .update-hint { animation: update-hint-in 90ms ease-out 220ms backwards; }
     @keyframes update-hint-in { from { opacity: 0; } to { opacity: 1; } }

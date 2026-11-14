@@ -74,6 +74,9 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(() => pageOf(name, description, body, enabled));
   const unsaved = dirty && pageOf(name, description, body, enabled, original) !== saved;
+  // The page as it is this moment, for a save to tell whether it was typed in while the save was on its way.
+  const pageNow = useRef("");
+  pageNow.current = JSON.stringify([name, description, body, enabled]);
   // The conversation beside the skill: each change the editor asked for in words, and what came of it, in the order
   // asked. Scarlet saves each revision as a new version.
   const [edits, setEdits] = useState<Task[]>([]);
@@ -237,6 +240,22 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
   // The page isn't on the project's live feed, so it asks how the request is going. When it ends, the skill it
   // changed and its outcome arrive together.
   const editId = edit?.id;
+  const editOwner = useRef<{ skillId?: string; editId?: string }>({ skillId, editId });
+  useEffect(() => {
+    const owner = { skillId, editId };
+    editOwner.current = owner;
+    return () => { editOwner.current = {}; };
+  }, [skillId, editId, working]);
+  async function showFinished(task: Task) {
+    const owner = editOwner.current;
+    if (!skillId || owner.skillId !== skillId || owner.editId !== task.id) return;
+    const res = await api.skill(skillId);
+    if (editOwner.current !== owner) return;
+    show(res);
+    useSkillsStore.getState().apply(res.skill);
+    setViewVersion("current");
+    setEdit(task);
+  }
   useEffect(() => {
     if (!working || !editId || !skillId) return;
     let gone = false;
@@ -244,15 +263,8 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
       void api.task(editId, "conversation").then(async ({ task }) => {
         if (gone) return;
         if (!FINISHED.includes(task.state)) return setEdit(task);
+        await showFinished(task);
         window.clearInterval(timer);
-        const res = await api.skill(skillId).catch(() => null);
-        if (gone) return;
-        if (res) {
-          show(res);
-          useSkillsStore.getState().apply(res.skill);
-          setViewVersion("current");
-        }
-        setEdit(task);
       }).catch(() => { /* The next ask tries again. */ });
     }, 1000);
     return () => { gone = true; window.clearInterval(timer); };
@@ -279,6 +291,7 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
     setNameErr(null);
     try {
       const payload = { name: slug, description, content, enabled };
+      const sent = pageNow.current;
       if (isNew) {
         const s = await create(payload);
         leavingAfterSave.current = true;
@@ -295,7 +308,8 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
         // The name is saved as a slug ("My Skill" as my-skill). The field shows what was saved, unless it was typed in since.
         setName(typed => (slugify(typed) === slug ? res.skill.name : typed));
         setSaved(pageOf(res.skill.name, description, body, enabled, original));
-        settle();
+        // What was typed since Save was pressed wasn't sent: it stays unsaved, with its draft.
+        if (pageNow.current === sent) settle();
         setViewVersion("current");
       }
       if (andLeave && blocker.state === "blocked") blocker.proceed();
@@ -370,7 +384,7 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
             valueLabel={viewVersion === "current" ? "Current version" : undefined} />
         )}
         {viewVersion !== "current" && loaded && (
-          <button className="btn-ghost" onClick={() => restore(loaded.versions.find((v) => v.version === viewVersion)!)}>
+          <button className="btn-ghost" disabled={working} onClick={() => restore(loaded.versions.find((v) => v.version === viewVersion)!)}>
             Restore v{viewVersion}
           </button>
         )}
@@ -404,7 +418,7 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
                     <p>{e.instruction}</p>
                     <span className="unit-state">{standing}</span>
                     {active && <button type="button" className="simple-link unit-stop"
-                      onClick={() => void api.cancelTask(e.id).then(({ task }) => setEdit(task)).catch(err => setAskErr(errorMessage(err)))}>Stop</button>}
+                      onClick={() => void api.cancelTask(e.id).then(({ task }) => showFinished(task)).catch(err => setAskErr(errorMessage(err)))}>Stop</button>}
                   </div>
                   {asking ? <div className="req" data-state="asking"><div className="req-said">
                       <p className="req-say">{e.question}<button type="button" className="simple-link is-warn" onClick={() => box.current?.focus()}>Answer</button></p>
