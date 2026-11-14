@@ -171,7 +171,7 @@ export function doubledSoundText(d: DoubledSound, next: Timeline): string {
   // The exact seconds, so a split there leaves no sliver of either copy doubled or silenced.
   const from = Math.max(a!.timelineIn, b!.timelineIn), to = Math.min(clipEnd(a!), clipEnd(b!));
   const t = (n: number) => String(+n.toFixed(6));
-  const pair = `clips ${a!.id} and ${b!.id} both play ${d.mediaId} from ${d.source.start.toFixed(2)} to ${d.source.end.toFixed(2)} s, at ${t(from)}–${t(to)} s on the timeline`;
+  const pair = `clips ${a!.id} and ${b!.id} both play ${d.mediaId} from ${t(timelineToSource(a!, from))} to ${t(timelineToSource(a!, to))} s, at ${t(from)}–${t(to)} s on the timeline`;
   // One clip of the two starts where they overlap and one ends there, so either one plays only inside the overlap or each
   // plays past it on one side, where a single split leaves its own sound.
   const inside = [b!, a!].find(c => c.timelineIn >= from - 1e-6 && clipEnd(c) <= to + 1e-6);

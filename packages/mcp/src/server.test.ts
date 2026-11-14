@@ -496,7 +496,7 @@ describe("timeline_propose", () => {
       const saved = changes();
       const doubled = await propose(tl, { ops: [added] });
       expect(doubled.isError).toBe(true);
-      expect(textOf(doubled)).toContain("clips video-clip and audio-clip both play m1 from 0.00 to 5.00 s, at 0–5 s on the timeline: audio-clip plays only there, so set its volume to 0");
+      expect(textOf(doubled)).toContain("clips video-clip and audio-clip both play m1 from 0 to 5 s, at 0–5 s on the timeline: audio-clip plays only there, so set its volume to 0");
       expect(textOf(doubled)).toContain("Nothing was saved");
       expect(changes()).toBe(saved);
       // The editor asked to hear it twice.
