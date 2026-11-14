@@ -5,13 +5,13 @@ import { canStartCutReview, cutSummary, type Project } from "@scarlet/timeline";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
 import { isComposing } from "../../lib/hotkeys";
-import { clock, playbackClock } from "../../lib/format";
+import { clock, clockRange, lengthLabel, playbackClock } from "../../lib/format";
 import type { RecorderResult } from "../../lib/recorder";
 import { useSpeech } from "../../lib/speech";
 import type { Thread } from "../../lib/threads";
 import { useProjectStore } from "../../stores/project";
 import { commandSkillIds, enabledSkills, useSkillsStore } from "../../stores/skills";
-import { playheadPoints, useUiStore, type AgentContext } from "../../stores/ui";
+import { markedRangeOf, playheadPoints, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
 import { Icon, Spinner, InlineError } from "../ui/primitives";
 import { AgentChip, useAgentAvailability } from "./AgentChip";
 import { SkillCommandInput } from "./SkillCommandInput";
@@ -159,7 +159,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const send = async (text: string, voiceTranscript?: string, anchor = displayAnchor, skillIds?: string[]) => {
     if (question) {
       const answer = anchor?.editNumber ? `${[`Edit ${anchor.editNumber}`, anchor.label].filter(Boolean).join(" · ")} — ${text}`
-        : anchor ? `At ${clock(anchor.time)}${sourceName ? ` in ${sourceName}` : ""} — ${text}` : text;
+        : anchor ? `At ${anchor.markedRange ? clockRange(anchor.time, anchor.end ?? anchor.time) : clock(anchor.time)}${sourceName ? ` in ${sourceName}` : ""} — ${text}` : text;
       await answerTask(question.id, answer, skillIds);
       return;
     }
@@ -275,6 +275,9 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const tagAct = !targetTag ? undefined : question && targetTag === "Answer" ? "Answering Scarlet’s question"
     : thread && targetTag === "Reply" ? "Replying to this edit" : `Revising ${tagWords === "whole edit" ? "the whole edit" : tagWords}`;
   const tag = rewording ? undefined : targetTag;
+  // A stretch marked on the timeline's ruler rides with the message, beside the tag of the cut or edit it is aimed at.
+  const marked = rewording ? undefined : markedRangeOf(context);
+  const markedWords = marked && clockRange(marked.start, marked.end);
   const saveLabel = rewording ? "Save the new words" : sendLabel;
   function changeText(text: string) {
     dismissFirstEditHint();
@@ -330,6 +333,15 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
               aria-label={targetIsPoint ? `Take “${targetTag}” off: the message is about the whole video` : `Start a new edit instead of ${tagAct!.charAt(0).toLowerCase()}${tagAct!.slice(1)}`}
               title={recording || heard ? "Waits until what you’re saying is sent" : targetIsPoint ? "Whole video instead" : "New edit instead"} onClick={() => {
                 if (onClearTarget) onClearTarget(); else setContext("whole");
+                inputRef.current?.focus();
+              }}><Icon name="x" size={10} /></button>
+          </span>}
+          {marked && <span className="composer-tag composer-range" title={`About ${markedWords} on the timeline · ${lengthLabel(marked.end - marked.start)}`}>
+            <span className="composer-tag-name">{markedWords}</span>
+            <button type="button" className="composer-tag-clear" disabled={recording || heard} aria-label={`Take the marked range ${markedWords} off the message`}
+              title={recording || heard ? "Waits until what you’re saying is sent" : "Take the range off"} onClick={() => {
+                const was = context && context !== "whole" ? context : undefined;
+                setContext(withMarkedRange(context, undefined), was?.changeId ? was : undefined);
                 inputRef.current?.focus();
               }}><Icon name="x" size={10} /></button>
           </span>}
