@@ -3,7 +3,7 @@ import { create } from "zustand";
 import type { ProjectSummary } from "@scarlet/shared";
 import type { MediaAsset } from "@scarlet/timeline";
 import { dropTargets, fileDropZone } from "../../lib/dropTargets";
-import { engineUnavailable, errorMessage, IS_DESKTOP } from "../../lib/client";
+import { api, engineUnavailable, errorMessage, IS_DESKTOP } from "../../lib/client";
 import { canResumeFirstClip, matchAddedClip, resumeFirstClip } from "../../lib/firstClipFormat";
 import { fmtBytes } from "../../lib/format";
 import { addPendingImports, isLink, markImportStarted, pendingImports, removePendingImport, retryInterruptedImport, type PendingImport } from "../../lib/pendingImports";
@@ -61,7 +61,7 @@ const empty: ProjectImports = { items: [], localImport: null, pending: 0, ended:
 const useImports = create<Record<string, ProjectImports>>(() => ({}));
 const queues = new Map<string, Promise<void>>();
 // A lost engine stops every batch queued for that project until a fresh read can resume it.
-const disconnected = new Set<string>();
+const disconnected = new Map<string, number>();
 /** Imports this session is already working through, so reopening a project doesn't queue them twice. */
 const queued = new Set<string>();
 const queueKey = (projectId: string, source: string) => JSON.stringify([projectId, source]);
@@ -133,7 +133,7 @@ export function enqueueImports(projectId: string, sources: ImportSource[], match
         }
       } catch (error) {
         if (typeof source === "string" && engineUnavailable(error)) {
-          disconnected.add(projectId);
+          disconnected.set(projectId, id);
           keepPending = retryInterruptedImport(projectId, source);
         }
         if (keepPending) continue;
@@ -162,11 +162,14 @@ export function enqueueImports(projectId: string, sources: ImportSource[], match
  */
 export function resumeImports(projectId: string, media: readonly MediaAsset[]) {
   disconnected.delete(projectId);
-  // The new engine can answer the project read before the old import rejects. Recheck when its
-  // queue settles, so that late rejection still gets this reconnect's single retry.
+  // The read can come from the new engine before the old import rejects, or from the old engine
+  // before it goes away. Only spend the retry once the engine answers after the failure.
   const running = queues.get(projectId);
-  if (running) void running.then(() => {
-    if (disconnected.has(projectId)) return resumeImports(projectId, media);
+  if (running) void running.then(async () => {
+    const interrupted = disconnected.get(projectId);
+    if (interrupted === undefined) return;
+    const snapshot = await api.media(projectId).catch(() => undefined);
+    if (snapshot && disconnected.get(projectId) === interrupted) return resumeImports(projectId, snapshot.media);
   });
   const waiting = pendingImports(projectId).filter(i => !queued.has(queueKey(projectId, i.source)) && (!i.setsFormat || canResumeFirstClip(projectId)));
   // Only a file whose copy had begun can already be in the project. One still waiting its turn is imported, also when
