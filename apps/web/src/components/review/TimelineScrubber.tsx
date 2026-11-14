@@ -3,6 +3,7 @@ import { createStore, useStore } from "zustand";
 import { filmstripBatches, type TimeRange } from "@scarlet/timeline";
 import { api } from "../../lib/client";
 import { usePlayerStore } from "../../stores/player";
+import { useUiStore } from "../../stores/ui";
 import { arrowSeekTime, ignorePageShortcut, useHotkeys } from "../../lib/hotkeys";
 import { playbackClock } from "../../lib/format";
 import { playbackLog } from "../../lib/playbackLog";
@@ -488,6 +489,8 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
   label = "Position in the video", pictureAspect = 16 / 9, frameAt, previewStrip, hoverVideo, onSeek, onSelectTime, onScrubStart, highlight, marks, gaps, skippedRanges, onGap, onBand, range, onRange, fps = 30 }:
   TimelineScrubberProps & { subject: string; kept: RefObject<KeptView | undefined> }) {
   const litMark = useStore(useContext(EditHoverContext));
+  // The message box's icon is open: the passage the message is about lights up.
+  const aimLit = useUiStore(s => s.aimLit);
   const total = Number.isFinite(duration) ? Math.max(0, duration) : 0;
   const end = start + total;
   const position = Number.isFinite(playhead) ? Math.min(end, Math.max(start, playhead)) : start;
@@ -502,7 +505,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
     return () => observer.disconnect();
   }, []);
   const track = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ id: number; start: number; span: number; lifetime: AbortController; finish?: () => void; time?: number; x: number; paint?: number } | null>(null);
+  const drag = useRef<{ id: number; start: number; span: number; lifetime: AbortController; finish?: () => void; time?: number; x: number; x0?: number; paint?: number } | null>(null);
   useLayoutEffect(() => () => {
     // A new working cut builds the timeline again. A drag held just then ends with the timeline it was on: the video
     // it paused carries on as it was, instead of staying paused under a pointer that no longer moves anything.
@@ -676,6 +679,9 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
     if (e.type === "pointerup") gesture.x = e.clientX;
     seek();
     if (e.type === "pointerup" && gesture.time !== undefined) onSelectTime?.(gesture.time);
+    // A click away from the marked range, not a scrub, takes it off.
+    if (e.type === "pointerup" && range && onRange && gesture.time !== undefined && Math.abs(gesture.x - (gesture.x0 ?? gesture.x)) <= 3
+      && (gesture.time < range.start || gesture.time > range.end)) onRange(undefined);
     drag.current = null;
     gesture.lifetime.abort();
     gesture.finish?.();
@@ -689,7 +695,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
   }, [start, end]);
   // Where a marked range's end lands when it comes near: the edges of the open edit, of footage cuts took out, and each marked edit.
   const edges = useMemo(() => rangeEdges(highlight?.band, gaps, marks), [highlight?.band, gaps, marks]);
-  const marking = useRangeSelect({ slider, drag, from, span, start, end, fps, edges, range, onRange: onRange ?? noRange, onSeek,
+  const marking = useRangeSelect({ slider, drag, from, span, start, end, fps, edges, frameAt, pictureAspect, range, onRange: onRange ?? noRange, onSeek,
     onScrubStart, onPress: selectPosition, beforeGesture: stopZoom });
   const zoomControls = <div className="timeline-zoom-row" role="group" aria-label="Timeline zoom">
     <button type="button" className="timeline-zoom-step" aria-label="Zoom out" title="Zoom out (−)" disabled={intendedSpan >= total} onClick={() => zoomBy(.5)}>−</button>
@@ -713,7 +719,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
         stopZoom();
         e.currentTarget.setPointerCapture(e.pointerId);
         const lifetime = new AbortController();
-        drag.current = { id: e.pointerId, start: from, span, x: e.clientX, lifetime, finish: onScrubStart?.(lifetime.signal) };
+        drag.current = { id: e.pointerId, start: from, span, x: e.clientX, x0: e.clientX, lifetime, finish: onScrubStart?.(lifetime.signal) };
         seek();
       }}
       onPointerMove={e => {
@@ -756,7 +762,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
         // Panned or zoomed out of view, the band draws nothing: clamped to the edge it would leave a sliver that reads as a mark there.
         ? highlight.band.end > from && highlight.band.start < to &&
           // Pointer only: the keyboard reaches Before with \.
-          <span aria-hidden="true" className={`simple-timeline-band${highlight.tone ? ` is-${highlight.tone}` : ""}${onBand ? " is-live" : ""}`} style={{ left: `${Math.min(100, Math.max(0, percent(highlight.band.start)))}%`,
+          <span aria-hidden="true" className={`simple-timeline-band${highlight.tone ? ` is-${highlight.tone}` : ""}${onBand ? " is-live" : ""}${aimLit ? " is-lit" : ""}`} style={{ left: `${Math.min(100, Math.max(0, percent(highlight.band.start)))}%`,
             width: `${Math.max(0, Math.min(100, percent(highlight.band.end)) - Math.max(0, percent(highlight.band.start)))}%` }}
             onPointerDown={onBand ? e => {
               if (e.button !== 0 || !e.isPrimary || drag.current) return;

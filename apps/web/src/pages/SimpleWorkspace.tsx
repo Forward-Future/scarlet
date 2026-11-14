@@ -3297,6 +3297,28 @@ export function SimpleWorkspace() {
     box.setAgentContext(next, next && was?.changeId ? was : undefined);
     if (marked) box.focusComposer();
   };
+  // A click anywhere but the message box and the timeline takes a marked range off: the timeline says for itself
+  // which of its presses do. A drag, a scroll or a press held and moved isn't a click.
+  const hasMarkedRange = useUiStore(s => !!markedRangeOf(s.agentContext));
+  const clearRange = useRef(markRange);
+  clearRange.current = markRange;
+  useEffect(() => {
+    if (!hasMarkedRange) return;
+    let down: { x: number; y: number; id: number; away: boolean } | undefined;
+    const away = (target: EventTarget | null) => target instanceof Element && !target.closest(".composer-dock, .timeline-panel, .timeline-range-loupe");
+    const press = (e: PointerEvent) => { down = e.isPrimary && e.button === 0 ? { x: e.clientX, y: e.clientY, id: e.pointerId, away: away(e.target) } : undefined; };
+    const release = (e: PointerEvent) => {
+      const was = down;
+      down = undefined;
+      if (was?.away && was.id === e.pointerId && Math.hypot(e.clientX - was.x, e.clientY - was.y) <= 4) clearRange.current(undefined);
+    };
+    document.addEventListener("pointerdown", press, true);
+    document.addEventListener("pointerup", release, true);
+    return () => {
+      document.removeEventListener("pointerdown", press, true);
+      document.removeEventListener("pointerup", release, true);
+    };
+  }, [hasMarkedRange]);
   const pickPoint = (picked: AgentContext, action: "offer" | "attach") => {
     const box = useUiStore.getState();
     if (replyTo || rewordingItem || box.speaking) return;

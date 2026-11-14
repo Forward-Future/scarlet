@@ -10201,6 +10201,31 @@ it("starts a new edit about a stretch marked on the ruler, and keeps it while th
   expect(container.querySelector(".timeline-range")).toBeNull();
 });
 
+it("takes a marked stretch off on a click anywhere but the message box and the timeline", async () => {
+  idle();
+  await show();
+  await markOnRuler(11, 16);
+  const click = (el: Element, x = 5) => act(async () => {
+    el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, isPrimary: true, pointerId: 7, clientX: x, clientY: 5 }));
+    el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, isPrimary: true, pointerId: 7, clientX: x, clientY: 5 }));
+  });
+  const marked = () => (useUiStore.getState().agentContext as AgentContext | null)?.markedRange;
+  // The message box is where the message about it is written: a click there keeps it.
+  await click(document.querySelector(".simple-thread") ?? container);
+  expect(marked()).toBeUndefined();
+  await markOnRuler(11, 16);
+  expect(marked()).toBeDefined();
+  // A press that moves isn't a click.
+  const chat = container.querySelector(".simple-chat")!;
+  await act(async () => {
+    chat.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, isPrimary: true, pointerId: 8, clientX: 5, clientY: 5 }));
+    chat.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, isPrimary: true, pointerId: 8, clientX: 5, clientY: 60 }));
+  });
+  expect(marked()).toBeDefined();
+  await click(chat);
+  expect(marked()).toBeUndefined();
+});
+
 it("puts a marked stretch on the message beside the edit that's open, which stays what the message revises", async () => {
   beforeClipReady();
   await show();
