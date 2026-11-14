@@ -26,7 +26,7 @@ export function parseEbur128(stderr: string): Loudness {
   };
 }
 
-function measure(file: string, from: number | undefined, to: number | undefined, signal: AbortSignal): Promise<Loudness> {
+export function measureLoudness(file: string, from: number | undefined, to: number | undefined, signal: AbortSignal): Promise<Loudness> {
   const args = ["-hide_banner", "-nostats", "-nostdin"];
   if (from !== undefined) args.push("-ss", ffmpegPosition(from));
   if (to !== undefined) args.push("-t", String(to - (from ?? 0)));
@@ -69,7 +69,7 @@ export function perceptionRoutes(ctx: Ctx) {
     const info = await stat(file);
     const key = JSON.stringify(["ebur128", file, media.hash, info.size, info.ctimeMs, info.mtimeMs, from, to]);
     // A measurement someone asked for, such as a running edit's, isn't stopped by a pause of the project's media work.
-    const result = await loudness.get(key, signal => ctx.track(measure(file, from, to, AbortSignal.any([signal, ctx.projectSignal(media.projectId)]))));
+    const result = await loudness.get(key, signal => ctx.track(measureLoudness(file, from, to, AbortSignal.any([signal, ctx.projectSignal(media.projectId)]))));
     return c.json({ mediaId: media.id, ...(from !== undefined && { from }), ...(to !== undefined && { to }), ...result });
   });
 

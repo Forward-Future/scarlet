@@ -10,6 +10,8 @@ Frame the screen around what viewers need to see. The narration, the action on s
 
 A close view can make a passage readable or bring a chart and its labels into focus. A wider view can show how two windows relate or where to find a control. Hold a useful frame through small pointer movements and reframe when the viewer’s attention needs to shift.
 
+Fill the frame with the application, and leave the rest of the desktop outside it. Keep the recording's own aspect ratio and motion: don't replace moving footage with a screenshot or an isolated panel unless the editor asks. Look at several frames as the content moves, so a frame that suits one moment doesn't hide a control or a line of text at the next.
+
 If the edit has a presenter inset, frame the screen with the existing layout in mind so the inset leaves the action visible.
 
-`timeline_transcript` reads what is said and when. `frame_contact_sheet` shows the screen at that moment. `timeline_propose` sets a clip's crop, scale, position and keyframes.
+`timeline_transcript`, `frame_contact_sheet` and `timeline_propose` cover what this needs.

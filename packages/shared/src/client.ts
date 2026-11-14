@@ -387,6 +387,12 @@ export class ScarletClient {
       alreadyRemoved?: { changeId: string; index: number; version: string; at: number }[];
       /** The requested crossfade on the joins these cuts made. Older engines omit it. */
       joinCrossfades?: import("./api.js").JoinCrossfades;
+      /** Confident cuts that wait for the editor instead of applying, and why. */
+      stagedForEditor?: { cuts: number; why: string };
+      /** Cuts whose edges moved onto whole frames: how many, the largest move in seconds, and why. */
+      onFrames?: { cuts: number; largestShift: number; why: string };
+      /** Staged cuts of an earlier part that left the review because their footage changed. */
+      droppedFromReview?: Array<{ changeId: string; version: string; start: number; end: number; why: string }>;
       /** The project head after this submission. Older engines omit it. */
       head?: string }>(
       `/projects/${encodeURIComponent(projectId)}/dialogue-cuts`, body);
@@ -399,6 +405,8 @@ export class ScarletClient {
     return this.post<{
       change: Pick<Change, "id" | "state" | "description" | "fromVersion" | "toVersion" | "ranges" | "timelineEdits">;
       duration?: number; diffDescription?: string[]; timeline?: Timeline;
+      /** Removals inside a selected passage the engine put on whole frames. Older engines omit it. */
+      onWholeFrames?: Array<{ asked: [number, number]; removed: [number, number] }>;
     }>(`/projects/${projectId}/changes?summary=true`, body);
   }
   changes(projectId: string, state?: string) {

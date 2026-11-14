@@ -47,6 +47,10 @@ const KNOWN: Record<string, AgentCapabilities> = {
   gemini: { images: true, audio: false, files: false, plan: false },
 };
 
+// An agent Scarlet didn't launch is someone's own MCP client, such as Claude Code or Claude Desktop pointed at Scarlet,
+// and each of those shows the model the images a tool returns. Turning images off here would take the frame tools away
+// from the one way to run Scarlet without a host. A client that drops images gets them as unreadable content, not a
+// wrong measurement: every tool also answers in text.
 const UNKNOWN: AgentCapabilities = { images: true, audio: false, files: false, plan: false };
 
 export function agentCapabilities(agent: string | undefined, override?: Partial<AgentCapabilities> | string): AgentCapabilities {

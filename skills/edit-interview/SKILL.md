@@ -6,8 +6,12 @@ category: Picture and graphics
 
 # Edit an interview
 
-Choose camera coverage, reactions and framing over an existing conversation, from the brief and the footage.
+Choose camera coverage, reactions and framing over an existing conversation, from the brief and the footage. The conversation leads: picture choices follow what is said.
 
-`audio_sync` measures the offset between recordings that share audio. `dialogue_scan` and `transcript_get` say who speaks when. `frame_contact_sheet` shows a source or the composed timeline.
+Cover an edit in the dialogue with a change of angle, so a cut in the words doesn't show as a jump in the picture. Cut to a speaker as they start a thought, or a beat before when the cut shows them about to speak, and stay with them while they make their point. Cut to a listener when their reaction adds something: a laugh, a doubt, a moment of understanding. A reaction no one would miss is a distraction. Avoid changing angle in the middle of a word or a gesture.
 
-`timeline_propose` places a matching source range on another video track, splits a clip to change angle, or sets each clip's transform and volume for a simultaneous layout. An upper camera track can carry the picture with its audio muted while another microphone supplies the sound.
+For a remote conversation or a side-by-side layout, give each speaker a similar head size and eye line, respect each source's aspect ratio, and keep the layout steady rather than rearranging it between lines.
+
+Keep every camera and microphone in sync throughout.
+
+`audio_sync`, `dialogue_scan`, `transcript_get`, `frame_contact_sheet` and `timeline_propose` cover what this needs.

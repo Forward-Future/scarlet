@@ -454,9 +454,11 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   // Whether the host launches the CLI with its own to-do tool on.
   const plan = plans ? { plan: true } : {};
   if (isDialoguePass(task) && task.repeatAudit?.returns) {
-    const finish = "The dialogue pass has saved its editing work. Finish only the repeat check on the current playback. " +
-      "Use dialogue_check_repeats with the current version, repair accidental repeats with dialogue_apply_cuts, and recheck the resulting audio. " +
-      "Keep intentional speech with its reason. Honor the editor’s scope, preferences, protected footage and decisions.";
+    // The goal and what counts as done, not the steps: the tools say how they check and repair.
+    const finish = "The dialogue pass has saved its editing work. What is left is the repeat check on the current playback: " +
+      "no word the cuts clipped, and no accidental repeat, should play. Keep intentional speech with its reason. " +
+      "The pass is done once dialogue_check_repeats on the current version has nothing outstanding. " +
+      "Honor the editor’s scope, preferences, protected footage and decisions.";
     return { systemPrompt, instruction: finish + "\nEditor’s request: " + firstMessage(task.instruction.trim()) +
       (answered ? "\nThe editor answered: " + last!.text : ""), ...plan };
   }
