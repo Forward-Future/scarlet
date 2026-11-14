@@ -437,7 +437,9 @@ it("lists a thread's edits once, numbered, and opens one with its decisions unde
   }
   await act(async () => { strip.dispatchEvent(new PointerEvent("pointerout", { bubbles: true })); });
   expect(container.querySelector(".simple-timeline-tip")).toBeNull();
-  expect(tips.map(tip => tip.querySelector("b")?.textContent)).toEqual(["Edit 1 of 3 · 0:00", "Edit 2 of 3 · 0:00", "Edit 3 of 3 · 0:11"]);
+  // Each names the request first, so a dot never reads as another request's "Edit 3".
+  const request = "Tighten the wrap, add music bed…";
+  expect(tips.map(tip => tip.querySelector("b")?.textContent)).toEqual([`${request} · 1 of 3 · 0:00`, `${request} · 2 of 3 · 0:00`, `${request} · 3 of 3 · 0:11`]);
   expect(tips.map(tip => tip.querySelector(".simple-timeline-tip-summary")?.textContent)).toEqual(["music bed", "captions", "wrap"]);
   expect(tips.map(tip => tip.querySelector("small")?.textContent)).toEqual(["0:00–0:16 · 16 s", "0:00–0:02 · 2.2 s", "0:11–0:16 · 4.5 s"]);
   // Each dot carries its edit's number, as in the chat: filled once kept, amber while it asks for a look.
@@ -10225,4 +10227,42 @@ it("puts a marked stretch on the message beside the edit that's open, which stay
   expect(openTitle()).toBeUndefined();
   expect(useUiStore.getState().agentContext).toMatchObject({ time: 10, end: stretch.end, markedRange: stretch });
   expect((useUiStore.getState().agentContext as AgentContext).changeId).toBeUndefined();
+});
+
+it("keeps one list of every edit open at a time, and names the request the timeline marks above the ruler", async () => {
+  earlierRequestOnly(false);
+  const later = laterRequest("chg_later", false);
+  const intro = { changeId: "chg_later", spot: 1, label: "intro fade", range: { start: 0, end: 1 }, previous: [] };
+  later.lists.chg_later = [{ changeId: "chg_later", spot: 0, label: "outro fade", range: { start: 13, end: 15 }, previous: [] }, intro];
+  const change = { ...later.change, timelineEdits: [{ label: "outro fade", range: { start: 13, end: 15 } }, { label: "intro fade", range: intro.range }] };
+  data = { ...data, changes: [...data.changes, change] };
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  await act(async () => {});
+  // The latest request has the timeline. The line above the ruler says whose dots they are, and how many.
+  const heading = () => container.querySelector<HTMLElement>(".timeline-heading");
+  expect(heading()?.querySelector(".timeline-whose")?.textContent).toBe(threadWith("chg_later").title);
+  expect(heading()?.querySelector(".timeline-whose-count")?.textContent).toBe("· 2 edits");
+  // Its name brings the request into view in the chat.
+  const scrolled = vi.fn();
+  turnFor("chg_later").querySelector<HTMLElement>(".simple-pass")!.scrollIntoView = scrolled;
+  await click(heading()!.querySelector<HTMLElement>(".timeline-whose")!);
+  await act(async () => { await new Promise(resolve => requestAnimationFrame(() => resolve(undefined))); });
+  expect(scrolled).toHaveBeenCalled();
+  // Opening one request's list of every edit closes another's, so two "Hide" links never stand for one timeline.
+  const toggle = (changeId: string) => turnFor(changeId).querySelector<HTMLElement>(".simple-pass-toggle")!;
+  await click(toggle("chg_approved_2"));
+  expect(toggle("chg_approved_2").getAttribute("aria-expanded")).toBe("true");
+  await click(toggle("chg_later"));
+  expect(toggle("chg_later").getAttribute("aria-expanded")).toBe("true");
+  expect(toggle("chg_approved_2").getAttribute("aria-expanded")).toBe("false");
+  expect([...container.querySelectorAll(".simple-pass-toggle")].filter(t => t.textContent === "Hide")).toHaveLength(1);
+  // An open card names its own edit: the line waits while it is open.
+  await click(editRows("chg_later")[0]!);
+  await act(async () => {});
+  expect(container.querySelector(".edit-card")).not.toBeNull();
+  expect(heading()).toBeNull();
+  await press("Escape");
+  await act(async () => {});
+  expect(heading()?.querySelector(".timeline-whose")?.textContent).toBe(threadWith("chg_later").title);
 });

@@ -71,3 +71,14 @@ export function madeSentence(edits: readonly Listed[], length: (seconds: number)
 
 /** The sentence as plain text, for a title or a label. */
 export const sentenceText = (parts: readonly SentencePart[]) => parts.map(part => typeof part === "string" ? part : part.strong).join("");
+
+/**
+ * How many edits a request has on the timeline, in one figure: "12 zooms" when they are all one kind, "231 cuts" when
+ * they all took footage out, and "14 edits" otherwise. The rows the timeline numbers are counted, so it matches them.
+ */
+export function editCount(edits: readonly Pick<ThreadEdit, "beforeCut" | "kind">[], n = edits.length): string {
+  if (edits.length && edits.every(e => e.beforeCut)) return plural(n, "cut");
+  const kinds = new Set(edits.map(e => e.kind));
+  const noun = kinds.size === 1 ? NOUNS[[...kinds][0]!] : undefined;
+  return noun ? `${n} ${n === 1 ? noun[0] : noun[1]}` : plural(n, "edit");
+}

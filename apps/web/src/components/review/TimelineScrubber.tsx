@@ -230,6 +230,8 @@ interface TimelineScrubberProps {
   onRange?(range: TimeRange | undefined): void;
   /** The video's frame rate: a marked range's ends sit on frames. */
   fps?: number;
+  /** A line above the ruler: whose edits the marks are, in the simple view. */
+  heading?: ReactNode;
 }
 
 /**
@@ -486,7 +488,7 @@ export function TimelineScrubber(props: TimelineScrubberProps) {
 }
 
 function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, activeShortcuts, subject, kept,
-  label = "Position in the video", pictureAspect = 16 / 9, frameAt, previewStrip, hoverVideo, onSeek, onSelectTime, onScrubStart, highlight, marks, gaps, skippedRanges, onGap, onBand, range, onRange, fps = 30 }:
+  label = "Position in the video", pictureAspect = 16 / 9, frameAt, previewStrip, hoverVideo, onSeek, onSelectTime, onScrubStart, highlight, marks, gaps, skippedRanges, onGap, onBand, range, onRange, fps = 30, heading }:
   TimelineScrubberProps & { subject: string; kept: RefObject<KeptView | undefined> }) {
   const litMark = useStore(useContext(EditHoverContext));
   const total = Number.isFinite(duration) ? Math.max(0, duration) : 0;
@@ -699,6 +701,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
     <button type="button" className="timeline-fit" aria-label="Fit timeline" title="Show full timeline (0)" disabled={intendedSpan >= total} onClick={() => fitRange()}>Fit</button>
   </div>;
   return <div className="timeline-panel" onKeyDown={e => handleZoomKey(e.nativeEvent)}>
+    {heading && <div className="timeline-heading">{heading}</div>}
     <div ref={track} className={marking.marking ? "timeline-track is-marking" : "timeline-track"}><ScrubPreview start={from} duration={span} pictureAspect={pictureAspect} frameAt={frameAt} hoverVideo={hoverVideo} note={markNote || gapNote}>
     <div ref={slider} className="timeline-slider" role="slider" tabIndex={total ? 0 : -1} aria-disabled={!total}
       aria-label={label} aria-valuemin={start} aria-valuemax={end} aria-valuenow={position} aria-valuetext={playbackClock(position)}

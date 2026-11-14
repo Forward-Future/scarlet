@@ -40,7 +40,7 @@ import { Drawer, Icon, Loading } from "../components/ui/primitives";
 import { api, errorMessage } from "../lib/client";
 import { appLog } from "../lib/appLog";
 import { clock as videoClock, lengthLabel, plural, removedSeconds } from "../lib/format";
-import { madeSentence, type SentencePart } from "../lib/madeSentence";
+import { editCount, madeSentence, type SentencePart } from "../lib/madeSentence";
 import { editFocus, editKindWord, editNote } from "../lib/editKind";
 import { player, type Audition } from "../lib/player";
 import { appliedCutClock, appliedCutSource, cutChange } from "../lib/appliedCutPlayback";
@@ -584,6 +584,12 @@ function belongsTo(edit: ThreadEdit | undefined, change: Change) {
 
 /** Where a cut or an edit is, as the message box's tag and the player write it: past an hour, 1:02:07 and not 62:07. */
 const clockLabel = (seconds: number) => videoClock(seconds);
+
+/** A request's words, short enough to lead a hover note: its first line, up to 32 characters. */
+const shortTitle = (title: string) => {
+  const line = title.split("\n")[0]!.trim();
+  return line.length > 32 ? `${line.slice(0, 31).trimEnd()}…` : line;
+};
 
 /** A dialogue pass stages the cuts it doubted. Other proposals simply play. */
 function isDialoguePass(change: Change) {
@@ -1398,7 +1404,7 @@ function Turn({ projectId, thread, actions, pinned, pinHost, list: passList }: {
   if (!owner && hasRows) nodes.push(<div key="edits" className="req">{summed
     ? <PassSummary projectId={projectId} thread={thread} edits={listed} actions={actions} list={passList} listedNeed={passListed} />
     : <ThreadResult projectId={projectId} thread={thread} edits={listed} actions={actions} list={passList} listedNeed={passListed} />}</div>);
-  return <section className="simple-turn" aria-label={thread.title}>
+  return <section className="simple-turn" aria-label={thread.title} data-thread={thread.id}>
     {nodes}
   </section>;
 }
@@ -1479,9 +1485,13 @@ export function SimpleWorkspace() {
   const [focus, setFocus] = useState<{ threadId: string; changeId?: string; spot?: number }>();
   // The list each request has open in the chat: every edit, or just the ones that need the editor. ↑ and ↓ read it.
   const [lists, setLists] = useState<Record<string, OpenList>>({});
+  // One list of every edit is open at a time, so two "Hide" links never stand for one timeline: opening another
+  // request's closes it. The list of what needs the editor is a review list, and leaves the others as they are.
   const listOf = (threadId: string): PassList => [lists[threadId], next => setLists(all => {
     const open = typeof next === "function" ? next(all[threadId]) : next;
-    return open === all[threadId] ? all : { ...all, [threadId]: open };
+    if (open === all[threadId]) return all;
+    const others = open !== "all" ? all : Object.fromEntries(Object.entries(all).filter(([, list]) => list !== "all"));
+    return { ...others, [threadId]: open };
   })];
   // The pass whose full list is open in the chat, and the row the pointer is over there.
   const [openList, setOpenList] = useState<string>();
@@ -2638,7 +2648,10 @@ export function SimpleWorkspace() {
     if (state === "check" && passFocused) return [{ ...passEditDot(focusThread, e), group: "pass", state, current }];
     const visible = state === "check" || onLatest || current ? { state, current } : listShown ? { quiet: true } : undefined;
     if (!visible) return [];
-    return [{ ...editDot(focusThread, e, `Edit ${dotNumbers.get(e) ?? i + 1} of ${playerView.edits.length} · ${clockLabel(e.at ?? e.range.start)}`), n: dotNumbers.get(e) ?? i + 1, ...visible }];
+    // The hover note names the request first: "Edit 3" alone would read as the chat's third request.
+    const dot = editDot(focusThread, e, `${shortTitle(focusThread.title)} · ${dotNumbers.get(e) ?? i + 1} of ${playerView.edits.length} · ${clockLabel(e.at ?? e.range.start)}`);
+    // The request's words lead the note now, so they aren't said again under it.
+    return [{ ...dot, context: dot.context === focusThread.title ? undefined : dot.context, n: dotNumbers.get(e) ?? i + 1, ...visible }];
   }) : [];
   // The waiting pass's edits that ask for a look are on the timeline whatever else is: with one of its calls open, and
   // with the timeline on another request, as when a request waits behind the pass. "N need you" counts them with the
@@ -3353,6 +3366,22 @@ export function SimpleWorkspace() {
         setRewording(item && rewording?.id !== id ? { id, text: item.text } : undefined);
       }} /> : undefined} />;
 
+  // Above the ruler, whose edits the timeline marks: the request's words, then how many while it marks them all. Its
+  // name brings that request into view in the chat. An open card names its own edit, so the line waits while one is open.
+  const shownMarks = !source && !beforeCut && !(suggestion && lineFocus);
+  const allMarked = onLatest || listShown;
+  const timelineHeading = shownMarks && !(editCard ?? callCard ?? suggestCard) && focusThread && playerView?.edits.length && numberedDots.length
+    ? <>
+      <button type="button" className="timeline-whose" title={`${focusThread.title}\nShow in the chat`} onClick={() => {
+        setTranscript(false);
+        requestAnimationFrame(() => {
+          const block = chat.current?.querySelector(`[data-thread="${CSS.escape(focusThread.id)}"]`);
+          (block?.querySelector(".simple-pass") ?? block)?.scrollIntoView?.({ block: "nearest" });
+        });
+      }}>{focusThread.title}</button>
+      {allMarked && <span className="timeline-whose-count">· {editCount(playerView.edits, passFocused ? playerView.edits.length : editGroups(playerView.edits).length)}</span>}
+    </> : undefined;
+
   return <EditHoverContext.Provider value={hoveredEdit}>
     <main className="min-h-0 flex flex-1 flex-col">
       <Dropzone className="edit-workspace simple-workspace" label="Add footage to this project" notice={notice}
@@ -3433,7 +3462,7 @@ export function SimpleWorkspace() {
         <div className="workspace-stage simple-stage">
           {/* An applied cut plays on the version before it, where the working cut's times don't hold, and a suggestion's
               dots are all its own: neither has dots beside its band. */}
-          <CutPreview simple={{ marks: source || beforeCut ? [] : suggestion && lineFocus ? marks : [...marks, ...numberedDots, ...passDots], focus: lineFocus, label: onVideo, compareHost: reviewingEdit ? compareHost : undefined, above: editCard ?? callCard ?? suggestCard,
+          <CutPreview simple={{ marks: source || beforeCut ? [] : suggestion && lineFocus ? marks : [...marks, ...numberedDots, ...passDots], focus: lineFocus, label: onVideo, compareHost: reviewingEdit ? compareHost : undefined, above: editCard ?? callCard ?? suggestCard, heading: timelineHeading,
             gaps: cutKey ? gaps : undefined, skippedRanges: joinedPlayer?.clock.removed ?? (appliedListen ?? audition)?.skips,
             nextCutPlayback, cutPlayback: appliedListen && beforeTimeline && cutKey && appliedCut
               ? { key: editPlaybackKey(reviewingEdit!, appliedAfterVersion), start: appliedListen.start, side: appliedSide,
