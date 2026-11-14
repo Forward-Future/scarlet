@@ -157,6 +157,38 @@ it("settles a failed waveform read and ignores a late response from a previous s
   expect(container.querySelector("path[d]")?.getAttribute("d")).toBeFalsy();
 });
 
+it("keeps the old stills over a rebuilt timeline until its own have loaded", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(84);
+  const nap = (ms: number) => act(() => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  // A new working cut of the same footage: another length, so the timeline is built again.
+  const scrubber = (version: string, duration: number) =>
+    <TimelineScrubber duration={duration} playhead={0} frameAt={t => `/${version}/frame/${t}`} onSeek={() => {}} />;
+  const strip = () => container.querySelector<HTMLElement>(".timeline-filmstrip")!;
+  const own = () => [...strip().querySelectorAll<HTMLImageElement>(":scope > div:not(.filmstrip-held) > img")];
+  const held = () => [...strip().querySelectorAll<HTMLImageElement>(".filmstrip-held img")].map(img => img.getAttribute("src"));
+  const loadOwn = () => act(async () => { for (const img of own()) img.dispatchEvent(new Event("load")); });
+
+  await show(scrubber("v1", 8));
+  expect(held()).toEqual([]);
+  await loadOwn();
+  expect(strip().classList).not.toContain("is-loading");
+
+  await show(scrubber("v2", 9));
+  // The new cut's stills are on their way; the old ones stay in their place meanwhile, with no wait glow over them.
+  expect(strip().classList).toContain("is-loading");
+  expect(held().length).toBeGreaterThan(0);
+  expect(held().every(src => src?.startsWith("/v1/"))).toBe(true);
+  expect(strip().querySelector(".filmstrip-wait")).toBeNull();
+  expect(strip().querySelector(".filmstrip-held")?.hasAttribute("data-leaving")).toBe(false);
+
+  await loadOwn();
+  expect(strip().classList).not.toContain("is-loading");
+  expect(strip().querySelector(".filmstrip-held")?.hasAttribute("data-leaving")).toBe(true);
+  await nap(650);
+  expect(strip().querySelector(".filmstrip-held")).toBeNull();
+});
+
 it("loads the picture and the sound as one wave, and lands them together when they finish within a beat", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(84);

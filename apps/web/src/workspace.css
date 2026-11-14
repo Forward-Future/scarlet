@@ -262,6 +262,14 @@
 .timeline-sheet-cell > span { flex: none; position: relative; overflow: hidden; }
 .timeline-sheet-cell img { position: absolute; top: 0; max-width: none; object-fit: fill; }
 .timeline-filmstrip:not(.is-loading) img[data-loaded] { opacity: 1; }
+/* A rebuilt lane keeps the stills it replaced over its slots until its own land, then fades them out as those fade in. */
+.filmstrip-held {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  display: grid; grid-auto-flow: column; grid-template-rows: minmax(0, 1fr); grid-auto-columns: minmax(0, 1fr); gap: 1px;
+  transition: opacity .25s ease .28s;
+}
+.filmstrip-held[data-leaving] { opacity: 0; }
+.timeline-filmstrip .filmstrip-held img { opacity: 1; transition: none; }
 .timeline-playhead-time {
   position: absolute; top: 1px; padding: 1px 4px; border-radius: 3px; background: #f4f1e9; color: #1a1918;
   font: 11px/14px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;

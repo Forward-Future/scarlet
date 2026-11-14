@@ -5,6 +5,7 @@ import { api } from "../../lib/client";
 import { usePlayerStore } from "../../stores/player";
 import { arrowSeekTime, ignorePageShortcut, useHotkeys } from "../../lib/hotkeys";
 import { playbackClock } from "../../lib/format";
+import { playbackLog } from "../../lib/playbackLog";
 import { TimelineWaveform, type WaveformMedia } from "./TimelineWaveform";
 import type { EditCue } from "./EditReferences";
 import { ScrubPreview, type HoverVideo } from "../player/ScrubPreview";
@@ -49,6 +50,24 @@ function FilmstripSheet({ src, frames, pictureAspect, style, loaded, onLoad, onE
 
 /** How long the picture lane waits for its last stills before showing the ones it has. */
 const PICTURE_PATIENCE_MS = 3000;
+/** How long the stills a rebuilt lane held stay over the new ones: the new ones' left-to-right fade (workspace.css). */
+const HELD_FADE_MS = 600;
+
+interface Still { src?: string; span: number }
+/** The stills a lane last showed whole, and whether they were preview sheets, for the lane built in its place. */
+interface HeldStills { subject: string; built: string; stills: Still[]; sheets: boolean }
+/**
+ * A new working cut builds the timeline again and every still on it is a new picture from the engine. The lane built in
+ * its place keeps showing the old stills, of the same footage, until its own have landed, instead of going blank.
+ */
+interface Carry { subject: string; built: string; held: RefObject<HeldStills | undefined> }
+const HeldStillsContext = createContext<Carry | null>(null);
+
+/** Stills shown by the timeline this one was built in place of: not a zoom's other window, which shows another stretch. */
+function heldFor(carry: Carry | null) {
+  const held = carry?.held.current;
+  return carry && held && held.subject === carry.subject && held.built !== carry.built ? held : undefined;
+}
 
 const Filmstrip = memo(function Filmstrip({ start, duration, pictureAspect, frameAt, preview, hold, onLoading }: {
   start: number; duration: number; pictureAspect: number; frameAt: FrameAt; preview?: PreviewStrip | null;
@@ -101,11 +120,28 @@ const Filmstrip = memo(function Filmstrip({ start, duration, pictureAspect, fram
   const settle = (src: string) => setSettled(done => done.has(src) ? done : new Set([...done, src].filter(s => wanted.includes(s))));
   const waiting = loading || !!hold;
   const arriving = useArrival(waiting);
+  const carry = useContext(HeldStillsContext);
+  const [held, setHeld] = useState(() => heldFor(carry));
+  const complete = wanted.length > 0 && wanted.every(src => settled.has(src));
+  useLayoutEffect(() => {
+    if (carry && complete && !waiting) carry.held.current = { subject: carry.subject, built: carry.built, stills: stills.map(({ src, span }) => ({ src, span })), sheets: !!cached };
+  }, [carry, complete, waiting, stills, cached]);
+  // Once the lane's own stills are shown, the held ones fade out over them, then go.
+  useEffect(() => {
+    if (!held || waiting) return;
+    const timer = window.setTimeout(() => setHeld(undefined), HELD_FADE_MS);
+    return () => clearTimeout(timer);
+  }, [held, waiting]);
   // The glow starts at the shared wave's current point, so it moves with the sound lane's ripple.
   const phase = useMemo(() => waiting ? wavePhase() : undefined, [waiting]);
   return <div ref={strip} className={`timeline-filmstrip${waiting ? " is-loading" : ""}${arriving ? " is-arriving" : ""}`} aria-hidden="true"
     style={{ "--frames": Math.max(1, count), "--wave-phase": phase } as CSSProperties}>
-    {drawn && wanted.length > 0 && <div className="filmstrip-wait"><i /></div>}
+    {drawn && wanted.length > 0 && !held && <div className="filmstrip-wait"><i /></div>}
+    {held && <div className="filmstrip-held" data-leaving={!waiting || undefined}>
+      {held.stills.map((still, i) => still.src
+        ? <img key={i} src={still.src} alt="" draggable={false} style={held.sheets ? { gridColumn: `span ${still.span}`, objectFit: "fill" } : undefined} />
+        : <div key={i} />)}
+    </div>}
     {stills.map((still, i) => {
       // After a wait the stills fade in from left to right.
       const order = { "--at": (stills.length > 1 ? i / (stills.length - 1) : 0).toFixed(3) } as CSSProperties;
@@ -399,8 +435,25 @@ export function TimelineScrubber(props: TimelineScrubberProps) {
   const { start, duration, cue, waveform } = props;
   const subject = [waveform?.source?.id, waveform?.original, start, cue?.changeId, cue?.spot, cue?.time, props.reviewing];
   const context = [...subject, waveform?.timeline?.version, duration];
+  const key = JSON.stringify(context);
   const kept = useRef<KeptView>(undefined);
-  return <Scrubber key={JSON.stringify(context)} {...props} subject={JSON.stringify(subject)} kept={kept} />;
+  const held = useRef<HeldStills>(undefined);
+  const subjectKey = JSON.stringify(subject);
+  const carry = useMemo(() => ({ subject: subjectKey, built: key, held }), [subjectKey, key]);
+  // Building the timeline again reloads every still on it, so say what made it.
+  const built = useRef<unknown[]>(undefined);
+  useEffect(() => {
+    const before = built.current;
+    built.current = context;
+    if (!before || JSON.stringify(before) === key) return;
+    const names = ["source", "original", "start", "change", "spot", "cue", "reviewing", "version", "duration"];
+    const changed = Object.fromEntries(names.flatMap((name, i) =>
+      JSON.stringify(before[i]) === JSON.stringify(context[i]) ? [] : [[name, `${String(before[i])}->${String(context[i])}`]]));
+    playbackLog("timeline rebuilt", changed);
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  return <HeldStillsContext.Provider value={carry}>
+    <Scrubber key={key} {...props} subject={subjectKey} kept={kept} />
+  </HeldStillsContext.Provider>;
 }
 
 function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, activeShortcuts, subject, kept,
