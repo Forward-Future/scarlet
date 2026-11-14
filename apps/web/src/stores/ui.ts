@@ -205,14 +205,16 @@ export const useUiStore = create<UiState>((set, get) => ({
 
   agent: loadAgent(),
   setAgent: (agent) => {
-    localStorage.setItem(AGENT_KEY, JSON.stringify(agent));
+    try { localStorage.setItem(AGENT_KEY, JSON.stringify(agent)); } catch { /* Keep the pick for this session. */ }
     set({ agent });
   },
 
-  showRunTokens: localStorage.getItem(RUN_TOKENS_KEY) === "shown",
+  showRunTokens: (() => { try { return localStorage.getItem(RUN_TOKENS_KEY) === "shown"; } catch { return false; } })(),
   setShowRunTokens: (v) => {
-    if (v) localStorage.setItem(RUN_TOKENS_KEY, "shown");
-    else localStorage.removeItem(RUN_TOKENS_KEY);
+    try {
+      if (v) localStorage.setItem(RUN_TOKENS_KEY, "shown");
+      else localStorage.removeItem(RUN_TOKENS_KEY);
+    } catch { /* Keep the choice for this session. */ }
     set({ showRunTokens: v });
   },
 
