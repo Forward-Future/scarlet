@@ -235,6 +235,22 @@ function errorResult(err: unknown): ToolResult {
   return { isError: true, content: [{ type: "text", text: describeError(err) }] };
 }
 
+const REFUSAL_LIMIT = 8000;
+
+/** Why a tool result saved nothing, or undefined when it did its work. Kept whole up to a generous limit. */
+export function toolRefusal(result: ToolResult): { text: string; data: Record<string, unknown> } | undefined {
+  const body = result.content?.flatMap(c => c.type === "text" ? [c.text] : []).join("\n") ?? "";
+  if (result.isError) return { text: body.slice(0, REFUSAL_LIMIT), data: { error: true } };
+  if (!body.startsWith("{")) return undefined;
+  let parsed: unknown;
+  try { parsed = JSON.parse(body); } catch { return undefined; }
+  if (!parsed || typeof parsed !== "object" || !(parsed as { needsRevision?: unknown }).needsRevision) return undefined;
+  const { next, ...rest } = parsed as { next?: unknown };
+  const detail = JSON.stringify(rest);
+  return { text: typeof next === "string" ? next : "Nothing was saved.",
+    data: detail.length <= REFUSAL_LIMIT ? { result: rest } : { result: `${detail.slice(0, REFUSAL_LIMIT)}…` } };
+}
+
 export function describeError(err: unknown): string {
   if (err instanceof OpError) return `Invalid op ${JSON.stringify(err.op)}: ${err.message}`;
   if (err instanceof ScarletApiError) {
@@ -875,12 +891,22 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
         });
         // A read the result was built without is reported with it, so a clean-looking answer is never one that went unmeasured.
         const line = unmeasuredLine(missed);
-        return line ? { ...result, content: [...result.content, { type: "text" as const, text: line }] } : result;
+        return await recordRefusal(name, line ? { ...result, content: [...result.content, { type: "text" as const, text: line }] } : result);
       } catch (err) {
         if (err instanceof MediaPreparing) return text(err.message);
-        return errorResult(err);
+        return await recordRefusal(name, errorResult(err));
       }
     }) as never);
+  }
+
+  /**
+   * Saves why a call did nothing to the task's events, whatever the harness reports: an error, or a save that
+   * asks for revision. The model's next call is read against it, so a decision it drops is never unexplained.
+   */
+  async function recordRefusal(name: ScarletToolName, result: ToolResult): Promise<ToolResult> {
+    const refusal = toolRefusal(result);
+    if (refusal) await postEvent({ type: "log", text: refusal.text, data: { kind: "tool_refused", tool: `scarlet.${name}`, ...refusal.data } });
+    return result;
   }
 
   /** The includeAudio flag exists only for a model that can hear; the type always carries it so handlers stay simple. */

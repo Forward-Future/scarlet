@@ -8,7 +8,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { agentCapabilities, ProposeChangeRequest, ScarletApiError, ScarletClient, Task, type EditingTools } from "@scarlet/shared";
 import type { Transcript } from "@scarlet/timeline";
 import { emptyTimeline, makeMediaClip } from "@scarlet/timeline";
-import { createScarletMcpServer, describeError, SCARLET_TOOL_NAMES } from "./server.js";
+import { createScarletMcpServer, describeError, SCARLET_TOOL_NAMES, toolRefusal } from "./server.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { makeState, startMockServer, type MockServer } from "./mock-server.js";
 
@@ -488,7 +488,9 @@ describe("timeline_propose", () => {
     expect(t).toContain("ops[0]");
     expect(t).toContain("ops[1] (splitClip).at");
     expect(t).toContain("Op types");
-    expect(mock.requests.some((q) => q.method === "POST")).toBe(false);
+    // Nothing is saved; only the reason is, in the task's events.
+    expect(mock.requests.some((q) => q.method === "POST" && !q.path.endsWith("/events"))).toBe(false);
+    expect(mock.state.events.at(-1)).toMatchObject({ type: "log", text: t, data: { kind: "tool_refused", tool: "scarlet.timeline_propose", error: true } });
   });
 
   it("dry-runs ops locally and reports unknown clip ids", async () => {
@@ -984,6 +986,11 @@ describe("task events", () => {
       ["question", "Keep the intro?"],
     ]);
   });
+  it("reads a save that asks for revision as a refusal, and a save as none", async () => {
+    expect(toolRefusal({ content: [{ type: "text", text: JSON.stringify({ needsRevision: true, disputedEdges: [{ start: 1, end: 2 }], next: "Nothing was saved. Check the edge." }) }] }))
+      .toEqual({ text: "Nothing was saved. Check the edge.", data: { result: { needsRevision: true, disputedEdges: [{ start: 1, end: 2 }] } } });
+    expect(toolRefusal({ content: [{ type: "text", text: JSON.stringify({ changeId: "chg_1" }) }] })).toBeUndefined();
+  });
   it("posts plain progress text with explicit per-edit references", async () => {
     const edits = [{ phrase: "leveled the dialogue", changeId: "chg_sound", spot: 1 }];
     await client.callTool({ name: "task_log", arguments: { text: "I leveled the dialogue in the interview.", edits } });
@@ -1029,7 +1036,8 @@ describe("task events", () => {
     try {
       const q = await client.callTool({ name: "task_question", arguments: { text: "Keep the intro?" } });
       expect(q.isError).toBe(true);
-      expect(mock.state.events).toHaveLength(0);
+      // No question was posted; why is kept with the task.
+      expect(mock.state.events.map(e => e.data?.kind)).toEqual(["tool_refused"]);
     } finally {
       mock.state.extra = undefined;
     }
@@ -1076,7 +1084,7 @@ describe("skills_list and misc", () => {
       for (const [name, args] of [["change_get", { changeId: "other" }], ["timeline_get", { version: "head" }]] as const) {
         expect((await session.callTool({ name, arguments: args })).isError).toBe(true);
       }
-      expect(mock.requests).toHaveLength(0);
+      expect(mock.requests.filter(q => !q.path.endsWith("/events"))).toHaveLength(0);
       const evidence = await session.callTool({ name: "change_get", arguments: { changeId: "chg_approved" } }) as CallToolResult;
       expect(JSON.parse(textOf(evidence))).toMatchObject({ change: { appliedVersion: "v_kept", approvedSpots: [1] } });
       expect(textOf(evidence)).not.toContain("rejected suggestion");
@@ -1201,7 +1209,7 @@ describe("skills_list and misc", () => {
   it("render_request/render_status and change_list work", async () => {
     const implicit = await client.callTool({ name: "render_request", arguments: {} });
     expect(implicit.isError).toBe(true);
-    expect(mock.requests).toHaveLength(0);
+    expect(mock.requests.filter(q => !q.path.endsWith("/events"))).toHaveLength(0);
     const r = (await client.callTool({ name: "render_request", arguments: { kind: "preview", range: { start: 0, end: 2 } } })) as CallToolResult;
     expect(JSON.parse(textOf(r))).toMatchObject({ id: "rnd_1", state: "queued" });
     const s = (await client.callTool({ name: "render_status", arguments: { renderId: "rnd_1" } })) as CallToolResult;

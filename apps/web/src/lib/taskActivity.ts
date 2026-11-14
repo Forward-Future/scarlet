@@ -134,6 +134,8 @@ export function taskActivityLabel(event: TaskEvent, hasScanHistory = false, wait
     }
     case "log":
       if (event.data?.kind === "editor_progress") return event.data.scanPage ? "Scanning dialogue" : event.text.trim() || undefined;
+      // Why a call saved nothing is kept for diagnosis; the agent says what it does next.
+      if (event.data?.kind === "tool_refused") return undefined;
       if (event.data?.kind === "init") return "Getting started";
       if (event.data?.kind === "reasoning") return "Planning next step";
       if (event.data?.kind === "connection") return "Reconnecting to the model";
