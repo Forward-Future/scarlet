@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { doubledSound, emptyTimeline, introducedDoubledSound, makeMediaClip, type MediaClip, type Timeline } from "./index.js";
+import { applyOps, doubledSound, emptyTimeline, introducedDoubledSound, makeMediaClip, type MediaClip, type Timeline } from "./index.js";
 
 const media = [
   { id: "media-a", kind: "video" as const, hasAudio: true },
@@ -24,7 +24,7 @@ const reported = () => timeline(
 describe("doubled sound", () => {
   it("finds the report's video and audio clips playing the same moment of one recording", () => {
     expect(doubledSound(reported(), media)).toEqual([
-      { mediaId: "media-a", clipIds: ["video-clip", "audio-clip"], overlap: { start: 0, end: 5.75 } },
+      { mediaId: "media-a", clipIds: ["video-clip", "audio-clip"], overlap: { start: 0, end: 5.75 }, source: { start: 0, end: 5.75 } },
     ]);
   });
 
@@ -33,7 +33,7 @@ describe("doubled sound", () => {
       [makeMediaClip("media-a", 2, 8, 2, { id: "v" })],
       [makeMediaClip("media-a", 0, 5, 0, { id: "a" })],
     );
-    expect(doubledSound(tl, media)).toEqual([{ mediaId: "media-a", clipIds: ["a", "v"], overlap: { start: 2, end: 5 } }]);
+    expect(doubledSound(tl, media)).toEqual([{ mediaId: "media-a", clipIds: ["a", "v"], overlap: { start: 2, end: 5 }, source: { start: 2, end: 5 } }]);
   });
 
   it("compares where the overlap starts on each clip's own clock, at its speed", () => {
@@ -42,7 +42,7 @@ describe("doubled sound", () => {
       [makeMediaClip("media-a", 0, 8, 0, { id: "v", speed: 2 })],
       [makeMediaClip("media-a", 4, 8, 2, { id: "a", speed: 2 })],
     );
-    expect(doubledSound(tl, media)).toEqual([{ mediaId: "media-a", clipIds: ["v", "a"], overlap: { start: 2, end: 4 } }]);
+    expect(doubledSound(tl, media)).toEqual([{ mediaId: "media-a", clipIds: ["v", "a"], overlap: { start: 2, end: 4 }, source: { start: 4, end: 8 } }]);
   });
 
   it("leaves the edit as it should have been: the video clip at volume 0 with the sound on A1", () => {
@@ -100,8 +100,24 @@ describe("doubled sound", () => {
     next.tracks[1]!.clips.push(makeMediaClip("media-a", 0, 2, 10, { id: "late-a" }));
     next.tracks[0]!.clips.push(makeMediaClip("media-a", 0, 2, 10, { id: "late-v" }));
     expect(introducedDoubledSound(before, next, media)).toEqual([
-      { mediaId: "media-a", clipIds: ["late-v", "late-a"], overlap: { start: 10, end: 12 } },
+      { mediaId: "media-a", clipIds: ["late-v", "late-a"], overlap: { start: 10, end: 12 }, source: { start: 0, end: 2 } },
     ]);
     expect(introducedDoubledSound(null, before, media)).toHaveLength(1);
+  });
+
+  it("doesn't report sound layered on purpose that a later edit cuts through, which gives its clips new ids", () => {
+    const layered = reported();
+    const rippled = applyOps(layered, [{ op: "rippleDelete", start: 2, end: 3 }]);
+    expect(doubledSound(rippled, media)).toHaveLength(2);
+    expect(introducedDoubledSound(layered, rippled, media)).toEqual([]);
+    const split = applyOps(layered, [{ op: "splitClip", clipId: "audio-clip", at: 2, newClipId: "audio-right" }]);
+    expect(introducedDoubledSound(layered, split, media)).toEqual([]);
+  });
+
+  it("reports a third copy moved under two layered on purpose, by the pairs it makes", () => {
+    const before = reported();
+    before.tracks.push({ ...structuredClone(before.tracks[1]!), id: "a2", clips: [makeMediaClip("media-a", 0, 5.75, 20, { id: "third" })] });
+    const next = applyOps(before, [{ op: "moveClip", clipId: "third", timelineIn: 0 }]);
+    expect(introducedDoubledSound(before, next, media).map(d => d.clipIds)).toEqual([["video-clip", "third"], ["audio-clip", "third"]]);
   });
 });

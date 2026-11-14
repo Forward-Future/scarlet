@@ -7,6 +7,8 @@ export interface DoubledSound {
   clipIds: [string, string];
   /** Timeline seconds where both play. */
   overlap: TimeRange;
+  /** Seconds of the recording both play there. */
+  source: TimeRange;
 }
 
 // The two copies line up to well under an audio sample at 48 kHz. Any farther apart is an offset someone placed, which
@@ -47,28 +49,51 @@ export function doubledSound(timeline: Timeline, media: Iterable<Audio>): Double
   const found: DoubledSound[] = [];
   for (const [mediaId, heard] of heardClips(timeline, assets)) {
     heard.sort((a, b) => a.start - b.start);
-    for (const [i, a] of heard.entries()) {
-      for (const b of heard.slice(i + 1)) {
-        if (b.start >= a.end - PLAYS) break;
+    for (let i = 0; i < heard.length; i++) {
+      const a = heard[i]!;
+      // Sorted by start, so the first clip that starts after this one ends ends the clips it can overlap.
+      for (let j = i + 1; j < heard.length && heard[j]!.start < a.end - PLAYS; j++) {
+        const b = heard[j]!;
         const overlap = { start: b.start, end: Math.min(a.end, b.end) };
         if (overlap.end - overlap.start < PLAYS) continue;
         if (Math.abs((a.clip.speed ?? 1) - (b.clip.speed ?? 1)) > 1e-9) continue;
         // Where the overlap starts, both clips play the same second of the recording.
         if (Math.abs(timelineToSource(a.clip, overlap.start) - timelineToSource(b.clip, overlap.start)) > SAME_MOMENT) continue;
         if (crossfades(a, b, overlap)) continue;
-        found.push({ mediaId, clipIds: [a.clip.id, b.clip.id], overlap: { start: round3(overlap.start), end: round3(overlap.end) } });
+        found.push({ mediaId, clipIds: [a.clip.id, b.clip.id], overlap: { start: round3(overlap.start), end: round3(overlap.end) },
+          source: { start: round3(timelineToSource(a.clip, overlap.start)), end: round3(timelineToSource(a.clip, overlap.end)) } });
       }
     }
   }
   return found;
 }
 
-/** Doubled sound in `next` that `before` didn't already play: the pairs an edit introduced. */
+/**
+ * Doubled sound in `next` that `before` didn't already play: where an edit doubles a stretch of a recording more times
+ * than `before` did. Clips layered on purpose that an edit splits or ripples get new ids, but they double nothing more,
+ * so they aren't reported. Where a stretch is doubled more, the pairs `before` didn't have are the ones reported.
+ */
 export function introducedDoubledSound(before: Timeline | null, next: Timeline, media: Iterable<Audio>): DoubledSound[] {
   const assets = [...media];
+  const had = before ? doubledSound(before, assets) : [];
+  const now = doubledSound(next, assets);
   const pair = (d: DoubledSound) => [...d.clipIds].sort().join(" ");
-  const had = new Set(before ? doubledSound(before, assets).map(pair) : []);
-  return doubledSound(next, assets).filter(d => !had.has(pair(d)));
+  const oldPairs = new Set(had.map(pair));
+  // How many pairs double the recording's second `at`.
+  const copies = (pairs: DoubledSound[], mediaId: string, at: number) =>
+    pairs.filter(d => d.mediaId === mediaId && d.source.start < at && d.source.end > at).length;
+  const more = now.filter(d => {
+    const edges = [...had, ...now].filter(o => o.mediaId === d.mediaId).flatMap(o => [o.source.start, o.source.end])
+      .filter(t => t > d.source.start && t < d.source.end);
+    const points = [d.source.start, ...edges.sort((a, b) => a - b), d.source.end];
+    return points.slice(1).some((end, i) => {
+      const at = (points[i]! + end) / 2;
+      return end - points[i]! > 1e-6 && copies(now, d.mediaId, at) > copies(had, d.mediaId, at);
+    });
+  });
+  // A pair `before` already had is reported only when no new pair doubles the same stretch: that one is the addition.
+  return more.filter(d => !oldPairs.has(pair(d)) || !more.some(o => !oldPairs.has(pair(o)) && o.mediaId === d.mediaId &&
+    o.source.start < d.source.end && o.source.end > d.source.start));
 }
 
 function round3(n: number) {

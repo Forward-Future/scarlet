@@ -6,7 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { agentCapabilities, ProposeChangeRequest, ScarletApiError, ScarletClient, Task, type EditingTools } from "@scarlet/shared";
-import type { Transcript } from "@scarlet/timeline";
+import type { Timeline, Transcript } from "@scarlet/timeline";
 import { emptyTimeline, makeMediaClip } from "@scarlet/timeline";
 import { createScarletMcpServer, describeError, SCARLET_TOOL_NAMES, toolRefusal } from "./server.js";
 import { buildSystemPrompt } from "./prompt.js";
@@ -477,44 +477,80 @@ describe("timeline_propose", () => {
     expect(JSON.parse(textOf(r))).toMatchObject({ onWholeFrames: [{ asked: [0.987, 1.513], removed: [1, 1.5] }] });
   });
 
-  it("tells the agent when an edit plays the same moment of a recording on two audible clips, and still saves the edit", async () => {
-    const old = mock.state.timeline;
+  it("refuses an edit that plays the same moment of a recording on two audible clips, before it can apply, unless the editor asked for it layered", async () => {
+    const old = { timeline: mock.state.timeline, waveform: mock.state.waveform };
+    mock.state.waveform = (id, from, to, points) => spokenWaveform(id, from, to, points, transcript.segments.flatMap(s => s.words));
     const c = await connect();
+    const changes = () => mock.requests.filter(req => req.method === "POST" && req.path.endsWith("/changes")).length;
+    const propose = async (base: Timeline, args: Record<string, unknown>) => {
+      mock.state.timeline = structuredClone(base);
+      await c.callTool({ name: "timeline_get", arguments: {} });
+      return await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", description: "Keep the original audio", ...args } }) as CallToolResult;
+    };
     try {
       // The report in #18: the recording on V1 with its sound, and the same range added to A1 at unity gain.
       const tl = emptyTimeline(mock.state.project.id);
       tl.version = "v_doubled";
       tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 5, 0, { id: "video-clip" })];
-      mock.state.timeline = tl;
-      await c.callTool({ name: "timeline_get", arguments: {} });
-      const doubled = (await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", description: "Keep the original audio",
-        ops: [{ op: "addClip", trackId: "a1", clip: makeMediaClip("m1", 0, 5, 0, { id: "audio-clip" }) }] } })) as CallToolResult;
-      expect(doubled.isError).toBeFalsy();
-      expect(JSON.parse(textOf(doubled))).toMatchObject({ changeId: expect.any(String),
-        doubledSound: [{ mediaId: "m1", clipIds: ["video-clip", "audio-clip"], overlap: { start: 0, end: 5 } }] });
+      const added = { op: "addClip", trackId: "a1", clip: makeMediaClip("m1", 0, 5, 0, { id: "audio-clip" }) };
+      const saved = changes();
+      const doubled = await propose(tl, { ops: [added] });
+      expect(doubled.isError).toBe(true);
+      expect(textOf(doubled)).toContain("clips video-clip and audio-clip both play m1 from 0.00 to 5.00 s, at 0–5 s on the timeline: audio-clip plays only there, so set its volume to 0");
+      expect(textOf(doubled)).toContain("Nothing was saved");
+      expect(changes()).toBe(saved);
+      // The editor asked to hear it twice.
+      const layered = await propose(tl, { ops: [added], layeredSound: true });
+      expect(layered.isError).toBeFalsy();
+      expect(changes()).toBe(saved + 1);
 
       // From the same one-clip timeline: the same addition with the video copy muted, which is the fix, and a copy
-      // offset by 5 ms, under a frame, which may be deliberate. Neither is reported.
-      for (const ops of [
-        [{ op: "updateClip", clipId: "video-clip", patch: { volume: 0 } }, { op: "addClip", trackId: "a1", clip: makeMediaClip("m1", 0, 5, 0, { id: "audio-clip" }) }],
-        [{ op: "addClip", trackId: "a1", clip: makeMediaClip("m1", 0.005, 5, 0, { id: "audio-clip" }) }],
-      ]) {
-        mock.state.timeline = structuredClone(tl);
-        await c.callTool({ name: "timeline_get", arguments: {} });
-        const r = (await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", description: "Keep the original audio", ops } })) as CallToolResult;
-        expect(r.isError).toBeFalsy();
-        expect(JSON.parse(textOf(r))).not.toHaveProperty("doubledSound");
-      }
+      // offset by 5 ms, under a frame, which may be deliberate. Neither is refused.
+      for (const ops of [[{ op: "updateClip", clipId: "video-clip", patch: { volume: 0 } }, added],
+        [{ op: "addClip", trackId: "a1", clip: makeMediaClip("m1", 0.005, 5, 0, { id: "audio-clip" }) }]])
+        expect((await propose(tl, { ops })).isError).toBeFalsy();
 
       // A full replacement timeline is checked the same way.
-      mock.state.timeline = structuredClone(tl);
-      await c.callTool({ name: "timeline_get", arguments: {} });
       const whole = { ...tl, tracks: [tl.tracks[0]!, { ...tl.tracks[1]!, clips: [makeMediaClip("m1", 0, 5, 0, { id: "audio-clip" })] }] };
-      const r = (await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", description: "Assemble", timeline: whole } })) as CallToolResult;
-      expect(r.isError).toBeFalsy();
-      expect(JSON.parse(textOf(r))).toMatchObject({ doubledSound: [{ clipIds: ["video-clip", "audio-clip"] }] });
+      expect(textOf(await propose(tl, { timeline: whole }))).toContain("clips video-clip and audio-clip both play m1");
     } finally {
-      mock.state.timeline = old;
+      mock.state.timeline = old.timeline;
+      mock.state.waveform = old.waveform;
+      await c.close();
+    }
+  });
+
+  it("says how to silence a partly overlapping copy and keep the sound each clip plays alone, and takes that fix", async () => {
+    const old = { timeline: mock.state.timeline, waveform: mock.state.waveform };
+    mock.state.waveform = (id, from, to, points) => spokenWaveform(id, from, to, points, transcript.segments.flatMap(s => s.words));
+    const c = await connect();
+    try {
+      // V1 already ends inside “back.” (1.5–1.8 s). A1 adds the recording from the quiet at 1.05 s to 3.5 s, so the two
+      // play 1.05–1.7 s twice, and each plays sound the other doesn't on either side.
+      const tl = emptyTimeline(mock.state.project.id);
+      tl.version = "v_partial";
+      tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 1.7, 0, { id: "video-clip" })];
+      mock.state.timeline = tl;
+      const propose = async (ops: object[]) => {
+        mock.state.timeline = structuredClone(tl);
+        await c.callTool({ name: "timeline_get", arguments: {} });
+        return await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", description: "Add the audio", ops } }) as CallToolResult;
+      };
+      const added = { op: "addClip", trackId: "a1", clip: makeMediaClip("m1", 1.05, 3.5, 1.05, { id: "audio-clip" }) };
+      const doubled = await propose([added]);
+      expect(doubled.isError).toBe(true);
+      expect(textOf(doubled)).toContain("at 1.05–1.7 s on the timeline: each also plays on its own outside that, so splitClip audio-clip at 1.7, which keeps the part after it as a new clip with its sound, and set audio-clip's volume to 0");
+      // Done as it says, A1 takes over from V1 at 1.7 s inside “back.”, on the same second of the recording: one sound
+      // that plays on, not a cut through the word.
+      const fixed = await propose([added, { op: "splitClip", clipId: "audio-clip", at: 1.7, newClipId: "audio-rest" },
+        { op: "updateClip", clipId: "audio-clip", patch: { volume: 0 } }]);
+      expect(fixed.isError, textOf(fixed)).toBeFalsy();
+      // Ending V1 there with nothing to take over is still a cut through the word.
+      const cut = await propose([{ op: "updateClip", clipId: "video-clip", patch: { sourceOut: 1.65 } }]);
+      expect(textOf(cut)).toContain("inside “back”");
+    } finally {
+      mock.state.timeline = old.timeline;
+      mock.state.waveform = old.waveform;
       await c.close();
     }
   });
