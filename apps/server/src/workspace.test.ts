@@ -1647,6 +1647,9 @@ it("recovers dead workers, keeps saved proposals and lets follow-ups run exactly
   const proposal = await api("POST", `/projects/${saved.projectId}/changes`, { description: "End", ops: marker, taskId: saved.id, skipRender: true });
   expect(proposal.status).toBe(201);
   const { change } = await proposal.json();
+  // An earlier proposal of the same run, which Scarlet closed when this one took its cuts over.
+  ctx.repos.changes.put({ ...ctx.repos.changes.get(change.id)!, id: "chg_carried", state: "rejected", rejectedFrom: "ready",
+    rejectReason: "Carried into a later part of the same dialogue pass.", replacedBy: change.id });
   // Simulate stopping between persisting the change and updating the task.
   ctx.repos.tasks.put({ ...ctx.repos.tasks.get(saved.id)!, changeIds: [] });
   const unstarted = make("Adjust the title", undefined, elsewhere());
@@ -1659,12 +1662,15 @@ it("recovers dead workers, keeps saved proposals and lets follow-ups run exactly
   const repos = workspace.ctx.repos;
   expect(repos.tasks.get(live.id)?.state).toBe("claimed");
   expect(repos.tasks.get(unstarted.id)?.state).toBe("queued");
-  expect(repos.tasks.get(saved.id)).toMatchObject({ state: "failed", interrupted: true, changeIds: [change.id] });
+  expect(repos.tasks.get(saved.id)).toMatchObject({ state: "failed", interrupted: true, changeIds: [change.id, "chg_carried"] });
   expect(repos.tasks.get(interrupted.id)).toMatchObject({ state: "failed", interrupted: true });
   // Scarlet closed mid-run, so each run carries on by itself, ahead of the follow-up asked while it worked.
   const resumed = repos.tasks.get(repos.tasks.get(saved.id)!.retryTaskId!)!;
   expect(resumed).toMatchObject({ state: "queued", resumeRootId: saved.id, changeIds: [], context: { threadId: saved.id } });
   expect(resumed.instruction).toContain(`Saved change ${change.id} [ready]`);
+  // The proposal Scarlet closed isn't told as one the editor turned down.
+  expect(resumed.instruction).toContain(`Saved change chg_carried [replaced by ${change.id}, which holds its cuts now; the editor made no decision on it]`);
+  expect(resumed.instruction).not.toContain("[rejected]");
   const retry = async () => (await (await api("POST", `/tasks/${interrupted.id}/retry`)).json()).task;
   const [a, b] = await Promise.all([retry(), retry()]);
   expect(a.id).toBe(b.id);
@@ -1674,7 +1680,7 @@ it("recovers dead workers, keeps saved proposals and lets follow-ups run exactly
   expect(repos.tasks.get(follow.id)?.state).toBe("queued");
   expect((await api("POST", projectsPath() + "/changes", { description: "Late result", ops: marker, taskId: interrupted.id })).status).toBe(409);
   expect((await api("POST", `/tasks/${interrupted.id}/complete`, { state: "done" })).status).toBe(409);
-  expect(repos.changes.select().map(c => c.id)).toEqual([change.id]);
+  expect(repos.changes.select().map(c => c.id)).toEqual([change.id, "chg_carried"]);
   // The surviving host confirms only its actual jobs. A stale claim expires even under the same host id.
   workspace.ctx.db.prepare("UPDATE tasks SET worker_seen_at = '2000-01-01' WHERE id IN (?,?)").run(live.id, a.id);
   await api("POST", `/hosts/${host.id}/heartbeat`, { running: [live.id] });
