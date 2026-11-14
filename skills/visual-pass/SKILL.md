@@ -14,4 +14,4 @@ Use the editor's own images, screenshots and footage where they exist, as they a
 
 Moving screen footage stays moving footage; framing it is the screen-framing skill's work.
 
-`frame_contact_sheet`, `asset_add` and `timeline_propose` cover what this needs.
+`frame_contact_sheet`, `screen_text`, `asset_add` and `timeline_propose` cover what this needs.
