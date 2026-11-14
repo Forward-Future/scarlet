@@ -375,4 +375,9 @@ button.other-take-time:hover, button.other-take-time:focus-visible { color: var(
 .reading-passage { margin: 0; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
 .reading-passage + .reading-passage { margin-top: 7px; }
 
-.review-actions button[data-key]::after { content: attr(data-key); font-size: 10px; opacity: .65; }
+.review-actions button:is([data-key="R"], [data-key="K"])::after {
+  content: attr(data-key);
+  content: attr(data-key) / "";
+  font-size: 10px;
+  opacity: .75;
+}

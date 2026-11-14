@@ -396,8 +396,6 @@
 .edit-card-acts .review-actions { margin-left: 0; }
 /* The cut's words open under the card's row and scroll inside it, so a long passage never pushes the timeline away. */
 .edit-card > .thread-passage { max-height: 30vh; overflow-y: auto; }
-/* Keys show on hover (each control's title), not in boxes. */
-.edit-card .review-actions button[data-key]::after { content: none; }
 /* What an edit that removed nothing did: "Audio", "Zoom". Neutral, since its footage stays; green for footage put back. */
 .edit-card-length { padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; line-height: 17px; white-space: nowrap; }
 /* A click into another cut's footage on the timeline switched to Before: the card says whose footage it is. The way
