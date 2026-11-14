@@ -8,6 +8,7 @@ import { fileInDirectory } from "@scarlet/render";
 import { createProject } from "@scarlet/timeline";
 import { createApp } from "../app.js";
 import { createTask, cancelTask } from "./tasks.js";
+import { projectBusy } from "./storage.js";
 import { accessToken } from "../auth.js";
 import { WhisperCppProvider } from "../transcribe/whispercpp.js";
 import { UhmDetector } from "../transcribe/uhm.js";
@@ -343,6 +344,73 @@ it("keeps reading for a running edit while the project's media work is paused, a
   expect(held[3]!.aborted).toBe(true);
   await settle();
   expect(read()).toEqual([0, 58, 116, 174]);
+});
+
+/**
+ * A project with a recording, and a Whisper that runs until it is stopped, then takes until `close` to let go of its files.
+ * `which` picks the call to hold: a dialogue page's window read, or a whole transcription.
+ */
+async function heldWhisper(which: "transcribeWav" | "transcribe") {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-held-whisper-"));
+  const app = createApp({ dataDir: dir, skillsSeedDir: dir, env: {}, log: () => {} });
+  const { ctx } = app;
+  let close = () => {};
+  onTestFinished(async () => {
+    close();
+    await ctx.close();
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const project = ctx.repos.projects.insert(createProject("Held"));
+  ctx.paths.ensureProject(project.id);
+  const media = ctx.repos.projects.putMedia(project.id, { id: "mic", name: "Mic", kind: "audio", path: "mic.wav", duration: 300 }, "ready");
+  await writeFile(join(ctx.paths.media(project.id), media.path), "recording");
+  ctx.repos.settings.update({ transcription: { provider: "whispercpp", whisperCppPath: process.execPath } });
+  const closed = new Promise<void>(resolve => { close = resolve; });
+  const held: AbortSignal[] = [];
+  const hold = async (signal: AbortSignal) => {
+    held.push(signal);
+    await new Promise(resolve => signal.addEventListener("abort", resolve, { once: true }));
+    await closed;
+    throw signal.reason;
+  };
+  if (which === "transcribe") vi.spyOn(WhisperCppProvider.prototype, "transcribe").mockImplementation(({ signal }) => hold(signal!));
+  else vi.spyOn(WhisperCppProvider.prototype, "transcribeWav").mockImplementation((_wav, _tmp, signal) => hold(signal!));
+  const headers = { Authorization: `Bearer ${accessToken(ctx)}`, "Content-Type": "application/json" };
+  return { app, ctx, project, media, held, headers, close: () => close() };
+}
+
+it("keeps a trashed project's cleanup waiting until a page the Trash stopped has let go of its files", async () => {
+  const { app, ctx, project, media, held, headers, close } = await heldWhisper("transcribeWav");
+  ctx.repos.transcripts.put({ id: "trs_mic", projectId: project.id, mediaId: media.id, segments: [] });
+  vi.spyOn(ctx.speakers, "turns").mockResolvedValue([]);
+  vi.spyOn(UhmDetector.prototype, "detect").mockResolvedValue([]);
+  const page = app.app.request(`/api/projects/${project.id}/dialogue-detections`, {
+    method: "POST", headers, body: JSON.stringify({ mediaId: media.id, from: 0, to: 60 }) });
+  await vi.waitFor(() => expect(held).toHaveLength(1));
+  expect((await app.app.request(`/api/projects/${project.id}`, { method: "DELETE", headers })).ok).toBe(true);
+  expect(held[0]!.aborted).toBe(true);
+  // The stopped page is still letting go: the project waits, and so does the request.
+  let answered = false;
+  void page.then(() => { answered = true; });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  expect([answered, projectBusy(ctx, project.id)]).toEqual([false, true]);
+  close();
+  expect((await page).ok).toBe(false);
+  await vi.waitFor(() => expect(projectBusy(ctx, project.id)).toBe(false));
+});
+
+it("keeps a project's cleanup waiting while a cancelled transcription lets go of its files", async () => {
+  const { app, ctx, project, media, held, headers, close } = await heldWhisper("transcribe");
+  const started = await app.app.request(`/api/media/${media.id}/transcribe`, { method: "POST", headers, body: "{}" });
+  const { task } = await started.json() as { task: { id: string } };
+  await vi.waitFor(() => expect(held).toHaveLength(1));
+  cancelTask(ctx, ctx.repos.tasks.get(task.id)!);
+  await vi.waitFor(() => expect(held[0]!.aborted).toBe(true));
+  expect(ctx.repos.tasks.get(task.id)?.state).toBe("cancelled");
+  expect(projectBusy(ctx, project.id)).toBe(true);
+  close();
+  await vi.waitFor(() => expect(projectBusy(ctx, project.id)).toBe(false));
 });
 
 it("restores committed dialogue evidence after restarting the engine and retries unfinished windows", async () => {

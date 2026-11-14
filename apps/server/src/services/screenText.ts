@@ -243,7 +243,7 @@ function recordingFor(ctx: Ctx, media: MediaAsset & { projectId: string }) {
 /** Read the windows queued for a recording, one after another, saving each as it is read. */
 function readQueued(ctx: Ctx, media: MediaAsset & { projectId: string }, file: string, state: Recording) {
   if (state.reading) return;
-  state.reading = ctx.track((async () => {
+  state.reading = ctx.trackProject(media.projectId, async () => {
     const kept = await state.kept!;
     while (state.queue.length) {
       const index = state.queue[0]!;
@@ -269,7 +269,7 @@ function readQueued(ctx: Ctx, media: MediaAsset & { projectId: string }, file: s
       state.queue.shift();
       for (const wake of state.waiters) wake();
     }
-  })()).finally(() => {
+  }).finally(() => {
     state.reading = undefined;
     for (const wake of state.waiters) wake();
   });

@@ -447,6 +447,8 @@ const MIGRATIONS: string[] = [
      UPDATE settings SET telemetry_revision = telemetry_revision + 1
        WHERE id = NEW.id AND json_type(NEW.json, '$.telemetryEnabled') IS NOT NULL;
    END;`,
+  // An engine's background work on a project's files, so every engine on the library keeps that project's cleanup waiting.
+  "CREATE TABLE IF NOT EXISTS project_work (project_id TEXT NOT NULL, pid INTEGER NOT NULL, jobs INTEGER NOT NULL, PRIMARY KEY (project_id, pid)) WITHOUT ROWID;",
 ];
 
 export function openDb(path: string): Db {

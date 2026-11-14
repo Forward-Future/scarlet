@@ -1,10 +1,15 @@
+import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
-import { createProject } from "@scarlet/timeline";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createProject, timelineFromKeepRanges } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "./app.js";
 import { accessToken } from "./auth.js";
+import { noteEngineStart } from "./context.js";
+import { projectBusy } from "./services/storage.js";
+import { sourcePreviews } from "./services/sourcePreviews.js";
+import { storeVersion } from "./services/timeline.js";
 import { purgeTrash } from "./services/trash.js";
 
 let workspace: ScarletApp;
@@ -20,6 +25,7 @@ beforeEach(async () => {
 // Folders a test made undeletable, made deletable again before cleanup.
 const locked: string[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const dir of locked.splice(0)) chmodSync(dir, 0o755);
   await workspace.ctx.close();
   rmSync(root, { recursive: true, force: true });
@@ -38,6 +44,29 @@ function undeletable(dir: string) {
 }
 const lockable = process.platform !== "win32" && process.getuid?.() !== 0;
 const clear = () => api("POST", "/storage/cleanup", {kind:"cache",projects:[{id,deletedAt:null}]});
+/** Each project's busy flag on the storage list. */
+const busy = async () => Object.fromEntries((await (await api("GET", "/storage")).json()).projects
+  .map((p: { id: string; busy: boolean }) => [p.id, p.busy]));
+/** The project's camera recording, and a version of it to render. */
+function footage() {
+  const ctx = workspace.ctx;
+  writeFileSync(join(ctx.paths.media(id), "camera.mp4"), "footage");
+  ctx.repos.projects.putMedia(id, { id: "camera", kind: "video", name: "Camera", path: "camera.mp4", duration: 30, height: 360, hasAudio: true }, "ready");
+  return storeVersion(ctx, id, timelineFromKeepRanges(id, "camera", [{ start: 0, end: 30 }]), { parent: null }).version;
+}
+/** An encoder that sees the stop, then takes until `close` to let go of its output. */
+function encoder() {
+  let started!: () => void, close!: () => void;
+  const running = new Promise<void>(resolve => { started = resolve; });
+  const closed = new Promise<void>(resolve => { close = resolve; });
+  const run = async (signal?: AbortSignal) => {
+    started();
+    await new Promise(resolve => signal!.addEventListener("abort", resolve, { once: true }));
+    await closed;
+    throw new Error("Stopped");
+  };
+  return { running, close, run };
+}
 it("allows permanently deleting a trashed project with an unclaimed edit", async () => {
   const created = await api("POST", `/projects/${id}/tasks`, { kind: "edit", agent: "codex", instruction: "Trim the intro" });
   const { task } = await created.json();
@@ -78,6 +107,127 @@ it("clears only reusable segments and refuses active projects", async () => {
   expect((await clear()).status).toBe(200);
   expect(generated.some(f=>existsSync(join(paths.segments(id),f)))).toBe(false);
   expect(protectedFiles.every(f=>existsSync(f))).toBe(true);
+});
+it("frees an idle project's storage while the engine works on something else", async () => {
+  const ctx = workspace.ctx;
+  // Background work of this engine that isn't this project's, such as another project's export.
+  let finish!: () => void;
+  ctx.track(new Promise<void>(resolve => { finish = resolve; }));
+  try {
+    writeFileSync(join(ctx.paths.segments(id), "a".repeat(64) + ".mp4"), "data");
+    const trashed = ctx.repos.projects.insert(createProject("Trashed")).id;
+    ctx.paths.ensureProject(trashed);
+    ctx.repos.projects.softDelete(trashed);
+    const { projects } = await (await api("GET", "/storage")).json();
+    expect(projects.map((p: { busy: boolean }) => p.busy)).toEqual([false, false]);
+    expect((await clear()).status).toBe(200);
+    const { deletedAt } = ctx.repos.projects.listDeleted()[0]!;
+    expect((await api("POST", "/storage/cleanup", { kind: "trash", projects: [{ id: trashed, deletedAt }] })).status).toBe(200);
+    expect(existsSync(ctx.paths.project(trashed))).toBe(false);
+  } finally {
+    finish();
+  }
+});
+it("keeps a project's cleanup blocked while its own workers hold its files, and another project's free", async () => {
+  const ctx = workspace.ctx;
+  const other = ctx.repos.projects.insert(createProject("Other")).id;
+  ctx.paths.ensureProject(other);
+  const version = footage();
+  const clearOther = () => api("POST", "/storage/cleanup", { kind: "cache", projects: [{ id: other, deletedAt: null }] });
+
+  // A full source cache encodes after its recording is ready.
+  ctx.db.prepare("INSERT INTO source_cache_requests VALUES ('camera', ?)").run(process.pid);
+  expect(await busy()).toEqual({ [id]: true, [other]: false });
+  expect((await clear()).status).toBe(409);
+  expect((await clearOther()).status).toBe(200);
+  // A claim whose engine is gone holds nothing, nor does a request still waiting for a worker.
+  ctx.db.prepare("UPDATE source_cache_requests SET worker_pid = ?").run(spawnSync(process.execPath, ["-e", ""]).pid);
+  expect(await busy()).toEqual({ [id]: false, [other]: false });
+  ctx.db.exec("UPDATE source_cache_requests SET worker_pid = NULL");
+  expect(await busy()).toEqual({ [id]: false, [other]: false });
+  ctx.db.exec("DELETE FROM source_cache_requests");
+
+  // A cancelled render whose encoder is still closing its output.
+  const encode = encoder();
+  vi.spyOn(ctx.render, "renderRange").mockImplementation((_project, _timeline, _range, _file, opts) => encode.run(opts.signal));
+  const render = ctx.renders.request({ projectId: id, version, kind: "segment", quality: "delivery", range: { start: 1, end: 3 } });
+  try {
+    await encode.running;
+    expect(ctx.renders.cancel(render.id)?.state).toBe("cancelled");
+    expect(await busy()).toEqual({ [id]: true, [other]: false });
+    expect((await clear()).status).toBe(409);
+    expect((await clearOther()).status).toBe(200);
+    // Another engine on the same library sees it too.
+    const peer = createApp({ dataDir: root, log() {} });
+    try {
+      expect([projectBusy(peer.ctx, id), projectBusy(peer.ctx, other)]).toEqual([true, false]);
+    } finally {
+      await peer.ctx.close();
+    }
+  } finally {
+    encode.close();
+  }
+  await settle();
+  expect(await busy()).toEqual({ [id]: false, [other]: false });
+  expect((await clear()).status).toBe(200);
+  // An engine given the id of one that was killed while its encoder closed takes up that claim.
+  ctx.db.prepare("UPDATE renders SET json = json_set(json, '$.queuePid', ?) WHERE id = ?").run(process.pid, render.id);
+  expect(projectBusy(ctx, id)).toBe(true);
+  ctx.db.prepare("INSERT OR REPLACE INTO engines (pid, started_at) VALUES (?, ?)").run(process.pid, Date.now() - 3_600_000);
+  expect(noteEngineStart(ctx)).toBe(true);
+  expect(projectBusy(ctx, id)).toBe(false);
+});
+it("keeps a trashed project until the workers the Trash stopped have closed its files", async () => {
+  const ctx = workspace.ctx;
+  const version = footage();
+  const idle = ctx.repos.projects.insert(createProject("Idle")).id;
+  ctx.paths.ensureProject(idle);
+  ctx.repos.projects.softDelete(idle);
+  const render = encoder(), chunk = encoder();
+  vi.spyOn(ctx.render, "renderRange").mockImplementation((_project, _timeline, _range, _file, opts) => render.run(opts.signal));
+  vi.spyOn(ctx.render, "makeProxy").mockImplementation((_input, _output, opts) => chunk.run(opts.signal));
+  const job = ctx.renders.request({ projectId: id, version, kind: "segment", quality: "delivery", range: { start: 1, end: 3 } });
+  const preview = sourcePreviews.get(ctx, ctx.repos.projects.getMedia("camera")!, 0, new AbortController().signal).catch(() => {});
+  try {
+    await Promise.all([render.running, chunk.running]);
+    expect((await api("DELETE", `/projects/${id}`)).status).toBe(200);
+    const deletedAt = ctx.repos.projects.listDeleted().find(p => p.id === id)!.deletedAt;
+    const empty = () => api("POST", "/storage/cleanup", { kind: "trash", projects: [{ id, deletedAt }] });
+    const later = Date.parse(deletedAt) + 31 * 24 * 60 * 60 * 1000;
+    expect(await busy()).toEqual({ [id]: true, [idle]: false });
+    expect((await empty()).status).toBe(409);
+    // The 30-day purge takes the idle project and leaves this one.
+    expect(purgeTrash(ctx, later)).toBe(1);
+    render.close();
+    await vi.waitFor(() => expect(ctx.repos.renders.get(job.id)?.queuePid).toBeUndefined());
+    // The preview chunk's encoder alone still holds the project, for another engine on the library too.
+    expect(await busy()).toEqual({ [id]: true });
+    expect((await empty()).status).toBe(409);
+    const peer = createApp({ dataDir: root, log() {} });
+    try {
+      expect(projectBusy(peer.ctx, id)).toBe(true);
+    } finally {
+      await peer.ctx.close();
+    }
+    chunk.close();
+    await preview;
+    await settle();
+    expect(await busy()).toEqual({ [id]: false });
+    expect(purgeTrash(ctx, later)).toBe(1);
+    await settle();
+    expect(existsSync(ctx.paths.project(id))).toBe(false);
+  } finally {
+    render.close();
+    chunk.close();
+  }
+});
+it("starts no work on a project's files that the library can't note", () => {
+  const ctx = workspace.ctx;
+  ctx.db.exec("DROP TABLE project_work");
+  let started = false;
+  const pending = ctx.pending.size;
+  expect(() => ctx.trackProject(id, async () => { started = true; })).toThrow();
+  expect([started, ctx.pending.size]).toEqual([false, pending]);
 });
 it("rejects stale Trash selections and retries interrupted file removal",async()=>{
   const ctx = workspace.ctx;

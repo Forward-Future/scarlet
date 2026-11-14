@@ -9,6 +9,7 @@ import { LocalWhisperModel } from "../transcribe/localModel.js";
 import { speakerAnalysisVersion } from "../transcribe/speakerLabels.js";
 import * as speakerWorker from "../transcribe/speakerWorker.js";
 import { speakersAtOnce, speakersRunBeside } from "./recordingSpeakers.js";
+import { projectBusy } from "./storage.js";
 
 /** An engine that finds a GPU speaker runtime bundled. The decode, the model downloads and the worker program are faked. */
 async function speakerFixture() {
@@ -229,6 +230,42 @@ it("goes on with an analysis a pass waits for while the project's media work is 
   ctx.repos.projects.softDelete(project.id);
   ctx.stopMedia(project.id, true);
   expect(await wide).toBe("stopped");
+});
+
+it("keeps a trashed project's cleanup waiting until an analysis the Trash stopped has let go of its files", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-speakers-trash-"));
+  const { ctx } = createApp({ dataDir: dir, skillsSeedDir: dir, env: {}, log: () => {} });
+  let close = () => {};
+  onTestFinished(async () => {
+    close();
+    await ctx.close();
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const project = ctx.repos.projects.insert(createProject("Speakers"));
+  ctx.paths.ensureProject(project.id);
+  ctx.speakers.beside = true;
+  vi.spyOn(LocalWhisperModel.prototype, "get").mockResolvedValue("model");
+  vi.spyOn(ffmpeg, "extractWav").mockImplementation(async (_file, wav) => { await writeFile(wav, "pcm"); });
+  // The worker runs until it is stopped, then takes until `close` to let go of its files.
+  const closed = new Promise<void>(resolve => { close = resolve; });
+  let started = false;
+  vi.spyOn(ffmpeg, "run").mockImplementation(async (_bin, _args, opts) => {
+    started = true;
+    await new Promise(resolve => opts?.signal?.addEventListener("abort", resolve, { once: true }));
+    await closed;
+    throw opts!.signal!.reason;
+  });
+  const media = ctx.repos.projects.putMedia(project.id, { id: "camera", name: "camera", path: "camera.wav", kind: "audio" }, "ready");
+  await writeFile(join(ctx.paths.media(project.id), media.path), "camera");
+  const analysis = ctx.speakers.turns(ctx, project.id, media).catch(() => "stopped");
+  await vi.waitFor(() => expect(started).toBe(true));
+  ctx.repos.projects.softDelete(project.id);
+  ctx.stopMedia(project.id, true);
+  expect(projectBusy(ctx, project.id)).toBe(true);
+  close();
+  expect(await analysis).toBe("stopped");
+  await vi.waitFor(() => expect(projectBusy(ctx, project.id)).toBe(false));
 });
 
 it("labels a transcript while the project's media work is paused only when the pause doesn't hold it", async () => {

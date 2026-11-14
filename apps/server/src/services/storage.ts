@@ -2,7 +2,7 @@ import { lstatSync, readdirSync } from "node:fs";
 import { readdir, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { StorageProject, StorageSelection } from "@scarlet/shared";
-import type { Ctx } from "../context.js";
+import { engineIsAlive, type Ctx } from "../context.js";
 import { conflict } from "../errors.js";
 
 export function checkedProjectDir(ctx: Ctx, id: string): string {
@@ -21,17 +21,24 @@ function cacheDir(ctx: Ctx, id: string): string | undefined {
   if (lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) return dir;
 }
 
-export function projectBusy(ctx: Ctx, id: string, expired = false): boolean {
-  // Other engine instances also publish their jobs to this database.
+export function projectBusy(ctx: Ctx, id: string): boolean {
+  // Only the project's own jobs count, read from the database every engine instance publishes them to.
   // Trashed projects cannot claim queued work. Preserve it for Restore, but
   // only an actual worker needs to delay permanently removing the project.
-  return !!((!expired && ctx.pending.size) || ctx.db.prepare(`SELECT 1 WHERE
+  if (ctx.db.prepare(`SELECT 1 WHERE
     EXISTS (SELECT 1 FROM renders WHERE project_id=? AND state IN ('queued','running')) OR
     EXISTS (SELECT 1 FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.project_id=?
       AND (t.state IN ('claimed','running') OR (p.deleted_at IS NULL AND t.state IN ('queued','waiting_for_user')))) OR
     EXISTS (SELECT 1 FROM media m JOIN projects p ON p.id=m.project_id
       WHERE m.project_id=? AND m.status NOT IN ('ready','failed')
-      AND (m.ingest_pid IS NOT NULL OR (p.deleted_at IS NULL AND p.media_paused=0)))`).get(id, id, id));
+      AND (m.ingest_pid IS NOT NULL OR (p.deleted_at IS NULL AND p.media_paused=0)))`).get(id, id, id)) return true;
+  // A full source cache encodes after its recording is ready, a cancelled render's encoder still closes its output, and
+  // other background work on the project's files has no job of its own: only their engines' claims say they hold the files.
+  const workers = ctx.db.prepare(`SELECT r.worker_pid AS pid FROM source_cache_requests r JOIN media m ON m.id=r.media_id
+    WHERE m.project_id=? AND r.worker_pid IS NOT NULL UNION ALL SELECT json_extract(json,'$.queuePid') FROM renders
+    WHERE project_id=? AND state='cancelled' AND json_extract(json,'$.queuePid') IS NOT NULL
+    UNION ALL SELECT pid FROM project_work WHERE project_id=?`).all(id, id, id) as { pid: number }[];
+  return workers.some(worker => engineIsAlive(ctx, worker.pid));
 }
 
 function missingSource(ctx: Ctx, id: string): boolean {
@@ -62,10 +69,10 @@ export async function storageProjects(ctx: Ctx): Promise<StorageProject[]> {
   return result;
 }
 
-export function validateSelection(ctx: Ctx, selected: StorageSelection, expired = false) {
+export function validateSelection(ctx: Ctx, selected: StorageSelection) {
   const current = ctx.db.prepare("SELECT deleted_at FROM projects WHERE id=?").get(selected.id) as { deleted_at: string | null } | undefined;
   if (!current || current.deleted_at !== selected.deletedAt) throw conflict("storage_changed", "The project changed. Rescan storage.");
-  if (projectBusy(ctx, selected.id, expired)) throw conflict("storage_busy", "Scarlet is working. Try again after the current jobs finish.");
+  if (projectBusy(ctx, selected.id)) throw conflict("storage_busy", "Scarlet is working. Try again after the current jobs finish.");
   checkedProjectDir(ctx, selected.id);
   if (!selected.deletedAt && missingSource(ctx, selected.id)) {
     throw conflict("storage_source_missing", "Reconnect missing project media before clearing its cache.");

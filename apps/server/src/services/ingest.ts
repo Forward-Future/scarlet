@@ -549,7 +549,10 @@ function startWithProvider(ctx: Ctx, projectId: string, asset: MediaAsset, provi
     return { task: failed, done: Promise.resolve(null) };
   }
   const controller = new AbortController();
-  const done = runTranscription(ctx, projectId, asset, provider, task, controller).finally(() => ctx.transcriptions.delete(task.id));
+  // Tracked until the run has stopped, so a cancelled task's worker keeps the project's cleanup waiting while it lets go.
+  // A const, for the callback's null check: `provider` is reassigned above.
+  const chosenProvider = provider;
+  const done = ctx.trackProject(projectId, () => runTranscription(ctx, projectId, asset, chosenProvider, task, controller).finally(() => ctx.transcriptions.delete(task.id)));
   ctx.transcriptions.set(task.id, { controller, done });
   return { task, done };
 }
@@ -798,7 +801,7 @@ export function getWaveform(ctx: Ctx, media: MediaWithStatus & { projectId: stri
   if (asked) ctx.waveformsAsked.add(media.id);
   const pending = ctx.waveforms.get(media.id);
   if (pending) return pending;
-  const job = ctx.track(loadOrBuildWaveform(ctx, media).finally(() => {
+  const job = ctx.trackProject(media.projectId, () => loadOrBuildWaveform(ctx, media).finally(() => {
     ctx.waveforms.delete(media.id);
     ctx.waveformsAsked.delete(media.id);
   }));

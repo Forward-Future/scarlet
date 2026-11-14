@@ -224,7 +224,7 @@ export class RecordingSpeakers {
         await Promise.all([!reuse && rm(wav, { force: true }), rm(tmp, { force: true })]);
       }
     };
-    return this.cache.get(key, async () => {
+    return this.cache.get(key, () => ctx.trackProject(projectId, async () => {
       const stop = new AbortController();
       const stopped = () => stop.abort(always.reason);
       const paused = () => { if (!this.passWaits.has(media.id)) stop.abort(pause.reason); };
@@ -235,7 +235,7 @@ export class RecordingSpeakers {
         always.removeEventListener("abort", stopped);
         pause.removeEventListener("abort", paused);
       }
-    }, { priority });
+    }), { priority });
   }
 
   /**

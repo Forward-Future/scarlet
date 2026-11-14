@@ -170,7 +170,7 @@ export function dialogueDetector(ctx: Ctx) {
     const whisper = local ? whisperLane(ctx, provider.separateWhisperLane) : undefined;
     const inLane = <T>(job: () => Promise<T>) => lane.run(work, signal, job);
     const inWhisperLane = <T>(job: () => Promise<T>) => whisper ? whisper.run(work, signal, job) : job();
-    const analyzed = ctx.track((keptSide ? keptWindows : acousticWindows).get(key, async () => {
+    const analyzed = ctx.track((keptSide ? keptWindows : acousticWindows).get(key, () => ctx.trackProject(projectId, async () => {
       signal.throwIfAborted();
       const stream = keptSide?.audioStream;
       if (keptSide) {
@@ -250,7 +250,7 @@ export function dialogueDetector(ctx: Ctx) {
         recording.release();
         await rm(wav, { force: true });
       }
-    }, { signal }));
+    }), { signal }));
     // A cut reads only its surviving words. Its short window is never a completed dialogue-scan page.
     if (keptSide) return { analyzed, ready: analyzed };
     // The expensive window detectors share one worker. Whole-recording speaker

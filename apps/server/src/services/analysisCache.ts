@@ -37,12 +37,17 @@ export class AnalysisCache<T> {
     job.users++;
     if (!signal) return job.result;
     return new Promise<T>((resolve, reject) => {
+      let stopped = false;
       const cancel = () => {
-        if (--job.users === 0) job.abort.abort();
-        reject(signal.reason);
+        stopped = true;
+        if (--job.users > 0) return reject(signal.reason);
+        // The last caller hears of the stop once the work has stopped, so whoever waits on the caller waits for the work too.
+        job.abort.abort();
+        void job.result.catch(() => {}).finally(() => reject(signal.reason));
       };
       signal.addEventListener("abort", cancel, { once: true });
-      job.result.then(resolve, reject).finally(() => signal.removeEventListener("abort", cancel));
+      job.result.then(value => { if (!stopped) resolve(value); }, error => { if (!stopped) reject(error); })
+        .finally(() => signal.removeEventListener("abort", cancel));
     });
   }
 

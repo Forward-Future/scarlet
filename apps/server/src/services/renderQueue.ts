@@ -508,7 +508,9 @@ export class RenderQueue {
   }
 
   private finish(id: string, outcome: Partial<Render> & { state: "done" | "failed" | "cancelled" }): Render | null {
-    const saved = this.update(id, () => ({ ...outcome, queuePid: undefined, demandPid: undefined,
+    // A cancelled encoder keeps its engine's claim until it has closed its output, so every engine sees the files in use.
+    const closing = outcome.state === "cancelled" && this.running.has(id);
+    const saved = this.update(id, () => ({ ...outcome, ...(!closing && { queuePid: undefined }), demandPid: undefined,
       ...(outcome.state === "cancelled" && { export: undefined }) }));
     this.owners.delete(id);
     this.backgroundCaches.delete(id);
@@ -575,6 +577,7 @@ export class RenderQueue {
                 this.queue.push({ id, key, playback: queued.kind === "playback" && this.owners.has(id) });
               }
             }
+            if (ac.signal.aborted) this.update(id, r => r.state === "cancelled" && r.queuePid === process.pid ? { queuePid: undefined } : undefined);
             this.running.delete(id);
             this.activeKeys.delete(key);
             this.pump();

@@ -43,8 +43,9 @@ const startChecks = new Map<number, StartCheck>();
 /**
  * Notes when this engine began beside its process id, for other engines to hold that id against (`engineIsAlive`).
  * True when the note already there is an earlier engine's: it was killed, and this engine was then given its process
- * id. What it left claimed under that id would pass for this engine's own work and never be taken up. Its imports and
- * source caches are released here; its renders are the caller's to recover.
+ * id. What it left claimed under that id would pass for this engine's own work and never be taken up. Its imports,
+ * source caches, work on project files and the claims of encoders it was closing are released here; its other renders
+ * are the caller's to recover.
  */
 export function noteEngineStart(ctx: Pick<Ctx, "db" | "log">): boolean {
   const inherited = ctx.db.transaction(() => {
@@ -55,6 +56,8 @@ export function noteEngineStart(ctx: Pick<Ctx, "db" | "log">): boolean {
     if (!noted) return false;
     ctx.db.prepare("UPDATE media SET ingest_pid = NULL WHERE ingest_pid = ?").run(process.pid);
     ctx.db.prepare("UPDATE source_cache_requests SET worker_pid = NULL WHERE worker_pid = ?").run(process.pid);
+    ctx.db.prepare("UPDATE renders SET json = json_remove(json, '$.queuePid') WHERE state = 'cancelled' AND json_extract(json, '$.queuePid') = ?").run(process.pid);
+    ctx.db.prepare("DELETE FROM project_work WHERE pid = ?").run(process.pid);
     return true;
   }, "immediate")();
   if (inherited) ctx.log(`[engine] the last engine with this process id (${process.pid}) was killed: what it left claimed is taken up`);
@@ -181,6 +184,9 @@ export interface Ctx {
   /** A review selection's saved draft, and the crossfade Scarlet put on its joins. */
   reviewDrafts: Map<string, { version: string; joinFades?: JoinFades }>;
   track<T>(p: Promise<T>): Promise<T>;
+  /** Starts work that writes into the project's folder, once the library has noted it (`project_work`): every engine then
+   * keeps the project's cleanup waiting until the work settles. Work the library can't note doesn't start. */
+  trackProject<T>(projectId: string, start: () => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
 
@@ -260,6 +266,22 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
       pending.add(p);
       p.finally(() => pending.delete(p)).catch(() => {});
       return p;
+    },
+    trackProject<T>(projectId: string, start: () => Promise<T>) {
+      db.prepare(`INSERT INTO project_work VALUES (?, ?, 1)
+        ON CONFLICT(project_id, pid) DO UPDATE SET jobs = jobs + 1`).run(projectId, process.pid);
+      const release = () => {
+        try {
+          db.transaction(() => {
+            db.prepare("UPDATE project_work SET jobs = jobs - 1 WHERE project_id = ? AND pid = ?").run(projectId, process.pid);
+            db.prepare("DELETE FROM project_work WHERE project_id = ? AND pid = ? AND jobs <= 0").run(projectId, process.pid);
+          })();
+        } catch (error) {
+          // The note stays, so the project's cleanup waits until this engine restarts and finds it.
+          log(`[storage] couldn't note that work on ${projectId} ended: ${(error as Error).message}`);
+        }
+      };
+      return ctx.track((async () => start())().finally(release));
     },
     async close() {
       shutdown.abort();

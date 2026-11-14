@@ -116,10 +116,11 @@ export class SourcePreviews {
         if (signal.aborted) this.fullJobs.delete(file);
         else ctx.log(`[media] ${media.id} couldn’t cache its source preview: ${error}`);
       } finally {
+        // The claim is what keeps the project's cleanup waiting, so it goes once the encode's last file has.
+        await rm(temp, { force: true }).catch(() => {});
         if (signal.aborted) ctx.db.prepare("UPDATE source_cache_requests SET worker_pid = NULL WHERE media_id = ? AND worker_pid = ?").run(media.id, process.pid);
         else ctx.db.prepare("DELETE FROM source_cache_requests WHERE media_id = ? AND worker_pid = ?").run(media.id, process.pid);
         this.fullRuns.delete(file);
-        await rm(temp, { force: true }).catch(() => {});
       }
     })());
     this.fullRuns.set(file, run);
@@ -164,7 +165,7 @@ export class SourcePreviews {
       if (this.encoding.size < 2) break;
       await Promise.race([...this.encoding.values()].map(job => job.catch(() => {})));
     }
-    const job = ctx.track((async () => {
+    const job = ctx.trackProject(media.projectId, () => (async () => {
       await mkdir(dir, { recursive: true });
       if ((await stat(file).catch(() => null))?.size) return;
       const temp = file + "." + randomUUID() + ".part.mp4";
