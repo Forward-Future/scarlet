@@ -6,7 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { agentCapabilities, ProposeChangeRequest, ScarletApiError, ScarletClient, Task, type EditingTools } from "@scarlet/shared";
-import type { Timeline, Transcript } from "@scarlet/timeline";
+import type { CaptionClip, Timeline, Track, Transcript } from "@scarlet/timeline";
 import { emptyTimeline, makeMediaClip, makeTrack } from "@scarlet/timeline";
 import { createScarletMcpServer, describeError, SCARLET_TOOL_NAMES, toolRefusal } from "./server.js";
 import { buildSystemPrompt } from "./prompt.js";
@@ -514,11 +514,10 @@ describe("timeline_propose", () => {
 
   it("checks a batch of ops as a whole, so a step on the way may put a clip on a track of the other kind", async () => {
     const original = { timeline: mock.state.timeline, head: mock.state.project.head };
-    const words = (id: string, at: number) => ({ id, kind: "caption", enabled: true, timelineIn: at, timelineOut: at + 1, text: id });
+    const words = (id: string, at: number): CaptionClip => ({ id, kind: "caption", enabled: true, timelineIn: at, timelineOut: at + 1, text: id });
     const c = await connect();
-    let n = 0;
-    const propose = async (tracks: object[], ops: object[]) => {
-      const tl = { ...emptyTimeline(mock.state.project.id), version: `captioned-${++n}`, tracks } as Timeline;
+    const propose = async (version: string, tracks: Track[], ops: unknown[]) => {
+      const tl: Timeline = { ...emptyTimeline(mock.state.project.id), version, tracks };
       mock.state.timeline = tl;
       mock.requests.length = 0;
       const r = await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", fromVersion: tl.version, description: "Tracks", ops } }) as CallToolResult;
@@ -527,16 +526,16 @@ describe("timeline_propose", () => {
     try {
       const captions = () => [{ ...makeTrack("caption", "Words", "cap"), clips: [words("line", 0)] }, makeTrack("caption", "More words", "cap2")];
       // The caption track turns into a video track, and its caption moves to the other caption track in the same call.
-      const moved = await propose(captions(), [{ op: "updateTrack", trackId: "cap", patch: { kind: "video" } }, { op: "moveClip", clipId: "line", timelineIn: 0, trackId: "cap2" }]);
+      const moved = await propose("moved", captions(), [{ op: "updateTrack", trackId: "cap", patch: { kind: "video" } }, { op: "moveClip", clipId: "line", timelineIn: 0, trackId: "cap2" }]);
       expect(moved.r.isError, textOf(moved.r)).toBeFalsy();
       expect(moved.posted).toBe(true);
       // A version saved before this was refused holds two captions on video and audio tracks: one call takes both out.
       const misplaced = [{ ...makeTrack("video", "Picture", "pic"), clips: [words("one", 0)] }, { ...makeTrack("audio", "Sound", "snd"), clips: [words("two", 2)] }];
-      const repaired = await propose(misplaced, [{ op: "removeClip", clipId: "one" }, { op: "removeClip", clipId: "two" }]);
+      const repaired = await propose("repaired", misplaced, [{ op: "removeClip", clipId: "one" }, { op: "removeClip", clipId: "two" }]);
       expect(repaired.r.isError, textOf(repaired.r)).toBeFalsy();
       expect(repaired.posted).toBe(true);
       // A batch that ends with a caption on a video track is still refused, naming the clip and the track.
-      const left = await propose(captions(), [{ op: "updateTrack", trackId: "cap2", patch: { muted: true } }, { op: "updateTrack", trackId: "cap", patch: { kind: "video" } }]);
+      const left = await propose("left", captions(), [{ op: "updateTrack", trackId: "cap2", patch: { muted: true } }, { op: "updateTrack", trackId: "cap", patch: { kind: "video" } }]);
       expect(left.r.isError).toBe(true);
       expect(textOf(left.r)).toContain("clip line of kind caption cannot go on video track cap");
       expect(left.posted).toBe(false);

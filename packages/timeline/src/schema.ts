@@ -316,11 +316,12 @@ export const WritableTimeline = Timeline.superRefine((timeline, ctx) => {
   if (duplicate !== undefined) {
     ctx.addIssue({ code: "custom", path: ["tracks"], message: `duplicate clip id: ${duplicate}` });
   }
-  timeline.tracks.forEach((track, t) => track.clips.forEach((clip, c) => {
-    if (!clipFitsTrack(clip, track)) {
-      ctx.addIssue({ code: "custom", path: ["tracks", t, "clips", c], message: `clip ${clip.id} of kind ${clip.kind} cannot go on ${track.kind} track ${track.id}` });
-    }
-  }));
+  // The first one on each track: a track of the wrong kind would otherwise name every clip it holds.
+  timeline.tracks.forEach((track, t) => {
+    const c = track.clips.findIndex((clip) => !clipFitsTrack(clip, track));
+    const clip = track.clips[c];
+    if (clip) ctx.addIssue({ code: "custom", path: ["tracks", t, "clips", c], message: `clip ${clip.id} of kind ${clip.kind} cannot go on ${track.kind} track ${track.id}` });
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -150,10 +150,11 @@ describe("tracks and markers", () => {
 });
 
 describe("a clip on a track of the other kind, which the renderer would skip", () => {
+  const stray = () => makeMediaClip("cam", 0, 1, 50, { id: "new" });
   /** The cut with a media clip under its caption track, as a version saved before this was refused. */
   const misplaced = () => {
     const tl = cut();
-    tl.tracks[2]!.clips.push(makeMediaClip("cam", 0, 1, 50, { id: "new" }));
+    tl.tracks[2]!.clips.push(stray());
     return tl;
   };
 
@@ -162,7 +163,7 @@ describe("a clip on a track of the other kind, which the renderer would skip", (
   });
 
   it("is refused when addTrack brings it", () => {
-    expect(() => applyOps(cut(), [{ op: "addTrack", track: { ...makeTrack("caption", "x", "t"), clips: [makeMediaClip("cam", 0, 1, 50, { id: "new" })] } }]))
+    expect(() => applyOps(cut(), [{ op: "addTrack", track: { ...makeTrack("caption", "x", "t"), clips: [stray()] } }]))
       .toThrow("clip new of kind media cannot go on caption track t");
   });
 
@@ -171,10 +172,11 @@ describe("a clip on a track of the other kind, which the renderer would skip", (
   });
 
   it("is refused in a whole timeline that lists a caption under a video or audio track", () => {
-    for (const [track, kind] of [[0, "video"], [1, "audio"]] as const) {
+    for (const [track, kind, id] of [[0, "video", "v1"], [1, "audio", "a1"]] as const) {
       const captioned = cut();
-      captioned.tracks[track]!.clips.push(caption("new", 30, 31));
-      expect(WritableTimeline.safeParse(captioned).error?.issues[0]?.message).toBe(`clip new of kind caption cannot go on ${kind} track ${captioned.tracks[track]!.id}`);
+      // Two of them on the track: the first is the one named.
+      captioned.tracks[track]!.clips.push(caption("new", 30, 31), caption("next", 31, 32));
+      expect(WritableTimeline.safeParse(captioned).error?.issues).toMatchObject([{ message: `clip new of kind caption cannot go on ${kind} track ${id}` }]);
     }
   });
 
