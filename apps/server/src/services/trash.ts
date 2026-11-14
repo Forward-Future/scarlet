@@ -17,7 +17,7 @@ export function removeTrashed(ctx: Ctx, selected: StorageSelection[], expired = 
   ctx.db.transaction(() => {
     for (const project of selected) {
       if (!project.deletedAt) throw new Error("Expected a trashed project");
-      validateSelection(ctx, project, expired);
+      validateSelection(ctx, project);
       const id = project.id;
       ctx.db.prepare("INSERT INTO storage_purges VALUES (?)").run(id);
       ctx.db.prepare("DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)").run(id);
@@ -77,7 +77,7 @@ function finishPurges(ctx: Ctx): Promise<void> {
 /** How many projects were removed for good. Their folders are deleted in the background (`ctx.pending`). */
 export function purgeTrash(ctx: Ctx, nowMs = Date.now()): number {
   const cutoff = new Date(nowMs - TRASH_DAYS * DAY).toISOString();
-  const expired = ctx.repos.projects.listDeleted().filter(p => p.deletedAt < cutoff && !projectBusy(ctx, p.id, true));
+  const expired = ctx.repos.projects.listDeleted().filter(p => p.deletedAt < cutoff && !projectBusy(ctx, p.id));
   void removeTrashed(ctx, expired, true);
   return expired.length;
 }

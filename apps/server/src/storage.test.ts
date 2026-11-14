@@ -79,6 +79,29 @@ it("clears only reusable segments and refuses active projects", async () => {
   expect(generated.some(f=>existsSync(join(paths.segments(id),f)))).toBe(false);
   expect(protectedFiles.every(f=>existsSync(f))).toBe(true);
 });
+it("frees an idle project's storage while the engine works on something else", async () => {
+  const ctx = workspace.ctx;
+  // Background work of this engine that isn't this project's, such as another project's export.
+  let finish!: () => void;
+  ctx.track(new Promise<void>(resolve => { finish = resolve; }));
+  try {
+    writeFileSync(join(ctx.paths.segments(id), "a".repeat(64) + ".mp4"), "data");
+    const trashed = ctx.repos.projects.insert(createProject("Trashed")).id;
+    ctx.paths.ensureProject(trashed);
+    ctx.repos.projects.softDelete(trashed);
+    const { projects } = await (await api("GET", "/storage")).json();
+    expect(projects.map((p: { busy: boolean }) => p.busy)).toEqual([false, false]);
+    expect((await clear()).status).toBe(200);
+    const { deletedAt } = ctx.repos.projects.listDeleted()[0]!;
+    expect((await api("POST", "/storage/cleanup", { kind: "trash", projects: [{ id: trashed, deletedAt }] })).status).toBe(200);
+    expect(existsSync(ctx.paths.project(trashed))).toBe(false);
+    // The project's own render still holds its cache.
+    ctx.db.prepare("INSERT INTO renders VALUES (?,?,?,?,?,?,?,?)").run("render", id, "key", "version", "full", "running", "{}", "now");
+    expect((await clear()).status).toBe(409);
+  } finally {
+    finish();
+  }
+});
 it("rejects stale Trash selections and retries interrupted file removal",async()=>{
   const ctx = workspace.ctx;
   ctx.repos.projects.softDelete(id);
