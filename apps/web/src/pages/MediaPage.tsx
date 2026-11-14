@@ -8,7 +8,7 @@ import { ACCEPTED_MEDIA, canPreviewMedia, isPreparingMedia, MEDIA_FORMAT_HINT } 
 import { clock } from "../lib/format";
 import { isLink } from "../lib/pendingImports";
 import { useProjectStore } from "../stores/project";
-import { TranscriptLine, useImportTranscription } from "../components/media/TranscriptionAction";
+import { ImportTranscriptionNotice, TranscriptLine, useImportTranscription } from "../components/media/TranscriptionAction";
 import { UploadList, type useUploader } from "../components/media/UploadDropzone";
 import { ImportProgress, preparationStep } from "../components/media/ImportProgress";
 import { MediaStatusLine } from "../components/media/MediaStatusLine";
@@ -63,7 +63,8 @@ export function MediaPage({ uploads, onPlay }: {
 }) {
   const current = useProjectStore((s) => s.current);
   // Media leaves out the note that transcription runs on this computer; the OpenAI and off notices stay.
-  const { available: transcriptionAvailable, notice: importNotice, local } = useImportTranscription();
+  const importTranscription = useImportTranscription();
+  const { available: transcriptionAvailable, notice: importNotice, local } = importTranscription;
   const notice = local ? "" : importNotice;
   const importErrors: string[] = useLocation().state?.importErrors ?? [];
   const [pickerError, setPickerError] = useState("");
@@ -115,7 +116,7 @@ export function MediaPage({ uploads, onPlay }: {
         }} />
       </div>
       <p id="media-file-types" className="mb-3 text-muted text-[12px]">{MEDIA_FORMAT_HINT}</p>
-      {notice && <p className="mb-3 text-muted text-[12px]">{notice}</p>}
+      {notice && <ImportTranscriptionNotice policy={importTranscription} />}
       {localImport && (
         <div className="card mb-3 px-3 py-2.5">
           <ImportProgress localImport={localImport} />

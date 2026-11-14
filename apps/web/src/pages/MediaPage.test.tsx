@@ -719,3 +719,31 @@ it("says nothing about where audio goes until the settings answer", async () => 
     expect(notice()?.textContent).toBe("Audio from imported files is sent to OpenAI for transcription.");
   });
 });
+
+it("says why imports won't be transcribed and offers the one fix", async () => {
+  const db = buildDb();
+  const cloud = { ...db.settings, transcription: { ...db.settings.transcription, provider: "openai" as const } };
+  const read = vi.spyOn(api, "settings").mockResolvedValue({ settings: cloud, transcriptionAvailable: false, transcriptionIssue: "OpenAI transcription needs an API key." });
+  const update = vi.spyOn(api, "updateSettings").mockImplementation(async () => {
+    read.mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    return { settings: db.settings };
+  });
+  await showMedia({ media: [] }, async container => {
+    const notice = () => container.querySelector(".import-transcription-notice");
+    expect(notice()!.textContent).toContain("OpenAI transcription needs an API key. Audio will be imported without a transcript.");
+    await act(async () => notice()!.querySelector("button")!.click());
+    expect(update).toHaveBeenCalledWith({ transcription: expect.objectContaining({ provider: "whispercpp" }) });
+    // Local transcription now runs, and Media leaves out the note that says so.
+    expect(notice()).toBeNull();
+  });
+  // showMedia restores every mock when it is done.
+  const off = { ...db.settings, transcription: { ...db.settings.transcription, provider: "none" as const } };
+  vi.spyOn(api, "settings").mockResolvedValue({ settings: off, transcriptionAvailable: false,
+    transcriptionIssue: "CrisperWhisper is not installed. The bundled Whisper runtime is unavailable." });
+  await showMedia({ media: [] }, async container => {
+    const notice = container.querySelector(".import-transcription-notice")!;
+    expect(notice.textContent).toContain("CrisperWhisper is not installed.");
+    expect(notice.querySelector("a")?.textContent).toBe("Set up transcription");
+    expect(notice.querySelector("a")?.getAttribute("href")).toBe("/settings");
+  });
+});

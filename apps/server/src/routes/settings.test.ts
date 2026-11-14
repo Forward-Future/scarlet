@@ -67,7 +67,7 @@ it("says whether the speech model the editor pointed to is there, and otherwise 
   await save({ transcription: { provider: "whispercpp", whisperCppPath: join(dataDir, "missing-cli") } });
   expect(await status()).toEqual({ state: "missing", selected: "custom", fallback: false, reason: expect.stringContaining("executable") });
   expect(await (await app.app.request("/api/settings", { headers: { Authorization: `Bearer ${accessToken(app.ctx)}` } })).json())
-    .toMatchObject({ transcriptionAvailable: false });
+    .toMatchObject({ transcriptionAvailable: false, transcriptionIssue: expect.stringContaining("executable") });
   await save({ transcription: { localModel: "custom", whisperCppPath: null, whisperModelPath: null } });
   expect(await status()).toEqual({ state: "missing", selected: "custom", fallback: false, reason: expect.stringContaining("Choose") });
   await save({ transcription: { whisperCppPath: process.execPath } });
@@ -123,4 +123,20 @@ it("revokes queued local work after the model changes, including changes made by
     await save({ render: { concurrency: 3 } });
     expect(app.ctx.repos.settings.transcriptionPolicy().signal).toBe(updated.signal);
   } finally { await peer.ctx.close(); }
+});
+
+it("says why nothing can transcribe, so Media can offer the fix", async () => {
+  const settings = async () => (await app.app.request("/api/settings", { headers: { Authorization: `Bearer ${accessToken(app.ctx)}` } })).json();
+  // A library first opened where no local runtime was found starts off, and says what is missing.
+  const missing = "CrisperWhisper is not installed. The bundled Whisper runtime is unavailable.";
+  expect(await settings()).toMatchObject({ transcriptionAvailable: false, transcriptionIssue: missing });
+  await save({ transcription: { provider: "whispercpp" } });
+  expect(await settings()).toMatchObject({ transcriptionAvailable: false, transcriptionIssue: "CrisperWhisper is not installed. The bundled Whisper runtime is unavailable." });
+  await save({ transcription: { provider: "openai" } });
+  expect(await settings()).toMatchObject({ transcriptionAvailable: false, transcriptionIssue: "OpenAI transcription needs an API key." });
+  await save({ transcription: { provider: "whispercpp" } });
+  app.ctx.whisperCli = process.execPath;
+  const ready = await settings();
+  expect(ready).toMatchObject({ transcriptionAvailable: true });
+  expect(ready).not.toHaveProperty("transcriptionIssue");
 });
