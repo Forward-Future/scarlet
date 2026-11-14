@@ -133,9 +133,11 @@ try {
   const { media } = await api(projectUrl + "/media/import", "POST", { path: clip });
   async function checkTranscription() {
     let previous;
-    let nextReport = 0;
+    let nextReport = Date.now() + 12_000;
     await until("import and Whisper transcript", async () => {
-      const [{ media: assets }, { tasks }] = await Promise.all([api(projectUrl + "/media"), api(projectUrl + "/tasks")]);
+      // Read the task first: a completed task and its media link are committed together.
+      const { tasks } = await api(projectUrl + "/tasks");
+      const { media: assets } = await api(projectUrl + "/media");
       const saved = assets.find(item => item.id === media.id);
       const task = tasks.find(task => task.kind === "transcribe" && task.context?.mediaId === media.id);
       if (saved?.status === "failed") throw new Error("Import failed: " + saved.error);
@@ -143,11 +145,13 @@ try {
       if (saved?.transcriptId && saved.status === "ready") return true;
       if (task?.state === "done") throw new Error("Transcription task finished without linking its saved words");
       const state = `media=${saved?.status}, task=${task?.state}, stage=${task?.progress?.stage}, words=${Math.round(100 * (task?.progress?.words?.fraction || 0))}%`;
-      if (state !== previous || Date.now() >= nextReport) {
+      if (Date.now() >= nextReport) {
         step(`Transcription ${state}. ${engineProcesses(pid)}`);
-        previous = state;
         nextReport = Date.now() + 30_000;
+      } else if (state !== previous) {
+        step("Transcription " + state);
       }
+      previous = state;
     }, 600_000, 1_000);
     const transcript = await api("/media/" + media.id + "/transcript");
     assert.equal(transcript.provider, "whispercpp");
@@ -178,9 +182,9 @@ try {
     await webdriver("POST", "/session/" + session + "/element/" + play["element-6066-11e4-a52e-4f735466cecf"] + "/click", {});
     await until("decoded H.264 picture advancing in the editor", async () => {
       const state = await execute(`
-      const video = document.querySelector('.watch-monitor video[aria-label="The current edit"]');
-      return { played: !!video && video.readyState >= 2 && video.videoWidth > 0 && video.currentTime > 0.25,
-        error: video?.error?.message || document.querySelector('.watch-monitor [role="alert"]')?.innerText };
+        const video = document.querySelector('.watch-monitor video[aria-label="The current edit"]');
+        return { played: !!video && video.readyState >= 2 && video.videoWidth > 0 && video.currentTime > 0.25,
+          error: video?.error?.message || document.querySelector('.watch-monitor [role="alert"]')?.innerText };
       `);
       if (state.error) throw new Error("Editor preview: " + state.error);
       return state.played;
@@ -212,7 +216,6 @@ try {
   }));
   const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
   if (failures.length) throw new AggregateError(failures, "Installed desktop smoke failed");
-
 } finally {
   if (session) await webdriver("DELETE", "/session/" + session, undefined, 5_000).catch(() => {});
   // The driver, its private display and D-Bus belong to this process group.
