@@ -471,7 +471,7 @@ describe("dialogue plan", () => {
   it("lets a word reference's placed edge give way to the range the agent decided beside it", async () => {
     const { tl, sources } = fixture();
     // A pause cut over the silence after "finish", then "first" by its index. Scarlet places the word cut's start in
-    // that same silence, at 1.59 s, inside the pause cut. Both come out; the word cut starts where the pause ends.
+    // that same silence, on the frame at 1.6 s, inside the pause cut. Both come out; the word cut starts where the pause ends.
     const plan = await planDialogueCuts({ tl, localPauses: false, cuts: [
       cut({ start: 1.5, end: 1.75, kind: "pause" }), { kind: "retake", decision: "cut", reason: "Earlier take.", mediaId: "mic", fromWord: 1, toWord: 1 }] }, sources);
     if (plan.outcome !== "ready") throw new Error(plan.outcome);
@@ -481,7 +481,7 @@ describe("dialogue plan", () => {
     expect(take!.end).toBeCloseTo(3.3, 2);
     // The agent is told where Scarlet had placed the edge and why it moved.
     expect(dialogueGate(plan).decisions).toContainEqual(expect.objectContaining({ cut: 1,
-      evidence: expect.stringContaining("Scarlet placed its start at 1.59 s, inside cut 0; it moved to 1.75 s to meet that cut.") }));
+      evidence: expect.stringContaining("Scarlet placed its start at 1.6 s, inside cut 0; it moved to 1.75 s to meet that cut.") }));
     // The other way round: the pause after the word, given in seconds, starts inside the word cut's placed end.
     const after = await planDialogueCuts({ tl, localPauses: false, cuts: [
       { kind: "retake", decision: "cut", reason: "Earlier take.", mediaId: "mic", fromWord: 1, toWord: 1 }, cut({ start: 2.6, end: 3.35, kind: "pause" })] }, sources);
