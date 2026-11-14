@@ -140,7 +140,7 @@ pub fn run() {
             let config = Arc::new(Mutex::new(AppConfig::load(&paths.config_file)));
             log::info!("Scarlet desktop {} starting; data {}; config {}", env!("CARGO_PKG_VERSION"), paths.data_dir.display(), paths.config_file.display());
 
-            let mcp = match engine::resolve_engine_launch(&paths.home) {
+            let mcp = match engine::resolve_engine_launch(&paths.home, paths.resource_dir.as_deref()) {
                 Ok(l) => {
                     log::info!("engine command: {} ({})", l.describe(), l.kind);
                     Some(McpLauncher::from_engine(&l))

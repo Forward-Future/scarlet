@@ -8,7 +8,7 @@ Use 64-bit CPython 3.12 with the standard venv module. Obtain a complete copy of
 
 In the desktop app, open **App Settings → General**, select CrisperWhisper and choose **Install from folder…** in its setup section. Pick the folder containing your local checkpoint.
 
-For command-line setup on Apple silicon with macOS 14 or later, run this command from this directory.
+For command-line setup on Apple silicon with macOS 14 or later or on Ubuntu 24.04 x86-64, run this command from this directory. On Ubuntu, install `python3.12-venv` first.
 
 ```sh
 python3.12 install.py --model "/path/to/local/model-snapshot"
@@ -22,7 +22,7 @@ py -3.12 install.py --model "D:\Models\CrisperWhisper2.0_large"
 
 The pinned PyTorch wheel requires macOS 14 or later on Apple silicon. On Intel Macs and macOS 13, use Scarlet’s bundled Whisper or a custom local model.
 
-Add `--data-dir "/path/to/Scarlet/data"` for a custom library. By default the installer uses `~/Library/Application Support/com.forwardfuture.scarlet/data` on macOS and `%APPDATA%\com.forwardfuture.scarlet\data` on Windows. It verifies the local model files against the pinned SHA-256 manifest, installs the versions in `requirements.txt` in a dedicated environment, and selects the Windows CPU wheel automatically.
+Add `--data-dir "/path/to/Scarlet/data"` for a custom library. By default the installer uses `~/Library/Application Support/com.forwardfuture.scarlet/data` on macOS and `%APPDATA%\com.forwardfuture.scarlet\data` on Windows. On Linux it uses `$XDG_DATA_HOME/com.forwardfuture.scarlet/data`, defaulting to `~/.local/share/com.forwardfuture.scarlet/data`. It verifies the local model files against the pinned SHA-256 manifest, installs the versions in `requirements.txt` in a dedicated environment, and selects the Windows CPU wheel automatically.
 
 Desktop releases include the adapter used for new transcriptions. Updating Scarlet reuses your installed checkpoint and Python environment. Run the setup command again to repair an installation or update its standalone adapter. A different checkpoint at the destination is left in place with an error identifying the file. The editor can select CrisperWhisper in Scarlet’s local transcription settings once setup completes.
 

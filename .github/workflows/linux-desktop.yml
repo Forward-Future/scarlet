@@ -1,0 +1,107 @@
+name: Linux desktop
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - ".github/workflows/linux-desktop.yml"
+      - "apps/**"
+      - "packages/**"
+      - "skills/**"
+      - "integrations/**"
+      - "package.json"
+      - "pnpm-*.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-desktop-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  ubuntu:
+    name: Ubuntu 24.04 amd64 package and native playback
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rust-docs
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          key: linux-desktop-amd64
+
+      - name: Install native build and headless test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev patchelf ffmpeg fonts-dejavu-core \
+            webkit2gtk-driver xvfb xauth dbus-x11 espeak-ng
+
+      - name: Build packages and engine sidecar
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm -r build
+          pnpm --filter @scarlet/server build:sea -- --out "$PWD/apps/desktop/src-tauri/binaries/scarlet-engine-$TARGET"
+          node apps/desktop/scripts/build-whisper.mjs
+
+      - name: Test the native shell
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked --target "$TARGET"
+
+      - name: Build the Debian package
+        run: pnpm --filter @scarlet/desktop exec tauri build --target "$TARGET" --bundles deb
+
+      - name: Install and check the package payload
+        id: package
+        shell: bash
+        run: |
+          shopt -s nullglob
+          debs=(apps/desktop/src-tauri/target/"$TARGET"/release/bundle/deb/*.deb)
+          [[ ${#debs[@]} -eq 1 ]]
+          version=$(node -p 'require("./apps/desktop/src-tauri/tauri.conf.json").version')
+          [[ $(dpkg-deb --field "${debs[0]}" Version) == "$version" ]]
+          [[ $(dpkg-deb --field "${debs[0]}" Architecture) == amd64 ]]
+          sudo apt-get install -y --no-install-recommends "./${debs[0]}"
+          package=$(dpkg-deb --field "${debs[0]}" Package)
+          payload=$(dpkg-query -L "$package")
+          engine=$(grep -E '/scarlet-engine$' <<< "$payload")
+          test -x "$engine"
+          test -x "$(dirname "$engine")/whisper-cli"
+          test -x /usr/bin/scarlet-desktop
+          if grep -Eq '/(ffmpeg|ffprobe)$' <<< "$payload"; then exit 1; fi
+          echo "engine_dir=$(dirname "$engine")" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/linux-installer"
+          cp "${debs[0]}" "$RUNNER_TEMP/linux-installer/Scarlet-$version-Ubuntu-24.04-amd64.deb"
+
+      - name: Smoke test the installed engine and inference runtimes
+        env:
+          ENGINE_DIR: ${{ steps.package.outputs.engine_dir }}
+        run: node apps/desktop/scripts/smoke-engine.mjs "$ENGINE_DIR" /usr/bin
+
+      - name: Import, transcribe, play and export in the installed desktop
+        run: node apps/desktop/scripts/smoke-linux-desktop.mjs
+
+      - name: Upload the verified Linux candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: scarlet-linux-ubuntu-24.04-amd64
+          path: ${{ runner.temp }}/linux-installer/*.deb
+          if-no-files-found: error

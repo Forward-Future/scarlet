@@ -31,6 +31,21 @@ The render tests need `ffmpeg` and `ffprobe` on `PATH`. For a change to editing 
 
 For headless integration work, `pnpm --filter @scarlet/server start` runs the API and render workers. `docker compose up -d` starts the containerized engine. To connect an external agent, configure `pnpm mcp` as a stdio MCP server with `SCARLET_SERVER` set to the engine URL, `SCARLET_PROJECT` to the project ID and `SCARLET_TOKEN` to the destination engine’s token. Use HTTPS for remote engines, or an HTTP loopback address through a tunnel. The standalone agent and MCP CLIs also accept `--token-file PATH` for an owner-readable file. The desktop app handles this connection for you. Both hosts include a Gemini CLI runner, which also requires a working sandbox backend.
 
+### Ubuntu 24.04 x86-64
+
+Install the native build dependencies and the codecs used for H.264/AAC playback in the editor.
+
+```sh
+sudo apt update
+sudo apt install build-essential cmake curl file libssl-dev libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev librsvg2-dev libxdo-dev ffmpeg \
+  gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
+```
+
+Then follow [Run from source](../README.md#run-from-source). Scarlet uses Ubuntu’s FFmpeg and FFprobe. The package includes its engine and a CPU build of Whisper.
+
+To install a Linux build from CI, download the Debian package artifact from a successful **Linux desktop** run, unzip it and run `sudo apt install ./<filename>.deb` using the downloaded filename. Launch **Scarlet** from the applications menu. [Linux desktop builds](https://github.com/Forward-Future/scarlet/actions/workflows/linux-desktop.yml)
+
 ## Transcription
 
 Scarlet prefers a local verbatim CrisperWhisper installation. Bundled Whisper large-v3-turbo handles local speech until that installation is ready. You can also choose another local model in **Settings → General**. [Transcription model setup and adapter interface](transcription-models.md)
@@ -54,9 +69,9 @@ pnpm --filter @scarlet/server build:sea -- --out ../desktop/src-tauri/binaries/s
 pnpm desktop:build
 ```
 
-On an Intel Mac, use the filename `scarlet-engine-x86_64-apple-darwin`. On Windows x64, use `scarlet-engine-x86_64-pc-windows-msvc.exe`. Local installers are written under `apps/desktop/src-tauri/target/release/bundle/` with the default Cargo target directory.
+On an Intel Mac, use the filename `scarlet-engine-x86_64-apple-darwin`. On Windows x64, use `scarlet-engine-x86_64-pc-windows-msvc.exe`. On Ubuntu x86-64, use `scarlet-engine-x86_64-unknown-linux-gnu`. The same `pnpm desktop:build` command produces a Debian package. Local installers are written under `apps/desktop/src-tauri/target/release/bundle/` with the default Cargo target directory.
 
-The installer includes the engine and `whisper-cli`. Install FFmpeg and FFprobe separately before importing media. On macOS, use the [checksum-verified setup helper](https://github.com/Forward-Future/scarlet-releases/releases/tag/v0.1.2-early-access.1). On Windows, run `winget install --id Gyan.FFmpeg.Essentials --exact`. Restart Scarlet after installation. Source development and the local main updaters can use their own pinned copies. On Windows, install the Vulkan SDK to include GPU transcription. `VULKAN_SDK` points to the SDK and `node apps/desktop/scripts/build-speaker-gpu.mjs` builds the optional DirectML speaker runtime. Local builds can fall back to the CPU runtimes.
+The installer includes the engine and `whisper-cli`. The Ubuntu package installs system FFmpeg and FFprobe as dependencies. For macOS and Windows, install those tools separately before importing media. On macOS, use the [checksum-verified setup helper](https://github.com/Forward-Future/scarlet-releases/releases/tag/v0.1.2-early-access.1). On Windows, run `winget install --id Gyan.FFmpeg.Essentials --exact`. Restart Scarlet after installation. Source development and the local main updaters can use their own pinned copies. On Windows, install the Vulkan SDK to include GPU transcription. `VULKAN_SDK` points to the SDK and `node apps/desktop/scripts/build-speaker-gpu.mjs` builds the optional DirectML speaker runtime. Local builds can fall back to the CPU runtimes.
 
 Each push to public `main` builds installers for its head commit. With `SCARLET_STABLE_RELEASES=true` and signing configured, the Desktop workflow publishes the signed Apple Silicon DMG, Intel DMG, Windows x64 setup executable and Windows x64 MSI together after the platform checks pass. The Mac release is notarized. [Stable releases](https://github.com/Forward-Future/scarlet/releases)
 
@@ -80,6 +95,7 @@ Rerun the enable command after changing the helper script so the installed copy 
 
 | Platform | Desktop log |
 | --- | --- |
+| Ubuntu | `${XDG_DATA_HOME:-~/.local/share}/com.forwardfuture.scarlet/logs/scarlet-desktop.log` |
 | macOS | `~/Library/Logs/com.forwardfuture.scarlet/scarlet-desktop.log` |
 | Windows | `%LOCALAPPDATA%\com.forwardfuture.scarlet\logs\scarlet-desktop.log` |
 
