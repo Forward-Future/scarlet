@@ -18,7 +18,7 @@ Start with the [source build](../README.md#run-from-source). The Tauri app opens
 
 ## Run and test
 
-Run commands from the repository root. Corepack can’t start pnpm 12 (Corepack 0.33, which comes with Node.js 22.17, and 0.36 both look for a `pnpm.cjs` it no longer ships), so install it with `npm install -g pnpm@12.16.1`. `pnpm desktop:dev` opens your local project library with live reload. `pnpm desktop:demo` opens an isolated sample interview in the native app. The renderer in `apps/web` runs inside that window.
+Run commands from the repository root. Corepack 0.33, which comes with Node.js 22.17, can’t start pnpm 12: it looks for a `pnpm.cjs` that pnpm 12 doesn’t ship. With that Corepack, install pnpm with `npm install -g pnpm@12.16.1` instead. Corepack 0.36 starts it, but only once the copy 0.33 saved is gone from Corepack’s cache (`pnpm/12.16.1`). `pnpm desktop:dev` opens your local project library with live reload. `pnpm desktop:demo` opens an isolated sample interview in the native app. The renderer in `apps/web` runs inside that window.
 
 | Command | What it checks |
 | --- | --- |
@@ -27,7 +27,27 @@ Run commands from the repository root. Corepack can’t start pnpm 12 (Corepack 
 | `pnpm test` | Runs workspace tests with Vitest |
 | `pnpm desktop:test` | Runs the desktop app’s Rust tests |
 
-The render and engine tests need `ffmpeg` and `ffprobe`. On macOS and Windows, CI runs them with the pinned builds that `pnpm desktop:ffmpeg` downloads to `apps/desktop/src-tauri/binaries`. Use the same builds locally, either on `PATH` or through `SCARLET_FFMPEG` and `SCARLET_FFPROBE`: some engine tests make their fixtures with the FFmpeg they find, and with another version a test can fail locally that passes in CI. The engine tests run one file at a time, and `apps/server/src/workspace.test.ts` alone takes several minutes. For a change to editing behavior, use the editing evaluations and keep real footage, transcripts and results outside the repository. For performance work, the editor benchmarks measure project opening, scrubbing, previews and export. [Editing evaluations](../evals/README.md) · [Editor benchmarks](editor-performance.md)
+The render and engine tests run `ffmpeg` and `ffprobe` from `PATH`, and some call them by those names. On macOS and Windows, CI tests with the pinned builds: it copies the files `pnpm desktop:ffmpeg` downloads to `apps/desktop/src-tauri/binaries` into a directory of their own as `ffmpeg` and `ffprobe`, and puts that directory first on `PATH`. To do the same on macOS:
+
+```sh
+pnpm desktop:ffmpeg
+mkdir -p ~/.scarlet-ffmpeg
+for t in ffmpeg ffprobe; do cp apps/desktop/src-tauri/binaries/$t-* ~/.scarlet-ffmpeg/$t; done
+export PATH="$HOME/.scarlet-ffmpeg:$PATH"
+```
+
+On Windows, in PowerShell:
+
+```powershell
+pnpm desktop:ffmpeg
+New-Item -ItemType Directory -Force ~/.scarlet-ffmpeg | Out-Null
+foreach ($t in 'ffmpeg', 'ffprobe') { Copy-Item apps/desktop/src-tauri/binaries/$t-*.exe ~/.scarlet-ffmpeg/$t.exe }
+$env:PATH = "$HOME\.scarlet-ffmpeg;$env:PATH"
+```
+
+Some engine tests make their fixtures with the FFmpeg they find, so with another version a test can fail locally that passes in CI. The engine tests run one file at a time, and `apps/server/src/workspace.test.ts` alone takes several minutes.
+
+For a change to editing behavior, use the editing evaluations and keep real footage, transcripts and results outside the repository. For performance work, the editor benchmarks measure project opening, scrubbing, previews and export. [Editing evaluations](../evals/README.md) · [Editor benchmarks](editor-performance.md)
 
 For headless integration work, `pnpm --filter @scarlet/server start` runs the API and render workers. `docker compose up -d` starts the containerized engine. To connect an external agent, configure `pnpm mcp` as a stdio MCP server with `SCARLET_SERVER` set to the engine URL, `SCARLET_PROJECT` to the project ID and `SCARLET_TOKEN` to the destination engine’s token. Use HTTPS for remote engines, or an HTTP loopback address through a tunnel. The standalone agent and MCP CLIs also accept `--token-file PATH` for an owner-readable file. The desktop app handles this connection for you. Both hosts include a Gemini CLI runner, which also requires a working sandbox backend.
 
