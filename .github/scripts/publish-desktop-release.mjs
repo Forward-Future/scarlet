@@ -101,8 +101,11 @@ export async function publishDesktopRelease({ version, directory, repository, sh
       tag_name: tag, target_commitish: sha, name: `Scarlet ${version}`,
       body: [
         "Download the DMG for your Mac’s chip (Apple Silicon or Intel), or choose the Setup EXE or MSI for Windows x64.",
-        "### FFmpeg and FFprobe",
-        "Install FFmpeg and FFprobe before importing footage. On macOS, use the [Mac setup helper and instructions](https://github.com/Forward-Future/scarlet-releases/releases/tag/v0.1.2-early-access.1). On Windows, open PowerShell and run `winget install --id Gyan.FFmpeg.Essentials --exact`. Restart Scarlet after installation.",
+        "Scarlet uses FFmpeg and FFprobe to import and export footage. If you already installed them for Early Access, you can use the same tools.",
+        "**macOS.** Drag Scarlet into Applications. To install the media tools, run `bash /Applications/Scarlet.app/Contents/Resources/Install-Scarlet-FFmpeg-macOS.sh` in Terminal, then open Scarlet. " +
+          `[View the helper source](https://github.com/${repository}/blob/${sha}/apps/desktop/scripts/Install-Scarlet-FFmpeg-macOS.sh)`,
+        "**Windows.** Run `winget install --id Gyan.FFmpeg.Essentials --exact` in PowerShell, then run Scarlet Setup and open Scarlet from your regular Windows account.",
+        "Early Access and stable Scarlet use separate project libraries. Continue opening existing Early Access projects in Scarlet Early Access.",
       ].join("\n\n"),
       draft: true, prerelease: false,
     } });

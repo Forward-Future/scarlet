@@ -25,6 +25,37 @@ it("lists every model each CLI offers, older releases and early-access ones incl
   expect(selectVisibleModel([], { agent: "codex", model: "gpt-6-sol" }, agents)).toBeUndefined();
 });
 
+it("offers Claude's default settings when it advertises just its default", () => {
+  const options = { efforts: [{ id: "high" }], speeds: [{ id: "fast" }] };
+  const host: AgentHost = { ...buildDb().hosts[0]!, online: true, agents: [
+    { id: "claude", installed: true, models: [],
+      modelLabels: { "": "Default" }, modelOptions: { "": options } },
+  ] };
+  const choices = modelChoices(onlineAgents([host]));
+  expect(choices).toHaveLength(1);
+  expect(choices[0]).toMatchObject({ key: "claude:", agent: "claude", model: undefined, label: "Default", profiles: [options] });
+  const secondHost = { ...host, id: "other-default", agents: [{ ...host.agents[0]!, modelLabels: { "": "Default (Opus)" } }] };
+  expect(modelChoices(onlineAgents([host, secondHost]))[0]?.label).toBe("Provider default");
+});
+
+it("uses named Claude models across hosts and offers no default from offline or signed-out hosts", () => {
+  const claude = { id: "claude" as const, installed: true, loggedIn: true, auth: "subscription" as const };
+  const host = { ...buildDb().hosts[0]!, online: true, agents: [claude] };
+  expect(modelChoices(onlineAgents([
+    { ...host, online: false }, { ...host, id: "signed-out", agents: [{ ...claude, loggedIn: false }] },
+  ]))).toEqual([]);
+  const agents = onlineAgents([host, { ...host, id: "with-models", agents: [{ ...claude, models: ["sonnet"] }] }]);
+  expect(modelChoices(agents).map(choice => choice.model)).toEqual(["sonnet"]);
+});
+
+it("respects the host's model override when resolving the default's label and capabilities", () => {
+  const host: AgentHost = { ...buildDb().hosts[0]!, online: true, agents: [
+    { id: "claude", installed: true, loggedIn: true, model: "sonnet", models: [],
+      modelLabels: { "": "Default (recommended)" }, modelOptions: { "": { efforts: [{ id: "high" }], speeds: [] } } },
+  ] };
+  expect(modelChoices(onlineAgents([host]))[0]).toMatchObject({ model: undefined, label: "Provider default", profiles: [] });
+});
+
 it("marks models from this install's own lists as Custom, for the CLI they belong to", () => {
   const host = buildDb().hosts[0]!;
   const hosts: AgentHost[] = [{ ...host, online: true, agents: [
