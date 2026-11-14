@@ -8,6 +8,7 @@ import { createApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { Db, migrate, openDb } from "../db.js";
 import { createRepos } from "../repo/index.js";
+import { toSegments } from "../transcribe/openai.js";
 import { createTask, saveTask } from "./tasks.js";
 import { transcriptReader } from "./transcriptReader.js";
 
@@ -81,6 +82,28 @@ it("searches across segment boundaries with inherited speaker roles and refreshe
     peer.prepare("DELETE FROM transcripts WHERE id = ?").run("replacement");
     await expect(find()).rejects.toMatchObject({ status: 404 });
   } finally { peer.close(); await ctx.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+it("returns an OpenAI word in a range read that covers only where that word falls outside the provider's segments", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-openai-range-"));
+  const { ctx, app } = createApp({ dataDir: dir, env: {}, log() {} });
+  try {
+    const project = ctx.repos.projects.insert(createProject("Range"));
+    const media = ctx.repos.projects.putMedia(project.id, { id: "mic", path: "mic.wav", kind: "audio", name: "Mic" }, "ready");
+    // Spanish isn't word-aligned after transcription, so these are the segments saved. "nació" has no length and
+    // starts where the first segment ends, so it goes to the second, which began after a pause; "Lima" comes
+    // after the last segment's end.
+    const segments = toSegments({ language: "spanish",
+      segments: [{ start: 0, end: 8.22, text: "piso 8, nació" }, { start: 8.6, end: 10.2, text: "en 1987" }],
+      words: [{ word: "piso", start: 7.02, end: 7.02 }, { word: "8", start: 7.02, end: 7.48 }, { word: "nació", start: 8.22, end: 8.22 },
+        { word: "en", start: 8.6, end: 9.16 }, { word: "1987", start: 9.16, end: 9.72 }, { word: "Lima", start: 10.3, end: 10.6 }] }, 0);
+    ctx.repos.transcripts.put({ id: "t", mediaId: media.id, projectId: project.id, language: "spanish", segments });
+    const client = new ScarletClient({ baseUrl: "https://range.local", token: accessToken(ctx), fetch: (url, init) => app.request(url, init) });
+    const read = async (from: number, to: number) =>
+      (await client.transcript(media.id, { from, to })).segments.flatMap(s => s.words.map(w => [w.text, w.start, w.end]));
+    expect(await read(8.22, 8.6)).toContainEqual(["nació", 8.22, 8.22]);
+    expect(await read(10.3, 10.6)).toContainEqual(["Lima", 10.3, 10.6]);
+  } finally { await ctx.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
 it("releases an event-based status wait on cancellation and reads peer-owned work without waiting", async () => {

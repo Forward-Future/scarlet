@@ -18,14 +18,36 @@ it("gives each segment the words said before it ends, and the last segment any t
   const segments = toSegments({ segments: [{ start: 0, end: 1.1, text: " So here " }, { start: 1.1, end: 2, text: "we go." }], words }, 10);
   expect(segments.map(s => [s.start, s.end, s.text, s.words.map(w => w.text)])).toEqual([
     [10, 11.1, "So here", ["So", "here"]],
-    // A word that starts within a millisecond of the segment's end belongs to what follows.
-    [11.1, 12, "we go.", ["we", "go.", "Late"]],
+    // A word that starts within a millisecond of the segment's end belongs to what follows, and the segment
+    // runs on to the end of the last word it holds.
+    [11.1, 13, "we go.", ["we", "go.", "Late"]],
   ]);
-  expect(segments[1]!.words[0]).toEqual({ text: "we", start: 11.2, end: 11.5 });
+  expect(segments[1]!.words).toEqual([{ text: "we", start: 11.2, end: 11.5 }, { text: "go.", start: 11.9995, end: 12.4 }, { text: "Late", start: 12.6, end: 13 }]);
   // Times before the recording starts are held at its start, and a segment never ends before it begins.
   const [early] = toSegments({ segments: [{ start: 5, end: 4, text: "x" }], words: [{ word: "x", start: -2, end: -1 }] }, 1);
-  expect(early).toMatchObject({ start: 6, end: 6, words: [{ text: "x", start: 0, end: 0 }] });
+  expect(early).toMatchObject({ start: 0, end: 6, words: [{ text: "x", start: 0, end: 0 }] });
   expect(toSegments({}, 0)).toMatchObject([{ start: 0, end: 0, text: "", words: [] }]);
+});
+
+it("starts a segment at the first word it holds when that word came before the segment's own start", () => {
+  // As OpenAI timed a Spanish recording: the first segment's last word has no length and ends with it, so it
+  // starts at that segment's end and goes to the next segment, which began after a pause.
+  const segments = toSegments({ language: "spanish", segments: [{ start: 0, end: 8.22, text: "piso 8, nació" }, { start: 8.6, end: 10.2, text: "en 1987" }],
+    words: [{ word: "piso", start: 7.02, end: 7.02 }, { word: "8", start: 7.02, end: 7.48 }, { word: "nació", start: 8.22, end: 8.22 },
+      { word: "en", start: 8.6, end: 9.16 }, { word: "1987", start: 9.16, end: 9.72 }] }, 0);
+  expect(segments.map(s => [s.start, s.end, s.words.map(w => [w.text, w.start, w.end])])).toEqual([
+    [0, 8.22, [["piso", 7.02, 7.02], ["8", 7.02, 7.48]]],
+    [8.22, 10.2, [["nació", 8.22, 8.22], ["en", 8.6, 9.16], ["1987", 9.16, 9.72]]],
+  ]);
+});
+
+it("ends a segment that isn't the last at the end of a word that runs past it", () => {
+  const segments = toSegments({ segments: [{ start: 0, end: 2, text: "a long" }, { start: 2.7, end: 3.5, text: "b" }],
+    words: [{ word: "a", start: 0.5, end: 1 }, { word: "long", start: 1.5, end: 2.6 }, { word: "b", start: 2.7, end: 3.2 }] }, 0);
+  expect(segments.map(s => [s.start, s.end, s.words.map(w => [w.text, w.start, w.end])])).toEqual([
+    [0, 2.6, [["a", 0.5, 1], ["long", 1.5, 2.6]]],
+    [2.7, 3.5, [["b", 2.7, 3.2]]],
+  ]);
 });
 
 describe("OpenAI transcription", () => {
