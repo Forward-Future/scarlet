@@ -49,6 +49,16 @@ describe("the skills Scarlet comes with", () => {
   const oldSettings = (dialogue: unknown) => app.ctx.db.prepare("INSERT OR REPLACE INTO settings (id, json) VALUES (1, ?)")
     .run(JSON.stringify({ dialogue, render: { handleSeconds: 4 } }));
 
+  it("seeds straight dialogue cuts and offers splice smoothing as a separate skill", async () => {
+    await upgrade();
+    const guide = publicGuide()!;
+    expect(guide.source).toBe("bundled");
+    expect(guide.content).toMatch(/straight picture and audio cuts/i);
+    expect(guide.content).not.toMatch(/timeline_crossfade_audio|crossfadeFrames/);
+    const smoothing = app.ctx.repos.skills.select("name = ?", ["smooth-audio-cuts"])[0]!;
+    expect(smoothing.content).toContain("timeline_crossfade_audio");
+  });
+
   it("carries existing dialogue preferences into the editable skill once and keeps other settings", async () => {
     oldSettings({ aiCuts: { filler: "off", pause: "suggest", retake: "cut", coaching: "suggest" }, pauseTightness: "tight", crossfadeFrames: 6 });
     await upgrade();
