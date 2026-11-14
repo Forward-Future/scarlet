@@ -83,7 +83,8 @@ export async function recordingWav(ctx: Paths, file: string, signal: AbortSignal
     const decoded = extractWav(file, wav, { audioStream }).then(async () => ({ wav, ...await wavLayout(wav) }));
     const created = entry = { decoded, users: 0 };
     decodes.set(key, created);
-    decoded.catch(() => { if (decodes.get(key) === created) decodes.delete(key); return rm(wav, { force: true }); });
+    // A file that can't be deleted (held open by another program) stays for the startup sweep: nothing to stop the engine over.
+    decoded.catch(() => { if (decodes.get(key) === created) decodes.delete(key); return rm(wav, { force: true }).catch(() => {}); });
   }
   const held = entry;
   clearTimeout(held.timer);
@@ -95,7 +96,7 @@ export async function recordingWav(ctx: Paths, file: string, signal: AbortSignal
     if (--held.users > 0) return;
     held.timer = setTimeout(() => {
       if (decodes.get(key) === held) decodes.delete(key);
-      void held.decoded.then(({ wav }) => rm(wav, { force: true }), () => {});
+      void held.decoded.then(({ wav }) => rm(wav, { force: true })).catch(() => {});
     }, KEEP_MS);
     held.timer.unref?.();
   };

@@ -280,6 +280,9 @@ const retiredGuideRevisions = new Set([
   "a74e1c5429365f6f04c0dcbc46d6352ec321cf54c1736be77625279bd6b3c67d",
 ]);
 
+// Workflows Scarlet no longer ships. An unedited copy leaves the library; one the editor changed stays theirs.
+const RETIRED_WORKFLOWS = ["render-verify", "screen-recording", "clean-dialogue", "edit-interview", "smooth-audio-cuts", "visual-pass"];
+
 // A seed directory can also supply personal workflows under these names. Only retire texts Scarlet shipped.
 const retiredWorkflowRevisions = new Set([
   // render-verify
@@ -300,7 +303,55 @@ const retiredWorkflowRevisions = new Set([
   "6e67cdc666c9c69d5c6e15591827d99e76b43027391bfdcb904fd3cb59792370",
   "641d6d61a997699a115e2a1decd03fe03bfee7382ff623b9b4ea1867c98ce206",
   "f6e6aef6dadf88242335b473fb13e641d3b4b3bc48c384c93ade8ed3fd0a274d",
-  "c3b937680e98e686b29b85f5ab954d3b782f0084ea2bf57c0e998536b49a5515",
+  "c3b937680e98e686b29b85f5ab954d3b782f0084ea2bf57c0e998536b49a5515",  // clean-dialogue
+  "6942012139a0e5d56ade6b8eb2a4da8c3053ea9acf1d22965ccd165992278d75",
+  "7296ee5e46e21830c89e978487d263113e1cdb08640a6c12de5205c1b1451db3",
+  "75032a3ede61ee010d307b4aaf8397ed8871e62f7e3b92f034659b7612681f30",
+  "01cf8ca6283d77d41804241bbd7ab3b03ea1feb66ec6d7b63d93ac4c95be4399",
+  "d4930d9b042fe164d95e05d4d72749457d46baffa92ca1d555fda267ffe224e5",
+  "0b137b7ab00e04560bf18e7020726d45383f55346d5c5f1b24bb27a16eeabac0",
+  "786353d66e38996a25c926ab4699eaf605435dda09cf3b7b014000ff4a848836",
+  "7c6f8b3c8525835cd35b7c01e43d30e5a10bbfb1c9a6c76119358caf005a5d3f",
+  "fa1b20c28b81f1e24ed10f6ed49747099cd9a9acc39dd2e6664cd41c52fa91b5",
+  "bd8104713b68df46a111155e5937216afcd733d389e2494821cdddd52e2922d6",
+  "d5828836869cb72787d6719d05b6a79e161100403e12187b28362b77b18ebe0c",
+  // edit-interview
+  "0da9596d93d9516dda1849ba214395b99d8f7588693b783849efccad4abca222",
+  "8b54d460579ae59b7a99eb1dd2530b1842e9fad8ffbddeaca887ca959e3111f6",
+  "a1b2f8f2fa8b83766705fe878dd812e0647faee9122a3e5faa5e5b6f417c3c7a",
+  "87d3dfffcaea445e86171b4c5dc52bb60c7eab1bf1351260bc363eec5b646574",
+  "c5d17ae80504c7f0c77b12085339bec53024e7f32f380b8307277e2ee8eaff42",
+  "544ee5195eed687b7dff2ccc33b6c79c902c9fe73216bd566a64a97a1493d5d5",
+  "9cc48460c94a88b481d94d43f361ad4263064cbc2377c2e921a41db9cbc5be09",
+  "051ee7762cfa2d8e1f973b5c1ff8c326b18af8f334ba250c086e42d12e9e68a5",
+  "310ff3a6daeb13018765b654fd9f7b214ead918b615653b5a7ab47e589449e4e",
+  // smooth-audio-cuts
+  "6f24552c2cc18df50a39efedea79ce1677c0fb17bc2b8f561c1356ae935c938a",
+  "3f2c8798ea970d7a975e83e12f2da974f00e6cddc747e888a3b343ca44632c57",
+  "de364b141eaa9c2f63cc72d06763af8b0b88b8d9e62e84ca646e7bd8dde9b530",
+  "a1d2cebfa699da97e62ecd2ac9bdb60319ac6055e5684eef9dce7e5c72eca8f0",
+  "d2d532485261415d1bd48191fd895c8f57a2bbe61ed9a4184805f87f921ed490",
+  "50e8696cf1d35ced249982b9dd9ca2f98bd7e2aee6b8117625feef8cfb5c9f8e",
+  "69640af2ee5424617ee205cda85e5c61b52fe92ac0bd4d484fce8b2cb1f9a424",
+  "387863a33c98f559a5939482b05c366293152c637f0a6ef45558c87a593c6703",
+  "d4b7b712cf744e29c715c39134659265865d37bbce2c2b56ba099c510723454c",
+  "8b26dcab409f323eaae5d05b90f90847b9b13c43da86abb6e1e9b004c566f14f",
+  "ec02e58f199b47a6029893a07fe4065fa5a29c11facda6d8e5068db4ef166feb",
+  "65d28192320b28b2d3ac064a64c0a8bc53634441f6c93f58494d3f256790c218",
+  // visual-pass
+  "1539696daf08473316c6b9e4539b81412f4e675146fb830360838fba26ff39cb",
+  "fb1ac47c6233db9294411c99cbdb18220f720812b6e09fc1b6d9fe3008384d20",
+  "5d4607f09de164ef41b7372ec30dd542b7ecc648936607c0990d9e24eb0484d3",
+  "944891a0ca564872c32a52e6f30672954f2248c970e6fd332d4e00277dabbd0a",
+  "91fab3a5af266906b1d1656261a1b3e32148d8f3536f49ff66f5d767ba4a3bdf",
+  "f735437da1f94cbd494493702428f0152b5a00b95afcd5bfdc87c06ed56febd7",
+  "45d31c15aab681d6ab82fa8d39578d1a989e819082207172c13aeb9eab01d338",
+  "59c379896b2403cdcbd06ac2eb2376d5296b792889f202a41c98cc23a13d431b",
+  "8e44d9f5f39dac1cf0c52f725d5fc286afc40d61762e19d55206d1948dd38a8c",
+  "2e553426b4307d3df9d423d3128029397f61c40228fe7643014851dc97f453b0",
+  "8ef2641984557868aa411a0985ce3864a14fada054440cf4fa598196c547fd8a",
+  "d07ce568c1630d9bc683767334dfd30f63a7fc9cb2b1947f598dbb8be9ebcd57",
+  "09c4725bb0f6e9e49f7bbf9e94fa6d4a692f3afa8a33b36fa8200c61099db0b1",
 ]);
 
 // Source builds could seed either the shipped first-cut guide or a local file under its name.
@@ -365,7 +416,7 @@ export function retireMergedSkills(ctx: Ctx) {
       retired.set(skill.id, shortcut ? dialogue.id : undefined);
       deleteSkill(ctx, skill);
     }
-    for (const skill of ctx.repos.skills.select("name IN ('render-verify', 'screen-recording')")) {
+    for (const skill of ctx.repos.skills.select(`name IN (${RETIRED_WORKFLOWS.map(name => `'${name}'`).join(", ")})`)) {
       if (!outOfBox(skill) || !retiredWorkflowRevisions.has(contentHash(skill.content)) ||
           skill.description !== parseFrontmatter(skill.content).description) continue;
       // Preserve edits explicitly requested for this skill, including its revision history and learnings awaiting a decision.
@@ -461,7 +512,7 @@ export function assistantSkills(skills: Skill[], selected: string[] | undefined,
     if (!forPrompt || selected?.length) return skill;
     const workflow = BUNDLED_SKILLS.some(s => s.folder === skill.name) ||
       skill.bundledName === "first-cut-dialogue" ||
-      skill.name === "screen-recording" || skill.name === "render-verify";
+      RETIRED_WORKFLOWS.includes(skill.name);
     if (!workflow) return skill;
     return { ...skill, content: `Read this workflow when it applies using skills_list with skillId "${skill.id}".` };
   });

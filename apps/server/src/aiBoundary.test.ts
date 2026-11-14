@@ -117,12 +117,15 @@ it("saves bounded ripple operations on the frames inside the selection, includin
     intent: "suggestion", description: "Tighten this passage.", ops: [
       { op: "rippleDelete", start: range.start, end: 2 }, { op: "rippleDelete", start, end },
     ] }, task);
-  const saved = await send(2.5, 3.0328);
+  // The second op is written on the edit as the first one asked to leave it, where the selection now ends at 3 s. The
+  // first came out a little short on whole frames (0.9667 s of 0.9995 s), so the second moves later by the difference
+  // before it goes onto frames, and still ends inside the shortened selection.
+  const saved = await send(2.5, 3);
   expect(saved.status).toBe(201);
-  expect((await saved.json()).change.ops).toEqual([
-    { op: "rippleDelete", start: 31 / 30, end: 2 }, { op: "rippleDelete", start: 2.5, end: 3 },
-  ]);
-  const outside = await send(2.5, 3.04);
+  const [first, second] = (await saved.json()).change.ops;
+  expect(first).toEqual({ op: "rippleDelete", start: 31 / 30, end: 2 });
+  expect(second).toMatchObject({ op: "rippleDelete", start: expect.closeTo(76 / 30, 9), end: expect.closeTo(3, 9) });
+  const outside = await send(2.5, 3.01);
   expect(outside.status).toBe(400);
   expect((await outside.json()).error.code).toBe("cut_scope");
 });

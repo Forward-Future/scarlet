@@ -26,6 +26,32 @@ export interface AgentContext {
   reviewRef?: EditRef;
   /** Number shown on the thread timeline. The agent uses changeId and editIndex for identity. */
   editNumber?: number;
+  /**
+   * A stretch the editor marked on the timeline's ruler for this message, on the version the timeline showed. It rides
+   * along with whatever the message is aimed at: a cut or an edit keeps its own time, and Scarlet is told both.
+   */
+  markedRange?: MarkedRange;
+}
+
+export interface MarkedRange { start: number; end: number; version?: string; mediaId?: string; clipIds?: string[] }
+
+/** The stretch marked on the ruler that the message in the box carries. */
+export function markedRangeOf(context: AgentContext | "whole" | null | undefined) {
+  return context && context !== "whole" ? context.markedRange : undefined;
+}
+
+/** A message about a marked stretch and nothing else: a new edit there. */
+export function rangeTarget(marked: MarkedRange): AgentContext {
+  return { time: marked.start, end: marked.end, version: marked.version, mediaId: marked.mediaId, clipIds: marked.clipIds ?? [], markedRange: marked };
+}
+
+/** The same aim with the marked stretch put on it, or taken off. Nothing is left of an aim that was only the stretch. */
+export function withMarkedRange(context: AgentContext | "whole" | null | undefined, marked: MarkedRange | undefined): AgentContext | null {
+  const target = context && context !== "whole" ? context : undefined;
+  // Words chosen in the transcript or a moment picked on the timeline give way to the stretch: it says where, as they did.
+  if (!target?.changeId) return marked ? rangeTarget(marked) : null;
+  const { markedRange: _was, ...rest } = target;
+  return marked ? { ...rest, markedRange: marked } : rest;
 }
 
 export function editTargetAt(time: number, version?: string, timeline?: Timeline | null, mediaId?: string): AgentContext {

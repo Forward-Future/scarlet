@@ -8,7 +8,7 @@ export function ReviewActions({ approve, revise, disabled, approvalDisabled, app
   scheduled?: { label: string; cancel(): void };
 }) {
   useHotkeys(event => {
-    if (disabled || event.repeat) return;
+    if (disabled || event.repeat || event.shiftKey) return;
     const key = event.key.toLowerCase();
     const action = key === "r" ? revise : key === approveKey.toLowerCase() && !approvalDisabled && !scheduled ? approve : undefined;
     if (action) { event.preventDefault(); action(); }

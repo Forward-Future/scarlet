@@ -163,7 +163,8 @@ export function runMarkdown(title: string, rows: TrialRow[]): string {
   const lines = [`# ${title}`, "", `| Case | Config | Trials (done) | ${keys.join(" | ")} |`, `|---|---|---|${keys.map(() => "---").join("|")}|`];
   for (const [key, group] of groups) {
     const [caseId, config] = key.split("\u0000");
-    const done = group.filter(g => g.headline);
+    // A trial that timed out or was cancelled is still scored for its own folder, but it isn't a result to average.
+    const done = group.filter(g => g.headline && g.state === "done");
     const cells = keys.map(k => {
       const values = done.map(g => g.headline![k]).filter((v): v is number => typeof v === "number");
       if (!values.length) return "–";

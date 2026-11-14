@@ -349,6 +349,10 @@ export type ApproveResponse = z.infer<typeof ApproveResponse>;
 /** Provider option IDs are also passed as CLI arguments on Windows. */
 export const AgentOptionId = z.string().regex(/^[a-z0-9][a-z0-9._-]*$/i);
 export const AgentEffort = AgentOptionId;
+/** A stretch of the timeline the editor marked on its ruler, in seconds on `version`, or of `mediaId`'s own footage. */
+export const MarkedRange = z.object({ version: Id.optional(), mediaId: Id.optional(), start: Seconds, end: Seconds });
+export type MarkedRange = z.infer<typeof MarkedRange>;
+
 export const ModelTuning = z.object({
   effort: AgentEffort.optional(),
   serviceTier: AgentOptionId.optional(),
@@ -356,7 +360,9 @@ export const ModelTuning = z.object({
 
 export const ReviseRequest = ModelTuning.extend({
   skillIds: z.array(Id).optional(),
-  position: Note.pick({ time: true, end: true, clipIds: true }).extend({ version: Id.optional(), mediaId: Id.optional(), cutIndex: z.number().int().nonnegative().optional() }).optional(),
+  position: Note.pick({ time: true, end: true, clipIds: true }).extend({ version: Id.optional(), mediaId: Id.optional(), cutIndex: z.number().int().nonnegative().optional(),
+    /** A stretch the editor marked on the timeline for this request, besides the cut or edit it is about. */
+    markedRange: MarkedRange.optional() }).optional(),
   text: z.string().min(1),
   voiceTranscript: z.string().optional(),
   /** Agent to send the revision to. Defaults to the change's author. */
@@ -659,6 +665,8 @@ export const Task = z.object({
       time: Seconds.optional(),
       end: Seconds.optional(),
       clipIds: z.array(Id).optional(),
+      /** A stretch the editor marked on the timeline for this request. `time` and `end` stay those of the cut or edit it is about. */
+      markedRange: MarkedRange.optional(),
       reviewAllCuts: z.boolean().optional(),
       /** Product shortcut chosen by the editor, independent of the guides pinned to this task. */
       dialogueOperation: z.enum(["none", "first-cut", "local-pauses"]).optional(),

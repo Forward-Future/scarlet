@@ -52,25 +52,33 @@ export function migrateDialogueSettings(ctx: Ctx) {
     const legacy: LegacyDialogueSettings = JSON.parse(row.dialogue);
     preservePendingSuggestions(ctx, legacy.aiCuts);
     const lines = editorialPreferences(legacy);
-    if (lines.length) {
-      const preferences = lines.map(line => `- ${line}`).join("\n");
-      const guides = ctx.repos.skills.select(`name = 'dialogue-pass' OR json_extract(json, '$.bundledName') IN ('first-cut-dialogue', 'dialogue-pass')`);
-      if (guides.length) {
-        for (const guide of guides) {
-          // From now on this is the editor's copy. Later seeding must retain both their prose and these choices.
-          const source = guide.source === "bundled" || guide.source === "seed" ? undefined : guide.source;
-          const content = `${guide.content}\n\n## Editor preferences for dialogue cuts\n\nUse these preferences in place of the general defaults above.\n\n${preferences}\n`;
-          updateSkill(ctx, null, { ...guide, source }, { content });
-        }
-      } else {
-        // The editor may have deleted the workflow or chosen an empty library. Keep their choices recoverable
-        // without restoring a deleted guide or activating a replacement.
-        let name = "dialogue-preferences";
-        for (let n = 2; ctx.repos.skills.select("name = ?", [name]).length; n++) name = `dialogue-preferences-${n}`;
-        const description = "Preferences saved for dialogue cuts in an earlier version of Scarlet.";
-        const content = `---\nname: ${name}\ndescription: ${description}\n---\n\n# Dialogue preferences\n\n${preferences}\n`;
-        createSkill(ctx, null, { name, content, description, scope: "team", enabled: false }, { source: "dialogue-settings" });
+    const guides = ctx.repos.skills.select(`name = 'dialogue-pass' OR json_extract(json, '$.bundledName') IN ('first-cut-dialogue', 'dialogue-pass')`);
+    // Scarlet used to add the default two-frame crossfade at every join by itself. The stock guide now asks for it; an
+    // editor's own guide that says nothing about crossfades would lose it, so it is written into that guide.
+    const frames = legacy.crossfadeFrames;
+    const defaultFade = frames === undefined || frames === 2;
+    const preferencesFor = (guide: { content: string; source?: string }) =>
+      defaultFade && guide.source !== "bundled" && guide.source !== "seed" && !/crossfade/i.test(guide.content)
+        ? [...lines, "Use a 2-frame audio crossfade at dialogue joins."] : lines;
+    if (guides.length) {
+      for (const guide of guides) {
+        const own = preferencesFor(guide);
+        if (!own.length) continue;
+        const preferences = own.map(line => `- ${line}`).join("\n");
+        // From now on this is the editor's copy. Later seeding must retain both their prose and these choices.
+        const source = guide.source === "bundled" || guide.source === "seed" ? undefined : guide.source;
+        const content = `${guide.content}\n\n## Editor preferences for dialogue cuts\n\nUse these preferences in place of the general defaults above.\n\n${preferences}\n`;
+        updateSkill(ctx, null, { ...guide, source }, { content });
       }
+    } else if (lines.length) {
+      // The editor may have deleted the workflow or chosen an empty library. Keep their choices recoverable
+      // without restoring a deleted guide or activating a replacement.
+      const preferences = lines.map(line => `- ${line}`).join("\n");
+      let name = "dialogue-preferences";
+      for (let n = 2; ctx.repos.skills.select("name = ?", [name]).length; n++) name = `dialogue-preferences-${n}`;
+      const description = "Preferences saved for dialogue cuts in an earlier version of Scarlet.";
+      const content = `---\nname: ${name}\ndescription: ${description}\n---\n\n# Dialogue preferences\n\n${preferences}\n`;
+      createSkill(ctx, null, { name, content, description, scope: "team", enabled: false }, { source: "dialogue-settings" });
     }
     ctx.db.prepare("UPDATE settings SET json = json_remove(json, '$.dialogue') WHERE id = 1").run();
   }, "immediate")();

@@ -11,12 +11,25 @@ type OtioRationalTime = { OTIO_SCHEMA: "RationalTime.1"; rate: number; value: nu
 type OtioTimeRange = { OTIO_SCHEMA: "TimeRange.1"; duration: OtioRationalTime; start_time: OtioRationalTime };
 
 function rt(seconds: number, rate: number, preserveSubframes = false): OtioRationalTime {
-  const frames = seconds * rate;
+  return frameTime(seconds * rate, rate, preserveSubframes);
+}
+function frameTime(frames: number, rate: number, preserveSubframes = false): OtioRationalTime {
   const whole = Math.round(frames);
   return { OTIO_SCHEMA: "RationalTime.1", rate, value: preserveSubframes && Math.abs(frames - whole) > 1e-7 ? frames : whole };
 }
 function tr(start: number, duration: number, rate: number, preserveSubframes = false): OtioTimeRange {
   return { OTIO_SCHEMA: "TimeRange.1", start_time: rt(start, rate, preserveSubframes), duration: rt(duration, rate, preserveSubframes) };
+}
+/** A range from a start in seconds, with a length already counted in frames. */
+function framesRange(start: number, frames: number, rate: number, preserveSubframes = false): OtioTimeRange {
+  return { OTIO_SCHEMA: "TimeRange.1", start_time: rt(start, rate, preserveSubframes), duration: frameTime(frames, rate, preserveSubframes) };
+}
+/**
+ * OTIO plays a track's children end to end, so each item's length runs from the frame nearest its start to the frame
+ * nearest its end on the timeline. Rounding each length on its own would add up along the track.
+ */
+function timelineFrames(start: number, end: number, rate: number): number {
+  return Math.max(0, Math.round(end * rate) - Math.round(start * rate));
 }
 
 export interface OtioExportOptions {
@@ -118,13 +131,13 @@ function otioTrack(
       children.push({
         OTIO_SCHEMA: "Gap.1",
         name: "",
-        source_range: tr(0, clip.timelineIn - cursor, rate),
+        source_range: framesRange(0, timelineFrames(cursor, clip.timelineIn, rate), rate),
         effects: [],
         markers: [],
         metadata: {},
       });
     }
-    children.push(otioClip(clip, rate, media, opts));
+    children.push(otioClip(clip, timelineFrames(clip.timelineIn, clipEnd(clip), rate), rate, media, opts));
     cursor = clipEnd(clip);
   }
   return {
@@ -139,8 +152,8 @@ function otioTrack(
   };
 }
 
-function otioClip(clip: Clip, rate: number, media: Map<string, MediaAsset>, opts: OtioExportOptions): unknown {
-  const duration = clipDuration(clip);
+/** `frames` is the clip's length on the timeline in project frames. */
+function otioClip(clip: Clip, frames: number, rate: number, media: Map<string, MediaAsset>, opts: OtioExportOptions): unknown {
   const effects: unknown[] = [];
   let mediaReference: unknown;
   let sourceRange: OtioTimeRange;
@@ -159,7 +172,8 @@ function otioClip(clip: Clip, rate: number, media: Map<string, MediaAsset>, opts
     // OTIO plays children end to end. Counting each cut in camera frames lets rounding drift accumulate
     // against the audio. Keep genuine subframes when the footage clock or playback speed differs.
     const preserveSubframes = (asset?.fps ?? rate) !== rate || (clip.speed ?? 1) !== 1;
-    sourceRange = tr(clip.sourceIn, clip.sourceOut - clip.sourceIn, rate, preserveSubframes);
+    // The footage it plays is its timeline length at its speed.
+    sourceRange = framesRange(clip.sourceIn, frames * (clip.speed ?? 1), rate, preserveSubframes);
     if ((clip.speed ?? 1) !== 1) {
       effects.push({
         OTIO_SCHEMA: "LinearTimeWarp.1",
@@ -178,10 +192,10 @@ function otioClip(clip: Clip, rate: number, media: Map<string, MediaAsset>, opts
       generator_kind: clip.kind === "color" ? "SolidColor" : "Text",
       parameters:
         clip.kind === "color" ? { color: clip.color } : { text: clip.text, style: clip.style ?? {} },
-      available_range: tr(0, duration, rate),
+      available_range: framesRange(0, frames, rate),
       metadata: {},
     };
-    sourceRange = tr(0, duration, rate);
+    sourceRange = framesRange(0, frames, rate);
   }
 
   const transform = clip.kind !== "caption" ? clip.transform : undefined;

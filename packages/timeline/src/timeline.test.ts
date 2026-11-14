@@ -280,6 +280,33 @@ describe("otio", () => {
     }
   });
 
+  it("keeps clips off whole frames in time with the music: rounding never adds up along a track", () => {
+    type Item = { OTIO_SCHEMA: string; source_range: { duration: { value: number } } };
+    type Doc = { tracks: { children: Array<{ children: Item[] }> } };
+    const project = createProject("Drift", { fps: 30 });
+    project.media.push({ id: "v", kind: "video", name: "cam.mp4", path: "cam.mp4", duration: 600, fps: 30 },
+      { id: "song", kind: "audio", name: "song.wav", path: "song.wav", duration: 600 });
+    const tl = emptyTimeline(project.id);
+    // 100 back-to-back clips of 1.01 s, then the same with every other one left out, against 101 s of music.
+    tl.tracks[0]!.clips = Array.from({ length: 100 }, (_, i) => makeMediaClip("v", i * 1.01, (i + 1) * 1.01, i * 1.01, { id: `c${i}` }));
+    tl.tracks[1]!.clips = [makeMediaClip("song", 0, 101, 0, { id: "music" })];
+    const lengths = (doc: Doc, track: number) => doc.tracks.children[track]!.children.map(c => c.source_range.duration.value);
+    const sum = (values: number[]) => values.reduce((a, b) => a + b, 0);
+    const doc = toOtio(project, tl) as Doc;
+    expect(lengths(doc, 1)).toEqual([3030]);
+    expect(sum(lengths(doc, 0))).toBe(3030);
+    // Each clip starts on the frame nearest its own start.
+    let at = 0;
+    for (const [i, value] of lengths(doc, 0).entries()) {
+      expect(at).toBe(Math.round(i * 1.01 * 30));
+      at += value;
+    }
+    tl.tracks[0]!.clips = tl.tracks[0]!.clips.filter((_, i) => i % 2 === 1);
+    const gapped = toOtio(project, tl) as Doc;
+    expect(gapped.tracks.children[0]!.children.filter(c => c.OTIO_SCHEMA === "Gap.1")).toHaveLength(50);
+    expect(sum(lengths(gapped, 0))).toBe(3030);
+  });
+
   it("writes markers by kind, and captions as markers unless asked not to", () => {
     const project = createProject("Markers");
     const tl = emptyTimeline(project.id);

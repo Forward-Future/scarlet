@@ -8,6 +8,7 @@ import { runProgress } from "../../lib/runProgress";
 import { runNow } from "../../lib/runNow";
 import { runningTranscription, transcriptionProgressLabel, transcriptsProgress } from "../../lib/transcriptionProgress";
 import { runAim, runIsActive, runItems, runLines, runSummary, type RunItem, type RunLine } from "../../lib/taskRun";
+import { pendingMediaWaits, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
 
 /** Tokens the agent used on this request, with the full breakdown on hover. Shown only when turned on in Settings → Usage. */
 function Tokens({ usage }: { usage?: UsageTotals }) {
@@ -51,7 +52,8 @@ export function Said({ text, className }: { text: string; className?: string }) 
  *   request will come to. It is written once and stays as it is; a run that said none has none. Then one line, with a
  *   turning ring before it, that says what Scarlet is doing this moment (`runNow`): the latest call it made, in plain
  *   words, or its own latest sentence. The line changes every few seconds and nothing else is there: no stages, no
- *   plan, no percent, no list of what it did. Its words shimmer. With no heading above it, Stop ends the line.
+ *   plan, no list of what it did, and no percent but one: while the recordings are transcribed it says how far along
+ *   they are. Its words shimmer. With no heading above it, Stop ends the line.
  * - When Scarlet asks something, or a request waits its turn: one row saying so, with its one action. A block whose
  *   heading already says where it stands (`banded`) leaves a question to the heading: its dot, the question and Answer.
  *   With no heading, the row opens the steps Scarlet took before it asked.
@@ -115,7 +117,17 @@ function WorkingRun({ task, events, changes, callNumber, say, result, stopAbove,
     const pass = changes.find(c => c.id === changeId);
     return numberOf.current?.(String(changeId), Number(index)) ?? (pass && callNumbers(pass, 0, false).get(index));
   }), [events, aim, changes]);
-  const words = doing ?? (voice ? voicePhase[voice.phase] : task.state === "claimed" ? "Getting started" : WORKING);
+  // While the run waits on its recordings' transcripts, the line says how far along they are: the one figure there.
+  const tasks = useProjectStore(s => s.current?.tasks);
+  const media = useProjectStore(s => s.current?.media);
+  const transcripts = useMemo(() => {
+    if (doing !== TRANSCRIPT_WAIT) return;
+    const ids = [...pendingMediaWaits(events)].flatMap(key => key.startsWith("transcript/") ? [key.slice("transcript/".length)] : []);
+    const progress = transcriptsProgress(tasks ?? [], media ?? [], ids);
+    return progress && progress.stage !== "queued" ? transcriptionProgressLabel(progress) : undefined;
+  }, [doing, events, tasks, media]);
+  const words = transcripts ? `Transcribing the recordings · ${transcripts}`
+    : doing ?? (voice ? voicePhase[voice.phase] : task.state === "claimed" ? "Getting started" : WORKING);
   return <div className="req" data-state="working" aria-label="Scarlet’s work" aria-busy>
     {aim && <div className="req-said req-lead"><Said className="req-say" text={aim.text} /></div>}
     <div className="req-row req-now">
