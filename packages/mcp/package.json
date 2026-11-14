@@ -12,7 +12,8 @@
     "./cli": { "types": "./dist/cli.d.ts", "import": "./dist/cli.js" },
     "./prompt": { "types": "./dist/prompt.d.ts", "import": "./dist/prompt.js" },
     "./media-profile": { "types": "./dist/media-profile.d.ts", "import": "./dist/media-profile.js" },
-    "./gap-sound": { "types": "./dist/gap-sound.d.ts", "import": "./dist/gap-sound.js" }
+    "./gap-sound": { "types": "./dist/gap-sound.d.ts", "import": "./dist/gap-sound.js" },
+    "./mock": { "types": "./dist/mock-server.d.ts", "import": "./dist/mock-server.js" }
   },
   "files": ["dist"],
   "scripts": {

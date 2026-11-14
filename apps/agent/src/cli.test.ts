@@ -2,7 +2,7 @@ import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { mock } from "@scarlet/mcp";
+import * as mock from "@scarlet/mcp/mock";
 import { main, parseArgv } from "./cli.js";
 import * as host from "./host.js";
 import * as runners from "./runners/index.js";

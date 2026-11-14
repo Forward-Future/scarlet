@@ -496,3 +496,26 @@ it("gives a new element the speed the editor picked, so a source set on it later
   player.attach(video);
   next.remove();
 });
+
+it("still plays from a point picked in a passage that ran to its end, after the passage was set up again", () => {
+  release = player.previewRange({ start: 40, end: 50 }, FPS);
+  reach(49);
+  reach(50.02);
+  expect(video.paused).toBe(true);
+  // The working cut moves on under the open edit: its passage is let go and taken up again where it is, at its end.
+  release();
+  release = player.previewRange({ start: 40, end: 50 }, FPS, undefined, true);
+  expect(video.paused).toBe(true);
+  expect(usePlayerStore.getState().time).toBe(50);
+  // The editor didn't pause it, so a press plays from the point they pick, as before it was set up again.
+  press(44);
+  expect(video.currentTime).toBe(44);
+  expect(video.paused).toBe(false);
+  // Paused by the editor part-way and set up again, a press only moves.
+  player.pause();
+  release();
+  release = player.previewRange({ start: 40, end: 50 }, FPS, undefined, true);
+  press(46);
+  expect(video.currentTime).toBe(46);
+  expect(video.paused).toBe(true);
+});

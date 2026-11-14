@@ -2,16 +2,6 @@ import { create } from "zustand";
 import { clipsAt, type Timeline } from "@scarlet/timeline";
 import type { AgentEffort, AgentId, EditRef } from "@scarlet/shared";
 
-export interface Notification {
-  id: number;
-  title: string;
-  body?: string;
-  projectId?: string;
-  link?: string;
-  at: string;
-  read: boolean;
-}
-
 export interface AgentPick {
   agent: AgentId;
   model?: string;
@@ -96,9 +86,6 @@ function sameTarget(now: ComposerDraft["agentContext"], sent: ComposerDraft["age
 }
 
 interface UiState {
-  notifications: Notification[];
-  notify(n: Omit<Notification, "id" | "at" | "read">): void;
-
   exportStarNotice: "unseen" | "visible" | "seen";
   offerExportStar(): void;
   dismissExportStar(): void;
@@ -157,8 +144,6 @@ interface UiState {
   setWsStatus(s: UiState["wsStatus"]): void;
 }
 
-let seq = 1;
-
 const DRAFTS_KEY = "scarlet.drafts.v1";
 
 /** A draft as kept on this computer. Which targets came from the playhead is only known in memory, so it is saved beside them. */
@@ -189,10 +174,6 @@ function loadDrafts(): Record<string, ComposerDraft> {
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
-  notifications: [],
-  notify: (n) =>
-    set({ notifications: [{ ...n, id: seq++, at: new Date().toISOString(), read: false }, ...get().notifications].slice(0, 50) }),
-
   exportStarNotice: "unseen",
   offerExportStar: () => {
     if (get().exportStarNotice !== "unseen") return;
@@ -224,14 +205,16 @@ export const useUiStore = create<UiState>((set, get) => ({
 
   agent: loadAgent(),
   setAgent: (agent) => {
-    localStorage.setItem(AGENT_KEY, JSON.stringify(agent));
+    try { localStorage.setItem(AGENT_KEY, JSON.stringify(agent)); } catch { /* Keep the pick for this session. */ }
     set({ agent });
   },
 
-  showRunTokens: localStorage.getItem(RUN_TOKENS_KEY) === "shown",
+  showRunTokens: (() => { try { return localStorage.getItem(RUN_TOKENS_KEY) === "shown"; } catch { return false; } })(),
   setShowRunTokens: (v) => {
-    if (v) localStorage.setItem(RUN_TOKENS_KEY, "shown");
-    else localStorage.removeItem(RUN_TOKENS_KEY);
+    try {
+      if (v) localStorage.setItem(RUN_TOKENS_KEY, "shown");
+      else localStorage.removeItem(RUN_TOKENS_KEY);
+    } catch { /* Keep the choice for this session. */ }
     set({ showRunTokens: v });
   },
 

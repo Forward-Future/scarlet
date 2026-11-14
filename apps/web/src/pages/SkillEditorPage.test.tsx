@@ -686,3 +686,25 @@ it("stays on the skill on Esc while a request is typed and not sent, and moves t
     await view.close();
   }
 });
+
+it("holds Restore while a skill revision runs and shows its saved words when it stops", async () => {
+  const db = buildDb();
+  let skill = db.skills.find(s => s.version > 1)!;
+  const versions = db.skillVersions[skill.id]!;
+  const task = { ...db.tasks[0]!, kind: "skill_edit" as const, state: "running" as const, context: { skillId: skill.id } };
+  vi.spyOn(api, "skill").mockImplementation(async () => ({ skill, versions, edits: [task] }));
+  vi.spyOn(api, "task").mockResolvedValue({ task, events: [] });
+  vi.spyOn(api, "cancelTask").mockImplementation(async () => {
+    skill = { ...skill, content: skill.content + "\nKeep the laugh.", version: skill.version + 1 };
+    return { task: { ...task, state: "cancelled" } };
+  });
+  const view = await open(`/settings/skills/${skill.id}`);
+  try {
+    await act(async () => view.el.querySelector<HTMLButtonElement>('[aria-label="Version history"]')!.click());
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="option"]')].at(-1)!.click());
+    expect(named(view.el, `Restore v${versions[0]!.version}`)!.disabled).toBe(true);
+    await act(async () => named(view.el, "Stop")!.click());
+    expect(markdown(view.el).value).toContain("Keep the laugh.");
+    expect(view.el.querySelector(".unit-state")?.textContent).toBe("Stopped");
+  } finally { await view.close(); }
+});

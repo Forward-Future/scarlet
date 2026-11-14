@@ -274,3 +274,48 @@ it("asks about words in the edit by the clips they play from, and offers a note 
   expect(button("Ask about this")).toBeUndefined();
   useUiStore.setState(ui, true);
 });
+
+it("lets Shift+Tab leave the words, and still takes a Tab in from outside, or a press between the words, to a word", async () => {
+  await mount();
+  const list = container.querySelector<HTMLElement>(".reading-scroll")!;
+  const at = (n: number) => container.querySelector<HTMLElement>(`[data-w="${n}"]`)!;
+  const byKeyboard = vi.spyOn(list, "matches").mockImplementation(selector => selector === ":focus-visible");
+  const outside = document.body.appendChild(document.createElement("button"));
+  try {
+    // Tab from the control before the transcript lands on the list, which hands the keyboard to a word.
+    outside.focus();
+    await act(async () => list.focus());
+    const word = document.activeElement as HTMLElement;
+    expect(word.dataset.w).toBeDefined();
+    // Shift+Tab from a word lands on the list too. It stays there, so the next Shift+Tab is out of the transcript:
+    // sent back to a word, the keyboard went round between the word and the list for good.
+    at(4).focus();
+    await act(async () => list.focus());
+    expect(document.activeElement).toBe(list);
+    // A press on the space between the words, with a word in focus, still goes to a word: the arrows work from there.
+    byKeyboard.mockReturnValue(false);
+    at(4).focus();
+    await act(async () => list.focus());
+    expect((document.activeElement as HTMLElement).dataset.w).toBe(word.dataset.w);
+  } finally {
+    outside.remove();
+  }
+});
+
+it("leaves alone an arrow the page has already taken, and moves between words on one it hasn't", async () => {
+  await mount();
+  const at = (n: number) => container.querySelector<HTMLElement>(`[data-w="${n}"]`)!;
+  const down = () => act(async () => { at(4).dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowDown" })); });
+  at(4).focus();
+  // The page steps edits with ↑ and ↓ from a listener that runs first and prevents the key's default.
+  const page = (e: KeyboardEvent) => { if (e.key === "ArrowDown") e.preventDefault(); };
+  window.addEventListener("keydown", page, true);
+  try {
+    await down();
+    expect(document.activeElement).toBe(at(4));
+  } finally {
+    window.removeEventListener("keydown", page, true);
+  }
+  await down();
+  expect(document.activeElement).toBe(at(5));
+});

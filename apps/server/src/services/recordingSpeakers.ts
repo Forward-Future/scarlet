@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { Stats } from "node:fs";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
-import { fileInDirectory } from "@scarlet/render";
+import { fileInDirectoryAsync } from "@scarlet/render";
 import { SpeakerProgress } from "@scarlet/shared";
 import { newId, type MediaAsset, type Transcript } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
@@ -69,7 +70,7 @@ const turnsFile = (ctx: Pick<Ctx, "paths">, projectId: string, key: string) => j
 
 /** Where the speaker turns of a recording are saved, named for its file as it is now. Nothing once the file is gone. */
 export async function savedSpeakerTurns(ctx: Pick<Ctx, "paths">, projectId: string, media: MediaAsset) {
-  const file = fileInDirectory(ctx.paths.media(projectId), media.path);
+  const file = await fileInDirectoryAsync(ctx.paths.media(projectId), media.path);
   const info = file && await stat(file).catch(() => null);
   return file && info ? turnsFile(ctx, projectId, turnsKey(file, info, speakerStream(media))) : undefined;
 }
@@ -89,6 +90,8 @@ export class RecordingSpeakers {
   private readonly active = new Map<string, { projectId: string; progress: SpeakerProgress }>();
   /** Analyses asked for and not yet ended, each settled when it ends either way. `priority`: a dialogue pass is waiting for it. */
   private readonly analyses = new Map<Promise<void>, { projectId: string; mediaId: string; priority: boolean }>();
+  /** Resolves when the last request has entered the work queue, even if its file was missing. */
+  private placed: Promise<void> = Promise.resolve();
   /** The GPU runtime failed an analysis the CPU then finished, so analysis stays on the CPU until the engine restarts. */
   private gpuFailed = false;
   /** Analysis runs beside the audio lane rather than in it. Decided by the machine; tests set it. */
@@ -113,26 +116,44 @@ export class RecordingSpeakers {
    * transcript. One nobody waits for stops with the pause, like the rest of the work Scarlet does unasked.
    */
   async turns(ctx: Ctx, projectId: string, media: MediaAsset, decoded?: DecodedRecording, priority = false): Promise<SpeakerTurn[]> {
-    if (!priority) return this.analysed(ctx, projectId, media, decoded, false);
-    // Counted before anything is awaited, so a pause that lands as the pass asks finds it waiting.
-    this.passWaits.set(media.id, (this.passWaits.get(media.id) ?? 0) + 1);
-    try { return await this.analysed(ctx, projectId, media, decoded, true); }
+    if (priority) this.passWaits.set(media.id, (this.passWaits.get(media.id) ?? 0) + 1);
+    const previous = this.placed;
+    let placed!: () => void;
+    this.placed = new Promise<void>(resolve => { placed = resolve; });
+    const analysis = this.analysed(ctx, projectId, media, decoded, priority, previous, placed);
+    const ended = analysis.then(() => undefined, () => undefined);
+    // Register before the file lookup finishes so dependent work can wait from the instant a pass asks.
+    this.analyses.set(ended, { projectId, mediaId: media.id, priority });
+    try { return await analysis; }
     finally {
-      const left = this.passWaits.get(media.id)! - 1;
-      if (left) this.passWaits.set(media.id, left);
-      else this.passWaits.delete(media.id);
+      this.analyses.delete(ended);
+      if (priority) {
+        const left = this.passWaits.get(media.id)! - 1;
+        if (left) this.passWaits.set(media.id, left);
+        else this.passWaits.delete(media.id);
+      }
     }
   }
 
-  private async analysed(ctx: Ctx, projectId: string, media: MediaAsset, decoded: DecodedRecording | undefined, priority: boolean): Promise<SpeakerTurn[]> {
+  private async analysed(ctx: Ctx, projectId: string, media: MediaAsset, decoded: DecodedRecording | undefined, priority: boolean,
+    previous: Promise<void>, placed: () => void): Promise<SpeakerTurn[]> {
+    // Queue in request order, even when one lookup fails. Only placement is serialized; workers still run concurrently.
+    await previous;
     const pause = ctx.mediaSignal(projectId);
     // Trash, a quit and a change of the transcription settings stop an analysis whoever waits for it.
     const always = AbortSignal.any([ctx.projectSignal(projectId), ctx.repos.settings.transcriptionSignal]);
-    if (!priority) pause.throwIfAborted();
-    always.throwIfAborted();
-    const file = fileInDirectory(ctx.paths.media(projectId), media.path);
-    if (!file) throw new Error("Could not find the recording for speaker analysis.");
-    const info = await stat(file);
+    let file: string, info: Stats;
+    try {
+      if (!priority) pause.throwIfAborted();
+      always.throwIfAborted();
+      const source = await fileInDirectoryAsync(ctx.paths.media(projectId), media.path);
+      if (!source) throw new Error("Could not find the recording for speaker analysis.");
+      file = source;
+      info = await stat(file);
+    } finally {
+      // The synchronous code below calls cache.get before the next request resumes on its microtask.
+      placed();
+    }
     const audioStream = speakerStream(media);
     const key = turnsKey(file, info, audioStream);
     const dir = ctx.paths.waveforms(projectId);
@@ -203,7 +224,7 @@ export class RecordingSpeakers {
         await Promise.all([!reuse && rm(wav, { force: true }), rm(tmp, { force: true })]);
       }
     };
-    const analysis = this.cache.get(key, async () => {
+    return this.cache.get(key, async () => {
       const stop = new AbortController();
       const stopped = () => stop.abort(always.reason);
       const paused = () => { if (!this.passWaits.has(media.id)) stop.abort(pause.reason); };
@@ -215,10 +236,6 @@ export class RecordingSpeakers {
         pause.removeEventListener("abort", paused);
       }
     }, { priority });
-    const ended = analysis.then(() => undefined, () => undefined);
-    this.analyses.set(ended, { projectId, mediaId: media.id, priority });
-    void ended.then(() => this.analyses.delete(ended));
-    return analysis;
   }
 
   /**

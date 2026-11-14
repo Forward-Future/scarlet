@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { PreferenceSelect } from "./PreferenceSelect";
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -131,4 +132,25 @@ it("comes back when the browser closes it though its owner still shows it, as Ch
   await act(async () => root.render(<Host open={false} />));
   expect(el.querySelector("dialog")).toBeNull();
   expect(dialog.open).toBe(false);
+});
+
+it("puts away an open list on a press outside the dialog, and the dialog only on the next", async () => {
+  const onClose = vi.fn();
+  await act(async () => root.render(<Drawer open onClose={onClose} title="Project settings">
+    <input aria-label="Name" defaultValue="Interview" />
+    <PreferenceSelect label="Frame rate" options={[{ value: 24, label: "24" }, { value: 30, label: "30" }]} value={24} onChange={() => undefined} />
+  </Drawer>));
+  const dialog = el.querySelector("dialog")!;
+  vi.spyOn(dialog, "getBoundingClientRect").mockReturnValue({ left: 100, right: 300, top: 100, bottom: 300 } as DOMRect);
+  await act(async () => el.querySelector<HTMLButtonElement>('[role="combobox"]')!.click());
+  // The list opens inside the dialog's layer.
+  expect(dialog.querySelector('[role="listbox"]')).not.toBeNull();
+  // One click beside the drawer closed the list and the drawer, and what was typed in the drawer went with it.
+  await pointer(dialog, "pointerdown", 400);
+  await pointer(dialog, "click", 400);
+  expect(dialog.querySelector('[role="listbox"]')).toBeNull();
+  expect(onClose).not.toHaveBeenCalled();
+  await pointer(dialog, "pointerdown", 400);
+  await pointer(dialog, "click", 400);
+  expect(onClose).toHaveBeenCalledTimes(1);
 });

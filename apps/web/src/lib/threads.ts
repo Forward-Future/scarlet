@@ -60,41 +60,6 @@ const REDOING = "The video changed while this suggestion was waiting. I’m redo
 const legacyInterruption = "The agent was interrupted after saving its proposed changes. You can review them here.";
 const ts = (x?: string) => Date.parse(x ?? "") || 0;
 
-export interface ThreadGroups {
-  needsYou: Thread[];
-  working: Thread[];
-  /** Approved edits, newest first. */
-  done: Thread[];
-  /** Other closed threads. */
-  closed: Thread[];
-}
-
-/** Needs you: questions first, then oldest first. Working: newest first. Done: approved edits, newest first. */
-export function groupThreads(threads: Thread[]): ThreadGroups {
-  const needsYou = threads
-    .filter((t) => t.status === "needs_you")
-    .sort((a, b) => Number(b.needs === "question") - Number(a.needs === "question") || Number(a.needs === "failed") - Number(b.needs === "failed") || ts(a.updatedAt) - ts(b.updatedAt));
-  const working = threads.filter((t) => t.status === "working").sort((a, b) => ts(b.createdAt) - ts(a.createdAt));
-  const finished = threads.filter((t) => t.status === "done" || t.status === "closed").sort((a, b) => ts(b.updatedAt) - ts(a.updatedAt));
-  const done = finished.filter((t) => t.status === "done");
-  const closed = finished.filter((t) => t.status === "closed");
-  return { needsYou, working, done, closed };
-}
-
-/** Case-insensitive search over what was asked, what the agent said, and every attempt. */
-export function matchesThread(t: Thread, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  const hay = [t.title, ...t.tasks.map((x) => `${requestText(x)} ${x.summary ?? ""}`), ...t.changes.map((c) => c.description)].join(" ").toLowerCase();
-  return q.split(/\s+/).every((w) => hay.includes(w));
-}
-
-/** Find the thread containing a task, change or thread id (for links like ?item=chg_…). */
-export function threadFor(threads: Thread[], id: string | null | undefined): Thread | undefined {
-  if (!id) return undefined;
-  return threads.find((t) => t.id === id || t.tasks.some((x) => x.id === id) || t.changes.some((c) => c.id === id));
-}
-
 /** Resolve explicit word-to-spot links from saved or streaming messages, scoped to this task. */
 function inlineEdits(text: string, refs: unknown, task: Task, changes: Change[]): InlineEdit[] | undefined {
   if (!Array.isArray(refs)) return;

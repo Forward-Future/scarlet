@@ -355,8 +355,8 @@ export class ScarletClient {
   versions(projectId: string) {
     return this.get<{ versions: VersionSummary[] }>(`/projects/${projectId}/versions`);
   }
-  diff(projectId: string, a: string, b: string) {
-    return this.get<{ diff: TimelineDiff; description: string[] }>(`/projects/${projectId}/versions/${apiPathId(a)}/diff/${apiPathId(b)}`);
+  diff(projectId: string, a: string, b: string, clipNames?: "id") {
+    return this.get<{ diff: TimelineDiff; description: string[] }>(`/projects/${projectId}/versions/${apiPathId(a)}/diff/${apiPathId(b)}${clipNames === "id" ? "?clipNames=id" : ""}`);
   }
   branches(projectId: string) {
     return this.get<{ branches: { name: string; head: string | null }[] }>(`/projects/${projectId}/branches`);

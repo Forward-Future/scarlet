@@ -477,11 +477,48 @@ describe("what goes to stderr when a read fails and the tool answers without it"
       : req.path === "/projects/prj_test/timeline" && req.query.get("version") === "applied" ? reply(res, { error: { code: "engine_error", message: "The database is busy." } }, 500) : false;
     const c = await connect();
     try {
-      const saved = JSON.parse(textOf(await ok(c, "dialogue_apply_cuts", { version: "typing", description: "Tightened", range: { start: 0, end: 10 },
-        cuts: [{ start: 6.6, end: 7.6, kind: "pause", decision: "cut", reason: "A long wait." }] })));
+      const result = await ok(c, "dialogue_apply_cuts", { version: "typing", description: "Tightened", range: { start: 0, end: 10 },
+        cuts: [{ start: 6.6, end: 7.6, kind: "pause", decision: "cut", reason: "A long wait." }] });
+      const saved = JSON.parse((result.content[0] as { text: string }).text);
       expect(saved).toMatchObject({ continueFrom: "applied" });
       expect(saved).not.toHaveProperty("keptSilences");
       expect(logged()).toEqual(["[scarlet-mcp] failed to place the kept silences on applied: Scarlet server error 500 (engine_error): The database is busy."]);
+      // The result says what it was answered without, so its silence about kept silences isn't read as none.
+      expect(result.content.at(-1)).toEqual({ type: "text",
+        text: "Not measured: failed to place the kept silences on applied (Scarlet server error 500 (engine_error): The database is busy.)." });
+    } finally { await c.close(); }
+  });
+
+  it("says in the result of each call, and only that call, which edges it saved without measuring", async () => {
+    const tl = emptyTimeline("prj_test");
+    tl.version = "unmeasured";
+    tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 6, 0)];
+    mock.state.timeline = tl;
+    // The levels fail a moment after they are asked for, and the project is read slowly: a read made meanwhile by
+    // another call must not carry this call's line.
+    mock.state.extra = (req, res) => {
+      if (req.path.endsWith("/media/m1/waveform")) {
+        setTimeout(() => reply(res, { error: { code: "engine_error", message: "The waveform cache is locked." } }, 500), 50);
+        return true;
+      }
+      return false;
+    };
+    const c = await connect();
+    try {
+      const [proposed, read] = await Promise.all([
+        ok(c, "timeline_propose", { intent: "requested", fromVersion: "unmeasured", ops: [{ op: "rippleDelete", start: 2, end: 2.5 }], description: "Tighten the pause." }),
+        (async () => { await new Promise(r => setTimeout(r, 20)); return await ok(c, "notes_list", {}); })(),
+      ]);
+      expect(proposed.content.at(-1)).toEqual({ type: "text",
+        text: "Not measured: failed to measure the edges of ripple 0 (Scarlet server error 500 (engine_error): The waveform cache is locked.); "
+          + "failed to measure the edit's new clip edges (Scarlet server error 500 (engine_error): The waveform cache is locked.)." });
+      expect(textOf(read)).not.toContain("Not measured");
+      // The stderr line stays.
+      expect(logged()).toContain("[scarlet-mcp] failed to measure the edit's new clip edges: Scarlet server error 500 (engine_error): The waveform cache is locked.");
+      // A call that measured everything ends with its own answer.
+      mock.state.extra = undefined;
+      const clean = await ok(c, "timeline_propose", { intent: "requested", fromVersion: "unmeasured", ops: [{ op: "rippleDelete", start: 2, end: 2.5 }], description: "Tighten the pause." });
+      expect(textOf(clean)).not.toContain("Not measured");
     } finally { await c.close(); }
   });
 

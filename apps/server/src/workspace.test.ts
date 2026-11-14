@@ -3277,14 +3277,20 @@ it("encodes one preview across ten simultaneous versions and keeps their identit
   const base = ensureHead(ctx, project.id).head;
   for (let i = 0; i < 10; i++) {
     const response = await api("POST", projectsPath() + "/changes?summary=true", { description: "Cards", fromVersion: base,
-      ops: [{ op: "addClip", trackId: "v1", clip: { id: "intro", kind: "color", color: "red", timelineIn: 0, timelineOut: 10 } },
+      ops: [{ op: "addClip", trackId: "v1", clip: { id: "intro", label: "Opening card", kind: "color", color: "red", timelineIn: 0, timelineOut: 10 } },
         { op: "addClip", trackId: "v1", clip: { id: "later", kind: "color", color: "blue", timelineIn: 20, timelineOut: 21 + i } }] });
     expect(response.status).toBe(201);
     const summary = await response.json();
     expect(summary).not.toHaveProperty("timeline");
     expect(summary.change).not.toHaveProperty("ops");
     expect(summary.duration).toBe(21 + i);
-    expect(summary.diffDescription.length).toBeGreaterThan(0);
+    // The agent reads this diff, and an op takes a clip's id: a labelled clip is named by its id, with the label after it.
+    expect(summary.diffDescription[0]).toBe("Added color clip intro “Opening card” at 0.00");
+    if (i === 0) {
+      const path = projectsPath() + `/versions/${base}/diff/${summary.change.toVersion}`;
+      expect((await (await api("GET", path)).json()).description[0]).toBe("Added color clip Opening card at 0.00");
+      expect((await (await api("GET", path + "?clipNames=id")).json()).description[0]).toBe(summary.diffDescription[0]);
+    }
     versions.push(summary.change.toVersion);
   }
   const request = (version: string, start = 0) => ctx.renders.request({ projectId: project.id, version, quality: "preview",
@@ -3649,6 +3655,7 @@ it("loads stock workflows on demand and leaves explicit selections and custom in
 it("applies requested edits and keeps suggestions and competing alternatives out of the cut until chosen", async () => {
   const path = projectsPath();
   const { ctx } = workspace;
+  const publish = vi.spyOn(ctx.bus, "publish");
   const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Add a marker",
     createdBy: { type: "human", name: "Editor" } });
   const submit = async (id: string, intent: string, taskId: string | undefined = task.id) => {
@@ -3659,7 +3666,7 @@ it("applies requested edits and keeps suggestions and competing alternatives out
   };
   const requested = await submit("requested", "requested");
   expect(requested).toMatchObject({ state: "approved", autoApplied: true, decidedBy: { type: "scarlet" } });
-  expect(ctx.repos.notifications.count()).toBe(0);
+  expect(publish.mock.calls.filter(([event]) => event.type === "notification")).toEqual([]);
   const suggestion = await submit("suggestion", "suggestion");
   const one = await submit("one", "alternative");
   const two = await submit("two", "alternative");
@@ -5374,6 +5381,29 @@ it("reads an agent's time within a millisecond of a frame as that frame, so late
   for (const edge of edges) expect(Math.abs(edge * 30 - Math.round(edge * 30))).toBeLessThan(1e-6);
   expect(put.timeline.tracks.flatMap(t => t.clips).every(c => clipEnd(c) - c.timelineIn > 0.01)).toBe(true);
   expect(put.change.ops![0]).toEqual({ op: "rippleInsertGap", at: 263 / 30, duration: 167 / 30 });
+});
+
+it("approves a fully assessed pass by the editor's calls first, then Scarlet's verdicts, as applying it when done does", async () => {
+  const { ctx } = workspace;
+  vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
+  const author = { type: "human" as const, name: "Editor" };
+  const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: author });
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "mic", path: "mic.wav", kind: "audio", duration: 20, hasAudio: true }, "ready");
+  const base = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: task.id, description: "Assemble",
+    ops: [{ op: "addClip", trackId: "a1", clip: { id: "raw", kind: "media", mediaId: "mic", timelineIn: 0, sourceIn: 0, sourceOut: 20 } }] }).change.toVersion;
+  const submitted = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: base, description: "Pass", cuts: [
+    { start: 2, end: 3, review: true, reason: "First retake." }, { start: 6, end: 8, review: true, reason: "Second retake." },
+    { start: 12, end: 13, review: true, reason: "Third retake." }] });
+  const pass = ((await submitted.json()).changes as Change[]).find(c => c.intent === "suggestion")!;
+  const versions = { fromVersion: pass.fromVersion, toVersion: pass.toVersion };
+  // The editor keeps the second cut before Scarlet checks it. Scarlet then checks every cut and asks about none.
+  expect((await api("PUT", `/changes/${pass.id}/cut-choices`, { ...versions, choices: [{ index: 1, choice: "keep" }] })).status).toBe(200);
+  const assessments = [{ index: 0, start: 2, end: 3, verdict: "keep", reason: "Keep it." }, { index: 1, start: 6, end: 8, verdict: "cut", reason: "Clean." },
+    { index: 2, start: 12, end: 13, verdict: "cut", reason: "Also clean." }].map(a => ({ ...a, inspected: true }));
+  expect((await api("POST", `/changes/${pass.id}/cut-assessments`, { ...versions, assessments })).status).toBe(200);
+  const approved = await api("POST", `/changes/${pass.id}/approve`, {});
+  expect(approved.status).toBe(200);
+  expect((await approved.json()).change.restoredCuts).toEqual([0, 1]);
 });
 
 it("moves one staged cut of a pending pass past its old edges and keeps the other cuts and their calls", async () => {

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
-import { fileInDirectory, LOCAL_MEDIA_INPUT } from "@scarlet/render";
+import { fileInDirectoryAsync, LOCAL_MEDIA_INPUT } from "@scarlet/render";
 import { Hono } from "hono";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
@@ -65,7 +65,7 @@ export function perceptionRoutes(ctx: Ctx) {
     if ((from !== undefined && from < 0) || (from !== undefined && to !== undefined && to <= from)) {
       throw badRequest("bad_range", "Choose a positive source range in seconds.");
     }
-    const file = fileInDirectory(ctx.paths.media(media.projectId), media.path);
+    const file = await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path);
     if (!file) throw notFound("source file");
     const info = await stat(file);
     const key = JSON.stringify(["ebur128", file, media.hash, info.size, info.ctimeMs, info.mtimeMs, from, to]);

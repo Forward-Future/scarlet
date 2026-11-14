@@ -6,7 +6,7 @@
  */
 import { taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, type AgentCapabilities, type Skill, type Task } from "@scarlet/shared";
 import type { Change, Note, Project, Timeline, TimelineDiff } from "@scarlet/timeline";
-import { describeDiff, formatTimecode } from "@scarlet/timeline";
+import { clipById, describeDiff, formatTimecode } from "@scarlet/timeline";
 import { summarizeProject } from "./analysis.js";
 
 /** What a learning check is shown about the request it reads. */
@@ -180,6 +180,10 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     parts.push(`Your task artifact directory is: ${ctx.workDir}\n\`asset_add\` imports a graphic, animation or music bed you made there, with how you made it.`);
   }
 
+  if (caps.toolPrefix) {
+    parts.push(`This harness prefixes Scarlet’s tool names with \`${caps.toolPrefix}\`. For example, call \`${caps.toolPrefix}project_get\` when a skill names \`project_get\`.`);
+  }
+
   // Project summary
   const summary = typeof ctx.project === "string" ? ctx.project : summarizeProject(ctx.project.project, ctx.project.timeline);
   parts.push(`# Project\n\n${summary}`);
@@ -259,7 +263,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // Change being revised
   if (ctx.change) {
     const { change, diff } = ctx.change;
-    const desc = ctx.change.description ?? (diff ? describeDiff(diff, (s) => s.toFixed(2)) : []);
+    const desc = ctx.change.description ?? (diff ? describeDiff(diff, undefined, clipById) : []);
     const lines = [
       `Change ${change.id} [${change.state}] by ${change.author.name}${change.author.model ? ` (${change.author.model})` : ""}`,
       `Description: ${change.description}`,
