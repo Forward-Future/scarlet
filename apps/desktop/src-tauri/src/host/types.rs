@@ -130,7 +130,6 @@ pub struct CompleteTaskRequest {
     pub summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    pub change_ids: Vec<String>,
 }
 
 /// What the engine tells the agent (GET /tasks/:id/prompt).
@@ -366,8 +365,8 @@ mod tests {
     fn sends_events_and_completions_in_the_engines_shape() {
         let event = TaskEvent { task_id: Some("t".into()), at: None, kind: "tool".into(), text: "scarlet.timeline_get".into(), data: None };
         assert_eq!(serde_json::to_value(&event).unwrap(), json!({ "taskId": "t", "type": "tool", "text": "scarlet.timeline_get" }));
-        let done = CompleteTaskRequest { state: "done".into(), if_started_at: None, interrupted: false, engine_lost: false, summary: None, error: None, change_ids: vec![] };
-        assert_eq!(serde_json::to_value(&done).unwrap(), json!({ "state": "done", "interrupted": false, "changeIds": [] }));
+        let done = CompleteTaskRequest { state: "done".into(), if_started_at: None, interrupted: false, engine_lost: false, summary: None, error: None };
+        assert_eq!(serde_json::to_value(&done).unwrap(), json!({ "state": "done", "interrupted": false }));
         // An assistant that isn't installed says only that. Empty catalogs are left out.
         let missing = AgentAvailability { id: "gemini".into(), ..Default::default() };
         assert_eq!(serde_json::to_value(&missing).unwrap(), json!({ "id": "gemini", "installed": false }));

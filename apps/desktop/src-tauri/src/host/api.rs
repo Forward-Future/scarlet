@@ -189,9 +189,11 @@ impl Api {
         Ok(())
     }
 
-    pub async fn complete_task(&self, task_id: &str, body: &CompleteTaskRequest) -> Result<(), ApiError> {
-        let _: Value = self.post(&format!("/tasks/{task_id}/complete"), serde_json::to_value(body).unwrap()).await?;
-        Ok(())
+    /// The engine answers with the task and the changes it holds for it. An answer without them still means the
+    /// completion landed.
+    pub async fn complete_task(&self, task_id: &str, body: &CompleteTaskRequest) -> Result<Vec<String>, ApiError> {
+        let answer: Value = self.post(&format!("/tasks/{task_id}/complete"), serde_json::to_value(body).unwrap()).await?;
+        Ok(answer["task"]["changeIds"].as_array().map(|ids| ids.iter().filter_map(Value::as_str).map(String::from).collect()).unwrap_or_default())
     }
 }
 

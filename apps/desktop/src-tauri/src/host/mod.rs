@@ -408,7 +408,7 @@ impl HostRuntime {
             let completions = std::mem::take(&mut *self.undelivered.completions.lock().unwrap());
             for (task_id, body) in completions {
                 match self.api.complete_task(&task_id, &body).await {
-                    Ok(()) => log::info!("task {task_id}: {} sent to the engine that came back", body.state),
+                    Ok(_) => log::info!("task {task_id}: {} sent to the engine that came back", body.state),
                     // Gone again: the host started for the next engine sends it.
                     Err(e) if e.status.is_none() => {
                         log::warn!("complete failed for task {task_id}: {e}");
@@ -695,33 +695,6 @@ impl HostRuntime {
         (sink, consumer, question_seen)
     }
 
-    async fn collect_change_ids(&self, task_id: &str) -> Vec<String> {
-        match self.api.task(task_id).await {
-            Ok(tw) => {
-                let mut ids: Vec<String> = Vec::new();
-                for id in tw.task.change_ids {
-                    if !ids.contains(&id) {
-                        ids.push(id);
-                    }
-                }
-                for e in tw.events {
-                    if e.kind == "change" {
-                        if let Some(id) = e.data.as_ref().and_then(|d| d.get("changeId")).and_then(Value::as_str) {
-                            if !ids.iter().any(|x| x == id) {
-                                ids.push(id.to_string());
-                            }
-                        }
-                    }
-                }
-                ids
-            }
-            Err(e) => {
-                log::warn!("task {task_id}: could not read its changes: {e}");
-                Vec::new()
-            }
-        }
-    }
-
     async fn complete(&self, task: &Task, state: &str, summary: Option<String>, error: Option<String>) {
         self.finish(task, state, summary, error, false).await
     }
@@ -729,17 +702,19 @@ impl HostRuntime {
     /// `stopped`: the host stopped the run before it finished. The editor can resume it from what it saved.
     async fn finish(&self, task: &Task, state: &str, summary: Option<String>, error: Option<String>, stopped: bool) {
         let task_id = &task.id;
-        let change_ids = self.collect_change_ids(task_id).await;
         let reason = error.clone();
         let interrupted = stopped || (state == "cancelled" && self.cancel.is_cancelled());
-        let body = CompleteTaskRequest { state: state.into(), if_started_at: task.started_at.clone(), summary, error, change_ids: change_ids.clone(), interrupted, engine_lost: false };
+        let body = CompleteTaskRequest { state: state.into(), if_started_at: task.started_at.clone(), summary, error, interrupted, engine_lost: false };
         // A post the engine misses is tried again. Forgotten here, the task stays running there until the engine
         // calls it interrupted and runs the finished request a second time. A copy does no harm: the engine ignores
         // the completion of an attempt it has already ended.
         let mut landed = false;
+        // The engine answers with the changes it holds for the task, for the line below.
+        let mut change_ids = Vec::new();
         for attempt in 1..=3 {
             match self.api.complete_task(task_id, &body).await {
-                Ok(()) => {
+                Ok(ids) => {
+                    change_ids = ids;
                     landed = true;
                     break;
                 }
@@ -1377,15 +1352,9 @@ mod tests {
     async fn completes_a_task_with_the_changes_it_made_and_clears_its_control_files() {
         crate::util::test_log::capture();
         let engine = api::fake::engine(|route, _| match route {
-            // One change on the task, one only in its events, one in both.
-            "GET /api/tasks/tsk_finish" => (200, json!({
-                "task": { "id": "tsk_finish", "projectId": "prj_1", "agent": "claude", "instruction": "x", "changeIds": ["chg_1", "chg_2", "chg_1"] },
-                "events": [
-                    { "type": "change", "text": "", "data": { "changeId": "chg_2" } },
-                    { "type": "change", "text": "", "data": { "changeId": "chg_3" } },
-                    { "type": "log", "text": "", "data": { "changeId": "chg_9" } },
-                    { "type": "change", "text": "no id" }
-                ]
+            // The engine answers with the changes it holds for the task.
+            "POST /api/tasks/tsk_finish/complete" => (200, json!({
+                "task": { "id": "tsk_finish", "projectId": "prj_1", "agent": "claude", "instruction": "x", "changeIds": ["chg_1", "chg_2", "chg_3"] }
             }).to_string()),
             _ => (200, "{}".into()),
         }).await;
@@ -1400,7 +1369,7 @@ mod tests {
 
         rt.complete(&task, "done", Some("Cut two pauses.".into()), None).await;
         let sent = &engine.bodies("POST /api/tasks/tsk_finish/complete")[0];
-        assert_eq!(sent, &json!({ "state": "done", "ifStartedAt": "2026-11-08T10:00:00.000Z", "interrupted": false, "summary": "Cut two pauses.", "changeIds": ["chg_1", "chg_2", "chg_3"] }));
+        assert_eq!(sent, &json!({ "state": "done", "ifStartedAt": "2026-11-08T10:00:00.000Z", "interrupted": false, "summary": "Cut two pauses." }));
         // The file with the engine token is gone. What the run made stays.
         assert!(!folder.join(".scarlet").exists() && folder.join("artifacts").join("cut.otio").exists());
         let (level, _) = crate::util::test_log::find(&["task tsk_finish done (3 changes: chg_1, chg_2, chg_3)"]).expect("no completion line");
@@ -1423,19 +1392,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completes_a_task_with_no_changes_when_the_engine_cannot_list_them() {
+    async fn completes_a_task_without_reading_it_again() {
         crate::util::test_log::capture();
-        let engine = api::fake::engine(|route, _| match route {
-            "GET /api/tasks/tsk_nolist" => (500, r#"{"error":{"code":"internal","message":"database is locked"}}"#.into()),
-            _ => (200, "{}".into()),
-        }).await;
+        let engine = api::fake::engine(|_, _| (200, "{}".into())).await;
         let dir = tempfile::tempdir().unwrap();
         let (rt, _) = runtime(&engine.url, dir.path());
-        rt.complete(&task("tsk_nolist"), "done", Some("Done.".into()), None).await;
-        assert_eq!(engine.bodies("POST /api/tasks/tsk_nolist/complete")[0]["changeIds"], json!([]));
-        let (level, line) = crate::util::test_log::find(&["task tsk_nolist: could not read its changes"]).expect("the failure was silent");
-        assert_eq!(level, log::Level::Warn);
-        assert!(line.ends_with("database is locked (internal 500)"), "{line}");
+        rt.complete(&task("tsk_noread"), "done", Some("Done.".into()), None).await;
+        // The engine already has the run's changes: the completion is all the host sends.
+        let routes: Vec<String> = engine.seen.lock().unwrap().iter().map(|(route, _)| route.clone()).collect();
+        assert_eq!(routes, ["POST /api/tasks/tsk_noread/complete"]);
+        assert_eq!(engine.bodies("POST /api/tasks/tsk_noread/complete")[0], json!({ "state": "done", "ifStartedAt": "2026-11-08T10:00:00.000Z", "interrupted": false, "summary": "Done." }));
+        // An answer without the task still means the completion landed. The line then lists no changes.
+        let (level, line) = crate::util::test_log::find(&["task tsk_noread done"]).expect("no completion line");
+        assert_eq!((level, line.ends_with("done")), (log::Level::Info, true), "{line}");
     }
 
     #[tokio::test]
@@ -1600,7 +1569,6 @@ mod tests {
             // Saved before the CLI could do anything, so a claim that never started can be told from one that did.
             "POST /api/tasks/tsk_flow/events",
             "POST /api/tasks/tsk_flow/events",
-            "GET /api/tasks/tsk_flow",
             "POST /api/tasks/tsk_flow/complete",
         ]);
         let events = engine.bodies("POST /api/tasks/tsk_flow/events");
