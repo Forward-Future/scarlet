@@ -18,6 +18,7 @@ import { AnalysisCache } from "../services/analysisCache.js";
 import { pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
 import { jsonBody, numberParam, requireProject, requireProjectHeader } from "./util.js";
+import { measureLoudness } from "./perception.js";
 
 /** Index visible clip intervals once so one still stats only the files that can contribute to its pixels. */
 function frameSources(timeline: Timeline) {
@@ -304,7 +305,9 @@ export function renderRoutes(ctx: Ctx) {
     const file = render.path && fileInDirectory(ctx.paths.renders(render.projectId), render.path);
     if (!file) throw notFound("render file");
     const { duration, width, height, fps, bitrate, videoCodec, audioCodec, hasAudio, sampleRate, channels } = await probeMedia(file);
-    return c.json({ render, fileInfo: { duration, width, height, fps, bitrate, videoCodec, audioCodec, hasAudio, sampleRate, channels } });
+    // The rendered sound's loudness, with every gain and effect applied: what processing did, beside the source's figures.
+    const loudness = hasAudio ? await ctx.track(measureLoudness(file, undefined, undefined, c.req.raw.signal)) : undefined;
+    return c.json({ render, fileInfo: { duration, width, height, fps, bitrate, videoCodec, audioCodec, hasAudio, sampleRate, channels, ...(loudness && { loudness }) } });
   });
 
   r.get("/renders/:renderId/filmstrip", async c => {

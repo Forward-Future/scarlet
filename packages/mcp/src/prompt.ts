@@ -233,7 +233,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
       if (about?.summary?.trim()) ctxLines.push(`- What you told the editor this edit did: "${about.summary.trim()}"`);
       if (about?.check?.trim()) ctxLines.push(`- What you asked the editor to check on this edit: "${about.check.trim()}"`);
     }
-    if (c.changeId && c.cutIndex !== undefined) ctxLines.push(`- Staged cut being revised: index ${c.cutIndex} of ${c.changeId}. Save its new range with \`dialogue_revise_cut\`. For a pause before the cut, use its word-based trim and report the remaining time it verifies on the preview. The range may move past the old edges.`);
+    if (c.changeId && c.cutIndex !== undefined) ctxLines.push(`- Staged cut being revised: index ${c.cutIndex} of ${c.changeId}. \`dialogue_revise_cut\` saves its new range.`);
     if (c.changeId && c.cutIndex !== undefined && ctx.replacedPass) ctxLines.push(`- The request names this cut in ${ctx.replacedPass}, the pass as the editor saw it. A revision or a later part of the pass replaced that pass since with ${c.changeId}, where the cut is index ${c.cutIndex} and may have moved.`);
     if (c.reviewAllCuts) ctxLines.push("- The editor requested individual review of every cut.");
     if (ctxLines.length) {
@@ -270,7 +270,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     lines.push(
       "",
       ctx.task?.context?.cutIndex !== undefined
-        ? "The feedback is about one staged cut of this pending pass. Save that cut's new range with dialogue_revise_cut. The other cuts and the editor's calls on them stay as they are."
+        ? "The feedback is about one staged cut of this pending pass."
         : "Revise it by proposing a NEW change against the current head that addresses the feedback (the original stays in history). Reference the note ids.",
     );
     parts.push(`# Change being revised\n\n${lines.join("\n")}`);

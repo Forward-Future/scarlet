@@ -3643,7 +3643,10 @@ it("holds captions until the words they are timed from are placed on the audio",
     // Alignment finishes, and the same call times each cue from where the recording has its words.
     mock.state.transcripts = { m1: transcript };
     await new Promise(resolve => setTimeout(resolve, 1600));
-    expect(textOf(await generate())).toContain("caption clip(s) from 10 words");
+    const made = textOf(await generate());
+    expect(made).toContain("caption clip(s) from 10 words");
+    // Each caption's reading rate comes back as a measurement, fastest first.
+    expect(made).toMatch(/Reading rate in characters a second \(timeline seconds\): median \d+\.\d; fastest \d+\.\d\d s \d+\.\d\/s "/);
     const words = saved.find(op => op.op === "addTrack")!.track!.clips.flatMap(c => c.words);
     expect(words.find(w => w.text === "Um,")).toMatchObject({ start: 2.5, end: 2.7 });
   } finally {

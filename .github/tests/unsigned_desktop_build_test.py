@@ -36,13 +36,18 @@ class UnsignedBuildTest(unittest.TestCase):
     def test_all_protected_jobs_and_final_archive_tests_pass(self):
         jobs = [{"name": name, "conclusion": "success"} for name in {"version"} | build.CI_JOBS]
         for name in build.NATIVE_JOBS:
-            platform = "Windows" if name.endswith("Windows x64") else "Mac"
+            if name.endswith("Windows x64"):
+                platform_checks = ("Verify Windows library permissions", "Check Windows engine startup before building native dependencies")
+            else:
+                platform_checks = ("Check binary architectures", "Test local main updater", "Check the Mac app's code signature")
             steps = [{"name": n, "conclusion": "success"} for n in (
                 "Rust tests", "Verify packaged versions and stage installers", "Upload verified installers",
                 "Inspect the staged public installers and smoke test their engine with external media tools",
-                f"Smoke test the bundled {platform} engine (ingest, render with captions, MCP)")]
+                "Build installers", *platform_checks)]
             steps.extend({"name": n, "conclusion": "skipped"} for n in (
-                "Sign and notarize the Mac release", "Sign the Windows application and installers"))
+                "Sign and notarize the Mac release", "Sign the Windows application and installers",
+                "Smoke test the bundled Mac engine (ingest, render with captions, MCP)",
+                "Smoke test the bundled Windows engine (ingest, render with captions, MCP)"))
             jobs.append({"name": name, "conclusion": "success", "steps": steps})
         jobs.append({"name": "publish", "conclusion": "skipped"})
         build.verify_jobs(jobs)
@@ -50,13 +55,13 @@ class UnsignedBuildTest(unittest.TestCase):
             build.verify_jobs(jobs[1:])
         with self.assertRaises(ValueError):
             build.verify_jobs(jobs + [jobs[0]])
-        native = next(job for job in jobs if job["name"] in build.NATIVE_JOBS)
-        for step in native["steps"]:
-            before = step["conclusion"]
-            step["conclusion"] = "failure"
-            with self.subTest(step=step["name"]), self.assertRaises(ValueError):
-                build.verify_jobs(jobs)
-            step["conclusion"] = before
+        for native in (job for job in jobs if job["name"] in build.NATIVE_JOBS):
+            for step in native["steps"]:
+                before = step["conclusion"]
+                step["conclusion"] = "skipped" if before == "success" else "success"
+                with self.subTest(job=native["name"], step=step["name"]), self.assertRaises(ValueError):
+                    build.verify_jobs(jobs)
+                step["conclusion"] = before
 
     def test_three_native_archives_share_main_run_provenance(self):
         build.verify_artifacts(self.artifacts, self.run)
