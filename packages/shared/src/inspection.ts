@@ -23,7 +23,12 @@ export interface RepeatEvidence {
   occurrences: Partial<Record<"first" | "second", RepeatOccurrence>>;
 }
 /** A join whose sound, read letter by letter, doesn't match the words the transcript says it plays. */
-export interface JoinHearing { at: number; mediaId: string; side: "out" | "in"; issue: "clipped" | "fragment"; heard: string; expected?: string; source: number }
+export interface JoinHearing { at: number; mediaId: string; side: "out" | "in"; issue: "clipped" | "fragment"; heard: string;
+  /** A clipped word: the transcript's word the cut goes through. */
+  expected?: string;
+  /** A fragment: the kept word beside it, which plays whole, and where it starts (in) or ends (out) in the recording. */
+  keptWord?: string; keptWordAt?: number;
+  source: number }
 export interface RepeatAuditResult {
   version: string;
   heard: number;

@@ -21,7 +21,17 @@ describe("hearing a join", () => {
       heard: [{ text: "subscription", start: 8.6, end: 9.4 }, { text: "k", start: 9.55, end: 9.68 }] });
     const inn = side({ clipId: "b", timelineStart: 9.7, source: { start: 12, end: 20 },
       said: [{ text: "I", start: 12.2, end: 12.3 }], heard: [{ text: "i", start: 12.2, end: 12.3 }] });
-    expect(hearJoin(out, inn)).toMatchObject([{ side: "out", issue: "fragment", heard: "k", expected: "subscription." }]);
+    expect(hearJoin(out, inn)).toMatchObject([{ side: "out", issue: "fragment", heard: "k", keptWord: "subscription.", keptWordAt: 9.4 }]);
+  });
+
+  it("hears a sound before the first kept word as a fragment beside that word, not as the word cut short", () => {
+    // The part after the join starts on a sigh, read as letters, a second and a half before “This”.
+    const out = side({ source: { start: 0, end: 4.1 }, timelineEnd: 4.1, said: [{ text: "good.", start: 3.9, end: 4.1 }], heard: [{ text: "good", start: 3.9, end: 4.1 }] });
+    const inn = side({ clipId: "b", timelineStart: 4.1, source: { start: 4.89, end: 9 },
+      said: [{ text: "This", start: 6.26, end: 6.58 }], heard: [{ text: "hs", start: 4.85, end: 5.2 }, { text: "this", start: 6.26, end: 6.58 }] });
+    const [found] = hearJoin(out, inn);
+    expect(found).toEqual({ at: 4.1, mediaId: "mic", side: "in", issue: "fragment", heard: "hs", keptWord: "This", keptWordAt: 6.26, source: 4.85 });
+    expect(found).not.toHaveProperty("expected");
   });
 
   it("passes a clean join, and a word the reader spells a little differently", () => {
