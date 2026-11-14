@@ -7,6 +7,7 @@ import type { Ctx } from "../context.js";
 import { badRequest, notFound } from "../errors.js";
 import { FFMPEG, ffmpegPosition } from "../render/ffmpeg.js";
 import { AnalysisCache } from "../services/analysisCache.js";
+import { screenText } from "../services/screenText.js";
 import { numberParam, requireMedia } from "./util.js";
 
 export interface Loudness { integratedLufs: number | null; loudnessRangeLu: number | null; truePeakDbtp: number | null }
@@ -71,6 +72,22 @@ export function perceptionRoutes(ctx: Ctx) {
     // A measurement someone asked for, such as a running edit's, isn't stopped by a pause of the project's media work.
     const result = await loudness.get(key, signal => ctx.track(measureLoudness(file, from, to, AbortSignal.any([signal, ctx.projectSignal(media.projectId)]))));
     return c.json({ mediaId: media.id, ...(from !== undefined && { from }), ...(to !== undefined && { to }), ...result });
+  });
+
+  // The text on screen in a range of a video, read once and kept. A range not read yet is read now: the answer waits up
+  // to `wait` seconds (default 30) and says how much it has read, and the reading carries on for the next ask.
+  r.get("/projects/:projectId/media/:mediaId/screen-text", async c => {
+    const media = requireMedia(ctx, c.req.param("mediaId"), c.req.param("projectId"));
+    if (media.kind !== "video") throw badRequest("no_picture", "Only a video has a picture to read.");
+    const number = (name: string) => c.req.query(name) !== undefined ? numberParam(c.req.query(name), name) : undefined;
+    const from = number("from"), to = number("to"), wait = number("wait");
+    if ((from !== undefined && from < 0) || (from !== undefined && to !== undefined && to <= from)) throw badRequest("bad_range", "Choose a positive source range in seconds.");
+    try {
+      return c.json(await screenText(ctx, media, { from, to }, { query: c.req.query("q") || undefined,
+        waitMs: Math.max(0, Math.min(60, wait ?? 30)) * 1000, signal: c.req.raw.signal }));
+    } catch (error) {
+      throw badRequest("screen_text", error instanceof Error ? error.message : String(error));
+    }
   });
 
   return r;

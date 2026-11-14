@@ -12,7 +12,7 @@ describe("the editing tools inventory", () => {
   it("gives every optional group exactly one preference, and the essentials none", () => {
     const preferences = EDITING_TOOL_GROUPS.flatMap(g => (g.preference ? [g.preference] : []));
     expect([...preferences].sort()).toEqual([...OptionalToolGroup.options].sort());
-    expect(EDITING_TOOL_GROUPS.filter(g => !g.preference).map(g => g.title)).toEqual(["Timeline editing", "Speech and waveform", "Review and delivery", "Requests and skills"]);
+    expect(EDITING_TOOL_GROUPS.filter(g => !g.preference).map(g => g.title)).toEqual(["Timeline editing", "Speech and waveform", "Screen text", "Review and delivery", "Requests and skills"]);
   });
 
   it("turns off only the tools of a group the editor switched off", () => {
