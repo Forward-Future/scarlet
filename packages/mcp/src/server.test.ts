@@ -40,6 +40,8 @@ const transcript: Transcript = {
 let mock: MockServer;
 let client: Client;
 let textOf: (r: CallToolResult) => string;
+/** A result's answer, before any line that says what it was answered without. */
+const firstJson = (r: CallToolResult) => JSON.parse((r.content[0] as { text: string }).text);
 
 async function connect(taskId?: string, workDir?: string, task?: Task, editingTools?: EditingTools, alignmentWaitMs?: number, agent = "claude") {
   const sc = new ScarletClient({ baseUrl: mock.url, token: "tok" });
@@ -1976,8 +1978,11 @@ it("moves the staged cut being revised past its old edges and steers the other e
       reason: "Starts in the pause after “weights” so the first “I” is gone." } });
     expect(moved.isError).toBeFalsy();
     expect(saved).toMatchObject({ start: 1.6, end: 3, crossfadeFrames: 3, taskId: "revise-cut", noteIds: ["n1"], reason: "Starts in the pause after “weights” so the first “I” is gone." });
-    expect(JSON.parse(textOf(moved as CallToolResult))).toMatchObject({ changeId: "pass2", start: 1.6, end: 3 });
-    expect(JSON.parse(textOf(moved as CallToolResult))).not.toHaveProperty("movedOn");
+    expect(firstJson(moved as CallToolResult)).toMatchObject({ changeId: "pass2", start: 1.6, end: 3 });
+    expect(firstJson(moved as CallToolResult)).not.toHaveProperty("movedOn");
+    // The engine's saved ranges couldn't be read (the mock has no cut-review route), and the result says so after its answer.
+    expect((moved as CallToolResult).content.at(-1)).toEqual({ type: "text",
+      text: "Not measured: failed to read the ranges saved for pass2 (Scarlet server error 404 (not_found): no mock route for POST /projects/prj_test/changes/pass2/cut-review)." });
     expect(mock.state.events.at(-1)).toMatchObject({ type: "change", data: { changeId: "pass2" } });
     // A revision had replaced the pass named since the request was sent: Scarlet made the move on the pass that waits, and says so.
     const plain = mock.state.extra;
@@ -1987,8 +1992,8 @@ it("moves the staged cut being revised past its old edges and steers the other e
       res.end(JSON.stringify({ replaced: "pass1b", change: { id: "pass3", state: "ready", description: "Review 3 optional dialogue cuts", fromVersion: "pass-from", toVersion: "pass3-to" } }));
       return true;
     };
-    const redirected = JSON.parse(textOf(await scoped.callTool({ name: "dialogue_revise_cut", arguments: { changeId: "pass", index: 1, start: 1.6, end: 3,
-      reason: "Starts in the pause." } }) as CallToolResult));
+    const redirected = firstJson(await scoped.callTool({ name: "dialogue_revise_cut", arguments: { changeId: "pass", index: 1, start: 1.6, end: 3,
+      reason: "Starts in the pause." } }) as CallToolResult);
     expect(redirected).toMatchObject({ changeId: "pass3", movedOn: "pass1b" });
     expect(redirected.note).toContain("replaced pass with pass1b");
   } finally {
@@ -2284,7 +2289,7 @@ it("measures the recording beside a staged cut's new edges with no scan read, an
   const move = async (start: number, end: number) => {
     const r = await scoped.callTool({ name: "dialogue_revise_cut", arguments: { changeId: "pass", index: 0, start, end, reason: "Starts after “back.”" } }) as CallToolResult;
     expect(r.isError, textOf(r)).toBeFalsy();
-    return JSON.parse(textOf(r));
+    return firstJson(r);
   };
   try {
     // Both edges in the pause between “back.” and “Um,”: the recording is quiet there, so nothing is reported and nothing is left to do.

@@ -18,6 +18,7 @@ import { acousticRepeatedTakes, findRepeatedTakes } from "./dialogue-retakes.js"
 import { audioCrossfadeOps } from "./audio-crossfade.js";
 import { firstCutRanges } from "./first-cut-ranges.js";
 import { InsetFraming, insetFraming, syncPictureOps } from "./sync-layout.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdtemp } from "node:fs/promises";
 import { readArtifact, writeArtifact } from "./workspace-files.js";
 import { tmpdir } from "node:os";
@@ -264,6 +265,17 @@ function unavailable(what: string, err: unknown) {
   if (!(err instanceof MediaPreparing)) console.error(`[scarlet-mcp] ${what}: ${describeError(err)}`);
 }
 
+/** What each tool call answered without, keyed by what failed, so concurrent calls never see each other's. */
+const unmeasured = new AsyncLocalStorage<Map<string, string>>();
+/** Notes a read the current call answered without, for the line its result ends with. */
+function noteUnmeasured(what: string, err: unknown) {
+  if (!(err instanceof MediaPreparing)) unmeasured.getStore()?.set(what, describeError(err));
+}
+/** The plain line a result ends with when it was answered without something it measures. */
+function unmeasuredLine(missed: ReadonlyMap<string, string>): string | undefined {
+  return missed.size ? `Not measured: ${[...missed].map(([what, why]) => `${what} (${why})`).join("; ")}.` : undefined;
+}
+
 export function formatZodError(err: z.ZodError): string {
   return formatIssues(err.issues);
 }
@@ -370,8 +382,8 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   const getProject = () => client.project(ctx.projectId);
 
-  /** For a `.catch`: note the failure on stderr and answer with `fallback`. */
-  const without = <T>(what: string, fallback: T) => (err: unknown) => { unavailable(what, err); return fallback; };
+  /** For a `.catch`: note the failure on stderr and in the call's result, and answer with `fallback`. */
+  const without = <T>(what: string, fallback: T) => (err: unknown) => { unavailable(what, err); noteUnmeasured(what, err); return fallback; };
   /** The same for a read every page or join repeats: a line is written once, so an engine without the route says so once. */
   const noted = new Set<string>();
   const unavailableOnce = (what: string, err: unknown) => {
@@ -852,7 +864,18 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
           const selected = await useStagedCut();
           if (selected) throw selected;
         }
-        return await handler(args);
+        const missed = new Map<string, string>();
+        const result = await unmeasured.run(missed, async () => {
+          try {
+            return await handler(args);
+          } catch (err) {
+            if (err instanceof MediaPreparing) return text(err.message);
+            return errorResult(err);
+          }
+        });
+        // A read the result was built without is reported with it, so a clean-looking answer is never one that went unmeasured.
+        const line = unmeasuredLine(missed);
+        return line ? { ...result, content: [...result.content, { type: "text" as const, text: line }] } : result;
       } catch (err) {
         if (err instanceof MediaPreparing) return text(err.message);
         return errorResult(err);
