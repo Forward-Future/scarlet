@@ -19,6 +19,7 @@ import { audioCrossfadeOps } from "./audio-crossfade.js";
 import { firstCutRanges } from "./first-cut-ranges.js";
 import { InsetFraming, insetFraming, syncPictureOps } from "./sync-layout.js";
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdtemp } from "node:fs/promises";
 import { readArtifact, writeArtifact } from "./workspace-files.js";
 import { tmpdir } from "node:os";
@@ -27,7 +28,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod/v3";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { boundedRippleOps, rippleDrift, cutAnchorOn, taskDialogueOperation, agentCapabilities, type AgentCapabilities, JOIN_WORD_SECONDS, fuzzySearchTranscript, apiPathId, disabledEditingTools, type EditingTools, type ScarletToolName,
+import { boundedRippleOps, rippleDrift, cutAnchorOn, taskDialogueOperation, agentCapabilities, DEFAULT_RESULT_CHARS, type AgentCapabilities, JOIN_WORD_SECONDS, fuzzySearchTranscript, apiPathId, disabledEditingTools, type EditingTools, type ScarletToolName,
   CrossfadeFrames, SheetOptions, SheetRequest, CutReviewOptions, SourceAudioOptions, SoundPictureOptions, type InspectionResult, type InspectionWindow, type DialogueDetections, type PictureActivityWindow, ScarletApiError, SuggestLearningRequest, TaskSkillDraft, skillTaskTarget, skillEditTarget, type ScarletClient } from "@scarlet/shared";
 import type { RepeatEvidence, AgentId, DialogueScanPage, ProjectDetail, ProposeChangeRequest, Skill, Task, TaskEvent, WaveformResponse } from "@scarlet/shared";
 import type { Author, Change, MediaAsset, TimeRange } from "@scarlet/timeline";
@@ -39,7 +40,7 @@ import {
   clipDuration,
   clipEnd,
   clipsAt,
-  describeDiff,
+  clipById, describeDiff,
   diffTimelines,
   emptyTimeline,
   frameAligned,
@@ -235,6 +236,22 @@ function errorResult(err: unknown): ToolResult {
   return { isError: true, content: [{ type: "text", text: describeError(err) }] };
 }
 
+const REFUSAL_LIMIT = 8000;
+
+/** Why a tool result saved nothing, or undefined when it did its work. Kept whole up to a generous limit. */
+export function toolRefusal(result: ToolResult): { text: string; data: Record<string, unknown> } | undefined {
+  const body = result.content?.flatMap(c => c.type === "text" ? [c.text] : []).join("\n") ?? "";
+  if (result.isError) return { text: body.slice(0, REFUSAL_LIMIT), data: { error: true } };
+  if (!body.startsWith("{")) return undefined;
+  let parsed: unknown;
+  try { parsed = JSON.parse(body); } catch { return undefined; }
+  if (!parsed || typeof parsed !== "object" || !(parsed as { needsRevision?: unknown }).needsRevision) return undefined;
+  const { next, ...rest } = parsed as { next?: unknown };
+  const detail = JSON.stringify(rest);
+  return { text: typeof next === "string" ? next : "Nothing was saved.",
+    data: detail.length <= REFUSAL_LIMIT ? { result: rest } : { result: `${detail.slice(0, REFUSAL_LIMIT)}…` } };
+}
+
 export function describeError(err: unknown): string {
   if (err instanceof OpError) return `Invalid op ${JSON.stringify(err.op)}: ${err.message}`;
   if (err instanceof ScarletApiError) {
@@ -263,6 +280,17 @@ function errorCause(err: Error): string {
  */
 function unavailable(what: string, err: unknown) {
   if (!(err instanceof MediaPreparing)) console.error(`[scarlet-mcp] ${what}: ${describeError(err)}`);
+}
+
+/** What each tool call answered without, keyed by what failed, so concurrent calls never see each other's. */
+const unmeasured = new AsyncLocalStorage<Map<string, string>>();
+/** Notes a read the current call answered without, for the line its result ends with. */
+function noteUnmeasured(what: string, err: unknown) {
+  if (!(err instanceof MediaPreparing)) unmeasured.getStore()?.set(what, describeError(err));
+}
+/** The plain line a result ends with when it was answered without something it measures. */
+function unmeasuredLine(missed: ReadonlyMap<string, string>): string | undefined {
+  return missed.size ? `Not measured: ${[...missed].map(([what, why]) => `${what} (${why})`).join("; ")}.` : undefined;
 }
 
 export function formatZodError(err: z.ZodError): string {
@@ -371,8 +399,8 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   const getProject = () => client.project(ctx.projectId);
 
-  /** For a `.catch`: note the failure on stderr and answer with `fallback`. */
-  const without = <T>(what: string, fallback: T) => (err: unknown) => { unavailable(what, err); return fallback; };
+  /** For a `.catch`: note the failure on stderr and in the call's result, and answer with `fallback`. */
+  const without = <T>(what: string, fallback: T) => (err: unknown) => { unavailable(what, err); noteUnmeasured(what, err); return fallback; };
   /** The same for a read every page or join repeats: a line is written once, so an engine without the route says so once. */
   const noted = new Set<string>();
   const unavailableOnce = (what: string, err: unknown) => {
@@ -868,7 +896,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     if (placed?.length) onWholeFrames.push(...placed);
     if (change.state === "approved") lastTimeline = undefined;
     const action = change.state === "approved" ? "Applied" : "Proposed";
-    const lines = diffDescription ?? (before && timeline ? describeDiff(diffTimelines(before, timeline)) : []);
+    const lines = diffDescription ?? (before && timeline ? describeDiff(diffTimelines(before, timeline), undefined, clipById) : []);
     await postEvent({
       type: "change",
       text: `${action} change ${change.id}: ${change.description}`,
@@ -895,6 +923,8 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>,
   ) {
     if (disabled.has(name) || (name === "source_audio" && !caps.audio)) return;
+    // Only a harness with file tools can put anything in the artifact directory for asset_add to import.
+    if (name === "asset_add" && !caps.files) return;
     if (authoring && !SKILL_FROM_CHANGE_TOOLS.has(name)) return;
     if (!caps.images && IMAGE_TOOLS.has(name)) return;
     // A request to revise a skill edits no video. It gets the tools for talking to the editor and for the skill.
@@ -913,12 +943,33 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
           const selected = await useStagedCut();
           if (selected) throw selected;
         }
-        return await handler(args);
+        const missed = new Map<string, string>();
+        const result = await unmeasured.run(missed, async () => {
+          try {
+            return await handler(args);
+          } catch (err) {
+            if (err instanceof MediaPreparing) return text(err.message);
+            return errorResult(err);
+          }
+        });
+        // A read the result was built without is reported with it, so a clean-looking answer is never one that went unmeasured.
+        const line = unmeasuredLine(missed);
+        return await recordRefusal(name, line ? { ...result, content: [...result.content, { type: "text" as const, text: line }] } : result);
       } catch (err) {
         if (err instanceof MediaPreparing) return text(err.message);
-        return errorResult(err);
+        return await recordRefusal(name, errorResult(err));
       }
     }) as never);
+  }
+
+  /**
+   * Saves why a call did nothing to the task's events, whatever the harness reports: an error, or a save that
+   * asks for revision. The model's next call is read against it, so a decision it drops is never unexplained.
+   */
+  async function recordRefusal(name: ScarletToolName, result: ToolResult): Promise<ToolResult> {
+    const refusal = toolRefusal(result);
+    if (refusal) await postEvent({ type: "log", text: refusal.text, data: { kind: "tool_refused", tool: `scarlet.${name}`, ...refusal.data } });
+    return result;
   }
 
   /** The includeAudio flag exists only for a model that can hear; the type always carries it so handlers stay simple. */
@@ -1102,58 +1153,98 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   tool(
     "transcript_get",
-    `Word-timed transcript of a media asset in SOURCE seconds. Each word carries a stable index (#123): the same index transcript_search, timeline_transcript and dialogue_scan show, and the word reference dialogue_check_join and dialogue_apply_cuts accept. Word times locate words; cut edges go where the recording is silent, which the dialogue tools measure. In text, a gap of ${GAP_SECONDS} s or more between two words is followed by a line saying what the recording holds there: quiet, or how much of it is sound at speaking level that no word explains, with its source seconds. That sound is whatever the transcript left out: a word it missed, a cut-off start, a breath, a laugh, typing. A missing transcript is started or joined with the configured provider; if the call reports preparation, call again. Narrow with from/to seconds or fromWord/toWord. Text format: \`#index start-end word\` lines (word) or \`[start-end] #first-#last speaker: text\` lines (segment); json: [index, start, end, text, speaker] tuples.`,
+    `Word-timed transcript of a media asset in SOURCE seconds. Each word carries a stable index (#123): the same index transcript_search, timeline_transcript and dialogue_scan show, and the word reference dialogue_check_join and dialogue_apply_cuts accept. Word times locate words; cut edges go where the recording is silent, which the dialogue tools measure. In text, a gap of ${GAP_SECONDS} s or more between two words is followed by a line saying what the recording holds there: quiet, or how much of it is sound at speaking level that no word explains, with its source seconds. That sound is whatever the transcript left out: a word it missed, a cut-off start, a breath, a laugh, typing. A missing transcript is started or joined with the configured provider; if the call reports preparation, call again. Narrow with from/to seconds or fromWord/toWord. A long result includes nextFromWord: pass it back with the same range, granularity and format to read the next page. Text format: \`#index start-end word\` lines (word) or \`[start-end] #first-#last speaker: text\` lines (segment); json: [index, start, end, text, speaker] tuples.`,
     {
       mediaId: z.string(),
       from: z.number().min(0).optional().describe("Start of range, source seconds"),
       to: z.number().min(0).optional().describe("End of range, source seconds"),
       fromWord: z.number().int().min(0).optional().describe("First word index"),
       toWord: z.number().int().min(0).optional().describe("Last word index"),
+      nextFromWord: z.number().int().min(0).optional().describe("Continuation word index returned by the previous page"),
       granularity: z.enum(["word", "segment"]).default("word"),
       format: z.enum(["json", "text"]).default("text"),
     },
-    async ({ mediaId, from, to, fromWord, toWord, granularity, format }) => {
+    async ({ mediaId, from, to, fromWord, toWord, nextFromWord, granularity, format }) => {
       const words = await transcriptWords(mediaId);
       if (!words) return text(`Media ${mediaId} has no audio track or no transcribed speech. Use waveform_get to inspect its sound.`);
       showWords(mediaId, words);
       const settled = settledThrough(mediaId);
       const estimates = Number.isFinite(settled) ? `Times after ${settled.toFixed(1)} s are estimates until Scarlet has placed those words on the audio. ` +
         "Placing them can add words the transcript missed, which moves the indices after them: a word reference from this read is then refused until you read again." : undefined;
-      const picked = words.map((w, index) => ({ ...w, index })).filter(w =>
+      const budget = caps.resultChars ?? DEFAULT_RESULT_CHARS;
+      const inRange = (w: TranscriptWord, index: number) =>
         (from === undefined || w.end >= from) && (to === undefined || w.start <= to) &&
-        (fromWord === undefined || w.index >= fromWord) && (toWord === undefined || w.index <= toWord));
+        (fromWord === undefined || index >= fromWord) && (toWord === undefined || index <= toWord);
+      const picked: Array<TranscriptWord & { index: number }> = [];
+      let nextIndex: number | undefined;
+      let minimumSize = 0;
+      // Bound the waveform measurements and formatting to what could fit. A word's spelling plus
+      // its separator is a lower bound for every format. The exact rendered size decides below.
+      for (let index = Math.max(nextFromWord ?? 0, fromWord ?? 0); index < words.length && index <= (toWord ?? Infinity); index++) {
+        const word = words[index]!;
+        if (!inRange(word, index)) continue;
+        minimumSize += word.text.trim().length + 1;
+        if (picked.length && minimumSize > budget) { nextIndex = index; break; }
+        picked.push({ ...word, index });
+      }
       if (!picked.length) return text(`No speech in that range of ${mediaId} (${words.length} words, #0–#${words.length - 1}). Use waveform_get to inspect pauses.`);
-      if (format === "json") return json({ mediaId, ...(estimates && { timesFinalThrough: round3(settled) }), words: picked.map(w => [w.index, w.start, w.end, w.text.trim(), w.speaker ?? null]) });
+      // The continuation is outside the word list in both formats. A giant single imported
+      // word still travels intact: stable indices address words, never fragments of a word.
+      function page(render: (count: number, next?: number) => string) {
+        const complete = render(picked.length, nextIndex);
+        if (complete.length <= budget || picked.length === 1) return text(complete);
+        let low = 1, high = picked.length - 1;
+        while (low < high) {
+          const mid = Math.ceil((low + high) / 2);
+          if (render(mid, picked[mid]!.index).length <= budget) low = mid;
+          else high = mid - 1;
+        }
+        return text(render(low, picked[low]!.index));
+      }
+      if (format === "json") {
+        const tuples = picked.map(w => [w.index, w.start, w.end, w.text.trim(), w.speaker ?? null]);
+        return page((count, next) => JSON.stringify({ mediaId, ...(estimates && { timesFinalThrough: round3(settled) }),
+          words: tuples.slice(0, count), ...(next !== undefined && { nextFromWord: next }) }));
+      }
       // What the recording holds in each gap between two words, by the index of the word after it.
-      const gapped = picked.flatMap((w, i) => i && w.start - picked[i - 1]!.end >= GAP_SECONDS && w.index === picked[i - 1]!.index + 1
-        ? [{ index: w.index, start: picked[i - 1]!.end, end: w.start }] : []);
+      const gapped = picked.flatMap((w, i) => {
+        // A gap belongs to the word after it, even when it falls exactly between two pages.
+        // A fresh ranged read retains its original first-word behavior.
+        const previous = words[w.index - 1];
+        if (!previous || (!i && nextFromWord === undefined) || !inRange(previous, w.index - 1)) return [];
+        return w.start - previous.end >= GAP_SECONDS ? [{ index: w.index, start: previous.end, end: w.start }] : [];
+      });
       const sounds = await gapSounds(mediaId, gapped).catch(withoutOnce(`failed to read the levels between the words of ${mediaId}`, [] as Array<GapSound | undefined>));
       const gapNote = new Map(gapped.flatMap((g, i) => sounds[i] ? [[g.index, `  · ${(g.end - g.start).toFixed(2)} s gap, ${describeGapSound(sounds[i]!)}`] as const] : []));
-      const lines: string[] = [];
-      if (granularity === "segment") {
-        let group: typeof picked = [];
-        const flush = () => {
-          if (!group.length) return;
-          const a = group[0]!, b = group.at(-1)!;
-          lines.push(`[${a.start.toFixed(2)}-${b.end.toFixed(2)}] #${a.index}-#${b.index}${a.speaker ? ` ${a.speaker}:` : ""} ${group.map(w => w.text.trim()).join(" ")}`);
-          group = [];
-        };
-        for (const w of picked) {
-          const prev = group.at(-1);
-          if (prev && (gapNote.has(w.index) || w.start - prev.end >= .6 || w.speaker !== prev.speaker || /[.?!]["”’)]*$/.test(prev.text.trim()))) flush();
-          if (gapNote.has(w.index)) lines.push(gapNote.get(w.index)!);
-          group.push(w);
+      return page((count, next) => {
+        const shown = picked.slice(0, count);
+        const lines: string[] = [];
+        if (granularity === "segment") {
+          let group: typeof picked = [];
+          const flush = () => {
+            if (!group.length) return;
+            const a = group[0]!, b = group.at(-1)!;
+            lines.push(`[${a.start.toFixed(2)}-${b.end.toFixed(2)}] #${a.index}-#${b.index}${a.speaker ? ` ${a.speaker}:` : ""} ${group.map(w => w.text.trim()).join(" ")}`);
+            group = [];
+          };
+          for (const w of shown) {
+            const prev = group.at(-1);
+            if (prev && (gapNote.has(w.index) || w.start - prev.end >= .6 || w.speaker !== prev.speaker || /[.?!]["”’)]*$/.test(prev.text.trim()))) flush();
+            if (gapNote.has(w.index)) lines.push(gapNote.get(w.index)!);
+            group.push(w);
+          }
+          flush();
+        } else {
+          let speaker: string | undefined;
+          for (const w of shown) {
+            if (gapNote.has(w.index)) lines.push(gapNote.get(w.index)!);
+            lines.push(`#${w.index} ${w.start.toFixed(2)}-${w.end.toFixed(2)}${w.speaker && w.speaker !== speaker ? ` ${w.speaker}:` : ""} ${w.text.trim()}`);
+            speaker = w.speaker;
+          }
         }
-        flush();
-      } else {
-        let speaker: string | undefined;
-        for (const w of picked) {
-          if (gapNote.has(w.index)) lines.push(gapNote.get(w.index)!);
-          lines.push(`#${w.index} ${w.start.toFixed(2)}-${w.end.toFixed(2)}${w.speaker && w.speaker !== speaker ? ` ${w.speaker}:` : ""} ${w.text.trim()}`);
-          speaker = w.speaker;
-        }
-      }
-      return text(`${mediaId}: words #${picked[0]!.index}–#${picked.at(-1)!.index} of ${words.length}, source seconds.${estimates ? ` ${estimates}` : ""}\n${lines.join("\n")}`);
+        const more = next === undefined ? "" : `\nContinue with nextFromWord=${next}.`;
+        return `${mediaId}: words #${picked[0]!.index}–#${shown.at(-1)!.index} of ${words.length}, source seconds.${estimates ? ` ${estimates}` : ""}\n${lines.join("\n")}${more}`;
+      });
     },
   );
 
@@ -2328,7 +2419,6 @@ ${OPS_DOC}`,
       noteIds: z.array(z.string()).optional().describe("Review note ids this change responds to"),
       fromVersion: z.string().optional().describe("Version the ops apply to. Defaults to the version you last read with timeline_get or timeline_at; leave it out unless you mean another version."),
       range: z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().positive() }).optional().describe("Timeline range on the base version for synchronized ripple removals across all tracks, including local pauses."),
-      syncSetup: z.boolean().optional().describe("Legacy placement hint. Clip positions and transforms come from the submitted edit."),
       pictureLayout: z.union([z.object({ screenClipId: z.string(), cameraClipId: z.string(),
         framing: InsetFraming.optional(),
       }), z.literal("asPlaced")]).optional()
@@ -2660,12 +2750,12 @@ ${OPS_DOC}`,
         const before = change.appliedReview?.originalVersion ?? (change.appliedOnto === approved ? change.fromVersion : change.appliedOnto ?? change.fromVersion);
         // A partial acceptance can leave the proposal's title and its diff describing edits the editor skipped.
         const partial = change.approvedSpots !== undefined || !!change.restoredCuts?.length;
-        const { description: diff } = await client.diff(ctx.projectId, before, approved);
+        const { description: diff } = await client.diff(ctx.projectId, before, approved, "id");
         return json({ change: { id: change.id, description: partial ? undefined : change.description, state: change.state,
           appliedVersion: approved, approvedSpots: change.approvedSpots }, diff });
       }
       const { change, diff } = await client.change(changeId);
-      return json({ change, diff: describeDiff(diff, s => s.toFixed(2)) });
+      return json({ change, diff: describeDiff(diff, undefined, clipById) });
     },
   );
 

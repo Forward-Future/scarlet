@@ -5,10 +5,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { ProposeChangeRequest, ScarletApiError, ScarletClient, Task, type EditingTools } from "@scarlet/shared";
+import { agentCapabilities, ProposeChangeRequest, ScarletApiError, ScarletClient, Task, type EditingTools } from "@scarlet/shared";
 import type { Transcript } from "@scarlet/timeline";
 import { emptyTimeline, makeMediaClip } from "@scarlet/timeline";
-import { createScarletMcpServer, describeError, SCARLET_TOOL_NAMES } from "./server.js";
+import { createScarletMcpServer, describeError, SCARLET_TOOL_NAMES, toolRefusal } from "./server.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { makeState, startMockServer, type MockServer } from "./mock-server.js";
 
@@ -40,8 +40,10 @@ const transcript: Transcript = {
 let mock: MockServer;
 let client: Client;
 let textOf: (r: CallToolResult) => string;
+/** A result's answer, before any line that says what it was answered without. */
+const firstJson = (r: CallToolResult) => JSON.parse((r.content[0] as { text: string }).text);
 
-async function connect(taskId?: string, workDir?: string, task?: Task, editingTools?: EditingTools, alignmentWaitMs?: number) {
+async function connect(taskId?: string, workDir?: string, task?: Task, editingTools?: EditingTools, alignmentWaitMs?: number, agent = "claude") {
   const sc = new ScarletClient({ baseUrl: mock.url, token: "tok" });
   const server = createScarletMcpServer(sc, {
     projectId: "prj_test",
@@ -50,8 +52,8 @@ async function connect(taskId?: string, workDir?: string, task?: Task, editingTo
     taskId,
     taskStartedAt: taskId ? "2026-04-01T12:00:00.000Z" : undefined,
     task,
-    agent: "claude",
-    author: { type: "agent", id: "claude", name: "claude", model: "opus" },
+    agent,
+    author: { type: "agent", id: agent, name: agent, model: "opus" },
     workDir,
   });
   const [a, b] = InMemoryTransport.createLinkedPair();
@@ -88,7 +90,8 @@ describe("MCP file tools", () => {
     const dir = await mkdtemp(join(tmpdir(), "scarlet-artifact-test-"));
     const root = join(dir, "artifacts");
     await mkdir(root);
-    const c = await connect(undefined, root);
+    // asset_add is offered only to a harness that can write files, such as Codex.
+    const c = await connect(undefined, root, undefined, undefined, undefined, "codex");
     try {
       await writeFile(join(dir, "credential"), "private");
       await writeFile(join(root, "image.png"), "graphic");
@@ -114,7 +117,7 @@ describe("MCP file tools", () => {
         // symlinked ancestor, then reuse the absolute path returned by export.
         const alias = join(dir, "alias");
         await symlink(dir, alias);
-        const aliased = await connect(undefined, join(alias, "artifacts"));
+        const aliased = await connect(undefined, join(alias, "artifacts"), undefined, undefined, undefined, "codex");
         try {
           const exported = await aliased.callTool({ name: "export_otio", arguments: { version: "v1" } }) as CallToolResult;
           const payload = JSON.parse(textOf(exported).split("\n\n").at(-1)!);
@@ -155,11 +158,19 @@ describe("tools/list", () => {
       expect(unavailable.isError).toBe(true);
     } finally { await session.close(); }
   });
+  it("offers asset_add only to a harness that can write files", async () => {
+    const codex = await connect(undefined, undefined, undefined, undefined, undefined, "codex");
+    try {
+      expect((await codex.listTools()).tools.map(t => t.name)).toContain("asset_add");
+    } finally { await codex.close(); }
+    expect((await client.listTools()).tools.map(t => t.name)).not.toContain("asset_add");
+  });
   it("registers every Scarlet tool with a description", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
-    // Claude's harness does not deliver audio, so nothing offers WAV. Only the check that reads a request offers a rule.
-    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => n !== "source_audio" && n !== "learning_suggest").sort());
+    // Claude's harness does not deliver audio, so nothing offers WAV, and has no file tools, so nothing imports from the
+    // artifact directory. Only the check that reads a request offers a rule.
+    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => n !== "source_audio" && n !== "learning_suggest" && n !== "asset_add").sort());
     for (const t of tools) expect(Object.keys(t.inputSchema.properties ?? {})).not.toContain("includeAudio");
     expect(JSON.stringify(tools)).not.toMatch(/\bWAV\b|can (hear|play)|accepts audio|consume audio/);
     for (const t of tools) expect(t.description?.length ?? 0).toBeGreaterThan(20);
@@ -477,7 +488,9 @@ describe("timeline_propose", () => {
     expect(t).toContain("ops[0]");
     expect(t).toContain("ops[1] (splitClip).at");
     expect(t).toContain("Op types");
-    expect(mock.requests.some((q) => q.method === "POST")).toBe(false);
+    // Nothing is saved; only the reason is, in the task's events.
+    expect(mock.requests.some((q) => q.method === "POST" && !q.path.endsWith("/events"))).toBe(false);
+    expect(mock.state.events.at(-1)).toMatchObject({ type: "log", text: t, data: { kind: "tool_refused", tool: "scarlet.timeline_propose", error: true } });
   });
 
   it("dry-runs ops locally and reports unknown clip ids", async () => {
@@ -486,6 +499,16 @@ describe("timeline_propose", () => {
       arguments: { intent: "requested", ops: [{ op: "removeClip", clipId: "does_not_exist" }], description: "x" },
     })) as CallToolResult;
     expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain("clip does_not_exist not found");
+  });
+
+  it("no longer offers the unused placement hint, and still reads a call that sends it", async () => {
+    const propose = (await client.listTools()).tools.find(t => t.name === "timeline_propose")!;
+    expect(Object.keys(propose.inputSchema.properties ?? {})).not.toContain("syncSetup");
+    const r = (await client.callTool({
+      name: "timeline_propose",
+      arguments: { intent: "requested", ops: [{ op: "removeClip", clipId: "does_not_exist" }], description: "x", syncSetup: true },
+    })) as CallToolResult;
     expect(textOf(r)).toContain("clip does_not_exist not found");
   });
 
@@ -745,6 +768,74 @@ describe("transcript tools", () => {
     expect(mock.requests.some(req => req.method === "POST")).toBe(false);
   });
 
+  it("pages a 6,300-word transcript without losing words or the measured gap at a page boundary", async () => {
+    const limit = 4_000;
+    // The uninterrupted opening must split inside a segment. Subsequent quiet gaps exercise
+    // the gap evidence at the page seams for both text granularities.
+    const words = Array.from({ length: 6_300 }, (_, i) => {
+      const start = i < 900 ? i * .1 : 90 + (i - 900) * .5;
+      return { start, end: start + .08, text: `word${i}`, speaker: i < 3000 ? "Host" : "Guest" };
+    });
+    const state = makeState({ transcripts: { m1: { ...transcript, segments: [
+      { id: "long", start: 0, end: words.at(-1)!.end, text: words.map(w => w.text).join(" "), words },
+    ] } } });
+    // The recording runs as long as its transcript: levels past a recording's end aren't read.
+    state.project.media = state.project.media.map(m => m.id === "m1" ? { ...m, duration: Math.ceil(words.at(-1)!.end) } : m);
+    state.waveform = (mediaId, from, to, points) => ({ mediaId, from, to, peaks: [], rms: Array(points).fill(0) });
+    const fixture = await startMockServer(state);
+    const agent = new Client({ name: "transcript-pages", version: "1" });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    try {
+      const server = createScarletMcpServer(new ScarletClient({ baseUrl: fixture.url, token: "tok" }), {
+        projectId: "prj_test", agent: "claude", capabilities: agentCapabilities("claude", { resultChars: limit }),
+        author: { type: "agent", name: "claude" },
+      });
+      await server.connect(a);
+      await agent.connect(b);
+      for (const [format, granularity] of [["json", "word"], ["text", "word"], ["text", "segment"]]) {
+        const fromWord = 13, toWord = 6199;
+        let nextFromWord: number | undefined, pages = 0, gaps = 0;
+        const seen: number[] = [];
+        do {
+          const result = await agent.callTool({ name: "transcript_get",
+            arguments: { mediaId: "m1", fromWord, toWord, format, granularity, nextFromWord } }) as CallToolResult;
+          expect(result.isError).toBeFalsy();
+          const text = textOf(result);
+          expect(text.length).toBeLessThanOrEqual(limit);
+          const first = nextFromWord ?? fromWord;
+          if (format === "json") {
+            const page = JSON.parse(text);
+            expect(page.words[0][0]).toBe(first);
+            for (const [index, start, end, spelling, speaker] of page.words) {
+              seen.push(index);
+              const word = words[index]!;
+              if (start !== word.start || end !== word.end || spelling !== word.text || speaker !== word.speaker) {
+                throw new Error(`Word #${index} changed when paged`);
+              }
+            }
+            nextFromWord = page.nextFromWord;
+          } else {
+            if (pages && first > 900) expect(text.split("\n")[1]).toContain("0.42 s gap, quiet");
+            gaps += [...text.matchAll(/ s gap, quiet/g)].length;
+            const matches = [...text.matchAll(/\bword(\d+)\b/g)].map(m => Number(m[1]));
+            expect(matches[0]).toBe(first);
+            seen.push(...matches);
+            const next = text.match(/Continue with nextFromWord=(\d+)\./);
+            nextFromWord = next ? Number(next[1]) : undefined;
+          }
+          if (nextFromWord !== undefined) expect(nextFromWord).toBe(seen.at(-1)! + 1);
+          pages++;
+        } while (nextFromWord !== undefined && pages < 200);
+        expect(pages).toBeGreaterThan(1);
+        expect(seen).toEqual(Array.from({ length: toWord - fromWord + 1 }, (_, i) => fromWord + i));
+        if (format === "text") expect(gaps).toBe(toWord - 900);
+      }
+    } finally {
+      await agent.close();
+      await fixture.close();
+    }
+  }, 60_000);
+
   it("starts or joins transcription and delivers words to concurrent reads without a question", async () => {
     let polls = 0;
     mock.state.extra = (req, res) => {
@@ -904,6 +995,11 @@ describe("task events", () => {
       ["question", "Keep the intro?"],
     ]);
   });
+  it("reads a save that asks for revision as a refusal, and a save as none", async () => {
+    expect(toolRefusal({ content: [{ type: "text", text: JSON.stringify({ needsRevision: true, disputedEdges: [{ start: 1, end: 2 }], next: "Nothing was saved. Check the edge." }) }] }))
+      .toEqual({ text: "Nothing was saved. Check the edge.", data: { result: { needsRevision: true, disputedEdges: [{ start: 1, end: 2 }] } } });
+    expect(toolRefusal({ content: [{ type: "text", text: JSON.stringify({ changeId: "chg_1" }) }] })).toBeUndefined();
+  });
   it("posts plain progress text with explicit per-edit references", async () => {
     const edits = [{ phrase: "leveled the dialogue", changeId: "chg_sound", spot: 1 }];
     await client.callTool({ name: "task_log", arguments: { text: "I leveled the dialogue in the interview.", edits } });
@@ -949,7 +1045,8 @@ describe("task events", () => {
     try {
       const q = await client.callTool({ name: "task_question", arguments: { text: "Keep the intro?" } });
       expect(q.isError).toBe(true);
-      expect(mock.state.events).toHaveLength(0);
+      // No question was posted; why is kept with the task.
+      expect(mock.state.events.map(e => e.data?.kind)).toEqual(["tool_refused"]);
     } finally {
       mock.state.extra = undefined;
     }
@@ -996,7 +1093,7 @@ describe("skills_list and misc", () => {
       for (const [name, args] of [["change_get", { changeId: "other" }], ["timeline_get", { version: "head" }]] as const) {
         expect((await session.callTool({ name, arguments: args })).isError).toBe(true);
       }
-      expect(mock.requests).toHaveLength(0);
+      expect(mock.requests.filter(q => !q.path.endsWith("/events"))).toHaveLength(0);
       const evidence = await session.callTool({ name: "change_get", arguments: { changeId: "chg_approved" } }) as CallToolResult;
       expect(JSON.parse(textOf(evidence))).toMatchObject({ change: { appliedVersion: "v_kept", approvedSpots: [1] } });
       expect(textOf(evidence)).not.toContain("rejected suggestion");
@@ -1121,7 +1218,7 @@ describe("skills_list and misc", () => {
   it("render_request/render_status and change_list work", async () => {
     const implicit = await client.callTool({ name: "render_request", arguments: {} });
     expect(implicit.isError).toBe(true);
-    expect(mock.requests).toHaveLength(0);
+    expect(mock.requests.filter(q => !q.path.endsWith("/events"))).toHaveLength(0);
     const r = (await client.callTool({ name: "render_request", arguments: { kind: "preview", range: { start: 0, end: 2 } } })) as CallToolResult;
     expect(JSON.parse(textOf(r))).toMatchObject({ id: "rnd_1", state: "queued" });
     const s = (await client.callTool({ name: "render_status", arguments: { renderId: "rnd_1" } })) as CallToolResult;
@@ -1898,8 +1995,11 @@ it("moves the staged cut being revised past its old edges and steers the other e
       reason: "Starts in the pause after “weights” so the first “I” is gone." } });
     expect(moved.isError).toBeFalsy();
     expect(saved).toMatchObject({ start: 1.6, end: 3, crossfadeFrames: 3, taskId: "revise-cut", noteIds: ["n1"], reason: "Starts in the pause after “weights” so the first “I” is gone." });
-    expect(JSON.parse(textOf(moved as CallToolResult))).toMatchObject({ changeId: "pass2", start: 1.6, end: 3 });
-    expect(JSON.parse(textOf(moved as CallToolResult))).not.toHaveProperty("movedOn");
+    expect(firstJson(moved as CallToolResult)).toMatchObject({ changeId: "pass2", start: 1.6, end: 3 });
+    expect(firstJson(moved as CallToolResult)).not.toHaveProperty("movedOn");
+    // The engine's saved ranges couldn't be read (the mock has no cut-review route), and the result says so after its answer.
+    expect((moved as CallToolResult).content.at(-1)).toEqual({ type: "text",
+      text: "Not measured: failed to read the ranges saved for pass2 (Scarlet server error 404 (not_found): no mock route for POST /projects/prj_test/changes/pass2/cut-review)." });
     expect(mock.state.events.at(-1)).toMatchObject({ type: "change", data: { changeId: "pass2" } });
     // A revision had replaced the pass named since the request was sent: Scarlet made the move on the pass that waits, and says so.
     const plain = mock.state.extra;
@@ -1909,8 +2009,8 @@ it("moves the staged cut being revised past its old edges and steers the other e
       res.end(JSON.stringify({ replaced: "pass1b", change: { id: "pass3", state: "ready", description: "Review 3 optional dialogue cuts", fromVersion: "pass-from", toVersion: "pass3-to" } }));
       return true;
     };
-    const redirected = JSON.parse(textOf(await scoped.callTool({ name: "dialogue_revise_cut", arguments: { changeId: "pass", index: 1, start: 1.6, end: 3,
-      reason: "Starts in the pause." } }) as CallToolResult));
+    const redirected = firstJson(await scoped.callTool({ name: "dialogue_revise_cut", arguments: { changeId: "pass", index: 1, start: 1.6, end: 3,
+      reason: "Starts in the pause." } }) as CallToolResult);
     expect(redirected).toMatchObject({ changeId: "pass3", movedOn: "pass1b" });
     expect(redirected.note).toContain("replaced pass with pass1b");
   } finally {
@@ -2206,7 +2306,7 @@ it("measures the recording beside a staged cut's new edges with no scan read, an
   const move = async (start: number, end: number) => {
     const r = await scoped.callTool({ name: "dialogue_revise_cut", arguments: { changeId: "pass", index: 0, start, end, reason: "Starts after “back.”" } }) as CallToolResult;
     expect(r.isError, textOf(r)).toBeFalsy();
-    return JSON.parse(textOf(r));
+    return firstJson(r);
   };
   try {
     // Both edges in the pause between “back.” and “Um,”: the recording is quiet there, so nothing is reported and nothing is left to do.

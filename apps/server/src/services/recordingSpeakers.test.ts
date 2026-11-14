@@ -112,6 +112,11 @@ it("lets a pass's other audio work wait for every analysis a pass is waiting for
   await imported;
   // A pass reads two recordings. Its work waits for both analyses, also when one fails.
   const camera = ctx.speakers.turns(ctx, project.id, await recording("camera"), undefined, true);
+  // The pass can ask to wait in the same turn, before the first filesystem lookup has completed.
+  let firstFinished = false;
+  const firstWait = ctx.speakers.awaitedByPass().then(() => { firstFinished = true; });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(firstFinished).toBe(false);
   await vi.waitFor(() => expect(finish).toHaveLength(1));
   const screen = ctx.speakers.turns(ctx, project.id, await recording("screen"), undefined, true).catch((error: Error) => error.message);
   let waited = false;
@@ -124,6 +129,7 @@ it("lets a pass's other audio work wait for every analysis a pass is waiting for
   finish.shift()!(new Error("the worker failed"));
   expect(await screen).toContain("the worker failed");
   await wait;
+  await firstWait;
   expect(waited).toBe(true);
 });
 

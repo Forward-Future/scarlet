@@ -23,7 +23,8 @@ export function CachedVideo({ url, label, hidden, active, autoPlay, joins, parke
   // moment later. Paused just as this player takes over, the store alone still says playing, and the file would
   // play by itself.
   const resume = useRef<boolean>(undefined);
-  resume.current ??= autoPlay || (usePlayerStore.getState().playing && !player.element()?.paused);
+  const outgoing = player.element();
+  resume.current ??= autoPlay || (outgoing ? !outgoing.paused && !outgoing.ended : usePlayerStore.getState().playing);
   const [failed, setFailed] = useState(false);
   useLayoutEffect(() => {
     const el = video.current!;

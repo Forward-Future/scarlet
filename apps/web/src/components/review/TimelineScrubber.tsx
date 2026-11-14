@@ -5,6 +5,7 @@ import { api } from "../../lib/client";
 import { usePlayerStore } from "../../stores/player";
 import { arrowSeekTime, ignorePageShortcut, useHotkeys } from "../../lib/hotkeys";
 import { playbackClock } from "../../lib/format";
+import { playbackLog } from "../../lib/playbackLog";
 import { TimelineWaveform, type WaveformMedia } from "./TimelineWaveform";
 import type { EditCue } from "./EditReferences";
 import { ScrubPreview, type HoverVideo } from "../player/ScrubPreview";
@@ -49,6 +50,22 @@ function FilmstripSheet({ src, frames, pictureAspect, style, loaded, onLoad, onE
 
 /** How long the picture lane waits for its last stills before showing the ones it has. */
 const PICTURE_PATIENCE_MS = 3000;
+/** How long the stills a rebuilt lane held stay over the new ones: the new ones' left-to-right fade (workspace.css). */
+const HELD_FADE_MS = 600;
+
+interface HeldStills { subject: string; built: string; view: string; cells: Element[] }
+/**
+ * A new working cut builds the timeline again and every still on it is a new picture from the engine. The lane built in
+ * its place keeps showing the old stills, of the same footage, until its own have landed, instead of going blank.
+ */
+interface Carry { subject: string; built: string; start: number; duration: number; held: RefObject<HeldStills | undefined> }
+const HeldStillsContext = createContext<Carry | null>(null);
+
+/** Stills shown by the timeline this one was built in place of: not a zoom's other window, which shows another stretch. */
+function heldFor(carry: Carry | null, view: string) {
+  const held = carry?.held.current;
+  return carry && held && held.subject === carry.subject && held.built !== carry.built && held.view === view ? held : undefined;
+}
 
 const Filmstrip = memo(function Filmstrip({ start, duration, pictureAspect, frameAt, preview, hold, onLoading }: {
   start: number; duration: number; pictureAspect: number; frameAt: FrameAt; preview?: PreviewStrip | null;
@@ -59,7 +76,7 @@ const Filmstrip = memo(function Filmstrip({ start, duration, pictureAspect, fram
   const [count, setCount] = useState(0);
   const [failed, setFailed] = useState<string>();
   // Stills that have loaded or given up. The lane shows them together once every one has.
-  const [settled, setSettled] = useState<ReadonlySet<string>>(new Set());
+  const [settled, setSettled] = useState<ReadonlyMap<string, boolean>>(new Map());
   const [impatient, setImpatient] = useState<string>();
   useLayoutEffect(() => {
     const el = strip.current!;
@@ -98,23 +115,58 @@ const Filmstrip = memo(function Filmstrip({ start, duration, pictureAspect, fram
     const timer = window.setTimeout(() => setImpatient(batch), PICTURE_PATIENCE_MS);
     return () => clearTimeout(timer);
   }, [loading, batch]);
-  const settle = (src: string) => setSettled(done => done.has(src) ? done : new Set([...done, src].filter(s => wanted.includes(s))));
+  const settle = (src: string, loaded: boolean) => setSettled(done => {
+    if (done.get(src) === loaded) return done;
+    const next = new Map([...done].filter(([url]) => wanted.includes(url)));
+    return next.set(src, loaded);
+  });
   const waiting = loading || !!hold;
   const arriving = useArrival(waiting);
+  const carry = useContext(HeldStillsContext);
+  const view = carry && start === carry.start && duration === carry.duration ? "full" : `${start}/${duration}`;
+  const [held, setHeld] = useState(() => heldFor(carry, view));
+  const overlay = useRef<HTMLDivElement>(null);
+  const complete = preview !== null && (duration <= 0 || (count > 0 && wanted.every(src => settled.has(src))));
+  const hasPicture = wanted.some(src => settled.get(src));
+  // A pending cache lookup or an expired patience timer can end the loading wave before any picture is available.
+  // An empty or failed batch is terminal too: once known, it must not keep showing footage from an older cut.
+  const reveal = !waiting && (hasPicture || complete);
+  useLayoutEffect(() => {
+    const el = overlay.current;
+    if (el && held && held.cells[0]?.parentElement !== el) el.replaceChildren(...held.cells);
+  }, [held]);
+  useLayoutEffect(() => {
+    if (!carry) return;
+    if (complete && hasPicture && !waiting) {
+      // The old lane unmounts before the new layout effects run. Move its already-decoded cells across intact:
+      // this preserves sheet cropping and avoids an extra round of requests for the previous cut.
+      const cells = Array.from(strip.current!.querySelectorAll(":scope > div:not(.filmstrip-wait, .filmstrip-held)"));
+      carry.held.current = { subject: carry.subject, built: carry.built, view, cells };
+    } else if (complete && !hasPicture || (carry.held.current?.built === carry.built && carry.held.current.view === view)) {
+      carry.held.current = undefined;
+    }
+  }, [carry, complete, hasPicture, waiting, view, stills]);
+  // Once the lane's own stills are shown, the held ones fade out over them, then go.
+  useEffect(() => {
+    if (!held || !reveal) return;
+    const timer = window.setTimeout(() => setHeld(undefined), HELD_FADE_MS);
+    return () => clearTimeout(timer);
+  }, [held, reveal]);
   // The glow starts at the shared wave's current point, so it moves with the sound lane's ripple.
   const phase = useMemo(() => waiting ? wavePhase() : undefined, [waiting]);
   return <div ref={strip} className={`timeline-filmstrip${waiting ? " is-loading" : ""}${arriving ? " is-arriving" : ""}`} aria-hidden="true"
     style={{ "--frames": Math.max(1, count), "--wave-phase": phase } as CSSProperties}>
-    {drawn && wanted.length > 0 && <div className="filmstrip-wait"><i /></div>}
+    {drawn && wanted.length > 0 && !held && <div className="filmstrip-wait"><i /></div>}
+    {held && <div ref={overlay} className="filmstrip-held" data-leaving={reveal || undefined} />}
     {stills.map((still, i) => {
       // After a wait the stills fade in from left to right.
       const order = { "--at": (stills.length > 1 ? i / (stills.length - 1) : 0).toFixed(3) } as CSSProperties;
       const src = still.src;
       if (cached && src) return <FilmstripSheet key={still.key} src={src} frames={still.span} pictureAspect={pictureAspect}
-        style={order} loaded={settled.has(src)} onLoad={() => settle(src)} onError={() => setFailed(cached.id)} />;
+        style={order} loaded={settled.get(src) === true} onLoad={() => settle(src, true)} onError={() => setFailed(cached.id)} />;
       return <div key={still.key}>{src && <QueuedImg key={src} src={src} alt="" draggable={false} decoding="async"
-        data-loaded={settled.has(src) || undefined} style={order} onLoad={() => settle(src)}
-        onError={e => { e.currentTarget.hidden = true; settle(src); }} />}</div>;
+        data-loaded={settled.get(src) || undefined} style={order} onLoad={() => settle(src, true)}
+        onError={e => { e.currentTarget.hidden = true; settle(src, false); }} />}</div>;
     })}
   </div>;
 });
@@ -375,7 +427,7 @@ function ZoomPopover({ children, onKey }: { children: ReactNode; onKey(event: Ke
     if (open) { onKey(e.nativeEvent); e.stopPropagation(); }
   }}>
     <button ref={trigger} type="button" className="timeline-view-trigger" aria-label="Timeline controls"
-      title="Timeline controls · scroll or pinch to zoom" aria-expanded={open} aria-controls={id}
+      title="Timeline controls · scroll or pinch to zoom" aria-expanded={open} aria-controls={open ? id : undefined}
       onClick={e => { e.currentTarget.focus({ preventScroll: true }); setOpen(value => !value); }}>
       <Icon name="zoom" size={15} />
     </button>
@@ -399,8 +451,25 @@ export function TimelineScrubber(props: TimelineScrubberProps) {
   const { start, duration, cue, waveform } = props;
   const subject = [waveform?.source?.id, waveform?.original, start, cue?.changeId, cue?.spot, cue?.time, props.reviewing];
   const context = [...subject, waveform?.timeline?.version, duration];
+  const key = JSON.stringify(context);
   const kept = useRef<KeptView>(undefined);
-  return <Scrubber key={JSON.stringify(context)} {...props} subject={JSON.stringify(subject)} kept={kept} />;
+  const held = useRef<HeldStills>(undefined);
+  const subjectKey = JSON.stringify(subject);
+  const carry = useMemo(() => ({ subject: subjectKey, built: key, start: start ?? 0, duration, held }), [subjectKey, key, start, duration]);
+  // Building the timeline again reloads every still on it, so say what made it.
+  const built = useRef<unknown[]>(undefined);
+  useEffect(() => {
+    const before = built.current;
+    built.current = context;
+    if (!before || JSON.stringify(before) === key) return;
+    const names = ["source", "original", "start", "change", "spot", "cue", "reviewing", "version", "duration"];
+    const changed = Object.fromEntries(names.flatMap((name, i) =>
+      JSON.stringify(before[i]) === JSON.stringify(context[i]) ? [] : [[name, `${String(before[i])}->${String(context[i])}`]]));
+    playbackLog("timeline rebuilt", changed);
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  return <HeldStillsContext.Provider value={carry}>
+    <Scrubber key={key} {...props} subject={subjectKey} kept={kept} />
+  </HeldStillsContext.Provider>;
 }
 
 function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, activeShortcuts, subject, kept,
@@ -421,7 +490,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
     return () => observer.disconnect();
   }, []);
   const track = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ id: number; start: number; lifetime: AbortController; finish?: () => void; time?: number; x: number; paint?: number } | null>(null);
+  const drag = useRef<{ id: number; start: number; span: number; lifetime: AbortController; finish?: () => void; time?: number; x: number; paint?: number } | null>(null);
   useLayoutEffect(() => () => {
     // A new working cut builds the timeline again. A drag held just then ends with the timeline it was on: the video
     // it paused carries on as it was, instead of staying paused under a pointer that no longer moves anything.
@@ -583,7 +652,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
     gesture.paint = undefined;
     const rect = slider.current!.getBoundingClientRect();
     if (rect.width <= 0) return;
-    const time = gesture.start + span * Math.max(0, Math.min(1, (gesture.x - rect.left) / rect.width));
+    const time = gesture.start + gesture.span * Math.max(0, Math.min(1, (gesture.x - rect.left) / rect.width));
     if (time === gesture.time) return;
     gesture.time = time;
     onSeek(time);
@@ -621,7 +690,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
         stopZoom();
         e.currentTarget.setPointerCapture(e.pointerId);
         const lifetime = new AbortController();
-        drag.current = { id: e.pointerId, start: from, x: e.clientX, lifetime, finish: onScrubStart?.(lifetime.signal) };
+        drag.current = { id: e.pointerId, start: from, span, x: e.clientX, lifetime, finish: onScrubStart?.(lifetime.signal) };
         seek();
       }}
       onPointerMove={e => {

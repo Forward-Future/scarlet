@@ -98,7 +98,8 @@ it("makes a version a button only when it has edits to list", async () => {
   // Under the fixture's versions sits the empty timeline the project began with, and on top an undo of the newest.
   data = { ...data, versions: [...data.versions!.map(v => v.version === "ver_1" ? { ...v, parent: "ver_0" } : v),
     { version: "ver_0", parent: null, name: "Main", changeId: null, description: "Empty timeline", duration: 0, isHead: false, createdAt: new Date(0).toISOString() }] };
-  apply("chg_undo", "ver_4", { description: "Undo · Tighten the wrap", revertsVersion: "ver_3", ranges: [{ start: 0, end: 16.5 }] });
+  // The undo put back three places, as the undo of a dialogue pass does.
+  apply("chg_undo", "ver_4", { description: "Undo · Tighten the wrap", revertsVersion: "ver_3", ranges: [{ start: 0, end: 2 }, { start: 5, end: 6 }, { start: 11.5, end: 16.5 }] });
   await show();
   expect(shownVersions()).toEqual(["ver_4", "ver_3", "ver_2", "ver_1", "ver_0"]);
   // An undo, a lone edit nobody revised, the import and the empty timeline say all they have: text, with nothing to press.

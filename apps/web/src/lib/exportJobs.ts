@@ -190,11 +190,6 @@ async function run(projectId: string, file: ExportFile, context: string, version
   } finally {
     finish(result);
     if (result?.phase === "done" && file.format === "mp4") useUiStore.getState().offerExportStar();
-    if (resumed && result) {
-      useUiStore.getState().notify(result.phase === "done"
-        ? { title: "Export finished", body: file.name, projectId }
-        : { title: "Export didn’t finish", body: `${file.name}: ${result.error}`, projectId });
-    }
     // Tell the engine the export is settled. If it can't hear, leave the destination for the next launch to finish.
     const released = !ownedId || cancelled || await api.releaseRender(ownedId, owner).then(() => true, () => false);
     if (released) await discard();

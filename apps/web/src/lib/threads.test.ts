@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { taskRunKind, type Task, type TaskEvent, type ThreadEdit } from "@scarlet/shared";
 import type { Change, Note } from "@scarlet/timeline";
-import { appliedPassCuts, buildThreads, firstCutDeliveries, groupThreads, matchesThread, queueLabel, requestTarget, revisionTarget, threadConversation, threadFor, type ThreadEntry } from "./threads";
+import { appliedPassCuts, buildThreads, firstCutDeliveries, queueLabel, requestTarget, revisionTarget, threadConversation, type ThreadEntry } from "./threads";
 import { groupEditMessages } from "./groupEditMessages";
 
 const t0 = Date.parse("2026-10-30T12:00:00Z");
@@ -146,16 +146,17 @@ describe("buildThreads", () => {
     expect(threadConversation(th!, []).entries.filter((e) => e.kind === "request").map((e) => (e as { text: string }).text)).toEqual(["First cut", "Tighten the end"]);
   });
 
-  it("puts questions first and finds a thread from any of its items", () => {
+  it("says a question and a ready change need the editor while a running request works", () => {
     const threads = buildThreads({
       tasks: [task("q", "waiting_for_user", { question: "Purple or white?", createdAt: at(10) }), task("w", "running")],
       changes: [change("r", "ready", { createdAt: at(-5), updatedAt: at(-5) })],
       notes: [],
     });
-    const g = groupThreads(threads);
-    expect(g.needsYou.map((t) => t.id)).toEqual(["q", "r"]);
-    expect(g.working.map((t) => t.id)).toEqual(["w"]);
-    expect(threadFor(threads, "r")?.latest?.id).toBe("r");
+    const status = Object.fromEntries(threads.map(t => [t.id, [t.status, t.needs]]));
+    expect(status.q).toEqual(["needs_you", "question"]);
+    expect(status.r?.[0]).toBe("needs_you");
+    expect(status.w?.[0]).toBe("working");
+    expect(threads.find(t => t.id === "r")?.latest?.id).toBe("r");
   });
 
   it("treats a sent-back change as working until the redo arrives, and says why in Scarlet's words under the request that made it", () => {
@@ -183,19 +184,10 @@ describe("buildThreads", () => {
   });
 });
 
-describe("matchesThread", () => {
-  it("matches every word of the query, in any order", () => {
-    const [thread] = buildThreads({ changes: [change("Remove the long pauses", "ready")], tasks: [], notes: [] });
-    expect(matchesThread(thread!, "pauses long")).toBe(true);
-    expect(matchesThread(thread!, "  remove   pauses ")).toBe(true);
-    expect(matchesThread(thread!, "pauses intro")).toBe(false);
-  });
-});
-
 it("puts failed requests without a proposal in Needs you and removes Retry after it starts", () => {
   const failed = task("failed", "failed", { context: { threadId: "failed" } });
   const [thread] = buildThreads({ tasks: [failed], changes: [], notes: [] });
-  expect(groupThreads([thread!]).needsYou[0]?.needs).toBe("task_failed");
+  expect(thread).toMatchObject({ status: "needs_you", needs: "task_failed" });
   expect(threadConversation(thread!, []).entries).toContainEqual(expect.objectContaining({ action: { taskId: failed.id, label: "Retry edit" } }));
   const retry = task("retry", "queued", { createdAt: at(2), context: { threadId: failed.id } });
   const [running] = buildThreads({ tasks: [{ ...failed, retryTaskId: retry.id }, retry], changes: [], notes: [] });

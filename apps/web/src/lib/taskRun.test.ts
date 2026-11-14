@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { Task, TaskEvent } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
-import { runAim, runItems, runLines, runSummary, workTime } from "./taskRun";
+import { runAim, runItems, runLines, runSummary } from "./taskRun";
 
 const task = { id: "tsk", projectId: "prj", kind: "edit", agent: "codex", instruction: "/dialogue-pass", context: {}, state: "done",
   createdBy: { type: "user", id: "usr", name: "Matt" }, changeIds: ["chg_assembly", "chg_pass"], question: null,
@@ -166,11 +166,14 @@ it("sums up a run in a few words", () => {
 
 it("never counts time spent waiting for your answer", () => {
   const ev = (s: number, type: "question" | "answer"): TaskEvent => ({ at: at(s), type, text: "" });
-  // Finished run: 261 s start to finish, 200 s of it waiting on a question.
-  expect(workTime(task, [ev(30, "question"), ev(230, "answer")], Date.now())).toBe(61_000);
+  const took = (run: Task, events: TaskEvent[], now: number) =>
+    runLines(run, events, runItems(run, events, []), now).filter(line => line.kind === "step").map(line => line.took);
+  const step = tool(10, "timeline_get");
+  // Finished run: the step ran from 10 s to the finish at 261 s, 200 s of it waiting on a question.
+  expect(took(task, [step, ev(30, "question"), ev(230, "answer")], Date.now())).toEqual([51_000]);
   // Still waiting: the clock stopped when the question was asked, however long you take.
   const asking = { ...task, state: "waiting_for_user", finishedAt: null } as unknown as Task;
-  expect(workTime(asking, [ev(30, "question")], Date.parse(at(5000)))).toBe(30_000);
+  expect(took(asking, [step, ev(30, "question")], Date.parse(at(5000)))).toEqual([20_000]);
 });
 
 it("leaves a message shown as the run's reply out of its updates", () => {

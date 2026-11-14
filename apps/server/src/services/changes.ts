@@ -33,7 +33,7 @@ import { frameAligned, frameAlignedRemoval, isPublishedCall, onFrame, makeStaged
   type CutReview,
   makeTimeMap,
   mergeRanges,
-  describeDiff,
+  clipById, describeDiff,
   describeDialogueRemovals,
   diffTimelines,
   timelineDuration,
@@ -1319,9 +1319,9 @@ function persistProposal(ctx: Ctx, user: User, projectId: string, body: ProposeC
   if (change.state === "approved" && change.appliedVersion && change.appliedVersion !== stored.version) {
     const timeline = resolveTimeline(ctx, project, change.appliedVersion);
     const applied = diffTimelines(resolveTimeline(ctx, project, change.appliedOnto), timeline, project.settings.fps);
-    return { change, timeline, duration: applied.durationAfter, diffDescription: describeDiff(applied) };
+    return { change, timeline, duration: applied.durationAfter, diffDescription: describeDiff(applied, undefined, clipById) };
   }
-  return { change, timeline: stored, duration: diff.durationAfter, diffDescription: describeDiff(diff) };
+  return { change, timeline: stored, duration: diff.durationAfter, diffDescription: describeDiff(diff, undefined, clipById) };
 }
 
 /** Tell the editor when an agent's change is ready for a decision. */
@@ -1698,7 +1698,8 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
     const review = prepareCutReview(ctx, change).review;
     if (!review || opts.spots || change.cutAssessments.length !== review.cuts.length || change.cutAssessments.some(a => a.verdict === "ask"))
       throw conflict("review_decisions_needed", "Open Needs your call to finish the outstanding decisions.");
-    opts = { ...opts, restoredCuts: change.cutAssessments.filter(a => a.verdict === "keep").map(a => a.index) };
+    // The editor's call on a cut stands over Scarlet's verdict, as when the pass is applied once it finishes.
+    opts = { ...opts, restoredCuts: review.cuts.flatMap((_, i) => cutDecision(change, i) === "keep" ? [i] : []) };
   }
   if (change.cutEdits?.length && !opts.restoredCuts) {
     if (opts.spots) throw badRequest("spots_unsupported", "Review this pass by its individual cuts.");

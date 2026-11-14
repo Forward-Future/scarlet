@@ -256,6 +256,47 @@ it("doesn't put a request back in line when the answer's reply arrives after Sca
   expect(useProjectStore.getState().current!.tasks[0]).toMatchObject({ state: "queued", question: null });
 });
 
+it("keeps a queued request's hold, new words and early start as the engine answers, unless the socket has it running", async () => {
+  const { db } = open();
+  const queued = { ...db.tasks.find(t => t.kind !== "transcribe")!, id: "task_queued", projectId: PRJ, state: "queued" as const };
+  const running = { ...queued, state: "running" as const };
+  const held = { ...queued, heldForRewording: true } as typeof queued;
+  vi.spyOn(api, "holdForRewording").mockResolvedValue({ task: held });
+  vi.spyOn(api, "rewordTask").mockResolvedValue({ task: { ...queued, instruction: "Shorter" } });
+  vi.spyOn(api, "startBeforeCalls").mockResolvedValue({ task: queued });
+  open({ tasks: [queued] });
+  await initial.holdForRewording(queued.id, true);
+  expect(store().tasks).toEqual([held]);
+  await initial.rewordTask(queued.id, "Shorter", ["skl_dialogue"]);
+  expect(api.rewordTask).toHaveBeenCalledExactlyOnceWith(queued.id, "Shorter", ["skl_dialogue"]);
+  expect(store().tasks[0]!.instruction).toBe("Shorter");
+  // Scarlet picked it up before the answer came back: the answer doesn't put it back in line.
+  open({ tasks: [running] });
+  await initial.startBeforeCalls(queued.id);
+  await initial.holdForRewording(queued.id, false);
+  expect(store().tasks).toEqual([running]);
+});
+
+it("keeps a learning the editor revised or declined as the engine answers, and sends nothing with no project open", async () => {
+  const { db } = open();
+  const rule: Learning = { id: "lrn_1", projectId: PRJ, rule: "Leave the breath.", said: "Keep the breath.", taskId: db.tasks[0]!.id,
+    skillId: "skl_dialogue", state: "suggested" };
+  open({ learnings: [rule] });
+  vi.spyOn(api, "reviseLearning").mockResolvedValue({ learning: { ...rule, rule: "Leave the breath before a punchline." } });
+  vi.spyOn(api, "declineLearning").mockResolvedValue({ learning: { ...rule, state: "declined" } as Learning });
+  await initial.reviseLearning(rule.id, "Leave the breath before a punchline.");
+  expect(api.reviseLearning).toHaveBeenCalledExactlyOnceWith(PRJ, rule.id, { rule: "Leave the breath before a punchline." });
+  expect(store().learnings).toEqual([{ ...rule, rule: "Leave the breath before a punchline." }]);
+  await initial.declineLearning(rule.id);
+  expect(api.declineLearning).toHaveBeenCalledExactlyOnceWith(PRJ, rule.id);
+  expect(store().learnings).toEqual([{ ...rule, state: "declined" }]);
+  useProjectStore.setState({ current: null });
+  await initial.reviseLearning(rule.id, "Again");
+  await initial.declineLearning(rule.id);
+  expect(api.reviseLearning).toHaveBeenCalledTimes(1);
+  expect(api.declineLearning).toHaveBeenCalledTimes(1);
+});
+
 /** The sample project open in the store, as a page would have it. */
 function open(extra: Partial<ProjectData> = {}) {
   const db = buildDb();

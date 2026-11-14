@@ -330,10 +330,6 @@ function workClock(task: Task, events: readonly TaskEvent[]) {
   };
 }
 
-export function workTime(task: Task, events: readonly TaskEvent[], now: number) {
-  return workClock(task, events)(runIsActive(task) ? now : Date.parse(task.finishedAt ?? "") || now);
-}
-
 /** One line in an opened run: a step and how long it took, or an update from the agent. */
 export type RunLine = { kind: RunItem["kind"]; text: string; took?: number; live?: boolean };
 

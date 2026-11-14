@@ -259,6 +259,9 @@ export function TranscriptPane({ source, draft, onChoose, onAsk, toolsHost }: { 
         }}
         onFocus={(e) => {
           if (e.target === e.currentTarget) {
+            // Shift+Tab out of the words stops on the list itself on its way out. Sent back to a word from here, as
+            // a Tab in from outside is, the keyboard never got out of the transcript that way.
+            if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget) && e.currentTarget.matches(":focus-visible")) return;
             const target = e.currentTarget.querySelector<HTMLElement>("[data-current]") ?? e.currentTarget.querySelector<HTMLElement>("[data-w]");
             target?.focus();
           }
@@ -272,7 +275,8 @@ export function TranscriptPane({ source, draft, onChoose, onAsk, toolsHost }: { 
             playWord(w);
             return;
           }
-          if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) return;
+          // A key the page has already taken is the page's: ↑ and ↓ step edits while a card is open.
+          if (e.defaultPrevented || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) return;
           const target = e.target as HTMLElement;
           let stops: NodeListOf<HTMLElement> | HTMLElement[] | undefined;
           let i: number;

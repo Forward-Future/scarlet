@@ -141,6 +141,13 @@ describe("an editing prompt", () => {
     expect(buildSystemPrompt({ ...base, task: task({ editIndex: 2, cutIndex: 1 }) })).not.toMatch(/Selected edit index|Staged cut being revised/);
   });
 
+  it("gives the model the tool names its harness exposes", () => {
+    expect(buildSystemPrompt({ ...base, task: task({}) })).toContain("call `mcp__scarlet__project_get`");
+    for (const agent of ["codex", "gemini", "another"]) {
+      expect(buildSystemPrompt({ ...base, task: { ...task({}), agent } })).not.toContain("mcp__scarlet__");
+    }
+  });
+
   it("mentions the artifact directory only to a harness that can write files there", () => {
     const withFiles = buildSystemPrompt({ ...base, workDir: "/work/task_1", capabilities: { images: true, audio: false, files: true } });
     expect(withFiles).toContain("Your task artifact directory is: /work/task_1");
