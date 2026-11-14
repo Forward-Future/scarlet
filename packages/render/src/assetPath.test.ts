@@ -1,10 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { fileInDirectory, fileInDirectoryAsync } from "./assetPath.js";
 
-const root = mkdtempSync(join(tmpdir(), "scarlet-asset-"));
+// The temporary folder in its full spelling: on Windows it can be given with a short name (RUNNER~1), which one
+// lookup expands and the other leaves.
+const root = realpathSync.native(mkdtempSync(join(tmpdir(), "scarlet-asset-")));
 const media = join(root, "media");
 mkdirSync(join(media, "folder"), { recursive: true });
 writeFileSync(join(media, "clip.mp4"), "x");

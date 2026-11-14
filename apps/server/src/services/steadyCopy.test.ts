@@ -20,7 +20,8 @@ it("copies a file byte for byte in chunks, flushing as it goes, and keeps its ti
   expect(statSync(destination).size).toBe(1_000_003);
   expect(digest(destination)).toBe(digest(source));
   const apart = statSync(destination, { bigint: true }).mtimeNs - statSync(source, { bigint: true }).mtimeNs;
-  expect(Number(apart < 0n ? -apart : apart)).toBeLessThan(1000);
+  // Within a microsecond: some file systems and Node builds keep a file's time no finer than that.
+  expect(Number(apart < 0n ? -apart : apart)).toBeLessThanOrEqual(1000);
 });
 
 it("stops when the import is cancelled", async () => {
