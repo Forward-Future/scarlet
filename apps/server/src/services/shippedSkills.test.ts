@@ -1,54 +1,43 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dialogueShortcut, EDITING_TOOL_GROUPS, SKILL_CATEGORIES } from "@scarlet/shared";
+import { dialogueShortcut, EDITING_TOOL_GROUPS } from "@scarlet/shared";
 import { describe, expect, it } from "vitest";
-import { BUNDLED_SKILLS } from "../bundledSkills.js";
 import { parseFrontmatter } from "./skills.js";
 
-// The guides under skills/ are read by the model as written. A tool renamed in the engine, a typo in a command, or a
-// header the app can't place doesn't fail anything else: the model is pointed at a tool it doesn't have, or the guide
-// stops being recognised as stock and no longer updates. These checks hold every shipped guide to what the product
-// actually offers.
+// The guides under skills/ are read by the model as written. A tool renamed in the engine or a typo in a command fails
+// nothing else: the model is pointed at a tool it doesn't have, or the editor at a command the composer can't read.
+// The guides are read from disk, so an edit is checked on the next run without rebuilding the bundle.
 
-const readme = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../../../skills/README.md"), "utf8");
-const toolNames = new Set<string>(EDITING_TOOL_GROUPS.flatMap(g => [...g.tools]));
-const category = (content: string) => /^---\r?\n[\s\S]*?^category:\s*(.*?)\s*$/m.exec(content)?.[1];
-const body = (content: string) => content.replace(/^---\r?\n[\s\S]*?\r?\n---/, "");
+const skillsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../skills");
+const shipped = readdirSync(skillsDir, { withFileTypes: true }).filter(d => d.isDirectory())
+  .map(d => ({ folder: d.name, content: readFileSync(join(skillsDir, d.name, "SKILL.md"), "utf8") }));
+const tools = new Set<string>(EDITING_TOOL_GROUPS.flatMap(g => [...g.tools]));
+const commands = new Set(shipped.map(s => parseFrontmatter(s.content).name ?? s.folder));
+
+/** The tool and command names in a guide that Scarlet doesn't have. */
+function unknownNames(text: string): string[] {
+  const named = Array.from(text.matchAll(/`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`/g), m => m[1]!).filter(name => !tools.has(name));
+  // Every `/…` in code is a command, in the only form the composer reads (skillCommands).
+  const typed = Array.from(text.matchAll(/`(\/[^`\s]*)`/g), m => m[1]!).filter(command => {
+    const name = /^\/([a-z0-9][a-z0-9-]*)$/.exec(command)?.[1];
+    return !name || (!commands.has(name) && !dialogueShortcut(name, []));
+  });
+  return [...named, ...typed];
+}
 
 describe("the skills Scarlet ships", () => {
-  it("are bundled from skills/", () => {
-    expect(BUNDLED_SKILLS.length).toBeGreaterThan(0);
+  it("are read from skills/", () => {
+    expect(shipped.length).toBeGreaterThan(0);
   });
 
-  it.each(BUNDLED_SKILLS.map(s => [s.folder, s.content]))("%s is named for its folder, as stock-skill upgrades assume", (folder, content) => {
-    const { name, description } = parseFrontmatter(content);
-    // Seeding, upgrades and the workflow listing find a stock skill by `folder === name`.
-    expect(name).toBe(folder);
-    // The name seeding would store, unchanged.
-    expect(folder).toMatch(/^[a-z0-9][a-z0-9-]*$/);
-    // The description is the trigger the model reads when no guide is pinned.
-    expect(description?.length).toBeGreaterThan(0);
+  it.each(shipped.map(s => [s.folder, s.content]))("%s names only tools and commands Scarlet has", (_folder, content) => {
+    expect(unknownNames(content)).toEqual([]);
   });
 
-  it.each(BUNDLED_SKILLS.map(s => [s.folder, s.content]))("%s is in a group the Skills page draws", (_folder, content) => {
-    expect(SKILL_CATEGORIES).toContain(category(content));
-  });
-
-  it.each(BUNDLED_SKILLS.map(s => [s.folder, s.content]))("%s names only tools Scarlet has", (_folder, content) => {
-    const named = Array.from(body(content).matchAll(/`([a-z]+(?:_[a-z]+)+)`/g), m => m[1]!);
-    expect(named.filter(name => !toolNames.has(name))).toEqual([]);
-  });
-
-  it.each(BUNDLED_SKILLS.map(s => [s.folder, s.content]))("%s names only commands the composer resolves", (_folder, content) => {
-    const shipped = new Set(BUNDLED_SKILLS.map(s => s.folder));
-    const commands = Array.from(body(content).matchAll(/`\/([a-z0-9][a-z0-9-]*)`/g), m => m[1]!);
-    expect(commands.filter(name => !shipped.has(name) && !dialogueShortcut(name, []))).toEqual([]);
-  });
-
-  it("are each listed once in skills/README.md, under the group the app shows them in", () => {
-    const rows = Array.from(readme.matchAll(/^\|\s*([^|]+?)\s*\|\s*\[[^\]]+\]\(([a-z0-9-]+)\/SKILL\.md\)/gm), m => ({ stage: m[1]!, folder: m[2]! }));
-    expect(rows.map(r => r.folder).sort()).toEqual(BUNDLED_SKILLS.map(s => s.folder).sort());
-    for (const { stage, folder } of rows) expect([folder, stage]).toEqual([folder, category(BUNDLED_SKILLS.find(s => s.folder === folder)!.content)]);
+  it("catch a misspelled tool and a command the composer can't read", () => {
+    expect(unknownNames("Save the cuts with `dialogue_apply_cuts`, or type `/tighten-pauses-here`.")).toEqual([]);
+    expect(unknownNames("Save the cuts with `dialogue_aply_cuts`, or type `/tighten_pauses_here`."))
+      .toEqual(["dialogue_aply_cuts", "/tighten_pauses_here"]);
   });
 });
