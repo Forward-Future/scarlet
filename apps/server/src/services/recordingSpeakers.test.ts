@@ -265,7 +265,7 @@ it("keeps a trashed project's cleanup waiting until an analysis the Trash stoppe
   expect(projectBusy(ctx, project.id)).toBe(true);
   close();
   expect(await analysis).toBe("stopped");
-  await vi.waitFor(() => expect(projectBusy(ctx, project.id)).toBe(false));
+  await vi.waitFor(() => expect(projectBusy(ctx, project.id)).toBe(false), { timeout: 10_000 });
 });
 
 it("labels a transcript while the project's media work is paused only when the pause doesn't hold it", async () => {

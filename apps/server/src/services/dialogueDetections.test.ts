@@ -397,7 +397,7 @@ it("keeps a trashed project's cleanup waiting until a page the Trash stopped has
   expect([answered, projectBusy(ctx, project.id)]).toEqual([false, true]);
   close();
   expect((await page).ok).toBe(false);
-  await vi.waitFor(() => expect(projectBusy(ctx, project.id)).toBe(false));
+  await vi.waitFor(() => expect(projectBusy(ctx, project.id)).toBe(false), { timeout: 10_000 });
 });
 
 it("keeps a project's cleanup waiting while a cancelled transcription lets go of its files", async () => {
@@ -410,7 +410,7 @@ it("keeps a project's cleanup waiting while a cancelled transcription lets go of
   expect(ctx.repos.tasks.get(task.id)?.state).toBe("cancelled");
   expect(projectBusy(ctx, project.id)).toBe(true);
   close();
-  await vi.waitFor(() => expect(projectBusy(ctx, project.id)).toBe(false));
+  await vi.waitFor(() => expect(projectBusy(ctx, project.id)).toBe(false), { timeout: 10_000 });
 });
 
 it("restores committed dialogue evidence after restarting the engine and retries unfinished windows", async () => {

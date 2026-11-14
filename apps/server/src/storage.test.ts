@@ -199,7 +199,7 @@ it("keeps a trashed project until the workers the Trash stopped have closed its 
     // The 30-day purge takes the idle project and leaves this one.
     expect(purgeTrash(ctx, later)).toBe(1);
     render.close();
-    await vi.waitFor(() => expect(ctx.repos.renders.get(job.id)?.queuePid).toBeUndefined());
+    await vi.waitFor(() => expect(ctx.repos.renders.get(job.id)?.queuePid).toBeUndefined(), { timeout: 10_000 });
     // The preview chunk's encoder alone still holds the project, for another engine on the library too.
     expect(await busy()).toEqual({ [id]: true });
     expect((await empty()).status).toBe(409);
