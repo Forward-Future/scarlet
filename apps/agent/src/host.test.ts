@@ -1,4 +1,6 @@
+import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -8,6 +10,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { type AddressInfo } from "node:net";
 import { ScarletClient, type Task, type TaskEvent } from "@scarlet/shared";
 import * as mock from "@scarlet/mcp/mock";
+import { startStamp } from "./orphans.js";
 import { AgentHost, claudeProjectDir, humanDuration, promptTimeLimit, pruneTaskDirs, removeClaudeSessions, removeControlFiles, stalledReason, timedOutReason, type HostOptions } from "./host.js";
 import { DEFAULT_STALL_MS } from "./runners/types.js";
 import type { RunAgentFn, RunAgentOptions } from "./runners/types.js";
@@ -831,6 +834,27 @@ describe("pruneTaskDirs", () => {
     const elsewhere = await startOver({ ...process.env, CLAUDE_CONFIG_DIR: join(home, "claude-config") });
     expect(elsewhere.folders).toEqual([]);
     expect(await sessions()).toEqual([elsewhere.session]);
+  });
+});
+
+describe("AgentHost launch sweep", { timeout: 30_000 }, () => {
+  it("stops an agent CLI an earlier launch left running before it claims anything, whatever the engine says of its task", async ({ signal }) => {
+    const root = await mkdtemp(join(tmpdir(), "scarlet-sweep-"));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    // The CLI a crashed host left behind: in its own process group, and noted with its program and start time.
+    const cli = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], { stdio: "ignore", detached: process.platform !== "win32", windowsHide: true });
+    const exited = once(cli, "exit");
+    onTestFinished(() => void (cli.exitCode === null && cli.signalCode === null && cli.kill()));
+    const note = join(root, "agent-pids", String(cli.pid));
+    await mkdir(join(root, "agent-pids"));
+    await writeFile(note, `${process.execPath}\n${await startStamp(cli.pid!)}`);
+    const srv = await startServer();
+    srv.queue.length = 0;
+    let notedAtClaim: boolean | undefined;
+    srv.claimGate = async () => void (notedAtClaim ??= existsSync(note));
+    await startHostAndWait(makeHost(srv, async () => ({ ok: true, summary: "" }), undefined, { workRoot: root }).host, once(srv.events, "claim", { signal }));
+    await vi.waitFor(() => expect(notedAtClaim).toBe(false));
+    expect((await exited)[0]).not.toBe(0);
   });
 });
 

@@ -10,6 +10,7 @@ import { basename, delimiter, dirname, extname, isAbsolute, join } from "node:pa
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { findOnPath, needsCmdShell } from "../detect.js";
+import { noteCli } from "../orphans.js";
 import { stopCliTree } from "../processTree.js";
 
 export interface SpawnLinesOptions {
@@ -167,11 +168,13 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
   child.stderr!.setEncoding("utf8");
   child.stderr!.on("data", addStderr);
 
+  let forget: (() => void) | undefined;
   const done = new Promise<SpawnOutcome>((resolve) => {
     let settled = false;
     const finish = (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
       settled = true;
+      forget?.();
       clearTimeout(timer);
       clearTimeout(stallTimer);
       opts.signal?.removeEventListener("abort", onAbort);
@@ -192,6 +195,9 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
     if (opts.stdin !== undefined) child.stdin.end(opts.stdin);
     else if (!opts.interactive) child.stdin.end();
   }
+  // Noted after the prompt is handed over: reading a start time takes seconds on Windows, and Claude Code waits only
+  // a few seconds for its prompt. The note goes when the CLI ends.
+  if (child.pid) forget = noteCli(child.pid, spec.file);
   return { child, done, kill };
 }
 
