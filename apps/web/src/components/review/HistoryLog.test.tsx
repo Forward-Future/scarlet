@@ -86,3 +86,14 @@ it("keeps every entry's words one colour, with a small mark before the ones appr
   expect(lines[0]!.textContent).toBe("Claude Code couldn’t finish “Add captions”");
   expect(lines[0]!.querySelector(".history-mark")!.getAttribute("aria-hidden")).toBe("true");
 });
+
+it("marks what Scarlet did with the same badge, whichever model ran it", async () => {
+  const entry = (id: string, actor: ActivityEntry["actor"]): ActivityEntry => ({ id, projectId: PRJ, actor, type: "change.created", summary: `Entry ${id}`,
+    data: {}, createdAt: new Date().toISOString() });
+  vi.spyOn(api, "activity").mockResolvedValue({ activity: [
+    entry("a", { type: "agent", id: "claude", name: "Claude Code" }), entry("b", { type: "scarlet", name: "Scarlet" }),
+  ] });
+  await act(async () => root.render(<HistoryLog />));
+  const badges = [...container.querySelectorAll("section li")].map(li => li.firstElementChild!.textContent);
+  expect(badges).toEqual(["S", "S"]);
+});
