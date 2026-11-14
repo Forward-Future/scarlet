@@ -205,6 +205,23 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     versionLookup = undefined;
     return { changes, versions: undefined, historyRevision: (d.historyRevision ?? 0) + 1 };
   });
+  /** Keep the task a request about it answers with, unless the socket already has it further on. */
+  const taskAnswered = async (request: Promise<{ task: Task }>) => {
+    const { task } = await request;
+    patch(task.projectId, (d) => ({ tasks: upsertAnswered(d.tasks, task) }));
+  };
+  /** Keep a new note and the request it started. */
+  const noteCreated = (projectId: string, res: { note: Note; task?: Task }) => {
+    patch(projectId, (d) => ({ notes: upsert(d.notes, res.note), tasks: res.task ? upsertAnswered(d.tasks, res.task) : d.tasks }));
+    return res;
+  };
+  /** Send a change to one of the open project's learnings, and keep the learning as the engine answers. */
+  const learningChanged = async (send: (projectId: string) => Promise<{ learning: Learning }>) => {
+    const projectId = get().current?.id;
+    if (!projectId) return;
+    const { learning } = await send(projectId);
+    patch(projectId, (d) => ({ learnings: upsert(d.learnings ?? [], learning) }));
+  };
   /**
    * The edit moved to `head` and its timeline couldn't be read. One failed read mustn't take the conversation and the
    * video off screen: the last timeline that was read stays, as it does while any new one is on its way, and the store
@@ -642,14 +659,10 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     },
 
     async createNote(projectId, body) {
-      const res = await api.createNote(projectId, body);
-      patch(projectId, (d) => ({ notes: upsert(d.notes, res.note), tasks: res.task ? upsertAnswered(d.tasks, res.task) : d.tasks }));
-      return res;
+      return noteCreated(projectId, await api.createNote(projectId, body));
     },
     async createVoiceNote(projectId, blob, fields) {
-      const res = await api.createVoiceNote(projectId, blob, fields);
-      patch(projectId, (d) => ({ notes: upsert(d.notes, res.note), tasks: res.task ? upsertAnswered(d.tasks, res.task) : d.tasks }));
-      return res;
+      return noteCreated(projectId, await api.createVoiceNote(projectId, blob, fields));
     },
     async updateNote(noteId, body) {
       const prev = get().current?.notes.find((n) => n.id === noteId);
@@ -676,16 +689,10 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       patch(projectId, (d) => ({ learnings: d.learnings?.some(l => l.id === learning.id && l.state === "saved") ? d.learnings : upsert(d.learnings ?? [], learning) }));
     },
     async reviseLearning(learningId, rule) {
-      const projectId = get().current?.id;
-      if (!projectId) return;
-      const { learning } = await api.reviseLearning(projectId, learningId, { rule });
-      patch(projectId, (d) => ({ learnings: upsert(d.learnings ?? [], learning) }));
+      return learningChanged(projectId => api.reviseLearning(projectId, learningId, { rule }));
     },
     async declineLearning(learningId) {
-      const projectId = get().current?.id;
-      if (!projectId) return;
-      const { learning } = await api.declineLearning(projectId, learningId);
-      patch(projectId, (d) => ({ learnings: upsert(d.learnings ?? [], learning) }));
+      return learningChanged(projectId => api.declineLearning(projectId, learningId));
     },
 
     async createTask(projectId, body) {
@@ -711,22 +718,18 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       patch(task.projectId, (d) => ({ tasks: resumed ? upsertAnswered(upsert(d.tasks, task), resumed) : upsert(d.tasks, task) }));
     },
     async answerTask(taskId, text, skillIds) {
-      const { task } = await api.answerTask(taskId, text, skillIds);
-      patch(task.projectId, (d) => ({ tasks: upsertAnswered(d.tasks, task) }));
+      return taskAnswered(api.answerTask(taskId, text, skillIds));
     },
     async holdForRewording(taskId, on) {
-      const { task } = await api.holdForRewording(taskId, on);
       // Letting go of a hold lets Scarlet start the request, and so does saving its new words. The socket may have it
       // claimed before this answer says "queued": that answer must not put a running request back in the tray.
-      patch(task.projectId, (d) => ({ tasks: upsertAnswered(d.tasks, task) }));
+      return taskAnswered(api.holdForRewording(taskId, on));
     },
     async startBeforeCalls(taskId) {
-      const { task } = await api.startBeforeCalls(taskId);
-      patch(task.projectId, (d) => ({ tasks: upsertAnswered(d.tasks, task) }));
+      return taskAnswered(api.startBeforeCalls(taskId));
     },
     async rewordTask(taskId, text, skillIds) {
-      const { task } = await api.rewordTask(taskId, text, skillIds);
-      patch(task.projectId, (d) => ({ tasks: upsertAnswered(d.tasks, task) }));
+      return taskAnswered(api.rewordTask(taskId, text, skillIds));
     },
     async loadTaskEvents(taskId, scope = "all") {
       const cur = get().current;
