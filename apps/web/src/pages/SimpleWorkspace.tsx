@@ -1186,6 +1186,8 @@ function Turn({ projectId, thread, actions, pinned, pinHost, list: passList }: {
       case "agent":
         return <div key={i} className="simple-msg from-scarlet"><span className="simple-who">Scarlet</span><Said text={entry.fullText ?? entry.text} /></div>;
       case "change":
+        // An applied change with no request behind it says what it did once: in the sentence over its edits.
+        if (entry.change.state === "approved" && hasRows) return null;
         return <ChangeReply key={i} thread={thread} entry={entry} actions={actions} />;
       case "system":
         return <div key={i} className={`simple-note${entry.tone === "bad" ? " is-bad" : ""}`}>{entry.text}</div>;
