@@ -74,6 +74,9 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(() => pageOf(name, description, body, enabled));
   const unsaved = dirty && pageOf(name, description, body, enabled, original) !== saved;
+  // The page as it is this moment, for a save to tell whether it was typed in while the save was on its way.
+  const pageNow = useRef("");
+  pageNow.current = JSON.stringify([name, description, body, enabled]);
   // The conversation beside the skill: each change the editor asked for in words, and what came of it, in the order
   // asked. Scarlet saves each revision as a new version.
   const [edits, setEdits] = useState<Task[]>([]);
@@ -288,6 +291,7 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
     setNameErr(null);
     try {
       const payload = { name: slug, description, content, enabled };
+      const sent = pageNow.current;
       if (isNew) {
         const s = await create(payload);
         leavingAfterSave.current = true;
@@ -304,7 +308,8 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
         // The name is saved as a slug ("My Skill" as my-skill). The field shows what was saved, unless it was typed in since.
         setName(typed => (slugify(typed) === slug ? res.skill.name : typed));
         setSaved(pageOf(res.skill.name, description, body, enabled, original));
-        settle();
+        // What was typed since Save was pressed wasn't sent: it stays unsaved, with its draft.
+        if (pageNow.current === sent) settle();
         setViewVersion("current");
       }
       if (andLeave && blocker.state === "blocked") blocker.proceed();

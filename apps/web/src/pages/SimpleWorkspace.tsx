@@ -52,7 +52,7 @@ import { buildThreads, firstCutDeliveries, isRedo, queueLabel, requestTarget, re
 import { runIsActive } from "../lib/taskRun";
 import { canPreviewMedia } from "../lib/upload";
 import { useProjectStore } from "../stores/project";
-import { playheadPoints, pointOf, useUiStore, type AgentContext } from "../stores/ui";
+import { markedRangeOf, playheadPoints, pointOf, useUiStore, withMarkedRange, type AgentContext, type MarkedRange } from "../stores/ui";
 import { CutPreview } from "./WatchPage";
 import { EditHoverContext, type TimelineDot, type TimelineGap } from "../components/review/TimelineScrubber";
 import "../simple.css";
@@ -481,7 +481,7 @@ function CallStanding({ run, answer }: { run?: Task; answer?(): void }) {
 
 function CallActions({ choice, disabled, decide, revise }: { choice?: CutChoice; disabled: boolean; decide(choice: CutChoice): void; revise(): void }) {
   useHotkeys(event => {
-    if (disabled || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (disabled || event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
     const key = event.key.toLowerCase();
     if (key === "r") { event.preventDefault(); revise(); return; }
     const chosen = key === "a" ? "cut" : key === "s" ? "keep" : undefined;
@@ -1445,10 +1445,11 @@ export function SimpleWorkspace() {
   const ordered = useMemo(() => [...threads].sort((a, b) => ts(a.createdAt) - ts(b.createdAt)), [threads]);
   // An edit applied while the editor watches arrives on the timeline with a moment. One applied before the project opened
   // arrives quietly: a change counts as just applied when it was seen waiting first, or turned up applied once the
-  // project's own changes were in.
+  // project's own changes were in. The clock starts once the history is read: on a slow open the changes arrive long
+  // after the project mounted, and every one there then was applied before it opened.
   const landing = useRef<{ opened: number; states: Map<string, string>; at: Map<string, number> }>(undefined);
-  landing.current ??= { opened: Date.now(), states: new Map(), at: new Map() };
-  for (const change of changes) {
+  if (!current.reviewStatus) landing.current ??= { opened: Date.now(), states: new Map(changes.map(c => [c.id, c.state])), at: new Map() };
+  if (landing.current) for (const change of changes) {
     const was = landing.current.states.get(change.id);
     if (change.state === "approved" && was !== "approved" && (was !== undefined || Date.now() - landing.current.opened > LANDING_SETTLES)
       && !landing.current.at.has(change.id)) landing.current.at.set(change.id, Date.now());
@@ -1456,7 +1457,7 @@ export function SimpleWorkspace() {
   }
   const justLanded = (changeId: string) => Date.now() - (landing.current?.at.get(changeId) ?? -Infinity) < LANDING_SHOWS;
   // Once its moment is over the marker is drawn as any other, so a zoom that draws it again doesn't play the moment twice.
-  const landingEnds = Math.max(0, ...landing.current.at.values()) + LANDING_SHOWS;
+  const landingEnds = Math.max(0, ...landing.current?.at.values() ?? []) + LANDING_SHOWS;
   const [, endLanding] = useState(0);
   useEffect(() => {
     const left = landingEnds - Date.now();
@@ -1542,8 +1543,9 @@ export function SimpleWorkspace() {
   const applyWhenDone = (change: Change) => unsaved[change.id]?.applyWhenDone ?? !!change.applyWhenDone;
   // Only a pass Scarlet is still working on can be set to apply when it finishes. Once its run has stopped, the staged
   // cuts it never checked are the editor's calls, and a schedule sent along with one of them would apply over the rest.
-  // The last save sent for each pass, and what a save that failed said.
-  const saves = useRef<{ last: Record<string, object>; failed?: string }>({ last: {} });
+  // The last save sent for each pass, what a save that failed said, and the calls of each pass that the last failed save
+  // carried and no save has carried since: those are back with the editor, and the line saying why stays until they're saved.
+  const saves = useRef<{ last: Record<string, object>; failed?: string; unsent: Record<string, Set<number>> }>({ last: {}, unsent: {} });
   async function saveChoices(change: Change, calls: Record<number, CutChoice>, apply = passRunning && applyWhenDone(change)) {
     const sent = { calls, applyWhenDone: apply };
     saves.current.last[change.id] = sent;
@@ -1551,6 +1553,8 @@ export function SimpleWorkspace() {
     try {
       const { change: saved } = await api.saveCutChoices(change.id, { fromVersion: change.fromVersion, toVersion: change.toVersion, applyWhenDone: apply,
         choices: Object.entries(calls).map(([index, choice]) => ({ index: Number(index), choice })) });
+      const unsent = saves.current.unsent[change.id];
+      for (const index of Object.keys(calls)) unsent?.delete(Number(index));
       if (saves.current.last[change.id] !== sent) return;
       // A part may have landed before the click reached the engine. Its response carries the choices at their live
       // indices. A project event can beat that response, including one that supersedes this proposal again.
@@ -1564,10 +1568,12 @@ export function SimpleWorkspace() {
         ((alreadyMoved || newerCall) && ts(held.updatedAt) === ts(saved.updatedAt))) ? held : saved;
       if (live !== held)
         useProjectStore.getState().applyEvent({ type: "change.updated", projectId: saved.projectId, change: saved });
-      // The latest save carries every call made so far. Landed, an earlier save's failure lost nothing: its line goes.
-      setDecideError(shown => shown === saves.current.failed ? "" : shown);
+      // The latest save carries every call made so far. Landed, an earlier save's failure lost nothing, unless a call it
+      // carried is still undecided: then its line stays, so the decision doesn't vanish without a word.
+      if (!unsent?.size) setDecideError(shown => shown === saves.current.failed ? "" : shown);
       return live;
     } catch (e) {
+      saves.current.unsent[change.id] = new Set(Object.keys(calls).map(Number));
       saves.current.failed = errorMessage(e);
       setDecideError(saves.current.failed);
     } finally {
@@ -1801,7 +1807,10 @@ export function SimpleWorkspace() {
     ? { url: preparedCall.after.file, state: preparedCall.after.file ? "ready" : "uncached" } : undefined);
   // A listen waits for the working cut its pass is on, and After for the pass's cut list too, so it doesn't start in
   // the wrong place or change players partway. A listen that has started isn't held back again.
-  const openingJoin = needsSingleCut && (!listenJoined || !listenCache);
+  // When the engine couldn't build that one-cut version, After isn't held behind a Retry that asks for the same thing
+  // again: it plays over the working cut, stepping over the cut's footage, as it did before the engine built them.
+  const singleFailed = needsSingleCut && !preparedCall && !listenJoined && (!!single.error || !!single.preview);
+  const openingJoin = needsSingleCut && !singleFailed && (!listenJoined || !listenCache);
   const startedListen = useRef<Audition>(undefined);
   const listenPending = !!audition && startedListen.current !== audition && !!pass && listening?.changeId === pass.id && (
     (!cutOverride && !conflict && pass.fromVersion === head && timeline?.version !== head)
@@ -1934,7 +1943,7 @@ export function SimpleWorkspace() {
     const aimed = box.agentContext;
     const asked = askedWords.current;
     askedWords.current = undefined;
-    if (!replyTo && !box.agentDraft.trim() && aimed && aimed !== "whole" && !aimed.changeId && aimed !== asked) box.setAgentContext(null);
+    if (!replyTo && !box.agentDraft.trim() && aimed && aimed !== "whole" && !aimed.changeId && !aimed.markedRange && aimed !== asked) box.setAgentContext(null);
   }, [current.id, replyTo, openDraft]);
   // What the next message revises: one cut, one edit, or the whole request. Shown above the box.
   const [targetLabel, setTargetLabel] = useState<string>();
@@ -2006,7 +2015,8 @@ export function SimpleWorkspace() {
       const { target: cutAim, label } = cutTarget(pass, index, cut);
       // Words chosen in the cut's passage still say where the editor was looking: only the cut they're about moves.
       const words = aimed === wordsInCall.current;
-      const target = words ? { ...cutAim, version: aimed.version, time: aimed.time, end: aimed.end, clipIds: aimed.clipIds, label: aimed.label } : cutAim;
+      const moved = words ? { ...cutAim, version: aimed.version, time: aimed.time, end: aimed.end, clipIds: aimed.clipIds, label: aimed.label } : cutAim;
+      const target = aimed.markedRange ? { ...moved, markedRange: aimed.markedRange } : moved;
       if (words) wordsInCall.current = target;
       ui.setAgentContext(target, aimed);
       setTargetLabel(shown => shown && label);
@@ -2059,6 +2069,11 @@ export function SimpleWorkspace() {
     const say = calls ? setDecideError : setStripError;
     // Without the pass's cut list nothing would be restored, so every cut would apply, skipped ones included.
     if (calls && cutReview.review === undefined) {
+      // The editor's last call is saved all the same. Once the list is in, the pass goes in by itself (`autoApply`).
+      if (choices) {
+        void saveChoices(calls, choices);
+        if (!cutReview.error) return;
+      }
       setDecideError(cutReview.error ? `Couldn’t load this pass’s cuts: ${cutReview.error}` : "Still loading this pass’s cuts. Try again in a moment.");
       // One failed load would otherwise answer every Apply until the project was reopened.
       if (cutReview.error) cutReview.retry();
@@ -3070,6 +3085,8 @@ export function SimpleWorkspace() {
     // left from a cut or an edit that has since closed doesn't.
     if (why === "moved" && !aim.target && replyTo === aim.thread?.id && !aimForItem.current) return;
     const text = carry ? ui.agentDraft : "";
+    // A stretch marked on the ruler stays with the box as it is aimed elsewhere, until it is sent or taken off.
+    const marked = why === "sent" ? undefined : markedRangeOf(ui.agentContext);
     // The message moves with the aim: nothing of it is left behind for the request it was on.
     if (carry) { ui.setAgentContext(null); ui.setAgentDraft(""); }
     countAim();
@@ -3083,7 +3100,7 @@ export function SimpleWorkspace() {
     setTargetLabel(aim.target ? aim.label : undefined);
     // A message the editor made a new edit, by the tag's × or the line above the box, is about the whole video: typing
     // on doesn't pin it to the playhead.
-    box.setAgentContext(aim.target ?? (carry && !aim.thread ? "whole" : null));
+    box.setAgentContext(marked ? withMarkedRange(aim.target, marked) : aim.target ?? (carry && !aim.thread ? "whole" : null));
     if (text) box.setAgentDraft(box.agentDraft ? `${box.agentDraft} ${text}` : text);
   };
   // Before the page is drawn, so the box never shows a moment of what it was aimed at before.
@@ -3223,6 +3240,10 @@ export function SimpleWorkspace() {
   const startBeforeCalls = useProjectStore(s => s.startBeforeCalls);
   // What the tray couldn't do is said in the banner, as Stop's is: most often, Scarlet began the request first.
   const queueAction = (action: Promise<void>) => { setMenuError(""); return action.catch(e => { setMenuError(errorMessage(e)); throw e; }); };
+  // The line is about a request as it stood. Once any request moves on it has nothing left to say, and the tray may
+  // have no row left whose press would take it away.
+  const taskStates = tasks.map(t => `${t.id}:${t.state}`).join();
+  useEffect(() => setMenuError(""), [taskStates]);
   const queued = useMemo(() => queueOrder(tasks, changes).filter(t => waitingToStart(t) && rootOf(t) === t.id), [tasks, changes, rootOf]);
   const queuedItems = useMemo((): QueuedRequest[] => queued.map(t => {
     const target = targetName(t.context);
@@ -3260,6 +3281,22 @@ export function SimpleWorkspace() {
     });
   }, [point, offeredPoint, written, speaking, playerVersion, source?.id, canOfferPoint]);
 
+  /**
+   * A stretch marked on the timeline's ruler, or taken off there. It goes on the message as it is aimed: a cut or an
+   * edit the box talks to stays its target, and Scarlet is told both. With nothing aimed it is a new edit about that
+   * stretch. A queued request's words and a message being spoken are left as they are.
+   */
+  const markRange = (marked: MarkedRange | undefined) => {
+    const box = useUiStore.getState();
+    if (rewordingItem || box.speaking) return;
+    const was = box.agentContext && box.agentContext !== "whole" ? box.agentContext : undefined;
+    if (!marked && !was?.markedRange) return;
+    const next = withMarkedRange(box.agentContext, marked);
+    if (was && was === wordsInCall.current && next) wordsInCall.current = next;
+    setOfferedPoint(undefined);
+    box.setAgentContext(next, next && was?.changeId ? was : undefined);
+    if (marked) box.focusComposer();
+  };
   const pickPoint = (picked: AgentContext, action: "offer" | "attach") => {
     const box = useUiStore.getState();
     if (replyTo || rewordingItem || box.speaking) return;
@@ -3404,7 +3441,7 @@ export function SimpleWorkspace() {
                 ? { key: callPlaybackKey(listening.index, callTimeline.version), start: audition.start, side: listening.side,
                   beforeWindow: preparedCall?.before.window, afterWindow: preparedCall?.after.window,
                   beforeFile: preparedCall?.before.file, afterFile: preparedCall?.after.file } : undefined,
-            onGap: hearInBefore, onBand, onPick: pickPoint, holdPassage: cutWaits, writeRequest, heard: heardPick }} threadView={playerView}
+            onGap: hearInBefore, onBand, onPick: pickPoint, onRange: markRange, holdPassage: cutWaits, writeRequest, heard: heardPick }} threadView={playerView}
             workingCache={workingCache} draftVersion={previewVersion} draft={appliedCut ? beforeTimeline : pinnedCallVersion ? callTimeline : draft}
             openingJoin={openingJoin && !source && !appliedCut}
             draftFailed={openingJoin ? !!single.error || (!!single.preview && !listenJoined) : pinnedCallVersion ? !!savedBefore.error : !appliedCut && !!draftVersion && draftState?.version === draftVersion && !!draftState.failed}

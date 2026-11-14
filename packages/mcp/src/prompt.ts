@@ -225,6 +225,12 @@ export function buildSystemPrompt(ctx: PromptContext): string {
         `- ${c.mediaId ? "Source" : "Timeline"} position referenced: ${c.time.toFixed(2)} s (${formatTimecode(c.time, fps)})${c.end !== undefined ? ` to ${c.end.toFixed(2)} s (${formatTimecode(c.end, fps)})` : ""}`,
       );
     }
+    // A stretch marked with nothing open is already the position above. Marked with a cut or an edit open, it is said
+    // besides it: the editor chose both, and which the request means is theirs to say.
+    const marked = c.markedRange;
+    if (marked && !(marked.start === c.time && marked.end === c.end)) {
+      ctxLines.push(`- Stretch the editor marked on the ${marked.mediaId ? "source" : "timeline"}: ${marked.start.toFixed(2)} s (${formatTimecode(marked.start, fps)}) to ${marked.end.toFixed(2)} s (${formatTimecode(marked.end, fps)})${marked.version ? ` on version ${marked.version}` : ""}`);
+    }
     if (c.clipIds?.length) ctxLines.push(`- Clip ids under the playhead: ${c.clipIds.join(", ")}`);
     if (c.noteIds?.length) ctxLines.push(`- Note ids to address: ${c.noteIds.join(", ")} (pass them as noteIds when proposing)`);
     if (c.changeId) ctxLines.push(`- Change being revised: ${c.changeId}`);

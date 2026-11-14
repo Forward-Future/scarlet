@@ -142,7 +142,9 @@ export function projectRoutes(ctx: Ctx) {
       });
       // The project's own requests that haven't started wait for Restore. A skill's edit only borrows the project to run
       // in, and no host takes a request in the trash: left waiting there, it would hold its skill until the project came back.
-      for (const task of ctx.repos.tasks.select(`project_id = ? AND (state IN ('claimed','running')
+      // A transcription isn't cancelled: that would be final, keeping rough word times or no transcript at all. The
+      // project's signal stops it as interrupted instead, and it starts again from its saved chunks after Restore.
+      for (const task of ctx.repos.tasks.select(`project_id = ? AND ((state IN ('claimed','running') AND kind <> 'transcribe')
           OR (kind = 'skill_edit' AND state IN ('queued','waiting_for_user')))`, [project.id])) {
         cancelTask(ctx, task);
       }

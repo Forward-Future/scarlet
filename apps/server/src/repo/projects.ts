@@ -217,8 +217,10 @@ export class ProjectsRepo {
     return row ? { ...this.rowToMedia(row), projectId: row.project_id } : null;
   }
 
+  /** Adding a file to the project is an edit and moves "Last edited". Its import, transcript and labels being saved are not. */
   putMedia(projectId: string, asset: MediaAsset, status: MediaStatus, error?: string): MediaWithStatus {
     const parsed = MediaAsset.parse(asset);
+    const added = !this.db.prepare("SELECT 1 FROM media WHERE id = ?").get(parsed.id);
     this.db
       .prepare(
         `INSERT INTO media (id, project_id, status, error, json, created_at, ingest_pid) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -226,7 +228,7 @@ export class ProjectsRepo {
            ingest_pid = CASE WHEN excluded.status = 'ingesting' THEN media.ingest_pid END`,
       )
       .run(parsed.id, projectId, status, error ?? null, JSON.stringify(parsed), now(), status === "ingesting" ? process.pid : null);
-    this.touch(projectId);
+    if (added) this.touch(projectId);
     return { ...parsed, status, error };
   }
 
