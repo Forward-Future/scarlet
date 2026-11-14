@@ -11,6 +11,8 @@ export const EDITING_TOOL_GROUPS = [
     tools: ["project_get", "timeline_get", "timeline_at", "timeline_diff", "timeline_propose", "timeline_first_cut", "timeline_crossfade_audio"] },
   { title: "Speech and waveform", description: "Find a line, measure pauses and loudness, and check the words and sound at each cut.", preference: null,
     tools: ["transcript_get", "transcript_search", "timeline_transcript", "timeline_join_audit", "waveform_get", "sound_picture", "media_profile", "audio_sync", "dialogue_scan", "dialogue_check_join", "dialogue_check_repeats", "dialogue_apply_cuts", "dialogue_review_inspect", "dialogue_review_save", "dialogue_revise_cut"] },
+  { title: "Screen text", description: "Read and search the words shown on screen in a recording.", preference: null,
+    tools: ["screen_text"] },
   { title: "Review and delivery", description: "Follow review notes, preview a change and render a delivery.", preference: null,
     tools: ["change_get", "change_list", "notes_list", "note_reply", "note_resolve", "render_request", "render_status"] },
   { title: "Requests and skills", description: "Report progress, ask editorial questions, use saved instructions and offer rules to add to them.", preference: null,

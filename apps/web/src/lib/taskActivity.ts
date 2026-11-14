@@ -28,6 +28,7 @@ const toolActivity: Record<string, string> = {
   timeline_join_audit: "Checking how the cuts sound",
   dialogue_check_repeats: "Checking the finished dialogue for repeats",
   media_profile: "Measuring the sound",
+  screen_text: "Reading the text on screen",
   timeline_propose: "Proposing edit",
   timeline_crossfade_audio: "Smoothing dialogue",
   timeline_first_cut: "Building first edit",

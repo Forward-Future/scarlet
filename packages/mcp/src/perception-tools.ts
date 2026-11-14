@@ -34,6 +34,8 @@ export interface PerceptionDeps {
   readWaveform(mediaId: string, from: number, to: number, points: number): Promise<WaveformResponse>;
   /** Note on stderr a read that failed and was answered without. Media still being prepared is not one. */
   unavailable(what: string, err: unknown): void;
+  /** Whether this run has the frame tools: its harness shows the model images and the editor left them on. */
+  seesFrames: boolean;
 }
 
 const text = (s: string): CallToolResult => ({ content: [{ type: "text", text: s }] });
@@ -203,6 +205,31 @@ export function registerPerception(deps: PerceptionDeps) {
           : { transcript: Number.isFinite(settled)
             ? `words are still being placed on the audio: times final up to ${settled} s; call again${settled > lo ? `, or give \`to\` below ${settled}` : ""}`
             : "none yet; transcript_get prepares it" }) });
+    });
+
+  tool("screen_text",
+    "The words shown on screen in a video, read from its picture: one line per line of text, `start-end` in SOURCE seconds while it stays on screen, its box as percent of the frame from the left and from the top, and the words. Frames are looked at once a second and read again only when the picture changes, so text shown for under a second can be missed; the words are read by a text recognizer and can be misspelt, but the box and the times are where it is. With `query`, only lines holding those words (case, punctuation and spacing ignored), across the whole video unless from/to narrow it. A video is read once and kept: a range not read yet is read now, and the answer says how much was read when it returns; call again for the rest. timeline_at maps source seconds to the edit. Lines are listed in time order, 200 at a time; `offset` pages on." +
+      (deps.seesFrames ? " The reading says where; the picture says what it looks like: media_frame at a line's start second shows that frame, and frame_contact_sheet the window around it, so a search leads to the one or two frames worth looking at." : ""),
+    { mediaId: z.string(), from: z.number().min(0).optional(), to: z.number().min(0).optional(),
+      query: z.string().min(1).max(200).optional().describe("Words to find on screen"),
+      offset: z.number().int().min(0).default(0) },
+    async ({ mediaId, from, to, query, offset }) => {
+      const { project } = await deps.getProject();
+      const asset = project.media.find(m => m.id === mediaId);
+      if (!asset) throw new Error(`Media ${mediaId} is not in this project. Use project_get for media ids.`);
+      if (asset.kind !== "video") throw new Error(`Media ${mediaId} is ${asset.kind}: only a video has a picture to read.`);
+      const qs = new URLSearchParams({ ...(from !== undefined && { from: String(from) }), ...(to !== undefined && { to: String(to) }), ...(query && { q: query }) }).toString();
+      const read = await client.get<{ from: number; to: number; readSeconds: number; done: boolean; error?: string;
+        spans: Array<{ start: number; end: number; text: string; box: [number, number, number, number] }> }>(
+        `/projects/${encodeURIComponent(deps.projectId)}/media/${encodeURIComponent(mediaId)}/screen-text${qs ? `?${qs}` : ""}`);
+      const pct = (n: number) => Math.round(n * 100);
+      const page = read.spans.slice(offset, offset + 200);
+      const range = `${read.from.toFixed(1)}-${read.to.toFixed(1)} s`;
+      const head = `${mediaId} ${range}${query ? `, lines with “${query}”` : ""}: ${read.spans.length} line${read.spans.length === 1 ? "" : "s"}` +
+        (read.done ? "." : `; ${read.readSeconds.toFixed(0)} of ${(read.to - read.from).toFixed(0)} s read so far${read.error ? `, stopped: ${read.error}` : ", still reading: call again for the rest"}.`);
+      const lines = page.map(s => `${s.start.toFixed(1)}-${s.end.toFixed(1)} [${pct(s.box[0])}-${pct(s.box[2])}% x, ${pct(s.box[1])}-${pct(s.box[3])}% y] ${s.text}`);
+      const more = offset + page.length < read.spans.length ? [`offset ${offset + page.length} for the next ${Math.min(200, read.spans.length - offset - page.length)}.`] : [];
+      return text([head, ...lines, ...more].join("\n"));
     });
 
   return {
