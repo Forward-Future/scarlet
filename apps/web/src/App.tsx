@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { listenForFileDrops } from "./lib/dropTargets";
+import type { DesktopPlatform } from "./lib/desktop";
 import { captureProjectPlace } from "./lib/updatePlace";
 import { reviewItemPath } from "@scarlet/shared";
 import { createBrowserRouter, createRoutesFromElements, Navigate, Route, RouterProvider, useLocation, useParams } from "react-router-dom";
@@ -83,7 +84,7 @@ router.subscribe(({ location }) => {
   previousLocation = location;
 });
 
-export function App({ platform }: { platform: "macos" | "windows" }) {
+export function App({ platform }: { platform: DesktopPlatform }) {
   useEffect(() => listenForFileDrops(platform), [platform]);
   useEffect(() => {
     // Control+, everywhere; Cmd+, too on macOS.

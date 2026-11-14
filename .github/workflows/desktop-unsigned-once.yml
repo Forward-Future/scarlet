@@ -1,0 +1,107 @@
+name: Publish the one-time unsigned Scarlet desktop release
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+env:
+  # The source, version and both release conditions are fixed in this reviewed workflow.
+  RELEASE_SOURCE_SHA: 'f2e8c84ce4d58ee9d8ee1f1d21b2c46ebee30d82'
+  RELEASE_VERSION: '0.1.20'
+
+jobs:
+  verify:
+    if: github.repository == 'Forward-Future/scarlet' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.source.outputs.version }}
+      artifact_id: ${{ steps.stage.outputs.artifact-id }}
+      manifest_sha256: ${{ steps.manifest.outputs.sha256 }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test reviewed release tooling
+        run: |
+          ruby .github/tests/desktop_permissions_test.rb
+          python3 -B -m unittest discover -s .github/tests -p unsigned_desktop_build_test.py
+          node --test .github/scripts/publish-desktop-release.test.mjs
+      - name: Verify the approved merge and its release number
+        id: source
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git merge-base --is-ancestor "$RELEASE_SOURCE_SHA" "$GITHUB_SHA"
+          git worktree add --detach "$RUNNER_TEMP/approved-source" "$RELEASE_SOURCE_SHA"
+          cd "$RUNNER_TEMP/approved-source"
+          node apps/desktop/scripts/release-version.mjs check
+          [[ "$(node apps/desktop/scripts/release-version.mjs for-commit)" == "$RELEASE_VERSION" ]]
+          echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+      - name: Check the main run and all four installer payloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_PROMPT_DISABLED: '1'
+        run: python3 .github/scripts/verify-unsigned-desktop-build.py installers
+      - name: Record the four verified installer digests
+        id: manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd installers && sha256sum -- Scarlet-*) > "$RUNNER_TEMP/installer-checksums"
+          echo "sha256=$(sha256sum "$RUNNER_TEMP/installer-checksums" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Stage the verified installers for this dispatch
+        id: stage
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-unsigned-installers
+          path: installers/
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+  publish:
+    needs: verify
+    if: github.repository == 'Forward-Future/scarlet' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    concurrency:
+      group: publish-desktop-${{ needs.verify.outputs.version }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.verify.outputs.artifact_id }}
+          merge-multiple: true
+          path: installers
+      - name: Verify the installer bytes from the read-only job
+        shell: bash
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.verify.outputs.manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          (cd installers && sha256sum -- Scarlet-*) > "$RUNNER_TEMP/installer-checksums"
+          [[ "$EXPECTED_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          printf '%s  %s\n' "$EXPECTED_MANIFEST_SHA256" "$RUNNER_TEMP/installer-checksums" | sha256sum --check --strict
+      - name: Publish the verified unsigned installers for the approved source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/publish-desktop-release.mjs "$RELEASE_VERSION" installers --unsigned-once

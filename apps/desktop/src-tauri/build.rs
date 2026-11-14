@@ -24,6 +24,14 @@ fn main() {
     let _ = std::fs::create_dir_all(&dir);
     std::fs::create_dir_all(dir.join("uhm-runtime")).expect("create runtime resources directory");
     std::fs::create_dir_all(dir.join("speaker-runtime")).expect("create speaker runtime directory");
+    if target == "x86_64-unknown-linux-gnu" {
+        let cpu = dir.join("whisper-cpu");
+        std::fs::create_dir_all(&cpu).expect("create optimized Whisper runtime directory");
+        let program = cpu.join("whisper-cli");
+        if !program.exists() {
+            std::fs::write(program, b"").expect("create development Whisper placeholder");
+        }
+    }
     // Windows bundles the GPU builds of whisper-cli and the speaker runtime from these folders (tauri.windows.conf.json),
     // so they are never empty, with or without the GPU builds.
     for (name, note) in [("whisper-gpu", "the Vulkan whisper-cli"), ("speaker-gpu", "the DirectML speaker runtime")] {
