@@ -213,7 +213,11 @@ function recoveryInstruction(ctx: Ctx, task: Task, rootId?: string): string {
     lines.push(`Scanned source seconds on ${mediaId}: ${mergeRanges(ranges).map(r => `${r.start}–${r.end}`).join(", ")}`);
   }
   for (const c of savedChanges(ctx, attempts)) {
-    lines.push(`Saved change ${c.id} [${c.state}], version ${c.appliedVersion ?? c.toVersion}: ${c.description}`);
+    // Scarlet closes a proposal when a later part or a revision takes its cuts over. The editor didn't turn it down:
+    // a resumed pass that read fifteen such proposals as [rejected] kept 24 of the 27 cuts held for review, "as you
+    // chose earlier" (2026-11-13).
+    const state = c.state === "rejected" && c.replacedBy ? `replaced by ${c.replacedBy}, which holds its cuts now; the editor made no decision on it` : c.state;
+    lines.push(`Saved change ${c.id} [${state}], version ${c.appliedVersion ?? c.toVersion}: ${c.description}`);
   }
   return lines.join("\n");
 }
