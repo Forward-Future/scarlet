@@ -815,6 +815,10 @@ impl HostRuntime {
                 return self.complete(&task, "failed", None, Some(e.to_string())).await;
             }
         };
+        // Stopped while the prompt was fetched. Nothing has started, so the engine can give the claim back.
+        if cancel.is_cancelled() {
+            return self.complete(&task, "cancelled", None, Some("cancelled".into())).await;
+        }
 
         // Events: forwarded in order by a consumer task so completion waits for them.
         let (sink, consumer, question_seen) = self.forward_events(&task.id, task.started_at.clone());
@@ -853,10 +857,13 @@ impl HostRuntime {
             // The CLI no longer has the session. Start over with the answers in the prompt.
             log::info!("task {}: could not resume the CLI session ({}); starting a fresh run", task.id, result.error.as_deref().unwrap_or("unknown"));
             match self.prepare(&task, true).await {
-                Ok(p) => {
+                Ok(p) if !cancel.is_cancelled() => {
                     result = run_agent(options(p)).await;
                     log::info!("task {}: {} ended (exit code {:?})", task.id, task.agent, result.exit_code);
+                    usage = usage::add_usage(usage, result.usage.clone());
                 }
+                // Stopped while the prompt was fetched: no fresh run. The run that could not resume ends it as cancelled.
+                Ok(_) => {}
                 Err(e) => {
                     drop(sink);
                     drain_events(&task.id, consumer).await;
@@ -865,7 +872,6 @@ impl HostRuntime {
                     return self.complete(&task, "failed", None, Some(e.to_string())).await;
                 }
             }
-            usage = usage::add_usage(usage, result.usage.clone());
         }
         // Completion waits for the forwarded events.
         drop(sink);
@@ -1524,6 +1530,44 @@ mod tests {
         // Nothing was prepared for it: no prompt asked for, no folder made.
         assert!(!engine.seen.lock().unwrap().iter().any(|(route, _)| route.contains("/prompt")));
         assert!(!rt.run_dir(&task("tsk_quit")).exists());
+    }
+
+    #[tokio::test]
+    async fn a_run_stopped_while_its_prompt_is_fetched_never_starts_its_cli() {
+        // The editor stops one request while its prompt is on its way, and the app quits during the next one's.
+        let (stop, quit) = (CancellationToken::new(), CancellationToken::new());
+        let (stopping, quitting) = (stop.clone(), quit.clone());
+        let engine = api::fake::engine(move |route, _| {
+            if route.starts_with("GET /api/tasks/tsk_stop/prompt") {
+                stopping.cancel();
+            } else if route.starts_with("GET /api/tasks/tsk_quitting/prompt") {
+                quitting.cancel();
+            }
+            match route {
+                r if r.contains("/prompt") => (200, r#"{"systemPrompt":"SYSTEM","instruction":"Cut the pauses"}"#.into()),
+                _ => (200, "{}".into()),
+            }
+        }).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut rt, _) = runtime(&engine.url, dir.path());
+        Arc::get_mut(&mut rt).unwrap().cancel = quit;
+
+        rt.run_task(unrunnable("tsk_stop"), stop).await;
+        let cancel = rt.cancel.child_token();
+        rt.run_task(unrunnable("tsk_quitting"), cancel).await;
+        // Neither saved its start, which a run posts before its CLI.
+        let routes: Vec<String> = engine.seen.lock().unwrap().iter().map(|(route, _)| route.split('?').next().unwrap().to_string()).collect();
+        assert_eq!(routes, [
+            "GET /api/tasks/tsk_stop/prompt",
+            "POST /api/tasks/tsk_stop/complete",
+            "GET /api/tasks/tsk_quitting/prompt",
+            "POST /api/tasks/tsk_quitting/complete",
+        ]);
+        // Both end cancelled. Only the one cut off by the quit is interrupted, for the engine to queue again.
+        let stopped = &engine.bodies("POST /api/tasks/tsk_stop/complete")[0];
+        assert_eq!((&stopped["state"], &stopped["error"], &stopped["interrupted"]), (&json!("cancelled"), &json!("cancelled"), &json!(false)));
+        let closed = &engine.bodies("POST /api/tasks/tsk_quitting/complete")[0];
+        assert_eq!((&closed["state"], &closed["error"], &closed["interrupted"]), (&json!("cancelled"), &json!("cancelled"), &json!(true)));
     }
 
     #[tokio::test]
