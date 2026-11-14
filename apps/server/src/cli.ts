@@ -106,6 +106,7 @@ async function runServe(argv: string[]) {
     skillsSeedDir,
     desktopPid: solo ? process.ppid : undefined,
     prepareSourceProxies: true,
+    backgroundCheckpoints: true,
     telemetry: { posthogKey: isSea() ? DEFAULT_POSTHOG_KEY : undefined },
   });
 
