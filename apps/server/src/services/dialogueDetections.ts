@@ -15,7 +15,8 @@ import { alignmentVersion, alignsLanguage, alignWords } from "../transcribe/word
 import { bundledWhisperModel } from "../transcribe/localModel.js";
 import { resolveLocalRuntime, resolvedBinary, type LocalRuntime } from "../transcribe/localRuntime.js";
 import { transcriptLanguage } from "./transcriptReader.js";
-import { readSourceEnergy } from "./transcriptSources.js";
+import { readSourceEnergy, sourceLabels, type measureSources } from "./transcriptSources.js";
+import { otherInputSound, recordingInputs, type RecordingInputs } from "./otherInput.js";
 import { otherVoiceTurns } from "./otherVoiceTurns.js";
 import { appendTaskEvent } from "./tasks.js";
 import { AnalysisCache } from "./analysisCache.js";
@@ -280,8 +281,46 @@ export function dialogueDetector(ctx: Ctx) {
     return page;
   }
 
+  // Which input a recording's dialogue is on is measured once per file, from its transcript and a few of its pages.
+  const inputsOf = new Map<string, Promise<RecordingInputs | undefined>>();
+  const inputWindows = new AnalysisCache<ReturnType<typeof measureSources>>(r => r.energy.length * 64, 12 * 1024 * 1024);
+  /**
+   * A page of a recording with a mix and two isolated inputs also says what sounded on the input the dialogue isn't
+   * on. Editor-confirmed voice inputs have said so already, with that input transcribed by itself. This reading is
+   * added to the page as it is served, saved pages included, and costs one short decode of the page's audio.
+   */
+  async function withOtherInput(projectId: string, media: MediaAsset, from: number, to: number, result: DialogueDetections): Promise<DialogueDetections> {
+    if (result.otherVoiceTurns || media.voiceRoles || !media.transcriptId || !media.duration) return result;
+    const signal = ctx.projectSignal(projectId);
+    try {
+      const file = sourceFile(projectId, media, to);
+      const stamp = JSON.stringify(await fileStamp(file));
+      const read = (a: number, b: number) => inputWindows.get(JSON.stringify([stamp, a, b]), () => readSourceEnergy(file, a, b, signal));
+      let inputs = inputsOf.get(stamp);
+      if (!inputs) {
+        inputs = (async () => {
+          if (!(await sourceLabels(file, signal)).length) return;
+          const transcript = ctx.repos.transcripts.get(media.transcriptId!);
+          return transcript ? recordingInputs(transcript.segments.flatMap(s => s.words), media.duration!, read) : undefined;
+        })();
+        if (inputsOf.size >= 32) inputsOf.delete(inputsOf.keys().next().value!);
+        inputsOf.set(stamp, inputs);
+        inputs.catch(() => inputsOf.delete(stamp));
+      }
+      const known = await inputs;
+      if (!known) return result;
+      const { energy } = await read(from, to);
+      return { ...result, otherVoiceTurns: otherInputSound(energy, known, from, to, result.segments.flatMap(s => s.words)) };
+    } catch (err) {
+      signal.throwIfAborted();
+      ctx.log(`[media] ${media.id} couldn’t read which input sounded between ${from} and ${to} s: ${(err as Error).message}`);
+      return result;
+    }
+  }
+
   async function detect(projectId: string, media: MediaAsset, from: number, to: number, taskId?: string, startedAt?: string, keptSide?: { audioStream?: number; cachedOnly?: true }) {
-    return (await openPage(projectId, media, from, to, taskId ? scanEdit(projectId, taskId, startedAt) : undefined, undefined, keptSide)).ready;
+    const result = await (await openPage(projectId, media, from, to, taskId ? scanEdit(projectId, taskId, startedAt) : undefined, undefined, keptSide)).ready;
+    return keptSide ? result : withOtherInput(projectId, media, from, to, result);
   }
   // The engine owns the requested range. A slow reader or an MCP timeout does
   // not stall the next page. Foreground requests join the same detector window.
