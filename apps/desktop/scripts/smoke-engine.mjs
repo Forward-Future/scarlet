@@ -14,6 +14,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { smokeEnvironment, startSmokeEngine } from "./smoke-engine-startup.mjs";
 import { registerStorage } from "./register-storage.mjs";
+import { stockSkillNames } from "./stock-skills.mjs";
 import { createRequire } from "node:module";
 
 const dir = resolve(process.argv[2] ?? "");
@@ -97,7 +98,8 @@ try {
   if ((await api("GET", "/settings")).settings.transcription.provider !== "openai") fail("couldn't choose a transcription provider that needs no model");
   const { project } = await api("POST", "/projects", { name: "Smoke", settings: { width: 320, height: 180, aspect: "custom", fps: 30 } });
   const { skills } = await api("GET", `/skills?projectId=${project.id}`);
-  const workflows = ["add-captions", "clean-dialogue", "edit-interview", "dialogue-pass", "frame-screen", "smooth-audio-cuts", "visual-pass"];
+  // Read from skills/ like the engine's own bundling, so adding a stock skill can't fail every install's check.
+  const workflows = stockSkillNames();
   for (const name of workflows) {
     const skill = skills.find(s => s.name === name && s.scope === "team");
     // The stock skills carry no upstream marker in their frontmatter any more, so the check is that each one is there
