@@ -60,10 +60,9 @@ export function dispatchWsEvent(ev: WsEvent) {
     case "skill.updated":
       useSkillsStore.getState().apply(ev.skill);
       return;
-    case "notification": {
-      useUiStore.getState().notify({ title: ev.title, body: ev.body, projectId: ev.projectId, link: ev.link });
+    case "notification":
+      // The window shows no list of notifications.
       return;
-    }
     default:
       useProjectStore.getState().applyEvent(ev);
   }

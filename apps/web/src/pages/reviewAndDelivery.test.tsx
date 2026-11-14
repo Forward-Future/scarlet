@@ -69,7 +69,7 @@ beforeEach(() => {
     loadChangeDiff: vi.fn().mockRejectedValue(new Error("No diff fixture")),
   });
   localStorage.removeItem("scarlet.exportStarShown");
-  useUiStore.setState({ notifications: [], exportStarNotice: "unseen" });
+  useUiStore.setState({ exportStarNotice: "unseen" });
   useExports.setState({ jobs: {} });
   vi.spyOn(desktop, "keepVideoExport").mockResolvedValue();
   vi.spyOn(api, "releaseRender").mockResolvedValue();
@@ -1242,7 +1242,6 @@ it("shows an export again after a reload or restart, saves it to the destination
   await act(async () => { await vi.waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith(31, api.renderFileUrl(kept.id)), { timeout: 2500 }); });
   await act(async () => { await vi.waitFor(() => expect(release).toHaveBeenCalledExactlyOnceWith(kept.id, owner)); });
   expect(button("Show in folder")).toBeDefined();
-  expect(useUiStore.getState().notifications[0]).toMatchObject({ title: "Export finished", body: "Interview final.mp4", projectId: PRJ });
   expect(request).not.toHaveBeenCalled();
   expect(choose).not.toHaveBeenCalled();
   expect(desktop.keepVideoExport).not.toHaveBeenCalled();
