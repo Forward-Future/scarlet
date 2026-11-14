@@ -8,8 +8,9 @@ import { Icon } from "../ui/primitives";
  * push-to-talk style when `followHold` is set. Shows a red dot and elapsed
  * time while recording and auto-stops at the 2 minute cap.
  */
-export function MicButton({ onResult, onStart, onRecording, disabled, disabledReason, followHold = false, size = "md", label = "Record a voice note" }: { onResult: (r: RecorderResult) => void; onStart?(): void; onRecording?(on: boolean): void; disabled?: boolean; disabledReason?: string; followHold?: boolean; size?: "md" | "lg"; label?: string }) {
+export function MicButton({ onResult, onStart, onRecording, onError, disabled, disabledReason, followHold = false, size = "md", label = "Record a voice note" }: { onResult: (r: RecorderResult) => void; onStart?(): void; onRecording?(on: boolean): void; onError?(message: string): void; disabled?: boolean; disabledReason?: string; followHold?: boolean; size?: "md" | "lg"; label?: string }) {
   const rec = useRecorder(onResult);
+  useEffect(() => { if (rec.error) onError?.(rec.error); }, [onError, rec.error]);
   const hold = useUiStore((s) => s.voiceHold);
   const heldRef = useRef(false);
   const button = useRef<HTMLButtonElement>(null);
@@ -66,7 +67,7 @@ export function MicButton({ onResult, onStart, onRecording, disabled, disabledRe
 
   const unsupported = rec.state === "unsupported";
   const isDisabled = disabled || unsupported;
-  const title = unsupported ? "Scarlet can’t record audio on this computer" : disabled ? disabledReason : rec.recording ? "Stop recording" : `${label} (hold V)`;
+  const title = unsupported ? "Scarlet can’t record audio on this computer" : disabled ? disabledReason : rec.recording ? "Stop recording" : followHold ? `${label} (hold V)` : label;
   const dim = size === "lg" ? "size-10" : "size-8";
 
   return (
@@ -91,7 +92,7 @@ export function MicButton({ onResult, onStart, onRecording, disabled, disabledRe
         </span>
       )}
       {rec.state === "requesting" && <span className="text-[12px] text-muted">Waiting for microphone…</span>}
-      {rec.error && !rec.recording && (
+      {rec.error && !rec.recording && !onError && (
         <span role="alert" className="text-[12px] text-bad max-w-[260px] leading-tight">
           {rec.error}
         </span>

@@ -91,3 +91,16 @@ for (const windows of [false, true]) {
     assert.throws(() => inspectPublicPayload(root, windows), /license differs/);
   });
 }
+
+test("the stock skills it expects are the ones in skills/, named by their frontmatter", async (t) => {
+  const { stockSkillNames } = await import("./stock-skills.mjs");
+  assert.deepEqual(stockSkillNames(), ["add-captions", "dialogue-pass", "frame-screen"]);
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "scarlet-skills-test-")));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const [folder, text] of [["b-folder", "---\nname: \"zoom-in\"\n---\n"], ["a-folder", "no frontmatter"], ["notes", null]]) {
+    mkdirSync(join(dir, folder));
+    if (text !== null) writeFileSync(join(dir, folder, "SKILL.md"), text);
+  }
+  writeFileSync(join(dir, "README.md"), "");
+  assert.deepEqual(stockSkillNames(dir), ["a-folder", "zoom-in"]);
+});

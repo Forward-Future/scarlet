@@ -2,16 +2,6 @@ import { create } from "zustand";
 import { clipsAt, type Timeline } from "@scarlet/timeline";
 import type { AgentEffort, AgentId, EditRef } from "@scarlet/shared";
 
-export interface Notification {
-  id: number;
-  title: string;
-  body?: string;
-  projectId?: string;
-  link?: string;
-  at: string;
-  read: boolean;
-}
-
 export interface AgentPick {
   agent: AgentId;
   model?: string;
@@ -36,6 +26,32 @@ export interface AgentContext {
   reviewRef?: EditRef;
   /** Number shown on the thread timeline. The agent uses changeId and editIndex for identity. */
   editNumber?: number;
+  /**
+   * A stretch the editor marked on the timeline's ruler for this message, on the version the timeline showed. It rides
+   * along with whatever the message is aimed at: a cut or an edit keeps its own time, and Scarlet is told both.
+   */
+  markedRange?: MarkedRange;
+}
+
+export interface MarkedRange { start: number; end: number; version?: string; mediaId?: string; clipIds?: string[] }
+
+/** The stretch marked on the ruler that the message in the box carries. */
+export function markedRangeOf(context: AgentContext | "whole" | null | undefined) {
+  return context && context !== "whole" ? context.markedRange : undefined;
+}
+
+/** A message about a marked stretch and nothing else: a new edit there. */
+export function rangeTarget(marked: MarkedRange): AgentContext {
+  return { time: marked.start, end: marked.end, version: marked.version, mediaId: marked.mediaId, clipIds: marked.clipIds ?? [], markedRange: marked };
+}
+
+/** The same aim with the marked stretch put on it, or taken off. Nothing is left of an aim that was only the stretch. */
+export function withMarkedRange(context: AgentContext | "whole" | null | undefined, marked: MarkedRange | undefined): AgentContext | null {
+  const target = context && context !== "whole" ? context : undefined;
+  // Words chosen in the transcript or a moment picked on the timeline give way to the stretch: it says where, as they did.
+  if (!target?.changeId) return marked ? rangeTarget(marked) : null;
+  const { markedRange: _was, ...rest } = target;
+  return marked ? { ...rest, markedRange: marked } : rest;
 }
 
 export function editTargetAt(time: number, version?: string, timeline?: Timeline | null, mediaId?: string): AgentContext {
@@ -96,9 +112,6 @@ function sameTarget(now: ComposerDraft["agentContext"], sent: ComposerDraft["age
 }
 
 interface UiState {
-  notifications: Notification[];
-  notify(n: Omit<Notification, "id" | "at" | "read">): void;
-
   exportStarNotice: "unseen" | "visible" | "seen";
   offerExportStar(): void;
   dismissExportStar(): void;
@@ -157,8 +170,6 @@ interface UiState {
   setWsStatus(s: UiState["wsStatus"]): void;
 }
 
-let seq = 1;
-
 const DRAFTS_KEY = "scarlet.drafts.v1";
 
 /** A draft as kept on this computer. Which targets came from the playhead is only known in memory, so it is saved beside them. */
@@ -189,10 +200,6 @@ function loadDrafts(): Record<string, ComposerDraft> {
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
-  notifications: [],
-  notify: (n) =>
-    set({ notifications: [{ ...n, id: seq++, at: new Date().toISOString(), read: false }, ...get().notifications].slice(0, 50) }),
-
   exportStarNotice: "unseen",
   offerExportStar: () => {
     if (get().exportStarNotice !== "unseen") return;
@@ -224,14 +231,16 @@ export const useUiStore = create<UiState>((set, get) => ({
 
   agent: loadAgent(),
   setAgent: (agent) => {
-    localStorage.setItem(AGENT_KEY, JSON.stringify(agent));
+    try { localStorage.setItem(AGENT_KEY, JSON.stringify(agent)); } catch { /* Keep the pick for this session. */ }
     set({ agent });
   },
 
-  showRunTokens: localStorage.getItem(RUN_TOKENS_KEY) === "shown",
+  showRunTokens: (() => { try { return localStorage.getItem(RUN_TOKENS_KEY) === "shown"; } catch { return false; } })(),
   setShowRunTokens: (v) => {
-    if (v) localStorage.setItem(RUN_TOKENS_KEY, "shown");
-    else localStorage.removeItem(RUN_TOKENS_KEY);
+    try {
+      if (v) localStorage.setItem(RUN_TOKENS_KEY, "shown");
+      else localStorage.removeItem(RUN_TOKENS_KEY);
+    } catch { /* Keep the choice for this session. */ }
     set({ showRunTokens: v });
   },
 

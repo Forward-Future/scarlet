@@ -126,22 +126,29 @@ export function diffTimelines(before: Timeline, after: Timeline, fps = 30): Time
   };
 }
 
-/** Human-readable one-liner per clip diff, for change descriptions. */
-export function describeDiff(d: TimelineDiff, fmt: (s: number) => string = (s) => s.toFixed(2)): string[] {
+/** Operations address clips by ID. Show that ID alongside any human-readable label in agent diffs. */
+export const clipById = (clip: Clip): string => clip.label ? `${clip.id} “${clip.label}”` : clip.id;
+
+/** Describe each change using the clip's label for editor-facing output. */
+export function describeDiff(
+  d: TimelineDiff,
+  fmt: (s: number) => string = (s) => s.toFixed(2),
+  name: (clip: Clip) => string = clip => clip.label ?? clip.id,
+): string[] {
   const out: string[] = [];
   for (const c of d.clips) {
     switch (c.type) {
       case "added":
-        out.push(`Added ${c.clip.kind} clip ${c.clip.label ?? c.clip.id} at ${fmt(c.clip.timelineIn)}`);
+        out.push(`Added ${c.clip.kind} clip ${name(c.clip)} at ${fmt(c.clip.timelineIn)}`);
         break;
       case "removed":
-        out.push(`Removed ${c.clip.kind} clip ${c.clip.label ?? c.clip.id} (${fmt(c.clip.timelineIn)}–${fmt(clipEnd(c.clip))})`);
+        out.push(`Removed ${c.clip.kind} clip ${name(c.clip)} (${fmt(c.clip.timelineIn)}–${fmt(clipEnd(c.clip))})`);
         break;
       case "modified":
-        out.push(`Changed ${c.fields.join(", ")} on ${c.after.label ?? c.after.id} at ${fmt(c.after.timelineIn)}`);
+        out.push(`Changed ${c.fields.join(", ")} on ${name(c.after)} at ${fmt(c.after.timelineIn)}`);
         break;
       case "movedTrack":
-        out.push(`Moved ${c.after.label ?? c.after.id} to track ${c.toTrackId}`);
+        out.push(`Moved ${name(c.after)} to track ${c.toTrackId}`);
         break;
     }
   }

@@ -8,6 +8,7 @@ import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { PLAN_STEPS } from "@scarlet/mcp/prompt";
 import { createTask, pairQuestionsAndAnswers } from "./tasks.js";
+import { learningCheckContext } from "./learnings.js";
 
 let dataDir: string;
 let app: ScarletApp;
@@ -142,6 +143,20 @@ it("rejects editing requests for the api agent, which no host runs", async () =>
   const res = await api<{ error: { code: string } }>("POST", `/projects/${project.id}/tasks`, { kind: "edit", agent: "api", instruction: "Cut it" });
   expect(res.status).toBe(400);
   expect(res.body.error.code).toBe("agent_unavailable");
+});
+
+it("tells a learning check where in the video the request was about, on the player's clock past an hour", () => {
+  const about = (time: number) => {
+    const asked = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Add a title here", context: { time },
+      createdBy: { type: "human", name: "Editor" } });
+    const check = createTask(app.ctx, { projectId: project.id, kind: "learning_check", agent: "claude", instruction: "Add a title here",
+      context: { checksTaskId: asked.id }, createdBy: { type: "human", name: "Editor" } });
+    return learningCheckContext(app.ctx, check).about;
+  };
+  expect(about(125.9)).toBe("They said it about the moment at 2:05 in the video.");
+  expect(about(3599)).toBe("They said it about the moment at 59:59 in the video.");
+  expect(about(3600)).toBe("They said it about the moment at 1:00:00 in the video.");
+  expect(about(4503)).toBe("They said it about the moment at 1:15:03 in the video.");
 });
 
 it("pairs questions with the answers that followed", () => {

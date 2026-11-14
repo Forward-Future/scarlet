@@ -237,6 +237,57 @@ pub fn hide_console(cmd: &mut tokio::process::Command) {
     }
 }
 
+/// Windows: a job object holding a process and every process it starts, which ends whatever is still in it when it
+/// is dropped. A process that ends on Windows leaves its children running, and `taskkill /T` can no longer find them
+/// under it. Nothing in the job may break away from it.
+#[cfg(windows)]
+pub struct ProcessJob(windows_sys::Win32::Foundation::HANDLE);
+
+// SAFETY: a job object's handle may be used and closed from any thread.
+#[cfg(windows)]
+unsafe impl Send for ProcessJob {}
+
+#[cfg(windows)]
+impl ProcessJob {
+    /// Put the process in a new job that ends everything in it when closed. The process should have started nothing
+    /// yet: what it started before is not in the job.
+    pub fn hold(process: std::os::windows::io::RawHandle) -> std::io::Result<Self> {
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+        // SAFETY: plain Win32 calls on a handle this owns, with a limit structure of the size given.
+        unsafe {
+            let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if handle.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            // Closed on every return from here.
+            let job = ProcessJob(handle);
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let size = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+            if SetInformationJobObject(job.0, JobObjectExtendedLimitInformation, &limits as *const _ as *const std::ffi::c_void, size) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if AssignProcessToJobObject(job.0, process as windows_sys::Win32::Foundation::HANDLE) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(job)
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ProcessJob {
+    fn drop(&mut self) {
+        // SAFETY: the handle is this job's own, and is closed once.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
 /// How long a Unix process group gets between `kill_tree`'s SIGTERM and its SIGKILL.
 pub const KILL_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -265,6 +316,34 @@ pub async fn kill_tree(pid: u32) {
             tokio::time::sleep(KILL_AFTER).await;
             signal("-KILL", pid).await;
         });
+    }
+}
+
+/// A child's output, line by line. Each line is decoded on its own, with any byte that isn't UTF-8 replaced: cmd.exe
+/// on a non-English Windows writes its messages in the console's code page, and one such line must not end the
+/// reading. Lines end at `\n`, a `\r` before it is dropped, and a last line without an ending is still a line.
+pub struct LossyLines<R> {
+    reader: tokio::io::BufReader<R>,
+    buf: Vec<u8>,
+}
+
+pub fn lossy_lines<R: tokio::io::AsyncRead + Unpin>(reader: R) -> LossyLines<R> {
+    LossyLines { reader: tokio::io::BufReader::new(reader), buf: Vec::new() }
+}
+
+impl<R: tokio::io::AsyncRead + Unpin> LossyLines<R> {
+    /// The next line, or None at the end of the output.
+    pub async fn next_line(&mut self) -> std::io::Result<Option<String>> {
+        use tokio::io::AsyncBufReadExt;
+        self.buf.clear();
+        if self.reader.read_until(b'\n', &mut self.buf).await? == 0 {
+            return Ok(None);
+        }
+        let mut line = self.buf.as_slice();
+        if let Some(rest) = line.strip_suffix(b"\n") {
+            line = rest.strip_suffix(b"\r").unwrap_or(rest);
+        }
+        Ok(Some(String::from_utf8_lossy(line).into_owned()))
     }
 }
 
@@ -504,6 +583,20 @@ mod tests {
         assert_eq!(js_len(&tail), 801);
         assert_eq!(stderr_tail_line("  only line \r\n").as_deref(), Some("only line"));
         assert_eq!(stderr_tail_line(""), None);
+    }
+
+    #[tokio::test]
+    async fn reads_every_line_of_a_child_however_it_is_encoded() {
+        // A line in a Windows code page, then UTF-8, then a last line with no ending.
+        let bytes: &[u8] = b"first\r\nAcc\xe8s refus\xe9\r\n\xff\n\ncaf\xc3\xa9\nlast";
+        let mut lines = lossy_lines(bytes);
+        let mut read = Vec::new();
+        while let Ok(Some(line)) = lines.next_line().await {
+            read.push(line);
+        }
+        assert_eq!(read, ["first", "Acc\u{fffd}s refus\u{fffd}", "\u{fffd}", "", "café", "last"]);
+        // At the end it keeps saying so.
+        assert_eq!(lines.next_line().await.unwrap(), None);
     }
 
     #[test]

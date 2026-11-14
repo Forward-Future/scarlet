@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { audition, soundPicture, contactSheet, fileInDirectory, pictureActivity, PREVIEW_COPY_ACTIVITY_THRESHOLD, qualityEvents, snapRange, type PictureActivity } from "@scarlet/render";
+import { audition, soundPicture, contactSheet, fileInDirectoryAsync, pictureActivity, PREVIEW_COPY_ACTIVITY_THRESHOLD, qualityEvents, snapRange, type PictureActivity } from "@scarlet/render";
 import { AcousticWordsRequest, InspectionReviewRequest, PictureActivityRequest, SheetRequest, SourceAudioRequest, SoundPictureRequest, DialogueRangeRequest, DialogueScanRequest, DialogueWindowRequest, type CutEvent, type InspectionResult, type InspectionWindow, type PictureActivityWindow } from "@scarlet/shared";
 import { diffTimelines, timelineDuration, type MediaAsset, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
@@ -82,11 +82,11 @@ export function inspectionRoutes(ctx: Ctx) {
   async function collect(project: Project, plans: WindowPlan[], options: WindowOptions): Promise<InspectionResult> {
     const signal = ctx.projectSignal(project.id);
     const renderIds: string[] = [];
-    const inputs = plans.map(plan => {
+    const inputs = await Promise.all(plans.map(async plan => {
       if (plan.clock === "source") {
         const media = project.media.find(m => m.id === plan.id);
         if (!media) throw notFound("media");
-        const file = fileInDirectory(ctx.paths.media(project.id), media.path);
+        const file = await fileInDirectoryAsync(ctx.paths.media(project.id), media.path);
         if (!file) throw notFound("source file");
         return { plan, file, origin: 0, local: plan.range, sourceWidth: media.width, fps: media.fps || project.settings.fps, media };
       }
@@ -96,10 +96,10 @@ export function inspectionRoutes(ctx: Ctx) {
         renderIds.push(render.id);
         return;
       }
-      const file = fileInDirectory(ctx.paths.renders(project.id), render.path);
+      const file = await fileInDirectoryAsync(ctx.paths.renders(project.id), render.path);
       if (!file) throw notFound("preview file");
       return { plan, file, origin: range.start, local: { start: 0, end: range.end - range.start }, fps: project.settings.fps, media: undefined };
-    });
+    }));
     if (renderIds.length) return { state: "preparing", renderIds };
     const windows = await Promise.all(inputs.map(async input => {
       if (!input) throw new Error("Missing inspection input");
@@ -172,7 +172,7 @@ export function inspectionRoutes(ctx: Ctx) {
       if (!media) throw notFound("media in this project");
       if (media.kind === "audio" || !media.duration) throw badRequest("no_video", "Choose a moving video source.");
       if (to > media.duration + 0.000001) throw badRequest("outside_media", "Window exceeds source duration.");
-      const file = fileInDirectory(ctx.paths.media(project.id), media.path);
+      const file = await fileInDirectoryAsync(ctx.paths.media(project.id), media.path);
       if (!file) throw notFound("source file");
       const range = { start: from, end: to }, fps = media.fps || project.settings.fps;
       const [info, picture] = await Promise.all([stat(file), sourcePicture(project, media, range, "activity")]);
@@ -211,7 +211,7 @@ export function inspectionRoutes(ctx: Ctx) {
     if (!media.duration || to > media.duration + 0.000001) throw badRequest("outside_media", "Window exceeds source duration.");
     const language = transcriptLanguage(ctx, media.projectId, media) || ctx.settings().transcription.language;
     if (language !== "auto" && !alignsLanguage(language)) return c.json([]);
-    const file = fileInDirectory(ctx.paths.media(media.projectId), media.path);
+    const file = await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path);
     if (!file) throw notFound("source file");
     const imported = join(ctx.paths.media(media.projectId), media.path);
     for (const path of await emissionStorePaths(ctx, media.projectId, file, imported, audioStream)) {
@@ -250,7 +250,7 @@ export function inspectionRoutes(ctx: Ctx) {
     if (!media) throw notFound("media in this project");
     if (media.kind !== "audio" && !media.hasAudio) throw badRequest("no_audio", "Choose a source with audio.");
     if (!media.duration || to > media.duration + 0.000001) throw badRequest("outside_media", "Window exceeds source duration.");
-    const file = fileInDirectory(ctx.paths.media(project.id), media.path);
+    const file = await fileInDirectoryAsync(ctx.paths.media(project.id), media.path);
     if (!file) throw notFound("source file");
     if (voice && !media.voiceRoles) throw badRequest("voice_roles_missing", "This recording has no confirmed voice inputs.");
     const stream = voice ? media.voiceRoles![voice === "me" ? "me" : "other"] - 1 : 0;
@@ -264,7 +264,7 @@ export function inspectionRoutes(ctx: Ctx) {
     if (!media) throw notFound("media in this project");
     if (media.kind !== "audio" && !media.hasAudio) throw badRequest("no_audio", "Choose a source with audio.");
     if (!media.duration || to > media.duration + 0.000001) throw badRequest("outside_media", "Window exceeds source duration.");
-    const file = fileInDirectory(ctx.paths.media(project.id), media.path);
+    const file = await fileInDirectoryAsync(ctx.paths.media(project.id), media.path);
     if (!file) throw notFound("source file");
     if (voice && !media.voiceRoles) throw badRequest("voice_roles_missing", "This recording has no confirmed voice inputs.");
     const stream = voice ? media.voiceRoles![voice === "me" ? "me" : "other"] - 1 : 0;

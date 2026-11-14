@@ -313,7 +313,6 @@ it("sends each kind of event to the part of the window it is about", async () =>
   dispatchWsEvent({ type: "task.updated", projectId: PRJ, task });
   expect(useHostsStore.getState().hosts).toContainEqual(host);
   expect(useSkillsStore.getState().skills[0]).toEqual(skill);
-  expect(useUiStore.getState().notifications.at(0)).toMatchObject({ title: "Export finished", projectId: PRJ, link: "/p/x" });
   expect(applied).toHaveBeenCalledExactlyOnceWith({ type: "task.updated", projectId: PRJ, task });
 
   // A local import's copy reports how far it has been checked to whoever started it, and to nobody afterwards.

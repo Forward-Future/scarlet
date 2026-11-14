@@ -26,6 +26,12 @@ export const ENGINE_UNREACHABLE = "Scarlet can’t reach its engine right now.";
 const unanswered = (err: unknown) => err instanceof TypeError &&
   /^(Load failed|Failed to fetch|NetworkError when attempting to fetch resource\.?|The network connection was lost\.|Could not connect to the server\.|fetch failed)$/.test(err.message);
 
+/** The desktop connection was lost, or the engine stopped accepting requests during shutdown. */
+export function engineUnavailable(error: unknown): boolean {
+  return error instanceof TypeError && (error.message === ENGINE_UNREACHABLE || unanswered(error))
+    || error instanceof ScarletApiError && error.status === 503 && error.code === "http_error";
+}
+
 /**
  * Every request the window makes of the engine goes through here. The log gets each change it asks for (anything
  * but a read), each failure with the engine's reason, each call that never got through, and each slow read, so

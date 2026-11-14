@@ -27,12 +27,11 @@ use futures_util::future::{BoxFuture, FutureExt, Shared};
 use tokio_util::sync::CancellationToken;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::{Mutex, Notify};
 
 use crate::config::Paths;
-use crate::util::{child_env, hide_console, split_command_line};
+use crate::util::{child_env, hide_console, lossy_lines, split_command_line};
 
 pub const READY_PREFIX: &str = "SCARLET_READY ";
 
@@ -99,8 +98,13 @@ fn sidecar_name() -> &'static str {
 }
 
 /// Tauri dev uses the compiled checkout. Packaged builds (including debug bundles) use the sidecar.
-pub fn resolve_engine_launch(home: &Path) -> Result<EngineLaunch> {
-    let sidecar = std::env::current_exe().ok().map(|exe| exe.with_file_name(sidecar_name()));
+pub fn resolve_engine_launch(home: &Path, resources: Option<&Path>) -> Result<EngineLaunch> {
+    // The deb installs the private engine, Whisper and native audio libraries together under /usr/lib/Scarlet.
+    let sidecar = if cfg!(target_os = "linux") {
+        resources.map(|dir| dir.join(sidecar_name()))
+    } else {
+        std::env::current_exe().ok().map(|exe| exe.with_file_name(sidecar_name()))
+    };
     let cli = dev_repo_root().join("apps/server/dist/cli.js");
     select_engine(home, tauri::is_dev(), sidecar.as_deref(), std::env::var("SCARLET_ENGINE_CMD").ok().as_deref(), &cli)
 }
@@ -171,8 +175,19 @@ impl Running {
     fn track(mut child: Child, stdin: Option<ChildStdin>, pid: u32) -> Self {
         let force = CancellationToken::new();
         let stop = force.clone();
+        // Windows: the engine and every media tool it starts are held in a job, which ends what is left of them when
+        // this instance of the engine is over. Called right after the spawn, before the engine has started anything.
+        #[cfg(windows)]
+        let job = match child.raw_handle().map(crate::util::ProcessJob::hold) {
+            Some(Ok(job)) => Some(job),
+            Some(Err(e)) => {
+                log::warn!("engine: could not hold its processes in a job, so a crash may leave media tools running: {e}");
+                None
+            }
+            None => None,
+        };
         let exit = async move {
-            tokio::select! {
+            let status = tokio::select! {
                 biased;
                 status = child.wait() => {
                     // An engine that ends by itself signals nobody. The media tools it had started would work on
@@ -189,7 +204,12 @@ impl Running {
                     let _ = child.start_kill();
                     child.wait().await.ok()
                 }
-            }
+            };
+            // Closing the job ends whatever the engine left in it. On Windows `taskkill /T` can't find a tree under
+            // an engine that has already ended.
+            #[cfg(windows)]
+            drop(job);
+            status
         }.boxed().shared();
         Self { exit, force, stdin, pid }
     }
@@ -300,7 +320,7 @@ impl EngineManager {
             return; // already running
         }
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let launch = match resolve_engine_launch(&self.paths.home) {
+        let launch = match resolve_engine_launch(&self.paths.home, self.paths.resource_dir.as_deref()) {
             Ok(l) => l,
             Err(e) => {
                 self.update(|s| {
@@ -478,7 +498,7 @@ impl EngineManager {
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("engine stdout not captured"))?;
         if let Some(stderr) = child.stderr.take() {
             tokio::spawn(async move {
-                let mut lines = BufReader::new(stderr).lines();
+                let mut lines = lossy_lines(stderr);
                 while let Ok(Some(l)) = lines.next_line().await {
                     log::log!(engine_line_level(&l, true), "[engine] {l}");
                 }
@@ -494,7 +514,7 @@ impl EngineManager {
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<ReadyInfo>();
         let reader = tokio::spawn(async move {
             let mut tx = Some(ready_tx);
-            let mut lines = BufReader::new(stdout).lines();
+            let mut lines = lossy_lines(stdout);
             while let Ok(Some(l)) = lines.next_line().await {
                 if let Some(info) = parse_ready_line(&l) {
                     if let Some(tx) = tx.take() {
@@ -626,6 +646,8 @@ fn newest_mtime(dirs: &[PathBuf]) -> Option<SystemTime> {
 mod tests {
     use super::*;
     #[cfg(unix)]
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    #[cfg(unix)]
     #[tokio::test]
     async fn shutdown_waits_for_and_kills_the_real_child() {
         let mut cmd = tokio::process::Command::new("/bin/sleep");
@@ -665,6 +687,38 @@ mod tests {
         let outlived = alive();
         if outlived {
             let _ = std::process::Command::new("kill").args(["-KILL", &tool]).status();
+        }
+        assert!(!outlived, "the media tool outlived the engine that started it");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn an_engine_that_ends_by_itself_on_windows_takes_the_media_tools_it_started_with_it() {
+        // Node stands in for the engine. It starts a media tool apart from itself, as one started through a shell
+        // or a launcher is, says its process id and ends without stopping it, as it does on an uncaught error.
+        let node = crate::host::spawn::find_on_path("node", &crate::util::env_map()).expect("node");
+        let script = "const t=require('child_process').spawn(process.execPath,['-e','setTimeout(()=>{},30000)'],{detached:true,stdio:'ignore'});t.unref();console.log(t.pid)";
+        let mut cmd = tokio::process::Command::new(&node);
+        cmd.args(["-e", script]).stdin(Stdio::piped()).stdout(Stdio::piped());
+        let mut child = cmd.spawn().unwrap();
+        let pid = child.id().unwrap();
+        let stdin = child.stdin.take();
+        let mut said = lossy_lines(child.stdout.take().unwrap());
+        let tracked = Running::track(child, stdin, pid);
+        let tool = said.next_line().await.unwrap().expect("the media tool's process id");
+        let status = tokio::time::timeout(Duration::from_secs(10), tracked.exit.clone()).await.expect("the engine did not end");
+        assert!(status.is_some_and(|s| s.success()));
+        let alive = || {
+            let out = std::process::Command::new("tasklist").args(["/FI", &format!("PID eq {tool}"), "/FO", "CSV", "/NH"]).output();
+            out.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("\"{tool}\"")))
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while alive() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let outlived = alive();
+        if outlived {
+            let _ = std::process::Command::new("taskkill").args(["/PID", &tool, "/F"]).output();
         }
         assert!(!outlived, "the media tool outlived the engine that started it");
     }
@@ -768,7 +822,7 @@ mod tests {
     fn dev_fallback_resolves_on_this_checkout() {
         // In this repo apps/server/dist exists, so the fallback must resolve to node + cli.js
         // (unless SCARLET_ENGINE_CMD is set in the environment).
-        let l = resolve_engine_launch(&crate::util::home_dir()).unwrap();
+        let l = resolve_engine_launch(&crate::util::home_dir(), None).unwrap();
         assert!(!l.program.is_empty());
         if l.kind == "dev" {
             assert!(l.prefix_args[0].replace('\\', "/").ends_with("apps/server/dist/cli.js"));

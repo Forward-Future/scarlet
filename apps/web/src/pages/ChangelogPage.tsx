@@ -15,6 +15,8 @@ type EditGroup = ReturnType<typeof editGroups<ListedEdit>>[number];
  * is one. Nothing when the row already says it all: a single edit nobody revised, an undo, an empty timeline.
  */
 function versionEdits(change: Change | undefined, thread: ListedEdit[]): EditGroup[] | undefined {
+  // An undo is saved with a range for each place it put back. Counted as edits, undoing a pass read "1 edit … 3 places".
+  if (change?.revertsVersion) return undefined;
   const own = change?.state === "approved" ? changeEdits(change) : [];
   const revised = own.some(edit => thread.some(t => t.previous.length && (t.changeId === edit.changeId || matchesEdit(t, edit))));
   return own.length > 1 || revised ? editGroups(own) : undefined;

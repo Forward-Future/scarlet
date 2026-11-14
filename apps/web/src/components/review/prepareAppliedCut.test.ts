@@ -78,6 +78,26 @@ it("prepares a rebased applied cut on its saved version, including the changed p
   ]);
 });
 
+it("prepares an applied cut on the video as it runs now once a later batch has changed it, stepping over that batch's cut too", async () => {
+  // This cut came out in the pass's first batch. A later batch took out the neighbor, which is a cut on another version.
+  const batch = timeline("batch", [{ start: 0, end: removed.start }, { start: removed.end, end: 30 }]);
+  const head = timeline("head", [{ start: 0, end: neighbor.start }, { start: neighbor.end, end: removed.start }, { start: removed.end, end: 30 }]);
+  const change: Change = { id: "change", projectId: project, author: { name: "Scarlet", type: "scarlet" }, description: "Cut a take.",
+    state: "approved", noteIds: [], ranges: [], renders: [], fromVersion: before.version, toVersion: batch.version,
+    ops: [{ op: "rippleDelete", ...removed }] };
+  const selected = edit(0, removed);
+  const target = editToPrepare(selected, change, [selected, edit(1, neighbor, batch.version)],
+    (made, from) => made && made.version !== head.version && from !== head.version ? { version: head.version } : made)!;
+  expect(target.after?.version).toBe(head.version);
+  vi.spyOn(api, "timeline").mockImplementation(async (_project, version) => ({ timeline: version === before.version ? before : version === head.version ? head : batch }));
+  const prepare = vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+  await prepareCut(project, 30, target, new AbortController().signal);
+  // The batch's own version, which still has the neighbor in it, is never prepared or played for this cut.
+  expect(prepare.mock.calls.map(([, version, times]) => [version, times])).toEqual([
+    ["head", [8, 9.5, 12.5 - 1 / 30]], ["before", [8, 12, 10]],
+  ]);
+});
+
 it("rejects a saved version that takes extra footage or leaves in a neighboring removal inside the listen", () => {
   const wanted = cutAudition(removed, "after", 30);
   const extra = timeline("extra", [{ start: 0, end: 8.5 }, { start: 9, end: 10 }, { start: 12, end: 30 }]);

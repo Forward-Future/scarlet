@@ -6,7 +6,7 @@
  */
 import { taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, type AgentCapabilities, type Skill, type Task } from "@scarlet/shared";
 import type { Change, Note, Project, Timeline, TimelineDiff } from "@scarlet/timeline";
-import { describeDiff, formatTimecode } from "@scarlet/timeline";
+import { clipById, describeDiff, formatTimecode } from "@scarlet/timeline";
 import { summarizeProject } from "./analysis.js";
 
 /** What a learning check is shown about the request it reads. */
@@ -180,6 +180,10 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     parts.push(`Your task artifact directory is: ${ctx.workDir}\n\`asset_add\` imports a graphic, animation or music bed you made there, with how you made it.`);
   }
 
+  if (caps.toolPrefix) {
+    parts.push(`This harness prefixes Scarlet’s tool names with \`${caps.toolPrefix}\`. For example, call \`${caps.toolPrefix}project_get\` when a skill names \`project_get\`.`);
+  }
+
   // Project summary
   const summary = typeof ctx.project === "string" ? ctx.project : summarizeProject(ctx.project.project, ctx.project.timeline);
   parts.push(`# Project\n\n${summary}`);
@@ -221,6 +225,12 @@ export function buildSystemPrompt(ctx: PromptContext): string {
         `- ${c.mediaId ? "Source" : "Timeline"} position referenced: ${c.time.toFixed(2)} s (${formatTimecode(c.time, fps)})${c.end !== undefined ? ` to ${c.end.toFixed(2)} s (${formatTimecode(c.end, fps)})` : ""}`,
       );
     }
+    // A stretch marked with nothing open is already the position above. Marked with a cut or an edit open, it is said
+    // besides it: the editor chose both, and which the request means is theirs to say.
+    const marked = c.markedRange;
+    if (marked && !(marked.start === c.time && marked.end === c.end)) {
+      ctxLines.push(`- Stretch the editor marked on the ${marked.mediaId ? "source" : "timeline"}: ${marked.start.toFixed(2)} s (${formatTimecode(marked.start, fps)}) to ${marked.end.toFixed(2)} s (${formatTimecode(marked.end, fps)})${marked.version ? ` on version ${marked.version}` : ""}`);
+    }
     if (c.clipIds?.length) ctxLines.push(`- Clip ids under the playhead: ${c.clipIds.join(", ")}`);
     if (c.noteIds?.length) ctxLines.push(`- Note ids to address: ${c.noteIds.join(", ")} (pass them as noteIds when proposing)`);
     if (c.changeId) ctxLines.push(`- Change being revised: ${c.changeId}`);
@@ -233,7 +243,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
       if (about?.summary?.trim()) ctxLines.push(`- What you told the editor this edit did: "${about.summary.trim()}"`);
       if (about?.check?.trim()) ctxLines.push(`- What you asked the editor to check on this edit: "${about.check.trim()}"`);
     }
-    if (c.changeId && c.cutIndex !== undefined) ctxLines.push(`- Staged cut being revised: index ${c.cutIndex} of ${c.changeId}. Save its new range with \`dialogue_revise_cut\`. For a pause before the cut, use its word-based trim and report the remaining time it verifies on the preview. The range may move past the old edges.`);
+    if (c.changeId && c.cutIndex !== undefined) ctxLines.push(`- Staged cut being revised: index ${c.cutIndex} of ${c.changeId}. \`dialogue_revise_cut\` saves its new range.`);
     if (c.changeId && c.cutIndex !== undefined && ctx.replacedPass) ctxLines.push(`- The request names this cut in ${ctx.replacedPass}, the pass as the editor saw it. A revision or a later part of the pass replaced that pass since with ${c.changeId}, where the cut is index ${c.cutIndex} and may have moved.`);
     if (c.reviewAllCuts) ctxLines.push("- The editor requested individual review of every cut.");
     if (ctxLines.length) {
@@ -259,7 +269,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // Change being revised
   if (ctx.change) {
     const { change, diff } = ctx.change;
-    const desc = ctx.change.description ?? (diff ? describeDiff(diff, (s) => s.toFixed(2)) : []);
+    const desc = ctx.change.description ?? (diff ? describeDiff(diff, undefined, clipById) : []);
     const lines = [
       `Change ${change.id} [${change.state}] by ${change.author.name}${change.author.model ? ` (${change.author.model})` : ""}`,
       `Description: ${change.description}`,
@@ -270,7 +280,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     lines.push(
       "",
       ctx.task?.context?.cutIndex !== undefined
-        ? "The feedback is about one staged cut of this pending pass. Save that cut's new range with dialogue_revise_cut. The other cuts and the editor's calls on them stay as they are."
+        ? "The feedback is about one staged cut of this pending pass."
         : "Revise it by proposing a NEW change against the current head that addresses the feedback (the original stays in history). Reference the note ids.",
     );
     parts.push(`# Change being revised\n\n${lines.join("\n")}`);

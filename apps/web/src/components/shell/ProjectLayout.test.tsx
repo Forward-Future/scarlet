@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
+import * as imports from "../media/UploadDropzone";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { api } from "../../lib/client";
 import { useProjectStore } from "../../stores/project";
+import { startup } from "./BootSplash";
 import { ProjectLayout } from "./ProjectLayout";
 
 vi.mock("../../lib/client", async (original) => {
@@ -60,4 +62,53 @@ it("keeps a missing project distinct from other projects in Trash", async () => 
   await api.deleteProject(project.id);
   await initial.load("prj_missing");
   expect(useProjectStore.getState()).toMatchObject({ status: "error", trashedProject: null, current: null });
+});
+
+it("carries on with imports kept for the project when it opens, and again each time it is read after the engine came back", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const { project } = await api.createProject({ name: "Interview" });
+  const resume = vi.spyOn(imports, "resumeImports").mockResolvedValue(undefined);
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<MemoryRouter initialEntries={[`/p/${project.id}`]}><Routes>
+      <Route path="/p/:id" element={<ProjectLayout />} />
+    </Routes></MemoryRouter>));
+    await act(async () => vi.waitFor(() => expect(useProjectStore.getState().current?.id).toBe(project.id)));
+    expect(resume).toHaveBeenCalledWith(project.id, expect.any(Array));
+    // The engine restarts under the open project. The window stays up, and reads the project again once it is back:
+    // files that were importing when the engine went are waiting, saved, for exactly this.
+    resume.mockClear();
+    await act(async () => { await useProjectStore.getState().load(project.id); });
+    expect(resume).toHaveBeenCalledWith(project.id, useProjectStore.getState().current!.media);
+  } finally {
+    await act(() => root.unmount());
+  }
+});
+
+it("waits for the edit history only for a note's link or the history panel", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const { project } = await api.createProject({ name: "History wait" });
+  const started = startup.done;
+  startup.done = true;
+  onTestFinished(() => { startup.done = started; });
+  const show = async (link: string) => {
+    useProjectStore.setState({
+      load: vi.fn(async () => {}), status: "ready", trashedProject: null,
+      current: { id: project.id, project, timeline: null, media: [], changes: [], notes: [], renders: [], tasks: [], taskEvents: {}, reviewStatus: "loading" },
+    });
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => root.render(<MemoryRouter initialEntries={[link]}><Routes>
+      <Route path="/p/:id" element={<ProjectLayout />}><Route index element={<Destination />} /></Route>
+    </Routes></MemoryRouter>));
+    const text = container.textContent;
+    await act(async () => root.unmount());
+    return text;
+  };
+  expect(await show(`/p/${project.id}?note=note_1`)).toContain("Loading edit history…");
+  expect(await show(`/p/${project.id}?panel=history`)).toContain("Loading edit history…");
+  // Older links named a thread or item that nothing reads any more.
+  expect(await show(`/p/${project.id}?thread=chg_1`)).toBe(`/p/${project.id}?thread=chg_1`);
+  expect(await show(`/p/${project.id}`)).toBe(`/p/${project.id}`);
 });

@@ -1,5 +1,5 @@
 import { AGENT_LABEL } from "@scarlet/shared";
-import { formatTimecode } from "@scarlet/timeline";
+import { clock, formatTimecode } from "@scarlet/timeline";
 import type { Author } from "@scarlet/timeline";
 
 /** Timecode via @scarlet/timeline; never hand-roll this. */
@@ -109,13 +109,7 @@ export function plural(n: number, word: string, pluralWord = `${word}s`): string
  * tags, lists and the transcript. `playbackClock` is the exact time, for where the editor places something to the
  * frame: the timeline's playhead and the note under the pointer, and Export's range.
  */
-export function clock(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds + 1e-6));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const r = String(s % 60).padStart(2, "0");
-  return h ? `${h}:${String(m).padStart(2, "0")}:${r}` : `${m}:${r}`;
-}
+export { clock };
 
 /**
  * A stretch of the video on the clock, from where it starts to where it ends: "0:04 – 0:06". With both ends in the

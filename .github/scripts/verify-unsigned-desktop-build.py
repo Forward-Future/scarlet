@@ -50,13 +50,18 @@ def verify_jobs(jobs):
     require(by_name.get("publish", {}).get("conclusion") == "skipped", "The ordinary publisher must have been skipped.")
     for name in NATIVE_JOBS:
         steps = {step["name"]: step["conclusion"] for step in by_name[name]["steps"]}
-        platform = "Windows" if name == "build / Windows x64" else "Mac"
-        for step in ("Rust tests", "Verify packaged versions and stage installers", "Upload verified installers",
+        if name == "build / Windows x64":
+            platform_checks = ("Verify Windows library permissions", "Check Windows engine startup before building native dependencies")
+        else:
+            platform_checks = ("Check binary architectures", "Test local main updater", "Check the Mac app's code signature")
+        for step in (*platform_checks, "Rust tests", "Verify packaged versions and stage installers", "Upload verified installers",
                      "Inspect the staged public installers and smoke test their engine with external media tools",
-                     f"Smoke test the bundled {platform} engine (ingest, render with captions, MCP)"):
+                     "Build installers"):
             require(steps.get(step) == "success", f"{name} did not complete {step}.")
-        for step in ("Sign and notarize the Mac release", "Sign the Windows application and installers"):
-            require(steps.get(step) == "skipped", f"Unexpected signing state in {name}.")
+        for step in ("Sign and notarize the Mac release", "Sign the Windows application and installers",
+                     "Smoke test the bundled Mac engine (ingest, render with captions, MCP)",
+                     "Smoke test the bundled Windows engine (ingest, render with captions, MCP)"):
+            require(steps.get(step) == "skipped", f"Unexpected {step} state in {name}.")
 
 
 def verify_artifacts(artifacts, run):

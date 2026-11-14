@@ -1,5 +1,5 @@
 import type { Task, User } from "@scarlet/shared";
-import { newId, type Note } from "@scarlet/timeline";
+import { clock, newId, type Note } from "@scarlet/timeline";
 import { cleanupNote } from "../cleanup.js";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
@@ -20,15 +20,6 @@ export interface CreateNoteInput {
   effort?: string;
   serviceTier?: string;
   changeId?: string;
-}
-
-/** A note's place in the video as the renderer's clock writes it: 0:05, 1:15:03. Minutes alone would read 75:03 past an hour. */
-export function clock(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds + 1e-6));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const r = String(s % 60).padStart(2, "0");
-  return h ? `${h}:${String(m).padStart(2, "0")}:${r}` : `${m}:${r}`;
 }
 
 /** Create a review note; optionally dispatch it to an agent as a `note` task. Never touches the timeline. */

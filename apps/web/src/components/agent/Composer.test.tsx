@@ -65,73 +65,30 @@ it.each(["typing", "voice"])("dismisses the first-project glow for good on first
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
   const hint = () => container.querySelector(".composer-box.first-edit-hint");
-  const suggestion = () => container.querySelector('button[aria-label="Make a first cut"]');
-  useSkillsStore.setState({ status: "ready", skills: db.skills });
   useUiStore.getState().offerFirstEditHint("first-project");
   await show();
   expect(hint()).toBeNull();
-  expect(suggestion()).toBeNull();
   await act(() => useProjectStore.setState({ current: { ...current, id: "first-project", project: { ...project, id: "first-project" } } }));
   expect(hint()).not.toBeNull();
-  expect(suggestion()).not.toBeNull();
   if (input === "typing") await type("Trim the intro");
   else await act(() => micProps.onStart?.());
   expect(hint()).toBeNull();
-  expect(suggestion()).toBeNull();
   await type("");
   await act(() => useUiStore.getState().offerFirstEditHint("first-project"));
   expect(hint()).toBeNull();
   expect(localStorage.getItem("scarlet.firstEditHint")).toBe("dismissed");
 });
 
-it("offers the published first cut on the first import and leaves its directions editable until Send", async () => {
+// "There's no notice above the message box. The editor chose this design." (AGENTS.md)
+it("puts nothing above the message box on the first import, even with the dialogue pass ready", async () => {
   const guide = db.skills.find(isDialogueGuide)!;
-  const load = vi.spyOn(api, "skills").mockResolvedValue({ skills: [guide] });
-  useProjectStore.setState({ current: { ...current, media: [] } });
+  useSkillsStore.setState({ status: "ready", skills: [guide] });
   useUiStore.getState().offerFirstEditHint(PRJ);
   await show();
-  const suggestion = () => container.querySelector<HTMLButtonElement>('button[aria-label="Make a first cut"]');
-  expect(suggestion()).toBeNull();
-  expect(load).not.toHaveBeenCalled();
-
-  await act(() => useProjectStore.setState({ current }));
-  expect(load).toHaveBeenCalledTimes(1);
-  expect(suggestion()!.nextElementSibling).toBe(container.querySelector(".composer-box.first-edit-hint"));
-  await act(() => suggestion()!.click());
-  const field = container.querySelector("textarea")!;
-  expect(field.value).toBe("/dialogue-pass ");
-  expect(document.activeElement).toBe(field);
-  expect([field.selectionStart, field.selectionEnd]).toEqual([field.value.length, field.value.length]);
-  expect(container.querySelector('[role="listbox"]')).toBeNull();
-  expect(suggestion()).toBeNull();
-  expect(container.querySelector(".first-edit-hint")).toBeNull();
-  expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
-  await type(field.value + "Keep the pause before the last answer.");
-  await submit();
-  expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
-    instruction: "/dialogue-pass Keep the pause before the last answer.", context: { version: project.head, skillIds: [guide.id] },
-  }));
-  expect(suggestion()).toBeNull();
-});
-
-it("only offers the enabled bundled dialogue pass to an empty, untargeted composer", async () => {
-  const guide = db.skills.find(isDialogueGuide)!;
-  const suggestion = () => container.querySelector('button[aria-label="Make a first cut"]');
-  useSkillsStore.setState({ status: "ready", skills: [{ ...guide, name: "first-cut-dialogue" }] });
-  useUiStore.getState().offerFirstEditHint(PRJ);
-  await show();
-  expect(suggestion()).toBeNull();
-  await act(() => useSkillsStore.setState({ skills: [{ ...guide, enabled: false }] }));
-  expect(suggestion()).toBeNull();
-  await act(() => useSkillsStore.setState({ skills: [{ ...guide, source: undefined, bundledName: undefined }] }));
-  expect(suggestion()).toBeNull();
-  await act(() => useSkillsStore.setState({ skills: [guide] }));
-  expect(suggestion()).not.toBeNull();
-  await selectPoint({ time: 11, clipIds: [] });
-  expect(suggestion()).toBeNull();
-  await act(() => useUiStore.setState({ agentContext: null, agentDraft: "Keep my directions" }));
-  expect(suggestion()).toBeNull();
-  expect(container.querySelector("textarea")!.value).toBe("Keep my directions");
+  expect(container.querySelector(".composer-box.first-edit-hint")).not.toBeNull();
+  expect(container.querySelector('button[aria-label="Make a first cut"]')).toBeNull();
+  expect(container.querySelector(".composer-first-cut")).toBeNull();
+  expect(container.querySelector("textarea")!.value).toBe("");
 });
 
 it("switches models above the draft and sends the edit with the selected model", async () => {
@@ -985,6 +942,27 @@ it("carries a tag inside the box for what the message revises, and its × hands 
   expect(useUiStore.getState().agentDraft).toBe("Keep the laugh");
 });
 
+it("carries a stretch marked on the timeline as a second tag, and its × takes off the stretch alone", async () => {
+  const cut: AgentContext = { changeId: "chg_1", cutIndex: 0, version: "v1", time: 125, end: 127, clipIds: [], label: "Cut at 2:05" };
+  await act(async () => useUiStore.getState().setAgentContext({ ...cut, markedRange: { start: 42, end: 51.5, version: "v2" } }));
+  await show({ targetTag: "Cut at 2:05" });
+  const tags = () => [...container.querySelectorAll(".composer-row > .composer-tag .composer-tag-name")].map(tag => tag.textContent);
+  // The cut's tag comes first, as it always did, and the stretch after it.
+  expect(tags()).toEqual(["Cut at 2:05", "0:42 – 0:51"]);
+  const clear = container.querySelector<HTMLButtonElement>(".composer-range .composer-tag-clear")!;
+  expect(clear.getAttribute("aria-label")).toBe("Take the marked range 0:42 – 0:51 off the message");
+  await act(async () => clear.click());
+  // The message is still about the cut, at the cut's own time.
+  expect(useUiStore.getState().agentContext).toEqual(cut);
+  expect(tags()).toEqual(["Cut at 2:05"]);
+  // A stretch marked with nothing open is the whole aim: taking it off leaves a new edit about the whole video.
+  await act(async () => useUiStore.getState().setAgentContext({ time: 42, end: 51.5, clipIds: [], markedRange: { start: 42, end: 51.5 } }));
+  await show();
+  expect(tags()).toEqual(["0:42 – 0:51"]);
+  await act(async () => container.querySelector<HTMLButtonElement>(".composer-range .composer-tag-clear")!.click());
+  expect(useUiStore.getState().agentContext).toBeNull();
+});
+
 it("keeps the tag's × from taking the box elsewhere while a spoken message is in it, which would drop the recording", async () => {
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
@@ -1318,4 +1296,40 @@ it("saves a queued request's words once while Enter is held, and doesn't send th
     .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", repeat: true, bubbles: true, cancelable: true })));
   expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
   expect(useUiStore.getState().agentDraft).toBe("Tighten every pause");
+});
+
+it("takes the caret after the message when the page hands it the keyboard, and leaves a caret already in it alone", async () => {
+  await show();
+  await type("Keep the laugh");
+  const field = container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
+  // A box that was just built around its message has the caret before the first letter.
+  field.setSelectionRange(0, 0);
+  await act(async () => useUiStore.getState().focusComposer());
+  expect(document.activeElement).toBe(field);
+  expect([field.selectionStart, field.selectionEnd]).toEqual([14, 14]);
+  // The editor is typing in the middle of it when the page asks again: the caret stays put.
+  field.setSelectionRange(4, 4);
+  await act(async () => useUiStore.getState().focusComposer());
+  expect([field.selectionStart, field.selectionEnd]).toEqual([4, 4]);
+});
+
+it("says what went wrong with the microphone on the line over the box, until the editor types or tries the mic again", async () => {
+  let micProps!: ComponentProps<typeof mic.MicButton>;
+  vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
+  await show();
+  const line = () => container.querySelector('.composer-dock > [role="alert"]')?.textContent;
+  const denied = "Microphone access was denied. Allow the microphone for this site and try again.";
+  expect(line()).toBeUndefined();
+  await act(async () => micProps.onError?.(denied));
+  expect(line()).toBe(denied);
+  await type("Tighten the opening");
+  expect(line()).toBeUndefined();
+  // Allowed since, the mic is tried again: the old refusal isn't still said over a recording that is under way.
+  await act(async () => micProps.onError?.(denied));
+  expect(line()).toBe(denied);
+  await act(async () => micProps.onStart?.());
+  expect(line()).toBeUndefined();
+  // Refused again, it says so again once the mic lets go.
+  await act(async () => { micProps.onError?.(denied); });
+  expect(line()).toBe(denied);
 });

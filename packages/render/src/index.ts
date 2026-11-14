@@ -1,4 +1,4 @@
-export { fileInDirectory } from "./assetPath.js";
+export { fileInDirectory, fileInDirectoryAsync } from "./assetPath.js";
 export * from "./exec.js";
 export * from "./probe.js";
 export * from "./waveform.js";

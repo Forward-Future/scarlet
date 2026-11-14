@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { MultipartParseError, parseMultipartRequest } from "@remix-run/multipart-parser/future";
-import { fileInDirectory, hasIndexedAvc, speechActivity } from "@scarlet/render";
+import { fileInDirectoryAsync, hasIndexedAvc, speechActivity } from "@scarlet/render";
 import { Hono } from "hono";
 import { z } from "zod/v3";
 import { DialogueVoiceRoles, isPlayableMedia, MediaKind, Provenance } from "@scarlet/timeline";
@@ -48,7 +48,7 @@ export function mediaRoutes(ctx: Ctx) {
     requireLocalPauseTarget(requireProjectEditAttempt(ctx, attempt, source.projectId));
     const { roles, from, to } = await jsonBody(c, z.object({ roles: DialogueVoiceRoles, from: z.number().finite().nonnegative(), to: z.number().finite().positive() }));
     if (to <= from || to - from > 60 || to > (source.duration ?? 0)) throw badRequest("voice_reference", "Choose a reference of up to one minute with both voices.");
-    const file = fileInDirectory(ctx.paths.media(source.projectId), source.path);
+    const file = await fileInDirectoryAsync(ctx.paths.media(source.projectId), source.path);
     if (!file) throw notFound("source file");
     if (!(await ctx.track(sourceLabels(file, ctx.mediaSignal(source.projectId)))).length) throw badRequest("voice_inputs", "Choose a synchronized recording with a mix and two isolated inputs.");
     const { mix } = await ctx.track(readSourceEnergy(file, from, to, ctx.mediaSignal(source.projectId)));
@@ -263,7 +263,7 @@ export function mediaRoutes(ctx: Ctx) {
       if (from < 0 || to > duration + 0.000001 || to <= from || to > from + 60) {
         throw badRequest("bad_speech_range", "Choose up to 60 seconds within the source audio.");
       }
-      const file = fileInDirectory(ctx.paths.media(media.projectId), media.path);
+      const file = await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path);
       if (!file) throw notFound("source file");
       const info = await stat(file);
       const key = JSON.stringify(["vad", file, media.hash, info.size, info.ctimeMs, info.mtimeMs, from, to]);

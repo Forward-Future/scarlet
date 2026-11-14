@@ -178,12 +178,13 @@ export function TranscriptionAction({ asset, available, disabled }: { asset: Med
   const transcribe = useProjectStore((s) => s.transcribe);
   const [error, setError] = useState("");
   const [starting, setStarting] = useState(false);
-  const { running, latest } = useTranscriptionRun(asset);
+  const { running, latest, paused, mediaPaused } = useTranscriptionRun(asset);
   if (starting || running) {
     const progress = transcriptionProgressLabel(running?.progress);
     return <Chip tone="info"><Spinner className="size-2.5" /> Transcribing{progress && ` · ${progress}`}</Chip>;
   }
   if (isPreparingMedia(asset)) return null;
+  if (paused) return <Chip>Transcription paused</Chip>;
   if (available === false) return <Link to="/settings" className="btn-ghost">Set up transcription</Link>;
   async function start() {
     if (starting) return;
@@ -200,6 +201,6 @@ export function TranscriptionAction({ asset, available, disabled }: { asset: Med
   const failure = error || (latest?.state === "failed" ? latest.error || "Transcription failed." : "");
   return <div className="flex max-w-full flex-wrap items-center gap-2">
     {failure && <span role="alert" className="text-bad text-[12px] break-words">{failure}</span>}
-    <button className="btn-ghost" disabled={disabled || available === undefined} onClick={() => void start()}>{failure ? "Retry transcription" : "Transcribe"}</button>
+    <button className="btn-ghost" disabled={disabled || available === undefined || mediaPaused} title={mediaPaused ? "Resume caching to transcribe this file." : undefined} onClick={() => void start()}>{failure ? "Retry transcription" : "Transcribe"}</button>
   </div>;
 }

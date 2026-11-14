@@ -132,6 +132,11 @@ function rustRecords(target) {
     if (pkg.repository === "https://github.com/madsmtm/objc2") files.push(join(sources, "objc2.md"), join(sources, "objc2-MIT.txt"));
     if (pkg.name === "selectors") files.push(join(sources, "MPL-2.0.txt"));
     if (pkg.name === "alloc-stdlib") files.push(join(sources, "alloc-stdlib.txt"));
+    if (pkg.name === "dlopen2") files.push(join(sources, "dlopen2.txt"));
+    if (pkg.name === "libappindicator-sys") {
+      const workspace = metadata.packages.find(p => p.name === "libappindicator" && p.version === pkg.version);
+      if (workspace) files.push(...notices(dirname(workspace.manifest_path)));
+    }
     if (pkg.repository === "https://github.com/wravery/webview2-rs") files.push(join(sources, "webview2-rs.txt"));
     return { name: `${pkg.name}@${pkg.version}`, license: pkg.license || basename(pkg.license_file),
       source: `https://crates.io/api/v1/crates/${pkg.name}/${pkg.version}/download`, files };
@@ -156,7 +161,7 @@ async function main() {
   const [flag, explicitTarget] = process.argv.slice(2);
   const target = flag === "--target" ? explicitTarget : process.env.TAURI_ENV_TARGET_TRIPLE
     ?? execFileSync("rustc", ["-vV"], { encoding: "utf8" }).match(/^host: (\S+)/m)?.[1];
-  if ((flag && flag !== "--target") || !["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc"].includes(target)) {
+  if ((flag && flag !== "--target") || !["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"].includes(target)) {
     throw new Error("Pass --target followed by a supported desktop target triple");
   }
   const dest = join(bundled, "runtime");
