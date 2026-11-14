@@ -46,8 +46,9 @@ function spread(from: HTMLCanvasElement, to: CanvasRenderingContext2D, r: number
 
 /**
  * The footage's own colours, glowing softly into the dark around the player and under the timeline, as a room lit by
- * its screen. It follows the picture as it plays and eases between shots. It asks nothing of the video: it copies the
- * frame on screen into a small canvas behind the stage and blurs it there.
+ * its screen. It follows the picture as it plays and eases between shots. With motion reduced it holds still while the
+ * picture plays and is set at once when it rests. It asks nothing of the video: it copies the frame on screen into a
+ * small canvas behind the stage and blurs it there.
  *
  * The blur is the canvas's own. WebKit has no canvas filter, and a CSS blur on a canvas that changes repaints only the
  * part that was drawn on, so the light round the picture kept showing the frame before.
@@ -62,6 +63,7 @@ export function AmbientLight({ stage, monitor }: { stage: RefObject<HTMLElement 
     if (!el || !area || !context || !frame.context || !glow.context || passes.some(p => !p.context)) return;
     const latest = frame.context, easing = glow.context;
     const all = [el, frame.el, glow.el, ...passes.map(p => p.el)];
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     let shown: HTMLVideoElement | undefined, seen = "", settleUntil = 0, lastLook = 0, lit = false, blank = true;
     const fit = () => {
       const width = Math.max(1, Math.round(area.clientWidth * SCALE)), height = Math.max(1, Math.round(area.clientHeight * SCALE));
@@ -78,6 +80,9 @@ export function AmbientLight({ stage, monitor }: { stage: RefObject<HTMLElement 
         if (lit) { context.clearRect(0, 0, el.width, el.height); easing.clearRect(0, 0, glow.el.width, glow.el.height); light(false); shown = undefined; blank = true; }
         return;
       }
+      const still = reduceMotion.matches;
+      // With motion reduced, a glow already drawn holds as it is while the picture plays.
+      if (still && !blank && !video.paused && !video.ended) return;
       const box = video.getBoundingClientRect(), origin = area.getBoundingClientRect();
       const picture = pictureRect(box, video);
       const at = `${video.currentTime}|${box.left - origin.left}|${box.top - origin.top}|${picture.width}|${picture.height}`;
@@ -94,8 +99,9 @@ export function AmbientLight({ stage, monitor }: { stage: RefObject<HTMLElement 
       const width = picture.width * (1 + 2 * SPREAD) * SCALE, height = picture.height * (1 + 2 * SPREAD) * SCALE;
       try {
         // The first look at a picture fills the glow at once. After that each look moves the whole glow a step toward
-        // the frame, so light from a picture of another shape, or from before a resize, fades out too.
-        if (fresh || blank) {
+        // the frame, so light from a picture of another shape, or from before a resize, fades out too. With motion reduced
+        // every look sets the glow at once.
+        if (fresh || blank || still) {
           easing.clearRect(0, 0, glow.el.width, glow.el.height);
           easing.drawImage(video, x, y, width, height);
         } else {
