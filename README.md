@@ -58,4 +58,4 @@ Bug reports and pull requests are welcome. For a bug, include your operating sys
 
 ## License
 
-Scarlet is MIT-licensed. It includes workflows adapted from Alex’s DaVinci editing skills, © 2026 Alex (@The_Alex) and Forward Future. [Scarlet license](LICENSE) · [Editing skills license](apps/desktop/src-tauri/licenses/alex-editing-skills.txt)
+Scarlet is MIT-licensed. It includes workflows adapted from Alex’s DaVinci editing skills, © 2026 Alex (@The_Alex) and Forward Future. Acoustic filler detection is [Powered by Desert Ant Labs](https://desertant.com/). [Scarlet license](LICENSE) · [Editing skills license](apps/desktop/src-tauri/licenses/alex-editing-skills.txt)
