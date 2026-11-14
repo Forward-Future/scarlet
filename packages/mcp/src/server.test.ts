@@ -41,7 +41,7 @@ let mock: MockServer;
 let client: Client;
 let textOf: (r: CallToolResult) => string;
 
-async function connect(taskId?: string, workDir?: string, task?: Task, editingTools?: EditingTools, alignmentWaitMs?: number) {
+async function connect(taskId?: string, workDir?: string, task?: Task, editingTools?: EditingTools, alignmentWaitMs?: number, agent = "claude") {
   const sc = new ScarletClient({ baseUrl: mock.url, token: "tok" });
   const server = createScarletMcpServer(sc, {
     projectId: "prj_test",
@@ -50,8 +50,8 @@ async function connect(taskId?: string, workDir?: string, task?: Task, editingTo
     taskId,
     taskStartedAt: taskId ? "2026-04-01T12:00:00.000Z" : undefined,
     task,
-    agent: "claude",
-    author: { type: "agent", id: "claude", name: "claude", model: "opus" },
+    agent,
+    author: { type: "agent", id: agent, name: agent, model: "opus" },
     workDir,
   });
   const [a, b] = InMemoryTransport.createLinkedPair();
@@ -88,7 +88,8 @@ describe("MCP file tools", () => {
     const dir = await mkdtemp(join(tmpdir(), "scarlet-artifact-test-"));
     const root = join(dir, "artifacts");
     await mkdir(root);
-    const c = await connect(undefined, root);
+    // asset_add is offered only to a harness that can write files, such as Codex.
+    const c = await connect(undefined, root, undefined, undefined, undefined, "codex");
     try {
       await writeFile(join(dir, "credential"), "private");
       await writeFile(join(root, "image.png"), "graphic");
@@ -114,7 +115,7 @@ describe("MCP file tools", () => {
         // symlinked ancestor, then reuse the absolute path returned by export.
         const alias = join(dir, "alias");
         await symlink(dir, alias);
-        const aliased = await connect(undefined, join(alias, "artifacts"));
+        const aliased = await connect(undefined, join(alias, "artifacts"), undefined, undefined, undefined, "codex");
         try {
           const exported = await aliased.callTool({ name: "export_otio", arguments: { version: "v1" } }) as CallToolResult;
           const payload = JSON.parse(textOf(exported).split("\n\n").at(-1)!);
@@ -155,11 +156,19 @@ describe("tools/list", () => {
       expect(unavailable.isError).toBe(true);
     } finally { await session.close(); }
   });
+  it("offers asset_add only to a harness that can write files", async () => {
+    const codex = await connect(undefined, undefined, undefined, undefined, undefined, "codex");
+    try {
+      expect((await codex.listTools()).tools.map(t => t.name)).toContain("asset_add");
+    } finally { await codex.close(); }
+    expect((await client.listTools()).tools.map(t => t.name)).not.toContain("asset_add");
+  });
   it("registers every Scarlet tool with a description", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
-    // Claude's harness does not deliver audio, so nothing offers WAV. Only the check that reads a request offers a rule.
-    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => n !== "source_audio" && n !== "learning_suggest").sort());
+    // Claude's harness does not deliver audio, so nothing offers WAV, and has no file tools, so nothing imports from the
+    // artifact directory. Only the check that reads a request offers a rule.
+    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => n !== "source_audio" && n !== "learning_suggest" && n !== "asset_add").sort());
     for (const t of tools) expect(Object.keys(t.inputSchema.properties ?? {})).not.toContain("includeAudio");
     expect(JSON.stringify(tools)).not.toMatch(/\bWAV\b|can (hear|play)|accepts audio|consume audio/);
     for (const t of tools) expect(t.description?.length ?? 0).toBeGreaterThan(20);
@@ -486,6 +495,16 @@ describe("timeline_propose", () => {
       arguments: { intent: "requested", ops: [{ op: "removeClip", clipId: "does_not_exist" }], description: "x" },
     })) as CallToolResult;
     expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain("clip does_not_exist not found");
+  });
+
+  it("no longer offers the unused placement hint, and still reads a call that sends it", async () => {
+    const propose = (await client.listTools()).tools.find(t => t.name === "timeline_propose")!;
+    expect(Object.keys(propose.inputSchema.properties ?? {})).not.toContain("syncSetup");
+    const r = (await client.callTool({
+      name: "timeline_propose",
+      arguments: { intent: "requested", ops: [{ op: "removeClip", clipId: "does_not_exist" }], description: "x", syncSetup: true },
+    })) as CallToolResult;
     expect(textOf(r)).toContain("clip does_not_exist not found");
   });
 

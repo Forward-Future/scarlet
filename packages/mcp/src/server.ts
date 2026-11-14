@@ -832,6 +832,8 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>,
   ) {
     if (disabled.has(name) || (name === "source_audio" && !caps.audio)) return;
+    // Only a harness with file tools can put anything in the artifact directory for asset_add to import.
+    if (name === "asset_add" && !caps.files) return;
     if (authoring && !SKILL_FROM_CHANGE_TOOLS.has(name)) return;
     if (!caps.images && IMAGE_TOOLS.has(name)) return;
     // A request to revise a skill edits no video. It gets the tools for talking to the editor and for the skill.
@@ -2299,7 +2301,6 @@ ${OPS_DOC}`,
       noteIds: z.array(z.string()).optional().describe("Review note ids this change responds to"),
       fromVersion: z.string().optional().describe("Version the ops apply to. Defaults to the version you last read with timeline_get or timeline_at; leave it out unless you mean another version."),
       range: z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().positive() }).optional().describe("Timeline range on the base version for synchronized ripple removals across all tracks, including local pauses."),
-      syncSetup: z.boolean().optional().describe("Legacy placement hint. Clip positions and transforms come from the submitted edit."),
       pictureLayout: z.union([z.object({ screenClipId: z.string(), cameraClipId: z.string(),
         framing: InsetFraming.optional(),
       }), z.literal("asPlaced")]).optional()
