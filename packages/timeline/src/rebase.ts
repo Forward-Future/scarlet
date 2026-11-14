@@ -522,6 +522,18 @@ export function rebaseOp(op: TimelineOp, map: TimeMap, onto: Timeline, index = 0
   }
 }
 
+const FOOTAGE_KEYS = ["sourceIn", "sourceOut", "speed"] as const;
+
+function sameFootage(before: Clip | undefined, now: Clip | undefined, map: () => TimeMap, fps: number): boolean {
+  if (before?.kind !== "media" || now?.kind !== "media") return false;
+  if (now.mediaId !== before.mediaId || now.speed !== before.speed) return false;
+  if (Math.abs(now.sourceIn - before.sourceIn) > EPS || Math.abs(now.sourceOut - before.sourceOut) > EPS) return false;
+  // The map follows the first layer at that time, which can be another track's clip.
+  if (sameFrame(before.timelineIn, now.timelineIn, fps)) return true;
+  const placed = map()(before.timelineIn, "right");
+  return placed != null && sameFrame(placed, now.timelineIn, fps);
+}
+
 /**
  * Replay `ops` (written in sequence against `base`) onto `onto`, translating
  * every time through the footage. `include(i)` skips ops; later ops are still
@@ -531,9 +543,19 @@ export function rebaseOp(op: TimelineOp, map: TimeMap, onto: Timeline, index = 0
 export function replayOps(base: Timeline, ops: TimelineOp[], onto: Timeline, include: (i: number) => boolean = () => true, fps = 30, translatedOps?: TimelineOp[]): Timeline {
   let orig = base;
   let cur = onto;
+  let map: TimeMap | undefined;
   ops.forEach((op, i) => {
     const nextOrig = applyOp(orig, op);
     if (include(i)) {
+      // A trim or a speed change is written for the footage the clip held. Whether the current version changed that
+      // footage since doesn't depend on which of the change's edits go in, so the clip is compared where both started.
+      if (op.op === "updateClip" && FOOTAGE_KEYS.some(key => op.patch[key] !== undefined)) {
+        const before = findClip(base, op.clipId);
+        const now = findClip(onto, op.clipId);
+        if ((before?.kind === "media" || now?.kind === "media") && !sameFootage(before, now, () => (map ??= makeTimeMap(base, onto, fps)), fps)) {
+          throw new RebaseConflict(`the footage under clip ${op.clipId} changed since`, i, before?.timelineIn);
+        }
+      }
       // makeTimeMap would serialize both track lists again to decide the same thing.
       const tracksSame = stableStringify(orig.tracks) === stableStringify(cur.tracks);
       const same = tracksSame && stableStringify(orig.markers) === stableStringify(cur.markers);

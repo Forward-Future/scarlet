@@ -265,6 +265,8 @@ describe("changedSpots", () => {
 });
 
 describe("parallel changes", () => {
+  const footageChanged = (id: string) => ({ kind: "conflict", reason: `the footage under clip ${id} changed since` });
+
   const A: TimelineOp[] = [{ op: "rippleDelete", start: 2, end: 3 }];
   const B: TimelineOp[] = [{ op: "rippleDelete", start: 10, end: 11 }];
 
@@ -305,6 +307,133 @@ describe("parallel changes", () => {
     const to = applyOps(base, overlapping);
     const plan = planApply({ from: base, to, head, ops: overlapping, changeRanges: diffTimelines(base, to).ranges });
     expect(plan.kind).toBe("conflict");
+  });
+
+  it("refuses a clip trim when a cut approved since split that clip", () => {
+    const base = timelineFromKeepRanges(P, "m1", [{ start: 0, end: 10 }]);
+    const clipId = base.tracks[0]!.clips[0]!.id;
+    const trim: TimelineOp[] = [{ op: "updateClip", clipId, patch: { sourceOut: 8 } }];
+    const to = applyOps(base, trim);
+    // The cut keeps the clip's id on the left piece, which now ends at source 5.
+    const head = applyOps(base, [{ op: "rippleDelete", start: 5, end: 6 }]);
+    const plan = planApply({ from: base, to, head, ops: trim, changeRanges: diffTimelines(base, to).ranges });
+    expect(plan).toMatchObject(footageChanged(clipId));
+  });
+
+  it("still re-applies a clip trim when a cut approved since left the clip's footage alone", () => {
+    const base = timelineFromKeepRanges(P, "m1", [{ start: 0, end: 10 }, { start: 12, end: 20 }]);
+    const [first, second] = base.tracks[0]!.clips.map(c => c.id);
+    const approve = (trim: TimelineOp, cut: TimelineOp) => {
+      const to = applyOps(base, [trim]);
+      const plan = planApply({ from: base, to, head: applyOps(base, [cut]), ops: [trim], changeRanges: diffTimelines(base, to).ranges });
+      expect(plan.kind).toBe("rebased");
+      return plan.kind === "rebased" ? plan.timeline.tracks[0]!.clips : [];
+    };
+    // A cut in the other clip, after the trim.
+    expect(approve({ op: "updateClip", clipId: first!, patch: { sourceOut: 8 } }, { op: "rippleDelete", start: 15, end: 16 })).toMatchObject([
+      { id: first, timelineIn: 0, sourceIn: 0, sourceOut: 8 }, { id: second, timelineIn: 10, sourceIn: 12, sourceOut: 17 }, { timelineIn: 15, sourceIn: 18 },
+    ]);
+    // A cut before the trimmed clip only moves it.
+    expect(approve({ op: "updateClip", clipId: second!, patch: { sourceOut: 18 } }, { op: "rippleDelete", start: 2, end: 3 })).toMatchObject([
+      { id: first, timelineIn: 0, sourceOut: 2 }, { timelineIn: 2, sourceIn: 3, sourceOut: 10 }, { id: second, timelineIn: 9, sourceIn: 12, sourceOut: 18 },
+    ]);
+  });
+
+  it("still re-applies a clip trim when a clip approved since moved on another track", () => {
+    const base = timelineFromKeepRanges(P, "m1", [{ start: 0, end: 10 }]);
+    base.tracks[0]!.clips = [makeMediaClip("m1", 0, 6, 0, { id: "primary" })];
+    const overlay = makeTrack("video", "Overlay", "overlay");
+    overlay.clips.push(makeMediaClip("m2", 0, 10, 0, { id: "c" }));
+    base.tracks.push(overlay);
+    const trim: TimelineOp[] = [{ op: "updateClip", clipId: "c", patch: { sourceOut: 8 } }];
+    const to = applyOps(base, trim);
+    // Only the clip on V1 moved; `c` sits where it was, holding the same footage.
+    const head = applyOps(base, [{ op: "moveClip", clipId: "primary", timelineIn: 1 }]);
+    const plan = planApply({ from: base, to, head, ops: trim, changeRanges: diffTimelines(base, to).ranges });
+    expect(plan.kind).toBe("rebased");
+    expect(plan.kind === "rebased" ? plan.timeline.tracks.find(t => t.id === "overlay")!.clips : []).toMatchObject([
+      { id: "c", timelineIn: 0, sourceIn: 0, sourceOut: 8 },
+    ]);
+  });
+
+  it("refuses a clip trim when the clip's id now holds footage it didn't hold when the change was made", () => {
+    const base = timelineFromKeepRanges(P, "m1", [{ start: 0, end: 10 }]);
+    const track = base.tracks[0]!;
+    track.clips = [{ id: "card", kind: "color", enabled: true, timelineIn: 0, timelineOut: 10, color: "black", opacity: 1 }];
+    // The source field does nothing on a card; the label makes the change real.
+    const ops: TimelineOp[] = [{ op: "updateClip", clipId: "card", patch: { sourceOut: 8, label: "Rename card" } }];
+    const to = applyOps(base, ops);
+    // Since then the card became footage under the same id, and a cut split it.
+    const head = applyOps(base, [
+      { op: "removeClip", clipId: "card" },
+      { op: "addClip", trackId: track.id, clip: makeMediaClip("m1", 0, 10, 0, { id: "card" }) },
+      { op: "rippleDelete", start: 5, end: 6 },
+    ]);
+    const plan = planApply({ from: base, to, head, ops, changeRanges: diffTimelines(base, to).ranges });
+    expect(plan).toMatchObject(footageChanged("card"));
+  });
+
+  it("approves either of two trims of one clip on its own", () => {
+    const base = timelineFromKeepRanges(P, "m1", [{ start: 0, end: 10 }, { start: 12, end: 22 }]);
+    const [first, second] = base.tracks[0]!.clips.map(c => c.id);
+    const ops: TimelineOp[] = [
+      { op: "updateClip", clipId: second!, patch: { sourceIn: 14 } },
+      { op: "updateClip", clipId: second!, patch: { sourceOut: 20 } },
+    ];
+    const to = applyOps(base, ops);
+    const changeRanges = diffTimelines(base, to).ranges;
+    expect(changeRanges).toHaveLength(2);
+    expect(assignSpots(base, ops, changeRanges)).toEqual([0, 1]);
+    expect(canApproveSpots(base, ops, changeRanges)).toBe(true);
+    const approve = (head: Timeline, spot: number) => {
+      const plan = planApply({ from: base, to, head, ops, spots: [spot], changeRanges });
+      expect(plan.kind).toBe("partial");
+      return plan.kind === "partial" ? plan.timeline.tracks[0]!.clips.find(c => c.id === second) : undefined;
+    };
+    expect(approve(base, 0)).toMatchObject({ timelineIn: 10, sourceIn: 14, sourceOut: 22 });
+    expect(approve(base, 1)).toMatchObject({ timelineIn: 10, sourceIn: 12, sourceOut: 20 });
+    // A cut approved since in the other clip only moves this one.
+    const head = applyOps(base, [{ op: "rippleDelete", start: 2, end: 3 }]);
+    expect(head.tracks[0]!.clips.map(c => c.id)).toEqual([first, expect.any(String), second]);
+    expect(approve(head, 0)).toMatchObject({ timelineIn: 9, sourceIn: 14, sourceOut: 22 });
+    expect(approve(head, 1)).toMatchObject({ timelineIn: 9, sourceIn: 12, sourceOut: 20 });
+  });
+
+  it("refuses one of two trims of a clip on its own when a cut approved since split that clip", () => {
+    const base = timelineFromKeepRanges(P, "m1", [{ start: 0, end: 10 }]);
+    const clipId = base.tracks[0]!.clips[0]!.id;
+    const ops: TimelineOp[] = [
+      { op: "updateClip", clipId, patch: { sourceIn: 2 } },
+      { op: "updateClip", clipId, patch: { sourceOut: 8 } },
+    ];
+    const to = applyOps(base, ops);
+    const changeRanges = diffTimelines(base, to).ranges;
+    const head = applyOps(base, [{ op: "rippleDelete", start: 5, end: 6 }]);
+    const approve = (spot: number) => planApply({ from: base, to, head, ops, spots: [spot], changeRanges });
+    // Either trim alone would stretch the left piece back over the right one.
+    for (const spot of [0, 1]) expect(approve(spot)).toMatchObject(footageChanged(clipId));
+  });
+
+  it("refuses a trim no spot shows, approved with a later spot, when a cut approved since split its clip", () => {
+    const base = timelineFromKeepRanges(P, "m1", [{ start: 0, end: 30 }]);
+    const hidden = makeTrack("video", "B-roll", "v2");
+    hidden.hidden = hidden.muted = true;
+    hidden.clips.push(makeMediaClip("m2", 0, 10, 10, { id: "c" }));
+    const captions = makeTrack("caption", "Captions", "cc");
+    captions.clips.push({ kind: "caption", id: "a", enabled: true, timelineIn: 0, timelineOut: 2, text: "a" },
+      { kind: "caption", id: "z", enabled: true, timelineIn: 25, timelineOut: 27, text: "z" });
+    base.tracks.push(hidden, captions);
+    const ops: TimelineOp[] = [
+      { op: "updateClip", clipId: "a", patch: { text: "changed a" } },
+      { op: "updateClip", clipId: "c", patch: { sourceOut: 8 } },
+      { op: "updateClip", clipId: "z", patch: { text: "changed z" } },
+    ];
+    const to = applyOps(base, ops);
+    const changeRanges = diffTimelines(base, to).ranges;
+    expect(assignSpots(base, ops, changeRanges)).toEqual([0, null, 1]);
+    const head = applyOps(base, [{ op: "rippleDelete", start: 15, end: 16, trackIds: ["v2"] }]);
+    const plan = planApply({ from: base, to, head, ops, spots: [1], changeRanges });
+    expect(plan).toMatchObject(footageChanged("c"));
   });
 
   it("refuses to merge a whole-timeline replacement onto a moved cut", () => {
