@@ -107,7 +107,7 @@
  *  Quick actions
  *
  *  Settings
- *   GET    /settings                                     → { settings: ServerSettings, transcriptionAvailable: boolean }
+ *   GET    /settings                                     → { settings: ServerSettings, transcriptionAvailable: boolean, transcriptionIssue?: string }
  *   GET    /settings/local-model                         → LocalModelStatus (selection, active local engine and readiness)
  *   PATCH  /settings                Partial<ServerSettings> → { settings }
  *

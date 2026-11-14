@@ -439,13 +439,16 @@ impl EngineManager {
                 env.insert("SCARLET_BIN_DIR".into(), bin.to_string_lossy().to_string());
             }
         }
-        if launch.kind == "dev" {
-            // Tauri places the media tools beside the desktop executable. The dev engine runs under Node elsewhere.
+        if launch.kind != "sidecar" {
+            // Tauri places the media tools, whisper-cli among them, beside the desktop executable. A dev engine, or one
+            // from SCARLET_ENGINE_CMD, runs under Node elsewhere and would otherwise find no local transcription runtime.
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(dir) = exe.parent() {
                     env.entry("SCARLET_BIN_DIR".into()).or_insert_with(|| dir.to_string_lossy().into_owned());
                 }
             }
+        }
+        if launch.kind == "dev" {
             let skills = dev_repo_root().join("skills");
             if skills.is_dir() && !env.contains_key("SCARLET_SKILLS_SEED") {
                 env.insert("SCARLET_SKILLS_SEED".into(), skills.to_string_lossy().to_string());
