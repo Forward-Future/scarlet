@@ -33,7 +33,7 @@ import { frameAligned, frameAlignedRemoval, isPublishedCall, onFrame, makeStaged
   type CutReview,
   makeTimeMap,
   mergeRanges,
-  describeDiff,
+  clipById, describeDiff,
   describeDialogueRemovals,
   diffTimelines,
   timelineDuration,
@@ -1266,9 +1266,9 @@ function persistProposal(ctx: Ctx, user: User, projectId: string, body: ProposeC
   if (change.state === "approved" && change.appliedVersion && change.appliedVersion !== stored.version) {
     const timeline = resolveTimeline(ctx, project, change.appliedVersion);
     const applied = diffTimelines(resolveTimeline(ctx, project, change.appliedOnto), timeline, project.settings.fps);
-    return { change, timeline, duration: applied.durationAfter, diffDescription: describeDiff(applied) };
+    return { change, timeline, duration: applied.durationAfter, diffDescription: describeDiff(applied, undefined, clipById) };
   }
-  return { change, timeline: stored, duration: diff.durationAfter, diffDescription: describeDiff(diff) };
+  return { change, timeline: stored, duration: diff.durationAfter, diffDescription: describeDiff(diff, undefined, clipById) };
 }
 
 /** Tell the editor when an agent's change is ready for a decision. */

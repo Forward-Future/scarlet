@@ -3271,14 +3271,20 @@ it("encodes one preview across ten simultaneous versions and keeps their identit
   const base = ensureHead(ctx, project.id).head;
   for (let i = 0; i < 10; i++) {
     const response = await api("POST", projectsPath() + "/changes?summary=true", { description: "Cards", fromVersion: base,
-      ops: [{ op: "addClip", trackId: "v1", clip: { id: "intro", kind: "color", color: "red", timelineIn: 0, timelineOut: 10 } },
+      ops: [{ op: "addClip", trackId: "v1", clip: { id: "intro", label: "Opening card", kind: "color", color: "red", timelineIn: 0, timelineOut: 10 } },
         { op: "addClip", trackId: "v1", clip: { id: "later", kind: "color", color: "blue", timelineIn: 20, timelineOut: 21 + i } }] });
     expect(response.status).toBe(201);
     const summary = await response.json();
     expect(summary).not.toHaveProperty("timeline");
     expect(summary.change).not.toHaveProperty("ops");
     expect(summary.duration).toBe(21 + i);
-    expect(summary.diffDescription.length).toBeGreaterThan(0);
+    // The agent reads this diff, and an op takes a clip's id: a labelled clip is named by its id, with the label after it.
+    expect(summary.diffDescription[0]).toBe("Added color clip intro “Opening card” at 0.00");
+    if (i === 0) {
+      const path = projectsPath() + `/versions/${base}/diff/${summary.change.toVersion}`;
+      expect((await (await api("GET", path)).json()).description[0]).toBe("Added color clip Opening card at 0.00");
+      expect((await (await api("GET", path + "?clipNames=id")).json()).description[0]).toBe(summary.diffDescription[0]);
+    }
     versions.push(summary.change.toVersion);
   }
   const request = (version: string, start = 0) => ctx.renders.request({ projectId: project.id, version, quality: "preview",

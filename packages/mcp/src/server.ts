@@ -38,7 +38,7 @@ import {
   clipDuration,
   clipEnd,
   clipsAt,
-  describeDiff,
+  clipById, describeDiff,
   diffTimelines,
   emptyTimeline,
   frameAligned,
@@ -805,7 +805,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     const { change, timeline, diffDescription, duration } = await client.proposeChangeSummary(ctx.projectId, req);
     if (change.state === "approved") lastTimeline = undefined;
     const action = change.state === "approved" ? "Applied" : "Proposed";
-    const lines = diffDescription ?? (before && timeline ? describeDiff(diffTimelines(before, timeline)) : []);
+    const lines = diffDescription ?? (before && timeline ? describeDiff(diffTimelines(before, timeline), undefined, clipById) : []);
     await postEvent({
       type: "change",
       text: `${action} change ${change.id}: ${change.description}`,
@@ -2579,12 +2579,12 @@ ${OPS_DOC}`,
         const before = change.appliedReview?.originalVersion ?? (change.appliedOnto === approved ? change.fromVersion : change.appliedOnto ?? change.fromVersion);
         // A partial acceptance can leave the proposal's title and its diff describing edits the editor skipped.
         const partial = change.approvedSpots !== undefined || !!change.restoredCuts?.length;
-        const { description: diff } = await client.diff(ctx.projectId, before, approved);
+        const { description: diff } = await client.diff(ctx.projectId, before, approved, "id");
         return json({ change: { id: change.id, description: partial ? undefined : change.description, state: change.state,
           appliedVersion: approved, approvedSpots: change.approvedSpots }, diff });
       }
       const { change, diff } = await client.change(changeId);
-      return json({ change, diff: describeDiff(diff, s => s.toFixed(2)) });
+      return json({ change, diff: describeDiff(diff, undefined, clipById) });
     },
   );
 
