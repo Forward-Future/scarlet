@@ -47,6 +47,7 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
           key: linux-desktop-amd64
+          cache-on-failure: true
 
       - name: Install native build and headless test tools
         run: |
@@ -92,7 +93,7 @@ jobs:
           engine=$(grep -E '/scarlet-engine$' <<< "$payload")
           resources=$(dirname "$engine")
           [[ "$resources" == /usr/lib/* ]]
-          for executable in "$engine" "$resources/whisper-cli" /usr/bin/scarlet-desktop; do
+          for executable in "$engine" "$resources/whisper-cli" "$resources/whisper-cpu/whisper-cli" /usr/bin/scarlet-desktop; do
             test -s "$executable" && test -x "$executable"
           done
           for license in scarlet.txt uhm.txt uhm-model-license.txt runtime/node.txt runtime/rust.txt runtime/javascript.txt \
@@ -112,6 +113,15 @@ jobs:
 
       - name: Import, transcribe, play and export in the installed desktop
         run: node apps/desktop/scripts/smoke-linux-desktop.mjs
+
+      # Keep a failed smoke fixture installable for diagnosis without publishing a candidate.
+      - name: Retain the package for reproducing a smoke failure
+        if: failure() && steps.package.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-smoke-debug-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/linux-installer/*.deb
+          retention-days: 2
 
       - name: Upload the verified Linux candidate
         uses: actions/upload-artifact@v4

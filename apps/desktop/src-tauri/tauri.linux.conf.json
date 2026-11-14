@@ -5,7 +5,8 @@
     "externalBin": [],
     "resources": {
       "binaries/scarlet-engine-x86_64-unknown-linux-gnu": "scarlet-engine",
-      "binaries/whisper-cli-x86_64-unknown-linux-gnu": "whisper-cli"
+      "binaries/whisper-cli-x86_64-unknown-linux-gnu": "whisper-cli",
+      "binaries/whisper-cpu/whisper-cli": "whisper-cpu/whisper-cli"
     },
     "linux": {
       "deb": {
