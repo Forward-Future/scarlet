@@ -1,13 +1,22 @@
 import hashlib
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from install import ensure_runtime, verify_checkpoint
+from install import default_data_dir, ensure_runtime, verify_checkpoint
 
 
 class SetupTest(unittest.TestCase):
+    @patch("install.sys.platform", "linux")
+    def test_linux_setup_uses_the_desktop_data_directory(self):
+        absolute = Path.home() / "custom-data"
+        default = Path.home() / ".local" / "share"
+        for setting, parent in [(str(absolute), absolute), ("", default), ("relative", default)]:
+            with self.subTest(setting=setting), patch.dict(os.environ, {"XDG_DATA_HOME": setting}):
+                self.assertEqual(default_data_dir(), parent / "com.forwardfuture.scarlet/data")
+
     def test_checks_local_checkpoint_content(self):
         with TemporaryDirectory() as directory:
             model = Path(directory)

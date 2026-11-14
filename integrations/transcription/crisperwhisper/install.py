@@ -20,8 +20,11 @@ def default_data_dir():
         parent = Path.home() / "Library" / "Application Support"
     elif sys.platform == "win32":
         parent = Path(os.environ["APPDATA"])
+    elif sys.platform == "linux":
+        xdg_data = Path(os.environ.get("XDG_DATA_HOME", ""))
+        parent = xdg_data if xdg_data.is_absolute() else Path.home() / ".local" / "share"
     else:
-        raise ValueError("Supply --data-dir when installing outside a macOS or Windows Scarlet library.")
+        raise ValueError("Supply --data-dir to select the Scarlet library on this platform.")
     return parent / "com.forwardfuture.scarlet" / "data"
 
 

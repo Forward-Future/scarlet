@@ -1,6 +1,6 @@
 import type { LocalModelStatus } from "@scarlet/shared";
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream, createWriteStream, statSync, type WriteStream } from "node:fs";
+import { createReadStream, createWriteStream, readFileSync, statSync, type WriteStream } from "node:fs";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -23,13 +23,30 @@ export const bundledWhisperModel: PinnedModel & { displayName: string } = {
   replaces: ["ggml-base.bin"],
 };
 
-export function bundledWhisperCli(env: NodeJS.ProcessEnv): string | undefined {
+/** Every CPU the scheduler can use must support the instructions in the optimized Linux whisper.cpp build. */
+export function supportsWhisperAvx2(cpuInfo: string): boolean {
+  const cores = cpuInfo.trim().split(/\n\s*\n/);
+  return cores.every(core => {
+    const flags = new Set(/^flags\s*:\s*(.*)$/m.exec(core)?.[1]?.split(/\s+/));
+    return ["sse4_2", "avx", "f16c", "fma", "avx2", "bmi2"].every(flag => flags.has(flag));
+  });
+}
+
+function canRunWhisperAvx2() {
+  if (process.platform !== "linux" || process.arch !== "x64") return false;
+  try { return supportsWhisperAvx2(readFileSync("/proc/cpuinfo", "utf8")); } catch { return false; }
+}
+
+export function bundledWhisperCli(env: NodeJS.ProcessEnv, avx2 = canRunWhisperAvx2()): string | undefined {
   const name = process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
+  const names = avx2 ? [join("whisper-cpu", name), name] : [name];
   for (const dir of [env.SCARLET_BIN_DIR, dirname(process.execPath)]) {
     if (!dir) continue;
-    const file = join(dir, name);
-    const info = statSync(file, { throwIfNoEntry: false });
-    if (info?.isFile() && info.size > 0) return file;
+    for (const candidate of names) {
+      const file = join(dir, candidate);
+      const info = statSync(file, { throwIfNoEntry: false });
+      if (info?.isFile() && info.size > 0) return file;
+    }
   }
 }
 

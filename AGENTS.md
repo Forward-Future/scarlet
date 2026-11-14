@@ -1,10 +1,10 @@
 # Scarlet
 
-Scarlet is a desktop-only video editor for macOS and Windows. Open projects, demonstrate features, take screenshots, and verify interface changes in the native Scarlet application window. Do not open or publish a browser version, including a localhost demo or an in-app browser preview.
+Scarlet is a desktop-only video editor for macOS, Windows and Linux. Open projects, demonstrate features, take screenshots, and verify interface changes in the native Scarlet application window. Do not open or publish a browser version, including a localhost demo or an in-app browser preview.
 
 Starting a chat does not require opening Scarlet. Keep code work and automated tests headless until the task needs the native interface. For work on the installed release, reuse the regular Scarlet window.
 
-Silence only the Scarlet instance under test. Leave system volume, output devices, and other apps’ audio unchanged. For screenshots, use a muted native background preview and capture only the requested window or panel. On Windows, use a separate, noninteractive desktop and a disposable WebView2 profile. Launch with `--mute-audio` and verify the flag on that instance’s running WebView2 process before testing or capturing. Leave the user’s desktop, window focus, mouse, and keyboard untouched throughout.
+Silence only the Scarlet instance under test. Leave system volume, output devices, and other apps’ audio unchanged. For screenshots, use a muted native background preview and capture only the requested window or panel. On Windows, use a separate, noninteractive desktop and a disposable WebView2 profile. Launch with `--mute-audio` and verify the flag on that instance’s running WebView2 process before testing or capturing. On Linux, run native UI tests on a private Xvfb display with isolated audio. Leave the user’s desktop, window focus, mouse, and keyboard untouched throughout.
 
 Share one native preview across chats. Before launching, check for a running dev or demo session in the checkout you need. Reuse it if it is idle and matches the requested mode. If another chat is using the preview, wait your turn. When a preview needs to be started, use `pnpm desktop:dev` for the real project library or `pnpm desktop:demo` for the isolated sample interview. Close a temporary preview you started and stop its dev command after verification, unless the user wants it left open for review.
 
