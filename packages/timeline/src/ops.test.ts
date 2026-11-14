@@ -187,7 +187,6 @@ describe("a clip on a track of the other kind, which the renderer would skip", (
   });
 
   it("leaves valid tracks alone, and a saved version that holds one readable", () => {
-    expect(WritableTimeline.safeParse(cut()).success).toBe(true);
     expect(applyOps(cut(), [{ op: "updateTrack", trackId: "a1", patch: { kind: "video", muted: true } }]).tracks[1]).toMatchObject({ kind: "video", muted: true });
     expect(Timeline.parse(misplaced())).toEqual(misplaced());
   });

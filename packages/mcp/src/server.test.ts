@@ -6,7 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { agentCapabilities, ProposeChangeRequest, ScarletApiError, ScarletClient, Task, type EditingTools } from "@scarlet/shared";
-import type { CaptionClip, Timeline, Track, Transcript } from "@scarlet/timeline";
+import type { CaptionClip, Track, Transcript } from "@scarlet/timeline";
 import { emptyTimeline, makeMediaClip, makeTrack } from "@scarlet/timeline";
 import { createScarletMcpServer, describeError, SCARLET_TOOL_NAMES, toolRefusal } from "./server.js";
 import { buildSystemPrompt } from "./prompt.js";
@@ -517,10 +517,9 @@ describe("timeline_propose", () => {
     const words = (id: string, at: number): CaptionClip => ({ id, kind: "caption", enabled: true, timelineIn: at, timelineOut: at + 1, text: id });
     const c = await connect();
     const propose = async (version: string, tracks: Track[], ops: unknown[]) => {
-      const tl: Timeline = { ...emptyTimeline(mock.state.project.id), version, tracks };
-      mock.state.timeline = tl;
+      mock.state.timeline = { ...emptyTimeline(mock.state.project.id), version, tracks };
       mock.requests.length = 0;
-      const r = await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", fromVersion: tl.version, description: "Tracks", ops } }) as CallToolResult;
+      const r = await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", fromVersion: version, description: "Tracks", ops } }) as CallToolResult;
       return { r, posted: mock.requests.some(q => q.method === "POST" && q.path === "/projects/prj_test/changes") };
     };
     try {
