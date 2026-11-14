@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { clipEnd, createProject, isPlayableMedia, cutPlaybackWindow, sha256, timelineDuration, timelineFromKeepRanges, Transform, type Change, type Clip, type Project } from "@scarlet/timeline";
 import { buildThreads, isThreadDone, taskPlan, threadRevision, type Render, type Task } from "@scarlet/shared";
@@ -62,6 +63,8 @@ beforeEach(() => {
 afterEach(async () => {
   await workspace.ctx.close();
   rmSync(directory, { recursive: true, force: true });
+  // Opening each Windows library checks its ACL synchronously. Let Vitest receive its progress replies between fixtures.
+  if (process.platform === "win32") await setImmediate();
 });
 
 function api(method: string, path: string, body?: unknown) {
@@ -1954,7 +1957,9 @@ it.each(["pause", "trash"])("stops a source encode on %s and resumes its checkpo
   const media = ctx.repos.projects.putMedia(project.id, {
     id: "camera", name: "Camera", path: "camera.mov", kind: "video", duration: 90, previewMode: "on-demand",
   }, "ready");
-  writeFileSync(join(ctx.paths.media(project.id), media.path), "recording");
+  const source = join(ctx.paths.media(project.id), media.path);
+  writeFileSync(source, "recording");
+  const stamp = statSync(source);
   const encode = vi.spyOn(ctx.render, "makeProxy").mockImplementation(async (_, file, options) => {
     writeFileSync(file, "partial");
     await new Promise<void>((_, reject) => options.signal!.addEventListener("abort", () => reject(Error("stopped")), { once: true }));
@@ -1972,6 +1977,8 @@ it.each(["pause", "trash"])("stops a source encode on %s and resumes its checkpo
   const restored = vi.fn<RenderAdapter["makeProxy"]>(async (_, file) => { writeFileSync(file, "complete"); });
   workspace = openWorkspace({ makeProxy: restored });
   await Promise.all(workspace.ctx.pending);
+  // Reopening an already-private library must not change source metadata and invalidate its checkpoint.
+  expect(statSync(source)).toMatchObject({ size: stamp.size, mtimeMs: stamp.mtimeMs, ctimeMs: stamp.ctimeMs });
   expect(restored).not.toHaveBeenCalled();
   if (action === "pause") await api("PATCH", projectsPath(), { mediaPaused: false });
   else await api("POST", projectsPath() + "/restore");

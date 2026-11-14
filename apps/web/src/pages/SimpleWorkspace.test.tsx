@@ -6018,6 +6018,36 @@ it("greys out the pass's other cuts on After, and a click into one plays it in B
   expect(gap().classList.contains("is-skipped")).toBe(true);
 });
 
+it("shades and steps over what a later batch of the pass took out, since the video as it runs now doesn't have it either", async () => {
+  // This cut, 10–12.4 s, came out in the pass's first batch; a later batch took out 8.5–9.5 s of the same footage.
+  const cut = { op: "rippleDelete" as const, start: 10, end: 12.4 };
+  const later = { op: "rippleDelete" as const, start: 8.5, end: 9.5 };
+  const before = { ...data.timeline!, version: "v_before" };
+  const batch = { ...applyOps(before, [cut]), version: "v_batch" };
+  const working = { ...applyOps(batch, [later]), version: data.project.head! };
+  data = { ...data, timeline: working, changes: data.changes.map(c => c.id === "chg_approved_2"
+    ? { ...c, ops: [cut], fromVersion: "v_before", toVersion: batch.version, appliedVersion: batch.version,
+      timelineEdits: undefined, approvedSpots: undefined, appliedReview: undefined, cutReasons: [{ ...cut, reason: "Keep the image test" }] } : c) };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockResolvedValue({ version: working.version, edits: [
+    { changeId: "chg_approved_2", spot: 0, label: "Keep the image test", range: { start: 8.5, end: 8.5 }, at: 8.5,
+      beforeCut: { version: "v_before", removed: { start: 10, end: 12.4 } }, previous: [] },
+    { changeId: "chg_approved_2", spot: 1, label: "Drop the long pause", range: { start: 8.5, end: 8.5 }, at: 8.5,
+      beforeCut: { version: "v_batch", removed: { start: 8.5, end: 9.5 } }, previous: [] },
+  ] });
+  vi.spyOn(api, "timeline").mockImplementation(async (_, version) => ({ timeline: version === "v_before" ? before : version === "v_batch" ? batch : working }));
+  const audition = vi.spyOn(player, "audition");
+  await show();
+  await click(turnFor("chg_approved_2").querySelector(".simple-edits .simple-edit")!);
+  await act(async () => {});
+  const gap = container.querySelector<HTMLElement>(".simple-timeline-gap")!;
+  expect(gap.classList.contains("is-skipped")).toBe(true);
+  expect(gap.querySelector(".simple-timeline-gap-label")?.textContent).toBe("Cut at 0:08");
+  // After plays as the video runs now: over the later cut as well as this one, on the working edit's own media.
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 8.5, end: 9.5, removed: true }, { start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(player.mediaTime(13)).toBeCloseTo(9.6, 6);
+});
+
 it("keeps an edit that left its request's list closed when it is listed again, in a request that still has an edit to check", async () => {
   earlierRequestOnly();
   const later = laterRequest();

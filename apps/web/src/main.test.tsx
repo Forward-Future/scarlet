@@ -62,13 +62,13 @@ it("requires a successful native handshake before loading even a demo", async ()
 
 it("keeps the editor unloaded on unsupported native platforms", async () => {
   Object.assign(window, { __TAURI_INTERNALS__: {} });
-  info.mockResolvedValueOnce({ platform: "linux" });
+  info.mockResolvedValueOnce({ platform: "android" });
   await import("./main");
   await vi.waitFor(() => expect(render).toHaveBeenLastCalledWith(expect.stringContaining("desktop app")));
   expect(loadEditor).not.toHaveBeenCalled();
 });
 
-it.each(["macos", "windows"])("opens the editor inside the %s app", async (platform) => {
+it.each(["macos", "windows", "linux"])("opens the editor inside the %s app", async (platform) => {
   Object.assign(window, { __TAURI_INTERNALS__: {} });
   info.mockResolvedValueOnce({ platform });
   await import("./main");

@@ -45,6 +45,7 @@ import { editFocus, editKindWord, editNote } from "../lib/editKind";
 import { player, type Audition } from "../lib/player";
 import { appliedCutClock, appliedCutSource, cutChange } from "../lib/appliedCutPlayback";
 import { cutAudition, cutAuditionClock, isolatedReviewCut } from "../lib/cutAudition";
+import { besides, removedSince } from "../lib/removedSince";
 import { usePlayerStore } from "../stores/player";
 import { verifiedJoinClock, type JoinClock } from "../lib/joinClock";
 import { buildThreads, firstCutDeliveries, isRedo, queueLabel, requestTarget, revisionTarget, stagedCuts, threadConversation, type Thread, type ThreadEntry } from "../lib/threads";
@@ -2409,8 +2410,17 @@ export function SimpleWorkspace() {
   const visiting = shownSide?.side === "before" ? shownSide.visit : undefined;
   // The pass's other cuts, in this cut's clock. Each goes by its time in the video as it runs now, as its row in the
   // pass's list and its tag in the message box do: "Cut at 3:04".
-  const otherEdits = useMemo(() => appliedCut ? threadEdits.flatMap(e => e !== reviewingEdit && e.beforeCut?.version === beforeCut!.version
-    ? [{ at: clockLabel(e.at ?? e.range.start), label: e.label, removed: e.beforeCut.removed }] : []) : [], [appliedCut, threadEdits, reviewingEdit, beforeCut]);
+  const sameVersion = useMemo(() => appliedCut ? threadEdits.flatMap(e => e !== reviewingEdit && e.beforeCut?.version === beforeCut!.version
+    ? [{ at: clockLabel(e.at ?? e.range.start), label: e.label as string | undefined, removed: e.beforeCut.removed }] : []) : [], [appliedCut, threadEdits, reviewingEdit, beforeCut]);
+  // A pass applies its cuts in batches, and this cut's version is the one before its own batch. What came out since,
+  // in later batches, revisions or other requests, isn't in the video as it runs now either: it's shaded here the
+  // same way, by its time now, and After steps over it.
+  const since = useMemo(() => appliedCut && beforeTimeline && timeline && timeline.version === head && head !== beforeTimeline.version
+    ? removedSince(beforeTimeline, timeline, fps) : undefined, [appliedCut, beforeTimeline, timeline, head, fps]);
+  const otherEdits = useMemo(() => !since || !appliedCut ? sameVersion : [...sameVersion,
+    ...besides(since, [appliedCut, ...sameVersion.map(o => o.removed)], fps).map(({ removed, at }) => ({ at: clockLabel(at), removed,
+      label: threadEdits.find(e => e.beforeCut && Math.abs((e.at ?? e.range.start) - at) < 1.5 / fps)?.label }))]
+    .sort((a, b) => a.removed.start - b.removed.start), [sameVersion, since, appliedCut, threadEdits, fps]);
   const otherCuts = useMemo(() => otherEdits.map(o => o.removed), [otherEdits]);
   const othersKey = useMemo(() => JSON.stringify(otherCuts), [otherCuts]);
   // Both sides use the same review window. After can travel farther on the source clock to play its kept tail.
@@ -2427,21 +2437,27 @@ export function SimpleWorkspace() {
   // After plays the version the cut made, where its join is inside the rendered media, through a clock that keeps
   // the timeline on the version before it. Seeking past the shaded passage while it played let the removed
   // footage's first sounds through before the jump landed.
+  // When later batches or requests have changed the video since this cut's own save, After plays the video as it
+  // runs now, which has this cut's join and theirs. Its clock compares the two versions, so footage put back
+  // elsewhere lines up too.
+  const afterSource = useMemo(() => madeBy && since && timeline && madeBy.version !== timeline.version
+    ? { version: timeline.version, removed: undefined } : madeBy, [madeBy, since, timeline]);
+  const afterVersion = afterSource?.version;
   // The version the cut made and whether it has a saved file are asked for with the version before it, not after,
   // so After starts as soon as that one arrives.
-  const cutAfter = useReviewTimeline(current.id, appliedSide === "after" ? appliedAfterVersion : undefined, preparedEdit?.after.timeline ?? timeline);
+  const cutAfter = useReviewTimeline(current.id, appliedSide === "after" ? afterVersion : undefined, afterVersion === timeline?.version ? timeline : preparedEdit?.after.timeline ?? timeline);
   const afterTimeline = cutAfter.timeline;
   const appliedJoined = useMemo(() => {
-    if (!appliedListen || appliedSide !== "after" || !appliedCut || !madeBy || !beforeTimeline || !afterTimeline) return;
-    const clock = appliedCutClock(beforeTimeline, afterTimeline, madeBy.removed, fps, appliedCut, appliedListen);
-    return clock ? { version: madeBy.version, timeline: afterTimeline, clock } : undefined;
-  }, [appliedListen, appliedCut, madeBy, beforeTimeline, afterTimeline, fps]); // eslint-disable-line react-hooks/exhaustive-deps
-  const appliedFile = usePlaybackCache(current.project, { version: appliedAfterVersion, settingsRevision: current.renderSettingsRevision });
+    if (!appliedListen || appliedSide !== "after" || !appliedCut || !afterSource || !beforeTimeline || !afterTimeline) return;
+    const clock = appliedCutClock(beforeTimeline, afterTimeline, afterSource.removed, fps, appliedCut, appliedListen);
+    return clock ? { version: afterSource.version, timeline: afterTimeline, clock } : undefined;
+  }, [appliedListen, appliedCut, afterSource, beforeTimeline, afterTimeline, fps]); // eslint-disable-line react-hooks/exhaustive-deps
+  const appliedFile = usePlaybackCache(current.project, { version: afterVersion, settingsRevision: current.renderSettingsRevision });
   // Wait for the version the cut made, and to know whether it has a saved file, before starting After, so the listen
   // doesn't change players partway.
   const appliedCache = appliedFile.cache ?? (appliedJoined && preparedEdit?.after.version === appliedJoined.version
     ? { url: preparedEdit.after.file, state: preparedEdit.after.file ? "ready" : "uncached" } : undefined);
-  const joinPending = appliedSide === "after" && !!madeBy && ((!afterTimeline && !cutAfter.error) || (!!appliedJoined && !appliedCache));
+  const joinPending = appliedSide === "after" && !!afterSource && ((!afterTimeline && !cutAfter.error) || (!!appliedJoined && !appliedCache));
   // The player for After: the version with the join in its media, once it's known how it plays.
   const joinedListen = appliedCut ? appliedJoined : listenJoined;
   const joinedFile = appliedCut ? appliedCache : listenCache;

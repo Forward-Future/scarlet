@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { LocalWhisperModel, bundledWhisperCli, bundledWhisperGpu, bundledWhisperModel } from "./localModel.js";
+import { LocalWhisperModel, bundledWhisperCli, bundledWhisperGpu, bundledWhisperModel, supportsWhisperAvx2 } from "./localModel.js";
 
 const bytes = Buffer.from("test model");
 const model = { name: "test.bin", url: "https://example.invalid/test.bin", size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -69,6 +69,28 @@ it("finds the bundled whisper-cli beside the engine only when its program is rea
   expect(bundledWhisperCli({ SCARLET_BIN_DIR: dir })).toBeUndefined();
   // Only Windows has a separate GPU build.
   if (process.platform !== "win32") expect(bundledWhisperGpu({ SCARLET_BIN_DIR: dir })).toBeUndefined();
+});
+
+it("selects Linux's optimized Whisper only on CPUs that can run it", async () => {
+  const flags = ["sse4_2", "avx", "f16c", "fma", "avx2", "bmi2"];
+  const core = (n: number, flags: string[]) => `processor\t: ${n}\nflags\t: fpu ${flags.join(" ")}`;
+  const info = core(0, flags);
+  expect(supportsWhisperAvx2(info + "\n\n" + core(1, flags))).toBe(true);
+  for (const flag of flags) {
+    expect(supportsWhisperAvx2(info + "\n\n" + core(1, flags.filter(f => f !== flag)))).toBe(false);
+  }
+  expect(supportsWhisperAvx2("")).toBe(false);
+  const name = process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
+  const env = { SCARLET_BIN_DIR: dir };
+  const baseline = join(dir, name);
+  const optimized = join(dir, "whisper-cpu", name);
+  await writeFile(baseline, "baseline");
+  await mkdir(join(dir, "whisper-cpu"));
+  await writeFile(optimized, "");
+  expect(bundledWhisperCli(env, true)).toBe(baseline);
+  await writeFile(optimized, "optimized");
+  expect(bundledWhisperCli(env, false)).toBe(baseline);
+  expect(bundledWhisperCli(env, true)).toBe(optimized);
 });
 
 it.runIf(process.platform === "win32")("uses the GPU whisper-cli only when its program is really there", async () => {
