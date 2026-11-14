@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
-import { fileInDirectory } from "@scarlet/render";
+import { fileInDirectoryAsync } from "@scarlet/render";
 import { SpeakerProgress } from "@scarlet/shared";
 import { newId, type MediaAsset, type Transcript } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
@@ -70,7 +70,7 @@ const turnsFile = (ctx: Pick<Ctx, "paths">, projectId: string, key: string) => j
 
 /** Where the speaker turns of a recording are saved, named for its file as it is now. Nothing once the file is gone. */
 export async function savedSpeakerTurns(ctx: Pick<Ctx, "paths">, projectId: string, media: MediaAsset) {
-  const file = fileInDirectory(ctx.paths.media(projectId), media.path);
+  const file = await fileInDirectoryAsync(ctx.paths.media(projectId), media.path);
   const info = file && await stat(file).catch(() => null);
   return file && info ? turnsFile(ctx, projectId, turnsKey(file, info, speakerStream(media))) : undefined;
 }
@@ -146,7 +146,7 @@ export class RecordingSpeakers {
     try {
       if (!priority) pause.throwIfAborted();
       always.throwIfAborted();
-      const source = fileInDirectory(ctx.paths.media(projectId), media.path);
+      const source = await fileInDirectoryAsync(ctx.paths.media(projectId), media.path);
       if (!source) throw new Error("Could not find the recording for speaker analysis.");
       file = source;
       info = await stat(file);
