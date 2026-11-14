@@ -1645,7 +1645,8 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
     const review = prepareCutReview(ctx, change).review;
     if (!review || opts.spots || change.cutAssessments.length !== review.cuts.length || change.cutAssessments.some(a => a.verdict === "ask"))
       throw conflict("review_decisions_needed", "Open Needs your call to finish the outstanding decisions.");
-    opts = { ...opts, restoredCuts: change.cutAssessments.filter(a => a.verdict === "keep").map(a => a.index) };
+    // The editor's call on a cut stands over Scarlet's verdict, as when the pass is applied once it finishes.
+    opts = { ...opts, restoredCuts: review.cuts.flatMap((_, i) => cutDecision(change, i) === "keep" ? [i] : []) };
   }
   if (change.cutEdits?.length && !opts.restoredCuts) {
     if (opts.spots) throw badRequest("spots_unsupported", "Review this pass by its individual cuts.");

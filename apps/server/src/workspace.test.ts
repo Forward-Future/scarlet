@@ -5377,6 +5377,29 @@ it("reads an agent's time within a millisecond of a frame as that frame, so late
   expect(put.change.ops![0]).toEqual({ op: "rippleInsertGap", at: 263 / 30, duration: 167 / 30 });
 });
 
+it("approves a fully assessed pass by the editor's calls first, then Scarlet's verdicts, as applying it when done does", async () => {
+  const { ctx } = workspace;
+  vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
+  const author = { type: "human" as const, name: "Editor" };
+  const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: author });
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "mic", path: "mic.wav", kind: "audio", duration: 20, hasAudio: true }, "ready");
+  const base = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: task.id, description: "Assemble",
+    ops: [{ op: "addClip", trackId: "a1", clip: { id: "raw", kind: "media", mediaId: "mic", timelineIn: 0, sourceIn: 0, sourceOut: 20 } }] }).change.toVersion;
+  const submitted = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: base, description: "Pass", cuts: [
+    { start: 2, end: 3, review: true, reason: "First retake." }, { start: 6, end: 8, review: true, reason: "Second retake." },
+    { start: 12, end: 13, review: true, reason: "Third retake." }] });
+  const pass = ((await submitted.json()).changes as Change[]).find(c => c.intent === "suggestion")!;
+  const versions = { fromVersion: pass.fromVersion, toVersion: pass.toVersion };
+  // The editor keeps the second cut before Scarlet checks it. Scarlet then checks every cut and asks about none.
+  expect((await api("PUT", `/changes/${pass.id}/cut-choices`, { ...versions, choices: [{ index: 1, choice: "keep" }] })).status).toBe(200);
+  const assessments = [{ index: 0, start: 2, end: 3, verdict: "keep", reason: "Keep it." }, { index: 1, start: 6, end: 8, verdict: "cut", reason: "Clean." },
+    { index: 2, start: 12, end: 13, verdict: "cut", reason: "Also clean." }].map(a => ({ ...a, inspected: true }));
+  expect((await api("POST", `/changes/${pass.id}/cut-assessments`, { ...versions, assessments })).status).toBe(200);
+  const approved = await api("POST", `/changes/${pass.id}/approve`, {});
+  expect(approved.status).toBe(200);
+  expect((await approved.json()).change.restoredCuts).toEqual([0, 1]);
+});
+
 it("moves one staged cut of a pending pass past its old edges and keeps the other cuts and their calls", async () => {
   const { ctx } = workspace;
   vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
