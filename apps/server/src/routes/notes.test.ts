@@ -27,14 +27,14 @@ afterEach(async () => {
 type Sent = { note?: Note; task?: Task; error?: { code: string; message: string } };
 
 /** Send a recording as a voice note: to an agent as a request when `assignTo` is given, otherwise kept as a note. */
-async function voice(assignTo?: string, clipIds?: string): Promise<{ status: number; body: Sent }> {
+async function voice(assignTo?: string, clipIds?: string, signal?: AbortSignal): Promise<{ status: number; body: Sent }> {
   const form = new FormData();
   form.append("audio", new Blob(["testing"], { type: "audio/wav" }), "voice.wav");
   form.append("time", "1");
   if (assignTo) form.append("assignTo", assignTo);
   if (clipIds !== undefined) form.append("clipIds", clipIds);
   const res = await app.app.request(`/api/projects/${project.id}/notes/voice`, {
-    method: "POST", headers: { Authorization: `Bearer ${accessToken(app.ctx)}` }, body: form,
+    method: "POST", headers: { Authorization: `Bearer ${accessToken(app.ctx)}` }, body: form, signal,
   });
   return { status: res.status, body: await res.json() as Sent };
 }
@@ -93,6 +93,30 @@ it("refuses a voice request it has no words for, and still keeps a voice note th
   expect(heard.status).toBe(201);
   expect(heard.body.task).toMatchObject({ kind: "note", agent: "claude", instruction: "Trim the intro" });
   expect(saved()).toEqual({ notes: 3, tasks: 1 });
+});
+
+it.each(["dictated", "recorded"] as const)("stops cleaning up a %s note once its request is cancelled, and keeps the note as spoken", async kind => {
+  const spoken = "um, trim the, uh, intro";
+  app.ctx.env.anthropicKey = "unused-fixture";
+  app.ctx.env.openaiKey = "unused-fixture";
+  app.ctx.repos.settings.update({ transcription: { provider: "openai" }, noteCleanup: { enabled: true, provider: "anthropic" } });
+  vi.spyOn(OpenAIProvider.prototype, "transcribe").mockResolvedValue({ segments: [{ start: 0, end: 1, text: spoken }] });
+  // The cleanup provider takes the request and never answers.
+  const asked: Array<AbortSignal | undefined> = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+    asked.push(init?.signal ?? undefined);
+    init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+  }));
+  const request = new AbortController();
+  const sent = kind === "recorded" ? voice(undefined, undefined, request.signal) : app.app.request(`/api/projects/${project.id}/notes`, {
+    method: "POST", signal: request.signal, body: JSON.stringify({ time: 1, text: spoken, voiceTranscript: spoken }),
+    headers: { Authorization: `Bearer ${accessToken(app.ctx)}`, "content-type": "application/json" },
+  }).then(async res => ({ status: res.status, body: await res.json() as Sent }));
+  await vi.waitFor(() => expect(asked).toHaveLength(1));
+  request.abort("Client connection prematurely closed.");
+  const answered = await Promise.race([sent, new Promise<string>(resolve => setTimeout(() => resolve("still waiting"), 100))]);
+  expect(answered).toMatchObject({ status: 201, body: { note: { text: spoken, voiceTranscript: spoken } } });
+  expect(asked[0]?.aborted).toBe(true);
 });
 
 it("keeps a reply beside the note, under the name of the agent that gave it", async () => {

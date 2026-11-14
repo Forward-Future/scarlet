@@ -23,11 +23,11 @@ export interface CreateNoteInput {
 }
 
 /** Create a review note; optionally dispatch it to an agent as a `note` task. Never touches the timeline. */
-export async function createNote(ctx: Ctx, user: User, projectId: string, input: CreateNoteInput): Promise<{ note: Note; task?: Task }> {
+export async function createNote(ctx: Ctx, user: User, projectId: string, input: CreateNoteInput, signal?: AbortSignal): Promise<{ note: Note; task?: Task }> {
   const { project, head } = ensureHead(ctx, projectId);
   let text = input.text;
   if (input.voiceTranscript) {
-    const cleaned = await cleanupNote(ctx, input.voiceTranscript, { time: input.time, end: input.end, clipIds: input.clipIds });
+    const cleaned = await cleanupNote(ctx, input.voiceTranscript, { time: input.time, end: input.end, clipIds: input.clipIds }, signal);
     if (cleaned) text = cleaned;
   }
   const ts = now();
