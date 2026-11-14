@@ -905,6 +905,34 @@ it("plays a short cut file on its version clock and hands an out-of-window seek 
   expect(play.mock.contexts.filter(el => el !== video)).toHaveLength(0);
 });
 
+it("keeps decoded frames across the gap between a new working version and its timeline", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(84);
+  const noop = () => {};
+  await show(<MemoryRouter><CutPreview simple={{ marks: [] }} workingCache={{ cache: { state: "uncached" }, startCache: noop }}
+    active hasCut spot={0} autoPlaySource={false} onRetryDraft={noop} onMedia={noop} /></MemoryRouter>);
+  const originals = [...container.querySelectorAll<HTMLImageElement>(".timeline-filmstrip img")];
+  expect(originals).toHaveLength(2);
+  await act(() => { originals.forEach(img => img.dispatchEvent(new Event("load"))); });
+
+  const project = { ...data.project, head: "next" };
+  await act(() => useProjectStore.setState({ current: { ...data, project } }));
+  const held = () => container.querySelector(".filmstrip-held");
+  expect(held()?.querySelector("img")).toBe(originals[0]);
+  expect(held()?.hasAttribute("data-leaving")).toBe(false);
+  await act(() => useProjectStore.setState({ current: { ...data, project, timeline: { ...data.timeline!, version: "next" } } }));
+  expect(held()?.querySelector("img")).toBe(originals[0]);
+  const replacements = [...container.querySelectorAll<HTMLImageElement>(".timeline-filmstrip > div:not(.filmstrip-held) img")];
+  expect(replacements).toHaveLength(2);
+  await act(() => { replacements.forEach(img => img.dispatchEvent(new Event("load"))); });
+  expect(held()?.hasAttribute("data-leaving")).toBe(true);
+
+  await act(() => useProjectStore.setState({ current: { ...data, project: { ...project, head: "empty" },
+    timeline: { ...data.timeline!, version: "empty", tracks: [] } } }));
+  expect(held()?.hasAttribute("data-leaving")).toBe(true);
+  expect(container.querySelector(".timeline-filmstrip > div:not(.filmstrip-held) img")).toBeNull();
+});
+
 function drawPlayerFormat(source?: ProjectData["media"][number]) {
   const noop = () => {};
   return show(<MemoryRouter><CutPreview simple={{ marks: [] }}

@@ -230,8 +230,8 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   onMedia, resumeTime, simple, joined }: PreviewProps) {
   const current = useProjectStore(useShallow(s => {
     if (!s.current) return null;
-    const { id, project, media, timeline, notes, versions, renderSettingsRevision } = s.current;
-    return { id, project, media, timeline, notes, versions, renderSettingsRevision };
+    const { id, project, media, timeline, notes, versions, renderSettingsRevision, headError } = s.current;
+    return { id, project, media, timeline, notes, versions, renderSettingsRevision, headError };
   }))!;
   const pendingImports = useImportCount(current.id);
   const cut = hasCut && !source && !draftVersion;
@@ -258,11 +258,16 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const cacheSource = source?.kind === "video" ? source.id : undefined;
   const selectedCache = usePlaybackCache(current.project, { version: draftVersion, mediaId: cacheSource, automatic: !!cacheSource && active, settingsRevision: current.renderSettingsRevision });
   const { cache } = cut ? workingCache : selectedCache;
+  const displayedTimeline = draftVersion ? draft : current.timeline?.version === head ? current.timeline : null;
+  const missingTimeline = !!cacheVersion && !displayedTimeline;
+  const timelineFailed = draftVersion ? draftFailed : !!current.headError;
   const previewStrip = useMemo(() => {
+    // The new head can arrive before its timeline. Its individual frames are still unknown during that read.
+    if (missingTimeline) return timelineFailed ? undefined : null;
     if (!cacheVersion || cacheSource || IS_MOCK) return undefined;
     if (!cache) return null;
     return cache.renderId ? { id: cache.renderId, version: cacheVersion, fps: current.project.settings.fps } : undefined;
-  }, [cacheVersion, cacheSource, cache, current.project.settings.fps]);
+  }, [missingTimeline, timelineFailed, cacheVersion, cacheSource, cache, current.project.settings.fps]);
   const readyUrl = joined ? joined.file ?? (IS_MOCK ? api.renderFileUrl(joined.version) : undefined)
     : cache?.url ?? (IS_MOCK && draftVersion && draft ? api.renderFileUrl(draftVersion) : undefined);
   const selection = joined ? `joined:${joined.version}` : source?.id ?? cacheVersion;
@@ -298,7 +303,6 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const duration = draftVersion ? proposedDuration : source?.duration || cutDuration || videoDuration;
   const fps = source?.fps || settings.fps;
   const lastFrame = Math.max(0, (Math.ceil(duration * fps - 1e-6) - 1) / fps);
-  const displayedTimeline = draftVersion ? draft : current.timeline?.version === head ? current.timeline : null;
   const reviewCut = !source ? simple.cutPlayback : undefined;
   const visible = useSyncExternalStore(onVisibility, documentVisible);
   const allowStandby = active && visible && !current.project.mediaPaused;

@@ -126,8 +126,7 @@ const Filmstrip = memo(function Filmstrip({ start, duration, pictureAspect, fram
   const view = carry && start === carry.start && duration === carry.duration ? "full" : `${start}/${duration}`;
   const [held, setHeld] = useState(() => heldFor(carry, view));
   const overlay = useRef<HTMLDivElement>(null);
-  const measured = drawn && count > 0;
-  const complete = measured && wanted.every(src => settled.has(src));
+  const complete = preview !== null && (duration <= 0 || (count > 0 && wanted.every(src => settled.has(src))));
   const hasPicture = wanted.some(src => settled.get(src));
   // A pending cache lookup or an expired patience timer can end the loading wave before any picture is available.
   // An empty or failed batch is terminal too: once known, it must not keep showing footage from an older cut.
