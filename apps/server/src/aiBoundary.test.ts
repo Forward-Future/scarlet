@@ -364,6 +364,17 @@ it("keeps a selected-cut request within its review slot at each engine write ent
   expect(ctx.repos.projects.header(project.id)?.head).toBe(base);
 });
 
+it("saves the reason to check an applied dialogue cut with its reason, for its edit's flag", async () => {
+  const { ctx } = workspace;
+  const { task, base } = dialogueTask();
+  const check = "A removed word starts right after the cut: watch and listen at the join.";
+  const submitted = await api("POST", `/projects/${project.id}/dialogue-cuts`, { fromVersion: base, description: "Two cuts",
+    cuts: [{ start: 2, end: 3, review: false, reason: "Repeat.", kind: "retake", check }, { start: 5, end: 6, review: false, reason: "Restart.", kind: "retake" }] }, task);
+  expect(submitted.status).toBe(201);
+  const applied = (await submitted.json()).changes.find((c: Change) => c.state === "approved") as Change;
+  expect(ctx.repos.changes.get(applied.id)!.cutReasons?.map(r => [r.reason, r.check])).toEqual([["Repeat.", check], ["Restart.", undefined]]);
+});
+
 it("keeps ordinary timeline edits available when the editor selected an already applied cut", async () => {
   const { ctx } = workspace;
   const { task, base } = dialogueTask();

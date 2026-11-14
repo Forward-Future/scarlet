@@ -73,6 +73,15 @@ describe("reviewing one thread on the working interview timeline", () => {
     expect(result.every(e => e.range.start < e.range.end)).toBe(true);
   });
 
+  it("flags an applied dialogue cut that carries a reason to check, and only that one", () => {
+    const reasons = [{ start: 1, end: 1.5, reason: "False start", check: "A removed word starts right after the cut: watch and listen at the join." },
+      { start: 2, end: 2.5, reason: "Repeated line" }];
+    const cuts = { ...change, toVersion: head.version, ranges: [{ start: 1, end: 1.5 }], cutReasons: reasons,
+      ops: reasons.map(({ start, end }) => ({ op: "rippleDelete", start, end })).reverse() };
+    const result = threadTimeline(thread([cuts]), head, links, () => earlier, 30);
+    expect(result.map(e => [e.label, e.check])).toEqual([["False start", reasons[0]!.check], ["Repeated line", undefined]]);
+  });
+
   it("reads a cut named by the footage around its join as a cut, with the footage it removed", () => {
     // Named as the tool asks: the playback either side of the join, which is footage that stayed.
     const gulp = { ...change, toVersion: head.version, ops: [{ op: "rippleDelete", start: 584.05, end: 585.6 }],
