@@ -6,8 +6,29 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { noteFor, startStamp, stopOrphans } from "./orphans.js";
+import { noteCli, noteFor, startStamp, stopOrphans } from "./orphans.js";
 import { spawnLines } from "./runners/spawn.js";
+
+/** A note write a test holds open, as `writeFile` leaves one between creating the file and writing to it. */
+const held = vi.hoisted(() => ({ next: undefined as undefined | { opened: () => void; release: Promise<void> } }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs/promises")>();
+  const writeFile: typeof fs.writeFile = async (file, data, options) => {
+    const hold = held.next;
+    if (!hold || typeof file !== "string" || typeof data !== "string") return fs.writeFile(file, data, options);
+    held.next = undefined;
+    const { flag = "w", mode = 0o666 } = typeof options === "object" && options ? options : {};
+    const handle = await fs.open(file, flag, mode);
+    try {
+      hold.opened();
+      await hold.release;
+      await handle.writeFile(data);
+    } finally {
+      await handle.close();
+    }
+  };
+  return { ...fs, writeFile };
+});
 
 async function noteDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "scarlet-orphans-"));
@@ -20,8 +41,8 @@ async function noteDir(): Promise<string> {
  * A process that stays up until it is killed, as a stand-in for a CLI or for another Scarlet. It starts in its own
  * process group, as a CLI does, and is stopped by its own id when the test ends.
  */
-function idler() {
-  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], { stdio: "ignore", detached: process.platform !== "win32", windowsHide: true });
+function idler(args = ["-e", "setTimeout(() => {}, 120000)"]) {
+  const child = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "ignore"], detached: process.platform !== "win32", windowsHide: true });
   const exited = once(child, "exit") as Promise<[number | null, NodeJS.Signals | null]>;
   const running = () => child.exitCode === null && child.signalCode === null;
   onTestFinished(async () => {
@@ -29,7 +50,31 @@ function idler() {
     child.kill();
     await exited;
   });
-  return { pid: child.pid!, exited, running, stop: async () => void (child.kill(), await exited) };
+  return { pid: child.pid!, stdout: child.stdout, exited, running, stop: async () => void (child.kill(), await exited) };
+}
+
+/**
+ * A stand-in CLI with a tool subprocess under it, in its process group on POSIX and in its tree on Windows. The
+ * subprocess is stopped by its own id when the test ends, unless that id has since gone to another process.
+ */
+async function idlerWithTool() {
+  const script = "const t = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore', windowsHide: true }); console.log(t.pid); setTimeout(() => {}, 120000)";
+  const cli = idler(["-e", script]);
+  const [line] = (await once(cli.stdout!, "data")) as [Buffer];
+  const pid = Number(String(line).trim());
+  const started = await startStamp(pid);
+  onTestFinished(async () => {
+    if (started && (await startStamp(pid)) === started) process.kill(pid, "SIGTERM");
+  });
+  const running = () => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return { ...cli, tool: { pid, running } };
 }
 
 /** What a note says of a process: this Node, and when the process started. */
@@ -49,7 +94,7 @@ describe("stopOrphans", { timeout: 30_000 }, () => {
     const earlier = idler();
     const host = `${earlier.pid}\n${await stamped(earlier.pid)}`;
     await earlier.stop();
-    const cli = idler();
+    const cli = await idlerWithTool();
     const older = idler();
     await writeFile(join(dir, String(cli.pid)), `${await stamped(cli.pid)}\n${host}`);
     // A note from before the host recorded itself names only the CLI. Nobody is left to ask, so it is stopped too.
@@ -59,6 +104,8 @@ describe("stopOrphans", { timeout: 30_000 }, () => {
     // Killed, not left to run out.
     expect((await cli.exited)[0]).not.toBe(0);
     expect((await older.exited)[0]).not.toBe(0);
+    // Its tool subprocess too, not the CLI alone.
+    await vi.waitFor(() => expect(cli.tool.running()).toBe(false), { timeout: 10_000 });
     expect(await readdir(dir)).toEqual([]);
     expect(lines).toEqual(expect.arrayContaining([expect.stringContaining(`stopping agent CLI ${cli.pid} `), expect.stringContaining(`stopping agent CLI ${older.pid} `)]));
   });
@@ -99,6 +146,32 @@ describe("stopOrphans", { timeout: 30_000 }, () => {
     expect((await kept.exited)[0]).not.toBe(0);
     expect(ours.running()).toBe(true);
     expect(await readdir(dir)).toEqual([String(ours.pid)]);
+  });
+
+  it("never shows a sweep a note still being written, and puts the note in place whole once it is", async () => {
+    const dir = await noteDir();
+    await stopOrphans(dir, () => undefined);
+    const cli = idler();
+    // The note's file is created and held there before anything is written to it.
+    let opened!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((resolve) => (opened = resolve));
+    held.next = { opened, release: new Promise<void>((resolve) => (release = resolve)) };
+    const forget = noteCli(cli.pid, process.execPath);
+    onTestFinished(forget);
+    await reached;
+    // Another Scarlet's launch sweeps the shared notes meanwhile.
+    const seen = await readdir(dir);
+    const { lines, log } = logged();
+    await stopOrphans(dir, log);
+    release();
+    const expected = await noteFor(process.execPath, cli.pid);
+    await vi.waitFor(async () => expect(await readFile(join(dir, String(cli.pid)), "utf8").catch(() => "")).toBe(expected), { timeout: 5_000 });
+    expect(seen).toEqual([]);
+    expect(lines).toEqual([]);
+    expect(cli.running()).toBe(true);
+    // Nothing is left where the note was written.
+    expect(await readdir(join(dir, ".."))).toEqual(["agent-pids"]);
   });
 
   it("logs and carries on when the notes can't be read, so the host still starts", async () => {

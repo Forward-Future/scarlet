@@ -4,8 +4,9 @@
  * while it runs, and the next launch stops those whose host is gone. Matches the desktop host.
  */
 import { execFile } from "node:child_process";
-import { readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { privateDirectory, windowsAclShell } from "./private-files.js";
 
@@ -60,13 +61,29 @@ export function noteCli(pid: number, program: string): () => void {
   const path = join(at.dir, String(pid));
   const ended = new AbortController();
   const noted = noteFor(program, pid, ended.signal)
-    .then((text) => (ended.signal.aborted ? undefined : writeFile(path, text, { mode: 0o600 })))
+    .then((text) => (ended.signal.aborted ? undefined : publish(path, text)))
     // Without its note, the next launch can't stop this CLI if this one crashes.
     .catch((err) => void (ended.signal.aborted || at.log(`could not note agent CLI ${pid} for the next launch: ${errMsg(err)}`)));
   return () => {
     ended.abort();
     void noted.then(() => rm(path, { force: true })).catch(() => undefined);
   };
+}
+
+/**
+ * Put a note under its name only once it is whole. A sweep, this host's or another Scarlet's, that read a note still
+ * being written would take it for an empty one and remove it, and the CLI could then never be stopped. The note is
+ * written beside the notes folder, in the work root no sweep reads, which is already private, so no note starts
+ * PowerShell. Only a crash between the write and the rename leaves the written file there.
+ */
+async function publish(path: string, text: string): Promise<void> {
+  const staged = join(dirname(dirname(path)), `.agent-pid-${randomUUID()}`);
+  try {
+    await writeFile(staged, text, { flag: "wx", mode: 0o600 });
+    await rename(staged, path);
+  } finally {
+    await rm(staged, { force: true });
+  }
 }
 
 /** What a note holds: the CLI's program and start time, then the process id, program and start time of the Scarlet that started it. */
