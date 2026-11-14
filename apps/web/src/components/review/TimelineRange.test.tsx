@@ -82,6 +82,32 @@ it("still moves the playhead on a press on the ruler that doesn't drag", async (
   expect(seeks).toEqual([300, 600]);
 });
 
+it("takes the range off on a click on the ruler, which still moves the playhead there", async () => {
+  await show({ start: 300, end: 450 });
+  await press(".timeline-range-zone", 700);
+  await release(700);
+  expect(marked).toHaveBeenCalledExactlyOnceWith(undefined);
+  expect(picks).toEqual([2100]);
+});
+
+it("opens the close-up on a press held still on the ruler, to draw a range by frames from there", async () => {
+  await show();
+  await press(".timeline-range-zone", 100);
+  await act(async () => { await new Promise(done => setTimeout(done, HOLD_MS + 50)); });
+  expect(container.querySelector(".timeline-range-loupe b")?.textContent).toBe("5:00.000");
+  // Twenty pixels is 60 s on this timeline, and 6 s in the close-up.
+  await move(120);
+  await release(120);
+  expect(marked).toHaveBeenCalledExactlyOnceWith({ start: 300, end: 306 });
+  expect(picks).toEqual([]);
+  // Held and let go without moving, it draws nothing.
+  marked.mockClear();
+  await press(".timeline-range-zone", 100);
+  await act(async () => { await new Promise(done => setTimeout(done, HOLD_MS + 50)); });
+  await release(100);
+  expect(marked).not.toHaveBeenCalled();
+});
+
 it("moves an end a frame at a time from the keyboard, and Esc takes the range off", async () => {
   await show({ start: 300, end: 450 });
   const end = container.querySelector<HTMLButtonElement>(".timeline-range-handle.is-end")!;

@@ -55,8 +55,8 @@ interface Gesture {
   /** The range as last drawn. */
   last?: TimeRange;
   hold?: number;
-  /** The close-up: the time and pointer position it opened at. */
-  precise?: { time: number; x: number };
+  /** The close-up: the time and pointer position it opened at, and whether the end has moved in it since. */
+  precise?: { time: number; x: number; moved?: boolean };
   paint?: number;
   stop(): void;
 }
@@ -73,18 +73,20 @@ interface RangeSelect {
   onRange(range: TimeRange | undefined): void;
   onSeek(time: number): void;
   onScrubStart?(gesture: AbortSignal): (() => void) | undefined;
-  /** A press on the ruler that never became a range. */
+  /** A press on the ruler that never became a range. It takes off the range there was. */
   onPress(time: number): void;
   beforeGesture(): void;
 }
 
 /**
  * A stretch of the timeline the editor marks for the message they're writing. A drag along the ruler draws it and the
- * video follows the end that moves. Each end has a handle: dragged, it lands on the edge of a cut or an edit it comes
- * near; held still, it opens a close-up where the end moves a frame at a time.
+ * video follows the end that moves. Each end has a handle the height of the timeline: dragged, it lands on the edge of a
+ * cut or an edit it comes near; held still, it opens a close-up where the end moves a frame at a time. A press held
+ * still on the ruler opens the same close-up, to draw a range by frames from there. A click on the ruler takes the
+ * range off.
  */
 export function useRangeSelect({ slider, drag, from, span, start, end, fps, edges, range, onRange, onSeek, onScrubStart, onPress, beforeGesture }: RangeSelect) {
-  const [live, setLive] = useState<{ range: TimeRange; moving: "start" | "end"; snapped: boolean; precise: boolean }>();
+  const [live, setLive] = useState<{ range: TimeRange; moving: "start" | "end"; at: number; snapped: boolean; precise: boolean }>();
   const gesture = useRef<Gesture>(undefined);
   const now = useRef({ edges, fps, start, end, onRange, onSeek, onPress });
   useLayoutEffect(() => { now.current = { edges, fps, start, end, onRange, onSeek, onPress }; });
@@ -110,8 +112,8 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     }
     time = Math.max(start, Math.min(end, time));
     const next = g.last = orderedRange(g.anchor, time, start, end, fps);
-    setLive({ range: next, moving: time >= g.anchor ? "end" : "start", snapped, precise: !!g.precise });
-    onSeek(time >= g.anchor ? next.end : next.start);
+    setLive({ range: next, moving: time >= g.anchor ? "end" : "start", at: time, snapped, precise: !!g.precise });
+    onSeek(time);
   };
 
   const begin = (e: PointerEvent<HTMLElement>, edge?: "start" | "end") => {
@@ -134,19 +136,24 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
         g.moved = true;
         clearTimeout(g.hold);
       }
+      if (g.precise && g.x !== g.precise.x) g.precise.moved = true;
       if (g.moved || g.precise) g.paint ??= requestAnimationFrame(() => place(g));
     };
     const up = (event: globalThis.PointerEvent) => {
       if (event.pointerId !== id) return;
       const cancelled = event.type === "pointercancel";
       if (!cancelled) g.x = event.clientX;
-      const drawn = !cancelled && (g.moved || !!g.precise);
+      // A press held on the ruler and let go without moving draws nothing: the close-up opened, and nothing was chosen.
+      const drawn = !cancelled && (g.moved || (!!g.precise && (!!edge || !!g.precise.moved)));
       if (drawn) place(g);
       g.stop();
       setLive(undefined);
       if (drawn && g.last) now.current.onRange(g.last);
       else {
-        if (!cancelled && !edge) now.current.onPress(Math.max(now.current.start, Math.min(now.current.end, pressed)));
+        if (!cancelled && !edge) {
+          if (range) now.current.onRange(undefined);
+          now.current.onPress(Math.max(now.current.start, Math.min(now.current.end, pressed)));
+        }
       }
     };
     g.stop = () => {
@@ -168,13 +175,12 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     document.addEventListener("pointermove", move, true);
     document.addEventListener("pointerup", up, true);
     document.addEventListener("pointercancel", up, true);
-    if (edge && range) {
-      g.hold = window.setTimeout(() => {
-        if (gesture.current !== g || g.moved) return;
-        g.precise = { time: edge === "start" ? range.start : range.end, x: g.x };
-        place(g);
-      }, HOLD_MS);
-    }
+    // Held still, the press opens the close-up: on a handle at that end, on the ruler at the frame pressed.
+    g.hold = window.setTimeout(() => {
+      if (gesture.current !== g || g.moved) return;
+      g.precise = { time: edge && range ? (edge === "start" ? range.start : range.end) : anchor, x: g.x };
+      place(g);
+    }, HOLD_MS);
     return true;
   };
 
@@ -207,7 +213,8 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
         onPointerDown={e => { if (begin(e, edge)) { e.stopPropagation(); e.currentTarget.focus({ preventScroll: true }); } }}
         onKeyDown={e => nudge(edge, e)} />;
     };
-    const edgeTime = live && (live.moving === "start" ? live.range.start : live.range.end);
+    // The close-up follows where the moving end is, also the instant a held press opens it with nothing drawn yet.
+    const edgeTime = live?.at;
     layer = <>
       <span aria-hidden="true" className={live ? "timeline-range is-live" : "timeline-range"} style={{ left: `${left}%`, width: `${Math.max(0, right - left)}%` }} />
       {live && !live.precise && <span aria-hidden="true" className="timeline-range-time" style={{ left: `${(left + right) / 2}%` }}>

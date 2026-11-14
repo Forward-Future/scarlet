@@ -274,14 +274,15 @@
 .timeline-range { position: absolute; z-index: 2; inset-block: 0; min-width: 2px; pointer-events: none; border-radius: 3px;
   background: rgba(244, 241, 233, .1); border-inline: 1.5px solid #f4f1e9; }
 .timeline-range.is-live { background: rgba(244, 241, 233, .16); }
-.timeline-range-handle { position: absolute; z-index: 4; top: 2px; width: 12px; height: calc(var(--ruler-height) - 4px); margin-left: -6px; padding: 0; border: 0;
-  border-radius: 4px; background: #f4f1e9; box-shadow: 0 0 0 .5px rgb(0 0 0 / 45%); cursor: ew-resize; touch-action: none; }
-/* Two grip lines, and a wider place to press than the handle is drawn. */
-.timeline-range-handle::before { content: ""; position: absolute; inset: 7px 4px; border-inline: 1px solid #1a1918; }
-.timeline-range-handle::after { content: ""; position: absolute; inset: -6px -10px; }
-.timeline-range-handle:focus-visible { outline: 2px solid var(--color-fg); outline-offset: 2px; }
-.timeline-range-handle.is-held { box-shadow: 0 0 0 3px rgba(244, 241, 233, .3); }
-.timeline-range-handle.is-snapped { box-shadow: 0 0 0 3px rgba(255, 160, 156, .75); }
+/* A handle is the full height of the timeline, so the end's line can be held anywhere along it. Its grip is drawn on the ruler. */
+.timeline-range-handle { position: absolute; z-index: 4; top: 0; bottom: 0; width: 18px; margin-left: -9px; padding: 0; border: 0; background: none;
+  cursor: ew-resize; touch-action: none; }
+.timeline-range-handle::before { content: ""; position: absolute; top: 2px; left: 3px; width: 12px; height: calc(var(--ruler-height) - 4px); box-sizing: border-box;
+  border-radius: 4px; background: #f4f1e9 linear-gradient(to right, transparent 4px, #1a1918 4px 5px, transparent 5px 7px, #1a1918 7px 8px, transparent 8px) no-repeat 0 7px / 12px calc(100% - 14px);
+  box-shadow: 0 0 0 .5px rgb(0 0 0 / 45%); }
+.timeline-range-handle:focus-visible::before { outline: 2px solid var(--color-fg); outline-offset: 2px; }
+.timeline-range-handle.is-held::before { box-shadow: 0 0 0 3px rgba(244, 241, 233, .3); }
+.timeline-range-handle.is-snapped::before { box-shadow: 0 0 0 3px rgba(255, 160, 156, .75); }
 .timeline-range-time { position: absolute; z-index: 5; top: 1px; transform: translateX(-50%); padding: 1px 5px; border-radius: 3px; background: #f4f1e9; color: #1a1918;
   font: 11px/14px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
 /* While a range is drawn, its own times are the ones to read: the bubble under the pointer steps aside. */
