@@ -15,7 +15,7 @@ import type { JoinClock } from "../lib/joinClock";
 import { api, IS_MOCK, loggedFetch } from "../lib/client";
 import { usePlayerStore } from "../stores/player";
 import { selectRender, useProjectStore } from "../stores/project";
-import { editTargetAt, useUiStore, type AgentContext } from "../stores/ui";
+import { editTargetAt, markedRangeOf, useUiStore, type AgentContext, type MarkedRange } from "../stores/ui";
 import { Icon } from "../components/ui/primitives";
 import { PreferenceSelect } from "../components/ui/PreferenceSelect";
 import { CachedVideo } from "../components/player/CachedVideo";
@@ -169,6 +169,8 @@ interface PreviewProps {
     onBand?(time: number): void;
     /** Timeline navigation offers the point to the composer. N attaches it explicitly. */
     onPick?(point: AgentContext, action: "offer" | "attach"): void;
+    /** A stretch marked on the timeline's ruler for the message being written, or none once it is taken off there. */
+    onRange?(range: MarkedRange | undefined): void;
     /** The chosen edit is about to play on another version: don't start its passage on this one meanwhile. */
     holdPassage?: boolean;
     /** A revision was requested from the open card. Its message box is outside the player. */
@@ -427,6 +429,17 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     simple.onPick?.(point, action);
   };
 
+  // The stretch marked for the message in the box, drawn while the timeline is the one it was marked on.
+  const markedRange = useUiStore(s => markedRangeOf(s.agentContext));
+  const rangeVersion = draftVersion ?? current.timeline?.version ?? current.project.head ?? undefined;
+  const shownRange = useMemo(() => markedRange && markedRange.version === rangeVersion && markedRange.mediaId === source?.id
+    ? { start: markedRange.start, end: markedRange.end } : undefined, [markedRange, rangeVersion, source?.id]);
+  const markRange = (range: TimeRange | undefined) => {
+    if (!range) return simple.onRange?.(undefined);
+    const point = editTargetAt(range.start, rangeVersion, displayedTimeline, source?.id);
+    simple.onRange?.({ start: range.start, end: range.end, version: rangeVersion, mediaId: source?.id, clipIds: point.clipIds });
+  };
+
   useEffect(() => { if (!active) player.pause(); }, [active]);
 
   // The press that last played the change.
@@ -675,6 +688,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
           <PlayerTimeline activeShortcuts={active} duration={duration} pictureAspect={pictureAspect} previewStrip={previewStrip} hoverVideo={hoverVideo}
             waveform={{ media: current.media, mediaPaused: current.project.mediaPaused, source, timeline: displayedTimeline, ...sameClockBefore && {
               audioFrom: playingBefore ? sameClockBefore : undefined, scaleWith: playingBefore ? displayedTimeline : sameClockBefore } }} frameAt={frameAt} onSeek={seekFull} onSelectTime={selectTime} onScrubStart={scrubStart}
+            range={simple.onRange ? shownRange : undefined} onRange={simple.onRange ? markRange : undefined} fps={fps}
             marks={simple.marks} gaps={simple.gaps} skippedRanges={simple.skippedRanges} onGap={simple.onGap} onBand={simple.onBand}
             highlight={simple.focus ?? (selectedEdit ? editFocus(selectedEdit, duration) : undefined)} />
         </div>

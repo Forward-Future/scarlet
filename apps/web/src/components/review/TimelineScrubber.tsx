@@ -14,6 +14,7 @@ import { TimelineMarkers, type TimelineMarker } from "./TimelineMarkers";
 import { TimelineRuler } from "./TimelineRuler";
 import { Icon } from "../ui/primitives";
 import { useTimelineZoom } from "./useTimelineZoom";
+import { rangeEdges, useRangeSelect } from "./TimelineRange";
 import { useArrival, useLaneHold, wavePhase } from "./laneLoading";
 import type { ProgressFocus } from "../player/SimpleProgress";
 
@@ -219,6 +220,15 @@ interface TimelineScrubberProps {
   onGap?(gap: TimelineGap, time: number): void;
   /** A click inside the highlight's band, at the time it points to. It doesn't seek: the caller decides where to play it. */
   onBand?(time: number): void;
+  /** The stretch the editor marked for the message they're writing, in this timeline's clock. */
+  range?: TimeRange;
+  /**
+   * A drag along the ruler marks a stretch, and its handles adjust it. With this, a press on the ruler that doesn't move
+   * still moves the playhead; without it the ruler scrubs like the rest of the timeline.
+   */
+  onRange?(range: TimeRange | undefined): void;
+  /** The video's frame rate: a marked range's ends sit on frames. */
+  fps?: number;
 }
 
 /**
@@ -435,6 +445,8 @@ function ZoomPopover({ children, onKey }: { children: ReactNode; onKey(event: Ke
   </div>;
 }
 
+const noRange = () => {};
+
 export function PlayerTimeline(props: Omit<TimelineScrubberProps, "playhead">) {
   const playhead = usePlayerStore(s => s.time);
   return <TimelineScrubber {...props} playhead={playhead} />;
@@ -473,7 +485,7 @@ export function TimelineScrubber(props: TimelineScrubberProps) {
 }
 
 function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, activeShortcuts, subject, kept,
-  label = "Position in the video", pictureAspect = 16 / 9, frameAt, previewStrip, hoverVideo, onSeek, onSelectTime, onScrubStart, highlight, marks, gaps, skippedRanges, onGap, onBand }:
+  label = "Position in the video", pictureAspect = 16 / 9, frameAt, previewStrip, hoverVideo, onSeek, onSelectTime, onScrubStart, highlight, marks, gaps, skippedRanges, onGap, onBand, range, onRange, fps = 30 }:
   TimelineScrubberProps & { subject: string; kept: RefObject<KeptView | undefined> }) {
   const litMark = useStore(useContext(EditHoverContext));
   const total = Number.isFinite(duration) ? Math.max(0, duration) : 0;
@@ -675,6 +687,10 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
     select.current.onSeek(time);
     select.current.onSelectTime?.(time);
   }, [start, end]);
+  // Where a marked range's end lands when it comes near: the edges of the open edit, of footage cuts took out, and each marked edit.
+  const edges = useMemo(() => rangeEdges(highlight?.band, gaps, marks), [highlight?.band, gaps, marks]);
+  const marking = useRangeSelect({ slider, drag, from, span, start, end, fps, edges, range, onRange: onRange ?? noRange, onSeek,
+    onScrubStart, onPress: selectPosition, beforeGesture: stopZoom });
   const zoomControls = <div className="timeline-zoom-row" role="group" aria-label="Timeline zoom">
     <button type="button" className="timeline-zoom-step" aria-label="Zoom out" title="Zoom out (−)" disabled={intendedSpan >= total} onClick={() => zoomBy(.5)}>−</button>
     <span className="timeline-zoom-level">{Number(zoom.toFixed(1))}×</span>
@@ -682,11 +698,18 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
     <button type="button" className="timeline-fit" aria-label="Fit timeline" title="Show full timeline (0)" disabled={intendedSpan >= total} onClick={() => fitRange()}>Fit</button>
   </div>;
   return <div className="timeline-panel" onKeyDown={e => handleZoomKey(e.nativeEvent)}>
-    <div ref={track} className="timeline-track"><ScrubPreview start={from} duration={span} pictureAspect={pictureAspect} frameAt={frameAt} hoverVideo={hoverVideo} note={markNote || gapNote}>
+    <div ref={track} className={marking.marking ? "timeline-track is-marking" : "timeline-track"}><ScrubPreview start={from} duration={span} pictureAspect={pictureAspect} frameAt={frameAt} hoverVideo={hoverVideo} note={markNote || gapNote}>
     <div ref={slider} className="timeline-slider" role="slider" tabIndex={total ? 0 : -1} aria-disabled={!total}
       aria-label={label} aria-valuemin={start} aria-valuemax={end} aria-valuenow={position} aria-valuetext={playbackClock(position)}
       onPointerDown={e => {
         if (!total || e.button !== 0 || !e.isPrimary || drag.current) return;
+        if (onRange) {
+          // The ruler marks a range. The strip that picks a marker lies over its lower edge, so go by where the press is.
+          const box = e.currentTarget.getBoundingClientRect();
+          const ruler = e.currentTarget.querySelector<HTMLElement>(".timeline-lanes")?.offsetTop ?? 0;
+          const onRuler = !!(e.target as Element).closest(".timeline-range-zone") || (box.height > 0 && e.clientY - box.top < ruler);
+          if (onRuler && marking.begin(e)) return;
+        }
         stopZoom();
         e.currentTarget.setPointerCapture(e.pointerId);
         const lifetime = new AbortController();
@@ -716,6 +739,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
         selectPosition(target);
       }}>
       <TimelineRuler start={from} duration={span} width={width} />
+      {onRange && total > 0 && <div aria-hidden="true" className="timeline-range-zone" title="Drag to mark a range for your message" />}
       <div className="timeline-lanes">
         {mediaWindows.map((sample, i) => {
           const projection = sample.span !== span || sample.from !== from
@@ -750,6 +774,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
       {markLayout.length > 0 && <div aria-hidden="true" className={aimed ? "simple-timeline-hover is-aimed" : "simple-timeline-hover"}
         onPointerMove={hoverMark} onPointerLeave={() => { setHotMark(undefined); setAimed(false); }} onPointerDown={pressMark} />}
       {markNodes}
+      {marking.layer}
       {position >= from && position <= to && <>
         <span aria-hidden="true" className={gliding ? "timeline-playhead-time is-gliding" : "timeline-playhead-time"}
           style={{ left: `min(${percent(position)}%, calc(100% - var(--timeline-tools-space)))`, transform: `translateX(-${percent(position)}%)` }}>{playbackClock(position)}</span>

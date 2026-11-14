@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { matchesEdit, type EditRef, type Thread, type ThreadEdit } from "@scarlet/shared";
 import { errorMessage } from "../../lib/client";
-import { requestThreadEdits, useReviewableEditFlags, useThreadEditKey } from "./threadEditRequest";
+import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
 import { useUiStore, type AgentContext } from "../../stores/ui";
 import { editGroups } from "./ThreadEdits";
 import { originalReviewRef } from "../../lib/editReviews";
@@ -29,7 +29,7 @@ export function useThreadTimeline(projectId: string, head: string | null, thread
   // While the markers load again for a new working cut, the list that was showing stays: an open edit's card doesn't
   // blink out and come back, and its listen isn't played again. A list that failed to load shows nothing.
   const last = useRef<{ owner: string; edits: ThreadEdit[] }>(undefined);
-  const edits = useReviewableEditFlags(thread, current?.edits ?? (!current && !!head && last.current?.owner === owner ? last.current.edits : empty));
+  const edits = current?.edits ?? (!current && !!head && last.current?.owner === owner ? last.current.edits : empty);
   if (current?.edits) last.current = { owner, edits };
   else if (current?.error) last.current = undefined;
   const selected = picked?.owner === owner ? edits.find(e => matchesEdit(e, picked.ref)) : undefined;

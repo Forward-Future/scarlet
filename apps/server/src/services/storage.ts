@@ -1,5 +1,5 @@
-import { lstatSync, readdirSync, unlinkSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { lstatSync, readdirSync } from "node:fs";
+import { readdir, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { StorageProject, StorageSelection } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
@@ -72,10 +72,21 @@ export function validateSelection(ctx: Ctx, selected: StorageSelection, expired 
   }
 }
 
-export function clearSegments(ctx: Ctx, id: string) {
+/** The cached renders `clearSegments` would delete. Read while the selection is checked, so both see the same state. */
+export function segmentFiles(ctx: Ctx, id: string): string[] {
   const dir = cacheDir(ctx, id);
-  if (!dir) return;
-  for (const file of readdirSync(dir, { withFileTypes: true })) {
-    if (file.isFile() && segmentName.test(file.name)) unlinkSync(join(dir, file.name));
-  }
+  if (!dir) return [];
+  return readdirSync(dir, { withFileTypes: true }).filter(file => file.isFile() && segmentName.test(file.name)).map(file => join(dir, file.name));
+}
+
+/**
+ * Delete a project's cached renders, listed by `segmentFiles`, outside any transaction and without blocking the engine.
+ * A file that can't be deleted, such as one in use on Windows, stays for the next clear and stops no other.
+ */
+export async function clearSegments(ctx: Ctx, id: string, files = segmentFiles(ctx, id)): Promise<void> {
+  const failed: string[] = [];
+  await Promise.all(files.map(file => unlink(file).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") failed.push(`${basename(file)}: ${error.message}`);
+  })));
+  if (failed.length) ctx.log(`[storage] couldn't clear ${failed.length} cached ${failed.length === 1 ? "render" : "renders"} of ${id}: ${failed[0]}`);
 }

@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { downloadImport } from "./importUrl.js";
 import { hasInitialTimeline, newId, ProjectSettings, videoFormat, type MediaAsset, type MediaKind, type Project, type Transcript, type TranscriptSegment } from "@scarlet/timeline";
 import { engineIsAlive, type Ctx } from "../context.js";
+import { quietProgress } from "./progressSave.js";
 import { now } from "../db.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { humanDuration } from "../logText.js";
@@ -348,7 +349,8 @@ async function backgroundIngest(ctx: Ctx, projectId: string, asset: MediaAsset) 
         ? Math.ceil(elapsed * (1 - fraction) / fraction)
         : undefined;
       preparation = { stage, fraction, remainingSeconds };
-      publish("ingesting", preparation);
+      const shown = preparation;
+      quietProgress(ctx, `import progress (${asset.id})`, () => publish("ingesting", shown));
     };
   }
   try {
@@ -558,7 +560,7 @@ function startWithProvider(ctx: Ctx, projectId: string, asset: MediaAsset, provi
  * 50 s in word alignment on a Core Ultra 9, so Whisper is the first third. A cloud provider only uploads.
  * `words` is the same figure for the words alone, which is all a dialogue pass waits for.
  */
-function transcriptionProgress(ctx: Ctx, task: Task, provider: TranscriptionProvider["name"]) {
+export function transcriptionProgress(ctx: Ctx, task: Task, provider: TranscriptionProvider["name"]) {
   type Stage = NonNullable<Task["progress"]>["stage"];
   const share = provider === "whispercpp" ? 1 / 3 : 1 / 2;
   let started: { at: number; fraction: number; words: number } | undefined;
@@ -573,11 +575,11 @@ function transcriptionProgress(ctx: Ctx, task: Task, provider: TranscriptionProv
     const elapsed = started === undefined ? 0 : (at - started.at) / 1000;
     const left = (done: number, initial = 0) => elapsed >= 5 && done - initial >= 0.02 && done < 1
       ? Math.ceil(elapsed * (1 - done) / (done - initial)) : undefined;
-    ctx.db.transaction(() => {
+    quietProgress(ctx, `transcription progress (${task.id})`, () => ctx.db.transaction(() => {
       const current = ctx.repos.tasks.get(task.id);
       if (current?.state === "running") saveTask(ctx, { ...current, progress: { stage, fraction: Math.min(1, fraction), remainingSeconds: left(fraction, started?.fraction),
         words: { fraction: Math.min(1, words), remainingSeconds: left(words, started?.words) } } });
-    }, "immediate")();
+    }, "immediate")());
   }
   return {
     queued: () => save("queued", 0, 0),

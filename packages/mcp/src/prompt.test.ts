@@ -106,6 +106,12 @@ describe("an editing prompt", () => {
     expect(source).toContain("- Source position referenced: 77.00 s (1:17.00) to 80.50 s (1:20.15)");
     // On the timeline the project's 24 fps counts the frames: half a second is frame 12.
     expect(buildSystemPrompt({ ...base, task: task({ time: 80.5 }) })).toContain("- Timeline position referenced: 80.50 s (1:20.12)");
+    // A stretch marked on the ruler with an edit open is said besides the edit's own place, on the version it was marked on.
+    const marked = buildSystemPrompt({ ...base, task: task({ time: 10, end: 12, markedRange: { start: 42, end: 51.5, version: "v5" } }) });
+    expect(marked).toContain("- Timeline position referenced: 10.00 s (0:10.00) to 12.00 s (0:12.00)");
+    expect(marked).toContain("- Stretch the editor marked on the timeline: 42.00 s (0:42.00) to 51.50 s (0:51.12) on version v5");
+    // Marked with nothing open it is the position itself, said once.
+    expect(buildSystemPrompt({ ...base, task: task({ time: 42, end: 51.5, markedRange: { start: 42, end: 51.5 } }) })).not.toContain("Stretch the editor marked");
     // With nothing recorded there is no context section.
     expect(buildSystemPrompt({ ...base, task: task({}) })).not.toContain("## Context");
   });

@@ -1,17 +1,16 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { flushSync } from "react-dom";
-import { agentTarget, isDialogueGuide, type Task } from "@scarlet/shared";
+import { agentTarget, type Task } from "@scarlet/shared";
 import { canStartCutReview, cutSummary, type Project } from "@scarlet/timeline";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
 import { isComposing } from "../../lib/hotkeys";
-import { clock, playbackClock } from "../../lib/format";
+import { clock, clockRange, lengthLabel, playbackClock } from "../../lib/format";
 import type { RecorderResult } from "../../lib/recorder";
 import { useSpeech } from "../../lib/speech";
 import type { Thread } from "../../lib/threads";
 import { useProjectStore } from "../../stores/project";
 import { commandSkillIds, enabledSkills, useSkillsStore } from "../../stores/skills";
-import { playheadPoints, useUiStore, type AgentContext } from "../../stores/ui";
+import { markedRangeOf, playheadPoints, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
 import { Icon, Spinner, InlineError } from "../ui/primitives";
 import { AgentChip, useAgentAvailability } from "./AgentChip";
 import { SkillCommandInput } from "./SkillCommandInput";
@@ -77,7 +76,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const inputId = useId();
   const library = useSkillsStore(s => s.skills);
-  const skillStatus = useSkillsStore(s => s.status);
   const skills = useMemo(() => enabledSkills(library), [library]);
 
   // A key that gives the box the cursor (N, R) may still be held as it arrives. Its repeats are that same press, not
@@ -126,12 +124,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const head = project.head ?? undefined;
   const displayAnchor = context === "whole" ? null : context ?? selectedEdit ?? null;
   const replying = !!thread;
-  const firstImport = firstEditHint && !draft && !replying && !rewording && !displayAnchor && !targetTag &&
-    media?.some(m => (m.kind === "video" || m.kind === "audio") && m.status !== "failed");
-  useEffect(() => {
-    if (firstImport && skillStatus === "idle") void useSkillsStore.getState().load();
-  }, [firstImport, skillStatus]);
-  const firstCut = firstImport && skillStatus === "ready" && skills.find(s => s.name === "dialogue-pass" && isDialogueGuide(s));
   const question = replying && (!displayAnchor?.changeId || selectedEdit) ? thread.question : undefined;
   // An answer goes to the agent that asked. Anything else needs an agent and a model to send to.
   const unavailable = !question && none;
@@ -159,7 +151,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const send = async (text: string, voiceTranscript?: string, anchor = displayAnchor, skillIds?: string[]) => {
     if (question) {
       const answer = anchor?.editNumber ? `${[`Edit ${anchor.editNumber}`, anchor.label].filter(Boolean).join(" · ")} — ${text}`
-        : anchor ? `At ${clock(anchor.time)}${sourceName ? ` in ${sourceName}` : ""} — ${text}` : text;
+        : anchor ? `At ${anchor.markedRange ? clockRange(anchor.time, anchor.end ?? anchor.time) : clock(anchor.time)}${sourceName ? ` in ${sourceName}` : ""} — ${text}` : text;
       await answerTask(question.id, answer, skillIds);
       return;
     }
@@ -275,6 +267,9 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const tagAct = !targetTag ? undefined : question && targetTag === "Answer" ? "Answering Scarlet’s question"
     : thread && targetTag === "Reply" ? "Replying to this edit" : `Revising ${tagWords === "whole edit" ? "the whole edit" : tagWords}`;
   const tag = rewording ? undefined : targetTag;
+  // A stretch marked on the timeline's ruler rides with the message, beside the tag of the cut or edit it is aimed at.
+  const marked = rewording ? undefined : markedRangeOf(context);
+  const markedWords = marked && clockRange(marked.start, marked.end);
   const saveLabel = rewording ? "Save the new words" : sendLabel;
   function changeText(text: string) {
     dismissFirstEditHint();
@@ -301,18 +296,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         </div>}
         {modelPicker && <div className="composer-model"><AgentChip threadInput={thread ? question ? "answer" : "reply" : undefined} /></div>}
       </div>
-      {firstCut && <button type="button" className="composer-first-cut" aria-label="Make a first cut"
-        aria-description="Add /dialogue-pass to the message box. You can add directions before sending."
-        onClick={() => {
-          const text = `/${firstCut.name} `;
-          flushSync(() => changeText(text));
-          inputRef.current?.focus();
-          inputRef.current?.setSelectionRange(text.length, text.length);
-        }}>
-        <span className="composer-first-cut-icon"><Icon name="scissors" size={15} /></span>
-        <span className="composer-first-cut-copy"><strong>Make a first cut</strong><span>Trim false starts, retakes and distracting pauses.</span></span>
-        <span aria-hidden="true" className="composer-first-cut-insert">↵</span>
-      </button>}
       {tray}
       {/* Esc leaves a queued request's words as they were, unless the skill list took it first. */}
       {/* While an input method composes, Esc is its own: it puts away its candidates, and the words stay in the box. */}
@@ -330,6 +313,15 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
               aria-label={targetIsPoint ? `Take “${targetTag}” off: the message is about the whole video` : `Start a new edit instead of ${tagAct!.charAt(0).toLowerCase()}${tagAct!.slice(1)}`}
               title={recording || heard ? "Waits until what you’re saying is sent" : targetIsPoint ? "Whole video instead" : "New edit instead"} onClick={() => {
                 if (onClearTarget) onClearTarget(); else setContext("whole");
+                inputRef.current?.focus();
+              }}><Icon name="x" size={10} /></button>
+          </span>}
+          {marked && <span className="composer-tag composer-range" title={`About ${markedWords} on the timeline · ${lengthLabel(marked.end - marked.start)}`}>
+            <span className="composer-tag-name">{markedWords}</span>
+            <button type="button" className="composer-tag-clear" disabled={recording || heard} aria-label={`Take the marked range ${markedWords} off the message`}
+              title={recording || heard ? "Waits until what you’re saying is sent" : "Take the range off"} onClick={() => {
+                const was = context && context !== "whole" ? context : undefined;
+                setContext(withMarkedRange(context, undefined), was?.changeId ? was : undefined);
                 inputRef.current?.focus();
               }}><Icon name="x" size={10} /></button>
           </span>}

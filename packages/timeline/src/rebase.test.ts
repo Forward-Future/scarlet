@@ -390,6 +390,30 @@ describe("parallel clip properties", () => {
     });
   });
 
+  it("carries word timings with a caption that is retimed too, after an earlier cut", () => {
+    const base = scene();
+    const head = applyOps(base, [{ op: "rippleDelete", start: 0, end: 1 }]);
+    const plan = approve(base, head, [update("line", { timelineIn: 5, timelineOut: 6.5, words: [{ text: "hi", start: 5, end: 6.5 }] })]);
+    expect(plan.kind).toBe("rebased");
+    if (plan.kind === "rebased") expect(plan.timeline.tracks[2]!.clips[0]).toMatchObject({
+      timelineIn: 4, timelineOut: 5.5, words: [{ text: "hi", start: 4, end: 5.5 }],
+    });
+  });
+
+  it("keeps word timings where the caption is when only the caption part of a cut and a retiming is approved", () => {
+    const base = scene();
+    const ops: TimelineOp[] = [{ op: "rippleDelete", start: 1, end: 2 }, update("line", { text: "hi", words: [{ text: "hi", start: 4, end: 5 }] })];
+    const to = applyOps(base, ops);
+    const ranges = diffTimelines(base, to).ranges;
+    const captionSpot = ranges.findIndex((r) => r.start >= 3);
+    expect(captionSpot).toBeGreaterThanOrEqual(0);
+    const plan = planApply({ from: base, to, head: base, ops, changeRanges: ranges, spots: [captionSpot] });
+    expect(plan.kind).toBe("partial");
+    if (plan.kind === "partial") expect(plan.timeline.tracks[2]!.clips[0]).toMatchObject({
+      timelineIn: 5, timelineOut: 8, text: "hi", words: [{ text: "hi", start: 5, end: 6 }],
+    });
+  });
+
   it("preserves ten independent corrections submitted against one cut, in reverse approval order", () => {
     const base = scene();
     const track = base.tracks[2]!;
