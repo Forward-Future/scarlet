@@ -14,4 +14,4 @@ Fill the frame with the application, and leave the rest of the desktop outside i
 
 If the edit has a presenter inset, frame the screen with the existing layout in mind so the inset leaves the action visible.
 
-`timeline_transcript`, `frame_contact_sheet` and `timeline_propose` cover what this needs.
+`timeline_transcript`, `screen_text`, `frame_contact_sheet` and `timeline_propose` cover what this needs.

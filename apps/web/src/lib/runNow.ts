@@ -103,6 +103,10 @@ function toolWords(name: string, raw: unknown, callNumber?: CallNumber): string 
       return typeof query === "string" && query.trim() ? `Searching the transcript for “${query.trim().slice(0, 40)}”` : "Searching the transcript";
     }
     case "media_frame": return `Looking at the picture${span(input, "t")}`;
+    case "screen_text": {
+      const query = field(input, "query");
+      return typeof query === "string" && query.trim() ? `Searching the screen for “${query.trim().slice(0, 40)}”` : `Reading the text on screen${span(input, "from", "to")}`;
+    }
     case "frame_contact_sheet": return `Looking at the picture${span(input)}`;
     case "frame_contact_sheet_batch": {
       const n = count(field(input, "windows"));

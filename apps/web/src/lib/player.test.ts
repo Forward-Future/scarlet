@@ -54,9 +54,66 @@ it("plays straight on from where the footage resumes, without pausing, on the re
   reach(73.02);
   expect(video.paused).toBe(true);
   expect(usePlayerStore.getState().time).toBe(73);
-  // Play again listens from the top.
+  // Play carries on from where the listen stopped, and nothing stops it again.
   player.play();
-  expect(video.currentTime).toBe(8);
+  expect(video.currentTime).toBe(73);
+  expect(video.paused).toBe(false);
+  reach(80);
+  reach(80.5);
+  expect(video.paused).toBe(false);
+  expect(usePlayerStore.getState().time).toBe(80.5);
+});
+
+it("stops at the listen's end only once: stepped back and played again, it runs through the end", () => {
+  release = player.audition(AFTER, FPS);
+  reach(72);
+  reach(73.02);
+  expect(video.paused).toBe(true);
+  // ← from the stop, then Play: the join plays again, and the video carries on past where the listen ended.
+  player.seek(71, true);
+  player.play();
+  reach(72.9);
+  reach(73.02);
+  reach(75);
+  expect(video.paused).toBe(false);
+  expect(usePlayerStore.getState().time).toBe(75);
+});
+
+it("steps over footage removed beyond the listen once the editor plays on", () => {
+  // Another cut of the pass, 90 to 100 s, is out of the video as it runs now too.
+  release = player.audition({ ...AFTER, beyond: [{ start: 90, end: 100 }] }, FPS);
+  reach(72);
+  reach(73.02);
+  player.play();
+  reach(89.9);
+  reach(89.99);
+  expect(video.currentTime).toBe(100);
+  expect(video.paused).toBe(false);
+  // A seek into it lands where the footage resumes, as in the listen's own cut.
+  usePlayerStore.setState({ scrubGesture: new AbortController().signal });
+  player.seek(95, true);
+  expect(usePlayerStore.getState().time).toBe(100);
+  usePlayerStore.setState({ scrubGesture: undefined });
+});
+
+it("plays on past the listen's end from a point picked on the timeline while it plays", () => {
+  release = player.audition(AFTER, FPS);
+  reach(8.5);
+  press(71);
+  expect(video.paused).toBe(false);
+  reach(72.9);
+  reach(73.02);
+  reach(74);
+  expect(video.paused).toBe(false);
+  expect(usePlayerStore.getState().time).toBe(74);
+});
+
+it("plays a listen the editor started from a point on the timeline until they pause it", () => {
+  release = player.audition({ start: 8, end: 72, skips: [], from: 30, through: true }, FPS);
+  expect(video.currentTime).toBe(30);
+  reach(71.9);
+  reach(72.02);
+  reach(73);
   expect(video.paused).toBe(false);
 });
 
@@ -87,7 +144,8 @@ it.each([false, true])("handles a final reading past the cut preview's stop (sou
   vi.spyOn(video, "ended", "get").mockReturnValue(true);
   video.dispatchEvent(new Event("ended"));
   player.toggle();
-  expect(video.currentTime).toBe(soughtPast ? video.duration : AFTER.start);
+  // Short of the video's end, Play carries on from the stop. At the end there is nothing left: it plays the listen again.
+  expect(video.currentTime).toBe(soughtPast ? video.duration : AFTER.end);
 });
 
 it("does not restart an audition when a fallback section ends before the full video", () => {
@@ -316,7 +374,7 @@ it("carries on playing a listen that was playing when it was set up again", () =
   expect(video.paused).toBe(true);
 });
 
-it("keeps a finished listen finished when it is set up again, so Play starts it over", () => {
+it("keeps a finished listen finished when it is set up again, so Play carries on from its end", () => {
   release = player.audition(AFTER, FPS);
   reach(72);
   reach(73.02);
@@ -324,7 +382,8 @@ it("keeps a finished listen finished when it is set up again, so Play starts it 
   release = player.audition({ ...AFTER }, FPS, true);
   expect(video.paused).toBe(true);
   player.play();
-  expect(video.currentTime).toBe(8);
+  expect(video.currentTime).toBe(73);
+  expect(video.paused).toBe(false);
 });
 
 it("takes up an edit's passage again without replaying it", () => {

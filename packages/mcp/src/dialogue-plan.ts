@@ -326,13 +326,17 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
   // A range given as words has its edges placed by Scarlet in the silence beside the words. When the agent decides
   // that silence in the range next to it, as a pause cut before a retake, the placed edge lands inside that range
   // and the plan used to be refused: once or twice on most passes, a turn each. The placed edge gives way to the
-  // range beside it. The words themselves reaching into another range is still the agent's overlap to fix.
+  // range beside it, and the gate says so. The words themselves reaching into another range is still the agent's overlap to fix.
   for (const placed of cuts) {
     if (!placed.spoken) continue;
     for (const other of cuts) {
       if (other === placed || other.end <= placed.start || other.start >= placed.end) continue;
-      if (other.end <= placed.spoken.start + 1e-6) placed.start = Math.max(placed.start, other.end);
-      else if (other.start >= placed.spoken.end - 1e-6) placed.end = Math.min(placed.end, other.start);
+      const edge = other.end <= placed.spoken.start + 1e-6 ? "start" : other.start >= placed.spoken.end - 1e-6 ? "end" : undefined;
+      if (!edge) continue;
+      const was = placed[edge];
+      placed[edge] = edge === "start" ? Math.max(placed.start, other.end) : Math.min(placed.end, other.start);
+      if (Math.abs(placed[edge] - was) > 1e-6) placed.notes = [...(placed.notes ?? []),
+        `Scarlet placed its ${edge} at ${r2(was)} s, inside cut ${other.input}; it moved to ${r2(placed[edge])} s to meet that cut.`];
     }
   }
   const sorted = [...cuts].sort((a, b) => a.start - b.start);

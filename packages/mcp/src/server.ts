@@ -2262,7 +2262,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   // -- timeline -------------------------------------------------------------
 
-  const perception = registerPerception({ tool, client, projectId: ctx.projectId, getTimeline, peekTimeline, getProject, readPassage, transcriptWords, showWords, settledThrough, readLevels, unavailable: unavailableOnce,
+  const perception = registerPerception({ tool, client, projectId: ctx.projectId, seesFrames: caps.images && !disabled.has("media_frame"), getTimeline, peekTimeline, getProject, readPassage, transcriptWords, showWords, settledThrough, readLevels, unavailable: unavailableOnce,
     readWaveform: (mediaId, from, to, points) => readPrepared(mediaId, "waveform", () => client.waveform(mediaId, from, to, points, true)) });
 
   async function readApprovedExample(changeId: string) {

@@ -303,3 +303,61 @@ export async function audition(file: string, range: TimeRange, signal?: AbortSig
   h.write("data", 36); h.writeUInt32LE(stdout.length, 40);
   return Buffer.concat([h, stdout]).toString("base64");
 }
+
+/** The size a screen frame is read at: the recording's own, shrunk so its longer side is at most `maxSide`, in even pixels. */
+export function screenFrameSize(width: number, height: number, maxSide = 1920) {
+  const scale = Math.min(1, maxSide / Math.max(width, height));
+  const even = (n: number) => Math.max(2, 2 * Math.round(n * scale / 2));
+  return { width: even(width), height: even(height) };
+}
+
+export interface ScreenFrameOptions {
+  /** Frames a second to read. */
+  fps: number;
+  /** The size `screenFrameSize` gave for this recording. */
+  width: number; height: number;
+  decoder?: SheetOptions["decoder"];
+  signal?: AbortSignal;
+  onFallback?: (reason: string) => void;
+}
+
+/**
+ * Hand each frame of a window to `onFrame` as packed RGB, `fps` a second, frame `i` at `range.start + i / fps` source
+ * seconds. Screen text is read from these: a 4K screen read at 1920 wide found the same lines as at full size, and
+ * decodes in a quarter of the memory.
+ */
+export async function screenFrames(file: string, range: TimeRange, opts: ScreenFrameOptions, onFrame: (index: number, rgb: Buffer) => void): Promise<number> {
+  if (opts.decoder && (opts.decoder !== "cuda" || await isStoredAsShown(file, { signal: opts.signal }))) {
+    let delivered = 0;
+    try { return await framesFrom(file, range, opts, (i, rgb) => { delivered = i + 1; onFrame(i, rgb); }); }
+    catch (error) {
+      opts.signal?.throwIfAborted();
+      // Frames already handed over stay handed over: the CPU picks up where the GPU stopped.
+      if (delivered) throw error;
+      opts.onFallback?.(cpuFallback(opts.decoder, error));
+    }
+  }
+  return framesFrom(file, range, { ...opts, decoder: undefined }, onFrame);
+}
+
+async function framesFrom(file: string, range: TimeRange, opts: ScreenFrameOptions, onFrame: (index: number, rgb: Buffer) => void) {
+  const { width, height } = opts, size = width * height * 3;
+  const filter = shrinkFirst(opts.decoder, `${width}:${height}`, `fps=${opts.fps}:round=down,scale=${width}:${height}:flags=area,format=rgb24`);
+  let pending: Buffer[] = [], held = 0, index = 0;
+  await runCapture(resolveFfmpeg(), [...input(file, range, opts.decoder), "-loglevel", "error", "-map", "0:v:0", "-an", "-vf", filter,
+    "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], {
+    signal: opts.signal, maxStderr: 256 * 1024,
+    onStdoutChunk(chunk) {
+      pending.push(chunk);
+      held += chunk.length;
+      while (held >= size) {
+        const all = Buffer.concat(pending, held);
+        onFrame(index++, all.subarray(0, size));
+        const rest = all.subarray(size);
+        pending = rest.length ? [Buffer.from(rest)] : [];
+        held = rest.length;
+      }
+    },
+  });
+  return index;
+}
