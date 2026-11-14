@@ -477,6 +477,48 @@ describe("timeline_propose", () => {
     expect(JSON.parse(textOf(r))).toMatchObject({ onWholeFrames: [{ asked: [0.987, 1.513], removed: [1, 1.5] }] });
   });
 
+  it("tells the agent when an edit plays the same moment of a recording on two audible clips, and still saves the edit", async () => {
+    const old = mock.state.timeline;
+    const c = await connect();
+    try {
+      // The report in #18: the recording on V1 with its sound, and the same range added to A1 at unity gain.
+      const tl = emptyTimeline(mock.state.project.id);
+      tl.version = "v_doubled";
+      tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 5, 0, { id: "video-clip" })];
+      mock.state.timeline = tl;
+      await c.callTool({ name: "timeline_get", arguments: {} });
+      const doubled = (await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", description: "Keep the original audio",
+        ops: [{ op: "addClip", trackId: "a1", clip: makeMediaClip("m1", 0, 5, 0, { id: "audio-clip" }) }] } })) as CallToolResult;
+      expect(doubled.isError).toBeFalsy();
+      expect(JSON.parse(textOf(doubled))).toMatchObject({ changeId: expect.any(String),
+        doubledSound: [{ mediaId: "m1", clipIds: ["video-clip", "audio-clip"], overlap: { start: 0, end: 5 } }] });
+
+      // From the same one-clip timeline: the same addition with the video copy muted, which is the fix, and a copy
+      // offset by 5 ms, under a frame, which may be deliberate. Neither is reported.
+      for (const ops of [
+        [{ op: "updateClip", clipId: "video-clip", patch: { volume: 0 } }, { op: "addClip", trackId: "a1", clip: makeMediaClip("m1", 0, 5, 0, { id: "audio-clip" }) }],
+        [{ op: "addClip", trackId: "a1", clip: makeMediaClip("m1", 0.005, 5, 0, { id: "audio-clip" }) }],
+      ]) {
+        mock.state.timeline = structuredClone(tl);
+        await c.callTool({ name: "timeline_get", arguments: {} });
+        const r = (await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", description: "Keep the original audio", ops } })) as CallToolResult;
+        expect(r.isError).toBeFalsy();
+        expect(JSON.parse(textOf(r))).not.toHaveProperty("doubledSound");
+      }
+
+      // A full replacement timeline is checked the same way.
+      mock.state.timeline = structuredClone(tl);
+      await c.callTool({ name: "timeline_get", arguments: {} });
+      const whole = { ...tl, tracks: [tl.tracks[0]!, { ...tl.tracks[1]!, clips: [makeMediaClip("m1", 0, 5, 0, { id: "audio-clip" })] }] };
+      const r = (await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", description: "Assemble", timeline: whole } })) as CallToolResult;
+      expect(r.isError).toBeFalsy();
+      expect(JSON.parse(textOf(r))).toMatchObject({ doubledSound: [{ clipIds: ["video-clip", "audio-clip"] }] });
+    } finally {
+      mock.state.timeline = old;
+      await c.close();
+    }
+  });
+
   it("returns a readable error for invalid ops instead of crashing", async () => {
     const r = (await client.callTool({
       name: "timeline_propose",
