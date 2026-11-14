@@ -11,11 +11,13 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { appliedCutReview, planCutReview } from "../../packages/timeline/src/index.ts";
 import { cli, isMain, list, main } from "./args.ts";
 import { evidencePath, listCases, scanPath, timelinePath, type CaseFile, type Suite } from "./case.ts";
 import { Engine } from "./engine.ts";
 import { fetchScans, fetchWords, mediaEvidence, mediaFile } from "./evidence.ts";
 import { gatherTask, mediaInfo } from "./evaluate.ts";
+import { intersect } from "./intervals.ts";
 import type { LabeledRange, MediaEvidence, Word } from "./metrics.ts";
 import { caseDir, dataDir, readJson, writeJson } from "./paths.ts";
 import { measurePicture } from "./pictureMeasure.ts";
@@ -127,11 +129,20 @@ export async function buildCase(engine: Engine, opts: BuildOptions): Promise<{ f
     }
     const decided = labels.length;
     // Applied cuts stand unless the editor undid them; keep them as labels so recall counts them.
-    if (artifacts.applied?.cutReasons) {
-      const from = artifacts.timelines.get(artifacts.applied.fromVersion)!;
-      artifacts.applied.cutReasons.forEach((r, i) => {
-        for (const [mediaId, ranges] of byMedia(timelineRangeToSource(from, media, r))) for (const x of ranges) {
-          labels.push({ mediaId, ...x, label: "cut", origin: `applied#${i}` });
+    // A pass saved in parts cuts each part on the version the part before it left, so each maps through its own.
+    // A part approved through its cut review applied only the removals the review lists, on the clock of the version it cut.
+    // An older engine saved just the calls restored, numbered as planCutReview lists them, so its review is planned again.
+    for (const [p, part] of (artifacts.parts ?? []).entries()) {
+      const from = artifacts.timelines.get(part.fromVersion)!;
+      const timeline = async (version: string) => artifacts.timelines.get(version) ?? await engine.timeline(project.id, version);
+      const older = !part.appliedReview && part.restoredCuts?.length ? planCutReview(from, await timeline(part.toVersion), project.media, part.ops, part.firstCut) : undefined;
+      if (older === null) warnings.push(`${part.id} was approved with cuts restored, and its review can't be planned again; all its cuts are labeled.`);
+      const applied = part.appliedReview ? { original: await timeline(part.appliedReview.originalVersion), joins: part.appliedReview.joins }
+        : older && { original: older.original, joins: appliedCutReview(older, part.restoredCuts!).joins };
+      const removed = applied && byMedia(applied.joins.flatMap(j => timelineRangeToSource(applied.original, media, j.removed)));
+      part.cutReasons?.forEach((r, i) => {
+        for (const [mediaId, ranges] of byMedia(timelineRangeToSource(from, media, r))) for (const x of removed ? intersect(ranges, removed.get(mediaId) ?? []) : ranges) {
+          labels.push({ mediaId, ...x, label: "cut", origin: p ? `applied#${p}.${i}` : `applied#${i}` });
         }
       });
     }
