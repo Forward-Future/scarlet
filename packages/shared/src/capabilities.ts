@@ -15,6 +15,8 @@ export interface AgentCapabilities {
   audio: boolean;
   /** The agent can write files in its task artifact directory (needed before `asset_add`). */
   files: boolean;
+  /** Character target for paging long MCP text responses. Configurable per harness. */
+  resultChars?: number;
   /**
    * Scarlet can launch the harness with its own to-do tool on, and the plan its model keeps there reaches Scarlet as
    * `plan` task events. Off, the model has no such tool and the chat shows no plan. The tool and its description are
@@ -25,6 +27,10 @@ export interface AgentCapabilities {
   /** Prefix the harness uses when it exposes Scarlet's MCP tools to the model. */
   toolPrefix?: string;
 }
+
+// A 58-minute transcript exceeded Claude Code's result window and was saved to a file its
+// file-disabled session couldn't read. Leave headroom below its 50,000-character spill point.
+export const DEFAULT_RESULT_CHARS = 40_000;
 
 // `plan` is off for every harness. On 2026-11-08 Claude Code, given the tool and one sentence asking for its steps, laid
 // them out within twelve seconds in each of eleven real requests, at a median of about 15 seconds a request. Since
@@ -51,11 +57,14 @@ export function agentCapabilities(agent: string | undefined, override?: Partial<
       const parsed = JSON.parse(override) as Record<string, unknown>;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
       for (const key of ["images", "audio", "files", "plan"] as const) if (typeof parsed[key] === "boolean") extra[key] = parsed[key] as boolean;
+      if (typeof parsed.resultChars === "number") extra.resultChars = parsed.resultChars;
     } catch {
       extra = {};
       // The value is the user's own text, so it stays out of the log.
       console.warn('[scarlet] SCARLET_AGENT_CAPS ignored: it must be a JSON object such as {"audio":true}');
     }
   } else if (override && typeof override === "object") extra = override;
-  return { ...base, ...extra };
+  const resultChars = extra.resultChars;
+  return { ...base, ...extra, resultChars: resultChars !== undefined && Number.isSafeInteger(resultChars) && resultChars >= 2_000
+    ? resultChars : DEFAULT_RESULT_CHARS };
 }

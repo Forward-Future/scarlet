@@ -6,21 +6,23 @@ afterEach(() => vi.restoreAllMocks());
 describe("agentCapabilities", () => {
   it("gives each known harness what it delivers, and an unknown one the conservative set", () => {
     // No harness's to-do tool is on: the chat shows no plan. Gemini's runner reads none.
-    expect(agentCapabilities("claude")).toEqual({ images: true, audio: false, files: false, plan: false, toolPrefix: "mcp__scarlet__" });
-    expect(agentCapabilities("codex")).toEqual({ images: true, audio: false, files: true, plan: false });
-    expect(agentCapabilities("gemini")).toEqual({ images: true, audio: false, files: false, plan: false });
-    for (const agent of [undefined, "", "api", "toString", "Claude"]) expect(agentCapabilities(agent), String(agent)).toEqual({ images: true, audio: false, files: false, plan: false });
+    expect(agentCapabilities("claude")).toEqual({ images: true, audio: false, files: false, plan: false, resultChars: 40_000, toolPrefix: "mcp__scarlet__" });
+    expect(agentCapabilities("codex")).toEqual({ images: true, audio: false, files: true, plan: false, resultChars: 40_000 });
+    expect(agentCapabilities("gemini")).toEqual({ images: true, audio: false, files: false, plan: false, resultChars: 40_000 });
+    for (const agent of [undefined, "", "api", "toString", "Claude"]) expect(agentCapabilities(agent), String(agent)).toEqual({ images: true, audio: false, files: false, plan: false, resultChars: 40_000 });
   });
 
-  it("applies an override given as an object or as SCARLET_AGENT_CAPS JSON, taking only its true/false capabilities", () => {
-    expect(agentCapabilities("claude", { audio: true })).toEqual({ images: true, audio: true, files: false, plan: false, toolPrefix: "mcp__scarlet__" });
+  it("applies an override given as an object or as SCARLET_AGENT_CAPS JSON, taking its supported capabilities", () => {
+    expect(agentCapabilities("claude", { audio: true })).toEqual({ images: true, audio: true, files: false, plan: false, resultChars: 40_000, toolPrefix: "mcp__scarlet__" });
     expect(agentCapabilities("claude", '{"plan":true}').plan).toBe(true);
     expect(agentCapabilities("codex", '{"plan":true}').plan).toBe(true);
-    expect(agentCapabilities("codex", '{"audio":true,"files":false}')).toEqual({ images: true, audio: true, files: false, plan: false });
-    expect(agentCapabilities("claude", ' {"images": false, "audio": "yes", "files": 1, "shell": true} ')).toEqual({ images: false, audio: false, files: false, plan: false, toolPrefix: "mcp__scarlet__" });
+    expect(agentCapabilities("codex", '{"audio":true,"files":false}')).toEqual({ images: true, audio: true, files: false, plan: false, resultChars: 40_000 });
+    expect(agentCapabilities("claude", ' {"images": false, "audio": "yes", "files": 1, "shell": true} ')).toEqual({ images: false, audio: false, files: false, plan: false, resultChars: 40_000, toolPrefix: "mcp__scarlet__" });
+    expect(agentCapabilities("codex", '{"resultChars":8000}').resultChars).toBe(8_000);
+    expect(agentCapabilities("codex", { resultChars: 200 }).resultChars).toBe(40_000);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    for (const unset of [undefined, "", "   "]) expect(agentCapabilities("codex", unset)).toEqual({ images: true, audio: false, files: true, plan: false });
-    expect(agentCapabilities("codex", "{}")).toEqual({ images: true, audio: false, files: true, plan: false });
+    for (const unset of [undefined, "", "   "]) expect(agentCapabilities("codex", unset)).toEqual({ images: true, audio: false, files: true, plan: false, resultChars: 40_000 });
+    expect(agentCapabilities("codex", "{}")).toEqual({ images: true, audio: false, files: true, plan: false, resultChars: 40_000 });
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -28,7 +30,7 @@ describe("agentCapabilities", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     for (const bad of ["files=true", "{files:true}", '{"files":true', "null", '["files"]', '"files"', "17"]) {
       warn.mockClear();
-      expect(agentCapabilities("codex", bad), bad).toEqual({ images: true, audio: false, files: true, plan: false });
+      expect(agentCapabilities("codex", bad), bad).toEqual({ images: true, audio: false, files: true, plan: false, resultChars: 40_000 });
       expect(warn, bad).toHaveBeenCalledTimes(1);
       // One fixed line: the variable's name and what it should hold, never what it held.
       expect(warn.mock.calls[0]).toEqual(['[scarlet] SCARLET_AGENT_CAPS ignored: it must be a JSON object such as {"audio":true}']);

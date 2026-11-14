@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { ProposeChangeRequest, ScarletApiError, ScarletClient, Task, type EditingTools } from "@scarlet/shared";
+import { agentCapabilities, ProposeChangeRequest, ScarletApiError, ScarletClient, Task, type EditingTools } from "@scarlet/shared";
 import type { Transcript } from "@scarlet/timeline";
 import { emptyTimeline, makeMediaClip } from "@scarlet/timeline";
 import { createScarletMcpServer, describeError, SCARLET_TOOL_NAMES } from "./server.js";
@@ -737,6 +737,72 @@ describe("transcript tools", () => {
     expect(textOf(none)).toContain("No speech in that range");
     expect(mock.requests.some(req => req.method === "POST")).toBe(false);
   });
+
+  it("pages a 6,300-word transcript without losing words or the measured gap at a page boundary", async () => {
+    const limit = 4_000;
+    // The uninterrupted opening must split inside a segment. Subsequent quiet gaps exercise
+    // the gap evidence at the page seams for both text granularities.
+    const words = Array.from({ length: 6_300 }, (_, i) => {
+      const start = i < 900 ? i * .1 : 90 + (i - 900) * .5;
+      return { start, end: start + .08, text: `word${i}`, speaker: i < 3000 ? "Host" : "Guest" };
+    });
+    const state = makeState({ transcripts: { m1: { ...transcript, segments: [
+      { id: "long", start: 0, end: words.at(-1)!.end, text: words.map(w => w.text).join(" "), words },
+    ] } } });
+    state.waveform = (mediaId, from, to, points) => ({ mediaId, from, to, peaks: [], rms: Array(points).fill(0) });
+    const fixture = await startMockServer(state);
+    const agent = new Client({ name: "transcript-pages", version: "1" });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    try {
+      const server = createScarletMcpServer(new ScarletClient({ baseUrl: fixture.url, token: "tok" }), {
+        projectId: "prj_test", agent: "claude", capabilities: agentCapabilities("claude", { resultChars: limit }),
+        author: { type: "agent", name: "claude" },
+      });
+      await server.connect(a);
+      await agent.connect(b);
+      for (const [format, granularity] of [["json", "word"], ["text", "word"], ["text", "segment"]]) {
+        const fromWord = 13, toWord = 6199;
+        let nextFromWord: number | undefined, pages = 0, gaps = 0;
+        const seen: number[] = [];
+        do {
+          const result = await agent.callTool({ name: "transcript_get",
+            arguments: { mediaId: "m1", fromWord, toWord, format, granularity, nextFromWord } }) as CallToolResult;
+          expect(result.isError).toBeFalsy();
+          const text = textOf(result);
+          expect(text.length).toBeLessThanOrEqual(limit);
+          const first = nextFromWord ?? fromWord;
+          if (format === "json") {
+            const page = JSON.parse(text);
+            expect(page.words[0][0]).toBe(first);
+            for (const [index, start, end, spelling, speaker] of page.words) {
+              seen.push(index);
+              const word = words[index]!;
+              if (start !== word.start || end !== word.end || spelling !== word.text || speaker !== word.speaker) {
+                throw new Error(`Word #${index} changed when paged`);
+              }
+            }
+            nextFromWord = page.nextFromWord;
+          } else {
+            if (pages && first > 900) expect(text.split("\n")[1]).toContain("0.42 s gap, quiet");
+            gaps += [...text.matchAll(/ s gap, quiet/g)].length;
+            const matches = [...text.matchAll(/\bword(\d+)\b/g)].map(m => Number(m[1]));
+            expect(matches[0]).toBe(first);
+            seen.push(...matches);
+            const next = text.match(/Continue with nextFromWord=(\d+)\./);
+            nextFromWord = next ? Number(next[1]) : undefined;
+          }
+          if (nextFromWord !== undefined) expect(nextFromWord).toBe(seen.at(-1)! + 1);
+          pages++;
+        } while (nextFromWord !== undefined && pages < 200);
+        expect(pages).toBeGreaterThan(1);
+        expect(seen).toEqual(Array.from({ length: toWord - fromWord + 1 }, (_, i) => fromWord + i));
+        if (format === "text") expect(gaps).toBe(toWord - 900);
+      }
+    } finally {
+      await agent.close();
+      await fixture.close();
+    }
+  }, 60_000);
 
   it("starts or joins transcription and delivers words to concurrent reads without a question", async () => {
     let polls = 0;

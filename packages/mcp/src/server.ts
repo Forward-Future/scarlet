@@ -26,7 +26,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod/v3";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { boundedRippleOps, cutAnchorOn, taskDialogueOperation, agentCapabilities, type AgentCapabilities, JOIN_WORD_SECONDS, fuzzySearchTranscript, apiPathId, disabledEditingTools, type EditingTools, type ScarletToolName,
+import { boundedRippleOps, cutAnchorOn, taskDialogueOperation, agentCapabilities, DEFAULT_RESULT_CHARS, type AgentCapabilities, JOIN_WORD_SECONDS, fuzzySearchTranscript, apiPathId, disabledEditingTools, type EditingTools, type ScarletToolName,
   CrossfadeFrames, SheetOptions, SheetRequest, CutReviewOptions, SourceAudioOptions, SoundPictureOptions, type InspectionResult, type InspectionWindow, type DialogueDetections, type PictureActivityWindow, ScarletApiError, SuggestLearningRequest, TaskSkillDraft, skillTaskTarget, skillEditTarget, type ScarletClient } from "@scarlet/shared";
 import type { RepeatEvidence, AgentId, DialogueScanPage, ProjectDetail, ProposeChangeRequest, Skill, Task, TaskEvent, WaveformResponse } from "@scarlet/shared";
 import type { Author, Change, MediaAsset, TimeRange } from "@scarlet/timeline";
@@ -1039,56 +1039,96 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   tool(
     "transcript_get",
-    `Word-timed transcript of a media asset in SOURCE seconds. Each word carries a stable index (#123): the same index transcript_search, timeline_transcript and dialogue_scan show, and the word reference dialogue_check_join and dialogue_apply_cuts accept. Word times locate words; cut edges go where the recording is silent, which the dialogue tools measure. In text, a gap of ${GAP_SECONDS} s or more between two words is followed by a line saying what the recording holds there: quiet, or how much of it is sound at speaking level that no word explains, with its source seconds. That sound is whatever the transcript left out: a word it missed, a cut-off start, a breath, a laugh, typing. A missing transcript is started or joined with the configured provider; if the call reports preparation, call again. Narrow with from/to seconds or fromWord/toWord. Text format: \`#index start-end word\` lines (word) or \`[start-end] #first-#last speaker: text\` lines (segment); json: [index, start, end, text, speaker] tuples.`,
+    `Word-timed transcript of a media asset in SOURCE seconds. Each word carries a stable index (#123): the same index transcript_search, timeline_transcript and dialogue_scan show, and the word reference dialogue_check_join and dialogue_apply_cuts accept. Word times locate words; cut edges go where the recording is silent, which the dialogue tools measure. In text, a gap of ${GAP_SECONDS} s or more between two words is followed by a line saying what the recording holds there: quiet, or how much of it is sound at speaking level that no word explains, with its source seconds. That sound is whatever the transcript left out: a word it missed, a cut-off start, a breath, a laugh, typing. A missing transcript is started or joined with the configured provider; if the call reports preparation, call again. Narrow with from/to seconds or fromWord/toWord. A long result includes nextFromWord: pass it back with the same range, granularity and format to read the next page. Text format: \`#index start-end word\` lines (word) or \`[start-end] #first-#last speaker: text\` lines (segment); json: [index, start, end, text, speaker] tuples.`,
     {
       mediaId: z.string(),
       from: z.number().min(0).optional().describe("Start of range, source seconds"),
       to: z.number().min(0).optional().describe("End of range, source seconds"),
       fromWord: z.number().int().min(0).optional().describe("First word index"),
       toWord: z.number().int().min(0).optional().describe("Last word index"),
+      nextFromWord: z.number().int().min(0).optional().describe("Continuation word index returned by the previous page"),
       granularity: z.enum(["word", "segment"]).default("word"),
       format: z.enum(["json", "text"]).default("text"),
     },
-    async ({ mediaId, from, to, fromWord, toWord, granularity, format }) => {
+    async ({ mediaId, from, to, fromWord, toWord, nextFromWord, granularity, format }) => {
       const words = await transcriptWords(mediaId);
       if (!words) return text(`Media ${mediaId} has no audio track or no transcribed speech. Use waveform_get to inspect its sound.`);
       const settled = settledThrough(mediaId);
       const estimates = Number.isFinite(settled) ? `Times after ${settled.toFixed(1)} s are estimates until Scarlet has placed those words on the audio; indices are final.` : undefined;
-      const picked = words.map((w, index) => ({ ...w, index })).filter(w =>
+      const budget = caps.resultChars ?? DEFAULT_RESULT_CHARS;
+      const inRange = (w: TranscriptWord, index: number) =>
         (from === undefined || w.end >= from) && (to === undefined || w.start <= to) &&
-        (fromWord === undefined || w.index >= fromWord) && (toWord === undefined || w.index <= toWord));
+        (fromWord === undefined || index >= fromWord) && (toWord === undefined || index <= toWord);
+      const picked: Array<TranscriptWord & { index: number }> = [];
+      let nextIndex: number | undefined;
+      let minimumSize = 0;
+      // Bound the waveform measurements and formatting to what could fit. A word's spelling plus
+      // its separator is a lower bound for every format. The exact rendered size decides below.
+      for (let index = Math.max(nextFromWord ?? 0, fromWord ?? 0); index < words.length && index <= (toWord ?? Infinity); index++) {
+        const word = words[index]!;
+        if (!inRange(word, index)) continue;
+        minimumSize += word.text.trim().length + 1;
+        if (picked.length && minimumSize > budget) { nextIndex = index; break; }
+        picked.push({ ...word, index });
+      }
       if (!picked.length) return text(`No speech in that range of ${mediaId} (${words.length} words, #0–#${words.length - 1}). Use waveform_get to inspect pauses.`);
-      if (format === "json") return json({ mediaId, ...(estimates && { timesFinalThrough: round3(settled) }), words: picked.map(w => [w.index, w.start, w.end, w.text.trim(), w.speaker ?? null]) });
+      // The continuation is outside the word list in both formats. A giant single imported
+      // word still travels intact: stable indices address words, never fragments of a word.
+      function page(render: (count: number, next?: number) => string) {
+        const complete = render(picked.length, nextIndex);
+        if (complete.length <= budget || picked.length === 1) return text(complete);
+        let low = 1, high = picked.length - 1;
+        while (low < high) {
+          const mid = Math.ceil((low + high) / 2);
+          if (render(mid, picked[mid]!.index).length <= budget) low = mid;
+          else high = mid - 1;
+        }
+        return text(render(low, picked[low]!.index));
+      }
+      if (format === "json") {
+        const tuples = picked.map(w => [w.index, w.start, w.end, w.text.trim(), w.speaker ?? null]);
+        return page((count, next) => JSON.stringify({ mediaId, ...(estimates && { timesFinalThrough: round3(settled) }),
+          words: tuples.slice(0, count), ...(next !== undefined && { nextFromWord: next }) }));
+      }
       // What the recording holds in each gap between two words, by the index of the word after it.
-      const gapped = picked.flatMap((w, i) => i && w.start - picked[i - 1]!.end >= GAP_SECONDS && w.index === picked[i - 1]!.index + 1
-        ? [{ index: w.index, start: picked[i - 1]!.end, end: w.start }] : []);
+      const gapped = picked.flatMap((w, i) => {
+        // A gap belongs to the word after it, even when it falls exactly between two pages.
+        // A fresh ranged read retains its original first-word behavior.
+        const previous = words[w.index - 1];
+        if (!previous || (!i && nextFromWord === undefined) || !inRange(previous, w.index - 1)) return [];
+        return w.start - previous.end >= GAP_SECONDS ? [{ index: w.index, start: previous.end, end: w.start }] : [];
+      });
       const sounds = await gapSounds(mediaId, gapped).catch(withoutOnce(`failed to read the levels between the words of ${mediaId}`, [] as Array<GapSound | undefined>));
       const gapNote = new Map(gapped.flatMap((g, i) => sounds[i] ? [[g.index, `  · ${(g.end - g.start).toFixed(2)} s gap, ${describeGapSound(sounds[i]!)}`] as const] : []));
-      const lines: string[] = [];
-      if (granularity === "segment") {
-        let group: typeof picked = [];
-        const flush = () => {
-          if (!group.length) return;
-          const a = group[0]!, b = group.at(-1)!;
-          lines.push(`[${a.start.toFixed(2)}-${b.end.toFixed(2)}] #${a.index}-#${b.index}${a.speaker ? ` ${a.speaker}:` : ""} ${group.map(w => w.text.trim()).join(" ")}`);
-          group = [];
-        };
-        for (const w of picked) {
-          const prev = group.at(-1);
-          if (prev && (gapNote.has(w.index) || w.start - prev.end >= .6 || w.speaker !== prev.speaker || /[.?!]["”’)]*$/.test(prev.text.trim()))) flush();
-          if (gapNote.has(w.index)) lines.push(gapNote.get(w.index)!);
-          group.push(w);
+      return page((count, next) => {
+        const shown = picked.slice(0, count);
+        const lines: string[] = [];
+        if (granularity === "segment") {
+          let group: typeof picked = [];
+          const flush = () => {
+            if (!group.length) return;
+            const a = group[0]!, b = group.at(-1)!;
+            lines.push(`[${a.start.toFixed(2)}-${b.end.toFixed(2)}] #${a.index}-#${b.index}${a.speaker ? ` ${a.speaker}:` : ""} ${group.map(w => w.text.trim()).join(" ")}`);
+            group = [];
+          };
+          for (const w of shown) {
+            const prev = group.at(-1);
+            if (prev && (gapNote.has(w.index) || w.start - prev.end >= .6 || w.speaker !== prev.speaker || /[.?!]["”’)]*$/.test(prev.text.trim()))) flush();
+            if (gapNote.has(w.index)) lines.push(gapNote.get(w.index)!);
+            group.push(w);
+          }
+          flush();
+        } else {
+          let speaker: string | undefined;
+          for (const w of shown) {
+            if (gapNote.has(w.index)) lines.push(gapNote.get(w.index)!);
+            lines.push(`#${w.index} ${w.start.toFixed(2)}-${w.end.toFixed(2)}${w.speaker && w.speaker !== speaker ? ` ${w.speaker}:` : ""} ${w.text.trim()}`);
+            speaker = w.speaker;
+          }
         }
-        flush();
-      } else {
-        let speaker: string | undefined;
-        for (const w of picked) {
-          if (gapNote.has(w.index)) lines.push(gapNote.get(w.index)!);
-          lines.push(`#${w.index} ${w.start.toFixed(2)}-${w.end.toFixed(2)}${w.speaker && w.speaker !== speaker ? ` ${w.speaker}:` : ""} ${w.text.trim()}`);
-          speaker = w.speaker;
-        }
-      }
-      return text(`${mediaId}: words #${picked[0]!.index}–#${picked.at(-1)!.index} of ${words.length}, source seconds.${estimates ? ` ${estimates}` : ""}\n${lines.join("\n")}`);
+        const more = next === undefined ? "" : `\nContinue with nextFromWord=${next}.`;
+        return `${mediaId}: words #${picked[0]!.index}–#${shown.at(-1)!.index} of ${words.length}, source seconds.${estimates ? ` ${estimates}` : ""}\n${lines.join("\n")}${more}`;
+      });
     },
   );
 
