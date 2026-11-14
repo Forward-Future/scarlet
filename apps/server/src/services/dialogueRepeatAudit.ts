@@ -47,7 +47,10 @@ export function hearJoin(out: JoinSide, inn: JoinSide): JoinHearing[] {
     const stray = !word || (which === "out" ? edgeWord.start > word.end + BEYOND : edgeWord.end < word.start - BEYOND);
     if (stray) {
       if (letters(edgeWord.text) >= 1 && edgeWord.end - edgeWord.start >= .06)
-        found.push({ at, mediaId: side.mediaId, side: which, issue: "fragment", heard: edgeWord.text, ...(word && { expected: word.text }), source: Math.round(edgeWord.start * 1000) / 1000 });
+        // The kept word beside it plays whole. It was reported as `expected`, and a pass read a sigh before “This” as
+        // “This” cut short: it moved the edge out to take in the whole sigh, where the edge goes past it (2026-11-13).
+        found.push({ at, mediaId: side.mediaId, side: which, issue: "fragment", heard: edgeWord.text,
+          ...(word && { keptWord: word.text, keptWordAt: Math.round((which === "out" ? word.end : word.start) * 1000) / 1000 }), source: Math.round(edgeWord.start * 1000) / 1000 });
       return;
     }
     // The kept word itself, sounding at the edge and heard short: the cut goes through it.
