@@ -11,6 +11,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
 import type { AgentAvailability, AgentId, AgentUsage, Task, TaskEvent } from "@scarlet/shared";
 import { ScarletClient } from "@scarlet/shared";
+import { stopOrphans } from "./orphans.js";
 import { privateDirectory } from "./private-files.js";
 import type { AgentConfig } from "./config.js";
 import { CLI_AGENTS, detect as detectAgents, runnerEnv } from "./detect.js";
@@ -102,6 +103,8 @@ export class AgentHost {
   /** Register, start heartbeats, WS and the claim loop. Resolves when the loop ends (after stop()). */
   async start(): Promise<void> {
     this.stopped = false;
+    // Before anything is claimed. The engine may have ended an earlier launch's tasks already, so the notes say what to stop.
+    await stopOrphans(join(this.opts.workRoot, "agent-pids"), this.log);
     // An old folder's Claude sessions go with it, unless Claude Code was told to keep its files somewhere other than the home.
     const home = (this.opts.env ?? process.env).CLAUDE_CONFIG_DIR ? undefined : homedir();
     await pruneTaskDirs(this.opts.workRoot, undefined, home).catch((err) => this.log(`could not prune old task folders: ${errMsg(err)}`));
