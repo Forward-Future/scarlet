@@ -108,6 +108,38 @@ it("opens the close-up on a press held still on the ruler, to draw a range by fr
   expect(marked).not.toHaveBeenCalled();
 });
 
+it("goes into the close-up when a drag stops and holds still, and the end it was moving carries on by frames", async () => {
+  await show();
+  await press(".timeline-range-zone", 100);
+  await move(150);
+  expect(container.querySelector(".timeline-range-loupe")).toBeNull();
+  await act(async () => { await new Promise(done => setTimeout(done, HOLD_MS + 50)); });
+  expect(container.querySelector(".timeline-range-loupe b")?.textContent).toBe("7:30.000");
+  // The close-up shows the frame the end is on and a row of the video's pictures either side of it.
+  expect(container.querySelectorAll(".timeline-range-loupe-picture")).toHaveLength(9);
+  // Ten pixels on is 30 s on the timeline, and 3 s in the close-up.
+  await move(160);
+  await release(160);
+  expect(marked).toHaveBeenCalledExactlyOnceWith({ start: 300, end: 453 });
+});
+
+it("takes the range off on a click on the timeline away from it, and keeps it through a scrub", async () => {
+  await show({ start: 300, end: 450 });
+  const slider = ".timeline-slider";
+  // A scrub away from it keeps it.
+  await press(slider, 600);
+  await act(async () => { container.querySelector(slider)!.dispatchEvent(event("pointermove", 650)); });
+  await act(async () => { container.querySelector(slider)!.dispatchEvent(event("pointerup", 650)); });
+  expect(marked).not.toHaveBeenCalled();
+  // A click inside it keeps it too.
+  await press(slider, 120);
+  await act(async () => { container.querySelector(slider)!.dispatchEvent(event("pointerup", 120)); });
+  expect(marked).not.toHaveBeenCalled();
+  await press(slider, 600);
+  await act(async () => { container.querySelector(slider)!.dispatchEvent(event("pointerup", 600)); });
+  expect(marked).toHaveBeenCalledExactlyOnceWith(undefined);
+});
+
 it("moves an end a frame at a time from the keyboard, and Esc takes the range off", async () => {
   await show({ start: 300, end: 450 });
   const end = container.querySelector<HTMLButtonElement>(".timeline-range-handle.is-end")!;

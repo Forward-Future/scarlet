@@ -288,18 +288,24 @@
 /* While a range is drawn, its own times are the ones to read: the bubble under the pointer steps aside. */
 .timeline-track.is-marking .scrub-preview { display: none; }
 .timeline-track.is-marking .timeline-playhead-time { visibility: hidden; }
-.timeline-range-loupe { position: absolute; z-index: 11; bottom: calc(100% + 8px); width: 220px; transform: translateX(-50%); display: grid; gap: 6px; padding: 8px 10px;
+/* The close-up: the frame the held end is on, then a row of pictures either side and a tick for each frame. */
+.timeline-range-loupe { --loupe-half: 246px; position: absolute; z-index: 11; bottom: calc(100% + 8px); width: 492px; transform: translateX(-50%); display: grid; gap: 6px; padding: 8px;
   border: 1px solid #55524e; border-radius: 8px; background: #1a1918; box-shadow: 0 8px 24px rgb(0 0 0 / 45%); pointer-events: none; }
-.timeline-range-loupe-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.timeline-range-loupe-frame { justify-self: center; width: 240px; overflow: hidden; border-radius: 4px; background: #000; }
+.timeline-range-loupe-frame img, .timeline-range-loupe-picture img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.timeline-range-loupe-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 2px; }
 .timeline-range-loupe-head b { color: var(--color-fg); font: 600 13px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
 .timeline-range-loupe-head small { color: #aaa69e; font-size: 11px; }
-.timeline-range-loupe-strip { position: relative; height: 22px; border-radius: 3px; overflow: hidden; background: #2d2b28; }
-.timeline-range-loupe-strip[data-inside="before"] { background: linear-gradient(to right, rgba(244, 241, 233, .2) 50%, #2d2b28 50%); }
-.timeline-range-loupe-strip[data-inside="after"] { background: linear-gradient(to left, rgba(244, 241, 233, .2) 50%, #2d2b28 50%); }
-.timeline-range-loupe-strip i { position: absolute; bottom: 0; width: 1px; height: 6px; background: #87847f; }
-.timeline-range-loupe-strip i.is-second { height: 12px; background: #c9c5bd; }
-.timeline-range-loupe-strip i.is-edge { height: 100%; background: rgba(255, 160, 156, .9); }
-.timeline-range-loupe-strip i.is-now { top: 0; width: 2px; height: auto; margin-left: -1px; background: #f4f1e9; }
+.timeline-range-loupe-row { position: relative; display: grid; grid-template-columns: repeat(9, 1fr); gap: 0; padding-bottom: 12px; border-radius: 3px; overflow: hidden; background: #2d2b28; }
+.timeline-range-loupe-picture { background: #000; box-shadow: inset -1px 0 0 #1a1918; }
+/* What the range holds, shaded from the held end toward the end that stays. */
+.timeline-range-loupe-row::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--now); background: rgba(244, 241, 233, .16); pointer-events: none; }
+.timeline-range-loupe-row[data-inside="after"]::after { inset: 0 0 0 auto; width: calc(100% - var(--now)); }
+.timeline-range-loupe-ticks { position: absolute; inset: auto 0 0; height: 12px; }
+.timeline-range-loupe-ticks i { position: absolute; bottom: 0; width: 1px; height: 5px; background: #87847f; }
+.timeline-range-loupe-ticks i.is-second { height: 10px; background: #c9c5bd; }
+.timeline-range-loupe-ticks i.is-edge { height: 100%; background: rgba(255, 160, 156, .9); }
+.timeline-range-loupe-now { position: absolute; z-index: 1; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #f4f1e9; box-shadow: 0 0 0 1px rgb(0 0 0 / 50%); }
 .timeline-playhead.is-gliding, .timeline-playhead-time.is-gliding { transition: left .26s cubic-bezier(.3, .7, .3, 1), transform .26s cubic-bezier(.3, .7, .3, 1); }
 .timeline-playhead::before {
   content: ""; position: absolute; left: 50%; top: -5px; transform: translateX(-50%);
