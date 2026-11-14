@@ -3,7 +3,7 @@
  * replacement timeline). Ops are applied immutably and validated.
  */
 import { z } from "zod/v3";
-import { duplicateClipId, WritableTimeline, Clip, Marker, Track, Timeline, Seconds, Id, CaptionStyle, RenderColor } from "./schema.js";
+import { clipFitsTrack, duplicateClipId, WritableTimeline, Clip, Marker, Track, Timeline, Seconds, Id, CaptionStyle, RenderColor } from "./schema.js";
 import type { CaptionClip } from "./schema.js";
 import { clipEnd } from "./time.js";
 
@@ -371,12 +371,6 @@ function straightenCrossfades(track: Track, start: number, end: number) {
       break;
     }
   }
-}
-
-function clipFitsTrack(clip: Clip, track: Track): boolean {
-  if (track.kind === "caption") return clip.kind === "caption";
-  if (clip.kind === "caption") return false;
-  return true;
 }
 
 /** Keep the words audible in a trimmed caption, including partial boundary words. */
