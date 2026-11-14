@@ -112,23 +112,38 @@ describe("stopOrphans", { timeout: 30_000 }, () => {
 
   it("stops nothing under an id now held by another program or a later process, or for a note that names no start time", async () => {
     const dir = await noteDir();
-    const [program, restarted, unstamped, empty] = [idler(), idler(), idler(), idler()];
+    const [program, restarted, unstamped, bystander] = [idler(), idler(), idler(), idler()];
     // The id is the noted process's, as is the start time, but another program runs under it.
     await writeFile(join(dir, String(program.pid)), `/usr/local/bin/claude\n${await startStamp(program.pid)}`);
     // The noted program runs under the id, but it started at another time.
     await writeFile(join(dir, String(restarted.pid)), `${process.execPath}\nMon Jan  1 00:00:00 2001`);
     // The program alone would fit an unrelated process that has since had the id.
     await writeFile(join(dir, String(unstamped.pid)), `${process.execPath}\n`);
-    await writeFile(join(dir, String(empty.pid)), "");
     // A file not named by a process id is no note, whatever it says.
-    await writeFile(join(dir, "README"), await stamped(empty.pid));
-    await writeFile(join(dir, `${empty.pid}.old`), await stamped(empty.pid));
+    await writeFile(join(dir, "README"), await stamped(bystander.pid));
+    await writeFile(join(dir, `${bystander.pid}.old`), await stamped(bystander.pid));
     const { lines, log } = logged();
     await stopOrphans(dir, log);
     await delay(300);
-    for (const p of [program, restarted, unstamped, empty]) expect(p.running()).toBe(true);
+    for (const p of [program, restarted, unstamped, bystander]) expect(p.running()).toBe(true);
     expect(lines).toEqual([]);
     expect(await readdir(dir)).toEqual([]);
+  });
+
+  it("leaves an empty note under an id in use, which another Scarlet may be writing in place, until the id is free", async () => {
+    const dir = await noteDir();
+    const cli = idler();
+    // As the desktop host leaves a note between creating it and writing to it.
+    await writeFile(join(dir, String(cli.pid)), "");
+    const { lines, log } = logged();
+    await stopOrphans(dir, log);
+    expect(await readdir(dir)).toEqual([String(cli.pid)]);
+    expect(cli.running()).toBe(true);
+    // Nothing was ever written to it and its process has ended: there is no one left to wait for.
+    await cli.stop();
+    await stopOrphans(dir, log);
+    expect(await readdir(dir)).toEqual([]);
+    expect(lines).toEqual([]);
   });
 
   it("leaves a CLI whose Scarlet is still open, this host or another, and stops it once that Scarlet has gone", async () => {

@@ -37,12 +37,16 @@ async function stopNoted(dir: string, log: (msg: string) => void): Promise<void>
   });
   for (const name of names) {
     const path = join(dir, name);
-    const { cli, scarlet } = noteHalves(await readFile(path, "utf8").catch(() => ""));
+    const note = await readFile(path, "utf8").catch(() => "");
+    // Process ids 0 and 1 name no CLI, and as a process group they would name this one or every process.
+    const pid = /^[1-9]\d*$/.test(name) ? Number(name) : 0;
+    // The desktop host writes a note in place, so one found empty under an id in use may be a note another Scarlet
+    // is writing this moment. Removed now, its CLI could never be stopped. It goes once the id is free.
+    if (!note.trim() && pid > 1 && idInUse(pid)) continue;
+    const { cli, scarlet } = noteHalves(note);
     // The desktop app, a development preview and this host may share these notes. A CLI whose Scarlet is still
     // open is that Scarlet's work, and its note stays for the launch after that Scarlet's.
     if (scarlet && (await stillRuns(scarlet.pid, scarlet.note))) continue;
-    // Process ids 0 and 1 name no CLI, and as a process group they would name this one or every process.
-    const pid = /^[1-9]\d*$/.test(name) ? Number(name) : 0;
     if (pid > 1 && (await stillRuns(pid, cli))) {
       log(`stopping agent CLI ${pid} left running by an earlier session (${cli.split("\n")[0]})`);
       await killGroupNow(pid);
@@ -137,6 +141,16 @@ async function stillRuns(pid: number, note: string): Promise<boolean> {
   const name = basename(program.trim());
   if (!name || !started.trim() || (await startStamp(pid)) !== started.trim()) return false;
   return runsProgram(pid, name);
+}
+
+/** Whether any process has the id now. One this user may not signal still has it. */
+function idInUse(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 /** Whether the process runs the program: by the command line `ps` prints for it, or the image `tasklist` names on Windows, where file names ignore case. */
