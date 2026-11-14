@@ -4,6 +4,7 @@ import { cutPlaybackWindow, firstIndex, mergeRanges, CUT_LEAD_SECONDS, snapToFra
 import { appliedCutClock, appliedCutSource } from "../../lib/appliedCutPlayback";
 import { api, IS_MOCK } from "../../lib/client";
 import { cutAudition, cutAuditionClock, isolatedReviewCut } from "../../lib/cutAudition";
+import { besides, removedSince } from "../../lib/removedSince";
 import { usePlayerStore } from "../../stores/player";
 import { useProjectStore } from "../../stores/project";
 import { singleCutDraft, type SingleCutDrafts } from "./useCutReview";
@@ -65,10 +66,14 @@ function nearbyCuts(edits: readonly ThreadEdit[], version: string, cut: TimeRang
   return skips.filter(r => r.start !== cut.start || r.end !== cut.end).map(({ start, end }) => ({ start, end }));
 }
 
-export function editToPrepare(edit: ThreadEdit, change: Change | undefined, edits: readonly ThreadEdit[]): CutToPrepare | undefined {
+type AppliedAfter = NonNullable<CutToPrepare["after"]> & { version: string };
+
+/** `afterOf` names the version After plays, when the video has changed since the cut's own save. */
+export function editToPrepare(edit: ThreadEdit, change: Change | undefined, edits: readonly ThreadEdit[],
+  afterOf: (made: AppliedAfter | undefined, before: string) => AppliedAfter | undefined = made => made): CutToPrepare | undefined {
   if (!edit.beforeCut) return;
   const { removed: cut, version } = edit.beforeCut;
-  return { cut, before: version, nearby: nearbyCuts(edits, version, cut), applied: true, after: change && appliedCutSource(change) };
+  return { cut, before: version, nearby: nearbyCuts(edits, version, cut), applied: true, after: afterOf(change && appliedCutSource(change), version) };
 }
 
 export interface CutPlaybackWindow extends TimeRange { url: string }
@@ -117,7 +122,11 @@ export async function prepareCut(projectId: string, fps: number, target: CutToPr
   const cut = edited?.cut ?? target.cut;
   const duration = timelineDuration(before);
   if (cut.start >= duration || cut.end <= cut.start) return;
-  const listen = cutAudition(cut, "after", duration, { others: target.nearby });
+  // An applied cut whose After is the video as it runs now also steps over what came out since its own batch, as
+  // its card does: the clock is made for that listen.
+  const since = target.applied && edited && !edited.removed
+    ? besides(removedSince(before, edited.timeline, fps), [cut, ...(target.nearby ?? [])], fps).map(r => r.removed) : [];
+  const listen = cutAudition(cut, "after", duration, { others: since.length ? [...(target.nearby ?? []), ...since] : target.nearby });
   const after = edited?.timeline;
   const clock = edited && (target.applied ? appliedCutClock(before, edited.timeline, edited.removed, fps, cut, listen)
     : edited.removed && cutAuditionClock(before, edited.timeline, edited.removed, fps, cut, listen));

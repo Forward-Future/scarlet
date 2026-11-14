@@ -2944,7 +2944,7 @@ it("plays a call's cut footage from a click inside its passage on the timeline",
   expect(band().classList.contains("is-live")).toBe(true);
   // Without layout the click lands on the passage's first frame. Before plays from there, and its icon lights with a flash.
   await act(async () => { band().dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, isPrimary: true, button: 0, bubbles: true })); });
-  expect(listen).toHaveBeenLastCalledWith({ start: 4, end: 9, skips: [], from: 6 }, expect.any(Number));
+  expect(listen).toHaveBeenLastCalledWith({ start: 4, end: 9, skips: [], from: 6, through: true }, expect.any(Number));
   expect(usePlayerStore.getState().scrubGesture).toBeUndefined();
   expect(beforeIcon(call())).toEqual(["", "Before", "true", "Back to After (\\)"]);
   expect(call().querySelector(".edit-card-before.is-flash")).not.toBeNull();
@@ -3172,7 +3172,7 @@ it("marks, shades and plays a waiting call where its footage sits once the worki
   expect(player.mediaTime(12)).toBe(11);
   // So is its shaded passage: a click inside it plays the cut footage from the passage's first frame.
   await clickBand();
-  expect(listen).toHaveBeenLastCalledWith({ start: 8, end: 13, skips: [], from: 10 }, expect.any(Number));
+  expect(listen).toHaveBeenLastCalledWith({ start: 8, end: 13, skips: [], from: 10, through: true }, expect.any(Number));
   await press("\\");
   expect(listen).toHaveBeenLastCalledWith({ start: 8, end: 14, skips: [{ start: 10, end: 11, removed: true }] }, expect.any(Number));
   // Its words are the cut's own footage, read where that sits on the working cut.
@@ -4930,7 +4930,7 @@ it("revises just the applied edit that's showing, even with a pass waiting, and 
   const band = () => container.querySelector<HTMLElement>(".simple-timeline-band")!;
   expect(band().classList.contains("is-live")).toBe(true);
   await act(async () => { band().dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, isPrimary: true, button: 0, bubbles: true })); });
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 14.4, skips: [], from: 10 }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 14.4, skips: [], from: 10, through: true }, expect.any(Number));
   expect(usePlayerStore.getState().scrubGesture).toBeUndefined();
   expect(beforeIcon(bar)).toEqual(["", "Before", "true", "Back to After (\\)"]);
   expect(bar.querySelector(".edit-card-before.is-flash")).not.toBeNull();
@@ -5997,7 +5997,7 @@ it("greys out the pass's other cuts on After, and a click into one plays it in B
 
   // Without layout the click lands on the gap's first frame. It plays Before from there instead of seeking past the gap.
   await act(async () => { gap().dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, isPrimary: true, button: 0, bubbles: true })); });
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 14.4, skips: [], from: 6 }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 14.4, skips: [], from: 6, through: true }, expect.any(Number));
   expect(usePlayerStore.getState().scrubGesture).toBeUndefined();
   // The card says whose footage is playing, and only that: the lit icon under it is the way back and names its key,
   // so the line has no button and no key box of its own.
@@ -6013,7 +6013,8 @@ it("greys out the pass's other cuts on After, and a click into one plays it in B
 
   // The lit icon goes back to After, which picks up where that cut's footage ends, as the edit plays it.
   await click(container.querySelector(".edit-card-before")!);
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], from: 7 }, expect.any(Number));
+  // The other cut sits before this listen: an editor who plays on from an earlier point steps over it too.
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], from: 7, beyond: [{ start: 6, end: 7 }] }, expect.any(Number));
   expect(container.querySelector(".edit-card-switched")).toBeNull();
   expect(gap().classList.contains("is-skipped")).toBe(true);
 });
@@ -7212,6 +7213,37 @@ it("moves on to the next edit when one Scarlet didn't flag is kept, and closes a
   expect(openTitle()).toBe("captions");
   await press("k");
   expect(openTitle()).toBe("wrap");
+  await press("k");
+  expect(editPanel()).toBeNull();
+});
+
+it("goes from a kept edit Scarlet didn't flag to the next one that hasn't been kept, past the ones that have, and wraps", async () => {
+  laterRequest("chg_later", false);
+  // The editor kept "captions" earlier.
+  keepEdits(PRJ, threadWith("chg_approved_2").id, [{ changeId: "chg_approved_2", spot: 1 }]);
+  await show();
+  await act(async () => {});
+  const rows = () => [...turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edit")];
+  await click(rows()[0]!);
+  expect(openTitle()).toBe("music bed");
+  // Captions is already kept: Keep goes past it to wrap.
+  await press("k");
+  expect(openTitle()).toBe("wrap");
+  // Nothing is left to keep after wrap, or before it: the card closes.
+  await press("k");
+  expect(editPanel()).toBeNull();
+});
+
+it("wraps to an earlier edit that hasn't been kept when the last one is kept", async () => {
+  laterRequest("chg_later", false);
+  await show();
+  await act(async () => {});
+  await click([...turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edit")][1]!);
+  expect(openTitle()).toBe("captions");
+  await press("k");
+  expect(openTitle()).toBe("wrap");
+  await press("k");
+  expect(openTitle()).toBe("music bed");
   await press("k");
   expect(editPanel()).toBeNull();
 });
