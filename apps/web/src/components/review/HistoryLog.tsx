@@ -102,7 +102,7 @@ export function HistoryLog() {
                   {a.actor.type === "human" ? (
                     <Avatar name={a.actor.name} size={22} />
                   ) : (
-                    <span className="size-[22px] shrink-0 rounded-full bg-raised grid place-items-center text-[9px] font-semibold text-muted">{a.actor.type === "agent" ? "AI" : "S"}</span>
+                    <span className="size-[22px] shrink-0 rounded-full bg-raised grid place-items-center text-[9px] font-semibold text-muted">S</span>
                   )}
                   <div className="min-w-0 flex-1">
                     <div className="text-[13px] leading-snug text-fg">
