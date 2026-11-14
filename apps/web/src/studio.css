@@ -451,3 +451,4 @@
 .version-edit-value { color: var(--color-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* The full history's entries keep one colour. A small mark before the words says which were approved, put back or went wrong. */
 .history-mark { display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; vertical-align: 0.14em; }
+.import-transcription-notice .simple-link { font-size: inherit; color: var(--color-fg); }

@@ -11,24 +11,62 @@ import { MediaStatusLine } from "./MediaStatusLine";
 
 const unknownNotice = "Audio may be sent to OpenAI, depending on your transcription settings.";
 
+/** What fixes transcription that can't run: a setting Scarlet can change at once, or the Settings page that holds the choice. */
+export type TranscriptionFix = { label: string; to: string } | { label: string; turnOnLocal: true };
+
 export function useImportTranscription() {
   // `local`: the notice only says transcription runs on this computer, which Media and Add from a link leave out.
   // No notice until the settings answer: the OpenAI one would flash each time Media opens, also where audio stays here.
-  const [policy, setPolicy] = useState<{ available?: boolean | null; notice: string; local?: boolean }>({ notice: "" });
+  const [policy, setPolicy] = useState<{ available?: boolean | null; notice: string; local?: boolean; fix?: TranscriptionFix }>({ notice: "" });
+  const [revision, setRevision] = useState(0);
+  const [fixing, setFixing] = useState(false);
+  const [fixError, setFixError] = useState("");
   useEffect(() => {
     let live = true;
-    void api.settings().then(({ settings, transcriptionAvailable }) => {
+    void api.settings().then(({ settings, transcriptionAvailable, transcriptionIssue }) => {
       if (!live) return;
-      const provider = settings.transcription.provider;
-      const notice = provider === "none" || transcriptionAvailable === false ? "Transcription is unavailable. Audio will be imported without a transcript."
+      const tr = settings.transcription;
+      const provider = tr.provider;
+      const unavailable = provider === "none" || transcriptionAvailable === false;
+      const notice = unavailable ? `${transcriptionIssue ?? "Transcription is unavailable."} Audio will be imported without a transcript.`
         : provider === "whispercpp" ? "Scarlet transcribes imported audio on this computer."
         : "Audio from imported files is sent to OpenAI for transcription.";
-      setPolicy({ notice, local: provider === "whispercpp" && transcriptionAvailable !== false,
+      // OpenAI with no key: local transcription is one click away. A local runtime that can't run is set up in Settings.
+      const fix: TranscriptionFix | undefined = !unavailable ? undefined
+        : provider === "openai" ? { label: "Use local transcription", turnOnLocal: true }
+        : { label: "Set up transcription", to: tr.localModel === "custom" ? "/settings#advanced" : "/settings" };
+      setPolicy({ notice, fix, local: provider === "whispercpp" && transcriptionAvailable !== false,
         available: transcriptionAvailable ?? (provider === "none" ? false : null) });
     }).catch(() => { if (live) setPolicy({ available: null, notice: unknownNotice }); });
     return () => { live = false; };
-  }, []);
-  return policy;
+  }, [revision]);
+  const turnOnLocal = async () => {
+    setFixing(true);
+    setFixError("");
+    try {
+      const { settings } = await api.settings();
+      await api.updateSettings({ transcription: { ...settings.transcription, provider: "whispercpp" } });
+      setRevision(r => r + 1);
+    } catch (e) {
+      setFixError(errorMessage(e));
+    } finally {
+      setFixing(false);
+    }
+  };
+  return { ...policy, fixing, fixError, turnOnLocal };
+}
+
+/** The import notice, with the one action that lets imports be transcribed when they can't be. */
+export function ImportTranscriptionNotice({ policy }: { policy: ReturnType<typeof useImportTranscription> }) {
+  const { notice, fix, fixing, fixError, turnOnLocal } = policy;
+  if (!notice) return null;
+  return <p className="import-transcription-notice mb-3 text-muted text-[12px]">
+    {notice}
+    {fix && <>{" "}{"to" in fix
+      ? <Link to={fix.to} className="simple-link">{fix.label}</Link>
+      : <button type="button" className="simple-link" disabled={fixing} onClick={() => void turnOnLocal()}>{fix.label}</button>}</>}
+    {fixError && <span role="alert" className="block text-bad">{fixError}</span>}
+  </p>;
 }
 
 /** Older servers can still accept transcription requests when the capability is unknown. */
