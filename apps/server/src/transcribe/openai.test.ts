@@ -42,6 +42,15 @@ it("starts a segment at the first word it holds when that word came before the s
   ]);
 });
 
+it("ends a segment that isn't the last at the end of a word that runs past it", () => {
+  const segments = toSegments({ segments: [{ start: 0, end: 2, text: "a long" }, { start: 2.7, end: 3.5, text: "b" }],
+    words: [{ word: "a", start: 0.5, end: 1 }, { word: "long", start: 1.5, end: 2.6 }, { word: "b", start: 2.7, end: 3.2 }] }, 0);
+  expect(segments.map(s => [s.start, s.end, s.words.map(w => [w.text, w.start, w.end])])).toEqual([
+    [0, 2.6, [["a", 0.5, 1], ["long", 1.5, 2.6]]],
+    [2.7, 3.5, [["b", 2.7, 3.2]]],
+  ]);
+});
+
 describe("OpenAI transcription", () => {
   let dir: string;
   /** What each upload held: its form fields, and the seconds of audio in its file. */
