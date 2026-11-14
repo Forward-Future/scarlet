@@ -100,18 +100,6 @@
 .composer-skills [role="option"]:is([aria-selected="true"], :hover) { background: var(--color-raised); }
 .composer-skill-footer { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--color-line); }
 .composer-skill-footer button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 5px 8px; border-radius: 5px; font-weight: 500; }
-.composer-first-cut {
-  display: flex; align-items: center; gap: 11px; min-width: 0; min-height: 43px; padding: 3px 5px;
-  border-radius: 6px; color: var(--color-fg); text-align: left;
-}
-.composer-first-cut:hover { background: var(--color-raised); }
-.composer-first-cut-icon {
-  flex: none; display: grid; place-items: center; width: 30px; height: 30px;
-  border: 1px solid var(--color-line); border-radius: 7px; background: var(--color-raised);
-}
-.composer-first-cut-copy { display: grid; gap: 2px; min-width: 0; color: var(--color-muted); font-size: 12px; line-height: 17px; }
-.composer-first-cut-copy strong { color: var(--color-fg); font-size: 13px; font-weight: 600; }
-.composer-first-cut-insert { margin-left: auto; padding-right: 3px; color: var(--color-muted); }
 .composer-box {
   grid-column: 1 / -1;
   padding: 4px 6px 4px var(--text-inset);

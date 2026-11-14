@@ -1329,3 +1329,25 @@ it("drops a file that was taken out of the project, on the engine's answer and w
   expect(remove).toHaveBeenLastCalledWith(PRJ, second);
   expect(files()).toEqual([third]);
 });
+
+it("keeps the timeline it has when the project is read again and the video hasn't changed, so the player doesn't reopen its stream", async () => {
+  const db = buildDb();
+  const project = db.projects.find(p => p.id === PRJ)!;
+  const timeline = db.timelines[project.head!]!;
+  useProjectStore.setState({ status: "ready", current: { id: PRJ, project, timeline,
+    media: project.media, changes: [], notes: [], tasks: [], renders: [], taskEvents: {} } });
+  vi.spyOn(api, "changes").mockResolvedValue({ changes: [] });
+  vi.spyOn(api, "notes").mockResolvedValue({ notes: [] });
+  vi.spyOn(api, "tasks").mockResolvedValue({ tasks: [] });
+  // A reconnect reads the same version again: the same content, as a new object.
+  const read = vi.spyOn(api, "workspace").mockResolvedValue({ project, timeline: structuredClone(timeline) });
+  await initial.load(PRJ);
+  expect(useProjectStore.getState().current!.timeline).toBe(timeline);
+  await initial.refreshHead(PRJ);
+  expect(useProjectStore.getState().current!.timeline).toBe(timeline);
+  // A new version takes its place.
+  const moved = { ...structuredClone(timeline), version: "moved-on" };
+  read.mockResolvedValue({ project: { ...project, head: "moved-on" }, timeline: moved });
+  await initial.load(PRJ);
+  expect(useProjectStore.getState().current!.timeline).toBe(moved);
+});

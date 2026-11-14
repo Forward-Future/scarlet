@@ -157,6 +157,19 @@ describe("native retake boundaries", () => {
     expect(pause.start).toBeCloseTo(2.2 + AIR_AFTER_SPEECH);
     expect(pause.end).toBeCloseTo(3.4 - AIR_BEFORE_SPEECH);
   });
+  it("trims nothing from a pause asked to play at its full length, whatever sounds in the middle of it", () => {
+    // A breath at 2.7–2.9 s splits the quiet between “first” and “next” in two. Each edge used to be pulled into the
+    // quiet run beside its word, so a pause asked to stay 1.2 s long still lost the breath and the quiet around it.
+    const breath = [...voice, { start: 2.7, end: 2.9 }];
+    const rms = Array.from({ length: 250 }, (_, i) => breath.some(v => v.start <= i/50 && i/50 < v.end) ? .12 : .001);
+    const split = joinEvidence(words, { from: 0, to: 5, peaks: rms, rms, speechActivity: breath });
+    const pause = pauseCutRange(words[1]!, words[2]!, () => split, 1.2);
+    expect(pause.end - pause.start).toBeLessThan(.04);
+    // Asked for less, the pause is still trimmed, breath and all.
+    const shorter = pauseCutRange(words[1]!, words[2]!, () => split, .4);
+    expect(shorter.start).toBeLessThan(2.7);
+    expect(shorter.end).toBeGreaterThan(2.9);
+  });
   it("puts a seconds edge at the room-tone dip between two words said in one breath instead of holding the cut", () => {
     const { p, tl } = fixture();
     // “one two”, run together with a 40 ms dip at 1.48–1.52 s, then a pause and “three”.

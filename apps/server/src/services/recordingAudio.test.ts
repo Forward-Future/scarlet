@@ -96,3 +96,23 @@ it("lets the next reader decode again after a decode fails", async () => {
   expect(again.samples).toBe(48000);
   again.release();
 });
+
+it("leaves a decode it can't delete where it is, without an unhandled failure that would stop the engine", async () => {
+  vi.useFakeTimers();
+  const source = join(dir, "interview.mp4");
+  await writeFile(source, "recording");
+  decodeAsFfmpeg();
+  const unhandled = vi.fn();
+  process.on("unhandledRejection", unhandled);
+  try {
+    const page = await recordingWav(ctx(), source, signal);
+    // Something else holds the file, as a virus scanner does on Windows: stand in a folder, which the delete refuses.
+    await rm(page.wav, { force: true });
+    await mkdir(page.wav);
+    page.release();
+    await vi.advanceTimersByTimeAsync(121_000);
+    vi.useRealTimers();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(unhandled).not.toHaveBeenCalled();
+  } finally { process.off("unhandledRejection", unhandled); }
+});

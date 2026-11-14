@@ -3236,6 +3236,7 @@ dependencies = [
  "url",
  "webkit2gtk",
  "which",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

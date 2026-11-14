@@ -10,7 +10,7 @@ import { cli, isMain, main } from "./args.ts";
 import { loadCase } from "./case.ts";
 import { Engine } from "./engine.ts";
 import { round } from "./metrics.ts";
-import { cacheDir, readJson, resultsDir, timestamp, writeJson } from "./paths.ts";
+import { cacheDir, readJson, resultsDir, timestamp, writeChosenJson } from "./paths.ts";
 import { audibleClips } from "./timeline.ts";
 
 type Reading = Parameters<typeof joinEvidence>[1];
@@ -53,7 +53,7 @@ function summarize(rows: Row[]) {
 }
 
 /** The same RMS, peaks and voice activity that Scarlet reads at a word edge. Keep both variants on identical inputs. */
-async function readWaveforms(id: string, duration: number, path: string, engineUrl?: string) {
+async function readWaveforms(id: string, duration: number, path: string, engineUrl?: string, chosen?: string) {
   if (existsSync(path)) return readJson<Reading[]>(path);
   const engine = await Engine.connect({ url: engineUrl });
   const pages: Reading[] = [];
@@ -61,7 +61,7 @@ async function readWaveforms(id: string, duration: number, path: string, engineU
     const to = Math.min(duration, from + 32), points = Math.max(10, Math.ceil((to - from) * 50));
     pages.push(await engine.get<Reading>(`/media/${encodeURIComponent(id)}/waveform?from=${from}&to=${to}&points=${points}&speechActivity=1`));
   }
-  writeJson(path, pages);
+  writeChosenJson(path, pages, chosen);
   return pages;
 }
 
@@ -83,7 +83,7 @@ async function run() {
   if (!Array.isArray(map.joins) || !Number.isFinite(map.frameRate) || map.frameRate <= 0 || !(Math.abs(map.rawDuration - asset.duration) < .1)) throw new Error("The reference audio map must match the case recording's duration.");
   if (asset.audioStream && asset.audioStream !== 0) throw new Error("The waveform API measures audio stream zero. Select a case whose dialogue is on that stream.");
   const waveformPath = values.waveforms ?? join(cacheDir(), "word-edges-v1", `${id}-${asset.hash ?? asset.duration}.json`);
-  const readings = await readWaveforms(id, asset.duration, waveformPath, values.engine);
+  const readings = await readWaveforms(id, asset.duration, waveformPath, values.engine, values.waveforms);
   const evidence = new DialogueEvidence();
   for (const wf of readings) {
     if ("mediaId" in wf && wf.mediaId !== id) throw new Error("The waveform cache belongs to another recording.");
@@ -133,7 +133,7 @@ async function run() {
   const shared = previous && rows.filter((r, i) => r.frameAligned && previous.rows[i]?.frameAligned).map(r => r.index);
   const paired = previous && shared && { shared: shared.length, baseline: summarize(shared.map(i => previous.rows[i]!)), candidate: summarize(shared.map(i => rows[i]!)) };
   const out = values.out ?? join(resultsDir(), "word-edges", c.id, timestamp() + ".json");
-  writeJson(out, { ...result, summary, paired });
+  writeChosenJson(out, { ...result, summary, paired }, values.out);
   console.log(JSON.stringify({ case: c.id, summary, paired, out }, null, 2));
 }
 

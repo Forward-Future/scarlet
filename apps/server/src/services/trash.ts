@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import type { StorageSelection } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { checkedProjectDir, projectBusy, validateSelection } from "./storage.js";
@@ -9,8 +9,11 @@ const DAY = 24 * 60 * 60 * 1000;
 /** When a project moved to the Trash at `deletedAt` is removed for good. */
 export const purgeDate = (deletedAt: string) => new Date(Date.parse(deletedAt) + TRASH_DAYS * DAY).toISOString();
 
-/** Keep a durable removal intent so an interruption can never erase a restorable project. */
-export function removeTrashed(ctx: Ctx, selected: StorageSelection[], expired = false) {
+/**
+ * Keep a durable removal intent so an interruption can never erase a restorable project. The projects' rows go at once;
+ * the returned promise settles once their folders have been deleted, or have failed to and wait for the next try.
+ */
+export function removeTrashed(ctx: Ctx, selected: StorageSelection[], expired = false): Promise<void> {
   ctx.db.transaction(() => {
     for (const project of selected) {
       if (!project.deletedAt) throw new Error("Expected a trashed project");
@@ -28,25 +31,54 @@ export function removeTrashed(ctx: Ctx, selected: StorageSelection[], expired = 
   if (selected.length) {
     ctx.log(`[trash] removed ${selected.length} ${selected.length === 1 ? "project" : "projects"} for good${expired ? ` after ${TRASH_DAYS} days in the trash` : ""}: ${selected.map(p => p.id).join(", ")}`);
   }
-  finishPurges(ctx);
+  return finishPurges(ctx);
 }
 
-function finishPurges(ctx: Ctx) {
+/** Folders being deleted now, so two sweeps never delete the same one at once. */
+const deleting = new Map<string, Promise<void>>();
+
+/**
+ * Delete the folders of projects removed for good. Which ones is decided in the database; the deleting happens outside
+ * any transaction and without blocking the engine. Each folder goes on its own: one that can't be deleted yet, such as
+ * a file in use on Windows, keeps its purge row for the next try and holds up no other.
+ */
+function finishPurges(ctx: Ctx): Promise<void> {
   const pending = ctx.db.prepare("SELECT project_id FROM storage_purges").all() as {project_id: string}[];
-  for (const {project_id: id} of pending) {
-    ctx.db.transaction(() => {
-      if (!ctx.db.prepare("SELECT 1 FROM projects WHERE id=?").get(id)) {
-        rmSync(checkedProjectDir(ctx,id), { recursive: true, force: true });
+  return ctx.track(Promise.all(pending.map(({ project_id: id }) => {
+    let folder: string;
+    try {
+      // A project still in the library keeps its folder; only the purge row was left.
+      if (ctx.db.prepare("SELECT 1 FROM projects WHERE id=?").get(id)) {
+        ctx.db.prepare("DELETE FROM storage_purges WHERE project_id=?").run(id);
+        return;
       }
-      ctx.db.prepare("DELETE FROM storage_purges WHERE project_id=?").run(id);
-    }, "immediate")();
-  }
+      folder = checkedProjectDir(ctx, id);
+    } catch (error) {
+      ctx.log(`[trash] couldn't remove the folder of ${id} yet and will try again: ${(error as Error).message}`);
+      return;
+    }
+    const running = deleting.get(folder);
+    if (running) return running;
+    const job = (async () => {
+      try {
+        await rm(folder, { recursive: true, force: true });
+        ctx.db.prepare("DELETE FROM storage_purges WHERE project_id=?").run(id);
+      } catch (error) {
+        ctx.log(`[trash] couldn't remove the folder of ${id} yet and will try again: ${(error as Error).message}`);
+      } finally {
+        deleting.delete(folder);
+      }
+    })();
+    deleting.set(folder, job);
+    return job;
+  })).then(() => {}));
 }
 
+/** How many projects were removed for good. Their folders are deleted in the background (`ctx.pending`). */
 export function purgeTrash(ctx: Ctx, nowMs = Date.now()): number {
   const cutoff = new Date(nowMs - TRASH_DAYS * DAY).toISOString();
   const expired = ctx.repos.projects.listDeleted().filter(p => p.deletedAt < cutoff && !projectBusy(ctx, p.id, true));
-  removeTrashed(ctx, expired, true);
+  void removeTrashed(ctx, expired, true);
   return expired.length;
 }
 

@@ -47,6 +47,11 @@ export interface DialoguePlanSources {
    * answers null at once.
    */
   words(mediaId: string, through?: number, prepare?: boolean): Promise<TranscriptWord[] | null>;
+  /**
+   * Throws when `words` is not the list the model last read indices from. Placing words can add ones the transcript
+   * missed, which moves every later index: a reference read before that names other words now.
+   */
+  sameWordsAsRead?(mediaId: string, words: readonly TranscriptWord[]): void;
   /** Measure the recording near these source instants when no scan page covers them. */
   measure(points: Array<{ mediaId: string; t: number }>): Promise<void>;
   /** Independent speech reading of the few seconds that would survive beside a cut, when available for replay. */
@@ -90,6 +95,7 @@ export function audibleSourcePoints(tl: Timeline, times: number[]) {
 export async function resolveWordCut(tl: Timeline, ref: { mediaId: string; fromWord: number; toWord: number }, sources: DialoguePlanSources, compareTakes = false) {
   let words = await sources.words(ref.mediaId);
   if (!words) throw new Error(`Media ${ref.mediaId} has no transcript words to reference. Use seconds instead.`);
+  sources.sameWordsAsRead?.(ref.mediaId, words);
   const { fromWord, toWord } = ref;
   if (fromWord > toWord || toWord >= words.length) {
     throw new Error(`Word range #${fromWord}–#${toWord} is outside ${ref.mediaId}'s transcript (#0–#${words.length - 1}).`);
@@ -97,6 +103,7 @@ export async function resolveWordCut(tl: Timeline, ref: { mediaId: string; fromW
   const shifts = compareTakes ? equivalentShifts(words, fromWord, toWord).slice(1) : [];
   const last = Math.min(words.length - 1, toWord + 1 + Math.max(0, ...shifts));
   words = await sources.words(ref.mediaId, words[last]!.end + SETTLED_MARGIN) ?? words;
+  sources.sameWordsAsRead?.(ref.mediaId, words);
   const cut = await placeWordCut(tl, words, ref, sources);
   if (!shifts.length) return cut;
   // Only the inspection tool compares other performances. Saving always uses the indices submitted.
@@ -176,8 +183,10 @@ export class NoPauseToTrim extends Error {}
 export async function resolvePauseCut(tl: Timeline, ref: { mediaId: string; afterWord: number; leave?: number }, sources: DialoguePlanSources) {
   let words = await sources.words(ref.mediaId);
   if (!words) throw new Error(`Media ${ref.mediaId} has no transcript words to reference. Use seconds instead.`);
+  sources.sameWordsAsRead?.(ref.mediaId, words);
   if (ref.afterWord >= words.length - 1) throw new Error(`No word follows #${ref.afterWord} in ${ref.mediaId}'s transcript (#0–#${words.length - 1}). Give the pause in seconds.`);
   words = await sources.words(ref.mediaId, words[ref.afterWord + 1]!.end + SETTLED_MARGIN) ?? words;
+  sources.sameWordsAsRead?.(ref.mediaId, words);
   const before = words[ref.afterWord]!, after = words[ref.afterWord + 1]!;
   const said = `“${before.text.trim()}” and “${after.text.trim()}” (#${ref.afterWord}, #${ref.afterWord + 1})`;
   const middle = (before.end + after.start) / 2;
