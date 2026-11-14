@@ -390,6 +390,18 @@ it("says what quitting would stop, in every project: the edits under way and wai
   expect(await underWay()).toEqual({ edits: 0, queued: 1, exports: 0 });
 });
 
+it("counts a skill Scarlet writes or revises as under way, and not the learning check beside a request", async () => {
+  const underWay = async () => (await api<{ edits: number; queued: number; exports: number }>("GET", "/under-way")).body;
+  const scarlet = { type: "scarlet", name: "Scarlet" } as const;
+  // A learning check cut short isn't run again, and the request it reads is counted already.
+  createTask(app.ctx, { projectId: project.id, kind: "learning_check", agent: "claude", instruction: "Tighten the intro", state: "running", createdBy: scarlet });
+  expect(await underWay()).toEqual({ edits: 0, queued: 0, exports: 0 });
+  // Quitting stops a skill's revision and a skill written from a change, and both carry on at the next launch.
+  createTask(app.ctx, { projectId: project.id, kind: "skill_edit", agent: "claude", instruction: "Shorter pauses", state: "running", createdBy: scarlet });
+  createTask(app.ctx, { projectId: project.id, kind: "skill_from_change", agent: "claude", instruction: "Write a SKILL.md", state: "running", createdBy: scarlet });
+  expect(await underWay()).toEqual({ edits: 2, queued: 0, exports: 0 });
+});
+
 it("resumes a run its engine's crash cut short, until crashes keep cutting it short, and a run Scarlet quit on every time", async () => {
   const { body: { host } } = await api<{ host: { id: string } }>("POST", "/hosts/register", { name: "test", platform: "test", agents: [{ id: "claude", installed: true }] });
   // Each attempt is claimed and cut short; the next is the attempt Scarlet resumed it as, if any.
