@@ -22,6 +22,8 @@ export interface AgentCapabilities {
    * chat will show them (`taskPrompt` in `apps/server/src/services/tasks.ts`).
    */
   plan: boolean;
+  /** Prefix the harness uses when it exposes Scarlet's MCP tools to the model. */
+  toolPrefix?: string;
 }
 
 // `plan` is off for every harness. On 2026-11-08 Claude Code, given the tool and one sentence asking for its steps, laid
@@ -31,7 +33,7 @@ export interface AgentCapabilities {
 const KNOWN: Record<string, AgentCapabilities> = {
   // claude -p runs with --tools "" (no file tools); Claude models take images but not audio.
   // Plan: Claude Code 2.1.316 has TaskCreate and TaskUpdate (TodoWrite before it) only when --tools names them.
-  claude: { images: true, audio: false, files: false, plan: false },
+  claude: { images: true, audio: false, files: false, plan: false, toolPrefix: "mcp__scarlet__" },
   // codex exec has a writable workspace; MCP audio blocks are not forwarded to the model.
   // Plan: Codex 0.166 has update_plan only with tools.update_plan.enabled, and reports it as `todo_list` items.
   codex: { images: true, audio: false, files: true, plan: false },

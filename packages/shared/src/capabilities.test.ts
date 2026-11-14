@@ -6,18 +6,18 @@ afterEach(() => vi.restoreAllMocks());
 describe("agentCapabilities", () => {
   it("gives each known harness what it delivers, and an unknown one the conservative set", () => {
     // No harness's to-do tool is on: the chat shows no plan. Gemini's runner reads none.
-    expect(agentCapabilities("claude")).toEqual({ images: true, audio: false, files: false, plan: false });
+    expect(agentCapabilities("claude")).toEqual({ images: true, audio: false, files: false, plan: false, toolPrefix: "mcp__scarlet__" });
     expect(agentCapabilities("codex")).toEqual({ images: true, audio: false, files: true, plan: false });
     expect(agentCapabilities("gemini")).toEqual({ images: true, audio: false, files: false, plan: false });
     for (const agent of [undefined, "", "api", "toString", "Claude"]) expect(agentCapabilities(agent), String(agent)).toEqual({ images: true, audio: false, files: false, plan: false });
   });
 
   it("applies an override given as an object or as SCARLET_AGENT_CAPS JSON, taking only its true/false capabilities", () => {
-    expect(agentCapabilities("claude", { audio: true })).toEqual({ images: true, audio: true, files: false, plan: false });
+    expect(agentCapabilities("claude", { audio: true })).toEqual({ images: true, audio: true, files: false, plan: false, toolPrefix: "mcp__scarlet__" });
     expect(agentCapabilities("claude", '{"plan":true}').plan).toBe(true);
     expect(agentCapabilities("codex", '{"plan":true}').plan).toBe(true);
     expect(agentCapabilities("codex", '{"audio":true,"files":false}')).toEqual({ images: true, audio: true, files: false, plan: false });
-    expect(agentCapabilities("claude", ' {"images": false, "audio": "yes", "files": 1, "shell": true} ')).toEqual({ images: false, audio: false, files: false, plan: false });
+    expect(agentCapabilities("claude", ' {"images": false, "audio": "yes", "files": 1, "shell": true} ')).toEqual({ images: false, audio: false, files: false, plan: false, toolPrefix: "mcp__scarlet__" });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     for (const unset of [undefined, "", "   "]) expect(agentCapabilities("codex", unset)).toEqual({ images: true, audio: false, files: true, plan: false });
     expect(agentCapabilities("codex", "{}")).toEqual({ images: true, audio: false, files: true, plan: false });

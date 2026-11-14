@@ -180,6 +180,10 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     parts.push(`Your task artifact directory is: ${ctx.workDir}\n\`asset_add\` imports a graphic, animation or music bed you made there, with how you made it.`);
   }
 
+  if (caps.toolPrefix) {
+    parts.push(`This harness prefixes Scarlet’s tool names with \`${caps.toolPrefix}\`. For example, call \`${caps.toolPrefix}project_get\` when a skill names \`project_get\`.`);
+  }
+
   // Project summary
   const summary = typeof ctx.project === "string" ? ctx.project : summarizeProject(ctx.project.project, ctx.project.timeline);
   parts.push(`# Project\n\n${summary}`);
