@@ -765,7 +765,60 @@ describe("transcript tools", () => {
       .toContain("[0.20-1.80] #0-#3 Hello everyone welcome back.");
     const none = await client.callTool({ name: "transcript_get", arguments: { mediaId: "m1", from: 10 } }) as CallToolResult;
     expect(textOf(none)).toContain("No speech in that range");
-    expect(mock.requests.some(req => req.method === "POST")).toBe(false);
+    // Reading which input each word came from is the only request a read makes: nothing starts transcription.
+    expect(mock.requests.filter(req => req.method === "POST").every(req => req.path.endsWith("/other-input"))).toBe(true);
+  });
+
+  it("marks the words and gap sound heard only on the input the dialogue isn't on", async () => {
+    const original = mock.state.otherInput;
+    // "back" came from a producer on the call, and a chime plays in the gap before "welcome".
+    mock.state.otherInput = (_mediaId, words, gaps) => ({ available: true, words: words.map(([start]) => Math.abs(start - 4) < .01),
+      gaps: gaps.map(([start, end]) => start < 3.6 && end > 3.5 ? [{ start: 3.0, end: 3.4 }] : []) });
+    // A session that found a recording without such inputs doesn't ask again: this one starts fresh.
+    const fresh = await connect();
+    try {
+      const read = textOf(await fresh.callTool({ name: "transcript_get", arguments: { mediaId: "m1", from: 1, to: 5 } }) as CallToolResult);
+      expect(read).toContain("#6 4.00-4.30 [other input] back");
+      expect(read).toContain("#5 3.60-3.90 welcome");
+      expect(read).toMatch(/gap, .*0\.40 s of it is on the other input alone \(3\.00–3\.40\): not the speaker/);
+      const json = JSON.parse(textOf(await fresh.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 5, toWord: 6, format: "json" } }) as CallToolResult));
+      expect(json.otherInput).toEqual([6]);
+    } finally {
+      await fresh.close();
+      mock.state.otherInput = original;
+    }
+  });
+
+  it("asks which input each word came from in parts the engine accepts, on a read longer than one part", async () => {
+    // 12,000 short words, read in segments with a large result budget: one read holds more words than one request takes.
+    const words = Array.from({ length: 12_000 }, (_, i) => ({ start: i * .3, end: i * .3 + .2, text: "a" }));
+    const state = makeState({ transcripts: { m1: { ...transcript, segments: [{ id: "all", start: 0, end: words.at(-1)!.end, text: "", words }] } } });
+    state.project.media = state.project.media.map(m => m.id === "m1" ? { ...m, duration: Math.ceil(words.at(-1)!.end) } : m);
+    const asked: number[] = [];
+    // The word at 3000 s, the 10,001st, came from the call.
+    state.otherInput = (_mediaId, read, gaps) => {
+      if (read.length > 5000 || gaps.length > 2000) throw new Error("more than one request takes");
+      asked.push(read.length);
+      return { available: true, words: read.map(([start]) => Math.abs(start - 3000) < .01), gaps: gaps.map(() => []) };
+    };
+    const fixture = await startMockServer(state);
+    const agent = new Client({ name: "other-input-parts", version: "1" });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    try {
+      const server = createScarletMcpServer(new ScarletClient({ baseUrl: fixture.url, token: "tok" }), {
+        projectId: "prj_test", agent: "claude", capabilities: agentCapabilities("claude", { resultChars: 200_000 }),
+        author: { type: "agent", name: "claude" },
+      });
+      await server.connect(a);
+      await agent.connect(b);
+      const read = textOf(await agent.callTool({ name: "transcript_get", arguments: { mediaId: "m1", granularity: "segment" } }) as CallToolResult);
+      expect(asked.length).toBeGreaterThan(1);
+      expect(asked.reduce((n, count) => n + count, 0)).toBeGreaterThan(5000);
+      expect(read).toContain("[other input] a");
+    } finally {
+      await agent.close();
+      await fixture.close();
+    }
   });
 
   it("pages a 6,300-word transcript without losing words or the measured gap at a page boundary", async () => {
@@ -3191,6 +3244,24 @@ it("says how far a saved part's cuts reach, so a pass that read to the end first
     // The part whose cuts come within a page of where the read stopped has decided the rest of it too.
     await save(100, 100.4);
     expect(saved().at(-1)).toEqual({ kind: "pass_progress", mediaId: "m1", through: 120 });
+  } finally {
+    Object.assign(mock.state, original);
+    await editor.close();
+  }
+});
+
+it("marks a word from the input the dialogue isn't on where the edit plays it", async () => {
+  const original = { timeline: mock.state.timeline, otherInput: mock.state.otherInput };
+  const editor = await connect();
+  const tl = emptyTimeline(mock.state.project.id);
+  tl.version = "inputs";
+  tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 6, 0)];
+  mock.state.timeline = tl;
+  // The "Um," at 2.5 s came from a producer on the call.
+  mock.state.otherInput = (_mediaId, words, gaps) => ({ available: true, words: words.map(([start]) => Math.abs(start - 2.5) < .01), gaps: gaps.map(() => []) });
+  try {
+    const page = textOf(await editor.callTool({ name: "timeline_transcript", arguments: { version: tl.version, from: 2.4, to: 3, detail: "words" } }) as CallToolResult);
+    expect(page).toContain("2.50-2.70 #4 [other input] Um,");
   } finally {
     Object.assign(mock.state, original);
     await editor.close();
