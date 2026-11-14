@@ -53,20 +53,18 @@ const PICTURE_PATIENCE_MS = 3000;
 /** How long the stills a rebuilt lane held stay over the new ones: the new ones' left-to-right fade (workspace.css). */
 const HELD_FADE_MS = 600;
 
-interface Still { src?: string; span: number }
-/** The stills a lane last showed whole, and whether they were preview sheets, for the lane built in its place. */
-interface HeldStills { subject: string; built: string; stills: Still[]; sheets: boolean }
+interface HeldStills { subject: string; built: string; view: string; cells: Element[] }
 /**
  * A new working cut builds the timeline again and every still on it is a new picture from the engine. The lane built in
  * its place keeps showing the old stills, of the same footage, until its own have landed, instead of going blank.
  */
-interface Carry { subject: string; built: string; held: RefObject<HeldStills | undefined> }
+interface Carry { subject: string; built: string; start: number; duration: number; held: RefObject<HeldStills | undefined> }
 const HeldStillsContext = createContext<Carry | null>(null);
 
 /** Stills shown by the timeline this one was built in place of: not a zoom's other window, which shows another stretch. */
-function heldFor(carry: Carry | null) {
+function heldFor(carry: Carry | null, view: string) {
   const held = carry?.held.current;
-  return carry && held && held.subject === carry.subject && held.built !== carry.built ? held : undefined;
+  return carry && held && held.subject === carry.subject && held.built !== carry.built && held.view === view ? held : undefined;
 }
 
 const Filmstrip = memo(function Filmstrip({ start, duration, pictureAspect, frameAt, preview, hold, onLoading }: {
@@ -78,7 +76,7 @@ const Filmstrip = memo(function Filmstrip({ start, duration, pictureAspect, fram
   const [count, setCount] = useState(0);
   const [failed, setFailed] = useState<string>();
   // Stills that have loaded or given up. The lane shows them together once every one has.
-  const [settled, setSettled] = useState<ReadonlySet<string>>(new Set());
+  const [settled, setSettled] = useState<ReadonlyMap<string, boolean>>(new Map());
   const [impatient, setImpatient] = useState<string>();
   useLayoutEffect(() => {
     const el = strip.current!;
@@ -117,40 +115,59 @@ const Filmstrip = memo(function Filmstrip({ start, duration, pictureAspect, fram
     const timer = window.setTimeout(() => setImpatient(batch), PICTURE_PATIENCE_MS);
     return () => clearTimeout(timer);
   }, [loading, batch]);
-  const settle = (src: string) => setSettled(done => done.has(src) ? done : new Set([...done, src].filter(s => wanted.includes(s))));
+  const settle = (src: string, loaded: boolean) => setSettled(done => {
+    if (done.get(src) === loaded) return done;
+    const next = new Map([...done].filter(([url]) => wanted.includes(url)));
+    return next.set(src, loaded);
+  });
   const waiting = loading || !!hold;
   const arriving = useArrival(waiting);
   const carry = useContext(HeldStillsContext);
-  const [held, setHeld] = useState(() => heldFor(carry));
-  const complete = wanted.length > 0 && wanted.every(src => settled.has(src));
+  const view = carry && start === carry.start && duration === carry.duration ? "full" : `${start}/${duration}`;
+  const [held, setHeld] = useState(() => heldFor(carry, view));
+  const overlay = useRef<HTMLDivElement>(null);
+  const measured = drawn && count > 0;
+  const complete = measured && wanted.every(src => settled.has(src));
+  const hasPicture = wanted.some(src => settled.get(src));
+  // A pending cache lookup or an expired patience timer can end the loading wave before any picture is available.
+  // An empty or failed batch is terminal too: once known, it must not keep showing footage from an older cut.
+  const reveal = !waiting && (hasPicture || complete);
   useLayoutEffect(() => {
-    if (carry && complete && !waiting) carry.held.current = { subject: carry.subject, built: carry.built, stills: stills.map(({ src, span }) => ({ src, span })), sheets: !!cached };
-  }, [carry, complete, waiting, stills, cached]);
+    const el = overlay.current;
+    if (el && held && held.cells[0]?.parentElement !== el) el.replaceChildren(...held.cells);
+  }, [held]);
+  useLayoutEffect(() => {
+    if (!carry) return;
+    if (complete && hasPicture && !waiting) {
+      // The old lane unmounts before the new layout effects run. Move its already-decoded cells across intact:
+      // this preserves sheet cropping and avoids an extra round of requests for the previous cut.
+      const cells = Array.from(strip.current!.querySelectorAll(":scope > div:not(.filmstrip-wait, .filmstrip-held)"));
+      carry.held.current = { subject: carry.subject, built: carry.built, view, cells };
+    } else if (complete && !hasPicture || (carry.held.current?.built === carry.built && carry.held.current.view === view)) {
+      carry.held.current = undefined;
+    }
+  }, [carry, complete, hasPicture, waiting, view, stills]);
   // Once the lane's own stills are shown, the held ones fade out over them, then go.
   useEffect(() => {
-    if (!held || waiting) return;
+    if (!held || !reveal) return;
     const timer = window.setTimeout(() => setHeld(undefined), HELD_FADE_MS);
     return () => clearTimeout(timer);
-  }, [held, waiting]);
+  }, [held, reveal]);
   // The glow starts at the shared wave's current point, so it moves with the sound lane's ripple.
   const phase = useMemo(() => waiting ? wavePhase() : undefined, [waiting]);
   return <div ref={strip} className={`timeline-filmstrip${waiting ? " is-loading" : ""}${arriving ? " is-arriving" : ""}`} aria-hidden="true"
     style={{ "--frames": Math.max(1, count), "--wave-phase": phase } as CSSProperties}>
     {drawn && wanted.length > 0 && !held && <div className="filmstrip-wait"><i /></div>}
-    {held && <div className="filmstrip-held" data-leaving={!waiting || undefined}>
-      {held.stills.map((still, i) => still.src
-        ? <img key={i} src={still.src} alt="" draggable={false} style={held.sheets ? { gridColumn: `span ${still.span}`, objectFit: "fill" } : undefined} />
-        : <div key={i} />)}
-    </div>}
+    {held && <div ref={overlay} className="filmstrip-held" data-leaving={reveal || undefined} />}
     {stills.map((still, i) => {
       // After a wait the stills fade in from left to right.
       const order = { "--at": (stills.length > 1 ? i / (stills.length - 1) : 0).toFixed(3) } as CSSProperties;
       const src = still.src;
       if (cached && src) return <FilmstripSheet key={still.key} src={src} frames={still.span} pictureAspect={pictureAspect}
-        style={order} loaded={settled.has(src)} onLoad={() => settle(src)} onError={() => setFailed(cached.id)} />;
+        style={order} loaded={settled.get(src) === true} onLoad={() => settle(src, true)} onError={() => setFailed(cached.id)} />;
       return <div key={still.key}>{src && <QueuedImg key={src} src={src} alt="" draggable={false} decoding="async"
-        data-loaded={settled.has(src) || undefined} style={order} onLoad={() => settle(src)}
-        onError={e => { e.currentTarget.hidden = true; settle(src); }} />}</div>;
+        data-loaded={settled.get(src) || undefined} style={order} onLoad={() => settle(src, true)}
+        onError={e => { e.currentTarget.hidden = true; settle(src, false); }} />}</div>;
     })}
   </div>;
 });
@@ -439,7 +456,7 @@ export function TimelineScrubber(props: TimelineScrubberProps) {
   const kept = useRef<KeptView>(undefined);
   const held = useRef<HeldStills>(undefined);
   const subjectKey = JSON.stringify(subject);
-  const carry = useMemo(() => ({ subject: subjectKey, built: key, held }), [subjectKey, key]);
+  const carry = useMemo(() => ({ subject: subjectKey, built: key, start: start ?? 0, duration, held }), [subjectKey, key, start, duration]);
   // Building the timeline again reloads every still on it, so say what made it.
   const built = useRef<unknown[]>(undefined);
   useEffect(() => {

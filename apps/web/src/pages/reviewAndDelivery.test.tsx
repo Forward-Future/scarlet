@@ -157,36 +157,62 @@ it("settles a failed waveform read and ignores a late response from a previous s
   expect(container.querySelector("path[d]")?.getAttribute("d")).toBeFalsy();
 });
 
-it("keeps the old stills over a rebuilt timeline until its own have loaded", async () => {
+it("keeps decoded stills through cache lookup and slow frame requests until a replacement can be shown", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(84);
-  const nap = (ms: number) => act(() => new Promise<void>(resolve => setTimeout(resolve, ms)));
-  // A new working cut of the same footage: another length, so the timeline is built again.
-  const scrubber = (version: string, duration: number) =>
-    <TimelineScrubber duration={duration} playhead={0} frameAt={t => `/${version}/frame/${t}`} onSeek={() => {}} />;
+  const scrubber = (version: string, duration: number, pending = false) =>
+    <TimelineScrubber duration={duration} playhead={0} previewStrip={pending ? null : undefined}
+      frameAt={t => `/${version}/frame/${t}`} onSeek={() => {}} />;
   const strip = () => container.querySelector<HTMLElement>(".timeline-filmstrip")!;
   const own = () => [...strip().querySelectorAll<HTMLImageElement>(":scope > div:not(.filmstrip-held) > img")];
-  const held = () => [...strip().querySelectorAll<HTMLImageElement>(".filmstrip-held img")].map(img => img.getAttribute("src"));
-  const loadOwn = () => act(async () => { for (const img of own()) img.dispatchEvent(new Event("load")); });
+  const overlay = () => strip().querySelector(".filmstrip-held");
+  const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  vi.useFakeTimers();
+  try {
+    await show(scrubber("v1", 8));
+    const original = own();
+    expect(original).toHaveLength(2);
+    await act(() => { for (const img of original) img.dispatchEvent(new Event("load")); });
 
-  await show(scrubber("v1", 8));
-  expect(held()).toEqual([]);
-  await loadOwn();
-  expect(strip().classList).not.toContain("is-loading");
+    await show(scrubber("v2", 9, true));
+    await tick(1000);
+    expect(own()).toEqual([]);
+    expect(overlay()?.querySelector("img")).toBe(original[0]);
+    expect(overlay()?.hasAttribute("data-leaving")).toBe(false);
 
-  await show(scrubber("v2", 9));
-  // The new cut's stills are on their way; the old ones stay in their place meanwhile, with no wait glow over them.
-  expect(strip().classList).toContain("is-loading");
-  expect(held().length).toBeGreaterThan(0);
-  expect(held().every(src => src?.startsWith("/v1/"))).toBe(true);
-  expect(strip().querySelector(".filmstrip-wait")).toBeNull();
-  expect(strip().querySelector(".filmstrip-held")?.hasAttribute("data-leaving")).toBe(false);
+    await show(scrubber("v2", 9));
+    expect(strip().querySelector(".filmstrip-wait")).toBeNull();
+    await tick(4000);
+    expect(overlay()?.hasAttribute("data-leaving")).toBe(false);
+    await act(() => { own()[0]!.dispatchEvent(new Event("load")); });
+    expect(overlay()?.hasAttribute("data-leaving")).toBe(true);
+    await tick(650);
+    expect(overlay()).toBeNull();
+    expect(own()[0]!.hasAttribute("data-loaded")).toBe(true);
+  } finally { vi.useRealTimers(); }
+});
 
-  await loadOwn();
-  expect(strip().classList).not.toContain("is-loading");
-  expect(strip().querySelector(".filmstrip-held")?.hasAttribute("data-leaving")).toBe(true);
-  await nap(650);
-  expect(strip().querySelector(".filmstrip-held")).toBeNull();
+it("retains the crop of each held preview-sheet cell and releases the old picture when every new frame fails", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(90);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(84);
+  const scrubber = (duration: number, cached = false) =>
+    <TimelineScrubber duration={duration} playhead={0} pictureAspect={9 / 16} onSeek={() => {}}
+      previewStrip={cached ? { id: "portrait", version: "v1", fps: 30 } : undefined} frameAt={t => `/frame/${t}`} />;
+  await show(scrubber(8, true));
+  const cells = [...container.querySelectorAll(".timeline-sheet-cell")];
+  expect(cells).toHaveLength(2);
+  await act(() => { cells[0]!.querySelector("img")!.dispatchEvent(new Event("load")); });
+  await show(scrubber(9));
+  expect(container.querySelector(".filmstrip-held .timeline-sheet-cell:last-child")).toBe(cells[1]);
+  expect((cells[1]!.querySelector("img")!).style.left).toBe("-100%");
+  await act(() => {
+    for (const img of container.querySelectorAll(".timeline-filmstrip > div:not(.filmstrip-held) > img")) {
+      img.dispatchEvent(new Event("error"));
+    }
+  });
+  expect(container.querySelector(".filmstrip-held[data-leaving]")).toBeTruthy();
+  await show(scrubber(10));
+  expect(container.querySelector(".filmstrip-held")).toBeNull();
 });
 
 it("loads the picture and the sound as one wave, and lands them together when they finish within a beat", async () => {
