@@ -680,6 +680,41 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     }
     return chunk;
   }
+  /** The most words and gaps the engine reads in one other-input request (`/media/:id/other-input`). */
+  const OTHER_INPUT_WORDS = 5000, OTHER_INPUT_GAPS = 2000;
+  // Which words of a recording were heard only on the input its dialogue isn't on, by transcript index, once their times are final.
+  const inputLabels = new Map<string, Map<number, boolean>>();
+  const noInputs = new Set<string>();
+  /**
+   * On a recording with a mix and two isolated inputs, the words heard only on the input the dialogue isn't on, and the
+   * sound on that input alone in each gap. A producer's "got you" and a system chime read like the speaker in the mix:
+   * a pass kept both (2026-11-13). Empty for any other recording, and when the reading fails.
+   */
+  async function otherInput(mediaId: string, words: Array<{ index: number; start: number; end: number }>, gaps: TimeRange[] = []) {
+    const empty = { other: new Set<number>(), gaps: gaps.map((): TimeRange[] => []) };
+    if (noInputs.has(mediaId) || (!words.length && !gaps.length)) return empty;
+    const known = inputLabels.get(mediaId) ?? new Map<number, boolean>();
+    inputLabels.set(mediaId, known);
+    const ask = words.filter(w => !known.has(w.index));
+    // The engine takes at most OTHER_INPUT_WORDS words and OTHER_INPUT_GAPS gaps a request. A transcript read of a long
+    // recording, in segments, can hold several times that: it is asked in parts, and the answers put back in order.
+    const parts = Math.max(1, Math.ceil(ask.length / OTHER_INPUT_WORDS), Math.ceil(gaps.length / OTHER_INPUT_GAPS));
+    const read = async () => {
+      const answers = await Promise.all(Array.from({ length: parts }, (_, i) => client.otherInput(ctx.projectId, mediaId, {
+        words: ask.slice(i * OTHER_INPUT_WORDS, (i + 1) * OTHER_INPUT_WORDS).map(w => [w.start, w.end]),
+        gaps: gaps.slice(i * OTHER_INPUT_GAPS, (i + 1) * OTHER_INPUT_GAPS).map(g => [g.start, g.end]) })));
+      return { available: answers.every(a => a.available), words: answers.flatMap(a => a.words), gaps: answers.flatMap(a => a.gaps) };
+    };
+    const reading = await read().catch(withoutOnce(`failed to read which input each word of ${mediaId} came from`, undefined));
+    if (!reading) return empty;
+    if (!reading.available) { noInputs.add(mediaId); return empty; }
+    const settled = settledThrough(mediaId);
+    ask.forEach((w, i) => { if (w.end <= settled) known.set(w.index, reading.words[i]!); });
+    const fresh = new Map(ask.map((w, i) => [w.index, reading.words[i]!]));
+    return { other: new Set(words.filter(w => fresh.get(w.index) ?? known.get(w.index)).map(w => w.index)), gaps: reading.gaps };
+  }
+  const OTHER_INPUT = "[other input]";
+
   /** What sounds in each stretch between two words of a recording. Undefined where its levels cannot be read. */
   async function gapSounds(mediaId: string, gaps: Array<{ start: number; end: number }>, edge?: number): Promise<Array<GapSound | undefined>> {
     const out: Array<GapSound | undefined> = [];
@@ -1153,7 +1188,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   tool(
     "transcript_get",
-    `Word-timed transcript of a media asset in SOURCE seconds. Each word carries a stable index (#123): the same index transcript_search, timeline_transcript and dialogue_scan show, and the word reference dialogue_check_join and dialogue_apply_cuts accept. Word times locate words; cut edges go where the recording is silent, which the dialogue tools measure. In text, a gap of ${GAP_SECONDS} s or more between two words is followed by a line saying what the recording holds there: quiet, or how much of it is sound at speaking level that no word explains, with its source seconds. That sound is whatever the transcript left out: a word it missed, a cut-off start, a breath, a laugh, typing. A missing transcript is started or joined with the configured provider; if the call reports preparation, call again. Narrow with from/to seconds or fromWord/toWord. A long result includes nextFromWord: pass it back with the same range, granularity and format to read the next page. Text format: \`#index start-end word\` lines (word) or \`[start-end] #first-#last speaker: text\` lines (segment); json: [index, start, end, text, speaker] tuples.`,
+    `Word-timed transcript of a media asset in SOURCE seconds. Each word carries a stable index (#123): the same index transcript_search, timeline_transcript and dialogue_scan show, and the word reference dialogue_check_join and dialogue_apply_cuts accept. Word times locate words; cut edges go where the recording is silent, which the dialogue tools measure. In text, a gap of ${GAP_SECONDS} s or more between two words is followed by a line saying what the recording holds there: quiet, or how much of it is sound at speaking level that no word explains, with its source seconds. That sound is whatever the transcript left out: a word it missed, a cut-off start, a breath, a laugh, typing. On a recording with a mix and two isolated inputs, such as a microphone and the computer's sound, a word heard only on the input the dialogue isn't on reads ${"`[other input]`"} (a producer on a call, a remote guest, playback), and a gap's line says how much of its sound is on that input alone (a system chime, a remark from the call): neither is the speaker. A missing transcript is started or joined with the configured provider; if the call reports preparation, call again. Narrow with from/to seconds or fromWord/toWord. A long result includes nextFromWord: pass it back with the same range, granularity and format to read the next page. Text format: \`#index start-end word\` lines (word) or \`[start-end] #first-#last speaker: text\` lines (segment); json: [index, start, end, text, speaker] tuples, and otherInput listing the indices heard only on the other input.`,
     {
       mediaId: z.string(),
       from: z.number().min(0).optional().describe("Start of range, source seconds"),
@@ -1203,8 +1238,12 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       }
       if (format === "json") {
         const tuples = picked.map(w => [w.index, w.start, w.end, w.text.trim(), w.speaker ?? null]);
-        return page((count, next) => JSON.stringify({ mediaId, ...(estimates && { timesFinalThrough: round3(settled) }),
-          words: tuples.slice(0, count), ...(next !== undefined && { nextFromWord: next }) }));
+        const { other } = await otherInput(mediaId, picked);
+        return page((count, next) => {
+          const marked = picked.slice(0, count).filter(w => other.has(w.index)).map(w => w.index);
+          return JSON.stringify({ mediaId, ...(estimates && { timesFinalThrough: round3(settled) }),
+            words: tuples.slice(0, count), ...(marked.length && { otherInput: marked }), ...(next !== undefined && { nextFromWord: next }) });
+        });
       }
       // What the recording holds in each gap between two words, by the index of the word after it.
       const gapped = picked.flatMap((w, i) => {
@@ -1214,8 +1253,14 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
         if (!previous || (!i && nextFromWord === undefined) || !inRange(previous, w.index - 1)) return [];
         return w.start - previous.end >= GAP_SECONDS ? [{ index: w.index, start: previous.end, end: w.start }] : [];
       });
-      const sounds = await gapSounds(mediaId, gapped).catch(withoutOnce(`failed to read the levels between the words of ${mediaId}`, [] as Array<GapSound | undefined>));
-      const gapNote = new Map(gapped.flatMap((g, i) => sounds[i] ? [[g.index, `  · ${(g.end - g.start).toFixed(2)} s gap, ${describeGapSound(sounds[i]!)}`] as const] : []));
+      const [sounds, inputs] = await Promise.all([
+        gapSounds(mediaId, gapped).catch(withoutOnce(`failed to read the levels between the words of ${mediaId}`, [] as Array<GapSound | undefined>)),
+        otherInput(mediaId, picked, gapped)]);
+      const elsewhere = (runs: TimeRange[]) => runs.length
+        ? `; ${runs.reduce((n, r) => n + r.end - r.start, 0).toFixed(2)} s of it is on the other input alone (${runs.map(r => `${r.start.toFixed(2)}–${r.end.toFixed(2)}`).join(", ")}): not the speaker` : "";
+      const gapNote = new Map(gapped.flatMap((g, i) => sounds[i] || inputs.gaps[i]?.length
+        ? [[g.index, `  · ${(g.end - g.start).toFixed(2)} s gap, ${sounds[i] ? describeGapSound(sounds[i]!) : "levels unread"}${elsewhere(inputs.gaps[i] ?? [])}`] as const] : []));
+      const said = (w: typeof picked[number]) => inputs.other.has(w.index) ? `${OTHER_INPUT} ${w.text.trim()}` : w.text.trim();
       return page((count, next) => {
         const shown = picked.slice(0, count);
         const lines: string[] = [];
@@ -1224,7 +1269,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
           const flush = () => {
             if (!group.length) return;
             const a = group[0]!, b = group.at(-1)!;
-            lines.push(`[${a.start.toFixed(2)}-${b.end.toFixed(2)}] #${a.index}-#${b.index}${a.speaker ? ` ${a.speaker}:` : ""} ${group.map(w => w.text.trim()).join(" ")}`);
+            lines.push(`[${a.start.toFixed(2)}-${b.end.toFixed(2)}] #${a.index}-#${b.index}${a.speaker ? ` ${a.speaker}:` : ""} ${group.map(said).join(" ")}`);
             group = [];
           };
           for (const w of shown) {
@@ -1238,7 +1283,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
           let speaker: string | undefined;
           for (const w of shown) {
             if (gapNote.has(w.index)) lines.push(gapNote.get(w.index)!);
-            lines.push(`#${w.index} ${w.start.toFixed(2)}-${w.end.toFixed(2)}${w.speaker && w.speaker !== speaker ? ` ${w.speaker}:` : ""} ${w.text.trim()}`);
+            lines.push(`#${w.index} ${w.start.toFixed(2)}-${w.end.toFixed(2)}${w.speaker && w.speaker !== speaker ? ` ${w.speaker}:` : ""} ${said(w)}`);
             speaker = w.speaker;
           }
         }
@@ -2353,7 +2398,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   // -- timeline -------------------------------------------------------------
 
-  const perception = registerPerception({ tool, client, projectId: ctx.projectId, seesFrames: caps.images && !disabled.has("media_frame"), getTimeline, peekTimeline, getProject, readPassage, transcriptWords, showWords, settledThrough, readLevels, unavailable: unavailableOnce,
+  const perception = registerPerception({ tool, client, projectId: ctx.projectId, otherInputWords: async (mediaId, words) => (await otherInput(mediaId, words)).other, seesFrames: caps.images && !disabled.has("media_frame"), getTimeline, peekTimeline, getProject, readPassage, transcriptWords, showWords, settledThrough, readLevels, unavailable: unavailableOnce,
     readWaveform: (mediaId, from, to, points) => readPrepared(mediaId, "waveform", () => client.waveform(mediaId, from, to, points, true)) });
 
   async function readApprovedExample(changeId: string) {

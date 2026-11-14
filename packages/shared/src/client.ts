@@ -306,6 +306,12 @@ export class ScarletClient {
   waveform(mediaId: string, from: number, to: number, points = 1000, cachedOnly = false, speechActivity = false) {
     return this.withResource("media", mediaId, path => this.get<WaveformResponse>(`${path}/waveform?from=${from}&to=${to}&points=${points}${cachedOnly ? "&cachedOnly=1" : ""}${speechActivity ? "&speechActivity=1" : ""}`));
   }
+  /** Words heard only on the input a recording's dialogue isn't on, and what sounded there alone in each gap. Source seconds. */
+  otherInput(projectId: string, mediaId: string, body: { words: Array<[number, number]>; gaps: Array<[number, number]> }) {
+    return this.post<{ available: boolean; words: boolean[]; gaps: Array<Array<{ start: number; end: number }>> }>(
+      `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}/other-input`, body);
+  }
+
   transcript(mediaId: string, opts: { from?: number; to?: number; granularity?: "word" | "segment"; audioSources?: boolean } = {}) {
     const q = new URLSearchParams();
     if (opts.from !== undefined) q.set("from", String(opts.from));
