@@ -44,7 +44,7 @@ interface Srv {
   /** Holds a claim open, as the engine's long poll does. */
   claimGate?: () => Promise<void>;
   /** One-off failures: the next request to the named route answers with this status. */
-  failNext: Partial<Record<"heartbeat" | "claim" | "prompt" | "complete" | "task", number>>;
+  failNext: Partial<Record<"heartbeat" | "claim" | "prompt" | "complete", number>>;
   /** What the engine says the task's state is. */
   taskState: Task["state"];
 }
@@ -83,7 +83,7 @@ async function startServer(questionFailures = 0): Promise<Srv> {
       return srv.claimGate ? srv.claimGate().then(answer) : answer();
     }
     if (req.method === "GET" && ["/tasks/task_1", "/tasks/resumed"].includes(req.path)) {
-      return failed("task") || send(200, { task: { ...task, id: req.path.split("/").pop(), state: srv.taskState }, events: srv.taskEvents });
+      return send(200, { task: { ...task, id: req.path.split("/").pop(), state: srv.taskState }, events: srv.taskEvents });
     }
     const prompt = /^\/tasks\/([^/]+)\/prompt$/.exec(req.path);
     if (req.method === "GET" && prompt) {
@@ -709,6 +709,17 @@ describe("AgentHost when a run or the engine misbehaves", { timeout: 30_000 }, (
     expect(after).not.toContain("GET /tasks/task_1");
     expect(srv.completes).toEqual([{ state: "done", summary: "Cut made." }]);
     await vi.waitFor(() => expect(lines).toContainEqual(expect.stringMatching(/^task task_1 done after \d+(ms|s) \(1 changes: chg_7\)$/)));
+  });
+
+  it("takes a completion the engine answered with nothing as landed", async ({ signal }) => {
+    const srv = await startServer();
+    const { lines, log } = logging();
+    const { host, client } = makeHost(srv, async () => ({ ok: true, summary: "Cut made." }), undefined, { log });
+    // A reply with no body reaches the host as nothing.
+    const completeTask = vi.spyOn(client, "completeTask").mockResolvedValue(undefined as never);
+    await startHostAndWait(host, once(srv.events, "claim", { signal }));
+    await vi.waitFor(() => expect(lines).toContainEqual(expect.stringMatching(/^task task_1 done after \d+(ms|s)$/)), { timeout: 5_000 });
+    expect(completeTask).toHaveBeenCalledTimes(1);
   });
 
   it("logs an event the engine refused with its task, and keeps the run going", async ({ signal }) => {

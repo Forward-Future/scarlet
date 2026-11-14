@@ -338,7 +338,7 @@ export class AgentHost {
           // try either once the engine cancels the task or hands it out again: it has ended this attempt itself.
           if (attempt && signal.aborted) break;
           try {
-            changeIds = (await this.client.completeTask(task.id, body)).task?.changeIds ?? [];
+            changeIds = (await this.client.completeTask(task.id, body))?.task?.changeIds ?? [];
             landed = true;
           } catch (err) {
             this.log(`complete failed for task ${task.id}: ${errMsg(err)}`);
