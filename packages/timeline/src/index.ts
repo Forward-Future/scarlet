@@ -13,5 +13,6 @@ export * from "./builders.js";
 export * from "./cutReview.js";
 export * from "./stagedCutMapping.js";
 export * from "./joinCrossfade.js";
+export * from "./doubledSound.js";
 
 export * from "./history.js";

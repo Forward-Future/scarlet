@@ -44,6 +44,8 @@ import {
   diffTimelines,
   emptyTimeline,
   frameAligned,
+  introducedDoubledSound,
+  type DoubledSound,
   newId,
   OpError,
   makeTimeMap,
@@ -920,7 +922,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       return { ...op, ...aligned };
     });
   }
-  async function propose(body: ProposeChangeRequest, before: Timeline | null, onWholeFrames: FrameAdjustment[] = []): Promise<ToolResult> {
+  async function propose(body: ProposeChangeRequest, before: Timeline | null, onWholeFrames: FrameAdjustment[] = [], doubledSound: DoubledSound[] = []): Promise<ToolResult> {
     const req: ProposeChangeRequest = {
       ...body,
       fromVersion: before && before.version !== "draft" ? before.version : undefined,
@@ -947,6 +949,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       duration: duration ?? (timeline ? timelineDuration(timeline) : undefined),
       diff: lines,
       ...(onWholeFrames.length && { onWholeFrames }),
+      ...(doubledSound.length && { doubledSound }),
     };
     return json(result);
   }
@@ -2454,7 +2457,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   tool(
     "timeline_propose",
-    `Propose an edit to the timeline. Provide EITHER \`ops\` (a list of operations on the named base version) OR \`timeline\` (a full replacement timeline). Scarlet validates it, stores a new version, makes short before/after previews available when the editor opens the change. Directly requested edits apply automatically. Suggestions and alternatives wait for review. Write \`description\` for the editor in one short, plain sentence about what changed (e.g. "Cut the false start at 1:17 and the 1.4 s pause after it"). Pass \`noteIds\` when the change answers review notes. Every audible clip edge the edit makes is measured on its recording, whichever op makes it: one inside a sounding word, or through a sound it would leave a piece of, refuses the edit and gives the quiet second beside it. Returns the change id, state, affected timeline ranges, the new version id and a diff.
+    `Propose an edit to the timeline. Provide EITHER \`ops\` (a list of operations on the named base version) OR \`timeline\` (a full replacement timeline). Scarlet validates it, stores a new version, makes short before/after previews available when the editor opens the change. Directly requested edits apply automatically. Suggestions and alternatives wait for review. Write \`description\` for the editor in one short, plain sentence about what changed (e.g. "Cut the false start at 1:17 and the 1.4 s pause after it"). Pass \`noteIds\` when the change answers review notes. Every audible clip edge the edit makes is measured on its recording, whichever op makes it: one inside a sounding word, or through a sound it would leave a piece of, refuses the edit and gives the quiet second beside it. Returns the change id, state, affected timeline ranges, the new version id and a diff. When the edit leaves two audible clips playing the same moment of the same recording, \`doubledSound\` names both clip ids and the timeline range they overlap: the mix plays that sound twice, so set one clip's volume to 0 unless the editor asked for it layered.
 
 ${OPS_DOC}`,
     {
@@ -2543,7 +2546,13 @@ ${OPS_DOC}`,
         await refuseEdgesInSound(before, parsed.data);
         if (inset) body.timeline = applyOps(parsed.data, syncPictureOps((await getProject()).project, parsed.data, inset));
       }
-      return propose(body, before, frameChanges);
+      // A second audible copy of the same moment of a recording doubles that sound in the mix. One edit asked to keep the
+      // original audio and played it twice as loud, on the video clip and again on A1. Layering can be meant, so the
+      // edit goes in and the agent is told (#18).
+      const doubledSound = await getProject()
+        .then(({ project }) => introducedDoubledSound(before, body.timeline ?? applyOps(before ?? emptyTimeline(ctx.projectId), body.ops ?? []), project.media))
+        .catch(without("failed to check the edit for sound it plays twice", [] as DoubledSound[]));
+      return propose(body, before, frameChanges, doubledSound);
     },
   );
 
