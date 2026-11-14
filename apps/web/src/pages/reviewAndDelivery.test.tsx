@@ -974,6 +974,36 @@ it("uses the full monitor for landscape and fits the picture to the project or s
   expectMonitor(9 / 16, false);
 });
 
+it("jumps the playhead to a typed time from G or a click on the clock, and refuses a time past the end", async () => {
+  const seek = vi.spyOn(player, "seek");
+  const noop = () => {};
+  await show(<MemoryRouter><CutPreview simple={{ marks: [] }} workingCache={{ cache: undefined, startCache: noop }} active hasCut spot={0} autoPlaySource={false}
+    onRetryDraft={noop} onMedia={noop} /></MemoryRouter>);
+  const field = () => container.querySelector<HTMLInputElement>(".monitor-clock input");
+  const key = (name: string, on: EventTarget = window) => act(() => on.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })));
+  const type = (value: string) => act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field()!, value);
+    field()!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await key("g");
+  expect(field()?.value).toBe("0:00.000");
+  await type("0:05.600");
+  await key("Enter", field()!);
+  expect(seek).toHaveBeenCalledWith(5.6, true);
+  expect(field()).toBeNull();
+  await act(() => container.querySelector<HTMLButtonElement>(".monitor-jump")!.click());
+  expect(field()).not.toBeNull();
+  await key("Escape", field()!);
+  expect(field()).toBeNull();
+  expect(seek).toHaveBeenCalledTimes(1);
+  await key("g");
+  await type("0:20");
+  await key("Enter", field()!);
+  expect(container.querySelector(".monitor-clock [role=\"alert\"]")?.textContent).toBe("Enter a time between 0:00 and 0:16.");
+  expect(field()).not.toBeNull();
+  expect(seek).toHaveBeenCalledTimes(1);
+});
+
 it("moves the clock and the timeline as the video plays", async () => {
   const noop = () => {};
   await show(<MemoryRouter><CutPreview simple={{ marks: [] }} workingCache={{ cache: undefined, startCache: noop }} active hasCut spot={0} autoPlaySource={false}

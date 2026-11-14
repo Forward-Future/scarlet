@@ -117,6 +117,7 @@ export const SHORTCUTS: Array<{ keys: string[]; what: string; where: string }> =
   { keys: ["S"], what: "Skip the call on screen", where: "Call card" },
   { keys: [COMPARE_KEY], what: "Switch between Before and After", where: "Edit comparison" },
   { keys: ["Space"], what: "Play / pause", where: "Preview" },
+  { keys: ["G"], what: "Jump to a time", where: "Preview" },
   { keys: ["↑", "↓"], what: "Previous / next edit or call", where: "Edit or call card" },
   { keys: ["←", "→"], what: "Back / forward 5 seconds (1 second with Shift)", where: "Preview" },
   { keys: ["+", "−"], what: "Zoom in / out (0 to fit)", where: "Timeline" },

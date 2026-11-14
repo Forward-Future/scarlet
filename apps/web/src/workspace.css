@@ -164,6 +164,12 @@
 .monitor-playback { position: absolute; bottom: 10px; left: 10px; display: flex; flex-wrap: wrap; align-items: center; max-width: calc(100% - 20px); gap: 2px; padding: 1px 9px 1px 2px; border-radius: 7px; background: rgb(16 16 16 / 86%); }
 .monitor-clock { color: #b6b3ac; font: 11px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .monitor-clock strong { font-weight: 500; color: #f4f0e8; }
+.monitor-jump { margin: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-variant-numeric: inherit; cursor: text; }
+.monitor-jump:disabled { cursor: default; }
+.monitor-jump:focus-visible { outline: 1px solid rgb(255 255 255 / 35%); outline-offset: 2px; border-radius: 2px; }
+.monitor-jump-field { width: 8.6em; margin: 0; padding: 0 2px; border: 0; border-radius: 2px; background: rgb(255 255 255 / 8%); color: #f4f0e8; font: inherit; font-variant-numeric: inherit; outline: none; }
+.monitor-jump-field:focus { background: rgb(255 255 255 / 12%); }
+.monitor-jump-error { margin-left: 6px; color: #ffa09c; white-space: normal; }
 .watch-viewport { container-type: size; flex: 1; min-height: 135px; display: grid; place-items: center; grid-template: 100% / 100%; }
 .watch-monitor { position: relative; width: min(100%, calc(100cqh * var(--picture-aspect))); aspect-ratio: var(--picture-aspect); }
 /* The landscape picture fits inside the full monitor, including its dark surround and controls. */
@@ -187,7 +193,7 @@
   .video-frame:hover::after { opacity: 1; }
   .watch-monitor :is(.monitor-playback, .monitor-controls) { opacity: 0; transition: opacity .3s ease 1.2s; }
   .watch-monitor:hover :is(.monitor-playback, .monitor-controls),
-  .watch-monitor:has(:focus-visible, [aria-expanded="true"]) :is(.monitor-playback, .monitor-controls) { opacity: 1; transition-duration: .15s; transition-delay: 0s; }
+  .watch-monitor:has(:focus-visible, [aria-expanded="true"], .monitor-jump-field) :is(.monitor-playback, .monitor-controls) { opacity: 1; transition-duration: .15s; transition-delay: 0s; }
   /* While the picture loads, the play button turning is the one sign of it: the playback controls show until it is in. */
   .watch-monitor .monitor-playback[data-loading] { opacity: 1; transition-duration: .15s; transition-delay: 0s; }
 }

@@ -2,15 +2,15 @@ import { useEffect, useState } from "react";
 import type { Project, Timeline } from "@scarlet/timeline";
 import { player } from "../../lib/player";
 import { usePlayerStore } from "../../stores/player";
-import { MonitorPlayback, PlayerTime } from "../player/MonitorPlayback";
+import { MonitorPlayback, PlayerTime, type ClockJump } from "../player/MonitorPlayback";
 import { cutFrameUrl } from "./thumbs";
 import type { useEditBefore } from "./EditBeforePreview";
 
 /** Compare composed frames at the project playhead. Play always resumes the working edit. */
-export function FramingPreview({ project, timeline, original, duration, before, loading, coarse, onAfter }: {
+export function FramingPreview({ project, timeline, original, duration, before, loading, coarse, onAfter, jump }: {
   project: Project; timeline: Timeline; original: ReturnType<typeof useEditBefore>; duration: number; before: boolean; loading?: boolean;
   /** The clock in whole seconds, as the player beside it shows it. */
-  coarse?: boolean; onAfter(): void;
+  coarse?: boolean; onAfter(): void; jump?: ClockJump;
 }) {
   const fps = project.settings.fps;
   const playing = usePlayerStore(s => s.playing);
@@ -32,7 +32,7 @@ export function FramingPreview({ project, timeline, original, duration, before, 
     {/* Paused, the picture is the composed frame, which says for itself when it is loading. */}
     <MonitorPlayback playing={playing} playable loading={playing && loading} onToggle={() => { onAfter(); player.toggle(); }}
       playLabel={before ? "Play edited video" : undefined}>
-      <PlayerTime end={duration} coarse={coarse} />
+      <PlayerTime end={duration} coarse={coarse} jump={jump} />
     </MonitorPlayback>
   </>;
 }

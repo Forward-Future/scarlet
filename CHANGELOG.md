@@ -8,6 +8,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 - Scarlet lets you know when a new version of your edition is ready to download.
 - A rule you approve stays saved if Scarlet stops after updating the skill.
+- Click the clock or press G to jump the playhead to a time you type.
 - An edit another request flagged can be revised and undone from the request that flagged it.
 - With a marked range's handle focused, ← and → keep stepping it a frame at a time, Esc takes off only the range, and Space plays.
 - A queued request being reworded keeps its new words after Scarlet restarts.

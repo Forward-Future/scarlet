@@ -19,7 +19,7 @@ import { editTargetAt, markedRangeOf, useUiStore, type AgentContext, type Marked
 import { Icon } from "../components/ui/primitives";
 import { PreferenceSelect } from "../components/ui/PreferenceSelect";
 import { CachedVideo } from "../components/player/CachedVideo";
-import { MonitorPlayback, PlayerTime } from "../components/player/MonitorPlayback";
+import { MonitorPlayback, PlayerTime, type ClockJump } from "../components/player/MonitorPlayback";
 import { usePictureWait } from "../components/player/usePictureWait";
 import { useCutAudio } from "../components/player/useCutAudio";
 import { usePlaybackCache } from "../components/player/usePlaybackCache";
@@ -631,6 +631,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     } else setExpanded(true);
   }
   const view = draftVersion ? "Proposed edit" : source ? "Source preview" : hasCut ? "Working edit" : "Footage";
+  const jump: ClockJump = { fps, playable, active, onSeek: seekFull };
 
   return (
     <section ref={stage} className="cut-preview" aria-label={view} data-expanded={expanded || undefined}>
@@ -672,13 +673,13 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
           {simple.label && <div className="simple-on-video" role="status">{simple.label}</div>}
           {playingBefore && originalChange && selectedEdit ? <EditBeforePreview key={threadView?.request}
             change={originalChange} original={original} passage={selectedEdit.range} active={active} loading={loading}
-            clock={<PlayerTime end={duration} coarse />} playbackRef={beforeClip} />
+            clock={<PlayerTime end={duration} coarse jump={jump} />} playbackRef={beforeClip} />
             : framing && displayedTimeline ? <FramingPreview
             key={JSON.stringify([selection, threadView?.threadId, threadView?.selected?.changeId, threadView?.request])}
-            project={current.project} timeline={displayedTimeline} original={original} duration={duration} before={before} loading={loading} coarse onAfter={after} />
+            project={current.project} timeline={displayedTimeline} original={original} duration={duration} before={before} loading={loading} coarse onAfter={after} jump={jump} />
             : (source || cut || change || draftVersion) && <MonitorPlayback playing={playing} playable={playable} loading={loading || (!!openingJoin && !draftFailed)}
             onToggle={() => player.toggle()}>
-            <PlayerTime end={duration} coarse />
+            <PlayerTime end={duration} coarse jump={jump} />
           </MonitorPlayback>}
           {(source || cut || change || draftVersion) && <div className="monitor-controls">
             {/* Picking a speed hands the keys back to the page, so the arrows go on stepping through edits. */}

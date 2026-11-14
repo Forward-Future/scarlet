@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { absTime, authorLabel, clock, clockRange, fmtBytes, initials, pct, lengthLabel, playbackClock, plural, relTime, removedSeconds, tokenBreakdown, tokenLabel, trashedLine } from "./format";
+import { absTime, authorLabel, clock, clockRange, fmtBytes, initials, pct, lengthLabel, parsePlaybackClock, playbackClock, plural, relTime, removedSeconds, tokenBreakdown, tokenLabel, trashedLine } from "./format";
 
 afterEach(() => vi.useRealTimers());
 
@@ -77,6 +77,23 @@ it("reads the player's position to the millisecond, carrying a rounded-up millis
   expect(playbackClock(61.0421)).toBe("1:01.042");
   expect(playbackClock(59.9996)).toBe("1:00.000");
   expect(playbackClock(-1)).toBe("0:00.000");
+});
+
+it("reads a typed playback clock, and refuses a minute or second of 60, a negative, or garbage", () => {
+  expect(parsePlaybackClock("0:00")).toBe(0);
+  expect(parsePlaybackClock("5")).toBe(5);
+  expect(parsePlaybackClock("5.6")).toBe(5.6);
+  expect(parsePlaybackClock("5.600")).toBe(5.6);
+  expect(parsePlaybackClock("1:23")).toBe(83);
+  expect(parsePlaybackClock("1:23.042")).toBe(83.042);
+  expect(parsePlaybackClock(" 0:05.600 ")).toBe(5.6);
+  expect(parsePlaybackClock("1:02:03")).toBe(3723);
+  expect(parsePlaybackClock("1:02:03.042")).toBe(3723.042);
+  expect(parsePlaybackClock("1:60")).toBeNaN();
+  expect(parsePlaybackClock("1:02:60")).toBeNaN();
+  expect(parsePlaybackClock("-1")).toBeNaN();
+  expect(parsePlaybackClock("nope")).toBeNaN();
+  expect(parsePlaybackClock("")).toBeNaN();
 });
 
 it("sizes a file in the unit that reads best", () => {

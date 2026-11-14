@@ -4,7 +4,7 @@ import { snapToFrame, timelineDuration } from "@scarlet/timeline";
 import { errorMessage, IS_MOCK } from "../../lib/client";
 import { desktop } from "../../lib/desktop";
 import { exportCounting, exportFailureSeen, exportFile, PICTURE_DONE, useExports, type ExportFile } from "../../lib/exportJobs";
-import { pct, playbackClock } from "../../lib/format";
+import { parsePlaybackClock, pct, playbackClock } from "../../lib/format";
 import { useProjectStore, type ProjectData } from "../../stores/project";
 import { ActivityProgress, Field, Icon, InlineError, Modal } from "../ui/primitives";
 import { PreferenceSelect } from "../ui/PreferenceSelect";
@@ -17,13 +17,6 @@ const QUALITY: Record<ExportQuality, { label: string; hint: string }> = {
   delivery: { label: "High", hint: "Looks the same as the original, in a smaller file." },
   best: { label: "Original quality", hint: "Matches the original footage, for re-editing or grading. About the size of the original." },
 };
-
-function parseClock(value: string): number {
-  if (!/^(?:\d+:)?(?:\d+:)?\d+(?:\.\d+)?$/.test(value.trim())) return NaN;
-  const parts = value.trim().split(":").map(Number);
-  if (parts.slice(1).some(part => part >= 60)) return NaN;
-  return parts.reduce((seconds, part) => seconds * 60 + part, 0);
-}
 
 export function ExportSheet({ hasCut, onClose }: { hasCut: boolean; onClose(): void }) {
   const current = useProjectStore(s => s.current);
@@ -60,7 +53,7 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
   // An export that stopped is explained here, so the menu's mark for it goes once this is open.
   const failed = job?.phase === "failed";
   useEffect(() => { if (failed) exportFailureSeen(current.id); }, [failed, current.id]);
-  const range = format === "mp4" && customRange ? { start: snapToFrame(parseClock(start), fps), end: snapToFrame(parseClock(end), fps) } : undefined;
+  const range = format === "mp4" && customRange ? { start: snapToFrame(parsePlaybackClock(start), fps), end: snapToFrame(parsePlaybackClock(end), fps) } : undefined;
   const invalidRange = range && !(range.start >= 0 && range.end > range.start && range.end <= duration);
   const custom = format === "mp4" && (!!range || !!targetHeight || quality !== "delivery");
   const level = QUALITY[quality];

@@ -10608,3 +10608,18 @@ it("goes from a kept edit Scarlet didn't flag to a call still waiting, or a flag
   // Nothing else waits: the card closes.
   expect(keepGoesTo([[edit(13, undefined, true)], [edit(21)]], 1, still, [])).toBeUndefined();
 });
+
+it("opens a jump field from G on the preview, and not from G typed in the message box", async () => {
+  await show();
+  const field = () => container.querySelector<HTMLInputElement>(".monitor-clock input");
+  await press("g");
+  expect(field()?.value).toBe("0:00.000");
+  await press("Escape");
+  expect(field()).toBeNull();
+  const box = container.appendChild(document.createElement("textarea"));
+  box.focus();
+  await act(async () => { box.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true, cancelable: true })); });
+  expect(field()).toBeNull();
+  expect(container.querySelector(".monitor-jump")?.tagName).toBe("BUTTON");
+  box.remove();
+});

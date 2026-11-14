@@ -134,3 +134,14 @@ export function playbackClock(seconds: number): string {
   const ms = Math.max(0, Math.round(seconds * 1000));
   return `${clock(Math.floor(ms / 1000))}.${String(ms % 1000).padStart(3, "0")}`;
 }
+
+/**
+ * The clock strings Export's range boxes and the preview jump field accept: optional hours, minutes:seconds, an
+ * optional fraction. A minute or second of 60 or more is refused, as is anything that isn't that clock.
+ */
+export function parsePlaybackClock(value: string): number {
+  if (!/^(?:\d+:)?(?:\d+:)?\d+(?:\.\d+)?$/.test(value.trim())) return NaN;
+  const parts = value.trim().split(":").map(Number);
+  if (parts.slice(1).some(part => part >= 60)) return NaN;
+  return parts.reduce((seconds, part) => seconds * 60 + part, 0);
+}

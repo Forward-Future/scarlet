@@ -2,7 +2,7 @@
 import { act, createElement, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { arrowSeekTime, handleCutArrow, ignorePageShortcut, isComposing, isEditableTarget, mediaPlaying, useComparisonShortcut, useHotkeys } from "./hotkeys";
+import { arrowSeekTime, handleCutArrow, ignorePageShortcut, isComposing, isEditableTarget, mediaPlaying, SHORTCUTS, useComparisonShortcut, useHotkeys } from "./hotkeys";
 import { usePlayerStore } from "../stores/player";
 
 afterEach(() => {
@@ -24,6 +24,10 @@ function picker(expanded: boolean) {
   trigger.setAttribute("aria-expanded", String(expanded));
   return trigger;
 }
+
+it("lists G as jump to a time on the preview", () => {
+  expect(SHORTCUTS).toContainEqual({ keys: ["G"], what: "Jump to a time", where: "Preview" });
+});
 
 it("lets a focused button take Space while nothing plays", () => {
   const fit = document.body.appendChild(document.createElement("button"));
