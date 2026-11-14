@@ -276,7 +276,7 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
     // A run resumed after a quit may finish without saving another part. Its earlier attempts' pass still applies.
     const rootId = task.resumeRootId;
     if (rootId) for (const change of ctx.repos.changes.select(`project_id = ? AND state = 'ready' AND json_extract(json, '$.taskId') IN
-        (SELECT id FROM tasks WHERE id = ? OR json_extract(json, '$.resumeRootId') = ?)`, [task.projectId, rootId, rootId])) {
+        (SELECT id FROM tasks WHERE project_id = ? AND (id = ? OR json_extract(json, '$.resumeRootId') = ?))`, [task.projectId, task.projectId, rootId, rootId])) {
       if (change.taskId !== task.id) applyChoicesWhenDone(ctx, change);
     }
   }

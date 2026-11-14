@@ -113,7 +113,7 @@ export function NotePopover() {
         {busy && <Spinner className="size-3" />}
         <div className="flex-1" />
         <label className="inline-flex items-center gap-2 text-[12px] text-muted" title={none ? unavailableReason : undefined}>
-          <Toggle checked={assign && !none} onChange={onAssign} label="Send to the agent" disabled={none} />
+          <Toggle checked={assign && !none} onChange={onAssign} label="Send to Scarlet" disabled={none} />
           {assign && !none ? "Send to" : "Just a note"}
         </label>
         {assign && !none && <AgentChip />}

@@ -11,7 +11,7 @@ use tauri::{AppHandle, State};
 use crate::AppState;
 
 const README: &str = "Scarlet logs\n\n\
-system.json: Scarlet version, OS, engine and AI assistant status, and desktop settings.\n\
+system.json: Scarlet version, OS, engine and CLI status, and desktop settings.\n\
 logs/: UTC event times, components, task and media states, and HTTP results from the desktop log.\n\
 Search for a task id (tsk_...) to follow one edit.\n\n\
 Not included: videos, projects, transcripts, the project database or sign-in tokens.\n";
@@ -343,6 +343,7 @@ mod tests {
         let report = entry(&bytes, "system.json");
         assert!(report.contains("\"version\": \"test\"") && report.contains("token=[redacted]") && !report.contains("abcdefgh1234"), "{report}");
         assert!(entry(&bytes, "README.txt").starts_with("Scarlet logs"));
+        assert!(entry(&bytes, "README.txt").contains("engine and CLI status"));
     }
 
     #[test]

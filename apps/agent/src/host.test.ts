@@ -44,7 +44,7 @@ interface Srv {
   /** Holds a claim open, as the engine's long poll does. */
   claimGate?: () => Promise<void>;
   /** One-off failures: the next request to the named route answers with this status. */
-  failNext: Partial<Record<"heartbeat" | "claim" | "prompt" | "complete" | "task", number>>;
+  failNext: Partial<Record<"heartbeat" | "claim" | "prompt" | "complete", number>>;
   /** What the engine says the task's state is. */
   taskState: Task["state"];
 }
@@ -83,7 +83,7 @@ async function startServer(questionFailures = 0): Promise<Srv> {
       return srv.claimGate ? srv.claimGate().then(answer) : answer();
     }
     if (req.method === "GET" && ["/tasks/task_1", "/tasks/resumed"].includes(req.path)) {
-      return failed("task") || send(200, { task: { ...task, id: req.path.split("/").pop(), state: srv.taskState }, events: srv.taskEvents });
+      return send(200, { task: { ...task, id: req.path.split("/").pop(), state: srv.taskState }, events: srv.taskEvents });
     }
     const prompt = /^\/tasks\/([^/]+)\/prompt$/.exec(req.path);
     if (req.method === "GET" && prompt) {
@@ -117,7 +117,9 @@ async function startServer(questionFailures = 0): Promise<Srv> {
       if (failed("complete")) return true;
       srv.completes.push(req.body);
       res.once("finish", () => srv.events.emit("complete"));
-      return send(200, { task: { ...task, state: (req.body as { state: string }).state } });
+      // The engine keeps the ids of the changes the run's events named, and answers with them.
+      const changeIds = srv.taskEvents.flatMap((e) => (e.type === "change" ? [String(e.data?.changeId)] : []));
+      return send(200, { task: { ...task, state: (req.body as { state: string }).state, changeIds } });
     }
     return false;
   };
@@ -195,7 +197,7 @@ async function claudeRunFiles(cwd: string, home: string): Promise<string> {
 
 // Windows starts PowerShell for each private directory. A resumed task can require five calls across two preparations.
 describe("AgentHost", { timeout: 30_000 }, () => {
-  it("registers, claims, runs, streams events and completes with change ids", async ({ signal }) => {
+  it("registers, claims, runs, streams events and completes", async ({ signal }) => {
     const srv = await startServer();
     const seen: RunAgentOptions[] = [];
     const runner: RunAgentFn = async (opts) => {
@@ -231,7 +233,7 @@ describe("AgentHost", { timeout: 30_000 }, () => {
     expect(saved[0]).toMatchObject({ hostId: "host_1" });
 
     expect(srv.taskEvents.map((e) => e.type)).toEqual(["log", "tool", "change"]);
-    expect(srv.completes).toEqual([{ state: "done", summary: "First cut proposed as chg_7.", error: undefined, changeIds: ["chg_7"] }]);
+    expect(srv.completes).toEqual([{ state: "done", summary: "First cut proposed as chg_7.", error: undefined }]);
 
     // Runner inputs
     const run = seen[0]!;
@@ -461,15 +463,15 @@ describe("AgentHost when a run or the engine misbehaves", { timeout: 30_000 }, (
       return { complete: srv.completes[0], lastEvent: srv.taskEvents.at(-1) };
     };
     const stalled = await outcome({ ok: false, summary: "Read the transcript.", error: "stalled", timedOut: true, stalled: true }, { stallMs: 120_000 });
-    expect(stalled.complete).toEqual({ state: "failed", summary: "Read the transcript.", error: "stalled: the agent wrote nothing for 2 minutes", changeIds: [], interrupted: true });
+    expect(stalled.complete).toEqual({ state: "failed", summary: "Read the transcript.", error: "stalled: the agent wrote nothing for 2 minutes", interrupted: true });
     expect(stalled.lastEvent).toMatchObject({ type: "error", text: "stalled: the agent wrote nothing for 2 minutes" });
 
     const capped = await outcome({ ok: false, summary: "", error: "timed out", timedOut: true }, { timeoutMs: 90_000 });
-    expect(capped.complete).toEqual({ state: "failed", error: "timed out after 2 minutes, the limit for one agent run", changeIds: [], interrupted: true });
+    expect(capped.complete).toEqual({ state: "failed", error: "timed out after 2 minutes, the limit for one agent run", interrupted: true });
 
     // A failure the host didn't cause keeps the runner's words and is not resumable.
     const crashed = await outcome({ ok: false, summary: "" }, {});
-    expect(crashed.complete).toEqual({ state: "failed", error: "agent failed", changeIds: [] });
+    expect(crashed.complete).toEqual({ state: "failed", error: "agent failed" });
   });
 
   it("fails the task with the reason when the runner itself throws", async ({ signal }) => {
@@ -655,7 +657,7 @@ describe("AgentHost when a run or the engine misbehaves", { timeout: 30_000 }, (
       const sent = srv.server.requests.filter((r) => r.path === "/tasks/task_1/complete").map((r) => r.body);
       return { srv, lines, sent, tries: completeTask.mock.calls.length, cwd: made.cwd!, session: made.session! };
     };
-    const completion = { state: "done", ifStartedAt: startedAt, summary: "Cut two pauses.", changeIds: [] };
+    const completion = { state: "done", ifStartedAt: startedAt, summary: "Cut two pauses." };
 
     const again = await finish(false);
     // Forgotten after the one post, the task stays running at the engine, which then calls it interrupted and
@@ -690,17 +692,34 @@ describe("AgentHost when a run or the engine misbehaves", { timeout: 30_000 }, (
     expect(completeTask).toHaveBeenCalledTimes(1);
   });
 
-  it("completes without change ids, and says so, when the engine can't be asked for them", async ({ signal }) => {
+  it("completes without reading the task again, and logs the changes the engine answers with", async ({ signal }) => {
     const srv = await startServer();
     const { lines, log } = logging();
-    const { host } = makeHost(srv, async () => {
-      srv.failNext.task = 503;
+    let ended = 0;
+    const { host } = makeHost(srv, async (opts) => {
+      opts.onEvent({ type: "change", text: "Proposed change chg_7", data: { changeId: "chg_7" } });
+      await vi.waitFor(() => expect(srv.taskEvents).toHaveLength(1));
+      ended = srv.server.requests.length;
       return { ok: true, summary: "Cut made." };
     }, undefined, { log });
     await startHostAndWait(host, once(srv.events, "complete", { signal }));
-    expect(srv.completes).toEqual([{ state: "done", summary: "Cut made.", changeIds: [] }]);
-    expect(lines).toContain("task task_1: could not read its change ids: task refused");
-    await vi.waitFor(() => expect(lines).toContainEqual(expect.stringMatching(/^task task_1 done after \d+(ms|s)$/)));
+    // The engine already has the run's changes: nothing between the run's end and its completion reads the task.
+    const after = srv.server.requests.slice(ended).map((r) => `${r.method} ${r.path}`);
+    expect(after).toContain("POST /tasks/task_1/complete");
+    expect(after).not.toContain("GET /tasks/task_1");
+    expect(srv.completes).toEqual([{ state: "done", summary: "Cut made." }]);
+    await vi.waitFor(() => expect(lines).toContainEqual(expect.stringMatching(/^task task_1 done after \d+(ms|s) \(1 changes: chg_7\)$/)));
+  });
+
+  it("takes a completion the engine answered with nothing as landed", async ({ signal }) => {
+    const srv = await startServer();
+    const { lines, log } = logging();
+    const { host, client } = makeHost(srv, async () => ({ ok: true, summary: "Cut made." }), undefined, { log });
+    // A reply with no body reaches the host as nothing.
+    const completeTask = vi.spyOn(client, "completeTask").mockResolvedValue(undefined as never);
+    await startHostAndWait(host, once(srv.events, "claim", { signal }));
+    await vi.waitFor(() => expect(lines).toContainEqual(expect.stringMatching(/^task task_1 done after \d+(ms|s)$/)), { timeout: 5_000 });
+    expect(completeTask).toHaveBeenCalledTimes(1);
   });
 
   it("logs an event the engine refused with its task, and keeps the run going", async ({ signal }) => {

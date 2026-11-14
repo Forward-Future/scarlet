@@ -210,6 +210,9 @@ export function taskRoutes(ctx: Ctx) {
     const count = (sql: string) => (ctx.db.prepare(sql).get() as { n: number }).n;
     const live = "project_id IN (SELECT id FROM projects WHERE deleted_at IS NULL)";
     const requests = `kind IN ('edit','note','revise') AND ${live}`;
+    // Quitting stops a skill Scarlet writes or revises too, and it carries on at the next launch as a request does.
+    // A learning check isn't run again, and the request it reads is counted already.
+    const runs = `kind IN ('edit','note','revise','skill_edit','skill_from_change') AND ${live}`;
     // A request held for the editor's answer or calls waits on them, not on Scarlet, so quitting holds up nothing of it.
     const queued = ctx.repos.tasks.select(`state = 'queued' AND ${requests}`);
     let waiting = 0;
@@ -219,7 +222,7 @@ export function taskRoutes(ctx: Ctx) {
       waiting += queued.filter(t => t.projectId === projectId && !["question", "review"].includes(queueWait(t, tasks, changes)?.kind ?? "")).length;
     }
     return c.json({
-      edits: count(`SELECT count(*) AS n FROM tasks WHERE ${requests} AND state IN ('claimed','running')`),
+      edits: count(`SELECT count(*) AS n FROM tasks WHERE ${runs} AND state IN ('claimed','running')`),
       queued: waiting,
       exports: count(`SELECT count(*) AS n FROM renders WHERE ${live} AND state IN ('queued','running') AND json_extract(json, '$.export.owner') IS NOT NULL`),
     });

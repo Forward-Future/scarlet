@@ -1,9 +1,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createProject, type Project } from "@scarlet/timeline";
-import { taskPlan, type Task, type TaskEvent, type TaskPrompt, type WsEvent } from "@scarlet/shared";
+import { ATTEMPT_HEADER, TASK_HEADER, taskPlan, type Task, type TaskEvent, type TaskPrompt, type WsEvent } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { PLAN_STEPS } from "@scarlet/mcp/prompt";
@@ -390,6 +390,18 @@ it("says what quitting would stop, in every project: the edits under way and wai
   expect(await underWay()).toEqual({ edits: 0, queued: 1, exports: 0 });
 });
 
+it("counts a skill Scarlet writes or revises as under way, and not the learning check beside a request", async () => {
+  const underWay = async () => (await api<{ edits: number; queued: number; exports: number }>("GET", "/under-way")).body;
+  const scarlet = { type: "scarlet", name: "Scarlet" } as const;
+  // A learning check cut short isn't run again, and the request it reads is counted already.
+  createTask(app.ctx, { projectId: project.id, kind: "learning_check", agent: "claude", instruction: "Tighten the intro", state: "running", createdBy: scarlet });
+  expect(await underWay()).toEqual({ edits: 0, queued: 0, exports: 0 });
+  // Quitting stops a skill's revision and a skill written from a change, and both carry on at the next launch.
+  createTask(app.ctx, { projectId: project.id, kind: "skill_edit", agent: "claude", instruction: "Shorter pauses", state: "running", createdBy: scarlet });
+  createTask(app.ctx, { projectId: project.id, kind: "skill_from_change", agent: "claude", instruction: "Write a SKILL.md", state: "running", createdBy: scarlet });
+  expect(await underWay()).toEqual({ edits: 2, queued: 0, exports: 0 });
+});
+
 it("resumes a run its engine's crash cut short, until crashes keep cutting it short, and a run Scarlet quit on every time", async () => {
   const { body: { host } } = await api<{ host: { id: string } }>("POST", "/hosts/register", { name: "test", platform: "test", agents: [{ id: "claude", installed: true }] });
   // Each attempt is claimed and cut short; the next is the attempt Scarlet resumed it as, if any.
@@ -414,4 +426,30 @@ it("resumes a run its engine's crash cut short, until crashes keep cutting it sh
     attempt = await cutShort(attempt!, false);
     expect(attempt?.state).toBe("queued");
   }
+});
+
+it("finds a run's attempts among its own project's tasks, not by reading every project's", async () => {
+  const run = await claimed("claude", "Mark the chapters");
+  const prepare = vi.spyOn(app.ctx.db, "prepare");
+  // The run saves an edit, the editor stops it, and Scarlet resumes it; the resumed attempt saves again and finishes.
+  const save = async (task: Task, id: string) => {
+    const headers = { Authorization: `Bearer ${accessToken(app.ctx)}`, "Content-Type": "application/json", [TASK_HEADER]: task.id, [ATTEMPT_HEADER]: task.startedAt! };
+    const res = await app.app.request(`/api/projects/${task.projectId}/changes`, { method: "POST", headers, body: JSON.stringify({ intent: "requested", skipRender: true,
+      description: "Mark a chapter", ops: [{ op: "addMarker", marker: { id, time: 0, kind: "chapter", text: "Chapter", resolved: false } }] }) });
+    expect(res.status).toBe(201);
+  };
+  await save(run, "first");
+  await api("POST", `/tasks/${run.id}/cancel`);
+  const { body: { task: queued } } = await api<{ task: Task }>("POST", `/tasks/${run.id}/retry`, {});
+  expect(queued.resumeRootId).toBe(run.id);
+  const { body: { host } } = await api<{ host: { id: string } }>("POST", "/hosts/register", { name: "test", platform: "test", agents: [{ id: "claude", installed: true }] });
+  const { body: { task: resumed } } = await api<{ task: Task }>("POST", `/hosts/${host.id}/claim`, { taskId: queued.id });
+  await save(resumed, "again");
+  expect((await api<{ task: Task }>("POST", `/tasks/${resumed.id}/complete`, { state: "done", ifStartedAt: resumed.startedAt })).body.task.state).toBe("done");
+  // The staged-call check on each save, putting away a stale save, and the resumed run's earlier passes on finishing.
+  const lookups = [...new Set(prepare.mock.calls.map(([sql]) => sql))].filter(sql => sql.includes("SELECT id FROM tasks WHERE"));
+  expect(lookups).toHaveLength(3);
+  const scans = lookups.filter(sql => (app.ctx.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[])
+    .some(({ detail }) => /^SCAN tasks\b/.test(detail)));
+  expect(scans).toEqual([]);
 });

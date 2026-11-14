@@ -112,3 +112,73 @@ it("copies the frame on screen into the glow, eases toward later frames, and goe
   expect(context.clearRect).toHaveBeenCalled();
   await act(async () => root.unmount());
 });
+
+it("holds the glow still while the picture plays with motion reduced, and sets it at once when it rests", async () => {
+  let reduce = true;
+  const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+  vi.spyOn(window, "matchMedia").mockReturnValue(Object.create(query, { matches: { get: () => reduce } }));
+  // Frames drawn from the video, and steps of the glow toward one.
+  let draws = 0, fades = 0;
+  const context = {
+    globalCompositeOperation: "source-over",
+    clearRect() {},
+    fillRect() { if (this.globalCompositeOperation === "destination-out") fades++; },
+    drawImage(source: unknown) { if (source instanceof HTMLVideoElement) draws++; },
+  };
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
+  let width = 1000, paused = false;
+  const stage = document.createElement("section"), monitor = document.createElement("div");
+  Object.defineProperty(stage, "clientWidth", { get: () => width });
+  Object.defineProperty(stage, "clientHeight", { value: 800 });
+  const playing =() => { const video = readyVideo(); Object.defineProperty(video, "paused", { get: () => paused }); return video; };
+  const video = playing();
+  monitor.append(video);
+  document.body.append(stage);
+  stage.append(monitor);
+  const stageRef = createRef<HTMLElement>(), monitorRef = createRef<HTMLDivElement>();
+  (stageRef as { current: HTMLElement | null }).current = stage;
+  (monitorRef as { current: HTMLDivElement | null }).current = monitor;
+  const host = document.createElement("div");
+  stage.prepend(host);
+  const root = createRoot(host);
+  const tick = (n = 1) => act(async () => { vi.advanceTimersByTime(120 * n); });
+
+  // The first look fills the glow at once, though the picture plays.
+  await act(async () => root.render(<AmbientLight stage={stageRef} monitor={monitorRef} />));
+  expect(host.querySelector("canvas")!.dataset.lit).toBe("true");
+  expect(draws).toBe(1);
+
+  // Playing on, through new frames and a clip that comes on top, the glow holds as it is.
+  for (let t = 1; t <= 20; t++) { video.currentTime = t; await tick(); }
+  const clip = playing();
+  monitor.append(clip);
+  await tick(20);
+  expect(draws).toBe(1);
+  expect(fades).toBe(0);
+
+  // At rest, the picture on top sets the glow at once, and so does a seek: no step toward it.
+  paused = true;
+  await tick();
+  expect(draws).toBeGreaterThan(1);
+  clip.currentTime = 50;
+  await tick(20);
+  expect(fades).toBe(0);
+  const settled = draws;
+  await tick(10);
+  expect(draws).toBe(settled);
+
+  // A glow cleared by a resize is filled once, though the picture plays, and then holds again.
+  paused = false;
+  width = 1200;
+  await tick();
+  expect(draws).toBe(settled + 1);
+  for (let t = 51; t <= 60; t++) { clip.currentTime = t; await tick(); }
+  expect(draws).toBe(settled + 1);
+
+  // With motion no longer reduced, it follows the playing picture again.
+  reduce = false;
+  clip.currentTime = 61;
+  await tick();
+  expect(fades).toBeGreaterThan(0);
+  await act(async () => root.unmount());
+});
