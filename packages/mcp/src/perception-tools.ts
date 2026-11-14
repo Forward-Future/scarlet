@@ -26,6 +26,8 @@ export interface PerceptionDeps {
   /** A media's words in transcript_get order (index = stable word index), or null without a transcript. */
   /** With `through`, only words whose times are final up to that source second: it rejects while alignment hasn't reached it. */
   transcriptWords(mediaId: string, prepareMissing?: boolean, through?: number): Promise<TranscriptWord[] | null>;
+  /** Of these words of a recording (transcript index, source seconds), the ones heard only on the input its dialogue isn't on. */
+  otherInputWords?(mediaId: string, words: Array<{ index: number; start: number; end: number }>): Promise<Set<number>>;
   /** Note the list a tool showed the model word indices from, so a reference read from it resolves against the same list. */
   showWords?(mediaId: string, words: readonly TranscriptWord[]): void;
   /** The source second up to which a media's word times, as last read, are final. Infinity once they all are, and for a media with no transcript. */
@@ -117,7 +119,17 @@ export function registerPerception(deps: PerceptionDeps) {
     const all = timelineJoins(tl, project);
     const joins = all.filter(j => j.at >= range.start - 1e-3 && j.at <= range.end + 1e-3);
     const limit = detail === "words" ? 600 : 3000;
-    const shown = words.slice(0, limit);
+    let shown = words.slice(0, limit);
+    // A word from the input the dialogue isn't on (a producer on a call) is marked, as transcript_get marks it.
+    if (deps.otherInputWords && shown.length) {
+      const marked = new Map<string, Set<number>>();
+      for (const mediaId of new Set(shown.map(w => w.mediaId))) {
+        const source = transcripts.get(mediaId)!;
+        const asked = [...new Set(shown.filter(w => w.mediaId === mediaId).map(w => w.index))].map(index => ({ index, start: source[index]!.start, end: source[index]!.end }));
+        marked.set(mediaId, await deps.otherInputWords(mediaId, asked).catch(() => new Set<number>()));
+      }
+      shown = shown.map(w => marked.get(w.mediaId)?.has(w.index) ? { ...w, text: `[other input] ${w.text}` } : w);
+    }
     if (shown.length) deps.readPassage(tl.version, { start: Math.max(0, range.start),
       end: shown.length < words.length ? shown.at(-1)!.end : Math.min(duration, range.end) });
     const body = formatTimelineTranscript(shown, joins.filter(j => !shown.length || j.at <= shown.at(-1)!.end + 1e-3 || shown.length === words.length),
@@ -127,7 +139,7 @@ export function registerPerception(deps: PerceptionDeps) {
   }
 
   tool("timeline_transcript",
-    "What the audience hears on a timeline version (default head): transcript words in playback order with TIMELINE seconds, and a ‖ line at every join between kept source ranges showing the source jump and the words either side. Each mediaId line identifies the source of the #indices that follow. Use this mediaId and those transcript_get indices in dialogue_check_join or dialogue_apply_cuts. lines groups words between pauses and joins (`time #firstIndex text`); words lists `start-end #index word` for exact edges. Read it after an edit to check that sentences still read naturally across each join.",
+    "What the audience hears on a timeline version (default head): transcript words in playback order with TIMELINE seconds, and a ‖ line at every join between kept source ranges showing the source jump and the words either side. Each mediaId line identifies the source of the #indices that follow. Use this mediaId and those transcript_get indices in dialogue_check_join or dialogue_apply_cuts. lines groups words between pauses and joins (`time #firstIndex text`); words lists `start-end #index word` for exact edges. Read it after an edit to check that sentences still read naturally across each join. A word heard only on the input a recording's dialogue isn't on (a producer on a call, playback) reads [other input]: it is not the speaker.",
     { version: z.string().optional(), from: z.number().min(0).optional().describe("Timeline seconds"), to: z.number().min(0).optional().describe("Timeline seconds"),
       detail: z.enum(["lines", "words"]).default("lines") }, readTranscript);
 
