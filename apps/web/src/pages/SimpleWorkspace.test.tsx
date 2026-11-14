@@ -2240,6 +2240,9 @@ it("marks only what needs the editor once a pass is applied, and its settled cut
   useProjectStore.setState({ current: data });
   await show();
   await act(async () => {});
+  // An applied edit with no request behind it says what it did once, in the sentence over its edit, not as a reply too.
+  expect(turnFor("chg_title").querySelector(".simple-msg")).toBeNull();
+  expect(turnFor("chg_title").querySelector(".simple-made-line")).not.toBeNull();
   const pass = turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
   const marks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")];
   expect(marks()).toEqual([]);
