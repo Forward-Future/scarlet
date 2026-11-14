@@ -99,3 +99,44 @@ it("leaves the note as spoken and logs the provider's reason when the request fa
     expect(line).not.toMatch(/sk-(ant-)?fixture/);
   }
 });
+
+/** A provider that takes the request and never answers: its call ends only when its signal aborts. */
+function silentProvider() {
+  const signals: Array<AbortSignal | undefined> = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+    signals.push(init?.signal ?? undefined);
+    init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+  }));
+  return signals;
+}
+/** What the call has come to a moment after its signal aborted, or that it is still waiting. */
+const settled = (pending: Promise<string | null>) =>
+  Promise.race([pending, new Promise<string>(resolve => setTimeout(() => resolve("still waiting"), 100))]);
+const engines = {
+  anthropic: () => engine({ enabled: true, provider: "anthropic" }, { anthropicKey: "sk-ant-fixture" }),
+  openai: () => engine({ enabled: true, provider: "openai" }, { openaiKey: "sk-fixture" }),
+};
+
+it.each(["anthropic", "openai"] as const)("leaves the note as spoken when %s doesn't answer within 30 seconds", async name => {
+  const deadline = new AbortController();
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(deadline.signal);
+  const signals = silentProvider();
+  const { ctx, lines } = engines[name]();
+  const pending = cleanupNote(ctx, spoken, { time: 0 });
+  deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+  expect(await settled(pending)).toBeNull();
+  expect(timeout).toHaveBeenCalledWith(30_000);
+  expect(signals).toHaveLength(1);
+  expect(lines).toEqual(["[cleanup] failed: The operation was aborted due to timeout"]);
+});
+
+it.each(["anthropic", "openai"] as const)("stops asking %s once the request for the note is cancelled", async name => {
+  const request = new AbortController();
+  const signals = silentProvider();
+  const { ctx, lines } = engines[name]();
+  const pending = cleanupNote(ctx, spoken, { time: 0 }, request.signal);
+  request.abort("Client connection prematurely closed.");
+  expect(await settled(pending)).toBeNull();
+  expect(signals[0]?.aborted).toBe(true);
+  expect(lines).toEqual(["[cleanup] failed: Client connection prematurely closed."]);
+});
