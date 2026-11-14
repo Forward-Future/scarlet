@@ -1,6 +1,7 @@
 import { timelineFromKeepRanges, type MediaAsset } from "@scarlet/timeline";
 import { dialogueAudioStream } from "./dialogue-join.js";
 import { NoPauseToTrim, planDialogueCuts, SETTLED_MARGIN, type DialoguePlanSources } from "./dialogue-plan.js";
+import { measureQuietKeptWords } from "./quiet-kept-word.js";
 
 export interface FirstCutKeep {
   start?: number;
@@ -101,6 +102,15 @@ export async function firstCutRanges(keep: FirstCutKeep[], projectId: string, au
       (t >= start && t < end) !== (n >= r.fromWord! && n <= r.toWord!)))
       throw new Error(`keep[${i}] at ${start}–${end} s does not play exactly #${r.fromWord}–#${r.toWord} of ${audio.id}. Inspect the source and correct its handles or word range.`);
   }
+  // A word-indexed keep promises that the word plays. A seconds-only keep can deliberately hold on the picture.
+  const isolated = placed.flatMap((r, i) => {
+    const before = placed[i - 1], after = placed[i + 1];
+    if (rows[i]!.fromWord === undefined || !before || !after ||
+      Math.abs(r.start - before.end) < 1e-6 || Math.abs(after.start - r.end) < 1e-6) return [];
+    return [{ mediaId: audio.id, start: r.start, end: r.end }];
+  });
+  const conflicts = await measureQuietKeptWords(isolated, sources);
+  if (conflicts.length) throw new Error(`First cut needs revision:\n${conflicts.map(c => c.reason).join("\n")}\nUse corrected source handles, or a seconds-only keep for an intentional hold.`);
   evidence.unshift(`Resolved ${rows.filter(r => r.fromWord !== undefined).length} indexed keep(s) against ${audio.id}.`);
   return { ranges: placed, evidence };
 }
