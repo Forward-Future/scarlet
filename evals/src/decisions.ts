@@ -6,7 +6,7 @@ import { planCutReview, reviewReasons, type Change, type MediaAsset, type Timeli
 import type { EditorDecision, Engine, ReviewChangeExport, ReviewDecisionExport } from "./engine.ts";
 import { timelineRangeToSource } from "./timeline.ts";
 
-export function editorDecision(change: Pick<Change, "state" | "restoredCuts" | "approvedSpots">, index: number): EditorDecision {
+function editorDecision(change: Pick<Change, "state" | "restoredCuts" | "approvedSpots">, index: number): EditorDecision {
   if (change.state === "rejected") return "skipped";
   if (change.state !== "approved") return "pending";
   if (change.restoredCuts) return change.restoredCuts.includes(index) ? "skipped" : "approved";

@@ -8,7 +8,7 @@ import { Icon } from "../ui/primitives";
 import { PreferenceSelect } from "../ui/PreferenceSelect";
 
 /** The learnings that still wait: on the editor's call, or on Scarlet while it saves one they approved. */
-export function openLearnings(learnings: Learning[] | undefined): Learning[] {
+function openLearnings(learnings: Learning[] | undefined): Learning[] {
   return (learnings ?? []).filter(l => l.state === "suggested" || l.state === "saving");
 }
 

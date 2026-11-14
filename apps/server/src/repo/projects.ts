@@ -3,7 +3,7 @@ import { countReviewDecisions, type ProjectSummary, type Task } from "@scarlet/s
 import { now, type Db } from "../db.js";
 import type { JsonStore } from "./store.js";
 
-export type MediaStatus = "ingesting" | "ready" | "failed";
+type MediaStatus = "ingesting" | "ready" | "failed";
 
 /** MediaAsset plus server-side ingest status (returned by the media routes). */
 export type MediaWithStatus = MediaAsset & { status: MediaStatus; error?: string };

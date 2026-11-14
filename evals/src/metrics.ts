@@ -13,11 +13,11 @@ export interface Word { text: string; start: number; end: number }
 export interface Levels { from: number; step: number; db: number[] }
 export interface MediaEvidence { mediaId: string; duration?: number; words?: Word[]; levels?: Levels }
 
-export type EdgeSide = "out" | "in";
+type EdgeSide = "out" | "in";
 export interface Edge { mediaId: string; at: number; side: EdgeSide }
-export type EdgeClass = "silence" | "low" | "speech" | "unknown";
+type EdgeClass = "silence" | "low" | "speech" | "unknown";
 
-export interface Grid { label: string; step: number; phase: number }
+interface Grid { label: string; step: number; phase: number }
 export interface EdgeOptions {
   /** "around": loudest bucket within ±windowSeconds. "kept": loudest bucket over windowSeconds on the kept side. */
   window: "around" | "kept";
@@ -75,12 +75,12 @@ export function levelIn(levels: Levels, start: number, end: number): number | un
   return loudest;
 }
 
-export function onGrid(t: number, grid: Grid, tolerance: number): boolean {
+function onGrid(t: number, grid: Grid, tolerance: number): boolean {
   const r = (((t - grid.phase) % grid.step) + grid.step) % grid.step;
   return Math.min(r, grid.step - r) <= tolerance;
 }
 
-export function clippedWord(words: readonly Word[] | undefined, t: number, margin: number): Word | undefined {
+function clippedWord(words: readonly Word[] | undefined, t: number, margin: number): Word | undefined {
   return words?.find(w => w.start + margin < t && t < w.end - margin);
 }
 
@@ -293,7 +293,7 @@ export interface ReferenceOptions {
   /** A required sentence is missing when the candidate cuts at least this share of its words. */
   missingCutShare: number;
 }
-export const DEFAULT_REFERENCE_OPTIONS: ReferenceOptions = { edgeTolerances: [0.02, 0.1, 0.5], edgeMatchWindow: 1, requiredKeepShare: 0.8, missingCutShare: 0.5 };
+const DEFAULT_REFERENCE_OPTIONS: ReferenceOptions = { edgeTolerances: [0.02, 0.1, 0.5], edgeMatchWindow: 1, requiredKeepShare: 0.8, missingCutShare: 0.5 };
 
 export interface ReferenceComparison {
   words: PRF & { inScope: number };
@@ -512,7 +512,7 @@ export interface TraceMetrics {
 const ms = (a?: string, b?: string) => a && b ? (Date.parse(b) - Date.parse(a)) / 1000 : null;
 
 /** Numeric token counts from `task.usage`, whatever its exact shape (flat or nested one level). */
-export function usageNumbers(usage: unknown): Record<string, number> | null {
+function usageNumbers(usage: unknown): Record<string, number> | null {
   if (!usage || typeof usage !== "object") return null;
   const out: Record<string, number> = {};
   for (const [k, v] of Object.entries(usage)) {
@@ -572,7 +572,7 @@ export function traceMetrics(task: TaskLike, events: readonly EventLike[]): Trac
 }
 
 /** The plan submitted to dialogue_apply_cuts (the last call on `version`, or the last call). */
-export interface PlanCut extends Range {
+interface PlanCut extends Range {
   /** A word reference names the removed words instead of seconds. */
   mediaId?: string;
   fromWord?: number;
@@ -596,7 +596,7 @@ export function submittedPlans(events: readonly EventLike[]): SubmittedPlan[] {
 }
 
 /** Cuts whose edges the tool checks against the recording. */
-export const isEdged = (c: PlanCut) => c.decision !== "keep" && c.picture !== "protect" &&
+const isEdged = (c: PlanCut) => c.decision !== "keep" && c.picture !== "protect" &&
   (c.kind === "retake" || c.kind === "filler" || (c.kind === "coaching" && !!c.productionQuote));
 
 export interface PlanMetrics {

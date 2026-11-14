@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { clipDuration, planCutReview, reviewReasons, type Change, type MediaClip, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
+import { carriesAudio, clipDuration, planCutReview, reviewReasons, type Change, type MediaClip, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { resolveTimeline } from "../services/timeline.js";
@@ -16,7 +16,7 @@ function decision(change: Change, index: number): Decision {
 
 /** Source seconds of each recording the viewer hears during a timeline range. */
 function sources(project: Project, tl: Timeline, range: TimeRange) {
-  const audible = new Set(project.media.filter(m => m.kind === "audio" || (m.kind === "video" && m.hasAudio !== false)).map(m => m.id));
+  const audible = new Set(project.media.filter(carriesAudio).map(m => m.id));
   return tl.tracks.filter(t => t.kind !== "caption" && !t.muted).flatMap(t => t.clips)
     .filter((c): c is MediaClip => c.kind === "media" && c.enabled && c.volume > 0 && audible.has(c.mediaId))
     .flatMap(c => {

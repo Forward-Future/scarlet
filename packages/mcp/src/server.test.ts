@@ -8,7 +8,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { agentCapabilities, ProposeChangeRequest, ScarletApiError, ScarletClient, Task, type EditingTools } from "@scarlet/shared";
 import type { Transcript } from "@scarlet/timeline";
 import { emptyTimeline, makeMediaClip } from "@scarlet/timeline";
-import { createScarletMcpServer, describeError, SCARLET_TOOL_NAMES, toolRefusal } from "./server.js";
+import { createScarletMcpServer, SCARLET_TOOL_NAMES } from "./server.js";
+import { describeError, toolRefusal } from "./tool-result.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { makeState, startMockServer, type MockServer } from "./mock-server.js";
 

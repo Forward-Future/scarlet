@@ -69,10 +69,10 @@ export function ActivityProgress({ label, value, children }: { label: string; va
   </>;
 }
 
-export function Avatar({ name, size = 22, tone = "neutral" }: { name: string; size?: number; tone?: "neutral" | "accent" }) {
+export function Avatar({ name, size = 22 }: { name: string; size?: number }) {
   return (
     <span
-      className={`inline-flex items-center justify-center rounded-full font-semibold select-none shrink-0 ${tone === "accent" ? "bg-hi-dim text-fg" : "bg-raised text-muted"}`}
+      className="inline-flex items-center justify-center rounded-full font-semibold select-none shrink-0 bg-raised text-muted"
       style={{ width: size, height: size, fontSize: Math.max(9, size * 0.42) }}
       title={name}
       aria-label={name}
@@ -82,19 +82,15 @@ export function Avatar({ name, size = 22, tone = "neutral" }: { name: string; si
   );
 }
 
-type Tone = "neutral" | "accent" | "ok" | "warn" | "bad" | "info";
+type Tone = "neutral" | "info";
 const TONE: Record<Tone, string> = {
   neutral: "bg-raised text-muted",
-  accent: "bg-hi-dim text-fg",
-  ok: "bg-ok/15 text-ok",
-  warn: "bg-warn/15 text-warn",
-  bad: "bg-bad/15 text-bad",
   info: "bg-raised text-fg",
 };
 
-export function Chip({ tone = "neutral", children, className = "", title }: { tone?: Tone; children: ReactNode; className?: string; title?: string }) {
+export function Chip({ tone = "neutral", children }: { tone?: Tone; children: ReactNode }) {
   return (
-    <span className={`chip ${TONE[tone]} ${className}`} title={title}>
+    <span className={`chip ${TONE[tone]} `}>
       {children}
     </span>
   );
@@ -210,7 +206,7 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, body, confirmLa
 }
 
 /** Right-side drawer. */
-export function Drawer({ open, onClose, title, children, footer, width = 380, wrapContents }: { open: boolean; onClose: () => void; title: string; children: ReactNode; footer?: ReactNode; width?: number; wrapContents?: (contents: ReactNode) => ReactNode }) {
+export function Drawer({ open, onClose, title, children, width = 380, wrapContents }: { open: boolean; onClose: () => void; title: string; children: ReactNode; width?: number; wrapContents?: (contents: ReactNode) => ReactNode }) {
   if (!open) return null;
   const contents = <>
     <div className="flex items-center justify-between px-5 py-3 min-h-[57px] border-b border-line">
@@ -220,7 +216,6 @@ export function Drawer({ open, onClose, title, children, footer, width = 380, wr
       </button>
     </div>
     <div className="px-5 py-4 overflow-y-auto flex-1">{children}</div>
-    {footer}
   </>;
   return (
     <DialogSurface onDismiss={onClose} aria-label={title} className="studio-drawer fixed inset-y-0 left-auto right-0 m-0 h-full max-h-full max-w-full bg-panel text-fg border-l border-line shadow-2xl flex flex-col backdrop:bg-transparent" style={{ width }}>
@@ -257,12 +252,11 @@ export function Toggle({ checked, onChange, label, disabled }: { checked: boolea
   );
 }
 
-export function PageHeading({ title, description, children }: { title: string; description?: string; children?: ReactNode }) {
+export function PageHeading({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <header className="page-heading">
       <div>
         <h1>{title}</h1>
-        {description && <p>{description}</p>}
       </div>
       {children && <div className="heading-actions">{children}</div>}
     </header>
@@ -282,7 +276,7 @@ export function Kbd({ children }: { children: ReactNode }) {
   return <kbd className="kbd">{children}</kbd>;
 }
 
-export function CloseIcon() {
+function CloseIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
       <path d="M3 3l10 10M13 3L3 13" />
@@ -290,23 +284,19 @@ export function CloseIcon() {
   );
 }
 
-export type IconName = "fullscreen" | "more" | "undo" | "refresh" | "play" | "pause" | "prev" | "next" | "mic" | "stop" | "bell" | "plus" | "chevron" | "check" | "x" | "note" | "diff" | "down" | "upload" | "export" | "link" | "trash" | "copy" | "search" | "zoom" | "settings" | "help" | "swap" | "compare" | "bolt" | "film" | "library" | "history" | "clock" | "stack" | "audio" | "image" | "arrow" | "monitor" | "review" | "star" | "trim" | "captions" | "warning" | "scissors" | "bulb" | "pencil";
+export type IconName = "fullscreen" | "more" | "undo" | "refresh" | "play" | "pause" | "mic" | "stop" | "plus" | "chevron" | "check" | "x" | "note" | "diff" | "down" | "upload" | "export" | "link" | "trash" | "search" | "zoom" | "settings" | "help" | "compare" | "film" | "library" | "history" | "clock" | "stack" | "audio" | "image" | "arrow" | "monitor" | "review" | "star" | "trim" | "captions" | "scissors" | "bulb" | "pencil";
 
 const iconPaths: Record<IconName, ReactNode> = {
   scissors: <><circle cx="4" cy="4" r="2" /><circle cx="4" cy="12" r="2" /><path d="M5.4 5.4 8 8m5.3-5.3-7.9 7.9m4.4-.7 3.5 3.5" /></>,
   trim: <path d="M8 2v2m0 3v2m0 3v2M1 8h4L3 6m2 2-2 2m12-2h-4l2-2m-2 2 2 2" />,
-  warning: <path d="M8 1.8 15 14H1zM8 6.5v3.2M8 11.9h.01" />,
   captions: <><rect x="1" y="3" width="14" height="10" rx="2" /><path d="M3.5 7h3m2 0h3.5m-8.5 3h5m2 0H13" /></>,
   more: <g fill="currentColor" stroke="none"><circle cx="3" cy="8" r="1.5" /><circle cx="8" cy="8" r="1.5" /><circle cx="13" cy="8" r="1.5" /></g>,
   star: <path d="m8 1.5 2 4.1 4.5.7-3.25 3.2.75 4.5L8 11.85l-4 2.15.75-4.5L1.5 6.3l4.5-.7z" />,
   play: <path d="M4 2.5v11l9-5.5z" fill="currentColor" stroke="none" />,
   pause: <path d="M4 3v10M12 3v10" strokeWidth="2.4" />,
   fullscreen: <path d="M6 2H2v4m8-4h4v4M2 10v4h4m4 0h4v-4" />,
-  prev: <path d="M11 3L5 8l6 5M4 3v10" />,
-  next: <path d="M5 3l6 5-6 5M12 3v10" />,
   mic: <path d="M8 2a2.5 2.5 0 0 1 2.5 2.5v4A2.5 2.5 0 0 1 8 11a2.5 2.5 0 0 1-2.5-2.5v-4A2.5 2.5 0 0 1 8 2zM3.5 8.5a4.5 4.5 0 0 0 9 0M8 13v2" />,
   stop: <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="currentColor" stroke="none" />,
-  bell: <path d="M4 11V7a4 4 0 1 1 8 0v4l1 1.5H3zM6.5 14a1.5 1.5 0 0 0 3 0" />,
   plus: <path d="M8 3v10M3 8h10" />,
   chevron: <path d="M6 3l5 5-5 5" />,
   check: <path d="M3 8.5l3 3 7-7" />,
@@ -321,7 +311,6 @@ const iconPaths: Record<IconName, ReactNode> = {
   upload: <path d="M8 11V3M4.5 6.5L8 3l3.5 3.5M3 13h10" />,
   link: <path d="M6.5 9.5l3-3M5 11a2.5 2.5 0 0 1 0-3.5l1.5-1.5M11 5a2.5 2.5 0 0 1 0 3.5L9.5 10" />,
   trash: <path d="M3 4.5h10M6 4.5V3h4v1.5M5 4.5l.5 8.5h5l.5-8.5" />,
-  copy: <path d="M6 6h7v7H6zM3 10V3h7" />,
   zoom: <><circle cx="6.7" cy="6.7" r="4.6" /><path d="m10.2 10.2 3.8 3.8M4.7 6.7h4m-2-2v4" /></>,
   search: <path d="M7 11.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zM10.5 10.5L14 14" />,
   settings: <path d="M2 4h4m3 0h5M2 8h7m3 0h2M2 12h2m3 0h7M6 2.5v3M10 6.5v3M5 10.5v3" />,
@@ -336,10 +325,8 @@ const iconPaths: Record<IconName, ReactNode> = {
   monitor: <><rect x="1.5" y="2.5" width="13" height="9" rx="1.5" /><path d="M8 12v2m-3 0h6" /></>,
   review: <><rect x="2" y="2" width="12" height="12" rx="2" /><path d="m5 8 2 2 4-4" /></>,
   help: <path d="M8 14.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13zM6 6.5a2 2 0 1 1 3 1.7c-.7.4-1 .8-1 1.5M8 12h.01" />,
-  swap: <path d="M3 5.5h8l-2.5-2.5M13 10.5H5l2.5 2.5" />,
   // A frame split down the middle, its earlier half filled: the footage as it was before an edit.
   compare: <><path d="M2.75 5.25A1.75 1.75 0 0 1 4.5 3.5H8v9H4.5a1.75 1.75 0 0 1-1.75-1.75z" fill="currentColor" stroke="none" opacity=".45" /><rect x="2.75" y="3.5" width="10.5" height="9" rx="1.75" /><path d="M8 1.75v12.5" /></>,
-  bolt: <path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z" fill="currentColor" stroke="none" />,
   bulb: <path d="M5.6 10.4a4.2 4.2 0 1 1 4.8 0c-.4.3-.6.8-.6 1.3H6.2c0-.5-.2-1-.6-1.3zM6.6 14h2.8" />,
 };
 

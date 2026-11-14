@@ -87,8 +87,6 @@
 /* What the message revises, as a tag inside the box before the text. Its × makes the message a new edit. */
 .composer-tag { flex: none; align-self: center; display: inline-flex; align-items: center; gap: 3px; max-width: 55%; margin-right: 4px; padding: 0 2px 0 7px;
   border: 1px solid var(--color-line); border-radius: 4px; font-size: 11.5px; line-height: 20px; color: var(--color-muted); white-space: nowrap; }
-/* The stretch marked on the timeline: lit like its band there, so the two read as one thing. */
-.composer-range { border-color: rgba(244, 241, 233, .55); color: var(--color-fg); font-variant-numeric: tabular-nums; }
 /* What the message is about, folded into one edit-point icon of a fixed size; hover, focus or a click opens its card. */
 .composer-aim { position: relative; flex: none; align-self: center; display: inline-flex; }
 .composer-aim-icon { position: relative; display: inline-grid; place-items: center; width: 26px; height: 28px; padding: 0; border: 0; border-radius: 6px;
@@ -170,7 +168,7 @@
 .watch-monitor { position: relative; width: min(100%, calc(100cqh * var(--picture-aspect))); aspect-ratio: var(--picture-aspect); }
 /* The landscape picture fits inside the full monitor, including its dark surround and controls. */
 .watch-monitor[data-landscape] { width: 100%; height: 100%; }
-.watch-monitor, .clip-monitor > div:first-child { container-type: size; }
+.watch-monitor { container-type: size; }
 .video-surface { position: absolute; inset: 0; display: grid; place-items: center; grid-template: 100% / 100%; }
 .video-frame { position: relative; width: min(100%, calc(100cqh * var(--picture-aspect))); aspect-ratio: var(--picture-aspect); }
 @container (max-width: 280px) {
@@ -263,14 +261,6 @@
 .timeline-zoom-step { width: 27px; background: #343432; font-size: 16px; line-height: 1; }
 .timeline-zoom-level { min-width: 33px; text-align: center; font: 11px var(--font-mono); }
 .timeline-fit { margin-left: auto; padding: 0 8px; border: 1px solid #53534e; }
-.timeline-markers { position: absolute; inset: 16px 0 auto; height: 14px; pointer-events: none; }
-.timeline-marker { position: absolute; top: 0; width: 16px; height: 14px; transform: translateX(-50%); display: grid; place-items: center; pointer-events: auto; }
-.timeline-marker::after { content: ""; width: 6px; height: 6px; transform: rotate(45deg); border-radius: 1px; background: #e99884; box-shadow: 0 0 0 1px #252321; }
-.timeline-marker:hover::after, .timeline-marker:focus-visible::after { background: #ffd4c9; }
-.timeline-marker-tip { position: absolute; bottom: 100%; z-index: 5; width: fit-content; max-height: 9rem; overflow: auto; pointer-events: auto; padding: 7px 9px; background: var(--color-panel); color: var(--color-fg); border: 1px solid var(--color-line); border-radius: 5px; box-shadow: 0 2px 8px #0005; }
-.timeline-marker-note { max-width: 16rem; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
-.timeline-marker-note + .timeline-marker-note { margin-top: 6px; }
-.timeline-marker-note > span { display: flex; align-items: center; gap: 4px; color: var(--color-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .timeline-filmstrip > div, .filmstrip-held > div { min-width: 0; overflow: hidden; background: var(--color-raised); }
 .timeline-filmstrip img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .timeline-filmstrip img[hidden] { display: none; }
@@ -355,36 +345,14 @@
   100% { box-shadow: 0 0 0 2px rgba(244, 241, 233, .22), 0 0 16px rgba(244, 241, 233, 0); }
 }
 
-/* Review one proposal in the conversation, alongside its replies. */
-.thread-decision { display: grid; justify-items: start; gap: 8px; min-width: 0; }
-.review-tools, .review-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
-.review-tools { font-size: 12px; color: var(--color-muted); }
-.review-tools { font-variant-numeric: tabular-nums; }
-.review-tool { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; }
-.review-tool:hover { color: var(--color-fg); }
-.review-tools .btn-icon { width: 26px; height: 26px; }
-.review-copy { display: grid; gap: 5px; }
-.review-copy h2 { font-size: 14px; font-weight: 600; }
-.review-passage { border-left: 2px solid var(--color-line); padding-left: 9px; color: var(--color-muted); }
-.review-voice { margin-right: 5px; font-size: 11px; white-space: nowrap; }
-/* A staged cut's words, struck through between the kept words either side. */
-.review-struck .review-kept { color: var(--color-dim); }
+.review-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .review-removed { color: var(--color-fg); text-decoration: line-through; text-decoration-color: var(--color-bad); text-decoration-thickness: 1.5px; }
 .other-takes { display: grid; gap: 2px; color: var(--color-muted); }
 .other-takes-head { font-size: 11.5px; color: var(--color-dim); }
 .other-takes ul { display: grid; gap: 2px; }
 .other-takes li { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; align-items: baseline; }
 .other-take-time { font: 11px var(--font-mono); color: var(--color-dim); font-variant-numeric: tabular-nums; text-align: left; }
-button.other-take-time:hover, button.other-take-time:focus-visible { color: var(--color-fg); }
 .other-take-text { overflow-wrap: anywhere; }
-.review-actions { gap: 6px; }
-.review-scheduled { display: inline-grid; align-items: center; padding: 6px 12px; border-radius: 8px; font-size: 13px; color: var(--color-ok); background: transparent; }
-.review-scheduled > span { grid-area: 1 / 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-/* Both labels share one cell, so the button keeps the width of the longer one and doesn't jump on hover. */
-.review-scheduled-cancel { visibility: hidden; color: var(--color-fg); }
-.review-scheduled:is(:hover, :focus-visible):not(:disabled) { background: color-mix(in srgb, currentColor 10%, transparent); }
-.review-scheduled:is(:hover, :focus-visible):not(:disabled) .review-scheduled-state { visibility: hidden; }
-.review-scheduled:is(:hover, :focus-visible):not(:disabled) .review-scheduled-cancel { visibility: visible; }
 
 .reading-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 12px 16px; border-bottom: 1px solid var(--color-line); }
 .reading-title { min-width: 0; flex: 1 1 145px; }

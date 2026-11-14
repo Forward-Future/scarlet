@@ -5,7 +5,7 @@
  */
 import { clipDuration, formatTimecode, type MediaClip, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 import { normalizeTranscriptToken } from "@scarlet/shared";
-import { captionSourceClips, dbfs, wordsByMidpoint } from "./analysis.js";
+import { captionSourceClips, dbfs, isTag, wordsByMidpoint } from "./analysis.js";
 
 // ---------------------------------------------------------------------------
 // Joins and time mapping
@@ -13,7 +13,7 @@ import { captionSourceClips, dbfs, wordsByMidpoint } from "./analysis.js";
 
 export interface JoinSide { trackId: string; clipId: string; mediaId: string; /** Source seconds at the edge. */ source: number }
 /** A discontinuity on one track: the outgoing source stops and another source position starts. */
-export interface TrackJoin {
+interface TrackJoin {
   trackId: string; out: JoinSide; in: JoinSide;
   outClip?: Pick<MediaClip, "sourceIn" | "speed"> & { joinSource: number };
   /** Seconds of empty timeline between them. */ gap?: number;
@@ -88,7 +88,7 @@ export function sourceToTimeline(tl: Timeline, mediaId: string, t: number): Plac
   return out.sort((a, b) => a.time - b.time);
 }
 
-export interface RangePlacement extends TimeRange { source: TimeRange; trackIds: string[] }
+interface RangePlacement extends TimeRange { source: TimeRange; trackIds: string[] }
 
 /** Where a source range plays on the timeline, split by clip, plus the source portions no longer in the edit. */
 export function sourceRangeToTimeline(tl: Timeline, mediaId: string, from: number, to: number) {
@@ -216,17 +216,17 @@ export interface Reading { from: number; to: number; peaks: number[]; rms?: numb
 /** Same thresholds as dialogue_check_join's quiet runs: low RMS, low peak and no detected voice. */
 export const QUIET_RMS = .01, QUIET_PEAK = .05;
 /** Less air than this after the last kept word usually clips its decay or the breath. */
-export const MIN_AIR_AFTER = .06;
+const MIN_AIR_AFTER = .06;
 /** Less air than this before kept speech resumes usually clips the onset. */
-export const MIN_AIR_BEFORE = .04;
+const MIN_AIR_BEFORE = .04;
 /** A room-tone step this large between two quiet edges is audible as a change of room. */
-export const ROOM_TONE_JUMP_DB = 6;
+const ROOM_TONE_JUMP_DB = 6;
 /** Room tone below this level (a gated or very quiet mic) is inaudible, so a step between two such floors is not reported. */
-export const AUDIBLE_ROOM_TONE_DB = -70;
+const AUDIBLE_ROOM_TONE_DB = -70;
 /** A transcript word that spans an edge with at least this much measured quiet beside it is a stretched timing, not a clipped word. */
-export const STRETCHED_WORD_AIR = .1;
+const STRETCHED_WORD_AIR = .1;
 /** Strip resolution and reach either side of the join. */
-export const STRIP_STEP = .02, STRIP_REACH = .3;
+const STRIP_STEP = .02, STRIP_REACH = .3;
 const wordMargin = .03;
 
 export interface JoinAudit {
@@ -297,7 +297,7 @@ export function auditJoin(join: number, at: number, side: TrackJoin, out: Readin
   const speed = side.outClip?.speed ?? 1;
   const center = side.outClip?.joinSource ?? side.out.source - (side.overlap ?? 0) / 2 * speed;
   const lastWord = words.out?.findLast(w => w.end > w.start && w.end <= center + 1e-6 && w.start >= (side.outClip?.sourceIn ?? 0)
-    && w.text.trim() && !/^\s*\[.*\]\s*$/.test(w.text));
+    && w.text.trim() && !isTag(w.text));
   const wordEndToJoin = lastWord && !words.out?.some(w => w.start >= lastWord.end && w.start < center - 1e-6 && w.end > center + 1e-6)
     ? round((center - lastWord.end) / speed + (side.gap ?? 0)) : undefined;
   const firstWord = words.in?.find(w => w.start >= side.in.source - wordMargin);

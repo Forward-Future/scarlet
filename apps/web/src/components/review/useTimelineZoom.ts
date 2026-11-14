@@ -25,7 +25,7 @@ function follow(view: TimeWindow, time: number, start: number, end: number): Tim
  * own length, and stays there until the playhead moves.
  */
 export function useTimelineZoom(track: RefObject<HTMLDivElement | null>, start: number, total: number,
-  position: number, cueTime: number | undefined, dragging: RefObject<unknown>, previewRequest?: number, passage?: TimeRange, carried?: TimeWindow) {
+  position: number, dragging: RefObject<unknown>, previewRequest?: number, passage?: TimeRange, carried?: TimeWindow) {
   const end = start + total;
   const minSpan = Math.min(1, total);
   const [frame, setFrame] = useState<ZoomFrame>(() => {
@@ -34,9 +34,7 @@ export function useTimelineZoom(track: RefObject<HTMLDivElement | null>, start: 
       const view = { from: clamp(carried.from, start, end - span), span };
       return { view, samples: view };
     }
-    const span = cueTime === undefined ? total : Math.min(6, total);
-    const from = cueTime === undefined ? start : clamp(Math.floor(cueTime - span / 2), start, end - span);
-    const view = follow({ from, span }, position, start, end);
+    const view = follow({ from: start, span: total }, position, start, end);
     return { view, samples: view };
   });
   const live = useRef(frame);

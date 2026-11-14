@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { timelineDuration, type MediaAsset, type Timeline, type Transcript } from "@scarlet/timeline";
+import { carriesAudio, timelineDuration, type MediaAsset, type Timeline, type Transcript } from "@scarlet/timeline";
 import { api, errorMessage } from "../../lib/client";
 import { mediaClipsFor, speechAssets } from "../../lib/transcriptMap";
 import { usePlayerStore } from "../../stores/player";
@@ -31,11 +31,10 @@ export function transcriptChunks(source: MediaAsset | undefined, assets: MediaAs
   return [...chunks.values()];
 }
 
-const hasSpeech = (asset: MediaAsset) => asset.kind === "audio" || (asset.kind === "video" && asset.hasAudio !== false);
 
 export function useTranscriptWindow(source: MediaAsset | undefined, timeline: Timeline | null, media: MediaAsset[], fixedRange?: { start: number; end: number }, audioSources = false) {
   // A source with no sound has no transcript to show or to make, like a silent clip in the edit.
-  const assets = useMemo(() => source ? [source].filter(hasSpeech) : speechAssets(timeline, media), [source, timeline, media]);
+  const assets = useMemo(() => source ? [source].filter(carriesAudio) : speechAssets(timeline, media), [source, timeline, media]);
   const clips = useMemo(() => !source && timeline ? mediaClipsFor(timeline) : [], [source, timeline]);
   const duration = useMemo(() => source ? source.duration : timeline ? timelineDuration(timeline) : 0, [source, timeline]);
   const playerDuration = usePlayerStore(s => s.duration);

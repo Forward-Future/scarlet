@@ -17,7 +17,7 @@ import { CaptionWord } from "./schema.js";
 import type { Clip, Marker, MediaClip, Timeline, TimeRange, Track } from "./schema.js";
 import { OpError, applyOp, replayOnCopy, shiftClip, type TimelineOp } from "./ops.js";
 import { ZodError } from "zod/v3";
-import { clipEnd, timelineDuration } from "./time.js";
+import { clipEnd, sourceToTimeline, timelineDuration } from "./time.js";
 import { firstIndex, intervalCandidates } from "./intervals.js";
 import { stableStringify } from "./ids.js";
 
@@ -36,7 +36,6 @@ interface Placed {
 }
 
 const srcAt = (c: MediaClip, t: number) => c.sourceIn + (t - c.timelineIn) * (c.speed ?? 1);
-const tlAt = (c: MediaClip, s: number) => c.timelineIn + (s - c.sourceIn) / (c.speed ?? 1);
 
 function mediaOn(tl: Timeline, kind: Kind): Placed[] {
   const out: Placed[] = [];
@@ -122,7 +121,7 @@ function sourceTimeMap(a: Timeline, b: Timeline, fps: number): TimeMap {
       // A split can put the two sides of the same source frame on opposite
       // sides of a gap. Only a fragment containing the requested side counts.
       if (side === "right" ? s >= y.clip.sourceOut - EPS : s <= y.clip.sourceIn + EPS) continue;
-      const at = tlAt(y.clip, Math.min(Math.max(s, y.clip.sourceIn), y.clip.sourceOut));
+      const at = sourceToTimeline(y.clip, Math.min(Math.max(s, y.clip.sourceIn), y.clip.sourceOut));
       const inside = s > y.clip.sourceIn + EPS && s < y.clip.sourceOut - EPS ? 0 : 1;
       const score = [y.clip.id === x.clip.id ? 0 : 1, y.track.id === x.track.id ? 0 : 1, inside, Math.abs(at - t)];
       if (!best || compare(score, best.score) < 0) best = { score, t: at };
@@ -661,7 +660,8 @@ export function independentClipSpots(base: Timeline, ops: TimelineOp[], spots: T
  * operation with no visible footprint. A null result means the spots must be
  * approved together (one edit spans spots, or a footprint cannot be attributed).
  */
-export function assignSpots(base: Timeline, ops: TimelineOp[], spots: TimeRange[], tolerance = 0.3, fps = 30): Array<number | null> | null {
+export function assignSpots(base: Timeline, ops: TimelineOp[], spots: TimeRange[], fps = 30): Array<number | null> | null {
+  const tolerance = 0.3;
   const independent = independentClipSpots(base, ops, spots, tolerance, fps);
   if (independent) return independent;
   const states: Timeline[] = [base];
@@ -693,7 +693,7 @@ export function assignSpots(base: Timeline, ops: TimelineOp[], spots: TimeRange[
 }
 
 export function canApproveSpots(base: Timeline, ops: TimelineOp[] | undefined, ranges: TimeRange[], fps = 30): boolean {
-  return ranges.length > 1 && !!ops?.length && assignSpots(base, ops, ranges, undefined, fps) !== null;
+  return ranges.length > 1 && !!ops?.length && assignSpots(base, ops, ranges, fps) !== null;
 }
 
 export type ApplyPlan =
@@ -801,7 +801,7 @@ export function planApply(input: { from: Timeline; to: Timeline; head: Timeline;
     };
   }
   const keep = new Set(input.spots);
-  const owners = all ? null : verifiedOwners !== undefined ? verifiedOwners : assignSpots(from, ops, changeRanges, undefined, fps);
+  const owners = all ? null : verifiedOwners !== undefined ? verifiedOwners : assignSpots(from, ops, changeRanges, fps);
   const propertyEdits = ops.every(isPropertyEdit) ? ops : undefined;
   // A full property approval only needs to inspect the clips it depends on.
   const differences = all && propertyEdits ? [] : changedSpots(from, to, { fps });

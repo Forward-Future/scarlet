@@ -3,7 +3,7 @@ import type { Db } from "../db.js";
 import { conflict } from "../errors.js";
 
 /** Settings are a single JSON row; zod defaults fill anything missing. */
-export const DEFAULT_SETTINGS_INPUT = { transcription: {}, noteCleanup: {}, render: {} };
+const DEFAULT_SETTINGS_INPUT = { transcription: {}, noteCleanup: {}, render: {} };
 
 type LocalProvider = "whispercpp" | "none";
 export type DefaultProvider = LocalProvider | (() => LocalProvider);

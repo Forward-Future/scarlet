@@ -58,10 +58,10 @@ export interface MockDb {
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 
 export const PRJ = "prj_demo";
-export const PRJ_SHORT = "prj_short";
-export const MED_MAIN = "med_main";
+const PRJ_SHORT = "prj_short";
+const MED_MAIN = "med_main";
 export const MED_MUSIC = "med_music";
-export const MED_LOGO = "med_logo";
+const MED_LOGO = "med_logo";
 export const SAMPLE_TRANSCRIPTION_MODEL = "Whisper large-v3";
 
 export function mc(id: string, mediaId: string, sourceIn: number, sourceOut: number, timelineIn: number, extra: Partial<MediaClip> = {}): MediaClip {

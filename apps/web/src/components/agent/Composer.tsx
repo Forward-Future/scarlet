@@ -29,7 +29,7 @@ export function Composer(props: ComposerProps) {
   return project ? <ComposerBox {...props} project={project} /> : null;
 }
 
-export interface Rewording { id: string; text: string; onChange(text: string): void; onSave(text: string, skillIds?: string[]): Promise<void>; onCancel(): void }
+interface Rewording { id: string; text: string; onChange(text: string): void; onSave(text: string, skillIds?: string[]): Promise<void>; onCancel(): void }
 
 interface ComposerProps {
   /** What sits attached to the top of the message box: the requests queued behind the one Scarlet is on. */

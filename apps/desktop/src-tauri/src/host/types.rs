@@ -108,13 +108,6 @@ pub struct TaskEvent {
     pub data: Option<Value>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct TaskWithEvents {
-    pub task: Task,
-    #[serde(default)]
-    pub events: Vec<TaskEvent>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompleteTaskRequest {
@@ -218,6 +211,13 @@ pub struct RunResult {
     pub usage: Option<super::usage::AgentUsage>,
 }
 
+impl RunResult {
+    /// A run that failed before it could report anything else.
+    pub fn failed(error: impl Into<String>) -> Self {
+        RunResult { ok: false, error: Some(error.into()), ..Default::default() }
+    }
+}
+
 /// Matches the Scarlet question tool however the CLI namespaces it
 /// (mcp__scarlet__task_question, scarlet__task_question, task_question).
 pub fn is_question_tool(name: Option<&str>) -> bool {
@@ -279,6 +279,17 @@ pub fn tail_summary_max(texts: &[String], max: usize) -> String {
         format!("…{}", crate::util::js_slice_suffix(joined, max))
     } else {
         joined.to_string()
+    }
+}
+
+/// JavaScript truthiness for a JSON value: absent, null, false, "" and 0 are not.
+pub fn truthy(v: Option<&Value>) -> bool {
+    match v {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(Value::String(s)) => !s.is_empty(),
+        Some(Value::Number(n)) => n.as_f64().map(|f| f != 0.0).unwrap_or(true),
+        _ => true,
     }
 }
 
@@ -345,17 +356,12 @@ mod tests {
     }
 
     #[test]
-    fn reads_a_prompt_a_task_with_events_and_a_host() {
+    fn reads_a_prompt_and_a_host() {
         let prompt: TaskPrompt = serde_json::from_str(r#"{"systemPrompt":"SYS","instruction":"Do it"}"#).unwrap();
         assert_eq!((prompt.system_prompt.as_str(), prompt.instruction.as_str(), prompt.resume_session), ("SYS", "Do it", None));
         let resumed: TaskPrompt = serde_json::from_str(r#"{"systemPrompt":"SYS","instruction":"The editor said yes","resumeSession":"s1"}"#).unwrap();
         assert_eq!(resumed.resume_session.as_deref(), Some("s1"));
         assert!(serde_json::from_str::<TaskPrompt>(r#"{"instruction":"no system prompt"}"#).is_err());
-
-        let bare: TaskWithEvents = serde_json::from_str(r#"{"task":{"id":"t","projectId":"p","agent":"claude","instruction":"x"}}"#).unwrap();
-        assert!(bare.events.is_empty());
-        let with: TaskWithEvents = serde_json::from_str(r#"{"task":{"id":"t","projectId":"p","agent":"claude","instruction":"x"},"events":[{"type":"change","text":"Cut","data":{"changeId":"chg_1"},"at":"now","seq":4}]}"#).unwrap();
-        assert_eq!((with.events[0].kind.as_str(), with.events[0].data.as_ref().unwrap()["changeId"].as_str()), ("change", Some("chg_1")));
 
         let host: AgentHost = serde_json::from_str(r#"{"id":"host_1","name":"Mac (desktop)"}"#).unwrap();
         assert_eq!((host.id.as_str(), host.online, host.agents.len()), ("host_1", false, 0));

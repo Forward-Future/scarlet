@@ -12,9 +12,9 @@ function layerOf(trigger: HTMLElement | null) {
 }
 
 /** `title` is what the field says on hover, such as its whole value where a narrow place cuts it short. */
-export function PreferenceSelect<const T extends string | number>({ id, label, options, value, onChange, onClose, disabled, compact, valueLabel, shortcut, title }: {
+export function PreferenceSelect<const T extends string | number>({ id, label, options, value, onChange, onClose, disabled, compact, valueLabel, title }: {
   id?: string; label?: string; options: Choice<T>[]; value: T; onChange(value: NoInfer<T>): void; onClose?(): void;
-  disabled?: boolean; compact?: boolean; valueLabel?: string; shortcut?: string; title?: string;
+  disabled?: boolean; compact?: boolean; valueLabel?: string; title?: string;
 }) {
   const generatedId = useId();
   const triggerId = id ?? generatedId;
@@ -80,7 +80,7 @@ export function PreferenceSelect<const T extends string | number>({ id, label, o
 
   return <>
     <button type="button" role="combobox" ref={trigger} id={triggerId} aria-label={label} title={title} disabled={unavailable}
-      aria-keyshortcuts={shortcut} data-key={shortcut} aria-expanded={open} aria-controls={open ? list : undefined} aria-activedescendant={open ? list + "-" + index : undefined}
+      aria-expanded={open} aria-controls={open ? list : undefined} aria-activedescendant={open ? list + "-" + index : undefined}
       className={compact ? "preference-select compact" : "preference-select"} onBlur={() => setActive(null)}
       onMouseDown={e => e.preventDefault()}
       onClick={e => {

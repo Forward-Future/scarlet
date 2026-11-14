@@ -29,7 +29,6 @@ import { AmbientLight } from "../components/player/AmbientLight";
 import { cutFrameUrl, scrubFrameUrl } from "../components/review/thumbs";
 import { EditBeforePreview, useEditBefore, type BeforePlayback } from "../components/review/EditBeforePreview";
 import { useApprovalComparison } from "../components/review/SideBySideComparison";
-import type { EditCue } from "../components/review/EditReferences";
 import { PlayerTimeline, type TimelineDot, type TimelineGap } from "../components/review/TimelineScrubber";
 import { BeforeToggle } from "../components/review/BeforeToggle";
 import type { CutPlaybackWindow, PreparedCut } from "../components/review/usePrepareNextCut";
@@ -131,7 +130,6 @@ function SelectedCutFrame({ url, time, fps }: { url: string; time: number; fps: 
 
 interface PreviewProps {
   threadView?: ThreadTimelineView;
-  playFullCut?: boolean;
   workingCache: ReturnType<typeof usePlaybackCache>;
   draftVersion?: string;
   draft?: Timeline;
@@ -143,7 +141,6 @@ interface PreviewProps {
   autoPlaySource: boolean;
   change?: Change;
   spot: number;
-  cue?: EditCue;
   approval?: boolean;
   /**
    * The editor's presses that play the change, counted: the line that opens a suggestion says it plays it, as an edit's
@@ -153,9 +150,8 @@ interface PreviewProps {
   playChange?: number;
   active: boolean;
   onMedia(): void;
-  resumeTime?: number;
   /**
-   * Experimental simple workspace: the picture, a thin progress line and Before/After only.
+   * The simple workspace: the picture, a thin progress line and Before/After only.
    * compareHost puts an applied edit's Before/After in its card's row of controls.
    * It is null while the panel mounts, so the toggle waits for it instead of showing in the old row.
    * `above` sits right on top of the timeline, as the card for the edit on screen.
@@ -232,8 +228,8 @@ function CutSide({ project, timeline, url, window, parkedAt, active, fps, label,
     proposed={label === "Proposed draft"} onStart={noop} parkedAt={parkedAt} />;
 }
 
-export function CutPreview({ threadView, workingCache, draftVersion, draft, draftFailed, openingJoin, onRetryDraft, source, autoPlaySource, hasCut, change, spot, cue, approval = false, playChange, playFullCut = false, active,
-  onMedia, resumeTime, simple, joined }: PreviewProps) {
+export function CutPreview({ threadView, workingCache, draftVersion, draft, draftFailed, openingJoin, onRetryDraft, source, autoPlaySource, hasCut, change, spot, approval = false, playChange, active,
+  onMedia, simple, joined }: PreviewProps) {
   const current = useProjectStore(useShallow(s => {
     if (!s.current) return null;
     const { id, project, media, timeline, notes, versions, renderSettingsRevision, headError } = s.current;
@@ -383,7 +379,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const missingBefore = !applied && !pair?.beforeRange && !beforeRender ? pair?.before : null;
   useEffect(() => { if (missingBefore) void useProjectStore.getState().ensureRender(missingBefore); }, [missingBefore]);
   const editRange = (!approval && !draftVersion && !applied ? pair?.beforeRange ?? beforeRender?.range : undefined) ?? pair?.range ?? change?.ranges[spot];
-  const editStart = playFullCut ? 0 : cue?.time ?? resumeTime ?? (approval ? (approvalChange ?? change)?.ranges[spot]?.start ?? editRange?.start ?? 0 : editRange?.start);
+  const editStart = approval ? (approvalChange ?? change)?.ranges[spot]?.start ?? editRange?.start ?? 0 : editRange?.start;
   const beforeShown = useRef(false);
   const beforeClip = useRef<BeforePlayback>(null);
   // A click on the timeline outside the edit's passage stretches the passage to reach it, so the editor can hear
@@ -463,14 +459,14 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   useLayoutEffect(() => {
     if (editStart === undefined) return;
     player.pause();
-    player.seek(editStart, !!cue);
+    player.seek(editStart, false);
     // A press waits for the change's version to be up, then plays it once. Anything else that brings the change up
     // again finds the press already spent, and leaves it paused.
     if (!playable) return;
     const pressed = playChange !== playedChange.current;
     playedChange.current = playChange;
-    if ((playFullCut || pressed) && active) player.play();
-  }, [change?.id, spot, editStart, cue, draft?.version, playFullCut, playChange]);
+    if (pressed && active) player.play();
+  }, [change?.id, spot, editStart, draft?.version, playChange]);
 
   const passage = simple.holdPassage ? undefined : reached?.range ?? threadView?.selected?.range;
   useLayoutEffect(() => { shownPassage.current = passage; }, [passage]);
@@ -519,7 +515,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     // Before plays a clip of its own and a framing preview holds a still frame. Back on After, the passage plays from its top.
     // A framing preview stretched by a skip or a click outside it goes on from that point, as any edit's passage does.
     if (!passage || playingBefore || (framing && !reached)) played.current = undefined;
-    if ((playingBefore || (framing && !reached)) && simple?.heard) simple.heard.current = undefined;
+    if ((playingBefore || (framing && !reached)) && simple.heard) simple.heard.current = undefined;
     if (!passage || !active || !playable || !duration) return;
     // The clip moves the playhead as it plays. The player under it waits, and takes up from the playhead afterwards.
     if (playingBefore) return player.lendPlayhead({ pause: () => beforeClip.current?.pause() });
@@ -530,10 +526,10 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     // An edit goes by its first version: a revision that lands under it is still the passage the editor chose.
     const first = selectedEdit?.previous[0] ?? selectedEdit;
     const chosen = `${first?.changeId}/${first?.spot}/${threadView?.request}`;
-    const again = simple?.quiet?.current || (played.current ? played.current.chosen === chosen && (!reached || played.current.reached === reached) : !reached && simple?.heard?.current === chosen);
-    if (simple?.quiet) simple.quiet.current = false;
+    const again = simple.quiet?.current || (played.current ? played.current.chosen === chosen && (!reached || played.current.reached === reached) : !reached && simple.heard?.current === chosen);
+    if (simple.quiet) simple.quiet.current = false;
     played.current = { chosen, reached };
-    if (simple?.heard) simple.heard.current = chosen;
+    if (simple.heard) simple.heard.current = chosen;
     if (reached) {
       const release = player.previewRange(passage, fps, reached.at, again);
       // A drag holds the video paused until it ends, and its release carries on as it was. The store still says
@@ -548,7 +544,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const editedVersion = draft?.version ?? head;
   useLayoutEffect(() => {
     if (active && change && editedVersion) player.prepare();
-  }, [active, change?.id, editedVersion, spot, cue]);
+  }, [active, change?.id, editedVersion, spot]);
 
   const noteId = params.get("note");
   const linkedNotes = useMemo(() => noteId ? current.notes.filter(n => n.id === noteId) : undefined, [noteId, current.notes]);
@@ -675,7 +671,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
             <SelectedCutFrame key={JSON.stringify([fullVideoUrl, selectedFrameUrl])} time={selectedTime} url={selectedFrameUrl} fps={fps} />}
           {simple.label && <div className="simple-on-video" role="status">{simple.label}</div>}
           {playingBefore && originalChange && selectedEdit ? <EditBeforePreview key={threadView?.request}
-            change={originalChange} original={original} passage={selectedEdit.range} active={active} aspect={pictureAspect} loading={loading}
+            change={originalChange} original={original} passage={selectedEdit.range} active={active} loading={loading}
             clock={<PlayerTime end={duration} coarse />} playbackRef={beforeClip} />
             : framing && displayedTimeline ? <FramingPreview
             key={JSON.stringify([selection, threadView?.threadId, threadView?.selected?.changeId, threadView?.request])}

@@ -3,7 +3,7 @@ import { normalizeTranscriptToken, type AcousticFiller, type DialogueDetections 
 import { clipRange, rangesOverlap, timelineToSource, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 import { audibleMediaClips } from "./analysis.js";
 
-export interface FillerCue extends TimeRange {
+interface FillerCue extends TimeRange {
   whisper?: TranscriptWord;
   uhm?: AcousticFiller;
 }

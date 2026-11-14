@@ -1,4 +1,4 @@
-import type { Clip, MediaClip, Project, Timeline, TimeRange, Track } from "./schema.js";
+import type { Clip, MediaAsset, MediaClip, Project, Timeline, TimeRange, Track } from "./schema.js";
 
 export function clipDuration(clip: Clip): number {
   if (clip.kind === "media") {
@@ -65,6 +65,16 @@ export function snapToFrame(seconds: number, fps: number): number {
 export function timelineToSource(clip: MediaClip, t: number): number {
   const rel = Math.max(0, t - clip.timelineIn);
   return clip.sourceIn + rel * (clip.speed ?? 1);
+}
+
+/** Map a source time to where a media clip plays it on the timeline. Times outside the clip are not clamped. */
+export function sourceToTimeline(clip: MediaClip, sourceSeconds: number): number {
+  return clip.timelineIn + (sourceSeconds - clip.sourceIn) / (clip.speed ?? 1);
+}
+
+/** An audio file, or a video not known to be silent. */
+export function carriesAudio(asset: Pick<MediaAsset, "kind" | "hasAudio">): boolean {
+  return asset.kind === "audio" || (asset.kind === "video" && asset.hasAudio !== false);
 }
 
 /** Merge overlapping/adjacent ranges. */

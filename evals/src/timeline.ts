@@ -18,7 +18,7 @@ export interface MediaInfo {
 export interface SourceRange extends Range { mediaId: string }
 export interface TimelineWord extends PlayedWord { sourceStart: number; sourceEnd: number }
 
-export function carriesAudio(media: MediaInfo | undefined): boolean {
+function carriesAudio(media: MediaInfo | undefined): boolean {
   return !!media && (media.kind === "audio" || (media.kind === "video" && media.hasAudio !== false));
 }
 

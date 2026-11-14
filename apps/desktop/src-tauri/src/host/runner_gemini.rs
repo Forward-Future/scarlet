@@ -8,11 +8,10 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-use super::runner::{write_files, RunOptions, RunnerCommand};
-use super::runner_claude::stderr_tail;
+use super::runner::{cut_short, exit_error, write_files, RunOptions, RunnerCommand};
 use super::spawn::{resolve_cli, spawn_lines, SpawnLinesOptions};
 use super::usage::{gemini_usage, AgentUsage};
-use super::types::{brief, brief_input, is_question_tool, tail_summary, value_text, McpSpec, RunResult, RunnerEvent};
+use super::types::{brief, brief_input, is_question_tool, tail_summary, truthy, value_text, McpSpec, RunResult, RunnerEvent};
 
 #[derive(Debug, Default, Clone)]
 pub struct GeminiState {
@@ -47,16 +46,6 @@ fn content_text(content: Option<&Value>) -> String {
 
 fn first<'a>(msg: &'a Value, keys: &[&str]) -> Option<&'a Value> {
     keys.iter().find_map(|k| msg.get(*k)).filter(|v| !v.is_null())
-}
-
-fn truthy(v: Option<&Value>) -> bool {
-    match v {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Number(n)) => n.as_f64().map(|f| f != 0.0).unwrap_or(true),
-        _ => true,
-    }
 }
 
 /// Parse one JSONL line from `gemini -p --output-format stream-json`.
@@ -227,11 +216,11 @@ pub fn build_gemini_command(model: Option<&str>, system_prompt: &str, instructio
 pub async fn run_gemini(opts: RunOptions) -> RunResult {
     let bin = match opts.bin.clone().map(Ok).unwrap_or_else(|| resolve_cli("gemini", &opts.env)) {
         Ok(b) => b,
-        Err(e) => return RunResult { ok: false, error: Some(e.to_string()), ..Default::default() },
+        Err(e) => return RunResult::failed(e.to_string()),
     };
     let cmd = build_gemini_command(opts.model.as_deref(), &opts.system_prompt, &opts.instruction, &opts.mcp, &opts.cwd, &bin);
     if let Err(e) = write_files(&cmd.files).await {
-        return RunResult { ok: false, error: Some(e.to_string()), ..Default::default() };
+        return RunResult::failed(e.to_string());
     }
     let st = Arc::new(Mutex::new(GeminiState::default()));
     let st2 = st.clone();
@@ -259,18 +248,12 @@ pub async fn run_gemini(opts: RunOptions) -> RunResult {
     .await
     {
         Ok(o) => o,
-        Err(e) => return RunResult { ok: false, error: Some(e.to_string()), ..Default::default() },
+        Err(e) => return RunResult::failed(e.to_string()),
     };
     let s = st.lock().unwrap().clone();
     let usage = s.usage.clone().map(|u| u.or_model(opts.model.as_deref()));
-    if let Some(q) = s.question.clone() {
-        return RunResult { ok: true, summary: tail_summary(&s.texts), question: Some(q), question_posted: s.question_posted, exit_code: outcome.code, usage: usage.clone(), ..Default::default() };
-    }
-    if outcome.timed_out {
-        return RunResult { ok: false, summary: tail_summary(&s.texts), error: Some(if outcome.stalled { "stalled" } else { "timed out" }.into()), timed_out: true, stalled: outcome.stalled, exit_code: outcome.code, usage: usage.clone(), ..Default::default() };
-    }
-    if outcome.aborted {
-        return RunResult { ok: false, summary: tail_summary(&s.texts), error: Some("cancelled".into()), aborted: true, exit_code: outcome.code, usage: usage.clone(), ..Default::default() };
+    if let Some(result) = cut_short(&s.texts, s.question.as_ref(), s.question_posted, &outcome, &RunResult { usage: usage.clone(), ..Default::default() }) {
+        return result;
     }
     let success = s.result.as_ref().map(|(st, _)| st == "success").unwrap_or(false);
     let ok = s.failed.is_none() && (outcome.code == Some(0) || success);
@@ -280,7 +263,7 @@ pub async fn run_gemini(opts: RunOptions) -> RunResult {
         error: if ok {
             None
         } else {
-            Some(s.failed.clone().unwrap_or_else(|| format!("gemini exited with code {}{}", outcome.code.map(|c| c.to_string()).unwrap_or("null".into()), stderr_tail(&outcome.stderr))))
+            Some(s.failed.clone().unwrap_or_else(|| exit_error("gemini", &outcome)))
         },
         exit_code: outcome.code,
         usage,

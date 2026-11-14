@@ -20,7 +20,7 @@ const SLOW_CALL_MS = 1000;
  * What the editor reads when the window can't reach the engine, as while it restarts or Scarlet quits. The webview's
  * own words for that ("Load failed", "Failed to fetch") name no cause, and an engine shutting down answers with none.
  */
-export const ENGINE_UNREACHABLE = "Scarlet can’t reach its engine right now.";
+const ENGINE_UNREACHABLE = "Scarlet can’t reach its engine right now.";
 
 /** A request that never got an answer, in the words each webview (and Node) uses for it. */
 const unanswered = (err: unknown) => err instanceof TypeError &&

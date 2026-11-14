@@ -6,14 +6,14 @@ import { QueuedImg } from "./QueuedImg";
 import { useUiStore } from "../../stores/ui";
 
 /** How near, in pixels, a dragged end comes to the edge of a cut or an edit before it lands on it. */
-export const RANGE_SNAP_PX = 7;
+const RANGE_SNAP_PX = 7;
 /** A press on the ruler that moves less than this is a press, not a range: it moves the playhead as it always did. */
 const PRESS_SLOP_PX = 3;
 /** A handle held still this long opens the close-up. */
 export const HOLD_MS = 350;
 const HOLD_SLOP_PX = 4;
 /** In the close-up the end moves this many times slower than the pointer, one frame at a time. */
-export const PRECISE_SLOWDOWN = 10;
+const PRECISE_SLOWDOWN = 10;
 /** A drag that stops this still, for HOLD_MS, goes into the close-up where it is. */
 const STILL_SLOP_PX = 2;
 /** In the close-up, a hand that shifts less than this before letting go of a held press hasn't moved. */
@@ -21,7 +21,7 @@ const PRECISE_SLOP_PX = 2;
 /** The close-up's row of pictures: this many, each this many frames after the one before. */
 const LOUPE_PICTURES = 9, LOUPE_STEP_FRAMES = 3;
 
-export const toFrame = (time: number, fps: number) => Math.round(time * fps) / fps;
+const toFrame = (time: number, fps: number) => Math.round(time * fps) / fps;
 
 /** The edge within `reach` seconds of `time` that is nearest to it, if there is one. */
 export function snapTime(time: number, edges: readonly number[], reach: number) {

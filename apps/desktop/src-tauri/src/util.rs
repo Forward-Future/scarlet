@@ -348,7 +348,7 @@ impl<R: tokio::io::AsyncRead + Unpin> LossyLines<R> {
 
 pub fn now_iso() -> String {
     // RFC 3339 UTC with milliseconds, like `new Date().toISOString()`.
-    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let d = unix_now();
     let secs = d.as_secs() as i64;
     let millis = d.subsec_millis();
     let (y, mo, da, h, mi, s) = civil_from_unix(secs);
@@ -379,6 +379,11 @@ pub fn stderr_tail_line(stderr: &str) -> Option<String> {
     }
     let tail = lines[lines.len().saturating_sub(5)..].join(" | ");
     Some(if js_len(&tail) > 800 { format!("…{}", js_slice_suffix(&tail, 800)) } else { tail })
+}
+
+/// The time since 1970, UTC. Zero for a clock set before then.
+pub(crate) fn unix_now() -> std::time::Duration {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default()
 }
 
 pub(crate) fn civil_from_unix(t: i64) -> (i64, u32, u32, u32, u32, u32) {

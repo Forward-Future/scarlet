@@ -17,7 +17,7 @@ export function tokenCount(v: unknown): number {
 const has = (o: Raw, ...keys: string[]) => !!o && keys.some(k => typeof o[k] === "number");
 const modelName = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 200) : undefined);
 
-export function emptyUsage(model?: string): AgentUsage {
+function emptyUsage(model?: string): AgentUsage {
   return { model: modelName(model), inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
 }
 

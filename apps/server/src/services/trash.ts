@@ -3,7 +3,7 @@ import type { StorageSelection } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { checkedProjectDir, projectBusy, validateSelection } from "./storage.js";
 
-export const TRASH_DAYS = 30;
+const TRASH_DAYS = 30;
 const DAY = 24 * 60 * 60 * 1000;
 
 /** When a project moved to the Trash at `deletedAt` is removed for good. */

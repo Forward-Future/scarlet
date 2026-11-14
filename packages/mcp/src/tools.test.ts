@@ -8,7 +8,8 @@ import { emptyTimeline, makeMediaClip, OpError, timelineDuration, type MediaClip
 import { z } from "zod/v3";
 import { toolAnnotations } from "./annotations.js";
 import { syncRate } from "./audio-sync.js";
-import { createScarletMcpServer, describeError, formatZodError, transcriptionNote, validateOps, type ScarletMcpContext } from "./server.js";
+import { createScarletMcpServer, transcriptionNote, validateOps, type ScarletMcpContext } from "./server.js";
+import { describeError, formatZodError } from "./tool-result.js";
 import { makeState, startMockServer, type MockServer, type RecordedRequest } from "./mock-server.js";
 
 const transcript: Transcript = { id: "t1", mediaId: "m1", segments: [{ id: "s1", start: 0, end: 6, text: "Hello everyone welcome back.", words: [

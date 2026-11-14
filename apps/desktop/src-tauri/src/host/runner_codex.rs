@@ -1,11 +1,7 @@
 //! Codex CLI runner (port of apps/agent/src/runners/codex.ts).
 //!
-//!   codex exec --json --skip-git-repo-check --cd <cwd>
-//!         -c 'mcp_servers.scarlet.command="..."'
-//!         -c 'mcp_servers.scarlet.args=["..."]'
-//!         -c 'mcp_servers.scarlet.env_vars=["SCARLET_SERVER","SCARLET_TOKEN",...]'
-//!         --output-last-message <cwd>/.scarlet/last-message.md
-//!         [--model m] -  (instruction on stdin)
+//! `build_codex_command` has the command line: `codex exec --json` with the Scarlet MCP server as its only tool
+//! and the instruction on stdin.
 //!
 //! Runs are ephemeral: Codex sessions show up in the user's Codex app thread
 //! list. After a question, the answer reaches a fresh run through the replayed Q&A.
@@ -21,11 +17,10 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-use super::runner::{write_files, RunOptions, RunnerCommand};
-use super::runner_claude::stderr_tail;
+use super::runner::{cut_short, exit_error, write_files, RunOptions, RunnerCommand};
 use super::spawn::{resolve_cli, spawn_lines, SpawnLinesOptions};
 use super::usage::{add_usage, codex_usage, AgentUsage};
-use super::types::{brief, brief_input, is_question_tool, plan_event, tail_summary, value_text, McpSpec, PlanStep, RunResult, RunnerEvent};
+use super::types::{brief, brief_input, is_question_tool, plan_event, tail_summary, truthy, value_text, McpSpec, PlanStep, RunResult, RunnerEvent};
 
 #[derive(Debug, Default, Clone)]
 pub struct CodexState {
@@ -64,16 +59,6 @@ pub fn is_retry_notice(text: &str) -> bool {
 
 fn s(v: Option<&Value>) -> Option<String> {
     v.filter(|x| !x.is_null()).map(value_text)
-}
-
-fn truthy(v: Option<&Value>) -> bool {
-    match v {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Number(n)) => n.as_f64().map(|f| f != 0.0).unwrap_or(true),
-        _ => true,
-    }
 }
 
 /// Parse one JSONL line from `codex exec --json`.
@@ -328,13 +313,13 @@ pub async fn run_codex(mut opts: RunOptions) -> RunResult {
     opts.env.extend(opts.mcp.env.clone());
     let bin = match opts.bin.clone().map(Ok).unwrap_or_else(|| resolve_cli("codex", &opts.env)) {
         Ok(b) => b,
-        Err(e) => return RunResult { ok: false, error: Some(e.to_string()), ..Default::default() },
+        Err(e) => return RunResult::failed(e.to_string()),
     };
     let tmp_dir = opts.cwd.join(".scarlet");
     let _ = tokio::fs::create_dir_all(&tmp_dir).await;
     let built = build_codex_command(opts.model.as_deref(), opts.effort.as_deref(), opts.service_tier.as_deref(), &opts.system_prompt, &opts.instruction, opts.plan, &opts.mcp, &opts.cwd, &bin, &tmp_dir);
     if let Err(e) = write_files(&built.cmd.files).await {
-        return RunResult { ok: false, error: Some(e.to_string()), ..Default::default() };
+        return RunResult::failed(e.to_string());
     }
     let st = Arc::new(Mutex::new(CodexState::default()));
     let st2 = st.clone();
@@ -362,7 +347,7 @@ pub async fn run_codex(mut opts: RunOptions) -> RunResult {
     .await
     {
         Ok(o) => o,
-        Err(e) => return RunResult { ok: false, error: Some(e.to_string()), ..Default::default() },
+        Err(e) => return RunResult::failed(e.to_string()),
     };
     let s = st.lock().unwrap().clone();
     let usage = s.usage.clone().map(|u| u.or_model(opts.model.as_deref()));
@@ -373,14 +358,8 @@ pub async fn run_codex(mut opts: RunOptions) -> RunResult {
             last = Some(t.to_string());
         }
     }
-    if let Some(q) = s.question.clone() {
-        return RunResult { ok: true, summary: tail_summary(&s.texts), question: Some(q), question_posted: s.question_posted, exit_code: outcome.code, usage: usage.clone(), ..Default::default() };
-    }
-    if outcome.timed_out {
-        return RunResult { ok: false, summary: tail_summary(&s.texts), error: Some(if outcome.stalled { "stalled" } else { "timed out" }.into()), timed_out: true, stalled: outcome.stalled, exit_code: outcome.code, usage: usage.clone(), ..Default::default() };
-    }
-    if outcome.aborted {
-        return RunResult { ok: false, summary: tail_summary(&s.texts), error: Some("cancelled".into()), aborted: true, exit_code: outcome.code, usage: usage.clone(), ..Default::default() };
+    if let Some(result) = cut_short(&s.texts, s.question.as_ref(), s.question_posted, &outcome, &RunResult { usage: usage.clone(), ..Default::default() }) {
+        return result;
     }
     let ok = s.failed.is_none() && (outcome.code == Some(0) || s.turn_completed);
     RunResult {
@@ -389,7 +368,7 @@ pub async fn run_codex(mut opts: RunOptions) -> RunResult {
         error: if ok {
             None
         } else {
-            Some(s.failed.clone().or_else(|| s.retry_notice.clone()).unwrap_or_else(|| format!("codex exited with code {}{}", outcome.code.map(|c| c.to_string()).unwrap_or("null".into()), stderr_tail(&outcome.stderr))))
+            Some(s.failed.clone().or_else(|| s.retry_notice.clone()).unwrap_or_else(|| exit_error("codex", &outcome)))
         },
         exit_code: outcome.code,
         usage,

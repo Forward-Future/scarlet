@@ -1,8 +1,8 @@
 import type { RetakeGroup } from "@scarlet/shared";
-import type { MediaAsset, TimeRange, Timeline } from "@scarlet/timeline";
-import { mediaClipsFor, sourceToTimeline, speechAssets } from "../../lib/transcriptMap";
+import { sourceToTimeline, type MediaAsset, type TimeRange, type Timeline } from "@scarlet/timeline";
+import { mediaClipsFor, speechAssets } from "../../lib/transcriptMap";
 
-export interface CutSource extends TimeRange { mediaId: string }
+interface CutSource extends TimeRange { mediaId: string }
 export interface OtherTake extends TimeRange {
   text: string;
   /** Where this take plays on the timeline, when the timeline still has it. */

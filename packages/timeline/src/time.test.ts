@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampRange, clipDuration, clock, clipEnd, clipRange, clipsAt, emptyTimeline, frameAlignedRemoval, filmstripBatches, FILMSTRIP_SEEK_BATCH, makeMediaClip, planSegments,
-  rangesOverlap, mergeRanges, snapToFrame, sourceClockAnchors, sparseFilmstrip, timelineDuration, timelineToSource, trackDuration, withHandles,
+  rangesOverlap, mergeRanges, snapToFrame, sourceClockAnchors, sourceToTimeline, carriesAudio, sparseFilmstrip, timelineDuration, timelineToSource, trackDuration, withHandles,
   MAX_TIMELINE_SECONDS, planPlaybackSegments, WritableTimeline, type ColorClip, type Timeline,
 } from "./index.js";
 
@@ -12,6 +12,16 @@ function timeline(...clips: Timeline["tracks"][number]["clips"]): Timeline {
   tl.tracks[0]!.clips = clips;
   return tl;
 }
+
+it("counts audio files and videos not known to be silent as carrying audio", () => {
+  expect(carriesAudio({ kind: "audio" })).toBe(true);
+  expect(carriesAudio({ kind: "audio", hasAudio: false })).toBe(true);
+  expect(carriesAudio({ kind: "video" })).toBe(true);
+  expect(carriesAudio({ kind: "video", hasAudio: true })).toBe(true);
+  expect(carriesAudio({ kind: "video", hasAudio: false })).toBe(false);
+  expect(carriesAudio({ kind: "image" })).toBe(false);
+  expect(carriesAudio({ kind: "image", hasAudio: true })).toBe(false);
+});
 
 it("rejects new and historical versions beyond the planning budget before enumerating sections", () => {
   const stored = timeline(card(0, MAX_TIMELINE_SECONDS + 1));
@@ -40,6 +50,10 @@ describe("clip and timeline lengths", () => {
     expect(timelineToSource(fast, 8)).toBe(16);
     // A time before the clip maps to its first source frame.
     expect(timelineToSource(fast, 1)).toBe(10);
+    expect(sourceToTimeline(fast, 16)).toBe(8);
+    // A source time outside the clip is not clamped.
+    expect(sourceToTimeline(fast, 6)).toBe(3);
+    expect(sourceToTimeline(makeMediaClip("m", 10, 30, 5), 12)).toBe(7);
     expect(clipDuration(makeMediaClip("m", 30, 10, 0))).toBe(0);
     expect(clipDuration(card(6, 2))).toBe(0);
     expect(clipEnd(card(2, 6))).toBe(6);

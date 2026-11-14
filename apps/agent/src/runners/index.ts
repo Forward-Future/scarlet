@@ -1,4 +1,5 @@
 import { AgentOptionId, type AgentId } from "@scarlet/shared";
+import { MODEL_ID } from "../modelCatalog.js";
 import { runClaude } from "./claude.js";
 import { runCodex } from "./codex.js";
 import { runGemini } from "./gemini.js";
@@ -19,7 +20,7 @@ export function runnerFor(agent: AgentId): RunAgentFn {
 /** Dispatch on opts.agent. */
 export const runAgent: RunAgentFn = async (opts: RunAgentOptions): Promise<RunAgentResult> => {
   // Model and effort are launcher arguments, including on Windows batch shims.
-  if ((opts.model && !/^[a-z0-9][a-z0-9._:/@+\[\]-]*$/i.test(opts.model)) ||
+  if ((opts.model && !MODEL_ID.test(opts.model)) ||
       [opts.effort, opts.serviceTier].some(id => id !== undefined && !AgentOptionId.safeParse(id).success)) {
     return { ok: false, summary: "", error: "Invalid model or model option" };
   }

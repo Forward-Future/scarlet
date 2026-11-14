@@ -1,6 +1,6 @@
 import { normalizeTranscriptToken } from "@scarlet/shared";
 import { clipEnd, rangesOverlap, timelineToSource, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
-import { round3 } from "./analysis.js";
+import { isTag, round3 } from "./analysis.js";
 import { dialogueAudioStream, dialogueClips, type AudioLevels } from "./dialogue-join.js";
 import type { DialoguePlanSources } from "./dialogue-plan.js";
 import { timelineJoins } from "./timeline-perception.js";
@@ -125,7 +125,7 @@ export async function measureQuietKeptWords(pieces: SourcePiece[], sources: Dial
     const words = await sources.words(mediaId, retained.end, false).catch(() => null);
     const kept = words?.filter(w => {
       const middle = (w.start + w.end) / 2;
-      return middle >= retained.start && middle < retained.end && !/^\s*\[.*\]\s*$/.test(w.text) && normalizeTranscriptToken(w.text);
+      return middle >= retained.start && middle < retained.end && !isTag(w.text) && normalizeTranscriptToken(w.text);
     });
     if (kept?.length !== 1) return;
     const word = kept[0]!;
@@ -133,7 +133,7 @@ export async function measureQuietKeptWords(pieces: SourcePiece[], sources: Dial
     // The independent cached speech reading can confirm a very quiet voice or locate the same word nearby.
     // Missing emissions leave the waveform evidence available to the agent without starting transcription.
     const heard = await sources.readKeptWords?.(mediaId, 0, Math.max(0, retained.start - CONTEXT), Math.min(page.end, retained.end + CONTEXT), true).catch(() => []);
-    const speech = heard?.filter(w => normalizeTranscriptToken(w.text) && !/^\s*\[.*\]\s*$/.test(w.text));
+    const speech = heard?.filter(w => normalizeTranscriptToken(w.text) && !isTag(w.text));
     if (speech?.some(w => (w.start + w.end) / 2 >= retained.start && (w.start + w.end) / 2 < retained.end)) return;
     const candidates = speech?.filter(w => normalizeTranscriptToken(w.text) === normalizeTranscriptToken(word.text) && rangesOverlap(w, nearby));
     const heardNearby = candidates?.length === 1 ? rounded(candidates[0]!) : undefined;

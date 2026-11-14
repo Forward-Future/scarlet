@@ -157,7 +157,7 @@ export function replayHistoryEdit(base: Timeline, next: Timeline, onto: Timeline
     if (original && change && (change.fromVersion !== base.version || change.approvedSpots)) {
       const proposedOn = original();
       const owners = change.approvedSpots && (change.spotAssignment?.fps === fps ? change.spotAssignment.owners :
-        assignSpots(proposedOn, ops.data, change.ranges, undefined, fps));
+        assignSpots(proposedOn, ops.data, change.ranges, fps));
       if (change.approvedSpots && !owners) conflict("the approved spots");
       const selected = new Set(change.approvedSpots);
       recorded = [];

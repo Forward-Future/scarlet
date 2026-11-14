@@ -54,28 +54,28 @@ export function taskRoutes(ctx: Ctx) {
     // The request, the pass that now waits for it and the note of it are saved together: a request saved alone
     // would leave its pass to apply over the call it sends back.
     const task = ctx.db.transaction(() => {
-    const task = createTask(ctx, {
-      projectId: project.id,
-      kind: body.kind,
-      agent: body.agent,
-      model: body.model,
-      effort: body.effort,
-      fast: body.fast,
-      serviceTier: body.serviceTier,
-      instruction,
-      context: { ...(body.context ?? {}), ...(threadId || aboutCut ? { message: said, asked: said === body.instruction ? undefined : body.instruction } : {}) },
-      createdBy: actorFor(user),
-    });
-    // A pass set to apply when Scarlet finishes waits for a call the editor sends back, instead of applying over it.
-    if (changeId && cutIndex !== undefined) callSentBack(ctx, task);
-    logActivity(ctx, {
-      projectId: project.id,
-      actor: actorFor(user),
-      type: "request.created",
-      summary: `${user.name} asked ${agentName(task.agent)}: ${quote(task.context.message ?? body.instruction, 120)}${threadId ? " (follow-up)" : ""}`,
-      data: { taskId: task.id, threadId: task.context.threadId },
-    });
-    return task;
+      const task = createTask(ctx, {
+        projectId: project.id,
+        kind: body.kind,
+        agent: body.agent,
+        model: body.model,
+        effort: body.effort,
+        fast: body.fast,
+        serviceTier: body.serviceTier,
+        instruction,
+        context: { ...(body.context ?? {}), ...(threadId || aboutCut ? { message: said, asked: said === body.instruction ? undefined : body.instruction } : {}) },
+        createdBy: actorFor(user),
+      });
+      // A pass set to apply when Scarlet finishes waits for a call the editor sends back, instead of applying over it.
+      if (changeId && cutIndex !== undefined) callSentBack(ctx, task);
+      logActivity(ctx, {
+        projectId: project.id,
+        actor: actorFor(user),
+        type: "request.created",
+        summary: `${user.name} asked ${agentName(task.agent)}: ${quote(task.context.message ?? body.instruction, 120)}${threadId ? " (follow-up)" : ""}`,
+        data: { taskId: task.id, threadId: task.context.threadId },
+      });
+      return task;
     }, "immediate")();
     return c.json({ task }, 201);
   });
@@ -84,9 +84,8 @@ export function taskRoutes(ctx: Ctx) {
     const project = requireProjectHeader(ctx, c.req.param("id"));
     const state = c.req.query("state");
     // A skill edit and a learning check only borrow the project to run in. Neither is part of its conversation.
-    const tasks = state
-      ? ctx.repos.tasks.select("project_id = ? AND kind NOT IN ('skill_edit', 'learning_check') AND state = ?", [project.id, TaskState.parse(state)], "created_at DESC")
-      : ctx.repos.tasks.select("project_id = ? AND kind NOT IN ('skill_edit', 'learning_check')", [project.id], "created_at DESC");
+    const tasks = ctx.repos.tasks.select("project_id = ? AND kind NOT IN ('skill_edit', 'learning_check')" + (state ? " AND state = ?" : ""),
+      state ? [project.id, TaskState.parse(state)] : [project.id], "created_at DESC");
     const conversation = c.req.query("events") === "conversation"
       ? ctx.repos.taskEvents.conversations(tasks.filter(t => t.kind !== "transcribe").map(t => t.id)) : undefined;
     return c.json({ tasks, conversation });

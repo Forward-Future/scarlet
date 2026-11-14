@@ -187,7 +187,7 @@ export async function buildCase(engine: Engine, opts: BuildOptions): Promise<{ f
   return { file, dir, warnings };
 }
 
-export async function datasetCli(argv = process.argv.slice(2)) {
+async function datasetCli(argv = process.argv.slice(2)) {
   const { values, positionals } = cli({
     project: { type: "string" }, "from-task": { type: "string" }, source: { type: "string" },
     "reference-version": { type: "string" }, "reference-decisions": { type: "boolean" }, "with-scan": { type: "boolean" }, fingerprint: { type: "string" },

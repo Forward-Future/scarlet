@@ -1,9 +1,42 @@
 import { describe, expect, it } from "vitest";
 import { applyOps } from "./ops.js";
 import { emptyTimeline, makeMediaClip } from "./builders.js";
-import { timelineDuration } from "./time.js";
-import type { MediaAsset } from "./schema.js";
-import { audioCrossfadeOps, crossfadeJoins, playedEdges, replayJoinFades, rippleJoins } from "./joinCrossfade.js";
+import { clipEnd, timelineDuration } from "./time.js";
+import type { MediaAsset, Timeline } from "./schema.js";
+import { audioCrossfadeOps, crossfadeJoins, replayJoinFades, rippleJoins } from "./joinCrossfade.js";
+
+const EPS = 1e-6;
+
+/**
+ * Every clip edge on the tracks that play, as the cut is heard: a centered crossfade's two overlapping edges are the one
+ * join at its centre, where its cut was.
+ */
+function playedEdges(timeline: Timeline): number[] {
+  const edges: number[] = [];
+  for (const track of timeline.tracks) {
+    if (track.kind === "caption") continue;
+    const clips = track.clips;
+    const inside = new Set<number>();
+    for (let i = 0; i < clips.length; i++) {
+      const left = clips[i]!;
+      const leftEnd = clipEnd(left);
+      for (let j = i + 1; left.kind === "media" && left.audioFadeOut && j < clips.length && clips[j]!.timelineIn < leftEnd - EPS; j++) {
+        const right = clips[j]!;
+        const overlap = leftEnd - right.timelineIn;
+        if (right.kind !== "media" || right.timelineIn <= left.timelineIn + EPS || Math.abs(left.audioFadeOut - overlap) > EPS ||
+            Math.abs(right.audioFadeIn - overlap) > EPS) continue;
+        inside.add(i * 2 + 1).add(j * 2);
+        edges.push(right.timelineIn + overlap / 2);
+        break;
+      }
+    }
+    clips.forEach((clip, i) => {
+      if (!inside.has(i * 2)) edges.push(clip.timelineIn);
+      if (!inside.has(i * 2 + 1)) edges.push(clipEnd(clip));
+    });
+  }
+  return edges;
+}
 
 const media: MediaAsset[] = [{ id: "m", kind: "video", name: "Interview", path: "interview", duration: 12, hasAudio: true }];
 const joins = [{ leftClipId: "a", rightClipId: "b" }, { leftClipId: "b", rightClipId: "c" }];

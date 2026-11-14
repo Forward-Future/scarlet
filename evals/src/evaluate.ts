@@ -164,7 +164,7 @@ export async function evaluateCaseOrigin(loaded: LoadedCase, opts: Omit<Evaluate
 
 type ReferenceInput = NonNullable<Parameters<typeof scoreRun>[0]["reference"]>;
 
-export function evaluateArtifacts(a: Artifacts, evidence: ReadonlyMap<string, MediaEvidence>, reference: ReferenceInput | undefined, opts: EvaluateOptions = {}): Evaluation {
+function evaluateArtifacts(a: Artifacts, evidence: ReadonlyMap<string, MediaEvidence>, reference: ReferenceInput | undefined, opts: EvaluateOptions = {}): Evaluation {
   const edgeOptions = opts.edgeOptions ?? DEFAULT_EDGE_OPTIONS;
   const score = scoreRun({
     media: a.media,

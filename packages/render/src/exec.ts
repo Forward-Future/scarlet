@@ -267,8 +267,6 @@ export interface RunFfmpegOptions {
   signal?: AbortSignal;
   /** Called with the output timestamp (seconds) each time ffmpeg reports progress. */
   onProgress?: (outTimeSeconds: number) => void;
-  /** Working directory (relative paths in concat lists etc.). */
-  cwd?: string;
 }
 
 /**
@@ -289,7 +287,6 @@ export function runFfmpeg(args: string[], opts: RunFfmpegOptions = {}): Promise<
     const child = spawn(bin, full, {
       stdio: ["ignore", opts.onProgress ? "pipe" : "ignore", "pipe"],
       windowsHide: true,
-      cwd: opts.cwd,
     });
     let err = "";
     let aborted = false;

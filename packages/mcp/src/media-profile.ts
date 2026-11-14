@@ -65,7 +65,7 @@ export function pauseStats(words: TranscriptWord[]) {
   });
 }
 
-export interface Clause { from: number; to: number; start: number; end: number; text: string; tokens: string[] }
+interface Clause { from: number; to: number; start: number; end: number; text: string; tokens: string[] }
 
 /** Split words into clauses at sentence ends and pauses of 0.5 s or more. `from`/`to` are word indices. */
 export function clauses(words: TranscriptWord[]): Clause[] {
@@ -88,8 +88,8 @@ export function clauses(words: TranscriptWord[]): Clause[] {
  * restarts the next one ("So today we" / "So today we're going to…") scores by containment.
  * Evidence only: deliberate repetition and callbacks look the same.
  */
-export function retakeGroups(words: TranscriptWord[], opts: { window?: number; minScore?: number; limit?: number } = {}) {
-  const { window = 90, minScore = .6, limit = 30 } = opts;
+export function retakeGroups(words: TranscriptWord[]) {
+  const window = 90, minScore = .6, limit = 30;
   const list = clauses(words);
   const pairs: Array<{ a: number; b: number; score: number }> = [];
   for (let i = 0; i < list.length; i++) {

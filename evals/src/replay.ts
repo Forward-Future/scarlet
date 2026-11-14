@@ -37,7 +37,7 @@ best reproduces the original run is used (the run's own detector settings).
 
 type Tier = "applied" | "review" | "kept";
 
-export interface ReplayedCut {
+interface ReplayedCut {
   index: number;
   kind?: string;
   decision?: string;
@@ -76,7 +76,7 @@ export interface ReplayResult {
 }
 
 /** The tool's join evidence for each stored scan window. */
-export function scanEvidence(capture: ScanCapture, waveforms: ScanWaveforms): DialogueEvidence {
+function scanEvidence(capture: ScanCapture, waveforms: ScanWaveforms): DialogueEvidence {
   const evidence = new DialogueEvidence();
   for (const page of capture.pages) {
     const w = waveforms[windowKey(page.from, page.to)];
@@ -309,7 +309,7 @@ export function partsMarkdown(r: PartsResult, baseline?: PartsResult): string {
 }
 
 /** Per-range differences between two replays of the same plan (e.g. before and after a code edit). */
-export function compareReplays(before: ReplayResult, after: ReplayResult) {
+function compareReplays(before: ReplayResult, after: ReplayResult) {
   const changes: Array<{ index: number; kind?: string; before: ReplayedCut["replay"]; after: ReplayedCut["replay"] }> = [];
   for (const a of after.cuts) {
     const b = before.cuts.find(c => c.index === a.index);
@@ -320,7 +320,7 @@ export function compareReplays(before: ReplayResult, after: ReplayResult) {
 
 const fmt = (o: Record<string, number>) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(", ") || "none";
 
-export function replayMarkdown(r: ReplayResult, diff?: ReturnType<typeof compareReplays>, baseline?: string): string {
+function replayMarkdown(r: ReplayResult, diff?: ReturnType<typeof compareReplays>, baseline?: string): string {
   const e = (s: EdgeSummary) => `${s.speech}/${s.total} on speech, ${s.silence} silent, ${s.onGrid["1s+0.48"] ?? 0} on the 0.48 grid`;
   const lines = [
     `# Replay · case ${r.caseId}${r.taskId ? ` · ${r.taskId}` : ""}`, "",
@@ -350,7 +350,7 @@ export function replayMarkdown(r: ReplayResult, diff?: ReturnType<typeof compare
   return lines.join("\n") + "\n";
 }
 
-export async function replayCli(argv = process.argv.slice(2)) {
+async function replayCli(argv = process.argv.slice(2)) {
   const { values } = cli({ case: { type: "string" }, plan: { type: "string" }, fingerprint: { type: "string" }, baseline: { type: "string" }, out: { type: "string" },
     "drop-quotes": { type: "boolean" }, parts: { type: "boolean" } }, USAGE, argv);
   if (!values.case) throw new Error(USAGE);

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Map, Value};
 
-use super::runner::{write_files, RunOptions, RunnerCommand};
+use super::runner::{cut_short, exit_error, write_files, RunOptions, RunnerCommand};
 use super::spawn::{resolve_cli, spawn_lines, SpawnLinesOptions};
 use super::usage::{add_usage, claude_usage, AgentUsage};
 use super::types::{brief, brief_input, is_question_tool, plan_event, pretty_tool_name, tail_summary, value_text, McpSpec, PlanStep, RunResult, RunnerEvent};
@@ -397,12 +397,12 @@ pub fn build_claude_command(model: Option<&str>, effort: Option<&str>, service_t
 pub async fn run_claude(opts: RunOptions) -> RunResult {
     let bin = match opts.bin.clone().map(Ok).unwrap_or_else(|| resolve_cli("claude", &opts.env)) {
         Ok(b) => b,
-        Err(e) => return RunResult { ok: false, error: Some(e.to_string()), ..Default::default() },
+        Err(e) => return RunResult::failed(e.to_string()),
     };
     let tmp_dir = opts.cwd.join(".scarlet");
     let cmd = build_claude_command(opts.model.as_deref(), opts.effort.as_deref(), opts.service_tier.as_deref(), &opts.system_prompt, &opts.instruction, opts.resume_session.as_deref(), can_run_bare(&opts.env), opts.plan, &opts.mcp, &bin, &tmp_dir);
     if let Err(e) = write_files(&cmd.files).await {
-        return RunResult { ok: false, error: Some(e.to_string()), ..Default::default() };
+        return RunResult::failed(e.to_string());
     }
 
     let st = Arc::new(Mutex::new(ClaudeState::default()));
@@ -437,7 +437,7 @@ pub async fn run_claude(opts: RunOptions) -> RunResult {
     .await
     {
         Ok(o) => o,
-        Err(e) => return RunResult { ok: false, error: Some(e.to_string()), ..Default::default() },
+        Err(e) => return RunResult::failed(e.to_string()),
     };
 
     let s = st.lock().unwrap().clone();
@@ -446,14 +446,8 @@ pub async fn run_claude(opts: RunOptions) -> RunResult {
         usage: claude_run_usage(&s, opts.model.as_deref()),
         ..Default::default()
     };
-    if let Some(q) = s.question.clone() {
-        return RunResult { ok: true, summary: tail_summary(&s.texts), question: Some(q), question_posted: s.question_posted, exit_code: outcome.code, ..session };
-    }
-    if outcome.timed_out {
-        return RunResult { ok: false, summary: tail_summary(&s.texts), error: Some(if outcome.stalled { "stalled" } else { "timed out" }.into()), timed_out: true, stalled: outcome.stalled, exit_code: outcome.code, ..session };
-    }
-    if outcome.aborted {
-        return RunResult { ok: false, summary: tail_summary(&s.texts), error: Some("cancelled".into()), aborted: true, exit_code: outcome.code, ..session };
+    if let Some(result) = cut_short(&s.texts, s.question.as_ref(), s.question_posted, &outcome, &session) {
+        return result;
     }
     let ok = !s.result_is_error && (outcome.code == Some(0) || s.result.is_some());
     let summary = match s.result.as_deref() {
@@ -465,18 +459,9 @@ pub async fn run_claude(opts: RunOptions) -> RunResult {
     } else if s.result_is_error {
         s.result.clone()
     } else {
-        Some(format!("claude exited with code {}{}", outcome.code.map(|c| c.to_string()).unwrap_or("null".into()), stderr_tail(&outcome.stderr)))
+        Some(exit_error("claude", &outcome))
     };
     RunResult { ok, summary, error, exit_code: outcome.code, resume_failed: !ok && opts.resume_session.is_some() && !s.started, ..session }
-}
-
-pub fn stderr_tail(stderr: &str) -> String {
-    let t = stderr.trim();
-    if t.is_empty() {
-        String::new()
-    } else {
-        format!(": {}", crate::util::js_slice_suffix(t, 800))
-    }
 }
 
 #[cfg(test)]

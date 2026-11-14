@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { absTime, authorLabel, clock, clockRange, durationLabel, fmtBytes, initials, pct, lengthLabel, playbackClock, plural, relTime, removedSeconds, tc, tokenBreakdown, tokenLabel, trashedLine } from "./format";
+import { absTime, authorLabel, clock, clockRange, fmtBytes, initials, pct, lengthLabel, playbackClock, plural, relTime, removedSeconds, tokenBreakdown, tokenLabel, trashedLine } from "./format";
 
 afterEach(() => vi.useRealTimers());
 
@@ -79,17 +79,6 @@ it("reads the player's position to the millisecond, carrying a rounded-up millis
   expect(playbackClock(-1)).toBe("0:00.000");
 });
 
-it("words a length in the largest units that fit, and an unknown length as a dash", () => {
-  expect(durationLabel(0.4)).toBe("0s");
-  expect(durationLabel(59.4)).toBe("59s");
-  expect(durationLabel(59.6)).toBe("1m 00s");
-  expect(durationLabel(125)).toBe("2m 05s");
-  expect(durationLabel(3599.6)).toBe("1h 0m");
-  expect(durationLabel(7384)).toBe("2h 3m");
-  expect(durationLabel(NaN)).toBe("–");
-  expect(durationLabel(Infinity)).toBe("–");
-});
-
 it("sizes a file in the unit that reads best", () => {
   expect(fmtBytes(0)).toBe("0 B");
   expect(fmtBytes(1023)).toBe("1023 B");
@@ -150,5 +139,4 @@ it("keeps a share between 0 and 100 percent, counts things in the singular or pl
   expect(plural(1, "cut")).toBe("1 cut");
   expect(plural(0, "cut")).toBe("0 cuts");
   expect(plural(2, "reply", "replies")).toBe("2 replies");
-  expect(tc(61.5, 30)).toBe("1:01.15");
 });

@@ -1,14 +1,13 @@
 import { appliedReviewChange, CutAssessment, isPublishedCall, type Change } from "@scarlet/timeline";
 import { Hono } from "hono";
 import { z } from "zod/v3";
-import { namedTimelineEdits, ApproveRequest, FlagEditRequest, CutChoicesRequest, ChangeState, DialogueCutsRequest, ProposeChangeRequest, ReviseRequest, StagedCutRevision } from "@scarlet/shared";
+import { namedTimelineEdits, ApproveRequest, FlagEditRequest, CutChoicesRequest, ChangeState, DialogueCutsRequest, ProposeChangeRequest, ReviseRequest, sameRun, StagedCutRevision } from "@scarlet/shared";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest, conflict, notFound } from "../errors.js";
-import { approveChange, changeDiff, flagEdit, saveCutChoices, prepareCutReview, prepareFirstDecision, proposeChange, recordPlayableDecision, scheduleSpotCheck, submitDialogueCuts, rejectChange, reopenChange, reviseChange, reviseStagedCut, unapproveChange, withSpotCapability } from "../services/changes.js";
+import { approveChange, changeDiff, flagEdit, saveCutChoices, prepareCutReview, prepareFirstDecision, proposeChange, recordPlayableDecision, requireUnscopedEdit, scheduleSpotCheck, submitDialogueCuts, rejectChange, reopenChange, reviseChange, reviseStagedCut, unapproveChange, withSpotCapability } from "../services/changes.js";
 import { jsonBody, requireProjectHeader, TIMELINE_JSON_BYTES } from "./util.js";
 import { requestAttempt, requireProjectEditAttempt } from "../services/taskAttempt.js";
-import { requireUnscopedEdit } from "../services/changes.js";
 
 export function changeRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
@@ -78,9 +77,8 @@ export function changeRoutes(ctx: Ctx) {
   r.get("/projects/:id/changes", (c) => {
     const project = requireProjectHeader(ctx, c.req.param("id"));
     const state = c.req.query("state");
-    const changes = state
-      ? ctx.repos.changes.select("project_id = ? AND state = ?", [project.id, ChangeState.parse(state)], "created_at DESC")
-      : ctx.repos.changes.select("project_id = ?", [project.id], "created_at DESC");
+    const changes = ctx.repos.changes.select("project_id = ?" + (state ? " AND state = ?" : ""),
+      state ? [project.id, ChangeState.parse(state)] : [project.id], "created_at DESC");
     for (const change of changes) scheduleSpotCheck(ctx, change, project.settings.fps);
     return c.json({ changes });
   });
@@ -111,7 +109,7 @@ export function changeRoutes(ctx: Ctx) {
       const change = requireChange(c.req.param("changeId"), c.req.param("projectId"));
       const task = requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), change.projectId);
       const owner = change.taskId && ctx.repos.tasks.get(change.taskId);
-      requireUnscopedEdit(ctx, task, !!task && !!owner && (owner.resumeRootId ?? owner.id) === (task.resumeRootId ?? task.id));
+      requireUnscopedEdit(ctx, task, !!task && !!owner && sameRun(task, owner));
       // A recommendation describes the proposal itself, so it still holds after the edit moves on: approval carries the cuts across.
       if (change.state !== "ready" || change.intent !== "suggestion" || change.fromVersion !== body.fromVersion || change.toVersion !== body.toVersion)
         throw conflict("cut_review_stale", "Reopen the proposal for the current edit.");

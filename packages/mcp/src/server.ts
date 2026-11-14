@@ -5,7 +5,6 @@ import { matchAudio, syncRate } from "./audio-sync.js";
  * propose changes. Everything goes through a `ScarletClient`; the server can
  * be run over stdio (see cli.ts) or embedded in-process.
  */
-import { cutScope, selectedRange } from "./cut-scope.js";
 import { audibleSourcePoints, cutsReach, dialogueGate, dialogueScanPage, planDialogueCuts, resolveCutRange, SPEECH_BESIDE_EDGE, type DialoguePlanSources } from "./dialogue-plan.js";
 import { inspectDialogueSuggestion, MAX_WHOLE_PICTURE_SHEETS, type DialogueInspection } from "./dialogue-review.js";
 import { Lanes, ReviewInspections, urgencyRank, type InspectionRequest } from "./review-prep.js";
@@ -15,11 +14,9 @@ import { resolveOutgoingPause } from "./outgoing-pause.js";
 import { DialogueEvidence, matchFillers } from "./dialogue-decisions.js";
 import { acousticRetakeContinuations, acousticRetakeJoin, type AcousticRetakePage } from "./dialogue-retake-join.js";
 import { acousticRepeatedTakes, findRepeatedTakes } from "./dialogue-retakes.js";
-import { audioCrossfadeOps } from "./audio-crossfade.js";
 import { firstCutRanges } from "./first-cut-ranges.js";
 import { InsetFraming, insetFraming, syncPictureOps } from "./sync-layout.js";
 import { createHash } from "node:crypto";
-import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdtemp } from "node:fs/promises";
 import { readArtifact, writeArtifact } from "./workspace-files.js";
 import { tmpdir } from "node:os";
@@ -27,13 +24,13 @@ import { basename, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod/v3";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { boundedRippleOps, rippleDrift, cutAnchorOn, taskDialogueOperation, agentCapabilities, DEFAULT_RESULT_CHARS, type AgentCapabilities, JOIN_WORD_SECONDS, fuzzySearchTranscript, apiPathId, disabledEditingTools, type EditingTools, type ScarletToolName,
+import { boundedRippleOps, rippleDrift, cutAnchorOn, cutScope, selectedRange, flattenWords, searchTranscript, taskDialogueOperation, agentCapabilities, DEFAULT_RESULT_CHARS, type AgentCapabilities, JOIN_WORD_SECONDS, fuzzySearchTranscript, apiPathId, disabledEditingTools, type EditingTools, type ScarletToolName,
   CrossfadeFrames, SheetOptions, SheetRequest, CutReviewOptions, SourceAudioOptions, SoundPictureOptions, type InspectionResult, type InspectionWindow, type DialogueDetections, type PictureActivityWindow, ScarletApiError, SuggestLearningRequest, TaskSkillDraft, skillTaskTarget, skillEditTarget, type ScarletClient } from "@scarlet/shared";
 import type { RepeatEvidence, AgentId, DialogueScanPage, ProjectDetail, ProposeChangeRequest, Skill, Task, TaskEvent, WaveformResponse } from "@scarlet/shared";
 import type { Author, Change, MediaAsset, TimeRange } from "@scarlet/timeline";
 import {
   applyOps,
+  audioCrossfadeOps,
   CutAssessment,
   CaptionStyle,
   captionsFromWords,
@@ -45,12 +42,12 @@ import {
   emptyTimeline,
   frameAligned,
   newId,
-  OpError,
   makeTimeMap,
   mergeRanges,
   rangesOverlap,
   timelineDuration,
   timelineFromKeepRanges,
+  carriesAudio,
   timelineToSource,
   type Timeline,
   SUMMARY_MAX,
@@ -71,15 +68,15 @@ import {
   firstCutEvidence,
   firstCutPauses,
   downsample,
-  flattenWords,
   round3,
   dbfs,
+  isTag,
   captionWordMapper,
-  searchTranscript,
   sparkline,
   summarizeTimeline,
 } from "./analysis.js";
 import { toolAnnotations } from "./annotations.js";
+import { MediaPreparing, describeError, errorResult, errorText, formatZodError, json, noteUnmeasured, text, toolRefusal, unavailable, unmeasured, unmeasuredLine, type ToolResult } from "./tool-result.js";
 import { registerPerception } from "./perception-tools.js";
 import { sourceRangeToTimeline, sourceToTimeline, timelineWords } from "./timeline-perception.js";
 import { KEPT_PAUSE_SECONDS, partLeftovers } from "./dialogue-leftovers.js";
@@ -98,9 +95,11 @@ const PASS_WIDE_TOOLS: ReadonlySet<string> = new Set(["timeline_propose", "timel
 const NOT_APPLIED_NEXT = "Nothing was applied. Another request changed this footage after fromVersion. Read that passage on currentVersion and make the edit again there.";
 
 /** Source seconds read without saving a part before dialogue_scan reminds the agent that the editor is waiting. */
-export const SAVE_REMINDER_SECONDS = 300;
+const SAVE_REMINDER_SECONDS = 300;
 /** The latest staged pass of a run, and how many of its cuts still have no recommendation. */
 interface StagedReview { changeId: string; total: number; unchecked: number }
+/** How many of a pass's cuts have a recommendation that isn't provisional. */
+const assessedCuts = (change: Change) => change.cutAssessments?.filter(a => !a.provisional).length ?? 0;
 /** dialogue_scan's note while staged cuts wait for a recommendation, which the editor needs before they can call them. */
 function reviewReminderText({ changeId, total, unchecked }: StagedReview) {
   const cuts = unchecked === 1 ? "1 cut" : `${unchecked} cuts`;
@@ -137,7 +136,7 @@ export { SCARLET_TOOL_NAMES, type ScarletToolName } from "@scarlet/shared";
  * Whatever made the edge counts: a ripple, a trimmed or added clip, a whole new timeline. A pass that built its
  * video from added clips skipped every edge check there was, and a revision that trimmed one clip by a frame did too.
  */
-export function newClipEdges(before: Timeline | null, next: Timeline, media: ReadonlyArray<{ id: string; duration?: number }>):
+function newClipEdges(before: Timeline | null, next: Timeline, media: ReadonlyArray<{ id: string; duration?: number }>):
   Array<{ clipId: string; mediaId: string; stream?: number; side: "in" | "out"; source: number }> {
   const audible = (tl: Timeline) => tl.tracks.filter(t => t.kind !== "caption" && !t.muted)
     .map(t => t.clips.filter((c): c is MediaClip => c.kind === "media" && c.enabled && c.volume > 0));
@@ -185,10 +184,6 @@ Clip fields:
 - effects: [{type, params, enabled}]. A patch replaces the whole array, so include the stages you keep. Audio types: denoise {amount dB, noiseFloor dBFS}, expander {thresholdDb, rangeDb, ratio, attack ms, release ms}, eq {highpass Hz, lowpass Hz, bands [{frequency, gain dB, width Q}]}, compressor {thresholdDb, ratio, attack ms, release ms, makeupDb}, limiter {limitDb, attack ms, release ms}, loudnorm {i LUFS, tp dBTP, lra LU}.
 - A later video track composites on top of an earlier one. A caption clip can carry a title or label.`;
 
-type ToolResult = CallToolResult;
-
-class MediaPreparing extends Error {}
-
 /**
  * How long a cut or an edge check waits for word alignment to reach it before asking to be called again. Alignment
  * runs ahead of the pages a pass reads, so this covers the turn or two it can be behind.
@@ -210,6 +205,9 @@ const DIALOGUE_FAILURE_LIMIT = 2;
  */
 const JOIN_LIST_CHARS = 40_000;
 
+/** Buckets for a waveform window read at 20 ms a bucket, ten at least. */
+const levelPoints = (from: number, to: number) => Math.max(10, Math.ceil((to - from) * 50));
+
 /** "about 37 min" or "about 3 h 48 min". */
 function roughDuration(seconds: number) {
   const minutes = Math.max(1, Math.round(seconds / 60));
@@ -224,87 +222,6 @@ export function transcriptionNote(progress: Task["progress"]): string {
   const { fraction, remainingSeconds } = progress.stage === "transcribing" && progress.words ? progress.words : progress;
   const left = remainingSeconds !== undefined && fraction < 1 ? `, ${roughDuration(remainingSeconds)} left` : "";
   return `${progress.stage === "aligning" ? "aligning words" : "transcribing"}, ${Math.floor(fraction * 100)}% done${left}`;
-}
-
-function text(s: string): ToolResult {
-  return { content: [{ type: "text", text: s }] };
-}
-
-/** Compact JSON. A tool returns either this or a text rendering of the same data, never both. */
-function json(value: unknown): ToolResult {
-  return text(JSON.stringify(value));
-}
-
-function errorResult(err: unknown): ToolResult {
-  return { isError: true, content: [{ type: "text", text: describeError(err) }] };
-}
-
-const REFUSAL_LIMIT = 8000;
-
-/** Why a tool result saved nothing, or undefined when it did its work. Kept whole up to a generous limit. */
-export function toolRefusal(result: ToolResult): { text: string; data: Record<string, unknown> } | undefined {
-  const body = result.content?.flatMap(c => c.type === "text" ? [c.text] : []).join("\n") ?? "";
-  if (result.isError) return { text: body.slice(0, REFUSAL_LIMIT), data: { error: true } };
-  if (!body.startsWith("{")) return undefined;
-  let parsed: unknown;
-  try { parsed = JSON.parse(body); } catch { return undefined; }
-  if (!parsed || typeof parsed !== "object" || !(parsed as { needsRevision?: unknown }).needsRevision) return undefined;
-  const { next, ...rest } = parsed as { next?: unknown };
-  const detail = JSON.stringify(rest);
-  return { text: typeof next === "string" ? next : "Nothing was saved.",
-    data: detail.length <= REFUSAL_LIMIT ? { result: rest } : { result: `${detail.slice(0, REFUSAL_LIMIT)}…` } };
-}
-
-export function describeError(err: unknown): string {
-  if (err instanceof OpError) return `Invalid op ${JSON.stringify(err.op)}: ${err.message}`;
-  if (err instanceof ScarletApiError) {
-    // The engine lists what failed validation. Without it the agent can only guess and resubmit.
-    const issues = err.code === "validation_error" ? z.array(z.object({ path: z.array(z.union([z.string(), z.number()])), message: z.string() }))
-      .safeParse(err.details) : undefined;
-    const detail = issues?.success && issues.data.length ? `\n${formatIssues(issues.data)}` : "";
-    return `Scarlet server error ${err.status} (${err.code}): ${err.message}${detail}`;
-  }
-  if (err instanceof z.ZodError) return `Validation failed:\n${formatZodError(err)}`;
-  if (err instanceof Error) return `${err.name}: ${err.message}${errorCause(err)}`;
-  return String(err);
-}
-
-/** Node's fetch reports every network failure as "fetch failed"; the cause says which (refused, reset, headers timeout). */
-function errorCause(err: Error): string {
-  const cause = err.cause;
-  if (!(cause instanceof Error)) return "";
-  const code = (cause as { code?: unknown }).code;
-  return ` (${typeof code === "string" ? `${code}: ` : ""}${cause.message})`;
-}
-
-/**
- * A read that failed and was answered without, so the result says less and can't say why. The reason goes to stderr;
- * stdout is the protocol's. Media still being prepared is expected, and the tool that waits for it says so itself.
- */
-function unavailable(what: string, err: unknown) {
-  if (!(err instanceof MediaPreparing)) console.error(`[scarlet-mcp] ${what}: ${describeError(err)}`);
-}
-
-/** What each tool call answered without, keyed by what failed, so concurrent calls never see each other's. */
-const unmeasured = new AsyncLocalStorage<Map<string, string>>();
-/** Notes a read the current call answered without, for the line its result ends with. */
-function noteUnmeasured(what: string, err: unknown) {
-  if (!(err instanceof MediaPreparing)) unmeasured.getStore()?.set(what, describeError(err));
-}
-/** The plain line a result ends with when it was answered without something it measures. */
-function unmeasuredLine(missed: ReadonlyMap<string, string>): string | undefined {
-  return missed.size ? `Not measured: ${[...missed].map(([what, why]) => `${what} (${why})`).join("; ")}.` : undefined;
-}
-
-export function formatZodError(err: z.ZodError): string {
-  return formatIssues(err.issues);
-}
-
-function formatIssues(issues: ReadonlyArray<{ path: ReadonlyArray<string | number>; message: string }>): string {
-  return issues
-    .slice(0, 20)
-    .map((i) => `- ${i.path.length ? i.path.join(".") : "(root)"}: ${i.message}`)
-    .join("\n");
 }
 
 /** Validate a list of ops and return readable errors instead of throwing. */
@@ -646,8 +563,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   /** A waveform window with 20 ms buckets and voice activity, for edge evidence. */
   function readLevels(mediaId: string, from: number, to: number): Promise<WaveformResponse> {
-    const points = Math.max(10, Math.ceil((to - from) * 50));
-    return readPrepared(mediaId, "waveform", () => client.waveform(mediaId, from, to, points, true, true));
+    return readPrepared(mediaId, "waveform", () => client.waveform(mediaId, from, to, levelPoints(from, to), true, true));
   }
 
   /**
@@ -680,7 +596,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       // the recording does.
       chunk = recordingEnd(mediaId).catch(() => undefined).then(end => {
         const to = end !== undefined && end > from ? Math.min(asked, end) : asked;
-        return readPrepared(mediaId, "waveform", () => client.waveform(mediaId, from, to, Math.max(10, Math.ceil((to - from) * 50)), true));
+        return readPrepared(mediaId, "waveform", () => client.waveform(mediaId, from, to, levelPoints(from, to), true));
       }).then(wf => { const levels = { from: wf.from, to: wf.to, rms: wf.rms ?? [] }; return { levels, speech: speakingLevel(levels) }; });
       levelChunks.set(key, chunk);
       chunk.catch(() => levelChunks.delete(key));
@@ -810,7 +726,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     const starts = await Promise.all(outgoing.map(async clip => {
       const edge = timelineToSource(clip, at);
       const words = await wordsThrough(clip, edge);
-      const last = words.findLast(w => w.end > w.start && w.start >= clip.sourceIn && w.start < edge && w.text.trim() && !/^\s*\[.*\]\s*$/.test(w.text));
+      const last = words.findLast(w => w.end > w.start && w.start >= clip.sourceIn && w.start < edge && w.text.trim() && !isTag(w.text));
       return last ? clip.timelineIn + (last.start - clip.sourceIn) / clip.speed : -Infinity;
     }));
     const previous = Math.max(...starts);
@@ -1047,16 +963,21 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     },
   );
 
+  /** Whether the preview renders an inspection waits on are all done. One that failed or was cancelled throws. */
+  async function rendersDone(ids: string[]) {
+    const jobs = await Promise.all(ids.map(id => client.render(id)));
+    const failed = jobs.find(({ render }) => render.state === "failed" || render.state === "cancelled");
+    if (failed) throw new Error(failed.render.errorDetail || failed.render.error || "Inspection preview was cancelled.");
+    return jobs.every(({ render }) => render.state === "done");
+  }
+
   async function inspect(request: () => Promise<InspectionResult>, onReady?: (windows: InspectionWindow[]) => void, batchSignal?: AbortSignal): Promise<ToolResult> {
     let result = await request();
     if (result.state === "preparing") {
       const deadline = Date.now() + (batchSignal ? 120_000 : 10_000);
       const ids = result.renderIds;
       while (Date.now() < deadline) {
-        const jobs = await Promise.all(ids.map(id => client.render(id)));
-        const failed = jobs.find(({ render }) => render.state === "failed" || render.state === "cancelled");
-        if (failed) throw new Error(failed.render.errorDetail || failed.render.error || "Inspection preview was cancelled.");
-        if (jobs.every(({ render }) => render.state === "done")) {
+        if (await rendersDone(ids)) {
           result = await request();
           break;
         }
@@ -1359,7 +1280,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
           dialogue = { candidates: [], reason: err.message };
         }
       }
-      const peaks = wf.peaks.map((p) => Math.round(p * 1000) / 1000);
+      const peaks = wf.peaks.map(p => round3(p));
       const silences = detectSilences(peaks, wf.from, wf.to, { threshold, minDuration: minSilence });
       const shown = downsample(peaks, points);
       return json({ mediaId, from: wf.from, to: wf.to, bucketSeconds: round3((wf.to - wf.from) / Math.max(1, shown.length)),
@@ -1524,8 +1445,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       if (err instanceof MediaPreparing) throw err;
       detectorIssue = describeError(err);
     } finally { timer.abort(); }
-    const points = Math.max(10, Math.ceil((to - from) * 50));
-    const wf = await readPrepared(mediaId, "waveform", () => client.waveform(mediaId, from, to, points, true, !detections?.speechActivity));
+    const wf = await readPrepared(mediaId, "waveform", () => client.waveform(mediaId, from, to, levelPoints(from, to), true, !detections?.speechActivity));
     if (detections?.speechActivity) wf.speechActivity = detections.speechActivity;
     const transcript = detections ? { id: "first-pass", mediaId, segments: detections.segments }
       : await getTranscript(mediaId, { from, to, granularity: "word" }, false);
@@ -1618,7 +1538,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     const change = record?.change;
     if (change?.state === "ready" && !change.replacedBy) {
       const prepared = await stagedReview;
-      const assessed = change.cutAssessments?.filter(a => !a.provisional).length ?? 0;
+      const assessed = assessedCuts(change);
       // A replacement review can inherit every recommendation from the preceding section.
       const hasRecommendation = prepared?.changeId === id
         ? prepared.unchecked === 0 || assessed > prepared.total - prepared.unchecked
@@ -1696,8 +1616,8 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     const pending = ctx.taskId ? await stagedReview : undefined;
     const reviewReminder = pending?.unchecked ? reviewReminderText(pending) : undefined;
     const saveCheckpoint = batch?.checkpoint;
-    return text(JSON.stringify({ ...first, nextFrom, ...(restoredPages.length ? { restoredPages } : {}), ...(saveReminder && { saveReminder }),
-      ...(saveCheckpoint && { saveCheckpoint }), ...(reviewReminder && { reviewReminder }) }));
+    return json({ ...first, nextFrom, ...(restoredPages.length ? { restoredPages } : {}), ...(saveReminder && { saveReminder }),
+      ...(saveCheckpoint && { saveCheckpoint }), ...(reviewReminder && { reviewReminder }) });
   }
 
   const WordRef = {
@@ -2064,10 +1984,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       let result = await client.contactSheet(ctx.projectId, request);
       while (result.state === "preparing") {
         if (Date.now() > deadline) throw new Error("Frames are still preparing. Inspect this cut again.");
-        const jobs = await Promise.all(result.renderIds.map(id => client.render(id)));
-        const failed = jobs.find(({ render }) => render.state === "failed" || render.state === "cancelled");
-        if (failed) throw new Error(failed.render.errorDetail || failed.render.error || "Inspection preview was cancelled.");
-        if (jobs.every(({ render }) => render.state === "done")) result = await client.contactSheet(ctx.projectId, request);
+        if (await rendersDone(result.renderIds)) result = await client.contactSheet(ctx.projectId, request);
         else await delay(300);
       }
       return result;
@@ -2142,7 +2059,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       if (review && change.state === "ready") {
         reviews.ahead(change, 0, review.cuts.length);
         // A later part of a pass carries the earlier part's recommendations into its review.
-        const assessed = change.cutAssessments?.filter(a => !a.provisional).length ?? 0;
+        const assessed = assessedCuts(change);
         if (review.cuts.length) await cutProgress(changeId, assessed, review.cuts.length);
         return { changeId, total: review.cuts.length, unchecked: Math.max(0, review.cuts.length - assessed) };
       }
@@ -2231,7 +2148,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       await postEvent({ type: "log", text: `Saved recommendations for ${result.assessed} of ${result.total} suggested cuts.`,
         data: { kind: "editor_progress", reviewCounter: `cuts/${changeId}/${toVersion}`, count: result.assessed } });
       await cutProgress(changeId, result.assessed, result.total);
-      if (stageWithoutAppliedCuts === changeId && result.assessed > (change.cutAssessments?.filter(a => !a.provisional).length ?? 0)) stageWithoutAppliedCuts = undefined;
+      if (stageWithoutAppliedCuts === changeId && result.assessed > assessedCuts(change)) stageWithoutAppliedCuts = undefined;
       if ((await stagedReview)?.changeId === changeId)
         stagedReview = Promise.resolve({ changeId, total: result.total, unchecked: Math.max(0, result.total - result.assessed) });
       return json(result);
@@ -2504,7 +2421,7 @@ ${OPS_DOC}`,
       const inset = typeof pictureLayout === "object" ? pictureLayout : undefined;
       if (ops) {
         const v = validateOps(ops);
-        if (!v.ok) return { isError: true, content: [{ type: "text", text: v.error }] };
+        if (!v.ok) return errorText(v.error);
         if (!v.ops.length) throw new Error("ops is empty");
         if (before && (range || (selectedRange(ctx.task?.context) && v.ops.every(o => o.op === "rippleDelete" && !o.trackIds)))) {
           body.range = cutScope(before, await cutAnchor(before), range);
@@ -2547,7 +2464,7 @@ ${OPS_DOC}`,
       } else {
         const parsed = WritableTimeline.safeParse({ ...timeline, projectId: ctx.projectId, version: (timeline as { version?: string })?.version ?? "draft" });
         if (!parsed.success) {
-          return { isError: true, content: [{ type: "text", text: `Invalid timeline:\n${formatZodError(parsed.error)}` }] };
+          return errorText(`Invalid timeline:\n${formatZodError(parsed.error)}`);
         }
         body.timeline = parsed.data;
         await refuseEdgesInSound(before, parsed.data);
@@ -2659,7 +2576,7 @@ ${OPS_DOC}`,
           problems.push(`keep[${i}]: end ${r.end} exceeds media duration ${media.duration}`);
         }
       });
-      if (problems.length) return { isError: true, content: [{ type: "text", text: `Invalid keep ranges:\n${problems.map((p) => `- ${p}`).join("\n")}` }] };
+      if (problems.length) return errorText(`Invalid keep ranges:\n${problems.map((p) => `- ${p}`).join("\n")}`);
       const build = () => timelineFromKeepRanges(ctx.projectId, mediaId, ranges, { audioMediaId, crossfade,
         layer: layer && second ? { mediaId: second.id, offset: layer.offset, duration: second.duration!, sound: layer.sound,
           transform: Transform.parse(layer.framing ?? insetFraming(detail.project, second)) } : undefined });
@@ -2738,7 +2655,7 @@ ${OPS_DOC}`,
         next: "Choose destination new or supply replaceTrackId. No tracks were changed." });
       const target = typeof destination === "object" ? tracks.find(t => t.id === destination.replaceTrackId) : undefined;
       if (typeof destination === "object" && !target) throw new Error("Choose a caption track on the current version.");
-      const sources = new Set(detail.project.media.filter(m => m.kind === "audio" || (m.kind === "video" && m.hasAudio !== false)).map(m => m.id));
+      const sources = new Set(detail.project.media.filter(carriesAudio).map(m => m.id));
       const clips = captionSourceClips(head, id => sources.has(id), mediaId);
       const mediaIds = new Set(clips.map(c => c.mediaId));
       const mappers = new Map<string, ReturnType<typeof captionWordMapper>>();
@@ -2888,7 +2805,7 @@ ${OPS_DOC}`,
       range: z.object({ start: z.number().min(0), end: z.number().min(0) }).optional(),
     },
     async ({ kind, version, range }) => {
-      if (kind === "preview" && !range) return { isError: true, content: [{ type: "text", text: "Choose a short timeline range for the preview, in seconds." }] };
+      if (kind === "preview" && !range) return errorText("Choose a short timeline range for the preview, in seconds.");
       const { render } = await client.requestRender(ctx.projectId, {
         kind: range ? "segment" : kind,
         version,

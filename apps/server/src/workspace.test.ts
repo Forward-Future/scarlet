@@ -1211,7 +1211,7 @@ it("keeps the head another engine set while creating the first timeline version"
     expect(winner).toBeTruthy();
     expect(current.head).toBe(winner);
     expect(current.timeline.markers[0]?.id).toBe("winner");
-    expect(ctx.repos.versions.list(project.id)).toHaveLength(2);
+    expect(ctx.repos.versions.summaries(project.id, null)).toHaveLength(2);
   } finally {
     await other.ctx.close();
   }
@@ -2951,7 +2951,7 @@ it("pins an empty timeline and rejects late task output and cross-project links 
   expect((await api("POST", projectsPath() + "/changes", { ...change, taskId: makeTask(other.id).id })).status).toBe(400);
   expect((await api("POST", projectsPath() + "/changes", { ...change, taskId: cancelled.id })).status).toBe(409);
   expect((await api("POST", "/tasks/" + cancelled.id + "/events", { type: "question", text: "Late?" })).status).toBe(409);
-  expect(workspace.ctx.repos.versions.list(project.id)).toHaveLength(1);
+  expect(workspace.ctx.repos.versions.summaries(project.id, null)).toHaveLength(1);
   const allowed = await api("POST", projectsPath() + "/changes", change);
   expect(allowed.status).toBe(201);
   expect(workspace.ctx.repos.notes.get(note.id)?.state).toBe("open");

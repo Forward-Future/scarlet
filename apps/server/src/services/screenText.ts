@@ -17,11 +17,11 @@ import { SCREEN_TEXT_MODELS, type ScreenLine } from "../transcribe/screenTextMod
 import { pictureDecoder, pictureLane } from "./pictureWork.js";
 
 /** Bump when the reading changes: the models, the sampling or how lines become spans. Kept readings are read again. */
-export const SCREEN_TEXT_VERSION = 2;
+const SCREEN_TEXT_VERSION = 2;
 /** Seconds of a recording read and kept together. */
-export const SCREEN_TEXT_CHUNK = 60;
+const SCREEN_TEXT_CHUNK = 60;
 /** Frames a second looked at. Text shown for less than a second can be missed. */
-export const SCREEN_TEXT_FPS = 1;
+const SCREEN_TEXT_FPS = 1;
 /** Frames decoded and read in one go, so a recording that changes every second holds about 60 MB of frames at once. */
 const BATCH_SECONDS = 10;
 /** A line the reader is less sure of than this is left out: on real screens, those were icons read as letters. */

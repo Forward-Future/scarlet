@@ -10,7 +10,7 @@
  */
 import { isThreadDone } from "./threadTimeline.js";
 import { isAsideTask, taskRecoveryAction, type Skill, type Task } from "./api.js";
-import { cutSummary, isPublishedCall, mergeRanges, type Author, type Change, type Note, type TimeRange } from "@scarlet/timeline";
+import { cutSummary, isPublishedCall, mergeRanges, rangesOverlap, type Author, type Change, type Note, type TimeRange } from "@scarlet/timeline";
 
 export type ThreadStatus = "needs_you" | "working" | "done" | "closed";
 
@@ -438,7 +438,7 @@ export function callNumbers(pass: Pick<Change, "cutAssessments" | "cutChoices">,
  * the revision's own request, so the run is found back through the passes each revision replaced, and then at its
  * latest attempt.
  */
-export function passRunOver(pass: Change, changes: readonly Change[], tasks: readonly Task[]): boolean {
+function passRunOver(pass: Change, changes: readonly Change[], tasks: readonly Task[]): boolean {
   let run = tasks.find(t => t.id === pass.taskId);
   for (let hops = 0; run?.context.cutIndex !== undefined && run.context.changeId && hops < 50; hops++) {
     const replaced = changes.find(c => c.id === run!.context.changeId);
@@ -464,7 +464,6 @@ function cutInPass(pass: Change, { changeId, cutIndex }: Task["context"], change
   if (!changeId || cutIndex === undefined) return undefined;
   if (changeId === pass.id) return cutIndex;
   const same = (a: TimeRange, b: TimeRange) => Math.abs(a.start - b.start) < 0.05 && Math.abs(a.end - b.end) < 0.05;
-  const overlaps = (a: TimeRange, b: TimeRange) => a.start < b.end && a.end > b.start;
   const staged = (c: Change) => mergeRanges((c.cutReasons ?? []).map(({ start, end }) => ({ start, end })));
   // The proposal that took one's place: the one named on it, or the one a revision of one of its cuts made from it.
   const after = (from: Change) => changes.find(c => c.id === from.replacedBy) ?? changes.find(c => c.id !== from.id && !!c.cutReasons
@@ -490,11 +489,11 @@ function cutInPass(pass: Change, { changeId, cutIndex }: Task["context"], change
       // The next part can stage a cut that touches this one, and the review then lists the two as one.
       const ranges = [cut, ...(change.cutReasons ?? []).filter(r => r.start >= cut!.start && r.end <= cut!.end)];
       const carried = next.cutReasons.filter(r => ranges.some(range => same(r, range)));
-      found = cuts.findIndex(r => overlaps(r, cut!) && carried.some(kept => kept.start >= r.start && kept.end <= r.end));
+      found = cuts.findIndex(r => rangesOverlap(r, cut!) && carried.some(kept => kept.start >= r.start && kept.end <= r.end));
     }
     const at = found >= 0 ? found : index;
     const moved = cuts[at];
-    if (!moved || !overlaps(moved, cut)) return undefined;
+    if (!moved || !rangesOverlap(moved, cut)) return undefined;
     change = next; index = at; cut = moved;
   }
   return undefined;

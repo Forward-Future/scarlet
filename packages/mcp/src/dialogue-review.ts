@@ -2,8 +2,9 @@ import { clipDuration, reviewReasons, timelineToSource, type Change, type CutRev
 import { ScarletApiError, type InspectionResult, type ScarletClient, type SheetRequest } from "@scarlet/shared";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { z } from "zod/v3";
+import { dbfs } from "./analysis.js";
 
-export interface InspectionReceipt {
+interface InspectionReceipt {
   complete: boolean;
   /** Verdict of the measured join audit on the suggestion's version; unset when the join could not be measured. */
   joinAudit?: string;
@@ -103,7 +104,7 @@ export async function inspectDialogueSuggestion(client: ScarletClient, change: C
         for (let t = from; t < to - 1e-6; t += 59) {
           const wf = await client.waveform(asset.id, t, Math.min(t + 59, to), 64, false, true);
           // RMS in dBFS, 64 buckets over the window, as every audio tool reports levels.
-          info({ from: wf.from, to: wf.to, voice: wf.speechActivity, levelsDb: wf.rms?.map(v => Math.max(-99, Math.round(20 * Math.log10(v + 1e-7)))) }, out);
+          info({ from: wf.from, to: wf.to, voice: wf.speechActivity, levelsDb: wf.rms?.map(dbfs) }, out);
           if (!wf.speechActivity || !wf.rms) receipt.complete = false;
         }
         if (audio) {

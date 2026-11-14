@@ -1,4 +1,4 @@
-import { isLearningCheck, isSkillEdit, type ApproveLearningRequest, type Learning, type ReviseLearningRequest, type RunChoice, type Skill, type SuggestLearningRequest, type TaskSkillDraft, type Task, type User } from "@scarlet/shared";
+import { isLearningCheck, isSkillEdit, sameRun, type ApproveLearningRequest, type Learning, type ReviseLearningRequest, type RunChoice, type Skill, type SuggestLearningRequest, type TaskSkillDraft, type Task, type User } from "@scarlet/shared";
 import { stripFrontmatter, type LearningCheckContext } from "@scarlet/mcp/prompt";
 import { clock, newId } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
@@ -7,7 +7,7 @@ import { clip } from "../logText.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { actorFor, logActivity, quote } from "./activity.js";
 import { latestSkillEdit } from "./skills.js";
-import { createTask, FINISHED_TASK } from "./tasks.js";
+import { createTask, editsDialogue, FINISHED_TASK } from "./tasks.js";
 
 /**
  * Learnings: standing rules Scarlet picked up from the editor's requests. Every request is read for one as it is
@@ -45,7 +45,7 @@ const ONLY_A_SKILL = /^\/[\w-]+$/;
  * resumed run and a message with no words of the editor's aren't read.
  */
 export function startLearningCheck(ctx: Ctx, task: Task): Task | undefined {
-  if (!["edit", "note", "revise"].includes(task.kind) || task.createdBy.type !== "human" || task.resumeRootId || task.agent === "api") return;
+  if (!editsDialogue(task.kind) || task.createdBy.type !== "human" || task.resumeRootId || task.agent === "api") return;
   // The check is Scarlet's own. Whatever goes wrong starting it, the request it reads is already saved and runs.
   try {
     if (ONLY_A_SKILL.test(wordsOf(task)) || !enabledSkills(ctx).length) return;
@@ -90,12 +90,15 @@ function plain(text: string): string {
     .replace(/^[\s"'…]+|[\s"'…]+$/g, "").replace(/\.\.\.$/, "").replace(/\s+/g, " ").trim();
 }
 
+/** A skill's description and instructions as they read, to find a quoted passage in. */
+const skillText = (skill: Skill) => plain(skill.description + "\n" + stripFrontmatter(skill.content));
+
 /**
  * What the skill already says that a rule would change, as the check quoted it. Each passage must be in the skill, so
  * the editor reads the skill's words and not the model's account of them; one that isn't is sent back to be quoted.
  */
 function quotedFrom(skill: Skill, quotes: string[] | undefined): string[] | undefined {
-  const text = plain(skill.description + "\n" + stripFrontmatter(skill.content));
+  const text = skillText(skill);
   const kept: string[] = [];
   for (const quote of quotes ?? []) {
     const at = plain(quote);
@@ -180,12 +183,17 @@ export function suggestLearning(ctx: Ctx, from: Task, body: SuggestLearningReque
   return { learning, skill };
 }
 
+/** Only a rule that waits on the editor can be reworded, declined or approved. */
+function requireSuggested(learning: Learning): void {
+  if (learning.state !== "suggested") throw conflict("learning_settled", `this learning is already ${learning.state}`);
+}
+
 /**
  * The editor rewords a rule that waits on them. Approve saves it to the skill as they wrote it. A reason it wasn't
  * saved before was about the old wording, so it goes.
  */
 export function reviseLearning(ctx: Ctx, learning: Learning, user: User, body: ReviseLearningRequest): Learning {
-  if (learning.state !== "suggested") throw conflict("learning_settled", `this learning is already ${learning.state}`);
+  requireSuggested(learning);
   if (body.rule === learning.rule) return learning;
   ctx.log(`[learning] ${learning.id} revised`);
   logActivity(ctx, { projectId: learning.projectId, actor: actorFor(user), type: "learning.revised",
@@ -194,7 +202,7 @@ export function reviseLearning(ctx: Ctx, learning: Learning, user: User, body: R
 }
 
 export function declineLearning(ctx: Ctx, learning: Learning, user: User): Learning {
-  if (learning.state !== "suggested") throw conflict("learning_settled", `this learning is already ${learning.state}`);
+  requireSuggested(learning);
   ctx.log(`[learning] ${learning.id} declined`);
   logActivity(ctx, { projectId: learning.projectId, actor: actorFor(user), type: "learning.declined",
     summary: `${user.name} declined the rule ${quote(learning.rule, 120)}`, data: { learningId: learning.id } });
@@ -208,14 +216,14 @@ export function declineLearning(ctx: Ctx, learning: Learning, user: User): Learn
  * again after a save that changed nothing, they have read why, and the next save is told so.
  */
 export function approveLearning(ctx: Ctx, learning: Learning, user: User, body: ApproveLearningRequest = {}): Learning {
-  if (learning.state !== "suggested") throw conflict("learning_settled", `this learning is already ${learning.state}`);
+  requireSuggested(learning);
   const { skillId, ...choice } = body;
   const skill = ctx.repos.skills.get(skillId ?? learning.skillId);
   if (!skill) throw notFound("the skill to save this to");
   const runWith = choice.agent ? choice : undefined;
   // On a repeat approval the editor has also seen the passages quoted in the previous save's closing message.
   const shown = [...(learning.error ?? "").matchAll(/“([^”]+)”|"([^"]+)"/g)].map(match => match[1] ?? match[2]!);
-  const current = plain(skill.description + "\n" + stripFrontmatter(skill.content));
+  const current = skillText(skill);
   const replaces = skill.id === learning.skillId
     ? [...new Set([...(learning.replaces ?? []), ...shown.filter(passage => current.includes(plain(passage)))])]
     : [];
@@ -232,7 +240,7 @@ export function approveLearning(ctx: Ctx, learning: Learning, user: User, body: 
  * What the agent revising the skill is told: the rule, the editor's words it came from, what in the skill they were
  * shown it would replace, and why the last save changed nothing when they approved again after reading it.
  */
-export function learningInstruction(ctx: Ctx, learning: Learning): string {
+function learningInstruction(ctx: Ctx, learning: Learning): string {
   const project = ctx.repos.projects.header(learning.projectId);
   return [
     `Work this standing rule into the skill: “${learning.rule}”`,
@@ -253,7 +261,7 @@ function requestRun(ctx: Ctx, learning: Learning): RunChoice {
 }
 
 /** Start the oldest approved learning for this skill, unless the skill is being revised already. */
-export function startNextSave(ctx: Ctx, skillId: string): void {
+function startNextSave(ctx: Ctx, skillId: string): void {
   const running = latestSkillEdit(ctx, skillId);
   if (running && !FINISHED_TASK.has(running.state)) return;
   const [next] = ctx.repos.learnings.select("state = 'saving' AND json_extract(json, '$.skillId') = ? AND json_extract(json, '$.editTaskId') IS NULL",
@@ -274,9 +282,6 @@ export function startNextSave(ctx: Ctx, skillId: string): void {
   save(ctx, { ...next, editTaskId: task.id });
 }
 
-/** A run and the attempts that resumed it are one request. */
-const rootOf = (task: Task) => task.resumeRootId ?? task.id;
-
 /**
  * A skill edit ended. The learning it was saving is saved, or goes back to the editor with why it wasn't. A run cut
  * short and resumed is the same request: when the attempt that carried on saves the skill, the learning is saved.
@@ -285,7 +290,7 @@ export function skillEditEnded(ctx: Ctx, task: Task): void {
   if (!isSkillEdit(task) || !task.context.skillId || !FINISHED_TASK.has(task.state)) return;
   const learning = task.context.learningId ? ctx.repos.learnings.get(task.context.learningId) : null;
   const saving = learning?.editTaskId ? ctx.repos.tasks.get(learning.editTaskId) : null;
-  if (learning && saving && rootOf(saving) === rootOf(task)) {
+  if (learning && sameRun(task, saving ?? undefined)) {
     if (task.state === "done" && task.resultSkillId) {
       if (learning.state === "saving" || learning.state === "suggested") {
         save(ctx, { ...learning, state: "saved", error: undefined });

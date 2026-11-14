@@ -41,7 +41,7 @@ export function markedRangeOf(context: AgentContext | "whole" | null | undefined
 }
 
 /** A message about a marked stretch and nothing else: a new edit there. */
-export function rangeTarget(marked: MarkedRange): AgentContext {
+function rangeTarget(marked: MarkedRange): AgentContext {
   return { time: marked.start, end: marked.end, version: marked.version, mediaId: marked.mediaId, clipIds: marked.clipIds ?? [], markedRange: marked };
 }
 

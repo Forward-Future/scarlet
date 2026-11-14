@@ -1,20 +1,6 @@
 import { AGENT_LABEL } from "@scarlet/shared";
-import { clock, formatTimecode } from "@scarlet/timeline";
+import { clock } from "@scarlet/timeline";
 import type { Author } from "@scarlet/timeline";
-
-/** Timecode via @scarlet/timeline; never hand-roll this. */
-export function tc(seconds: number, fps: number): string {
-  return formatTimecode(seconds, fps);
-}
-
-export function durationLabel(seconds: number): string {
-  if (!Number.isFinite(seconds)) return "–";
-  const s = Math.round(seconds);
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  if (m >= 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
-  return m > 0 ? `${m}m ${r.toString().padStart(2, "0")}s` : `${r}s`;
-}
 
 export function relTime(iso?: string): string {
   if (!iso) return "";

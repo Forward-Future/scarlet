@@ -14,7 +14,7 @@ import type { AgentAvailability, AgentId } from "@scarlet/shared";
 
 export const CLI_AGENTS: Array<Exclude<AgentId, "api">> = ["claude", "codex", "gemini"];
 
-export interface ExecResult {
+interface ExecResult {
   code: number | null;
   stdout: string;
   stderr: string;
@@ -114,8 +114,8 @@ export interface DetectOptions {
   log?: (msg: string) => void;
 }
 
-export const SUBSCRIPTION = "subscription" as const;
-export const API_KEY = "api_key" as const;
+const SUBSCRIPTION = "subscription" as const;
+const API_KEY = "api_key" as const;
 
 /** Env vars that make a CLI bill an API key instead of the signed-in subscription. */
 export function apiKeyVars(agent: string): string[] {

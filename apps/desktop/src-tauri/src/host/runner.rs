@@ -9,7 +9,8 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 
-use super::types::{McpSpec, RunResult, RunnerEvent};
+use super::spawn::SpawnOutcome;
+use super::types::{tail_summary, McpSpec, RunResult, RunnerEvent};
 
 pub type EventSink = Arc<dyn Fn(RunnerEvent) + Send + Sync>;
 /// Takes the run's token count so far each time it changes, for a live count while the agent works.
@@ -74,6 +75,36 @@ pub async fn write_files(files: &BTreeMap<PathBuf, String>) -> Result<()> {
     Ok(())
 }
 
+/// What a run that paused on a question, or that the host stopped, reports. None when the CLI ended by itself.
+/// `base` carries what the run has either way: its tokens, and its session where the CLI keeps one.
+pub fn cut_short(texts: &[String], question: Option<&String>, question_posted: bool, outcome: &SpawnOutcome, base: &RunResult) -> Option<RunResult> {
+    let base = base.clone();
+    if let Some(q) = question {
+        return Some(RunResult { ok: true, summary: tail_summary(texts), question: Some(q.clone()), question_posted, exit_code: outcome.code, ..base });
+    }
+    if outcome.timed_out {
+        return Some(RunResult { ok: false, summary: tail_summary(texts), error: Some(if outcome.stalled { "stalled" } else { "timed out" }.into()), timed_out: true, stalled: outcome.stalled, exit_code: outcome.code, ..base });
+    }
+    if outcome.aborted {
+        return Some(RunResult { ok: false, summary: tail_summary(texts), error: Some("cancelled".into()), aborted: true, exit_code: outcome.code, ..base });
+    }
+    None
+}
+
+/// The error of a CLI that ended without saying why: its exit code, then the end of what it wrote to stderr.
+pub fn exit_error(cli: &str, outcome: &SpawnOutcome) -> String {
+    format!("{cli} exited with code {}{}", outcome.code.map(|c| c.to_string()).unwrap_or("null".into()), stderr_tail(&outcome.stderr))
+}
+
+fn stderr_tail(stderr: &str) -> String {
+    let t = stderr.trim();
+    if t.is_empty() {
+        String::new()
+    } else {
+        format!(": {}", crate::util::js_slice_suffix(t, 800))
+    }
+}
+
 /// Dispatch on `opts.agent`.
 pub async fn run_agent(opts: RunOptions) -> RunResult {
     let invalid_model = opts.model.as_deref().is_some_and(|m|
@@ -81,13 +112,13 @@ pub async fn run_agent(opts: RunOptions) -> RunResult {
     let invalid_option = [opts.effort.as_deref(), opts.service_tier.as_deref()].into_iter().flatten().any(|id|
         !id.starts_with(|c: char| c.is_ascii_alphanumeric()) || !id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)));
     if invalid_model || invalid_option {
-        return RunResult { ok: false, error: Some("Invalid model or model option".into()), ..Default::default() };
+        return RunResult::failed("Invalid model or model option");
     }
     match opts.agent.as_str() {
         "claude" => super::runner_claude::run_claude(opts).await,
         "codex" => super::runner_codex::run_codex(opts).await,
         "gemini" => super::runner_gemini::run_gemini(opts).await,
-        other => RunResult { ok: false, error: Some(format!("no runner for agent \"{other}\"")), ..Default::default() },
+        other => RunResult::failed(format!("no runner for agent \"{other}\"")),
     }
 }
 

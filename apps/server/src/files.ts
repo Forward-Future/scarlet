@@ -65,7 +65,7 @@ export function serveOriginal(req: Request, path: string): Response {
   return response;
 }
 
-export interface ServeOptions {
+interface ServeOptions {
   contentType?: string;
   cacheControl?: string;
 }

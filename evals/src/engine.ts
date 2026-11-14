@@ -20,7 +20,7 @@ export interface TaskRecord extends TaskLike {
   createdBy?: { type: string; name: string };
 }
 
-export class EngineError extends Error {
+class EngineError extends Error {
   constructor(readonly status: number, readonly code: string | undefined, message: string) { super(message); }
 }
 
@@ -145,7 +145,7 @@ export interface ReviewChangeExport {
   cuts: ReviewCutExport[];
 }
 export type EditorDecision = "approved" | "skipped" | "pending" | "unknown";
-export interface ReviewCutExport {
+interface ReviewCutExport {
   index: number;
   /** Timeline seconds on the review's original version. */
   removed: TimeRange;

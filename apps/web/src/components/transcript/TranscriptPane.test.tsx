@@ -256,8 +256,8 @@ it("asks about words in the edit by the clips they play from, and offers a note 
   // The edit plays the clip from its tenth second: the words' times are the edit's, ten seconds earlier.
   const edited = { ...timelineFromKeepRanges(PRJ, source.id, [{ start: 10, end: 60 }]), version: "after" };
   useProjectStore.setState({ current: { ...useProjectStore.getState().current!, timeline: edited, project: { ...project, head: edited.version } } });
-  const onAsk = vi.fn(), onChoose = vi.fn();
-  await act(async () => root.render(<MemoryRouter><TranscriptPane onAsk={onAsk} onChoose={onChoose} /></MemoryRouter>));
+  const onAsk = vi.fn();
+  await act(async () => root.render(<MemoryRouter><TranscriptPane onAsk={onAsk} /></MemoryRouter>));
   const at = (n: number) => container.querySelector<HTMLElement>(`[data-w="${n}"]`)!;
   const button = (text: string) => [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === text);
   expect(at(0).textContent).toBe("word10");
@@ -270,7 +270,6 @@ it("asks about words in the edit by the clips they play from, and offers a note 
   await act(async () => at(3).dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight", shiftKey: true })));
   await act(async () => button("Note")!.click());
   expect(useUiStore.getState().notePopover).toEqual({ open: true, time: 3, end: 5 });
-  expect(onChoose).toHaveBeenCalledTimes(1);
   expect(button("Ask about this")).toBeUndefined();
   useUiStore.setState(ui, true);
 });

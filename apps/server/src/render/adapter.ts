@@ -1,9 +1,9 @@
 /**
- * Render adapter. The server codes against this interface; `@scarlet/render`
- * (being built separately) will replace the fallback below with a one-line
- * swap: `export const adapter: RenderAdapter = scarletRender;`.
+ * Render adapter. The server codes against this interface. The engine's default
+ * is the `@scarlet/render` adapter in scarletRender.ts; the fallback below is kept
+ * for tests and for probing a file without an engine context.
  *
- * Expected surface of @scarlet/render:
+ * The surface an adapter provides:
  *   probeMedia(path) → { duration, fps?, width?, height?, hasAudio, hasAlpha?, kind }
  *   hashFile(path) → sha256 hex
  *   extractWaveformFull(path, duration, pointsPerSecond) → { peaks, rms? }
@@ -365,6 +365,3 @@ export const fallbackAdapter: RenderAdapter = {
   renderPlaybackSegment,
   renderFullCached,
 };
-
-/** Kept for tests and as a reference; the server defaults to scarletRender.ts. */
-export const adapter: RenderAdapter = fallbackAdapter;

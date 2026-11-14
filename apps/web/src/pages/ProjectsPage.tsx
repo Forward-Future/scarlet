@@ -56,7 +56,7 @@ function usePoster(projectId: string, mediaCount: number, poster: ProjectSummary
  * What Scarlet is doing in the project, as the engine counted it, in a few words: "Editing", "Transcribing 42%",
  * "Caching paused". A job under way gives how far it has got once there is a figure, and never says 100%.
  */
-export function activityLabel(activity: ProjectActivity): string {
+function activityLabel(activity: ProjectActivity): string {
   const name = { editing: "Editing", importing: "Importing", transcribing: "Transcribing", caching: "Caching" }[activity.kind];
   if (activity.paused) return `${name} paused`;
   if (activity.kind === "importing") return `Importing ${plural(activity.count ?? 1, "file")}`;

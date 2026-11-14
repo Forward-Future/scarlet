@@ -4,23 +4,13 @@ import { cutWords, type MappedWord } from "../../lib/transcriptMap";
 import { useTranscriptWindow } from "../transcript/useTranscriptWindow";
 import { Icon } from "../ui/primitives";
 
-/** Kept words shown either side of the removed ones. */
-const CONTEXT_WORDS = 4;
-
-function Words({ items, preceding, showSpeakers }: { items: MappedWord[]; preceding?: MappedWord; showSpeakers: boolean }) {
-  let previous = preceding?.word.speaker || preceding?.word.audioSource;
-  return <>{items.map(({ word, index }, i) => {
-    const label = word.speaker || word.audioSource;
-    const changed = showSpeakers && !!label && label !== previous;
-    if (label) previous = label;
-    return <Fragment key={index}>{i > 0 && " "}{changed &&
-      <small className="review-voice" title={word.speaker ? "Transcript speaker" : "Separate recording audio track"}>{label}</small>}{word.text}</Fragment>;
-  })}</>;
+function Words({ items }: { items: MappedWord[] }) {
+  return <>{items.map(({ word, index }, i) => <Fragment key={index}>{i > 0 && " "}{word.text}</Fragment>)}</>;
 }
 
 /** The words before, inside and after `range` on `timeline`, from the transcript pages the review already reads. */
-function useCutPassage(timeline: Timeline, media: MediaAsset[], range: TimeRange, excerpt?: TimeRange, handles = 5, whole = false) {
-  const window = useMemo(() => excerpt ?? withHandles(range, handles, timelineDuration(timeline)), [excerpt?.start, excerpt?.end, range.start, range.end, timeline, handles]);
+function useCutPassage(timeline: Timeline, media: MediaAsset[], range: TimeRange) {
+  const window = useMemo(() => withHandles(range, PASSAGE_HANDLES, timelineDuration(timeline)), [range.start, range.end, timeline]);
   const { transcripts, loading, error, retry } = useTranscriptWindow(undefined, timeline, media, window, true);
   const parts = useMemo(() => {
     const before: MappedWord[] = [], removed: MappedWord[] = [], after: MappedWord[] = [];
@@ -32,40 +22,9 @@ function useCutPassage(timeline: Timeline, media: MediaAsset[], range: TimeRange
       else if (mid < range.end) removed.push(word);
       else after.push(word);
     }
-    return whole ? { before, removed, after } : { before: before.slice(-7), removed, after: after.slice(0, 8) };
-  }, [timeline, transcripts, range.start, range.end, window, whole]);
+    return { before, removed, after };
+  }, [timeline, transcripts, range.start, range.end, window]);
   return { ...parts, pending: loading && !transcripts.length, error, retry };
-}
-
-function speakersIn(words: MappedWord[]) {
-  return new Set(words.map(({ word }) => word.speaker || word.audioSource).filter(Boolean)).size > 1;
-}
-
-/** A long removal shows its opening and closing words. */
-function RemovedWords({ removed, preceding, showSpeakers }: { removed: MappedWord[]; preceding?: MappedWord; showSpeakers: boolean }) {
-  const abbreviate = removed.length > 12;
-  return <><Words showSpeakers={showSpeakers} preceding={preceding} items={abbreviate ? removed.slice(0, 6) : removed} />
-    {abbreviate && <> … <Words showSpeakers={showSpeakers} preceding={removed.at(-7)} items={removed.slice(-6)} /></>}</>;
-}
-
-/** The removed words struck through between a few kept words either side. */
-function StruckLine({ before, removed, after }: { before: MappedWord[]; removed: MappedWord[]; after: MappedWord[] }) {
-  const showSpeakers = speakersIn([...before, ...removed, ...after]);
-  return <p className="review-spoken review-struck">
-    {before.length > 0 && <><span className="review-kept">… <Words showSpeakers={showSpeakers} items={before} /></span>{" "}</>}
-    <del className="review-removed" aria-label="Removed words"><RemovedWords showSpeakers={showSpeakers} preceding={before.at(-1)} removed={removed} /></del>
-    {after.length > 0 && <>{" "}<span className="review-kept"><Words showSpeakers={showSpeakers} preceding={removed.at(-1)} items={after} /> …</span></>}
-  </p>;
-}
-
-/** What a staged cut takes out, in context: “… and then we <del>um, we</del> started the …”. */
-export function StruckExcerpt({ timeline, media, range }: { timeline: Timeline; media: MediaAsset[]; range: TimeRange }) {
-  const { before, removed, after, pending, error, retry } = useCutPassage(timeline, media, range);
-  if (error) return <button className="btn-quiet" onClick={retry}>Retry transcript</button>;
-  if (pending || !removed.length) return null;
-  return <div className="review-passage" role="group" aria-label="Words this cut removes">
-    <StruckLine before={before.slice(-CONTEXT_WORDS)} removed={removed} after={after.slice(0, CONTEXT_WORDS)} />
-  </div>;
 }
 
 /** An edit card reads at least this many words either side of its cut, a whole sentence or more, and at most CONTEXT_MOST. */
@@ -112,7 +71,7 @@ function KeptRun({ items, others }: { items: MappedWord[]; others: TimeRange[] }
     else runs.push({ other, items: [word] });
   }
   return <>{runs.map((run, i) => {
-    const words = <Words showSpeakers={false} items={run.items} />;
+    const words = <Words items={run.items} />;
     return <Fragment key={run.items[0]!.index}>{i > 0 && " "}{run.other
       ? <del className="review-removed is-other" title="Another edit removes these words">{words}</del>
       : <span className="review-kept">{words}</span>}</Fragment>;
@@ -131,12 +90,12 @@ export function CutMark({ length }: { length: string }) {
 export function EditPassage({ timeline, media, range, length, others = [], current = false }: {
   timeline: Timeline; media: MediaAsset[]; range: TimeRange; length: string; others?: TimeRange[]; current?: boolean;
 }) {
-  const { before, removed, after, pending, error, retry } = useCutPassage(timeline, media, range, undefined, PASSAGE_HANDLES, true);
+  const { before, removed, after, pending, error, retry } = useCutPassage(timeline, media, range);
   const [open, setOpen] = useState(false);
   const lead = sentencesBefore(pending ? [] : before), tail = sentencesAfter(pending ? [] : after);
   const folds = !current && removed.length > SHOW_REMOVED;
-  const struck = <del className="review-removed"><Words showSpeakers={false} items={removed} /></del>;
-  const mark = current ? <Words showSpeakers={false} items={removed} /> : folds
+  const struck = <del className="review-removed"><Words items={removed} /></del>;
+  const mark = current ? <Words items={removed} /> : folds
     ? <button type="button" className="edit-passage-cut" aria-expanded={open} onClick={() => setOpen(o => !o)}
       title={open ? "Hide the cut words" : `Show the ${removed.length} cut words`}><Icon name="scissors" size={12} />{length}</button>
     : removed.length ? <span className="edit-passage-cut is-words" title={length}><Icon name="scissors" size={12} />{struck}</span>

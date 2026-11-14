@@ -6,8 +6,10 @@ import type { EditReviewRequest } from "./telemetry.js";
 import type { z } from "zod/v3";
 import { requireSecureEngineUrl } from "./engineTransport.js";
 import type { TranscriptSearchResult } from "./transcriptSearch.js";
-import type { AcousticWordsRequest, DialogueRangeRequest, DialogueScanRequest, DialogueWindowRequest, DialogueDetections, SourceAudioRequest, SoundPictureRequest, SoundPictureLayout, SheetRequest, InspectionReviewRequest, InspectionResult, PictureActivityRequest, PictureActivityWindow } from "./inspection.js";
-import type { Author, Change, CutReview, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript, TranscriptWord } from "@scarlet/timeline";
+import type { ThreadEdit } from "./threadTimeline.js";
+import type { StorageCleanup, StorageProject } from "./storage.js";
+import type { AcousticWordsRequest, DialogueRangeRequest, DialogueScanRequest, DialogueWindowRequest, DialogueDetections, SourceAudioRequest, SoundPictureRequest, SoundPictureLayout, SheetRequest, InspectionReviewRequest, InspectionResult, PictureActivityRequest, PictureActivityWindow, RepeatAuditRequest, RepeatAuditResult } from "./inspection.js";
+import type { Author, Change, CutAssessment, CutReview, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript, TranscriptWord } from "@scarlet/timeline";
 import type {
   ActivityEntry,
   AgentHost,
@@ -48,6 +50,14 @@ import type {
   User,
   VersionSummary,
   WaveformResponse,
+  RetakeGroup,
+  DialogueCutsRequest,
+  JoinCrossfades,
+  FlagEditRequest,
+  CutChoicesRequest,
+  StagedCutRevision,
+  LocalModelStatus,
+  TelemetryUnavailable,
 } from "./api.js";
 
 /**
@@ -63,6 +73,10 @@ function audioExt(audio: Blob): string {
   if (type.includes("mpeg")) return ".mp3";
   return ".webm";
 }
+
+/** A query string from the fields that are set. */
+const query = (q: Record<string, unknown>) =>
+  new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString();
 
 /** Route IDs are single opaque segments. URL parsers normalize even encoded dot segments. */
 export function apiPathId(id: string): string {
@@ -234,7 +248,7 @@ export class ScarletClient {
     return this.get<Pick<ProjectDetail, "project" | "timeline">>(`/projects/${id}?view=workspace`);
   }
   threadEdits(projectId: string, threadId: string) {
-    return this.get<{ version: string | null; edits: import("./threadTimeline.js").ThreadEdit[] }>(`/projects/${projectId}/threads/${encodeURIComponent(threadId)}/edits`);
+    return this.get<{ version: string | null; edits: ThreadEdit[] }>(`/projects/${projectId}/threads/${encodeURIComponent(threadId)}/edits`);
   }
   recordEditReview(projectId: string, body: EditReviewRequest) {
     return this.post<void>(`/projects/${projectId}/edit-reviews`, body);
@@ -256,8 +270,8 @@ export class ScarletClient {
   pictureActivity(projectId: string, request: z.input<typeof PictureActivityRequest>, signal?: AbortSignal) {
     return this.request<{ windows: PictureActivityWindow[] }>("POST", `/projects/${encodeURIComponent(projectId)}/picture-activity`, request, { signal });
   }
-  checkDialogueRepeats(projectId: string, taskId: string, body: z.input<typeof import("./inspection.js").RepeatAuditRequest>) {
-    return this.post<import("./inspection.js").RepeatAuditResult>(`/projects/${apiPathId(projectId)}/tasks/${apiPathId(taskId)}/repeat-audit`, body);
+  checkDialogueRepeats(projectId: string, taskId: string, body: z.input<typeof RepeatAuditRequest>) {
+    return this.post<RepeatAuditResult>(`/projects/${apiPathId(projectId)}/tasks/${apiPathId(taskId)}/repeat-audit`, body);
   }
   dialogueDetections(projectId: string, request: z.input<typeof DialogueWindowRequest>) {
     return this.post<DialogueDetections>(`/projects/${encodeURIComponent(projectId)}/dialogue-detections`, request);
@@ -300,9 +314,6 @@ export class ScarletClient {
   removeMedia(projectId: string, mediaId: string) {
     return this.delete<Record<string, never>>(`/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}`);
   }
-  setVoiceRoles(mediaId: string, roles: import("@scarlet/timeline").DialogueVoiceRoles, from: number, to: number) {
-    return this.put<{ media: MediaAsset }>(`/media/${encodeURIComponent(mediaId)}/voice-roles`, { roles, from, to });
-  }
   waveform(mediaId: string, from: number, to: number, points = 1000, cachedOnly = false, speechActivity = false) {
     return this.withResource("media", mediaId, path => this.get<WaveformResponse>(`${path}/waveform?from=${from}&to=${to}&points=${points}${cachedOnly ? "&cachedOnly=1" : ""}${speechActivity ? "&speechActivity=1" : ""}`));
   }
@@ -330,7 +341,7 @@ export class ScarletClient {
   }
   /** Repeated lines in one recording with a take inside from–to (source seconds). */
   retakes(projectId: string, mediaId: string, from: number, to: number) {
-    return this.get<{ mediaId: string; groups: import("./api.js").RetakeGroup[] }>(
+    return this.get<{ mediaId: string; groups: RetakeGroup[] }>(
       `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}/retakes?from=${from}&to=${to}`);
   }
   transcribe(mediaId: string, provider?: string) {
@@ -381,7 +392,7 @@ export class ScarletClient {
   }
 
   // Changes
-  submitDialogueCuts(projectId: string, body: import("./api.js").DialogueCutsRequest) {
+  submitDialogueCuts(projectId: string, body: DialogueCutsRequest) {
     return this.post<{ changes: Array<Pick<Change, "id" | "state" | "fromVersion" | "toVersion" | "description" | "intent" | "timelineEdits">>;
       /** Staged cuts from the run's previous part that joined this part's review. */
       carriedForward?: number;
@@ -392,7 +403,7 @@ export class ScarletClient {
       /** Earlier review slots whose footage is already out. Each join is on its named version. */
       alreadyRemoved?: { changeId: string; index: number; version: string; at: number }[];
       /** The requested crossfade on the joins these cuts made. Older engines omit it. */
-      joinCrossfades?: import("./api.js").JoinCrossfades;
+      joinCrossfades?: JoinCrossfades;
       /** Confident cuts that wait for the editor instead of applying, and why. */
       stagedForEditor?: { cuts: number; why: string };
       /** Cuts whose edges moved onto whole frames: how many, the largest move in seconds, and why. */
@@ -404,7 +415,7 @@ export class ScarletClient {
       `/projects/${encodeURIComponent(projectId)}/dialogue-cuts`, body);
   }
   /** Flag an applied edit for the editor, as the run that found a doubt about it. */
-  flagEdit(projectId: string, body: import("./api.js").FlagEditRequest) {
+  flagEdit(projectId: string, body: FlagEditRequest) {
     type Flagged = { changeId: string; spot: number; label: string; request: string; range: TimeRange; at?: number };
     return this.post<{ flagged: Flagged; version: string; alsoThere?: Flagged[] }>(`/projects/${encodeURIComponent(projectId)}/edit-flags`, body);
   }
@@ -438,16 +449,16 @@ export class ScarletClient {
     return this.withResource("changes", changeId, path => this.request<{ draft?: Timeline; ontoVersion?: string; removed?: TimeRange[] }>(
       "POST", `${path}/cut-review?view=draft`, { restoredCuts, ontoVersion }, { signal }));
   }
-  assessCuts(changeId: string, fromVersion: string, toVersion: string, assessments: Omit<import("@scarlet/timeline").CutAssessment, "provisional" | "askOrder" | "revised">[]) {
+  assessCuts(changeId: string, fromVersion: string, toVersion: string, assessments: Omit<CutAssessment, "provisional" | "askOrder" | "revised">[]) {
     // A published or revised call keeps its note and decision with the editor.
     return this.withResource("changes", changeId, path => this.post<{ total: number; assessed: number; needsDecision: number;
       heldForEditor?: number[]; editorPreference?: string; heldRevised?: number[]; editorRequest?: string; heldCalls?: number[]; existingCalls?: string }>(
       `${path}/cut-assessments`, { fromVersion, toVersion, assessments }));
   }
-  saveCutChoices(changeId: string, body: import("./api.js").CutChoicesRequest) {
+  saveCutChoices(changeId: string, body: CutChoicesRequest) {
     return this.withResource("changes", changeId, path => this.put<{ change: Change }>(`${path}/cut-choices`, body));
   }
-  reviseStagedCut(changeId: string, index: number, body: import("./api.js").StagedCutRevision) {
+  reviseStagedCut(changeId: string, index: number, body: StagedCutRevision) {
     return this.withResource("changes", changeId, path => this.post<{ change: Change; replaced?: string; index?: number; carried?: true }>(`${path}/staged-cuts/${index}`, body));
   }
   approveChange(changeId: string, spots?: number[], restoredCuts?: number[]) {
@@ -519,7 +530,7 @@ export class ScarletClient {
     return this.withResource("renders", renderId, path => this.get<{ render: Render; fileInfo?: RenderFileInfo }>(`${path}${inspectFile ? "?inspectFile=true" : ""}`));
   }
   renders(projectId: string, q: { kind?: string; version?: string; currentDelivery?: boolean } = {}) {
-    const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString();
+    const qs = query(q);
     return this.get<{ renders: Render[]; currentDeliveryKey?: string | null; fullRenderKeys?: FullRenderKeys }>(`/projects/${projectId}/renders${qs ? `?${qs}` : ""}`);
   }
   renderFileUrl(renderId: string, waitForPlayback = false) {
@@ -585,11 +596,11 @@ export class ScarletClient {
   holdForRewording(taskId: string, on: boolean) {
     return this.post<{ task: Task }>(`/tasks/${taskId}/hold`, { on });
   }
-  /** Change the words of a request that is still waiting its turn. It keeps its place in the queue. */
   /** Start a queued request without waiting for the editor's calls on a dialogue pass. */
   startBeforeCalls(taskId: string) {
     return this.post<{ task: Task }>(`/tasks/${taskId}/start-now`, {});
   }
+  /** Change the words of a request that is still waiting its turn. It keeps its place in the queue. */
   rewordTask(taskId: string, text: string, skillIds?: string[]) {
     return this.post<{ task: Task }>(`/tasks/${taskId}/reword`, { text, skillIds } satisfies RewordTaskRequest);
   }
@@ -600,10 +611,6 @@ export class ScarletClient {
   }
   heartbeat(hostId: string, agents: AgentHost["agents"], running?: string[]) {
     return this.post<{ cancelled?: string[] }>(`/hosts/${hostId}/heartbeat`, { agents, running });
-  }
-  claimTask(hostId: string, opts: { taskId?: string; agents?: string[]; wait?: number } = {}) {
-    const q = opts.wait ? `?wait=${opts.wait}` : "";
-    return this.post<{ task: Task | null }>(`/hosts/${hostId}/claim${q}`, { taskId: opts.taskId, agents: opts.agents });
   }
   postTaskEvent(taskId: string, event: TaskEvent, startedAt?: string) {
     return this.withResource("tasks", taskId, path => this.post<Record<string, never>>(path + "/events", { ...event, startedAt }));
@@ -640,7 +647,7 @@ export class ScarletClient {
 
   // Skills
   skills(q: { projectId?: string; taskId?: string; view?: "prompt" | "assistant" } = {}) {
-    const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString();
+    const qs = query(q);
     return this.get<{ skills: Skill[] }>(`/skills${qs ? `?${qs}` : ""}`);
   }
   createSkill(body: UpsertSkillRequest) {
@@ -689,11 +696,11 @@ export class ScarletClient {
 
   // Activity, trash, DaVinci
   activity(projectId: string, q: { before?: string; beforeId?: string; limit?: number; type?: string } = {}) {
-    const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString();
+    const qs = query(q);
     return this.get<{ activity: ActivityEntry[] }>(`/projects/${projectId}/activity${qs ? `?${qs}` : ""}`);
   }
   serverActivity(q: { before?: string; limit?: number } = {}) {
-    const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString();
+    const qs = query(q);
     return this.get<{ activity: ActivityEntry[] }>(`/activity${qs ? `?${qs}` : ""}`);
   }
   trash() {
@@ -707,18 +714,18 @@ export class ScarletClient {
   }
 
   storage() {
-    return this.get<{ projects: import("./storage.js").StorageProject[] }>("/storage");
+    return this.get<{ projects: StorageProject[] }>("/storage");
   }
-  cleanStorage(selection: import("./storage.js").StorageCleanup) {
+  cleanStorage(selection: StorageCleanup) {
     return this.post<{ projects: number }>("/storage/cleanup", selection);
   }
 
   // Settings
   localModelStatus() {
-    return this.get<import("./api.js").LocalModelStatus>("/settings/local-model");
+    return this.get<LocalModelStatus>("/settings/local-model");
   }
   settings() {
-    return this.get<{ settings: ServerSettings; transcriptionAvailable?: boolean; transcriptionIssue?: string; telemetryUnavailable?: import("./api.js").TelemetryUnavailable }>("/settings");
+    return this.get<{ settings: ServerSettings; transcriptionAvailable?: boolean; transcriptionIssue?: string; telemetryUnavailable?: TelemetryUnavailable }>("/settings");
   }
   updateSettings(body: Partial<ServerSettings>) {
     return this.patch<{ settings: ServerSettings }>("/settings", body);

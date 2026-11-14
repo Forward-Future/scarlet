@@ -21,8 +21,6 @@ export interface SoundPictureOptions {
   signal?: AbortSignal;
 }
 
-/** The longest passage one picture holds: past this a word is too narrow to read. */
-export const SOUND_PICTURE_SECONDS = 15;
 const W = 1280, TITLE = 22, WAVE = 120, WORDS = 22, SPECTRUM = 200, AXIS = 20;
 const ROW = TITLE + WAVE + WORDS + SPECTRUM + AXIS;
 

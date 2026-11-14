@@ -9,13 +9,11 @@
  */
 import { round3 } from "./analysis.js";
 
-export const REFERENCE_MATCH_VERSION = 2;
-
 export interface MatchWord { text: string; start: number; end: number }
 export interface MatchSource { mediaId: string; words: readonly MatchWord[] }
 
 /** A continuous piece of one recording as it plays in the finished video. Word numbers are transcript indices. */
-export interface Stretch {
+interface Stretch {
   mediaId: string;
   finalStart: number; finalEnd: number;
   sourceStart: number; sourceEnd: number;
@@ -24,7 +22,7 @@ export interface Stretch {
 }
 
 /** Speech in the finished video that none of the recordings has: added narration, or words heard differently. */
-export interface Unmatched { finalStart: number; finalEnd: number; finalWords: [number, number]; text: string }
+interface Unmatched { finalStart: number; finalEnd: number; finalWords: [number, number]; text: string }
 
 export interface Join {
   /** Finished-video seconds: the end of the last word before the join and the start of the first after it. */
@@ -42,9 +40,9 @@ export interface Join {
   unmatched?: string;
 }
 
-export interface UnusedRange { mediaId: string; sourceStart: number; sourceEnd: number; sourceWords: [number, number]; words: number; text: string }
+interface UnusedRange { mediaId: string; sourceStart: number; sourceEnd: number; sourceWords: [number, number]; words: number; text: string }
 
-export interface ReferenceMatch {
+interface ReferenceMatch {
   /** Recording seconds per finished second. 1 unless the finished video was retimed. */
   rate: number;
   finalWords: number;
@@ -309,69 +307,4 @@ export function matchReference(finalWords: readonly MatchWord[], sourceList: rea
   });
 
   return { rate, finalWords: final.tokens.length, matchedWords: merged.reduce((n, r) => n + r.pairs.length, 0), stretches, joins, unmatched, unused };
-}
-
-function spread(values: number[]) {
-  if (!values.length) return undefined;
-  const sorted = [...values].sort((a, b) => a - b);
-  const at = (q: number) => round3(sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]!);
-  return { count: sorted.length, median: at(0.5), p90: at(0.9), max: round3(sorted.at(-1)!) };
-}
-
-/** Pauses of at least this long are counted as pauses; shorter gaps are how words run together. */
-const PAUSE = 0.3;
-
-/**
- * The figures a reader needs before paging through the joins: how much of each recording plays, how the removals
- * divide by size, and the pauses the finished video keeps against the ones the recordings had.
- */
-export function summarizeReference(match: ReferenceMatch, finalWords: readonly MatchWord[], sources: readonly MatchSource[]) {
-  const forward = match.joins.filter(j => j.kind === "forward");
-  const pauseOnly = forward.filter(j => !j.removedWords && (j.removedSeconds ?? 0) > 0);
-  const withWords = forward.filter(j => j.removedWords);
-  const sized = (from: number, to: number) => {
-    const picked = withWords.filter(j => j.removedWords! >= from && j.removedWords! <= to);
-    return { count: picked.length, seconds: spread(picked.map(j => j.removedSeconds!)) };
-  };
-  const pauses = (words: readonly MatchWord[], from: number, to: number) => {
-    const out: number[] = [];
-    for (let i = from + 1; i <= to; i++) {
-      const gap = words[i]!.start - words[i - 1]!.end;
-      if (gap >= PAUSE) out.push(gap);
-    }
-    return out;
-  };
-  const keptPauses = match.stretches.flatMap(s => pauses(finalWords, s.finalWords[0], s.finalWords[1]));
-  return {
-    rate: match.rate,
-    finished: {
-      words: match.finalWords, matchedWords: match.matchedWords,
-      speechSeconds: finalWords.length ? round3(finalWords.at(-1)!.end - finalWords[0]!.start) : 0,
-      notInRecordings: { passages: match.unmatched.length, seconds: round3(match.unmatched.reduce((n, u) => n + u.finalEnd - u.finalStart, 0)) },
-    },
-    recordings: sources.map(source => {
-      const used = match.stretches.filter(s => s.mediaId === source.mediaId);
-      const unused = match.unused.filter(u => u.mediaId === source.mediaId);
-      return {
-        mediaId: source.mediaId, words: source.words.length,
-        usedPieces: used.length, usedSeconds: round3(used.reduce((n, s) => n + s.sourceEnd - s.sourceStart, 0)),
-        unusedPassages: unused.length, unusedSeconds: round3(unused.reduce((n, u) => n + u.sourceEnd - u.sourceStart, 0)),
-        firstUsed: used.length ? Math.min(...used.map(s => s.sourceStart)) : null,
-        lastUsed: used.length ? Math.max(...used.map(s => s.sourceEnd)) : null,
-      };
-    }),
-    joins: {
-      total: match.joins.length,
-      forward: forward.length, back: match.joins.filter(j => j.kind === "back").length, switch: match.joins.filter(j => j.kind === "switch").length,
-      // A join that only shortens a pause, with what was taken and the pause the finished video leaves there.
-      pauseOnly: { count: pauseOnly.length, removedSeconds: spread(pauseOnly.map(j => j.removedSeconds!)), pauseLeft: spread(pauseOnly.map(j => j.finalIn - j.finalOut)) },
-      removedWords: { "1-2": sized(1, 2), "3-15": sized(3, 15), "16-100": sized(16, 100), "over100": sized(101, Infinity) },
-      pauseAcrossJoin: spread(match.joins.map(j => Math.max(0, j.finalIn - j.finalOut))),
-    },
-    pauses: {
-      // Pauses of 0.3 s or more inside a piece: ones the finished video plays as recorded.
-      keptAsRecorded: spread(keptPauses),
-      inRecordings: spread(sources.flatMap(s => pauses(s.words, 0, s.words.length - 1))),
-    },
-  };
 }

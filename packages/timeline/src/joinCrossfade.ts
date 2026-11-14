@@ -220,34 +220,3 @@ export function rippleJoins(ops: ReadonlyArray<Record<string, unknown>>): number
   }
   return joins.sort((a, b) => a - b).filter((j, i, all) => i === 0 || j - all[i - 1]! > EPS);
 }
-
-/**
- * Every clip edge on the tracks that play, as the cut is heard: a centered crossfade's two overlapping edges are the one
- * join at its centre, where its cut was.
- */
-export function playedEdges(timeline: Timeline): number[] {
-  const edges: number[] = [];
-  for (const track of timeline.tracks) {
-    if (track.kind === "caption") continue;
-    const clips = track.clips;
-    const inside = new Set<number>();
-    for (let i = 0; i < clips.length; i++) {
-      const left = clips[i]!;
-      const leftEnd = clipEnd(left);
-      for (let j = i + 1; left.kind === "media" && left.audioFadeOut && j < clips.length && clips[j]!.timelineIn < leftEnd - EPS; j++) {
-        const right = clips[j]!;
-        const overlap = leftEnd - right.timelineIn;
-        if (right.kind !== "media" || right.timelineIn <= left.timelineIn + EPS || Math.abs(left.audioFadeOut - overlap) > EPS ||
-            Math.abs(right.audioFadeIn - overlap) > EPS) continue;
-        inside.add(i * 2 + 1).add(j * 2);
-        edges.push(right.timelineIn + overlap / 2);
-        break;
-      }
-    }
-    clips.forEach((clip, i) => {
-      if (!inside.has(i * 2)) edges.push(clip.timelineIn);
-      if (!inside.has(i * 2 + 1)) edges.push(clipEnd(clip));
-    });
-  }
-  return edges;
-}

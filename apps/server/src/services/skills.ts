@@ -17,7 +17,7 @@ type MirrorLocation = Pick<Skill, "id" | "name"> & {
 };
 
 /** Scoped paths are read only to clean up pre-global skill mirrors. */
-export function skillDiskPath(ctx: Ctx, skill: MirrorLocation): string {
+function skillDiskPath(ctx: Ctx, skill: MirrorLocation): string {
   const parts: string[] = [skill.scope];
   if (skill.scope === "personal") parts.push(skill.ownerId ?? "");
   if (skill.scope === "project") parts.push(skill.projectId ?? "");
@@ -32,7 +32,7 @@ export function skillDiskPath(ctx: Ctx, skill: MirrorLocation): string {
   return path;
 }
 
-export function mirrorSkill(ctx: Ctx, skill: Skill) {
+function mirrorSkill(ctx: Ctx, skill: Skill) {
   const p = skillDiskPath(ctx, skill);
   mkdirSync(dirname(p), { recursive: true });
   const temp = join(dirname(p), randomUUID() + ".tmp");
@@ -44,7 +44,7 @@ export function mirrorSkill(ctx: Ctx, skill: Skill) {
   }
 }
 
-export function unmirrorSkill(ctx: Ctx, skill: MirrorLocation) {
+function unmirrorSkill(ctx: Ctx, skill: MirrorLocation) {
   let file: string;
   try {
     file = skillDiskPath(ctx, skill);
@@ -62,7 +62,7 @@ export function unmirrorSkill(ctx: Ctx, skill: MirrorLocation) {
 }
 
 /** Parse `name:` / `description:` from YAML-ish frontmatter. */
-export function parseFrontmatter(content: string): { name?: string; description?: string } {
+function parseFrontmatter(content: string): { name?: string; description?: string } {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
   if (!m) return {};
   const out: { name?: string; description?: string } = {};
@@ -248,7 +248,7 @@ export function deleteSkill(ctx: Ctx, skill: Skill, user?: User | null) {
 }
 
 /** Seed team skills from a directory of `<name>/SKILL.md` folders (skipped when absent/empty or already seeded). */
-export function seedSkills(ctx: Ctx, dir: string | undefined, source = "seed"): number {
+export function seedSkills(ctx: Ctx, dir: string | undefined): number {
   if (!dir || !existsSync(dir)) return 0;
   const root = realpathSync(dir);
   const list: Array<{ folder: string; content: string }> = [];
@@ -265,7 +265,7 @@ export function seedSkills(ctx: Ctx, dir: string | undefined, source = "seed"): 
       }
     } finally { closeSync(fd); }
   }
-  return seedSkillList(ctx, list, source);
+  return seedSkillList(ctx, list, "seed");
 }
 
 // The exact texts of the guide that shipped before the workflows replaced it.

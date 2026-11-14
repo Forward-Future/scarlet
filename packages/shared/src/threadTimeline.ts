@@ -63,7 +63,7 @@ interface SavedEdit extends ThreadEdit {
 }
 
 /** A cut Scarlet named no edit for, in a video it built from the pieces to keep. */
-export const LEFT_OUT = "Cut";
+const LEFT_OUT = "Cut";
 
 /** How far apart, in seconds on the working cut, two named edits can sit and still be the same place. */
 const SAME_PLACE = 1;

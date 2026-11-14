@@ -4,10 +4,9 @@
  * and record each change Scarlet makes for the agent's gate report. The MCP tool supplies live reads;
  * offline replay (evals/src/replay.ts) supplies stored ones, so both run the same code.
  */
-import { normalizeTranscriptToken, type RepeatOccurrence, type DialogueCutKind, type DialogueDetections, type Task } from "@scarlet/shared";
+import { cutScope, normalizeTranscriptToken, selectedRange, type RepeatOccurrence, type DialogueCutKind, type DialogueDetections, type Task } from "@scarlet/shared";
 import { clipsAt, frameAlignedRemoval, mergeRanges, timelineDuration, timelineToSource, type Project, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
 import { round3 } from "./analysis.js";
-import { cutScope, selectedRange } from "./cut-scope.js";
 import { quietKeptWords, type QuietKeptWord } from "./quiet-kept-word.js";
 import type { GapSound } from "./gap-sound.js";
 import type { DialogueEvidence } from "./dialogue-decisions.js";
@@ -96,7 +95,7 @@ export function audibleSourcePoints(tl: Timeline, times: number[]) {
  * Resolve a word reference to a timeline range on `tl`: each edge goes in the measured silence
  * beside the removed words (wordCutRange), then maps through the clip that plays it.
  */
-export async function resolveWordCut(tl: Timeline, ref: { mediaId: string; fromWord: number; toWord: number }, sources: DialoguePlanSources, compareTakes = false) {
+async function resolveWordCut(tl: Timeline, ref: { mediaId: string; fromWord: number; toWord: number }, sources: DialoguePlanSources, compareTakes = false) {
   let words = await sources.words(ref.mediaId);
   if (!words) throw new Error(`Media ${ref.mediaId} has no transcript words to reference. Use seconds instead.`);
   sources.sameWordsAsRead?.(ref.mediaId, words);
@@ -120,7 +119,8 @@ export async function resolveWordCut(tl: Timeline, ref: { mediaId: string; fromW
 }
 
 /** How far a removal of words[from..to] can slide and still leave the same words playing: always 0, then each shift. */
-export function equivalentShifts(words: ReadonlyArray<Pick<TranscriptWord, "text">>, from: number, to: number, most = 5) {
+export function equivalentShifts(words: ReadonlyArray<Pick<TranscriptWord, "text">>, from: number, to: number) {
+  const most = 5;
   const token = (i: number) => words[i] ? normalizeTranscriptToken(words[i]!.text) : "";
   const shifts = [0];
   // Later: the first removed word is said again right after the removal.
@@ -184,7 +184,7 @@ export class NoPauseToTrim extends Error {}
  * Resolve a pause named by the word it follows to a timeline range on `tl`: the pause between that word and the next
  * comes down to `leave` seconds, or to the default edge padding, with both edges in the measured quiet.
  */
-export async function resolvePauseCut(tl: Timeline, ref: { mediaId: string; afterWord: number; leave?: number }, sources: DialoguePlanSources) {
+async function resolvePauseCut(tl: Timeline, ref: { mediaId: string; afterWord: number; leave?: number }, sources: DialoguePlanSources) {
   let words = await sources.words(ref.mediaId);
   if (!words) throw new Error(`Media ${ref.mediaId} has no transcript words to reference. Use seconds instead.`);
   sources.sameWordsAsRead?.(ref.mediaId, words);
@@ -252,7 +252,7 @@ export function dialogueScanPage(mediaId: string, from: number, to: number, audi
   return { mediaId, start: from, end: to, audioStream, edges: joinEvidence(segments.flatMap(s => s.words), wf), segments };
 }
 
-export type ResolvedCut = Omit<DialogueCutInput, "mediaId" | "fromWord" | "toWord" | "afterWord" | "leave"> & {
+type ResolvedCut = Omit<DialogueCutInput, "mediaId" | "fromWord" | "toWord" | "afterWord" | "leave"> & {
   start: number;
   end: number;
   /** Index of the range in the submitted list. */
@@ -269,7 +269,7 @@ export type ResolvedCut = Omit<DialogueCutInput, "mediaId" | "fromWord" | "toWor
   cleanAlternatives?: Array<{ fromWord: number; toWord: number }>;
 };
 /** One cut as sent to the engine (DialogueCutsRequest). */
-export interface PlannedDecision extends TimeRange {
+interface PlannedDecision extends TimeRange {
   reason: string;
   review: boolean;
   kind: DialogueCutKind;
@@ -279,7 +279,7 @@ export interface PlannedDecision extends TimeRange {
 }
 export type GateLine = Record<string, unknown> & { cut: number };
 
-export type DialoguePlan =
+type DialoguePlan =
   | { outcome: "preserved"; kept?: TimeRange[] }
   | { outcome: "needsRevision"; disputedEdges: Array<TimeRange & { reason: string; quietKeptWord?: QuietKeptWord }> }
   | { outcome: "ready"; removals: ResolvedCut[]; decisions: PlannedDecision[]; gate: Map<number, GateLine>;
@@ -287,7 +287,7 @@ export type DialoguePlan =
       kept: TimeRange[];
       unreadJoinAudio?: Array<{ cut: number; reasons: string[] }> };
 
-export interface DialoguePlanRequest {
+interface DialoguePlanRequest {
   tl: Timeline;
   cuts: DialogueCutInput[];
   /** What the calling tool accepts to resolve a repeated phrase, when it takes keeps instead of removals. */

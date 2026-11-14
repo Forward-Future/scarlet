@@ -6,13 +6,13 @@ import { useUiStore } from "../../stores/ui";
 import { PreferenceSelect } from "../ui/PreferenceSelect";
 import { ConfirmDialog, Drawer, Field, InlineError, Spinner } from "../ui/primitives";
 
-export const ASPECTS: Array<{ value: ProjectSettings["aspect"]; label: string; dims: string }> = [
+const ASPECTS: Array<{ value: ProjectSettings["aspect"]; label: string; dims: string }> = [
   { value: "16:9", label: "16:9 landscape", dims: "1920×1080" },
   { value: "9:16", label: "9:16 vertical", dims: "1080×1920" },
   { value: "1:1", label: "1:1 square", dims: "1080×1080" },
   { value: "4:5", label: "4:5 portrait", dims: "1080×1350" },
 ];
-export const FPS_OPTIONS = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];
+const FPS_OPTIONS = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];
 const fpsLabel = (fps: number) => `${Number(fps.toFixed(3))} fps`;
 
 export function ProjectSettingsDrawer({ onDeleted }: { onDeleted: () => void }) {

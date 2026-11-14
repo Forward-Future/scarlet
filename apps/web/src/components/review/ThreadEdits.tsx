@@ -174,7 +174,7 @@ function removedLabel(edit: ListedEdit) {
  * One list per thread, at its end, always current: a revision updates its edit's row in place and
  * new edits join the list. Every edit is listed, however many: the link that opens the list opens all of it.
  * It is a list of rows as a pass's is, each led by its edit's number where a pass's row has its time.
- * A row plays its edit, whose details and decisions sit in the strip under the player. Pressed again, the open row
+ * A row plays its edit, whose details and decisions sit in its card on top of the timeline. Pressed again, the open row
  * plays its edit again. `under` is what sits directly under an edit's row: a request about that one edit that hasn't
  * left the chat. With `only`, the list is just the edits it picks, such as the ones that need the editor, each with
  * the number it has in the whole list.

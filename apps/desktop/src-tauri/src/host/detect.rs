@@ -68,7 +68,7 @@ pub fn api_key_vars(agent: &str) -> &'static [&'static str] {
     }
 }
 
-fn strip_vars(env: &HashMap<String, String>, vars: &[&str]) -> HashMap<String, String> {
+pub(super) fn strip_vars(env: &HashMap<String, String>, vars: &[&str]) -> HashMap<String, String> {
     env.iter().filter(|(k, _)| !vars.iter().any(|v| k.eq_ignore_ascii_case(v))).map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
@@ -84,12 +84,20 @@ pub fn runner_env(agent: &str, agents: &[AgentAvailability], env: &HashMap<Strin
     }
 }
 
-pub async fn detect_claude<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentAvailability {
-    let Some(path) = io.find("claude").await else {
-        return AgentAvailability { id: "claude".into(), installed: false, ..Default::default() };
+/// Where the CLI is and the version it prints, or the entry for one that isn't installed.
+async fn installed<I: DetectIo>(io: &I, id: &str) -> Result<(String, Option<String>), AgentAvailability> {
+    let Some(path) = io.find(id).await else {
+        return Err(AgentAvailability { id: id.into(), installed: false, ..Default::default() });
     };
     let v = io.exec(&path, &["--version"]).await;
-    let version = parse_version(&format!("{}{}", v.stdout, v.stderr));
+    Ok((path, parse_version(&format!("{}{}", v.stdout, v.stderr))))
+}
+
+pub async fn detect_claude<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentAvailability {
+    let (path, version) = match installed(io, "claude").await {
+        Ok(found) => found,
+        Err(missing) => return missing,
+    };
     let mut logged_in: Option<bool> = None;
     let mut auth: Option<String> = None;
     let mut plan: Option<String> = None;
@@ -151,11 +159,10 @@ pub async fn detect_claude<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentA
 }
 
 pub async fn detect_codex<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentAvailability {
-    let Some(path) = io.find("codex").await else {
-        return AgentAvailability { id: "codex".into(), installed: false, ..Default::default() };
+    let (path, version) = match installed(io, "codex").await {
+        Ok(found) => found,
+        Err(missing) => return missing,
     };
-    let v = io.exec(&path, &["--version"]).await;
-    let version = parse_version(&format!("{}{}", v.stdout, v.stderr));
     let mut logged_in: Option<bool> = None;
     let mut auth: Option<String> = None;
     // `codex login status`: "Logged in using ChatGPT" / "Logged in using an API key ..." / "Not logged in" (exit 1).
@@ -199,11 +206,10 @@ pub async fn detect_codex<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentAv
 }
 
 pub async fn detect_gemini<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentAvailability {
-    let Some(path) = io.find("gemini").await else {
-        return AgentAvailability { id: "gemini".into(), installed: false, ..Default::default() };
+    let (_, version) = match installed(io, "gemini").await {
+        Ok(found) => found,
+        Err(missing) => return missing,
     };
-    let v = io.exec(&path, &["--version"]).await;
-    let version = parse_version(&format!("{}{}", v.stdout, v.stderr));
     let logged_in = io.exists(&o.home.join(".gemini").join("oauth_creds.json")) || env_truthy(o.env, "GEMINI_API_KEY") || env_truthy(o.env, "GOOGLE_API_KEY");
     AgentAvailability { id: "gemini".into(), installed: true, version, logged_in: Some(logged_in), ..Default::default() }
 }

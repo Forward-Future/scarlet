@@ -18,7 +18,7 @@ import { transcriptLanguage } from "./transcriptReader.js";
 import { readSourceEnergy } from "./transcriptSources.js";
 import { otherInputReader } from "./otherInput.js";
 import { otherVoiceTurns } from "./otherVoiceTurns.js";
-import { appendTaskEvent } from "./tasks.js";
+import { appendTaskEvent, editsDialogue } from "./tasks.js";
 import { AnalysisCache } from "./analysisCache.js";
 import { audioLane, whisperLane, type AudioWork } from "./audioWork.js";
 import { emissionStore, emissionStorePaths, recordingWav } from "./recordingAudio.js";
@@ -60,7 +60,7 @@ export function dialogueDetector(ctx: Ctx) {
   function scanEdit(projectId: string, taskId: string, startedAt?: string): ScanEdit {
     const owner = ctx.repos.tasks.get(taskId);
     // A request sent about a point is a note and one sent back is a revision. Both edit, as a whole request does.
-    if (!owner || owner.projectId !== projectId || !["edit", "revise", "note"].includes(owner.kind)) throw notFound("edit in this project");
+    if (!owner || owner.projectId !== projectId || !editsDialogue(owner.kind)) throw notFound("edit in this project");
     return { taskId, startedAt: startedAt ?? owner.startedAt };
   }
   function activeEdit(edit: ScanEdit) {

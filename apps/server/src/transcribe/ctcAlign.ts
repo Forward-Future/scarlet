@@ -10,7 +10,7 @@ export const FRAME_SAMPLES = 320;
 const RECEPTIVE_SAMPLES = 400;
 export const FRAME_SECONDS = FRAME_SAMPLES / SAMPLE_RATE;
 export const CLASSES = 32;
-export const BLANK = 0;
+const BLANK = 0;
 export const SEPARATOR = 4;
 /** Spoken but not spellable in the model's alphabet (numbers, symbols, other scripts). Matches any character. */
 export const WILDCARD = -1;
@@ -324,4 +324,4 @@ export function applyTimings(segments: readonly TranscriptSegment[], timings: Re
   });
 }
 
-const round = (seconds: number) => Math.round(seconds * 1000) / 1000;
+export const round = (seconds: number) => Math.round(seconds * 1000) / 1000;

@@ -1,6 +1,6 @@
 import type { MediaClip, Timeline, TimeRange, Track } from "./schema.js";
 import { intervalCandidates } from "./intervals.js";
-import { clipEnd, mergeRanges, timelineDuration, timelineToSource } from "./time.js";
+import { clipEnd, mergeRanges, sourceToTimeline, timelineDuration, timelineToSource } from "./time.js";
 import { shiftClip, trimHead, trimTail } from "./ops.js";
 import { stableStringify } from "./ids.js";
 import { sameContent } from "./rebase.js";
@@ -40,8 +40,8 @@ function survivingFragments(before: MediaClip[], after: MediaClip[]): Fragment[]
     for (const clip of candidates) {
       const s = Math.max(old.sourceIn, clip.sourceIn), e = Math.min(old.sourceOut, clip.sourceOut);
       if (e <= s + EPS) continue;
-      const from = (source: number) => old.timelineIn + (source - old.sourceIn) / old.speed;
-      const shift = clip.timelineIn + (s - clip.sourceIn) / clip.speed - from(s);
+      const from = (source: number) => sourceToTimeline(old, source);
+      const shift = sourceToTimeline(clip, s) - from(s);
       // A repeated source elsewhere matters only for the frames that actually repeat.
       const repeated = mergeRanges(sources.get(old.mediaId)!(s, e).filter(c => c !== old && c.sourceIn < e - EPS && c.sourceOut > s + EPS)
         .map(c => ({ start: Math.max(s, c.sourceIn), end: Math.min(e, c.sourceOut) })), EPS);

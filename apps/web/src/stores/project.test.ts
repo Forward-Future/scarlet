@@ -200,7 +200,7 @@ it("keeps a first-cut task in its initiating project and preserves newer worker 
   expect(useProjectStore.getState().current?.tasks).toMatchObject([{ id: task.id, state: "running" }]);
 });
 
-it("keeps late checkout, note, and optimistic rollback results in the original project", async () => {
+it("keeps late note and optimistic rollback results in the original project", async () => {
   const db = buildDb();
   const [a, b] = db.projects;
   const data = (project: NonNullable<typeof a>): ProjectData => ({
@@ -209,17 +209,14 @@ it("keeps late checkout, note, and optimistic rollback results in the original p
   });
   const other = data(b!);
   useProjectStore.setState({ current: data(a!) });
-  vi.spyOn(api, "checkout").mockResolvedValue({ project: { ...a!, head: "restored" } });
-  vi.spyOn(api, "changes").mockResolvedValue({ changes: db.changes });
   const readHead = vi.spyOn(api, "workspace");
   vi.spyOn(api, "createNote").mockResolvedValue({ note: db.notes[0]! });
   vi.spyOn(api, "updateProject").mockRejectedValue(new Error("rename failed"));
 
-  const checkout = initial.checkout("restored");
   const note = initial.createNote(PRJ, { time: 0, text: "A only" });
   const failed = initial.updateProject({ name: "Pending" });
   useProjectStore.setState({ current: other });
-  await Promise.all([checkout, note, expect(failed).rejects.toThrow("rename failed")]);
+  await Promise.all([note, expect(failed).rejects.toThrow("rename failed")]);
 
   expect(readHead).not.toHaveBeenCalled();
   expect(useProjectStore.getState().current).toBe(other);
@@ -825,58 +822,21 @@ it("loads the activity log a page at a time, from the last entry it has", async 
   expect(store().activity).toEqual([entry(0)]);
 });
 
-it("moves to another branch, an earlier version or a restored one, and reads the timeline it now has", async () => {
+it("moves to an earlier version or a restored one, and reads the timeline it now has", async () => {
   const { db, project } = open({ versions: [] });
   const change = { ...db.changes[0]!, projectId: PRJ, toVersion: "v_restored" };
-  const moved = { ...project, head: "v_branch", branch: "alt" };
-  vi.spyOn(api, "switchBranch").mockResolvedValue({ project: moved });
   const readHead = vi.spyOn(api, "workspace").mockImplementation(async () => ({ project: useProjectStore.getState().current!.project, timeline: null }));
-  await initial.switchBranch("alt", "v1");
-  expect(api.switchBranch).toHaveBeenCalledExactlyOnceWith(PRJ, "alt", project.head, project.branch ?? "main", "v1");
-  expect(store()).toMatchObject({ project: moved, timeline: null, versions: undefined });
-  expect(readHead).toHaveBeenCalledTimes(1);
-
-  const restored = { ...moved, head: "v_restored" };
+  const restored = { ...project, head: "v_restored" };
   vi.spyOn(api, "historyEdit").mockResolvedValue({ project: restored, change });
   await initial.historyEdit("v_old", "restore");
-  expect(api.historyEdit).toHaveBeenCalledExactlyOnceWith(PRJ, "v_old", "restore", "v_branch", "alt");
-  expect(store()).toMatchObject({ project: restored, changes: [change] });
-
-  vi.spyOn(api, "unapproveChange").mockResolvedValue({ change: { ...change, state: "ready" }, project: { ...restored, head: "v_branch" } });
-  await initial.unapprove(change.id);
-  expect(store()).toMatchObject({ project: { head: "v_branch" }, changes: [{ id: change.id, state: "ready" }] });
-  expect(readHead).toHaveBeenCalledTimes(3);
+  expect(api.historyEdit).toHaveBeenCalledExactlyOnceWith(PRJ, "v_old", "restore", project.head, project.branch ?? "main");
+  expect(store()).toMatchObject({ project: restored, timeline: null, changes: [change], versions: undefined });
+  expect(readHead).toHaveBeenCalledTimes(1);
 
   // With no edit yet there is no version to move from.
   open({ project: { ...project, head: null } });
-  await initial.switchBranch("alt");
   await initial.historyEdit("v_old", "revert");
-  expect(api.switchBranch).toHaveBeenCalledTimes(1);
   expect(api.historyEdit).toHaveBeenCalledTimes(1);
-});
-
-it("shows a rejection at once and takes it back if the engine refuses", async () => {
-  const { db } = open();
-  const change = { ...db.changes.find(c => c.state === "ready")!, projectId: PRJ };
-  open({ changes: [change] });
-  let refuse!: (error: Error) => void;
-  const send = vi.spyOn(api, "rejectChange").mockImplementation(() => new Promise((_resolve, reject) => { refuse = reject; }));
-  const rejecting = initial.reject(change.id, "Too tight");
-  expect(store().changes[0]!.state).toBe("rejected");
-  refuse(new Error("engine away"));
-  await expect(rejecting).rejects.toThrow("engine away");
-  expect(store().changes).toEqual([change]);
-  const rejected = { ...change, state: "rejected" as const, updatedAt: "2026-10-30T13:00:00.000Z" };
-  send.mockResolvedValue({ change: rejected });
-  await initial.reject(change.id);
-  expect(store().changes).toEqual([rejected]);
-  // A change that isn't here is not sent.
-  await initial.reject("chg_unknown");
-  expect(send).toHaveBeenCalledTimes(2);
-
-  vi.spyOn(api, "reopenChange").mockResolvedValue({ change });
-  await initial.reopen(change.id);
-  expect(store().changes).toEqual([change]);
 });
 
 it("takes an approval back when the engine refuses it, and does nothing for a change it doesn't have", async () => {
@@ -914,39 +874,12 @@ it("puts a revision's note and request beside the change it revises", async () =
   vi.mocked(api.reviseChange).mockResolvedValue({ change: revised, note: { ...note, id: "note_second" } });
   await expect(initial.revise(change.id, { text: "And the next" })).resolves.toBeUndefined();
   expect(store().tasks).toEqual([task]);
-
-  vi.spyOn(api, "change").mockResolvedValue({ change: { ...revised, description: "With its diff" }, diff: { ranges: [] } } as never);
-  await expect(initial.loadChangeDiff(change.id)).resolves.toEqual({ ranges: [] });
-  expect(store().changes[0]!.description).toBe("With its diff");
-
-  vi.spyOn(api, "importOtio").mockResolvedValue({ change: { ...change, id: "chg_import" } } as never);
-  await expect(initial.importFromDavinci({ OTIO_SCHEMA: "Timeline.1" })).resolves.toMatchObject({ id: "chg_import" });
-  expect(store().changes.map(c => c.id)).toEqual([change.id, "chg_import"]);
-  useProjectStore.setState({ current: null });
-  await expect(initial.importFromDavinci({})).rejects.toThrow("No project loaded");
 });
 
-it("shows a note's edit at once, takes it back if it fails, and adds replies and voice notes", async () => {
+it("adds a voice note and the request it starts", async () => {
   const { db } = open();
   const note = { ...db.notes[0]!, projectId: PRJ, state: "open" as const };
   open({ notes: [note] });
-  let refuse!: (error: Error) => void;
-  const send = vi.spyOn(api, "updateNote").mockImplementation(() => new Promise((_resolve, reject) => { refuse = reject; }));
-  const updating = initial.updateNote(note.id, { state: "resolved" });
-  expect(store().notes[0]).toMatchObject({ state: "resolved", assignedTo: note.assignedTo });
-  refuse(new Error("engine away"));
-  await expect(updating).rejects.toThrow("engine away");
-  expect(store().notes).toEqual([note]);
-  send.mockResolvedValue({ note: { ...note, state: "resolved", updatedAt: "2026-10-30T13:00:00.000Z" } });
-  await initial.updateNote(note.id, { state: "resolved" });
-  expect(store().notes[0]).toMatchObject({ state: "resolved", updatedAt: "2026-10-30T13:00:00.000Z" });
-  await initial.updateNote("note_unknown", { state: "resolved" });
-  expect(send).toHaveBeenCalledTimes(2);
-
-  vi.spyOn(api, "replyNote").mockResolvedValue({ note: { ...note, text: "With a reply" } });
-  await initial.replyNote(note.id, "Agreed");
-  expect(store().notes[0]!.text).toBe("With a reply");
-
   const spoken = { ...note, id: "note_voice" };
   const task = { ...db.tasks[0]!, id: "task_voice", projectId: PRJ };
   vi.spyOn(api, "createVoiceNote").mockResolvedValue({ note: spoken, task });

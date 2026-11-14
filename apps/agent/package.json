@@ -16,7 +16,6 @@
   "dependencies": {
     "@scarlet/mcp": "workspace:*",
     "@scarlet/shared": "workspace:*",
-    "@scarlet/timeline": "workspace:*",
     "ws": "^8.18.0",
     "zod": "4.6.6"
   },

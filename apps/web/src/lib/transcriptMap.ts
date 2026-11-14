@@ -5,9 +5,9 @@
  * Words no clip keeps are returned with no placements so the UI can show them
  * struck-through.
  */
-import type { MediaAsset, MediaClip, Timeline, Transcript, TranscriptWord } from "@scarlet/timeline";
+import { carriesAudio, sourceToTimeline, type MediaAsset, type MediaClip, type Timeline, type Transcript, type TranscriptWord } from "@scarlet/timeline";
 
-export interface Placement {
+interface Placement {
   clipId?: string;
   trackId?: string;
   /** Playback seconds in the displayed source or cut. */
@@ -42,12 +42,7 @@ export function mediaClipsFor(timeline: Timeline, mediaId?: string): Array<{ tra
   return out;
 }
 
-export function sourceToTimeline(clip: MediaClip, sourceTime: number): number {
-  const speed = clip.speed ?? 1;
-  return clip.timelineIn + (sourceTime - clip.sourceIn) / speed;
-}
-
-export function flattenWords(transcript: Transcript): Array<{ segmentId: string; indexInSegment: number; word: TranscriptWord }> {
+function flattenWords(transcript: Transcript): Array<{ segmentId: string; indexInSegment: number; word: TranscriptWord }> {
   const out: Array<{ segmentId: string; indexInSegment: number; word: TranscriptWord }> = [];
   for (const seg of transcript.segments) {
     if (seg.words.length) {
@@ -172,5 +167,5 @@ export function sourceWords(transcript: Transcript): MappedWord[] {
 export function speechAssets(timeline: Timeline | null, media: MediaAsset[]): MediaAsset[] {
   if (!timeline) return [];
   const ids = new Set(mediaClipsFor(timeline).map(({ clip }) => clip.mediaId));
-  return media.filter(asset => ids.has(asset.id) && (asset.kind === "audio" || (asset.kind === "video" && asset.hasAudio !== false)));
+  return media.filter(asset => ids.has(asset.id) && carriesAudio(asset));
 }

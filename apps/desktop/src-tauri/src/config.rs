@@ -29,7 +29,7 @@ pub fn private_directory(path: &Path) -> Result<()> {
             .join(r"System32\WindowsPowerShell\v1.0");
         let status = std::process::Command::new(powershell.join("powershell.exe"))
             .args(["-NoProfile", "-NonInteractive", "-Command", script]).env("PSModulePath", powershell.join("Modules"))
-            .env("SCARLET_PRIVATE_DIRECTORY", path).creation_flags(0x08000000).status()?;
+            .env("SCARLET_PRIVATE_DIRECTORY", path).creation_flags(crate::util::CREATE_NO_WINDOW).status()?;
         anyhow::ensure!(status.success(), "could not restrict workspace permissions");
     }
     Ok(())

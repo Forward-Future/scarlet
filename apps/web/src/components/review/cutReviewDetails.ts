@@ -1,10 +1,6 @@
-import { cutSummary, dialogueReceipt, type Change, type TimeRange } from "@scarlet/timeline";
+import { cutSummary, dialogueReceipt, type Change } from "@scarlet/timeline";
 import { lengthLabel, plural } from "../../lib/format";
 import { editConfirmation } from "../../lib/taskActivity";
-
-export { cutSummary, reviewReasons } from "@scarlet/timeline";
-
-export interface CutAudition { range: TimeRange; excerpt?: TimeRange }
 
 /** Describe the selection that actually landed, even if the proposal included more. */
 export function appliedEditSummary(change: Change): string {

@@ -6,7 +6,7 @@ import { clipLength } from "./timeline.ts";
 type Keyed = MediaClip & { keyframes?: Array<{ time: number; transform: LayerTransform; ease?: string }> };
 
 /** A clip's transform at a second of its own clock: keyframes blend in a straight line, and a hold keeps its value. */
-export function transformAt(clip: Keyed, local: number): LayerTransform {
+function transformAt(clip: Keyed, local: number): LayerTransform {
   const base: LayerTransform = { ...(clip.transform ?? {}) };
   const keys = [...(clip.keyframes ?? [])].sort((a, b) => a.time - b.time);
   if (!keys.length) return base;
@@ -36,7 +36,7 @@ function layersAt(tl: Timeline, at: number): Array<{ clip: MediaClip; source: nu
 }
 
 /** The timeline second at which a version plays this second of a recording, if it does. */
-export function timelineSecond(tl: Timeline, mediaId: string, source: number): number | undefined {
+function timelineSecond(tl: Timeline, mediaId: string, source: number): number | undefined {
   for (const track of tl.tracks) {
     if (track.kind === "caption") continue;
     for (const clip of track.clips) {

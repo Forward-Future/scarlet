@@ -25,11 +25,11 @@ describe("working row activity", () => {
     expect(taskActivityLabel(read)).toBe("Reading transcript 0:00–57:47");
     const waiting: TaskEvent = { type: "log", text: "Waiting for the transcript", data: { kind: "media_wait", wait: "transcript", mediaId: "cam" } };
     expect(latest([read, waiting])).toBe("Waiting for the transcript");
-    expect(taskActivityLabel(read, false, pendingMediaWaits([waiting]))).toBe("Waiting for the transcript");
+    expect(taskActivityLabel(read, pendingMediaWaits([waiting]))).toBe("Waiting for the transcript");
     const ready: TaskEvent = { ...waiting, data: { ...waiting.data, done: true } };
-    expect(taskActivityLabel(read, false, pendingMediaWaits([waiting, ready]))).toBe("Reading transcript 0:00–57:47");
+    expect(taskActivityLabel(read, pendingMediaWaits([waiting, ready]))).toBe("Reading transcript 0:00–57:47");
     // Another recording's transcript isn't the one being waited for.
-    expect(taskActivityLabel({ ...read, data: { ...read.data, input: { mediaId: "screen", from: 0 } } }, false, pendingMediaWaits([waiting]))).toBe("Reading transcript at 0:00");
+    expect(taskActivityLabel({ ...read, data: { ...read.data, input: { mediaId: "screen", from: 0 } } }, pendingMediaWaits([waiting]))).toBe("Reading transcript at 0:00");
   });
 
   it("names the cuts a multi-cut inspection checks", () => {

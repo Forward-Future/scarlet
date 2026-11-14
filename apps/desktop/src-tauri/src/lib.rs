@@ -47,6 +47,11 @@ fn resolve_paths(app: &tauri::AppHandle) -> anyhow::Result<Paths> {
     })
 }
 
+/// The isolated native demo: a development build under the demo's own identifier.
+pub(crate) fn is_demo(app: &tauri::AppHandle) -> bool {
+    cfg!(debug_assertions) && app.config().identifier == "com.forwardfuture.scarlet.demo"
+}
+
 /// Write a panic to the log before the default hook prints it. A release build aborts on a panic, so this is
 /// the only place one is written down.
 fn log_panics() {
@@ -163,7 +168,7 @@ pub fn run() {
             app.manage(AppState { paths: paths.clone(), config: config.clone(), engine: engine.clone(), host: host.clone(), login });
 
             // The native interview demo uses in-memory fixtures and has no engine jobs.
-            if !(cfg!(debug_assertions) && handle.config().identifier == "com.forwardfuture.scarlet.demo") {
+            if !is_demo(&handle) {
                 engine.start_solo();
             }
             Ok(())

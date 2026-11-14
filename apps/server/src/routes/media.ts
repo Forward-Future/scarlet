@@ -23,7 +23,7 @@ import { sourceCacheStatuses, sourcePreviews } from "../services/sourcePreviews.
 import { pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
 import { getWaveform, ingestMedia, readWaveformCache, removeUnreadableMedia, settleAlignment, startTranscription, transcriptionHeld, writeHashedFile } from "../services/ingest.js";
-import { jsonBody, numberParam, requireMedia, requireProjectHeader } from "./util.js";
+import { jsonBody, numberParam, optionalNumberParam, requireMedia, requireProjectHeader } from "./util.js";
 
 const ImportRequest = z
   .object({ path: z.string().optional(), url: z.string().url().optional(), kind: MediaKind.optional(), name: z.string().optional(), importId: z.string().uuid().optional(), deferFormat: z.boolean().optional() })
@@ -41,7 +41,6 @@ export function mediaRoutes(ctx: Ctx) {
   // The picture lane alone decides how many frames decode at once, and keeps a slot for the editor's.
   const frames = new AnalysisCache<Buffer>(frame => frame.length, undefined, Infinity);
   const speech = new AnalysisCache<Awaited<ReturnType<typeof speechActivity>>>(spans => 48 * spans.length, 1024 * 1024);
-  const previews = sourcePreviews;
   const imports = new Map<string, ReturnType<typeof ingestMedia>>();
 
   r.put("/media/:mediaId/voice-roles", async c => {
@@ -231,18 +230,18 @@ export function mediaRoutes(ctx: Ctx) {
 
   r.on(["GET", "POST"], "/media/:mediaId/playback-cache", async c => {
     const media = requireMedia(ctx, c.req.param("mediaId"));
-    const { status } = await previews.full(ctx, media, c.req.method === "POST");
+    const { status } = await sourcePreviews.full(ctx, media, c.req.method === "POST");
     return c.json(status);
   });
   r.get("/media/:mediaId/playback-cache/file", async c => {
-    const file = await previews.fullFile(ctx, requireMedia(ctx, c.req.param("mediaId")), c.req.query("fileKey"));
+    const file = await sourcePreviews.fullFile(ctx, requireMedia(ctx, c.req.param("mediaId")), c.req.query("fileKey"));
     if (!file) throw notFound("cached preview");
     return serveFile(c.req.raw, file);
   });
 
   r.get("/media/:mediaId/preview/:index", async (c) => {
     const media = requireMedia(ctx, c.req.param("mediaId"));
-    const file = await previews.get(ctx, media, Number(c.req.param("index")), c.req.raw.signal);
+    const file = await sourcePreviews.get(ctx, media, Number(c.req.param("index")), c.req.raw.signal);
     return serveFile(c.req.raw, file);
   });
 
@@ -278,8 +277,8 @@ export function mediaRoutes(ctx: Ctx) {
 
   r.on("GET", ["/media/:mediaId/transcript", "/projects/:projectId/media/:mediaId/transcript"], async (c) => {
     const media = requireMedia(ctx, c.req.param("mediaId"), c.req.param("projectId"));
-    const from = c.req.query("from") !== undefined ? numberParam(c.req.query("from"), "from") : null;
-    const to = c.req.query("to") !== undefined ? numberParam(c.req.query("to"), "to") : null;
+    const from = optionalNumberParam(c.req.query("from"), "from") ?? null;
+    const to = optionalNumberParam(c.req.query("to"), "to") ?? null;
     const omitWords = c.req.query("granularity") === "segment";
     const transcript = await transcripts.read(media, from, to, omitWords);
     if (!transcript) throw notFound("transcript");

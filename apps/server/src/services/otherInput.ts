@@ -100,7 +100,7 @@ const SOUNDING = 14000;
 const MIN_RUN = .1;
 
 /** Where each requested word and gap sat on a recording's inputs. */
-export interface InputReading {
+interface InputReading {
   /** Whether the recording has a mix and two inputs with the dialogue on one of them. Without it nothing below is said. */
   available: boolean;
   /** For each word asked about, whether it was heard only on the input the dialogue isn't on. */

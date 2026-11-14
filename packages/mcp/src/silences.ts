@@ -6,13 +6,13 @@
  */
 import { clipDuration, rangesOverlap, timelineToSource, type MediaAsset, type MediaClip, type TimeRange, type Timeline, type Transcript, type TranscriptWord } from "@scarlet/timeline";
 import type { PictureActivityWindow } from "@scarlet/shared";
-import { audibleMediaClips, dbfs, remainingPauseRanges, round3 } from "./analysis.js";
+import { audibleMediaClips, dbfs, isTag, remainingPauseRanges, round3 } from "./analysis.js";
 import type { TimelineWord } from "./timeline-perception.js";
 
 /** The scan lists a stretch without words from this length. */
-export const SILENCE_SECONDS = 1.5;
+const SILENCE_SECONDS = 1.5;
 /** A saved part reports a stretch without words it still plays from this length. */
-export const KEPT_SILENCE_SECONDS = 2;
+const KEPT_SILENCE_SECONDS = 2;
 
 export interface Silence extends TimeRange {
   seconds: number;
@@ -26,12 +26,12 @@ export interface Silence extends TimeRange {
   open?: "start" | "end" | "both";
 }
 
-const spoken = (w: TranscriptWord) => w.end > w.start && !!w.text.trim() && !/^\[.*\]$/.test(w.text.trim());
+const spoken = (w: TranscriptWord) => w.end > w.start && !!w.text.trim() && !isTag(w.text);
 
-/** Every stretch of a page with no transcript word for at least `min` seconds. `previous` is the last word before the page. */
+/** Every stretch of a page with no transcript word for at least SILENCE_SECONDS. `previous` is the last word before the page. */
 export function silences(transcript: Transcript | null, wf: { from: number; to: number; peaks: number[]; speechActivity?: TimeRange[] },
-  opts: { min?: number; previous?: TranscriptWord } = {}): Silence[] {
-  const min = opts.min ?? SILENCE_SECONDS;
+  opts: { previous?: TranscriptWord } = {}): Silence[] {
+  const min = SILENCE_SECONDS;
   const words = (transcript?.segments ?? []).filter(s => !/^\[(?:blank_audio|silence)\]$/i.test(s.text.trim()))
     .flatMap(s => s.words).filter(w => spoken(w) && w.end > wf.from && w.start < wf.to).sort((a, b) => a.start - b.start);
   const step = (wf.to - wf.from) / Math.max(1, wf.peaks.length);
@@ -65,7 +65,7 @@ export function silences(transcript: Transcript | null, wf: { from: number; to: 
   return out;
 }
 
-export interface PictureWindow { mediaId: string; from: number; to: number;
+interface PictureWindow { mediaId: string; from: number; to: number;
   /** Add to this window's source seconds to get the scanned recording's. */ shift: number }
 
 const plain = (clip: MediaClip) => (clip.speed ?? 1) === 1;
@@ -104,13 +104,14 @@ export function pictureReading(w: PictureActivityWindow, shift: number) {
     ...(w.changedFrames > 0 && { typicalAreaPct: pct(w.typicalArea), largestAreaPct: pct(w.largestArea), largestAt: at(w.largestAt), lastChangeAt: at(w.lastChangeAt) }) };
 }
 
-export interface KeptSilence { mediaId: string; source: TimeRange; start: number; end: number; seconds: number; after: string; before: string }
+interface KeptSilence { mediaId: string; source: TimeRange; start: number; end: number; seconds: number; after: string; before: string }
 
 /**
  * Stretches without words that a saved part still plays and no decision covers. `words` are the version's words in
  * playback order inside the part's range; `decided` are its cut, review and keep ranges, all in timeline seconds.
  */
-export function keptSilences(tl: Timeline, words: TimelineWord[], decided: TimeRange[], min = KEPT_SILENCE_SECONDS): KeptSilence[] {
+export function keptSilences(tl: Timeline, words: TimelineWord[], decided: TimeRange[]): KeptSilence[] {
+  const min = KEPT_SILENCE_SECONDS;
   const clips = audibleMediaClips(tl);
   const out: KeptSilence[] = [];
   // A transcript can mark blank audio as a bracketed word. It is not speech.

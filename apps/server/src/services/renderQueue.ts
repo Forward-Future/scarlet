@@ -51,7 +51,7 @@ function workerPid(render: Pick<Render, "queuePid" | "demandPid" | "export">): n
  * queue's own reasons, such as a source that changed while the render waited, are sentences already.
  * `sources`: the files the render read, by the names the editor gave them.
  */
-export function renderFailure(error: unknown, sources: ReadonlyArray<{ name: string; file: string }>, what: string): string {
+function renderFailure(error: unknown, sources: ReadonlyArray<{ name: string; file: string }>, what: string): string {
   if (error instanceof HttpError) return error.message;
   const said = `${error instanceof Error ? error.message : String(error)}\n${(error as { stderr?: unknown } | undefined)?.stderr ?? ""}`;
   if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOSPC" || /no space left on device/i.test(said))
@@ -168,12 +168,12 @@ export class RenderQueue {
             const input: RenderInput = { ...render, quality: render.quality ?? "preview" };
             const mode = render.previewContentKey?.startsWith("local-v1-") ? "local" : undefined;
             if (render.previewContentKey) {
-              const originalKey = this.renderContentKey(saved, input, render, mode);
+              const originalKey = this.contentKeyOf(render, saved);
               if (!sameQueuedSource(render.previewContentKey, originalKey, assemblyRevision(render))) {
                 throw conflict("render_source_changed", "A source changed after this render was queued. Request a new render.");
               }
             }
-            const format = this.outputFormat(saved, input, undefined, render.height);
+            const format = this.outputFormat(saved, input, render.height);
             render = { ...render, ...format, key: this.keyFor(saved, input, format),
               previewContentKey: this.renderContentKey(saved, input, format, mode) };
           } catch (error) {
@@ -198,9 +198,9 @@ export class RenderQueue {
   }
 
   private outputFormat(project: Pick<Project, "settings">, input: RenderInput,
-    preference = this.ctx.settings().render.hwaccel, height = this.outputHeight(project.settings.height, input)): RenderFormat {
+    height = this.outputHeight(project.settings.height, input)): RenderFormat {
     // The editor's choice holds for exports too: "none" encodes in software, a named device uses that one.
-    return { height, hwaccel: preference };
+    return { height, hwaccel: this.ctx.settings().render.hwaccel };
   }
 
   keyFor(project: Pick<Project, "settings">, input: RenderInput, format = this.outputFormat(project, input)): string {
@@ -357,9 +357,14 @@ export class RenderQueue {
       stableStringify(r.projectSettings) === stableStringify(project.settings) && this.available(r) && this.isCurrent(r, project));
   }
 
-  isCurrent(render: Render, project: Project): boolean {
-    return render.previewContentKey === this.renderContentKey({ ...project, settings: render.projectSettings ?? project.settings },
+  /** The content key a saved render has now, in the format and project settings it was queued with. */
+  private contentKeyOf(render: Render, project: Project): string | undefined {
+    return this.renderContentKey({ ...project, settings: render.projectSettings ?? project.settings },
       { ...render, quality: render.quality ?? "preview" }, render, render.previewContentKey?.startsWith("local-v1-") ? "local" : undefined);
+  }
+
+  isCurrent(render: Render, project: Project): boolean {
+    return render.previewContentKey === this.contentKeyOf(render, project);
   }
 
   private available(render: Render): boolean {
@@ -608,8 +613,7 @@ export class RenderQueue {
       const previousKey = render.previewContentKey;
       if (oldRange || oldFull || previousKey) {
         const assembly = assemblyRevision(render);
-        const currentKey = this.renderContentKey(project, { ...render, quality: render.quality ?? "preview" }, render,
-          previousKey?.startsWith("local-v1-") ? "local" : undefined);
+        const currentKey = this.contentKeyOf(render, project);
         if (previousKey && !(oldRange && currentKey) && !sameQueuedSource(previousKey, currentKey, assembly)) {
           throw conflict("render_source_changed", "A source changed after this render was queued. Request a new render.");
         }

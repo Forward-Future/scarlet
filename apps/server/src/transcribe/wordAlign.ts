@@ -8,7 +8,7 @@ import { AnalysisCache } from "../services/analysisCache.js";
 import { audioLane, type AudioLane, type AudioWork } from "../services/audioWork.js";
 import {
   alignGroup, applyTimings, alignmentGroups, CLASSES, FRAME_SAMPLES, framesFor, groupLabels, logSoftmax, MIN_SCORE,
-  planChunks, SAMPLE_RATE, stitchChunks, type AlignWord, type Emissions, type WordTiming,
+  planChunks, round, SAMPLE_RATE, stitchChunks, type AlignWord, type Emissions, type WordTiming,
 } from "./ctcAlign.js";
 import { audioWorker } from "./audioWorker.js";
 import { EmissionFile } from "./emissions.js";
@@ -250,6 +250,16 @@ export async function alignTranscript(ctx: { paths: { root: string; tmp: string 
   }
 }
 
+/** The 44-byte header of a 16 kHz mono 16-bit PCM WAV holding `dataBytes` of samples. */
+export function pcmWavHeader(dataBytes: number): Buffer {
+  const head = Buffer.alloc(44);
+  head.write("RIFF", 0, "ascii"); head.writeUInt32LE(36 + dataBytes, 4); head.write("WAVEfmt ", 8, "ascii");
+  head.writeUInt32LE(16, 16); head.writeUInt16LE(1, 20); head.writeUInt16LE(1, 22); head.writeUInt32LE(SAMPLE_RATE, 24);
+  head.writeUInt32LE(SAMPLE_RATE * 2, 28); head.writeUInt16LE(2, 32); head.writeUInt16LE(16, 34);
+  head.write("data", 36, "ascii"); head.writeUInt32LE(dataBytes, 40);
+  return head;
+}
+
 /** 16 kHz mono 16-bit PCM WAV, read by sample range. FFmpeg may write LIST chunks before the data. */
 export async function openWav(path: string) {
   const handle = await open(path, "r");
@@ -466,4 +476,3 @@ async function emit(ort: Runtime, session: Session, samples: Float32Array, onChu
   return { logProbs, frames: logProbs.length / CLASSES };
 }
 
-const round = (seconds: number) => Math.round(seconds * 1000) / 1000;

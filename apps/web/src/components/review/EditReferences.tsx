@@ -1,17 +1,4 @@
-import type { Change, TimeRange } from "@scarlet/timeline";
-import type { IconName } from "../ui/primitives";
-
-export type EditMarker = { time: number; description: string; icon: IconName };
-export type EditCue = EditMarker & { changeId: string; spot: number };
-
-export function editIcon(change: Change, text: string): IconName {
-  if (change.firstCut || change.appliedReview) return "trim";
-  if (change.ops?.length && change.ops.every(op => op.op === "rippleDelete" || op.op === "splitClip")) return "trim";
-  if (/\b(?:captions?|captioned|subtitles?)\b/i.test(text)) return "captions";
-  if (/\b(?:volumes?|gain|audio|music|levels?|leveled|levelled|leveling|levelling|loudness|louder|quieter|crossfades?)\b/i.test(text)) return "audio";
-  if (/\b(?:cut|cuts|trim|trimmed|pause|ripple|filler)\b/i.test(text)) return "trim";
-  return "film";
-}
+import type { TimeRange } from "@scarlet/timeline";
 
 const timecode = /\b(?:\d+:)?\d+:[0-5]\d(?:\.\d+)?\b/g;
 

@@ -3,8 +3,6 @@ import { restoredReviewState, type Task } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 
-export { beginRevision } from "@scarlet/shared";
-
 /** Renders can finish while a proposal is rejected or being revised. */
 export function resumeReviewState(ctx: Ctx, change: Change, state?: ChangeState): ChangeState {
   return restoredReviewState(change, state, id => ctx.repos.renders.get(id)?.state);

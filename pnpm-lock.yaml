@@ -172,9 +172,6 @@ importers:
 
   .:
     devDependencies:
-      '@tauri-apps/cli':
-        specifier: ^2.12.4
-        version: 2.12.4
       '@types/node':
         specifier: ^24.0.0
         version: 24.19.2
@@ -196,9 +193,6 @@ importers:
       '@scarlet/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-      '@scarlet/timeline':
-        specifier: workspace:*
-        version: link:../../packages/timeline
       ws:
         specifier: ^8.18.0
         version: 8.22.0
@@ -340,9 +334,6 @@ importers:
       '@scarlet/timeline':
         specifier: workspace:*
         version: link:../timeline
-      zod:
-        specifier: 4.6.6
-        version: 4.6.6(patch_hash=39e8741de3511d78c8baeb77cf7feb2071938232aae58be30d6de8c0e8568126)
 
   packages/shared:
     dependencies:

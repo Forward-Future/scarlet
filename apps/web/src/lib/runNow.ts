@@ -35,7 +35,7 @@ export function runNow(events: readonly TaskEvent[], aim?: string, callNumber?: 
         // A rule Scarlet picked up is offered in Learnings, and nothing about it is in the chat.
         if (name === "learning_suggest") continue;
         const wait = waitingFor(event, waits);
-        if (wait) return taskActivityLabel(event, false, waits);
+        if (wait) return taskActivityLabel(event, waits);
         const words = toolWords(name, event.data?.input, callNumber) ?? taskActivityLabel(event);
         if (words) return words;
         continue;

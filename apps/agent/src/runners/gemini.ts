@@ -7,7 +7,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writePrivateFile } from "../private-files.js";
 import { briefInput, DEFAULT_STALL_MS, isQuestionTool, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
-import { resolveCli, spawnLines, tailSummary } from "./spawn.js";
+import { earlyResult, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
 import { geminiUsage } from "./usage.js";
 import type { AgentUsage } from "@scarlet/shared";
 
@@ -40,14 +40,9 @@ function contentText(content: unknown): string {
 
 /** Parse one JSONL line from `gemini -p --output-format stream-json`. */
 export function parseGeminiLine(line: string, st: GeminiParseState): RunnerEvent[] {
-  let msg: Record<string, unknown>;
-  try {
-    msg = JSON.parse(line) as Record<string, unknown>;
-  } catch {
-    return [{ type: "log", text: line }];
-  }
-  // The CLIs write one JSON object per line. Anything else that parses (null, a number, a list) is noise too.
-  if (!msg || typeof msg !== "object" || Array.isArray(msg)) return [{ type: "log", text: line }];
+  // Anything that isn't one JSON object (a warning, null, a number, a list) is noise: surface it as a log line.
+  const msg = jsonLine(line);
+  if (!msg) return [{ type: "log", text: line }];
   const events: RunnerEvent[] = [];
   const type = msg.type as string | undefined;
   const flushPartial = () => {
@@ -185,11 +180,8 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
   const outcome = await handle.done;
 
   const usage = st.usage && !st.usage.model && opts.model ? { ...st.usage, model: opts.model } : st.usage;
-  if (st.question) {
-    return { ok: true, summary: tailSummary(st.texts), question: st.question, questionPosted: st.questionPosted, exitCode: outcome.code, usage };
-  }
-  if (outcome.timedOut) return { ok: false, summary: tailSummary(st.texts), error: outcome.stalled ? "stalled" : "timed out", timedOut: true, stalled: outcome.stalled, exitCode: outcome.code, usage };
-  if (outcome.aborted) return { ok: false, summary: tailSummary(st.texts), error: "cancelled", aborted: true, exitCode: outcome.code, usage };
+  const early = earlyResult(st, outcome, { usage });
+  if (early) return early;
   const ok = !st.failed && (outcome.code === 0 || st.result?.status === "success");
   return {
     ok,

@@ -6,6 +6,8 @@ import { AgentOptionId, type AgentAvailability, type ModelOptions } from "@scarl
 import { spawnLines } from "./runners/spawn.js";
 
 export type CliAgent = "claude" | "codex" | "gemini";
+/** A model id that is safe to pass to a CLI as a launcher argument. */
+export const MODEL_ID = /^[a-z0-9][a-z0-9._:/@+\[\]-]*$/i;
 type Catalog = Pick<AgentAvailability, "models" | "model" | "modelLabels" | "modelOptions">;
 
 const claudeResponse = z.object({
@@ -41,7 +43,7 @@ export async function discoverModels(agent: CliAgent, file: string, env: NodeJS.
   const modelOptions = new Map<string, ModelOptions>();
   let defaultModel: string | undefined;
   const add = (id: string, name: string, options: ModelOptions = { efforts: [], speeds: [] }) => {
-    if (id && !/^[a-z0-9][a-z0-9._:/@+\[\]-]*$/i.test(id)) return;
+    if (id && !MODEL_ID.test(id)) return;
     names.set(id, name || id);
     const efforts = options.efforts.filter(o => AgentOptionId.safeParse(o.id).success);
     const speeds = options.speeds.filter(o => AgentOptionId.safeParse(o.id).success);

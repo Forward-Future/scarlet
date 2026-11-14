@@ -21,7 +21,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writePrivateFile } from "../private-files.js";
 import { briefInput, DEFAULT_STALL_MS, isQuestionTool, planEvent, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
-import { resolveCli, spawnLines, tailSummary } from "./spawn.js";
+import { earlyResult, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
 import { addUsage, codexUsage } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
 
@@ -44,7 +44,7 @@ export interface CodexParseState {
  * The steps of a `todo_list` item: Codex's `update_plan`, as `codex exec --json` reports it. Each step is its text and
  * whether it is finished. The stream leaves out which step is under way, so none is "in_progress".
  */
-export function codexPlan(items: unknown): PlanStep[] | undefined {
+function codexPlan(items: unknown): PlanStep[] | undefined {
   if (!Array.isArray(items)) return undefined;
   return items.flatMap((entry): PlanStep[] => {
     const { text, completed } = (entry ?? {}) as { text?: unknown; completed?: unknown };
@@ -53,7 +53,7 @@ export function codexPlan(items: unknown): PlanStep[] | undefined {
 }
 
 /** Codex reports stream retries and its HTTPS fallback as errors, then usually carries on. */
-export function isRetryNotice(text: string) {
+function isRetryNotice(text: string) {
   return /^Reconnecting\.{3} \d+\/\d+/.test(text) || /^Falling back from WebSockets/.test(text);
 }
 
@@ -82,14 +82,9 @@ interface CodexItem {
 
 /** Parse one JSONL line from `codex exec --json`. */
 export function parseCodexLine(line: string, st: CodexParseState): RunnerEvent[] {
-  let msg: Record<string, unknown>;
-  try {
-    msg = JSON.parse(line) as Record<string, unknown>;
-  } catch {
-    return [{ type: "log", text: line }];
-  }
-  // The CLIs write one JSON object per line. Anything else that parses (null, a number, a list) is noise too.
-  if (!msg || typeof msg !== "object" || Array.isArray(msg)) return [{ type: "log", text: line }];
+  // Anything that isn't one JSON object (a warning, null, a number, a list) is noise: surface it as a log line.
+  const msg = jsonLine(line);
+  if (!msg) return [{ type: "log", text: line }];
   const events: RunnerEvent[] = [];
   const type = msg.type as string | undefined;
   const item = (msg.item as CodexItem | undefined) ?? undefined;
@@ -311,11 +306,8 @@ export async function runCodex(opts: RunAgentOptions): Promise<RunAgentResult> {
     /* not written */
   }
   const usage = st.usage && !st.usage.model && opts.model ? { ...st.usage, model: opts.model } : st.usage;
-  if (st.question) {
-    return { ok: true, summary: tailSummary(st.texts), question: st.question, questionPosted: st.questionPosted, exitCode: outcome.code, usage };
-  }
-  if (outcome.timedOut) return { ok: false, summary: tailSummary(st.texts), error: outcome.stalled ? "stalled" : "timed out", timedOut: true, stalled: outcome.stalled, exitCode: outcome.code, usage };
-  if (outcome.aborted) return { ok: false, summary: tailSummary(st.texts), error: "cancelled", aborted: true, exitCode: outcome.code, usage };
+  const early = earlyResult(st, outcome, { usage });
+  if (early) return early;
   // A failure line fails the run whatever it says, an empty reason included.
   const ok = st.failed === undefined && (outcome.code === 0 || st.turnCompleted);
   return {

@@ -5,7 +5,7 @@ const starts = (w: MappedWord) => w.placements[0]?.start ?? w.word.start;
 const ends = (w: MappedWord) => w.placements[0]?.end ?? w.word.end;
 const finishesSentence = (w: MappedWord) => /[.!?]["'”’)]?$/.test(w.word.text);
 
-export interface ReadingTurn {
+interface ReadingTurn {
   voice?: string;
   tone?: number;
   words: MappedWord[];

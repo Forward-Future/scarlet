@@ -15,7 +15,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { agentCapabilities, ScarletClient } from "@scarlet/shared";
 import { createScarletMcpServer } from "./server.js";
 
-export interface CliOptions {
+interface CliOptions {
   server: string;
   token?: string;
   project: string;

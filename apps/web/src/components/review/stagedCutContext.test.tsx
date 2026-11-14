@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emptyTimeline, makeMediaClip, type MediaAsset, type Timeline, type Transcript } from "@scarlet/timeline";
 import { api } from "../../lib/client";
-import { EditPassage, StruckExcerpt } from "./CutTranscript";
+import { EditPassage } from "./CutTranscript";
 import { OtherTakes } from "./OtherTakes";
 import { cutSource, otherTakes } from "./retakeLookup";
 
@@ -36,23 +36,6 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 const settle = () => act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); });
-
-it("strikes through the words a staged cut removes between a few kept words either side", async () => {
-  // “so the next thing we um we did was open the project file today”: the cut removes “um we”.
-  const transcript: Transcript = { id: "tr_mic", mediaId: "mic", segments: [spoken("so the next thing we um we did was open the project file today", 10)] };
-  vi.spyOn(api, "transcript").mockResolvedValue(transcript);
-  // Word 5 (“um”) starts at 12.0 s, word 6 (“we”) ends at 12.7 s.
-  await act(async () => root.render(<StruckExcerpt timeline={timeline()} media={[mic]} range={{ start: 11.95, end: 12.75 }} />));
-  await settle();
-  const group = container.querySelector('[aria-label="Words this cut removes"]')!;
-  expect(group).not.toBeNull();
-  expect(group.querySelector("del")?.textContent).toBe("um we");
-  const [before, after] = [...group.querySelectorAll(".review-kept")].map(n => n.textContent);
-  // Four kept words either side, no more.
-  expect(before).toBe("… the next thing we");
-  expect(after).toBe("did was open the …");
-  expect(group.textContent).not.toContain("so the");
-});
 
 it("reads an edit card's cut as the words either side of one mark, which opens a long cut's words, with no speaker tags", async () => {
   const segment = spoken("It broke last week. click the problem is still building on my computer okay test the new model from Deepseek flew under the radar.", 10);
@@ -111,15 +94,12 @@ it("lists other takes with timeline times from the engine's retake route", async
     { start: 45, end: 48, text: "So today we are editing." },
     { start: 70, end: 73, text: "Today we are going to edit." },
   ] }] });
-  const play = vi.fn();
-  await act(async () => root.render(<OtherTakes projectId="prj" timeline={timeline()} media={[mic]} range={{ start: 5, end: 8 }} onPlay={play} />));
+  await act(async () => root.render(<OtherTakes projectId="prj" timeline={timeline()} media={[mic]} range={{ start: 5, end: 8 }} />));
   await settle();
   expect(retakes).toHaveBeenCalledWith("prj", "mic", 5, 8);
   const list = container.querySelector('[aria-label="Other takes"]')!;
   expect(list.querySelector(".other-takes-head")?.textContent).toBe("Other takes · 2");
   expect([...list.querySelectorAll("li")].map(li => li.textContent)).toEqual(["CutSo today we are editing.", "0:50Today we are going to edit."]);
-  await act(async () => { list.querySelector("button")!.click(); });
-  expect(play).toHaveBeenCalledWith(expect.objectContaining({ at: 50, start: 70 }));
 });
 
 it("shows nothing when the line has no other takes", async () => {

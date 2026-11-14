@@ -8,11 +8,9 @@ import { fullRenderContext, type Render } from "@scarlet/shared";
 import { timelineDuration } from "@scarlet/timeline";
 import { MonitorPlayback } from "../components/player/MonitorPlayback";
 import { usePictureWait } from "../components/player/usePictureWait";
-import { PlayerTimeline, TimelineScrubber } from "../components/review/TimelineScrubber";
+import { TimelineScrubber } from "../components/review/TimelineScrubber";
 import { TimelineWaveform } from "../components/review/TimelineWaveform";
-import { ChangeClip } from "../components/review/ChangeClip";
 import { FramingPreview } from "../components/review/FramingPreview";
-import { OriginalFootage } from "../components/review/OriginalFootage";
 import { WindowActions } from "../components/shell/WorkspaceNavigation";
 import { api } from "../lib/client";
 import { buildDb, mc, PRJ } from "../lib/mock/fixtures";
@@ -26,7 +24,6 @@ import { transcriptChunks } from "../components/transcript/useTranscriptWindow";
 import { mediaClipsFor } from "../lib/transcriptMap";
 import { CutPreview } from "./WatchPage";
 import { usePlayerStore } from "../stores/player";
-import * as sourcePlayback from "../lib/sourcePlayback";
 import * as cutStream from "../lib/cutStream";
 import { desktop } from "../lib/desktop";
 import { ExportSheet } from "../components/review/ExportVideo";
@@ -66,7 +63,6 @@ beforeEach(() => {
   vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
   useProjectStore.setState({
     current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined),
-    loadChangeDiff: vi.fn().mockRejectedValue(new Error("No diff fixture")),
   });
   localStorage.removeItem("scarlet.exportStarShown");
   useUiStore.setState({ exportStarNotice: "unseen" });
@@ -87,7 +83,6 @@ const show = (element: ReactNode) => act(async () => root.render(element));
 const click = (element: HTMLElement) => act(async () => element.click());
 const labeled = (label: string) => container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
 const exportButton = () => container.querySelector<HTMLButtonElement>('button[form="export-working-cut"]');
-const compareButton = () => container.querySelector<HTMLButtonElement>('button[aria-label="Before"]')!;
 const button = (text: string) => [...container.querySelectorAll("button")].find((b) => b.textContent?.includes(text));
 
 function sizeWaveformLane(width: number) {
@@ -303,46 +298,12 @@ it("seeks on one full-video timeline with keyboard steps and endpoints", async (
   }
 });
 
-it("uses the ruler's visible time window for captions, thumbnail samples and scrubbing", async () => {
+it("writes the ruler's times as the player does, counting the hours past one", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(720);
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(68);
-  const caption = { id: "cap", kind: "caption" as const, enabled: true, timelineIn: 442, timelineOut: 445, text: "The watch demo" };
-  const timeline = { ...data.timeline!, tracks: [{ ...data.timeline!.tracks[0]!, kind: "caption" as const, clips: [caption] }] };
   const onSeek = vi.fn();
-  await show(<TimelineScrubber duration={2227} playhead={443}
-    cue={{ time: 443, changeId: "edit", spot: 0, icon: "trim", description: "Edit cue" }} waveform={{ timeline, media: [] }}
-    frameAt={t => "/frame/" + t} onSeek={onSeek} />);
-  expect(container.querySelector('[aria-label="Timeline settings"]')).toBeNull();
   // The ruler writes a time as the player does, with no zero before the minutes.
   const stamps = () => [...container.querySelectorAll(".timeline-ruler .ruler-major > span")].map(s => s.textContent);
-  expect(stamps()).toEqual(["7:20", "7:21", "7:22", "7:23", "7:24", "7:25"]);
-  const marker = labeled("Caption marker at 7:22");
-  expect(marker).toBeTruthy();
-  expect(container.textContent).not.toContain(caption.text);
-  await act(() => marker.dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
-  expect(container.querySelector('[role="tooltip"]')?.textContent).toContain(caption.text);
-  await act(() => marker.dispatchEvent(new PointerEvent("pointerout", { bubbles: true, relatedTarget: document.body })));
-  expect(container.textContent).not.toContain(caption.text);
-  await act(() => marker.focus());
-  expect(document.getElementById(marker.getAttribute("aria-describedby")!)?.textContent).toContain(caption.text);
-  await act(() => marker.blur());
-  expect(container.textContent).not.toContain(caption.text);
-  await click(marker);
-  expect(onSeek).toHaveBeenLastCalledWith(caption.timelineIn);
-  expect(document.activeElement).toBe(marker);
-  expect(document.getElementById(marker.getAttribute("aria-describedby")!)?.textContent).toContain(caption.text);
-  await act(() => marker.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  expect(container.textContent).not.toContain(caption.text);
-  expect(container.querySelector(".timeline-playhead")?.getAttribute("style")).toContain("50%");
-  const slider = labeled("Position in the video");
-  vi.spyOn(slider, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 720, 120));
-  Object.defineProperty(slider, "setPointerCapture", { value: vi.fn() });
-  await act(() => {
-    for (const type of ["pointerdown", "pointerup"]) slider.dispatchEvent(new PointerEvent(type, {
-      pointerId: 1, isPrimary: true, button: 0, clientX: 480, bubbles: true,
-    }));
-  });
-  expect(onSeek).toHaveBeenLastCalledWith(444);
   await show(<TimelineScrubber duration={2227} playhead={443} frameAt={() => undefined} onSeek={onSeek} />);
   expect(stamps()).toEqual(["0:00", "5:00", "10:00", "15:00", "20:00", "25:00", "30:00"]);
   // Past an hour it counts the hours, as the player does.
@@ -350,7 +311,7 @@ it("uses the ruler's visible time window for captions, thumbnail samples and scr
   expect(stamps()).toEqual(["0:00", "15:00", "30:00", "45:00", "1:00:00", "1:15:00"]);
 });
 
-it("zooms from the timeline controls and draws no edit points, zoomed or reviewing", async () => {
+it("zooms from the timeline controls and draws no edit points, zoomed or not", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   vi.spyOn(window, "matchMedia").mockReturnValue(Object.create(reduced, { matches: { value: true } }));
@@ -358,7 +319,7 @@ it("zooms from the timeline controls and draws no edit points, zoomed or reviewi
   const timeline = { ...data.timeline!, tracks: [{ ...data.timeline!.tracks[0]!, kind: "video" as const, hidden: false,
     clips: [mc("a", source, 0, 1, 50), mc("b", source, 0, 2, 51)] }] };
   const seek = vi.fn();
-  const render = (reviewing = false) => show(<TimelineScrubber duration={200} playhead={150} reviewing={reviewing}
+  const render = () => show(<TimelineScrubber duration={200} playhead={150}
     waveform={{ timeline, media: [] }} frameAt={() => undefined} onSeek={seek} />);
   const rail = () => container.querySelector(".timeline-cuts, .timeline-cut, .timeline-cut-group");
   await render();
@@ -382,8 +343,6 @@ it("zooms from the timeline controls and draws no edit points, zoomed or reviewi
   await click(trigger);
   await act(() => document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
-  await render(true);
-  expect(rail()).toBeNull();
   expect(container.textContent).not.toContain("edit points");
 });
 
@@ -431,7 +390,7 @@ it("keeps the stretch the editor zoomed to when a new working cut builds the tim
   await render("ver_e", 180, { playhead: 151 });
   expect(playhead()).not.toBeNull();
   // Other footage starts on the whole of it, as before.
-  await render("ver_e", 180, { reviewing: true });
+  await render("ver_e", 180, { waveform: { source: data.media[0]!, timeline: { ...data.timeline!, version: "ver_e" }, media: [] } });
   expect([stamps()[0], stamps().at(-1)]).toEqual([expect.stringMatching(/0:00$/), expect.stringMatching(/2:30$/)]);
 });
 
@@ -1024,18 +983,6 @@ it("moves the clock and the timeline as the video plays", async () => {
   expect(container.querySelector(".monitor-clock strong")?.textContent).toBe("0:01");
 });
 
-it("leaves static timeline markers alone as the playhead advances", async () => {
-  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(720);
-  const mark = vi.fn(() => 2);
-  const editMarkers = [{ id: "edit", kind: "edit" as const, icon: "trim" as const, description: "Edit", get time() { return mark(); } }];
-  await show(<PlayerTimeline duration={10} editMarkers={editMarkers} frameAt={() => undefined} onSeek={() => {}} />);
-  expect(mark).toHaveBeenCalled();
-  mark.mockClear();
-  for (let i = 1; i <= 10; i++) await act(() => usePlayerStore.getState().setTime(i / 10));
-  expect(mark).not.toHaveBeenCalled();
-  expect(container.querySelector('[role="slider"]')?.getAttribute("aria-valuenow")).toBe("1");
-});
-
 it("uses a newly finished source proxy as soon as the engine publishes it", async () => {
   const source = data.media[0]!;
   const cache = vi.spyOn(api, "sourceCache").mockResolvedValueOnce({ state: "caching" })
@@ -1079,158 +1026,6 @@ it("keeps a playing source on its file while preparing the newly selected previe
     expect(video().src).toBe(api.sourceCacheUrl(source.id, "new"));
     await show(null);
   } finally { vi.useRealTimers(); }
-});
-
-it("reuses the source decoder across edit points into the same recording", async () => {
-  const asset = { ...data.media[0]!, duration: 120 };
-  const timeline = { ...data.timeline!, tracks: [{ ...data.timeline!.tracks[0]!, clips: [
-    mc("first", asset.id, 10, 15, 0), mc("next", asset.id, 30, 40, 5, { speed: 2 }),
-  ] }] };
-  const open = vi.spyOn(sourcePlayback, "openSourcePlayback");
-  const noop = () => {};
-  const view = (time: number) => <OriginalFootage onVideo={noop} onToggle={noop} onPlaybackChange={noop} timeline={timeline}
-    target={{ time }} end={10} media={[{ ...asset }]} autoPlay={false} onPosition={noop} onAdvance={noop} failedTimeline={false} onRetryTimeline={noop} />;
-  await show(view(1));
-  const video = container.querySelector("video")!;
-  vi.spyOn(video, "readyState", "get").mockReturnValue(4);
-  await act(() => video.dispatchEvent(new Event("loadedmetadata")));
-  await show(view(5));
-  expect(open).toHaveBeenCalledTimes(1);
-  expect(video.currentTime).toBe(30);
-  expect(video.playbackRate).toBe(2);
-});
-
-it("compares a multi-source first cut with the visible original at its source time", async () => {
-  const base = data.timeline!;
-  const camera = data.media[0]!;
-  const screen = { ...camera, id: "screen", name: "Screen.mp4", duration: 120 };
-  const track = base.tracks[0]!;
-  const timeline = { ...base, tracks: [
-    { ...track, clips: [mc("camera", camera.id, 0, 20, 0)] },
-    { ...track, id: "screen-track", clips: [mc("screen", screen.id, 40, 80, 0, { speed: 2 })] },
-  ] };
-  const change = { ...data.changes[0]!, renders: [{ before: null, after: null, beforeRange: { start: 0, end: 0 }, range: { start: 3, end: 18 } }] };
-  const read = vi.spyOn(api, "timeline").mockResolvedValue({ timeline });
-  const playback = vi.spyOn(sourcePlayback, "openSourcePlayback");
-  useProjectStore.setState({ current: { ...data, media: [camera, screen] }, requestRender: vi.fn().mockResolvedValue(data.renders[0]) });
-  await show(<ChangeClip change={change} aspect={1} />);
-  const scrub = (key: string, shiftKey = false) => act(() => {
-    container.querySelector('[role="slider"]')!.dispatchEvent(new KeyboardEvent("keydown", { key, shiftKey, bubbles: true }));
-  });
-  await scrub("ArrowRight", true);
-  await click(compareButton());
-  expect(read).toHaveBeenCalledWith(change.projectId, change.toVersion);
-  expect(playback).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ start: 48, duration: 120 }));
-  expect(container.querySelector('[aria-label="Original footage"]')).toBeTruthy();
-  expect(container.textContent).toContain(screen.name);
-  await click(compareButton());
-  expect(container.querySelector('[aria-label="Original footage"]')).toBeNull();
-  expect(container.querySelector('[aria-label="Previous preview section"]')).toBeNull();
-});
-
-it.each(["Before", "After"] as const)("disables the comparison when a saved clip has only %s", async side => {
-  useProjectStore.setState({ current: { ...data, media: [] } });
-  const id = data.renders[0]!.id;
-  const change = { ...data.changes[0]!, renders: [{
-    range: { start: 0, end: 5 }, before: side === "Before" ? id : null, after: side === "After" ? id : null,
-  }] };
-  await show(<ChangeClip change={change} aspect={1} />);
-  const toggle = compareButton();
-  expect(toggle.disabled).toBe(true);
-  expect(toggle.getAttribute("aria-pressed")).toBe(String(side === "Before"));
-  const key = new KeyboardEvent("keydown", { key: "\\", bubbles: true, cancelable: true });
-  await act(() => { toggle.dispatchEvent(key); });
-  expect(key.defaultPrevented).toBe(false);
-  expect(toggle.getAttribute("aria-pressed")).toBe(String(side === "Before"));
-});
-
-it("prepares only the visible side and ten-second section of a long change", async () => {
-  const change = { ...data.changes[0]!, renders: [{ range: { start: 3, end: 105 }, beforeRange: { start: 5, end: 27 }, before: null, after: null }] };
-  const requestRender = vi.fn().mockResolvedValue({ ...data.renders[0]!, state: "running" });
-  useProjectStore.setState({ requestRender });
-  await show(<ChangeClip change={change} aspect={1} active={false} />);
-  expect(requestRender).not.toHaveBeenCalled();
-  await show(<ChangeClip change={change} aspect={1} active />);
-  expect(requestRender).toHaveBeenCalledExactlyOnceWith({ kind: "segment", version: change.toVersion, quality: "preview", range: { start: 3, end: 13 } });
-  const skip = async () => {
-    for (let i = 0; i < 10; i++) await act(() => {
-      container.querySelector('[role="slider"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true }));
-    });
-  };
-  await skip();
-  await vi.waitFor(() => expect(requestRender.mock.lastCall?.[0]).toMatchObject({ version: change.toVersion, range: { start: 13, end: 23 } }));
-  await click(compareButton());
-  await vi.waitFor(() => expect(requestRender.mock.lastCall?.[0]).toMatchObject({ version: change.fromVersion, range: { start: 15, end: 25 } }));
-  await skip();
-  await vi.waitFor(() => expect(requestRender.mock.lastCall?.[0]).toMatchObject({ version: change.fromVersion, range: { start: 25, end: 27 } }));
-  expect(compareButton().getAttribute("aria-pressed")).toBe("true");
-  expect(container.querySelector('[aria-label="Next preview section"]')).toBeNull();
-  expect(requestRender).toHaveBeenCalledTimes(4);
-});
-
-it("keeps one decoder and an absolute timeline clock across long cut-review sections", async () => {
-  const change = data.changes[0]!;
-  const original = data.timeline!;
-  const cut = { original, before: { range: { start: 3, end: 38 } }, removed: { start: 5, end: 36 },
-    after: { range: { start: 2, end: 6 } }, at: 4 };
-  const session = { seek: vi.fn(), finishSeek: vi.fn(), bufferThrough: vi.fn(async () => {}), dispose: vi.fn(), sourceTime: vi.fn<() => number>() };
-  const open = vi.spyOn(cutStream, "openCutStream").mockImplementation(video => {
-    session.sourceTime.mockImplementation(() => video.currentTime);
-    return session;
-  });
-  const requestRender = vi.fn().mockResolvedValue(data.renders[0]);
-  useProjectStore.setState({ requestRender });
-  const view = (after?: typeof cut.after) => <ChangeClip inMonitor change={change} aspect={1} cut={{ ...cut, after }} timelineHost={container} />;
-  await show(view());
-  const video = container.querySelector("video")!;
-  expect(open).toHaveBeenCalledWith(video, expect.any(Array), 3, expect.any(Function), expect.any(Function), cut.before.range);
-  vi.spyOn(video, "readyState", "get").mockReturnValue(4);
-  const slider = container.querySelector('[role="slider"]')!;
-  for (const time of [13.2, 23.7, 34.1]) {
-    await act(() => { video.currentTime = time; video.dispatchEvent(new Event("timeupdate")); });
-    expect(container.querySelector("video")).toBe(video);
-    expect(Number(slider.getAttribute("aria-valuenow"))).toBeCloseTo(time);
-  }
-  await act(() => slider.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
-  expect(video.currentTime).toBe(3);
-  expect(session.seek).toHaveBeenCalledWith(3);
-  session.sourceTime.mockReturnValue(3);
-  await act(() => { video.currentTime = 34.1; video.dispatchEvent(new Event("timeupdate")); });
-  expect(Number(slider.getAttribute("aria-valuenow"))).toBe(3);
-  expect(open).toHaveBeenCalledTimes(1);
-  expect(requestRender).not.toHaveBeenCalled();
-  await click(compareButton());
-  expect(session.dispose).toHaveBeenCalledTimes(1);
-  expect(compareButton().getAttribute("aria-busy")).toBe("true");
-  expect(compareButton().getAttribute("aria-pressed")).toBe("false");
-  expect(container.querySelector("video")).toBeNull();
-  expect(requestRender).not.toHaveBeenCalled();
-  await show(view(cut.after));
-  expect(requestRender).toHaveBeenCalledWith(expect.objectContaining({ version: change.toVersion, range: cut.after.range }));
-});
-
-it("seeks to an exact time in a distant window and plays into the next window without paging", async () => {
-  const change = { ...data.changes[0]!, renders: [{ range: { start: 3, end: 45 }, beforeRange: { start: 5, end: 47 }, before: null, after: null }] };
-  const requestRender = vi.fn(async ({ range }: { range: { start: number; end: number } }) => ({
-    ...data.renders[0]!, id: `preview-${range.start}`, state: "done" as const, range,
-  }));
-  useProjectStore.setState({ requestRender });
-  await show(<ChangeClip change={change} aspect={1} previewTimeline={data.timeline!} />);
-  const seek = (key: string, shiftKey = false) => act(() => {
-    container.querySelector('[role="slider"]')!.dispatchEvent(new KeyboardEvent("keydown", { key, shiftKey, bubbles: true }));
-  });
-  for (let i = 0; i < 22; i++) await seek("ArrowRight", true);
-  await vi.waitFor(() => expect(container.querySelector("video")?.src).toContain("preview-23"));
-  const el = container.querySelector("video")!;
-  Object.defineProperty(el, "duration", { configurable: true, value: 10 });
-  await act(() => el.dispatchEvent(new Event("loadedmetadata")));
-  expect(el.currentTime).toBe(2);
-  expect(container.querySelector('[role="slider"]')?.getAttribute("aria-valuenow")).toBe("25");
-  await vi.waitFor(() => expect(requestRender).toHaveBeenCalledWith(expect.objectContaining({ range: { start: 33, end: 43 } })));
-  await act(() => el.dispatchEvent(new Event("ended")));
-  expect(container.querySelector("video")?.src).toContain("preview-33");
-  expect(requestRender.mock.calls.filter(([body]) => body.range.start === 33)).toHaveLength(1);
-  expect(container.querySelector('[role="slider"]')?.getAttribute("aria-valuenow")).toBe("33");
 });
 
 it("shows an export again after a reload or restart, saves it to the destination chosen before, and releases it", async () => {

@@ -14,7 +14,7 @@ import type { PictureSample } from "./picture.ts";
 import type { TimelineWord } from "./timeline.ts";
 
 /** The id the finished video's own words carry, where a recording's would be. */
-export const PUBLISHED = "published";
+const PUBLISHED = "published";
 
 /** Recording and finished video keep time to within this across two stretches when nothing was taken out between them. */
 const CONTINUOUS = 0.15;

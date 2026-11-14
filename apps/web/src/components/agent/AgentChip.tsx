@@ -98,7 +98,7 @@ export function useAgentAvailability() {
 }
 
 /** Short label like "Claude · opus". */
-export function agentShort(agent: string, model?: string): string {
+function agentShort(agent: string, model?: string): string {
   const name = (AGENT_LABEL as Record<string, string>)[agent]?.replace(/ (Code|CLI)$/, "") ?? agent;
   return model ? `${name} · ${model}` : name;
 }

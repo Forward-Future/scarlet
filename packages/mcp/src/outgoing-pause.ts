@@ -1,4 +1,4 @@
-import { clipDuration, timelineToSource, type Project, type TimeRange, type Timeline } from "@scarlet/timeline";
+import { clipDuration, sourceToTimeline, timelineToSource, type Project, type TimeRange, type Timeline } from "@scarlet/timeline";
 import { dialogueAudioStream, dialogueClips, type JoinPage } from "./dialogue-join.js";
 import { gapSound } from "./gap-sound.js";
 
@@ -19,7 +19,7 @@ export function resolveOutgoingPause(tl: Timeline, project: Project, current: Ti
       for (const word of page.edges!.words) {
         if (word.start >= edge - epsilon || word.end <= clip.sourceIn || word.start >= clip.sourceOut) continue;
         if (word.end > edge + epsilon) return { status: "unavailable", reason: `The current cut already intersects “${word.text.trim()}”. Inspect its ending before moving it earlier.` };
-        const timelineEnd = clip.timelineIn + (word.end - clip.sourceIn) / clip.speed;
+        const timelineEnd = sourceToTimeline(clip, word.end);
         if (!last || timelineEnd > last.timelineEnd) last = { text: word.text.trim(), mediaId: clip.mediaId, sourceEnd: word.end, timelineEnd };
       }
     }

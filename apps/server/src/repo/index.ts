@@ -10,11 +10,11 @@ import { SettingsRepo, type DefaultProvider } from "./settings.js";
 import { UsageRepo } from "./usage.js";
 
 /** Transcript plus the owning project (for the project_id index column). */
-export const StoredTranscript = Transcript.extend({ projectId: z.string() });
-export type StoredTranscript = z.infer<typeof StoredTranscript>;
+const StoredTranscript = Transcript.extend({ projectId: z.string() });
+type StoredTranscript = z.infer<typeof StoredTranscript>;
 
 const StoredTaskEvent = TaskEvent.extend({ id: z.string(), taskId: z.string(), at: z.string() });
-export type StoredTaskEvent = z.infer<typeof StoredTaskEvent>;
+type StoredTaskEvent = z.infer<typeof StoredTaskEvent>;
 
 const eventFilters = {
   all: "",
@@ -24,7 +24,7 @@ const eventFilters = {
   lastPlanOrAnswer: " AND event_kind IN ('plan','answer')",
 };
 
-export class TaskEventsRepo {
+class TaskEventsRepo {
   constructor(private readonly db: Db) {}
   append(ev: StoredTaskEvent): StoredTaskEvent {
     const parsed = StoredTaskEvent.parse(ev);
@@ -53,7 +53,7 @@ export class TaskEventsRepo {
   }
 }
 
-export class SkillVersionsRepo {
+class SkillVersionsRepo {
   constructor(private readonly db: Db) {}
   append(skillId: string, v: SkillVersion) {
     this.db

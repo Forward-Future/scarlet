@@ -76,6 +76,11 @@ export function numberParam(value: string | undefined, name: string, fallback?: 
   return n;
 }
 
+/** A number the caller may leave out. One given empty is refused, as a required one is. */
+export function optionalNumberParam(value: string | undefined, name: string): number | undefined {
+  return value === undefined ? undefined : numberParam(value, name);
+}
+
 export function formString(v: string | File | undefined): string | undefined {
   return typeof v === "string" ? v : undefined;
 }

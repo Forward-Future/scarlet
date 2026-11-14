@@ -484,7 +484,7 @@ describe("approving some spots of a batch", () => {
       const diff = diffTimelines(base, to, fps);
       const owners = independentCutSpots(base, ops, diff.spots, fps);
       expect(owners).toEqual([1, 0]);
-      expect(assignSpots(base, ops, diff.ranges, undefined, fps)).toEqual(owners);
+      expect(assignSpots(base, ops, diff.ranges, fps)).toEqual(owners);
       for (const spot of [0, 1]) {
         const plan = planApply({ from: base, to, head: base, ops, spots: [spot], changeRanges: diff.ranges, fps }, owners);
         expect(plan.kind).toBe("partial");

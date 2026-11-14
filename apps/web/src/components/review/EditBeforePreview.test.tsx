@@ -45,7 +45,7 @@ type Before = ReturnType<typeof useEditBefore>;
 const before = (over: Partial<Before>): Before => ({ timeline: undefined, error: undefined, retry: vi.fn(), duration: 16, map: undefined, range: undefined, unavailable: undefined, ...over }) as Before;
 /** The edit's passage on the page's timeline: where its Before runs, unless the test says the edit moved it. */
 const show = (original: Before, passage = original.range ?? { start: 0, end: 0 }, playbackRef?: { current: BeforePlayback | null }) =>
-  act(async () => root.render(<EditBeforePreview change={change} original={original} passage={passage} active aspect={16 / 9}
+  act(async () => root.render(<EditBeforePreview change={change} original={original} passage={passage} active
     clock={<b>0:02 / 0:16</b>} playbackRef={playbackRef} />));
 
 it("says Before is opening until the earlier version is in, and offers to ask again when it couldn't be read", async () => {

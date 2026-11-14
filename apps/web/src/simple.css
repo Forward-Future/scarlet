@@ -66,17 +66,6 @@
 .simple-target span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .simple-target + .composer-dock { border-top: 0; padding-top: 6px; }
 
-.simple-progress { position: relative; height: 30px; margin: 4px 2px 0; cursor: pointer; touch-action: none; }
-.simple-progress-line, .simple-progress-done { position: absolute; left: 0; top: 9px; height: 2px; border-radius: 1px; }
-.simple-progress-line { right: 0; background: var(--color-line); }
-.simple-progress-done { background: var(--color-dim); }
-.simple-progress-mark { position: absolute; top: 6px; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; background: var(--color-muted); }
-.simple-progress-mark.is-on { background: var(--color-fg); box-shadow: 0 0 0 3px rgba(255, 255, 255, .16); }
-.simple-progress-head { position: absolute; top: 2px; width: 2px; height: 16px; margin-left: -1px; background: var(--color-fg); border-radius: 1px; }
-.simple-progress-time, .simple-progress-total { position: absolute; top: 19px; font: 10.5px var(--font-mono); color: var(--color-dim); font-variant-numeric: tabular-nums; }
-.simple-progress-time { left: 0; }
-.simple-progress-total { right: 0; }
-
 .simple-decide { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 clamp(16px, 2vw, 28px) 16px; padding: 9px 10px 9px 14px;
   border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-panel); font-size: 12.5px; color: var(--color-muted); }
 .simple-decide-text { flex: 1 1 14rem; min-width: 0; color: var(--color-fg); }
@@ -98,21 +87,6 @@
 .simple-subhead .simple-link { flex: none; margin-left: auto; }
 .simple-banner { display: flex; align-items: center; gap: 10px; padding: 7px 18px; border-bottom: 1px solid var(--color-line); font-size: 12px; color: var(--color-warn); }
 .simple-transcript { flex: 1; min-height: 0; overflow-y: auto; }
-
-.simple-progress.is-focused { height: 40px; }
-.simple-progress.is-focused .simple-progress-line { top: 13px; height: 2px; }
-.simple-progress.is-focused .simple-progress-head { top: 2px; height: 24px; }
-.simple-progress.is-focused .simple-progress-mark { top: 10px; }
-.simple-progress.is-focused :is(.simple-progress-time, .simple-progress-total, .simple-progress-now) { top: 28px; }
-.simple-progress-band { position: absolute; top: 4px; height: 20px; min-width: 2px; border-radius: 3px;
-  background: repeating-linear-gradient(135deg, rgba(255, 160, 156, .30) 0 5px, rgba(255, 160, 156, .12) 5px 10px);
-  border: 1px solid rgba(255, 160, 156, .55); overflow: hidden; }
-.simple-progress-band span { display: block; padding: 2px 6px; font-size: 10.5px; line-height: 14px; color: var(--color-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* A join where footage came out: a line at the spot, labelled with how much. */
-.simple-progress-cut { position: absolute; top: 4px; height: 20px; width: 2px; margin-left: -1px; border-radius: 1px; background: rgba(255, 160, 156, .9); }
-.simple-progress-cut span { position: absolute; left: 6px; top: 2px; padding: 0 6px; border-radius: 3px; border: 1px solid rgba(255, 160, 156, .55);
-  background: rgba(255, 160, 156, .16); font-size: 10.5px; line-height: 14px; color: var(--color-fg); white-space: nowrap; }
-.simple-progress-now { position: absolute; left: 50%; transform: translateX(-50%); font: 10.5px var(--font-mono); color: var(--color-fg); }
 
 /* Names what the player is showing for screen readers. The card or strip under the picture already says it on screen. */
 .simple-on-video { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -138,8 +112,8 @@
   font-size: 10.5px; line-height: 14px; color: var(--color-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* An edit that keeps its footage (a sound fix, a zoom, a title): outlined, not hatched red, since After plays it.
    Footage an edit put back is green. */
-.simple-timeline-band.is-kept, .simple-progress-band.is-kept { background: rgba(244, 241, 233, .06); border: 1.5px solid rgba(244, 241, 233, .55); }
-.simple-timeline-band.is-added, .simple-progress-band.is-added { background: color-mix(in srgb, var(--color-ok) 14%, transparent);
+.simple-timeline-band.is-kept { background: rgba(244, 241, 233, .06); border: 1.5px solid rgba(244, 241, 233, .55); }
+.simple-timeline-band.is-added { background: color-mix(in srgb, var(--color-ok) 14%, transparent);
   border: 1.5px solid color-mix(in srgb, var(--color-ok) 70%, transparent); }
 /* Footage another cut in the same pass took out. On After it isn't in the media, so it greys out instead of looking
    playable, and a click hears it in Before. On Before it plays, so it's only outlined. Hovered, it lifts over the

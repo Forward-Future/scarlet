@@ -79,6 +79,24 @@ export function inspectionRoutes(ctx: Ctx) {
     return previewPictures(ctx.paths.media(project.id))(media, range.start, range.end, height).catch(() => undefined);
   }
 
+  function projectMedia(project: Project, mediaId: string) {
+    const media = project.media.find(m => m.id === mediaId);
+    if (!media) throw notFound("media in this project");
+    return media;
+  }
+
+  /** The file to listen to, and which of its audio streams: a confirmed voice's input, or the first. */
+  async function audioSource(project: Project, { mediaId, to, voice }: { mediaId: string; to: number; voice?: string }) {
+    const media = projectMedia(project, mediaId);
+    if (media.kind !== "audio" && !media.hasAudio) throw badRequest("no_audio", "Choose a source with audio.");
+    if (!media.duration || to > media.duration + 0.000001) throw badRequest("outside_media", "Window exceeds source duration.");
+    const file = await fileInDirectoryAsync(ctx.paths.media(project.id), media.path);
+    if (!file) throw notFound("source file");
+    if (voice && !media.voiceRoles) throw badRequest("voice_roles_missing", "This recording has no confirmed voice inputs.");
+    const stream = voice ? media.voiceRoles![voice === "me" ? "me" : "other"] - 1 : 0;
+    return { file, stream };
+  }
+
   async function collect(project: Project, plans: WindowPlan[], options: WindowOptions): Promise<InspectionResult> {
     const signal = ctx.projectSignal(project.id);
     const renderIds: string[] = [];
@@ -139,8 +157,7 @@ export function inspectionRoutes(ctx: Ctx) {
     const range = { start: body.from, end: body.to };
     let plan: WindowPlan;
     if (body.mediaId) {
-      const media = project.media.find(m => m.id === body.mediaId);
-      if (!media) throw notFound("media in this project");
+      const media = projectMedia(project, body.mediaId);
       if (media.kind === "audio" || !media.duration) throw badRequest("no_video", "Choose a moving video source.");
       if (body.to > media.duration + 0.000001) throw badRequest("outside_media", "Window exceeds source duration.");
       plan = { label: "Source", clock: "source", id: media.id, range, focus: body.focus };
@@ -168,8 +185,7 @@ export function inspectionRoutes(ctx: Ctx) {
     const project = requireProject(ctx, c.req.param("id"));
     const signal = ctx.projectSignal(project.id);
     const measured = await Promise.all(windows.map(async ({ mediaId, from, to }): Promise<PictureActivityWindow> => {
-      const media = project.media.find(m => m.id === mediaId);
-      if (!media) throw notFound("media in this project");
+      const media = projectMedia(project, mediaId);
       if (media.kind === "audio" || !media.duration) throw badRequest("no_video", "Choose a moving video source.");
       if (to > media.duration + 0.000001) throw badRequest("outside_media", "Window exceeds source duration.");
       const file = await fileInDirectoryAsync(ctx.paths.media(project.id), media.path);
@@ -199,8 +215,7 @@ export function inspectionRoutes(ctx: Ctx) {
   r.post("/projects/:id/dialogue-detections", async c => {
     const { mediaId, from, to, taskId, startedAt, keptSide } = await jsonBody(c, DialogueWindowRequest);
     const project = requireProject(ctx, c.req.param("id"));
-    const media = project.media.find(m => m.id === mediaId);
-    if (!media) throw notFound("media in this project");
+    const media = projectMedia(project, mediaId);
     return c.json(await dialogue.detect(project.id, media, from, to, taskId, startedAt, keptSide));
   });
 
@@ -224,8 +239,7 @@ export function inspectionRoutes(ctx: Ctx) {
   r.post("/projects/:id/dialogue-scan", async c => {
     const { mediaId, from, to, taskId, startedAt } = await jsonBody(c, DialogueScanRequest);
     const project = requireProject(ctx, c.req.param("id"));
-    const media = project.media.find(m => m.id === mediaId);
-    if (!media) throw notFound("media in this project");
+    const media = projectMedia(project, mediaId);
     const scan = await dialogue.start(project.id, media, from, to, taskId, startedAt);
     const key = `${taskId}/${media.id}`;
     if (!transcribing.has(key)) {
@@ -238,36 +252,21 @@ export function inspectionRoutes(ctx: Ctx) {
   r.post("/projects/:id/dialogue-checkpoints", async c => {
     const { mediaId, from, to } = await jsonBody(c, DialogueRangeRequest);
     const project = requireProject(ctx, c.req.param("id"));
-    const media = project.media.find(m => m.id === mediaId);
-    if (!media) throw notFound("media in this project");
+    const media = projectMedia(project, mediaId);
     return c.json(await dialogue.checkpoints(project.id, media, from, to));
   });
 
   r.post("/projects/:id/source-audio", async c => {
     const { mediaId, from, to, voice } = await jsonBody(c, SourceAudioRequest);
     const project = requireProject(ctx, c.req.param("id"));
-    const media = project.media.find(m => m.id === mediaId);
-    if (!media) throw notFound("media in this project");
-    if (media.kind !== "audio" && !media.hasAudio) throw badRequest("no_audio", "Choose a source with audio.");
-    if (!media.duration || to > media.duration + 0.000001) throw badRequest("outside_media", "Window exceeds source duration.");
-    const file = await fileInDirectoryAsync(ctx.paths.media(project.id), media.path);
-    if (!file) throw notFound("source file");
-    if (voice && !media.voiceRoles) throw badRequest("voice_roles_missing", "This recording has no confirmed voice inputs.");
-    const stream = voice ? media.voiceRoles![voice === "me" ? "me" : "other"] - 1 : 0;
+    const { file, stream } = await audioSource(project, { mediaId, to, voice });
     return c.json({ wav: await ctx.track(audition(file, { start: from, end: to }, ctx.projectSignal(project.id), stream)) });
   });
 
   r.post("/projects/:id/sound-picture", async c => {
     const { mediaId, from, to, remove, voice, words } = await jsonBody(c, SoundPictureRequest);
     const project = requireProject(ctx, c.req.param("id"));
-    const media = project.media.find(m => m.id === mediaId);
-    if (!media) throw notFound("media in this project");
-    if (media.kind !== "audio" && !media.hasAudio) throw badRequest("no_audio", "Choose a source with audio.");
-    if (!media.duration || to > media.duration + 0.000001) throw badRequest("outside_media", "Window exceeds source duration.");
-    const file = await fileInDirectoryAsync(ctx.paths.media(project.id), media.path);
-    if (!file) throw notFound("source file");
-    if (voice && !media.voiceRoles) throw badRequest("voice_roles_missing", "This recording has no confirmed voice inputs.");
-    const stream = voice ? media.voiceRoles![voice === "me" ? "me" : "other"] - 1 : 0;
+    const { file, stream } = await audioSource(project, { mediaId, to, voice });
     const { jpeg, layout } = await ctx.track(soundPicture(file, { range: { start: from, end: to }, remove, words, stream, signal: ctx.projectSignal(project.id) }));
     return c.json({ jpeg: jpeg.toString("base64"), layout });
   });

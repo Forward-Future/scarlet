@@ -3,15 +3,14 @@ import type { RetakeGroup } from "@scarlet/shared";
 import type { MediaAsset, TimeRange, Timeline } from "@scarlet/timeline";
 import { api, errorMessage } from "../../lib/client";
 import { clock } from "../../lib/format";
-import { cutSource, otherTakes, type OtherTake } from "./retakeLookup";
+import { cutSource, otherTakes } from "./retakeLookup";
 
 /**
  * Other attempts at the line a staged cut removes, from the engine's retake grouping of that recording.
- * Times are timeline times; a take the edit no longer plays says so. `onPlay` lets a review that can seek
- * jump to a take.
+ * Times are timeline times; a take the edit no longer plays says so.
  */
-export function OtherTakes({ projectId, timeline, media, range, onPlay }: {
-  projectId: string; timeline: Timeline; media: MediaAsset[]; range: TimeRange; onPlay?(take: OtherTake & { at: number }): void;
+export function OtherTakes({ projectId, timeline, media, range }: {
+  projectId: string; timeline: Timeline; media: MediaAsset[]; range: TimeRange;
 }) {
   const source = useMemo(() => cutSource(timeline, media, range), [timeline, media, range.start, range.end]);
   const key = source ? JSON.stringify([projectId, source.mediaId, source.start, source.end]) : "";
@@ -32,9 +31,7 @@ export function OtherTakes({ projectId, timeline, media, range, onPlay }: {
     <div className="other-takes-head">Other takes · {takes.length}</div>
     <ul>
       {takes.map(take => <li key={take.start}>
-        {take.at !== undefined && onPlay
-          ? <button type="button" className="other-take-time" title="Play this take" onClick={() => onPlay({ ...take, at: take.at! })}>{clock(take.at)}</button>
-          : <span className="other-take-time">{take.at !== undefined ? clock(take.at) : "Cut"}</span>}
+        <span className="other-take-time">{take.at !== undefined ? clock(take.at) : "Cut"}</span>
         <span className="other-take-text">{take.text}</span>
       </li>)}
     </ul>

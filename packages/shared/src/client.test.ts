@@ -219,8 +219,6 @@ describe("a query", () => {
     // A run with a time cap asks for a prompt that names it.
     expect(await paths(c => c.taskPrompt("t1", { workDir: "/w", fresh: true, timeLimitMinutes: 45 }))).toEqual(["/tasks/t1/prompt?workDir=%2Fw&fresh=1&timeLimit=45"]);
     expect(await paths(c => c.taskPrompt("t1", { timeLimitMinutes: 1440 }))).toEqual(["/tasks/t1/prompt?timeLimit=1440"]);
-    expect(await paths(c => c.claimTask("h1"))).toEqual(["/hosts/h1/claim"]);
-    expect(await paths(c => c.claimTask("h1", { wait: 25, agents: ["claude"] }))).toEqual(["/hosts/h1/claim?wait=25"]);
     expect(await paths(c => c.changes("p1"))).toEqual(["/projects/p1/changes"]);
     expect(await paths(c => c.changes("p1", "ready"))).toEqual(["/projects/p1/changes?state=ready"]);
     expect(await paths(c => c.task("t1", "conversation"))).toEqual(["/tasks/t1?events=conversation"]);

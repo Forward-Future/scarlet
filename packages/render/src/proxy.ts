@@ -17,11 +17,6 @@ export interface ProxyOptions {
   range?: { start: number; end: number };
   /** Target height in pixels (never upscaled); default 540. */
   height?: number;
-  /** Force a frame rate; source rate when omitted. */
-  fps?: number;
-  /** Audio bitrate, default "96k". */
-  audioBitrate?: string;
-  crf?: number;
   /** Hardware acceleration policy. Default "none" (libx264). */
   hwaccel?: HwAccel;
   onProgress?: (fraction: number) => void;
@@ -74,31 +69,29 @@ function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, o
   // Older FFmpeg MP4 defaults duplicate the first picture to fill an audio lead.
   // Keep each filtered frame and its timestamp, including a partial-frame input seek.
   const clock = ["-fps_mode:v", "passthrough"];
-  if (!opts.fps && probe.videoTimeBase) clock.push("-enc_time_base:v", probe.videoTimeBase);
+  if (probe.videoTimeBase) clock.push("-enc_time_base:v", probe.videoTimeBase);
   if (encoder === "libx264") {
-    const filters = [`scale=${scale}`, ...(opts.fps ? [`fps=${opts.fps}`] : [])];
     return { input: [], output: [
-      "-vf", filters.join(","), "-c:v", "libx264", "-preset", opts.range ? "ultrafast" : "veryfast",
-      "-crf", String(opts.crf ?? 28), ...keyframes, ...clock, "-pix_fmt", "yuv420p", "-profile:v", "high",
+      "-vf", `scale=${scale}`, "-c:v", "libx264", "-preset", opts.range ? "ultrafast" : "veryfast",
+      "-crf", "28", ...keyframes, ...clock, "-pix_fmt", "yuv420p", "-profile:v", "high",
     ] };
   }
   const nativeCodec = probe.videoCodec === "h264" || probe.videoCodec === "hevc";
   const upright = storedAsShown(probe);
   // Not every hardware encoder honours forced keyframes, but all of them bound the GOP.
-  const gop = Math.max(1, Math.round((opts.fps ?? (probe.fps || 30)) / 2));
+  const gop = Math.max(1, Math.round((probe.fps || 30) / 2));
   const encode = ["-c:v", encoder, ...encoding.args, ...keyframes, ...clock, "-g", String(gop),
     // A forced I-frame is a seek point only when it is also an IDR frame.
     ...(encoder === "h264_nvenc" ? ["-forced-idr", "1"] : encoder === "h264_qsv" ? ["-forced_idr", "1"] : []), "-profile:v", "high"];
   // Keep 4K pictures on the GPU from decode to encode; only the small proxy is written out.
-  if (hardwareDecode && encoder === "h264_nvenc" && nativeCodec && upright && !probe.hasAlpha && !opts.fps) {
+  if (hardwareDecode && encoder === "h264_nvenc" && nativeCodec && upright && !probe.hasAlpha) {
     return { input: ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
       output: ["-vf", `scale_cuda=${scale}:format=yuv420p:interp_algo=bicubic`, ...encode] };
   }
-  const filters = [`scale=${scale}`, ...(opts.fps ? [`fps=${opts.fps}`] : [])];
   const threaded = opts.hwaccel === "auto" && threadedAvcPreview && probe.videoCodec === "h264";
   return {
     input: hardwareDecode && encoder === "h264_videotoolbox" && nativeCodec && !threaded ? ["-hwaccel", "videotoolbox"] : [],
-    output: ["-vf", filters.join(","), ...encode, "-pix_fmt", "yuv420p"],
+    output: ["-vf", `scale=${scale}`, ...encode, "-pix_fmt", "yuv420p"],
   };
 }
 
@@ -112,7 +105,7 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
   const hasVideo = probe.hasVideo && !probe.isStillImage;
   const warnings: string[] = [];
   const encoding = hasVideo && probe.width && probe.height
-    ? await resolveEncoding(opts.hwaccel, opts.ffmpegPath, { ...proxySize(probe, height), fps: opts.fps ?? (probe.fps || 30) },
+    ? await resolveEncoding(opts.hwaccel, opts.ffmpegPath, { ...proxySize(probe, height), fps: probe.fps || 30 },
       "preview", reason => warnings.push(reason))
     : softwareEncoder("preview");
   const encoder = encoding.name;
@@ -175,7 +168,7 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
       ]);
       await writeFile(manifest, list.join("\n") + "\n");
       const audio = probe.hasAudio ? [...LOCAL_MEDIA_INPUT, "-i", input, "-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac",
-        "-b:a", opts.audioBitrate ?? "96k", "-ac", "2"] : ["-map", "0:v:0", "-an"];
+        "-b:a", "96k", "-ac", "2"] : ["-map", "0:v:0", "-an"];
       await runFfmpeg(["-y", "-f", "concat", "-safe", "1", "-i", manifest, ...audio,
         "-c:v", "copy", "-movflags", "+faststart", output], { signal: opts.signal, ffmpegPath: opts.ffmpegPath,
         onProgress: opts.onProgress && (t => opts.onProgress!(PARTS + (1 - PARTS) * Math.min(1, t / Math.max(probe.duration, pictureDuration)))) });
@@ -190,7 +183,7 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
   if (video) args.push("-map", "0:v:0", ...video.output);
   else args.push("-vn");
   if (probe.hasAudio) {
-    args.push("-map", "0:a:0", "-c:a", "aac", "-b:a", opts.audioBitrate ?? "96k", "-ac", "2");
+    args.push("-map", "0:a:0", "-c:a", "aac", "-b:a", "96k", "-ac", "2");
   } else {
     args.push("-an");
   }

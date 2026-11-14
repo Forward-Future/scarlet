@@ -24,7 +24,6 @@
   },
   "dependencies": {
     "@ozymandiasthegreat/vad": "2.0.7",
-    "@scarlet/timeline": "workspace:*",
-    "zod": "4.6.6"
+    "@scarlet/timeline": "workspace:*"
   }
 }

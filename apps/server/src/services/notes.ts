@@ -1,4 +1,4 @@
-import type { Task, User } from "@scarlet/shared";
+import { agentTarget, type Task, type User } from "@scarlet/shared";
 import { clock, newId, type Note } from "@scarlet/timeline";
 import { cleanupNote } from "../cleanup.js";
 import type { Ctx } from "../context.js";
@@ -43,7 +43,7 @@ export async function createNote(ctx: Ctx, user: User, projectId: string, input:
     voiceTranscript: input.voiceTranscript,
     audioPath: input.audioPath,
     author: actorFor(user),
-    assignedTo: target ? (target.model ? `${target.agent}:${target.model}` : target.agent) : undefined,
+    assignedTo: target ? agentTarget(target.agent, target.model) : undefined,
     changeId: input.changeId,
     state: target ? "in_progress" : "open",
     createdAt: ts,

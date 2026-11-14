@@ -5,7 +5,7 @@ import type { Ctx } from "../context.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { auditDialogueAudio } from "./dialogueRepeatAudit.js";
 import { prepareCutReview } from "./changes.js";
-import { appendTaskEvent, saveTask } from "./tasks.js";
+import { appendTaskEvent, editsDialogue, saveTask } from "./tasks.js";
 import { resolveTimeline } from "./timeline.js";
 
 export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<typeof RepeatAuditRequest>, signal: AbortSignal) {
@@ -14,7 +14,7 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
   function current() {
     const owner = ctx.repos.tasks.get(task.id);
     if (!owner || owner.startedAt !== task.startedAt || (request.startedAt && owner.startedAt !== request.startedAt) ||
-        !["edit", "revise", "note"].includes(owner.kind) || !["claimed", "running"].includes(owner.state))
+        !editsDialogue(owner.kind) || !["claimed", "running"].includes(owner.state))
       throw conflict("edit_inactive", "This edit is no longer running.");
     const project = ctx.repos.projects.header(projectId);
     if (!project || project.head !== request.version || (owner.context.branch && owner.context.branch !== project.branch))

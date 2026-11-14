@@ -1,5 +1,5 @@
 /** Read flat display fields, retaining the complete header for edits. */
-export interface Frontmatter {
+interface Frontmatter {
   name?: string;
   description?: string;
   [key: string]: string | undefined;

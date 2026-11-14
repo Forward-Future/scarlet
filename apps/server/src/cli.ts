@@ -10,7 +10,7 @@
  * for the local user (kept in `<data>/access-token`). The desktop app uses
  * `--solo` to bind the API to loopback and receive the startup handshake:
  *
- *   SCARLET_READY {"port":N,"url":"http://127.0.0.1:N","token":"sct_...","userId":"usr_..."}
+ *   SCARLET_READY {"port":N,"url":"http://127.0.0.1:N","token":"sct_...","userId":"usr_...","dataDir":"..."}
  */
 import { existsSync, fstatSync } from "node:fs";
 import { dirname, resolve } from "node:path";

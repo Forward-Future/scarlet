@@ -6,7 +6,7 @@ export const InsetFraming = z.object({
   ...Transform.pick({ cropLeft: true, cropRight: true, cropTop: true, cropBottom: true, cornerRadius: true }).partial().shape,
 });
 
-export type SyncPicture = "asPlaced" | { screenClipId: string; cameraClipId: string; framing?: z.infer<typeof InsetFraming> };
+type SyncPicture = "asPlaced" | { screenClipId: string; cameraClipId: string; framing?: z.infer<typeof InsetFraming> };
 
 /** The preset inset: a quarter of the canvas, in its bottom-right corner. */
 export function insetFraming(project: Project, asset: Pick<MediaAsset, "width" | "height">): Pick<Transform, "scale" | "x" | "y"> {

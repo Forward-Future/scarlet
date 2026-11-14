@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { open, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { extractWav } from "../render/ffmpeg.js";
-import { alignmentVersion } from "../transcribe/wordAlign.js";
+import { alignmentVersion, pcmWavHeader } from "../transcribe/wordAlign.js";
 
 type Paths = { paths: { tmp: string; waveforms(projectId: string): string } };
 
@@ -133,12 +133,7 @@ function pcmWindows({ wav, samples, data }: Decode): Omit<RecordingAudio, "relea
     },
     async writeWindow(target, from, to) {
       const pcm = await bytes(from, to);
-      const head = Buffer.alloc(44);
-      head.write("RIFF", 0); head.writeUInt32LE(36 + pcm.length, 4); head.write("WAVEfmt ", 8);
-      head.writeUInt32LE(16, 16); head.writeUInt16LE(1, 20); head.writeUInt16LE(1, 22);
-      head.writeUInt32LE(RATE, 24); head.writeUInt32LE(RATE * 2, 28); head.writeUInt16LE(2, 32); head.writeUInt16LE(16, 34);
-      head.write("data", 36); head.writeUInt32LE(pcm.length, 40);
-      await writeFile(target, Buffer.concat([head, pcm]));
+      await writeFile(target, Buffer.concat([pcmWavHeader(pcm.length), pcm]));
     },
   };
 }

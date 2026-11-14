@@ -25,7 +25,7 @@ export class Lanes {
 }
 
 /** The agent is waiting, the agent reads it next, or the agent may ask for it. */
-export type Urgency = "now" | "next" | "later";
+type Urgency = "now" | "next" | "later";
 export const urgencyRank = (u: Urgency) => u === "now" ? 2 : u === "next" ? 1 : 0;
 
 export interface InspectionRequest { index: number; audio: boolean; wholePicture: boolean }

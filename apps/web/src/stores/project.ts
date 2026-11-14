@@ -15,7 +15,6 @@ import type {
   Task,
   TaskEvent,
   TrashedProject,
-  UpdateNoteRequest,
   UsageTotals,
   VersionSummary,
   WsEvent,
@@ -25,7 +24,7 @@ import { api, errorMessage } from "../lib/client";
 import { subscribeProject } from "../lib/realtime";
 import { mergeTaskEvents } from "../lib/taskActivity";
 
-export type Status = "idle" | "loading" | "ready" | "error";
+type Status = "idle" | "loading" | "ready" | "error";
 
 export interface ProjectData {
   id: string;
@@ -86,12 +85,7 @@ interface ProjectState {
 
   approve(changeId: string, spots?: number[], restoredCuts?: number[]): Promise<ApproveResponse | undefined>;
   historyEdit(version: string, action: "revert" | "restore"): Promise<void>;
-  switchBranch(name: string, from?: string): Promise<void>;
-  unapprove(changeId: string): Promise<void>;
-  reopen(changeId: string): Promise<void>;
-  reject(changeId: string, reason?: string): Promise<void>;
   revise(changeId: string, body: Parameters<typeof api.reviseChange>[1]): Promise<Task | undefined>;
-  loadChangeDiff(changeId: string): Promise<Awaited<ReturnType<typeof api.change>>["diff"]>;
 
   requestRender(body: Partial<RenderRequest>): Promise<Render>;
   ensureRender(renderId: string): Promise<void>;
@@ -99,10 +93,7 @@ interface ProjectState {
 
   createNote(projectId: string, body: CreateNoteRequest): Promise<{ note: Note; task?: Task }>;
   createVoiceNote(projectId: string, blob: Blob, fields: Parameters<typeof api.createVoiceNote>[2]): Promise<{ note: Note; task?: Task }>;
-  updateNote(noteId: string, body: UpdateNoteRequest): Promise<void>;
-  replyNote(noteId: string, text: string): Promise<void>;
 
-  /** Approve a rule for the skill it names, or another the editor chose. An agent then works it into that skill. */
   /** Approve a rule for a skill. The save runs on the model chosen now. */
   approveLearning(learningId: string, skillId?: string, runWith?: RunChoice): Promise<void>;
   reviseLearning(learningId: string, rule: string): Promise<void>;
@@ -127,9 +118,7 @@ interface ProjectState {
   upsertMedia(projectId: string, media: MediaAsset): void;
   /** Take a file Scarlet couldn't read out of the project. The engine refuses one the video or its history uses. */
   removeMedia(mediaId: string): Promise<void>;
-  checkout(version: string): Promise<void>;
   loadActivity(more?: boolean): Promise<void>;
-  importFromDavinci(otio: unknown): Promise<Change>;
 }
 
 /**
@@ -577,45 +566,11 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       patch(cur.id, () => ({ project, versions: undefined }));
       await get().refreshHead(cur.id);
     },
-    async switchBranch(name, from) {
-      const cur = get().current;
-      if (!cur?.project.head) return;
-      const { project } = await api.switchBranch(cur.id, name, cur.project.head, cur.project.branch ?? "main", from);
-      patch(cur.id, () => ({ project, versions: undefined }));
-      await get().refreshHead(cur.id);
-    },
-    async unapprove(changeId) {
-      const res = await api.unapproveChange(changeId);
-      replaceChange(res.change);
-      patch(res.project.id, () => ({ project: res.project }));
-      await get().refreshHead(res.project.id);
-    },
-    async reject(changeId, reason) {
-      const prev = get().current?.changes.find((c) => c.id === changeId);
-      if (!prev) return;
-      replaceChange({ ...prev, state: "rejected" });
-      try {
-        const { change } = await api.rejectChange(changeId, reason);
-        replaceChange(change);
-      } catch (err) {
-        replaceChange(prev);
-        throw err;
-      }
-    },
-    async reopen(changeId) {
-      const { change } = await api.reopenChange(changeId);
-      replaceChange(change);
-    },
     async revise(changeId, body) {
       const res = await api.reviseChange(changeId, body);
       replaceChange(res.change);
       patch(res.change.projectId, (d) => ({ notes: upsert(d.notes, res.note), tasks: res.task ? upsertAnswered(d.tasks, res.task) : d.tasks }));
       return res.task;
-    },
-    async loadChangeDiff(changeId) {
-      const res = await api.change(changeId);
-      replaceChange(res.change);
-      return res.diff;
     },
 
     async requestRender(body) {
@@ -674,22 +629,6 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     },
     async createVoiceNote(projectId, blob, fields) {
       return noteCreated(projectId, await api.createVoiceNote(projectId, blob, fields));
-    },
-    async updateNote(noteId, body) {
-      const prev = get().current?.notes.find((n) => n.id === noteId);
-      if (!prev) return;
-      patch(prev.projectId, (d) => ({ notes: upsert(d.notes, { ...prev, ...body, assignedTo: body.assignedTo ?? prev.assignedTo }) }));
-      try {
-        const { note } = await api.updateNote(noteId, body);
-        patch(prev.projectId, (d) => ({ notes: upsert(d.notes, note) }));
-      } catch (err) {
-        patch(prev.projectId, (d) => ({ notes: upsert(d.notes, prev) }));
-        throw err;
-      }
-    },
-    async replyNote(noteId, text) {
-      const { note } = await api.replyNote(noteId, text);
-      patch(note.projectId, (d) => ({ notes: upsert(d.notes, note) }));
     },
 
     async approveLearning(learningId, skillId, runWith) {
@@ -803,22 +742,6 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const cursor = more ? cur.activity?.at(-1) : undefined;
       const { activity } = await api.activity(cur.id, { before: cursor?.createdAt, beforeId: cursor?.id, limit: 200 });
       patch(cur.id, (d) => ({ activity: more ? [...(d.activity ?? []), ...activity] : activity, activityComplete: activity.length < 200 }));
-    },
-    async importFromDavinci(otio) {
-      const cur = get().current;
-      if (!cur) throw new Error("No project loaded");
-      const { change } = await api.importOtio(cur.id, otio);
-      replaceChange(change);
-      return change;
-    },
-    async checkout(version) {
-      const cur = get().current;
-      if (!cur) return;
-      const { project } = await api.checkout(cur.id, version);
-      patch(cur.id, () => ({ project }));
-      await get().refreshHead(cur.id);
-      const changes = await api.changes(cur.id);
-      patch(cur.id, () => ({ changes: changes.changes }));
     },
   };
 });

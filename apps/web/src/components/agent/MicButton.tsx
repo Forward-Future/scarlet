@@ -8,7 +8,7 @@ import { Icon } from "../ui/primitives";
  * push-to-talk style when `followHold` is set. Shows a red dot and elapsed
  * time while recording and auto-stops at the 2 minute cap.
  */
-export function MicButton({ onResult, onStart, onRecording, onError, disabled, disabledReason, followHold = false, size = "md", label = "Record a voice note" }: { onResult: (r: RecorderResult) => void; onStart?(): void; onRecording?(on: boolean): void; onError?(message: string): void; disabled?: boolean; disabledReason?: string; followHold?: boolean; size?: "md" | "lg"; label?: string }) {
+export function MicButton({ onResult, onStart, onRecording, onError, disabled, disabledReason, followHold = false, label = "Record a voice note" }: { onResult: (r: RecorderResult) => void; onStart?(): void; onRecording?(on: boolean): void; onError?(message: string): void; disabled?: boolean; disabledReason?: string; followHold?: boolean; label?: string }) {
   const rec = useRecorder(onResult);
   useEffect(() => { if (rec.error) onError?.(rec.error); }, [onError, rec.error]);
   const hold = useUiStore((s) => s.voiceHold);
@@ -68,7 +68,6 @@ export function MicButton({ onResult, onStart, onRecording, onError, disabled, d
   const unsupported = rec.state === "unsupported";
   const isDisabled = disabled || unsupported;
   const title = unsupported ? "Scarlet can’t record audio on this computer" : disabled ? disabledReason : rec.recording ? "Stop recording" : followHold ? `${label} (hold V)` : label;
-  const dim = size === "lg" ? "size-10" : "size-8";
 
   return (
     <div className="flex items-center gap-2">
@@ -80,9 +79,9 @@ export function MicButton({ onResult, onStart, onRecording, onError, disabled, d
         title={title}
         disabled={isDisabled}
         onClick={() => { if (rec.recording) rec.stop(); else { onStart?.(); void rec.start(); } }}
-        className={`${dim} inline-flex items-center justify-center rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${rec.recording ? "bg-bad text-white mic-voice" : rec.state === "requesting" ? "bg-raised text-muted" : "mic-ready"}`}
+        className={`size-8 inline-flex items-center justify-center rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${rec.recording ? "bg-bad text-white mic-voice" : rec.state === "requesting" ? "bg-raised text-muted" : "mic-ready"}`}
       >
-        <Icon name={rec.recording ? "stop" : "mic"} size={size === "lg" ? 18 : 15} />
+        <Icon name={rec.recording ? "stop" : "mic"} size={15} />
       </button>
       {rec.recording && (
         <span className="inline-flex items-center gap-1.5 text-[12px] tnum" aria-live="polite">

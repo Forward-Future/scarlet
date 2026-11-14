@@ -49,6 +49,13 @@ export async function voiceForm(request: Request, maxBytes = 64 * 1024 * 1024) {
   return fields;
 }
 
+/** The recording a voice form carries, and the extension to keep it under. */
+function voiceAudio(form: Record<string, string | File>) {
+  const audio = formFile(form.audio);
+  if (!audio) throw badRequest("missing_audio", "multipart field `audio` is required");
+  return { audio, ext: extname(audio.name || "").toLowerCase() || ".webm" };
+}
+
 export function noteRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
 
@@ -67,8 +74,7 @@ export function noteRoutes(ctx: Ctx) {
   r.post("/projects/:id/notes/voice", async (c) => {
     const project = requireProjectHeader(ctx, c.req.param("id"));
     const form = await voiceForm(c.req.raw);
-    const audio = formFile(form.audio);
-    if (!audio) throw badRequest("missing_audio", "multipart field `audio` is required");
+    const { audio, ext } = voiceAudio(form);
     const time = numberParam(formString(form.time), "time");
     const endRaw = formString(form.end);
     const end = endRaw ? numberParam(endRaw, "end") : undefined;
@@ -87,7 +93,6 @@ export function noteRoutes(ctx: Ctx) {
     }
     ctx.paths.ensureProject(project.id);
     const noteId = newId("note");
-    const ext = extname(audio.name || "").toLowerCase() || ".webm";
     const audioPath = `${noteId}${ext}`;
     const abs = join(ctx.paths.notes(project.id), audioPath);
     await writeFile(abs, Buffer.from(await audio.arrayBuffer()));
@@ -137,11 +142,9 @@ export function noteRoutes(ctx: Ctx) {
    */
   r.post("/speech", async (c) => {
     const form = await voiceForm(c.req.raw);
-    const audio = formFile(form.audio);
-    if (!audio) throw badRequest("missing_audio", "multipart field `audio` is required");
+    const { audio, ext } = voiceAudio(form);
     const provider = getTranscriptionProvider(ctx);
     if (!provider) throw badRequest("transcription_not_configured", NOT_CONFIGURED);
-    const ext = extname(audio.name || "").toLowerCase() || ".webm";
     const abs = join(ctx.paths.tmp, `${newId("speech")}${ext}`);
     await writeFile(abs, Buffer.from(await audio.arrayBuffer()));
     try {
@@ -157,9 +160,8 @@ export function noteRoutes(ctx: Ctx) {
   r.get("/projects/:id/notes", (c) => {
     const project = requireProjectHeader(ctx, c.req.param("id"));
     const state = c.req.query("state");
-    const notes = state
-      ? ctx.repos.notes.select("project_id = ? AND state = ?", [project.id, Note.shape.state.parse(state)], "created_at DESC")
-      : ctx.repos.notes.select("project_id = ?", [project.id], "created_at DESC");
+    const notes = ctx.repos.notes.select("project_id = ?" + (state ? " AND state = ?" : ""),
+      state ? [project.id, Note.shape.state.parse(state)] : [project.id], "created_at DESC");
     return c.json({ notes });
   });
 

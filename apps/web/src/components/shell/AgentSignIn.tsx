@@ -13,7 +13,7 @@ import { InlineError, Spinner } from "../ui/primitives";
 
 type SignInAgent = "claude" | "codex";
 
-export const SIGN_IN: Record<SignInAgent, { button: string; plan: string }> = {
+const SIGN_IN: Record<SignInAgent, { button: string; plan: string }> = {
   claude: { button: "Sign in with Claude", plan: "Claude Pro or Max" },
   codex: { button: "Sign in with ChatGPT", plan: "ChatGPT" },
 };
@@ -36,7 +36,7 @@ function capitalize(s: string) {
 }
 
 /** Track (and drive) the desktop sign-in flow for one agent. */
-export function useAgentLogin(agent: SignInAgent) {
+function useAgentLogin(agent: SignInAgent) {
   const [status, setStatus] = useState<AgentLoginStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 

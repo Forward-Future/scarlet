@@ -34,7 +34,7 @@ export function cacheTimeLeft(now: () => number = () => performance.now()) {
 }
 
 /** Bounded, persistent cache. Readers can only see complete, independently playable MP4s. */
-export class SourcePreviews {
+class SourcePreviews {
   private readonly encoding = new Map<string, Promise<void>>();
 
   private readonly fullJobs = new Map<string, PlaybackCacheStatus>();

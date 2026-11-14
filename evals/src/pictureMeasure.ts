@@ -14,7 +14,7 @@ const run = promisify(execFile);
 const WIDTH = 320, HEIGHT = 180;
 
 /** One frame as small grayscale. Seeking before the input lands on the exact frame for these codecs. */
-export async function grabFrame(file: string, at: number): Promise<Gray> {
+async function grabFrame(file: string, at: number): Promise<Gray> {
   const { stdout } = await run(ffmpegPath(), ["-v", "error", "-nostdin", "-ss", String(Math.max(0, at)), "-i", file, "-frames:v", "1",
     "-vf", `scale=${WIDTH}:${HEIGHT},format=gray`, "-f", "rawvideo", "-"], { encoding: "buffer", maxBuffer: 1 << 24 });
   if (stdout.length < WIDTH * HEIGHT) throw new Error(`No frame at ${at.toFixed(2)} s of ${file}.`);

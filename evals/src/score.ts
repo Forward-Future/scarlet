@@ -36,7 +36,7 @@ export interface ScoreInput {
   edgeOptions?: EdgeOptions;
 }
 
-export interface EdgeDetail extends EdgeReport { context?: string; reason?: string }
+interface EdgeDetail extends EdgeReport { context?: string; reason?: string }
 export interface Tier {
   version: string;
   removal: RemovalSummary;
@@ -48,7 +48,7 @@ export interface Tier {
   edgeList: EdgeDetail[];
   cuts: Array<CutRecord & { timeline: Range }>;
 }
-export interface ReviewTier extends Tier {
+interface ReviewTier extends Tier {
   items: number;
   ai: { cut: number; keep: number; ask: number; unassessed: number; inspected: number };
   editor: { approved: number; skipped: number; pending: number; unknown: number };
@@ -57,11 +57,11 @@ export interface ReviewTier extends Tier {
   /** Staged cuts the agent submitted as "cut": Scarlet held them for review. */
   heldByScarlet: number;
 }
-export interface PictureScore extends PictureComparison { summary: PictureSummary }
+interface PictureScore extends PictureComparison { summary: PictureSummary }
 type ScoredReference = Omit<ReferenceComparison, "edges"> & { edges: ReferenceComparison["edges"] | null };
 
 /** The dead air and doubled words each version plays. The lists are the applied version's, longest gaps first. */
-export interface PacingScore {
+interface PacingScore {
   source: PacingSummary;
   applied: PacingSummary;
   proposed: PacingSummary;

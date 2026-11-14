@@ -2,7 +2,7 @@ import { Author, Timeline, timelineDuration } from "@scarlet/timeline";
 import type { VersionSummary } from "@scarlet/shared";
 import type { Db } from "../db.js";
 
-export interface VersionRow {
+interface VersionRow {
   version: string;
   projectId: string;
   parent: string | null;
@@ -24,7 +24,7 @@ interface Raw {
   created_at: string;
 }
 
-const toRow = (r: Raw, timeline = Timeline.parse(JSON.parse(r.json))): VersionRow => ({
+const toRow = (r: Raw, timeline: Timeline): VersionRow => ({
   version: r.version,
   projectId: r.project_id,
   parent: r.parent,
@@ -128,13 +128,6 @@ export class VersionsRepo {
     this.db
       .prepare("UPDATE timeline_versions SET change_id = ? WHERE project_id = ? AND version = ? AND change_id IS NULL")
       .run(changeId, projectId, version);
-  }
-
-  list(projectId: string): VersionRow[] {
-    const rows = this.db
-      .prepare("SELECT * FROM timeline_versions WHERE project_id = ? ORDER BY created_at DESC")
-      .all(projectId) as Raw[];
-    return rows.map(row => toRow(row));
   }
 
   links(projectId: string) {

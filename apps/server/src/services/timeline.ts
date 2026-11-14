@@ -5,17 +5,17 @@ import { now } from "../db.js";
 import { badRequest, notFound } from "../errors.js";
 
 /** Version id: first 16 hex of sha256 of the stable JSON of the timeline content. */
-export function versionIdFor(tl: Timeline): string {
+function versionIdFor(tl: Timeline): string {
   const { version, parent, createdAt, ...content } = tl;
   return createHash("sha256").update(stableStringify(content)).digest("hex").slice(0, 16);
 }
+
+type VersionMeta = { parent: string | null; author?: Author; changeId?: string | null; description?: string };
 
 /**
  * Store a timeline as an immutable version. Same content → same id; an
  * existing version is returned untouched (first writer wins on parent).
  */
-type VersionMeta = { parent: string | null; author?: Author; changeId?: string | null; description?: string };
-
 export function storeVersion(ctx: Ctx, projectId: string, input: Timeline, meta: VersionMeta): Timeline {
   return storeValidatedVersion(ctx, WritableTimeline.parse({ ...input, projectId }), meta);
 }

@@ -225,7 +225,6 @@
   font-weight: 600;
   letter-spacing: -.045em;
 }
-.page-heading p { margin-top: 7px; color: var(--color-muted); font-size: 13px; }
 .heading-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .control-tabs {
   gap: 2px;
@@ -266,8 +265,7 @@
   }
 }
 
-.request-list { padding: 14px 12px; }
-.watch-monitor, .clip-monitor {
+.watch-monitor {
   background: #080808;
   border: 1px solid var(--color-line);
   border-radius: 8px;

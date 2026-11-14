@@ -42,6 +42,9 @@ use api::Api;
 use runner::{run_agent, RunOptions};
 use types::{AgentAvailability, CompleteTaskRequest, McpSpec, RunResult, RunnerEvent, Task, TaskEvent, CLI_AGENTS};
 
+/// The folder under the work folder that holds one folder for each run.
+const TASKS_DIR: &str = "tasks-v2";
+
 /// Finished task folders keep their artifacts this long.
 const TASK_DIR_DAYS: u64 = 14;
 
@@ -104,10 +107,7 @@ impl McpLauncher {
                 }
             }
             if let Some(a) = agents.iter_mut().find(|a| a.id == id) {
-                if a.model.is_none() { a.model = catalog.model; }
-                a.model_options = catalog.model_options;
-                a.models = Some(catalog.models);
-                a.model_labels = catalog.model_labels;
+                take_catalog(a, catalog.model, catalog.model_options, Some(catalog.models), catalog.model_labels);
             }
         }
     }
@@ -131,6 +131,14 @@ impl McpLauncher {
         env.insert("SCARLET_WORKDIR".into(), work_dir.to_string());
         McpSpec { command: self.program.clone(), args, env }
     }
+}
+
+/// Give an assistant the model list read for it. A model it already has, from the settings, stays its default.
+fn take_catalog(agent: &mut AgentAvailability, model: Option<String>, options: BTreeMap<String, Value>, models: Option<Vec<String>>, labels: BTreeMap<String, String>) {
+    if agent.model.is_none() { agent.model = model; }
+    agent.model_options = options;
+    agent.models = models;
+    agent.model_labels = labels;
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -177,7 +185,7 @@ pub fn claude_project_dir(real_cwd: &Path, home: &Path) -> Option<PathBuf> {
 /// Delete the Claude sessions of one finished Scarlet task: only the project folder named after its task folder,
 /// and the to-do list of each session in it.
 pub fn remove_claude_sessions(real_cwd: &Path, home: &Path) -> std::io::Result<()> {
-    if !real_cwd.parent().and_then(Path::file_name).is_some_and(|n| n == "tasks-v2") {
+    if !real_cwd.parent().and_then(Path::file_name).is_some_and(|n| n == TASKS_DIR) {
         return Ok(());
     }
     let Some(dir) = claude_project_dir(real_cwd, home) else { return Ok(()) };
@@ -290,6 +298,14 @@ async fn heartbeat_workers(api: &Api, host_id: &str, agents: &[AgentAvailability
     Ok(())
 }
 
+/// Show one event of a run in the window and save it with the engine.
+async fn send_event(api: &Api, emit: &Emit, task_id: &str, started_at: Option<&str>, ev: &TaskEvent) {
+    emit("host://task-event", json!({ "taskId": task_id, "event": ev }));
+    if let Err(e) = api.post_task_event(task_id, started_at, ev).await {
+        log::warn!("task {task_id}: post event failed: {e}");
+    }
+}
+
 pub struct HostRuntime {
     emit: Emit,
     api: Api,
@@ -335,6 +351,13 @@ impl HostRuntime {
             mcp_command: Some(self.mcp.describe()),
             configured: true,
         }
+    }
+
+    /// The status with the assistants as they are now. `status` gives none while they are being written.
+    async fn full_status(&self) -> HostStatus {
+        let mut s = self.status();
+        s.agents = self.agents.read().await.clone();
+        s
     }
 
     fn emit_status(&self) {
@@ -387,16 +410,19 @@ impl HostRuntime {
         let agents = self.agents.read().await.clone();
         match heartbeat_workers(&self.api, &id, &agents, &self.running).await {
             Ok(()) => self.reached(),
-            Err(e) => {
-                log::warn!("heartbeat failed: {e}");
-                self.connected.store(false, Ordering::SeqCst);
-                self.set_error(Some(format!("heartbeat failed: {e}")));
-                // Host may have been forgotten by a restarted server: re-register.
-                if e.is_status(404) {
-                    if let Err(e2) = self.register().await {
-                        log::warn!("re-register failed: {e2}");
-                    }
-                }
+            Err(e) => self.lost("heartbeat", &e).await,
+        }
+    }
+
+    /// A call to the engine failed: say so in Settings, and register again when the engine no longer knows this host.
+    async fn lost(&self, what: &str, e: &api::ApiError) {
+        log::warn!("{what} failed: {e}");
+        self.connected.store(false, Ordering::SeqCst);
+        self.set_error(Some(format!("{what} failed: {e}")));
+        // Host may have been forgotten by a restarted server: re-register.
+        if e.is_status(404) {
+            if let Err(e2) = self.register().await {
+                log::warn!("re-register failed: {e2}");
             }
         }
     }
@@ -452,10 +478,7 @@ impl HostRuntime {
                 // A refresh or a sign-in that finished meanwhile has the newer answer. Only an assistant still
                 // without a list takes this one.
                 let Some(agent) = agents.iter_mut().find(|a| a.id == found.id && lacks_models(a)) else { continue };
-                if agent.model.is_none() { agent.model = found.model; }
-                agent.model_options = found.model_options;
-                agent.models = found.models;
-                agent.model_labels = found.model_labels;
+                take_catalog(agent, found.model, found.model_options, found.models, found.model_labels);
                 read = true;
             }
             (read, agents.iter().any(lacks_models), describe_agents(&agents))
@@ -615,14 +638,7 @@ impl HostRuntime {
                     if self.cancel.is_cancelled() {
                         break;
                     }
-                    log::warn!("claim failed: {e}");
-                    self.connected.store(false, Ordering::SeqCst);
-                    self.set_error(Some(format!("claim failed: {e}")));
-                    if e.is_status(404) {
-                        if let Err(e2) = self.register().await {
-                            log::warn!("re-register failed: {e2}");
-                        }
-                    }
+                    self.lost("claim", &e).await;
                     self.sleep_or_wake(Duration::from_secs(5)).await;
                 }
             }
@@ -657,10 +673,7 @@ impl HostRuntime {
     async fn post_event(&self, task: &Task, kind: &str, text: String, data: Option<Value>) {
         let task_id = &task.id;
         let ev = TaskEvent { task_id: Some(task_id.to_string()), at: Some(now_iso()), kind: kind.to_string(), text, data };
-        (self.emit)("host://task-event", json!({ "taskId": task_id, "event": ev }));
-        if let Err(e) = self.api.post_task_event(task_id, task.started_at.as_deref(), &ev).await {
-            log::warn!("task {task_id}: post event failed: {e}");
-        }
+        send_event(&self.api, &self.emit, task_id, task.started_at.as_deref(), &ev).await;
     }
 
     /// Where a run's events go: the sink its runner writes to, the task that sends them on in order to the window
@@ -685,10 +698,7 @@ impl HostRuntime {
                         continue; // summary goes in complete()
                     }
                     let tev = TaskEvent { task_id: Some(task_id.clone()), at: Some(at), kind: ev.kind.clone(), text: ev.text.clone(), data: ev.data.clone() };
-                    emit("host://task-event", json!({ "taskId": task_id, "event": tev }));
-                    if let Err(e) = api.post_task_event(&task_id, started_at.as_deref(), &tev).await {
-                        log::warn!("task {task_id}: post event failed: {e}");
-                    }
+                    send_event(&api, &emit, &task_id, started_at.as_deref(), &tev).await;
                 }
             })
         };
@@ -796,7 +806,7 @@ impl HostRuntime {
     /// loopback port may change when the app restarts between task attempts.
     fn task_dir(&self, project_id: &str, task_id: &str) -> PathBuf {
         let scope = serde_json::to_vec(&[project_id, task_id]).expect("task scope");
-        self.work_root.join("tasks-v2").join(format!("{:x}", Sha256::digest(scope)))
+        self.work_root.join(TASKS_DIR).join(format!("{:x}", Sha256::digest(scope)))
     }
 
     pub async fn run_task(&self, task: Task, cancel: CancellationToken) {
@@ -935,7 +945,7 @@ impl HostRuntime {
     }
 
     async fn run(self: Arc<Self>) {
-        let tasks_root = self.work_root.join("tasks-v2");
+        let tasks_root = self.work_root.join(TASKS_DIR);
         let pids = self.work_root.join("agent-pids");
         let _ = tokio::task::spawn_blocking(move || spawn::stop_orphans(&pids)).await;
         let home = (!child_env(&self.home).contains_key("CLAUDE_CONFIG_DIR")).then(|| self.home.clone());
@@ -1077,11 +1087,7 @@ impl HostManager {
 
     pub async fn status(&self) -> HostStatus {
         match self.runtime.lock().await.as_ref() {
-            Some(rt) => {
-                let mut s = rt.status();
-                s.agents = rt.agents.read().await.clone();
-                s
-            }
+            Some(rt) => rt.full_status().await,
             None => HostStatus { mcp_command: self.mcp.lock().unwrap().as_ref().map(|m| m.describe()), ..Default::default() },
         }
     }
@@ -1190,9 +1196,7 @@ impl HostManager {
                 rt.heartbeat().await;
                 rt.wake.notify_one();
                 rt.emit_status();
-                let mut s = rt.status();
-                s.agents = rt.agents.read().await.clone();
-                s
+                rt.full_status().await
             }
             None => {
                 let env = child_env(&self.paths.home);

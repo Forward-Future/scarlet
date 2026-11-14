@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Transcript } from "@scarlet/timeline";
 import { makeMediaClip } from "@scarlet/timeline";
+import { flattenWords, searchTranscript } from "@scarlet/shared";
 import {
   captionWordMapper,
   dedupeWords,
@@ -9,10 +10,7 @@ import {
   firstCutEvidence,
   firstCutPauses,
   downsample,
-  flattenWords,
-  formatTranscriptText,
   mapWordsThroughClip,
-  searchTranscript,
   sparkline,
 } from "./analysis.js";
 import { joinEvidence } from "./dialogue-join.js";
@@ -91,17 +89,6 @@ describe("searchTranscript", () => {
       ["one", 0, 1],
       ["two", 1, 2],
     ]);
-  });
-});
-
-describe("formatTranscriptText", () => {
-  it("renders compact word lines under segment headers with speaker", () => {
-    const out = formatTranscriptText(transcript, "word", 0, 2);
-    expect(out.split("\n")[0]).toBe("## [0.00-3.00] Matt:");
-    expect(out).toContain("[0.10-0.40] Hello");
-    expect(out).not.toContain("channel");
-    const seg = formatTranscriptText(transcript, "segment");
-    expect(seg).toContain("[4.00-7.00] Welcome back to the channel.");
   });
 });
 

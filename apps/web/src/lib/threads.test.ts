@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { taskRunKind, type Task, type TaskEvent, type ThreadEdit } from "@scarlet/shared";
+import type { Task, ThreadEdit } from "@scarlet/shared";
 import type { Change, Note } from "@scarlet/timeline";
-import { appliedPassCuts, buildThreads, firstCutDeliveries, queueLabel, requestTarget, revisionTarget, threadConversation, type ThreadEntry } from "./threads";
-import { groupEditMessages } from "./groupEditMessages";
+import { appliedPassCuts, buildThreads, firstCutDeliveries, requestTarget, revisionTarget, threadConversation } from "./threads";
 
 const t0 = Date.parse("2026-10-30T12:00:00Z");
 const at = (min: number) => new Date(t0 + min * 60_000).toISOString();
@@ -273,21 +272,6 @@ it("keeps a standalone edit's name and identity when its first task is a revisio
   }
 });
 
-it("keeps late results with the request that produced them when a follow-up was queued", () => {
-  const dialogue = task("Dialogue", "done", { context: { threadId: "dialogue-thread" }, changeIds: ["sync", "cuts"] });
-  const framing = task("Crop the camera", "done", { createdAt: at(2), context: dialogue.context, changeIds: ["crop"] });
-  const changes = [
-    change("sync", "approved", { taskId: dialogue.id, description: "Synced the recordings." }),
-    change("cuts", "approved", { taskId: dialogue.id, updatedAt: at(3), description: "Removed seven cuts." }),
-    change("crop", "approved", { taskId: framing.id, updatedAt: at(4), description: "Tightened the framing." }),
-  ];
-  const [thread] = buildThreads({ tasks: [dialogue, framing], changes, notes: [] });
-  const { entries } = threadConversation(thread!, [], {}, undefined, []);
-  expect(entries.map(e => "text" in e && e.text)).toEqual([
-    "Dialogue", "Synced the recordings.", "Removed seven cuts.", "Crop the camera", "Tightened the framing.",
-  ]);
-});
-
 it("shows the saved first-cut reply and leaves a clean playback recheck out of the chat", () => {
   const reply = "First cut saved. Review the flagged demo holds.";
   const allClear = "The playback audio check found no repeats. No edits were needed.";
@@ -323,66 +307,6 @@ it("leaves out a dialogue part's review that the next part of the same pass took
   expect(entries.map(e => "text" in e && e.text)).toContain("Dialogue cuts are pending review.");
 });
 
-it("shows a revised edit once and keeps its reports, excerpt and original receipt in details", () => {
-  const range = { start: 2, end: 4 };
-  const original = change("first", "approved", { taskId: "crop", description: "First crop.", timelineEdits: [{ label: "Face framing", range }] });
-  const updated = change("second", "approved", { taskId: "crop", description: "Kept the inset width.", createdAt: at(2), updatedAt: at(2),
-    timelineEdits: [{ label: "Face framing", range, replaces: { changeId: original.id, spot: 0 } }] });
-  const separate = change("third", "approved", { taskId: "crop", description: "Framed a different shot.", timelineEdits: [{ label: "Face framing", range }] });
-  const t = task("crop", "done", { changeIds: [original.id, updated.id, separate.id] });
-  const [thread] = buildThreads({ tasks: [t], changes: [original, updated, separate], notes: [] });
-  const edit = (c: Change, previous: ThreadEdit["previous"] = []): ThreadEdit => ({ changeId: c.id, spot: 0, label: "Face framing", range, previous });
-  const event: TaskEvent = { type: "log", at: at(2), text: "Checked the inset.", data: { kind: "editor_progress",
-    edits: [{ phrase: "inset", changeId: original.id, spot: 0 }], excerpt: "The original shot." } };
-  const { entries } = threadConversation(thread!, [], { crop: [event, event] }, undefined, [
-    edit(updated, [{ changeId: original.id, spot: 0 }]), edit(separate),
-  ]);
-  const saved = entries.filter(e => e.kind === "change");
-  expect(saved.map(e => e.change.id).sort()).toEqual(["second", "third"]);
-  expect(saved.find(e => e.change.id === updated.id)?.text).toBe("Kept the inset width.");
-  expect(saved.find(e => e.change.id === updated.id)?.details?.map(d => d.text).sort()).toEqual(["Checked the inset.", "First crop."]);
-  expect(saved.find(e => e.change.id === updated.id)?.details?.find(d => d.text === event.text)?.excerpt).toBe("The original shot.");
-  expect(entries.some(e => e.kind === "progress")).toBe(false);
-});
-
-it("keeps each request's result in place when a later request replaces its timeline spot", () => {
-  const range = { start: 2, end: 4 };
-  const first = change("first", "approved", { taskId: "frame", timelineEdits: [{ label: "Face framing", range }] });
-  const second = change("second", "approved", { taskId: "widen", createdAt: at(4), updatedAt: at(4),
-    timelineEdits: [{ label: "Wider framing", range, replaces: { changeId: first.id, spot: 0 } }] });
-  const context = { threadId: "camera" };
-  const summary = "Matched the width. Kept the height. Checked the opening. The last shot keeps its own crop.";
-  const tasks = [task("frame", "done", { context, changeIds: [first.id] }),
-    task("widen", "done", { context, createdAt: at(3), finishedAt: at(5), summary, changeIds: [second.id] })];
-  const notes = [note("exposure", { changeId: first.id, createdAt: at(2) }), note("position", { changeId: first.id, createdAt: at(2.5) })];
-  const [thread] = buildThreads({ changes: [first, second], tasks, notes });
-  const report: TaskEvent = { type: "log", at: at(1), text: "Checked the first frame.", data: {
-    kind: "editor_progress", edits: [{ phrase: "first frame", changeId: first.id, spot: 0 }],
-  } };
-  const { entries } = threadConversation(thread!, notes, { frame: [report] }, undefined, [
-    { changeId: second.id, spot: 0, label: "Wider framing", range, previous: [{ changeId: first.id, spot: 0 }] },
-  ]);
-  expect(entries.map(e => "text" in e ? e.text : e.kind)).toEqual(["frame", "first.", "exposure", "position", "widen", summary]);
-  const results = entries.filter(e => e.kind === "change");
-  expect(results[0]?.details?.map(d => d.text)).toContain(report.text);
-  expect(results[1]?.text).toBe(summary);
-});
-
-it("keeps the rest of a batch when one spot is revised and preserves every link in a shared explanation", () => {
-  const range = { start: 2, end: 4 };
-  const batch = change("batch", "approved", { taskId: "edit", timelineEdits: [{ label: "Intro", range }, { label: "Outro", range }] });
-  const intro = change("intro", "approved", { taskId: "edit", timelineEdits: [{ label: "New intro", range, replaces: { changeId: "batch", spot: 0 } }] });
-  const t = task("edit", "done", { changeIds: [batch.id, intro.id] });
-  const [thread] = buildThreads({ tasks: [t], changes: [batch, intro], notes: [] });
-  const refs = [{ phrase: "intro", changeId: batch.id, spot: 0 }, { phrase: "outro", changeId: batch.id, spot: 1 }];
-  const { entries } = threadConversation(thread!, [], { edit: [{ type: "log", text: "Checked intro and outro.", data: { kind: "editor_progress", edits: refs } }] },
-    undefined, [{ changeId: intro.id, spot: 0, range, label: "New intro", previous: [{ changeId: batch.id, spot: 0 }] }]);
-  expect(entries.filter(e => e.kind === "change")).toHaveLength(2);
-  const explanations = entries.flatMap(e => e.kind === "change" ? e.details ?? [] : []).filter(n => n.edits);
-  expect(explanations).toHaveLength(1);
-  expect(explanations[0]?.edits?.map(ref => [ref.change.id, ref.spot])).toEqual([["batch", 0], ["batch", 1]]);
-});
-
 it("names what a sent message revised, in the words the box showed", () => {
   const pass = change("pass", "revising", { intent: "suggestion", cutReasons: [{ start: 149.49, end: 151.67, reason: "Keep the finished sentence." }] });
   const edit = change("edit", "approved");
@@ -398,30 +322,6 @@ it("names what a sent message revised, in the words the box showed", () => {
   expect(revisionTarget(sent({ changeId: "edit", editIndex: 1, time: 65 }), [edit], [{ ...row, spot: 0 }])).toBe("the edit at 1:05");
   expect(revisionTarget(sent({ changeId: "edit", time: 0 }), [edit])).toBe("the whole edit");
   expect(revisionTarget(sent({ time: 12 }), [edit])).toBeUndefined();
-});
-
-it("names the recordings a live wait for transcripts is waiting on, until they're ready", () => {
-  const pass = task("pass", "running", { startedAt: at(1) });
-  const [thread] = buildThreads({ tasks: [pass], changes: [], notes: [] });
-  const wait = (mediaId: string, done?: boolean): TaskEvent => ({ type: "log", at: at(2), text: done ? "Ready: the transcript" : "Waiting for the transcript",
-    data: { kind: "media_wait", wait: "transcript", mediaId, ...(done && { done }) } });
-  expect(threadConversation(thread!, [], { pass: [wait("cam"), wait("mic")] }).live).toMatchObject({ text: "Waiting for the transcript", transcripts: ["cam", "mic"] });
-  expect(threadConversation(thread!, [], { pass: [wait("cam"), wait("mic"), wait("cam", true)] }).live?.transcripts).toEqual(["mic"]);
-  expect(threadConversation(thread!, [], { pass: [wait("cam"), wait("mic"), wait("cam", true), wait("mic", true)] }).live?.transcripts).toBeUndefined();
-});
-
-it("gives the live line to a run picked up again while an older request in its thread still waits", () => {
-  const context = { threadId: "zoom" };
-  // The run was interrupted. A follow-up in its thread was sent before it was picked up again, and waits its turn.
-  // The attempt that carries the run on is a later task than that request, and starts ahead of it.
-  const original = task("zoom", "failed", { context, interrupted: true, retryTaskId: "resumed" });
-  const followUp = task("follow", "queued", { context, createdAt: at(1) });
-  const resumed = task("resumed", "running", { context, resumeRootId: "zoom", createdAt: at(2), startedAt: at(2) });
-  const [thread] = buildThreads({ tasks: [original, followUp, resumed], changes: [], notes: [] });
-  // The thread's first request in line is still the one that waits.
-  expect(thread!.active?.id).toBe("follow");
-  const reading: TaskEvent = { type: "tool", at: at(3), text: "timeline_get", data: { tool: "timeline_get", input: {} } };
-  expect(threadConversation(thread!, [], { resumed: [reading] }).live).toMatchObject({ text: "Reading timeline", entry: { taskId: "resumed" } });
 });
 
 describe("requestTarget", () => {
@@ -509,59 +409,6 @@ describe("requestTarget", () => {
   });
 });
 
-it("stops saying it is scanning once the scan has reached the end of the dialogue, give or take a frame", () => {
-  const second = (s: number) => new Date(t0 + s * 1000).toISOString();
-  const running = task("pass", "running", { instruction: "/dialogue-pass", startedAt: second(1) });
-  const page = (s: number, from: number, to: number | undefined, end = 120): TaskEvent => ({ id: `e${s}`, at: second(s), type: "log", text: "Dialogue scan · a.mp4",
-    data: { kind: "editor_progress", scanPage: { mediaId: "med_1", from, end, ...(to !== undefined && { to }) } } });
-  const [thread] = buildThreads({ tasks: [running], changes: [], notes: [] });
-  const live = (events: TaskEvent[]) => threadConversation(thread!, [], { pass: events }).live;
-  expect(live([page(2, 0, undefined), page(3, 0, 60)])).toMatchObject({ text: "Scanning dialogue", entry: { scan: { seconds: 60, total: 120 } } });
-  // The last page ends on the recording's last word, a little short of its length. The run's steps call that done.
-  expect(live([page(2, 0, undefined), page(3, 0, 60), page(4, 58, 119.7)])).toMatchObject({ text: "Preparing edits…", entry: { scan: { seconds: 119.7 } } });
-  expect(live([page(2, 0, undefined), page(3, 0, 60), page(4, 58, 119)])?.text).toBe("Scanning dialogue");
-});
-
-describe("queueLabel", () => {
-  const isPass = (t: Task) => taskRunKind(t) === "pass";
-  const queued = task("mine", "queued", { createdAt: at(5) });
-
-  it("says nothing for a request that isn't waiting its turn", () => {
-    expect(queueLabel(task("mine", "running"), [], [], isPass)).toBeUndefined();
-    expect(queueLabel(queued, [queued], [], isPass)).toBeUndefined();
-    // A transcription runs beside the edits, and another project's work is not in this one's way.
-    const others = [task("transcribing", "running", { kind: "transcribe" }), task("elsewhere", "running", { projectId: "other" })];
-    expect(queueLabel(queued, [...others, queued], [], isPass)).toBeUndefined();
-  });
-
-  it("names what is running ahead of it: the dialogue pass, or the current edit", () => {
-    expect(queueLabel(queued, [task("pass", "running", { instruction: "/dialogue-pass" }), queued], [], isPass)).toBe("Queued · After the dialogue pass");
-    expect(queueLabel(queued, [task("zoom", "claimed"), queued], [], isPass)).toBe("Queued · After the current edit");
-  });
-
-  it("says it waits for the editor's answer when an earlier request asked a question", () => {
-    expect(queueLabel(queued, [task("asking", "waiting_for_user", { question: "Which take?" }), queued], [], isPass))
-      .toBe("Queued · Waiting for your answer on the earlier edit");
-  });
-
-  it("counts the requests asked before it, and not the ones asked after", () => {
-    const earlier = task("first", "queued", { createdAt: at(1) }), second = task("second", "queued", { createdAt: at(2) }), later = task("later", "queued", { createdAt: at(9) });
-    expect(queueLabel(queued, [earlier, queued, later], [], isPass)).toBe("Queued · 1 request ahead");
-    expect(queueLabel(queued, [earlier, second, queued, later], [], isPass)).toBe("Queued · 2 requests ahead");
-    expect(queueLabel(earlier, [earlier, second, queued, later], [], isPass)).toBeUndefined();
-  });
-
-  it("is plain Queued behind a dialogue pass whose calls the editor hasn't made, unless it is about that pass", () => {
-    const pass = change("pass-cuts", "ready", { intent: "suggestion", threadId: "pass-thread", cutReasons: [{ start: 1, end: 2, reason: "pause" }] } as Partial<Change>);
-    expect(queueLabel(queued, [queued], [pass], isPass)).toBe("Queued");
-    // A revision of one of the pass's cuts, or a reply in its thread, works on the pass and isn't held by it.
-    expect(queueLabel({ ...queued, context: { changeId: "pass-cuts" } }, [queued], [pass], isPass)).toBeUndefined();
-    expect(queueLabel({ ...queued, context: { threadId: "pass-thread" } }, [queued], [pass], isPass)).toBeUndefined();
-    // Once the calls are made, nothing holds it.
-    expect(queueLabel(queued, [queued], [{ ...pass, state: "approved" }], isPass)).toBeUndefined();
-  });
-});
-
 it("lists the cuts a dialogue pass applied, through later revisions of them, and nothing that isn't a cut", () => {
   const delivery = { task: task("pass", "done"), appliedChangeIds: ["pass-a", "pass-b"], state: "ready" as const };
   const cut = (changeId: string, extra: Partial<ThreadEdit> = {}): ThreadEdit => ({ changeId, spot: 0, label: changeId, range: { start: 1, end: 2 }, previous: [],
@@ -576,46 +423,4 @@ it("lists the cuts a dialogue pass applied, through later revisions of them, and
   ];
   expect(appliedPassCuts(delivery, edits).map(e => e.label)).toEqual(["pass-a", "revision"]);
   expect(appliedPassCuts({ ...delivery, appliedChangeIds: [] }, edits)).toEqual([]);
-});
-
-describe("groupEditMessages", () => {
-  const saved = (c: Change, text: string, taskId?: string): ThreadEntry => ({ kind: "change", at: c.createdAt ?? at(1), change: c, attempt: 1, text, taskId });
-
-  it("puts a finished request's updates under its result, and shows a first cut's delivery on its change", () => {
-    const done = task("req", "done", { changeIds: ["made"] });
-    const made = change("made", "approved", { taskId: "req" });
-    const [thread] = buildThreads({ tasks: [done], changes: [made], notes: [] });
-    const update: ThreadEntry = { kind: "progress", taskId: "req", at: at(1), text: "Checked the join" };
-    const delivery = { task: done, appliedChangeIds: ["made"], state: "ready" as const, version: "v_made", change: made };
-    const entries: ThreadEntry[] = [
-      { kind: "request", taskId: "req", at: at(0), text: "Trim the start", author: done.createdBy },
-      update,
-      saved(made, "Trimmed the start", "req"),
-      { kind: "firstCut", at: at(2), delivery },
-    ];
-    const rows = groupEditMessages(entries, thread!, []);
-    expect(rows.map(r => r.kind)).toEqual(["request", "change"]);
-    expect(rows[1]).toMatchObject({ kind: "change", text: "Trimmed the start", activity: [update], delivery });
-  });
-
-  it("leaves an update where it is while its request still runs, and a first cut that isn't ready as its own row", () => {
-    const running = task("req", "running");
-    const [thread] = buildThreads({ tasks: [running], changes: [], notes: [] });
-    const update: ThreadEntry = { kind: "progress", taskId: "req", at: at(1), text: "Reading the transcript" };
-    const preparing: ThreadEntry = { kind: "firstCut", at: at(2), delivery: { task: running, appliedChangeIds: [], state: "preparing" } };
-    expect(groupEditMessages([update, preparing], thread!, [])).toEqual([update, preparing]);
-  });
-
-  it("explains a result with Scarlet's reply to it, once, and keeps a different explanation as a detail", () => {
-    const done = task("req", "done", { changeIds: ["made"] });
-    const made = change("made", "approved", { taskId: "req", description: "Removed the false start." });
-    const [thread] = buildThreads({ tasks: [done], changes: [made], notes: [] });
-    const reply = (text: string): ThreadEntry => ({ kind: "agent", taskId: "req", at: at(2), text, author: made.author, change: made });
-    const rows = groupEditMessages([saved(made, "Removed the false start", "req"), reply("I cut the false start and kept the breath."), reply("I cut the false start and kept the breath.")], thread!, []);
-    expect(rows).toHaveLength(1);
-    // The reply is the row's words. What the change saved, said differently, is kept once behind it.
-    expect(rows[0]).toMatchObject({ kind: "change", text: "I cut the false start and kept the breath." });
-    const details = (rows[0] as Extract<ThreadEntry, { kind: "change" }>).details!.map(d => d.text);
-    expect(details).toEqual(["Removed the false start"]);
-  });
 });

@@ -25,19 +25,19 @@ const USAGE = `Usage:
 
 Results go to $SCARLET_EVAL_DATA/results (default: Scarlet's application support folder /evals).`;
 
-export interface AgentConfig { agent: string; model?: string; effort?: string }
+interface AgentConfig { agent: string; model?: string; effort?: string }
 
-export function parseConfig(spec: string): AgentConfig {
+function parseConfig(spec: string): AgentConfig {
   const parts = spec.split(":");
   if (parts.length === 1) return { agent: parts[0]! };
   if (parts.length === 2) return { agent: parts[0]!, model: parts[1] || undefined };
   return { agent: parts[0]!, model: parts.slice(1, -1).join(":") || undefined, effort: parts.at(-1) || undefined };
 }
-export const configLabel = (c: AgentConfig) => [c.agent, c.model ?? "default", c.effort ?? "default"].join(":");
+const configLabel = (c: AgentConfig) => [c.agent, c.model ?? "default", c.effort ?? "default"].join(":");
 const slug = (s: string) => s.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-|-$/g, "");
 
 /** The exact request the app's composer sends for a first cut, on a dedicated branch. */
-export function taskRequest(loaded: LoadedCase, config: AgentConfig, branch: string, skillIds: string[]) {
+function taskRequest(loaded: LoadedCase, config: AgentConfig, branch: string, skillIds: string[]) {
   const r = loaded.file.request;
   return {
     kind: "edit", agent: config.agent, ...(config.model && { model: config.model }), ...(config.effort && { effort: config.effort }),
@@ -46,7 +46,7 @@ export function taskRequest(loaded: LoadedCase, config: AgentConfig, branch: str
   };
 }
 
-export function branchName(caseId: string, config: AgentConfig, trial: number, stamp: string) {
+function branchName(caseId: string, config: AgentConfig, trial: number, stamp: string) {
   return `eval ${caseId} ${configLabel(config)} t${trial} ${stamp}`.slice(0, 80);
 }
 
@@ -137,7 +137,7 @@ export function positiveNumber(flag: string, value: string | undefined, fallback
   return n;
 }
 
-export async function runCli(argv = process.argv.slice(2)) {
+async function runCli(argv = process.argv.slice(2)) {
   const { values } = cli({
     "evaluate-task": { type: "string" }, "evaluate-case": { type: "string" }, case: { type: "string" }, cases: { type: "string" }, suite: { type: "string" },
     configs: { type: "string" }, trials: { type: "string" }, "timeout-min": { type: "string" }, "dry-run": { type: "boolean" }, yes: { type: "boolean" },

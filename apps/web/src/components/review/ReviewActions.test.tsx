@@ -76,18 +76,7 @@ it("decides once for a held key, and not at all while typing or while the decisi
   expect([revise.mock.calls.length, approve.mock.calls.length]).toEqual([1, 0]);
 });
 
-it("says an approval made in advance in place of the button, with a way to take it back", async () => {
-  const cancel = vi.fn();
-  await show({ scheduled: { label: "Applies when Scarlet finishes", cancel } });
-  expect(named("Apply")).toBeUndefined();
-  const said = container.querySelector<HTMLButtonElement>(".review-scheduled")!;
-  expect([said.getAttribute("aria-label"), said.querySelector(".review-scheduled-state")?.textContent]).toEqual(["Applies when Scarlet finishes. Cancel", "Applies when Scarlet finishes"]);
-  // It's already approved, so A does nothing more.
-  await press("a");
-  expect(approve).not.toHaveBeenCalled();
-  await act(async () => said.click());
-  expect(cancel).toHaveBeenCalledTimes(1);
-  // A revision with nothing to approve is Revise alone.
+it("shows Revise alone for a revision with nothing to approve", async () => {
   await act(async () => root.render(<ReviewActions revise={revise} />));
   expect(buttons().map(b => b.textContent)).toEqual(["Revise"]);
 });

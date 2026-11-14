@@ -19,7 +19,7 @@ use tokio::process::ChildStdin;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use super::detect::api_key_vars;
+use super::detect::{api_key_vars, strip_vars};
 use super::spawn::{build_command, resolve_cli, spawn_spec};
 use super::HostManager;
 use crate::util::{child_env, kill_tree, lossy_lines};
@@ -118,9 +118,8 @@ impl LoginManager {
         let (name, args) = login_command(agent).ok_or_else(|| anyhow!("{agent} has no one-click sign-in"))?;
         self.cancel(agent).await;
 
-        let mut env = child_env(&self.home);
         // An API key in the environment would make the CLI skip the subscription flow.
-        env.retain(|k, _| !api_key_vars(agent).iter().any(|v| k.eq_ignore_ascii_case(v)));
+        let env = strip_vars(&child_env(&self.home), api_key_vars(agent));
         let bin = resolve_cli(name, &env).with_context(|| format!("install the {name} CLI first"))?;
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         let spec = spawn_spec(&bin, &args, &env);

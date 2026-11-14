@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchReference, summarizeReference, type MatchWord } from "./reference-match.js";
+import { matchReference, type MatchWord } from "./reference-match.js";
 
 const VOCAB = "the a of to and we you it this that is was for on with as have but not they from say her she will one all would there their what so up out if about who get which go me when make can like time no just him know take people into year your good some could them see other than then now look only come its over think also back after use two how our work first well way even new want because any these give day most us plan build video camera light sound story begin finish idea market river window paper engine garden pocket silver orange".split(" ");
 
@@ -57,10 +57,6 @@ describe("matching a finished video to its recordings", () => {
     expect(m.matchedWords).toBe(final.length);
     expect(m.unmatched).toEqual([]);
     expect(m.unused.map(u => [u.mediaId, ...u.sourceWords])).toEqual([["a", 0, 19], ["a", 120, 122], ["a", 201, 259], ["a", 331, 399], ["b", 50, 299]]);
-    const summary = summarizeReference(m, final, [{ mediaId: "a", words: a }, { mediaId: "b", words: b }]);
-    expect(summary.joins).toMatchObject({ total: 3, forward: 2, switch: 1, back: 0 });
-    expect(summary.joins.removedWords["3-15"].count).toBe(1);
-    expect(summary.recordings[1]).toMatchObject({ mediaId: "b", usedPieces: 1, unusedPassages: 1 });
   });
 
   it("reports a shortened pause as a join with no words removed", () => {
@@ -71,9 +67,6 @@ describe("matching a finished video to its recordings", () => {
     expect(m.joins[0]).toMatchObject({ kind: "forward", removedWords: 0 });
     expect(m.joins[0]!.removedSeconds).toBeCloseTo(0.65, 2);
     expect(m.joins[0]!.finalIn - m.joins[0]!.finalOut).toBeCloseTo(0.25, 2);
-    const summary = summarizeReference(m, final, [{ mediaId: "a", words: a }]);
-    expect(summary.joins.pauseOnly.count).toBe(1);
-    expect(summary.pauses.keptAsRecorded?.count).toBe(3);
   });
 
   it("tells the take that was used from the same line said again", () => {

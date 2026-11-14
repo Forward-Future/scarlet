@@ -1,6 +1,6 @@
-import { applyReviewRemovals, clipDuration, crossfadeJoins, timelineDuration, timelineToSource, type MediaAsset, type MediaClip, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
+import { applyReviewRemovals, clipDuration, crossfadeJoins, sourceToTimeline, timelineDuration, timelineToSource, type MediaAsset, type MediaClip, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 import { JOIN_WORD_SECONDS, normalizeTranscriptToken } from "@scarlet/shared";
-import { dbfs, round3 } from "./analysis.js";
+import { dbfs, isTag, round3 } from "./analysis.js";
 import { REPEAT_WITHIN } from "./dialogue-leftovers.js";
 import { partialRepeatAtJoin, type FragmentSide } from "./dialogue-fragment-repeat.js";
 import { MAX_CROSSFADE, QUIET_PEAK, QUIET_RMS, timelineJoins, type JoinSide } from "./timeline-perception.js";
@@ -86,7 +86,6 @@ type Sound = "quiet" | "valley" | "sound";
 /** The instant is inside the word's timing, clear of both its edges. */
 const inWord = (w: Word, t: number) => w.start + wordMargin < t && t < w.end - wordMargin;
 /** A transcript tag such as [music], which names no spoken word. */
-const isTag = (text: string) => /^\s*\[.*\]\s*$/.test(text);
 const plain = (w: Pick<Word, "text">) => w.text.trim().replace(/[.,;:!?]+$/u, "") || w.text.trim();
 const quote = (words: string[]) => [...new Set(words)].map(w => "“" + w + "”").join(" / ");
 
@@ -303,7 +302,7 @@ export function dialogueJoinWords(tl: Timeline, project: Pick<Project, "media">,
     const page = pageAt(pages, clip.mediaId, stream, t);
     const words = page?.words.filter(w => w.end > t - JOIN_WORD_SECONDS && w.start < t + JOIN_WORD_SECONDS && w.start >= clip.sourceIn && w.end <= clip.sourceOut);
     if (!words?.length) return [];
-    const timelineAt = (source: number) => clip.timelineIn + (source - clip.sourceIn) / clip.speed;
+    const timelineAt = (source: number) => sourceToTimeline(clip, source);
     return [{ mediaId: clip.mediaId, clipId: clip.id, ...(stream && { audioStream: stream }), words: words.map(w => [timelineAt(w.start), timelineAt(w.end), w.text] as const) }];
   });
   return { start: wordsAt(range.start), end: wordsAt(range.end) };
@@ -328,7 +327,7 @@ function samePhrase(left: TimedWord[], right: TimedWord[], removedSeconds = 0) {
 }
 
 /** Words doubled across an edit, or an immediately repeated phrase at the beginning or end of a kept take. */
-export function dialogueJoinRepeats(nearby: RepeatReadings, cut: TimeRange, previousEnd = 0, nextStart = Infinity) {
+function dialogueJoinRepeats(nearby: RepeatReadings, cut: TimeRange, previousEnd = 0, nextStart = Infinity) {
   const kept = (readings: RepeatReadings["start"], side: "start" | "end") => readings.map(r => ({
     ...r, words: r.words.filter(([s, e]) => side === "start"
       ? s >= previousEnd && (s + e) / 2 < cut.start : (s + e) / 2 >= cut.end && e <= nextStart),
@@ -544,7 +543,7 @@ export function audibleMediaClips(tl: Timeline) {
     .filter((c): c is MediaClip => c.kind === "media" && c.enabled && c.volume > 0);
 }
 
-export interface EdgeAudio {
+interface EdgeAudio {
   edge: "start" | "end";
   mediaId: string;
   /** Source second of the boundary. */
@@ -596,7 +595,7 @@ const FRAGMENT_DROP_DB = 12;
 const FRAGMENT_SOUND_DBFS = -42;
 
 /** What a clip edge given in source seconds leaves playing that an editor would hear as a mistake. */
-export interface EdgeInSound {
+interface EdgeInSound {
   /** The transcript word the edge falls inside, while that word is sounding. */
   word?: string;
   /**
@@ -688,7 +687,7 @@ function besideWord(runs: TimeRange[], side: "start" | "end") {
   return runs.reduce<TimeRange | undefined>((best, q) => !best || (side === "start" ? q.start < best.start : q.end > best.end) ? q : best, undefined);
 }
 
-export interface WordCut extends TimeRange {
+interface WordCut extends TimeRange {
   /** The removed words, for the editor-facing reason and the model's own check. */
   text: string;
   /** Edges that found no measured silence and fell back to the word timings. */

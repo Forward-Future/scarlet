@@ -59,11 +59,11 @@ export function sampleTimes(duration: number, fps: number, count: number, scenes
 const sheetSize = "w='max(2,trunc(min(320,180*dar)/2)*2)':h='max(2,trunc(min(180,320/dar)/2)*2)'";
 export const sheetScale = `scale=${sheetSize}`;
 /** A frame counts as changed when any 192x108 grey pixel moves by more than this many levels. */
-export const ACTIVITY_THRESHOLD = 24;
+const ACTIVITY_THRESHOLD = 24;
 /** A 720p preview copy reads thin features one or two grey levels fainter than its 4K original,
  * and its own noise stays under five. Two levels lower keeps copy sheets at least as sensitive. */
 export const PREVIEW_COPY_ACTIVITY_THRESHOLD = 22;
-export const activityFilterAt = (threshold: number) => `scale=192:108,format=gray,tblend=all_mode=difference,bbox=min_val=${threshold}`;
+const activityFilterAt = (threshold: number) => `scale=192:108,format=gray,tblend=all_mode=difference,bbox=min_val=${threshold}`;
 export const activityFilter = activityFilterAt(ACTIVITY_THRESHOLD);
 
 function tileSheet(count: number) {

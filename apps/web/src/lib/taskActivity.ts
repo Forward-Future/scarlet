@@ -70,15 +70,11 @@ export function toolName(event: TaskEvent): string {
   return name.replace(/^(?:mcp__scarlet__|mcp_scarlet_|scarlet(?:__|[./]))/i, "").replaceAll(".", "_").toLowerCase();
 }
 
-export function isDialogueScanTool(event: TaskEvent) {
-  return event.type === "tool" && toolName(event) === "dialogue_scan";
-}
-
-const waitLabels: Record<string, string> = { transcript: "the transcript", sound: "the sound analysis", dialogue: "dialogue analysis" };
+export const waitLabels: Record<string, string> = { transcript: "the transcript", sound: "the sound analysis", dialogue: "dialogue analysis" };
 /** The live line while a run waits for a transcript. */
 export const TRANSCRIPT_WAIT = `Waiting for ${waitLabels.transcript}`;
 /** Tools an agent calls again to collect media work that is still being prepared. */
-const waitTools: Record<string, string> = { transcript_get: "transcript", transcript_search: "transcript", waveform_get: "sound", dialogue_scan: "dialogue" };
+export const waitTools: Record<string, string> = { transcript_get: "transcript", transcript_search: "transcript", waveform_get: "sound", dialogue_scan: "dialogue" };
 
 function waitKey(wait: unknown, mediaId: unknown) {
   return typeof wait === "string" && typeof mediaId === "string" ? `${wait}/${mediaId}` : undefined;
@@ -105,9 +101,9 @@ export function waitingFor(event: TaskEvent, waits: ReadonlySet<string>): string
   return key && waits.has(key) ? wait : undefined;
 }
 
-function toolLabel(name: string, event: TaskEvent, hasScanHistory: boolean): string | undefined {
+function toolLabel(name: string, event: TaskEvent): string | undefined {
   if (!Object.hasOwn(toolActivity, name)) return;
-  const label = name === "dialogue_scan" && hasScanHistory ? "Reviewing dialogue" : toolActivity[name]!;
+  const label = toolActivity[name]!;
   const input = event.data?.input;
   if (!input || typeof input !== "object") return label;
   if ("index" in input && typeof input.index === "number" && Number.isSafeInteger(input.index) && input.index >= 0) {
@@ -122,7 +118,7 @@ function toolLabel(name: string, event: TaskEvent, hasScanHistory: boolean): str
   return typeof end === "number" && Number.isFinite(end) && end - time >= 1 ? `${label} ${clock(time)}–${clock(end)}` : `${label} at ${clock(time)}`;
 }
 
-export function taskActivityLabel(event: TaskEvent, hasScanHistory = false, waits: ReadonlySet<string> = new Set()): string | undefined {
+export function taskActivityLabel(event: TaskEvent, waits: ReadonlySet<string> = new Set()): string | undefined {
   switch (event.type) {
     case "tool": {
       const wait = waitingFor(event, waits);
@@ -132,7 +128,7 @@ export function taskActivityLabel(event: TaskEvent, hasScanHistory = false, wait
         const input = event.data?.input;
         return input && typeof input === "object" && "text" in input && typeof input.text === "string" ? progressLabel(input.text) : undefined;
       }
-      return toolLabel(tool, event, hasScanHistory);
+      return toolLabel(tool, event);
     }
     case "log":
       if (event.data?.kind === "editor_progress") return event.data.scanPage ? "Scanning dialogue" : event.text.trim() || undefined;
@@ -199,30 +195,4 @@ export function mergeTaskEvents(history: TaskEvent[], live: TaskEvent[]): TaskEv
   const ids = new Set(history.map((event) => event.id));
   return [...history, ...live.filter((event) => !event.id || !ids.has(event.id))]
     .sort((a, b) => (Date.parse(a.at ?? "") || 0) - (Date.parse(b.at ?? "") || 0));
-}
-
-const compactTools: Record<string, string> = {
-  project_get: "Reading project", media_list: "Reviewing footage", media_frame: "Inspecting frame",
-  source_audio: "Checking audio", audio_sync: "Aligning audio", dialogue_check_join: "Checking join", timeline_join_audit: "Checking joins", dialogue_check_repeats: "Checking repeated dialogue", media_profile: "Measuring audio",
-  dialogue_review_inspect: "Checking cut", dialogue_review_save: "Saving recommendations", dialogue_revise_cut: "Moving cut",
-  dialogue_apply_cuts: "Editing dialogue", waveform_get: "Checking waveform", sound_picture: "Checking waveform", timeline_first_cut: "Assembling footage",
-  change_list: "Reviewing edits", render_request: "Rendering preview", render_status: "Checking render",
-  change_review_cut: "Reviewing cut", timeline_propose: "Applying edit", skill_save_from_change: "Saving skill",
-};
-
-/** Compact activity from a single event, when one is available. */
-export function compactActivity(ev: TaskEvent): string | undefined {
-  const explicit = ev.data?.activity;
-  if (typeof explicit === "string" && /^[\p{L}][\p{L}’-]*(?: [\p{L}][\p{L}’-]*)?$/u.test(explicit)) return explicit;
-  if (ev.type === "tool") {
-    const name = toolName(ev);
-    const label = compactTools[name] ?? toolActivity[name];
-    if (label && label.split(" ").length <= 2) return label;
-  }
-  if (ev.data?.kind === "reasoning") return "Planning edit";
-  if (ev.data?.kind === "media_wait") return ev.data.done ? undefined : "Waiting";
-  if (ev.data?.scanPage) return "Scanning dialogue";
-  const label = progressLabel(ev.text);
-  if (label && label.split(" ").length <= 2) return label;
-  if (ev.type === "change") return "Finishing edit";
 }

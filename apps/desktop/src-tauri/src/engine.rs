@@ -33,7 +33,7 @@ use tokio::sync::{Mutex, Notify};
 use crate::config::Paths;
 use crate::util::{child_env, hide_console, lossy_lines, split_command_line};
 
-pub const READY_PREFIX: &str = "SCARLET_READY ";
+pub const READY_PREFIX: &str = "SCARLET_READY";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -49,7 +49,7 @@ pub struct ReadyInfo {
 
 /// Parse the engine's ready line. Returns None for any other output.
 pub fn parse_ready_line(line: &str) -> Option<ReadyInfo> {
-    let rest = line.trim_start().strip_prefix(READY_PREFIX.trim_end())?;
+    let rest = line.trim_start().strip_prefix(READY_PREFIX)?;
     serde_json::from_str::<ReadyInfo>(rest.trim()).ok()
 }
 
@@ -264,6 +264,14 @@ fn ended(s: &mut EngineStatus, quitting: bool, asked: bool, code: Option<i32>) {
     }
 }
 
+/// The status once Scarlet has stopped the engine for good.
+fn stopped(s: &mut EngineStatus) {
+    s.state = "stopped".into();
+    s.pid = None;
+    s.url = None;
+    s.token = None;
+}
+
 pub struct EngineManager {
     app: AppHandle,
     paths: Paths,
@@ -303,6 +311,11 @@ impl EngineManager {
 
     pub fn status(&self) -> EngineStatus {
         self.status.lock().unwrap().clone()
+    }
+
+    /// Stopped, or started again since `generation`: whatever belongs to that start has nothing left to do.
+    fn superseded(&self, generation: u64) -> bool {
+        self.stopped.load(Ordering::SeqCst) || self.generation.load(Ordering::SeqCst) != generation
     }
 
     fn update(&self, f: impl FnOnce(&mut EngineStatus)) {
@@ -370,7 +383,7 @@ impl EngineManager {
         log::info!("engine: dev reload on; watching {}", dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", "));
         loop {
             tokio::time::sleep(Duration::from_millis(700)).await;
-            if self.stopped.load(Ordering::SeqCst) || self.generation.load(Ordering::SeqCst) != generation {
+            if self.superseded(generation) {
                 return;
             }
             let now = newest_mtime(&dirs);
@@ -399,7 +412,7 @@ impl EngineManager {
         let mut attempt: u32 = 0;
         let mut failed_starts: u32 = 0;
         loop {
-            if self.stopped.load(Ordering::SeqCst) || self.generation.load(Ordering::SeqCst) != generation {
+            if self.superseded(generation) {
                 return;
             }
             let started = Instant::now();
@@ -415,13 +428,8 @@ impl EngineManager {
                     });
                 }
             }
-            if self.stopped.load(Ordering::SeqCst) || self.generation.load(Ordering::SeqCst) != generation {
-                self.update(|s| {
-                    s.state = "stopped".into();
-                    s.pid = None;
-                    s.url = None;
-                    s.token = None;
-                });
+            if self.superseded(generation) {
+                self.update(stopped);
                 return;
             }
             // Code changed (dev): restart right away, same port.
@@ -488,7 +496,7 @@ impl EngineManager {
         cmd.process_group(0);
         hide_console(&mut cmd);
         let mut running = self.running.lock().await;
-        if self.stopped.load(Ordering::SeqCst) || self.generation.load(Ordering::SeqCst) != generation {
+        if self.superseded(generation) {
             return Ok(());
         }
         log::info!("engine: spawning {} serve --solo --data {} --port {port}", launch.describe(), self.paths.data_dir.display());
@@ -606,12 +614,7 @@ impl EngineManager {
         self.stopped.store(true, Ordering::SeqCst);
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.shutdown_child().await;
-        self.update(|s| {
-            s.state = "stopped".into();
-            s.pid = None;
-            s.url = None;
-            s.token = None;
-        });
+        self.update(stopped);
     }
 
     /// Synchronous best-effort stop for process exit paths.

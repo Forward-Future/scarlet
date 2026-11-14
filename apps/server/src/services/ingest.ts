@@ -29,7 +29,7 @@ import { emissionStore, emissionStorePaths } from "./recordingAudio.js";
 import { prepareSourceProxies, sourcePreviews } from "./sourcePreviews.js";
 import { steadyCopy } from "./steadyCopy.js";
 
-export const WAVEFORM_POINTS_PER_SECOND = 50;
+const WAVEFORM_POINTS_PER_SECOND = 50;
 const runFile = promisify(execFile);
 const GiB = 1024 ** 3;
 const URL_IMPORT_BYTES = 64 * GiB;
@@ -492,12 +492,21 @@ export async function removeUnreadableMedia(ctx: Ctx, projectId: string, id: str
     .map(path => path && rm(path, { recursive: true, force: true }).catch(error => ctx.log(`[media] ${id} left ${path} behind: ${(error as Error).message}`))));
 }
 
-/** Run transcription for an asset (as a server-side `transcribe` task), store the transcript, link it on the asset. */
+/** The recording's most recent transcription task in the project, whatever state it is in. */
+export function latestTranscription(ctx: Ctx, projectId: string, mediaId: string): Task | undefined {
+  return ctx.repos.tasks.select("project_id = ? AND kind = 'transcribe' AND json_extract(json, '$.context.mediaId') = ?",
+    [projectId, mediaId], "created_at DESC, rowid DESC LIMIT 1")[0];
+}
+
+/** `startTranscription(...).done`, for tests and benchmarks. */
 export function transcribeMedia(ctx: Ctx, projectId: string, asset: MediaAsset, providerOverride?: string): Promise<Transcript | null> {
   return startTranscription(ctx, projectId, asset, providerOverride).done;
 }
 
-/** Same as transcribeMedia but hands back the task row synchronously (for the HTTP route). */
+/**
+ * Run transcription for an asset as a server-side `transcribe` task, store the transcript and link it on the asset.
+ * Hands back the task row at once, and a promise for the transcript.
+ */
 export function startTranscription(
   ctx: Ctx,
   projectId: string,
@@ -536,8 +545,7 @@ function startWithProvider(ctx: Ctx, projectId: string, asset: MediaAsset, provi
     let inherit = resume === "missing" ? undefined : resume;
     if (resume === "missing" || inherit?.interrupted) {
       // Another engine may have recovered and even finished this job since the recovery sweep listed it.
-      const [latest] = ctx.repos.tasks.select("project_id = ? AND kind = 'transcribe' AND json_extract(json, '$.context.mediaId') = ?",
-        [projectId, asset.id], "created_at DESC, rowid DESC LIMIT 1");
+      const latest = latestTranscription(ctx, projectId, asset.id);
       if (inherit?.interrupted && latest && latest.id !== inherit.interrupted.id) return { task: latest, started: false };
       if (resume === "missing" && latest?.state === "done" && hasTranscript(ctx, asset.id)) return { task: latest, started: false };
       // A resumed pass can ask for its missing transcript while caching is paused, before the recovery sweep runs.
@@ -805,7 +813,7 @@ export function settleAlignment(ctx: Ctx, media: MediaWithStatus & { projectId: 
   const provider = media.status === "ready" ? getTranscriptionProvider(ctx) : null;
   // Reading a transcript never sends a recording to a cloud service, and never repeats a run that failed by itself:
   // both wait for the editor's Retry, and the transcript keeps the times it has.
-  const [last] = ctx.repos.tasks.select("project_id = ? AND kind = 'transcribe' AND json_extract(json, '$.context.mediaId') = ?", [projectId, media.id], "created_at DESC, rowid DESC LIMIT 1");
+  const last = latestTranscription(ctx, projectId, media.id);
   if (!provider || provider.name !== "whispercpp" || last?.state === "cancelled" || (last?.state === "failed" && !last.interrupted)) return keepTimes(ctx, media.id);
   // A read may continue an existing local transcript, but a different preset is a new transcription request.
   const partial = ctx.db.prepare(`SELECT json_extract(json, '$.provider') AS provider, json_extract(json, '$.localModel') AS model

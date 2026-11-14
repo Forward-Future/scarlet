@@ -96,7 +96,7 @@ interface RunBundleProps {
 }
 
 /** What a pass sent back to check the finished cut is doing, whatever it said on its way in. */
-export const FINAL_CHECK = "Final check of the finished cut";
+const FINAL_CHECK = "Final check of the finished cut";
 /** The events of a pass's latest run, once the engine has sent it back to check for repeats; every event otherwise. */
 const sinceRerun = (task: Task, events: readonly TaskEvent[]) => {
   const from = task.repeatAudit?.returns ? task.startedAt : undefined;

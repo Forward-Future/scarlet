@@ -1,5 +1,5 @@
 import { normalizeTranscriptToken } from "@scarlet/shared";
-import { clipDuration, timelineToSource, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
+import { clipDuration, sourceToTimeline, timelineToSource, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 import { dialogueAudioStream, dialogueClips } from "./dialogue-join.js";
 import type { RepeatedTake } from "./dialogue-retakes.js";
 
@@ -57,7 +57,7 @@ export function acousticRetakeJoin(tl: Timeline, project: Project, range: TimeRa
         if (take.first.start < clip.sourceIn || take.followingWord.end > clip.sourceOut) continue;
         const effect = cutEffect(cut, take);
         if (!effect) continue;
-        const timelineAt = clip.timelineIn + (take.first.start - clip.sourceIn) / (clip.speed ?? 1);
+        const timelineAt = sourceToTimeline(clip, take.first.start);
         const key = JSON.stringify([mediaId, audioStream, take.first.start, take.next.start, timelineAt]);
         results.set(key, { mediaId, ...(audioStream !== undefined && { audioStream }), ...effect });
       }

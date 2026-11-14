@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 /** One sweep of the loading wave, in seconds. workspace.css's `waveform-travel` runs for the same time. */
-export const WAVE_PERIOD = 4.8;
+const WAVE_PERIOD = 4.8;
 /** A lane that finishes this soon before the other waits for it, so the two land as one. */
-export const TOGETHER_MS = 250;
+const TOGETHER_MS = 250;
 /** Loading shows only after this long, so a quick load just appears. workspace.css waits as long. */
-export const GRACE_MS = 150;
+const GRACE_MS = 150;
 
 /**
  * The delay that puts a loading wave starting now at the same point as every other one, so the picture's
@@ -15,7 +15,7 @@ export function wavePhase() {
   return `${(-((performance.now() / 1000) % WAVE_PERIOD)).toFixed(3)}s`;
 }
 
-export type Lane = "picture" | "sound";
+type Lane = "picture" | "sound";
 
 /**
  * The picture and the sound load on their own. A lane that finishes while the other is still loading

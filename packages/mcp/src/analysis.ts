@@ -1,18 +1,17 @@
 /**
  * Pure helpers used by the MCP tools: silence detection, sparklines,
- * transcript search/formatting, caption mapping and timeline summaries.
+ * caption mapping and timeline summaries.
  * No I/O here so everything is unit-testable.
  */
 import type { Clip, MediaClip, Project, TimeRange, Timeline, Transcript, TranscriptWord } from "@scarlet/timeline";
 import { clipEnd, formatTimecode, mergeRanges, rangesOverlap, timelineDuration } from "@scarlet/timeline";
 import { normalizeTranscriptToken } from "@scarlet/shared";
-export { flattenWords, searchTranscript, type TranscriptMatch } from "@scarlet/shared";
 
 // ---------------------------------------------------------------------------
 // Waveform
 // ---------------------------------------------------------------------------
 
-export interface Silence {
+interface Silence {
   start: number;
   end: number;
   duration: number;
@@ -76,36 +75,6 @@ export function downsample(values: number[], n: number): number[] {
 }
 
 // ---------------------------------------------------------------------------
-// Transcript
-// ---------------------------------------------------------------------------
-
-/** `[12.34-12.80] word` lines, grouped under a segment/speaker header. */
-export function formatTranscriptText(t: Transcript, granularity: "word" | "segment", from?: number, to?: number): string {
-  const lines: string[] = [];
-  for (const seg of t.segments) {
-    if (from !== undefined && seg.end < from) continue;
-    if (to !== undefined && seg.start > to) continue;
-    const spk = seg.speaker ? ` ${seg.speaker}:` : "";
-    if (granularity === "segment" || seg.words.length === 0) {
-      lines.push(`[${fmt(seg.start)}-${fmt(seg.end)}]${spk} ${seg.text.trim()}`);
-      continue;
-    }
-    lines.push(`## [${fmt(seg.start)}-${fmt(seg.end)}]${spk}`);
-    for (const w of seg.words) {
-      if (from !== undefined && w.end < from) continue;
-      if (to !== undefined && w.start > to) continue;
-      const wspk = w.speaker && w.speaker !== seg.speaker ? ` ${w.speaker}:` : "";
-      lines.push(`[${fmt(w.start)}-${fmt(w.end)}]${wspk} ${w.text}`);
-    }
-  }
-  return lines.join("\n");
-}
-
-function fmt(s: number): string {
-  return s.toFixed(2);
-}
-
-// ---------------------------------------------------------------------------
 // Captions through the timeline
 // ---------------------------------------------------------------------------
 
@@ -164,13 +133,12 @@ export function captionWordMapper(words: readonly TranscriptWord[]): (clip: Medi
 }
 
 /** Media clips whose audio is actually heard (enabled, unmuted track, volume > 0). */
-export function audibleMediaClips(timeline: Timeline, mediaId?: string): MediaClip[] {
+export function audibleMediaClips(timeline: Timeline): MediaClip[] {
   const clips: MediaClip[] = [];
   for (const track of timeline.tracks) {
     if (track.kind === "caption" || track.muted) continue;
     for (const clip of track.clips) {
       if (clip.kind !== "media" || clip.enabled === false) continue;
-      if (mediaId && clip.mediaId !== mediaId) continue;
       if ((clip.volume ?? 1) <= 0) continue;
       clips.push(clip);
     }
@@ -187,7 +155,8 @@ export function captionSourceClips(timeline: Timeline, available: (id: string) =
 }
 
 /** Drop words that duplicate an earlier one at (almost) the same timeline time. */
-export function dedupeWords(words: TranscriptWord[], tolerance = 0.02): TranscriptWord[] {
+export function dedupeWords(words: TranscriptWord[]): TranscriptWord[] {
+  const tolerance = 0.02;
   const sorted = [...words].sort((a, b) => a.start - b.start);
   const out: TranscriptWord[] = [];
   const lastStart = new Map<string, number>();
@@ -205,7 +174,7 @@ export function dedupeWords(words: TranscriptWord[], tolerance = 0.02): Transcri
 // Timeline summaries
 // ---------------------------------------------------------------------------
 
-export function describeClip(clip: Clip, fps = 30): string {
+function describeClip(clip: Clip, fps = 30): string {
   const range = `${formatTimecode(clip.timelineIn, fps)}–${formatTimecode(clipEnd(clip), fps)}`;
   const label = clip.label ? ` "${clip.label}"` : "";
   const off = clip.enabled === false ? " (disabled)" : "";
@@ -271,6 +240,9 @@ export function truncate(s: string, n: number): string {
 export function round3(n: number): number {
   return Math.round(n * 1000) / 1000;
 }
+
+/** A transcript word that is a bracketed tag, such as [BLANK_AUDIO], and not something said. */
+export const isTag = (text: string) => /^\s*\[.*\]\s*$/.test(text);
 
 /** Linear level 0..1 → dBFS, floored at -99. Every audio tool reports levels this way. */
 export function dbfs(v: number): number {

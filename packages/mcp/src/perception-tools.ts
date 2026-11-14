@@ -8,11 +8,12 @@ import { ScarletApiError, type ProjectDetail, type ScarletClient, type ScarletTo
 import { timelineDuration, type Project, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 import { auditJoin, formatTimelineTranscript, newJoins, timelineJoins, timelineWords, type JoinAudit, type TimelineJoin } from "./timeline-perception.js";
 import { levelProfile, pauseStats, retakeGroups } from "./media-profile.js";
+import { json, text } from "./tool-result.js";
 
-export type ToolRegistrar = <Shape extends z.ZodRawShape>(name: ScarletToolName, description: string, shape: Shape,
+type ToolRegistrar = <Shape extends z.ZodRawShape>(name: ScarletToolName, description: string, shape: Shape,
   handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<CallToolResult>) => void;
 
-export interface PerceptionDeps {
+interface PerceptionDeps {
   tool: ToolRegistrar;
   client: ScarletClient;
   projectId: string;
@@ -42,8 +43,6 @@ export interface PerceptionDeps {
   seesFrames: boolean;
 }
 
-const text = (s: string): CallToolResult => ({ content: [{ type: "text", text: s }] });
-const json = (v: unknown): CallToolResult => text(JSON.stringify(v));
 /** Outgoing side: what was heard before the join and what was removed after it. */
 const OUT_WINDOW = [1, .3] as const;
 const IN_WINDOW = [.3, 1] as const;
@@ -267,5 +266,3 @@ export function registerPerception(deps: PerceptionDeps) {
     },
   };
 }
-
-export type Perception = ReturnType<typeof registerPerception>;

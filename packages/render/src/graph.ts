@@ -69,8 +69,6 @@ export interface GraphOptions extends FontOptions {
   probes?: Map<string, ProbeResult>;
   ffprobePath?: string;
   ffmpegPath?: string;
-  /** Override the option used to load the script; auto-detected from the ffmpeg version. */
-  filterScriptFlag?: "-/filter_complex" | "-filter_complex_script";
 }
 
 export interface FilterGraph {
@@ -392,7 +390,7 @@ export function wrapText(text: string, maxChars: number): string {
   return lines.join("\n");
 }
 
-export function mergeCaptionStyle(
+function mergeCaptionStyle(
   ...layers: Array<Partial<CaptionStyle> | undefined>
 ): CaptionStyle {
   const merged: Record<string, unknown> = {};
@@ -419,7 +417,7 @@ function fittedSize(iw: number, ih: number, W: number, H: number, scale: number)
  * pixel of this clip: no alpha source, fade, opacity, keyframe, visual effect,
  * crop, rotation or offset, and a picture that fills the canvas.
  */
-export function coversCanvas(clip: Clip, p: Placement, media: Map<string, MediaAsset>, W: number, H: number, picture?: ProbeResult): boolean {
+function coversCanvas(clip: Clip, p: Placement, media: Map<string, MediaAsset>, W: number, H: number, picture?: ProbeResult): boolean {
   if (clip.kind !== "media" && clip.kind !== "color") return false;
   if (clip.opacity < 1 || (clip.kind === "media" && clip.keyframes?.length)) return false;
   const tf = TransformSchema.parse(clip.transform ?? {});
@@ -846,11 +844,8 @@ async function writeFilterGraph(
   const scriptPath = path.join(tmp, "graph.txt");
   await fs.writeFile(scriptPath, graph, "utf8");
 
-  let flag = opts.filterScriptFlag;
-  if (!flag) {
-    const major = await ffmpegMajor(opts.ffmpegPath).catch(() => undefined);
-    flag = (major ?? 7) >= 7 ? "-/filter_complex" : "-filter_complex_script";
-  }
+  const major = await ffmpegMajor(opts.ffmpegPath).catch(() => undefined);
+  const flag = (major ?? 7) >= 7 ? "-/filter_complex" : "-filter_complex_script";
 
   return {
     directPicture: drawtexts.length ? undefined : directPicture,

@@ -3,7 +3,7 @@ import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { run } from "../render/ffmpeg.js";
 import { boundedRippleOps, rippleDrift, cutAnchorOn, cutScope, selectedRange, selectionPlacements, taskDialogueOperation, type DialogueCutsRequest, type JoinCrossfades, reviewItemPath, type StagedCutRevision } from "@scarlet/shared";
-import { buildThreads, threadTimeline, type ApproveResponse, type FlagEditRequest, type ProposeChangeRequest, type Task, type ThreadEdit, type User } from "@scarlet/shared";
+import { agentTarget, beginRevision, buildThreads, threadTimeline, type ApproveResponse, type FlagEditRequest, type AgentId, type ProposeChangeRequest, type Task, type ThreadEdit, type User } from "@scarlet/shared";
 import { z } from "zod/v3";
 import { ReviseRequest as ReviseRequestSchema } from "@scarlet/shared";
 import { frameAligned, frameAlignedRemoval, isPublishedCall, onFrame, makeStagedCutMapper,
@@ -56,17 +56,16 @@ import { requestCutPlaybackFile, waitForPlayback } from "./playback.js";
 import { now } from "../db.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { notify } from "./notify.js";
-import { createTask, FINISHED_TASK, parseAssignTo, isDialoguePass, queueRepeatCheck, saveTask } from "./tasks.js";
+import { createTask, editsDialogue, FINISHED_TASK, parseAssignTo, isDialoguePass, queueRepeatCheck, saveTask, stagesCut } from "./tasks.js";
 import { ensureHead, resolveTimeline, storeValidatedVersion, storeVersion } from "./timeline.js";
 import { actorFor, authorName, logActivity, quote } from "./activity.js";
-import { beginRevision, proposalAfterRevisions, resumeReviewState } from "./revisionState.js";
+import { proposalAfterRevisions, resumeReviewState } from "./revisionState.js";
 import { currentCutRanges, placeRevision, reviewedCutsOnHead } from "./stagedCutRecovery.js";
 import { removalOutsideSelection, rippleOutsideSelection } from "./selectedRemoval.js";
 
-export function authorFor(user: User, override?: Partial<Author>): Author {
+function authorFor(user: User, override?: Partial<Author>): Author {
   const base: Author = { type: "human", id: user.id, name: user.name };
-  const merged = { ...base, ...Object.fromEntries(Object.entries(override ?? {}).filter(([, v]) => v !== undefined)) } as Author;
-  return merged;
+  return { ...base, ...Object.fromEntries(Object.entries(override ?? {}).filter(([, v]) => v !== undefined)) } as Author;
 }
 
 function saveChange(ctx: Ctx, change: Change): Change {
@@ -80,6 +79,11 @@ function saveChange(ctx: Ctx, change: Change): Change {
     if (held) ctx.bus.taskQueued({ taskId: held.id, projectId: saved.projectId });
   }
   return saved;
+}
+
+/** Close a change that another one has taken the place of. */
+function putAway(ctx: Ctx, change: Change, rejectReason: string, replacedBy: string): Change {
+  return saveChange(ctx, { ...change, state: "rejected", rejectedFrom: change.state, rejectReason, replacedBy });
 }
 
 /**
@@ -136,6 +140,11 @@ function spotWindows(diff: TimelineDiff, spot: TimelineDiff["spots"][number], ha
   return { range: withHandles(spot.after, handle, diff.durationAfter), beforeRange: withHandles(spot.before, handle, diff.durationBefore) };
 }
 
+/** The version a request's selection was made on, when that isn't the one being edited. */
+function anchorOriginal(ctx: Ctx, project: Pick<Project, "id" | "head">, anchor: Task["context"], base: Timeline): Timeline | undefined {
+  return anchor.version && anchor.version !== "head" && anchor.version !== base.version ? resolveTimeline(ctx, project, anchor.version) : undefined;
+}
+
 function assertMediaExists(project: Project, tl: Timeline) {
   const ids = new Set(project.media.map((m) => m.id));
   for (const t of tl.tracks) {
@@ -148,6 +157,8 @@ function assertMediaExists(project: Project, tl: Timeline) {
 }
 
 type FadedJoin = { at: number; duration: number };
+/** The record of an applied version whose joins carry no crossfade. */
+const noFades = (): JoinFades => ({ duration: 0, fades: [], plain: [] });
 type CutReason = NonNullable<Change["cutReasons"]>[number];
 
 /** A pre-upgrade dialogue proposal recorded one overlap for all its joins. */
@@ -168,6 +179,13 @@ function fadeJoins(project: Project, timeline: Timeline, joins: readonly FadedJo
   const faded = crossfadeJoins(timeline, project.media, [...durations.keys()], duration, { durations });
   if (!faded.fades.length && !faded.report.plain.length) return { timeline };
   return { timeline: faded.timeline, joinFades: { duration, fades: faded.fades, plain: faded.report.plain } };
+}
+
+/** The chosen cuts as placed on `head`, each join with its cut's crossfade. Placing nothing leaves `head` as it is. */
+function fadePlaced(project: Project, change: Change, review: CutReview,
+  placed: { timeline: Timeline; applied: NonNullable<Change["appliedReview"]> }, head: Timeline): { timeline: Timeline; joinFades?: JoinFades } {
+  if (placed.timeline === head) return { timeline: head };
+  return fadeJoins(project, placed.timeline, placed.applied.joins.map(j => ({ at: j.at, duration: cutCrossfade(change, review.cuts[j.reviewIndex!]!.removed) })));
 }
 
 /** Reasons are stored in chronological order on the base timeline. */
@@ -227,13 +245,11 @@ export interface ProposeResult {
   notApplied?: { reason: string; currentVersion: string };
 }
 
-/** Apply a proposed change: store the new version, diff, record the review windows without encoding footage. */
 function selectedStagedCut(ctx: Ctx, task?: Task | null) {
   if (!task || (task.kind !== "revise" && task.kind !== "edit") || !task.context.changeId || task.context.cutIndex === undefined) return;
   const change = ctx.repos.changes.get(task.context.changeId);
   if (!change || change.projectId !== task.projectId) throw badRequest("wrong_cut", "The selected cut is unavailable.");
-  let staged = task.stagedCutRevision ?? (task.kind === "revise" || change.intent === "suggestion" &&
-    (["ready", "revising"].includes(change.state) || !!change.replacedBy));
+  let staged = task.stagedCutRevision ?? stagesCut(task.kind, change);
   if (task.stagedCutRevision === undefined && !staged && change.intent === "suggestion" && change.updatedAt && task.createdAt && change.updatedAt >= task.createdAt) {
     // For an older request, a later render or metadata update does not turn an already approved edit back into a staged cut.
     const prior = ctx.db.prepare(`SELECT type FROM activity WHERE project_id = ? AND created_at <= ?
@@ -289,7 +305,7 @@ function opsOnWholeFrames(ctx: Ctx, projectId: string, body: ProposeChangeReques
   if (body.range || (selectedRange(task?.context) && body.ops?.every(op => op.op === "rippleDelete" && !op.trackIds))) {
     const base = resolveTimeline(ctx, project, version);
     const anchor = task?.context ?? {};
-    const original = anchor.version && anchor.version !== "head" && anchor.version !== base.version ? resolveTimeline(ctx, project, anchor.version) : undefined;
+    const original = anchorOriginal(ctx, project, anchor, base);
     try {
       const range = cutScope(base, cutAnchorOn(anchor, base, original), body.range);
       if (!body.ops?.length || body.timeline) throw new Error("A bounded ripple edit takes synchronized ripple removals on an existing timeline.");
@@ -403,7 +419,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     const toHead = head === fromVersion ? undefined : makeTimeMap(base, resolveTimeline(ctx, project, head), fps);
     // A pass saved in parts: the run's previous parts left their staged cuts waiting. They join this part's review so
     // they stay reviewable once this part's cuts apply. A run resumed after an interruption still owns its earlier parts.
-    const rootId = taskId && (ctx.repos.tasks.get(taskId)?.resumeRootId ?? taskId);
+    const rootId = taskId && (sourceTask?.resumeRootId ?? taskId);
     const parts = rootId && dialogueParts(projectId, rootId);
     const pending = new Map<string, Set<number>>();
     if (parts) for (const task of ctx.repos.tasks.select(`project_id = ? AND kind IN ('edit','revise','note') AND state IN ('queued','claimed','running','waiting_for_user')
@@ -552,14 +568,13 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       }
     }
     const heldRanges = [...protectedCuts.keys()];
-    const task = taskId && ctx.repos.tasks.get(taskId);
-    const requested = task && task.createdBy.type === "human" && ["edit", "revise", "note"].includes(task.kind) &&
-      task.context.branch === project.branch && !task.context.reviewAllCuts;
+    const requested = sourceTask && sourceTask.createdBy.type === "human" && editsDialogue(sourceTask.kind) &&
+      sourceTask.context.branch === project.branch && !sourceTask.context.reviewAllCuts;
     // Why confident cuts wait for the editor here instead of applying. The agent sent them as cuts, so it is told.
-    const stagedWhy = requested ? undefined : !task ? "No request of the editor's is attached, so every cut waits for them."
-      : task.context.reviewAllCuts ? "The editor asked to review every cut."
-      : task.createdBy.type !== "human" ? "Scarlet started this request, not the editor, so its cuts wait for them."
-      : !["edit", "revise", "note"].includes(task.kind) ? `A ${task.kind} request stages its cuts for the editor.`
+    const stagedWhy = requested ? undefined : !sourceTask ? "No request of the editor's is attached, so every cut waits for them."
+      : sourceTask.context.reviewAllCuts ? "The editor asked to review every cut."
+      : sourceTask.createdBy.type !== "human" ? "Scarlet started this request, not the editor, so its cuts wait for them."
+      : !editsDialogue(sourceTask.kind) ? `A ${sourceTask.kind} request stages its cuts for the editor.`
       : "The editor moved to another version of the edit while this request ran.";
     const candidates = body.cuts.map(c => ({ ...c, crossfade: frames / fps, ...(current && { ...moveToHead(c), ...(c.originalRange && { originalRange: moveToHead(c.originalRange) }) }),
       asked: { start: c.start, end: c.end } }));
@@ -660,7 +675,6 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       }
       return start === c.originalRange.start && end === c.originalRange.end ? c : { ...c, originalRange: { start, end } };
     });
-    const onto = head;
     const satisfied = { ...(alreadyRemoved.length && { alreadyRemoved }), ...(droppedFromReview.length && { droppedFromReview }) };
     if (!cuts.length) return { changes: [], ...satisfied };
     const applied = cuts.filter(c => requested && !c.review);
@@ -693,10 +707,10 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       return [{ ...c, start: onFrame(c.start - shift), end: onFrame(c.end - shift),
         originalRange: c.originalRange && { start: onFrame(c.originalRange.start - shift), end: onFrame(c.originalRange.end - shift) } }];
     });
-    let version = onto;
+    let version = head;
     const changes: Change[] = [];
     if (applied.length) {
-      const { change } = persistProposal(ctx, user, projectId, { fromVersion: onto, intent: "requested", ops: ops(applied),
+      const { change } = persistProposal(ctx, user, projectId, { fromVersion: head, intent: "requested", ops: ops(applied),
         description: whole && own ? own : describeDialogueRemovals(applied), taskId, author, noteIds }, ids[0], applied.map(({ start, end, reason, kind, crossfade, check }) => ({ start, end, reason, ...(kind && { kind }), ...(crossfade && { crossfade }), ...(check && { check }) })));
       if (change.state !== "approved") throw conflict("cut_changed", "The confident cuts could not be applied to this version.");
       changes.push(change);
@@ -761,8 +775,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     }
     // The previous part's review now lives in this one, or this part's cuts moved the edit past it.
     if (changes.length) for (const change of waiting) {
-      saveChange(ctx, { ...change, state: "rejected", rejectedFrom: change.state, rejectReason: CARRIED,
-        replacedBy: (changes.find(c => c.intent === "suggestion") ?? changes[0]!).id });
+      putAway(ctx, change, CARRIED, (changes.find(c => c.intent === "suggestion") ?? changes[0]!).id);
     }
     const editorDecided = [...overruled.map(c => c.asked), ...joined].sort((a, b) => a.start - b.start);
     return { changes, ...adjusted, ...(held.length && { heldForReview: held.map(c => c.asked) }), ...(carried.length && { carriedForward: carried.length }), ...(editorDecided.length && { editorDecided }),
@@ -991,13 +1004,13 @@ export function reviseStagedCut(ctx: Ctx, user: User, named: Change, namedIndex:
     if (taskId) for (const earlier of ctx.repos.changes.select("project_id = ? AND state = 'ready' AND json_extract(json, '$.taskId') = ? AND id != ?",
       [change.projectId, taskId, id])) {
       if (earlier.fromVersion === change.fromVersion && earlier.intent === "suggestion")
-        saveChange(ctx, { ...earlier, state: "rejected", rejectedFrom: earlier.state, rejectReason: REVISED, replacedBy: revised.id });
+        putAway(ctx, earlier, REVISED, revised.id);
     }
     // The editor's calls on the other cuts carry over, including ones made while this revision ran. The revised cut
     // needs a new call.
     const latest = ctx.repos.changes.get(change.id) ?? change;
     if (latest.state === "ready") {
-      saveChange(ctx, { ...latest, state: "rejected", rejectedFrom: latest.state, rejectReason: REVISED, replacedBy: revised.id });
+      putAway(ctx, latest, REVISED, revised.id);
     } else if (latest.state === "revising" && !selected && taskId && latest.revisionFrom?.taskId === taskId) {
       // A pass-wide revision can move several slots. Keep its review state and let the
       // next move find this successor with the preceding move and the editor’s calls.
@@ -1055,7 +1068,7 @@ function retireOtherVersions(ctx: Ctx, applied: Change): Change[] {
       WHERE made.project_id = changes.project_id AND rv.kind = 'revise' AND json_extract(rv.json, '$.context.changeId') = changes.id)))`,
     [applied.projectId, applied.id, applied.fromVersion])
     .filter(other => threadOfChange(ctx, other) === thread)
-    .map(other => saveChange(ctx, { ...other, state: "rejected", rejectedFrom: other.state, rejectReason: "Another version of this pass was applied.", replacedBy: applied.id }));
+    .map(other => putAway(ctx, other, "Another version of this pass was applied.", applied.id));
 }
 
 /**
@@ -1179,6 +1192,7 @@ function assertStagedCallsStand(ctx: Ctx, project: Project, task: Task, base: Ti
   }
 }
 
+/** Apply a proposed change: store the new version, diff, record the review windows without encoding footage. */
 function persistProposal(ctx: Ctx, user: User, projectId: string, body: ProposeChangeRequest, changeId = newId("chg"), cutReasons?: Change["cutReasons"],
   { fold = false }: { fold?: boolean } = {}): ProposeResult {
   const sourceTask = body.taskId ? ctx.repos.tasks.get(body.taskId) : null;
@@ -1207,7 +1221,7 @@ function persistProposal(ctx: Ctx, user: User, projectId: string, body: ProposeC
   assertMediaExists(project, next);
   if (!cutReasons && !fold && !body.range && sourceTask && selectedRange(sourceTask.context) && base.tracks.some(t => t.clips.length)) {
     const anchor = sourceTask.context;
-    const original = anchor.version && anchor.version !== "head" && anchor.version !== base.version ? resolveTimeline(ctx, project, anchor.version) : undefined;
+    const original = anchorOriginal(ctx, project, anchor, base);
     try {
       const allowed = selectionPlacements(base, cutAnchorOn(anchor, base, original));
       const outside = (body.ops && rippleOutsideSelection(base, body.ops, allowed)) ?? removalOutsideSelection(base, next, allowed);
@@ -1263,7 +1277,7 @@ function persistProposal(ctx: Ctx, user: User, projectId: string, body: ProposeC
     replacements.add(key);
   }
   const requested = body.intent === "requested" && sourceTask?.createdBy.type === "human"
-    && ["edit", "revise", "note"].includes(sourceTask.kind) && sourceTask.context.branch === project.branch;
+    && editsDialogue(sourceTask.kind) && sourceTask.context.branch === project.branch;
   const autoApply = (requested && !sourceTask.context.reviewAllCuts && body.autoApprove !== false) || (!sourceTask && body.autoApprove === true
     && author.type === "human" && !["suggestion", "alternative"].includes(body.intent ?? ""));
 
@@ -1274,7 +1288,7 @@ function persistProposal(ctx: Ctx, user: User, projectId: string, body: ProposeC
   const owners = multiple ? independentCutSpots(base, body.ops!, diff.spots, project.settings.fps)
     ?? independentClipSpots(base, body.ops!, diff.ranges, 0.3, project.settings.fps, diff.spots) : undefined;
   const spotAssignment = owners ? { fps: project.settings.fps, owners } : multiple && cost <= 300 ? {
-    fps: project.settings.fps, owners: assignSpots(base, body.ops!, diff.ranges, undefined, project.settings.fps),
+    fps: project.settings.fps, owners: assignSpots(base, body.ops!, diff.ranges, project.settings.fps),
   } : undefined;
   let change: Change = {
     id: changeId,
@@ -1440,7 +1454,7 @@ export function changeDiff(ctx: Ctx, change: Change): TimelineDiff {
 }
 
 /** The thread a task belongs to (its own id when it started one). */
-export function threadOf(task: Task): string {
+function threadOf(task: Task): string {
   return task.context.threadId ?? task.id;
 }
 
@@ -1452,12 +1466,6 @@ function threadOfChange(ctx: Ctx, change: Change): string {
 
 type ApproveResult = Omit<ApproveResponse, "task"> & { task?: Task };
 
-/**
- * Put an approved change into the cut. If the cut moved since the agent
- * started (another change was approved), the change's edits are re-applied
- * onto it through the footage; if they touch the same moments, the change goes
- * back to its agent to redo on the current cut instead of failing.
- */
 export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number[], ontoVersion?: string): {
   review: CutReview | null; draft?: Timeline; ontoVersion?: string; removed?: TimeRange[];
   /** The requested crossfades on the draft's joins when it differs from the proposal. */
@@ -1481,8 +1489,7 @@ export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number
     const head = resolveTimeline(ctx, project);
     const placed = reviewedCutsOnHead(ctx, project, change, review, head, restoredCuts);
     if ("conflict" in placed) throw conflict("cut_review_stale", placed.conflict.reason, { currentVersion: head.version, ...placed.conflict });
-    const { timeline, joinFades } = placed.timeline === head ? { timeline: head, joinFades: undefined }
-      : fadeJoins(project, placed.timeline, placed.applied.joins.map(j => ({ at: j.at, duration: cutCrossfade(change, review.cuts[j.reviewIndex!]!.removed) })));
+    const { timeline, joinFades } = fadePlaced(project, change, review, placed, head);
     const draft = timeline === head ? head : storeVersion(ctx, project.id, timeline, {
       parent: head.version, description: "Preview the reviewed cuts" });
     return { review, draft, joinFades, ...(ontoVersion && { ontoVersion, removed: placed.applied.joins.map(j => j.removed) }) };
@@ -1517,11 +1524,16 @@ export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number
 }
 
 /** The editor's call on each staged cut, or what Approve does without one: Scarlet's verdict once it has assessed the pass, else cut. */
-export function cutDecision(change: Change, index: number): CutChoice["choice"] {
+function cutDecision(change: Change, index: number): CutChoice["choice"] {
   const chosen = change.cutChoices?.find(c => c.index === index)?.choice;
   if (chosen) return chosen;
   if (!change.cutAssessments?.length) return "cut";
   return change.cutAssessments.find(a => a.index === index)?.verdict === "cut" ? "cut" : "keep";
+}
+
+/** The cuts Approve puts back: those decided as keep. */
+function keptCuts(change: Change, review: CutReview): number[] {
+  return review.cuts.flatMap((_, i) => cutDecision(change, i) === "keep" ? [i] : []);
 }
 
 const ACTIVE_TASK = new Set(["queued", "claimed", "running", "waiting_for_user"]);
@@ -1652,7 +1664,7 @@ function recheckMovedCalls(ctx: Ctx, saved: Change, before: Change, review: CutR
 }
 
 /** The task now doing a run's work: a run interrupted when Scarlet quit carries on under a new task. */
-export function latestAttempt(ctx: Ctx, taskId: string | undefined): Task | undefined {
+function latestAttempt(ctx: Ctx, taskId: string | undefined): Task | undefined {
   let task = taskId ? ctx.repos.tasks.get(taskId) ?? undefined : undefined;
   for (let hops = 0; task?.retryTaskId && hops < 100; hops++) {
     const next = ctx.repos.tasks.get(task.retryTaskId);
@@ -1680,7 +1692,7 @@ export function retireStaleSaves(ctx: Ctx, task: Task): void {
     if (stale.state !== "ready" || stale.intent !== "requested" || !stale.error?.startsWith(STALE_SAVE)) continue;
     const again = own.slice(at + 1).findLast(c => c.state === "approved" && c.intent === "requested");
     if (!again) continue;
-    saveChange(ctx, { ...stale, state: "rejected", rejectedFrom: stale.state, rejectReason: SAVED_AGAIN, replacedBy: again.id });
+    putAway(ctx, stale, SAVED_AGAIN, again.id);
     ctx.log(`[edit] ${stale.id} put away: its run saved the work again as ${again.id}`);
   }
 }
@@ -1707,8 +1719,7 @@ export function applyChoicesWhenDone(ctx: Ctx, change: Change): Change | null {
     // The schedule stands: the editor's call on the last of them applies the pass.
     const settled = new Set([...change.cutChoices ?? [], ...(change.cutAssessments ?? []).filter(a => a.verdict !== "ask")].map(c => c.index));
     if (review.cuts.some((_, i) => !settled.has(i))) return null;
-    const restoredCuts = review.cuts.flatMap((_, i) => cutDecision(change, i) === "keep" ? [i] : []);
-    return approveChange(ctx, user, { ...change, applyWhenDone: undefined }, { restoredCuts }).change;
+    return approveChange(ctx, user, { ...change, applyWhenDone: undefined }, { restoredCuts: keptCuts(change, review) }).change;
   } catch (error) {
     ctx.log(`[review] Could not apply ${change.id} when its pass finished: ${error}`);
     // A video that moved under the pass names the cut it moved under. Anything else is in the log.
@@ -1731,6 +1742,12 @@ function alternativeAlreadyChosen(ctx: Ctx, change: Change, head: string) {
   });
 }
 
+/**
+ * Put an approved change into the cut. If the cut moved since the agent
+ * started (another change was approved), the change's edits are re-applied
+ * onto it through the footage; if they touch the same moments, the change goes
+ * back to its agent to redo on the current cut instead of failing.
+ */
 export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spots?: number[]; restoredCuts?: number[]; automatic?: boolean }): ApproveResult {
   if (change.state === "approved") {
     const projectRow = ctx.repos.projects.get(change.projectId);
@@ -1760,7 +1777,7 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
     if (!review || opts.spots || change.cutAssessments.length !== review.cuts.length || change.cutAssessments.some(a => a.verdict === "ask"))
       throw conflict("review_decisions_needed", "Open Needs your call to finish the outstanding decisions.");
     // The editor's call on a cut stands over Scarlet's verdict, as when the pass is applied once it finishes.
-    opts = { ...opts, restoredCuts: review.cuts.flatMap((_, i) => cutDecision(change, i) === "keep" ? [i] : []) };
+    opts = { ...opts, restoredCuts: keptCuts(change, review) };
   }
   if (change.cutEdits?.length && !opts.restoredCuts) {
     if (opts.spots) throw badRequest("spots_unsupported", "Review this pass by its individual cuts.");
@@ -1785,7 +1802,7 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
       appliedReview = appliedCutReview(review, opts.restoredCuts);
       target = draft.version;
       // With every cut applied the draft is the proposal, faded as `joinFades` says.
-      if (target !== change.toVersion) appliedJoinFades = joinFades ?? (opts.restoredCuts.length ? { duration: 0, fades: [], plain: [] } : change.joinFades);
+      if (target !== change.toVersion) appliedJoinFades = joinFades ?? (opts.restoredCuts.length ? noFades() : change.joinFades);
       if (target !== head && target !== change.toVersion && !ctx.repos.versions.get(project.id, target)?.changeId) ctx.repos.versions.setChangeId(project.id, target, change.id);
     } else {
       // The edit moved during review: the editor's own edit, or a request that finished meanwhile. The chosen cuts
@@ -1805,9 +1822,8 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
         return { change: pending, project, task, reason, outcome: "sent_back" };
       }
       appliedReview = placed.applied;
-      const faded = placed.timeline === headTl ? { timeline: headTl, joinFades: undefined }
-        : fadeJoins(project, placed.timeline, placed.applied.joins.map(j => ({ at: j.at, duration: cutCrossfade(change, review.cuts[j.reviewIndex!]!.removed) })));
-      appliedJoinFades = faded.joinFades ?? { duration: 0, fades: [], plain: [] };
+      const faded = fadePlaced(project, change, review, placed, headTl);
+      appliedJoinFades = faded.joinFades ?? noFades();
       target = faded.timeline === headTl ? head : storeVersion(ctx, project.id, faded.timeline, {
         parent: head, changeId: change.id, author: change.author, description: change.description }).version;
       outcome = "rebased";
@@ -1858,7 +1874,7 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
         timeline = faded.timeline;
         appliedJoinFades = faded.joinFades;
       }
-      appliedJoinFades ??= { duration: 0, fades: [], plain: [] };
+      appliedJoinFades ??= noFades();
       const stored = storeVersion(ctx, project.id, timeline, {
         parent: head,
         changeId: change.id,
@@ -1939,17 +1955,21 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
   return { change: saved, project: updated, outcome };
 }
 
+/** The agent and model that made a change, to run its next version. An author Scarlet can't place runs on the default agent. */
+function authorsAgent(ctx: Ctx, author: Author): { agent: AgentId; model?: string } {
+  try {
+    return { ...parseAssignTo(author.id, ctx.settings().defaultAgent), model: author.model };
+  } catch {
+    return { agent: ctx.settings().defaultAgent, model: undefined };
+  }
+}
+
 /** The cut moved under this change in a way it can't absorb: ask its agent to redo it, in the same thread. */
 function sendBack(ctx: Ctx, user: User, change: Change, project: Project, reason: string): ApproveResult {
   if (change.author.type !== "agent") {
     throw conflict("needs_redo", `This change can't be merged: ${reason}. Make it again on the current edit.`);
   }
-  let target = { agent: ctx.settings().defaultAgent, model: undefined as string | undefined };
-  try {
-    target = { ...parseAssignTo(change.author.id, ctx.settings().defaultAgent), model: change.author.model };
-  } catch {
-    /* keep the default agent */
-  }
+  const target = authorsAgent(ctx, change.author);
   const head = project.head ?? undefined;
   const task = createTask(ctx, {
     projectId: change.projectId,
@@ -2072,15 +2092,9 @@ export function reviseChange(ctx: Ctx, user: User, change: Change, body: ReviseR
   const target = body.assignTo
     ? parseAssignTo(body.assignTo, ctx.settings().defaultAgent)
     : change.author.type === "agent" && change.author.id
-      ? (() => {
-          try {
-            return { ...parseAssignTo(change.author.id, ctx.settings().defaultAgent), model: change.author.model };
-          } catch {
-            return { agent: ctx.settings().defaultAgent, model: undefined };
-          }
-        })()
+      ? authorsAgent(ctx, change.author)
       : { agent: ctx.settings().defaultAgent, model: undefined };
-  const assignedTo = target.model ? `${target.agent}:${target.model}` : target.agent;
+  const assignedTo = agentTarget(target.agent, target.model);
   const note = ctx.repos.notes.put({
     id: newId("note"),
     projectId: change.projectId,

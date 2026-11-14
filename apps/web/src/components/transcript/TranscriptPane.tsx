@@ -38,7 +38,7 @@ const WordParagraph = memo(function WordParagraph({ words, from, to }: {
  * `toolsHost` is given by a view that heads the transcript itself, as the simple view does: the pane then has no title
  * of its own, and its figures and help mark go on that heading (null until the heading is on the page).
  */
-export function TranscriptPane({ source, draft, onChoose, onAsk, toolsHost }: { draft?: Timeline; source?: MediaAsset; onChoose?: () => void; onAsk(words: AgentContext): void; toolsHost?: HTMLElement | null }) {
+export function TranscriptPane({ source, draft, onAsk, toolsHost }: { draft?: Timeline; source?: MediaAsset; onAsk(words: AgentContext): void; toolsHost?: HTMLElement | null }) {
   const project = useProjectStore(s => s.current?.project);
   const projectMedia = useProjectStore(s => s.current?.media ?? emptyMedia);
   const projectNotes = useProjectStore(s => source ? undefined : s.current?.notes);
@@ -148,17 +148,13 @@ export function TranscriptPane({ source, draft, onChoose, onAsk, toolsHost }: { 
     return index === undefined ? undefined : words[Number(index)];
   };
 
-  const seek = (at: number) => {
-    player.seek(at);
-    onChoose?.();
-  };
+  const seek = (at: number) => player.seek(at);
 
   const playWord = (word: MappedWord) => {
     const placement = word.placements[0];
     if (!placement) return;
     player.seek(placement.start);
     player.play();
-    onChoose?.();
   };
 
   const onWordDown = (i: number, shift: boolean) => {
@@ -216,7 +212,6 @@ export function TranscriptPane({ source, draft, onChoose, onAsk, toolsHost }: { 
           {!source && !draft && <button
             className="btn-ghost py-1"
             onClick={() => {
-              onChoose?.();
               openNotePopover(range.start, range.end);
               setSel(null);
             }}

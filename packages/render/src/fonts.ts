@@ -36,7 +36,7 @@ const FALLBACKS = [
   "arial unicode.ttf",
 ];
 
-export function defaultFontDirs(): string[] {
+function defaultFontDirs(): string[] {
   const home = os.homedir();
   const dirs: string[] = [];
   if (process.platform === "win32") {

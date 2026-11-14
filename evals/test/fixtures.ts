@@ -6,7 +6,7 @@ import type { MediaInfo } from "../src/timeline.ts";
 export const FLOOR_DB = -86;
 export const SPEECH_DB = -28;
 export const BREATH_DB = -60;
-export const STEP = 0.02;
+const STEP = 0.02;
 
 /** Words at fixed times; levels are speech inside words, a breath where asked, room floor elsewhere. */
 export function recording(mediaId: string, duration: number, spoken: Array<[string, number, number]>, breaths: Array<[number, number]> = []): MediaEvidence {

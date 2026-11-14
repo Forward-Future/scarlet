@@ -44,7 +44,7 @@ function isPicture(asset?: MediaAsset) {
   return !!asset && asset.kind !== "audio";
 }
 
-export function visibleClipAt(timeline: Timeline | null, t: number, media?: readonly MediaAsset[]) {
+function visibleClipAt(timeline: Timeline | null, t: number, media?: readonly MediaAsset[]) {
   return timeline && visibleClip(clipsAt(timeline, t), media);
 }
 

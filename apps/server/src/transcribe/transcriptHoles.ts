@@ -11,10 +11,10 @@ import { gapSound, speakingLevel, type GapLevels } from "@scarlet/mcp/gap-sound"
 import { normalizeTranscriptToken } from "@scarlet/shared";
 import { newId, type TimeRange, type TranscriptSegment, type TranscriptWord } from "@scarlet/timeline";
 import { SAMPLE_RATE } from "./ctcAlign.js";
-import { openWav } from "./wordAlign.js";
+import { openWav, pcmWavHeader } from "./wordAlign.js";
 
 /** A stretch without words is read again from this length. Shorter ones are the pauses inside a sentence. */
-export const HOLE_GAP = 1;
+const HOLE_GAP = 1;
 /** Sound at speaking level this long in all, with one run of at least HOLE_RUN, is more than a breath or a click. */
 const HOLE_SOUND = 0.4, HOLE_RUN = 0.25;
 /** Read this much either side of the sound, inside the gap. */
@@ -163,13 +163,8 @@ export async function writeHoleAudio(wavPath: string, holes: TimeRange[], out: s
     }
     parts.push(spacer);
     const data = Buffer.concat(parts);
-    const header = Buffer.alloc(44);
-    header.write("RIFF", 0, "ascii"); header.writeUInt32LE(36 + data.length, 4); header.write("WAVEfmt ", 8, "ascii");
-    header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(1, 22); header.writeUInt32LE(SAMPLE_RATE, 24);
-    header.writeUInt32LE(SAMPLE_RATE * 2, 28); header.writeUInt16LE(2, 32); header.writeUInt16LE(16, 34);
-    header.write("data", 36, "ascii"); header.writeUInt32LE(data.length, 40);
     const handle = await open(out, "w");
-    try { await writeFile(handle, Buffer.concat([header, data])); } finally { await handle.close(); }
+    try { await writeFile(handle, Buffer.concat([pcmWavHeader(data.length), data])); } finally { await handle.close(); }
     return pieces;
   } finally { await wav.close(); }
 }

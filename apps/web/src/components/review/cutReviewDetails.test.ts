@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
-import type { Change, ReviewCut } from "@scarlet/timeline";
-import { appliedEditSummary, reviewReasons } from "./cutReviewDetails";
+import { reviewReasons, type Change, type ReviewCut } from "@scarlet/timeline";
+import { appliedEditSummary } from "./cutReviewDetails";
 
 it("maps rounded legacy labels to the original ranges, retaining both reasons at a merged join", () => {
   const change = {

@@ -3,7 +3,7 @@ import { dialogueAudioStream } from "./dialogue-join.js";
 import { NoPauseToTrim, planDialogueCuts, SETTLED_MARGIN, type DialoguePlanSources } from "./dialogue-plan.js";
 import { measureQuietKeptWords } from "./quiet-kept-word.js";
 
-export interface FirstCutKeep {
+interface FirstCutKeep {
   start?: number;
   end?: number;
   fromWord?: number;

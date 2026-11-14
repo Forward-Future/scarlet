@@ -11,6 +11,7 @@ import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { findOnPath, needsCmdShell } from "../detect.js";
 import { stopCliTree } from "../processTree.js";
+import type { RunAgentResult } from "./types.js";
 
 export interface SpawnLinesOptions {
   cwd: string;
@@ -28,7 +29,7 @@ export interface SpawnLinesOptions {
   onStderr?: (chunk: string) => void;
 }
 
-export interface SpawnOutcome {
+interface SpawnOutcome {
   code: number | null;
   signal: NodeJS.Signals | null;
   /** Stopped by `timeoutMs` or `stallMs`. */
@@ -230,6 +231,30 @@ export function mcpEnv(vars: Record<string, string | undefined>): Record<string,
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(vars)) if (v !== undefined && v !== "") out[k] = v;
   return out;
+}
+
+/** The one JSON object a CLI wrote on a line of its stream. Undefined for anything else: a warning, null, a number, a list. */
+export function jsonLine(line: string): Record<string, unknown> | undefined {
+  let msg: unknown;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  return msg && typeof msg === "object" && !Array.isArray(msg) ? msg as Record<string, unknown> : undefined;
+}
+
+/**
+ * How a run ended when it stopped short of the CLI's own end: on a question for the editor, at the host's time or
+ * stall limit, or cancelled. Undefined when the CLI ran to its end, which each runner reads from its own stream.
+ */
+export function earlyResult(st: { texts: string[]; question?: string; questionPosted: boolean }, outcome: SpawnOutcome,
+  rest: Pick<RunAgentResult, "sessionId" | "usage">): RunAgentResult | undefined {
+  const summary = tailSummary(st.texts);
+  if (st.question) return { ok: true, summary, question: st.question, questionPosted: st.questionPosted, exitCode: outcome.code, ...rest };
+  if (outcome.timedOut) return { ok: false, summary, error: outcome.stalled ? "stalled" : "timed out", timedOut: true, stalled: outcome.stalled, exitCode: outcome.code, ...rest };
+  if (outcome.aborted) return { ok: false, summary, error: "cancelled", aborted: true, exitCode: outcome.code, ...rest };
+  return undefined;
 }
 
 /** Last-resort extraction of a summary from stream output when the CLI printed no result. */

@@ -18,8 +18,7 @@ Not included: videos, projects, transcripts, the project database or sign-in tok
 
 /// File name suggested in the Save dialog: `scarlet-logs-2026-11-06-1432.zip` (UTC).
 fn suggested_name() -> String {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
-    let (y, mo, d, h, mi, _) = crate::util::civil_from_unix(secs);
+    let (y, mo, d, h, mi, _) = crate::util::civil_from_unix(crate::util::unix_now().as_secs() as i64);
     format!("scarlet-logs-{y:04}-{mo:02}-{d:02}-{h:02}{mi:02}.zip")
 }
 
@@ -108,8 +107,7 @@ struct Zip {
 
 impl Zip {
     fn new() -> Self {
-        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
-        let (y, mo, d, h, mi, s) = crate::util::civil_from_unix(secs);
+        let (y, mo, d, h, mi, s) = crate::util::civil_from_unix(crate::util::unix_now().as_secs() as i64);
         Zip {
             out: Vec::new(),
             central: Vec::new(),
@@ -237,7 +235,7 @@ fn os_version() -> Option<String> {
     #[cfg(windows)]
     let out = {
         use std::os::windows::process::CommandExt;
-        std::process::Command::new("cmd").args(["/C", "ver"]).creation_flags(0x08000000).output().ok()?
+        std::process::Command::new("cmd").args(["/C", "ver"]).creation_flags(crate::util::CREATE_NO_WINDOW).output().ok()?
     };
     #[cfg(not(any(target_os = "macos", windows)))]
     let out = std::process::Command::new("uname").arg("-sr").output().ok()?;

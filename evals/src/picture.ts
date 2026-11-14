@@ -10,7 +10,7 @@
 
 export interface Gray { width: number; height: number; data: Float32Array }
 /** Fractions of the frame (or of the recording's picture): 0,0 is the top left. */
-export interface Rect { x: number; y: number; w: number; h: number }
+interface Rect { x: number; y: number; w: number; h: number }
 
 export interface Placement {
   /** Size of the recording's picture in the frame: 1 fills it edge to edge, as a clip's `scale` does. */
@@ -36,10 +36,10 @@ export interface LocateOptions {
   /** Parts of the frame already known to show something else. */
   ignore?: Rect[];
 }
-export const DEFAULT_LOCATE: LocateOptions = { minScale: 0.14, maxScale: 3.6, minScore: 0.55, minArea: 0.05 };
+const DEFAULT_LOCATE: LocateOptions = { minScale: 0.14, maxScale: 3.6, minScore: 0.55, minArea: 0.05 };
 
 /** Average blocks of `factor` pixels. */
-export function shrink(image: Gray, factor: number): Gray {
+function shrink(image: Gray, factor: number): Gray {
   const width = Math.floor(image.width / factor), height = Math.floor(image.height / factor);
   const data = new Float32Array(width * height);
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
@@ -287,11 +287,11 @@ function searchPart(frame: Gray, part: Gray, opts: LocateOptions, masked: Uint8A
 
 const round = (v: number) => Math.round(v * 1000) / 1000;
 
-export function intersection(a: Rect, b: Rect): number {
+function intersection(a: Rect, b: Rect): number {
   return Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
 }
 /** Shared area over combined area: 1 for the same rectangle, 0 for two that don't touch. */
-export function iou(a: Rect, b: Rect): number {
+function iou(a: Rect, b: Rect): number {
   const shared = intersection(a, b), all = a.w * a.h + b.w * b.h - shared;
   return all > 0 ? shared / all : 0;
 }
@@ -339,7 +339,7 @@ export type Layout = "camera" | "inset" | "screen" | "other";
 
 const area = (r: Rect) => r.w * r.h;
 /** The picture under or instead of the presenter: the largest other layer. */
-export function mainLayer(sample: PictureSample): Placement | undefined {
+function mainLayer(sample: PictureSample): Placement | undefined {
   return Object.entries(sample.layers).filter(([id]) => id !== sample.mediaId).map(([, p]) => p).sort((a, b) => area(b.rect) - area(a.rect))[0];
 }
 export function layoutOf(sample: PictureSample): Layout {

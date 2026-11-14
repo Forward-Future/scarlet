@@ -1,15 +1,14 @@
-import { DialogueScanPage, planText, taskNeedsTranscripts, taskPlan, taskRecoveryAction, type RunChoice, type Task } from "@scarlet/shared";
+import { beginRevision, DialogueScanPage, planText, taskNeedsTranscripts, taskPlan, taskRecoveryAction, type RunChoice, type Task } from "@scarlet/shared";
 import os from "node:os";
 import { mergeRanges, type Change, type TimeRange } from "@scarlet/timeline";
 import { processIsAlive, type Ctx } from "../context.js";
 import { now } from "../db.js";
 import { conflict, notFound } from "../errors.js";
-import { appendTaskEvent, createTask, hasTranscript, RESUMABLE, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
+import { appendTaskEvent, createTask, FINISHED_TASK, hasTranscript, RESUMABLE, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
 import { recordTaskFinished } from "../telemetry/events.js";
-import { beginRevision } from "./revisionState.js";
 import { prepareCutReview } from "./changes.js";
 import { skillEditEnded, startLearningCheck } from "./learnings.js";
-import { startTranscription, transcribeForDialogue } from "./ingest.js";
+import { latestTranscription, startTranscription, transcribeForDialogue } from "./ingest.js";
 import { getTranscriptionProvider, presetLabel } from "../transcribe/index.js";
 
 /** The change row can be durable even if its id hasn't yet been copied onto the task. */
@@ -378,8 +377,7 @@ export function continueReadyRuns(ctx: Ctx, projectId?: string): Task[] {
     if (!pending.length) return resumeTask(ctx, task);
     // A transcription cut short by a quit or a pause starts again when Scarlet or the project's media is back, so the run keeps waiting for it.
     const restarts = (id: string) => {
-      const [last] = ctx.repos.tasks.select("project_id = ? AND kind = 'transcribe' AND json_extract(json, '$.context.mediaId') = ?",
-        [task.projectId, id], "created_at DESC, rowid DESC LIMIT 1");
+      const last = latestTranscription(ctx, task.projectId, id);
       return last?.state === "failed" && !!last.interrupted;
     };
     const stopped = pending.filter(id => !restarts(id) && !ctx.repos.tasks.count(`project_id = ? AND ${ACTIVE_TRANSCRIPTION}`, [task.projectId, id]));
@@ -403,7 +401,7 @@ export function continueReadyRuns(ctx: Ctx, projectId?: string): Task[] {
 /** A transcription that finishes may complete what a run is waiting for. The 30 s recovery sweep catches the rest. */
 export function wireContinueWhenReady(ctx: Ctx) {
   ctx.bus.on("ws", event => {
-    if (event.type !== "task.updated" || event.task.kind !== "transcribe" || !FINISHED.has(event.task.state)) return;
+    if (event.type !== "task.updated" || event.task.kind !== "transcribe" || !FINISHED_TASK.has(event.task.state)) return;
     try {
       continueReadyRuns(ctx, event.projectId);
     } catch (err) {
@@ -411,5 +409,3 @@ export function wireContinueWhenReady(ctx: Ctx) {
     }
   });
 }
-
-const FINISHED: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);

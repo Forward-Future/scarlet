@@ -4,7 +4,7 @@
  * event emitter that plays the role of the WebSocket: renders progress,
  * tasks stream log lines, a change becomes ready, uploads finish ingesting.
  */
-import { dialogueCommand, AGENT_LABEL, beginRevision, buildThreads, restoredReviewState, threadRevision, threadTimeline, countReviewDecisions, fullRenderContext, taskNeedsTranscripts, taskRecoveryAction, reviewItemPath, splitAgentTarget, ScarletApiError, SkillSlug, isAsideTask, isSkillEdit, ReviseLearningRequest } from "@scarlet/shared";
+import { dialogueCommand, AGENT_LABEL, beginRevision, buildThreads, restoredReviewState, threadRevision, threadTimeline, countReviewDecisions, fullRenderContext, taskNeedsTranscripts, taskRecoveryAction, splitAgentTarget, ScarletApiError, SkillSlug, isAsideTask, isSkillEdit, ReviseLearningRequest } from "@scarlet/shared";
 import { appliedCutReview, appliedReviewChange, applyReviewRemovals, makeStagedCutMapper, contentHash, planCutReview, reviewedTimeline } from "@scarlet/timeline";
 import type { ApproveLearningRequest, EditSkillRequest, Learning, RunChoice, UsageGroupBy, UsageResponse, UsageTotals } from "@scarlet/shared";
 import type {
@@ -16,7 +16,6 @@ import type {
   FullRenderKeys,
   PlaybackCacheStatus,
   SourceCacheStatus,
-  ProjectDetail,
   ProjectSummary,
   Render,
   RenderRequest,
@@ -25,14 +24,13 @@ import type {
   SkillVersion,
   Task,
   TaskEvent,
-  UpdateNoteRequest,
   UpsertSkillRequest,
   User,
   VersionSummary,
   WsEvent,
 } from "@scarlet/shared";
 import type { Author, Change, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript } from "@scarlet/timeline";
-import { planRevert, fromOtio, otioSourceVersion, OtioImportError, toOtio, applyOps, canApproveSpots, clipEnd, withHandles, describeDiff, diffTimelines, emptyTimeline, formatTimecode, newId, planApply, timelineDuration, ASPECT_PRESETS, TimelineOp } from "@scarlet/timeline";
+import { planRevert, toOtio, applyOps, canApproveSpots, clipEnd, withHandles, describeDiff, diffTimelines, emptyTimeline, formatTimecode, newId, planApply, timelineDuration, ASPECT_PRESETS, TimelineOp } from "@scarlet/timeline";
 import type { ActivityEntry, ApproveResponse, TrashedProject } from "@scarlet/shared";
 import type { ScarletApi } from "../api";
 import { buildDb, mc, SAMPLE_TRANSCRIPTION_MODEL, type MockDb } from "./fixtures";
@@ -196,12 +194,6 @@ export class MockClient implements ScarletApi {
     this.db.versions[project.id] = [];
     return this.latency({ project }, 250);
   }
-  async project(id: string): Promise<ProjectDetail> {
-    this.requireAuth();
-    const project = this.projectById(id);
-    const timeline = project.head ? (this.db.timelines[project.head] ?? null) : null;
-    return this.latency({ project, summary: this.summary(id), timeline }, 180);
-  }
   async workspace(id: string) {
     this.requireAuth();
     const project = this.projectById(id);
@@ -318,46 +310,6 @@ export class MockClient implements ScarletApi {
     this.requireAuth();
     return this.latency({ activity: this.activityLog.filter((a) => a.projectId === null && (!q.before || a.createdAt < q.before)).slice(0, q.limit ?? 200) });
   }
-  async importOtio(projectId: string, otio: unknown): Promise<{ change: Change; timeline: Timeline }> {
-    this.requireAuth();
-    await sleep(500);
-    const project = this.projectById(projectId);
-    const exported = otioSourceVersion(otio);
-    const fromVersion = exported && this.db.timelines[exported] ? exported : (project.head ?? "");
-    const base = this.db.timelines[fromVersion];
-    if (!base) throw new ScarletApiError(400, "otio_import", "This project has no edit to compare against yet.");
-    let tl: Timeline;
-    try {
-      tl = fromOtio(otio, { ...project, media: this.db.media[projectId] ?? project.media }, base);
-    } catch (e) {
-      throw new ScarletApiError(400, "otio_import", e instanceof OtioImportError ? e.message : `Couldn’t read that timeline: ${(e as Error).message}`);
-    }
-    tl = { ...tl, version: newId("ver"), parent: fromVersion, createdAt: now() };
-    this.db.timelines[tl.version] = tl;
-    const diff = diffTimelines(base, tl, project.settings.fps);
-    const change: Change = {
-      id: newId("chg"),
-      projectId,
-      fromVersion,
-      toVersion: tl.version,
-      description: "Hand edits from DaVinci Resolve",
-      author: this.human(),
-      noteIds: [],
-      ranges: diff.ranges,
-      state: "ready",
-      renders: [],
-      threadId: undefined,
-      createdAt: now(),
-      updatedAt: now(),
-    };
-    change.threadId = change.id;
-    this.db.changes.unshift(change);
-    this.refreshCounts(projectId);
-    this.emit({ type: "change.updated", projectId, change: { ...change } });
-    this.log(projectId, "import.davinci", `${this.currentUser().name} brought back hand edits from DaVinci Resolve`, { changeId: change.id });
-    return { change, timeline: tl };
-  }
-
   // --- media ----------------------------------------------------------------------
   async media(projectId: string): Promise<{ media: MediaAsset[] }> {
     this.requireAuth();
@@ -525,40 +477,6 @@ export class MockClient implements ScarletApi {
     const head = this.projectById(projectId).head;
     const list = (this.db.versions[projectId] ?? []).map((v) => ({ ...v, isHead: v.version === head }));
     return this.latency({ versions: list });
-  }
-  async diff(projectId: string, a: string, b: string): Promise<{ diff: TimelineDiff; description: string[] }> {
-    this.requireAuth();
-    const ta = this.db.timelines[a];
-    const tb = this.db.timelines[b];
-    if (!ta || !tb) throw notFound("Version");
-    const fps = this.projectById(projectId).settings.fps;
-    const diff = diffTimelines(ta, tb, fps);
-    return this.latency({ diff, description: describeDiff(diff, (s) => formatTimecode(s, fps)) });
-  }
-  private branchRefs = new Map<string, Map<string, string | null>>();
-  async branches(projectId: string) {
-    this.requireAuth();
-    const project = this.projectById(projectId);
-    const refs = this.branchRefs.get(projectId) ?? new Map<string, string | null>();
-    refs.set(project.branch ?? "main", project.head);
-    this.branchRefs.set(projectId, refs);
-    return { branches: [...refs].map(([name, head]) => ({ name, head })) };
-  }
-  async switchBranch(projectId: string, name: string, expectedHead: string, expectedBranch: string, from?: string) {
-    await this.branches(projectId);
-    const project = this.projectById(projectId);
-    if (project.head !== expectedHead || (project.branch ?? "main") !== expectedBranch) throw new Error("The edit changed.");
-    const refs = this.branchRefs.get(projectId)!;
-    if (from) {
-      if (refs.has(name) || !this.db.timelines[from]) throw new Error("Choose a new name and an existing version.");
-      refs.set(name, from);
-    }
-    if (!refs.has(name)) throw notFound("Branch");
-    project.head = refs.get(name)!;
-    project.branch = name;
-    this.summary(projectId).head = project.head;
-    this.emitProject(projectId);
-    return { project };
   }
   async historyEdit(projectId: string, target: string, action: "revert" | "restore", expectedHead: string, branch: string) {
     this.requireAuth();
@@ -880,25 +798,6 @@ export class MockClient implements ScarletApi {
   async notes(projectId: string, state?: string): Promise<{ notes: Note[] }> {
     this.requireAuth();
     return this.latency({ notes: this.db.notes.filter((n) => n.projectId === projectId && (!state || n.state === state)) }, 150);
-  }
-  async updateNote(noteId: string, body: UpdateNoteRequest): Promise<{ note: Note }> {
-    this.requireAuth();
-    const note = this.db.notes.find((n) => n.id === noteId);
-    if (!note) throw notFound("Note");
-    Object.assign(note, body, { updatedAt: now() });
-    this.refreshCounts(note.projectId);
-    this.emit({ type: "note.updated", projectId: note.projectId, note: { ...note } });
-    return this.latency({ note });
-  }
-  async replyNote(noteId: string, text: string): Promise<{ note: Note }> {
-    this.requireAuth();
-    const note = this.db.notes.find((n) => n.id === noteId);
-    if (!note) throw notFound("Note");
-    const user = this.currentUser();
-    note.replies = [...(note.replies ?? []), { text, author: { type: "human", id: user.id, name: user.name }, createdAt: now() }];
-    note.updatedAt = now();
-    this.emit({ type: "note.updated", projectId: note.projectId, note: { ...note } });
-    return this.latency({ note });
   }
 
   // --- renders -------------------------------------------------------------------------

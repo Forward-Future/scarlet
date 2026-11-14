@@ -12,7 +12,7 @@ import { MediaStatusLine } from "./MediaStatusLine";
 const unknownNotice = "Audio may be sent to OpenAI, depending on your transcription settings.";
 
 /** What fixes transcription that can't run: a setting Scarlet can change at once, or the Settings page that holds the choice. */
-export type TranscriptionFix = { label: string; to: string } | { label: string; turnOnLocal: true };
+type TranscriptionFix = { label: string; to: string } | { label: string; turnOnLocal: true };
 
 export function useImportTranscription() {
   // `local`: the notice only says transcription runs on this computer, which Media and Add from a link leave out.
@@ -174,7 +174,7 @@ export function TranscriptLine({ asset, available, cloud = false }: { asset: Med
 }
 
 /** The transcript pane's way to start a transcription. A Media row uses `TranscriptLine`. */
-export function TranscriptionAction({ asset, available, disabled }: { asset: MediaAsset; available?: boolean | null; disabled?: boolean }) {
+export function TranscriptionAction({ asset, available }: { asset: MediaAsset; available?: boolean | null }) {
   const transcribe = useProjectStore((s) => s.transcribe);
   const [error, setError] = useState("");
   const [starting, setStarting] = useState(false);
@@ -201,6 +201,6 @@ export function TranscriptionAction({ asset, available, disabled }: { asset: Med
   const failure = error || (latest?.state === "failed" ? latest.error || "Transcription failed." : "");
   return <div className="flex max-w-full flex-wrap items-center gap-2">
     {failure && <span role="alert" className="text-bad text-[12px] break-words">{failure}</span>}
-    <button className="btn-ghost" disabled={disabled || available === undefined || mediaPaused} title={mediaPaused ? "Resume caching to transcribe this file." : undefined} onClick={() => void start()}>{failure ? "Retry transcription" : "Transcribe"}</button>
+    <button className="btn-ghost" disabled={available === undefined || mediaPaused} title={mediaPaused ? "Resume caching to transcribe this file." : undefined} onClick={() => void start()}>{failure ? "Retry transcription" : "Transcribe"}</button>
   </div>;
 }

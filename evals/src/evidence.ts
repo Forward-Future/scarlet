@@ -15,10 +15,10 @@ import { appSupportDir, cacheDir, checkedPath, dataDir, fileComponent, readJson,
 import type { MediaInfo } from "./timeline.ts";
 
 /** Resolution requested from the engine's cached waveform. */
-export const ENGINE_LEVEL_RATE = 50;
+const ENGINE_LEVEL_RATE = 50;
 const MAX_POINTS = 20000;
 /** Independent full-band levels: 16 kHz decode, 10 ms RMS frames. Sibilants and breaths above 4 kHz stay visible. */
-export const FULL_BAND = { sampleRate: 16000, hop: 0.01 };
+const FULL_BAND = { sampleRate: 16000, hop: 0.01 };
 
 export interface StoredEvidence extends MediaEvidence {
   wordsSource: "transcript" | "none";
@@ -30,7 +30,7 @@ export interface StoredEvidence extends MediaEvidence {
 const dbOf = (rms: number) => Math.round(Math.max(-120, 20 * Math.log10(rms + 1e-7)) * 10) / 10;
 
 /** The engine's prepared waveform as RMS dBFS. Never starts extraction. */
-export async function engineLevels(engine: Engine, media: MediaInfo): Promise<Levels | undefined> {
+async function engineLevels(engine: Engine, media: MediaInfo): Promise<Levels | undefined> {
   if (!media.duration) return undefined;
   const db: number[] = [];
   const chunk = MAX_POINTS / ENGINE_LEVEL_RATE;
@@ -112,7 +112,7 @@ export async function mediaEvidence(engine: Engine, projectId: string, media: Me
 // Dialogue scan windows (the first-cut detectors' evidence), for replay
 // ---------------------------------------------------------------------------
 
-export interface ScanWindowWaveform { from: number; to: number; peaks: number[]; rms: number[] }
+interface ScanWindowWaveform { from: number; to: number; peaks: number[]; rms: number[] }
 export interface ScanCapture {
   mediaId: string;
   audioStream: number;
@@ -157,7 +157,7 @@ export async function fetchScans(engine: Engine, projectId: string, media: Media
 }
 
 /** Read-only access to the scan windows saved in the library, one set per detector fingerprint. */
-export async function libraryScanPages(mediaId: string, fingerprint?: string): Promise<Array<{ fingerprint: string; pages: Array<{ from: number; to: number; detections: DialogueDetections }> }>> {
+async function libraryScanPages(mediaId: string, fingerprint?: string): Promise<Array<{ fingerprint: string; pages: Array<{ from: number; to: number; detections: DialogueDetections }> }>> {
   const path = join(appSupportDir(), "data", "scarlet.db");
   if (!existsSync(path)) return [];
   // node:sqlite is built into Node 22.5+. Loaded lazily so the rest of the evals run without it.

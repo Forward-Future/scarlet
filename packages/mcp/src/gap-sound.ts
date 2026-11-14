@@ -5,7 +5,7 @@
  * stayed in the cut. An editor cutting by ear and waveform sees it at once. Scarlet measures; the model decides.
  */
 import type { TimeRange, TranscriptWord } from "@scarlet/timeline";
-import { dbfs } from "./analysis.js";
+import { dbfs, isTag } from "./analysis.js";
 
 export interface GapLevels { from: number; to: number; rms: number[] }
 export interface GapSound { seconds: number; runs: TimeRange[] }
@@ -41,7 +41,7 @@ export interface QuietPhrase extends TimeRange {
 }
 
 const NEIGHBOR_SECONDS = 2, MAX_NEIGHBOR_GAP = 12, MAX_PHRASE_SECONDS = 8;
-const isSpoken = (text: string) => !!text.trim() && !/^\s*\[.*\]\s*$/.test(text);
+const isSpoken = (text: string) => !!text.trim() && !isTag(text);
 /** Enough overlap to compare a phrase at the boundary of two level readings. */
 export const QUIET_PHRASE_CONTEXT = MAX_PHRASE_SECONDS + MAX_NEIGHBOR_GAP + NEIGHBOR_SECONDS;
 

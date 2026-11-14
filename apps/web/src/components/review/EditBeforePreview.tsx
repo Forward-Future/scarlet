@@ -62,8 +62,8 @@ export interface BeforePlayback {
  * with the clip across the edit's `passage`, so the timeline and the clock read as they do on After: second for second
  * when the edit moved nothing, in proportion when the passage ran longer or shorter before it.
  */
-export function EditBeforePreview({ change, original, passage, active, aspect, loading, clock, playbackRef }: {
-  change: Change; original: ReturnType<typeof useEditBefore>; passage: TimeRange; active: boolean; aspect: number; loading?: boolean;
+export function EditBeforePreview({ change, original, passage, active, loading, clock, playbackRef }: {
+  change: Change; original: ReturnType<typeof useEditBefore>; passage: TimeRange; active: boolean; loading?: boolean;
   clock?: ReactNode; playbackRef?: Ref<BeforePlayback>;
 }) {
   const clip = useRef<ComparisonPanePlayback>(null);
@@ -84,7 +84,7 @@ export function EditBeforePreview({ change, original, passage, active, aspect, l
   if (!original.timeline || !range) return <div className="absolute inset-0 grid place-content-center bg-black text-sm text-muted" role="status">
     {original.error ? <button className="btn-quiet" onClick={original.retry}>Retry Before</button> : "Opening Before…"}
   </div>;
-  return <ChangeClip change={change} active={active} aspect={aspect} inMonitor loading={loading} clock={clock} previewTimeline={original.timeline}
+  return <ChangeClip change={change} active={active} loading={loading} clock={clock} previewTimeline={original.timeline}
     playbackRef={clip} onElapsed={follow}
-    audition={{ ...range, at: range.start, description: change.description, beforeVersion: original.timeline.version }} />;
+    audition={{ ...range, beforeVersion: original.timeline.version }} />;
 }

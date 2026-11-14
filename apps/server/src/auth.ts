@@ -114,7 +114,7 @@ export function bearerToken(header: string | undefined): string | null {
   return header?.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : null;
 }
 
-export function tokenFromRequest(req: { header(name: string): string | undefined; query(name: string): string | undefined }) {
+function tokenFromRequest(req: { header(name: string): string | undefined; query(name: string): string | undefined }) {
   return bearerToken(req.header("authorization")) ?? (req.query("token") || undefined);
 }
 

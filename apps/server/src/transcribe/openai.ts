@@ -20,7 +20,7 @@ async function emptyDecode(wav: string) {
  * Why OpenAI turned a transcription down, in words the editor can act on. Its answer is JSON written for a program, so
  * that goes to the log. The key is set in the engine's environment (OPENAI_API_KEY), not in Settings.
  */
-export function openaiFailure(status: number, answer: string, model: string): string {
+function openaiFailure(status: number, answer: string, model: string): string {
   let error: { message?: unknown; code?: unknown; type?: unknown } | undefined;
   try { error = (JSON.parse(answer) as { error?: typeof error }).error; } catch { /* not JSON: a proxy's page, or nothing */ }
   const message = typeof error?.message === "string" ? error.message.trim() : "";

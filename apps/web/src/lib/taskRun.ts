@@ -1,8 +1,8 @@
-import { DialogueScanPage, type Task, type TaskEvent } from "@scarlet/shared";
-import { mergeRanges, type Change, type TimeRange } from "@scarlet/timeline";
-import { appliedEditSummary, cutSummary } from "../components/review/cutReviewDetails";
+import { DialogueScanPage, requestText, type Task, type TaskEvent } from "@scarlet/shared";
+import { cutSummary, mergeRanges, type Change, type TimeRange } from "@scarlet/timeline";
+import { appliedEditSummary } from "../components/review/cutReviewDetails";
 import { clock, lengthLabel, plural } from "./format";
-import { editConfirmation, taskChatText } from "./taskActivity";
+import { editConfirmation, taskChatText, toolName, waitLabels, waitTools } from "./taskActivity";
 
 /**
  * One agent run, shown the way Codex shows its work: short updates from the agent and one line per
@@ -16,11 +16,6 @@ const ACTIVE = new Set(["queued", "claimed", "running", "waiting_for_user"]);
 
 export function runIsActive(task: Task) {
   return ACTIVE.has(task.state);
-}
-
-function toolName(event: TaskEvent) {
-  const name = typeof event.data?.tool === "string" ? event.data.tool : event.text.trim().split(/\s+/, 1)[0] ?? "";
-  return name.replace(/^(?:mcp__scarlet__|mcp_scarlet_|scarlet(?:__|[./]))/i, "").replaceAll(".", "_").toLowerCase();
 }
 
 function input(event: TaskEvent): Record<string, unknown> {
@@ -105,8 +100,6 @@ const toolSteps: Record<string, StepSpec> = {
 /** How each step's verb reads while it's still going: "Read" → "Reading". */
 const ongoing = new Map(Object.values(toolSteps).map(spec => [spec.verb, spec.doing]));
 
-const waitNames: Record<string, string> = { transcript: "the transcript", sound: "the sound analysis", dialogue: "dialogue analysis" };
-
 const hostLines = /^(?:Starting the editing agent\.?|Edit resumed\.?|warning:|\(thinking\)|Claude Code session started)/i;
 
 /** The agent's own words, kept to a sentence or two and free of tool transcripts. */
@@ -171,7 +164,7 @@ export function runItems(task: Task, events: readonly TaskEvent[], changes: read
     const at = event.at ?? task.createdAt ?? "";
     if (event.type === "log" && event.data?.kind === "media_wait") {
       const { wait, mediaId, done, failed } = event.data;
-      const name = typeof wait === "string" ? waitNames[wait] : undefined;
+      const name = typeof wait === "string" ? waitLabels[wait] : undefined;
       if (!name || typeof mediaId !== "string") continue;
       const key = `${wait}/${mediaId}`;
       const row = waits.get(key);
@@ -239,7 +232,7 @@ export function runItems(task: Task, events: readonly TaskEvent[], changes: read
     const spec = toolSteps[name];
     if (!spec) continue;
     const args = input(event);
-    const waitKey = waitTool[name] && typeof args.mediaId === "string" ? `${waitTool[name]}/${args.mediaId}` : undefined;
+    const waitKey = waitTools[name] && typeof args.mediaId === "string" ? `${waitTools[name]}/${args.mediaId}` : undefined;
     // Calls that only collect work still being prepared are covered by the waiting row.
     if (waitKey && waits.has(waitKey)) continue;
     // Collecting a submitted picture batch looks at nothing new.
@@ -265,9 +258,6 @@ export function runItems(task: Task, events: readonly TaskEvent[], changes: read
   finishGroup();
   return items;
 }
-
-/** The tool an agent calls to collect each kind of media work. */
-const waitTool: Record<string, string> = { transcript_get: "transcript", transcript_search: "transcript", waveform_get: "sound" };
 
 function firstWords(text: string, words = 7) {
   const sentence = cutSummary(text).split(/(?<=[.!?])\s/u, 1)[0]!.replace(/[.!?]$/, "")
@@ -301,7 +291,7 @@ export function runSummary(task: Task, change?: Change): string {
   }
   // Only what the chat would show as Scarlet's words: a reply that was commands, or the request said back, says
   // nothing here either.
-  const said = editConfirmation(taskChatText(task), task.context.message ?? task.instruction);
+  const said = editConfirmation(taskChatText(task), requestText(task));
   return said ? firstWords(said) : "Done";
 }
 

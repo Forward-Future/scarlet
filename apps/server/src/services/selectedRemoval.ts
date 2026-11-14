@@ -1,4 +1,4 @@
-import { clipEnd, intervalCandidates, mergeRanges, timelineToSource, type MediaClip, type Timeline, type TimelineOp, type TimeRange } from "@scarlet/timeline";
+import { clipEnd, intervalCandidates, mergeRanges, sourceToTimeline, timelineToSource, type MediaClip, type Timeline, type TimelineOp, type TimeRange } from "@scarlet/timeline";
 
 const epsilon = 1e-9;
 
@@ -73,7 +73,7 @@ export function removalOutsideSelection(before: Timeline, after: Timeline, allow
     const survivor = byId.get(clip.id);
     const sameSource = survivor?.mediaId === clip.mediaId;
     if (sameSource && survivor.sourceIn <= clip.sourceIn && survivor.sourceOut >= clip.sourceOut) continue;
-    const at = (t: number) => clip.timelineIn + (t - clip.sourceIn) / clip.speed;
+    const at = (t: number) => sourceToTimeline(clip, t);
     for (const protectedPart of uncovered({ start: clip.timelineIn, end: clipEnd(clip) }, selected)) {
       const needed = { start: timelineToSource(clip, protectedPart.start), end: timelineToSource(clip, protectedPart.end) };
       let missing = uncovered(needed, sameSource ? [sourceRange(survivor)] : []);
@@ -87,7 +87,7 @@ export function removalOutsideSelection(before: Timeline, after: Timeline, allow
         const available = uncovered(sourceRange(fragment), claimed);
         const rest: TimeRange[] = [];
         for (const part of missing) {
-          const plays = fragment.timelineIn + (part.start - fragment.sourceIn) / fragment.speed;
+          const plays = sourceToTimeline(fragment, part.start);
           // A protected piece split by a ripple can move left by at most the selected time removed ahead of it.
           // Its copy elsewhere in the source cannot stand in for it.
           if (repeated && (plays < at(part.start) - possibleShift - epsilon || plays > at(part.start) + epsilon)) { rest.push(part); continue; }

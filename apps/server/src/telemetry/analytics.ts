@@ -4,7 +4,7 @@ import { SCARLET_VERSION, type TelemetryConfig } from "./config.js";
 import { anonymousId, installId } from "./identity.js";
 
 /** Fixed categories, flags, counts, durations and keyed analytics IDs. Never user content or raw library IDs. */
-export type TelemetryProperties = Readonly<Record<string, string | number | boolean>>;
+type TelemetryProperties = Readonly<Record<string, string | number | boolean>>;
 
 export interface Telemetry {
   /** A launch configuration that prevents the editor from turning reporting on. */
@@ -47,7 +47,7 @@ export const SHUTDOWN_FLUSH_TIMEOUT_MS = 1_000;
  * maxBufferedEvents bounds those.
  */
 export const MAX_BATCH_RETRY_MS = 30 * 60_000;
-export const RETRY_BASE_DELAY_MS = 2_000;
+const RETRY_BASE_DELAY_MS = 2_000;
 export const RETRY_MAX_DELAY_MS = 300_000;
 /** These reject the batch itself, so unlike 408 or 429 a retry can't help. */
 const REJECTED_BATCH_STATUSES = new Set([400, 401, 413]);

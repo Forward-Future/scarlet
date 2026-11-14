@@ -4,7 +4,7 @@ import syncFs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { applyOps, createProject, makeMediaClip, planPlaybackSegments, timelineFromKeepRanges } from "@scarlet/timeline";
+import { applyOps, createProject, makeMediaClip, planPlaybackSegments, planSegments, timelineFromKeepRanges } from "@scarlet/timeline";
 import type { MediaClip, Project, Timeline } from "@scarlet/timeline";
 import * as ffmpeg from "./exec.js";
 import {
@@ -29,7 +29,6 @@ import {
   makeProxy,
   outputSize,
   parseRate,
-  planSegments,
   probeMedia,
   probeToAssetFields,
   renderFullCached,

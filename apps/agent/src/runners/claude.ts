@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writePrivateFile } from "../private-files.js";
 import { briefInput, DEFAULT_STALL_MS, isQuestionTool, planEvent, prettyToolName, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
-import { resolveCli, spawnLines, tailSummary } from "./spawn.js";
+import { earlyResult, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
 import { addUsage, claudeUsage } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
 
@@ -12,12 +12,12 @@ import type { AgentUsage, PlanStep } from "@scarlet/shared";
  * and its result names the step's id; TaskUpdate changes one step by id. A Claude Code from before those has
  * TodoWrite, which takes the whole list. `--tools` takes the names a CLI knows and passes over the rest.
  */
-export const CLAUDE_PLAN_TOOLS = ["TaskCreate", "TaskUpdate", "TodoWrite"];
+const CLAUDE_PLAN_TOOLS = ["TaskCreate", "TaskUpdate", "TodoWrite"];
 const PLAN_READS = new Set(["TaskList", "TaskGet", "TodoRead"]);
 const STEP_STATE: Record<string, PlanStep["state"]> = { pending: "pending", in_progress: "in_progress", completed: "done" };
 
 /** The plan as Claude Code's to-do tools have left it, and their calls still waiting for a result. */
-export interface ClaudePlanState {
+interface ClaudePlanState {
   steps: Array<PlanStep & { id: string }>;
   calls: Record<string, { create: string } | { update: { id: string; status?: string; subject?: string } }>;
   /** The plan last passed on. */
@@ -106,15 +106,9 @@ type ContentBlock =
 
 /** Parse one stream-json line from `claude -p --output-format stream-json --verbose`. */
 export function parseClaudeLine(line: string, st: ClaudeParseState): RunnerEvent[] {
-  let msg: Record<string, unknown>;
-  try {
-    msg = JSON.parse(line) as Record<string, unknown>;
-  } catch {
-    // Non-JSON noise (warnings) — surface as a log line.
-    return [{ type: "log", text: line }];
-  }
-  // The CLIs write one JSON object per line. Anything else that parses (null, a number, a list) is noise too.
-  if (!msg || typeof msg !== "object" || Array.isArray(msg)) return [{ type: "log", text: line }];
+  // Anything that isn't one JSON object (a warning, null, a number, a list) is noise: surface it as a log line.
+  const msg = jsonLine(line);
+  if (!msg) return [{ type: "log", text: line }];
   const events: RunnerEvent[] = [];
   const type = msg.type as string | undefined;
   if ((type === "system" && msg.subtype === "init") || type === "assistant" || type === "user") st.started = true;
@@ -326,11 +320,8 @@ export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> 
   });
   const outcome = await handle.done;
   const session = { sessionId: st.sessionId ?? (st.started ? opts.resumeSession : undefined), usage: claudeRunUsage(st, opts.model) };
-  if (st.question) {
-    return { ok: true, summary: tailSummary(st.texts), question: st.question, questionPosted: st.questionPosted, exitCode: outcome.code, ...session };
-  }
-  if (outcome.timedOut) return { ok: false, summary: tailSummary(st.texts), error: outcome.stalled ? "stalled" : "timed out", timedOut: true, stalled: outcome.stalled, exitCode: outcome.code, ...session };
-  if (outcome.aborted) return { ok: false, summary: tailSummary(st.texts), error: "cancelled", aborted: true, exitCode: outcome.code, ...session };
+  const early = earlyResult(st, outcome, session);
+  if (early) return early;
   const ok = !st.resultIsError && (outcome.code === 0 || st.result !== undefined);
   return {
     ok,

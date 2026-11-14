@@ -65,6 +65,9 @@ export function noteEngineStart(ctx: Pick<Ctx, "db" | "log">): boolean {
   return inherited;
 }
 
+/** Room for a clock set since the computer started. */
+const BOOT_MARGIN_MS = 60_000;
+
 /**
  * Whether the engine that claimed an import, a source cache or a render under a process id still runs. A process with
  * that id is not enough: once an engine is killed its id goes to another program, which would hold the claim for as
@@ -77,9 +80,6 @@ export function noteEngineStart(ctx: Pick<Ctx, "db" | "log">): boolean {
  * age from what the clock read as it began, as the note does. Linux counts it from boot, so a clock set forward since
  * would read as a later start, and Windows has no `ps`.
  */
-/** Room for a clock set since the computer started. */
-const BOOT_MARGIN_MS = 60_000;
-
 export function engineIsAlive(ctx: Pick<Ctx, "db" | "track" | "log">, pid: number): boolean {
   if (pid === process.pid) return true;
   if (!processIsAlive(pid)) {

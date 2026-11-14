@@ -21,8 +21,6 @@ import { outputSize, renderRange, type RenderOptions, type RenderQuality } from 
 
 import { resolveEncoding, withRenderEncoder } from "./encoder.js";
 
-export { planSegments } from "@scarlet/timeline";
-
 /** Preserve compositing order while visiting each clip only in segments it intersects. */
 function segmentTimelines(timeline: Timeline, ranges: TimeRange[]): Timeline[] {
   const parts: Timeline[] = ranges.map(() => ({

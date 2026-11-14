@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::usage::AgentUsage;
-use super::types::{AgentAvailability, AgentHost, CompleteTaskRequest, Task, TaskEvent, TaskPrompt, TaskWithEvents};
+use super::types::{AgentAvailability, AgentHost, CompleteTaskRequest, Task, TaskEvent, TaskPrompt};
 
 #[derive(Debug, Clone)]
 pub struct ApiError {
@@ -149,10 +149,6 @@ impl Api {
     }
 
     // -- tasks ----------------------------------------------------------------
-
-    pub async fn task(&self, task_id: &str) -> Result<TaskWithEvents, ApiError> {
-        self.get(&format!("/tasks/{task_id}")).await
-    }
 
     pub async fn post_task_event(&self, task_id: &str, started_at: Option<&str>, ev: &TaskEvent) -> Result<(), ApiError> {
         let mut body = serde_json::to_value(ev).unwrap();
@@ -319,15 +315,15 @@ mod tests {
             _ => (200, "{}".into()),
         }).await;
         let api = Api::new(&engine.url, Some("sct_test"));
-        let gone = api.task("tsk_gone").await.unwrap_err();
+        let gone = api.get::<Value>("/tasks/tsk_gone").await.unwrap_err();
         assert!(gone.is_status(404) && !gone.is_status(500));
         assert_eq!((gone.code.as_str(), gone.message.as_str(), gone.to_string().as_str()), ("not_found", "No such task", "No such task (not_found 404)"));
         // Not the engine's JSON: the text itself, or the status's own name when there is none.
-        let plain = api.task("tsk_plain").await.unwrap_err();
+        let plain = api.get::<Value>("/tasks/tsk_plain").await.unwrap_err();
         assert_eq!((plain.status, plain.code.as_str(), plain.message.as_str()), (Some(502), "http_error", "upstream went away"));
-        let empty = api.task("tsk_empty").await.unwrap_err();
+        let empty = api.get::<Value>("/tasks/tsk_empty").await.unwrap_err();
         assert_eq!((empty.status, empty.message.as_str()), (Some(503), "Service Unavailable"));
-        let partial = api.task("tsk_partial").await.unwrap_err();
+        let partial = api.get::<Value>("/tasks/tsk_partial").await.unwrap_err();
         assert_eq!((partial.code.as_str(), partial.message.as_str()), ("http_error", "Bad id"));
     }
 
@@ -341,7 +337,7 @@ mod tests {
         }).await;
         let api = Api::new(&engine.url, None);
         // A 200 that isn't the JSON asked for names what was wrong and shows where the answer began.
-        let html = api.task("tsk_html").await.unwrap_err();
+        let html = api.get::<Value>("/tasks/tsk_html").await.unwrap_err();
         assert_eq!((html.status, html.code.as_str()), (Some(200), "decode_error"));
         assert!(html.message.contains(" in <html>xxx") && html.message.len() < 300, "{}", html.message);
         // An empty answer is fine where nothing is read from it, and an error where something is.
@@ -354,7 +350,7 @@ mod tests {
         let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let nowhere = Api::new(&format!("http://{}", closed.local_addr().unwrap()), None);
         drop(closed);
-        let down = nowhere.task("tsk_1").await.unwrap_err();
+        let down = nowhere.get::<Value>("/tasks/tsk_1").await.unwrap_err();
         assert_eq!((down.status, down.code.as_str()), (None, "network_error"));
         assert!(!down.is_status(404) && !down.to_string().contains("network_error"));
     }

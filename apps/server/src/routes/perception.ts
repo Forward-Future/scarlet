@@ -8,9 +8,9 @@ import { badRequest, notFound } from "../errors.js";
 import { FFMPEG, ffmpegPosition } from "../render/ffmpeg.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 import { screenText } from "../services/screenText.js";
-import { numberParam, requireMedia } from "./util.js";
+import { optionalNumberParam, requireMedia } from "./util.js";
 
-export interface Loudness { integratedLufs: number | null; loudnessRangeLu: number | null; truePeakDbtp: number | null }
+interface Loudness { integratedLufs: number | null; loudnessRangeLu: number | null; truePeakDbtp: number | null }
 
 /** Read ffmpeg's ebur128 summary. Silence reports -inf, which JSON cannot carry, so it becomes null. */
 export function parseEbur128(stderr: string): Loudness {
@@ -49,6 +49,12 @@ export function measureLoudness(file: string, from: number | undefined, to: numb
   });
 }
 
+function requireSourceRange(from: number | undefined, to: number | undefined) {
+  if ((from !== undefined && from < 0) || (from !== undefined && to !== undefined && to <= from)) {
+    throw badRequest("bad_range", "Choose a positive source range in seconds.");
+  }
+}
+
 /** Read-only measurements the agent tools need beyond waveforms and transcripts. */
 export function perceptionRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
@@ -60,11 +66,8 @@ export function perceptionRoutes(ctx: Ctx) {
   r.get("/projects/:projectId/media/:mediaId/loudness", async c => {
     const media = requireMedia(ctx, c.req.param("mediaId"), c.req.param("projectId"));
     if (media.kind !== "audio" && !media.hasAudio) throw badRequest("no_audio", "This media has no audio to measure.");
-    const from = c.req.query("from") !== undefined ? numberParam(c.req.query("from"), "from") : undefined;
-    const to = c.req.query("to") !== undefined ? numberParam(c.req.query("to"), "to") : undefined;
-    if ((from !== undefined && from < 0) || (from !== undefined && to !== undefined && to <= from)) {
-      throw badRequest("bad_range", "Choose a positive source range in seconds.");
-    }
+    const from = optionalNumberParam(c.req.query("from"), "from"), to = optionalNumberParam(c.req.query("to"), "to");
+    requireSourceRange(from, to);
     const file = await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path);
     if (!file) throw notFound("source file");
     const info = await stat(file);
@@ -79,9 +82,9 @@ export function perceptionRoutes(ctx: Ctx) {
   r.get("/projects/:projectId/media/:mediaId/screen-text", async c => {
     const media = requireMedia(ctx, c.req.param("mediaId"), c.req.param("projectId"));
     if (media.kind !== "video") throw badRequest("no_picture", "Only a video has a picture to read.");
-    const number = (name: string) => c.req.query(name) !== undefined ? numberParam(c.req.query(name), name) : undefined;
+    const number = (name: string) => optionalNumberParam(c.req.query(name), name);
     const from = number("from"), to = number("to"), wait = number("wait");
-    if ((from !== undefined && from < 0) || (from !== undefined && to !== undefined && to <= from)) throw badRequest("bad_range", "Choose a positive source range in seconds.");
+    requireSourceRange(from, to);
     try {
       return c.json(await screenText(ctx, media, { from, to }, { query: c.req.query("q") || undefined,
         waitMs: Math.max(0, Math.min(60, wait ?? 30)) * 1000, signal: c.req.raw.signal }));

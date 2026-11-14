@@ -1,20 +1,14 @@
-import { taskDialogueOperation, matchesEdit, namedTimelineEdits, noteThread, queueWait, DialogueScanPage, requestText, taskRecoveryAction, taskWasStopped, type Task, type TaskEvent, type Thread, type ThreadEdit } from "@scarlet/shared";
+import { taskDialogueOperation, matchesEdit, noteThread, DialogueScanPage, requestText, taskRecoveryAction, taskWasStopped, type Task, type TaskEvent, type Thread, type ThreadEdit } from "@scarlet/shared";
 import { clock } from "./format";
-import { groupEditMessages } from "./groupEditMessages";
-import { dialogueReceipt, mergeRanges, reviewReasons, type TimeRange, type Author, type Change, type Note } from "@scarlet/timeline";
-import { appliedEditSummary, cutSummary } from "../components/review/cutReviewDetails";
-import { compactActivity, editConfirmation, isDialogueScanTool, pendingMediaWaits, taskActivityLabel, taskChatText, TRANSCRIPT_WAIT, waitingFor } from "./taskActivity";
+import { cutSummary, dialogueReceipt, mergeRanges, rangesOverlap, reviewReasons, type TimeRange, type Author, type Change, type Note } from "@scarlet/timeline";
+import { appliedEditSummary } from "../components/review/cutReviewDetails";
+import { editConfirmation, taskChatText } from "./taskActivity";
+import { runIsActive } from "./taskRun";
 
-export { buildThreads, requestText, type Thread } from "@scarlet/shared";
+export { buildThreads, type Thread } from "@scarlet/shared";
 
-export interface InlineEdit { end: number; phrase: string; change: Change; spot: number }
-export interface EditDetail { text: string; change?: Change; edits?: InlineEdit[]; excerpt?: string }
-export interface RetryAction { taskId: string; label: "Resume agent" | "Retry edit" }
-export interface ProgressEntry {
-  kind: "progress"; taskId: string; at: string; text: string; edits?: InlineEdit[]; excerpt?: string;
-  summary?: string;
-  scan?: { mediaId: string; end: number; seconds: number; total: number; updatedAt: string };
-}
+interface RetryAction { taskId: string; label: "Resume agent" | "Retry edit" }
+interface ProgressEntry { kind: "progress"; taskId: string; at: string; text: string }
 
 export interface FirstCutDelivery {
   task: Task;
@@ -29,25 +23,19 @@ export function appliedPassCuts(delivery: FirstCutDelivery, edits: ThreadEdit[])
 }
 
 export type ThreadEntry = { taskId?: string } & (
-  | { kind: "request"; at: string; text: string; author: Author; voice?: boolean; revisionLabel?: string; queueStatus?: string }
+  | { kind: "request"; at: string; text: string; author: Author; revisionLabel?: string }
   // `replyTo` is the run a closing reply answers. It draws after that request's block and goes where the block goes.
   // `onNote` marks what Scarlet wrote back on the editor's note, as distinct from the message it closed the request with.
   | { kind: "agent"; at: string; text: string; author: Author; change?: Change; fullText?: string; replyTo?: string; onNote?: boolean }
   | ProgressEntry
   | { kind: "question"; at: string; text: string; task: Task; answered: boolean }
   | { kind: "answer"; at: string; text: string }
-  | { kind: "change"; at: string; change: Change; attempt: number; text: string; details?: EditDetail[]; activity?: ProgressEntry[]; delivery?: FirstCutDelivery }
+  | { kind: "change"; at: string; change: Change; text: string }
   | { kind: "firstCut"; at: string; delivery: FirstCutDelivery }
   | { kind: "system"; at: string; text: string; tone?: "ok" | "warn" | "bad"; action?: RetryAction });
 
 const FIRST_CUT_INSTRUCTION = "Make a first cut from this project’s footage and send it to me for review.";
 
-/** The last page ends on the last word, short of the recording's length: the same half second the run's steps allow. */
-function scanComplete(scan: { seconds: number; total: number }) {
-  return scan.seconds >= scan.total - 0.5;
-}
-
-const ACTIVE = new Set<Task["state"]>(["queued", "claimed", "running"]);
 /**
  * Scarlet's own redo of a suggestion. Applied after the video had moved on, the suggestion no longer fit, so the engine
  * asks for it again on the video as it is now. The editor didn't ask for it: it carries on the request that made the
@@ -62,35 +50,12 @@ export const isRedo = (task: Task) => task.kind === "revise" && task.createdBy.t
  */
 export const isRecheck = (task: Task) => task.kind === "revise" && task.createdBy.type === "scarlet" && !!task.cutConflict?.approved;
 /** Why Scarlet is rechecking an approved cut, in place of the editor's words a revision has. */
-export const RECHECK_WORDS = "The footage here changed after you approved it. Rechecking the cut.";
+const RECHECK_WORDS = "The footage here changed after you approved it. Rechecking the cut.";
 /** What Scarlet says about a suggestion it is to make again: while the redo waits its turn, then once Scarlet is on it. */
 const REDO_WAITS = "The video changed while this suggestion was waiting. I’ll redo it on the video as it is now.";
 const REDOING = "The video changed while this suggestion was waiting. I’m redoing it on the video as it is now.";
 const legacyInterruption = "The agent was interrupted after saving its proposed changes. You can review them here.";
 const ts = (x?: string) => Date.parse(x ?? "") || 0;
-
-/** Resolve explicit word-to-spot links from saved or streaming messages, scoped to this task. */
-function inlineEdits(text: string, refs: unknown, task: Task, changes: Change[]): InlineEdit[] | undefined {
-  if (!Array.isArray(refs)) return;
-  const result: InlineEdit[] = [];
-  let offset = 0;
-  for (const ref of refs) {
-    if (!ref || typeof ref.phrase !== "string" || !ref.phrase || !Number.isInteger(ref.spot)) continue;
-    const change = changes.find(c => c.id === ref.changeId && (c.taskId === task.id || task.changeIds.includes(c.id)));
-    if (!change || change.state === "failed") continue;
-    const named = namedTimelineEdits(change);
-    if (!(named ?? change.ranges)[ref.spot]) continue;
-    // A cut-by-cut review may replace a whole-proposal range with entirely new joins.
-    if (change.appliedReview) continue;
-    const spot = change.appliedWindows && change.approvedSpots ? change.approvedSpots.indexOf(ref.spot) : ref.spot;
-    if (spot < 0 || (change.appliedWindows && !named && !change.appliedWindows[spot])) continue;
-    const at = text.indexOf(ref.phrase, offset);
-    if (at < 0) continue;
-    offset = at + ref.phrase.length;
-    result.push({ end: offset, phrase: ref.phrase, change, spot });
-  }
-  return result.length ? result : undefined;
-}
 
 function taskForChange(tasks: Task[], change: Change) {
   return tasks.find(t => t.id === change.taskId) ?? tasks.find(t => t.changeIds.includes(change.id));
@@ -112,7 +77,7 @@ export function firstCutDeliveries(thread: Thread): Map<string, FirstCutDelivery
       ts(a.createdAt) - ts(b.createdAt) || (order.get(a.id) ?? -1) - (order.get(b.id) ?? -1));
     const change = changes.findLast(c => c.state === "approved" || c.state === "ready");
     const lastChange = changes.at(-1);
-    const preparing = ACTIVE.has(task.state) || task.state === "waiting_for_user" ||
+    const preparing = runIsActive(task) ||
       (task.state === "done" && (lastChange?.state === "rendering" || lastChange?.state === "proposed"));
     const finished = task.state === "done" && !task.interrupted && task.summary !== legacyInterruption &&
       lastChange?.state !== "failed" && lastChange?.state !== "revising";
@@ -180,7 +145,6 @@ export function requestTarget(task: Task, made: Change | undefined, changes: rea
   // Such a cut carries the note of each staged cut in it, as its call does.
   const note = made ? reviewReasons(made, [{ removed: cut }])[0]?.join(" ") || undefined : undefined;
   const same = (a: TimeRange, b: TimeRange) => Math.abs(a.start - b.start) < 0.05 && Math.abs(a.end - b.end) < 0.05;
-  const overlaps = (a: TimeRange, b: TimeRange) => a.start < b.end && a.end > b.start;
   let index = cutIndex;
   // The pass that took a pass's place: the one named on it, or the one a revision of one of its cuts made from it.
   const after = (pass: Change) => changes.find(c => c.id === pass.replacedBy) ?? changes.find(c => c.id !== pass.id && !!c.cutReasons
@@ -195,49 +159,25 @@ export function requestTarget(task: Task, made: Change | undefined, changes: rea
       // holds a staged cut with this one's range, or with the range of a staged cut this one was made of.
       const ranges = [cut, ...(change.cutReasons ?? []).filter(r => r.start >= cut!.start && r.end <= cut!.end)];
       const carried = next.cutReasons.filter(r => ranges.some(range => same(r, range)));
-      found = staged.findIndex(r => overlaps(r, cut!) && carried.some(kept => kept.start >= r.start && kept.end <= r.end));
+      found = staged.findIndex(r => rangesOverlap(r, cut!) && carried.some(kept => kept.start >= r.start && kept.end <= r.end));
     }
     const at = found >= 0 ? found : index;
     const moved = staged[at];
-    if (!moved || !overlaps(moved, cut)) return { note };
+    if (!moved || !rangesOverlap(moved, cut)) return { note };
     change = next; index = at; cut = moved;
   }
   const mine = edits.filter(e => e.beforeCut && [e, ...e.previous].some(ref => ref.changeId === change!.id));
-  const edit = mine.find(e => same(e.beforeCut!.removed, cut!)) ?? mine.find(e => overlaps(e.beforeCut!.removed, cut!));
+  const edit = mine.find(e => same(e.beforeCut!.removed, cut!)) ?? mine.find(e => rangesOverlap(e.beforeCut!.removed, cut!));
   return edit ? { note, edit } : { note, changeId: change.id, call: index };
 }
 
-/** What a queued request shows: Scarlet runs one request at a time in a project, unless each is about its own cut or edit, so it says what it is waiting for. */
-export function queueLabel(task: Task, tasks: readonly Task[], changes: readonly Change[], isDialoguePass: (task: Task) => boolean): string | undefined {
-  const wait = queueWait(task, tasks, changes);
-  if (!wait) return undefined;
-  switch (wait.kind) {
-    case "question": return "Queued · Waiting for your answer on the earlier edit";
-    case "run": return isDialoguePass(wait.task) ? "Queued · After the dialogue pass" : "Queued · After the current edit";
-    case "ahead": return `Queued · ${wait.count} ${wait.count === 1 ? "request" : "requests"} ahead`;
-    // The pass's card in the chat says what it waits for.
-    case "review": return "Queued";
-  }
-}
-
-/** Saved conversation entries in chronological order, with the active task's work tracked separately. */
-export function threadConversation(thread: Thread, notes: Note[], events: Record<string, TaskEvent[]> = {}, firstCuts?: Map<string, FirstCutDelivery>, timelineEdits?: ThreadEdit[],
-  /** Why a queued request is waiting, across the whole project (queueLabel). Without it, only this thread is considered. */
-  queue?: (task: Task) => string | undefined) {
+/** Saved conversation entries in chronological order. */
+export function threadConversation(thread: Thread, notes: Note[], events: Record<string, TaskEvent[]> = {}, firstCuts?: Map<string, FirstCutDelivery>) {
   const out: ThreadEntry[] = [];
-  /** `transcripts`: recordings whose transcripts the live line is waiting for, so it can show their progress. */
-  let live: { text: string; entry: ProgressEntry; transcripts?: string[] } | undefined;
-  const currentEdit = thread.question ?? thread.active;
-  // The live line is the running request's. A run picked up after an interruption is a later task than a request that
-  // was already waiting in its thread, so it isn't the thread's first in line.
-  const running = thread.tasks.find(t => t.state === "running");
-  let queuedFollowUps = 0;
   const dialogueTasks = new Set(thread.changes.filter(c => dialogueReceipt(c)).map(c => c.taskId));
   const attempt = new Map(thread.changes.map((c, i) => [c.id, i + 1]));
   for (const t of thread.tasks) {
     const start = out.length;
-    const waiting = t.state === "queued" && currentEdit && t.id !== currentEdit.id;
-    if (waiting) queuedFollowUps++;
     const author = t.createdBy;
     const requested = t.context.message === "Make first cut" && t.instruction.startsWith(FIRST_CUT_INSTRUCTION)
       ? t.instruction.slice(FIRST_CUT_INSTRUCTION.length).trim() : requestText(t);
@@ -245,97 +185,35 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
     // Scarlet's redo of a suggestion has no words of its own here: the suggestion says what is happening to it, below.
     else if (author.type === "scarlet") { if (!isRedo(t)) out.push({ kind: "system", at: t.createdAt ?? "", text: isRecheck(t) ? RECHECK_WORDS : requested, tone: "warn" }); }
     else if (requested && requested !== "Make first cut") {
-      const revisionLabel = revisionTarget(t, thread.changes);
-      let queueStatus = queue && t.state === "queued" ? queue(t) : undefined;
-      if (!queue && waiting) {
-        if (queuedFollowUps > 1) queueStatus = `Queued · ${queuedFollowUps} edits ahead`;
-        else if (thread.question) queueStatus = "Queued · Waiting for your answer on the earlier edit";
-        else queueStatus = firstCuts?.has(currentEdit.id) ? "Queued · After the dialogue edit" : "Queued · After the current edit";
-      }
-      out.push({ kind: "request", at: t.createdAt ?? "", text: requested, author, revisionLabel, queueStatus });
+      out.push({ kind: "request", at: t.createdAt ?? "", text: requested, author, revisionLabel: revisionTarget(t, thread.changes) });
     }
     const taskEvents = events[t.id] ?? [];
     const pending = t.state === "waiting_for_user" ? taskEvents.findLast(ev => ev.type === "question" && ev.text === t.question) : undefined;
-    // Only the last transient status can survive the replay. Historical tools
-    // aren't conversation entries and need no labels of their own.
-    const transient = t.state === "running" && taskEvents.findLast(ev =>
-      (ev.type === "tool" || ev.type === "answer" || ev.type === "change" || (ev.type === "log" && !(ev.data?.kind === "editor_progress" && ev.text.trim()))) &&
-      !!taskActivityLabel(ev));
-    const scans = new Map<string, { entry: ProgressEntry; start: number; ranges: TimeRange[] }>();
-    // A call that only collects a transcript or analysis still being prepared reads as waiting for it.
-    const waits = pendingMediaWaits(taskEvents);
+    const scans = new Set<string>();
     const reviewCounters = new Map<string, { count: number; entry: ProgressEntry }>();
-    let current: ProgressEntry | undefined;
     for (const ev of taskEvents) {
       if (ev.type === "log" && ev.data?.kind === "editor_progress" && ev.text.trim()) {
-        const text = ev.text.trim();
-        const entry: ProgressEntry = { kind: "progress", taskId: t.id, at: ev.at ?? t.createdAt ?? "", text };
+        const entry: ProgressEntry = { kind: "progress", taskId: t.id, at: ev.at ?? t.createdAt ?? "", text: ev.text.trim() };
         const result = ev.data.scanPage ? DialogueScanPage.safeParse(ev.data.scanPage) : undefined;
-        if (!result?.success) entry.summary = compactActivity(ev) ?? (text.length <= 48 ? text : "Editing");
         if (result?.success) {
-          const page = result.data;
-          const key = JSON.stringify([page.mediaId, page.end]);
-          const scan = scans.get(key) ?? { entry, start: page.from, ranges: [] };
+          const key = JSON.stringify([result.data.mediaId, result.data.end]);
           if (!scans.has(key)) {
-            out.push(scan.entry);
-            current = scan.entry;
-          }
-          scans.set(key, scan);
-          scan.start = Math.min(scan.start, page.from);
-          if (page.to !== undefined) {
-            scan.ranges = mergeRanges([...scan.ranges, { start: page.from, end: page.to }]);
-          }
-          const seconds = scan.ranges.reduce((sum, r) => sum + (r.end - r.start), 0);
-          const total = page.end - scan.start;
-          if (seconds !== scan.entry.scan?.seconds || total !== scan.entry.scan?.total) {
-            scan.entry.scan = { mediaId: page.mediaId, end: page.end, seconds, total, updatedAt: entry.at };
+            scans.add(key);
+            out.push(entry);
           }
         } else if (typeof ev.data.reviewCounter === "string" && typeof ev.data.count === "number") {
           const previous = reviewCounters.get(ev.data.reviewCounter);
           if (!previous || ev.data.count > previous.count) {
             if (previous) Object.assign(previous.entry, entry);
             else out.push(entry);
-            current = previous?.entry ?? entry;
-            reviewCounters.set(ev.data.reviewCounter, { count: ev.data.count, entry: current });
+            reviewCounters.set(ev.data.reviewCounter, { count: ev.data.count, entry: previous?.entry ?? entry });
           }
         } else {
-          entry.edits = inlineEdits(text, ev.data.edits, t, thread.changes);
-          if (entry.edits && typeof ev.data.excerpt === "string") entry.excerpt = ev.data.excerpt.trim().slice(0, 280);
           out.push(entry);
-          if (!entry.edits || ev.data.activity) current = entry;
-        }
-      } else if (ev === transient) {
-        const text = taskActivityLabel(ev, scans.size > 0, waits);
-        if (text) {
-          const scanTool = isDialogueScanTool(ev);
-          current = { kind: "progress", taskId: t.id, at: ev.at ?? t.createdAt ?? "", text,
-            summary: scanTool && scans.size ? text : (waitingFor(ev, waits) ? "Waiting" : compactActivity(ev)) ?? text };
-          if (scanTool) {
-            const input = ev.data?.input;
-            const mediaId = input && typeof input === "object" && "mediaId" in input ? input.mediaId : undefined;
-            const from = input && typeof input === "object" && "from" in input ? input.from : 0;
-            // Reading an unfinished page joins the same scan. Reading saved pages is separate work.
-            for (const scan of scans.values()) {
-              if (scan.entry.scan && scan.entry.scan.mediaId === mediaId && typeof from === "number" &&
-                  from >= scan.start && from < scan.entry.scan.end && !scan.ranges.some(r => from >= r.start && from < r.end)) {
-                current = scan.entry;
-                break;
-              }
-            }
-          }
         }
       }
       if (ev.type === "question") out.push({ kind: "question", at: ev.at ?? t.createdAt ?? "", text: ev.text, task: t, answered: ev !== pending });
       if (ev.type === "answer") out.push({ kind: "answer", at: ev.at ?? t.createdAt ?? "", text: ev.text });
-    }
-    if (t === running && current) {
-      let text = current.text;
-      if (current.scan) {
-        const scanning = [...scans.values()].some(s => s.entry.scan && !scanComplete(s.entry.scan));
-        text = scanning ? "Scanning dialogue" : "Preparing edits…";
-      }
-      const transcripts = [...waits].flatMap(key => key.startsWith("transcript/") ? [key.slice("transcript/".length)] : []);
-      live = text === TRANSCRIPT_WAIT && transcripts.length ? { entry: current, text, transcripts } : { entry: current, text };
     }
     if (t.state === "waiting_for_user" && t.question && !pending) {
       out.push({ kind: "question", at: t.startedAt ?? t.createdAt ?? "", text: t.question, task: t, answered: false });
@@ -387,7 +265,7 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
   for (const c of thread.changes) {
     if (c.replacedBy) continue;
     const task = taskForChange(thread.tasks, c);
-    const pendingReply = task && (task.state === "waiting_for_user" || ACTIVE.has(task.state));
+    const pendingReply = task && runIsActive(task);
     const liveDecision = c.state === "ready" && thread.needs === "decision" && thread.active?.id === task?.id && thread.latest?.id === c.id;
     if (c.state === "approved" || liveDecision || (!pendingReply && c.state !== "proposed" && c.state !== "rendering")) {
       const request = task && requestText(task);
@@ -400,9 +278,9 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
         : dialogueReceipt(c) ?? finalSummary ?? description ?? "I prepared a version for you to review.";
       const at = c.state === "approved" ? c.updatedAt ?? c.createdAt
         : finalReply && ts(task.finishedAt) > ts(c.createdAt) ? task.finishedAt : c.createdAt;
-      out.push({ kind: "change", taskId: task?.id, at: at ?? "", change: c, attempt: attempt.get(c.id) ?? 1, text });
+      out.push({ kind: "change", taskId: task?.id, at: at ?? "", change: c, text });
       const completion = editConfirmation(summary, request, "full");
-      if (task && completion && completion !== text && (timelineEdits || (c.state === "approved" && finalSummary))) {
+      if (task && completion && completion !== text && c.state === "approved" && finalSummary) {
         out.push({ kind: "agent", at: task.finishedAt ?? task.createdAt ?? "", text: completion, change: c, replyTo: task.id,
           author: { type: "agent", id: task.agent, name: task.agent, model: task.model } });
       }
@@ -410,14 +288,14 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
     // Applied after the video had moved on, a suggestion goes back to Scarlet to be made again. It says so once, in
     // Scarlet's words, under the request that made it, for as long as the redo waits or runs: why it wasn't applied
     // and what happens to it. What the redo makes, or how it ended, takes the line's place.
-    const redo = thread.tasks.find(t => isRedo(t) && t.context.changeId === c.id && (ACTIVE.has(t.state) || t.state === "waiting_for_user"));
+    const redo = thread.tasks.find(t => isRedo(t) && t.context.changeId === c.id && runIsActive(t));
     if (redo) out.push({ kind: "agent", taskId: task?.id, at: redo.createdAt ?? c.updatedAt ?? "", text: redo.state === "queued" && !redo.startedAt ? REDO_WAITS : REDOING,
       author: { type: "agent", id: redo.agent, name: redo.agent, model: redo.model } });
     for (const feedback of notes.filter(n => n.changeId === c.id)) {
       // The note's own words are what its request was sent as. A reply to it is Scarlet's, and never part of them.
       const words = noteThread(feedback).text;
       if (thread.tasks.some(t => t.context.noteIds?.includes(feedback.id) && requestText(t) === words)) continue;
-      out.push({ kind: "request", at: feedback.createdAt ?? c.updatedAt ?? "", text: words, author: feedback.author, voice: !!feedback.voiceTranscript });
+      out.push({ kind: "request", at: feedback.createdAt ?? c.updatedAt ?? "", text: words, author: feedback.author });
     }
     // A suggestion put away by a decision. Today that is the engine's doing: when the editor applies one of the alternatives
     // Scarlet offered, the others are put away as "Another alternative was chosen". The editor applied something else and
@@ -440,5 +318,5 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
     }
   }
   out.sort((a, b) => ts(a.at) - ts(b.at));
-  return { entries: timelineEdits ? groupEditMessages(out, thread, timelineEdits) : out, live, queuedFollowUps };
+  return { entries: out };
 }

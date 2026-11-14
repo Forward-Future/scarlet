@@ -1,4 +1,4 @@
-import { frameAlignedRemoval, makeTimeMap, mergeRanges, removedJoins, timelineDuration, type Timeline, type TimelineOp, type TimeRange } from "@scarlet/timeline";
+import { frameAlignedRemoval, makeTimeMap, mergeRanges, removedJoins, sourceToTimeline, timelineDuration, type Timeline, type TimelineOp, type TimeRange } from "@scarlet/timeline";
 import type { Task } from "./api.js";
 
 /**
@@ -44,7 +44,7 @@ export function selectionPlacements(tl: Timeline, anchor: Task["context"]): Time
   if (!anchor.mediaId) return [selected];
   return tl.tracks.flatMap(track => track.clips).flatMap(clip => {
     if (clip.kind !== "media" || !clip.enabled || clip.mediaId !== anchor.mediaId) return [];
-    const at = (t: number) => clip.timelineIn + (t - clip.sourceIn) / clip.speed;
+    const at = (t: number) => sourceToTimeline(clip, t);
     if (selected.start === selected.end) {
       const pin = selected.start;
       return pin >= clip.sourceIn && pin <= clip.sourceOut ? [{ start: at(pin), end: at(pin) }] : [];

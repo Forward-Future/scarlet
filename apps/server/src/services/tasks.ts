@@ -1,7 +1,7 @@
 import { agentCapabilities, isAsideTask, isLearningCheck, isSkillEdit, planText, reviewItemPath, splitAgentTarget, TaskPlan, dialogueCommand, taskDialogueOperation, taskRunKind } from "@scarlet/shared";
 import { AgentId, type AgentHost, type CompleteTaskRequest, type Task, type TaskEvent, type TaskKind, type TaskPrompt, type User } from "@scarlet/shared";
 import { buildSystemPrompt } from "@scarlet/mcp/prompt";
-import { describeDialogueRemovals, dialogueReceipt, dialogueRemovals, newId, type Author } from "@scarlet/timeline";
+import { carriesAudio, describeDialogueRemovals, dialogueReceipt, dialogueRemovals, newId, type Author, type Change } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { clip, since } from "../logText.js";
@@ -27,7 +27,7 @@ export function hasTranscript(ctx: Ctx, mediaId: string): boolean {
  * Recordings whose transcript or dialogue analysis the run waited for and never got, and whose transcript still
  * isn't saved. The MCP server records each wait and how it ended, so this is measured, not the agent's account.
  */
-export function unmetTranscriptWaits(ctx: Ctx, taskId: string): string[] {
+function unmetTranscriptWaits(ctx: Ctx, taskId: string): string[] {
   const met = new Map<string, boolean>();
   for (const ev of ctx.repos.taskEvents.list(taskId, "mediaWaits")) {
     const d = ev.data;
@@ -62,7 +62,12 @@ function recentDuration(ctx: Ctx, kind: TaskKind, agent: AgentId, model: string 
   return (seconds[middle]! + seconds[Math.floor((seconds.length - 1) / 2)]!) / 2;
 }
 
-const editsDialogue = (kind: TaskKind) => kind === "edit" || kind === "revise" || kind === "note";
+export const editsDialogue = (kind: TaskKind) => kind === "edit" || kind === "revise" || kind === "note";
+
+/** Whether a request of this kind about one cut of `change` revises a staged cut: a revision does, and so does any request about a pass that waits or was replaced. */
+export function stagesCut(kind: TaskKind, change: Change): boolean {
+  return kind === "revise" || change.intent === "suggestion" && (["ready", "revising"].includes(change.state) || !!change.replacedBy);
+}
 
 function requestedDialogue(ctx: Ctx, text: string) {
   if (!dialogueCommand(text)) return;
@@ -122,7 +127,7 @@ export function createTask(
     instruction: input.instruction,
     resumeRootId: input.resumeRootId,
     stagedCutRevision: input.stagedCutRevision ?? (selected && selected.projectId === input.projectId
-      ? input.kind === "revise" || selected.intent === "suggestion" && (["ready", "revising"].includes(selected.state) || !!selected.replacedBy) : undefined),
+      ? stagesCut(input.kind, selected) : undefined),
     cutConflict: input.cutConflict,
     expectedSeconds: recentDuration(ctx, input.kind, input.agent, input.model, input.context?.skillIds),
     context: { ...input.context, ...(input.context?.time !== undefined && (!input.context.version || input.context.version === "head") &&
@@ -285,7 +290,7 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
     const project = ctx.repos.projects.get(task.projectId);
     if (project?.head && (!task.context.branch || project.branch === task.context.branch) && !unmetTranscriptWaits(ctx, task.id).length) {
       const timeline = resolveTimeline(ctx, project);
-      const audible = new Set(project.media.filter(m => m.kind === "audio" || (m.kind === "video" && m.hasAudio !== false)).map(m => m.id));
+      const audible = new Set(project.media.filter(carriesAudio).map(m => m.id));
       const plays = timeline.tracks.some(t => !t.muted && t.clips.some(c => c.kind === "media" && c.enabled && c.volume > 0 && audible.has(c.mediaId)));
       const receipt = task.repeatAudit?.version === project.head ? task.repeatAudit : undefined;
       if (plays && (receipt?.remaining !== 0 || receipt.unavailable?.length)) {
@@ -474,7 +479,7 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
  * A lead-in keeps the editor's words as typed and out of the CLI's command parser. The system prompt carries the
  * instruction as well, unchanged.
  */
-export function firstMessage(instruction: string) {
+function firstMessage(instruction: string) {
   return instruction.startsWith("/") ? `The editor's request: ${instruction}` : instruction;
 }
 
@@ -512,7 +517,7 @@ export function aboutStagedCut(ctx: Ctx, projectId: string, context: Task["conte
 }
 
 /** How long a hold for rewording lasts unless the app renews it, so a closed app can't keep a request from ever starting. */
-export const REWORDING_HOLD_MS = 90_000;
+const REWORDING_HOLD_MS = 90_000;
 
 /**
  * Only a request that hasn't begun can have its words changed: a run that started has already read them. And only one
