@@ -356,3 +356,72 @@ it("carries on with files saved with a garbled mark, and doesn't let them set th
   expect(store.updateProject).not.toHaveBeenCalled();
   expect(pendingImports(project.id)).toEqual([]);
 });
+
+it("keeps interrupted files and links across a restart, with the same import ID and one retry", async () => {
+  const { enqueueImports } = await import("./UploadDropzone");
+  const { pendingImports } = await import("../../lib/pendingImports");
+  const { ScarletApiError } = await import("@scarlet/shared");
+  const path = "/clips/a.mov";
+  const link = "https://example.com/b.mov";
+  importLocalFile.mockRejectedValueOnce(new ScarletApiError(503, "http_error", ""));
+  await enqueueImports("prj", [path, link]);
+  expect(importLocalFile.mock.calls.map(call => call[1])).toEqual([path]);
+  const [first, next] = pendingImports("prj");
+  expect(first).toMatchObject({ source: path, interrupted: true, importId: expect.any(String) });
+  expect(next).toMatchObject({ source: link, started: false });
+
+  const resumed = await relaunch(localStorage.getItem(SAVED)!);
+  importLocalFile.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  await resumed.resumeImports("prj", []);
+  expect(importLocalFile).toHaveBeenCalledExactlyOnceWith("prj", path, expect.any(Function), first!.importId, false);
+  expect(pendingImports("prj").map(i => i.source)).toEqual([link]);
+  await resumed.resumeImports("prj", []);
+  expect(importLocalFile.mock.calls.at(-1)?.[1]).toBe(link);
+  expect(pendingImports("prj")).toEqual([]);
+});
+
+it("resumes when the new project's read arrives before the old import reports the disconnect", async () => {
+  const { enqueueImports, resumeImports } = await import("./UploadDropzone");
+  const { api } = await import("../../lib/client");
+  vi.spyOn(api, "media").mockResolvedValue({ media: [] });
+  let reject!: (reason: Error) => void;
+  importLocalFile.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+  const job = enqueueImports("prj", ["/a.mov", "/b.mov"]);
+  await vi.waitFor(() => expect(reject).toBeTypeOf("function"));
+  await resumeImports("prj", []);
+  reject(new TypeError("Failed to fetch"));
+  await job;
+  await vi.waitFor(() => expect(importLocalFile.mock.calls.map(call => call[1])).toEqual(["/a.mov", "/a.mov", "/b.mov"]));
+  expect((await import("../../lib/pendingImports")).pendingImports("prj")).toEqual([]);
+});
+
+it("keeps the retry for the next engine when a project read preceded the outage", async () => {
+  const { enqueueImports, resumeImports } = await import("./UploadDropzone");
+  const { pendingImports } = await import("../../lib/pendingImports");
+  const { api } = await import("../../lib/client");
+  const offline = new TypeError("Failed to fetch");
+  vi.spyOn(api, "media").mockRejectedValue(offline);
+  let disconnect!: (reason: Error) => void;
+  let online = false;
+  importLocalFile.mockImplementationOnce(() => new Promise((_resolve, reject) => { disconnect = reject; }))
+    .mockImplementationOnce(async () => {
+      if (!online) throw offline;
+      return video("a.mov", 1920, 1080, 24);
+    });
+  const job = enqueueImports("prj", ["/a.mov"]);
+  await vi.waitFor(() => expect(disconnect).toBeTypeOf("function"));
+  const importId = pendingImports("prj")[0]!.importId;
+  // Reopening the project during the copy can finish long before the engine goes down.
+  await resumeImports("prj", []);
+  disconnect(offline);
+  await job;
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(importLocalFile).toHaveBeenCalledTimes(1);
+  expect(pendingImports("prj")).toMatchObject([{ source: "/a.mov", importId, interrupted: true }]);
+
+  online = true;
+  await resumeImports("prj", []);
+  expect(importLocalFile).toHaveBeenLastCalledWith("prj", "/a.mov", expect.any(Function), importId, false);
+  expect(importLocalFile).toHaveBeenCalledTimes(2);
+  expect(pendingImports("prj")).toEqual([]);
+});

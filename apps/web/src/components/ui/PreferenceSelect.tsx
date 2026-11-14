@@ -12,8 +12,8 @@ function layerOf(trigger: HTMLElement | null) {
 }
 
 /** `title` is what the field says on hover, such as its whole value where a narrow place cuts it short. */
-export function PreferenceSelect<const T extends string | number>({ id, label, options, value, onChange, disabled, compact, valueLabel, shortcut, title }: {
-  id?: string; label?: string; options: Choice<T>[]; value: T; onChange(value: NoInfer<T>): void;
+export function PreferenceSelect<const T extends string | number>({ id, label, options, value, onChange, onClose, disabled, compact, valueLabel, shortcut, title }: {
+  id?: string; label?: string; options: Choice<T>[]; value: T; onChange(value: NoInfer<T>): void; onClose?(): void;
   disabled?: boolean; compact?: boolean; valueLabel?: string; shortcut?: string; title?: string;
 }) {
   const generatedId = useId();
@@ -34,6 +34,7 @@ export function PreferenceSelect<const T extends string | number>({ id, label, o
     const option = options[i];
     if (option && option.value !== value && !trigger.current?.matches(":disabled")) onChange(option.value);
     setActive(null);
+    onClose?.();
   }
 
   // Escape scrolling panes, while staying inside the top layer the field is in.
@@ -81,9 +82,11 @@ export function PreferenceSelect<const T extends string | number>({ id, label, o
     <button type="button" role="combobox" ref={trigger} id={triggerId} aria-label={label} title={title} disabled={unavailable}
       aria-keyshortcuts={shortcut} data-key={shortcut} aria-expanded={open} aria-controls={open ? list : undefined} aria-activedescendant={open ? list + "-" + index : undefined}
       className={compact ? "preference-select compact" : "preference-select"} onBlur={() => setActive(null)}
+      onMouseDown={e => e.preventDefault()}
       onClick={e => {
         e.currentTarget.focus();
         setActive(open ? null : initialIndex);
+        if (open) onClose?.();
       }}
       onKeyDown={e => {
         // A key the page has already acted on, such as ↑ or ↓ stepping to another edit, doesn't also open the list.
@@ -96,7 +99,7 @@ export function PreferenceSelect<const T extends string | number>({ id, label, o
           case "Home": setActive(0); break;
           case "End": setActive(options.length - 1); break;
           case "Enter": case " ": if (open) choose(index); else setActive(initialIndex); break;
-          case "Escape": if (!open) return; setActive(null); break;
+          case "Escape": if (!open) return; setActive(null); onClose?.(); break;
           default: {
             if (e.key.length !== 1) return;
             const match = options.findIndex(option => option.label.toLowerCase().startsWith(e.key.toLowerCase()));

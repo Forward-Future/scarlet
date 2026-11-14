@@ -193,7 +193,7 @@ function recoveryInstruction(ctx: Ctx, task: Task, rootId?: string): string {
   }
   const progress: string[] = [];
   const scans = new Map<string, TimeRange[]>();
-  for (const ev of events.filter(e => e.type === "log")) {
+  for (const ev of events.filter(e => e.type === "log" && e.data?.kind !== "tool_refused")) {
     if (ev.data?.scanPage) {
       const page = DialogueScanPage.safeParse(ev.data.scanPage);
       if (page.success && page.data.to !== undefined) {

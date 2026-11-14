@@ -164,7 +164,7 @@ export function registerPerception(deps: PerceptionDeps) {
     async ({ from, to }) => {
       const after = await deps.getTimeline(to);
       const [{ diff, description }, before, { project }] = await Promise.all([
-        client.diff(deps.projectId, from, after.version), deps.peekTimeline(from), deps.getProject()]);
+        client.diff(deps.projectId, from, after.version, "id"), deps.peekTimeline(from), deps.getProject()]);
       const added = newJoins(before, after, project).length, removed = newJoins(after, before, project).length;
       const delta = diff.durationAfter - diff.durationBefore;
       return text([`${from} → ${after.version}: ${diff.durationBefore.toFixed(2)} → ${diff.durationAfter.toFixed(2)} s (${delta >= 0 ? "+" : ""}${delta.toFixed(2)} s), joins +${added}/−${removed}.`,

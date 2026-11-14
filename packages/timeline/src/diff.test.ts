@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyOps, describeDiff, diffTimelines, emptyTimeline, formatTimecode, makeMediaClip, makeTrack, type Timeline } from "./index.js";
+import { applyOps, clipById, describeDiff, diffTimelines, emptyTimeline, formatTimecode, makeMediaClip, makeTrack, type Timeline } from "./index.js";
 
 function base(): Timeline {
   const tl = emptyTimeline("project");
@@ -32,6 +32,14 @@ describe("diffTimelines", () => {
     expect(d).toMatchObject({ durationBefore: 20, durationAfter: 25 });
     expect(describeDiff(d, t => formatTimecode(t, 30))).toEqual([
       "Changed volume, transform on Intro at 0:00.00",
+      "Removed media clip b (0:10.00–0:20.00)",
+      "Moved music to track v1",
+      "Added media clip new at 0:20.00",
+      "Duration 0:20.00 → 0:25.00",
+    ]);
+    // For an agent a clip is named by its id, which is what an op takes, with its label after it.
+    expect(describeDiff(d, t => formatTimecode(t, 30), clipById)).toEqual([
+      "Changed volume, transform on a “Intro” at 0:00.00",
       "Removed media clip b (0:10.00–0:20.00)",
       "Moved music to track v1",
       "Added media clip new at 0:20.00",

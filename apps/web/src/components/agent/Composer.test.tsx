@@ -1319,3 +1319,39 @@ it("saves a queued request's words once while Enter is held, and doesn't send th
   expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
   expect(useUiStore.getState().agentDraft).toBe("Tighten every pause");
 });
+
+it("takes the caret after the message when the page hands it the keyboard, and leaves a caret already in it alone", async () => {
+  await show();
+  await type("Keep the laugh");
+  const field = container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
+  // A box that was just built around its message has the caret before the first letter.
+  field.setSelectionRange(0, 0);
+  await act(async () => useUiStore.getState().focusComposer());
+  expect(document.activeElement).toBe(field);
+  expect([field.selectionStart, field.selectionEnd]).toEqual([14, 14]);
+  // The editor is typing in the middle of it when the page asks again: the caret stays put.
+  field.setSelectionRange(4, 4);
+  await act(async () => useUiStore.getState().focusComposer());
+  expect([field.selectionStart, field.selectionEnd]).toEqual([4, 4]);
+});
+
+it("says what went wrong with the microphone on the line over the box, until the editor types or tries the mic again", async () => {
+  let micProps!: ComponentProps<typeof mic.MicButton>;
+  vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
+  await show();
+  const line = () => container.querySelector('.composer-dock > [role="alert"]')?.textContent;
+  const denied = "Microphone access was denied. Allow the microphone for this site and try again.";
+  expect(line()).toBeUndefined();
+  await act(async () => micProps.onError?.(denied));
+  expect(line()).toBe(denied);
+  await type("Tighten the opening");
+  expect(line()).toBeUndefined();
+  // Allowed since, the mic is tried again: the old refusal isn't still said over a recording that is under way.
+  await act(async () => micProps.onError?.(denied));
+  expect(line()).toBe(denied);
+  await act(async () => micProps.onStart?.());
+  expect(line()).toBeUndefined();
+  // Refused again, it says so again once the mic lets go.
+  await act(async () => { micProps.onError?.(denied); });
+  expect(line()).toBe(denied);
+});

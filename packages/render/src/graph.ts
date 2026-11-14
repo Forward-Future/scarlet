@@ -33,7 +33,6 @@ import type {
   Project,
   Timeline,
   TimeRange,
-  Track,
   Transform,
   TransformKeyframe,
 } from "@scarlet/timeline";
@@ -870,9 +869,4 @@ async function writeFilterGraph(
     range: { start: R0, end: R1 },
     cleanup,
   };
-}
-
-/** Tracks in compositing order (as stored: index 0 is the bottom video track). */
-export function videoTracks(timeline: Timeline): Track[] {
-  return timeline.tracks.filter((t) => t.kind === "video");
 }

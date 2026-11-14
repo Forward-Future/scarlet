@@ -19,3 +19,18 @@ export function fileInDirectory(directory: string, name: string): string | undef
     return undefined;
   }
 }
+
+/**
+ * Resolve request-time paths asynchronously so a busy media drive does not hold up other engine requests.
+ */
+export async function fileInDirectoryAsync(directory: string, name: string): Promise<string | undefined> {
+  const root = path.resolve(directory);
+  const file = path.resolve(root, name);
+  if (!containsFile(root, file)) return undefined;
+  try {
+    const [target, realRoot] = await Promise.all([fs.promises.realpath(file), fs.promises.realpath(root)]);
+    return containsFile(realRoot, target) && (await fs.promises.stat(target)).isFile() ? target : undefined;
+  } catch {
+    return undefined;
+  }
+}

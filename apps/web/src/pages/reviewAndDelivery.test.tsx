@@ -69,7 +69,7 @@ beforeEach(() => {
     loadChangeDiff: vi.fn().mockRejectedValue(new Error("No diff fixture")),
   });
   localStorage.removeItem("scarlet.exportStarShown");
-  useUiStore.setState({ notifications: [], exportStarNotice: "unseen" });
+  useUiStore.setState({ exportStarNotice: "unseen" });
   useExports.setState({ jobs: {} });
   vi.spyOn(desktop, "keepVideoExport").mockResolvedValue();
   vi.spyOn(api, "releaseRender").mockResolvedValue();
@@ -155,6 +155,64 @@ it("settles a failed waveform read and ignores a late response from a previous s
   await act(async () => finish());
   expect(container.querySelector(".waveform-ripple")).toBeNull();
   expect(container.querySelector("path[d]")?.getAttribute("d")).toBeFalsy();
+});
+
+it("keeps decoded stills through cache lookup and slow frame requests until a replacement can be shown", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(84);
+  const scrubber = (version: string, duration: number, pending = false) =>
+    <TimelineScrubber duration={duration} playhead={0} previewStrip={pending ? null : undefined}
+      frameAt={t => `/${version}/frame/${t}`} onSeek={() => {}} />;
+  const strip = () => container.querySelector<HTMLElement>(".timeline-filmstrip")!;
+  const own = () => [...strip().querySelectorAll<HTMLImageElement>(":scope > div:not(.filmstrip-held) > img")];
+  const overlay = () => strip().querySelector(".filmstrip-held");
+  const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  vi.useFakeTimers();
+  try {
+    await show(scrubber("v1", 8));
+    const original = own();
+    expect(original).toHaveLength(2);
+    await act(() => { for (const img of original) img.dispatchEvent(new Event("load")); });
+
+    await show(scrubber("v2", 9, true));
+    await tick(1000);
+    expect(own()).toEqual([]);
+    expect(overlay()?.querySelector("img")).toBe(original[0]);
+    expect(overlay()?.hasAttribute("data-leaving")).toBe(false);
+
+    await show(scrubber("v2", 9));
+    expect(strip().querySelector(".filmstrip-wait")).toBeNull();
+    await tick(4000);
+    expect(overlay()?.hasAttribute("data-leaving")).toBe(false);
+    await act(() => { own()[0]!.dispatchEvent(new Event("load")); });
+    expect(overlay()?.hasAttribute("data-leaving")).toBe(true);
+    await tick(650);
+    expect(overlay()).toBeNull();
+    expect(own()[0]!.hasAttribute("data-loaded")).toBe(true);
+  } finally { vi.useRealTimers(); }
+});
+
+it("retains the crop of each held preview-sheet cell and releases the old picture when every new frame fails", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(90);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(84);
+  const scrubber = (duration: number, cached = false) =>
+    <TimelineScrubber duration={duration} playhead={0} pictureAspect={9 / 16} onSeek={() => {}}
+      previewStrip={cached ? { id: "portrait", version: "v1", fps: 30 } : undefined} frameAt={t => `/frame/${t}`} />;
+  await show(scrubber(8, true));
+  const cells = [...container.querySelectorAll(".timeline-sheet-cell")];
+  expect(cells).toHaveLength(2);
+  await act(() => { cells[0]!.querySelector("img")!.dispatchEvent(new Event("load")); });
+  await show(scrubber(9));
+  expect(container.querySelector(".filmstrip-held .timeline-sheet-cell:last-child")).toBe(cells[1]);
+  expect((cells[1]!.querySelector("img")!).style.left).toBe("-100%");
+  await act(() => {
+    for (const img of container.querySelectorAll(".timeline-filmstrip > div:not(.filmstrip-held) > img")) {
+      img.dispatchEvent(new Event("error"));
+    }
+  });
+  expect(container.querySelector(".filmstrip-held[data-leaving]")).toBeTruthy();
+  await show(scrubber(10));
+  expect(container.querySelector(".filmstrip-held")).toBeNull();
 });
 
 it("loads the picture and the sound as one wave, and lands them together when they finish within a beat", async () => {
@@ -847,6 +905,34 @@ it("plays a short cut file on its version clock and hands an out-of-window seek 
   expect(play.mock.contexts.filter(el => el !== video)).toHaveLength(0);
 });
 
+it("keeps decoded frames across the gap between a new working version and its timeline", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(84);
+  const noop = () => {};
+  await show(<MemoryRouter><CutPreview simple={{ marks: [] }} workingCache={{ cache: { state: "uncached" }, startCache: noop }}
+    active hasCut spot={0} autoPlaySource={false} onRetryDraft={noop} onMedia={noop} /></MemoryRouter>);
+  const originals = [...container.querySelectorAll<HTMLImageElement>(".timeline-filmstrip img")];
+  expect(originals).toHaveLength(2);
+  await act(() => { originals.forEach(img => img.dispatchEvent(new Event("load"))); });
+
+  const project = { ...data.project, head: "next" };
+  await act(() => useProjectStore.setState({ current: { ...data, project } }));
+  const held = () => container.querySelector(".filmstrip-held");
+  expect(held()?.querySelector("img")).toBe(originals[0]);
+  expect(held()?.hasAttribute("data-leaving")).toBe(false);
+  await act(() => useProjectStore.setState({ current: { ...data, project, timeline: { ...data.timeline!, version: "next" } } }));
+  expect(held()?.querySelector("img")).toBe(originals[0]);
+  const replacements = [...container.querySelectorAll<HTMLImageElement>(".timeline-filmstrip > div:not(.filmstrip-held) img")];
+  expect(replacements).toHaveLength(2);
+  await act(() => { replacements.forEach(img => img.dispatchEvent(new Event("load"))); });
+  expect(held()?.hasAttribute("data-leaving")).toBe(true);
+
+  await act(() => useProjectStore.setState({ current: { ...data, project: { ...project, head: "empty" },
+    timeline: { ...data.timeline!, version: "empty", tracks: [] } } }));
+  expect(held()?.hasAttribute("data-leaving")).toBe(true);
+  expect(container.querySelector(".timeline-filmstrip > div:not(.filmstrip-held) img")).toBeNull();
+});
+
 function drawPlayerFormat(source?: ProjectData["media"][number]) {
   const noop = () => {};
   return show(<MemoryRouter><CutPreview simple={{ marks: [] }}
@@ -1156,7 +1242,6 @@ it("shows an export again after a reload or restart, saves it to the destination
   await act(async () => { await vi.waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith(31, api.renderFileUrl(kept.id)), { timeout: 2500 }); });
   await act(async () => { await vi.waitFor(() => expect(release).toHaveBeenCalledExactlyOnceWith(kept.id, owner)); });
   expect(button("Show in folder")).toBeDefined();
-  expect(useUiStore.getState().notifications[0]).toMatchObject({ title: "Export finished", body: "Interview final.mp4", projectId: PRJ });
   expect(request).not.toHaveBeenCalled();
   expect(choose).not.toHaveBeenCalled();
   expect(desktop.keepVideoExport).not.toHaveBeenCalled();

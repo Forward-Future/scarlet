@@ -85,7 +85,11 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const arrivedByKey = useRef(false);
   useEffect(() => {
     if (focusTick && inputRef.current) {
-      inputRef.current.focus();
+      const field = inputRef.current;
+      if (document.activeElement !== field) {
+        field.focus();
+        field.setSelectionRange(field.value.length, field.value.length);
+      }
       arrivedByKey.current = true;
       useUiStore.setState({ composerFocus: 0 });
     }
@@ -340,9 +344,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
           {/* The reason is only for a mic with no agent to talk to. While a message sends or is written down the spinner says why. */}
           <MicButton onResult={(r) => void onVoice(r)} onStart={() => {
             dismissFirstEditHint();
+            setError("");
             voiceReword.current = rewording ? rewordSession : undefined;
             if (!voiceReword.current) voiceAnchor.current = captureTarget();
-          }} onRecording={setRecording} followHold disabled={unavailable || busy || speech.busy} disabledReason={unavailable ? unavailableReason : undefined} label="Talk to Scarlet" />
+          }} onRecording={setRecording} onError={setError} followHold disabled={unavailable || busy || speech.busy} disabledReason={unavailable ? unavailableReason : undefined} label="Talk to Scarlet" />
           {(busy || speech.busy) && <Spinner className="size-3.5 shrink-0" />}
           {/* Shown once there's something to send (Enter sends too). Stopping an edit is on its card, where its progress is. */}
           {value.trim() && <button type="button" className={rewording ? "btn-primary composer-send is-save shrink-0" : "btn-primary composer-send shrink-0"} aria-label={saveLabel} title={saveLabel}

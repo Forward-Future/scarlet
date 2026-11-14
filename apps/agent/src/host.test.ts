@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "v
 import { WebSocketServer, type WebSocket } from "ws";
 import { type AddressInfo } from "node:net";
 import { ScarletClient, type Task, type TaskEvent } from "@scarlet/shared";
-import { mock } from "@scarlet/mcp";
+import * as mock from "@scarlet/mcp/mock";
 import { AgentHost, claudeProjectDir, humanDuration, promptTimeLimit, pruneTaskDirs, removeClaudeSessions, removeControlFiles, stalledReason, timedOutReason, type HostOptions } from "./host.js";
 import { DEFAULT_STALL_MS } from "./runners/types.js";
 import type { RunAgentFn, RunAgentOptions } from "./runners/types.js";

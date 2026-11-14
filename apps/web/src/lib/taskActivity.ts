@@ -121,19 +121,6 @@ function toolLabel(name: string, event: TaskEvent, hasScanHistory: boolean): str
   return typeof end === "number" && Number.isFinite(end) && end - time >= 1 ? `${label} ${clock(time)}–${clock(end)}` : `${label} at ${clock(time)}`;
 }
 
-/** Keep the latest inspected source frame through subsequent progress updates. */
-export function latestInspectedFrame(events: readonly TaskEvent[] = []) {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i]!;
-    if (event.type !== "tool" || toolName(event) !== "media_frame") continue;
-    const input = event.data?.input;
-    if (input && typeof input === "object" && "mediaId" in input && typeof input.mediaId === "string"
-      && "t" in input && typeof input.t === "number" && Number.isFinite(input.t) && input.t >= 0) {
-      return { mediaId: input.mediaId, time: input.t };
-    }
-  }
-}
-
 export function taskActivityLabel(event: TaskEvent, hasScanHistory = false, waits: ReadonlySet<string> = new Set()): string | undefined {
   switch (event.type) {
     case "tool": {
@@ -148,6 +135,8 @@ export function taskActivityLabel(event: TaskEvent, hasScanHistory = false, wait
     }
     case "log":
       if (event.data?.kind === "editor_progress") return event.data.scanPage ? "Scanning dialogue" : event.text.trim() || undefined;
+      // Why a call saved nothing is kept for diagnosis; the agent says what it does next.
+      if (event.data?.kind === "tool_refused") return undefined;
       if (event.data?.kind === "init") return "Getting started";
       if (event.data?.kind === "reasoning") return "Planning next step";
       if (event.data?.kind === "connection") return "Reconnecting to the model";
@@ -202,16 +191,6 @@ export function editConfirmation(value?: string | null, instruction?: string, mo
     if (mode === "brief" && seen.size === 3) break;
   }
   return lines.join(mode === "full" ? "\n" : " ").trim() || undefined;
-}
-
-/** Histories and live events are kept in chronological order. */
-export function latestTaskActivity(events: readonly TaskEvent[] | undefined): string | undefined {
-  if (!events) return undefined;
-  for (let i = events.length - 1; i >= 0; i--) {
-    const label = taskActivityLabel(events[i]!);
-    if (label) return label;
-  }
-  return undefined;
 }
 
 /** A socket update can arrive while the saved history is in flight. */
