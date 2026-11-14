@@ -246,3 +246,36 @@ it("gives way to the project's own word when the project Scarlet reopens can't o
   expect(host.querySelector('main[aria-busy="true"]')).toBeNull();
   expect(host.textContent).toContain("Opening project…");
 });
+
+it("opens a project's page again where the editor was when the engine went away under the window", async () => {
+  const { becomes } = await engine("ready");
+  const project = await reopened();
+  const router = await shell(`/p/${project.id}`);
+  await project.opens();
+  expect(host.textContent).toContain("Project");
+  // The page is asked where the editor is before it is taken off screen, as it is before Settings opens.
+  const page = (event: Event) => {
+    const place = (event as CustomEvent<URL>).detail.searchParams;
+    place.set("t", "754.2");
+    place.set("open", "call:chg_pass:3");
+  };
+  window.addEventListener("scarlet:bookmark-project", page);
+  window.history.replaceState(null, "", `/p/${project.id}`);
+  try {
+    await becomes("loading");
+    expect(host.textContent).not.toContain("Project");
+    expect(router.state.location.search).toBe("");
+    // The engine is back: the page is shown at that place, and reads it as it does on the way back from Settings.
+    await becomes("ready");
+    expect(host.textContent).toContain("Project");
+    expect(router.state.location.pathname + router.state.location.search).toBe(`/p/${project.id}?t=754.2&open=call%3Achg_pass%3A3`);
+    // The place is used once. An outage on a page with no place in a project brings back that page as it is.
+    await act(async () => { await router.navigate("/somewhere"); });
+    window.history.replaceState(null, "", "/somewhere");
+    await becomes("loading");
+    await becomes("ready");
+    expect(router.state.location.pathname + router.state.location.search).toBe("/somewhere");
+  } finally {
+    window.removeEventListener("scarlet:bookmark-project", page);
+  }
+});

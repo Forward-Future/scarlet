@@ -290,15 +290,44 @@ function stillMaking(pass: Change, run: Task, tasks: readonly Task[], changes: r
 }
 
 /**
- * The pass whose calls hold a queued request back: one waiting on the editor that the request isn't about. A pass the
+ * The one cut or edit a request is about, when it is about one: a call of a pass sent back, or an applied edit revised
+ * or undone from its card. Requests in one thread about the same cut or edit name the same thing.
+ */
+function oneTarget(task: Task): string | undefined {
+  const { changeId, cutIndex, editIndex, threadId } = task.context;
+  if (!changeId || (cutIndex === undefined && editIndex === undefined)) return undefined;
+  return JSON.stringify([threadId ?? task.id, cutIndex ?? null, editIndex ?? null]);
+}
+
+/**
+ * Whether Scarlet can work on two requests at once. It can when each is about one cut or edit and they are about
+ * different ones: each agent then works on its own footage. A call's revision is saved into the pass as it stands
+ * when it lands, with the other revisions and the editor's calls made meanwhile. An applied edit's revision is put
+ * onto the video as it is when it lands, and one that meets footage another request changed is told so, with where,
+ * and saves again on the current video. Any other request is about the whole video, or about footage nothing names
+ * ahead of time, so it runs alone. Two requests about the same cut or edit keep the order they were asked in.
+ * The engine's claim query applies the same rule.
+ */
+export function runsBeside(a: Task, b: Task): boolean {
+  const x = oneTarget(a), y = oneTarget(b);
+  return !!x && !!y && x !== y;
+}
+
+/** The dialogue passes waiting on the editor that a request isn't about, which hold it back unless the editor said not to wait (`startsBeforeCalls`). */
+const holding = (task: Task, tasks: readonly Task[], changes: readonly Change[]) =>
+  task.startsBeforeCalls ? [] : openReviews(task, tasks, changes).filter(c => !aboutChange(task, c));
+
+/** The requests Scarlet is on now, among those that take turns with one. */
+const underWay = (task: Task, tasks: readonly Task[]) => takingTurns(task, tasks).filter(t => ACTIVE_STATES.has(t.state));
+
+/**
+ * The pass whose calls hold a queued request back: one waiting on the editor that the request isn't about. A pass a
  * run Scarlet is on is still making has asked for nothing yet, so what waits behind it waits for that run. A request
  * the editor started anyway (`startsBeforeCalls`) is held by none.
  */
 function heldBy(task: Task, tasks: readonly Task[], changes: readonly Change[]): Change | undefined {
-  // The editor said not to wait for their calls.
-  if (task.startsBeforeCalls) return undefined;
-  const active = takingTurns(task, tasks).find(t => ACTIVE_STATES.has(t.state));
-  return openReviews(task, tasks, changes).find(c => !aboutChange(task, c) && !(active && stillMaking(c, active, tasks, changes)));
+  const active = underWay(task, tasks);
+  return holding(task, tasks, changes).find(c => !active.some(run => stillMaking(c, run, tasks, changes)));
 }
 
 /** A request about an open pass goes ahead of requests that are waiting for that pass. */
@@ -318,22 +347,29 @@ function inLine(tasks: readonly Task[]) {
 }
 
 /**
- * Why a queued request hasn't started. Scarlet runs one request at a time in a project, in the order they were
- * asked, so two agents never edit the same video at once. The engine's claim query applies the same rule.
+ * Why a queued request hasn't started. Scarlet works on two requests at once only when each is about one cut or edit
+ * and they are about different ones (`runsBeside`). Otherwise requests run one at a time in a project, in the order
+ * they were asked, so two agents never edit the same footage at once. The engine's claim query applies the same rule.
  * A request held for the editor's calls says so while Scarlet is on something else too, such as a revision of one of
  * those calls: it won't start when that ends.
  */
 export function queueWait(task: Task, tasks: readonly Task[], changes: readonly Change[]): QueueWait | undefined {
   if (task.state !== "queued" || task.kind === "transcribe" || isAsideTask(task)) return undefined;
   const others = takingTurns(task, tasks);
-  const active = others.find(t => ACTIVE_STATES.has(t.state));
-  if (active?.state === "waiting_for_user") return { kind: "question", task: active };
+  const active = others.filter(t => ACTIVE_STATES.has(t.state));
+  const inTheWay = active.filter(t => !runsBeside(task, t));
+  const first = inTheWay[0];
+  if (first?.state === "waiting_for_user") return { kind: "question", task: first };
   const review = heldBy(task, tasks, changes);
-  if (active) return review ? { kind: "review", change: review } : { kind: "run", task: active };
+  if (first) return review ? { kind: "review", change: review } : { kind: "run", task: first };
   const before = inLine(tasks);
-  const ahead = others.filter(t => t.state === "queued" && before(t, task) && !goesAhead(task, t, tasks, changes));
+  const ahead = others.filter(t => t.state === "queued" && before(t, task) && !runsBeside(task, t) && !goesAhead(task, t, tasks, changes));
   if (ahead.length) return { kind: "ahead", count: ahead.length };
-  return review ? { kind: "review", change: review } : undefined;
+  if (review) return { kind: "review", change: review };
+  // A pass still being made by a run this request could otherwise work beside holds it until that run is done.
+  const open = holding(task, tasks, changes);
+  const making = open.length ? active.find(run => open.some(c => stillMaking(c, run, tasks, changes))) : undefined;
+  return making ? { kind: "run", task: making } : undefined;
 }
 
 /**
@@ -347,7 +383,7 @@ export function queueOrder(tasks: readonly Task[], changes: readonly Change[]): 
   const order: Task[] = [];
   for (;;) {
     const next = waiting.find(q => !heldBy(q, tasks, changes)
-      && !waiting.some(r => r !== q && r.projectId === q.projectId && before(r, q) && !goesAhead(q, r, tasks, changes)));
+      && !waiting.some(r => r !== q && r.projectId === q.projectId && before(r, q) && !runsBeside(q, r) && !goesAhead(q, r, tasks, changes)));
     if (!next) return [...order, ...waiting];
     order.push(next);
     waiting = waiting.filter(t => t !== next);

@@ -413,6 +413,8 @@ export class ScarletClient {
       duration?: number; diffDescription?: string[]; timeline?: Timeline;
       /** Removals inside a selected passage the engine put on whole frames. Older engines omit it. */
       onWholeFrames?: Array<{ asked: [number, number]; removed: [number, number] }>;
+      /** The edit met footage another request changed since `fromVersion`, so it wasn't applied. Older engines omit it. */
+      notApplied?: { reason: string; currentVersion: string };
     }>(`/projects/${projectId}/changes?summary=true`, body);
   }
   changes(projectId: string, state?: string) {

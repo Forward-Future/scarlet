@@ -124,6 +124,30 @@ export function pageAt(pages: JoinPage[], mediaId: string, stream: number | unde
   return best?.edges;
 }
 
+/** Sound this loud is speech or a sound the ear follows: the bar under which quiet runs are measured. */
+const SPEECH_DBFS = -40;
+
+/**
+ * How close sound at speaking level comes to a cut's edge on the side it removes: after source instant `t` for the
+ * cut's start (`out`), before it for its end (`in`), looking no further than `limit` seconds. Undefined when nothing
+ * sounds that close or no page measured the recording there. An edge a few hundredths of a second from a removed
+ * word can be clean in the sound and still show it in the picture: on one pass a cut ended 38 ms before "and", the
+ * join measured silent, and the editor saw the next word starting (2026-11-13).
+ */
+export function soundBesideEdge(pages: JoinPage[], mediaId: string, stream: number | undefined, t: number, side: "out" | "in", limit: number): number | undefined {
+  const page = pageAt(pages, mediaId, stream, t), levels = page?.levels;
+  if (!levels || !pageReaches(page, t)) return;
+  const { from, step, db } = levels;
+  const here = Math.floor((t - from) / step);
+  if (side === "out") {
+    for (let i = Math.max(0, here); i < db.length && from + i * step < t + limit; i++)
+      if (db[i]! > SPEECH_DBFS) return Math.max(0, from + i * step - t);
+  } else {
+    for (let i = Math.min(db.length - 1, here); i >= 0 && from + (i + 1) * step > t - limit; i--)
+      if (db[i]! > SPEECH_DBFS) return Math.max(0, t - from - (i + 1) * step);
+  }
+}
+
 function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: JoinPage[], fps: number, streams: Map<string, number>, namedEdge?: number): Edge {
   const sources: SourceEdge[] = [];
   const nearby = clips.filter(c => c.timelineIn <= at + reach && c.timelineIn + clipDuration(c) >= at - reach);
@@ -677,7 +701,64 @@ export interface WordCut extends TimeRange {
    * instant, and the frame the edge is saved on should be one of these.
    */
   room: { start?: TimeRange; end?: TimeRange };
+  /** Kept words beside the cut that sound somewhere other than their timing, and where the edge found them. */
+  retimed: string[];
 }
+
+/** Sound counts as speech within this of the level speech sits at on the page, as gapSound counts it. */
+const SPEECH_BELOW_DB = 12, QUIETEST_SPEECH_DBFS = -45, SYLLABLE_BELOW_DB = 6;
+
+/**
+ * Where a kept word beside a cut really sounds, when the recording is quiet all through its timing. ASR often hangs the
+ * first half of a word on the end of the phrase before a pause: on one pass “all right” after a pause was timed
+ * “…got you all <1.2 s> right”, three times in one video, and each cut that ended before “all” kept the whole pause.
+ * The word is the start of the first run of speaking-level sound after its timing (the last before it, for a word
+ * that precedes the cut), provided that sound begins before the next word's timing does (ends after the previous word's), so the sound
+ * is the word's and not its neighbour's. A breath is far under speaking level and stays with the pause. Undefined when the word
+ * sounds where it is timed, or when the page cannot say.
+ */
+function soundingWord(page: JoinPage["edges"] | undefined, kept: Word, neighbour: Word | undefined, side: "start" | "end"): Word | undefined {
+  const levels = page?.levels;
+  if (!page || !levels?.db.length) return;
+  const loud = extremeLevel(page, kept.start, kept.end, "highest");
+  if (!loud || loud.db > dbfs(QUIET_RMS)) return;
+  const sorted = [...levels.db].sort((a, b) => a - b);
+  const speech = sorted[Math.floor(sorted.length * .85)]!, floor = Math.max(speech - SPEECH_BELOW_DB, QUIETEST_SPEECH_DBFS);
+  // A run is a syllable once it gets near the level speech sits at. An inhale before the word can pass the floor,
+  // as one did at -38 dBFS beside speech at -20, and it stays with the pause.
+  const syllable = (from: number, to: number) => Math.max(...levels.db.slice(from, to)) >= speech - SYLLABLE_BELOW_DB;
+  const at = (i: number) => levels.from + i * levels.step, index = (t: number) => Math.floor((t - levels.from) / levels.step);
+  const minRun = Math.ceil(MIN_WORD_SOUND / levels.step);
+  if (side === "end") {
+    // The word follows the cut: its sound is the first speech after the start of its timing.
+    const limit = neighbour ? neighbour.start : kept.end + MAX_RETIME;
+    for (let i = Math.max(0, index(kept.start)); i < levels.db.length && at(i) < Math.min(limit, kept.start + MAX_RETIME); i++) {
+      if (levels.db[i]! < floor) continue;
+      let n = i;
+      while (n < levels.db.length && levels.db[n]! >= floor) n++;
+      if (n - i < minRun || !syllable(i, n)) { i = n; continue; }
+      const start = at(i);
+      if (start <= kept.end) return;
+      return { text: kept.text, start, end: start + (kept.end - kept.start) };
+    }
+    return;
+  }
+  // The word precedes the cut: its sound is the last speech before the end of its timing.
+  const limit = neighbour ? neighbour.end : kept.start - MAX_RETIME;
+  for (let i = Math.min(levels.db.length - 1, index(kept.end)); i >= 0 && at(i + 1) > Math.max(limit, kept.end - MAX_RETIME); i--) {
+    if (levels.db[i]! < floor) continue;
+    let n = i;
+    while (n >= 0 && levels.db[n]! >= floor) n--;
+    if (i - n < minRun || !syllable(n + 1, i + 1)) { i = n; continue; }
+    const end = at(i + 1);
+    if (end >= kept.start) return;
+    return { text: kept.text, start: end - (kept.end - kept.start), end };
+  }
+}
+/** A run of sound this short is a click, not a syllable. */
+const MIN_WORD_SOUND = .06;
+/** How far from its timing a kept word's sound is looked for. */
+const MAX_RETIME = 2;
 
 /**
  * A level this low between two words is room tone, only too brief to be a run of silence or bridged by the speech
@@ -758,8 +839,18 @@ function betweenWords(page: NonNullable<JoinPage["edges"]>, kept: Word, removed:
  * neighbor the edge runs to the start or end of the material.
  */
 export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t: number) => JoinPage["edges"] | undefined): WordCut {
-  const first = words[from]!, last = words[to]!, before = words[from - 1], after = words[to + 1];
-  const problems: string[] = [], dips: string[] = [];
+  const first = words[from]!, last = words[to]!;
+  const problems: string[] = [], dips: string[] = [], retimed: string[] = [];
+  // The kept word beside each edge, where the recording says it is.
+  const heard = (kept: Word | undefined, neighbour: Word | undefined, side: "start" | "end") => {
+    if (!kept) return kept;
+    const found = soundingWord(pageAt(side === "end" ? kept.start : kept.end), kept, neighbour, side);
+    if (!found) return kept;
+    retimed.push(`The recording is quiet where the transcript times the kept “${plain(kept)}” (${round3(kept.start)}–${round3(kept.end)} s); its sound ${
+      side === "end" ? "starts" : "ends"} at ${round3(side === "end" ? found.start : found.end)} s, and the ${side} is placed beside that.`);
+    return found;
+  };
+  const before = heard(words[from - 1], words[from - 2], "start"), after = heard(words[to + 1], words[to + 2], "end");
   const used: { start?: TimeRange; end?: TimeRange } = {}, room: WordCut["room"] = {};
   const edge = (kept: Word | undefined, removed: Word, side: "start" | "end", timed = false) => {
     room[side] = undefined;
@@ -816,7 +907,7 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
   // One edge between words that run together leaves the other in silence, where the ear resets. With both there, a
   // short word comes out of the middle of running speech: a doubled “the” cut that way took the kept “the” with it.
   if (dips.length === 2) problems.push(`No pause on either side of “${text}”: both edges sit between words that run together.`);
-  return { start, end, problems, dips, text, room };
+  return { start, end, problems, dips, text, room, retimed };
 }
 
 /** Default word-to-word duration when a pause is explicitly shortened without a target. */

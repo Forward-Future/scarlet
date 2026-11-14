@@ -105,6 +105,16 @@ function useRunUsage(taskId: string) {
   return useProjectStore(s => show ? s.current?.taskUsage?.[taskId] : undefined);
 }
 
+/**
+ * The tokens a request has used so far, in its heading before Stop while Scarlet has it. The host reports the count as
+ * each of the agent's messages lands, so it climbs while Scarlet works. Shown only when turned on in Settings → Usage.
+ */
+export function LiveTokens({ taskId }: { taskId: string }) {
+  const usage = useRunUsage(taskId);
+  if (!usage?.totalTokens) return null;
+  return <span className="run-dim run-tokens unit-tokens" title={tokenBreakdown(usage)}>{tokenLabel(usage.totalTokens)}</span>;
+}
+
 function WorkingRun({ task, events, changes, callNumber, say, result, stopAbove, onStop }: RunBundleProps) {
   const aim = useMemo(() => runAim(events), [events]);
   const progress = useMemo(() => runProgress(events), [events]);
@@ -171,7 +181,6 @@ function WaitingRun({ task, events, changes, say, result, banded, onStop }: RunB
     </div>}
     {line && lines.length > 0 && <RunList lines={lines} />}
     {say}
-    {!line && asking && !!usage?.totalTokens && <div className="req-row"><span className="req-right"><Tokens usage={usage} /></span></div>}
     {result?.(undefined)}
   </div>;
 }

@@ -51,6 +51,9 @@ export function taskRoutes(ctx: Ctx) {
     // agent: Undo edit, pressed on an edit's card, reads "Undo" in the chat and tells the agent which edit to put back.
     // What was asked is then kept too, for the thread's later requests: "Undo" alone doesn't say which edit.
     const said = body.context?.message ?? body.instruction;
+    // The request, the pass that now waits for it and the note of it are saved together: a request saved alone
+    // would leave its pass to apply over the call it sends back.
+    const task = ctx.db.transaction(() => {
     const task = createTask(ctx, {
       projectId: project.id,
       kind: body.kind,
@@ -64,7 +67,7 @@ export function taskRoutes(ctx: Ctx) {
       createdBy: actorFor(user),
     });
     // A pass set to apply when Scarlet finishes waits for a call the editor sends back, instead of applying over it.
-    if (changeId && cutIndex !== undefined) ctx.db.transaction(() => callSentBack(ctx, task), "immediate")();
+    if (changeId && cutIndex !== undefined) callSentBack(ctx, task);
     logActivity(ctx, {
       projectId: project.id,
       actor: actorFor(user),
@@ -72,6 +75,8 @@ export function taskRoutes(ctx: Ctx) {
       summary: `${user.name} asked ${agentName(task.agent)}: ${quote(task.context.message ?? body.instruction, 120)}${threadId ? " (follow-up)" : ""}`,
       data: { taskId: task.id, threadId: task.context.threadId },
     });
+    return task;
+    }, "immediate")();
     return c.json({ task }, 201);
   });
 
@@ -221,10 +226,11 @@ export function taskRoutes(ctx: Ctx) {
       const changes = ctx.repos.changes.select("project_id = ?", [projectId]);
       waiting += queued.filter(t => t.projectId === projectId && !["question", "review"].includes(queueWait(t, tasks, changes)?.kind ?? "")).length;
     }
+    // An export that has rendered and is still being saved to its file is one too: its owner lets go once it is saved.
     return c.json({
       edits: count(`SELECT count(*) AS n FROM tasks WHERE ${runs} AND state IN ('claimed','running')`),
       queued: waiting,
-      exports: count(`SELECT count(*) AS n FROM renders WHERE ${live} AND state IN ('queued','running') AND json_extract(json, '$.export.owner') IS NOT NULL`),
+      exports: count(`SELECT count(*) AS n FROM renders WHERE ${live} AND state IN ('queued','running','done') AND json_extract(json, '$.export.owner') IS NOT NULL`),
     });
   });
 

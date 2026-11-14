@@ -6,8 +6,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { agentCapabilities, ProposeChangeRequest, ScarletApiError, ScarletClient, Task, type EditingTools } from "@scarlet/shared";
-import type { Transcript } from "@scarlet/timeline";
-import { emptyTimeline, makeMediaClip } from "@scarlet/timeline";
+import type { CaptionClip, Track, Transcript } from "@scarlet/timeline";
+import { emptyTimeline, makeMediaClip, makeTrack } from "@scarlet/timeline";
 import { createScarletMcpServer, describeError, SCARLET_TOOL_NAMES, toolRefusal } from "./server.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { makeState, startMockServer, type MockServer } from "./mock-server.js";
@@ -510,6 +510,46 @@ describe("timeline_propose", () => {
       arguments: { intent: "requested", ops: [{ op: "removeClip", clipId: "does_not_exist" }], description: "x", syncSetup: true },
     })) as CallToolResult;
     expect(textOf(r)).toContain("clip does_not_exist not found");
+  });
+
+  it("checks a batch of ops as a whole, so a step on the way may put a clip on a track of the other kind", async () => {
+    const original = { timeline: mock.state.timeline, head: mock.state.project.head };
+    const words = (id: string, at: number): CaptionClip => ({ id, kind: "caption", enabled: true, timelineIn: at, timelineOut: at + 1, text: id });
+    const c = await connect();
+    const propose = async (version: string, tracks: Track[], ops: unknown[]) => {
+      mock.state.timeline = { ...emptyTimeline(mock.state.project.id), version, tracks };
+      mock.requests.length = 0;
+      const r = await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", fromVersion: version, description: "Tracks", ops } }) as CallToolResult;
+      return { r, posted: mock.requests.some(q => q.method === "POST" && q.path === "/projects/prj_test/changes") };
+    };
+    try {
+      const captions = () => [{ ...makeTrack("caption", "Words", "cap"), clips: [words("line", 0)] }, makeTrack("caption", "More words", "cap2")];
+      // The caption track turns into a video track, and its caption moves to the other caption track in the same call.
+      const moved = await propose("moved", captions(), [{ op: "updateTrack", trackId: "cap", patch: { kind: "video" } }, { op: "moveClip", clipId: "line", timelineIn: 0, trackId: "cap2" }]);
+      expect(moved.r.isError, textOf(moved.r)).toBeFalsy();
+      expect(moved.posted).toBe(true);
+      // A caption added to a video track that the same call makes a caption track is proposed in either order.
+      const add = { op: "addClip", trackId: "pic", clip: words("new", 0) }, convert = { op: "updateTrack", trackId: "pic", patch: { kind: "caption" } };
+      for (const ops of [[add, convert], [convert, add]]) {
+        const ordered = await propose("ordered", [makeTrack("video", "Picture", "pic")], ops);
+        expect(ordered.r.isError, textOf(ordered.r)).toBeFalsy();
+        expect(ordered.posted).toBe(true);
+      }
+      // A version saved before this was refused holds two captions on video and audio tracks: one call takes both out.
+      const misplaced = [{ ...makeTrack("video", "Picture", "pic"), clips: [words("one", 0)] }, { ...makeTrack("audio", "Sound", "snd"), clips: [words("two", 2)] }];
+      const repaired = await propose("repaired", misplaced, [{ op: "removeClip", clipId: "one" }, { op: "removeClip", clipId: "two" }]);
+      expect(repaired.r.isError, textOf(repaired.r)).toBeFalsy();
+      expect(repaired.posted).toBe(true);
+      // A batch that ends with a caption on a video track is still refused, naming the clip and the track.
+      const left = await propose("left", captions(), [{ op: "updateTrack", trackId: "cap2", patch: { muted: true } }, { op: "updateTrack", trackId: "cap", patch: { kind: "video" } }]);
+      expect(left.r.isError).toBe(true);
+      expect(textOf(left.r)).toContain("clip line of kind caption cannot go on video track cap");
+      expect(left.posted).toBe(false);
+    } finally {
+      mock.state.timeline = original.timeline;
+      mock.state.project.head = original.head;
+      await c.close();
+    }
   });
 
   it("requires exactly one of ops/timeline", async () => {
@@ -3315,11 +3355,12 @@ it("cuts by word reference: edges go in the measured gaps, and every gate decisi
     const applied = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Remove the first attempt",
       cuts: [{ ...ref, kind: "retake", decision: "cut", reason: "The second take is cleaner." }] } }) as CallToolResult;
     expect(applied.isError).toBeFalsy();
+    // Both edges sit in measured silence, so the cut applies as decided. "welcome" starts 0.04 s after its start, close
+    // enough for the picture to show it beginning, so the cut carries a check for the editor and the report says why.
     expect(mock.requests.find(r => r.path.endsWith("/dialogue-cuts"))?.body).toMatchObject({
-      description: "Remove the first attempt", cuts: [{ start: 1.067, end: 3.5, review: false }] });
-    // Both edges sit in measured silence, so the cut applies as decided; the report names the resolved words and range.
+      description: "Remove the first attempt", cuts: [{ start: 1.067, end: 3.5, review: false, check: "A removed word starts right after the cut: watch and listen at the join." }] });
     expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut",
-      range: [1.07, 3.5] }]);
+      range: [1.07, 3.5], evidence: expect.stringContaining("the removed sound starts") }]);
     // Without measured silence beside the words, the edge falls back to word timings and Scarlet stages the cut, saying why.
     mock.state.waveform = (mediaId, from, to, points) => ({ mediaId, from, to, peaks: Array(points).fill(.2), rms: Array(points).fill(.2),
       speechActivity: [{ start: from, end: to }] });
@@ -3663,7 +3704,8 @@ it("reads a transcript whose words are still being placed on the audio, and hold
     mock.state.transcripts = { m1: transcript };
     await new Promise(resolve => setTimeout(resolve, 1600));
     const applied = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Remove the first attempt", cuts: [cut] } }) as CallToolResult;
-    expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut", range: [1.07, 3.5] }]);
+    expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut", range: [1.07, 3.5],
+      evidence: expect.stringContaining("the removed sound starts") }]);
     expect(textOf(await editor.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 4, toWord: 4 } }) as CallToolResult)).toContain("#4 2.50-2.70 Um,");
   } finally {
     Object.assign(mock.state, original);

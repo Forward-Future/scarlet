@@ -164,6 +164,8 @@ interface PreviewProps {
   simple: { cutPlayback?: { key: string; start: number; side: "before" | "after"; beforeFile?: string; afterFile?: string; beforeWindow?: CutPlaybackWindow; afterWindow?: CutPlaybackWindow };
     nextCutPlayback?: PreparedCut;
     marks: TimelineDot[]; focus?: ProgressFocus; label?: string; compareHost?: HTMLElement | null; above?: ReactNode;
+    /** Above the ruler: whose edits the timeline marks. */
+    heading?: ReactNode;
     gaps?: TimelineGap[]; skippedRanges?: TimeRange[]; onGap?(gap: TimelineGap, time: number): void;
     /** A click inside the shaded passage, when the playing side steps over it. */
     onBand?(time: number): void;
@@ -179,7 +181,9 @@ interface PreviewProps {
      * The edit whose listen the editor has started, shared with the page's own listen of a cut. An edit that was a cut
      * until its revision landed, or becomes one, is taken up as it was instead of started again.
      */
-    heard?: { current: string | undefined } };
+    heard?: { current: string | undefined };
+    /** Set while Scarlet opens again, at launch, what was open at the last quit: that passage is shown and not played. */
+    quiet?: { current: boolean } };
   /**
    * Play this rendered version instead, through `clock`, while everything on screen stays on the version shown.
    * Its joins are inside the rendered media, so a cut sounds exactly as it will. `file` is its saved preview, when
@@ -514,7 +518,8 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     // An edit goes by its first version: a revision that lands under it is still the passage the editor chose.
     const first = selectedEdit?.previous[0] ?? selectedEdit;
     const chosen = `${first?.changeId}/${first?.spot}/${threadView?.request}`;
-    const again = played.current ? played.current.chosen === chosen && (!reached || played.current.reached === reached) : !reached && simple?.heard?.current === chosen;
+    const again = simple?.quiet?.current || (played.current ? played.current.chosen === chosen && (!reached || played.current.reached === reached) : !reached && simple?.heard?.current === chosen);
+    if (simple?.quiet) simple.quiet.current = false;
     played.current = { chosen, reached };
     if (simple?.heard) simple.heard.current = chosen;
     if (reached) {
@@ -689,7 +694,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
             waveform={{ media: current.media, mediaPaused: current.project.mediaPaused, source, timeline: displayedTimeline, ...sameClockBefore && {
               audioFrom: playingBefore ? sameClockBefore : undefined, scaleWith: playingBefore ? displayedTimeline : sameClockBefore } }} frameAt={frameAt} onSeek={seekFull} onSelectTime={selectTime} onScrubStart={scrubStart}
             range={simple.onRange ? shownRange : undefined} onRange={simple.onRange ? markRange : undefined} fps={fps}
-            marks={simple.marks} gaps={simple.gaps} skippedRanges={simple.skippedRanges} onGap={simple.onGap} onBand={simple.onBand}
+            marks={simple.marks} gaps={simple.gaps} skippedRanges={simple.skippedRanges} onGap={simple.onGap} onBand={simple.onBand} heading={simple.heading}
             highlight={simple.focus ?? (selectedEdit ? editFocus(selectedEdit, duration) : undefined)} />
         </div>
       </div>}

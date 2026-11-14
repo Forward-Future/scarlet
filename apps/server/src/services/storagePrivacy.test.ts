@@ -135,13 +135,26 @@ it.skipIf(process.platform === "win32")("sweeps ordinary temporary files and ski
   const working = ["recording_0123456789ab.wav", "chunk_0123456789ab.wav", "speech_0123456789ab.webm",
     "wcpp_0123456789ab.wav", "wcpp_0123456789ab.json", `${uuid}.wav`, `recording-${uuid}.wav`];
   const unrelated = ["my-recording.wav", "recording_backup.wav", "first-draft.json"];
+  working.push(`screen-text-${uuid}.rgb`);
   for (const name of [...working, ...unrelated]) writeFileSync(join(paths.tmp, name), "fixture");
+  // What a killed engine leaves outside the temporary folder: a model's download, the joined parts of an export, a
+  // full source cache's part, a screen-text save and a voice note's recording that never became a note.
+  mkdirSync(join(paths.root, "models"), { recursive: true });
+  mkdirSync(join(paths.waveforms("prj_sample"), "..", "renders"), { recursive: true });
+  const elsewhere = [join(paths.root, "models", `ggml-large.bin.${uuid}.part`), join(paths.renders("prj_sample"), `rnd_1.mp4.${uuid}.assembly.mp4`),
+    join(paths.waveforms("prj_sample"), `med_1.screen-text.json.${uuid}.tmp`), join(paths.notes("prj_sample"), "note_abc123.webm")];
+  const stays = [join(paths.root, "models", "ggml-large.bin"), join(paths.renders("prj_sample"), "rnd_1.mp4"), join(paths.notes("prj_sample"), "voice.webm")];
+  for (const file of [...elsewhere, ...stays]) writeFileSync(file, "fixture");
   rmSync(paths.proxies("prj_sample"), { recursive: true });
   symlinkSync(outside, paths.proxies("prj_sample"), "dir");
   const ctx = { paths, db: { prepare: () => ({ get: () => undefined }) }, log: () => {} } as unknown as Ctx;
   const later = Date.now() + 2 * 86_400_000;
-  expect(sweepLeftovers(ctx, later)).toBe(working.length);
+  // Nothing written in the last day goes: a job here or in another engine may still be writing it.
+  expect(sweepLeftovers(ctx)).toBe(0);
+  expect(sweepLeftovers(ctx, later)).toBe(working.length + elsewhere.length);
   for (const name of working) expect(existsSync(join(paths.tmp, name))).toBe(false);
+  for (const file of elsewhere) expect(existsSync(file)).toBe(false);
+  for (const file of stays) expect(existsSync(file)).toBe(true);
   for (const name of unrelated) expect(existsSync(join(paths.tmp, name))).toBe(true);
   expect(existsSync(kept)).toBe(true);
   rmSync(paths.tmp, { recursive: true });

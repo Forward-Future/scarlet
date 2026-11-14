@@ -198,7 +198,7 @@ export function requestTarget(task: Task, made: Change | undefined, changes: rea
   return edit ? { note, edit } : { note, changeId: change.id, call: index };
 }
 
-/** What a queued request shows: Scarlet runs one request at a time in a project, so it says what it is waiting for. */
+/** What a queued request shows: Scarlet runs one request at a time in a project, unless each is about its own cut or edit, so it says what it is waiting for. */
 export function queueLabel(task: Task, tasks: readonly Task[], changes: readonly Change[], isDialoguePass: (task: Task) => boolean): string | undefined {
   const wait = queueWait(task, tasks, changes);
   if (!wait) return undefined;

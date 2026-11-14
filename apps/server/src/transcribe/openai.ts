@@ -149,5 +149,8 @@ export function toSegments(json: VerboseJson, offset: number): TranscriptSegment
   }
   // Any trailing words (rounding) go on the last segment.
   if (wi < words.length && out.length) out[out.length - 1]!.words.push(...words.slice(wi));
-  return out;
+  // A segment spans every word it holds, so a read of a time range finds each word said in it.
+  return out.map(s => s.words.length
+    ? { ...s, start: Math.min(s.start, s.words[0]!.start), end: s.words.reduce((end, w) => Math.max(end, w.end), s.end) }
+    : s);
 }

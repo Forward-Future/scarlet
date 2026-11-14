@@ -30,15 +30,40 @@ export function restoreUpdatePlace() {
 }
 
 const lastKey = "scarlet.lastProject";
+const placeKey = "scarlet.lastPlace";
 const openingKey = "scarlet.lastProject.opening";
 
 /** The project on screen, so Scarlet reopens it after a quit. Null once the editor goes back to the library. */
 export function rememberProject(id: string | null) {
   try {
     if (id) localStorage.setItem(lastKey, id);
-    else localStorage.removeItem(lastKey);
+    else {
+      localStorage.removeItem(lastKey);
+      localStorage.removeItem(placeKey);
+    }
     localStorage.removeItem(openingKey);
   } catch { /* Storage is optional. */ }
+}
+
+/**
+ * Where the editor is in the project on screen, kept as they go so a quit, a crash or a power cut brings them back to
+ * it: the time on the cut, the speed, and the cut, edit or call that is open. Asked of the page as the way back from
+ * Settings is. Nothing is written while the place hasn't changed.
+ */
+export function rememberPlace() {
+  const path = captureProjectPlace(window.location);
+  try {
+    if (path && path !== localStorage.getItem(placeKey)) localStorage.setItem(placeKey, path);
+  } catch { /* Storage is optional. */ }
+}
+
+/** The place kept for a project, when it is that project's and nothing else. */
+function lastPlace(id: string) {
+  const path = localStorage.getItem(placeKey);
+  if (!path) return;
+  const place = new URL(path, window.location.href);
+  if (place.origin !== window.location.origin || place.pathname.replace(/\/$/, "") !== `/p/${id}`) return;
+  return place.pathname + place.search;
 }
 
 /**
@@ -51,8 +76,11 @@ export function restoreLastProject() {
     const failed = localStorage.getItem(openingKey);
     localStorage.removeItem(openingKey);
     if (!id || !/^[\w-]+$/.test(id) || window.location.pathname !== "/") return;
-    if (failed === id) return void localStorage.removeItem(lastKey);
+    if (failed === id) {
+      localStorage.removeItem(placeKey);
+      return void localStorage.removeItem(lastKey);
+    }
     localStorage.setItem(openingKey, id);
-    window.history.replaceState(null, "", `/p/${id}`);
+    window.history.replaceState(null, "", lastPlace(id) ?? `/p/${id}`);
   } catch { /* Open the project library if the bookmark is unavailable. */ }
 }

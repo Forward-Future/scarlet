@@ -6,7 +6,16 @@ import { MediaAsset } from "@scarlet/timeline";
  * new project's first files, whose first video gives the project its format. `started` says whether its copy had
  * begun: only such a file can have reached the project before a quit. An entry saved by an older Scarlet has none.
  */
-export interface PendingImport { projectId: string; source: string; at: string; setsFormat?: boolean; started?: boolean; importId?: string; interrupted?: boolean }
+export interface PendingImport { projectId: string; source: string; at: string; setsFormat?: boolean; started?: boolean; importId?: string; interrupted?: boolean;
+  /** How often the engine went away under this file's copy. One saved by an older Scarlet as interrupted has 1. */
+  interruptions?: number }
+
+/**
+ * How often a copy is begun again after the engine went away under it. Quitting Scarlet is one such time, and so is
+ * every restart of the engine, so one is too few: a second quit during the same long copy dropped the file unsaid.
+ * A file that takes the engine down every time still stops here.
+ */
+const INTERRUPTIONS = 5;
 
 const KEY = "scarlet.imports.v1";
 
@@ -16,8 +25,8 @@ function read(): PendingImport[] {
     return Array.isArray(saved) ? saved.filter((i): i is PendingImport =>
       !!i && typeof i.projectId === "string" && typeof i.source === "string" && typeof i.at === "string")
       // Only `true` marks a first file. An entry saved with anything else there is still an import to carry on with.
-      .map(({ projectId, source, at, setsFormat, started, importId, interrupted }) => ({ projectId, source, at, ...(setsFormat === true && { setsFormat }),
-        ...(interrupted === true && { interrupted: true }), ...(typeof started === "boolean" && { started }), ...(importId && MediaAsset.shape.importId.safeParse(importId).success && { importId }) })) : [];
+      .map(({ projectId, source, at, setsFormat, started, importId, interrupted, interruptions }) => ({ projectId, source, at, ...(setsFormat === true && { setsFormat }),
+        ...(interrupted === true && { interrupted: true, interruptions: Number.isInteger(interruptions) && interruptions! > 0 ? interruptions : 1 }), ...(typeof started === "boolean" && { started }), ...(importId && MediaAsset.shape.importId.safeParse(importId).success && { importId }) })) : [];
   } catch {
     return [];
   }
@@ -50,12 +59,13 @@ export function markImportStarted(projectId: string, source: string) {
   return importId;
 }
 
-/** Give an interrupted copy one retry, including after Scarlet itself restarts. */
+/** Keep an interrupted copy to begin again, including after Scarlet itself restarts, until it has been cut off too often. */
 export function retryInterruptedImport(projectId: string, source: string) {
   const list = read();
   const entry = list.find(i => i.projectId === projectId && i.source === source);
-  if (!entry || entry.interrupted) return false;
-  write(list.map(i => i === entry ? { ...i, interrupted: true } : i));
+  const interruptions = (entry?.interruptions ?? 0) + 1;
+  if (!entry || interruptions > INTERRUPTIONS) return false;
+  write(list.map(i => i === entry ? { ...i, interrupted: true, interruptions } : i));
   return true;
 }
 
@@ -72,6 +82,11 @@ export function clearSetsFormat(projectId: string) {
 
 export function pendingImports(projectId: string) {
   return read().filter(i => i.projectId === projectId);
+}
+
+/** Every project with files still to import. */
+export function projectsWithPendingImports() {
+  return [...new Set(read().map(i => i.projectId))];
 }
 
 export const isLink = (source: string) => /^https?:\/\//i.test(source);

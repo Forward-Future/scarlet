@@ -9,6 +9,7 @@ import {
   independentCutSpots,
   independentClipSpots,
   diffTimelines,
+  emptyTimeline,
   makeTimeMap,
   removedJoins,
   makeMediaClip,
@@ -305,6 +306,41 @@ describe("parallel changes", () => {
     const to = applyOps(base, overlapping);
     const plan = planApply({ from: base, to, head, ops: overlapping, changeRanges: diffTimelines(base, to).ranges });
     expect(plan.kind).toBe("conflict");
+  });
+
+  describe("a batch checked by its result, approved later", () => {
+    const addTo = (trackId: string): TimelineOp => ({ op: "addClip", trackId, clip: { id: "w", kind: "caption", enabled: true, timelineIn: 2, timelineOut: 3, text: "w" } });
+    /** The take with an empty third track of `kind`; `ops` proposed on it, approved once `since` is applied. */
+    const approve = (kind: "video" | "caption", ops: TimelineOp[], since: TimelineOp) => {
+      const base = take();
+      base.tracks.push(makeTrack(kind, "Third", "t3"));
+      const to = applyOps(base, ops);
+      return planApply({ from: base, to, head: applyOps(base, [since]), ops, changeRanges: diffTimelines(base, to).ranges });
+    };
+
+    it("is re-applied by its result, so the caption may go on before the batch makes its track a caption track", () => {
+      expect(approve("video", [addTo("t3"), { op: "updateTrack", trackId: "t3", patch: { kind: "caption" } }], { op: "rippleDelete", start: 15, end: 16 }))
+        .toMatchObject({ kind: "rebased", timeline: { tracks: [{}, {}, { kind: "caption", clips: [{ id: "w" }] }] } });
+    });
+
+    it("is refused when approving only some of its spots would leave a clip on a track of the other kind", () => {
+      // A version saved before this was refused, with a caption on the video track that the second cut takes out.
+      const base = emptyTimeline(P);
+      base.tracks[0]!.clips = [makeMediaClip("m1", 0, 4, 0, { id: "m" }), { id: "stray", kind: "caption", enabled: true, timelineIn: 1, timelineOut: 1.5, text: "stray" }];
+      const ops: TimelineOp[] = [{ op: "rippleDelete", start: 3, end: 3.5 }, { op: "rippleDelete", start: 1, end: 1.5 }];
+      const to = applyOps(base, ops);
+      const changeRanges = diffTimelines(base, to).ranges;
+      // The cut at 3 s alone: the stray caption stays on the video track.
+      const spot = changeRanges.findIndex(r => r.start > 2);
+      expect(spot).toBeGreaterThanOrEqual(0);
+      expect(planApply({ from: base, to, head: base, ops, spots: [spot], changeRanges }))
+        .toMatchObject({ kind: "conflict", spotsUnsupported: true });
+    });
+
+    it("is refused when the track's kind changed since, naming the clip and the track", () => {
+      expect(approve("caption", [addTo("t3")], { op: "updateTrack", trackId: "t3", patch: { kind: "video" } }))
+        .toMatchObject({ kind: "conflict", reason: "the edits no longer apply: clip w of kind caption cannot go on video track t3" });
+    });
   });
 
   it("refuses to merge a whole-timeline replacement onto a moved cut", () => {

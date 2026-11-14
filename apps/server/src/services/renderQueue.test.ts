@@ -1,9 +1,9 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, onTestFinished } from "vitest";
 import { DELIVERY_AUDIO_REVISION, FfmpegError } from "@scarlet/render";
 import { createProject, makeMediaClip, sha256, stableStringify, timelineFromKeepRanges, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
@@ -355,6 +355,9 @@ it("still gives up a killed engine's render when its unfinished file can't be re
 
 // Only macOS is asked when a process began: elsewhere a render stays with whatever process has its engine's id.
 it.runIf(process.platform === "darwin")("gives up a killed engine's render once another program has its process id", async () => {
+  // The computer has been up for days: the engine's note is from since it started, so only `ps` can say it is gone.
+  const up = vi.spyOn(os, "uptime").mockReturnValue(30 * 86_400);
+  onTestFinished(() => up.mockRestore());
   const { ctx } = workspace;
   const { pid: program } = await running();
   // The engine noted that it began an hour before the program that has its id now did.

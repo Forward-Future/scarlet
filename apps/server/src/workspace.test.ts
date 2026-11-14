@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, onTestFinished } from "vitest";
 import { clipEnd, createProject, isPlayableMedia, cutPlaybackWindow, sha256, timelineDuration, timelineFromKeepRanges, Transform, type Change, type Clip, type Project } from "@scarlet/timeline";
 import { buildThreads, isThreadDone, taskPlan, threadRevision, type Render, type Task } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "./app.js";
@@ -1690,11 +1690,18 @@ it("recovers dead workers, keeps saved proposals and lets follow-ups run exactly
   expect(repos.tasks.get(a.id)?.interrupted).toBe(true);
   const third = await claim();
   expect(third).toMatchObject({ id: repos.tasks.get(a.id)?.retryTaskId, resumeRootId: interrupted.id });
-  // A run that keeps losing its worker stops there and waits for the editor, and the follow-up goes ahead.
+  // The quit that began this chain isn't held against it: only a lost worker counts, so the run carries on again.
   workspace.ctx.db.prepare("UPDATE tasks SET worker_seen_at = '2000-01-01' WHERE id = ?").run(third.id);
   recoverTasks(workspace.ctx);
-  expect(repos.tasks.get(third.id)?.interrupted).toBe(true);
-  expect(repos.tasks.get(third.id)?.retryTaskId).toBeUndefined();
+  expect(repos.tasks.get(a.id)).toMatchObject({ interrupted: true, lostWorker: true });
+  expect(repos.tasks.get(interrupted.id)?.lostWorker).toBeUndefined();
+  const fourth = await claim();
+  expect(fourth).toMatchObject({ id: repos.tasks.get(third.id)?.retryTaskId, resumeRootId: interrupted.id });
+  // A run that keeps losing its worker stops there and waits for the editor, and the follow-up goes ahead.
+  workspace.ctx.db.prepare("UPDATE tasks SET worker_seen_at = '2000-01-01' WHERE id = ?").run(fourth.id);
+  recoverTasks(workspace.ctx);
+  expect(repos.tasks.get(fourth.id)?.interrupted).toBe(true);
+  expect(repos.tasks.get(fourth.id)?.retryTaskId).toBeUndefined();
   expect((await claim()).id).toBe(follow.id);
 });
 
@@ -2039,6 +2046,9 @@ it("resumes a pending native fingerprint after an engine restart", async () => {
 
 // Only macOS is asked when a process began: elsewhere an import stays with whatever process has its engine's id.
 it.runIf(process.platform === "darwin")("finishes an import a killed engine left once another program has its process id", async () => {
+  // The computer has been up for days: the engine's note is from since it started, so only `ps` can say it is gone.
+  const up = vi.spyOn(os, "uptime").mockReturnValue(30 * 86_400);
+  onTestFinished(() => up.mockRestore());
   const { ctx } = workspace;
   ctx.paths.ensureProject(project.id);
   const file = join(ctx.paths.media(project.id), "owned.wav");
@@ -6340,4 +6350,103 @@ it("checks repeats only in the selected placement when the same recording plays 
     cuts: [{ start: 0, end: 1, review: false, kind: "pause", reason: "Quiet beginning." }] });
   expect(shortened.status).toBe(201);
   await check((await shortened.json()).head);
+});
+
+it("works on two calls of one pass at once and lands both revisions, with a call made meanwhile, in the one pass that waits", async () => {
+  const { ctx } = workspace;
+  vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
+  const author = { type: "human" as const, name: "Editor" };
+  const { host } = await (await api("POST", "/hosts/register", { name: "Editor", platform: "test", agents: [{ id: "codex", installed: true }, { id: "claude", installed: true }] })).json();
+  const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: author });
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "mic", path: "mic.wav", kind: "audio", duration: 20, hasAudio: true }, "ready");
+  const base = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: task.id, description: "Assemble",
+    ops: [{ op: "addClip", trackId: "a1", clip: { id: "raw", kind: "media", mediaId: "mic", timelineIn: 0, sourceIn: 0, sourceOut: 20 } }] }).change.toVersion;
+  const submitted = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: base, description: "Pass", cuts: [
+    { start: 2, end: 3, review: true, reason: "First retake." }, { start: 6, end: 8, review: true, reason: "Second retake." },
+    { start: 12, end: 13, review: true, reason: "Third retake." }] });
+  const pass = ((await submitted.json()).changes as Change[]).find(c => c.intent === "suggestion")!;
+  const calls = [{ index: 0, start: 2, end: 3, verdict: "ask", reason: "Check it." }, { index: 1, start: 6, end: 8, verdict: "ask", reason: "Check the “I”." },
+    { index: 2, start: 12, end: 13, verdict: "ask", reason: "Check the end." }].map(a => ({ ...a, inspected: true }));
+  expect((await api("POST", `/changes/${pass.id}/cut-assessments`, { fromVersion: pass.fromVersion, toVersion: pass.toVersion, assessments: calls })).status).toBe(200);
+  // The pass's run is over, and its calls wait on the editor.
+  ctx.repos.tasks.put({ ...ctx.repos.tasks.get(task.id)!, state: "done" });
+
+  // The editor sends back the first call, then the third, and asks for a new edit.
+  const revise = async (cutIndex: number, text: string, time: number, end: number) => (await (await api("POST", `/changes/${pass.id}/revise`, { text,
+    position: { version: pass.fromVersion, time, end, clipIds: [], cutIndex } })).json()).task as Task;
+  const first = await revise(0, "Start it later.", 2, 3);
+  const third = await revise(2, "Ends too early.", 12, 13);
+  const captions = (await (await api("POST", projectsPath() + "/tasks", { agent: "codex", instruction: "Add captions." })).json()).task as Task;
+  const claim = async () => {
+    for (;;) {
+      const { task: next } = await (await api("POST", `/hosts/${host.id}/claim`, {})).json() as { task: Task | null };
+      if (next?.kind !== "learning_check") return next?.id ?? null;
+    }
+  };
+  // Scarlet starts on both calls at once. The new edit waits for the editor's calls, as it did.
+  expect([await claim(), await claim(), await claim()]).toEqual([first.id, third.id, null]);
+  expect(ctx.repos.tasks.get(captions.id)!.state).toBe("queued");
+  // Each is told about the pass as it stands, which no revision has replaced yet.
+  for (const [run, index] of [[first, 0], [third, 2]] as const)
+    expect((await (await api("GET", `/tasks/${run.id}/prompt`)).json()).systemPrompt).toContain(`Staged cut being revised: index ${index} of ${pass.id}.`);
+
+  // The third call's revision lands first. Both name the pass they were sent about.
+  const one = await (await api("POST", `/changes/${pass.id}/staged-cuts/2`, { taskId: third.id, start: 12, end: 13.5, reason: "Ends after the breath." })).json() as { change: Change };
+  expect((await api("POST", `/tasks/${third.id}/complete`, { state: "done" })).status).toBe(200);
+  // Meanwhile the editor approves the second call, on the pass that waits now.
+  expect((await api("PUT", `/changes/${one.change.id}/cut-choices`, { fromVersion: one.change.fromVersion, toVersion: one.change.toVersion,
+    choices: [{ index: 1, start: 6, end: 8, choice: "cut" }] })).status).toBe(200);
+  // The first call's revision lands on that pass, not on the one it read: one pass waits, with both revisions and the call.
+  const two = await (await api("POST", `/changes/${pass.id}/staged-cuts/0`, { taskId: first.id, start: 2.5, end: 3, reason: "Starts later." })).json() as { change: Change; replaced?: string };
+  expect(two.replaced).toBe(one.change.id);
+  expect(two.change.cutReasons).toEqual([{ start: 2.5, end: 3, reason: "Starts later." }, { start: 6, end: 8, reason: "Second retake." },
+    { start: 12, end: 13.5, reason: "Ends after the breath." }]);
+  expect(two.change.cutChoices).toEqual([expect.objectContaining({ index: 1, choice: "cut" })]);
+  expect((await api("POST", `/tasks/${first.id}/complete`, { state: "done" })).status).toBe(200);
+  expect(ctx.repos.changes.select("project_id = ? AND state = 'ready' AND json_extract(json, '$.intent') = 'suggestion'", [project.id]).map(c => c.id)).toEqual([two.change.id]);
+  // Nothing moved the video: the pass still waits on the editor's calls for the two revised cuts.
+  expect(ctx.repos.projects.get(project.id)!.head).toBe(base);
+});
+
+it("puts two edits' revisions made at once onto the video, and tells the one that meets the other's footage where", async () => {
+  const { ctx } = workspace;
+  vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
+  const { host } = await (await api("POST", "/hosts/register", { name: "Editor", platform: "test", agents: [{ id: "codex", installed: true }] })).json();
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "mic", path: "mic.wav", kind: "audio", duration: 60, hasAudio: true }, "ready");
+  const made = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", description: "Assemble", autoApprove: true,
+    ops: [{ op: "addClip", trackId: "a1", clip: { id: "raw", kind: "media", mediaId: "mic", timelineIn: 0, sourceIn: 0, sourceOut: 60 } }] }).change;
+  const base = ctx.repos.projects.get(project.id)!.head!;
+  // Three requests, each about one edit of the same thread, all read the video as it is now.
+  const about = async (editIndex: number, instruction: string) => {
+    const task = (await (await api("POST", projectsPath() + "/tasks", { agent: "codex", instruction,
+      context: { threadId: "tsk_thread", changeId: made.id, editIndex } })).json()).task as Task;
+    expect((await (await api("POST", `/hosts/${host.id}/claim`, { taskId: task.id })).json()).task.id).toBe(task.id);
+    return task;
+  };
+  const top = await about(0, "Trim the top."), tail = await about(1, "Trim the tail."), again = await about(2, "Trim the top more.");
+  const save = async (task: Task, description: string, start: number, end: number, fromVersion = base) =>
+    await (await api("POST", projectsPath() + "/changes?summary=true", { intent: "requested", taskId: task.id, fromVersion, description,
+      ops: [{ op: "rippleDelete", start, end }] })).json() as { change: Change; notApplied?: { reason: string; currentVersion: string } };
+
+  expect((await save(top, "Trim the top", 1, 3)).change.state).toBe("approved");
+  const afterTop = ctx.repos.projects.get(project.id)!.head!;
+  // The second was written on the video before the first landed. It touches other footage, so it goes onto the video as it is.
+  const second = await save(tail, "Trim the tail", 50, 52);
+  expect(second).toMatchObject({ change: { state: "approved" } });
+  expect(second.notApplied).toBeUndefined();
+  const merged = (await (await api("GET", `${projectsPath()}/timeline`)).json()).timeline as { tracks: Array<{ clips: Array<{ sourceIn: number; sourceOut: number }> }> };
+  expect(merged.tracks.flatMap(t => t.clips.map(c => [c.sourceIn, c.sourceOut]))).toEqual([[0, 1], [3, 50], [52, 60]]);
+  const afterTail = ctx.repos.projects.get(project.id)!.head!;
+  expect(afterTail).not.toBe(afterTop);
+
+  // The third meets footage the first took out. Nothing is applied, and it is told what met and the video to redo it on.
+  const third = await save(again, "Trim the top more", 2, 5);
+  expect(third.change.state).toBe("ready");
+  expect(third.notApplied).toEqual({ reason: expect.stringContaining("overlaps"), currentVersion: afterTail });
+  expect(ctx.repos.projects.get(project.id)!.head).toBe(afterTail);
+  // Made again on the current video it applies, and the refused save is put away when the run ends.
+  const redone = await save(again, "Trim the top more", 1, 3, afterTail);
+  expect(redone).toMatchObject({ change: { state: "approved" } });
+  expect((await api("POST", `/tasks/${again.id}/complete`, { state: "done" })).status).toBe(200);
+  expect(ctx.repos.changes.get(third.change.id)).toMatchObject({ state: "rejected", replacedBy: redone.change.id });
 });

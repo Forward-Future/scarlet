@@ -11,7 +11,7 @@ import { useUiStore } from "../../stores/ui";
 import type { MediaAsset } from "@scarlet/timeline";
 import { TranscriptLine } from "../media/TranscriptionAction";
 import { UsageSettings } from "../shell/UsageSettings";
-import { RunBundle, runEnded, Said } from "./RunBundle";
+import { LiveTokens, RunBundle, runEnded, Said } from "./RunBundle";
 
 const task: Task = {
   id: "tsk_1", projectId: "prj_1", kind: "edit", agent: "claude", model: "opus", instruction: "Tighten the intro",
@@ -410,13 +410,29 @@ it("leaves a question under a heading to the heading, opens the steps before it 
   bare.unmount();
 });
 
-it("keeps the tokens a question has used when its heading leaves it no row of its own", () => {
+it("leaves a question's tokens to its heading, and has a row for them with no heading", () => {
   useUiStore.getState().setShowRunTokens(true);
   openProject({ [task.id]: totals({ totalTokens: 900 }) });
   const asking = render(<RunBundle task={{ ...task, state: "waiting_for_user", finishedAt: undefined }} events={[]} changes={[]} stopAbove banded />);
-  expect(asking.host.querySelector(".req-status")).toBeNull();
-  expect(asking.host.querySelector(".req-row > .req-right > .run-tokens")?.textContent).toBe("900 tokens");
+  expect(asking.host.querySelector(".run-tokens")).toBeNull();
   asking.unmount();
+  const bare = render(<RunBundle task={{ ...task, state: "waiting_for_user", finishedAt: undefined }} events={[]} changes={[]} />);
+  expect(bare.host.querySelector(".req-status .req-right > .run-tokens")?.textContent).toBe("900 tokens");
+  bare.unmount();
+});
+
+it("counts a working request's tokens as they're reported, with every part on hover, only when turned on", () => {
+  useUiStore.getState().setShowRunTokens(false);
+  openProject({ [task.id]: totals({ totalTokens: 212_000 }) });
+  const view = render(<LiveTokens taskId={task.id} />);
+  expect(view.host.textContent).toBe("");
+  act(() => useUiStore.getState().setShowRunTokens(true));
+  expect(view.host.querySelector(".unit-tokens")?.textContent).toBe("212K tokens");
+  const more = totals({ totalTokens: 1_310_000 });
+  act(() => useProjectStore.setState(s => ({ current: { ...s.current!, taskUsage: { [task.id]: more } } })));
+  const tokens = view.host.querySelector<HTMLElement>(".unit-tokens")!;
+  expect([tokens.textContent, tokens.title]).toEqual(["1.3M tokens", tokenBreakdown(more)]);
+  view.unmount();
 });
 
 it("leaves the word for how a run ended to its heading when the block has one, with the one action on the line that says what the run saved", () => {

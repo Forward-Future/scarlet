@@ -15,6 +15,7 @@ import { Icon, Spinner, InlineError } from "../ui/primitives";
 import { AgentChip, useAgentAvailability } from "./AgentChip";
 import { SkillCommandInput } from "./SkillCommandInput";
 import { MicButton } from "./MicButton";
+import { ComposerAim, type AimItem } from "./ComposerAim";
 
 const timestampLabel = (time: number) => playbackClock(time).replace(/\.000$/, "");
 
@@ -270,6 +271,26 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   // A stretch marked on the timeline's ruler rides with the message, beside the tag of the cut or edit it is aimed at.
   const marked = rewording ? undefined : markedRangeOf(context);
   const markedWords = marked && clockRange(marked.start, marked.end);
+  // "Answer" and "Reply" say in words who the message goes to. Anything with a place (a cut, an edit, a moment, a
+  // marked stretch) folds into the edit-point icon, which keeps one size however much it holds.
+  const wordTag = tag === "Answer" || tag === "Reply" ? tag : undefined;
+  const placeTag = wordTag ? undefined : tag;
+  const takeOffTarget = () => {
+    if (onClearTarget) onClearTarget(); else setContext("whole");
+    inputRef.current?.focus();
+  };
+  const aimItems: AimItem[] = [
+    ...placeTag ? [{ key: `target:${placeTag}`, kind: "target" as const, name: placeTag,
+      detail: targetIsPoint ? "the moment you picked" : /^cut\b/i.test(placeTag) ? "the cut that’s open" : /^edit\b/i.test(placeTag) ? "the edit that’s open" : "what you’re revising",
+      clearLabel: targetIsPoint ? `Take “${placeTag}” off: the message is about the whole video` : `Start a new edit instead of ${tagAct!.charAt(0).toLowerCase()}${tagAct!.slice(1)}`,
+      onClear: takeOffTarget }] : [],
+    ...marked ? [{ key: `range:${marked.start}/${marked.end}`, kind: "range" as const, name: markedWords!, detail: `${lengthLabel(marked.end - marked.start)} you marked`,
+      clearLabel: `Take the marked range ${markedWords} off the message`, onClear: () => {
+        const was = context && context !== "whole" ? context : undefined;
+        setContext(withMarkedRange(context, undefined), was?.changeId ? was : undefined);
+        inputRef.current?.focus();
+      } }] : [],
+  ];
   const saveLabel = rewording ? "Save the new words" : sendLabel;
   function changeText(text: string) {
     dismissFirstEditHint();
@@ -306,24 +327,13 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         }}>
         <label htmlFor={inputId} className="composer-destination sr-only">{rewording ? "Changing the words of a queued request" : <>{mode}{editTitle && ` ${editTitle}`}</>}</label>
         <div className="composer-row">
-          {tag && <span className="composer-tag" title={targetIsPoint ? `About the video ${tagWords}` : tagAct}>
-            <span className="composer-tag-name">{tag}</span>
+          {aimItems.length > 0 && <ComposerAim items={aimItems} disabled={recording || heard} disabledReason="Waits until what you’re saying is sent" />}
+          {wordTag && <span className="composer-tag" title={tagAct}>
+            <span className="composer-tag-name">{wordTag}</span>
             {/* A spoken message stays where it was said until it is out: aiming the box elsewhere would drop it. */}
             <button type="button" className="composer-tag-clear" disabled={recording || heard}
-              aria-label={targetIsPoint ? `Take “${targetTag}” off: the message is about the whole video` : `Start a new edit instead of ${tagAct!.charAt(0).toLowerCase()}${tagAct!.slice(1)}`}
-              title={recording || heard ? "Waits until what you’re saying is sent" : targetIsPoint ? "Whole video instead" : "New edit instead"} onClick={() => {
-                if (onClearTarget) onClearTarget(); else setContext("whole");
-                inputRef.current?.focus();
-              }}><Icon name="x" size={10} /></button>
-          </span>}
-          {marked && <span className="composer-tag composer-range" title={`About ${markedWords} on the timeline · ${lengthLabel(marked.end - marked.start)}`}>
-            <span className="composer-tag-name">{markedWords}</span>
-            <button type="button" className="composer-tag-clear" disabled={recording || heard} aria-label={`Take the marked range ${markedWords} off the message`}
-              title={recording || heard ? "Waits until what you’re saying is sent" : "Take the range off"} onClick={() => {
-                const was = context && context !== "whole" ? context : undefined;
-                setContext(withMarkedRange(context, undefined), was?.changeId ? was : undefined);
-                inputRef.current?.focus();
-              }}><Icon name="x" size={10} /></button>
+              aria-label={`Start a new edit instead of ${tagAct!.charAt(0).toLowerCase()}${tagAct!.slice(1)}`}
+              title={recording || heard ? "Waits until what you’re saying is sent" : "New edit instead"} onClick={takeOffTarget}><Icon name="x" size={10} /></button>
           </span>}
           <SkillCommandInput key={owner} id={inputId} inputRef={inputRef} value={value} skills={skills}
             placeholder={rewording ? "What should it ask instead?" : question ? "Answer Scarlet…" : displayAnchor?.changeId && context ? "What should change?" : replying ? "Write a follow-up…" : "Describe your edit or type / for skills"}

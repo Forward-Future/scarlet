@@ -220,6 +220,11 @@ export interface ProposeResult {
   timeline: Timeline;
   /** Removals inside a selected passage that the engine put on whole frames: what was asked and what was removed. */
   onWholeFrames?: Array<{ asked: [number, number]; removed: [number, number] }>;
+  /**
+   * A requested edit that could not go onto the video: it was written on `fromVersion`, and since then something else
+   * changed the same footage. `reason` says what met and where, and `currentVersion` is the video as it is now.
+   */
+  notApplied?: { reason: string; currentVersion: string };
 }
 
 /** Apply a proposed change: store the new version, diff, record the review windows without encoding footage. */
@@ -692,7 +697,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     const changes: Change[] = [];
     if (applied.length) {
       const { change } = persistProposal(ctx, user, projectId, { fromVersion: onto, intent: "requested", ops: ops(applied),
-        description: whole && own ? own : describeDialogueRemovals(applied), taskId, author, noteIds }, ids[0], applied.map(({ start, end, reason, kind, crossfade }) => ({ start, end, reason, ...(kind && { kind }), ...(crossfade && { crossfade }) })));
+        description: whole && own ? own : describeDialogueRemovals(applied), taskId, author, noteIds }, ids[0], applied.map(({ start, end, reason, kind, crossfade, check }) => ({ start, end, reason, ...(kind && { kind }), ...(crossfade && { crossfade }), ...(check && { check }) })));
       if (change.state !== "approved") throw conflict("cut_changed", "The confident cuts could not be applied to this version.");
       changes.push(change);
       version = change.appliedVersion ?? change.toVersion;
@@ -1308,8 +1313,17 @@ function persistProposal(ctx: Ctx, user: User, projectId: string, body: ProposeC
   }
 
   if (alternativeAlreadyChosen(ctx, change, head)) change = rejectChange(ctx, user, change, "Another alternative was chosen");
+  // Another request may have changed the video since this one read it. An edit that meets none of those changes goes
+  // onto the video as it is now. One that does isn't applied, and its agent is told what met and where.
+  let notApplied: ProposeResult["notApplied"];
   if (autoApply) {
-    change = approveChange(ctx, user, change, { automatic: requested }).change;
+    const applied = approveChange(ctx, user, change, { automatic: requested });
+    change = applied.change;
+    const current = ctx.repos.projects.header(projectId)?.head;
+    if (applied.outcome === "conflict" && applied.reason && current) {
+      notApplied = { reason: applied.reason, currentVersion: current };
+      ctx.log(`[edit] ${change.id} not applied: the video moved from ${fromVersion} to ${current} under it (${applied.reason})`);
+    }
   }
   if (change.state === "ready") {
     scheduleSpotCheck(ctx, change, project.settings.fps);
@@ -1321,7 +1335,7 @@ function persistProposal(ctx: Ctx, user: User, projectId: string, body: ProposeC
     const applied = diffTimelines(resolveTimeline(ctx, project, change.appliedOnto), timeline, project.settings.fps);
     return { change, timeline, duration: applied.durationAfter, diffDescription: describeDiff(applied, undefined, clipById) };
   }
-  return { change, timeline: stored, duration: diff.durationAfter, diffDescription: describeDiff(diff, undefined, clipById) };
+  return { change, timeline: stored, duration: diff.durationAfter, diffDescription: describeDiff(diff, undefined, clipById), ...(notApplied && { notApplied }) };
 }
 
 /** Tell the editor when an agent's change is ready for a decision. */

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { captureProjectPlace, clearUpdatePlace, rememberProject, restoreLastProject, restoreUpdatePlace, saveUpdatePlace } from "./updatePlace";
+import { captureProjectPlace, clearUpdatePlace, rememberPlace, rememberProject, restoreLastProject, restoreUpdatePlace, saveUpdatePlace } from "./updatePlace";
 
 const at = (path: string) => window.history.replaceState(null, "", path);
 const here = () => window.location.pathname + window.location.search + window.location.hash;
@@ -77,6 +77,49 @@ it("reopens the project that was on screen when Scarlet last closed, and the lib
   at("/");
   restoreLastProject();
   expect(here()).toBe("/");
+});
+
+it("reopens the project where the editor was in it: the time, the speed and what was open", () => {
+  // The page adds where the editor is each time it is asked, as it does for the way back from Settings.
+  let where = { t: "754.2", open: "call:chg_pass:3" } as Record<string, string>;
+  const page = (event: Event) => { for (const [key, value] of Object.entries(where)) (event as CustomEvent<URL>).detail.searchParams.set(key, value); };
+  window.addEventListener("scarlet:bookmark-project", page);
+  try {
+    rememberProject("prj_1");
+    at("/p/prj_1");
+    rememberPlace();
+    const write = vi.spyOn(localStorage, "setItem");
+    // Asked again with the editor where they were, nothing is written.
+    rememberPlace();
+    expect(write).not.toHaveBeenCalled();
+    where = { t: "760", speed: "1.5" };
+    rememberPlace();
+    expect(write).toHaveBeenCalledTimes(1);
+    write.mockRestore();
+    // Scarlet closed without a word, and opens there.
+    at("/");
+    restoreLastProject();
+    expect(here()).toBe("/p/prj_1?t=760&speed=1.5");
+    // A place kept for another project isn't this one's: the project opens at its start.
+    rememberProject("prj_2");
+    at("/");
+    restoreLastProject();
+    expect(here()).toBe("/p/prj_2");
+    // Another page has no place in a project, and back in the library there is none to come back to.
+    at("/settings");
+    rememberPlace();
+    rememberProject("prj_1");
+    at("/");
+    restoreLastProject();
+    expect(here()).toBe("/p/prj_1?t=760&speed=1.5");
+    rememberProject(null);
+    rememberProject("prj_1");
+    at("/");
+    restoreLastProject();
+    expect(here()).toBe("/p/prj_1");
+  } finally {
+    window.removeEventListener("scarlet:bookmark-project", page);
+  }
 });
 
 it("doesn't try a project again that never finished opening, so the editor can always reach the library", () => {

@@ -1,3 +1,4 @@
+import { Changelog } from "../components/shell/Changelog";
 import { LocalModelNotice, TranscriptionGuide, useLocalModelStatus } from "../components/shell/LocalModelNotice";
 import { PreferenceSelect } from "../components/ui/PreferenceSelect";
 import { StorageSettings } from "../components/shell/StorageSettings";
@@ -381,6 +382,7 @@ export function SettingsPage() {
               {__SCARLET_REVISION__ && <><dt className="text-muted">Commit</dt><dd className="font-mono">{__SCARLET_REVISION__.slice(0, 7)}</dd></>}
             </dl>
             <UpdateSettings />
+            <Changelog />
             <section className="mt-6 max-w-prose space-y-2 text-sm leading-relaxed text-muted" aria-labelledby="telemetry-heading">
               <h2 id="telemetry-heading" className="font-semibold text-fg">Usage telemetry</h2>
               <TelemetrySwitch />

@@ -37,7 +37,7 @@ export function changeRoutes(ctx: Ctx) {
       const viewed = appliedReviewChange(result.change);
       const { id, state, description, fromVersion, toVersion, ranges, timelineEdits } = viewed;
       return c.json({ change: { id, state, description, fromVersion, toVersion, ranges, timelineEdits }, duration: result.duration, diffDescription: result.diffDescription,
-        ...(result.onWholeFrames && { onWholeFrames: result.onWholeFrames }) }, 201);
+        ...(result.onWholeFrames && { onWholeFrames: result.onWholeFrames }), ...(result.notApplied && { notApplied: result.notApplied }) }, 201);
     }
     // The proposal is saved by now, so a failed check must not read as a failed proposal.
     return c.json({ ...result, change: await withSpots(result.change, result.change.state === "ready") }, 201);

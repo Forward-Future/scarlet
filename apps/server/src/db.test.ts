@@ -73,6 +73,29 @@ it("reads a pragma as a row or its one value, and sets one", () => {
   expect(db.pragma("table_info(nothing_by_this_name)")).toBeUndefined();
 });
 
+it("undoes a part of a transaction that throws and keeps the rest, with only the kept part's effects", () => {
+  const effects: string[] = [];
+  const part = (body: string, fail = false) => db.savepoint(() => {
+    db.prepare("INSERT INTO notes (body) VALUES (?)").run(body);
+    db.afterCommit(() => effects.push(body));
+    if (fail) throw new Error(`${body} failed`);
+    return body;
+  });
+  db.transaction(() => {
+    expect(part("first")).toBe("first");
+    expect(() => part("second", true)).toThrow("second failed");
+    part("third");
+    expect(effects).toEqual([]);
+  }, "immediate")();
+  expect(bodies()).toEqual(["first", "third"]);
+  expect(effects).toEqual(["first", "third"]);
+  // With no transaction open it is one of its own.
+  expect(() => part("fourth", true)).toThrow("fourth failed");
+  expect(part("fifth")).toBe("fifth");
+  expect(bodies()).toEqual(["first", "third", "fifth"]);
+  expect(db.inTransaction).toBe(false);
+});
+
 it("undoes a transaction that throws, and runs none of the effects it scheduled", () => {
   const effects: string[] = [];
   const write = db.transaction((body: string, fail: boolean) => {

@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, onTestFinished } from "vitest";
 import { createProject } from "@scarlet/timeline";
 import type { SourceCacheStatus } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
@@ -102,6 +102,9 @@ it.each(["pause", "quit"])("keeps a video that was waiting to cache through a %s
 
 // Only macOS is asked when a process began: elsewhere a cache stays with whatever process has its engine's id.
 it.runIf(process.platform === "darwin")("caches a video a killed engine was caching once another program has its process id", () => withVideos({}, {}, async engine => {
+  // The computer has been up for days: the engine's note is from since it started, so only `ps` can say it is gone.
+  const up = vi.spyOn(os, "uptime").mockReturnValue(30 * 86_400);
+  onTestFinished(() => up.mockRestore());
   const { ctx } = engine.app();
   const program = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"], { stdio: "ignore" });
   try {

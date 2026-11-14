@@ -253,6 +253,9 @@ async fn save_engine_file(app: &AppHandle, state: &AppState, url: &str, path: &s
         }
     }
     file.flush().await.map_err(|e| e.to_string())?;
+    // On the disk before it takes the chosen name: after a power cut the file there is whole or isn't there, and an
+    // export that isn't there is still owed and saved again at the next launch.
+    file.get_ref().sync_all().await.map_err(|e| e.to_string())?;
     drop(file);
     temp_path.persist(path).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into_owned())

@@ -123,10 +123,18 @@ export function sourceRangeToTimeline(tl: Timeline, mediaId: string, from: numbe
 /** A transcript word placed on the timeline. `index` is its stable index in transcript_get for `mediaId`. */
 export interface TimelineWord { mediaId: string; index: number; text: string; start: number; end: number; speaker?: string }
 
+/** A word timeline_transcript lists, with the clip it plays from. */
+export interface ListedWord { word: TimelineWord; clip: MediaClip }
+
 /** Words heard on a version, in playback order. `transcripts` holds each media's words in transcript_get order. */
 export function timelineWords(tl: Timeline, transcripts: Map<string, TranscriptWord[]>, range?: TimeRange): TimelineWord[] {
+  return listedWords(tl, transcripts, range).map(listed => listed.word);
+}
+
+/** timelineWords, with the clip each word plays from, so a word index can be placed where the transcript lists it. */
+export function listedWords(tl: Timeline, transcripts: Map<string, TranscriptWord[]>, range?: TimeRange): ListedWord[] {
   const clips = captionSourceClips(tl, id => transcripts.has(id));
-  const out: TimelineWord[] = [];
+  const out: ListedWord[] = [];
   // A long pass leaves hundreds of clips per recording. Index each recording once instead of scanning it per clip.
   const indexes = new Map<string, ReturnType<typeof wordsByMidpoint>>();
   for (const clip of clips) {
@@ -140,12 +148,12 @@ export function timelineWords(tl: Timeline, transcripts: Map<string, TranscriptW
       const start = round(clip.timelineIn + Math.max(0, w.start - clip.sourceIn) / speed);
       const end = round(clip.timelineIn + Math.min(clip.sourceOut - clip.sourceIn, w.end - clip.sourceIn) / speed);
       if (range && (end < range.start || start > range.end)) continue;
-      out.push({ mediaId: clip.mediaId, index, text: w.text.trim(), start, end: Math.max(start, end), ...(w.speaker && { speaker: w.speaker }) });
+      out.push({ word: { mediaId: clip.mediaId, index, text: w.text.trim(), start, end: Math.max(start, end), ...(w.speaker && { speaker: w.speaker }) }, clip });
     }
   }
-  out.sort((a, b) => a.start - b.start);
+  out.sort((a, b) => a.word.start - b.word.start);
   // Two transcribed mics of one voice read the same word twice.
-  return out.filter((w, i) => !out.slice(Math.max(0, i - 3), i).some(p => Math.abs(p.start - w.start) < .03 &&
+  return out.filter(({ word: w }, i) => !out.slice(Math.max(0, i - 3), i).some(({ word: p }) => Math.abs(p.start - w.start) < .03 &&
     normalizeTranscriptToken(p.text) === normalizeTranscriptToken(w.text)));
 }
 

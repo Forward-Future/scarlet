@@ -29,7 +29,9 @@ class TranscriptDocument {
       }
       return this.full.transcript;
     }
-    const selected = (this.source.segments ?? []).filter(s => (from === null || s.end > from) && (to === null || s.start < to));
+    // A word said where the range starts is in it, though its segment may end there.
+    const selected = (this.source.segments ?? []).filter(s =>
+      (from === null || s.end > from || s.words?.some(w => w.start === from)) && (to === null || s.start < to));
     const page = { ...this.source, segments: omitWords ? selected.map(s => ({ ...s, words: [] })) : selected };
     return savedVoiceLabels(this.validated ? page : Transcript.parse(page), roles);
   }

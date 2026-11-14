@@ -13,7 +13,7 @@
  *    (parallel threads), and refuse when the edits overlap,
  *  - apply only some spots of a batch ("keep 5 of these 6 cuts").
  */
-import { CaptionWord } from "./schema.js";
+import { CaptionWord, misplacedClips } from "./schema.js";
 import type { Clip, Marker, MediaClip, Timeline, TimeRange, Track } from "./schema.js";
 import { OpError, applyOp, replayOnCopy, shiftClip, type TimelineOp } from "./ops.js";
 import { ZodError } from "zod/v3";
@@ -547,6 +547,9 @@ export function replayOps(base: Timeline, ops: TimelineOp[], onto: Timeline, inc
     }
     orig = nextOrig;
   });
+  // Checked as a batch, as applyOps checks one: a clip may meet a track of the other kind on the way, but not stay there.
+  const misplaced = misplacedClips(cur.tracks)[0];
+  if (misplaced) throw new RebaseConflict(`the edits no longer apply: ${misplaced.message}`);
   return cur;
 }
 
@@ -567,6 +570,8 @@ function replaySelection(base: Timeline, to: Timeline, ops: TimelineOp[], owners
     if (error instanceof RebaseConflict || error instanceof OpError || error instanceof ZodError) return null;
     throw error;
   }
+  // A selection replayed on a copy skips replayOps' check.
+  if (misplacedClips(timeline.tracks).length) return null;
   const applied = changedSpots(base, timeline, { fps }).map((s) => s.before);
   const skipped = changedSpots(timeline, to, { fps }).map((s) => s.after);
   return sameRanges(applied, spots.filter((_, i) => keep.has(i)).map((s) => s.before)) &&

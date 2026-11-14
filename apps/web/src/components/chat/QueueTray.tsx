@@ -14,7 +14,8 @@ export interface QueuedRequest {
 
 /**
  * The requests waiting their turn, as a tray attached to the top of the message box they were sent from. Scarlet runs
- * one request at a time, so the tray reads in running order, which isn't always the order asked: the one marked Next
+ * one request at a time, except those that are each about their own cut or edit, which start at once and never wait
+ * here for one another. The tray reads in running order, which isn't always the order asked: the one marked Next
  * runs first.
  * Closed, it is one line: the next request and how many are queued. It opens upward into every queued request, each
  * with a way to change its words and a way to take it out of the queue. `waits` is what the next request waits for

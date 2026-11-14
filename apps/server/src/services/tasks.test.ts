@@ -384,22 +384,50 @@ it("says what quitting would stop, in every project: the edits under way and wai
   await api("DELETE", `/projects/${trashed.id}`);
   expect(await underWay()).toEqual({ edits: 1, queued: 2, exports: 1 });
   // A request asking the editor something waits for them, and so does the request behind it. An export that has
-  // finished is done.
+  // rendered is still one until its file is saved, which is when its owner lets go of it.
   await api("POST", `/tasks/${running.id}/question`, { startedAt: running.startedAt, text: "Keep the cold open?" });
   app.ctx.repos.renders.put({ ...render, id: "export", state: "done", export: { name: "Cut.mp4", ticket: 1, owner: crypto.randomUUID() } });
+  expect(await underWay()).toEqual({ edits: 0, queued: 1, exports: 1 });
+  app.ctx.repos.renders.put({ ...render, id: "export", state: "done", export: undefined });
   expect(await underWay()).toEqual({ edits: 0, queued: 1, exports: 0 });
 });
 
 it("counts a skill Scarlet writes or revises as under way, and not the learning check beside a request", async () => {
   const underWay = async () => (await api<{ edits: number; queued: number; exports: number }>("GET", "/under-way")).body;
   const scarlet = { type: "scarlet", name: "Scarlet" } as const;
-  // A learning check cut short isn't run again, and the request it reads is counted already.
+  // A learning check reads one message and starts again by itself. The request it reads is counted already.
   createTask(app.ctx, { projectId: project.id, kind: "learning_check", agent: "claude", instruction: "Tighten the intro", state: "running", createdBy: scarlet });
   expect(await underWay()).toEqual({ edits: 0, queued: 0, exports: 0 });
   // Quitting stops a skill's revision and a skill written from a change, and both carry on at the next launch.
   createTask(app.ctx, { projectId: project.id, kind: "skill_edit", agent: "claude", instruction: "Shorter pauses", state: "running", createdBy: scarlet });
   createTask(app.ctx, { projectId: project.id, kind: "skill_from_change", agent: "claude", instruction: "Write a SKILL.md", state: "running", createdBy: scarlet });
   expect(await underWay()).toEqual({ edits: 2, queued: 0, exports: 0 });
+});
+
+it("reads a message for a rule again when a quit cut the read short, and keeps a resumed request ahead of the calls it was started before", async () => {
+  const { body: { host } } = await api<{ host: { id: string } }>("POST", "/hosts/register", { name: "test", platform: "test", agents: [{ id: "claude", installed: true }] });
+  const asked = (await api<{ task: Task }>("POST", `/projects/${project.id}/tasks`, { kind: "edit", agent: "claude", instruction: "Always cut the ums" })).body.task;
+  const checks = () => app.ctx.repos.tasks.select("kind = 'learning_check' AND json_extract(json, '$.context.checksTaskId') = ?", [asked.id], "created_at, rowid");
+  const cutShort = async (id: string, engineLost = false) => {
+    const { body: { task } } = await api<{ task: Task }>("POST", `/hosts/${host.id}/claim`, { taskId: id });
+    await api("POST", `/tasks/${id}/complete`, { state: "cancelled", interrupted: true, ifStartedAt: task.startedAt, ...(engineLost && { engineLost }) });
+    return app.ctx.repos.tasks.get(id)!;
+  };
+  const [first] = checks();
+  // The quit stopped the read before it offered anything: it starts again as it first did, under a new id.
+  const ended = await cutShort(first!.id);
+  expect(ended).toMatchObject({ state: "failed", interrupted: true });
+  const [, second] = checks();
+  expect(second).toMatchObject({ id: ended.retryTaskId, state: "queued", instruction: "Always cut the ums", context: { checksTaskId: asked.id } });
+  expect(second!.resumeRootId).toBeUndefined();
+  // One that lost its worker while Scarlet stayed open isn't read again: the next message is.
+  expect((await cutShort(second!.id, true)).retryTaskId).toBeUndefined();
+  expect(checks()).toHaveLength(2);
+
+  // The editor started this request without waiting for their calls. Cut short at work, it isn't held behind them again.
+  app.ctx.repos.tasks.put({ ...app.ctx.repos.tasks.get(asked.id)!, startsBeforeCalls: true });
+  const resumed = app.ctx.repos.tasks.get((await cutShort(asked.id)).retryTaskId!)!;
+  expect(resumed).toMatchObject({ state: "queued", resumeRootId: asked.id, startsBeforeCalls: true });
 });
 
 it("resumes a run its engine's crash cut short, until crashes keep cutting it short, and a run Scarlet quit on every time", async () => {
@@ -452,4 +480,44 @@ it("finds a run's attempts among its own project's tasks, not by reading every p
   const scans = lookups.filter(sql => (app.ctx.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[])
     .some(({ detail }) => /^SCAN tasks\b/.test(detail)));
   expect(scans).toEqual([]);
+});
+
+it("starts requests about different cuts or edits together, and every other request in turn", async () => {
+  const send = async (instruction: string, context?: Record<string, unknown>) =>
+    (await api<{ task: Task }>("POST", `/projects/${project.id}/tasks`, { kind: "edit", agent: "claude", instruction, ...(context && { context }) })).body.task;
+  const { body: { host } } = await api<{ host: { id: string } }>("POST", "/hosts/register", { name: "test", platform: "test", agents: [{ id: "claude", installed: true }] });
+  const claim = async () => {
+    for (;;) {
+      const { task } = (await api<{ task: Task | null }>("POST", `/hosts/${host.id}/claim`, {})).body;
+      if (task?.kind !== "learning_check") return task?.id ?? null;
+    }
+  };
+  const finish = (id: string) => api("POST", `/tasks/${id}/complete`, { state: "done" });
+  const edit = { threadId: "tsk_thread", changeId: "chg_edits" };
+  const first = await send("Hold the zoom longer", { ...edit, editIndex: 0 });
+  const same = await send("And ease out of it", { ...edit, editIndex: 0 });
+  const other = await send("Move the title up", { ...edit, editIndex: 1 });
+  const whole = await send("Add captions");
+  const late = await send("Make the wrap shorter", { ...edit, editIndex: 2 });
+
+  // Two agents start at once on two edits. The second request about the first edit waits for the first.
+  expect(await claim()).toBe(first.id);
+  expect(await claim()).toBe(other.id);
+  expect(await claim()).toBeNull();
+  // A question about one edit holds only what is about that edit.
+  expect((await api<{ waiting: boolean }>("POST", `/tasks/${other.id}/question`,
+    { text: "Above the lower third?", startedAt: app.ctx.repos.tasks.get(other.id)!.startedAt })).body.waiting).toBe(true);
+  await finish(first.id);
+  expect(await claim()).toBe(same.id);
+  // A request about the whole video runs alone: it waits for both, and the revision asked after it waits for it.
+  expect(await claim()).toBeNull();
+  await finish(same.id);
+  expect(await claim()).toBeNull();
+  await api("POST", `/tasks/${other.id}/answer`, { text: "Yes" });
+  expect(await claim()).toBe(other.id);
+  await finish(other.id);
+  expect(await claim()).toBe(whole.id);
+  expect(await claim()).toBeNull();
+  await finish(whole.id);
+  expect(await claim()).toBe(late.id);
 });

@@ -159,6 +159,9 @@ input[type="range"] {
     @apply flex flex-col gap-0.5 rounded-md border border-line bg-raised px-[9px] py-[5px] text-[12px] leading-[1.4] text-muted;
     box-shadow: 0 3px 12px rgb(0 0 0 / 30%);
   }
+  .update-hint:has(.update-hint-news) { max-width: 320px; }
+  .update-hint-news { @apply mt-1 flex flex-col gap-0.5 border-t border-line pt-1.5; }
+  .update-hint-news ul { @apply flex list-disc flex-col gap-0.5 pl-4; }
   .update-control:not(:hover, :has(:focus-visible)) > .update-hint { display: none; }
   @media (prefers-reduced-motion: no-preference) {
     .update-control:hover > .update-hint { animation: update-hint-in 90ms ease-out 220ms backwards; }

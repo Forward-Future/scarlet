@@ -5,7 +5,7 @@ import { api, errorMessage } from "../../lib/client";
 import { useHotkeys } from "../../lib/hotkeys";
 import { player } from "../../lib/player";
 import { leaveProject } from "../../lib/realtime";
-import { rememberProject } from "../../lib/updatePlace";
+import { rememberPlace, rememberProject } from "../../lib/updatePlace";
 import { resumeImports } from "../media/UploadDropzone";
 import { usePlayerStore } from "../../stores/player";
 import { useProjectStore } from "../../stores/project";
@@ -18,6 +18,9 @@ import { ModelSettings } from "./ModelSettings";
 import { ProjectSettingsDrawer } from "./ProjectSettingsDrawer";
 
 const SkillCreator = lazy(async () => ({ default: (await import("../../pages/SkillEditorPage")).SkillEditorPage }));
+
+/** How often the editor's place in the project is written down. A quit loses at most this much of where they got to. */
+const PLACE_EVERY_MS = 2000;
 
 function TrashedProjectView({ project }: { project: TrashedProject }) {
   const [restoring, setRestoring] = useState(false);
@@ -101,6 +104,20 @@ export function ProjectLayout() {
     rememberProject(id);
     void resumeImports(id, useProjectStore.getState().current?.media ?? []);
   }, [opened, id, projectLoad]);
+
+  // Where the editor is in it is kept as they go, and as the window goes away: Scarlet can close without a word.
+  useEffect(() => {
+    if (!opened || !id) return;
+    const every = window.setInterval(rememberPlace, PLACE_EVERY_MS);
+    const leaving = () => { if (document.visibilityState === "hidden") rememberPlace(); };
+    window.addEventListener("pagehide", rememberPlace);
+    document.addEventListener("visibilitychange", leaving);
+    return () => {
+      window.clearInterval(every);
+      window.removeEventListener("pagehide", rememberPlace);
+      document.removeEventListener("visibilitychange", leaving);
+    };
+  }, [opened, id]);
 
   // A playhead, pinned transcript span and draft belong to one project.
   useLayoutEffect(() => () => {

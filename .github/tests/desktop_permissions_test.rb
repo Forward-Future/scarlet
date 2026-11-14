@@ -17,7 +17,10 @@ class DesktopPermissionsTest < Minitest::Test
     # Psych versions using YAML 1.1 read the key 'on' as true.
     trigger = @entry["on"] || @entry.fetch(true)
     assert_equal({"branches" => ["main"]}, trigger.fetch("push"))
-    refute @entry.key?("concurrency"), "A branch-wide lock can cancel a pending release"
+    # A branch-wide lock can cancel a pending release. Only a pull request's runs share a group, and a newer push to it
+    # cancels the older ones; a push to main and a manual run each have a group of their own.
+    assert_equal({ "group" => "desktop-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}", "cancel-in-progress" => true },
+      @entry.fetch("concurrency"), "A branch-wide lock can cancel a pending release")
     assert_equal %w[aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc],
       @build.dig("strategy", "matrix", "include").map { |target| target.fetch("triple") }.sort
     assert_equal false, @build.dig("strategy", "fail-fast")

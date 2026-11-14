@@ -12,6 +12,8 @@ use tokio_util::sync::CancellationToken;
 use super::types::{McpSpec, RunResult, RunnerEvent};
 
 pub type EventSink = Arc<dyn Fn(RunnerEvent) + Send + Sync>;
+/// Takes the run's token count so far each time it changes, for a live count while the agent works.
+pub type UsageSink = Arc<dyn Fn(super::usage::AgentUsage) + Send + Sync>;
 
 pub struct RunOptions {
     pub agent: String,
@@ -28,6 +30,7 @@ pub struct RunOptions {
     pub cwd: PathBuf,
     pub mcp: McpSpec,
     pub on_event: EventSink,
+    pub on_usage: Option<UsageSink>,
     pub cancel: CancellationToken,
     /// Optional cap on the whole run. None lets a working agent take as long as it needs.
     pub timeout: Option<Duration>,
@@ -38,6 +41,16 @@ pub struct RunOptions {
     pub env: HashMap<String, String>,
     /// The task this run is for, to name it in the CLI's log lines.
     pub task: Option<String>,
+}
+
+/// Sends the run's count to `sink` when it differs from the one sent last.
+pub fn report_usage(sink: &Option<UsageSink>, last: &mut Option<super::usage::AgentUsage>, now: Option<super::usage::AgentUsage>) {
+    if let (Some(sink), Some(now)) = (sink, now) {
+        if last.as_ref() != Some(&now) {
+            *last = Some(now.clone());
+            sink(now);
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -114,6 +127,7 @@ pub(crate) mod testing {
             cwd: cwd.to_path_buf(),
             mcp,
             on_event: Arc::new(move |ev| seen.lock().unwrap().push(ev)),
+            on_usage: None,
             cancel: CancellationToken::new(),
             timeout: None,
             stall: None,
@@ -129,6 +143,19 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reports_usage_only_when_the_count_changes() {
+        use super::super::usage::AgentUsage;
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink: Option<UsageSink> = Some({ let seen = seen.clone(); Arc::new(move |u: AgentUsage| seen.lock().unwrap().push(u.output_tokens)) });
+        let mut last = None;
+        let at = |n| Some(AgentUsage { output_tokens: n, ..Default::default() });
+        for now in [None, at(5), at(5), at(9), None, at(9)] {
+            report_usage(&sink, &mut last, now);
+        }
+        assert_eq!(*seen.lock().unwrap(), vec![5, 9]);
+    }
 
     #[tokio::test]
     async fn refuses_a_model_or_option_that_could_pass_for_a_cli_flag() {
