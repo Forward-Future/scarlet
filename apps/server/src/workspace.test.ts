@@ -3354,7 +3354,11 @@ it.each(["a1", "alternate"])("requires an audio check of the version that plays,
   const finish = async () => (await (await api("POST", `/tasks/${pass.id}/complete`, { state: "done" })).json()).task as Task;
   const check = (version: string, keep?: { id: string; reason: string }[]) => api("POST", projectsPath() + `/tasks/${pass.id}/repeat-audit`, { version, keep });
   await claim();
-  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "Mic", path: "mic.wav", kind: "audio", hasAudio: true, duration: 20 }, "ready");
+  // The words said: a join reads its sound against them.
+  const said = [["go", .6, .64], ["go", 2.2, 2.24], ["now", 3, 3.06], ["very", 3.08, 3.16], ["very", 3.18, 3.26], ["fast", 3.28, 3.36]] as const;
+  ctx.repos.transcripts.put({ id: "tr_mic", mediaId: "mic", projectId: project.id, language: "en",
+    segments: [{ id: "s0", start: .6, end: 3.36, text: said.map(w => w[0]).join(" "), words: said.map(([text, start, end]) => ({ text, start, end })) }] });
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "Mic", path: "mic.wav", kind: "audio", hasAudio: true, duration: 20, transcriptId: "tr_mic" }, "ready");
   await micSpeech({ 30: "go|", 110: "go|", 150: "now|very|very|fast|" });
   const version = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, description: "Assemble two takes", ops: [
     { op: "addTrack", track: { id: "alternate", name: "Other microphone", kind: "audio" } },
@@ -3420,6 +3424,114 @@ it("reports an unreadable recording and leaves its checked work resumable", asyn
   expect(await check.json()).toMatchObject({ version, unavailable: [{ mediaId: "mic" }] });
   const done = await api("POST", `/tasks/${pass.id}/complete`, { state: "done" });
   expect(await done.json()).toMatchObject({ task: { state: "failed", interrupted: true } });
+});
+
+/** A pass whose two clips meet at `edge`: at 2.2 s the sound of “subscription.” up to the join reads “subscrip”. */
+async function joinedPass(speech: Record<number, string> = {}) {
+  const { ctx } = workspace;
+  const { host } = await (await api("POST", "/hosts/register", { name: "Host", platform: "test", agents: [{ id: "codex", installed: true }] })).json();
+  const pass = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: { type: "human", name: "Editor" } });
+  const words = [{ text: "Please", start: 1, end: 1.4 }, { text: "subscription.", start: 2.04, end: 2.3 }, { text: "Thanks", start: 5, end: 5.4 }];
+  ctx.repos.transcripts.put({ id: "tr_mic", mediaId: "mic", projectId: project.id, language: "en",
+    segments: [{ id: "s0", start: 1, end: 5.4, text: "Please subscription. Thanks", words }] });
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "Mic", path: "mic.wav", kind: "audio", hasAudio: true, duration: 20, transcriptId: "tr_mic" }, "ready");
+  await micSpeech({ 50: "please|", 102: "subscription|", 250: "thanks|", ...speech });
+  return {
+    pass,
+    claim: async () => (await (await api("POST", `/hosts/${host.id}/claim`, { taskId: pass.id })).json()).task as Task,
+    finish: async () => (await (await api("POST", `/tasks/${pass.id}/complete`, { state: "done" })).json()).task as Task,
+    check: async (version: string, keep?: { id: string; reason: string }[]) =>
+      (await api("POST", projectsPath() + `/tasks/${pass.id}/repeat-audit`, { version, keep })).json(),
+    join: (edge: number) => {
+      const clips = resolveTimeline(ctx, ctx.repos.projects.get(project.id)!).tracks.flatMap(t => t.clips.map(c => ({ op: "removeClip" as const, clipId: c.id })));
+      return proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, description: "Join", ops: [...clips,
+        { op: "addClip", trackId: "a1", clip: { id: `out${edge}`, kind: "media", mediaId: "mic", sourceIn: 0, sourceOut: edge, timelineIn: 0 } },
+        { op: "addClip", trackId: "a1", clip: { id: `in${edge}`, kind: "media", mediaId: "mic", sourceIn: 4.9, sourceOut: 10, timelineIn: edge } },
+      ] }).change.toVersion;
+    },
+  };
+}
+
+it("keeps a dialogue pass checking until no join clips a word", async () => {
+  const { pass, claim, finish, check, join } = await joinedPass();
+  await claim();
+  const clipped = join(2.2);
+  const heard = await check(clipped);
+  expect(heard).toMatchObject({ heard: 0, remaining: 0,
+    joins: [{ at: 2.2, mediaId: "mic", side: "out", issue: "clipped", heard: "subscrip", expected: "subscription." }] });
+  expect(await check(clipped)).toEqual(heard);
+  expect((await finish()).state).toBe("queued");
+  expect(workspace.ctx.repos.tasks.get(pass.id)?.repeatAudit).toMatchObject({ version: clipped, remaining: 0, joins: 1, returns: 1 });
+  await claim();
+  const whole = join(2.4);
+  expect(await check(whole)).not.toHaveProperty("joins");
+  expect(await finish()).toMatchObject({ state: "done", repeatAudit: { version: whole, remaining: 0, joins: 0, noFindings: true } });
+});
+
+it("stops checking a join that still clips a word after two returns, and says what is left", async () => {
+  const { claim, finish, check, join } = await joinedPass();
+  await claim();
+  const clipped = join(2.2);
+  for (const returns of [1, 2]) {
+    expect((await check(clipped)).joins).toHaveLength(1);
+    expect(await finish()).toMatchObject({ state: "queued", repeatAudit: { joins: 1, returns } });
+    await claim();
+  }
+  await check(clipped);
+  expect(await finish()).toMatchObject({ state: "failed", interrupted: true,
+    error: "The final audio check still has speech clipped at a join to resolve. Resume to finish checking the saved edit." });
+});
+
+it("counts a kept repeat as progress while a join still clips a word", async () => {
+  const { pass, claim, finish, check, join } = await joinedPass({ 300: "very|very|" });
+  await claim();
+  const clipped = join(2.2);
+  const found = await check(clipped);
+  expect(found).toMatchObject({ remaining: 1, repeats: [{ phrase: "very" }], joins: [{ issue: "clipped" }] });
+  expect(await finish()).toMatchObject({ state: "queued", repeatAudit: { remaining: 1, joins: 1, returns: 1 } });
+  await claim();
+  expect(await check(clipped, [{ id: found.repeats[0].id, reason: "Spoken emphasis" }])).toMatchObject({ remaining: 0, joins: [{ issue: "clipped" }] });
+  expect(workspace.ctx.repos.tasks.get(pass.id)?.repeatAudit).toMatchObject({ remaining: 0, joins: 1, returns: 0 });
+  expect((await finish()).state).toBe("queued");
+});
+
+it("lets a pass finish once the join that clips a word is staged for the editor's review", async () => {
+  const { pass, claim, finish, check, join } = await joinedPass();
+  vi.spyOn(workspace.ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
+  await claim();
+  const clipped = join(2.2);
+  expect((await check(clipped)).joins).toHaveLength(1);
+  expect((await finish()).state).toBe("queued");
+  await claim();
+  const staged = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: pass.id, fromVersion: clipped, description: "Check the join",
+    cuts: [{ start: 2, end: 2.6, review: true, reason: "The join may cut a word." }] });
+  expect(staged.status).toBe(201);
+  expect(workspace.ctx.repos.projects.header(project.id)!.head).toBe(clipped);
+  expect(await check(clipped)).toMatchObject({ remaining: 0, joins: [] });
+  expect(workspace.ctx.repos.tasks.get(pass.id)?.repeatAudit).toMatchObject({ joins: 0, returns: 0 });
+  expect((await finish()).state).toBe("done");
+});
+
+it("finishes a pass from its saved receipt, including one saved before joins were counted", async () => {
+  const { ctx } = workspace;
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "Mic", path: "mic.wav", kind: "audio", hasAudio: true, duration: 20 }, "ready");
+  ctx.repos.projects.putMedia(project.id, { id: "screen", name: "Screen", path: "screen.mp4", kind: "video", hasAudio: false, duration: 20 }, "ready");
+  const add = (mediaId: string, trackId: string) => [{ op: "addClip" as const, trackId, clip: { id: mediaId, kind: "media" as const, mediaId, sourceIn: 0, sourceOut: 4, timelineIn: 0 } }];
+  const audible = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", autoApprove: true, description: "Assemble", ops: add("mic", "a1") }).change.toVersion;
+  const finish = async (repeatAudit: object) => {
+    const pass = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: { type: "human", name: "Editor" } });
+    const version = ctx.repos.projects.header(project.id)!.head!;
+    ctx.repos.tasks.put({ ...pass, state: "running", startedAt: new Date().toISOString(), repeatAudit: { version, returns: 0, ...repeatAudit } });
+    return (await (await api("POST", `/tasks/${pass.id}/complete`, { state: "done" })).json()).task as Task;
+  };
+  expect((await finish({ remaining: 0, unavailable: [], noFindings: false })).state).toBe("done");
+  expect((await finish({ remaining: 1 })).state).toBe("queued");
+  expect((await finish({ remaining: 1, returns: 2 })).error).toBe("The final audio check still has repeated dialogue to resolve. Resume to finish checking the saved edit.");
+  expect((await finish({ remaining: 1, joins: 2, returns: 2 })).error)
+    .toBe("The final audio check still has repeated dialogue and speech clipped at 2 joins to resolve. Resume to finish checking the saved edit.");
+  // Nothing the editor hears plays, so there's no join to hear.
+  proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", autoApprove: true, fromVersion: audible, description: "Picture only", ops: [{ op: "removeClip", clipId: "mic" }, ...add("screen", "v1")] });
+  expect((await finish({ remaining: 0, joins: 1 })).state).toBe("done");
 });
 
 it("hands a request held by a dialogue pass to a waiting host as soon as the editor decides the pass", async () => {

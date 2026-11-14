@@ -90,12 +90,13 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
         ...(first || second ? { protected: first ? "first" : "second" } : {}) }];
     });
     const unavailable = check.unavailable.map(u => `Couldn’t check ${u.mediaId}: ${u.reason}`);
-    const last = owner.repeatAudit;
-    const returns = last?.version === tl.version && (last.remaining === undefined || repeats.length >= last.remaining) ? last.returns : 0;
     // A join inside a range staged for review isn't played yet; the review reads it.
     const joins = check.joins.filter(j => !stagedRanges.some(r => r.start - frame <= j.at && j.at <= r.end + frame));
+    const last = owner.repeatAudit;
+    const returns = last?.version === tl.version && (last.remaining === undefined ||
+      (repeats.length >= last.remaining && joins.length >= (last.joins ?? 0))) ? last.returns : 0;
     const noFindings = !check.repeats.length && !joins.length && !unavailable.length;
-    saveTask(ctx, { ...owner, state: "running", repeatAudit: { version: tl.version, remaining: repeats.length, unavailable, returns, noFindings } });
+    saveTask(ctx, { ...owner, state: "running", repeatAudit: { version: tl.version, remaining: repeats.length, joins: joins.length, unavailable, returns, noFindings } });
     return { version: tl.version, heard: check.repeats.length, staged: staged.length, remaining: repeats.length,
       repeats: repeats.slice(request.offset, request.offset + 25), ...(request.offset + 25 < repeats.length && { nextOffset: request.offset + 25 }),
       ...(check.unavailable.length && { unavailable: check.unavailable }),

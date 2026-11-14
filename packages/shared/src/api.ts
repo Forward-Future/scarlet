@@ -690,6 +690,8 @@ export const Task = z.object({
   /** The most recent measured playback and any outstanding request to finish checking it. */
   repeatAudit: z.object({
     version: z.string(), remaining: z.number().int().nonnegative().optional(),
+    /** Joins that still clip a word or play a fragment, outside ranges staged for review. */
+    joins: z.number().int().nonnegative().optional(),
     /** Every audible passage in scope was checked and there were no repeats or joins to review. */
     noFindings: z.boolean().optional(),
     unavailable: z.array(z.string()).optional(), returns: z.number().int().nonnegative().default(0),
