@@ -11,7 +11,7 @@ import { cutScope, selectedRange } from "./cut-scope.js";
 import { quietKeptWords, type QuietKeptWord } from "./quiet-kept-word.js";
 import type { GapSound } from "./gap-sound.js";
 import type { DialogueEvidence } from "./dialogue-decisions.js";
-import { audibleMediaClips, edgeOnFrame, pageAt as scanPageAt, checkKeptWords, type ReadKeptWords, checkDialogueJoin, checkResumeQuote, dialogueCutPreview, dialogueJoinWords, joinEvidence, pageReaches, pauseCutRange, PAUSE_BEAT, wordCutRange, type JoinPage } from "./dialogue-join.js";
+import { audibleMediaClips, edgeOnFrame, pageAt as scanPageAt, checkKeptWords, type ReadKeptWords, checkDialogueJoin, checkResumeQuote, dialogueCutPreview, dialogueJoinWords, joinEvidence, pageReaches, pauseCutRange, PAUSE_BEAT, dialogueAudioStream, soundBesideEdge, wordCutRange, type JoinPage } from "./dialogue-join.js";
 
 /** One range as the agent submits it: timeline seconds, or the removed words of a transcript. */
 export interface DialogueCutInput {
@@ -31,6 +31,8 @@ export interface DialogueCutInput {
   productionQuote?: string;
   picture?: "safe" | "uncertain" | "protect";
   reason: string;
+  /** A doubt the editor must settle by listening or looking, for a cut that applies. */
+  check?: string;
 }
 
 /** The reads planning needs. The MCP server reads live; replay reads a stored case. */
@@ -64,6 +66,8 @@ export interface DialoguePlanSources {
 
 /** A word's estimate before alignment can sit a few hundred milliseconds early. Ask for final times this far past it. */
 export const SETTLED_MARGIN = 2;
+/** An applied cut's edge this close to the sound it removes is flagged for the editor: about two frames at 30 fps. */
+export const SPEECH_BESIDE_EDGE = 0.06;
 
 /**
  * How far into each recording a set of cuts reaches: the source time under the end of its furthest cut. A stretch the
@@ -270,6 +274,8 @@ export interface PlannedDecision extends TimeRange {
   review: boolean;
   kind: DialogueCutKind;
   originalRange: TimeRange | undefined;
+  /** Marks an applied cut as needing the editor until they keep it. */
+  check?: string;
 }
 export type GateLine = Record<string, unknown> & { cut: number };
 
@@ -391,7 +397,7 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
   const report: GateLine[] = [];
   const decisions = removals.map(c => {
     const decided: PlannedDecision = { start: c.start, end: c.end, reason: c.reason, review: c.decision === "review", kind: c.kind,
-      originalRange: undefined };
+      originalRange: undefined, ...(c.check && { check: c.check }) };
     const adjust = (next: PlannedDecision, found: string) => {
       const reach = next.originalRange ?? next;
       if (reach.start < scope.start || reach.end > scope.end || kept.some(k => reach.start < k.end && reach.end > k.start)) {
@@ -549,6 +555,34 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
     const disputedEdges = issuesByJoin.flat();
     if (disputedEdges.length) return { outcome: "needsRevision", disputedEdges };
   }
+  // An applied cut whose edge sits right beside the sound it removes goes to the editor to watch and hear: the picture
+  // can show a word starting that the sound has not reached yet. The cut still applies, as the agent decided it. Its
+  // edges were measured with its other checks; one with no reading there is not flagged.
+  // A pause takes out a wait, and what sounds in it goes with it; this is about the words a cut takes out.
+  const near = SPEECH_BESIDE_EDGE;
+  const edgePages = sources.pages();
+  removals.forEach((c, i) => {
+    const d = decisions[i]!;
+    if (d.review || d.check || c.kind === "pause") return;
+    const close: string[] = [];
+    for (const [at, side] of [[d.start, "out"], [d.end, "in"]] as const) {
+      for (const { clip, track } of clipsAt(tl, at)) {
+        if (clip.kind !== "media" || track.muted || !clip.enabled || !clip.volume || track.kind === "caption") continue;
+        const asset = media.find(m => m.id === clip.mediaId);
+        const stream = dialogueAudioStream(clip) ?? (asset && dialogueAudioStream(asset)) ?? 0;
+        const gap = soundBesideEdge(edgePages, clip.mediaId, stream, timelineToSource(clip, at), side, Math.min(near, d.end - d.start));
+        if (gap === undefined) continue;
+        close.push(side === "out" ? `the removed sound starts ${gap.toFixed(2)} s after the cut` : `the removed sound ends ${gap.toFixed(2)} s before the join`);
+        break;
+      }
+    }
+    if (!close.length) return;
+    decisions[i] = { ...d, check: close.length === 2 ? "Speech sits right beside both edges: watch and listen at the join."
+      : close[0]!.startsWith("the removed sound starts") ? "A removed word starts right after the cut: watch and listen at the join."
+      : "A removed word ends right before the join: watch and listen there." };
+    report.push({ cut: c.input, kind: c.kind, ...(c.words && { words: c.words }), asked: c.decision, outcome: "cut",
+      range: [r2(d.start), r2(d.end)], evidence: `In the recording ${close.join(" and ")}. The cut applies; the editor is asked to check it (${decisions[i]!.check}).` });
+  });
   removals.forEach((c, i) => {
     const d = decisions[i]!;
     if (c.notes?.length) report.push({ cut: c.input, kind: c.kind, ...(c.words && { words: c.words }), asked: c.decision, outcome: d.review ? "review" : "cut",

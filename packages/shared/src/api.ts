@@ -295,7 +295,9 @@ export const DialogueCutsRequest = ProposeChangeRequest.pick({ description: true
   cuts: z.array(z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().positive(),
     originalRange: TimeRange.optional(), review: z.boolean(), reason: z.string().min(1),
     /** Editorial classification, also used to enforce the scope of a local pause edit. */
-    kind: DialogueCutKind.optional() })
+    kind: DialogueCutKind.optional(),
+    /** A doubt the editor must settle by listening or looking. Marks an applied cut as needing them until they keep it. */
+    check: z.string().trim().min(1).max(120).optional() })
     .refine(c => !c.originalRange || (c.review && c.originalRange.start <= c.start && c.end <= c.originalRange.end),
       "A repaired range must be staged inside its originally proposed removal.")).min(1),
 });

@@ -124,6 +124,30 @@ export function pageAt(pages: JoinPage[], mediaId: string, stream: number | unde
   return best?.edges;
 }
 
+/** Sound this loud is speech or a sound the ear follows: the bar under which quiet runs are measured. */
+const SPEECH_DBFS = -40;
+
+/**
+ * How close sound at speaking level comes to a cut's edge on the side it removes: after source instant `t` for the
+ * cut's start (`out`), before it for its end (`in`), looking no further than `limit` seconds. Undefined when nothing
+ * sounds that close or no page measured the recording there. An edge a few hundredths of a second from a removed
+ * word can be clean in the sound and still show it in the picture: on one pass a cut ended 38 ms before "and", the
+ * join measured silent, and the editor saw the next word starting (2026-11-13).
+ */
+export function soundBesideEdge(pages: JoinPage[], mediaId: string, stream: number | undefined, t: number, side: "out" | "in", limit: number): number | undefined {
+  const page = pageAt(pages, mediaId, stream, t), levels = page?.levels;
+  if (!levels || !pageReaches(page, t)) return;
+  const { from, step, db } = levels;
+  const here = Math.floor((t - from) / step);
+  if (side === "out") {
+    for (let i = Math.max(0, here); i < db.length && from + i * step < t + limit; i++)
+      if (db[i]! > SPEECH_DBFS) return Math.max(0, from + i * step - t);
+  } else {
+    for (let i = Math.min(db.length - 1, here); i >= 0 && from + (i + 1) * step > t - limit; i--)
+      if (db[i]! > SPEECH_DBFS) return Math.max(0, t - from - (i + 1) * step);
+  }
+}
+
 function checkEdge(at: number, direction: 1 | -1, clips: MediaClip[], pages: JoinPage[], fps: number, streams: Map<string, number>, namedEdge?: number): Edge {
   const sources: SourceEdge[] = [];
   const nearby = clips.filter(c => c.timelineIn <= at + reach && c.timelineIn + clipDuration(c) >= at - reach);

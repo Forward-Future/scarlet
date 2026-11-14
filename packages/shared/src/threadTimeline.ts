@@ -77,7 +77,7 @@ function dialogueEdits(change: Change, smoothed = false) {
   let lastEnd = 0;
   let place = 0;
   let call = -1;
-  const result: { label: string; range: TimeRange; removed: TimeRange; replaces?: EditRef }[] = [];
+  const result: { label: string; range: TimeRange; removed: TimeRange; replaces?: EditRef; check?: string }[] = [];
   for (let i = change.ops.length - 1; i >= 0; i--) {
     const op = change.ops[i]!;
     if (smoothed && keepsTiming(op)) continue;
@@ -87,8 +87,9 @@ function dialogueEdits(change: Change, smoothed = false) {
     const reason = reasons?.[place++];
     // The review numbers its calls as planCutReview lists them: a cut that starts where the last ended is the same call.
     if (call < 0 || op.start > lastEnd) call++;
-    if (!skipped?.has(call)) result.push({ label: reason?.start === op.start && reason.end === op.end ? reason.reason : change.description,
-      range: { start: at, end: at }, removed: { start: op.start, end: op.end }, replaces: undefined });
+    const own = reason?.start === op.start && reason.end === op.end ? reason : undefined;
+    if (!skipped?.has(call)) result.push({ label: own ? own.reason : change.description,
+      range: { start: at, end: at }, removed: { start: op.start, end: op.end }, replaces: undefined, ...(own?.check && { check: own.check }) });
     removed += op.end - op.start;
     lastEnd = op.end;
   }
@@ -148,7 +149,7 @@ function namedEdits(change: Change, readCuts: () => ReturnType<typeof dialogueEd
   if (change.timelineEdits?.length && !change.restoredCuts?.length) return change.timelineEdits;
   // Preserve the stored spot identities of older, unnamed proposals. Every cut has its reason, also the ones `cuts` leaves out as skipped.
   const cuts = readCuts();
-  if (cuts && change.ops?.length === change.cutReasons?.length) return cuts.map(({ label, range }) => ({ label, range }));
+  if (cuts && change.ops?.length === change.cutReasons?.length) return cuts.map(({ label, range, check }) => ({ label, range, ...(check && { check }) }));
 }
 
 export function namedTimelineEdits(change: Change): Change["timelineEdits"] {

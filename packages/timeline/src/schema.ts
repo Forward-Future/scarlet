@@ -478,7 +478,9 @@ export const Change = z.object({
     crossfade: Seconds.optional(),
     /** An unassessed cut staged under the retired Suggest setting still needs the editor if recommended. */
     legacySuggest: z.literal(true).optional(),
-    kind: z.enum(["pause", "filler", "retake", "coaching"]).optional() })).optional(),
+    kind: z.enum(["pause", "filler", "retake", "coaching"]).optional(),
+    /** Why the editor should look or listen before keeping this applied cut. */
+    check: z.string().trim().min(1).max(120).optional() })).optional(),
   /** Second-pass recommendations on the immutable chronological cut-review plan. */
   cutAssessments: z.array(CutAssessment).optional(),
   /** A call rechecked against newer footage. Its index still identifies the same call in the original pass. */
