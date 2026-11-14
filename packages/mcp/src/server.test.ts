@@ -6,8 +6,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { agentCapabilities, ProposeChangeRequest, ScarletApiError, ScarletClient, Task, type EditingTools } from "@scarlet/shared";
-import type { Transcript } from "@scarlet/timeline";
-import { emptyTimeline, makeMediaClip } from "@scarlet/timeline";
+import type { CaptionClip, Track, Transcript } from "@scarlet/timeline";
+import { emptyTimeline, makeMediaClip, makeTrack } from "@scarlet/timeline";
 import { createScarletMcpServer, describeError, SCARLET_TOOL_NAMES, toolRefusal } from "./server.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { makeState, startMockServer, type MockServer } from "./mock-server.js";
@@ -510,6 +510,39 @@ describe("timeline_propose", () => {
       arguments: { intent: "requested", ops: [{ op: "removeClip", clipId: "does_not_exist" }], description: "x", syncSetup: true },
     })) as CallToolResult;
     expect(textOf(r)).toContain("clip does_not_exist not found");
+  });
+
+  it("checks a batch of ops as a whole, so a step on the way may put a clip on a track of the other kind", async () => {
+    const original = { timeline: mock.state.timeline, head: mock.state.project.head };
+    const words = (id: string, at: number): CaptionClip => ({ id, kind: "caption", enabled: true, timelineIn: at, timelineOut: at + 1, text: id });
+    const c = await connect();
+    const propose = async (version: string, tracks: Track[], ops: unknown[]) => {
+      mock.state.timeline = { ...emptyTimeline(mock.state.project.id), version, tracks };
+      mock.requests.length = 0;
+      const r = await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", fromVersion: version, description: "Tracks", ops } }) as CallToolResult;
+      return { r, posted: mock.requests.some(q => q.method === "POST" && q.path === "/projects/prj_test/changes") };
+    };
+    try {
+      const captions = () => [{ ...makeTrack("caption", "Words", "cap"), clips: [words("line", 0)] }, makeTrack("caption", "More words", "cap2")];
+      // The caption track turns into a video track, and its caption moves to the other caption track in the same call.
+      const moved = await propose("moved", captions(), [{ op: "updateTrack", trackId: "cap", patch: { kind: "video" } }, { op: "moveClip", clipId: "line", timelineIn: 0, trackId: "cap2" }]);
+      expect(moved.r.isError, textOf(moved.r)).toBeFalsy();
+      expect(moved.posted).toBe(true);
+      // A version saved before this was refused holds two captions on video and audio tracks: one call takes both out.
+      const misplaced = [{ ...makeTrack("video", "Picture", "pic"), clips: [words("one", 0)] }, { ...makeTrack("audio", "Sound", "snd"), clips: [words("two", 2)] }];
+      const repaired = await propose("repaired", misplaced, [{ op: "removeClip", clipId: "one" }, { op: "removeClip", clipId: "two" }]);
+      expect(repaired.r.isError, textOf(repaired.r)).toBeFalsy();
+      expect(repaired.posted).toBe(true);
+      // A batch that ends with a caption on a video track is still refused, naming the clip and the track.
+      const left = await propose("left", captions(), [{ op: "updateTrack", trackId: "cap2", patch: { muted: true } }, { op: "updateTrack", trackId: "cap", patch: { kind: "video" } }]);
+      expect(left.r.isError).toBe(true);
+      expect(textOf(left.r)).toContain("clip line of kind caption cannot go on video track cap");
+      expect(left.posted).toBe(false);
+    } finally {
+      mock.state.timeline = original.timeline;
+      mock.state.project.head = original.head;
+      await c.close();
+    }
   });
 
   it("requires exactly one of ops/timeline", async () => {
