@@ -148,7 +148,7 @@ function buildInstaller(rev) {
   status('Building the Windows app and installer. This can take several minutes…');
   // This installer stays on the same disk. Avoid spending minutes compressing the sidecars.
   const localBundle = JSON.stringify({bundle:{windows:{nsis:{compression:'none'}}}});
-  run(tools.pnpm,['--filter','@scarlet/desktop','exec','tauri','build','--target',triple,'--bundles','nsis','--config',localBundle],src);
+  run(tools.pnpm,['--filter','@scarlet/desktop','exec','tauri','build','--target',triple,'--bundles','nsis','--config','src-tauri/tauri.local-media.conf.json','--config',localBundle],src);
   const release=path.join(target,triple,'release');
   status('Verifying the rebuilt engine…');
   run(process.execPath,['apps/desktop/scripts/smoke-engine.mjs',release],src);

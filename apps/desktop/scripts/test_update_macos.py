@@ -637,19 +637,19 @@ class UpdateTest(unittest.TestCase):
         commit = "b" * 40
         address = updater.CACHE / "ready.sock"
         intent = updater.CACHE / "restart"
-        # A git that takes its time to say main is at the verified build, as GitHub does on a poor connection.
-        # It writes a line when it is asked and another when it answers.
+        # Hold both Git requests open until the window has got its answer from the worker.
         tools = updater.CACHE / "tools"
         tools.mkdir()
-        asked = updater.CACHE / "asked"
-        (tools / "git").write_text(f"#!/bin/sh\necho asked >> '{asked}'\nsleep 0.4\necho answered >> '{asked}'\n"
-                                   f"printf '{commit}\\trefs/heads/main\\n'\n")
+        first = updater.CACHE / "first-request"
+        release = updater.CACHE / "release-first"
+        second = updater.CACHE / "second-request"
+        (tools / "git").write_text(
+            f"#!/bin/sh\nif [ -f '{first}' ]; then\n  touch '{second}'\n  exec sleep 30\nfi\n"
+            f"touch '{first}'\nwhile [ ! -f '{release}' ]; do sleep 0.02; done\n"
+            f"printf '{commit}\\trefs/heads/main\\n'\n")
         (tools / "git").chmod(0o755)
         during, between, clicks, opened, said = [], [], [], [], []
         run = subprocess.run
-
-        def lines():
-            return len(asked.read_text().splitlines()) if asked.exists() else 0
 
         def ask(message):
             try:
@@ -664,21 +664,16 @@ class UpdateTest(unittest.TestCase):
         def window():
             """Keeps asking whether an update is ready, into the worker's second check of GitHub, then clicks Restart."""
             deadline = time.monotonic() + 20
-            while ask("ready") != commit and time.monotonic() < deadline:
+            while (not first.exists() or not address.exists()) and time.monotonic() < deadline:
                 time.sleep(0.01)
-            second = 0
-            while second < 3 and time.monotonic() < deadline:
-                written = lines()
-                answer = ask("ready")
-                # An odd count that hasn't moved: git was waiting on GitHub from before the question until after its answer.
-                checking = written % 2 == 1 and lines() == written
-                (during if checking else between).append(answer)
-                if checking and written >= 3:
-                    second += 1
-                time.sleep(0.03)
-            while clicks[-1:] != ["accepted"] and time.monotonic() < deadline:
+            during.append(ask("ready"))
+            release.touch()
+            while not second.exists() and time.monotonic() < deadline:
+                between.append(ask("ready"))
+                time.sleep(0.01)
+            if second.exists():
+                during.extend(ask("ready") for _ in range(3))
                 clicks.append(ask("restart " + commit))
-                time.sleep(0.03)
 
         def capture_open(args, **kwargs):
             if args[0] == "/usr/bin/open":
@@ -700,14 +695,12 @@ class UpdateTest(unittest.TestCase):
                     self.watch()
             finally:
                 scarlet.join(25)
-        self.assertGreaterEqual(len(during), 3)
-        self.assertEqual([answer for answer in during if answer != commit], [])
+        self.assertEqual(during, [commit] * 4)
         self.assertEqual([answer for answer in between if answer != commit], [])
         self.assertEqual(clicks, ["accepted"])
         self.assertEqual(opened, [(str(updater.APP), commit)])
         self.assertFalse(address.exists())
-        # No build was under way to stop.
-        self.assertEqual([line.split()[0] for line in said], ["Installed"])
+        self.assertEqual(said, [f"Installed {commit} at {updater.APP}."])
 
 
 if __name__ == "__main__":

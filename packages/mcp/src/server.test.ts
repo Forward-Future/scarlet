@@ -2538,6 +2538,100 @@ it("lists a silence the pauses miss with what its picture does, and reports it w
   }
 });
 
+describe("checking a short piece of dialogue kept between cuts", () => {
+  const word = { text: "we", start: 2.98, end: 3.18 };
+  const aside = { kind: "coaching", decision: "cut", start: 1, end: 3, reason: "Remove the direction." };
+  const pause = { kind: "pause", decision: "cut", start: 3.4, end: 4.7, reason: "Tighten the lead-in." };
+
+  it.each([
+    { title: "returns conflicting word times before saving either cut", conflict: true },
+    { title: "checks the word after a cut made in an earlier batch", earlierCut: true, conflict: true, heardLater: true },
+    { title: "accepts a softly spoken word in the retained footage", spoken: true },
+    { title: "accepts a quiet word when the rest of the recording is just as soft", quietMic: true },
+    { title: "keeps a faint word confirmed by the cached speech reading", heardHere: true },
+    { title: "leaves a short wordless reaction alone", wordless: true },
+    { title: "respects an explicit keep on a quiet word", keep: true },
+    { title: "respects a protected moment in the picture", protect: true },
+    { title: "leaves the plan alone when levels are unavailable", noLevels: true },
+    { title: "lets a second audible track carry the start of the kept word", secondMic: "audible" },
+    { title: "ignores a muted second track when checking the dialogue", secondMic: "muted", conflict: true },
+    { title: "uses stream-zero measurements only for stream-zero dialogue", otherStream: true },
+  ])("$title", async ({ earlierCut, conflict, spoken, quietMic, heardLater, heardHere, wordless, keep, protect, noLevels, secondMic, otherStream }) => {
+    const original = { timeline: mock.state.timeline, transcripts: mock.state.transcripts, waveform: mock.state.waveform, extra: mock.state.extra };
+    const editor = await connect();
+    const tl = emptyTimeline(mock.state.project.id);
+    tl.tracks[0]!.clips = earlierCut
+      ? [makeMediaClip("m1", 0, 1, 0), makeMediaClip("m1", 3, 8, 1)]
+      : [makeMediaClip("m1", 0, 8, 0)];
+    if (secondMic) {
+      tl.tracks[1]!.clips = [makeMediaClip("m2", 0, .15, 3)];
+      tl.tracks[1]!.muted = secondMic === "muted";
+    }
+    if (otherStream) Object.assign(tl.tracks[0]!.clips[0]!, { audioStream: 1 });
+    mock.state.timeline = tl;
+    const words = [{ text: "Ready.", start: .2, end: .74 }, { text: "Reset.", start: 1.4, end: 1.8 },
+      ...(wordless ? [] : [word]), { text: "begin.", start: 5, end: 5.28 }];
+    const segment = { id: "s", start: .2, end: 5.28, text: words.map(w => w.text).join(" "), words };
+    mock.state.transcripts = { m1: { id: "t1", mediaId: "m1", segments: [segment] } };
+    const speech = [words[0]!, words[1]!, { start: 4.76, end: 5.28 }];
+    mock.state.waveform = (mediaId, from, to, points) => {
+      const levels = Array.from({ length: points }, (_, i) => {
+        const t = from + (i + .5) * (to - from) / points;
+        if ((spoken || quietMic || heardHere) && t >= word.start && t < word.end) return spoken ? .02 : .002;
+        if (speech.some(s => s.start <= t && t < s.end)) return quietMic ? .002 : .15;
+        return .0004;
+      });
+      return { mediaId, from, to, peaks: levels, ...!noLevels && { rms: levels, speechActivity: speech } };
+    };
+    const later = { text: word.text, start: 4.78, end: 4.94 };
+    mock.state.extra = (req, res) => {
+      const read = req.path.endsWith("/dialogue-detections") && (req.body as { keptSide?: { cachedOnly?: boolean } }).keptSide?.cachedOnly;
+      const heard = heardHere ? [word] : [later];
+      const reply = read && (heardHere || heardLater) ? { segments: [{ ...segment, id: "kept", words: heard }], speechActivity: [], acoustic: [] }
+        : req.path.endsWith("/dialogue-cuts") ? { changes: [] } : undefined;
+      if (!reply) return false;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(reply));
+      return true;
+    };
+    try {
+      const cuts = earlierCut ? [{ ...pause, start: 1.4, end: 2.7 }] : [aside, pause];
+      if (keep || protect) cuts.push({ ...pause, start: 3, end: 3.4, decision: keep ? "keep" : "cut",
+        ...(protect && { picture: "protect" }), reason: "Hold the reaction." });
+      const apply = async (cuts: object[]) => {
+        const result = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Trim the lead-in.", cuts } }) as CallToolResult;
+        expect(result.isError, textOf(result)).toBeFalsy();
+        return JSON.parse(textOf(result));
+      };
+      const response = await apply(cuts);
+      const saves = () => mock.requests.filter(r => r.path.endsWith("/dialogue-cuts"));
+      if (conflict) {
+        expect(response).toMatchObject({ needsRevision: true, disputedEdges: [{
+          start: earlierCut ? 1 : 3, end: earlierCut ? 1.4 : 3.4,
+          quietKeptWord: { word: word.text, mediaId: "m1", source: { start: word.start, end: word.end },
+            retainedSource: { start: 3, end: 3.4 }, peakRmsDbfs: -68,
+            ...(heardLater && { heardNearby: { start: later.start, end: later.end } }) },
+        }] });
+        const evidence = response.disputedEdges[0].quietKeptWord;
+        expect(evidence.nearbySound.start).toBeCloseTo(4.76, 2);
+        expect(evidence.nearbySound.end).toBeGreaterThan(later.start);
+        if (!heardLater) expect(evidence.heardNearby).toBeUndefined();
+        expect(saves()).toHaveLength(0);
+        if (!earlierCut) {
+          expect((await apply([{ ...aside, end: pause.end }])).needsRevision).toBeUndefined();
+          expect(saves()).toHaveLength(1);
+        }
+      } else {
+        expect(response.needsRevision).toBeUndefined();
+        expect(saves()).toHaveLength(1);
+      }
+    } finally {
+      Object.assign(mock.state, original);
+      await editor.close();
+    }
+  });
+});
+
 it("reports the pauses and doubled words a saved part still plays, and trims a pause named by the word it follows", async () => {
   const original = { extra: mock.state.extra, waveform: mock.state.waveform, timeline: mock.state.timeline, transcripts: mock.state.transcripts };
   const editor = await connect();

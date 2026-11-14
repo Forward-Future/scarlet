@@ -31,6 +31,22 @@ The render tests need `ffmpeg` and `ffprobe` on `PATH`. For a change to editing 
 
 For headless integration work, `pnpm --filter @scarlet/server start` runs the API and render workers. `docker compose up -d` starts the containerized engine. To connect an external agent, configure `pnpm mcp` as a stdio MCP server with `SCARLET_SERVER` set to the engine URL, `SCARLET_PROJECT` to the project ID and `SCARLET_TOKEN` to the destination engine’s token. Use HTTPS for remote engines, or an HTTP loopback address through a tunnel. The standalone agent and MCP CLIs also accept `--token-file PATH` for an owner-readable file. The desktop app handles this connection for you. Both hosts include a Gemini CLI runner, which also requires a working sandbox backend.
 
+### Ubuntu 24.04 x86-64
+
+Install the native build dependencies and the codecs used for H.264/AAC playback in the editor.
+
+```sh
+sudo apt update
+sudo apt install build-essential cmake curl file libssl-dev libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev librsvg2-dev libxdo-dev ffmpeg bubblewrap socat \
+  gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  gstreamer1.0-libav gstreamer1.0-pulseaudio
+```
+
+Then follow [Run from source](../README.md#run-from-source). Scarlet uses Ubuntu’s FFmpeg and FFprobe. The package includes its engine and CPU builds of Whisper for baseline x86-64 and processors with AVX2, FMA, F16C, BMI2 and SSE4.2.
+
+Download the `.deb` from the [Ubuntu preview releases](https://github.com/Forward-Future/scarlet-releases/releases?q=Ubuntu). From the download directory, run `sudo apt install ./Scarlet-*-Ubuntu-24.04-amd64.deb`, then open **Scarlet** from the applications menu. For a development build, download and unzip the `scarlet-linux-ubuntu-24.04-amd64` artifact from a successful [Linux desktop run](https://github.com/Forward-Future/scarlet/actions/workflows/linux-desktop.yml).
+
 ## Transcription
 
 Scarlet prefers a local verbatim CrisperWhisper installation. Bundled Whisper large-v3-turbo handles local speech until that installation is ready. You can also choose another local model in **Settings → General**. [Transcription model setup and adapter interface](transcription-models.md)
@@ -47,22 +63,24 @@ An English dialogue pass using bundled Whisper can download about 1.1 GB across 
 
 ## Package a desktop build
 
-Build on the target operating system and architecture. The desktop workflow uses Node.js 24. After `pnpm install --frozen-lockfile`, `pnpm build` and `pnpm desktop:ffmpeg`, build the engine sidecar at the path Tauri expects, then build the installer. On Apple Silicon, run the following from the repository root.
+Build on the target operating system and architecture. The desktop workflow uses Node.js 24. After `pnpm install --frozen-lockfile` and `pnpm build`, build the engine sidecar at the path Tauri expects, then build the installer. On Apple Silicon, run the following from the repository root.
 
 ```sh
 pnpm --filter @scarlet/server build:sea -- --out ../desktop/src-tauri/binaries/scarlet-engine-aarch64-apple-darwin
 pnpm desktop:build
 ```
 
-On an Intel Mac, use the filename `scarlet-engine-x86_64-apple-darwin`. On Windows x64, use `scarlet-engine-x86_64-pc-windows-msvc.exe`. Local installers are written under `apps/desktop/src-tauri/target/release/bundle/` with the default Cargo target directory.
+On an Intel Mac, use the filename `scarlet-engine-x86_64-apple-darwin`. On Windows x64, use `scarlet-engine-x86_64-pc-windows-msvc.exe`. On Ubuntu x86-64, use `scarlet-engine-x86_64-unknown-linux-gnu`. The same `pnpm desktop:build` command produces a Debian package. Local installers are written under `apps/desktop/src-tauri/target/release/bundle/` with the default Cargo target directory.
 
-The app ships the engine, FFmpeg, FFprobe and `whisper-cli`. On Windows, install the Vulkan SDK to include GPU transcription. `VULKAN_SDK` points to the SDK and `node apps/desktop/scripts/build-speaker-gpu.mjs` builds the optional DirectML speaker runtime. Local builds can fall back to the CPU runtimes.
+The installer includes the engine and `whisper-cli`. The Ubuntu package installs FFmpeg and FFprobe as dependencies. On macOS and Windows, install those tools separately before importing media. After installing the regular Mac app in Applications, run `bash /Applications/Scarlet.app/Contents/Resources/Install-Scarlet-FFmpeg-macOS.sh` to install both tools with checksum verification. On Windows, run `winget install --id Gyan.FFmpeg.Essentials --exact`. Restart Scarlet after installation. Source development and the local main updaters can use their own pinned copies. On Windows, install the Vulkan SDK to include GPU transcription. `VULKAN_SDK` points to the SDK and `node apps/desktop/scripts/build-speaker-gpu.mjs` builds the optional DirectML speaker runtime. Local builds can fall back to the CPU runtimes.
 
-Every push to public `main` creates a stable [Scarlet release](https://github.com/Forward-Future/scarlet/releases/latest) for that push’s head commit. The Desktop workflow stamps the same version into the Apple Silicon DMG, Intel DMG, Windows x64 setup executable and Windows x64 MSI. It verifies the packaged versions and architectures, runs the engine smoke tests, and publishes the files together. Pull requests and manual runs build and verify the installers with read-only access. If a release fails, rerun its failed jobs from the original workflow run to finish that version.
+Each push to public `main` builds installers for its head commit. With `SCARLET_STABLE_RELEASES=true` and signing configured, the Desktop workflow publishes the signed Apple Silicon DMG, Intel DMG, Windows x64 setup executable and Windows x64 MSI together after the platform checks pass. The Mac release is notarized. [Stable releases](https://github.com/Forward-Future/scarlet/releases)
+
+To build an Early Access update, select **Actions → Desktop → Run workflow**, choose the release source branch and enter the numeric **Early Access version** (for example `0.1.4`). Use a new version above the last published Early Access installer. Leaving the field empty builds the regular app. The read-only Early Access run retains the existing app identity and produces verified artifacts for Apple Silicon, Intel and Windows x64. The Mac setup helper is in the Apple Silicon artifact. Publish both DMGs, the Windows setup executable and the helper as a prerelease in the downloads repository, disclose the ad hoc Mac signatures and unsigned Windows installer, and link that release from the matching `v<version>-early-access.1` source tag. [Early Access downloads](https://github.com/Forward-Future/scarlet-releases/releases)
 
 The root package version sets the start of each release series. The patch number increases with the commit’s first-parent distance from the baseline. Reruns reuse the version, concurrent pushes get distinct versions, and a push containing several commits can skip numbers. Run `pnpm release:version for-commit` in a full clone to see a commit’s installer version. To start a new series, run `pnpm release:version set X.Y.Z` and commit all version changes together.
 
-macOS builds use ad hoc signing by default. For Developer ID signing, restrict the `release` environment to branch `main` and configure its `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID` secrets there. Only publication receives repository write access. [Desktop workflow](../.github/workflows/desktop.yml)
+During Early Access, keep the repository Actions variable `SCARLET_STABLE_RELEASES` set to `false` or unset. Pushes to `main` run CI and build installers for testing. To start publishing stable versions, configure signing in the `release` environment, restricted to `main`, then set the variable to `true` before the intended release commit. For Apple Developer ID signing and notarization, set the `APPLE_CERTIFICATE` (base64-encoded Developer ID Application P12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (app-specific) and `APPLE_TEAM_ID` secrets there. For Windows, provision an Azure Artifact Signing public-trust certificate profile, grant its app registration the Certificate Profile Signer role, and set `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` as environment secrets. Set `WINDOWS_SIGNING_ENDPOINT`, `WINDOWS_SIGNING_ACCOUNT` and `WINDOWS_SIGNING_PROFILE` as environment variables. Pull requests can run packaging checks without signing credentials. Only publication receives repository write access. [Desktop workflow](../.github/workflows/desktop.yml)
 
 ### Follow `main` on macOS
 
@@ -78,6 +96,7 @@ Rerun the enable command after changing the helper script so the installed copy 
 
 | Platform | Desktop log |
 | --- | --- |
+| Ubuntu | `${XDG_DATA_HOME:-~/.local/share}/com.forwardfuture.scarlet/logs/scarlet-desktop.log` |
 | macOS | `~/Library/Logs/com.forwardfuture.scarlet/scarlet-desktop.log` |
 | Windows | `%LOCALAPPDATA%\com.forwardfuture.scarlet\logs\scarlet-desktop.log` |
 

@@ -11,6 +11,8 @@ mod updates;
 mod storage;
 mod logs;
 mod quit;
+#[cfg(target_os = "linux")]
+mod linux;
 
 use std::sync::{Arc, Mutex};
 
@@ -133,6 +135,10 @@ pub fn run() {
                 log::info!("login shell PATH {}", if found { "loaded" } else { "unavailable; using the built-in search paths" });
             });
             let handle = app.handle().clone();
+            #[cfg(target_os = "linux")]
+            if let Some(window) = handle.get_webview_window("main") {
+                linux::enable_voice_input(&window)?;
+            }
             let paths = resolve_paths(&handle)?;
             if let Ok(root) = handle.path().app_data_dir() {
                 handle.state::<commands::ExportDestinations>().load(root.join("export-destinations.json"));
@@ -140,7 +146,7 @@ pub fn run() {
             let config = Arc::new(Mutex::new(AppConfig::load(&paths.config_file)));
             log::info!("Scarlet desktop {} starting; data {}; config {}", env!("CARGO_PKG_VERSION"), paths.data_dir.display(), paths.config_file.display());
 
-            let mcp = match engine::resolve_engine_launch(&paths.home) {
+            let mcp = match engine::resolve_engine_launch(&paths.home, paths.resource_dir.as_deref()) {
                 Ok(l) => {
                     log::info!("engine command: {} ({})", l.describe(), l.kind);
                     Some(McpLauncher::from_engine(&l))

@@ -43,6 +43,12 @@ export class SettingsRepo {
   }
   constructor(private readonly db: Db, private readonly defaultProvider: DefaultProvider = "none") {}
 
+  telemetryPreference(): { enabled: boolean; revision: number } {
+    const row = this.db.prepare("SELECT json_extract(json, '$.telemetryEnabled') AS enabled, telemetry_revision AS revision FROM settings WHERE id = 1")
+      .get() as { enabled: number | null; revision: number } | undefined;
+    return { enabled: row?.enabled !== 0, revision: row?.revision ?? 0 };
+  }
+
   get(): ServerSettings {
     const row = this.db.prepare("SELECT json, transcription_revision FROM settings WHERE id = 1").get() as
       { json: string; transcription_revision: number } | undefined;

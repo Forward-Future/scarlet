@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { ScarletClient } from "@scarlet/shared";
+import { fileInDirectory } from "@scarlet/render";
 import { createProject } from "@scarlet/timeline";
 import { createApp } from "../app.js";
 import { createTask, cancelTask } from "./tasks.js";
@@ -119,8 +120,8 @@ it("reads the selected input's existing acoustic words with transcription off", 
 
 it("reads only the kept speech frames, including a word missing from the transcript", async () => {
   const { ctx, project, media, speaker, request } = await cloudScanFixture();
-  const file = join(ctx.paths.media(project.id), media.path);
-  const store = (await EmissionFile.open(await emissionStore(ctx, project.id, await realpath(file)), 5 * SAMPLE_RATE))!;
+  const file = fileInDirectory(ctx.paths.media(project.id), media.path)!;
+  const store = (await EmissionFile.open(await emissionStore(ctx, project.id, file), 5 * SAMPLE_RATE))!;
   try {
     const rows = new Float32Array(store.frames * CLASSES);
     for (const first of [26, 53, 96]) {
@@ -418,9 +419,13 @@ it("restores committed dialogue evidence after restarting the engine and retries
     await writeFile(source, "different recording at the same path");
     expect(await (await request("checkpoints", 0, 180)).json()).toEqual([]);
   } finally {
-    await app.ctx.close();
-    vi.restoreAllMocks();
-    await rm(dir, { recursive: true, force: true });
+    try {
+      // If reopening failed, app still refers to the engine we already closed.
+      if (!app.ctx.shutdown.aborted) await app.ctx.close();
+    } finally {
+      vi.restoreAllMocks();
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 });
 

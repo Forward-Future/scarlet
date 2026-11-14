@@ -98,8 +98,13 @@ fn sidecar_name() -> &'static str {
 }
 
 /// Tauri dev uses the compiled checkout. Packaged builds (including debug bundles) use the sidecar.
-pub fn resolve_engine_launch(home: &Path) -> Result<EngineLaunch> {
-    let sidecar = std::env::current_exe().ok().map(|exe| exe.with_file_name(sidecar_name()));
+pub fn resolve_engine_launch(home: &Path, resources: Option<&Path>) -> Result<EngineLaunch> {
+    // The deb installs the private engine, Whisper and native audio libraries together under /usr/lib/Scarlet.
+    let sidecar = if cfg!(target_os = "linux") {
+        resources.map(|dir| dir.join(sidecar_name()))
+    } else {
+        std::env::current_exe().ok().map(|exe| exe.with_file_name(sidecar_name()))
+    };
     let cli = dev_repo_root().join("apps/server/dist/cli.js");
     select_engine(home, tauri::is_dev(), sidecar.as_deref(), std::env::var("SCARLET_ENGINE_CMD").ok().as_deref(), &cli)
 }
@@ -315,7 +320,7 @@ impl EngineManager {
             return; // already running
         }
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let launch = match resolve_engine_launch(&self.paths.home) {
+        let launch = match resolve_engine_launch(&self.paths.home, self.paths.resource_dir.as_deref()) {
             Ok(l) => l,
             Err(e) => {
                 self.update(|s| {
@@ -814,7 +819,7 @@ mod tests {
     fn dev_fallback_resolves_on_this_checkout() {
         // In this repo apps/server/dist exists, so the fallback must resolve to node + cli.js
         // (unless SCARLET_ENGINE_CMD is set in the environment).
-        let l = resolve_engine_launch(&crate::util::home_dir()).unwrap();
+        let l = resolve_engine_launch(&crate::util::home_dir(), None).unwrap();
         assert!(!l.program.is_empty());
         if l.kind == "dev" {
             assert!(l.prefix_args[0].replace('\\', "/").ends_with("apps/server/dist/cli.js"));

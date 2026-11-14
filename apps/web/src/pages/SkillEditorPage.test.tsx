@@ -255,7 +255,7 @@ it("lists each version once with the newest marked current, and offers Restore o
     expect(choices()).toHaveLength(2);
     expect(choices()[0]!.textContent).toMatch(/^v2 · Claude Code · .+ · current$/);
     expect(choices()[0]!.getAttribute("aria-selected")).toBe("true");
-    expect(choices()[1]!.textContent).toMatch(/^v1 · Matt Berman · /);
+    expect(choices()[1]!.textContent).toMatch(/^v1 · Demo Editor · /);
     expect(choices()[1]!.textContent).not.toContain("current");
     // The older one reads as it was, with the way to put it back.
     await act(async () => choices()[1]!.click());

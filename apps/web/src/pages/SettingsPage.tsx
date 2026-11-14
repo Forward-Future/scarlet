@@ -5,7 +5,7 @@ import { UsageSettings } from "../components/shell/UsageSettings";
 import { UpdateSettings } from "../components/shell/UpdateSettings";
 import { WindowActions } from "../components/shell/WorkspaceNavigation";
 import { useEffect, useState } from "react";
-import { FEATURE_NAMES, selectedLocalModel, type LocalTranscriptionModel, type ServerSettings } from "@scarlet/shared";
+import { FEATURE_NAMES, selectedLocalModel, type LocalTranscriptionModel, type ServerSettings, type TelemetryUnavailable } from "@scarlet/shared";
 import { api, errorMessage } from "../lib/client";
 import { desktop } from "../lib/desktop";
 import { Link, Navigate, Outlet, useBlocker, useLocation, useMatch, useNavigate } from "react-router-dom";
@@ -251,6 +251,54 @@ function ServerSettingsForm({ section }: { section: "general" | "advanced" }) {
   );
 }
 
+function TelemetrySwitch() {
+  const [state, setState] = useState<{ enabled: boolean; unavailable?: TelemetryUnavailable }>();
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const load = () => {
+    setError("");
+    return api.settings().then(({ settings, telemetryUnavailable }) => {
+      setState({ enabled: settings.telemetryEnabled, unavailable: telemetryUnavailable });
+    }).catch(e => setError(errorMessage(e)));
+  };
+  useEffect(() => { void load(); }, []);
+  async function change(enabled: boolean) {
+    setSaving(true);
+    setError("");
+    try {
+      const { settings } = await api.updateSettings({ telemetryEnabled: enabled });
+      setState({ enabled: settings.telemetryEnabled });
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+  return <>
+    {state ? <div className="flex items-center gap-2 text-fg">
+      <Toggle label="Send usage reports" checked={!state.unavailable && state.enabled} disabled={saving || !!state.unavailable} onChange={change} />
+      <span>Send usage reports</span>
+    </div> : !error && <Loading label="Loading telemetry setting…" />}
+    {state?.unavailable === "environment" && <p>Usage reporting is turned off by the engine environment.</p>}
+    {state?.unavailable === "unconfigured" && <p>This build has no telemetry project configured.</p>}
+    <InlineError>{error}</InlineError>
+    {error && !state && <button className="btn-quiet" onClick={() => void load()}>Retry</button>}
+  </>;
+}
+
+function ModelCredit() {
+  const [error, setError] = useState("");
+  const url = "https://desertant.com";
+  return <div className="mt-6 text-sm text-muted">
+    Filler-word detection uses <a className="underline" href={url} onClick={e => {
+      e.preventDefault();
+      setError("");
+      void desktop.openUrl(url).catch(e => setError(errorMessage(e)));
+    }}>Uhm by Desert Ant Labs</a>.
+    <InlineError>{error}</InlineError>
+  </div>;
+}
+
 const tabs = [
   { id: "general", label: "General", to: "/settings" },
   { id: "models", label: "Models", to: "/settings#models" },
@@ -335,6 +383,7 @@ export function SettingsPage() {
             <UpdateSettings />
             <section className="mt-6 max-w-prose space-y-2 text-sm leading-relaxed text-muted" aria-labelledby="telemetry-heading">
               <h2 id="telemetry-heading" className="font-semibold text-fg">Usage telemetry</h2>
+              <TelemetrySwitch />
               <p>Scarlet releases send usage reports to PostHog in the US by default. We use them to see how often installations edit, whether editors return or export, and how they review Scarlet’s changes.</p>
               <ul className="list-disc space-y-1 pl-5">
                 <li>At startup, Scarlet sends the number of projects in your library, excluding the trash.</li>
@@ -345,12 +394,13 @@ export function SettingsPage() {
               </ul>
               <p>Every event carries its time, a random event ID to prevent double counting, Scarlet version, operating system, processor architecture and an anonymous ID that links events from the same installation. PostHog sees the connection’s IP address. Scarlet disables location lookups and person profiles.</p>
               <p>Reports exclude account details, footage, audio, transcripts, prompts, notes, edit titles, revision text, project names, file paths, model names, error messages and the IDs Scarlet uses in your library.</p>
-              <p>To turn reporting off, set the environment variable <code>SCARLET_TELEMETRY_ENABLED=false</code> before starting Scarlet.</p>
+              <p>You can also turn reporting off by setting <code>SCARLET_TELEMETRY_ENABLED=false</code> before starting Scarlet.</p>
               <details>
                 <summary className="cursor-pointer">All tracked feature names</summary>
                 <ul className="mt-2 list-disc pl-5">{FEATURE_NAMES.map(name => <li key={name}><code>{name}</code></li>)}</ul>
               </details>
             </section>
+            <ModelCredit />
           </section>
         )}
         {tab === "advanced" && (

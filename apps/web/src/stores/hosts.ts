@@ -60,6 +60,14 @@ export function onlineAgents(hosts: AgentHost[], customOpenaiModels: readonly st
         cur.modelLabels[id] ??= { name: label, custom };
         (cur.modelOptions[id] ??= []).push(a.modelOptions?.[id]);
       }
+      // Either the CLI advertised its default or the host confirmed sign-in without a named catalog.
+      if (a.id === "claude" && !a.models?.length && (a.loggedIn || a.modelOptions?.[""] || a.modelLabels?.[""])) {
+        // With no model in the request, the host uses its configured model or the CLI default.
+        const model = a.model ?? "";
+        const label = a.modelLabels?.[model];
+        if (label) cur.modelLabels[""] ??= { name: label, custom: false };
+        (cur.modelOptions[""] ??= []).push(a.modelOptions?.[model]);
+      }
       if (a.model && cur.models.includes(a.model)) cur.defaultModel ??= a.model;
       cur.hostNames.push(h.name);
       map.set(a.id, cur);

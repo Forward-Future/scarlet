@@ -8,6 +8,7 @@ import { normalizeTranscriptToken, type RepeatOccurrence, type DialogueCutKind, 
 import { clipsAt, frameAlignedRemoval, mergeRanges, timelineDuration, timelineToSource, type MediaClip, type Project, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
 import { round3 } from "./analysis.js";
 import { cutScope, selectedRange } from "./cut-scope.js";
+import { quietKeptWords, type QuietKeptWord } from "./quiet-kept-word.js";
 import type { GapSound } from "./gap-sound.js";
 import type { DialogueEvidence } from "./dialogue-decisions.js";
 import { checkKeptWords, type ReadKeptWords, checkDialogueJoin, checkResumeQuote, dialogueCutPreview, dialogueJoinWords, joinEvidence, pageReaches, pauseCutRange, PAUSE_BEAT, wordCutRange, type JoinPage } from "./dialogue-join.js";
@@ -272,7 +273,7 @@ export type GateLine = Record<string, unknown> & { cut: number };
 
 export type DialoguePlan =
   | { outcome: "preserved"; kept?: TimeRange[] }
-  | { outcome: "needsRevision"; disputedEdges: Array<TimeRange & { reason: string }> }
+  | { outcome: "needsRevision"; disputedEdges: Array<TimeRange & { reason: string; quietKeptWord?: QuietKeptWord }> }
   | { outcome: "ready"; removals: ResolvedCut[]; decisions: PlannedDecision[]; gate: Map<number, GateLine>;
       /** Ranges the plan keeps on purpose, in timeline seconds: keep decisions, however they were given, and protected pictures. */
       kept: TimeRange[];
@@ -460,12 +461,14 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
   const { media, settings: { fps } } = project;
   const retained = sorted.filter(c => c.decision === "keep" || c.picture === "protect");
   const unreadJoinAudio: Array<{ cut: number; reasons: string[] }> = [];
+  const applied = mergeRanges(decisions.filter(d => !d.review), 1e-9);
+  const align = (r: TimeRange) => frameAlignedRemoval(r, fps, scope, kept);
+  const appliedFrames = applied.map(align);
+  const quiet = await quietKeptWords(tl, project, appliedFrames, [...kept, ...decisions.filter(d => d.review)], scope, sources);
+  if (quiet.length) return { outcome: "needsRevision", disputedEdges: quiet };
   const speechCuts = removals.flatMap((c, i) => c.kind !== "pause" && c.decision === "cut" ? [{ c, d: decisions[i]! }] : []);
   if (speechCuts.length && checkRetakes) {
-    const applied = mergeRanges(decisions.filter(d => !d.review), 1e-9);
     const optional = mergeRanges(decisions.filter(d => d.review), 1e-9);
-    const align = (r: TimeRange) => frameAlignedRemoval(r, fps, scope, kept);
-    const appliedFrames = applied.map(align);
     const atAfter = (at: number, ranges: TimeRange[]) => at - ranges.reduce((removed, r) =>
       removed + Math.max(0, Math.min(at, r.end) - r.start), 0);
     const onApplied = optional.map(align).map(r => ({ start: atAfter(r.start, appliedFrames), end: atAfter(r.end, appliedFrames) }));

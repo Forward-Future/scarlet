@@ -2,7 +2,7 @@
 
 # Scarlet
 
-Scarlet is an open-source AI video editor for macOS and Windows. Tell Claude Code or Codex what you want to change, by voice or in writing, then play the edit on your timeline. Your original footage stays intact.
+Scarlet is an open-source AI video editor for macOS, Windows and Linux. Tell Claude Code or Codex what you want to change, by voice or in writing, then play the edit on your timeline. Your original footage stays intact.
 
 Scarlet works especially well on dialogue-heavy recordings. Start with an interview, a video podcast or a talking-head take. Ask it to shorten long pauses, remove a repeated phrase or keep the clearest take of an answer. Tell it where the timing matters to you, such as a pause before a punchline.
 
@@ -10,11 +10,11 @@ Scarlet works especially well on dialogue-heavy recordings. Start with an interv
 
 Scarlet renders just the affected section so you can hear what a change sounds like in context. Requested edits go on the working timeline. Suggestions wait for you to apply them. For a first cut of a whole interview, you can jump straight to the cuts the agent flags for a second listen.
 
-[Download Scarlet for macOS or Windows](https://github.com/Forward-Future/scarlet/releases/latest)
+[Download Early Access for macOS or Windows](https://github.com/Forward-Future/scarlet-releases/releases) · [Ubuntu 24.04 x86-64 preview](https://github.com/Forward-Future/scarlet-releases/releases?q=Ubuntu) · [Stable releases](https://github.com/Forward-Future/scarlet/releases)
 
 ## Run from source
 
-Scarlet is in early development. Build the desktop app on macOS 13 or later (Apple Silicon or Intel) or Windows x64. Install Git, a current Node.js 22.x or 24.x, pnpm 12.16.1, Rust and the platform build tools listed in the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+Scarlet is in early development. Build the desktop app on macOS 13 or later (Apple Silicon or Intel), Windows x64 or Ubuntu 24.04 x86-64. On Ubuntu, install the [desktop build and playback dependencies](docs/development.md#ubuntu-2404-x86-64) first. Install Git, a current Node.js 22.x or 24.x, pnpm 12.16.1, Rust and the platform build tools listed in the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```sh
 git clone https://github.com/Forward-Future/scarlet.git
@@ -25,7 +25,7 @@ pnpm build
 
 **Try the sample interview.** Run `pnpm desktop:demo` to explore the native editor with an in-memory project and a simulated assistant.
 
-**Edit your own footage.** Install CMake, then run these commands to fetch FFmpeg, build local transcription support and open your project library.
+**Edit your own footage.** Install CMake, then run these commands to check or fetch the media tools, build local transcription support and open your project library.
 
 ```sh
 pnpm desktop:ffmpeg
@@ -47,11 +47,11 @@ pnpm desktop:dev
 
 Scarlet stores projects and renders video on your computer. CrisperWhisper is the default local transcription choice. Until you install its separately licensed weights, Scarlet uses Whisper large-v3-turbo, which downloads on first use. Your connected AI provider receives your editing request and the project context the agent uses, which can include transcript excerpts and video frames. [Choose or add a transcription model](docs/transcription-models.md)
 
-Packaged releases report anonymous usage, edit review decisions, and task and export outcomes to PostHog. Set `SCARLET_TELEMETRY_ENABLED=false` to turn reporting off. [See which events Scarlet sends](docs/telemetry.md)
+Packaged releases report anonymous usage, edit review decisions, and task and export outcomes to PostHog. Turn off **Send usage reports** in **Settings → About**, or set `SCARLET_TELEMETRY_ENABLED=false` before launching Scarlet. Early Access versions through 0.1.3 use the environment setting. [See which events Scarlet sends](docs/telemetry.md)
 
 ## Contributing
 
-Bug reports and pull requests are welcome. For a bug, include your operating system, the steps to reproduce it, and what you expected to see or hear. Use generated media for reproductions so your footage and transcripts stay private. [Open an issue](https://github.com/Forward-Future/scarlet/issues)
+Bug reports and pull requests are welcome. For a bug, include your operating system, the steps to reproduce it, and what you expected to see or hear. Use generated media for reproductions so your footage and transcripts stay private. [Open an issue](https://github.com/Forward-Future/scarlet/issues) · [Contributing guide](CONTRIBUTING.md) · [Code of conduct](CODE_OF_CONDUCT.md)
 
 - **Working on the desktop app?** Find the repository layout, test commands, packaging steps and log guide in the [development guide](docs/development.md).
 - **Working on how the agent edits?** Start with the [agent design guide](docs/AI-AGENTS.md) and the [editing evaluations](evals/README.md).
