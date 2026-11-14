@@ -55,6 +55,12 @@ export interface ExportFile {
   video: Pick<RenderRequest, "kind" | "quality" | "range" | "exportOptions">;
 }
 
+/** What the app says of a save when the engine stopped answering or sending: not there, or cut off part-way. */
+const ENGINE_WENT = /^Not connected to the engine$|^error (sending request|decoding response body)|request or response body error|could not deliver the file \(50[23]/;
+
+/** How often a save is tried while the engine keeps going away under it. */
+const SAVE_ATTEMPTS = 4;
+
 /** The engine was unreachable, as it is while Scarlet quits or restarts its engine. */
 const unreachable = (err: unknown) => !(err instanceof ScarletApiError) || err.status === 503;
 
@@ -72,7 +78,9 @@ export async function resumeExports() {
   const { renders } = await api.exports();
   for (const render of renders) {
     const kept = render.export;
-    if (!kept || useExports.getState().jobs[render.projectId]) continue;
+    // Only an export under way stands in the way. One shown as failed may still be owed by the engine: it is picked up.
+    const shown = useExports.getState().jobs[render.projectId];
+    if (!kept || (shown && "cancel" in shown)) continue;
     const video: ExportFile["video"] = { kind: render.kind, quality: render.quality ?? "delivery" };
     if (render.range) video.range = render.range;
     if (render.exportOptions) video.exportOptions = render.exportOptions;
@@ -136,9 +144,11 @@ async function run(projectId: string, file: ExportFile, context: string, version
       }
     }
     if (ticket === null) throw new Error("Export destination expired");
-    let url: string;
+    let url: () => string;
+    // Waits until the engine answers again.
+    let engineBack = async () => {};
     if (file.format === "otio") {
-      url = api.otioUrl(projectId, version);
+      url = () => api.otioUrl(projectId, version);
     } else {
       update({ phase: "rendering", waiting: true });
       let render = resumed;
@@ -167,10 +177,29 @@ async function run(projectId: string, file: ExportFile, context: string, version
         // Keep waiting while the engine restarts. It resumes this render under the same id.
         render = completed ?? await api.render(id).then(found => found.render, err => { if (unreachable(err)) return render!; throw err; });
       }
-      url = api.renderFileUrl(id);
+      // The engine may be back at another address by the time the file is read again.
+      url = () => api.renderFileUrl(id);
+      engineBack = async () => {
+        while (!cancelled && !await api.render(id).then(() => true, err => { if (unreachable(err)) return false; throw err; })) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      };
     }
     update({ phase: "saving" });
-    const saved = await desktop.finishVideoExport(ticket, url);
+    let saved: string;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        saved = await desktop.finishVideoExport(ticket, url());
+        break;
+      } catch (err) {
+        // The engine restarting under a save is no failure: the render is still there once it is back, under the same
+        // id, and the file is read again. Anything else that stops a save is the editor's to see.
+        // What the save said tells them apart: the engine wasn't there, or the file stopped arriving part-way.
+        if (cancelled || attempt >= SAVE_ATTEMPTS || !ENGINE_WENT.test(errorMessage(err))) throw err;
+        await engineBack();
+        if (cancelled) return;
+      }
+    }
     ticket = null;
     result = { phase: "done", path: saved, context: job.context };
   } catch (err) {

@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { engineIsAlive } from "./context.js";
@@ -40,6 +40,8 @@ beforeEach(() => {
   lines = [];
   ps.asked.length = 0;
   ps.says = "";
+  // The computer has been up for weeks, so no note here is from before it started.
+  vi.spyOn(os, "uptime").mockReturnValue(30 * 86_400);
   // Only macOS is asked when a process began.
   Object.defineProperty(process, "platform", { value: "darwin" });
 });
@@ -79,6 +81,18 @@ it("takes a process for the engine that noted its id unless it began more than a
   }
   expect(ps.asked).toEqual(Array(4).fill(["-o", "pid=,etime=", "-p", `${other},${process.pid}`]));
   expect(lines).toEqual([]);
+});
+
+it("takes an engine noted before the computer started for gone at once, whatever has its id now", async () => {
+  // The computer has been up ten minutes. An engine noted an hour ago ended with the restart, on every system.
+  vi.spyOn(os, "uptime").mockReturnValue(600);
+  note(3600);
+  expect(engineIsAlive(ctx, other)).toBe(false);
+  expect(ps.asked).toEqual([]);
+  // One noted since the computer started is asked about as ever.
+  note(300);
+  ps.says = line(other, 300) + own();
+  expect(engineIsAlive(ctx, other)).toBe(true);
 });
 
 it("takes a process that began after the note for another program, once `ps` has said so", async () => {

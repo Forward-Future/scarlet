@@ -478,7 +478,9 @@ export const Change = z.object({
     crossfade: Seconds.optional(),
     /** An unassessed cut staged under the retired Suggest setting still needs the editor if recommended. */
     legacySuggest: z.literal(true).optional(),
-    kind: z.enum(["pause", "filler", "retake", "coaching"]).optional() })).optional(),
+    kind: z.enum(["pause", "filler", "retake", "coaching"]).optional(),
+    /** Why the editor should look or listen before keeping this applied cut. */
+    check: z.string().trim().min(1).max(120).optional() })).optional(),
   /** Second-pass recommendations on the immutable chronological cut-review plan. */
   cutAssessments: z.array(CutAssessment).optional(),
   /** A call rechecked against newer footage. Its index still identifies the same call in the original pass. */
@@ -500,6 +502,13 @@ export const Change = z.object({
     check: z.string().trim().min(1).max(120).optional(),
     /** One sentence on what the edit did, side effects included. The edit's card shows this and nothing else. */
     summary: z.string().trim().min(1).max(SUMMARY_MAX).optional(), replaces: z.object({ changeId: Id, spot: z.number().int().nonnegative() }).optional() })).optional(),
+  /**
+   * Doubts a later request raised about this change's edits once they were in the video: the edit (`spot`, as its
+   * request lists it), the few words the editor reads and the run that raised it. That request lists the edit as one
+   * that needs the editor until they keep it there.
+   */
+  flags: z.array(z.object({ spot: z.number().int().nonnegative(), check: z.string().trim().min(1).max(120), taskId: Id,
+    at: z.string().datetime() })).optional(),
   /** Timeline ranges affected by the change (merged, with handles applied by the renderer). */
   ranges: z.array(TimeRange).default([]),
   state: ChangeState.default("proposed"),

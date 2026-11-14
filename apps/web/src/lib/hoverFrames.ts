@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ProjectSummary } from "@scarlet/shared";
 import { api } from "./client";
+import { interactiveFrameUrl } from "../components/review/thumbs";
 
 /** How many frames a card shows, how long each stays, and how wide they are fetched. */
 const FRAMES = 6;
@@ -26,7 +27,7 @@ function framesFor(projectId: string, posterMedia?: string) {
   if (!urls) {
     urls = api.media(projectId).then(({ media }) => {
       const video = media.find(m => m.kind === "video" && m.id === posterMedia) ?? media.find(m => m.kind === "video");
-      return video?.duration ? hoverTimes(video.duration).map(time => api.frameUrl(video.id, time, WIDTH)) : [];
+      return video?.duration ? hoverTimes(video.duration).map(time => interactiveFrameUrl(api.frameUrl(video.id, time, WIDTH))!) : [];
     }).catch(() => {
       sources.delete(key);
       return [];

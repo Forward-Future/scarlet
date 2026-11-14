@@ -1,3 +1,4 @@
+import os from "node:os";
 import { RecordingSpeakers } from "./services/recordingSpeakers.js";
 import { audioWorker } from "./transcribe/audioWorker.js";
 import { AnalysisCache } from "./services/analysisCache.js";
@@ -76,15 +77,24 @@ export function noteEngineStart(ctx: Pick<Ctx, "db" | "log">): boolean {
  * age from what the clock read as it began, as the note does. Linux counts it from boot, so a clock set forward since
  * would read as a later start, and Windows has no `ps`.
  */
+/** Room for a clock set since the computer started. */
+const BOOT_MARGIN_MS = 60_000;
+
 export function engineIsAlive(ctx: Pick<Ctx, "db" | "track" | "log">, pid: number): boolean {
   if (pid === process.pid) return true;
   if (!processIsAlive(pid)) {
     startChecks.delete(pid);
     return false;
   }
-  if (process.platform !== "darwin") return true;
   const note = ctx.db.prepare("SELECT started_at FROM engines WHERE pid = ?").get(pid) as { started_at: number } | undefined;
   if (!note) return true;
+  // An engine that began before the computer did is gone, whatever has its id now. This is known at once and on
+  // every system, so a restart or a power cut never leaves an import or an export held for a program that isn't Scarlet.
+  if (note.started_at < Date.now() - os.uptime() * 1000 - BOOT_MARGIN_MS) {
+    startChecks.delete(pid);
+    return false;
+  }
+  if (process.platform !== "darwin") return true;
   let check = startChecks.get(pid);
   // A later engine given the same id notes its own start. What was learned for the earlier note says nothing of it.
   if (check?.noted !== note.started_at) startChecks.set(pid, check = { noted: note.started_at, reused: false, asked: -Infinity });
@@ -198,6 +208,9 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
   const whisperCli = bundledWhisperCli(env);
   // The audio helper is one per engine process. Its notes on where each model runs go to this engine's log.
   audioWorker.log = options.log ?? (m => console.log(m));
+  // An agent at work asks for the helper's models again within a turn or two.
+  const agentAtWork = db.prepare("SELECT 1 FROM tasks WHERE state IN ('claimed','running') AND kind != 'transcribe' LIMIT 1");
+  audioWorker.wanted = () => { try { return !!agentAtWork.get(); } catch { return false; } };
   const repos = createRepos(db, () => whisperCli || hasCrisperWhisper(paths.root) ? "whispercpp" : "none");
   const pending = new Set<Promise<unknown>>();
   const shutdown = new AbortController();

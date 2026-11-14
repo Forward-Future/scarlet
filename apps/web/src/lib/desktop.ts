@@ -145,6 +145,7 @@ export const desktop = {
   /** A verified build that installs on restart, and the build the updater has under way. */
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   latestUpdateRevision: () => invoke<string>("latest_update_revision"),
+  updateChangelog: (revision: string) => invoke<string>("update_changelog", { revision }),
   restartForUpdate: (revision: string) => invoke<void>("restart_for_update", { revision }),
   log: (message: string | string[], level: "info" | "warn" | "error" | "debug" = "info") => invoke<void>("desktop_log", { level, message }).catch(() => undefined),
 

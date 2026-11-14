@@ -13,16 +13,42 @@ class DesktopPermissionsTest < Minitest::Test
     @build = YAML.safe_load(File.read(File.join(workflows, "desktop-build.yml"))).fetch("jobs").fetch("build")
   end
 
-  def test_every_main_push_builds_all_installers
+  def test_main_builds_all_installers
     # Psych versions using YAML 1.1 read the key 'on' as true.
     trigger = @entry["on"] || @entry.fetch(true)
     assert_equal({"branches" => ["main"]}, trigger.fetch("push"))
-    refute @entry.key?("concurrency"), "A branch-wide lock can cancel a pending release"
     assert_equal %w[aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc],
       @build.dig("strategy", "matrix", "include").map { |target| target.fetch("triple") }.sort
     assert_equal false, @build.dig("strategy", "fail-fast")
     assert_equal "${{ needs.version.outputs.version }}", @jobs.dig("build", "with", "version")
     assert_equal "${{ needs.version.outputs.version }}", @jobs.fetch("publish").fetch("steps").last.dig("env", "RELEASE_VERSION")
+  end
+
+  def test_prs_report_a_fast_check_independent_of_full_platform_tests
+    workflow = YAML.safe_load(File.read(File.expand_path("../workflows/pr-checks.yml", __dir__)))
+    trigger = workflow["on"] || workflow.fetch(true)
+    assert_nil trigger.fetch("pull_request"), "Every PR needs a check result, including documentation changes"
+    assert_equal({"contents" => "read"}, workflow.fetch("permissions"))
+    assert_equal true, workflow.fetch("concurrency").fetch("cancel-in-progress")
+    fast = workflow.fetch("jobs").fetch("fast")
+    assert_equal "Build, type-check and smoke tests", fast.fetch("name")
+    assert_equal "ubuntu-latest", fast.fetch("runs-on")
+    refute fast.key?("if")
+    refute fast.key?("needs")
+    full = workflow.fetch("jobs").fetch("platforms")
+    assert_equal "./.github/workflows/ci.yml", full.fetch("uses")
+    refute full.key?("needs")
+  end
+
+  def test_only_automatic_test_builds_share_runners_with_newer_main_pushes
+    linux = YAML.safe_load(File.read(File.expand_path("../workflows/linux-desktop.yml", __dir__)))
+    [@entry, linux].each do |workflow|
+      condition = "github.event_name == 'push' && github.run_attempt == '1' && vars.SCARLET_STABLE_RELEASES != 'true'"
+      assert_equal "${{ github.workflow }}-${{ #{condition} && github.ref || github.run_id }}",
+        workflow.fetch("concurrency").fetch("group")
+      assert_equal true, workflow.fetch("concurrency").fetch("cancel-in-progress")
+    end
+    refute_equal @entry.fetch("name"), linux.fetch("name")
   end
 
   def test_checks_and_native_builds_have_read_only_repository_access

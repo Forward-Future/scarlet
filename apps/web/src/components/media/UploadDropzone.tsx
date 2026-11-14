@@ -6,7 +6,7 @@ import { dropTargets, fileDropZone } from "../../lib/dropTargets";
 import { api, engineUnavailable, errorMessage, IS_DESKTOP } from "../../lib/client";
 import { canResumeFirstClip, matchAddedClip, resumeFirstClip } from "../../lib/firstClipFormat";
 import { fmtBytes } from "../../lib/format";
-import { addPendingImports, isLink, markImportStarted, pendingImports, removePendingImport, retryInterruptedImport, type PendingImport } from "../../lib/pendingImports";
+import { addPendingImports, isLink, markImportStarted, pendingImports, projectsWithPendingImports, removePendingImport, retryInterruptedImport, type PendingImport } from "../../lib/pendingImports";
 import { importLocalFile, uploadMedia } from "../../lib/upload";
 import { useProjectStore } from "../../stores/project";
 import { Icon, Progress } from "../ui/primitives";
@@ -202,6 +202,18 @@ export function resumeImports(projectId: string, media: readonly MediaAsset[]) {
   // Only a project's first files set its format. They were chosen before anything added later, so the saved order holds.
   jobs.push(enqueueImports(projectId, first, matchFormat), enqueueImports(projectId, later));
   return Promise.all(jobs).then(() => undefined);
+}
+
+/**
+ * Carry on the imports of every project, not only the one on screen: files dropped on a project's card, or left
+ * copying when the editor moved to another project, would otherwise wait until that project happened to be opened.
+ */
+export async function resumeAllImports() {
+  for (const projectId of projectsWithPendingImports()) {
+    // A project in the Trash can't be read. Its files wait, still saved, for it to be put back and opened.
+    const read = await api.media(projectId).catch(() => undefined);
+    if (read) void resumeImports(projectId, read.media);
+  }
 }
 
 export function useImportCount(projectId: string) {

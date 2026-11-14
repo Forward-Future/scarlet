@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { desktop } from "../../lib/desktop";
 import { buildPercent, enableUpdateStatus } from "../../lib/updateStatus";
 import { UpdateButton } from "./UpdateButton";
+import CHANGELOG_SOURCE from "../../../../../CHANGELOG.md?raw";
 
 it("shows a build under way with how far along it is, then becomes the button that restarts into it", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -152,5 +153,28 @@ it("reopens the project that was on screen, forgets it at the library, and never
   } finally {
     history.replaceState(null, "", "/");
     rememberProject(null);
+  }
+});
+
+it("lists what a waiting build adds to this one's changelog when the control is hovered", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.useRealTimers();
+  const commit = "d".repeat(40);
+  vi.spyOn(desktop, "updateStatus").mockResolvedValue({ ready: commit, building: null });
+  const news = Array.from({ length: 8 }, (_, i) => `- New change ${i + 1}.`).join("\n");
+  const read = vi.spyOn(desktop, "updateChangelog").mockResolvedValue(`# Changelog\n\n## Tomorrow\n\n${news}\n- Uses \`code\`.\n\n${CHANGELOG_SOURCE}`);
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  enableUpdateStatus();
+  try {
+    await act(async () => root.render(<UpdateButton />));
+    await vi.waitFor(() => expect(container.querySelector(".update-hint-news")).not.toBeNull());
+    expect(read).toHaveBeenCalledWith(commit);
+    const items = [...container.querySelectorAll(".update-hint-news li")].map(li => li.textContent);
+    expect(items).toEqual(["New change 1.", "New change 2.", "New change 3.", "New change 4.", "New change 5.", "New change 6."]);
+    expect(container.querySelector(".update-hint-news")!.lastElementChild!.textContent).toBe("And 3 more in Settings › About once it’s installed.");
+  } finally {
+    await act(async () => root.unmount());
+    vi.restoreAllMocks();
   }
 });

@@ -95,6 +95,14 @@ interface RunBundleProps {
   onWaitForTranscripts?(on: boolean): void;
 }
 
+/** What a pass sent back to check the finished cut is doing, whatever it said on its way in. */
+export const FINAL_CHECK = "Final check of the finished cut";
+/** The events of a pass's latest run, once the engine has sent it back to check for repeats; every event otherwise. */
+const sinceRerun = (task: Task, events: readonly TaskEvent[]) => {
+  const from = task.repeatAudit?.returns ? task.startedAt : undefined;
+  return from ? events.filter(e => (e.at ?? "") >= from) : events;
+};
+
 export function RunBundle(props: RunBundleProps) {
   if (props.task.state === "running" || props.task.state === "claimed") return <WorkingRun {...props} />;
   return runIsActive(props.task) ? <WaitingRun {...props} /> : <FinishedRun {...props} />;
@@ -105,8 +113,23 @@ function useRunUsage(taskId: string) {
   return useProjectStore(s => show ? s.current?.taskUsage?.[taskId] : undefined);
 }
 
-function WorkingRun({ task, events, changes, callNumber, say, result, stopAbove, onStop }: RunBundleProps) {
-  const aim = useMemo(() => runAim(events), [events]);
+/**
+ * The tokens a request has used so far, in its heading before Stop while Scarlet has it. The host reports the count as
+ * each of the agent's messages lands, so it climbs while Scarlet works. Shown only when turned on in Settings → Usage.
+ */
+export function LiveTokens({ taskId }: { taskId: string }) {
+  const usage = useRunUsage(taskId);
+  if (!usage?.totalTokens) return null;
+  return <span className="run-dim run-tokens unit-tokens" title={tokenBreakdown(usage)}>{tokenLabel(usage.totalTokens)}</span>;
+}
+
+function WorkingRun({ task, events: all, changes, callNumber, say, result, stopAbove, onStop }: RunBundleProps) {
+  // A pass sent back to check the finished cut for repeats runs again as the same request, in a new session. Its line
+  // and its first sentence are that session's: what it said an hour ago on the first run isn't what it is doing now.
+  const events = useMemo(() => sinceRerun(task, all), [task, all]);
+  // That check is named for what it is, above the line that says what it's on this moment.
+  const rerun = !!task.repeatAudit?.returns;
+  const aim = useMemo(() => rerun ? { text: FINAL_CHECK, note: "" } : runAim(events), [events, rerun]);
   const progress = useMemo(() => runProgress(events), [events]);
   const voices = useProjectStore(s => s.current?.speakerProgress);
   const voice = progress.read && !progress.read.seconds ? progress.recordings?.map(id => voices?.[id]).find(Boolean) : undefined;
@@ -171,7 +194,6 @@ function WaitingRun({ task, events, changes, say, result, banded, onStop }: RunB
     </div>}
     {line && lines.length > 0 && <RunList lines={lines} />}
     {say}
-    {!line && asking && !!usage?.totalTokens && <div className="req-row"><span className="req-right"><Tokens usage={usage} /></span></div>}
     {result?.(undefined)}
   </div>;
 }

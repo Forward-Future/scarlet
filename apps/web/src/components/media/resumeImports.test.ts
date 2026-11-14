@@ -357,7 +357,7 @@ it("carries on with files saved with a garbled mark, and doesn't let them set th
   expect(pendingImports(project.id)).toEqual([]);
 });
 
-it("keeps interrupted files and links across a restart, with the same import ID and one retry", async () => {
+it("keeps interrupted files and links across a restart, with the same import ID, until the engine has gone away under a file five times", async () => {
   const { enqueueImports } = await import("./UploadDropzone");
   const { pendingImports } = await import("../../lib/pendingImports");
   const { ScarletApiError } = await import("@scarlet/shared");
@@ -370,10 +370,18 @@ it("keeps interrupted files and links across a restart, with the same import ID 
   expect(first).toMatchObject({ source: path, interrupted: true, importId: expect.any(String) });
   expect(next).toMatchObject({ source: link, started: false });
 
-  const resumed = await relaunch(localStorage.getItem(SAVED)!);
+  // A second quit during the same long copy keeps the file too: it was dropped there once, unsaid.
+  let resumed = await relaunch(localStorage.getItem(SAVED)!);
+  for (let interruptions = 2; interruptions <= 5; interruptions++) {
+    importLocalFile.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await resumed.resumeImports("prj", []);
+    expect(importLocalFile).toHaveBeenCalledExactlyOnceWith("prj", path, expect.any(Function), first!.importId, false);
+    expect(pendingImports("prj")).toMatchObject([{ source: path, importId: first!.importId, interruptions }, { source: link }]);
+    resumed = await relaunch(localStorage.getItem(SAVED)!);
+  }
+  // A file that takes the engine down every time stops there, and the files behind it go on.
   importLocalFile.mockRejectedValueOnce(new TypeError("Failed to fetch"));
   await resumed.resumeImports("prj", []);
-  expect(importLocalFile).toHaveBeenCalledExactlyOnceWith("prj", path, expect.any(Function), first!.importId, false);
   expect(pendingImports("prj").map(i => i.source)).toEqual([link]);
   await resumed.resumeImports("prj", []);
   expect(importLocalFile.mock.calls.at(-1)?.[1]).toBe(link);
@@ -424,4 +432,25 @@ it("keeps the retry for the next engine when a project read preceded the outage"
   expect(importLocalFile).toHaveBeenLastCalledWith("prj", "/a.mov", expect.any(Function), importId, false);
   expect(importLocalFile).toHaveBeenCalledTimes(2);
   expect(pendingImports("prj")).toEqual([]);
+});
+
+it("carries on the imports of every project at launch, not only the one on screen", async () => {
+  const { pendingImports } = await import("../../lib/pendingImports");
+  // Files dropped on two projects' cards, and a third project in the Trash, when Scarlet quit.
+  const at = new Date().toISOString();
+  const { resumeAllImports } = await relaunch(JSON.stringify([
+    { projectId: "prj_a", source: "/clips/a.mov", at, started: false }, { projectId: "prj_b", source: "/clips/b.mov", at, started: false },
+    { projectId: "prj_trashed", source: "/clips/c.mov", at, started: false }]));
+  const { api } = await import("../../lib/client");
+  const { ScarletApiError } = await import("@scarlet/shared");
+  vi.spyOn(api, "media").mockImplementation(async id => {
+    if (id === "prj_trashed") throw new ScarletApiError(404, "not_found", "");
+    return { media: [] };
+  });
+  importLocalFile.mockImplementation(async (_project: string, path: string) => video(path, 1920, 1080, 24));
+  await resumeAllImports();
+  await vi.waitFor(() => expect(importLocalFile.mock.calls.map(call => [call[0], call[1]])).toEqual([["prj_a", "/clips/a.mov"], ["prj_b", "/clips/b.mov"]]));
+  await vi.waitFor(() => expect(pendingImports("prj_a").concat(pendingImports("prj_b"))).toEqual([]));
+  // A project that can't be read keeps its files for when it can.
+  expect(pendingImports("prj_trashed").map(i => i.source)).toEqual(["/clips/c.mov"]);
 });

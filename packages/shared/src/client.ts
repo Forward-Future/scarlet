@@ -403,6 +403,11 @@ export class ScarletClient {
       head?: string }>(
       `/projects/${encodeURIComponent(projectId)}/dialogue-cuts`, body);
   }
+  /** Flag an applied edit for the editor, as the run that found a doubt about it. */
+  flagEdit(projectId: string, body: import("./api.js").FlagEditRequest) {
+    type Flagged = { changeId: string; spot: number; label: string; request: string; range: TimeRange; at?: number };
+    return this.post<{ flagged: Flagged; version: string; alsoThere?: Flagged[] }>(`/projects/${encodeURIComponent(projectId)}/edit-flags`, body);
+  }
   proposeChange(projectId: string, body: ProposeChangeRequest) {
     return this.post<{ change: Change; timeline: Timeline; diffDescription?: string[] }>(`/projects/${projectId}/changes`, body);
   }
@@ -413,6 +418,8 @@ export class ScarletClient {
       duration?: number; diffDescription?: string[]; timeline?: Timeline;
       /** Removals inside a selected passage the engine put on whole frames. Older engines omit it. */
       onWholeFrames?: Array<{ asked: [number, number]; removed: [number, number] }>;
+      /** The edit met footage another request changed since `fromVersion`, so it wasn't applied. Older engines omit it. */
+      notApplied?: { reason: string; currentVersion: string };
     }>(`/projects/${projectId}/changes?summary=true`, body);
   }
   changes(projectId: string, state?: string) {

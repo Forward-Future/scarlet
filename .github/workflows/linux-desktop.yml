@@ -4,21 +4,13 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-  pull_request:
-    paths:
-      - ".github/workflows/linux-desktop.yml"
-      - "apps/**"
-      - "packages/**"
-      - "skills/**"
-      - "integrations/**"
-      - "package.json"
-      - "pnpm-*.yaml"
 
 permissions:
   contents: read
 
+# A newer push supersedes test builds. Releases, manual builds and retries get their own group.
 concurrency:
-  group: linux-desktop-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.run_attempt == '1' && vars.SCARLET_STABLE_RELEASES != 'true' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:

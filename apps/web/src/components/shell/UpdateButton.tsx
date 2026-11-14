@@ -2,16 +2,59 @@ import { clearUpdatePlace, saveUpdatePlace } from "../../lib/updatePlace";
 import { useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
 import { desktop } from "../../lib/desktop";
 import { buildPercent, refreshUpdateStatus, useUpdateStatus } from "../../lib/updateStatus";
+import { changesSince, parseChangelog, plainChange } from "../../lib/changelog";
 
 const RING = 2 * Math.PI * 5;
 const build = (revision: string) => <span className="font-mono">{revision.slice(0, 7)}</span>;
+const MOST_CHANGES = 6;
 
-/** What hovering the control says: which build it is about, which one is running now, and what happens next. */
-function UpdateHint({ id, title, children }: { id: string; title: ReactNode; children: ReactNode }) {
+// What each build's changelog adds to this one's, read once per build from the updater's checkout.
+const changes = new Map<string, Promise<string[]>>();
+function changesIn(revision: string) {
+  let read = changes.get(revision);
+  if (!read) {
+    // Nothing read is not kept: the updater can name a build before its checkout has fetched it.
+    read = desktop.updateChangelog(revision).then(text => text ? changesSince(parseChangelog(text)) : undefined, () => undefined)
+      .then(list => { if (!list) changes.delete(revision); return list ?? []; });
+    changes.set(revision, read);
+  }
+  return read;
+}
+/** How long the hover waits before reading again a build's changelog that wasn't there yet, and how many times. */
+const REREAD_MS = 15_000, REREADS = 8;
+
+function useChanges(revision: string) {
+  const [found, setFound] = useState<{ revision: string; changes: string[] } | null>(null);
+  const [reread, setReread] = useState(0);
+  useEffect(() => setReread(0), [revision]);
+  useEffect(() => {
+    let current = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    void changesIn(revision).then(list => {
+      if (!current) return;
+      setFound({ revision, changes: list });
+      if (!changes.has(revision) && reread < REREADS) timer = setTimeout(() => setReread(n => n + 1), REREAD_MS);
+    });
+    return () => { current = false; clearTimeout(timer); };
+  }, [revision, reread]);
+  return found?.revision === revision ? found.changes : [];
+}
+
+/**
+ * What hovering the control says: which build it is about, which one is running now, what happens next, and what the
+ * build brings, in the changelog's words.
+ */
+function UpdateHint({ id, revision, title, children }: { id: string; revision: string; title: ReactNode; children: ReactNode }) {
+  const news = useChanges(revision);
   return <span id={id} role="tooltip" className="update-hint"><span>
     <span className="text-fg">{title}</span>
     <span>You’re on {__SCARLET_VERSION__}{__SCARLET_REVISION__ && <>, build {build(__SCARLET_REVISION__)}</>}.</span>
     {children}
+    {news.length > 0 && <span className="update-hint-news">
+      <span className="text-fg">What’s new</span>
+      <ul>{news.slice(0, MOST_CHANGES).map(change => <li key={change}>{plainChange(change)}</li>)}</ul>
+      {news.length > MOST_CHANGES && <span>And {news.length - MOST_CHANGES} more in Settings › About once it’s installed.</span>}
+    </span>}
   </span></span>;
 }
 
@@ -70,7 +113,7 @@ export function UpdateButton() {
       {restarting ? "Restarting…" : "Restart to update"}
     </button>
     {error ? <span role="alert" className="update-button-error">{error}</span>
-      : ready && <UpdateHint id={hint} title={<>Build {build(ready)} is ready</>}>
+      : ready && <UpdateHint id={hint} revision={ready} title={<>Build {build(ready)} is ready</>}>
         <span>Restarting installs it and brings you back here.</span>
       </UpdateHint>}
   </aside>;
@@ -85,7 +128,7 @@ export function UpdateButton() {
       Updating
       <span className="update-button-figure">{percent}%</span>
     </span>
-    <UpdateHint id={hint} title={<>Updating to build {build(building.revision)}</>}>
+    <UpdateHint id={hint} revision={building.revision} title={<>Updating to build {build(building.revision)}</>}>
       <span>Scarlet is building it in the background. Keep working: this becomes Restart to update when it’s ready.</span>
     </UpdateHint>
   </aside>;

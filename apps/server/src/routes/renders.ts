@@ -66,7 +66,8 @@ function frameSources(timeline: Timeline) {
 export function renderRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
 
-  const frames = new AnalysisCache<Buffer>(jpeg => jpeg.length);
+  // The picture lane alone decides how many frames decode at once, and keeps a slot for the editor's.
+  const frames = new AnalysisCache<Buffer>(jpeg => jpeg.length, undefined, Infinity);
   // A GPU or a preview copy that fails does so for every frame of a scrub, so the retry is logged once a minute.
   const retried = throttledLog(line => ctx.log(line));
   async function requestFrame(request: Request, projectId: string, key: string, priority: boolean, cacheControl: string, decode: (signal: AbortSignal) => Promise<Buffer>, etag?: string) {

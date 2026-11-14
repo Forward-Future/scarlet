@@ -55,6 +55,8 @@ export interface RenderOptions {
   exportRange?: TimeRange;
   exportHeight?: number;
   omitCaptions?: boolean;
+  /** Export at original quality: software x264 at CRF 10 and 320 kb/s sound. */
+  best?: boolean;
   /** Output height in px (width follows the project aspect). Defaults to project height. */
   height?: number;
   hwaccel?: "none" | "auto" | "nvenc" | "qsv" | "videotoolbox";
@@ -327,8 +329,8 @@ async function renderRange(project: Project, timeline: Timeline, range: TimeRang
 
   filters.push(`${concatInputs.join("")}concat=n=${pieces.length}:v=1:a=1[vout][aout]`);
 
-  const crf = opts.quality === "delivery" ? "18" : "23";
-  const preset = opts.quality === "delivery" ? "medium" : "veryfast";
+  const crf = opts.best ? "10" : opts.quality === "delivery" ? "18" : "23";
+  const preset = opts.best ? "slow" : opts.quality === "delivery" ? "medium" : "veryfast";
   await ffmpeg(
     [
       "-progress", "pipe:1", "-nostats",
@@ -337,7 +339,7 @@ async function renderRange(project: Project, timeline: Timeline, range: TimeRang
       "-map", "[vout]", "-map", "[aout]", "-map_chapters", "-1",
       "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p", "-r", String(fps),
       ...(opts.quality === "delivery" ? [] : ["-g", String(Math.max(1, Math.round(fps / 2)))]),
-      "-c:a", "aac", "-b:a", "160k", "-ar", String(sr),
+      "-c:a", "aac", "-b:a", opts.best ? "320k" : "160k", "-ar", String(sr),
       "-movflags", "+faststart", "-y", outputPath,
     ],
     { signal: opts.signal, onProgress: opts.onProgress, duration: total },

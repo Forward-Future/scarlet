@@ -52,6 +52,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // Finish the exports that were in progress when Scarlet last quit.
       void import("../lib/exportJobs").then(jobs => jobs.resumeExports())
         .catch(error => appLog("error", "resume-exports", { error: errorMessage(error) }, { level: "warn" }));
+      // And the imports, in every project that has files still to copy.
+      void import("../components/media/UploadDropzone").then(imports => imports.resumeAllImports())
+        .catch(error => appLog("error", "resume-imports", { error: errorMessage(error) }, { level: "warn" }));
     } catch (err) {
       if (current !== attempt) return;
       const error = errorMessage(err);

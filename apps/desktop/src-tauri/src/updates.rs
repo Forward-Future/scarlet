@@ -133,6 +133,26 @@ pub async fn update_status(app: AppHandle) -> UpdateStatus {
     UpdateStatus { ready, building: building(&app) }
 }
 
+/// The CHANGELOG.md of a build the updater has fetched, read from its private checkout of main, so hovering the update
+/// says what the build brings. Empty when that build has no changelog or the checkout doesn't have it yet.
+#[tauri::command]
+pub async fn update_changelog(app: AppHandle, revision: String) -> Result<String, String> {
+    if !valid_revision(&revision) {
+        return Err("Invalid update revision.".into());
+    }
+    let Some(source) = socket_path(&app).map(|socket| socket.with_file_name("source")) else { return Ok(String::new()) };
+    if !source.is_dir() {
+        return Ok(String::new());
+    }
+    let mut git = tokio::process::Command::new("git");
+    crate::util::hide_console(&mut git);
+    git.args(["show", &format!("{revision}:CHANGELOG.md")]).current_dir(&source).kill_on_drop(true);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(5), git.output()).await
+        .map_err(|_| "Reading the update's changelog took too long.".to_owned())?
+        .map_err(|err| format!("Couldn't read the update's changelog: {err}"))?;
+    Ok(if output.status.success() { String::from_utf8_lossy(&output.stdout).into_owned() } else { String::new() })
+}
+
 #[tauri::command]
 pub async fn restart_for_update(app: AppHandle, revision: String) -> Result<(), String> {
     if !valid_revision(&revision) {

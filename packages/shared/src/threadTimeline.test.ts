@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Change, leftOutJoins, timelineDuration, timelineFromKeepRanges } from "@scarlet/timeline";
 import { buildThreads } from "./threads.js";
+import { Task } from "./api.js";
 import { changeRemovals, matchesEdit, REVISED_CHECK, threadEditList, threadTimeline } from "./threadTimeline.js";
 
 const head = { ...timelineFromKeepRanges("project", "interview", [{ start: 0, end: 3468 }]), version: "v2" };
@@ -73,6 +74,15 @@ describe("reviewing one thread on the working interview timeline", () => {
     expect(result.every(e => e.range.start < e.range.end)).toBe(true);
   });
 
+  it("flags an applied dialogue cut that carries a reason to check, and only that one", () => {
+    const reasons = [{ start: 1, end: 1.5, reason: "False start", check: "A removed word starts right after the cut: watch and listen at the join." },
+      { start: 2, end: 2.5, reason: "Repeated line" }];
+    const cuts = { ...change, toVersion: head.version, ranges: [{ start: 1, end: 1.5 }], cutReasons: reasons,
+      ops: reasons.map(({ start, end }) => ({ op: "rippleDelete", start, end })).reverse() };
+    const result = threadTimeline(thread([cuts]), head, links, () => earlier, 30);
+    expect(result.map(e => [e.label, e.check])).toEqual([["False start", reasons[0]!.check], ["Repeated line", undefined]]);
+  });
+
   it("reads a cut named by the footage around its join as a cut, with the footage it removed", () => {
     // Named as the tool asks: the playback either side of the join, which is footage that stayed.
     const gulp = { ...change, toVersion: head.version, ops: [{ op: "rippleDelete", start: 584.05, end: 585.6 }],
@@ -132,6 +142,59 @@ describe("reviewing one thread on the working interview timeline", () => {
     expect(flagged).toMatchObject([{ changeId: "batch", label: "Remove the delivery aside", kind: "cut", at: 99,
       check: "Tight speech join", reviewChangeId: flag.id, summary: "Removed the aside.", beforeCut: { version: "base", removed: { start: 99, end: 101 } } }]);
     expect(flagged).toHaveLength(1);
+  });
+
+  it("reads a later save that only moved a cut's join as that cut, revised", () => {
+    const keep = (version: string, ...ranges: Array<[number, number]>) =>
+      ({ ...timelineFromKeepRanges("project", "interview", ranges.map(([start, end]) => ({ start, end }))), version });
+    const versions: Record<string, ReturnType<typeof keep>> = {
+      base: keep("base", [0, 3468]),
+      v1: keep("v1", [0, 99], [101, 3468]),
+      // Listening back, the pass started 0.2 s earlier after the join, then let the line before it run 0.3 s longer,
+      // then took the breath after it out as well.
+      v2: keep("v2", [0, 99], [100.8, 3468]),
+      v3: keep("v3", [0, 99.3], [100.8, 3468]),
+      v4: keep("v4", [0, 99.3], [101.5, 3468]),
+    };
+    const read = (version: string) => versions[version];
+    const all = ["base", "v1", "v2", "v3", "v4"].map((version, i, list) => ({ version, parent: list[i - 1] ?? null }));
+    const save = (id: string, fromVersion: string, toVersion: string, timelineEdits: NonNullable<Change["timelineEdits"]>) =>
+      ({ ...change, id, fromVersion, toVersion, createdAt: `2026-01-0${toVersion[1]}T00:00:00Z`, timelineEdits });
+    const pass = save("batch", "base", "v1", [{ label: "Remove the delivery aside", range: { start: 99, end: 99 } }]);
+    const right = save("right", "v1", "v2", [{ label: "Keep the price whole", range: { start: 99, end: 99 },
+      check: "Listen for the start of “fifteen”", summary: "Started in the quiet before “fifteen.”" }]);
+    const left = save("left", "v2", "v3", [{ label: "Finish the model number", range: { start: 99.3, end: 99.3 }, summary: "Kept the final “three.”" }]);
+    const more = save("more", "v3", "v4", [{ label: "Close the breath", range: { start: 99.3, end: 99.3 }, summary: "Took out the breath after it." }]);
+
+    // Footage put back on the right of the join: the cut is still the pass's, at the same place, and removes less.
+    const once = threadTimeline(thread([pass, right]), versions.v2!, all, read, 30);
+    expect(once).toHaveLength(1);
+    expect(once[0]).toMatchObject({ changeId: "batch", label: "Remove the delivery aside", kind: "cut", at: 99,
+      check: "Listen for the start of “fifteen”", reviewChangeId: "right", summary: "Started in the quiet before “fifteen.”",
+      // Its reason to look is the later save's, so a Keep is recorded under that save's edit.
+      reviewRef: { changeId: "right", spot: 0 }, beforeCut: { version: "base" } });
+    expect(once[0]!.beforeCut!.removed.start).toBeCloseTo(99);
+    expect(once[0]!.beforeCut!.removed.end).toBeCloseTo(100.8);
+
+    // Put back on the left, the join moves along with it. Taking more out there is the same cut again.
+    const twice = threadTimeline(thread([pass, right, left]), versions.v3!, all, read, 30);
+    expect(twice.map(e => [e.changeId, e.kind, e.at, e.summary])).toEqual([["batch", "cut", 99.3, "Kept the final “three.”"]]);
+    const thrice = threadTimeline(thread([pass, right, left, more]), versions.v4!, all, read, 30);
+    expect(thrice.map(e => [e.changeId, e.kind, e.at, e.reviewChangeId])).toEqual([["batch", "cut", 99.3, "more"]]);
+    expect(thrice[0]!.beforeCut!.removed.start).toBeCloseTo(99.3);
+    expect(thrice[0]!.beforeCut!.removed.end).toBeCloseTo(101.5);
+
+    // Put back whole, the cut is not in the video and neither is the footage an addition to it.
+    const whole = { ...versions.base!, version: "v2" };
+    const undo = save("undo", "v1", "v2", [{ label: "Keep the complete aside", range: { start: 99, end: 101 } }]);
+    expect(threadTimeline(thread([pass, undo]), whole, all.slice(0, 3), v => v === "v2" ? whole : read(v), 30)).toEqual([]);
+
+    // With no cut of this request at the join, footage named at a point is still a stretch of the video.
+    const alone = threadTimeline(thread([right]), versions.v2!, all, read, 30);
+    expect(alone).toMatchObject([{ changeId: "right", kind: "restore" }]);
+    expect(alone[0]!.at).toBeUndefined();
+    expect(alone[0]!.range.start).toBeCloseTo(99);
+    expect(alone[0]!.range.end).toBeCloseTo(99.2);
   });
 
   it("shows the footage a change left out as it built the video from the pieces to keep, each stretch a cut", () => {
@@ -225,5 +288,47 @@ describe("listing a thread's edits in the chat", () => {
       summary: "Raised the narration 4 dB, which brings the room tone up with it" });
     // A revision's card says what the revision did, not what the edit it replaced did.
     expect(listed[1]!.summary).toBeUndefined();
+  });
+});
+
+describe("a doubt a later request raises about an edit already in the video", () => {
+  const run = (id: string, threadId: string) => Task.parse({ id, projectId: "project", kind: "edit", agent: "codex", instruction: id,
+    state: "done", createdBy: { type: "human", name: "Editor" }, createdAt: "2026-01-01T00:00:00Z", context: { threadId } });
+  const pass = { ...change, id: "pass", threadId: "dialogue", taskId: "cutting", timelineEdits: [
+    { label: "Keep the list cue", range: { start: 724, end: 724 } },
+    { label: "Carry the quotation into the reaction", range: { start: 724, end: 728 } }] };
+  const zooms = { ...change, id: "zooms", threadId: "framing", taskId: "framing-run", fromVersion: "v1", toVersion: "v2",
+    createdAt: "2026-01-02T00:00:00Z", timelineEdits: [{ label: "Frame the spreadsheet", range: { start: 623, end: 724 } }] };
+  const flags = [{ spot: 1, check: "Black gap and overlapping lines", taskId: "framing-run", at: "2026-01-02T00:05:00.000Z" }];
+
+  it("lists the edit with the request that raised it, as one that needs the editor, and leaves the one that made it as it was", () => {
+    const threads = buildThreads({ changes: [{ ...pass, flags }, zooms], notes: [], tasks: [run("cutting", "dialogue"), run("framing-run", "framing")] });
+    const framing = threads.find(t => t.id === "framing")!, dialogue = threads.find(t => t.id === "dialogue")!;
+    expect(framing.flagged?.map(c => c.id)).toEqual(["pass"]);
+    expect(dialogue.flagged).toBeUndefined();
+    const listed = threadTimeline(framing, head, links, () => earlier, 30);
+    expect(listed.map(e => [e.changeId, e.label, e.check, e.elsewhere, e.recheck])).toEqual([
+      ["zooms", "Frame the spreadsheet", undefined, undefined, undefined],
+      ["pass", "Carry the quotation into the reaction", "Black gap and overlapping lines", true, flags[0]!.at]]);
+    expect(threadTimeline(dialogue, head, links, () => earlier, 30).map(e => e.check)).toEqual([undefined, undefined]);
+  });
+
+  it("raises it on the request's own edit, as a new doubt a Keep before it doesn't settle", () => {
+    const own = { ...pass, flags: [{ ...flags[0]!, taskId: "cutting" }] };
+    const [dialogue] = buildThreads({ changes: [own], notes: [], tasks: [run("cutting", "dialogue")] });
+    expect(dialogue!.flagged).toBeUndefined();
+    expect(threadEditList(dialogue!).map(e => [e.spot, e.check, e.recheck, e.elsewhere])).toEqual([
+      [0, undefined, undefined, undefined], [1, "Black gap and overlapping lines", flags[0]!.at, undefined]]);
+  });
+
+  it("puts a revision the raising request made of it in its place", () => {
+    const revision = { ...zooms, id: "fix", timelineEdits: [{ label: "Close the gap", range: { start: 724, end: 726 }, replaces: { changeId: "pass", spot: 1 } }] };
+    const [framing] = buildThreads({ changes: [{ ...pass, flags }, revision], notes: [], tasks: [run("framing-run", "framing")] })
+      .filter(t => t.id === "framing");
+    expect(threadEditList(framing!).map(e => [e.changeId, e.check, e.previous])).toEqual([["fix", REVISED_CHECK, [{ changeId: "pass", spot: 1 }]]]);
+    // The editor's request about it from that request's card stays there, and doesn't join the two requests.
+    const revise = Task.parse({ ...run("revise-run", "framing"), kind: "revise", context: { threadId: "framing", changeId: "pass", editIndex: 1 } });
+    const threads = buildThreads({ changes: [{ ...pass, flags }, revision], notes: [], tasks: [run("cutting", "dialogue"), run("framing-run", "framing"), revise] });
+    expect(threads.map(t => [t.id, t.tasks.map(x => x.id)])).toEqual(expect.arrayContaining([["dialogue", ["cutting"]], ["framing", ["framing-run", "revise-run"]]]));
   });
 });

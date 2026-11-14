@@ -209,6 +209,28 @@ describe("native retake boundaries", () => {
     expect(cut.room.start).toEqual({ start: expect.closeTo(1.44), end: expect.closeTo(1.52) });
   });
 
+  it("ends a cut where a kept word sounds, when the transcript times it in the pause before", () => {
+    // “…got you. <1.2 s> Alright, so”, transcribed “got you all <1.2 s> right so”: the “all” of “alright” timed in the
+    // quiet straight after “you”. Cutting “got you” used to end before that “all” and keep the whole pause.
+    const said = [{ start: .5, end: .9, text: "this" }, { start: 1.4, end: 1.6, text: "got" }, { start: 1.6, end: 1.76, text: "you" },
+      { start: 1.76, end: 1.93, text: "all" }, { start: 3.12, end: 3.3, text: "right" }, { start: 3.3, end: 3.46, text: "so" }];
+    const sounds = [{ start: .5, end: .9 }, { start: 1.4, end: 1.76 }, { start: 3.0, end: 3.46 }];
+    const rms = Array.from({ length: 200 }, (_, i) => sounds.some(v => v.start <= i / 50 && i / 50 < v.end) ? .1 : .0005);
+    const edges = joinEvidence(said, { from: 0, to: 4, peaks: rms, rms, speechActivity: sounds });
+    const cut = wordCutRange(said, 1, 2, () => edges);
+    expect(cut.end).toBeCloseTo(3.0 - AIR_BEFORE_SPEECH);
+    expect(cut.problems).toEqual([]);
+    expect(cut.retimed).toEqual([expect.stringContaining("its sound starts at 3 s")]);
+    // A breath before the word is under speaking level and goes with the pause; a kept word that does sound where it
+    // is timed keeps its edge.
+    const breath = rms.map((v, i) => i >= 120 && i < 126 ? .015 : v);
+    expect(wordCutRange(said, 1, 2, () => joinEvidence(said, { from: 0, to: 4, peaks: breath, rms: breath, speechActivity: sounds })).end).toBeCloseTo(3.0 - AIR_BEFORE_SPEECH);
+    const spoken = rms.map((v, i) => i >= 88 && i < 96 ? .1 : v);
+    const plain = wordCutRange(said, 1, 2, () => joinEvidence(said, { from: 0, to: 4, peaks: spoken, rms: spoken, speechActivity: [...sounds, { start: 1.76, end: 1.92 }] }));
+    expect(plain.end).toBeLessThan(1.8);
+    expect(plain.retimed).toEqual([]);
+  });
+
   it("saves a placed edge on the frame nearest to it inside the quiet it was measured in, and leaves it when none fits", () => {
     const same = (t: number) => t;
     // At 30 fps frames fall at 2.333 and 2.367 s. Rounded inward, a start at 2.35 s would be saved at 2.367.

@@ -38,7 +38,8 @@ export function mediaRoutes(ctx: Ctx) {
   const readSources = transcriptSourceReader(ctx);
   const transcripts = transcriptReader(ctx);
   const r = new Hono<AppEnv>();
-  const frames = new AnalysisCache<Buffer>(frame => frame.length);
+  // The picture lane alone decides how many frames decode at once, and keeps a slot for the editor's.
+  const frames = new AnalysisCache<Buffer>(frame => frame.length, undefined, Infinity);
   const speech = new AnalysisCache<Awaited<ReturnType<typeof speechActivity>>>(spans => 48 * spans.length, 1024 * 1024);
   const previews = sourcePreviews;
   const imports = new Map<string, ReturnType<typeof ingestMedia>>();
@@ -353,7 +354,8 @@ export function mediaRoutes(ctx: Ctx) {
           catch { signal.throwIfAborted(); } // An evicted or damaged preview can be sampled from the original.
         }
       }
-      const indexedMp4 = preview && !!media.previewClock && hasIndexedAvc(media);
+      // The agent's frames read the movie's index too: the same picture, a third sooner on a long recording.
+      const indexedMp4 = !!media.previewClock && hasIndexedAvc(media);
       // The original decodes on an NVIDIA GPU when there is one.
       const decoder = await pictureDecoder(ctx.settings().render.hwaccel) === "cuda" ? "cuda" as const : undefined;
       return ctx.render.extractFrame(file, t, { width: w, signal, indexedMp4, decoder });

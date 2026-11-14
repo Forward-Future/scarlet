@@ -1,12 +1,14 @@
 import { DialogueScanPage, planText, taskNeedsTranscripts, taskPlan, taskRecoveryAction, type RunChoice, type Task } from "@scarlet/shared";
-import { mergeRanges, type TimeRange } from "@scarlet/timeline";
+import os from "node:os";
+import { mergeRanges, type Change, type TimeRange } from "@scarlet/timeline";
 import { processIsAlive, type Ctx } from "../context.js";
 import { now } from "../db.js";
 import { conflict, notFound } from "../errors.js";
 import { appendTaskEvent, createTask, hasTranscript, RESUMABLE, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
 import { recordTaskFinished } from "../telemetry/events.js";
 import { beginRevision } from "./revisionState.js";
-import { skillEditEnded } from "./learnings.js";
+import { prepareCutReview } from "./changes.js";
+import { skillEditEnded, startLearningCheck } from "./learnings.js";
 import { startTranscription, transcribeForDialogue } from "./ingest.js";
 import { getTranscriptionProvider, presetLabel } from "../transcribe/index.js";
 
@@ -27,19 +29,34 @@ const LOST_WORKER_ATTEMPTS = 3;
  * can repeat, so those are counted.
  */
 function reconcileTask(ctx: Ctx, task: Task, unstarted: boolean, quit: boolean): Task {
-  const saved = settleTask(ctx, task, unstarted);
+  let saved = settleTask(ctx, task, unstarted);
   ctx.log(`[task] ${task.id} recovered after its worker stopped: ${task.state} → ${saved.state}${saved.error ? ` (${saved.error})` : ""}`);
   const rootId = task.resumeRootId ?? task.id;
-  const again = quit || ctx.repos.tasks.count("project_id = ? AND (id = ? OR json_extract(json, '$.resumeRootId') = ?)",
-    [task.projectId, rootId, rootId]) < LOST_WORKER_ATTEMPTS;
+  // Only the attempts that lost their worker count. A pass that came through three quits, or that the editor resumed
+  // by hand, still carries on by itself the first time its worker goes missing.
+  if (!quit && saved.state === "failed" && saved.interrupted) saved = saveTask(ctx, { ...saved, lostWorker: true });
+  const again = quit || ctx.repos.tasks.count(`project_id = ? AND (id = ? OR json_extract(json, '$.resumeRootId') = ?)
+    AND json_extract(json, '$.lostWorker') = 1`, [task.projectId, rootId, rootId]) < LOST_WORKER_ATTEMPTS;
   let carriesOn = false;
   // A learning check cut short isn't run again: its request has moved on, and the next message is read anyway.
   if (again && saved.state === "failed" && saved.interrupted && saved.kind !== "transcribe" && saved.kind !== "learning_check") {
     try {
-      resumeTask(ctx, saved);
+      // All of the next attempt or none of it: one left half made would run beside a run that still offers Resume.
+      ctx.db.savepoint(() => resumeTask(ctx, saved));
       carriesOn = true;
     } catch (err) {
       ctx.log(`[task] ${task.id} couldn’t resume by itself: ${(err as Error).message}`);
+    }
+  }
+  // A learning check reads one message and edits nothing, so one cut short by a quit starts again as it first did,
+  // unless it had already offered its rule. Otherwise a rule said just before quitting would never reach Learnings.
+  // One that lost its worker isn't: the next message is read anyway.
+  if (quit && saved.kind === "learning_check" && saved.state === "failed" && saved.interrupted && !saved.retryTaskId) {
+    const asked = saved.context.checksTaskId ? ctx.repos.tasks.get(saved.context.checksTaskId) : null;
+    if (asked && asked.projectId === saved.projectId
+      && !ctx.repos.learnings.count("project_id = ? AND json_extract(json, '$.taskId') = ?", [asked.projectId, asked.id])) {
+      const again = startLearningCheck(ctx, asked);
+      if (again) saved = saveTask(ctx, { ...saved, retryTaskId: again.id });
     }
   }
   // A rule the editor approved was being saved by this run. An attempt that carries on is still saving it, so the
@@ -106,6 +123,8 @@ export function interruptTask(ctx: Ctx, taskId: string, ifStartedAt?: string, qu
 /** Native workers have a local PID. Standalone hosts confirm individual tasks in their 30 s heartbeat. */
 export function recoverTasks(ctx: Ctx, starting = false): void {
   const cutoff = new Date(Date.now() - 90_000).toISOString();
+  // A minute's margin for a clock set since.
+  const booted = new Date(Date.now() - os.uptime() * 1000 - 60_000).toISOString();
   ctx.db.transaction(() => {
     const renew = ctx.db.prepare("UPDATE tasks SET worker_seen_at = ? WHERE id = ?");
     for (const id of ctx.transcriptions.keys()) renew.run(now(), id);
@@ -114,7 +133,8 @@ export function recoverTasks(ctx: Ctx, starting = false): void {
       AND (worker_pid IS NOT NULL OR worker_seen_at IS NULL OR worker_seen_at <= ?)`)
       .all(cutoff) as Array<{ id: string; worker_pid: number | null; worker_seen_at: string | null }>;
     for (const { id, worker_pid: pid, worker_seen_at: seen } of workers) {
-      const alive = pid !== null && processIsAlive(pid);
+      // A worker last heard from before the computer started can't be the process that has its id now.
+      const alive = pid !== null && processIsAlive(pid) && !(seen && seen < booted);
       if (starting && (alive || (pid === null && seen))) {
         // A surviving worker gets a heartbeat window after restart or system sleep.
         // Even a reused PID will expire if no worker actually confirms this job.
@@ -122,14 +142,32 @@ export function recoverTasks(ctx: Ctx, starting = false): void {
         continue;
       }
       if (alive && seen && seen > cutoff) continue;
-      const task = ctx.repos.tasks.get(id)!;
-      // Found dead at startup: Scarlet was closed or crashed mid-run.
-      reconcileTask(ctx, task, pid !== null && !alive && task.state === "claimed", starting);
-      ctx.bus.taskQueued({ taskId: id, projectId: task.projectId });
+      // Each run is settled by itself: one that can't be leaves the others their recovery, and is tried again in
+      // the next round.
+      try {
+        ctx.db.savepoint(() => {
+          const task = ctx.repos.tasks.get(id)!;
+          // Found dead at startup: Scarlet was closed or crashed mid-run.
+          reconcileTask(ctx, task, pid !== null && !alive && task.state === "claimed", starting);
+          ctx.bus.taskQueued({ taskId: id, projectId: task.projectId });
+        });
+      } catch (err) {
+        ctx.log(`[task] ${id} couldn’t be recovered and will be tried again: ${(err as Error).message}`);
+      }
     }
-    if (starting) returnRulesLeftWithQuestions(ctx);
+    if (starting) {
+      try {
+        ctx.db.savepoint(() => returnRulesLeftWithQuestions(ctx));
+      } catch (err) {
+        ctx.log(`[task] couldn’t return the rules left with questions: ${(err as Error).message}`);
+      }
+    }
   }, "immediate")();
-  resumeTranscriptions(ctx);
+  try {
+    resumeTranscriptions(ctx);
+  } catch (err) {
+    ctx.log(`[task] couldn’t continue interrupted transcriptions: ${(err as Error).message}`);
+  }
 }
 
 /**
@@ -162,6 +200,9 @@ function resumeTranscriptions(ctx: Ctx): void {
       const ranWith = task.context.transcribedWith;
       if (provider.name !== "whispercpp" && ranWith && ranWith !== provider.name) {
         ctx.log(`[task] ${task.id} was interrupted; ${media.id} ran with ${ranWith} and is left for Retry, since ${provider.name} is selected now`);
+        // It won't start again by itself, so it is no longer an interruption: a run that waits for this transcript
+        // stops waiting (continueReadyRuns), and this is said once, not every half minute.
+        ctx.db.transaction(() => saveTask(ctx, { ...task, interrupted: undefined }), "immediate")();
         continue;
       }
       if (ctx.db.prepare(`SELECT 1 FROM transcripts WHERE media_id = ? AND project_id = ? AND created_at > ?
@@ -173,6 +214,22 @@ function resumeTranscriptions(ctx: Ctx): void {
     } catch (err) {
       ctx.log(`[task] ${task.id} couldn’t restart its transcription: ${(err as Error).message}`);
     }
+  }
+}
+
+/**
+ * How many of a waiting pass's staged cuts have no recommendation yet. The run that staged them knew, and the one that
+ * carries on is a new process that doesn't: without this it can finish with them unchecked, and they reach the
+ * editor as calls Scarlet never looked at.
+ */
+function unchecked(ctx: Ctx, change: Change): string {
+  if (change.state !== "ready") return "";
+  try {
+    const total = prepareCutReview(ctx, change).review?.cuts.length ?? 0;
+    const left = total - (change.cutAssessments?.filter(a => !a.provisional).length ?? 0);
+    return left > 0 ? ` ${left} of its ${total} staged cuts ${left === 1 ? "has" : "have"} no recommendation yet.` : "";
+  } catch {
+    return "";
   }
 }
 
@@ -217,7 +274,7 @@ function recoveryInstruction(ctx: Ctx, task: Task, rootId?: string): string {
     // a resumed pass that read fifteen such proposals as [rejected] kept 24 of the 27 cuts held for review, "as you
     // chose earlier" (2026-11-13).
     const state = c.state === "rejected" && c.replacedBy ? `replaced by ${c.replacedBy}, which holds its cuts now; the editor made no decision on it` : c.state;
-    lines.push(`Saved change ${c.id} [${state}], version ${c.appliedVersion ?? c.toVersion}: ${c.description}`);
+    lines.push(`Saved change ${c.id} [${state}], version ${c.appliedVersion ?? c.toVersion}: ${c.description}${unchecked(ctx, c)}`);
   }
   return lines.join("\n");
 }
@@ -243,10 +300,12 @@ function resumeTask(ctx: Ctx, task: Task, choice: RunChoice = {}): Task {
   const resumeRootId = action === "resume" ? task.resumeRootId ?? id : undefined;
   // A new id fences off late events, proposals and completions from the previous worker.
   const run = choice.agent ? { agent: choice.agent, model: choice.model, effort: choice.effort, fast: choice.fast, serviceTier: choice.serviceTier } : {};
-  const retry = createTask(ctx, {
+  let retry = createTask(ctx, {
     ...task, ...run, state: "queued", instruction: recoveryInstruction(ctx, task, resumeRootId), resumeRootId,
     context: { ...task.context, threadId: task.context.threadId ?? id, message: task.context.message ?? task.instruction },
   });
+  // A request the editor started ahead of their calls was at work: it isn't put behind those calls again.
+  if (task.startsBeforeCalls) retry = saveTask(ctx, { ...retry, startsBeforeCalls: true });
   const proposal = task.kind === "revise" && task.context.changeId && ctx.repos.changes.get(task.context.changeId);
   // The revision begins again on the proposal it names while that one stands. A pass a later revision has replaced stays
   // put away: marked as revising it would read as the pass this request revises, and its cut would be moved there

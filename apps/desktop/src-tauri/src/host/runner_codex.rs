@@ -339,11 +339,14 @@ pub async fn run_codex(mut opts: RunOptions) -> RunResult {
     let st = Arc::new(Mutex::new(CodexState::default()));
     let st2 = st.clone();
     let on_event = opts.on_event.clone();
+    let on_usage = opts.on_usage.clone();
+    let mut sent_usage = None;
     let handler = Box::new(move |line: &str| -> bool {
         let mut s = st2.lock().unwrap();
         for ev in parse_codex_line(line, &mut s) {
             on_event(ev);
         }
+        super::runner::report_usage(&on_usage, &mut sent_usage, s.usage.clone());
         if s.should_stop {
             s.should_stop = false;
             return true;

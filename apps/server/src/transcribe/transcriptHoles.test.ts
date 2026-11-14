@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import type { TranscriptSegment } from "@scarlet/timeline";
-import { fillTranscriptHoles, heardInHoles, transcriptHoles, wavLevels, withHoleWords, writeHoleAudio } from "./transcriptHoles.js";
+import { fillTranscriptHoles, heardInHoles, transcriptHoles, wavLevels, withHoleWords, wordsOnSound, writeHoleAudio } from "./transcriptHoles.js";
 
 const RATE = 16000;
 const seg = (...words: Array<[string, number, number]>): TranscriptSegment => ({ id: "s" + words[0]![1], start: words[0]![1], end: words.at(-1)![2],
@@ -84,5 +84,36 @@ it("reads the holes once, places what it heard, and returns the transcript uncha
     // A transcript with a word on every sound never runs Whisper again.
     const whole = [...transcript, seg(["which", 5, 5.6], ["includes", 5.7, 6.5])];
     expect(await fillTranscriptHoles({ ...base, segments: whole, read: async () => { throw new Error("not read"); }, align: async f => f })).toBe(whole);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+it("brings a word stretched over a wait in to its sound, and leaves words that sound throughout alone", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-holes-"));
+  try {
+    await recording(join(dir, "a.wav"), 22, spoke);
+    const levels = await wavLevels(join(dir, "a.wav"));
+    // "that" starts 0.6 s early, over the quiet before the sound at 9 s, and "matters" runs a second into the quiet after 11 s.
+    // A word quiet throughout, as Whisper writes over a wait, keeps its times; so does a short word with a sliver of quiet.
+    const stretched = [seg(["it", 1, 1.5], ["uses", 1.6, 2.2], ["Blender", 2.3, 3]), seg(["that", 8.4, 9.6], ["matters", 9.7, 12]),
+      seg(["hmm", 14, 15]), seg(["next", 19.9, 21])];
+    const { segments, moved } = wordsOnSound(stretched, levels);
+    expect(moved).toBe(2);
+    expect(segments[0]).toBe(stretched[0]);
+    expect(segments[1]!.words).toEqual([{ text: "that", start: 9, end: 9.6 }, { text: "matters", start: 9.7, end: 11 }]);
+    expect(segments.slice(2)).toEqual(stretched.slice(2));
+    // The waits that now show are quiet, so the only stretch to read again is still the unexplained speech at 5–6.5 s.
+    expect(transcriptHoles(segments, levels).map(h => Math.round(h.start * 10) / 10)).toEqual([4.7]);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+it("only fits the words to their sound when there is no reader for the holes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-holes-"));
+  try {
+    await recording(join(dir, "a.wav"), 22, spoke);
+    const log: string[] = [];
+    const out = await fillTranscriptHoles({ wav: join(dir, "a.wav"), segments: [seg(["that", 8.4, 9.6])], tmpDir: dir, signal: new AbortController().signal,
+      log: m => log.push(m), align: async () => { throw new Error("not aligned"); } });
+    expect(out[0]!.words[0]).toMatchObject({ start: 9, end: 9.6 });
+    expect(log).toEqual(["[transcribe] brought 1 word in from the quiet beside it"]);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

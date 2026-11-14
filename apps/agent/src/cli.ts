@@ -153,6 +153,8 @@ async function cmdStart(): Promise<void> {
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  // Closing the terminal is a quit too: the runs are handed back to be resumed, not left running with no host.
+  if (process.platform !== "win32") process.on("SIGHUP", () => void shutdown("SIGHUP"));
   await host.start();
 }
 

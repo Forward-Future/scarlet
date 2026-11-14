@@ -193,7 +193,8 @@ function LearningRow({ learning, rewording }: { learning: Learning; rewording: {
         <button ref={reviseButton} type="button" className="btn-quiet learn-revise" aria-pressed={editing} disabled={busy}
           onMouseDown={e => { if (now.current.editing) e.preventDefault(); }}
           onClick={() => editing ? reviseButton.current?.focus() : startRewording()}>Revise</button>
-        <button type="button" className="btn-primary" disabled={busy || !options.length}
+        {/* A skill that was deleted since isn't on offer: the dropdown asks for one, and Approve waits for it. */}
+        <button type="button" className="btn-primary" disabled={busy || !options.some(o => o.value === chosen)}
           onClick={() => void decide(async () => {
             if (await revised.current) await store().approveLearning(learning.id, chosen, effective ?? undefined);
           })}>Approve</button>

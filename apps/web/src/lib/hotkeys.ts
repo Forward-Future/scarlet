@@ -33,7 +33,10 @@ export function ignorePageShortcut(e: KeyboardEvent, owner?: Element | null): bo
   if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target)) return true;
   // A small popover that is open closes on Esc before anything behind it does, wherever its own listener sits.
   if (e.key === "Escape" && document.querySelector("[data-escape-owner]")) return true;
-  if (e.key === " " && e.target instanceof Element && e.target.closest('button, a, [role="button"]') && !mediaPlaying()) return true;
+  // A focused handle of the marked range takes its own Esc, and leaves Space to the player: it has no click of its own.
+  const handle = e.target instanceof Element && !!e.target.closest("[data-range-handle]");
+  if (e.key === "Escape" && handle) return true;
+  if (e.key === " " && !handle && e.target instanceof Element && e.target.closest('button, a, [role="button"]') && !mediaPlaying()) return true;
   // A clip inside version history can handle its own keys while the drawer has focus.
   const dialog = owner?.closest("dialog[open]");
   if (dialog && e.target instanceof Element && e.target.closest("dialog[open]") === dialog) {

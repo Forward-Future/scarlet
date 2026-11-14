@@ -41,6 +41,9 @@ export interface RepeatAuditResult {
   joins?: JoinHearing[];
 }
 
+/** Subtracting two times in seconds can land a hair past an exact limit (16.1 - 8.1 > 8): a window that long still counts. */
+const WINDOW_SLACK = 1e-6;
+
 export const RepeatAuditRequest = z.object({
   version: z.string().min(1), startedAt: z.string().optional(),
   keep: z.array(z.object({ id: z.string().min(1), reason: z.string().trim().min(1).max(300) })).max(100).default([]),
@@ -56,13 +59,13 @@ export const SheetOptions = {
 export const SheetRequest = z.object({
   ...SheetOptions, mediaId: z.string().min(1).optional(), version: z.string().min(1).optional(),
 }).refine(v => !v.mediaId || !v.version, "Choose source mediaId or timeline version")
-  .refine(v => v.to > v.from && v.to - v.from <= 120, "Choose a positive window up to 120 seconds")
-  .refine(v => v.mode !== "activity" || v.to <= v.from + 12, "Check screen activity in windows up to twelve seconds")
+  .refine(v => v.to > v.from && v.to - v.from <= 120 + WINDOW_SLACK, "Choose a positive window up to 120 seconds")
+  .refine(v => v.mode !== "activity" || v.to <= v.from + 12 + WINDOW_SLACK, "Check screen activity in windows up to twelve seconds")
   .refine(v => v.focus === undefined || (v.focus >= v.from && v.focus < v.to), "Focus must be within the window");
 /** Up to 24 source windows whose frame-to-frame change is measured without drawing a sheet. */
 export const PictureActivityRequest = z.object({
   windows: z.array(z.object({ mediaId: z.string().min(1), from: z.number().finite().nonnegative(), to: z.number().finite().positive() })
-    .refine(w => w.to > w.from && w.to - w.from <= 120, "Choose a positive window up to 120 seconds")).min(1).max(24),
+    .refine(w => w.to > w.from && w.to - w.from <= 120 + WINDOW_SLACK, "Choose a positive window up to 120 seconds")).min(1).max(24),
 });
 /** How one source window's picture changes. Times are source seconds; areas are shares of the frame, 0 to 1. */
 export interface PictureActivityWindow {
@@ -96,7 +99,7 @@ export const DialogueRangeRequest = z.object(SourceAudioOptions).omit({ voice: t
   .refine(v => v.to > v.from, "Choose a positive source range");
 /** One minute of dialogue and up to 25 seconds of context from the previous page. */
 export const AcousticWordsRequest = DialogueRangeRequest.and(z.object({ audioStream: z.number().int().nonnegative().optional() }))
-  .refine(v => v.to <= v.from + 85, "Choose up to 85 source seconds");
+  .refine(v => v.to <= v.from + 85 + WINDOW_SLACK, "Choose up to 85 source seconds");
 export const DialogueScanRequest = DialogueRangeRequest.and(z.object({ taskId: z.string().min(1), startedAt: z.string().datetime().optional() }));
 export const JOIN_WORD_SECONDS = 8;
 export const DialogueWindowRequest = DialogueRangeRequest
@@ -108,7 +111,7 @@ export const DialogueWindowRequest = DialogueRangeRequest
   .refine(v => !v.keptSide || v.to <= v.from + JOIN_WORD_SECONDS + 1e-6, `A kept-side reading covers up to ${JOIN_WORD_SECONDS} seconds`)
   .refine(v => v.to <= v.from + 60, "Choose up to sixty source seconds");
 export const SourceAudioRequest = z.object(SourceAudioOptions)
-  .refine(v => v.to > v.from && v.to - v.from <= 8, "Choose a source audio window up to eight seconds");
+  .refine(v => v.to > v.from && v.to - v.from <= 8 + WINDOW_SLACK, "Choose a source audio window up to eight seconds");
 export const SoundPictureOptions = {
   mediaId: z.string().min(1),
   from: z.number().finite().nonnegative().describe("Start of the passage, source seconds"),
@@ -120,7 +123,7 @@ export const SoundPictureOptions = {
 export const SoundPictureRequest = z.object({ ...SoundPictureOptions,
   /** The transcript's words in the passage, drawn at their times. */
   words: z.array(z.object({ text: z.string(), start: z.number().finite(), end: z.number().finite() })).max(300).optional() })
-  .refine(v => v.to > v.from && v.to - v.from <= 15, "Choose a passage of up to fifteen source seconds");
+  .refine(v => v.to > v.from && v.to - v.from <= 15 + WINDOW_SLACK, "Choose a passage of up to fifteen source seconds");
 /** Where each row's sound sits in a sound picture, in pixels, so a position can be turned into a time. */
 export interface SoundPictureLayout {
   width: number; height: number; pixelsPerSecond: number;

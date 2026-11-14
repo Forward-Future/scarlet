@@ -23,6 +23,11 @@ export interface Thread {
   tasks: Task[];
   /** Attempts, oldest first. */
   changes: Change[];
+  /**
+   * Other requests' applied changes with an edit this request flagged for the editor (`Change.flags`). The request
+   * lists that edit with its own, as one that needs the editor.
+   */
+  flagged?: Change[];
   latest?: Change;
   question?: Task;
   active?: Task;
@@ -68,11 +73,20 @@ export function buildThreads(d: Source): Thread[] {
   const g = new Groups();
   const tasks = d.tasks.filter((t) => t.kind !== "transcribe" && !isAsideTask(t));
   const key = (kind: "t" | "c" | "x", id: string) => `${kind}:${id}`;
+  // The requests that flagged each change's edits. A request there about one of those edits, such as Revise or Undo
+  // from its card, stays in the request that raised the doubt, which lists the edit, and doesn't join the two.
+  const raisedIn = new Map<string, Set<string>>();
+  const byId = new Map(tasks.map(t => [t.id, t]));
+  for (const c of d.changes) for (const flag of c.flags ?? []) {
+    const raiser = byId.get(flag.taskId);
+    if (raiser) (raisedIn.get(c.id) ?? raisedIn.set(c.id, new Set()).get(c.id)!).add(raiser.context.threadId ?? raiser.id);
+  }
   for (const t of tasks) {
     g.add(key("t", t.id));
     if (t.retryTaskId) g.union(key("t", t.id), key("t", t.retryTaskId));
     if (t.context.threadId) g.union(key("x", t.context.threadId), key("t", t.id));
-    if (t.context.changeId) g.union(key("c", t.context.changeId), key("t", t.id));
+    if (t.context.changeId && !(t.context.threadId && raisedIn.get(t.context.changeId)?.has(t.context.threadId)))
+      g.union(key("c", t.context.changeId), key("t", t.id));
     for (const c of t.changeIds) g.union(key("t", t.id), key("c", c));
   }
   const feedbackChanges = new Map<string, string>();
@@ -167,6 +181,13 @@ export function buildThreads(d: Source): Thread[] {
       createdAt,
       updatedAt,
     });
+  }
+  // A doubt about an edit goes to the request that raised it, where the editor is looking, not to the one that made it.
+  const byTask = new Map(threads.flatMap(thread => thread.tasks.map(task => [task.id, thread] as const)));
+  for (const change of d.changes) for (const flag of change.flags ?? []) {
+    const thread = byTask.get(flag.taskId);
+    if (!thread || thread.changes.includes(change) || thread.flagged?.includes(change)) continue;
+    (thread.flagged ??= []).push(change);
   }
   return threads;
 }
@@ -290,15 +311,44 @@ function stillMaking(pass: Change, run: Task, tasks: readonly Task[], changes: r
 }
 
 /**
- * The pass whose calls hold a queued request back: one waiting on the editor that the request isn't about. A pass the
+ * The one cut or edit a request is about, when it is about one: a call of a pass sent back, or an applied edit revised
+ * or undone from its card. Requests in one thread about the same cut or edit name the same thing.
+ */
+function oneTarget(task: Task): string | undefined {
+  const { changeId, cutIndex, editIndex, threadId } = task.context;
+  if (!changeId || (cutIndex === undefined && editIndex === undefined)) return undefined;
+  return JSON.stringify([threadId ?? task.id, cutIndex ?? null, editIndex ?? null]);
+}
+
+/**
+ * Whether Scarlet can work on two requests at once. It can when each is about one cut or edit and they are about
+ * different ones: each agent then works on its own footage. A call's revision is saved into the pass as it stands
+ * when it lands, with the other revisions and the editor's calls made meanwhile. An applied edit's revision is put
+ * onto the video as it is when it lands, and one that meets footage another request changed is told so, with where,
+ * and saves again on the current video. Any other request is about the whole video, or about footage nothing names
+ * ahead of time, so it runs alone. Two requests about the same cut or edit keep the order they were asked in.
+ * The engine's claim query applies the same rule.
+ */
+export function runsBeside(a: Task, b: Task): boolean {
+  const x = oneTarget(a), y = oneTarget(b);
+  return !!x && !!y && x !== y;
+}
+
+/** The dialogue passes waiting on the editor that a request isn't about, which hold it back unless the editor said not to wait (`startsBeforeCalls`). */
+const holding = (task: Task, tasks: readonly Task[], changes: readonly Change[]) =>
+  task.startsBeforeCalls ? [] : openReviews(task, tasks, changes).filter(c => !aboutChange(task, c));
+
+/** The requests Scarlet is on now, among those that take turns with one. */
+const underWay = (task: Task, tasks: readonly Task[]) => takingTurns(task, tasks).filter(t => ACTIVE_STATES.has(t.state));
+
+/**
+ * The pass whose calls hold a queued request back: one waiting on the editor that the request isn't about. A pass a
  * run Scarlet is on is still making has asked for nothing yet, so what waits behind it waits for that run. A request
  * the editor started anyway (`startsBeforeCalls`) is held by none.
  */
 function heldBy(task: Task, tasks: readonly Task[], changes: readonly Change[]): Change | undefined {
-  // The editor said not to wait for their calls.
-  if (task.startsBeforeCalls) return undefined;
-  const active = takingTurns(task, tasks).find(t => ACTIVE_STATES.has(t.state));
-  return openReviews(task, tasks, changes).find(c => !aboutChange(task, c) && !(active && stillMaking(c, active, tasks, changes)));
+  const active = underWay(task, tasks);
+  return holding(task, tasks, changes).find(c => !active.some(run => stillMaking(c, run, tasks, changes)));
 }
 
 /** A request about an open pass goes ahead of requests that are waiting for that pass. */
@@ -318,22 +368,29 @@ function inLine(tasks: readonly Task[]) {
 }
 
 /**
- * Why a queued request hasn't started. Scarlet runs one request at a time in a project, in the order they were
- * asked, so two agents never edit the same video at once. The engine's claim query applies the same rule.
+ * Why a queued request hasn't started. Scarlet works on two requests at once only when each is about one cut or edit
+ * and they are about different ones (`runsBeside`). Otherwise requests run one at a time in a project, in the order
+ * they were asked, so two agents never edit the same footage at once. The engine's claim query applies the same rule.
  * A request held for the editor's calls says so while Scarlet is on something else too, such as a revision of one of
  * those calls: it won't start when that ends.
  */
 export function queueWait(task: Task, tasks: readonly Task[], changes: readonly Change[]): QueueWait | undefined {
   if (task.state !== "queued" || task.kind === "transcribe" || isAsideTask(task)) return undefined;
   const others = takingTurns(task, tasks);
-  const active = others.find(t => ACTIVE_STATES.has(t.state));
-  if (active?.state === "waiting_for_user") return { kind: "question", task: active };
+  const active = others.filter(t => ACTIVE_STATES.has(t.state));
+  const inTheWay = active.filter(t => !runsBeside(task, t));
+  const first = inTheWay[0];
+  if (first?.state === "waiting_for_user") return { kind: "question", task: first };
   const review = heldBy(task, tasks, changes);
-  if (active) return review ? { kind: "review", change: review } : { kind: "run", task: active };
+  if (first) return review ? { kind: "review", change: review } : { kind: "run", task: first };
   const before = inLine(tasks);
-  const ahead = others.filter(t => t.state === "queued" && before(t, task) && !goesAhead(task, t, tasks, changes));
+  const ahead = others.filter(t => t.state === "queued" && before(t, task) && !runsBeside(task, t) && !goesAhead(task, t, tasks, changes));
   if (ahead.length) return { kind: "ahead", count: ahead.length };
-  return review ? { kind: "review", change: review } : undefined;
+  if (review) return { kind: "review", change: review };
+  // A pass still being made by a run this request could otherwise work beside holds it until that run is done.
+  const open = holding(task, tasks, changes);
+  const making = open.length ? active.find(run => open.some(c => stillMaking(c, run, tasks, changes))) : undefined;
+  return making ? { kind: "run", task: making } : undefined;
 }
 
 /**
@@ -347,7 +404,7 @@ export function queueOrder(tasks: readonly Task[], changes: readonly Change[]): 
   const order: Task[] = [];
   for (;;) {
     const next = waiting.find(q => !heldBy(q, tasks, changes)
-      && !waiting.some(r => r !== q && r.projectId === q.projectId && before(r, q) && !goesAhead(q, r, tasks, changes)));
+      && !waiting.some(r => r !== q && r.projectId === q.projectId && before(r, q) && !runsBeside(q, r) && !goesAhead(q, r, tasks, changes)));
     if (!next) return [...order, ...waiting];
     order.push(next);
     waiting = waiting.filter(t => t !== next);

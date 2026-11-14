@@ -9,6 +9,15 @@ import { useProjectStore, type ProjectData } from "../../stores/project";
 import { ActivityProgress, Field, Icon, InlineError, Modal } from "../ui/primitives";
 import { PreferenceSelect } from "../ui/PreferenceSelect";
 
+type ExportQuality = RenderRequest["quality"] | "best";
+
+/** The export's quality levels, smallest first. Original quality encodes in software; High uses the computer's video encoder. */
+const QUALITY: Record<ExportQuality, { label: string; hint: string }> = {
+  preview: { label: "Compressed", hint: "A smaller file for sharing a draft. Softer picture." },
+  delivery: { label: "High", hint: "Looks the same as the original, in a smaller file." },
+  best: { label: "Original quality", hint: "Matches the original footage, for re-editing or grading. About the size of the original." },
+};
+
 function parseClock(value: string): number {
   if (!/^(?:\d+:)?(?:\d+:)?\d+(?:\.\d+)?$/.test(value.trim())) return NaN;
   const parts = value.trim().split(":").map(Number);
@@ -44,7 +53,7 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
     setEnd(playbackClock(duration));
   }, [duration]); // eslint-disable-line react-hooks/exhaustive-deps
   const [targetHeight, setTargetHeight] = useState(previous?.video.exportOptions?.height ?? 0);
-  const [quality, setQuality] = useState<RenderRequest["quality"]>(previous?.video.quality ?? "delivery");
+  const [quality, setQuality] = useState<ExportQuality>(previous?.video.exportOptions?.bestQuality ? "best" : previous?.video.quality ?? "delivery");
   const [revealError, setRevealError] = useState("");
   // A percent shows only while it moves.
   const counting = !!busy && exportCounting(busy);
@@ -54,14 +63,17 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
   const range = format === "mp4" && customRange ? { start: snapToFrame(parseClock(start), fps), end: snapToFrame(parseClock(end), fps) } : undefined;
   const invalidRange = range && !(range.start >= 0 && range.end > range.start && range.end <= duration);
   const custom = format === "mp4" && (!!range || !!targetHeight || quality !== "delivery");
+  const level = QUALITY[quality];
   const sampleOnly = IS_MOCK && custom;
   const invalid = !hasCut || !duration || invalidRange || sampleOnly;
   const size = targetHeight ? `${Math.round(width * targetHeight / height / 2) * 2} × ${targetHeight}` : "Project size";
   const submit = () => {
     if (busy || invalid) return;
-    const video: ExportFile["video"] = { kind: custom ? "export" : "full", quality };
+    const video: ExportFile["video"] = { kind: custom ? "export" : "full", quality: quality === "best" ? "delivery" : quality };
     if (range) video.range = range;
-    if (targetHeight) video.exportOptions = { height: targetHeight };
+    if (targetHeight || quality === "best") {
+      video.exportOptions = { ...(targetHeight ? { height: targetHeight } : {}), ...(quality === "best" ? { bestQuality: true } : {}) };
+    }
     setRevealError("");
     // The file is named once, in the system's Save dialog, which also picks its folder and asks before replacing a
     // file. It opens on the project's name.
@@ -94,7 +106,7 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
           </>}
         </div>
         {format === "mp4" ? <details className="border-t border-line pt-3">
-          <summary className="cursor-pointer text-xs"><strong>Video options</strong><span className="ml-2 text-muted">{size} · {Number(fps.toFixed(3))} fps · {quality === "delivery" ? "Full quality" : "Smaller file"}</span></summary>
+          <summary className="cursor-pointer text-xs"><strong>Video options</strong><span className="ml-2 text-muted">{size} · {Number(fps.toFixed(3))} fps · {level.label}</span></summary>
           <div className="mt-4 grid grid-cols-1 gap-x-3 sm:grid-cols-2">
             <Field label="Resolution" htmlFor="export-resolution">
               <PreferenceSelect id="export-resolution" value={targetHeight} onChange={setTargetHeight} options={[
@@ -102,9 +114,9 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
                 ...[2160, 1080, 720, 480].filter(h => h < height).map(h => ({ value: h, label: `${Math.round(width * h / height / 2) * 2} × ${h}` })),
               ]} />
             </Field>
-            <Field label="Quality" htmlFor="export-quality">
+            <Field label="Quality" htmlFor="export-quality" hint={level.hint}>
               <PreferenceSelect id="export-quality" value={quality} onChange={setQuality}
-                options={[{ value: "delivery", label: "Full quality" }, { value: "preview", label: "Smaller file" }]} />
+                options={(Object.keys(QUALITY) as ExportQuality[]).map(value => ({ value, label: QUALITY[value].label }))} />
             </Field>
           </div>
         </details> : <p className="text-xs text-muted">The timeline links to the original media. The receiving editor needs access to those files.</p>}

@@ -10,6 +10,7 @@ import { useUiStore } from "../stores/ui";
 import { matchFirstClip } from "../lib/firstClipFormat";
 import { rememberProject } from "../lib/updatePlace";
 import { useHoverFrames } from "../lib/hoverFrames";
+import { interactiveFrameUrl } from "../components/review/thumbs";
 import { Dropzone, enqueueImports, filename, UploadList, useImportCount, useUploader, type ImportSource } from "../components/media/UploadDropzone";
 import { ACCEPTED_MEDIA, MEDIA_FORMAT_HINT } from "../lib/upload";
 import { desktop } from "../lib/desktop";
@@ -39,14 +40,16 @@ function usePoster(projectId: string, mediaCount: number, poster: ProjectSummary
       .media(projectId)
       .then(({ media }) => {
         const v = media.find((m) => m.kind === "video");
-        if (live) setSrc(v ? api.frameUrl(v.id, Math.min(2, (v.duration ?? 4) / 2), 480) : undefined);
+        if (live) setSrc(v ? interactiveFrameUrl(api.frameUrl(v.id, Math.min(2, (v.duration ?? 4) / 2), 480)) : undefined);
       })
       .catch(() => undefined);
     return () => {
       live = false;
     };
   }, [projectId, mediaCount, poster]);
-  return poster === undefined ? src : poster ? api.frameUrl(poster.mediaId, poster.time, 480) : undefined;
+  // The library's pictures are the editor's own view. Behind a pass's frames they held the window's connections,
+  // and the library's list waited 11 s for one (2026-11-12).
+  return poster === undefined ? src : poster ? interactiveFrameUrl(api.frameUrl(poster.mediaId, poster.time, 480)) : undefined;
 }
 
 /**

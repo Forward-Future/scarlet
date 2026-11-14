@@ -134,7 +134,7 @@ export function registerPerception(deps: PerceptionDeps) {
       end: shown.length < words.length ? shown.at(-1)!.end : Math.min(duration, range.end) });
     const body = formatTimelineTranscript(shown, joins.filter(j => !shown.length || j.at <= shown.at(-1)!.end + 1e-3 || shown.length === words.length),
       { detail, fps: project.settings.fps, all });
-    const more = words.length > limit ? `\nShowing ${limit} of ${words.length} words; continue with from=${shown.at(-1)!.end.toFixed(2)}.` : "";
+    const more = words.length > limit ? `\nShowing ${limit} of ${words.length} words; continue with from=${(shown.at(-1)!.end + 0.001).toFixed(3)}.` : "";
     return text(`Version ${tl.version}, ${range.start.toFixed(2)}–${range.end.toFixed(2)} of ${duration.toFixed(2)} s timeline: ${words.length} words, ${joins.length} joins.\n${body}${more}`);
   }
 

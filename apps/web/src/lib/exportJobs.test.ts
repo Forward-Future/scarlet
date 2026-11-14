@@ -24,6 +24,7 @@ const answers = () => ({
   save: vi.spyOn(desktop, "finishVideoExport").mockResolvedValue(DESTINATION.path),
   release: vi.spyOn(api, "releaseRender").mockResolvedValue(),
   request: vi.spyOn(api, "requestRender").mockImplementation(async () => ({ render })),
+  found: vi.spyOn(api, "render").mockImplementation(async () => ({ render })),
 });
 let asked: ReturnType<typeof answers>;
 
@@ -312,4 +313,33 @@ it("records that a failure was shown, once, and leaves any other state alone", a
   useExports.setState({ jobs: { [PRJ]: { phase: "done", path: DESTINATION.path, context: "c" } } });
   exportFailureSeen(PRJ);
   expect(job()).toEqual({ phase: "done", path: DESTINATION.path, context: "c" });
+});
+
+it("saves the file again when the engine went away under the save, and shows a failure that isn't the engine's", async () => {
+  render = { ...render, state: "done", progress: 1 };
+  // The engine restarted while the file was read: it is gone for one ask, then back with the render under its id.
+  const there = asked.found.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  asked.save.mockRejectedValueOnce("error decoding response body").mockResolvedValue(DESTINATION.path);
+  vi.useFakeTimers();
+  const exporting = exportFile(project, video);
+  await vi.advanceTimersByTimeAsync(1500);
+  vi.useRealTimers();
+  await exporting;
+  expect(there).toHaveBeenCalledTimes(2);
+  expect(asked.save).toHaveBeenCalledTimes(2);
+  expect(job()).toEqual({ phase: "done", path: DESTINATION.path, context: fullRenderContext(project.project) });
+  expect(lines).toEqual([]);
+
+  // A folder that can't be written is the editor's to see, at once and with the engine there throughout.
+  useExports.setState({ jobs: {} });
+  asked.save.mockReset().mockRejectedValue("Could not write to the chosen folder (permission denied)");
+  await exportFile(project, video);
+  expect(asked.save).toHaveBeenCalledTimes(1);
+  expect(job()).toMatchObject({ phase: "failed", error: "Could not write to the chosen folder (permission denied)" });
+
+  // An export shown as failed that the engine still owes is picked up when the engine is back.
+  asked.save.mockReset().mockResolvedValue(DESTINATION.path);
+  vi.spyOn(api, "exports").mockResolvedValue({ renders: [{ ...render, export: { name: NAME, ticket: 4, owner: "own", path: DESTINATION.path } }] });
+  await resumeExports();
+  await vi.waitFor(() => expect(job()).toMatchObject({ phase: "done" }));
 });

@@ -27,7 +27,7 @@ import { taskRoutes } from "./routes/tasks.js";
 import { continueReadyRuns, recoverTasks, wireContinueWhenReady } from "./services/taskRecovery.js";
 import { sweepLeftovers } from "./services/leftovers.js";
 import { recoverSourcePreviews } from "./services/sourcePreviews.js";
-import { holdTranscriptions, recoverIngestInBackground } from "./services/ingest.js";
+import { holdTranscriptions, recoverImportTranscriptions, recoverIngestInBackground } from "./services/ingest.js";
 import { timelineRoutes } from "./routes/timeline.js";
 import { perceptionRoutes } from "./routes/perception.js";
 import { foldStrandedPasses, recordLeftOutFootage, retireLeftoverPasses, wireChangeRenderCompletion } from "./services/changes.js";
@@ -71,7 +71,12 @@ export function createApp(options: ServerOptions): ScarletApp {
   wireChangeRenderCompletion(ctx);
   // Before anything is recovered or claimed: an engine that was killed may have had the process id this one was given.
   ctx.renders.recover(noteEngineStart(ctx));
-  recoverTasks(ctx, true);
+  // Never keeps Scarlet from starting: what it couldn't recover is tried again in half a minute.
+  try {
+    recoverTasks(ctx, true);
+  } catch (err) {
+    ctx.log(`[task] recovering interrupted runs failed and will run again: ${(err as Error).message}`);
+  }
   // A repair of earlier builds' leftovers. It must never keep Scarlet from starting.
   try {
     retireLeftoverPasses(ctx);
@@ -161,6 +166,9 @@ export function createApp(options: ServerOptions): ScarletApp {
   taskRecovery.unref();
   const stopPurge = scheduleTrashPurge(ctx);
   recoverIngestInBackground(ctx);
+  void ctx.track(recoverImportTranscriptions(ctx).catch(error => {
+    if (!ctx.shutdown.aborted) ctx.log(`[ingest] starting transcriptions left unbegun stopped part-way: ${(error as Error).message}`);
+  }));
   recoverSourcePreviews(ctx);
   const close = ctx.close.bind(ctx);
   ctx.close = async () => {

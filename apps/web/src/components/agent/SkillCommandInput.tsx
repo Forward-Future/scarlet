@@ -117,6 +117,9 @@ export function SkillCommandInput({ inputRef, value, skills, id, placeholder, on
               } else if (e.key === "Enter" && active?.name === query && caret === command?.end) onSubmit();
               else if (active) choose(active);
               else if (status === "error") void load();
+              // A command no row matches still sends: the send says when no skill has that name, and a shortcut such
+              // as /dialogue-pass goes to the skill it stands for.
+              else if (e.key === "Enter" && caret === command?.end && !e.repeat) onSubmit();
               return;
             }
           }

@@ -11,7 +11,7 @@ import { useUiStore } from "../../stores/ui";
 import type { MediaAsset } from "@scarlet/timeline";
 import { TranscriptLine } from "../media/TranscriptionAction";
 import { UsageSettings } from "../shell/UsageSettings";
-import { RunBundle, runEnded, Said } from "./RunBundle";
+import { LiveTokens, RunBundle, runEnded, Said } from "./RunBundle";
 
 const task: Task = {
   id: "tsk_1", projectId: "prj_1", kind: "edit", agent: "claude", model: "opus", instruction: "Tighten the intro",
@@ -410,13 +410,29 @@ it("leaves a question under a heading to the heading, opens the steps before it 
   bare.unmount();
 });
 
-it("keeps the tokens a question has used when its heading leaves it no row of its own", () => {
+it("leaves a question's tokens to its heading, and has a row for them with no heading", () => {
   useUiStore.getState().setShowRunTokens(true);
   openProject({ [task.id]: totals({ totalTokens: 900 }) });
   const asking = render(<RunBundle task={{ ...task, state: "waiting_for_user", finishedAt: undefined }} events={[]} changes={[]} stopAbove banded />);
-  expect(asking.host.querySelector(".req-status")).toBeNull();
-  expect(asking.host.querySelector(".req-row > .req-right > .run-tokens")?.textContent).toBe("900 tokens");
+  expect(asking.host.querySelector(".run-tokens")).toBeNull();
   asking.unmount();
+  const bare = render(<RunBundle task={{ ...task, state: "waiting_for_user", finishedAt: undefined }} events={[]} changes={[]} />);
+  expect(bare.host.querySelector(".req-status .req-right > .run-tokens")?.textContent).toBe("900 tokens");
+  bare.unmount();
+});
+
+it("counts a working request's tokens as they're reported, with every part on hover, only when turned on", () => {
+  useUiStore.getState().setShowRunTokens(false);
+  openProject({ [task.id]: totals({ totalTokens: 212_000 }) });
+  const view = render(<LiveTokens taskId={task.id} />);
+  expect(view.host.textContent).toBe("");
+  act(() => useUiStore.getState().setShowRunTokens(true));
+  expect(view.host.querySelector(".unit-tokens")?.textContent).toBe("212K tokens");
+  const more = totals({ totalTokens: 1_310_000 });
+  act(() => useProjectStore.setState(s => ({ current: { ...s.current!, taskUsage: { [task.id]: more } } })));
+  const tokens = view.host.querySelector<HTMLElement>(".unit-tokens")!;
+  expect([tokens.textContent, tokens.title]).toEqual(["1.3M tokens", tokenBreakdown(more)]);
+  view.unmount();
 });
 
 it("leaves the word for how a run ended to its heading when the block has one, with the one action on the line that says what the run saved", () => {
@@ -476,4 +492,23 @@ it("says what a stopped run saved in words, and opens the timeline from them onl
   expect(view.host.querySelector("button.req-summary")?.textContent).toBe("Trimmed the pause before the answer");
   expect(view.host.querySelector(".req-act")?.textContent).toBe("Resume");
   view.unmount();
+});
+
+it("names a pass's final check for what it is, and says what it is doing now, not what it did on its first run", () => {
+  openProject();
+  const at = (seconds: number) => new Date(Date.parse(task.startedAt!) + seconds * 1000).toISOString();
+  const FIRST = "I’ll sync both recordings, tighten the takes, and check playback for repeats.";
+  const AGAIN = "I’ll check playback, fix clipped words and keep deliberate repeats.";
+  const events = [
+    { type: "log" as const, at: at(0), text: "Starting the editing agent." }, { type: "log" as const, at: at(3), text: FIRST },
+    { type: "tool" as const, at: at(5), text: "audio_sync", data: { tool: "scarlet.audio_sync", input: {} } },
+    // Its calls went in an hour later, and the engine sent the pass back to check the finished cut (2026-11-14).
+    { type: "log" as const, at: at(4000), text: "Starting the editing agent." }, { type: "log" as const, at: at(4003), text: AGAIN },
+    { type: "tool" as const, at: at(4010), text: "dialogue_check_repeats", data: { tool: "scarlet.dialogue_check_repeats", input: {} } },
+  ];
+  const again: Task = { ...task, state: "running", summary: null, finishedAt: undefined, startedAt: at(4000), repeatAudit: { version: "v2", returns: 1 } };
+  const view = render(<RunBundle task={again} events={events} changes={[]} stopAbove banded />);
+  expect(view.host.querySelector(".req-lead")?.textContent).toBe("Final check of the finished cut");
+  expect(view.host.textContent).not.toContain(FIRST);
+  expect(view.host.querySelector(".req-now [role=status]")?.textContent).toBe("Checking the finished dialogue for repeats");
 });

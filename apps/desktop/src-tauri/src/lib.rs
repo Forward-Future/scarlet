@@ -125,6 +125,7 @@ pub fn run() {
             storage::developer_storage,
             updates::update_status,
             updates::latest_update_revision,
+            updates::update_changelog,
             updates::restart_for_update,
         ])
         .setup(|app| {

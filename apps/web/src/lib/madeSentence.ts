@@ -2,7 +2,7 @@ import type { EditKind, ThreadEdit } from "@scarlet/shared";
 import { editNote } from "./editKind";
 import { plural } from "./format";
 
-type Listed = Pick<ThreadEdit, "label" | "beforeCut" | "kind" | "summary" | "check">;
+type Listed = Pick<ThreadEdit, "label" | "beforeCut" | "kind" | "summary" | "check" | "elsewhere">;
 
 /** A stretch of the sentence: plain words, or a figure that reads in bold. */
 export type SentencePart = string | { strong: string };
@@ -23,7 +23,9 @@ const NAMED = 3;
  * says what Scarlet said about that edit. An edit made in several places is one edit, unless the list under the
  * sentence has a row for each place (`eachPlace`): then the sentence counts what that list shows.
  */
-export function madeSentence(edits: readonly Listed[], length: (seconds: number) => string, eachPlace = false): SentencePart[] {
+export function madeSentence(listed: readonly Listed[], length: (seconds: number) => string, eachPlace = false): SentencePart[] {
+  // An edit another request made is listed for a doubt this one raised about it. This request didn't make it.
+  const edits = listed.filter(e => !e.elsewhere);
   const cuts = edits.filter(e => e.beforeCut);
   const places = new Map<string, { edit: Listed; places: number }>();
   edits.forEach((edit, i) => {
@@ -71,3 +73,14 @@ export function madeSentence(edits: readonly Listed[], length: (seconds: number)
 
 /** The sentence as plain text, for a title or a label. */
 export const sentenceText = (parts: readonly SentencePart[]) => parts.map(part => typeof part === "string" ? part : part.strong).join("");
+
+/**
+ * How many edits a request has on the timeline, in one figure: "12 zooms" when they are all one kind, "231 cuts" when
+ * they all took footage out, and "14 edits" otherwise. The rows the timeline numbers are counted, so it matches them.
+ */
+export function editCount(edits: readonly Pick<ThreadEdit, "beforeCut" | "kind">[], n = edits.length): string {
+  if (edits.length && edits.every(e => e.beforeCut)) return plural(n, "cut");
+  const kinds = new Set(edits.map(e => e.kind));
+  const noun = kinds.size === 1 ? NOUNS[[...kinds][0]!] : undefined;
+  return noun ? `${n} ${n === 1 ? noun[0] : noun[1]}` : plural(n, "edit");
+}

@@ -332,7 +332,9 @@ describe("dialogue plan", () => {
     // A level of .001 is -60 dBFS, room tone: the cut applies from that instant to the quiet before the repeat.
     const dipped = await plan(.001);
     expect(dipped.decision).toMatchObject({ review: false, start: 1.4, end: 2.4 });
-    expect(dipped.gate).toMatchObject({ outcome: "cut", evidence: "No pause between “recognized” and “that”: the start is at the lowest level between them (-60 dBFS)." });
+    expect(dipped.gate).toMatchObject({ outcome: "cut", evidence: expect.stringContaining("No pause between “recognized” and “that”: the start is at the lowest level between them (-60 dBFS).") });
+    // The repeat starts the instant the cut does, so the cut applies and the editor is asked to watch and hear the join.
+    expect(dipped.decision.check).toBe("A removed word starts right after the cut: watch and listen at the join.");
     // Spoken straight through, or with a dip no deeper than a sibilant's hiss, there is nowhere to cut, and the editor auditions it as before.
     for (const level of [.12, .005]) {
       const through = await plan(level);

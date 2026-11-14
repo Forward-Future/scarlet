@@ -9,25 +9,14 @@ on:
         description: "Early Access numeric version, for example 0.1.4. Leave empty for a regular check build."
         required: false
         type: string
-  pull_request:
-    paths:
-      - "apps/desktop/**"
-      - "apps/server/**"
-      - "apps/agent/**"
-      - "apps/web/**"
-      - "packages/**"
-      - "skills/**"
-      - "integrations/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - ".github/workflows/desktop*.yml"
-      - ".github/scripts/*desktop-release*"
-      - ".github/scripts/sign-*-release.*"
-      - ".github/workflows/ci.yml"
-      - ".github/tests/desktop_permissions_test.rb"
 
 permissions:
   contents: read
+
+# A newer push supersedes test builds. Releases, manual builds and retries get their own group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.run_attempt == '1' && vars.SCARLET_STABLE_RELEASES != 'true' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   ci:

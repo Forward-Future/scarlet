@@ -96,6 +96,26 @@ export class Db {
       return result;
     };
   }
+  /**
+   * Run `fn` as a part of the open transaction that can fail by itself: what it wrote is undone and what it would
+   * have announced is dropped, and the rest of the transaction stands. Outside a transaction it is one of its own.
+   */
+  savepoint<R>(fn: () => R): R {
+    const effects = this.commitEffects;
+    if (!effects) return this.transaction(fn, "immediate")();
+    const announced = effects.length;
+    this.raw.exec("SAVEPOINT part");
+    try {
+      const result = fn();
+      this.raw.exec("RELEASE part");
+      return result;
+    } catch (e) {
+      this.raw.exec("ROLLBACK TO part");
+      this.raw.exec("RELEASE part");
+      effects.length = announced;
+      throw e;
+    }
+  }
   close(): void {
     this.cache.clear();
     this.raw.close();

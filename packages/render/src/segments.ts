@@ -435,7 +435,7 @@ async function renderBatch(
 }
 
 /** The caches for the lossless sections and complete program are identified by their inputs. */
-function audioMixPlan(project: Project, timeline: Timeline, range: TimeRange, cacheDir: string, output: "mix" | "program", media: Map<string, MediaAsset>) {
+function audioMixPlan(project: Project, timeline: Timeline, range: TimeRange, cacheDir: string, output: "mix" | "program", media: Map<string, MediaAsset>, bitrate = PROGRAM_AUDIO_BITRATE) {
   const { sampleRate, audioChannels } = project.settings;
   const inputs = timeline.tracks.flatMap(track => track.clips.flatMap(clip => {
     if (clip.kind !== "media") return [];
@@ -452,7 +452,7 @@ function audioMixPlan(project: Project, timeline: Timeline, range: TimeRange, ca
     }];
   }));
   const samples = Math.round(range.end * sampleRate) - Math.round(range.start * sampleRate);
-  const codec = output === "program" ? ["-c:a", "aac", "-b:a", "192k"] : ["-c:a", "alac"];
+  const codec = output === "program" ? ["-c:a", "aac", "-b:a", bitrate] : ["-c:a", "alac"];
   const key = sha256(stableStringify([`delivery-mix-${DELIVERY_AUDIO_REVISION}`, sampleRate, audioChannels, samples, inputs, codec]));
   const file = path.join(cacheDir, output + "-" + key + ".m4a");
   return { timeline, range, samples, codec, file };
@@ -482,6 +482,10 @@ function exportSegments(ranges: TimeRange[], trim?: TimeRange): TimeRange[] {
     .map(r => ({ start: Math.max(trim.start, r.start), end: Math.min(trim.end, r.end) }));
 }
 
+const PROGRAM_AUDIO_BITRATE = "192k";
+const BEST_AUDIO_BITRATE = "320k";
+const COMPRESSED_AUDIO_BITRATE = "128k";
+
 /** Each original sample is mixed once. One continuous AAC encode keeps priming out of the joins. */
 async function renderProgramAudio(project: Project, timeline: Timeline, cacheDir: string, opts: CachedRenderOptions): Promise<string> {
   const media = new Map(project.media.map(asset => [asset.id, asset]));
@@ -490,18 +494,19 @@ async function renderProgramAudio(project: Project, timeline: Timeline, cacheDir
     .map(track => ({ ...track, clips: track.clips.filter(clip => clip.kind === "media" &&
       clip.enabled !== false && clip.volume > 0 && media.get(clip.mediaId)?.hasAudio !== false) })) };
   const duration = timelineDuration(timeline);
+  const bitrate = opts.best ? BEST_AUDIO_BITRATE : opts.quality === "preview" ? COMPRESSED_AUDIO_BITRATE : PROGRAM_AUDIO_BITRATE;
   // A short cut list fits one FFmpeg graph. Bound the number of simultaneously open
   // decoders on busy cuts by mixing to sample-counted lossless segments instead.
   if (audible.tracks.reduce((n, track) => n + track.clips.length, 0) <= 16) {
     const range = opts.exportRange ?? { start: 0, end: snapToFrame(duration, project.settings.fps) };
-    return mixAudio(project, audioMixPlan(project, audible, range, cacheDir, "program", media), opts);
+    return mixAudio(project, audioMixPlan(project, audible, range, cacheDir, "program", media, bitrate), opts);
   }
   const ranges = exportSegments(planSegments(project, audible, 10, duration), opts.exportRange);
   const parts = segmentTimelines(audible, ranges);
   const mixes = ranges.map((range, i) => audioMixPlan(project, parts[i]!, range, cacheDir, "mix", media));
   const files = mixes.map(mix => mix.file);
   const { sampleRate, audioChannels } = project.settings;
-  const key = sha256(stableStringify(["delivery-aac-1", sampleRate, audioChannels, "192k", files.map(f => path.basename(f))]));
+  const key = sha256(stableStringify(["delivery-aac-1", sampleRate, audioChannels, bitrate, files.map(f => path.basename(f))]));
   const file = path.join(cacheDir, "program-" + key + ".m4a");
   if (await fileHasContent(file)) return file;
   await renderBatch(mixes.length, Math.max(1, opts.concurrency ?? 1), opts.signal, async (i, signal) => {
@@ -515,7 +520,7 @@ async function renderProgramAudio(project: Project, timeline: Timeline, cacheDir
     const list = path.join(temp, "sound.txt");
     await fs.writeFile(list, files.map(concatFile).join("\n") + "\n");
     await runFfmpeg(["-y", "-f", "concat", "-safe", "0", "-i", list, "-map", "0:a:0", "-map_chapters", "-1",
-      "-af", "asetpts=N/SR/TB", "-c:a", "aac", "-b:a", "192k", "-ar", String(sampleRate), "-ac", String(audioChannels), "-movie_timescale", String(sampleRate), staged],
+      "-af", "asetpts=N/SR/TB", "-c:a", "aac", "-b:a", bitrate, "-ar", String(sampleRate), "-ac", String(audioChannels), "-movie_timescale", String(sampleRate), staged],
       { ffmpegPath: opts.ffmpegPath, signal: opts.signal });
     await publishSegment(staged, file);
     return file;

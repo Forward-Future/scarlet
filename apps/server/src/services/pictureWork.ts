@@ -11,12 +11,20 @@ export class PictureLane {
   private active = 0;
   private readonly waiting: Array<{ priority: boolean; start(): void }> = [];
 
-  constructor(readonly slots: number) {}
+  /**
+   * `slots` decodes run at a time, and the editor's own may take `reserved` more. On 2026-11-11 a frame the editor
+   * scrubbed to waited two minutes for a slot, each held by a long decode for a pass, and the window's other requests
+   * waited behind it.
+   */
+  constructor(readonly slots: number, readonly reserved = 1) {}
+
+  private room(priority: boolean) { return this.active < this.slots + (priority ? this.reserved : 0); }
 
   async run<T>(job: () => Promise<T>, options: { priority?: boolean; signal?: AbortSignal } = {}): Promise<T> {
     const { priority = false, signal } = options;
     signal?.throwIfAborted();
-    if (this.active >= this.slots) {
+    if (this.room(priority)) this.active++;
+    else {
       await new Promise<void>((resolve, reject) => {
         const entry = { priority, start: () => { signal?.removeEventListener("abort", cancel); resolve(); } };
         const cancel = () => {
@@ -29,14 +37,17 @@ export class PictureLane {
         this.waiting.splice(index < 0 ? this.waiting.length : index, 0, entry);
         signal?.addEventListener("abort", cancel, { once: true });
       });
-    } else this.active++;
+    }
     try {
       signal?.throwIfAborted();
       return await job();
     } finally {
-      const next = this.waiting.shift();
-      if (next) next.start();
-      else this.active--;
+      this.active--;
+      // The first in line that has room: the editor's while any slot is free, the agent's while one of its own is.
+      for (let index; (index = this.waiting.findIndex(w => this.room(w.priority))) >= 0;) {
+        this.active++;
+        this.waiting.splice(index, 1)[0]!.start();
+      }
     }
   }
 
@@ -46,10 +57,14 @@ export class PictureLane {
 
 const lanes = new Map<string, PictureLane>();
 
-/** The engine's picture lane: one per data directory, two to four decodes at a time with the machine's size. */
+/**
+ * The engine's picture lane: one per data directory, two to four decodes at a time with the machine's size. Reading
+ * 24 frames spread over a 58-minute 4K recording took 3.1 s two at a time and 2.5 s three at a time on 18 cores
+ * (2026-11-14).
+ */
 export function pictureLane(ctx: { paths: { root: string } }): PictureLane {
   let lane = lanes.get(ctx.paths.root);
-  if (!lane) lanes.set(ctx.paths.root, lane = new PictureLane(Math.max(2, Math.min(4, Math.floor(availableParallelism() / 8)))));
+  if (!lane) lanes.set(ctx.paths.root, lane = new PictureLane(Math.max(2, Math.min(4, Math.floor(availableParallelism() / 6)))));
   return lane;
 }
 

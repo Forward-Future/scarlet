@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { useEffect, useLayoutEffect, useState } from "react";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api, IS_MOCK, serverUrl } from "../../lib/client";
 import { desktop } from "../../lib/desktop";
 import { useHotkeys } from "../../lib/hotkeys";
@@ -13,11 +13,22 @@ import { ExportStarNotice } from "./ExportStarNotice";
 import { ShortcutsModal } from "./ShortcutsModal";
 import { StartupRecovery } from "./StartupRecovery";
 import { BootSplash, startup } from "./BootSplash";
+import { captureProjectPlace } from "../../lib/updatePlace";
 
 /** How long the startup screen may stay before we admit something is wrong and offer logs. */
 const SLOW_START_MS = 45_000;
 // Survives remounts: once the engine has answered, later outages show the reconnect screen, not the startup screen.
 let connectedOnce = false;
+
+/**
+ * Where the editor was in a project when the engine went away under the window. The page is taken off screen while
+ * the engine is gone, and its playhead and its open cut go with it, so it is asked for its place first, as it is before
+ * Settings opens. This listens from before any page is on screen, so it is told ahead of the page being taken down.
+ */
+let leftAt: string | null = null;
+useAuthStore.subscribe((state, before) => {
+  if (before.status === "ready" && state.status !== "ready") leftAt = captureProjectPlace(window.location) ?? leftAt;
+});
 
 export function AppShell() {
   const status = useAuthStore((s) => s.status);
@@ -25,6 +36,17 @@ export function AppShell() {
   const failed = useAuthStore((s) => s.failed);
   const bootstrap = useAuthStore((s) => s.bootstrap);
   const location = useLocation();
+  const navigate = useNavigate();
+  // The engine is back: the page opens at the place it was left at, which goes into the address before it is shown.
+  const [, shown] = useState(0);
+  const returning = status === "ready" && leftAt !== null;
+  useLayoutEffect(() => {
+    if (!returning) return;
+    const place = leftAt!;
+    leftAt = null;
+    if (place.split("?")[0] === window.location.pathname) navigate(place, { replace: true });
+    shown(n => n + 1);
+  }, [returning]); // eslint-disable-line react-hooks/exhaustive-deps
   const setShortcutsOpen = useUiStore((s) => s.setShortcutsOpen);
   const [slowStart, setSlowStart] = useState(false);
   const listing = useProjectStore((s) => s.listStatus === "idle" || s.listStatus === "loading");
@@ -116,7 +138,7 @@ export function AppShell() {
   );
   // On startup the engine is still booting, so "offline" is expected: the startup screen stays instead of an error.
   // An engine replaced later takes the window for a moment too, and the screen says what that is.
-  if (status !== "ready" || (library && !startup.done)) return <BootSplash line={startup.done ? "Reconnecting to Scarlet…" : undefined} />;
+  if (status !== "ready" || returning || (library && !startup.done)) return <BootSplash line={startup.done ? "Reconnecting to Scarlet…" : undefined} />;
 
   return (
     <div className="h-full flex flex-col">

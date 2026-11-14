@@ -259,3 +259,35 @@ The file-delivery script is a portable Node client control for the engine's stre
 For the media trials, pass a local camera excerpt to `node apps/server/scripts/bench-preview-checkpoints.mjs <excerpt.mp4>` and a long H.264/AAC recording to `node packages/render/bench/indexed-inputs.mjs <recording.mp4> --nearby`. Set `SCARLET_BIN_DIR` as in the first-pass instructions.
 
 The final build and TypeScript checks passed, along with 567 JavaScript tests, 41 Rust tests, and the packaged-engine import, render and approval smoke test. A subsequent pass measured native macOS input-to-window latency. The Dell runner is available for the corresponding Windows measurements.
+
+## Third pass: where a week of real use waited
+
+This pass started from the installed app's log instead of a fixture: a week of an editor's own sessions on a 58-minute 4K interview, to 2026-11-14. The log's request and playback lines say what was slow and how often. Each change below answers one of them.
+
+| What waited, in the log | Cause | After |
+| --- | --- | --- |
+| An agent's source frames: 161 reads, 1–11 s each, in bursts of up to 26 | Two decodes at a time, each probing the whole file before seeking | Three at a time on 18 cores, reading the movie's index |
+| The editor's own frame behind a pass: up to 2 min 7 s, with every other request of the window waiting behind it | Every decode slot held by the agent | One slot kept for the editor's frames |
+| Opening or stepping to a cut: 247 ms at the median, 634 ms at p90, over 474 opens | The same whole-video file opened in a new player for each cut (350 of 492) | The player that has the file open seeks to the next cut |
+| The video's clock holding 267 ms about 0.3 s after Play, on 61 of 142 plays with Space and 65 of 86 passages | The sound device opened only in cut review | Open while the editor is at the video, closed two minutes after they leave it paused |
+| Filler reads at 1–3 s instead of 1–9 ms | The audio helper and its models unloaded after 30 s, between an agent's turns | Kept while an agent is at work |
+| A pass's transcript reads waiting 3–13 s on which input carries the dialogue | Sixteen one-minute level reads, one after another | Read four at a time, counted in the same order |
+| Screen text returning nothing after 20–30 s | A frame file closed twice, the second time closing another read's file | Closed once |
+| Seven agent events lost after a quiet stretch | The engine dropped an idle connection after 5 s and the desktop reused it | The engine keeps connections for two minutes |
+
+Measured on the same Mac, alternating builds:
+
+| Operation | Before | After |
+| --- | ---: | ---: |
+| 24 source frames asked at once through the engine, 10-minute 4K excerpt | 8.8–9.4 s | 2.6–2.8 s |
+| The editor's frame asked 150 ms into that burst | 1.19–1.37 s | 0.30–0.48 s |
+| 24 frames spread over the 58-minute recording, FFmpeg alone | 4.2–4.4 s | 2.4–2.5 s |
+| 16 one-minute level reads of three inputs, FFmpeg alone | 3.6 s | 1.6 s |
+
+The frames read through the index are byte for byte the ones read without it, at five times on each of two recordings. The cut-step and Play changes are covered by tests of the mounted player and are not yet timed in the native window: file playback shows no frames in a covered window, so that measurement needs the preview in front.
+
+Seen and left: each cut's Before still renders its own short file (0.4–1.2 s of FFmpeg per cut, and stepping away cancels it); a parked Before decoder plays muted while After starts; `POST /storage/cleanup` answers only after the files are gone.
+
+```sh
+SCARLET_BIN_DIR="/Applications/Scarlet.app/Contents/MacOS" node apps/server/scripts/bench-frame-burst.mjs <long recording.mp4>
+```

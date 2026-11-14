@@ -1,4 +1,4 @@
-import { appliedReviewChange, historyLineage, intervalCandidates, makeTimeMap, removedJoins, reviewReasons, timelineDuration, withHandles, type Change, type Timeline, type TimeRange } from "@scarlet/timeline";
+import { appliedReviewChange, clipRange, historyLineage, intervalCandidates, makeTimeMap, removedJoins, reviewReasons, timelineDuration, withHandles, type Change, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { Thread } from "./threads.js";
 import { editKinds, type EditKind } from "./editKind.js";
 
@@ -16,10 +16,22 @@ export interface ThreadEdit extends EditRef {
   check?: string;
   /** A later change that supplied the review note for this same edit on the working cut. */
   reviewChangeId?: string;
+  /**
+   * The later edit whose reason to look this one now carries. It asks something new of an edit the editor may already
+   * have kept or called, so keeping it is recorded under this identity and not the edit's own.
+   */
+  reviewRef?: EditRef;
   /** Scarlet's one sentence on what the edit did. Its card shows this alone. */
   summary?: string;
   /** What the edit did, so the timeline draws a cut, a sound fix or a zoom each for what it is. */
   kind?: EditKind;
+  /**
+   * When a later run raised `check` about this edit, already in the video. Keeping the edit before then doesn't
+   * settle that doubt.
+   */
+  recheck?: string;
+  /** Another request made this edit. It is listed here because this request found a doubt about it. */
+  elsewhere?: true;
 }
 
 /** Why a revision of a flagged edit asks for a look when Scarlet gave it no reason of its own. */
@@ -44,6 +56,10 @@ interface SavedEdit extends ThreadEdit {
   named?: boolean;
   /** Named at a point where its own save neither took footage out nor put any back. */
   still?: boolean;
+  /** Named at a point by a save of the whole video, which can move the join of a cut that an earlier save made. */
+  resaved?: boolean;
+  /** The footage this edit's save put back where the edit was named, in the clock of the version it saved. */
+  putBack?: TimeRange;
 }
 
 /** A cut Scarlet named no edit for, in a video it built from the pieces to keep. */
@@ -77,7 +93,7 @@ function dialogueEdits(change: Change, smoothed = false) {
   let lastEnd = 0;
   let place = 0;
   let call = -1;
-  const result: { label: string; range: TimeRange; removed: TimeRange; replaces?: EditRef }[] = [];
+  const result: { label: string; range: TimeRange; removed: TimeRange; replaces?: EditRef; check?: string }[] = [];
   for (let i = change.ops.length - 1; i >= 0; i--) {
     const op = change.ops[i]!;
     if (smoothed && keepsTiming(op)) continue;
@@ -87,8 +103,9 @@ function dialogueEdits(change: Change, smoothed = false) {
     const reason = reasons?.[place++];
     // The review numbers its calls as planCutReview lists them: a cut that starts where the last ended is the same call.
     if (call < 0 || op.start > lastEnd) call++;
-    if (!skipped?.has(call)) result.push({ label: reason?.start === op.start && reason.end === op.end ? reason.reason : change.description,
-      range: { start: at, end: at }, removed: { start: op.start, end: op.end }, replaces: undefined });
+    const own = reason?.start === op.start && reason.end === op.end ? reason : undefined;
+    if (!skipped?.has(call)) result.push({ label: own ? own.reason : change.description,
+      range: { start: at, end: at }, removed: { start: op.start, end: op.end }, replaces: undefined, ...(own?.check && { check: own.check }) });
     removed += op.end - op.start;
     lastEnd = op.end;
   }
@@ -148,7 +165,7 @@ function namedEdits(change: Change, readCuts: () => ReturnType<typeof dialogueEd
   if (change.timelineEdits?.length && !change.restoredCuts?.length) return change.timelineEdits;
   // Preserve the stored spot identities of older, unnamed proposals. Every cut has its reason, also the ones `cuts` leaves out as skipped.
   const cuts = readCuts();
-  if (cuts && change.ops?.length === change.cutReasons?.length) return cuts.map(({ label, range }) => ({ label, range }));
+  if (cuts && change.ops?.length === change.cutReasons?.length) return cuts.map(({ label, range, check }) => ({ label, range, ...(check && { check }) }));
 }
 
 export function namedTimelineEdits(change: Change): Change["timelineEdits"] {
@@ -176,6 +193,25 @@ export function changeRemovals(change: Change): { removed: TimeRange[]; version:
 /** Project the conversation's changes into distinct edit identities before translating their times. */
 function savedEdits(thread: Thread, visible: (version: string) => boolean, read?: (version: string) => Timeline | undefined, fps = 30) {
   const edits: SavedEdit[] = [];
+  // The latest doubt this request's runs raised about an edit already in the video (`Change.flags`).
+  const runs = new Set(thread.tasks?.map(t => t.id));
+  const flagOn = (change: Change, spot: number) => change.flags?.findLast(f => f.spot === spot && runs.has(f.taskId));
+  const raise = (edit: SavedEdit, flag: NonNullable<Change["flags"]>[number] | undefined) => {
+    if (!flag) return;
+    edit.check = flag.check;
+    edit.recheck = flag.at;
+  };
+  // An edit another request made comes first, as it was in the video before this request's own: a revision this
+  // request then makes of it takes its place.
+  for (const change of thread.flagged ?? []) {
+    for (const edit of savedEdits({ changes: [change] } as Pick<Thread, "changes"> as Thread, visible, read, fps)) {
+      const flag = flagOn(change, edit.spot);
+      if (!flag) continue;
+      raise(edit, flag);
+      edit.elsewhere = true;
+      edits.push(edit);
+    }
+  }
   for (const change of thread.changes) {
     const appliedVersion = change.appliedVersion ?? change.toVersion;
     if (change.state !== "approved" || !visible(appliedVersion)) continue;
@@ -195,6 +231,7 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
     // out and named nothing for goes by what it is.
     const taken = (found ? removedJoins(found.before, found.after, fps) : built?.joins)?.map((join): Cut => ({ label: built ? LEFT_OUT : change.description,
       range: { start: join.at, end: join.at }, removed: join.removed, replaces: undefined }));
+    const returned = taken && found ? removedJoins(found.after, found.before, fps).map(join => join.removed) : undefined;
     const cuts = rippled ?? taken;
     const removals = new Map(cuts?.map(cut => [cut.range.start, cut.removed]));
     const reasons = change.appliedReview && reviewReasons(change, change.appliedReview.joins);
@@ -205,8 +242,8 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
     // A pure pass already computed the joins on its finished clock. Skipped calls are absent from that list.
     const rippleJoins = dialogue && !change.restoredCuts?.length ? dialogue : undefined;
     const clocks = !rippleJoins && read ? { before: read(change.appliedOnto ?? change.fromVersion), after: read(appliedVersion) } : undefined;
-    const fromSteps = editKinds(change, ranges, clocks, rippleJoins ?? (taken && found && [...taken,
-      ...removedJoins(found.after, found.before, fps).map(join => ({ range: join.removed, facet: "restore" as const }))]));
+    const fromSteps = editKinds(change, ranges, clocks, rippleJoins ?? (taken && returned && [...taken,
+      ...returned.map(range => ({ range, facet: "restore" as const }))]));
     // What a built change's steps say is that footage was placed. An edit named on a join where footage was left out is a cut.
     const kinds = built && taken ? fromSteps.map((kind, spot) => taken.some(cut => cut.range.start >= ranges[spot]!.start - NAMED_SLACK &&
       cut.range.start <= ranges[spot]!.end + NAMED_SLACK) ? "cut" : kind) : fromSteps;
@@ -223,6 +260,7 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
       if (check) edit.check = check;
       const summary = "summary" in item ? item.summary : undefined;
       if (summary) edit.summary = summary;
+      raise(edit, flagOn(change, spot));
       // Two things Scarlet named on the one join are one cut: its row says both, and the footage is counted once.
       const shared = built && !joined && kinds[spot] === "cut" && taken ? taken.find(cut => shown.has(cut) &&
         cut.range.start >= item.range.start - NAMED_SLACK && cut.range.start <= item.range.end + NAMED_SLACK) : undefined;
@@ -240,6 +278,9 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
       const kind = edit.beforeCut ? "cut" : kinds[spot];
       if (kind) edit.kind = kind;
       if (found && edit.named && kind === "other" && range.start === range.end) edit.still = true;
+      if (found && edit.named && range.start === range.end) edit.resaved = true;
+      const back = edit.named && kind === "restore" ? returned?.filter(r => r.start <= range.end + NAMED_SLACK && r.end >= range.start - NAMED_SLACK) : undefined;
+      if (back?.length) edit.putBack = { start: Math.min(...back.map(r => r.start)), end: Math.max(...back.map(r => r.end)) };
       const prior = item.replaces ? edits.findIndex(e => matchesEdit(e, item.replaces!)) : -1;
       if (prior >= 0) {
         const replaced = edits[prior]!;
@@ -255,8 +296,10 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
       let spot = entries.length;
       for (const cut of taken) {
         if (shown.has(cut)) continue;
-        edits.push({ changeId: change.id, spot: spot++, label: cut.label, range: cut.range, version: change.toVersion, previous: [],
-          beforeCut: { version: built.version, removed: cut.removed }, kind: "cut" });
+        const edit: SavedEdit = { changeId: change.id, spot: spot++, label: cut.label, range: cut.range, version: change.toVersion, previous: [],
+          beforeCut: { version: built.version, removed: cut.removed }, kind: "cut" };
+        raise(edit, flagOn(change, edit.spot));
+        edits.push(edit);
       }
     }
   }
@@ -265,7 +308,7 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
 
 /** The edits one applied change made, in its own clock, as History lists them under its version. */
 export function changeEdits(change: Change): Omit<ThreadEdit, "at">[] {
-  return savedEdits({ changes: [change] } as Pick<Thread, "changes"> as Thread, () => true).map(({ version: _version, named: _named, still: _still, ...edit }) => edit)
+  return savedEdits({ changes: [change] } as Pick<Thread, "changes"> as Thread, () => true).map(({ version: _version, named: _named, still: _still, resaved: _resaved, putBack: _putBack, ...edit }) => edit)
     .sort((a, b) => (a.beforeCut?.removed.start ?? a.range.start) - (b.beforeCut?.removed.start ?? b.range.start));
 }
 
@@ -275,7 +318,7 @@ export function changeEdits(change: Change): Omit<ThreadEdit, "at">[] {
  * show it until threadTimeline's list for the working cut arrives, and number edits from that.
  */
 export function threadEditList(thread: Thread): Omit<ThreadEdit, "at">[] {
-  return savedEdits(thread, () => true).map(({ version: _version, named: _named, still: _still, ...edit }) => edit)
+  return savedEdits(thread, () => true).map(({ version: _version, named: _named, still: _still, resaved: _resaved, putBack: _putBack, ...edit }) => edit)
     .sort((a, b) => a.range.start - b.range.start);
 }
 
@@ -310,29 +353,126 @@ export function threadTimeline(thread: Thread, head: Timeline, links: Parameters
   // A pass also names cuts an earlier save of its request made, to say they need a look: on Matt's interview the cut
   // of "This is, what do I say?" was made by one save and flagged by the next, and showed as two edits, the flagged one
   // with no footage to show (2026-11-11). An edit named on a join where its own save moved nothing is the cut already there.
+  const note = (first: ThreadEdit, later: ThreadEdit) => {
+    // Two things one save named on the same edit are both said, as they are for a cut it made itself.
+    const again = first.reviewChangeId === later.changeId && first.summary && later.summary && first.summary !== later.summary;
+    if (later.check || later.summary) first.reviewChangeId = later.changeId;
+    if (later.check && later.check !== first.check) first.reviewRef = { changeId: later.changeId, spot: later.spot };
+    if (later.check) first.check = later.check;
+    if (later.summary) first.summary = again ? `${first.summary} ${later.summary}` : later.summary;
+  };
   const cutThere = (edit: ThreadEdit) => result.find(other => other.beforeCut && other.changeId !== edit.changeId &&
     Math.abs(other.at! - edit.at!) <= NAMED_SLACK);
-  for (const { version, named, still, ...edit } of edits) {
+  // A pass that listens back to its cut saves the video again with a join moved a few frames: on Matt's DeepSeek
+  // video each such save put a breath back or took a little more out at a cut the pass had made, and showed as an
+  // edit of its own, "Added" at a single point on a red line (2026-11-14). A save that only moved the join of a cut
+  // already listed revised that cut. The cut keeps its identity and its row, takes the save's sentence and reason to
+  // look, and what it removed is read again from the working cut, in the clock of the version it was cut from.
+  const backMaps = new Map<string, ReturnType<typeof makeTimeMap> | null>();
+  const backTo = (version: string) => {
+    if (!backMaps.has(version)) {
+      const source = read(version);
+      backMaps.set(version, source ? makeTimeMap(head, source, fps) : null);
+    }
+    return backMaps.get(version);
+  };
+  // Where the working cut jumps in its footage. Two clips that carry on from one another are not a join.
+  const joins = [...new Set(head.tracks.flatMap(track => {
+    const placed = track.clips.flatMap(clip => {
+      try { return [{ clip, ...clipRange(clip) }]; } catch { return []; }
+    }).sort((x, y) => x.start - y.start);
+    return placed.flatMap((item, i) => {
+      const last = placed[i - 1], next = placed[i + 1];
+      const carriesOn = (x: typeof item, y: typeof item) => Math.abs(y.start - x.end) <= 1e-6 && "mediaId" in x.clip && "mediaId" in y.clip &&
+        x.clip.mediaId === y.clip.mediaId && Math.abs(y.clip.sourceIn - x.clip.sourceOut) <= 0.5 / fps;
+      return [...(last && carriesOn(last, item) ? [] : [item.start]), ...(next && carriesOn(item, next) ? [] : [item.end])];
+    });
+  }))].sort((x, y) => x - y);
+  /** The join within `slack` of a time, which was named or mapped a hair off it and so sits inside the clip beside it. */
+  const joinNear = (t: number, slack = NAMED_SLACK) => {
+    let low = 0, high = joins.length;
+    while (low < high) { const mid = (low + high) >> 1; if (joins[mid]! < t) low = mid + 1; else high = mid; }
+    return [joins[low - 1], joins[low]].filter((join): join is number => join !== undefined && Math.abs(join - t) <= slack)
+      .sort((x, y) => Math.abs(x - t) - Math.abs(y - t))[0];
+  };
+  const removedAt = (cut: ThreadEdit, join: number): TimeRange | undefined => {
+    const back = backTo(cut.beforeCut!.version), { removed } = cut.beforeCut!;
+    const start = back?.(join, "left"), end = back?.(join, "right");
+    if (typeof start !== "number" || typeof end !== "number" || end - start <= 0.5 / fps) return;
+    return start < removed.end && end > removed.start ? { start, end } : undefined;
+  };
+  /** The cuts other saves made with their joins in `span`, latest first. */
+  const cutsIn = (edit: ThreadEdit, span: TimeRange) => result.filter(cut => cut.beforeCut && cut.at !== undefined && cut.changeId !== edit.changeId &&
+    cut.at >= span.start - NAMED_SLACK && cut.at <= span.end + NAMED_SLACK).reverse();
+  /**
+   * The latest of those cuts, moved to where one of `at` shows what it still removes. A save that swapped one take for
+   * another leaves the cut between them with its join somewhere else, so with no cut at the place itself (`span`
+   * left out) it is the latest cut anywhere that took out footage still missing there.
+   */
+  const revised = (edit: ThreadEdit, at: number[], span?: TimeRange) => {
+    const cuts = span ? cutsIn(edit, span) : result.filter(cut => cut.beforeCut && cut.at !== undefined && cut.changeId !== edit.changeId).reverse();
+    for (const cut of cuts) for (const t of at) {
+      const join = joinNear(t) ?? t, removed = removedAt(cut, join);
+      if (!removed) continue;
+      cut.at = join;
+      cut.range = withHandles({ start: join, end: join }, 1.5, duration);
+      cut.beforeCut = { ...cut.beforeCut!, removed };
+      return cut;
+    }
+  };
+  /** A cut whose footage the stretch `span` of the working cut plays again, all of it: the cut is no longer in the video. */
+  const putBackWhole = (edit: ThreadEdit, span: TimeRange) => cutsIn(edit, span).find(cut => {
+    const back = backTo(cut.beforeCut!.version), { removed } = cut.beforeCut!;
+    const start = back?.(span.start, "right"), end = back?.(span.end, "left");
+    return typeof start === "number" && typeof end === "number" && start <= removed.start + 0.5 / fps && end >= removed.end - 0.5 / fps;
+  });
+  for (const { version, named, still, resaved, putBack, ...edit } of edits) {
     if (!maps.has(version)) {
       const source = read(version);
       maps.set(version, source ? makeTimeMap(source, head, fps) : null);
     }
     const map = maps.get(version);
     if (!map) continue;
-    const start = map(edit.range.start, "right") ?? map(edit.range.start, "left");
-    const end = edit.range.end === edit.range.start ? start : map(edit.range.end, "left");
+    const backStart = putBack && (map(putBack.start, "right") ?? map(putBack.start, "left"));
+    const backEnd = putBack && (map(putBack.end, "left") ?? map(putBack.end, "right"));
+    const back = typeof backStart === "number" && typeof backEnd === "number" && backEnd > backStart ? { start: backStart, end: backEnd } : undefined;
+    // Footage put back and since taken out again is not in the video, as with any edit whose footage is gone.
+    if (putBack && !back) continue;
+    if (back) {
+      // Footage put back on the left of a join leaves the join at its end, and on the right at its start.
+      const trimmed = revised(edit, [back.end, back.start], back);
+      if (trimmed) {
+        note(trimmed, edit);
+        continue;
+      }
+      // Putting back all a cut of this request took out leaves the video as it was there: neither is an edit to it.
+      const gone = putBackWhole(edit, back);
+      if (gone) {
+        result.splice(result.indexOf(gone), 1);
+        continue;
+      }
+      // Named at a point, footage put back is still a stretch of the video, and is drawn as one.
+      if (edit.range.start === edit.range.end) edit.range = putBack!;
+    }
+    const point = edit.range.end === edit.range.start;
+    const right = map(edit.range.start, "right"), left = point || right === null ? map(edit.range.start, "left") : null;
+    // Footage put back since on the right of a join moved the frame after it along. The join is where the frame before it ends.
+    const start = point && right !== null && left !== null && left < right - 1e-6 && joinNear(left, 1e-4) !== undefined && joinNear(right, 1e-4) === undefined
+      ? left : right ?? left;
+    const end = point ? start : map(edit.range.end, "left");
     if (start === null || end === null || start > end + 1e-6 || start > duration) continue;
     if (edit.range.end > edit.range.start && end <= start) continue;
     const range = { start: Math.max(0, start), end: Math.min(duration, Math.max(start, end)) };
     // A removal has a join but no surviving frames of its own. Audition the join with context.
     const placed: ThreadEdit = range.end === range.start ? { ...edit, at: range.start, range: withHandles(range, 1.5, duration) } : { ...edit, range };
-    const first = (still && placed.at !== undefined ? cutThere(placed) : undefined) ?? sameAs(placed, named);
+    const first = (resaved && placed.at !== undefined ? revised(placed, [placed.at], { start: placed.at, end: placed.at }) ?? revised(placed, [placed.at]) : undefined) ??
+      (still && placed.at !== undefined ? cutThere(placed) : undefined) ?? sameAs(placed, named);
     if (first) {
-      if (placed.check || placed.summary) first.reviewChangeId = placed.changeId;
-      if (placed.check) first.check = placed.check;
-      if (placed.summary) first.summary = placed.summary;
+      note(first, placed);
       continue;
     }
+    // A point has no footage of its own to call added. One named where the save re-made a join is an edit at that join.
+    if (placed.at !== undefined && placed.kind === "restore") placed.kind = "other";
     result.push(placed);
   }
   return result.sort((a, b) => (a.at ?? a.range.start) - (b.at ?? b.range.start));

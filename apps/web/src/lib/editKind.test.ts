@@ -34,6 +34,9 @@ describe("the note on an applied edit's card", () => {
     const summary = "Muted the call audio and the screen recording's demo sound, leaving only the camera mic";
     expect(editNote(edit({ label: "Use camera mic, mute call audio", check: "Screen recording's demo sound is muted too", summary }))).toBe(summary);
     expect(editNote(edit({ label: "Trim the false start", summary: "Trimmed the false start" }))).toBe("Trimmed the false start");
+    // A doubt a later request raised about it follows the sentence written when it was made.
+    expect(editNote({ ...edit({ label: "Carry the quotation", summary: "Kept the quotation into the reaction", check: "Black gap and overlapping lines" }),
+      recheck: "2026-11-14T17:52:00.000Z" })).toBe("Kept the quotation into the reaction. Black gap and overlapping lines.");
   });
 
   it("reads an edit saved without a summary as its title, then its reason to look", () => {

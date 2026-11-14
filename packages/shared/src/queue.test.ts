@@ -79,9 +79,13 @@ it("says the editor's calls hold a request while Scarlet revises one of them, an
   const lower = task("lower", "queued", 2);
   const note = task("note", "queued", 3, { threadId: "pass", changeId: "chg_pass", cutIndex: 1 });
   const all = [pass, revision, lower, note];
-  // The new edit doesn't start when the revision ends: it waits for the calls. The note waits only for the run.
+  // The new edit doesn't start when the revision ends: it waits for the calls. The note is about another call, so
+  // it waits for nothing: Scarlet works on both at once.
   expect(queueWait(lower, all, [revising])).toEqual({ kind: "review", change: revising });
-  expect(queueWait(note, all, [revising])).toEqual({ kind: "run", task: revision });
+  expect(queueWait(note, all, [revising])).toBeUndefined();
+  // A second note on the call being revised waits for that run.
+  const same = task("same", "queued", 4, { threadId: "pass", changeId: "chg_pass", cutIndex: 0 });
+  expect(queueWait(same, [...all, same], [revising])).toEqual({ kind: "run", task: revision });
   // So the note runs first, though it was asked second.
   expect(queueOrder(all, [revising]).map(t => t.id)).toEqual(["note", "lower"]);
   // The same order once the revision has finished and its new version waits.
@@ -112,7 +116,8 @@ it("goes on saying the editor's calls hold a request once a note on one call has
   const replaced = { ...review, state: "rejected", replacedBy: "chg_pass_v2" } as Change;
   const revised = { ...review, id: "chg_pass_v2", taskId: "note" } as Change;
   expect(queueWait(lower, all, [replaced, revised])).toEqual({ kind: "review", change: revised });
-  expect(queueWait(second, all, [replaced, revised])).toEqual({ kind: "run", task: note });
+  // The second note is about another call, so it starts beside the first.
+  expect(queueWait(second, all, [replaced, revised])).toBeUndefined();
   expect(queueOrder(all, [replaced, revised]).map(t => t.id)).toEqual(["second", "lower"]);
   // The same when the note's run saves its cut a second time, in place of its own first attempt.
   const first = { ...revised, state: "rejected", replacedBy: "chg_pass_v3" } as Change;
@@ -137,4 +142,34 @@ it("holds nothing for a pass that is still being made: what is queued behind it 
   const interrupted = { ...task("pass", "failed", 0), interrupted: true, retryTaskId: "again" } as Task;
   const again = { ...task("again", "queued", 3, { threadId: "pass" }), resumeRootId: "pass" } as Task;
   expect(queueOrder([interrupted, zoom, again], []).map(t => t.id)).toEqual(["again", "zoom"]);
+});
+
+it("lets requests about different cuts or edits run at once, and keeps every other request in turn", () => {
+  const pass = task("pass", "done", 0);
+  const call = (id: string, state: Task["state"], minute: number, cutIndex: number) => task(id, state, minute, { threadId: "pass", changeId: "chg_pass", cutIndex });
+  const first = call("first", "running", 1, 2);
+  const second = call("second", "queued", 2, 5);
+  // A revision of another call doesn't wait for the one Scarlet is on, or for one ahead of it in line.
+  expect(queueWait(second, [pass, first, second], [review])).toBeUndefined();
+  expect(queueWait(second, [pass, { ...first, state: "queued" }, second], [review])).toBeUndefined();
+  expect(queueOrder([pass, { ...first, state: "queued" }, second], [review]).map(t => t.id)).toEqual(["first", "second"]);
+  // Nor for that one's question, which is about its own cut.
+  expect(queueWait(second, [pass, { ...first, state: "waiting_for_user" }, second], [review])).toBeUndefined();
+  // A second request about the same call keeps the order it was asked in.
+  const again = call("again", "queued", 3, 2);
+  expect(queueWait(again, [pass, first, again], [review])).toEqual({ kind: "run", task: first });
+  expect(queueWait(again, [pass, { ...first, state: "queued" }, again], [review])).toEqual({ kind: "ahead", count: 1 });
+  expect(queueWait(again, [pass, { ...first, state: "waiting_for_user" }, again], [review])).toEqual({ kind: "question", task: { ...first, state: "waiting_for_user" } });
+  // An applied edit's revision works beside another edit's, in the same thread or another.
+  const zoomFix = task("zoomFix", "queued", 4, { threadId: "zoom", changeId: "chg_zoom", editIndex: 0 });
+  const titleFix = task("titleFix", "running", 3, { threadId: "zoom", changeId: "chg_zoom", editIndex: 1 });
+  expect(queueWait(zoomFix, [titleFix, zoomFix], [])).toBeUndefined();
+  // A request about the whole video runs alone: it waits for the revisions under way, and later revisions wait for it.
+  const captions = task("captions", "queued", 5);
+  expect(queueWait(captions, [titleFix, captions], [])).toEqual({ kind: "run", task: titleFix });
+  const later = task("later", "queued", 6, { threadId: "zoom", changeId: "chg_zoom", editIndex: 2 });
+  expect(queueWait(later, [titleFix, captions, later], [])).toEqual({ kind: "ahead", count: 1 });
+  expect(queueWait(later, [{ ...captions, state: "running" }, later], [])).toEqual({ kind: "run", task: { ...captions, state: "running" } });
+  // A pass's calls still hold a revision of an edit the pass isn't about.
+  expect(queueWait(zoomFix, [pass, first, zoomFix], [review])).toEqual({ kind: "review", change: review });
 });

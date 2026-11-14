@@ -53,7 +53,16 @@ const ACTIVE = new Set<Task["state"]>(["queued", "claimed", "running"]);
  * asks for it again on the video as it is now. The editor didn't ask for it: it carries on the request that made the
  * suggestion, and its task's words ("Redo on the current edit") are the engine's, never shown.
  */
-export const isRedo = (task: Task) => task.kind === "revise" && task.createdBy.type === "scarlet";
+export const isRedo = (task: Task) => task.kind === "revise" && task.createdBy.type === "scarlet" && !task.cutConflict;
+/**
+ * Scarlet's recheck of a call the editor approved: the footage in its passage changed before the pass could go in, so
+ * the engine sends that one cut back. It is a request about that cut, drawn under its row like a revision, and not a
+ * redo of the request that saved the pass (2026-11-14: rechecks chained under an earlier "keep" and showed every
+ * reply since).
+ */
+export const isRecheck = (task: Task) => task.kind === "revise" && task.createdBy.type === "scarlet" && !!task.cutConflict?.approved;
+/** Why Scarlet is rechecking an approved cut, in place of the editor's words a revision has. */
+export const RECHECK_WORDS = "The footage here changed after you approved it. Rechecking the cut.";
 /** What Scarlet says about a suggestion it is to make again: while the redo waits its turn, then once Scarlet is on it. */
 const REDO_WAITS = "The video changed while this suggestion was waiting. I’ll redo it on the video as it is now.";
 const REDOING = "The video changed while this suggestion was waiting. I’m redoing it on the video as it is now.";
@@ -198,7 +207,7 @@ export function requestTarget(task: Task, made: Change | undefined, changes: rea
   return edit ? { note, edit } : { note, changeId: change.id, call: index };
 }
 
-/** What a queued request shows: Scarlet runs one request at a time in a project, so it says what it is waiting for. */
+/** What a queued request shows: Scarlet runs one request at a time in a project, unless each is about its own cut or edit, so it says what it is waiting for. */
 export function queueLabel(task: Task, tasks: readonly Task[], changes: readonly Change[], isDialoguePass: (task: Task) => boolean): string | undefined {
   const wait = queueWait(task, tasks, changes);
   if (!wait) return undefined;
@@ -234,7 +243,7 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
       ? t.instruction.slice(FIRST_CUT_INSTRUCTION.length).trim() : requestText(t);
     if (t.resumeRootId) out.push({ kind: "system", at: t.createdAt ?? "", text: "Edit resumed." });
     // Scarlet's redo of a suggestion has no words of its own here: the suggestion says what is happening to it, below.
-    else if (author.type === "scarlet") { if (!isRedo(t)) out.push({ kind: "system", at: t.createdAt ?? "", text: requested, tone: "warn" }); }
+    else if (author.type === "scarlet") { if (!isRedo(t)) out.push({ kind: "system", at: t.createdAt ?? "", text: isRecheck(t) ? RECHECK_WORDS : requested, tone: "warn" }); }
     else if (requested && requested !== "Make first cut") {
       const revisionLabel = revisionTarget(t, thread.changes);
       let queueStatus = queue && t.state === "queued" ? queue(t) : undefined;

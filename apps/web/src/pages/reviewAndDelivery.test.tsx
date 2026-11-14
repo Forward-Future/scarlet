@@ -864,6 +864,28 @@ it("prepares only After for the next decision and promotes that decoder when the
   expect(prepared?.closest("[data-parked]")).toBeNull();
 });
 
+it("steps to the next cut on the decoder that already has the whole video open, and parks no second one on it", async () => {
+  const timeline = data.timeline!;
+  const cut = (key: string, at: number) => ({ key, cut: { start: at, end: at + 1 },
+    before: { timeline, version: timeline.version, start: at - 2, file: "/before.mp4" },
+    after: { timeline, version: "head", start: at - 2, end: at + 3, file: "/whole.mp4", clock: joinClock([{ start: at, end: at + 1 }], timelineDuration(timeline)) } });
+  const first = cut("first", 3), next = cut("next", 6), last = cut("last", 9);
+  const draw = (plan: typeof first, queued?: typeof next) => show(<MemoryRouter><CutPreview simple={{ marks: [],
+    cutPlayback: { key: plan.key, start: plan.before.start, side: "after", afterFile: "/whole.mp4" }, nextCutPlayback: queued }}
+    workingCache={{ cache: { state: "ready", url: "/before.mp4" }, startCache: () => {} }}
+    joined={plan.after} active hasCut spot={0} autoPlaySource={false} onRetryDraft={() => {}} onMedia={() => {}} /></MemoryRouter>);
+  const whole = () => [...container.querySelectorAll('.watch-monitor video[src="/whole.mp4"]')];
+  await draw(first, next);
+  const playing = player.element();
+  expect(whole()).toEqual([playing]);
+  await draw(next, last);
+  expect(player.element()).toBe(playing);
+  expect(player.mediaTime(8)).toBe(7); // The next cut's own joins: a second of footage came out at 6.
+  expect(whole()).toEqual([playing]);
+  await draw(last);
+  expect(player.element()).toBe(playing);
+});
+
 it("plays a short cut file on its version clock and hands an out-of-window seek back to the full edit", async () => {
   const timeline = data.timeline!;
   const duration = timelineDuration(timeline);

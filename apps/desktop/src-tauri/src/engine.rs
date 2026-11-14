@@ -587,7 +587,7 @@ impl EngineManager {
         if !self.stopped.load(Ordering::SeqCst) {
             if let Some(state) = self.app.try_state::<crate::AppState>() {
                 let host = state.host.clone();
-                tauri::async_runtime::spawn(async move { host.stop().await });
+                tauri::async_runtime::spawn(async move { if asked { host.stop().await } else { host.stop_for_lost_engine().await } });
             }
         }
         Ok(())

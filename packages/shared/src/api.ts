@@ -295,7 +295,9 @@ export const DialogueCutsRequest = ProposeChangeRequest.pick({ description: true
   cuts: z.array(z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().positive(),
     originalRange: TimeRange.optional(), review: z.boolean(), reason: z.string().min(1),
     /** Editorial classification, also used to enforce the scope of a local pause edit. */
-    kind: DialogueCutKind.optional() })
+    kind: DialogueCutKind.optional(),
+    /** A doubt the editor must settle by listening or looking. Marks an applied cut as needing them until they keep it. */
+    check: z.string().trim().min(1).max(120).optional() })
     .refine(c => !c.originalRange || (c.review && c.originalRange.start <= c.start && c.end <= c.originalRange.end),
       "A repaired range must be staged inside its originally proposed removal.")).min(1),
 });
@@ -366,6 +368,18 @@ export const ReviseRequest = ModelTuning.extend({
   /** Agent to send the revision to. Defaults to the change's author. */
   assignTo: z.string().optional(),
 });
+
+/** A doubt a run raises about an applied edit: named by its change and place, or found where `range` falls on the working cut. */
+export const FlagEditRequest = z.object({
+  check: z.string().trim().min(1).max(120),
+  range: z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().nonnegative() }).optional(),
+  changeId: Id.optional(),
+  spot: z.number().int().nonnegative().optional(),
+  taskId: Id.optional(),
+}).refine(b => (b.changeId !== undefined) === (b.spot !== undefined), "changeId and spot go together")
+  .refine(b => (b.changeId !== undefined) !== (b.range !== undefined), "Give either range or changeId with spot")
+  .refine(b => !b.range || b.range.end >= b.range.start, "range.end comes after range.start");
+export type FlagEditRequest = z.infer<typeof FlagEditRequest>;
 
 // ---------------------------------------------------------------------------
 // Notes
@@ -465,6 +479,8 @@ const HardwareEncoder = z.enum(["none", "auto", "nvenc", "qsv", "videotoolbox"])
 const ExportOptions = z.object({
   height: z.number().int().min(2).max(16384).multipleOf(2).optional(),
   omitCaptions: z.boolean().optional(),
+  /** Original quality: encode in software at about the source's own rate, with 320 kb/s sound. A larger file than a delivery render. */
+  bestQuality: z.boolean().optional(),
 });
 
 /** Where a desktop export saves its file. The ticket names a destination only the desktop app can resolve. */
@@ -711,6 +727,8 @@ export const Task = z.object({
   }).optional(),
   /** The worker stopped before finishing, possibly after saving changes. */
   interrupted: z.boolean().optional(),
+  /** The run's worker went missing while Scarlet stayed open. A quit doesn't count: only these limit how often a run carries on by itself. */
+  lostWorker: z.boolean().optional(),
   /**
    * A finished run waited for these recordings' transcripts or dialogue analysis and ended before they were ready,
    * so it saved only what it could do without them. Scarlet measures this from the run's waits; it can be resumed.
