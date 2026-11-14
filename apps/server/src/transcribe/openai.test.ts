@@ -22,8 +22,7 @@ it("gives each segment the words said before it ends, and the last segment any t
     // runs on to the end of the last word it holds.
     [11.1, 13, "we go.", ["we", "go.", "Late"]],
   ]);
-  expect(segments[1]!.words[0]).toEqual({ text: "we", start: 11.2, end: 11.5 });
-  expect(segments[1]!.words.slice(1)).toEqual([{ text: "go.", start: 11.9995, end: 12.4 }, { text: "Late", start: 12.6, end: 13 }]);
+  expect(segments[1]!.words).toEqual([{ text: "we", start: 11.2, end: 11.5 }, { text: "go.", start: 11.9995, end: 12.4 }, { text: "Late", start: 12.6, end: 13 }]);
   // Times before the recording starts are held at its start, and a segment never ends before it begins.
   const [early] = toSegments({ segments: [{ start: 5, end: 4, text: "x" }], words: [{ word: "x", start: -2, end: -1 }] }, 1);
   expect(early).toMatchObject({ start: 0, end: 6, words: [{ text: "x", start: 0, end: 0 }] });
