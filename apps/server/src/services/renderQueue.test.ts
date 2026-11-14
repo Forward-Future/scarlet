@@ -177,9 +177,8 @@ it.each([
   expect(encode).toHaveBeenCalledTimes(2);
 });
 
-it("always tries hardware for exports while keeping the saved policy for previews", async () => {
+it("encodes exports and previews as the hardware setting says: software for none, hardware for auto or a named device", async () => {
   const { ctx } = workspace;
-  ctx.repos.settings.update({ render: { hwaccel: "none" } });
   const encode = vi.spyOn(ctx.render, "renderFullCached").mockImplementation(async (_project, _timeline, _cache, file) => {
     writeFileSync(file, "video");
   });
@@ -188,19 +187,19 @@ it("always tries hardware for exports while keeping the saved policy for preview
     { ...base, kind: "export" as const, quality: "preview" as const, exportOptions: { height: 720 } },
     { ...base, kind: "full" as const },
   ]) {
-    ctx.repos.settings.update({ render: { hwaccel: "none" } });
-    const queued = ctx.renders.request(input);
-    await settle();
-    expect(queued.hwaccel).toBe("auto");
-    expect(encode.mock.lastCall?.[4].hwaccel).toBe("auto");
     ctx.repos.settings.update({ render: { hwaccel: "auto" } });
-    const equivalent = ctx.renders.request(input);
-    expect(equivalent).toMatchObject({ id: queued.id, key: queued.key, previewContentKey: queued.previewContentKey });
+    const hardware = ctx.renders.request(input);
+    expect(hardware.hwaccel).toBe("auto");
+    await settle();
+    expect(encode.mock.lastCall?.[4].hwaccel).toBe("auto");
+    // An editor who turned hardware acceleration off gets a software encode, exports included.
+    ctx.repos.settings.update({ render: { hwaccel: "none" } });
+    const software = ctx.renders.request(input);
+    expect(software.hwaccel).toBe("none");
+    expect(software.key).not.toBe(hardware.key);
+    await settle();
+    expect(encode.mock.lastCall?.[4].hwaccel).toBe("none");
   }
-  ctx.repos.settings.update({ render: { hwaccel: "none" } });
-  expect(ctx.renders.request({ ...base, kind: "full", quality: "preview" }).hwaccel).toBe("none");
-  await settle();
-  expect(encode.mock.lastCall?.[4].hwaccel).toBe("none");
   ctx.repos.settings.update({ render: { hwaccel: "qsv" } });
   expect(ctx.renders.request({ ...base, kind: "export" }).hwaccel).toBe("qsv");
   await settle();
@@ -232,6 +231,8 @@ it("adopts interrupted software exports with their original settings and verifie
   const base = { ...section(), range: null, quality: "preview" as const };
   const preview = ctx.renders.request({ ...base, kind: "full" });
   await settle();
+  // The editor has since turned hardware encoding on. An export interrupted under the old setting goes on with it.
+  ctx.repos.settings.update({ render: { hwaccel: "auto" } });
   // An explicit preview-quality export previously wrapped the same local source fingerprint
   // as the software preview at the identical height, plus its own range and output options.
   const input = { ...base, kind: "export" as const, exportOptions: { height: preview.height! } };

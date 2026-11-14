@@ -48,6 +48,24 @@ it("moves Last edited only when the video changes, and lists a renamed, archived
   expect(listed().map(([name]) => name)).toEqual(["Newer", "Renamed"]);
 });
 
+it("moves Last edited when a file is added, not as an added file's import, transcript or labels are saved", () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2030-01-07T09:00:00Z"));
+  const project = repos.projects.insert(createProject("Interview"));
+  const edited = () => repos.projects.summaries()[0]!.updatedAt;
+  vi.setSystemTime(new Date("2030-01-08T09:00:00Z"));
+  const asset = { id: "camera", name: "Camera", path: "camera.mov", kind: "video" as const, duration: 60 };
+  repos.projects.putMedia(project.id, asset, "ingesting");
+  expect(edited()).toBe("2030-01-08T09:00:00.000Z");
+
+  // Its import finishing, a transcript linked and voice roles saved all update the same file.
+  vi.setSystemTime(new Date("2030-01-09T09:00:00Z"));
+  repos.projects.putMedia(project.id, asset, "ready");
+  repos.projects.putMedia(project.id, { ...asset, transcriptId: "trn_1" }, "ready");
+  repos.projects.putMedia(project.id, { ...asset, transcriptId: "trn_1", voiceRoles: { me: 1, other: 2 } }, "ready");
+  expect(edited()).toBe("2030-01-08T09:00:00.000Z");
+});
+
 it("counts for the library what the project's chat counts: a pass's calls that still wait, and a question as one", () => {
   const project = repos.projects.insert(createProject("Interview"));
   const count = () => repos.projects.summaries()[0]!.pendingChanges;

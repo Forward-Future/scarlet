@@ -10,11 +10,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::util::{env_get, hide_console, human_duration, kill_tree, stderr_tail_line, KILL_AFTER};
+use crate::util::{env_get, hide_console, human_duration, kill_tree, lossy_lines, stderr_tail_line, KILL_AFTER};
 
 /// True for Windows batch shims that must be run through cmd.exe.
 pub fn needs_cmd_shell(file: &str) -> bool {
@@ -133,12 +133,7 @@ fn runner_spec(file: &str, args: &[String], env: &HashMap<String, String>) -> Re
         "npm" => "npm",
         _ => anyhow::bail!("use a native or npm agent CLI instead of a batch launcher"),
     };
-    let root = shim.parent().context("missing shim directory")?.join("node_modules").join(package);
-    let manifest = root.join("package.json");
-    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest).with_context(|| format!("read {}", manifest.display()))?)?;
-    let bin = &manifest["bin"];
-    let entry = bin.as_str().or_else(|| bin[&name].as_str()).context("missing npm CLI entry point")?;
-    let target = root.join(entry);
+    let target = npm_entry(shim, &name, package)?;
     let ext = target.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
     let target = target.to_string_lossy().into_owned();
     let mut arguments = args.to_vec();
@@ -151,6 +146,69 @@ fn runner_spec(file: &str, args: &[String], env: &HashMap<String, String>) -> Re
         _ => anyhow::bail!("unsupported npm agent executable"),
     };
     Ok(SpawnSpec { file: program, args: arguments, verbatim: false })
+}
+
+/// The script or program a Windows package-manager shim for `package` runs, from the package's own manifest.
+fn npm_entry(shim: &Path, name: &str, package: &str) -> Result<PathBuf> {
+    let root = package_root(shim, package).with_context(|| format!("{} runs no copy of {package} Scarlet can find; use a native or npm agent CLI instead of a batch launcher", shim.display()))?;
+    let manifest = root.join("package.json");
+    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest).with_context(|| format!("read {}", manifest.display()))?)?;
+    let bin = &manifest["bin"];
+    let entry = bin.as_str().or_else(|| bin[name].as_str()).context("missing npm CLI entry point")?;
+    Ok(root.join(entry))
+}
+
+/// The folder `package` is installed in, for the shim that launches it. npm keeps it beside its shim, in
+/// `node_modules`. pnpm keeps global packages under its home (`global\5\node_modules`) and Yarn under `Data\global`,
+/// and their shims name the path, so the shim is read for it. Only a folder holding the package's manifest is taken.
+fn package_root(shim: &Path, package: &str) -> Option<PathBuf> {
+    let dir = shim.parent()?;
+    let is_package = |root: &Path| root.join("package.json").is_file();
+    let beside = dir.join("node_modules").join(package);
+    if is_package(&beside) {
+        return Some(beside);
+    }
+    let text = std::fs::read(shim).ok()?;
+    let text = String::from_utf8_lossy(&text);
+    // Each quoted path in the shim, relative to the shim's folder (`%~dp0`, or npm's `%dp0%`) or in full. Some name
+    // the script, Yarn's names another shim in the `.bin` beside the package; either way a `node_modules` folder
+    // above it holds the package.
+    let quoted = text.lines().flat_map(|line| line.split('"').skip(1).step_by(2));
+    for quoted in quoted {
+        let windows = quoted.replace('\\', std::path::MAIN_SEPARATOR_STR);
+        let path = match windows.strip_prefix("%~dp0").or_else(|| windows.strip_prefix("%dp0%")) {
+            Some(rest) => dir.join(rest.trim_start_matches(['\\', '/'])),
+            None if Path::new(&windows).is_absolute() => PathBuf::from(&windows),
+            None => continue,
+        };
+        if path.to_string_lossy().contains('%') {
+            continue;
+        }
+        let path = lexical(&path);
+        let found = path.ancestors()
+            .filter(|folder| folder.file_name().is_some_and(|n| n.eq_ignore_ascii_case("node_modules")))
+            .map(|modules| modules.join(package))
+            .find(|root| is_package(root));
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+/// The path with each `..` taken off the folder before it, as Windows reads a path in a shim.
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            part => out.push(part),
+        }
+    }
+    out
 }
 
 /// Where each running agent CLI's process id is noted, so the next launch can stop one this launch never got to.
@@ -282,7 +340,7 @@ fn runs_program(pid: u32, name: &str) -> bool {
 }
 
 /// SIGKILL the CLI's whole process group at once. Windows: `taskkill /T /F`.
-fn kill_group_now(pid: u32) {
+pub(crate) fn kill_group_now(pid: u32) {
     let quiet = std::process::Stdio::null;
     #[cfg(windows)]
     {
@@ -389,7 +447,7 @@ pub async fn spawn_lines(file: &str, args: &[String], opts: SpawnLinesOptions, m
         let killed = killed.clone();
         let last_line = last_line.clone();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(out).lines();
+            let mut lines = lossy_lines(out);
             while let Ok(Some(line)) = lines.next_line().await {
                 *last_line.lock().unwrap() = std::time::Instant::now();
                 let line = line.strip_suffix('\r').unwrap_or(&line);
@@ -417,15 +475,9 @@ pub async fn spawn_lines(file: &str, args: &[String], opts: SpawnLinesOptions, m
             kill_tree(pid).await;
             child.wait().await
         }
-        _ = run_limit(opts.timeout) => {
+        verdict = watch(opts.timeout, opts.stall, &last_line, &who) => {
             outcome.timed_out = true;
-            outcome.killed = true;
-            kill_tree(pid).await;
-            child.wait().await
-        }
-        _ = silence(&last_line, opts.stall) => {
-            outcome.timed_out = true;
-            outcome.stalled = true;
+            outcome.stalled = verdict == Watch::Stalled;
             outcome.killed = true;
             kill_tree(pid).await;
             child.wait().await
@@ -463,23 +515,70 @@ pub async fn spawn_lines(file: &str, args: &[String], opts: SpawnLinesOptions, m
     Ok(outcome)
 }
 
-async fn run_limit(limit: Option<Duration>) {
-    match limit {
-        Some(limit) => tokio::time::sleep(limit).await,
-        None => std::future::pending().await,
+/// How often a run's watchdog looks at the clock.
+const WATCH_TICK: Duration = Duration::from_secs(1);
+/// A look this late means the computer was asleep since the last one. Windows' clock counts on through a suspend,
+/// so a run would otherwise wake up stalled, or past its limit. A busy machine is late by seconds, not this.
+const ASLEEP_AFTER: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Watch {
+    Running,
+    /// The computer slept for this long (the gap between two looks): the stall clock starts again.
+    Slept(Duration),
+    /// The run has been awake for its whole time limit.
+    TimedOut,
+    /// The process has written no stdout line for the stall window. The agent CLIs stream an event for every step,
+    /// tool call and message, so a long silence means a hang, not a slow edit.
+    Stalled,
+}
+
+/// What a run's time limit and stall window make of the time since the last look.
+struct Watchdog {
+    limit: Option<Duration>,
+    stall: Option<Duration>,
+    /// Time the run has been going, without the time the computer slept.
+    awake: Duration,
+}
+
+impl Watchdog {
+    /// One look at the clock: `gap` since the last look, `quiet` since the process last wrote a line.
+    fn look(&mut self, gap: Duration, quiet: Duration) -> Watch {
+        if gap >= ASLEEP_AFTER {
+            return Watch::Slept(gap);
+        }
+        self.awake += gap;
+        if self.limit.is_some_and(|limit| self.awake >= limit) {
+            Watch::TimedOut
+        } else if self.stall.is_some_and(|stall| quiet >= stall) {
+            Watch::Stalled
+        } else {
+            Watch::Running
+        }
     }
 }
 
-/// Resolves once the process has written no stdout line for `stall`. The agent CLIs stream an event for every
-/// step, tool call and message, so a long silence means a hang, not a slow edit.
-async fn silence(last_line: &std::sync::Mutex<std::time::Instant>, stall: Option<Duration>) {
-    let Some(stall) = stall else { return std::future::pending().await };
+/// Resolves when the run should be stopped, for its time limit or for going quiet. Never, with neither.
+async fn watch(limit: Option<Duration>, stall: Option<Duration>, last_line: &std::sync::Mutex<std::time::Instant>, who: &str) -> Watch {
+    if limit.is_none() && stall.is_none() {
+        return std::future::pending().await;
+    }
+    let mut dog = Watchdog { limit, stall, awake: Duration::ZERO };
+    let mut looked = std::time::Instant::now();
     loop {
-        let quiet = last_line.lock().unwrap().elapsed();
-        if quiet >= stall {
-            return;
+        tokio::time::sleep(WATCH_TICK).await;
+        let now = std::time::Instant::now();
+        let gap = now.saturating_duration_since(looked);
+        looked = now;
+        let quiet = now.saturating_duration_since(*last_line.lock().unwrap());
+        match dog.look(gap, quiet) {
+            Watch::Running => {}
+            Watch::Slept(slept) => {
+                *last_line.lock().unwrap() = now;
+                log::info!("{who}: the computer was asleep for about {}; its stall and time limits don't count that", human_duration(slept));
+            }
+            stop => return stop,
         }
-        tokio::time::sleep(stall - quiet).await;
     }
 }
 
@@ -736,6 +835,65 @@ mod tests {
     }
 
     #[test]
+    fn finds_the_cli_a_pnpm_yarn_or_npm_shim_launches() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = |root: &Path, package: &str, bin: &str| {
+            let package = root.join(package);
+            std::fs::create_dir_all(&package).unwrap();
+            std::fs::write(package.join("package.json"), format!(r#"{{"bin":{bin}}}"#)).unwrap();
+            package
+        };
+        let shim = |path: &Path, text: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+            path.to_path_buf()
+        };
+        let claude = "@anthropic-ai/claude-code";
+
+        // pnpm keeps global packages under its home's global folder, and its shim names the script there.
+        let pnpm = dir.path().join("pnpm");
+        let package = install(&pnpm.join("global/5/node_modules"), claude, r#"{"claude":"cli.js"}"#);
+        let pnpm_shim = shim(&pnpm.join("claude.CMD"), concat!(
+            "@SETLOCAL\r\n",
+            "@IF NOT DEFINED NODE_PATH (\r\n",
+            "  @SET \"NODE_PATH=C:\\Users\\ed\\AppData\\Local\\pnpm\\global\\5\\.pnpm\\node_modules\"\r\n",
+            ") ELSE (\r\n",
+            "  @SET \"NODE_PATH=%NODE_PATH%;C:\\Users\\ed\\AppData\\Local\\pnpm\\global\\5\\.pnpm\\node_modules\"\r\n",
+            ")\r\n",
+            "@IF EXIST \"%~dp0\\node.exe\" (\r\n",
+            "  \"%~dp0\\node.exe\"  \"%~dp0\\global\\5\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n",
+            ") ELSE (\r\n",
+            "  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n",
+            "  node  \"%~dp0\\global\\5\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n",
+            ")\r\n",
+        ));
+        assert_eq!(npm_entry(&pnpm_shim, "claude", claude).unwrap(), package.join("cli.js"));
+
+        // Yarn's shim calls the one in its global folder's .bin, beside the package.
+        let yarn = dir.path().join("Yarn");
+        let package = install(&yarn.join("Data/global/node_modules"), claude, r#""bin/claude.js""#);
+        let yarn_shim = shim(&yarn.join("bin/claude.cmd"), "@\"%~dp0\\..\\Data\\global\\node_modules\\.bin\\claude.cmd\"   %*\r\n");
+        assert_eq!(npm_entry(&yarn_shim, "claude", claude).unwrap(), package.join("bin/claude.js"));
+
+        // npm keeps the package beside its shim, and a shim may also name the script by its full path.
+        let npm = dir.path().join("npm");
+        let package = install(&npm.join("node_modules"), "@openai/codex", r#"{"codex":"bin/codex.js"}"#);
+        let npm_shim = shim(&npm.join("codex.cmd"), "@ECHO off\r\n\"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n");
+        assert_eq!(npm_entry(&npm_shim, "codex", "@openai/codex").unwrap(), package.join("bin/codex.js"));
+        let elsewhere = dir.path().join("tools");
+        let package = install(&elsewhere.join("node_modules"), "@openai/codex", r#"{"codex":"bin/codex.js"}"#);
+        let full = shim(&dir.path().join("bin/codex.cmd"), &format!("node \"{}\" %*\r\n", package.join("bin/codex.js").display()));
+        assert_eq!(npm_entry(&full, "codex", "@openai/codex").unwrap(), package.join("bin/codex.js"));
+
+        // A shim that names no copy of the package is refused with the advice Scarlet gives for any batch launcher.
+        let other = shim(&dir.path().join("other/claude.cmd"), "@\"%~dp0\\somewhere\\else.exe\" %*\r\n");
+        let error = format!("{:#}", npm_entry(&other, "claude", claude).unwrap_err());
+        assert!(error.contains("use a native or npm agent CLI"), "{error}");
+        // A shim that is gone is too.
+        assert!(npm_entry(&dir.path().join("missing/claude.cmd"), "claude", claude).is_err());
+    }
+
+    #[test]
     fn finds_node_on_this_machine() {
         let env = crate::util::env_map();
         assert!(find_on_path("node", &env).is_some());
@@ -887,6 +1045,41 @@ mod tests {
         // Its line in the log is under the task's id, at INFO for a clean exit.
         let (level, line) = crate::util::test_log::find(&["task tsk_lines: node (pid ", "exited with code Some(0)"]).expect("no log line for the run");
         assert_eq!(level, log::Level::Info, "{line}");
+    }
+
+    #[test]
+    fn a_computer_that_slept_neither_stalls_a_run_nor_spends_its_time_limit() {
+        let secs = Duration::from_secs;
+        let mut dog = Watchdog { limit: Some(secs(3600)), stall: Some(secs(600)), awake: Duration::ZERO };
+        // Ticking along while the CLI is quiet: a stall only once it has been quiet for the whole window.
+        assert_eq!(dog.look(secs(1), secs(599)), Watch::Running);
+        assert_eq!(dog.look(secs(1), secs(600)), Watch::Stalled);
+        // Windows counts on through a suspend, so the first tick after waking comes hours late and the last line
+        // looks hours old. That is sleep: the stall clock starts again, and none of it counts toward the limit.
+        let mut dog = Watchdog { limit: Some(secs(3600)), stall: Some(secs(600)), awake: secs(3590) };
+        assert_eq!(dog.look(secs(2 * 3600), secs(2 * 3600 + 30)), Watch::Slept(secs(2 * 3600)));
+        assert_eq!(dog.awake, secs(3590));
+        assert_eq!(dog.look(secs(1), secs(1)), Watch::Running);
+        // The limit still comes, after the time the computer was awake.
+        for _ in 0..8 {
+            assert_eq!(dog.look(secs(1), secs(1)), Watch::Running);
+        }
+        assert_eq!(dog.look(secs(1), secs(1)), Watch::TimedOut);
+        // A tick a few seconds late is a busy machine, not sleep: it counts, and a quiet CLI still stalls.
+        let mut dog = Watchdog { limit: None, stall: Some(secs(10)), awake: Duration::ZERO };
+        assert_eq!(dog.look(secs(5), secs(5)), Watch::Running);
+        assert_eq!(dog.look(secs(6), secs(11)), Watch::Stalled);
+        assert_eq!(dog.awake, secs(11));
+    }
+
+    #[tokio::test]
+    async fn reads_on_past_a_line_that_is_not_utf8() {
+        // cmd.exe on a non-English Windows writes its messages in the console's code page. One such line is passed on
+        // with the unknown byte replaced, and the lines after it still arrive.
+        let script = "process.stdout.write(Buffer.from([0x41,0x63,0x63,0xe8,0x73,0x0d,0x0a]));console.log('after')";
+        let (outcome, lines, _) = run_script(script, "tsk_bytes", |_| {}, None).await;
+        assert_eq!(lines, ["Acc\u{fffd}s", "after"]);
+        assert_eq!(outcome.code, Some(0));
     }
 
     #[tokio::test]

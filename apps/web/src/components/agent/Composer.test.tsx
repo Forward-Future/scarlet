@@ -65,73 +65,30 @@ it.each(["typing", "voice"])("dismisses the first-project glow for good on first
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
   const hint = () => container.querySelector(".composer-box.first-edit-hint");
-  const suggestion = () => container.querySelector('button[aria-label="Make a first cut"]');
-  useSkillsStore.setState({ status: "ready", skills: db.skills });
   useUiStore.getState().offerFirstEditHint("first-project");
   await show();
   expect(hint()).toBeNull();
-  expect(suggestion()).toBeNull();
   await act(() => useProjectStore.setState({ current: { ...current, id: "first-project", project: { ...project, id: "first-project" } } }));
   expect(hint()).not.toBeNull();
-  expect(suggestion()).not.toBeNull();
   if (input === "typing") await type("Trim the intro");
   else await act(() => micProps.onStart?.());
   expect(hint()).toBeNull();
-  expect(suggestion()).toBeNull();
   await type("");
   await act(() => useUiStore.getState().offerFirstEditHint("first-project"));
   expect(hint()).toBeNull();
   expect(localStorage.getItem("scarlet.firstEditHint")).toBe("dismissed");
 });
 
-it("offers the published first cut on the first import and leaves its directions editable until Send", async () => {
+// "There's no notice above the message box. The editor chose this design." (AGENTS.md)
+it("puts nothing above the message box on the first import, even with the dialogue pass ready", async () => {
   const guide = db.skills.find(isDialogueGuide)!;
-  const load = vi.spyOn(api, "skills").mockResolvedValue({ skills: [guide] });
-  useProjectStore.setState({ current: { ...current, media: [] } });
+  useSkillsStore.setState({ status: "ready", skills: [guide] });
   useUiStore.getState().offerFirstEditHint(PRJ);
   await show();
-  const suggestion = () => container.querySelector<HTMLButtonElement>('button[aria-label="Make a first cut"]');
-  expect(suggestion()).toBeNull();
-  expect(load).not.toHaveBeenCalled();
-
-  await act(() => useProjectStore.setState({ current }));
-  expect(load).toHaveBeenCalledTimes(1);
-  expect(suggestion()!.nextElementSibling).toBe(container.querySelector(".composer-box.first-edit-hint"));
-  await act(() => suggestion()!.click());
-  const field = container.querySelector("textarea")!;
-  expect(field.value).toBe("/dialogue-pass ");
-  expect(document.activeElement).toBe(field);
-  expect([field.selectionStart, field.selectionEnd]).toEqual([field.value.length, field.value.length]);
-  expect(container.querySelector('[role="listbox"]')).toBeNull();
-  expect(suggestion()).toBeNull();
-  expect(container.querySelector(".first-edit-hint")).toBeNull();
-  expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
-  await type(field.value + "Keep the pause before the last answer.");
-  await submit();
-  expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
-    instruction: "/dialogue-pass Keep the pause before the last answer.", context: { version: project.head, skillIds: [guide.id] },
-  }));
-  expect(suggestion()).toBeNull();
-});
-
-it("only offers the enabled bundled dialogue pass to an empty, untargeted composer", async () => {
-  const guide = db.skills.find(isDialogueGuide)!;
-  const suggestion = () => container.querySelector('button[aria-label="Make a first cut"]');
-  useSkillsStore.setState({ status: "ready", skills: [{ ...guide, name: "first-cut-dialogue" }] });
-  useUiStore.getState().offerFirstEditHint(PRJ);
-  await show();
-  expect(suggestion()).toBeNull();
-  await act(() => useSkillsStore.setState({ skills: [{ ...guide, enabled: false }] }));
-  expect(suggestion()).toBeNull();
-  await act(() => useSkillsStore.setState({ skills: [{ ...guide, source: undefined, bundledName: undefined }] }));
-  expect(suggestion()).toBeNull();
-  await act(() => useSkillsStore.setState({ skills: [guide] }));
-  expect(suggestion()).not.toBeNull();
-  await selectPoint({ time: 11, clipIds: [] });
-  expect(suggestion()).toBeNull();
-  await act(() => useUiStore.setState({ agentContext: null, agentDraft: "Keep my directions" }));
-  expect(suggestion()).toBeNull();
-  expect(container.querySelector("textarea")!.value).toBe("Keep my directions");
+  expect(container.querySelector(".composer-box.first-edit-hint")).not.toBeNull();
+  expect(container.querySelector('button[aria-label="Make a first cut"]')).toBeNull();
+  expect(container.querySelector(".composer-first-cut")).toBeNull();
+  expect(container.querySelector("textarea")!.value).toBe("");
 });
 
 it("switches models above the draft and sends the edit with the selected model", async () => {

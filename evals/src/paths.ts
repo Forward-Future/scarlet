@@ -54,6 +54,11 @@ export function writeJson(path: string, value: unknown, root = dataDir()) {
   writeText(path, JSON.stringify(value, null, 1) + "\n", root);
 }
 
+/** A result written to a file the operator named with a flag: that file's own directory is the root they chose. */
+export function writeChosenJson(path: string, value: unknown, chosen: string | undefined) {
+  writeJson(path, value, chosen === undefined ? undefined : dirname(resolve(chosen)));
+}
+
 export function writeText(path: string, text: string, root = dataDir()) {
   const dest = checkedPath(root, path);
   let ancestor = dirname(dest);

@@ -14,7 +14,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncWriteExt};
 use tokio::process::ChildStdin;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use super::detect::api_key_vars;
 use super::spawn::{build_command, resolve_cli, spawn_spec};
 use super::HostManager;
-use crate::util::{child_env, kill_tree};
+use crate::util::{child_env, kill_tree, lossy_lines};
 
 /// How long a sign-in may wait for the browser round-trip.
 pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -155,7 +155,7 @@ impl LoginManager {
                 let url_seen = url_seen.clone();
                 let agent = agent.to_string();
                 tokio::spawn(async move {
-                    let mut lines = BufReader::new(r).lines();
+                    let mut lines = lossy_lines(r);
                     while let Ok(Some(line)) = lines.next_line().await {
                         let line = line.trim().to_string();
                         if line.is_empty() {

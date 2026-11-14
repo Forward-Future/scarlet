@@ -78,15 +78,55 @@ export function cutScope(tl: Timeline, anchor: Task["context"] | undefined, requ
   throw new Error("Stay within the selected source placement on the timeline.");
 }
 
+/**
+ * Ripple removals run in order, each written on the edit the ones before it leave as they were asked. Each goes on
+ * whole frames on its own, so it takes out a little less (or, under a frame, more) than asked, and everything after
+ * it plays that much later than the next removal's times assume. `place` moves a later range by what each earlier
+ * removal before it left (asked length less removed length) before it goes on frames; `removed` records each
+ * all-track removal as asked and as made. Without this every cut came out about a frame early on the footage for
+ * each cut before it: at 30 fps, 10.010–12.020 s took out 10.0333–12.0 s, and the next removal, at 20–21 s,
+ * landed 0.0433 s early.
+ *
+ * A start at an earlier removal's join is the first footage kept after it and moves; an end there is the footage
+ * before it and stays.
+ */
+export function rippleDrift() {
+  /** Where each earlier removal joins, on the edit as asked, and how much later than asked everything after it plays. */
+  const marks: Array<{ at: number; shift: number }> = [];
+  const EPS = 1e-9;
+  return {
+    place(r: TimeRange): TimeRange {
+      let start = r.start, end = r.end;
+      for (const m of marks) {
+        if (m.at <= r.start + EPS) start += m.shift;
+        if (m.at < r.end - EPS) end += m.shift;
+      }
+      return { start, end };
+    },
+    removed(asked: TimeRange, removed: TimeRange) {
+      const length = asked.end - asked.start;
+      // Earlier joins after this removal come nearer by what it was asked to take out; one inside it is at its join.
+      for (const m of marks) m.at = m.at >= asked.end ? m.at - length : m.at > asked.start ? asked.start : m.at;
+      const shift = length - (removed.end - removed.start);
+      if (Math.abs(shift) > EPS) marks.push({ at: asked.start, shift });
+    },
+  };
+}
+
 /** Each synchronized ripple shortens the selected passage for the next one. Check and measure the ranges that will play. */
 export function boundedRippleOps(ops: readonly TimelineOp[], scope: TimeRange, fps: number, duration: number) {
   let end = scope.end;
   const runsToEnd = Math.abs(duration - end) < 1e-6;
+  const drift = rippleDrift();
   return ops.map(op => {
-    if (op.op !== "rippleDelete" || op.trackIds || op.start < scope.start || op.end > end + 1e-9 || op.end <= op.start)
+    if (op.op !== "rippleDelete" || op.trackIds || op.end <= op.start)
       throw new Error("Ripple operations must stay inside the selected timeline range as it shortens.");
-    const aligned = frameAlignedRemoval(op, fps, { start: scope.start, end });
-    if (runsToEnd && Math.abs(op.end - end) < 1e-9) aligned.end = end;
+    const placed = drift.place(op);
+    if (placed.start < scope.start || placed.end > end + 1e-6)
+      throw new Error("Ripple operations must stay inside the selected timeline range as it shortens.");
+    const aligned = frameAlignedRemoval(placed, fps, { start: scope.start, end });
+    if (runsToEnd && Math.abs(placed.end - end) < 1e-6) aligned.end = end;
+    drift.removed(op, aligned);
     end -= aligned.end - aligned.start;
     return { ...op, ...aligned };
   });

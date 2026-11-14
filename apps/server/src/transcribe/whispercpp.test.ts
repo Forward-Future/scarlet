@@ -338,3 +338,32 @@ it("saves finished local windows at pauses, then resumes on the recording's cloc
     expect(unsplit.segments.at(-1)!.end).toBeCloseTo(10, 6);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+it("gives the CrisperWhisper adapter, which loads its model in a new Python process each window, ten-minute windows", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-crisper-windows-"));
+  try {
+    const seconds = 700, rate = 16000;
+    const wav = Buffer.alloc(44 + seconds * rate * 2);
+    wav.write("RIFF"); wav.writeUInt32LE(wav.length - 8, 4); wav.write("WAVEfmt ", 8);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write("data", 36); wav.writeUInt32LE(wav.length - 44, 40);
+    wav.fill(42, 44);
+    vi.spyOn(ffmpeg, "extractWav").mockImplementation(async (_file, path) => writeFile(path, wav));
+    const windows = async (provider: WhisperCppProvider) => {
+      const lengths: number[] = [];
+      vi.spyOn(provider, "transcribeWav").mockImplementation(async path => {
+        lengths.push((await readFile(path)).readUInt32LE(40) / 2 / rate);
+        return { language: "en", segments: [] };
+      });
+      const saved: number[] = [];
+      await provider.transcribe({ path: "interview.mov", tmpDir: dir, duration: seconds,
+        checkpoint: { through: 0, result: { segments: [] }, save: through => saved.push(through) } });
+      expect(saved.at(-1)).toBe(seconds);
+      return lengths.map(Math.round);
+    };
+    expect(await windows(new WhisperCppProvider({ binary: "python", crisperScript: "crisper_cli.py" }))).toEqual([600, 100]);
+    // whisper-cli's windows stay two minutes long.
+    expect(await windows(new WhisperCppProvider({ binary: "whisper-cli" }))).toEqual([120, 120, 120, 120, 120, 100]);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
