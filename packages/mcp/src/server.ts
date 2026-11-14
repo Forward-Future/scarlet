@@ -9,7 +9,7 @@ import { cutScope, selectedRange } from "./cut-scope.js";
 import { audibleSourcePoints, cutsReach, dialogueGate, dialogueScanPage, planDialogueCuts, resolveCutRange, type DialoguePlanSources } from "./dialogue-plan.js";
 import { inspectDialogueSuggestion, MAX_WHOLE_PICTURE_SHEETS, type DialogueInspection } from "./dialogue-review.js";
 import { Lanes, ReviewInspections, urgencyRank, type InspectionRequest } from "./review-prep.js";
-import { AIR_AFTER_SPEECH, AIR_BEFORE_SPEECH, DIP_DBFS, PAUSE_BEAT, checkKeptWords, checkDialogueJoin, checkResumeQuote, clipEdgeSound, dialogueAudioStream, dialogueClips, dialogueCutPreview, dialogueJoinWords, joinAudio, joinEvidence, type JoinPage } from "./dialogue-join.js";
+import { AIR_AFTER_SPEECH, AIR_BEFORE_SPEECH, DIP_DBFS, PAUSE_BEAT, checkKeptWords, checkDialogueJoin, NoCachedSpeech, checkResumeQuote, clipEdgeSound, dialogueAudioStream, dialogueClips, dialogueCutPreview, dialogueJoinWords, joinAudio, joinEvidence, type JoinPage } from "./dialogue-join.js";
 import { DialogueScanBatch, FIRST_CUT_BATCH_SIZE } from "./dialogue-scan-batch.js";
 import { resolveOutgoingPause } from "./outgoing-pause.js";
 import { DialogueEvidence, matchFillers } from "./dialogue-decisions.js";
@@ -18,6 +18,7 @@ import { acousticRepeatedTakes, findRepeatedTakes } from "./dialogue-retakes.js"
 import { audioCrossfadeOps } from "./audio-crossfade.js";
 import { firstCutRanges } from "./first-cut-ranges.js";
 import { InsetFraming, insetFraming, syncPictureOps } from "./sync-layout.js";
+import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdtemp } from "node:fs/promises";
 import { readArtifact, writeArtifact } from "./workspace-files.js";
@@ -27,7 +28,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod/v3";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { boundedRippleOps, cutAnchorOn, taskDialogueOperation, agentCapabilities, DEFAULT_RESULT_CHARS, type AgentCapabilities, JOIN_WORD_SECONDS, fuzzySearchTranscript, apiPathId, disabledEditingTools, type EditingTools, type ScarletToolName,
+import { boundedRippleOps, rippleDrift, cutAnchorOn, taskDialogueOperation, agentCapabilities, DEFAULT_RESULT_CHARS, type AgentCapabilities, JOIN_WORD_SECONDS, fuzzySearchTranscript, apiPathId, disabledEditingTools, type EditingTools, type ScarletToolName,
   CrossfadeFrames, SheetOptions, SheetRequest, CutReviewOptions, SourceAudioOptions, SoundPictureOptions, type InspectionResult, type InspectionWindow, type DialogueDetections, type PictureActivityWindow, ScarletApiError, SuggestLearningRequest, TaskSkillDraft, skillTaskTarget, skillEditTarget, type ScarletClient } from "@scarlet/shared";
 import type { RepeatEvidence, AgentId, DialogueScanPage, ProjectDetail, ProposeChangeRequest, Skill, Task, TaskEvent, WaveformResponse } from "@scarlet/shared";
 import type { Author, Change, MediaAsset, TimeRange } from "@scarlet/timeline";
@@ -165,7 +166,7 @@ const OPS_DOC = `Op types (all times are seconds; timeline times are positions i
 - updateClip: {"op":"updateClip","clipId":"clip_x","patch":{"audioFadeIn":0.066,"audioFadeOut":0.066}} — patch any clip fields (sourceIn/sourceOut to trim, volume, speed, opacity, transform, label, enabled, effects, text/style for captions).
 - moveClip: {"op":"moveClip","clipId":"clip_x","timelineIn":42.0,"trackId":"v2"} — move to a timeline position (and optionally another track).
 - splitClip: {"op":"splitClip","clipId":"clip_x","at":30.0,"newClipId":"clip_y"} — split at a timeline time into two clips.
-- rippleDelete: {"op":"rippleDelete","start":30.0,"end":31.2} — remove a timeline range from every track (or "trackIds") and close the gap; clips spanning the range are trimmed/split. All tracks stay in sync. To remove dialogue, dialogue_apply_cuts measures the edges and applies the editor's cut settings.
+- rippleDelete: {"op":"rippleDelete","start":30.0,"end":31.2} — remove a timeline range from every track (or "trackIds") and close the gap; clips spanning the range are trimmed/split. All tracks stay in sync. Several run in order, each in the times of the edit the ones before it leave as you gave them. Each goes inward onto whole frames (one that runs to the end of the edit keeps its end), and a later one first moves by what earlier ones left in, so it removes the footage you meant: onWholeFrames lists each that changed, with what was removed and movedBy. To remove dialogue, dialogue_apply_cuts measures the edges and applies the editor's cut settings.
 - rippleInsertGap: {"op":"rippleInsertGap","at":30.0,"duration":2.0} — push everything after the given time later.
 - addTrack: {"op":"addTrack","track":{"id":"v2","kind":"video","name":"B-roll","clips":[]}} — kinds: video | audio | caption.
 - removeTrack: {"op":"removeTrack","trackId":"v2"}
@@ -410,6 +411,14 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     unavailable(what, err);
   };
   const withoutOnce = <T>(what: string, fallback: T) => (err: unknown) => { unavailableOnce(what, err); return fallback; };
+  /**
+   * The same for a check that guards a save, except that a recording still being prepared (its waveform, or its words
+   * placed on the audio) goes back to the model as "call again": saved meanwhile, the edit would skip the check.
+   */
+  const withoutUnlessPreparing = <T>(what: string, fallback: T) => (err: unknown) => {
+    if (err instanceof MediaPreparing) throw err;
+    return without(what, fallback)(err);
+  };
 
   /**
    * The version this agent last looked at. Edits are proposed against it, so
@@ -556,9 +565,10 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
    * shared by every tool that shows or accepts word references. Only a complete transcript is kept.
    *
    * The engine saves a transcript when Whisper ends and goes on placing its words on the audio. Until that is done
-   * the words are read again every couple of seconds: their order and indices hold, and their times are final only
-   * up to `through`. With `through` the call resolves once the times are final that far, waiting up to `waitMs`,
-   * and otherwise says how far alignment has come. Whatever turns a word time into a cut edge or a measurement
+   * the words are read again every couple of seconds: their order holds while they are placed, and their times are
+   * final only up to `through`. Once placed, a reread of the stretches without words can add words, which moves the
+   * indices after them (`sameWordsAsRead` refuses a reference from the list before). With `through` the call
+   * resolves once the times are final that far, waiting up to `waitMs`, and otherwise says how far alignment has come. Whatever turns a word time into a cut edge or a measurement
    * asks this way; reading and searching the words does not need to.
    */
   const edgeWaitMs = ctx.alignmentWaitMs ?? EDGE_WAIT_MS;
@@ -603,6 +613,29 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       await delay(2000, undefined, { ref: false });
     }
   }
+  /**
+   * The word list each recording's indices were last shown to the model from. While Scarlet places the words, the
+   * engine reads stretches with sound and no words again and can add words the transcript missed, which moves every
+   * index after them. A reference resolved against another list than the one read would cut beside other words.
+   */
+  const wordsRead = new Map<string, { print: string; count: number }>();
+  const wordPrints = new WeakMap<readonly TranscriptWord[], string>();
+  const wordsPrint = (words: readonly TranscriptWord[]) => {
+    let print = wordPrints.get(words);
+    if (!print) wordPrints.set(words, print = `${words.length}:${createHash("sha1").update(words.map(w => w.text).join("\u0000")).digest("hex")}`);
+    return print;
+  };
+  /** Note the list a tool showed the model word indices from. */
+  const showWords = (mediaId: string, words: readonly TranscriptWord[] | null | undefined) => {
+    if (words) wordsRead.set(mediaId, { print: wordsPrint(words), count: words.length });
+  };
+  function sameWordsAsRead(mediaId: string, words: readonly TranscriptWord[]) {
+    const read = wordsRead.get(mediaId);
+    if (!read || read.print === wordsPrint(words)) return;
+    throw new Error(`The transcript of ${mediaId} changed since you read it: Scarlet placed its words on the audio and found words it had missed ` +
+      `(${read.count} words then, ${words.length} now), so word indices from that read name other words now. Nothing was placed or saved. ` +
+      "Read the passage again (transcript_get, timeline_transcript or dialogue_scan) and give the indices it shows.");
+  }
 
   /** A waveform window with 20 ms buckets and voice activity, for edge evidence. */
   function readLevels(mediaId: string, from: number, to: number): Promise<WaveformResponse> {
@@ -620,12 +653,28 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   /** Prepared levels in five-minute stretches of a recording, read once each, with the level speech sits at in each. */
   const levelChunks = new Map<string, Promise<{ levels: GapLevels; speech: number }>>();
   const CHUNK = 300;
-  function levelChunk(mediaId: string, from: number, to: number) {
-    const key = `${mediaId}/${from}/${to}`;
+  /** Where each recording ends, from the project's media. Undefined when the project doesn't say. */
+  const recordingEnds = new Map<string, Promise<number | undefined>>();
+  function recordingEnd(mediaId: string) {
+    let end = recordingEnds.get(mediaId);
+    if (!end) {
+      recordingEnds.set(mediaId, end = getProject().then(({ project }) => project.media.find(m => m.id === mediaId)?.duration || undefined));
+      end.catch(() => recordingEnds.delete(mediaId));
+    }
+    return end;
+  }
+  function levelChunk(mediaId: string, from: number, asked: number) {
+    const key = `${mediaId}/${from}/${asked}`;
     let chunk = levelChunks.get(key);
     if (!chunk) {
-      chunk = readPrepared(mediaId, "waveform", () => client.waveform(mediaId, from, to, Math.max(10, Math.ceil((to - from) * 50)), true))
-        .then(wf => { const levels = { from: wf.from, to: wf.to, rms: wf.rms ?? [] }; return { levels, speech: speakingLevel(levels) }; });
+      // Past the end of the recording the engine fills in silence. Read over a whole stretch, that silence pulled the
+      // level speech sits at down, on a recording under about two and a half minutes and in the last stretch of any:
+      // a breath then read as speech no word explains, and a pause holding one wasn't trimmed. The stretch stops where
+      // the recording does.
+      chunk = recordingEnd(mediaId).catch(() => undefined).then(end => {
+        const to = end !== undefined && end > from ? Math.min(asked, end) : asked;
+        return readPrepared(mediaId, "waveform", () => client.waveform(mediaId, from, to, Math.max(10, Math.ceil((to - from) * 50)), true));
+      }).then(wf => { const levels = { from: wf.from, to: wf.to, rms: wf.rms ?? [] }; return { levels, speech: speakingLevel(levels) }; });
       levelChunks.set(key, chunk);
       chunk.catch(() => levelChunks.delete(key));
     }
@@ -795,12 +844,12 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   /** Live reads for the dialogue planner (dialogue-plan.ts), which replay feeds from stored evidence instead. */
   const planSources: DialoguePlanSources = {
     evidence, pages: joinPages, project: async () => (await getProject()).project,
-    words: (mediaId, through, prepare = true) => transcriptWords(mediaId, prepare, through, edgeWaitMs), measure: measureAround,
+    words: (mediaId, through, prepare = true) => transcriptWords(mediaId, prepare, through, edgeWaitMs), sameWordsAsRead, measure: measureAround,
     readKeptWords: (mediaId, audioStream, from, to, cachedOnly) => keptSpeechReads.run(() => 0, async () => {
       const result = await client.dialogueDetections(ctx.projectId, { mediaId, from, to, keptSide: { audioStream, cachedOnly },
         taskId: ctx.taskId, startedAt: ctx.taskStartedAt });
       if (cachedOnly && (result.keptSideUnavailable || result.segments.some(s => s.id !== "kept")))
-        throw new Error("Cached speech measurements are unavailable at this edge.");
+        throw new NoCachedSpeech("Cached speech measurements are unavailable at this edge.");
       return result.segments.flatMap(s => s.words);
     }),
     sound: async (mediaId, range) => (await gapSounds(mediaId, [range], 0))[0],
@@ -824,31 +873,44 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     "Use requested only for edits the editor asked you to make. Choose suggestion for extra ideas or previews, and alternative for each option offered. Omitting intent leaves the edit in review.",
   );
 
-  type FrameAdjustment = { asked: [number, number]; removed: [number, number] };
-  async function propose(body: ProposeChangeRequest, before: Timeline | null, onWholeFrames: FrameAdjustment[] = []): Promise<ToolResult> {
-    // Ripple removals go on whole frames, as dialogue cuts do: one that ends between two frames leaves a black frame
-    // at its join. Each one that moved is reported with the range that was removed.
-    const fps = !body.range && body.ops?.some(op => op.op === "rippleDelete") ? (await getProject()).project.settings.fps : undefined;
+  /** A ripple removal that went onto whole frames: asked as given, removed where it went, and how much later it moved first. */
+  type FrameAdjustment = { asked: [number, number]; removed: [number, number]; movedBy?: number };
+  /**
+   * Ripple removals go on whole frames, as dialogue cuts do: one that ends between two frames leaves a black frame at
+   * its join. Each one that moved is reported with the range that was removed. Ops run in order, each written on the
+   * edit the earlier ones leave as asked, so a later one first moves by what the earlier rounding left in (rippleDrift),
+   * which `movedBy` reports.
+   */
+  async function ripplesOnFrames(ops: TimelineOp[], before: Timeline | null, onWholeFrames: FrameAdjustment[]): Promise<TimelineOp[]> {
+    if (!ops.some(op => op.op === "rippleDelete")) return ops;
+    const fps = (await getProject()).project.settings.fps;
     const base = before ? timelineDuration(before) : Infinity;
-    // Ops run in order, so each removal across every track brings the end of the edit earlier for the ones after it.
-    // Once any other op has run, where the edit ends is not known here, and the base's end stands. It stands for a
-    // task's edit throughout: the engine puts a task's removals on whole frames itself, by the base's end, and would
-    // make a move left out here without reporting it.
+    // Each removal across every track brings the end of the edit earlier for the ones after it. Once any other op has
+    // run, where the edit ends is not known here, and the base's end stands. It stands for a task's edit throughout:
+    // the engine puts a task's removals on whole frames itself, by the base's end, and would make a move left out here
+    // without reporting it.
     let ends = base, known = !ctx.taskId;
-    if (fps) body = { ...body, ops: body.ops!.map(op => {
+    const drift = rippleDrift();
+    return ops.map(op => {
       if (op.op !== "rippleDelete" || typeof op.start !== "number" || typeof op.end !== "number") {
         known = false;
         ends = base;
         return op;
       }
+      const placed = drift.place(op);
       // A removal that runs to the end of the edit keeps its end, which need not be on a frame.
-      const aligned = { start: frameAligned(op, fps).start, end: op.end >= ends - 1e-6 ? op.end : frameAligned(op, fps).end };
+      const runsToEnd = placed.end >= ends - 1e-6;
+      const aligned = { start: frameAligned(placed, fps).start, end: runsToEnd ? (Math.abs(placed.end - ends) < 1e-6 ? ends : placed.end) : frameAligned(placed, fps).end };
       if (Math.abs(aligned.start - op.start) > 1e-6 || Math.abs(aligned.end - op.end) > 1e-6) {
-        onWholeFrames.push({ asked: [op.start, op.end], removed: [round3(aligned.start), round3(aligned.end)] });
+        const movedBy = round3(placed.start - op.start);
+        onWholeFrames.push({ asked: [op.start, op.end], removed: [round3(aligned.start), round3(aligned.end)], ...(movedBy && { movedBy }) });
       }
+      if (!op.trackIds) drift.removed(op, aligned);
       if (known && !op.trackIds && aligned.start < ends) ends = Math.max(aligned.start, ends - (aligned.end - aligned.start));
       return { ...op, ...aligned };
-    }) };
+    });
+  }
+  async function propose(body: ProposeChangeRequest, before: Timeline | null, onWholeFrames: FrameAdjustment[] = []): Promise<ToolResult> {
     const req: ProposeChangeRequest = {
       ...body,
       fromVersion: before && before.version !== "draft" ? before.version : undefined,
@@ -1130,8 +1192,10 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     async ({ mediaId, from, to, fromWord, toWord, nextFromWord, granularity, format }) => {
       const words = await transcriptWords(mediaId);
       if (!words) return text(`Media ${mediaId} has no audio track or no transcribed speech. Use waveform_get to inspect its sound.`);
+      showWords(mediaId, words);
       const settled = settledThrough(mediaId);
-      const estimates = Number.isFinite(settled) ? `Times after ${settled.toFixed(1)} s are estimates until Scarlet has placed those words on the audio; indices are final.` : undefined;
+      const estimates = Number.isFinite(settled) ? `Times after ${settled.toFixed(1)} s are estimates until Scarlet has placed those words on the audio. ` +
+        "Placing them can add words the transcript missed, which moves the indices after them: a word reference from this read is then refused until you read again." : undefined;
       const budget = caps.resultChars ?? DEFAULT_RESULT_CHARS;
       const inRange = (w: TranscriptWord, index: number) =>
         (from === undefined || w.end >= from) && (to === undefined || w.start <= to) &&
@@ -1232,6 +1296,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     async ({ mediaId, query, match, minScore, contextWords }) => {
       const words = await transcriptWords(mediaId);
       if (!words) return text(`No transcribed speech to search for media ${mediaId}.`);
+      showWords(mediaId, words);
       const matches = match === "fuzzy" ? fuzzySearchTranscript(words, query, { contextWords, minScore }) : searchTranscript(words, query, contextWords);
       if (!matches.length) return text(`No ${match} matches for "${query}" in ${mediaId} (${words.length} words searched).`);
       const lines = matches.map((m) => `#${m.wordIndex} [${m.start.toFixed(2)}-${m.end.toFixed(2)}]${"score" in m ? ` ${m.score}` : ""}${m.speaker ? ` ${m.speaker}:` : ""} ${m.context}`);
@@ -1468,6 +1533,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     // cut can name its words. They are matched to the page by time, and an estimate could name the neighbouring word.
     const indexed = await transcriptWords(mediaId, false, to, Math.min(10_000, Math.max(0, pageDeadline - Date.now())))
       .catch(withoutOnce(`failed to read the word indices of ${mediaId}`, null));
+    showWords(mediaId, indexed);
     // A quiet phrase can start before the next page's overlap. Return it whole when its last word is reached.
     const audioStream = dialogueAudioStream(asset);
     const soft = indexed && (audioStream ?? 0) === 0
@@ -1770,6 +1836,8 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     const transcripts = new Map<string, TranscriptWord[]>();
     for (const id of new Set(audibleMediaClips(tl).map(c => c.mediaId))) {
       const words = await transcriptWords(id, false).catch(without(`failed to read the words of ${id} for what a part still plays`, null));
+      // keptPauses and repeatedWords name their words by these indices.
+      showWords(id, words);
       if (words) transcripts.set(id, words);
     }
     // A range staged for review still plays until the editor approves it.
@@ -2320,7 +2388,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   // -- timeline -------------------------------------------------------------
 
-  const perception = registerPerception({ tool, client, projectId: ctx.projectId, otherInputWords: async (mediaId, words) => (await otherInput(mediaId, words)).other, seesFrames: caps.images && !disabled.has("media_frame"), getTimeline, peekTimeline, getProject, readPassage, transcriptWords, settledThrough, readLevels, unavailable: unavailableOnce,
+  const perception = registerPerception({ tool, client, projectId: ctx.projectId, otherInputWords: async (mediaId, words) => (await otherInput(mediaId, words)).other, seesFrames: caps.images && !disabled.has("media_frame"), getTimeline, peekTimeline, getProject, readPassage, transcriptWords, showWords, settledThrough, readLevels, unavailable: unavailableOnce,
     readWaveform: (mediaId, from, to, points) => readPrepared(mediaId, "waveform", () => client.waveform(mediaId, from, to, points, true)) });
 
   async function readApprovedExample(changeId: string) {
@@ -2401,7 +2469,7 @@ ${OPS_DOC}`,
       // a clip inside the end of an “uh”; the revision the editor then asked for trimmed that join by one frame, into
       // the first sound of the next word, and said the word now played in full (2026-11-12).
       const refuseEdgesInSound = async (base: Timeline | null, next: Timeline) => {
-        const inside = await edgesInSound(base, next).catch(without("failed to measure the edit's new clip edges", [] as SoundingEdge[]));
+        const inside = await edgesInSound(base, next).catch(withoutUnlessPreparing("failed to measure the edit's new clip edges", [] as SoundingEdge[]));
         if (inside.length) throw new Error(inside.slice(0, 12).map(e => edgeInSoundText(e)).join("; ") +
           `${inside.length > 12 ? `; and ${inside.length - 12} more` : ""}. ${EDGES_IN_SOUND}`);
       };
@@ -2421,13 +2489,17 @@ ${OPS_DOC}`,
         if (before && (range || (selectedRange(ctx.task?.context) && v.ops.every(o => o.op === "rippleDelete" && !o.trackIds)))) {
           body.range = cutScope(before, await cutAnchor(before), range);
           const aligned = boundedRippleOps(v.ops, body.range, (await getProject()).project.settings.fps, timelineDuration(before));
+          const drift = rippleDrift();
           for (const [i, op] of aligned.entries()) {
             const asked = v.ops[i]!;
-            if (asked.op === "rippleDelete" && (Math.abs(op.start - asked.start) > 1e-6 || Math.abs(op.end - asked.end) > 1e-6))
-              frameChanges.push({ asked: [asked.start, asked.end], removed: [op.start, op.end] });
+            if (asked.op !== "rippleDelete") continue;
+            const movedBy = round3(drift.place(asked).start - asked.start);
+            drift.removed(asked, op);
+            if (Math.abs(op.start - asked.start) > 1e-6 || Math.abs(op.end - asked.end) > 1e-6)
+              frameChanges.push({ asked: [asked.start, asked.end], removed: [op.start, op.end], ...(movedBy && { movedBy }) });
           }
           v.ops = aligned;
-        }
+        } else v.ops = await ripplesOnFrames(v.ops, before, frameChanges);
         body.ops = v.ops;
         // Dialogue removed here skips the edge placement and checks of dialogue_apply_cuts. Three removals on one pass
         // came this way, and an edge inside a sounding word is the clipped word the editor sends back. Each all-track
@@ -2437,10 +2509,11 @@ ${OPS_DOC}`,
           let on = before;
           for (const [i, op] of v.ops.entries()) {
             if (op.op === "rippleDelete" && !op.trackIds && op.end > op.start) {
-              // Only a measured word split refuses the edit. A recording with nothing to measure goes ahead as asked.
+              // Only a measured word split refuses the edit. A recording with nothing to measure goes ahead as asked; one
+              // still being prepared is measured when the model calls again.
               const inside = await measureTimeline(on, [op.start, op.end])
                 .then(() => joinAudio(on, project, op, joinPages()).filter(e => e.sound === "sound" && e.transcriptSplitsWord))
-                .catch(without(`failed to measure the edges of ripple ${i}`, []));
+                .catch(withoutUnlessPreparing(`failed to measure the edges of ripple ${i}`, []));
               if (inside.length) throw new Error(inside.map(e => `ops[${i}] ${e.edge} at ${(e.edge === "start" ? op.start : op.end).toFixed(2)} s falls inside “${e.transcriptSplitsWord}”, which is sounding there`).join("; ") +
                 ". Remove dialogue with dialogue_apply_cuts, where a word reference puts each edge in the recording's silence, or move the edge onto quiet (dialogue_check_join measures it).");
             }
@@ -2557,7 +2630,7 @@ ${OPS_DOC}`,
       // leaves a piece of a sound playing goes onto the quiet that ends the piece, a fragment's length away at most,
       // and is reported. One inside a sounding word is the model's to move: which side of the word it meant is its call.
       const movedEdges: Array<{ keep: number; edge: "start" | "end"; from: number; to: number; evidence: string }> = [];
-      const measure = (timeline: Timeline) => edgesInSound(null, timeline).catch(without("failed to measure the first cut's edges", [] as SoundingEdge[]));
+      const measure = (timeline: Timeline) => edgesInSound(null, timeline).catch(withoutUnlessPreparing("failed to measure the first cut's edges", [] as SoundingEdge[]));
       /** Which keep range a clip of the built timeline plays: they lie end to end in the order given. */
       const rangeOf = (timeline: Timeline, clipId: string) => {
         const clip = timeline.tracks.flatMap(t => t.clips).find(c => c.id === clipId);

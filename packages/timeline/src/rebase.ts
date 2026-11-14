@@ -471,6 +471,11 @@ export function rebaseOp(op: TimelineOp, map: TimeMap, onto: Timeline, index = 0
       const patch = { ...op.patch };
       if (typeof patch.timelineIn === "number") patch.timelineIn = need(patch.timelineIn, "right");
       if (typeof patch.timelineOut === "number") patch.timelineOut = need(patch.timelineOut, "left");
+      // Caption word timings are timeline seconds too, so they move with the footage under them.
+      if (Array.isArray(patch.words)) {
+        patch.words = CaptionWord.array().parse(patch.words).map((w) =>
+          ({ ...w, start: need(w.start, "right"), end: need(w.end, markerEndSide(w.end, w.start)) }));
+      }
       return { ...op, patch };
     }
     case "removeClip":

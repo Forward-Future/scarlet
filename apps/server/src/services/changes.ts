@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { run } from "../render/ffmpeg.js";
-import { boundedRippleOps, cutAnchorOn, cutScope, selectedRange, selectionPlacements, taskDialogueOperation, type DialogueCutsRequest, type JoinCrossfades, reviewItemPath, type StagedCutRevision } from "@scarlet/shared";
+import { boundedRippleOps, rippleDrift, cutAnchorOn, cutScope, selectedRange, selectionPlacements, taskDialogueOperation, type DialogueCutsRequest, type JoinCrossfades, reviewItemPath, type StagedCutRevision } from "@scarlet/shared";
 import type { ApproveResponse, ProposeChangeRequest, Task, User } from "@scarlet/shared";
 import { z } from "zod/v3";
 import { ReviseRequest as ReviseRequestSchema } from "@scarlet/shared";
@@ -306,11 +306,17 @@ function opsOnWholeFrames(ctx: Ctx, projectId: string, body: ProposeChangeReques
     return moved.length ? { ...o, ...Object.fromEntries(moved.map(k => [k, onFrame(values[k] as number, fps)])) } : o;
   };
   const clipTimes = ["timelineIn", "sourceIn", "sourceOut"];
+  // Each removal is written on the edit the earlier ones leave as asked. One that went onto frames took out a little
+  // less, so a later one moves by that before it goes onto frames, or it lands early on the footage (rippleDrift).
+  const drift = rippleDrift();
   return { ...body, ops: body.ops.map(op => {
     if (op.op === "rippleDelete" && typeof op.start === "number" && typeof op.end === "number") {
       duration ??= timelineDuration(resolveTimeline(ctx, project, version));
-      const aligned = selectedRange(task?.context) ? frameAlignedRemoval(op, fps, op) : frameAligned(op, fps);
-      return { ...op, start: aligned.start, end: op.end >= duration - 1e-6 ? op.end : aligned.end };
+      const placed = drift.place(op);
+      const aligned = selectedRange(task?.context) ? frameAlignedRemoval(placed, fps, placed) : frameAligned(placed, fps);
+      const removed = { start: aligned.start, end: placed.end >= duration - 1e-6 ? placed.end : aligned.end };
+      if (!op.trackIds) drift.removed(op, removed);
+      return { ...op, ...removed };
     }
     if (op.op === "rippleInsertGap") return near(op, ["at", "duration"]);
     if (op.op === "moveClip") return near(op, ["timelineIn"]);

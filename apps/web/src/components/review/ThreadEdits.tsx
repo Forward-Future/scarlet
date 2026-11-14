@@ -3,7 +3,7 @@ import { historyLineage } from "@scarlet/timeline";
 import { matchesEdit, threadEditList, threadRevision, isThreadDone, REVISED_CHECK, type EditRef, type Thread, type ThreadEdit, type VersionSummary } from "@scarlet/shared";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
-import { requestThreadEdits, useReviewableEditFlags, useThreadEditKey } from "./threadEditRequest";
+import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
 import { removedSeconds } from "../../lib/format";
 import { editKindWord } from "../../lib/editKind";
 import { editKey, keepEdits, useKeptEdits } from "../../lib/keptEdits";
@@ -50,7 +50,7 @@ export function UndoEdit({ projectId, thread, target, onSent }: { projectId: str
     }
   }
   useHotkeys(event => {
-    if (event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.key.toLowerCase() !== "u") return;
+    if (event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== "u") return;
     event.preventDefault();
     void undo();
   });
@@ -103,12 +103,12 @@ export function useThreadEdits(projectId: string, thread: Thread | undefined): L
     });
     return () => { live = false; };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  // While a new list loads, keep the engine's numbering and the flags the editor saw. Finishing a task can arrive
-  // before the read for its final version, which may have replaced one of its earlier flagged edits.
+  // While a new list loads, keep the engine's numbering and the flags the editor saw. A flagged edit shows while its
+  // request still works: "N need you" counts it from the moment it lands.
   const shown = useRef<{ key: string; edits: ListedEdit[] }>(undefined);
   const current = loaded?.key === key;
   const previous = loaded && loaded.threadId === thread?.id && shown.current?.key === loaded.key ? shown.current.edits : undefined;
-  const edits = useReviewableEditFlags(thread, (current ? loaded.edits : previous) ?? saved);
+  const edits = (current ? loaded.edits : previous) ?? saved;
   useEffect(() => { if (current && loaded.edits) shown.current = { key, edits }; }, [current, loaded, key, edits]);
   return applied ? edits : [];
 }

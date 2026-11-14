@@ -608,7 +608,7 @@ export function buildDb(chatLayouts = false): MockDb {
 
   const taskEvents: Record<string, TaskEvent[]> = {
     task_running: [
-      { id: "ev1", taskId: "task_running", at: minutesAgo(1.5), type: "log", text: "Loading project context and skills (dialogue-pass, smooth-audio-cuts)" },
+      { id: "ev1", taskId: "task_running", at: minutesAgo(1.5), type: "log", text: "Loading project context and skills (dialogue-pass, add-captions)" },
       { id: "ev2", taskId: "task_running", at: minutesAgo(1.3), type: "tool", text: "transcript.get range=11.5–16 granularity=word" },
       { id: "ev3", taskId: "task_running", at: minutesAgo(1.1), type: "log", data: { kind: "editor_progress" }, text: "I found three filler words near the end of the clip." },
     ],

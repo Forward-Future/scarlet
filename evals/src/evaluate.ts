@@ -34,7 +34,7 @@ export const mediaInfo = (m: { id: string; kind: string; name?: string; duration
 type Decide = (review: Change, timeline: (v: string) => Promise<Timeline>) => Promise<{ source: "engine" | "local"; changes: ReviewChangeExport[] }>;
 
 async function assemble(task: TaskRecord, events: EventLike[], changes: Change[], project: { id: string; fps: number; media: MediaInfo[] },
-  load: (v: string) => Promise<Timeline>, decide: Decide): Promise<Artifacts> {
+  load: (v: string) => Promise<Timeline>, decide: Decide, partial = false): Promise<Artifacts> {
   const owned = changes.filter(c => !c.taskId || c.taskId === task.id);
   const requested = owned.filter(c => c.intent === "requested" && c.state === "approved")
     .sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
@@ -69,13 +69,16 @@ async function assemble(task: TaskRecord, events: EventLike[], changes: Change[]
     timelines.set(v, tl);
     return tl;
   };
-  for (const v of new Set([source, appliedVersion, proposed, review?.fromVersion, ...chain, ...parts.map(p => p.fromVersion), ...plans.map(p => p.version)].filter((v): v is string => !!v))) await timeline(v);
+  for (const v of new Set([source, appliedVersion, proposed, review?.fromVersion, ...chain, ...parts.map(p => p.fromVersion), ...plans.map(p => p.version)].filter((v): v is string => !!v))) {
+    if (partial) await timeline(v).catch(() => undefined);
+    else await timeline(v);
+  }
   // Versions the run checked joins on, to compare those checks with later parts. A case may not store them.
   const checked = events.flatMap(e => e.type === "tool" && toolName(String(e.data?.tool ?? "")) === "dialogue_check_join"
     && typeof (e.data?.input as { version?: unknown } | undefined)?.version === "string" ? [(e.data!.input as { version: string }).version] : []);
   for (const v of new Set(checked)) if (!timelines.has(v)) await timeline(v).catch(() => undefined);
   let reviewExport: ReviewChangeExport | undefined, reviewSource: Artifacts["reviewSource"] = "none";
-  if (review) {
+  if (review && !(partial && (!timelines.has(review.fromVersion) || !timelines.has(review.toVersion)))) {
     const result = await decide(review, timeline);
     reviewExport = result.changes.find(c => c.id === review.id);
     reviewSource = reviewExport ? result.source : "none";
@@ -96,8 +99,8 @@ export async function gatherTask(engine: Engine, taskId: string, cached?: (v: st
     (review, timeline) => reviewDecisions(engine, task.projectId, [review], timeline, project.media, taskId));
 }
 
-/** The run a case was built from, entirely from the case folder. */
-export async function artifactsFromCase(loaded: LoadedCase): Promise<Artifacts> {
+/** The run a case was built from, entirely from the case folder. `partial` reads a case that stores only some of the run's versions: a replay needs the plan's own. */
+export async function artifactsFromCase(loaded: LoadedCase, opts: { partial?: boolean } = {}): Promise<Artifacts> {
   const origin = loaded.origin();
   if (!origin) throw new Error(`Case ${loaded.file.id} was not built with --from-task; it has no stored run.`);
   const load = async (v: string) => {
@@ -110,7 +113,7 @@ export async function artifactsFromCase(loaded: LoadedCase): Promise<Artifacts> 
     async (review, timeline) => {
       const item = reviewExport(review, await timeline(review.fromVersion), await timeline(review.toVersion), media);
       return { source: "local", changes: item ? [item] : [] };
-    });
+    }, opts.partial);
 }
 
 export interface Evaluation {

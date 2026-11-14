@@ -3610,9 +3610,9 @@ it("passes explicitly chosen skills through notes, revisions, and answers to the
   seedSkillList(workspace.ctx, BUNDLED_SKILLS);
   const path = projectsPath();
   const library = (await (await api("GET", "/skills?projectId=" + project.id)).json()).skills;
-  const first = library.find((s: { name: string }) => s.name === "visual-pass");
+  const first = library.find((s: { name: string }) => s.name === "add-captions");
   const second = library.find((s: { name: string }) => s.name === "frame-screen");
-  const { task } = await (await api("POST", path + "/notes", { time: 0, text: "/visual-pass", assignTo: "codex", skillIds: [first.id] })).json();
+  const { task } = await (await api("POST", path + "/notes", { time: 0, text: "/add-captions", assignTo: "codex", skillIds: [first.id] })).json();
   const promptSkills = async (taskId: string) => (await (await api("GET", `/skills?projectId=${project.id}&taskId=${taskId}&view=prompt`)).json()).skills;
   expect(await promptSkills(task.id)).toEqual([first]);
   const available = await (await api("GET", `/skills?projectId=${project.id}&taskId=${task.id}&view=assistant`)).json();
@@ -3621,7 +3621,7 @@ it("passes explicitly chosen skills through notes, revisions, and answers to the
   await api("POST", `/tasks/${task.id}/answer`, { text: "/frame-screen", skillIds: [second.id] });
   expect(await promptSkills(task.id)).toEqual(expect.arrayContaining([first, second]));
   const { change } = await (await api("POST", path + "/changes", { description: "Marker", ops: marker, skipRender: true })).json();
-  const revision = await (await api("POST", `/changes/${change.id}/revise`, { text: "/visual-pass Keep the chart.", skillIds: [first.id] })).json();
+  const revision = await (await api("POST", `/changes/${change.id}/revise`, { text: "/add-captions Keep the chart.", skillIds: [first.id] })).json();
   expect(await promptSkills(revision.task.id)).toEqual([first]);
 });
 
@@ -3630,7 +3630,7 @@ it("loads stock workflows on demand and leaves explicit selections and custom in
   seedSkillList(ctx, BUNDLED_SKILLS);
   const url = "/skills?projectId=" + project.id;
   const list = async (query: string) => (await (await api("GET", url + query)).json()).skills as Array<{ id: string; name: string; content: string }>;
-  const stock = (await list("")).find(s => s.name === "visual-pass")!;
+  const stock = (await list("")).find(s => s.name === "add-captions")!;
   expect((await list("&view=prompt")).find(s => s.id === stock.id)?.content).toContain("skills_list");
   expect((await list("&view=assistant")).find(s => s.id === stock.id)?.content).toBe(stock.content);
   const task = createTask(ctx, { projectId: project.id, agent: "codex", kind: "edit", instruction: "Reframe",

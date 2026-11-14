@@ -15,24 +15,25 @@ import { dialogueGate, dialogueScanPage, planDialogueCuts, resolveCutRange, type
 import { gapSound, speakingLevel, type GapLevels } from "../../packages/mcp/src/gap-sound.ts";
 import { cutAnchorOn } from "../../packages/shared/src/cutScope.ts";
 import { taskDialogueOperation } from "../../packages/shared/src/threads.ts";
-import type { Project, TranscriptWord } from "../../packages/timeline/src/index.ts";
+import { frameAligned, type Project, type TranscriptWord } from "../../packages/timeline/src/index.ts";
 import { cli, isMain, main } from "./args.ts";
 import { loadCase, type LoadedCase } from "./case.ts";
 import { artifactsFromCase, evaluateCaseOrigin } from "./evaluate.ts";
 import { windowKey, type ScanCapture, type ScanWaveforms } from "./evidence.ts";
 import { overlap, subtract, type Range } from "./intervals.ts";
-import { DEFAULT_EDGE_OPTIONS, classifyEdges, joinEdges, summarizeEdges, type EdgeSummary, type Kept, type SubmittedPlan } from "./metrics.ts";
+import { DEFAULT_EDGE_OPTIONS, classifyEdges, joinEdges, summarizeEdges, type EdgeReport, type EdgeSummary, type Kept, submittedPlans, type SubmittedPlan } from "./metrics.ts";
 import { readJson, REPO_ROOT, resultsDir, timestamp, writeJson, writeText } from "./paths.ts";
 import { keptSource, sourceSpan, type MediaInfo, type SourceRange } from "./timeline.ts";
 
 const USAGE = `Usage:
   replay.ts --case <id> [--plan <plan.json>] [--fingerprint <prefix>]
-            [--drop-quotes] [--baseline <replay.json>] [--out <dir>]
+            [--drop-quotes] [--parts] [--baseline <replay.json>] [--out <dir>]
 
 --plan replays another { version, cuts[, range, only, crossfadeFrames] } on the case's source instead of the run's own plan.
 --fingerprint chooses a saved scan-window set; by default every complete set is tried and the one that
 best reproduces the original run is used (the run's own detector settings).
---drop-quotes replays the captured plan without optional quotes for an offline comparison.`;
+--drop-quotes replays the captured plan without optional quotes for an offline comparison.
+--parts replays every part of a pass that saved as it went (the last plan on each version) and totals them.`;
 
 type Tier = "applied" | "review" | "kept";
 
@@ -67,7 +68,10 @@ export interface ReplayResult {
   /** Planner changes, as "asked→outcome" per submitted range, plus how many moved an edge. */
   gate: { changed: Record<string, number>; moved: number; unchanged: number };
   transitions: Record<string, number>;
-  edges: { replay: { applied: EdgeSummary; review: EdgeSummary }; original?: { applied: EdgeSummary; review: EdgeSummary } };
+  /** `appliedOnFrames` is the applied tier as the engine saves it, each removal rounded inward to whole frames. */
+  edges: { replay: { applied: EdgeSummary; review: EdgeSummary; appliedOnFrames?: EdgeSummary }; original?: { applied: EdgeSummary; review: EdgeSummary } };
+  /** Each applied edge, on whole frames, that the recording is at speaking level at: where to listen first. Source seconds. */
+  appliedOnSpeech?: EdgeReport[];
   cuts: ReplayedCut[];
 }
 
@@ -104,7 +108,7 @@ export interface ReplayOptions {
 }
 
 export async function replayCase(loaded: LoadedCase, opts: ReplayOptions = {}): Promise<ReplayResult> {
-  const origin = await artifactsFromCase(loaded);
+  const origin = await artifactsFromCase(loaded, { partial: true });
   const plan = opts.plan ?? origin.plan;
   if (!plan) throw new Error("The run submitted no dialogue_apply_cuts plan. Pass --plan.");
   const tl = loaded.timeline(plan.version);
@@ -219,6 +223,8 @@ export async function replayCase(loaded: LoadedCase, opts: ReplayOptions = {}): 
     return out;
   };
   const kA = without(kS, decisions.filter(d => !d.review));
+  // The engine saves each removal on whole frames, rounded inward. The edges that play are those, not the planner's.
+  const kF = without(kS, decisions.filter(d => !d.review).map(d => frameAligned(d, loaded.file.fps)));
   const kR = without(kA, decisions.filter(d => d.review));
   const summarize = (before: Kept, after: Kept) => summarizeEdges(classifyEdges(joinEdges(before, after), loaded.evidence, DEFAULT_EDGE_OPTIONS));
   let originalEdges: ReplayResult["edges"]["original"];
@@ -235,9 +241,71 @@ export async function replayCase(loaded: LoadedCase, opts: ReplayOptions = {}): 
     agreement: Object.fromEntries(tried.map(t => [t.fp.slice(0, 12), Math.round(t.result.agreement * 1000) / 1000])),
     gate: { changed, moved: gate.decisions.filter(l => l.from).length, unchanged: gate.unchangedCuts },
     transitions,
-    edges: { replay: { applied: summarize(kS, kA), review: summarize(kA, kR) }, original: originalEdges },
+    edges: { replay: { applied: summarize(kS, kA), review: summarize(kA, kR), appliedOnFrames: summarize(kS, kF) }, original: originalEdges },
+    appliedOnSpeech: classifyEdges(joinEdges(kS, kF), loaded.evidence, DEFAULT_EDGE_OPTIONS).filter(e => e.class === "speech"),
     cuts,
   };
+}
+
+export interface PartsResult {
+  schema: 3;
+  kind: "replay-parts";
+  caseId: string;
+  parts: ReplayResult[];
+  /** Plans the case can't replay: it stores no timeline for the version they were submitted on. */
+  skipped: Array<{ version: string; cuts: number }>;
+}
+
+/**
+ * Replay every part of a pass that saved as it went: the last plan submitted on each version, each on its own
+ * version's timeline. One plan is a few removals of a pass's hundreds, so this is the replay that covers the pass.
+ */
+export async function replayParts(loaded: LoadedCase, opts: Omit<ReplayOptions, "plan"> = {}): Promise<PartsResult> {
+  const origin = await artifactsFromCase(loaded, { partial: true });
+  const last = new Map<string, SubmittedPlan>();
+  for (const plan of submittedPlans(origin.events)) if (plan.cuts.length) last.set(plan.version, plan);
+  const parts: ReplayResult[] = [], skipped: PartsResult["skipped"] = [];
+  for (const plan of last.values()) {
+    if (loaded.timeline(plan.version)) parts.push(await replayCase(loaded, { ...opts, plan }));
+    else skipped.push({ version: plan.version, cuts: plan.cuts.length });
+  }
+  return { schema: 3, kind: "replay-parts", caseId: loaded.file.id, parts, skipped };
+}
+
+const addEdges = (list: EdgeSummary[]) => ({
+  total: list.reduce((n, e) => n + e.total, 0), speech: list.reduce((n, e) => n + e.speech, 0), silence: list.reduce((n, e) => n + e.silence, 0),
+});
+
+/** A pass's parts as one table: what each plan asked, what the planner did with it and where its edges landed. */
+export function partsMarkdown(r: PartsResult, baseline?: PartsResult): string {
+  const tiers = (p: ReplayResult) => {
+    const n = { applied: 0, review: 0, kept: 0 };
+    for (const c of p.cuts) n[c.replay.tier]++;
+    return n;
+  };
+  const lines = [`# Replay of every part · case ${r.caseId}`, "",
+    "| Part | Removals | Applied | Held for review | Not cut | Edges moved | Applied edges on speech | Outcome |", "|---|---|---|---|---|---|---|---|"];
+  const total = { cuts: 0, applied: 0, review: 0, kept: 0, moved: 0 };
+  for (const [i, p] of r.parts.entries()) {
+    const t = tiers(p), e = p.edges.replay.applied;
+    total.cuts += p.cuts.length; total.applied += t.applied; total.review += t.review; total.kept += t.kept; total.moved += p.gate.moved;
+    lines.push(`| ${i + 1} (${p.planVersion.slice(0, 6)}) | ${p.cuts.length} | ${t.applied} | ${t.review} | ${t.kept} | ${p.gate.moved} | ${e.speech}/${e.total} | ${p.outcome}${p.error ? `: ${p.error.slice(0, 80)}` : ""} |`);
+  }
+  const applied = addEdges(r.parts.map(p => p.edges.replay.applied)), review = addEdges(r.parts.map(p => p.edges.replay.review));
+  const frames = addEdges(r.parts.flatMap(p => p.edges.replay.appliedOnFrames ?? []));
+  lines.push(`| **All** | ${total.cuts} | ${total.applied} | ${total.review} | ${total.kept} | ${total.moved} | ${applied.speech}/${applied.total} | |`, "",
+    `Applied edges: ${applied.speech}/${applied.total} on speech, ${applied.silence} silent. Review edges: ${review.speech}/${review.total} on speech, ${review.silence} silent.`,
+    `Applied edges as saved, on whole frames: ${frames.speech}/${frames.total} on speech, ${frames.silence} silent.`);
+  if (r.skipped.length) lines.push("", `Not replayed (the case stores no timeline for the version): ${r.skipped.map(s => `${s.version.slice(0, 6)} (${s.cuts} removals)`).join(", ")}.`);
+  if (baseline) {
+    const changes = r.parts.flatMap(p => {
+      const before = baseline.parts.find(b => b.planVersion === p.planVersion);
+      return before ? compareReplays(before, p).map(d => ({ ...d, version: p.planVersion })) : [];
+    });
+    lines.push("", "## Against the baseline", "", changes.length ? `${changes.length} submitted ranges changed:` : "No submitted range changed.");
+    for (const d of changes.slice(0, 80)) lines.push(`- ${d.version.slice(0, 6)} #${d.index} ${d.kind}: ${d.before.tier} ${d.before.start.toFixed(3)}–${d.before.end.toFixed(3)} → ${d.after.tier} ${d.after.start.toFixed(3)}–${d.after.end.toFixed(3)}`);
+  }
+  return lines.join("\n") + "\n";
 }
 
 /** Per-range differences between two replays of the same plan (e.g. before and after a code edit). */
@@ -284,9 +352,20 @@ export function replayMarkdown(r: ReplayResult, diff?: ReturnType<typeof compare
 
 export async function replayCli(argv = process.argv.slice(2)) {
   const { values } = cli({ case: { type: "string" }, plan: { type: "string" }, fingerprint: { type: "string" }, baseline: { type: "string" }, out: { type: "string" },
-    "drop-quotes": { type: "boolean" } }, USAGE, argv);
+    "drop-quotes": { type: "boolean" }, parts: { type: "boolean" } }, USAGE, argv);
   if (!values.case) throw new Error(USAGE);
   const loaded = loadCase(values.case);
+  if (values.parts) {
+    const result = await replayParts(loaded, { fingerprint: values.fingerprint, dropQuotes: values["drop-quotes"] });
+    const baseline = values.baseline && existsSync(values.baseline) ? readJson<PartsResult>(values.baseline) : undefined;
+    const dir = values.out ?? join(resultsDir(), "replays", loaded.file.id), stamp = `${timestamp()}-parts`;
+    writeJson(join(dir, `${stamp}.json`), result, values.out);
+    const md = partsMarkdown(result, baseline);
+    writeText(join(dir, `${stamp}.md`), md, values.out);
+    console.log(md);
+    console.log(`Wrote ${join(dir, stamp)}.{json,md}`);
+    return;
+  }
   const result = await replayCase(loaded, { plan: values.plan ? readJson<SubmittedPlan>(values.plan) : undefined, fingerprint: values.fingerprint,
     dropQuotes: values["drop-quotes"] });
   const baseline = values.baseline && existsSync(values.baseline) ? readJson<ReplayResult>(values.baseline) : undefined;

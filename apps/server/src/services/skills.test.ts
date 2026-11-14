@@ -49,14 +49,12 @@ describe("the skills Scarlet comes with", () => {
   const oldSettings = (dialogue: unknown) => app.ctx.db.prepare("INSERT OR REPLACE INTO settings (id, json) VALUES (1, ?)")
     .run(JSON.stringify({ dialogue, render: { handleSeconds: 4 } }));
 
-  it("seeds straight dialogue cuts and offers splice smoothing as a separate skill", async () => {
+  it("seeds straight dialogue cuts", async () => {
     await upgrade();
     const guide = publicGuide()!;
     expect(guide.source).toBe("bundled");
     expect(guide.content).toMatch(/straight picture and audio cuts/i);
     expect(guide.content).not.toMatch(/timeline_crossfade_audio|crossfadeFrames/);
-    const smoothing = app.ctx.repos.skills.select("name = ?", ["smooth-audio-cuts"])[0]!;
-    expect(smoothing.content).toContain("timeline_crossfade_audio");
   });
 
   it("carries existing dialogue preferences into the editable skill once and keeps other settings", async () => {
@@ -98,6 +96,21 @@ describe("the skills Scarlet comes with", () => {
     expect(publicGuide()).toMatchObject({ version: 1, source: "bundled" });
     expect(publicGuide()!.content).toBe(BUNDLED_SKILLS.find(s => s.folder === "dialogue-pass")!.content);
     expect(app.ctx.repos.skills.select().some(s => s.name === "dialogue-preferences")).toBe(false);
+  });
+
+  it("keeps the two-frame crossfade an editor had by default when their own dialogue guide doesn't ask for one", async () => {
+    await upgrade();
+    // Before preferences moved into the guide, Scarlet added the crossfade at every join by itself.
+    const content = "House rules for this interview.\nKeep the host's first take.\n";
+    const mine = updateSkill(app.ctx, editor, publicGuide()!, { content });
+    oldSettings({ aiCuts: { pause: "cut", filler: "cut", retake: "cut", coaching: "cut" }, pauseTightness: "natural", crossfadeFrames: 2 });
+    await upgrade();
+    const migrated = app.ctx.repos.skills.get(mine.id)!;
+    expect(migrated.content.startsWith(content)).toBe(true);
+    expect(migrated.content).toContain("Use a 2-frame audio crossfade at dialogue joins.");
+    // One saved before the setting existed had the same default.
+    await upgrade();
+    expect(app.ctx.repos.skills.get(mine.id)).toEqual(migrated);
   });
 
   it("carries preferences into a renamed disabled guide without replacing its content, identity or state", async () => {
@@ -295,16 +308,16 @@ describe("a stock skill the editor deleted", () => {
   });
 
   it("stays deleted at the next launch, and leaves its name free for a skill of the editor's own", async () => {
-    const stock = named("visual-pass")!;
+    const stock = named("frame-screen")!;
     expect(stock).toMatchObject({ source: "bundled", enabled: true });
     const deleted = await app.app.request(`/api/skills/${stock.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${accessToken(app.ctx)}` } });
     expect(deleted.status).toBe(200);
     // A skill Scarlet took away itself wasn't the editor's decision, so the next launch still seeds it.
-    deleteSkill(app.ctx, named("smooth-audio-cuts")!);
+    deleteSkill(app.ctx, named("add-captions")!);
     await app.ctx.close();
     launch();
-    expect(named("visual-pass")).toBeUndefined();
-    expect(named("smooth-audio-cuts")).toMatchObject({ source: "bundled", enabled: true });
+    expect(named("frame-screen")).toBeUndefined();
+    expect(named("add-captions")).toMatchObject({ source: "bundled", enabled: true });
     // One the editor had edited is theirs, with nothing left to say Scarlet came with it. Deleted, it stays deleted too.
     const edited = updateSkill(app.ctx, editor, named("add-captions")!, { content: named("add-captions")!.content + "\nKeep captions to two lines.\n" });
     expect(edited.source).toBeUndefined();
@@ -314,11 +327,11 @@ describe("a stock skill the editor deleted", () => {
     expect(named("add-captions")).toBeUndefined();
 
     // Made again by hand under the same name, it is the editor's own skill, and seeding leaves it as they wrote it.
-    const own = createSkill(app.ctx, null, { name: "visual-pass", content: "---\nname: visual-pass\ndescription: Mine.\n---\n\nMy own pass.\n", scope: "team" });
+    const own = createSkill(app.ctx, null, { name: "frame-screen", content: "---\nname: frame-screen\ndescription: Mine.\n---\n\nMy own framing.\n", scope: "team" });
     await app.ctx.close();
     launch();
-    expect(named("visual-pass")).toMatchObject({ id: own.id, content: own.content, version: 1 });
-    expect(named("visual-pass")!.source).toBeUndefined();
+    expect(named("frame-screen")).toMatchObject({ id: own.id, content: own.content, version: 1 });
+    expect(named("frame-screen")!.source).toBeUndefined();
   });
 });
 
@@ -439,6 +452,41 @@ describe("skills that the workflows replaced", () => {
     expect(named("render-verify")).toEqual(own);
     expect(named("screen-recording")).toEqual(custom);
     expect(usedBy(run.id)).toEqual([own.id, custom.id]);
+  });
+
+  // Last stock revision of one of the four workflows the public set dropped on 2026-11-13.
+  const smoothing = [
+    "---",
+    "name: smooth-audio-cuts",
+    "description: Fix clicks or abrupt room-tone changes at existing dialogue joins in Scarlet while preserving picture timing.",
+    "category: Sound",
+    "---",
+    "",
+    "# Smooth audio edits",
+    "",
+    "Fix a click or a change of room tone at a join without moving the picture. The recording and the brief decide the transition.",
+    "",
+    "A short centered audio crossfade is usually enough at a dialogue join. Reach further when a join still draws attention: a longer fade where the room tone changes, a shorter one where a word starts right after the cut, or a fade shaped differently on each side.",
+    "",
+    "Listen at both ends of the fade. It should not clip the start or end of a word, double a syllable, or uncover a gap or a breath that was cut away. Keep intentional pauses as they are, and change nothing in the picture.",
+    "",
+    "`timeline_crossfade_audio`, `timeline_propose`, `timeline_join_audit` and `timeline_diff` cover what this needs.",
+    "",
+  ].join("\n");
+
+  it("ships only the dialogue pass, captions and screen framing, and removes unedited copies of the rest on upgrade", async () => {
+    expect(app.ctx.repos.skills.select().map(skill => skill.name).sort()).toEqual(["add-captions", "dialogue-pass", "frame-screen"]);
+    const stock = createSkill(app.ctx, null, { name: "smooth-audio-cuts", scope: "team", content: smoothing }, { source: "bundled" });
+    const run = uses([stock.id]);
+    app.ctx.repos.tasks.put({ ...run, state: "done" });
+    await app.ctx.close();
+    app = createApp({ dataDir, env: {}, log: () => {} });
+    expect(named("smooth-audio-cuts")).toBeUndefined();
+    expect(usedBy(run.id)).toEqual([]);
+    // One the editor wrote under that name stays theirs.
+    const own = createSkill(app.ctx, editor, { name: "smooth-audio-cuts", scope: "team", content: smoothing + "Use six frames.\n" });
+    retireMergedSkills(app.ctx);
+    expect(named("smooth-audio-cuts")).toEqual(own);
   });
 
   it("preserves an old workflow while the editor is revising it", () => {

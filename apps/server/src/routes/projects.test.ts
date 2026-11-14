@@ -8,6 +8,7 @@ import { accessToken } from "../auth.js";
 import { OpenAIProvider } from "../transcribe/openai.js";
 import { createTask, saveTask } from "../services/tasks.js";
 import { sourcePreviews } from "../services/sourcePreviews.js";
+import { recoverTasks } from "../services/taskRecovery.js";
 
 let directory: string;
 let workspace: ScarletApp;
@@ -55,6 +56,31 @@ it("starts a transcription the pause cut off again as soon as media processing r
   expect(latest().state).toBe("done");
   expect(cloud).toHaveBeenCalledTimes(2);
   expect(ctx.repos.projects.getMedia("voice")?.transcriptId).toBeTruthy();
+});
+
+it("interrupts a transcription when the project goes to the trash, and starts it again after Restore", async () => {
+  const { ctx } = workspace;
+  const cloud = vi.spyOn(OpenAIProvider.prototype, "transcribe")
+    .mockImplementationOnce(({ signal }) => new Promise((_, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true })))
+    .mockResolvedValue({ segments: [] });
+  ctx.repos.projects.putMedia(project.id, { id: "voice", name: "Voice", path: "voice.wav", kind: "audio", duration: 60 }, "ready");
+  const latest = () => ctx.repos.tasks.select("kind = 'transcribe' AND json_extract(json, '$.context.mediaId') = 'voice'", [], "created_at, rowid").at(-1)!;
+  const { task } = await (await api("POST", "/media/voice/transcribe", {})).json();
+  await vi.waitFor(() => expect(cloud).toHaveBeenCalledTimes(1));
+
+  // A cancelled transcription is final, so the trash only interrupts it.
+  expect((await api("DELETE", `/projects/${project.id}`)).status).toBe(200);
+  await vi.waitFor(() => expect(ctx.repos.tasks.get(task.id)).toMatchObject({ state: "failed", interrupted: true }));
+  // Nothing starts it again while the project is in the trash.
+  recoverTasks(ctx);
+  expect(latest().id).toBe(task.id);
+
+  expect((await api("POST", `/projects/${project.id}/restore`)).status).toBe(200);
+  recoverTasks(ctx);
+  expect(latest().id).not.toBe(task.id);
+  while (ctx.pending.size) await Promise.allSettled([...ctx.pending]);
+  expect(latest().state).toBe("done");
+  expect(cloud).toHaveBeenCalledTimes(2);
 });
 
 it("leaves transcription running through a pause while Scarlet is working on a request, and stops it when nothing is under way", async () => {
