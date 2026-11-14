@@ -22,6 +22,8 @@ export interface MockState {
   timeline: Timeline | null;
   transcripts: Record<string, Transcript>;
   waveform: (mediaId: string, from: number, to: number, points: number) => WaveformResponse;
+  /** Which input each word and gap came from, as the engine reads a recording's inputs. Unavailable by default. */
+  otherInput: (mediaId: string, words: Array<[number, number]>, gaps: Array<[number, number]>) => { available: boolean; words: boolean[]; gaps: Array<Array<{ start: number; end: number }>> };
   notes: Note[];
   skills: Skill[];
   changes: Change[];
@@ -50,6 +52,7 @@ export function makeState(partial: Partial<MockState> = {}): MockState {
     timeline: null,
     transcripts: {},
     waveform: (mediaId, from, to, points) => ({ mediaId, from, to, peaks: Array.from({ length: points }, () => 0.5) }),
+    otherInput: (_mediaId, words, gaps) => ({ available: false, words: words.map(() => false), gaps: gaps.map(() => []) }),
     notes: [],
     skills: [],
     changes: [],
@@ -140,6 +143,10 @@ export async function startMockServer(state: MockState = makeState()): Promise<M
       if (rec.method === "GET" && (mm = m(/^\/media\/([^/]+)\/waveform$/))) {
         const q = url.searchParams;
         return send(res, 200, state.waveform(mm[1]!, Number(q.get("from")), Number(q.get("to")), Number(q.get("points") ?? 1000)));
+      }
+      if (rec.method === "POST" && (mm = m(/^\/projects\/[^/]+\/media\/([^/]+)\/other-input$/))) {
+        const b = body as { words?: Array<[number, number]>; gaps?: Array<[number, number]> };
+        return send(res, 200, state.otherInput(mm[1]!, b.words ?? [], b.gaps ?? []));
       }
       if (rec.method === "GET" && (mm = m(/^\/media\/([^/]+)\/frame$/))) {
         res.writeHead(200, { "content-type": "image/jpeg" });
