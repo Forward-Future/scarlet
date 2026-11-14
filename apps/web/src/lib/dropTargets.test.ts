@@ -5,7 +5,7 @@ import { dropTargets, listenForFileDrops } from "./dropTargets";
 
 afterEach(() => { vi.restoreAllMocks(); document.body.replaceChildren(); });
 
-it("gives files dropped on a dialog only to a drop zone inside it, not to the zone the dialog sits in", () => {
+it.each(["macos", "linux", "windows"] as const)("gives a native drop on %s to the visible target in CSS coordinates", (platform) => {
   type Drop = Parameters<Parameters<typeof desktop.onDropFiles>[0]>[0];
   let fire!: (event: Drop) => void;
   vi.spyOn(desktop, "onDropFiles").mockImplementation(handler => { fire = handler; return Promise.resolve(() => {}); });
@@ -15,13 +15,16 @@ it("gives files dropped on a dialog only to a drop zone inside it, not to the zo
   dropTargets.set(document.querySelector("#card")!, card);
   dropTargets.set(document.querySelector("#inner")!, inner);
   const under = vi.spyOn(document, "elementFromPoint");
-  const stop = listenForFileDrops("macos");
+  vi.spyOn(window, "devicePixelRatio", "get").mockReturnValue(2);
+  const stop = listenForFileDrops(platform);
   const drop = (selector: string) => {
     under.mockReturnValue(document.querySelector(selector));
     fire({ type: "drop", paths: ["/footage/a.mov"], position: { x: 10, y: 10 } } as Drop);
   };
   // On the project's row: its zone takes the files.
   drop("#row");
+  const cssPoint = platform === "windows" ? 5 : 10;
+  expect(under).toHaveBeenCalledWith(cssPoint, cssPoint);
   expect(card.drop).toHaveBeenCalledTimes(1);
   // On the Rename dialog that row opened, or the dimmed page around it: nothing imports into the project.
   drop("#rename input");

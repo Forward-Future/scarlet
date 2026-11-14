@@ -109,7 +109,7 @@ export function TranscriptionGuide({ crisper = false }: { crisper?: boolean }) {
       <summary className="cursor-pointer underline">{crisper ? "Set up CrisperWhisper" : "Custom model setup"}</summary>
       <div className="mt-2 space-y-2">
         {crisper ? <>
-          <p>Download the <button type="button" className="underline" onClick={() => open(crisperWeights)}>CrisperWhisper 2.0 large model files</button> to one folder. Setup requires 64-bit Python 3.12 on Windows or on Apple silicon with macOS 14 or later. Choose the model folder below. Scarlet verifies the files and downloads the runtime libraries.</p>
+          <p>Download the <button type="button" className="underline" onClick={() => open(crisperWeights)}>CrisperWhisper 2.0 large model files</button> to one folder. Setup requires 64-bit Python 3.12 on Windows, Ubuntu 24.04 x86-64 or Apple silicon with macOS 14 or later. On Ubuntu, install python3.12-venv. Choose the model folder below. Scarlet verifies the files and downloads the runtime libraries.</p>
           <CrisperSetupButton />
         </> : <p>Choose a whisper.cpp model file, or supply a local adapter that writes word-timed JSON. You can leave the model file empty when the adapter manages its own weights. Save your selection in Advanced.</p>}
         <button type="button" className="underline" onClick={() => open(setupGuide)}>Open transcription model guide</button>
