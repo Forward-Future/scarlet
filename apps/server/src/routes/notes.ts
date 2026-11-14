@@ -60,7 +60,7 @@ export function noteRoutes(ctx: Ctx) {
 
   r.post("/projects/:id/notes", async (c) => {
     const body = await jsonBody(c, CreateNoteRequest);
-    const result = await createNote(ctx, c.var.user, c.req.param("id"), body);
+    const result = await createNote(ctx, c.var.user, c.req.param("id"), body, c.req.raw.signal);
     return c.json(result, 201);
   });
 
@@ -122,7 +122,7 @@ export function noteRoutes(ctx: Ctx) {
     }
     let result: Awaited<ReturnType<typeof createNote>>;
     try {
-      result = await createNote(ctx, c.var.user, project.id, { version, time, end, clipIds, text, voiceTranscript, audioPath, assignTo, changeId, ...tuning.data });
+      result = await createNote(ctx, c.var.user, project.id, { version, time, end, clipIds, text, voiceTranscript, audioPath, assignTo, changeId, ...tuning.data }, c.req.raw.signal);
     } catch (error) {
       // No note refers to the recording, so nothing would ever remove it.
       await rm(abs, { force: true });
