@@ -202,6 +202,9 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
   const whisperCli = bundledWhisperCli(env);
   // The audio helper is one per engine process. Its notes on where each model runs go to this engine's log.
   audioWorker.log = options.log ?? (m => console.log(m));
+  // An agent at work asks for the helper's models again within a turn or two.
+  const agentAtWork = db.prepare("SELECT 1 FROM tasks WHERE state IN ('claimed','running') AND kind != 'transcribe' LIMIT 1");
+  audioWorker.wanted = () => { try { return !!agentAtWork.get(); } catch { return false; } };
   const repos = createRepos(db, () => whisperCli || hasCrisperWhisper(paths.root) ? "whispercpp" : "none");
   const pending = new Set<Promise<unknown>>();
   const shutdown = new AbortController();

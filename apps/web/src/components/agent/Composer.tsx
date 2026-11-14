@@ -158,7 +158,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     }
     if (!effective) throw new Error(unavailableReason);
     if (replying) {
-      if (anchor?.changeId && !thread.changes.some(c => c.id === anchor.changeId)) throw new Error("This suggestion is unavailable. Select the edit again.");
+      if (anchor?.changeId && ![...thread.changes, ...thread.flagged ?? []].some(c => c.id === anchor.changeId)) throw new Error("This suggestion is unavailable. Select the edit again.");
       const position = anchor && requestPosition(anchor);
       if (revising) {
         await revise(revising.id, { text, skillIds, voiceTranscript, assignTo: agentTarget(effective.agent, effective.model),

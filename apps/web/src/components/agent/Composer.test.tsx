@@ -656,6 +656,21 @@ it("pins a reply to the selected individual edit while typing and sends it in th
   expect(useProjectStore.getState().revise).not.toHaveBeenCalled();
 });
 
+it("sends a revision of an edit another request made from the request that flagged it, in that request", async () => {
+  const change = current.changes.find(c => c.state === "approved")!;
+  // The request that raised the doubt lists the edit with its own, and the message box there talks to it.
+  const own = buildThreads({ changes: [change], tasks: [], notes: [] })[0]!;
+  const raiser = { ...own, id: "thread_raiser", changes: [], flagged: [change] };
+  const target = { changeId: change.id, editIndex: 1, version: project.head!, time: 1, end: 3, clipIds: [], label: "Opening caption" };
+  await show({ thread: raiser, selectedEdit: target });
+  await type("Fade the caption out sooner");
+  await submit();
+  expect(container.textContent).not.toContain("This suggestion is unavailable");
+  expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
+    instruction: "Fade the caption out sooner", context: expect.objectContaining({ threadId: "thread_raiser", changeId: change.id, editIndex: 1 }),
+  }));
+});
+
 it("sends words chosen in a call's passage as a revision of that one cut, where the editor was looking", async () => {
   const ready = buildThreads(current).find(t => t.needs === "decision")!;
   // As the page aims the box at words chosen in the open call's passage: the call, and the words' own times.

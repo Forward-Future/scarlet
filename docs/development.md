@@ -18,7 +18,7 @@ Start with the [source build](../README.md#run-from-source). The Tauri app opens
 
 ## Run and test
 
-Run commands from the repository root. Corepack 0.33, which comes with Node.js 22.17, can’t start pnpm 12: it looks for a `pnpm.cjs` that pnpm 12 doesn’t ship. With that Corepack, install pnpm with `npm install -g pnpm@12.16.1` instead. Corepack 0.36 starts it, but only once the copy 0.33 saved is gone from Corepack’s cache (`pnpm/12.16.1`). `pnpm desktop:dev` opens your local project library with live reload. `pnpm desktop:demo` opens an isolated sample interview in the native app. The renderer in `apps/web` runs inside that window.
+Run commands from the repository root. `pnpm desktop:dev` opens your local project library with live reload. `pnpm desktop:demo` opens an isolated sample interview in the native app. The renderer in `apps/web` runs inside that window.
 
 | Command | What it checks |
 | --- | --- |
@@ -27,28 +27,7 @@ Run commands from the repository root. Corepack 0.33, which comes with Node.js 2
 | `pnpm test` | Runs workspace tests with Vitest |
 | `pnpm desktop:test` | Runs the desktop app’s Rust tests |
 
-The render and engine tests run `ffmpeg` and `ffprobe` from `PATH`, and some call them by those names. On macOS and Windows, CI tests with the pinned builds: it copies the files `pnpm desktop:ffmpeg` downloads to `apps/desktop/src-tauri/binaries` into a directory of their own as `ffmpeg` and `ffprobe`, and puts that directory first on `PATH`. The downloaded files are named for their target, and a checkout used for cross-builds can hold both Mac targets, so these steps name this machine's. To do the same on macOS:
-
-```sh
-pnpm desktop:ffmpeg
-mkdir -p ~/.scarlet-ffmpeg
-target=$(node -p '({ arm64: "aarch64", x64: "x86_64" })[process.arch] + "-apple-darwin"')
-for t in ffmpeg ffprobe; do cp "apps/desktop/src-tauri/binaries/$t-$target" ~/.scarlet-ffmpeg/$t; done
-export PATH="$HOME/.scarlet-ffmpeg:$PATH"
-```
-
-On Windows, in PowerShell:
-
-```powershell
-pnpm desktop:ffmpeg
-New-Item -ItemType Directory -Force ~/.scarlet-ffmpeg | Out-Null
-foreach ($t in 'ffmpeg', 'ffprobe') { Copy-Item apps/desktop/src-tauri/binaries/$t-x86_64-pc-windows-msvc.exe ~/.scarlet-ffmpeg/$t.exe }
-$env:PATH = "$HOME\.scarlet-ffmpeg;$env:PATH"
-```
-
-Some engine tests make their fixtures with the FFmpeg they find, so with another version a test can fail locally that passes in CI. The engine tests run one file at a time, and `apps/server/src/workspace.test.ts` alone takes several minutes.
-
-For a change to editing behavior, use the editing evaluations and keep real footage, transcripts and results outside the repository. For performance work, the editor benchmarks measure project opening, scrubbing, previews and export. [Editing evaluations](../evals/README.md) · [Editor benchmarks](editor-performance.md)
+The render tests need `ffmpeg` and `ffprobe` on `PATH`. For a change to editing behavior, use the editing evaluations and keep real footage, transcripts and results outside the repository. For performance work, the editor benchmarks measure project opening, scrubbing, previews and export. [Editing evaluations](../evals/README.md) · [Editor benchmarks](editor-performance.md)
 
 For headless integration work, `pnpm --filter @scarlet/server start` runs the API and render workers. `docker compose up -d` starts the containerized engine. To connect an external agent, configure `pnpm mcp` as a stdio MCP server with `SCARLET_SERVER` set to the engine URL, `SCARLET_PROJECT` to the project ID and `SCARLET_TOKEN` to the destination engine’s token. Use HTTPS for remote engines, or an HTTP loopback address through a tunnel. The standalone agent and MCP CLIs also accept `--token-file PATH` for an owner-readable file. The desktop app handles this connection for you. Both hosts include a Gemini CLI runner, which also requires a working sandbox backend.
 
@@ -95,13 +74,13 @@ On an Intel Mac, use the filename `scarlet-engine-x86_64-apple-darwin`. On Windo
 
 The installer includes the engine and `whisper-cli`. The Ubuntu package installs FFmpeg and FFprobe as dependencies. On macOS and Windows, install those tools separately before importing media. After installing the regular Mac app in Applications, run `bash /Applications/Scarlet.app/Contents/Resources/Install-Scarlet-FFmpeg-macOS.sh` to install both tools with checksum verification. On Windows, run `winget install --id Gyan.FFmpeg.Essentials --exact`. Restart Scarlet after installation. Source development and the local main updaters can use their own pinned copies. On Windows, install the Vulkan SDK to include GPU transcription. `VULKAN_SDK` points to the SDK and `node apps/desktop/scripts/build-speaker-gpu.mjs` builds the optional DirectML speaker runtime. Local builds can fall back to the CPU runtimes.
 
-Each push to public `main` builds installers for its head commit. With `SCARLET_STABLE_RELEASES=true` and signing configured, the Desktop workflow publishes the signed Apple Silicon DMG, Intel DMG, Windows x64 setup executable and Windows x64 MSI together after the platform checks pass. The Mac release is notarized. [Stable releases](https://github.com/Forward-Future/scarlet/releases)
+While stable publishing is off, each new push to public `main` replaces any unfinished automatic test builds with builds of the latest commit. Manually requested builds and retries run independently. With `SCARLET_STABLE_RELEASES=true` and signing configured, the Desktop workflow publishes the signed Apple Silicon DMG, Intel DMG, Windows x64 setup executable and Windows x64 MSI together after the platform checks pass. The Mac release is notarized. [Stable releases](https://github.com/Forward-Future/scarlet/releases)
 
 To build an Early Access update, select **Actions → Desktop → Run workflow**, choose the release source branch and enter the numeric **Early Access version** (for example `0.1.4`). Use a new version above the last published Early Access installer. Leaving the field empty builds the regular app. The read-only Early Access run retains the existing app identity and produces verified artifacts for Apple Silicon, Intel and Windows x64. The Mac setup helper is in the Apple Silicon artifact. Publish both DMGs, the Windows setup executable and the helper as a prerelease in the downloads repository, disclose the ad hoc Mac signatures and unsigned Windows installer, and link that release from the matching `v<version>-early-access.1` source tag. [Early Access downloads](https://github.com/Forward-Future/scarlet-releases/releases)
 
 The root package version sets the start of each release series. The patch number increases with the commit’s first-parent distance from the baseline. Reruns reuse the version, concurrent pushes get distinct versions, and a push containing several commits can skip numbers. Run `pnpm release:version for-commit` in a full clone to see a commit’s installer version. To start a new series, run `pnpm release:version set X.Y.Z` and commit all version changes together.
 
-During Early Access, keep the repository Actions variable `SCARLET_STABLE_RELEASES` set to `false` or unset. Pushes to `main` run CI and build installers for testing. To start publishing stable versions, configure signing in the `release` environment, restricted to `main`, then set the variable to `true` before the intended release commit. For Apple Developer ID signing and notarization, set the `APPLE_CERTIFICATE` (base64-encoded Developer ID Application P12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (app-specific) and `APPLE_TEAM_ID` secrets there. For Windows, provision an Azure Artifact Signing public-trust certificate profile, grant its app registration the Certificate Profile Signer role, and set `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` as environment secrets. Set `WINDOWS_SIGNING_ENDPOINT`, `WINDOWS_SIGNING_ACCOUNT` and `WINDOWS_SIGNING_PROFILE` as environment variables. Pull requests can run packaging checks without signing credentials. Only publication receives repository write access. [Desktop workflow](../.github/workflows/desktop.yml)
+During Early Access, keep the repository Actions variable `SCARLET_STABLE_RELEASES` set to `false` or unset. Pushes to `main` run CI and build installers for testing. To start publishing stable versions, configure signing in the `release` environment, restricted to `main`, then set the variable to `true` before the intended release commit. For Apple Developer ID signing and notarization, set the `APPLE_CERTIFICATE` (base64-encoded Developer ID Application P12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (app-specific) and `APPLE_TEAM_ID` secrets there. For Windows, provision an Azure Artifact Signing public-trust certificate profile, grant its app registration the Certificate Profile Signer role, and set `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` as environment secrets. Set `WINDOWS_SIGNING_ENDPOINT`, `WINDOWS_SIGNING_ACCOUNT` and `WINDOWS_SIGNING_PROFILE` as environment variables. For a packaging check before merging, run the Desktop workflow manually on the branch. Only publication receives repository write access. [Desktop workflow](../.github/workflows/desktop.yml)
 
 ### Follow `main` on macOS
 

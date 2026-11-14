@@ -61,7 +61,7 @@ export function LocalModelNotice({ model, status }: { model: LocalTranscriptionM
   let text: string;
   switch (status?.state) {
     case "ready": text = status.active === "crisperwhisper" ? "CrisperWhisper is ready." : model === "custom" ? "Custom model available" : "Model available"; break;
-    case "downloading": text = `Downloading model · ${Math.floor(status.received * 100 / status.total)}%`; break;
+    case "downloading": text = `Downloading model · ${Math.min(99, Math.floor(status.received * 100 / status.total))}%`; break;
     case "failed": text = "Download failed. Retry transcription to download again."; break;
     case "invalid": text = model === "custom" ? "Check your model file and adapter in Advanced." : "Model file is damaged. Scarlet will download it again on first use."; break;
     case "missing": text = model === "custom" ? "Choose a model file in Advanced." : "First transcription downloads up to 998 MB."; break;

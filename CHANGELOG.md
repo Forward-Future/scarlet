@@ -6,6 +6,15 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 14, 2026
 
+- An edit another request flagged can be revised and undone from the request that flagged it.
+- With a marked range's handle focused, ← and → keep stepping it a frame at a time, Esc takes off only the range, and Space plays.
+- A queued request being reworded keeps its new words after Scarlet restarts.
+- Token counts in the chat stay put when Scarlet reconnects.
+- A slash command with no matching skill sends on Enter and says why it couldn't run.
+- The Model row stops saying "Connecting…" after a brief hiccup at launch.
+- Approve waits for a skill to be chosen when a learning's skill was deleted, and a skill can't be deleted while Scarlet revises it.
+- Hovering the update button shows what's new once the update has finished downloading.
+
 - Settings › About lists what changed in each update, and hovering the update button says what the new build brings.
 - Media says why an import won't be transcribed, and links straight to the fix.
 - The transcript marks words and sounds picked up by a microphone the dialogue isn't on.

@@ -332,6 +332,8 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
           current: {
             id, project: detail.project, timeline: sameVersion(prev?.timeline, detail.timeline), media: detail.project.media,
             changes: prev?.changes ?? [], notes: prev?.notes ?? [], learnings: prev?.learnings, tasks: prev?.tasks ?? [], renders: [],
+            // A reconnect keeps the token counts shown until the fresh read arrives: a total only climbs.
+            taskUsage: prev?.taskUsage,
             taskEvents: prev?.taskEvents ?? {}, loadRevision: request, historyRevision: (prev?.historyRevision ?? 0) + 1, reviewStatus: needsHistory ? "loading" : undefined,
           },
         });
@@ -343,8 +345,14 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
         void api.projectUsage(id, "task").then(usage => {
           if (request !== projectLoad) return;
           const loaded = Object.fromEntries(usage.groups.flatMap(({ key, ...totals }) => key ? [[key, totals]] : []));
-          // Totals pushed by the socket while this was loading are newer.
-          patch(id, d => ({ taskUsage: { ...loaded, ...d.taskUsage } }));
+          // A total only climbs: whichever of the read and the one held (kept from before, or pushed by the socket since) is larger is newer.
+          patch(id, d => {
+            const taskUsage = { ...loaded };
+            for (const [key, held] of Object.entries(d.taskUsage ?? {})) {
+              if (!taskUsage[key] || held.totalTokens >= taskUsage[key].totalTokens) taskUsage[key] = held;
+            }
+            return { taskUsage };
+          });
         }, () => undefined);
 
         // What waits in Learnings is secondary too. The engine's list is what waits now: after a reconnect, a rule it
@@ -525,7 +533,10 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       try {
         const { project } = await api.updateProject(projectId, body);
         listRevision++;
+        const heldHead = get().current?.id === projectId ? get().current!.project.head : undefined;
         patch(projectId, () => ({ project }));
+        // The answer can be older than a head the socket brought meanwhile: when the two disagree, the engine says which is current.
+        if (heldHead !== undefined && heldHead !== project.head) void get().refreshHead(projectId).catch(() => undefined);
         // The library lists the latest edit first. A project whose video changed moves there now, not when the list is
         // next read. One that was renamed, archived or paused wasn't edited: its time and its place stay.
         const list = get().list, was = list.find(p => p.id === projectId);

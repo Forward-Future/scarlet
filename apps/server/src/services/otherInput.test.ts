@@ -35,7 +35,8 @@ it("finds the input the dialogue is on, and what sounded on the other one", asyn
   const reads: number[] = [];
   const inputs = await recordingInputs(said, 180, async from => { reads.push(from); return from === 0 ? first : rest; });
   expect(inputs).toEqual({ mix: 0, dialogue: 1, other: 2 });
-  expect(reads).toEqual([0, 60]);
+  // Pages are read ahead, and counted in order: the answer came from the first two.
+  expect(reads.slice(0, 2)).toEqual([0, 60]);
   const sound = otherInputSound(first.energy, inputs!, 0, 60, said.filter(w => w.end <= 60));
   expect(sound.map(s => [Math.round(s.start * 10) / 10, Math.round(s.end * 10) / 10, s.meAlsoActive, s.text])).toEqual([
     [55, 56, false, "okay"], [57.2, 57.7, false, ""],

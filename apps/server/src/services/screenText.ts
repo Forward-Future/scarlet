@@ -209,6 +209,9 @@ async function readWindow(ctx: Ctx, media: MediaAsset & { projectId: string }, f
     const frames = join(ctx.paths.tmp, `screen-text-${randomUUID()}.rgb`);
     await mkdir(ctx.paths.tmp, { recursive: true });
     const fd = openSync(frames, "w");
+    // Closed once: after the first close the number belongs to whichever file opens next, another window's frames.
+    let open = true;
+    const close = () => { if (open) { open = false; closeSync(fd); } };
     const picked: number[] = [];
     try {
       await pictureLane(ctx).run(() => screenFrames(file, { start: from, end: to }, { fps: SCREEN_TEXT_FPS, width, height, decoder, signal,
@@ -219,13 +222,13 @@ async function readWindow(ctx: Ctx, media: MediaAsset & { projectId: string }, f
         picked.push(from + i / SCREEN_TEXT_FPS);
         writeSync(fd, rgb);
       }), { signal });
-      closeSync(fd);
+      close();
       if (picked.length) {
         const lines = await audioWorker.request<ScreenLine[][]>({ kind: "screenText", frames, width, height, finder, reader, letters }, { signal });
         picked.forEach((at, i) => read.push({ at, lines: lines[i] ?? [] }));
       }
     } finally {
-      try { closeSync(fd); } catch { /* Closed above. */ }
+      close();
       await rm(frames, { force: true });
     }
   }

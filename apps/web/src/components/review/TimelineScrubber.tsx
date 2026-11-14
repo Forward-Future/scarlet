@@ -228,7 +228,7 @@ interface TimelineScrubberProps {
    * A drag along the ruler marks a stretch, and its handles adjust it. With this, a press on the ruler that doesn't move
    * still moves the playhead; without it the ruler scrubs like the rest of the timeline.
    */
-  onRange?(range: TimeRange | undefined): void;
+  onRange?(range: TimeRange | undefined, byKey?: boolean): void;
   /** The video's frame rate: a marked range's ends sit on frames. */
   fps?: number;
   /** A line above the ruler: whose edits the marks are, in the simple view. */
@@ -305,9 +305,11 @@ export interface TimelineDot {
 }
 
 /** A marker shows its edit's number. Edits that share a marker show their run of numbers ("12–13"), or the lowest and a plus when they skip. */
-function dotLabel(count: number, numbered: number, first: number, last: number) {
+function dotLabel(dots: readonly { n?: number }[], numbered: number, first: number, last: number) {
+  const count = dots.length;
   if (!numbered) return undefined;
-  if (count === 1) return String(first);
+  // Places of one edit made in several places share its one number.
+  if (count === 1 || (first === last && dots.every(d => d.n !== undefined))) return String(first);
   return numbered === count && last - first === count - 1 ? `${first}–${last}` : `${first}+`;
 }
 
@@ -361,7 +363,7 @@ export function layoutMarks(marks: TimelineDot[], from: number, span: number, wi
     for (const { n } of dots) if (n !== undefined) {
       numbers.add(n); first = Math.min(first, n); last = Math.max(last, n);
     }
-    const label = dotLabel(dots.length, numbers.size, first, last);
+    const label = dotLabel(dots, numbers.size, first, last);
     const layout: MarkLayout = { key, time, times: [time], dots, at: position(time), label, width: markWidth(label), quiet: dots.every(d => d.quiet) };
     return { layout, numbers, first, last };
   };
@@ -383,7 +385,7 @@ export function layoutMarks(marks: TimelineDot[], from: number, span: number, wi
       before.first = Math.min(before.first, next.first);
       before.last = Math.max(before.last, next.last);
       group.at = (position(group.time) + position(time)) / 2;
-      group.label = dotLabel(group.dots.length, before.numbers.size, before.first, before.last);
+      group.label = dotLabel(group.dots, before.numbers.size, before.first, before.last);
       group.width = markWidth(group.label);
       next = before;
     }

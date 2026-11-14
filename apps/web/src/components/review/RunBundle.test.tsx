@@ -493,3 +493,22 @@ it("says what a stopped run saved in words, and opens the timeline from them onl
   expect(view.host.querySelector(".req-act")?.textContent).toBe("Resume");
   view.unmount();
 });
+
+it("names a pass's final check for what it is, and says what it is doing now, not what it did on its first run", () => {
+  openProject();
+  const at = (seconds: number) => new Date(Date.parse(task.startedAt!) + seconds * 1000).toISOString();
+  const FIRST = "I’ll sync both recordings, tighten the takes, and check playback for repeats.";
+  const AGAIN = "I’ll check playback, fix clipped words and keep deliberate repeats.";
+  const events = [
+    { type: "log" as const, at: at(0), text: "Starting the editing agent." }, { type: "log" as const, at: at(3), text: FIRST },
+    { type: "tool" as const, at: at(5), text: "audio_sync", data: { tool: "scarlet.audio_sync", input: {} } },
+    // Its calls went in an hour later, and the engine sent the pass back to check the finished cut (2026-11-14).
+    { type: "log" as const, at: at(4000), text: "Starting the editing agent." }, { type: "log" as const, at: at(4003), text: AGAIN },
+    { type: "tool" as const, at: at(4010), text: "dialogue_check_repeats", data: { tool: "scarlet.dialogue_check_repeats", input: {} } },
+  ];
+  const again: Task = { ...task, state: "running", summary: null, finishedAt: undefined, startedAt: at(4000), repeatAudit: { version: "v2", returns: 1 } };
+  const view = render(<RunBundle task={again} events={events} changes={[]} stopAbove banded />);
+  expect(view.host.querySelector(".req-lead")?.textContent).toBe("Final check of the finished cut");
+  expect(view.host.textContent).not.toContain(FIRST);
+  expect(view.host.querySelector(".req-now [role=status]")?.textContent).toBe("Checking the finished dialogue for repeats");
+});

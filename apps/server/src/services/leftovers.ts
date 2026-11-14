@@ -10,7 +10,10 @@ function temporaryAudio(name: string) {
     /^wcpp_[a-z0-9]{12}\.(?:wav|json)$/.test(name) || /^speech_[a-z0-9]{12}\.[^./\\]*$/.test(name) ||
     /^(?:recording-)?[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.wav$/.test(name) ||
     // The frames a screen-text read was working through.
-    /^screen-text-[0-9a-f-]{36}\.rgb$/.test(name);
+    /^screen-text-[0-9a-f-]{36}\.rgb$/.test(name) ||
+    // The sound a hole reread cut out, and a word alignment's answer written beside its audio.
+    /^holes_[A-Za-z0-9_-]+\.wav$/.test(name) ||
+    /\.wav\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.align\.json$/.test(name);
 }
 
 /**

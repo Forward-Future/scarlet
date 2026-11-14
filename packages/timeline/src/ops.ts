@@ -150,8 +150,7 @@ function sortClips(track: Track) {
   track.clips.sort((a, b) => a.timelineIn - b.timelineIn);
 }
 
-/** Apply ops to a timeline and return a new validated timeline. The result is checked, not each step, so a clip may sit
- * on a track of the other kind on the way, as long as the track's kind or the clip's place is right once every op is made. */
+/** Apply ops to a timeline and return a new validated timeline. */
 export function applyOps(timeline: Timeline, ops: TimelineOp[]): Timeline {
   return WritableTimeline.parse(replayOnCopy(timeline, ops));
 }
@@ -174,6 +173,9 @@ function applyToDraft(tl: Timeline, op: TimelineOp): Timeline {
       const track = tl.tracks.find((t) => t.id === op.trackId);
       if (!track) throw new OpError(`track ${op.trackId} not found`, op);
       if (findClip(tl, op.clip.id)) throw new OpError(`clip ${op.clip.id} already exists`, op);
+      if (!clipFitsTrack(op.clip, track)) {
+        throw new OpError(`clip kind ${op.clip.kind} cannot go on ${track.kind} track`, op);
+      }
       track.clips.push(Clip.parse(op.clip));
       sortClips(track);
       return tl;
@@ -202,6 +204,9 @@ function applyToDraft(tl: Timeline, op: TimelineOp): Timeline {
       found.track.clips.splice(found.index, 1);
       const target = op.trackId ? tl.tracks.find((t) => t.id === op.trackId) : found.track;
       if (!target) throw new OpError(`track ${op.trackId} not found`, op);
+      if (!clipFitsTrack(clip, target)) {
+        throw new OpError(`clip kind ${clip.kind} cannot go on ${target.kind} track`, op);
+      }
       target.clips.push(clip);
       sortClips(target);
       return tl;
@@ -366,6 +371,12 @@ function straightenCrossfades(track: Track, start: number, end: number) {
       break;
     }
   }
+}
+
+function clipFitsTrack(clip: Clip, track: Track): boolean {
+  if (track.kind === "caption") return clip.kind === "caption";
+  if (clip.kind === "caption") return false;
+  return true;
 }
 
 /** Keep the words audible in a trimmed caption, including partial boundary words. */

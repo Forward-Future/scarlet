@@ -14,7 +14,7 @@ export const EDITING_TOOL_GROUPS = [
   { title: "Screen text", description: "Read and search the words shown on screen in a recording.", preference: null,
     tools: ["screen_text"] },
   { title: "Review and delivery", description: "Follow review notes, preview a change and render a delivery.", preference: null,
-    tools: ["change_get", "change_list", "notes_list", "note_reply", "note_resolve", "render_request", "render_status"] },
+    tools: ["change_get", "change_list", "edit_flag", "notes_list", "note_reply", "note_resolve", "render_request", "render_status"] },
   { title: "Requests and skills", description: "Report progress, ask editorial questions, use saved instructions and offer rules to add to them.", preference: null,
     tools: ["task_log", "task_question", "skills_list", "learning_suggest", "skill_save_from_change", "skill_save_edit"] },
   { title: "Frame inspection", description: "Examine a source frame or several moments from an edit together.", preference: "pictures",

@@ -13,19 +13,30 @@ const changes = new Map<string, Promise<string[]>>();
 function changesIn(revision: string) {
   let read = changes.get(revision);
   if (!read) {
-    read = desktop.updateChangelog(revision).then(text => changesSince(parseChangelog(text)), () => []);
+    // Nothing read is not kept: the updater can name a build before its checkout has fetched it.
+    read = desktop.updateChangelog(revision).then(text => text ? changesSince(parseChangelog(text)) : undefined, () => undefined)
+      .then(list => { if (!list) changes.delete(revision); return list ?? []; });
     changes.set(revision, read);
   }
   return read;
 }
+/** How long the hover waits before reading again a build's changelog that wasn't there yet, and how many times. */
+const REREAD_MS = 15_000, REREADS = 8;
 
 function useChanges(revision: string) {
   const [found, setFound] = useState<{ revision: string; changes: string[] } | null>(null);
+  const [reread, setReread] = useState(0);
+  useEffect(() => setReread(0), [revision]);
   useEffect(() => {
     let current = true;
-    void changesIn(revision).then(list => { if (current) setFound({ revision, changes: list }); });
-    return () => { current = false; };
-  }, [revision]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    void changesIn(revision).then(list => {
+      if (!current) return;
+      setFound({ revision, changes: list });
+      if (!changes.has(revision) && reread < REREADS) timer = setTimeout(() => setReread(n => n + 1), REREAD_MS);
+    });
+    return () => { current = false; clearTimeout(timer); };
+  }, [revision, reread]);
   return found?.revision === revision ? found.changes : [];
 }
 

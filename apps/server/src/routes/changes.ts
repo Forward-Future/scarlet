@@ -1,11 +1,11 @@
 import { appliedReviewChange, CutAssessment, isPublishedCall, type Change } from "@scarlet/timeline";
 import { Hono } from "hono";
 import { z } from "zod/v3";
-import { namedTimelineEdits, ApproveRequest, CutChoicesRequest, ChangeState, DialogueCutsRequest, ProposeChangeRequest, ReviseRequest, StagedCutRevision } from "@scarlet/shared";
+import { namedTimelineEdits, ApproveRequest, FlagEditRequest, CutChoicesRequest, ChangeState, DialogueCutsRequest, ProposeChangeRequest, ReviseRequest, StagedCutRevision } from "@scarlet/shared";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest, conflict, notFound } from "../errors.js";
-import { approveChange, changeDiff, saveCutChoices, prepareCutReview, prepareFirstDecision, proposeChange, recordPlayableDecision, scheduleSpotCheck, submitDialogueCuts, rejectChange, reopenChange, reviseChange, reviseStagedCut, unapproveChange, withSpotCapability } from "../services/changes.js";
+import { approveChange, changeDiff, flagEdit, saveCutChoices, prepareCutReview, prepareFirstDecision, proposeChange, recordPlayableDecision, scheduleSpotCheck, submitDialogueCuts, rejectChange, reopenChange, reviseChange, reviseStagedCut, unapproveChange, withSpotCapability } from "../services/changes.js";
 import { jsonBody, requireProjectHeader, TIMELINE_JSON_BYTES } from "./util.js";
 import { requestAttempt, requireProjectEditAttempt } from "../services/taskAttempt.js";
 import { requireUnscopedEdit } from "../services/changes.js";
@@ -41,6 +41,17 @@ export function changeRoutes(ctx: Ctx) {
     }
     // The proposal is saved by now, so a failed check must not read as a failed proposal.
     return c.json({ ...result, change: await withSpots(result.change, result.change.state === "ready") }, 201);
+  });
+
+  // A run flags an applied edit it doubts, its own or another request's, for the editor to look at.
+  r.post("/projects/:id/edit-flags", async c => {
+    const body = await jsonBody(c, FlagEditRequest);
+    const attempt = requestAttempt(c.req.raw), projectId = c.req.param("id");
+    return c.json(ctx.db.transaction(() => {
+      const task = requireProjectEditAttempt(ctx, attempt, projectId, body.taskId ?? attempt?.taskId);
+      if (!task) throw badRequest("no_task", "Only a request's run flags an edit for the editor.");
+      return flagEdit(ctx, projectId, task, body);
+    }, "immediate")(), 201);
   });
 
   r.post("/projects/:id/dialogue-cuts", async c => {

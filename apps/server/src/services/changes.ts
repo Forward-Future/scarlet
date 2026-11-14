@@ -3,7 +3,7 @@ import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { run } from "../render/ffmpeg.js";
 import { boundedRippleOps, rippleDrift, cutAnchorOn, cutScope, selectedRange, selectionPlacements, taskDialogueOperation, type DialogueCutsRequest, type JoinCrossfades, reviewItemPath, type StagedCutRevision } from "@scarlet/shared";
-import type { ApproveResponse, ProposeChangeRequest, Task, User } from "@scarlet/shared";
+import { buildThreads, threadTimeline, type ApproveResponse, type FlagEditRequest, type ProposeChangeRequest, type Task, type ThreadEdit, type User } from "@scarlet/shared";
 import { z } from "zod/v3";
 import { ReviseRequest as ReviseRequestSchema } from "@scarlet/shared";
 import { frameAligned, frameAlignedRemoval, isPublishedCall, onFrame, makeStagedCutMapper,
@@ -1253,7 +1253,10 @@ function persistProposal(ctx: Ctx, user: User, projectId: string, body: ProposeC
       (previous.timelineEdits?.length ? previous.timelineEdits.length + (previous.leftOut?.joins.length ?? 0) : undefined) ??
       previous.cutReasons?.length ?? previous.ranges.length);
     const key = JSON.stringify([replaces.changeId, replaces.spot]);
-    if (!previous || previous.projectId !== projectId || previous.state !== "approved" || threadOfChange(ctx, previous) !== threadId ||
+    // An edit another request made counts as this thread's while this thread flagged it: the editor revises it from here.
+    const ownOrFlagged = previous && (threadOfChange(ctx, previous) === threadId ||
+      (previous.flags ?? []).some(flag => { const raiser = ctx.repos.tasks.get(flag.taskId); return !!raiser && threadOf(raiser) === threadId; }));
+    if (!previous || previous.projectId !== projectId || previous.state !== "approved" || !ownOrFlagged ||
         replaces.spot >= (count ?? 0) || replacements.has(key)) {
       throw badRequest("invalid_replacement", "Choose an individual edit in this thread to revise.");
     }
@@ -1601,7 +1604,51 @@ export function saveCutChoices(ctx: Ctx, user: User, change: Change, body: {
   const applyWhenDone = body.applyWhenDone === undefined ? change.applyWhenDone
     : body.applyWhenDone ? change.applyWhenDone ?? { userId: user.id, at: now() } : undefined;
   const saved = saveChange(ctx, { ...change, cutChoices: [...byIndex.values()].sort((a, b) => a.index - b.index), applyWhenDone, error: undefined });
-  return applyChoicesWhenDone(ctx, saved) ?? saved;
+  return recheckMovedCalls(ctx, saved, change, review) ?? applyChoicesWhenDone(ctx, saved) ?? saved;
+}
+
+/**
+ * Send one cut the editor approved back to Scarlet: its footage changed on the working cut, so it can't go in as it
+ * was staged. The other calls keep their decisions (`choices`); this one asks again until the recheck lands.
+ */
+function recheckApprovedCut(ctx: Ctx, project: Project, change: Change, review: CutReview,
+  at: { index: number; range?: TimeRange; reason: string }, head: string, choices: CutChoice[]) {
+  const { index, range, reason } = at;
+  const removed = review.cuts[index]!.removed;
+  const former = change.cutAssessments?.find(a => a.index === index);
+  const assessments = [...(change.cutAssessments ?? []).filter(a => a.index !== index), {
+    index, ...removed, verdict: "ask" as const, ...(former?.revised && { revised: true }), ...(former?.askOrder && { askOrder: former.askOrder }),
+    reason: former?.reason ?? change.cutReasons?.find(c => c.start >= removed.start - 1e-6 && c.start < removed.end)?.reason ?? "Check this passage." }];
+  const checked = { ...change, cutChoices: choices.filter(c => c.index !== index), cutAssessments: assessments.sort((a, b) => a.index - b.index) };
+  const prior = change.taskId ? ctx.repos.tasks.get(change.taskId) : undefined;
+  const task = createTask(ctx, { projectId: project.id, kind: "revise", agent: prior?.agent ?? ctx.settings().defaultAgent,
+    model: prior?.model, effort: prior?.effort, serviceTier: prior?.serviceTier, createdBy: { type: "scarlet", name: "Scarlet" },
+    context: { changeId: change.id, threadId: threadOfChange(ctx, change), cutIndex: index, version: head, time: range?.start, end: range?.end,
+      noteIds: change.noteIds, message: "Recheck this cut" }, cutConflict: { version: head, range, approved: true },
+    instruction: `The editor approved this cut. The passage changed before it could apply. Recheck the current footage and preserve the intended edit. ${reason}` +
+      cutRevisionReference(change, { cutIndex: index, time: removed.start, end: removed.end, clipIds: [] }) });
+  return { change: saveChange(ctx, beginRevision(checked, task)), task };
+}
+
+/**
+ * A call the editor just approved whose footage changed on the working cut since the pass staged it goes back to
+ * Scarlet now, while the editor makes the other calls, instead of when the last call applies the pass (2026-11-14:
+ * every such recheck waited for the last call, one after another). One recheck at a time: while the pass is being
+ * revised, applying it finds the rest.
+ */
+function recheckMovedCalls(ctx: Ctx, saved: Change, before: Change, review: CutReview): Change | undefined {
+  if (saved.state !== "ready" || review.firstCut) return;
+  const project = ctx.repos.projects.get(saved.projectId);
+  const head = project?.head;
+  if (!project || !head || head === saved.fromVersion) return;
+  const was = new Map(before.cutChoices?.map(c => [c.index, c.choice]));
+  const approved = (saved.cutChoices ?? []).filter(c => c.choice === "cut" && was.get(c.index) !== "cut");
+  if (!approved.length) return;
+  const place = currentCutRanges(ctx, project, saved, review, resolveTimeline(ctx, project, head));
+  for (const { index } of approved) {
+    const at = place(index);
+    if (at.kind === "conflict") return recheckApprovedCut(ctx, project, saved, review, { index, range: at.range, reason: at.reason }, head, saved.cutChoices ?? []).change;
+  }
 }
 
 /** The task now doing a run's work: a run interrupted when Scarlet quit carries on under a new task. */
@@ -1753,19 +1800,8 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
           if (i === index) savedChoices.delete(i);
           else savedChoices.set(i, { index: i, ...cut.removed, choice: restored.has(i) ? "keep" : "cut" });
         }
-        const former = change.cutAssessments?.find(a => a.index === index);
-        const assessments = [...(change.cutAssessments ?? []).filter(a => a.index !== index), {
-          index, ...review.cuts[index]!.removed, verdict: "ask" as const, ...(former?.revised && { revised: true }), ...(former?.askOrder && { askOrder: former.askOrder }),
-          reason: former?.reason ?? change.cutReasons?.find(c => c.start >= review.cuts[index]!.removed.start - 1e-6 && c.start < review.cuts[index]!.removed.end)?.reason ?? "Check this passage." }];
-        const checked = { ...change, cutChoices: [...savedChoices.values()], cutAssessments: assessments.sort((a, b) => a.index - b.index), applyWhenDone: undefined };
-        const prior = change.taskId ? ctx.repos.tasks.get(change.taskId) : undefined;
-        const task = createTask(ctx, { projectId: project.id, kind: "revise", agent: prior?.agent ?? ctx.settings().defaultAgent,
-          model: prior?.model, effort: prior?.effort, serviceTier: prior?.serviceTier, createdBy: { type: "scarlet", name: "Scarlet" },
-          context: { changeId: change.id, threadId: threadOfChange(ctx, change), cutIndex: index, version: head, time: range?.start, end: range?.end,
-            noteIds: change.noteIds, message: "Recheck this cut" }, cutConflict: { version: head, range, approved: true },
-          instruction: `The editor approved this cut. The passage changed before it could apply. Recheck the current footage and preserve the intended edit. ${reason}` +
-            cutRevisionReference(change, { cutIndex: index, time: review.cuts[index]!.removed.start, end: review.cuts[index]!.removed.end, clipIds: [] }) });
-        const pending = saveChange(ctx, beginRevision(checked, task));
+        const { change: pending, task } = recheckApprovedCut(ctx, project, { ...change, applyWhenDone: undefined }, review, { index, range, reason }, head,
+          [...savedChoices.values()]);
         return { change: pending, project, task, reason, outcome: "sent_back" };
       }
       appliedReview = placed.applied;
@@ -2082,4 +2118,62 @@ export function reviseChange(ctx: Ctx, user: User, change: Change, body: ReviseR
     data: { changeId: change.id, threadId: saved.threadId, taskId: task.id },
   });
   return { change: saved, note, task };
+}
+
+/** A flagged edit as the run that flagged it hears of it: what the editor reads and which request made it. */
+interface FlaggedEdit { changeId: string; spot: number; label: string; request: string; range: { start: number; end: number }; at?: number }
+
+/**
+ * A run found a doubt about an edit already in the video, its own or another request's: a black gap a cut left, a line
+ * played twice. The doubt goes on that edit, and the request that raised it lists the edit as one that needs the
+ * editor until they keep it there, as an edit the run flagged as it made it does. Nothing about the edit changes.
+ * The edit is named by its change and place, or found on the working cut where `range` falls; when several edits are
+ * there, the one that covers most of it, and the run is told of the others. Caller holds the write lock.
+ */
+export function flagEdit(ctx: Ctx, projectId: string, task: Task, body: FlagEditRequest): { flagged: FlaggedEdit; version: string; alsoThere?: FlaggedEdit[] } {
+  const project = ctx.repos.projects.get(projectId);
+  if (!project?.head) throw conflict("no_timeline", "There is no video to flag an edit in yet.");
+  const read = (version: string) => ctx.repos.versions.get(projectId, version)?.timeline;
+  const head = read(project.head);
+  if (!head) throw conflict("no_timeline", "There is no video to flag an edit in yet.");
+  const threads = buildThreads({
+    changes: ctx.repos.changes.select("project_id = ?", [projectId]),
+    tasks: ctx.repos.tasks.select("project_id = ? AND kind != 'transcribe'", [projectId]),
+    notes: ctx.repos.notes.select("project_id = ? AND json_extract(json, '$.changeId') IS NOT NULL", [projectId]),
+  });
+  const links = ctx.repos.versions.links(projectId);
+  // Every applied edit on the working cut, as its own request lists it, so a revision is flagged and not what it replaced.
+  const edits = threads.filter(t => t.changes.some(c => c.state === "approved")).flatMap(thread =>
+    threadTimeline({ ...thread, flagged: undefined }, head, links, read, project.settings.fps).filter(e => !e.elsewhere).map(edit => ({ edit, thread })));
+  const named = (e: { edit: ThreadEdit; thread: { title: string } }): FlaggedEdit => ({ changeId: e.edit.changeId, spot: e.edit.spot,
+    label: e.edit.label, request: e.thread.title, range: e.edit.range, ...(e.edit.at !== undefined && { at: e.edit.at }) });
+  let found: (typeof edits)[number] | undefined;
+  let alsoThere: (typeof edits) = [];
+  if (body.changeId !== undefined) {
+    found = edits.find(e => e.edit.changeId === body.changeId && e.edit.spot === body.spot);
+    if (!found) throw notFound(`edit ${body.spot} of change ${body.changeId} on the working cut`);
+  } else {
+    const { start, end } = body.range!;
+    // A cut is a point, where it joins; any other edit is the footage it changed. Each is weighed by how much of the
+    // stretch it shares, a join inside the stretch counting as it would cover it all.
+    const near = 0.25;
+    const weigh = (e: ThreadEdit) => {
+      if (e.at !== undefined) return e.at >= start - near && e.at <= end + near ? 1 : 0;
+      const shared = Math.min(end, e.range.end) - Math.max(start, e.range.start);
+      if (end - start < 1e-6) return start >= e.range.start - near && start <= e.range.end + near ? 1 : 0;
+      return shared > 0 ? shared / (Math.max(end, e.range.end) - Math.min(start, e.range.start)) : 0;
+    };
+    const there = edits.map(e => ({ ...e, weight: weigh(e.edit) })).filter(e => e.weight > 0).sort((a, b) => b.weight - a.weight);
+    if (!there.length) throw badRequest("no_edit_there", `No applied edit is on the working cut (${project.head}) between ${start.toFixed(2)} s and ${end.toFixed(2)} s. ` +
+      "Read the current version's times with timeline_get or timeline_at. If no edit made it, say so in your reply.");
+    [found, ...alsoThere] = there;
+  }
+  const change = ctx.repos.changes.get(found!.edit.changeId)!;
+  const flags = change.flags ?? [];
+  if (!flags.some(f => f.spot === found!.edit.spot && f.taskId === task.id && f.check === body.check))
+    saveChange(ctx, { ...change, flags: [...flags, { spot: found!.edit.spot, check: body.check, taskId: task.id, at: now() }] });
+  logActivity(ctx, { projectId, actor: { type: "scarlet", name: "Scarlet" }, type: "change.flagged",
+    summary: `Scarlet flagged ${quote(found!.edit.label)}: ${quote(body.check, 120)}`,
+    data: { changeId: change.id, threadId: change.threadId, taskId: task.id } });
+  return { flagged: named(found!), version: project.head, ...(alsoThere.length && { alsoThere: alsoThere.slice(0, 6).map(named) }) };
 }

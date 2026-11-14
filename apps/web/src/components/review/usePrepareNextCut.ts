@@ -216,6 +216,7 @@ export function usePrepareReviewCuts(project: Project, settingsRevision: number 
       handoff = undefined;
     };
     const prepared = new Set<string>();
+    const failures = new Map<string, number>();
     // Several calls often use the same Before/After versions. Reuse those reads across their preparations.
     const media: PreparedMedia = { timelines: new Map(), files: new Map(), windows: new Map() };
     const schedule = () => {
@@ -261,9 +262,15 @@ export function usePrepareReviewCuts(project: Project, settingsRevision: number 
         }
         if (latest.current.openCut?.key === plan.key) refreshOpen(n => n + 1);
         else if (latest.current.queue.find(entry => entry.target.key !== latest.current.openCut?.key)?.key === key) setParked({ key, context, plan });
-      }, media).catch(() => {}).finally(() => {
+      }, media).then(() => true, () => false).then(done => {
         if (running?.controller !== controller || closed) return;
         prepared.add(key);
+        // A preparation that failed, say on a moment's engine error, is tried again a little later, twice at most.
+        const tries = done ? 0 : (failures.get(key) ?? 0) + 1;
+        if (tries && tries <= 2) {
+          failures.set(key, tries);
+          setTimeout(() => { if (!closed) { prepared.delete(key); schedule(); } }, 5_000 * tries);
+        }
         running = undefined;
         schedule();
       });

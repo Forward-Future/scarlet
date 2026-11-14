@@ -35,6 +35,7 @@ const toolActivity: Record<string, string> = {
   captions_generate: "Generating captions",
   change_get: "Reviewing change",
   change_list: "Looking through your edits",
+  edit_flag: "Flagging an edit for you",
   notes_list: "Reading notes",
   note_reply: "Replying to note",
   note_resolve: "Resolving note",

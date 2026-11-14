@@ -5,11 +5,10 @@
  * offline replay (evals/src/replay.ts) supplies stored ones, so both run the same code.
  */
 import { normalizeTranscriptToken, type RepeatOccurrence, type DialogueCutKind, type DialogueDetections, type Task } from "@scarlet/shared";
-import { clipEnd, clipsAt, frameAlignedRemoval, mergeRanges, timelineDuration, timelineToSource, type MediaClip, type Project, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
-import { mapWordsThroughClip, round3 } from "./analysis.js";
+import { clipsAt, frameAlignedRemoval, mergeRanges, timelineDuration, timelineToSource, type Project, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
+import { round3 } from "./analysis.js";
 import { cutScope, selectedRange } from "./cut-scope.js";
 import { quietKeptWords, type QuietKeptWord } from "./quiet-kept-word.js";
-import { listedWords, type ListedWord } from "./timeline-perception.js";
 import type { GapSound } from "./gap-sound.js";
 import type { DialogueEvidence } from "./dialogue-decisions.js";
 import { audibleMediaClips, edgeOnFrame, pageAt as scanPageAt, checkKeptWords, type ReadKeptWords, checkDialogueJoin, checkResumeQuote, dialogueCutPreview, dialogueJoinWords, joinEvidence, pageReaches, pauseCutRange, PAUSE_BEAT, dialogueAudioStream, soundBesideEdge, wordCutRange, type JoinPage } from "./dialogue-join.js";
@@ -162,13 +161,11 @@ async function placeWordCut(tl: Timeline, words: TranscriptWord[], ref: { mediaI
     cut.end = words[toWord]!.end;
     cut.problems.push("The measured gaps do not bracket the spoken occurrence. Review its word boundaries.");
   }
-  const project = await sources.project(), fps = project.settings.fps;
-  const listing = ref.clipId ? [] : await transcriptListing(tl, project, words, ref, sources);
+  const fps = (await sources.project()).settings.fps;
   const place = (source: number, side: "start" | "end", word: TranscriptWord, room?: TimeRange) => {
     // The word itself must play on this version; the edge then maps through the same clip.
-    const index = side === "start" ? fromWord : toWord, said = `Word #${index} “${word.text.trim()}” in ${ref.mediaId}`;
-    const clip = listedOnce(listing, index, said, tl.version) ?? playedOnce(clips, word, said, tl.version);
-    if (!clip) throw new Error(`Word #${index} “${word.text.trim()}” is not in version ${tl.version}. Read timeline_transcript for the words this version plays.`);
+    const clip = clips.find(c => word.start + word.end >= 2 * c.sourceIn && word.start + word.end < 2 * c.sourceOut);
+    if (!clip) throw new Error(`Word #${side === "start" ? fromWord : toWord} “${word.text.trim()}” is not in version ${tl.version}. Read timeline_transcript for the words this version plays.`);
     const on = (s: number) => clip.timelineIn + (Math.min(Math.max(s, clip.sourceIn), clip.sourceOut) - clip.sourceIn) / (clip.speed ?? 1);
     // Saved on the frame inside the measured quiet that is nearest the padded instant, so the engine's rounding keeps it there.
     return round3(edgeOnFrame(on(source), room, fps, on));
@@ -179,77 +176,6 @@ async function placeWordCut(tl: Timeline, words: TranscriptWord[], ref: { mediaI
   // Where the words themselves play: the edges sit in the silence either side of them.
   const spoken = { start: Math.max(start, place(words[fromWord]!.start, "start", words[fromWord]!)), end: Math.min(end, place(words[toWord]!.end, "end", words[toWord]!)) };
   return { start, end, words: cut.text, problems: cut.problems, dips: [...cut.dips, ...cut.retimed], spoken, source: { start: round3(cut.start), end: Number.isFinite(cut.end) ? round3(cut.end) : null } };
-}
-
-/**
- * Where timeline_transcript lists a word range's first and last words, read beside the version's other transcripts with
- * its rule. A second round where they play is enough: a listed word is compared only with words that start under 30 ms
- * before it, so neither the words outside that stretch nor recordings that play nowhere in it change what it lists.
- */
-async function transcriptListing(tl: Timeline, project: Project, words: TranscriptWord[], ref: { mediaId: string; fromWord: number; toWord: number }, sources: DialoguePlanSources) {
-  const { mediaId } = ref, ends = [words[ref.fromWord]!, words[ref.toWord]!];
-  const placements = tl.tracks.flatMap(t => t.clips.flatMap(c =>
-    c.kind === "media" && c.mediaId === mediaId ? mapWordsThroughClip(c, ends) : []));
-  if (!placements.length) return [];
-  // A loop, not Math.min(...): a take placed tens of thousands of times would overflow the call's arguments.
-  const range = { start: Infinity, end: -Infinity };
-  for (const w of placements) {
-    range.start = Math.min(range.start, w.start - 1);
-    range.end = Math.max(range.end, w.end + 1);
-  }
-  const transcripts = new Map([[mediaId, words]]);
-  const spoken = new Set(project.media.filter(m => m.kind === "audio" || m.hasAudio).map(m => m.id));
-  const nearby = tl.tracks.flatMap(t => t.clips.flatMap(c => c.kind === "media" && c.timelineIn <= range.end && clipEnd(c) >= range.start ? [c.mediaId] : []));
-  for (const id of new Set(nearby)) {
-    const other = id !== mediaId && spoken.has(id) ? await sources.words(id, undefined, false) : null;
-    if (other) transcripts.set(id, other);
-  }
-  return listedWords(tl, transcripts, range).filter(listed => listed.word.mediaId === mediaId);
-}
-
-/**
- * The clip a word index means where timeline_transcript lists the word: the one it is listed from. Listed at more than
- * one time, an index can't say which, so that is refused with each listed time. A word the transcript doesn't list is
- * placed from the clips that play it (playedOnce).
- */
-function listedOnce(listing: ListedWord[], index: number, what: string, version: string) {
-  const listed = listing.filter(l => l.word.index === index);
-  if (listed.length > 1) {
-    const times = listed.map(({ word: w }) => `${w.start.toFixed(3)}–${w.end.toFixed(3)} s`);
-    throw new Error(`${what} plays ${listed.length} times on version ${version}, at ${times.join(", ")}. A word index can't say which: give the range to remove as start/end in timeline seconds.`);
-  }
-  return listed[0]?.clip;
-}
-
-/** Where a clip puts an instant of the recording, were the clip long enough to reach it. */
-const at = (c: MediaClip, t: number) => c.timelineIn + (t - c.sourceIn) / (c.speed ?? 1);
-
-/**
- * The clip a word index means. A word plays in each clip that keeps its midpoint, as timeline_transcript lists it, and
- * one take can play at more than one time on a version. An index can't say which, so that is refused with each time
- * the word plays. Clips that put the word at the same time, as a video clip's sound and an audio clip of the same media
- * do, are one placement, mapped through the first of them in track and clip order.
- */
-function playedOnce(clips: MediaClip[], word: TranscriptWord, what: string, version: string) {
-  const playing = clips.filter(c => word.start + word.end >= 2 * c.sourceIn && word.start + word.end < 2 * c.sourceOut);
-  // In order of where the word starts, a placement joins a group only while the group still puts both ends of the word
-  // within a millisecond, so clips a little apart each can't chain into one, in any order. Every group that starts within
-  // a millisecond is looked at, as a clip at another speed can fall between two of the same placement.
-  const times: Array<{ clip: MediaClip; low: number; high: number }> = [];
-  for (const c of playing.toSorted((a, b) => at(a, word.start) - at(b, word.start))) {
-    const end = at(c, word.end);
-    const group = times.findLast(g => at(c, word.start) - at(g.clip, word.start) < 1e-3 && Math.max(g.high, end) - Math.min(g.low, end) < 1e-3);
-    if (group) {
-      group.low = Math.min(group.low, end);
-      group.high = Math.max(group.high, end);
-    } else times.push({ clip: c, low: end, high: end });
-  }
-  if (times.length > 1) {
-    // Milliseconds, the resolution the times are told apart at.
-    const at3 = times.map(({ clip: c }) => `${round3(at(c, Math.max(word.start, c.sourceIn))).toFixed(3)}–${round3(at(c, Math.min(word.end, c.sourceOut))).toFixed(3)} s`);
-    throw new Error(`${what} plays ${times.length} times on version ${version}, at ${at3.join(", ")}. A word index can't say which: give the range to remove as start/end in timeline seconds.`);
-  }
-  return playing[0];
 }
 
 export class NoPauseToTrim extends Error {}

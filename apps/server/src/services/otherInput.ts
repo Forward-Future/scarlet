@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { availableParallelism } from "node:os";
 import { fileInDirectory } from "@scarlet/render";
 import type { MediaAsset, TimeRange } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
@@ -14,6 +15,8 @@ export interface RecordingInputs { mix: number; dialogue: number; other: number 
 
 /** Enough words heard on one input alone to say which input the dialogue is on, and how lopsided they must be. */
 const MIN_WORDS = 150, SHARE = .8, PAGE = 60, MAX_PAGES = 16;
+/** Pages of levels decoded at once, each one FFmpeg on one core. */
+const READ_AHEAD = Math.max(2, Math.min(4, Math.floor(availableParallelism() / 4)));
 
 /**
  * Which input a recording's dialogue is on, measured: a recording with a mix and two isolated inputs (a microphone
@@ -44,10 +47,26 @@ export async function recordingInputs(words: readonly Word[], duration: number, 
     if (counts[a]! >= SHARE * heard) return { mix, dialogue: a, other: b };
     if (counts[b]! >= SHARE * heard) return { mix, dialogue: b, other: a };
   };
-  for (let i = Math.floor(step / 2); i < spoken.length; i += step) {
-    const [page, said] = spoken[i]!;
+  const picked: typeof spoken = [];
+  for (let i = Math.floor(step / 2); i < spoken.length; i += step) picked.push(spoken[i]!);
+  // Pages are read a few ahead and counted in order, so the answer is the one a page at a time gives. Every
+  // transcript read of a pass waits on this: 16 pages of a 58-minute recording took 3.6 s one after another and 1.6 s
+  // four at a time, and 13 s in a pass just after the engine started (2026-11-14).
+  const reads = new Map<number, Promise<Measured>>();
+  const reading = (n: number) => {
+    let measured = reads.get(n);
+    if (!measured) {
+      const from = picked[n]![0] * PAGE;
+      reads.set(n, measured = read(from, Math.min(duration, from + PAGE)));
+      measured.catch(() => {}); // One read ahead and never counted fails unheard.
+    }
+    return measured;
+  };
+  for (let n = 0; n < picked.length; n++) {
+    const [page, said] = picked[n]!;
     const from = page * PAGE;
-    const measured = await read(from, Math.min(duration, from + PAGE));
+    for (let ahead = n; ahead < Math.min(picked.length, n + READ_AHEAD); ahead++) void reading(ahead);
+    const measured = await reading(n);
     if (measured.mix !== undefined) {
       if (mix !== undefined && mix !== measured.mix) return;
       mix = measured.mix;
@@ -100,7 +119,7 @@ export function otherInputReader(ctx: Ctx) {
 
 function makeReader(ctx: Ctx) {
   const inputsOf = new Map<string, Promise<RecordingInputs | undefined>>();
-  const windows = new AnalysisCache<Measured>(r => r.energy.length * 64, 24 * 1024 * 1024);
+  const windows = new AnalysisCache<Measured>(r => r.energy.length * 64, 24 * 1024 * 1024, READ_AHEAD);
   /** The recording's inputs and a reader of its levels, or undefined when its layout isn't one this can read. */
   async function open(projectId: string, media: MediaAsset) {
     if (media.voiceRoles || !media.transcriptId || !media.duration || (media.kind !== "audio" && !media.hasAudio)) return;
@@ -151,7 +170,7 @@ function makeReader(ctx: Ctx) {
       return out;
     })]);
     const pages = new Map<number, Awaited<ReturnType<typeof levels>>>();
-    for (const start of [...needed].sort((a, b) => a - b)) pages.set(start, await levels(start));
+    for (const read of await Promise.all([...needed].sort((a, b) => a - b).map(levels))) pages.set(read.start, read);
     const heardOther = words.map(w => {
       const at = pages.get(page(w.start));
       return !!at && wordSource(at.energy, at.start, inputs.mix, w.start, Math.min(w.end, at.start + at.energy.length * .02)) === inputs.other;

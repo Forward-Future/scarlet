@@ -9,31 +9,13 @@ on:
         description: "Early Access numeric version, for example 0.1.4. Leave empty for a regular check build."
         required: false
         type: string
-  pull_request:
-    paths:
-      - "apps/desktop/**"
-      - "apps/server/**"
-      - "apps/agent/**"
-      - "apps/web/**"
-      - "packages/**"
-      - "skills/**"
-      - "integrations/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - ".github/workflows/desktop*.yml"
-      - ".github/scripts/*desktop-release*"
-      - ".github/scripts/sign-*-release.*"
-      - ".github/workflows/ci.yml"
-      - ".github/tests/desktop_permissions_test.rb"
 
 permissions:
   contents: read
 
-# A new push to a pull request cancels that pull request's builds still waiting or running, as CI and the Linux build
-# already do: the macOS runners are few, and builds of a commit that has been replaced held them for hours. A push to
-# main, which can publish, and a manual run each keep their own group and are never cancelled.
+# A newer push supersedes test builds. Releases, manual builds and retries get their own group.
 concurrency:
-  group: desktop-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.run_attempt == '1' && vars.SCARLET_STABLE_RELEASES != 'true' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:

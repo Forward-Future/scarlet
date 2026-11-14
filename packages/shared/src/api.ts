@@ -369,6 +369,18 @@ export const ReviseRequest = ModelTuning.extend({
   assignTo: z.string().optional(),
 });
 
+/** A doubt a run raises about an applied edit: named by its change and place, or found where `range` falls on the working cut. */
+export const FlagEditRequest = z.object({
+  check: z.string().trim().min(1).max(120),
+  range: z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().nonnegative() }).optional(),
+  changeId: Id.optional(),
+  spot: z.number().int().nonnegative().optional(),
+  taskId: Id.optional(),
+}).refine(b => (b.changeId !== undefined) === (b.spot !== undefined), "changeId and spot go together")
+  .refine(b => (b.changeId !== undefined) !== (b.range !== undefined), "Give either range or changeId with spot")
+  .refine(b => !b.range || b.range.end >= b.range.start, "range.end comes after range.start");
+export type FlagEditRequest = z.infer<typeof FlagEditRequest>;
+
 // ---------------------------------------------------------------------------
 // Notes
 // ---------------------------------------------------------------------------
@@ -467,6 +479,8 @@ const HardwareEncoder = z.enum(["none", "auto", "nvenc", "qsv", "videotoolbox"])
 const ExportOptions = z.object({
   height: z.number().int().min(2).max(16384).multipleOf(2).optional(),
   omitCaptions: z.boolean().optional(),
+  /** Original quality: encode in software at about the source's own rate, with 320 kb/s sound. A larger file than a delivery render. */
+  bestQuality: z.boolean().optional(),
 });
 
 /** Where a desktop export saves its file. The ticket names a destination only the desktop app can resolve. */

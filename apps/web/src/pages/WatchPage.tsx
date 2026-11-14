@@ -172,7 +172,7 @@ interface PreviewProps {
     /** Timeline navigation offers the point to the composer. N attaches it explicitly. */
     onPick?(point: AgentContext, action: "offer" | "attach"): void;
     /** A stretch marked on the timeline's ruler for the message being written, or none once it is taken off there. */
-    onRange?(range: MarkedRange | undefined): void;
+    onRange?(range: MarkedRange | undefined, byKey?: boolean): void;
     /** The chosen edit is about to play on another version: don't start its passage on this one meanwhile. */
     holdPassage?: boolean;
     /** A revision was requested from the open card. Its message box is outside the player. */
@@ -319,7 +319,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   // Before the first call opens the queued preview can warm its decoder without taking the working transport.
   const canWarmNext = allowStandby && !source && (!playing || (!!reviewCut && playbackReady));
   const nextCut = canWarmNext ? simple.nextCutPlayback : undefined;
-  useCutAudio(allowStandby && !!(reviewCut || nextCut));
+  useCutAudio(allowStandby && !!(reviewCut || nextCut), allowStandby);
   const pairKey = reviewCut?.key ?? nextCut?.key;
   const revision = current.renderSettingsRevision;
   const upcoming = useRef<{ revision?: number; plan: PreparedCut }>(undefined);
@@ -346,15 +346,27 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   // The normal card opens on After. Keep just that decoder for the next decision while the
   // current comparison is ready. Its keyed layer becomes the selected layer on Down/Approve/Keep.
   const layers = [];
-  if (pairKey && pairTimeline && leadIn !== undefined) {
-    layers.push({ key: pairKey, before: pairTimeline, beforeUrl: originalUrl, beforeWindow: reviewCut?.beforeWindow ?? beforeMedia?.window,
+  // Every cut of an edit plays After from one file, the whole video as it runs now. A layer on that file keeps its
+  // decoder from cut to cut: opened anew for each, the same file took 212 ms at the median to be ready to play again,
+  // on 350 of 492 cuts opened (2026-11-14). A cut that opened on another file keeps its layer until the next cut.
+  // The decoder parked for the next cut is that cut's own layer once it opens.
+  const shownLayers = useRef(new Map<string, string>());
+  const pairLayer = !pairKey ? undefined : shownLayers.current.get(pairKey)
+    ?? (editedSide?.url ? `whole ${editedSide.joined.version} ${editedSide.url}` : pairKey);
+  if (pairKey && pairLayer && pairTimeline && leadIn !== undefined) {
+    layers.push({ key: pairKey, layer: pairLayer, before: pairTimeline, beforeUrl: originalUrl, beforeWindow: reviewCut?.beforeWindow ?? beforeMedia?.window,
       edited: editedSide, afterWindow: reviewCut?.afterWindow ?? nextSelected?.after.window, leadIn,
       showBefore, showAfter });
   }
-  if (reviewCut && nextCut && nextCut.key !== pairKey) {
-    layers.push({ key: nextCut.key, edited: { joined: nextCut.after, url: nextCut.after.file }, afterWindow: nextCut.after.window, leadIn: nextCut.before.start,
+  // The decoder that has the whole file open steps to the next cut with a seek. A second one parked on the same
+  // file would only load it again.
+  if (reviewCut && nextCut && nextCut.key !== pairKey && !(pairLayer !== pairKey && nextCut.after.file === editedSide?.url)) {
+    layers.push({ key: nextCut.key, layer: nextCut.key, edited: { joined: nextCut.after, url: nextCut.after.file }, afterWindow: nextCut.after.window, leadIn: nextCut.before.start,
       showBefore: false, showAfter: false });
   }
+  const layerOrder = layers.map(l => `${l.key}\n${l.layer}`).join("\n");
+  const drawnLayers = new Map(layers.map(l => [l.key, l.layer]));
+  useLayoutEffect(() => { shownLayers.current = drawnLayers; }, [layerOrder]); // eslint-disable-line react-hooks/exhaustive-deps
   // A joined audition can play a different file with gaps skipped. Hovering
   // samples the version drawn on the timeline, including footage in those gaps.
   const originalHoverUrl = source?.kind === "video" && source.id !== rejectedOriginal && canPlayOriginal(source)
@@ -438,10 +450,10 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const rangeVersion = draftVersion ?? current.timeline?.version ?? current.project.head ?? undefined;
   const shownRange = useMemo(() => markedRange && markedRange.version === rangeVersion && markedRange.mediaId === source?.id
     ? { start: markedRange.start, end: markedRange.end } : undefined, [markedRange, rangeVersion, source?.id]);
-  const markRange = (range: TimeRange | undefined) => {
+  const markRange = (range: TimeRange | undefined, byKey?: boolean) => {
     if (!range) return simple.onRange?.(undefined);
     const point = editTargetAt(range.start, rangeVersion, displayedTimeline, source?.id);
-    simple.onRange?.({ start: range.start, end: range.end, version: rangeVersion, mediaId: source?.id, clipIds: point.clipIds });
+    simple.onRange?.({ start: range.start, end: range.end, version: rangeVersion, mediaId: source?.id, clipIds: point.clipIds }, byKey);
   };
 
   useEffect(() => { if (!active) player.pause(); }, [active]);
@@ -631,21 +643,21 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
         <div ref={monitor} className="watch-monitor" data-landscape={pictureAspect > 1 || undefined}
           style={{ "--picture-aspect": pictureAspect } as CSSProperties}
           onLoadedMetadataCapture={readSourceSize}>
-          {layers.map(({ key, before, beforeUrl, beforeWindow, edited, afterWindow, leadIn, showBefore, showAfter }) => <div key={key} className="absolute inset-0"
+          {layers.map(({ key, layer, before, beforeUrl, beforeWindow, edited, afterWindow, leadIn, showBefore, showAfter }) => <div key={layer} className="absolute inset-0"
             inert={!showBefore && !showAfter} data-parked={(!showBefore && !showAfter) || undefined}
             style={{ isolation: "isolate", zIndex: showBefore || showAfter ? 0 : -1 }} aria-hidden={(!showBefore && !showAfter) || undefined}>
-            {before && (showBefore || allowStandby) && <div className="absolute inset-0 bg-black" inert={!showBefore} data-parked={!showBefore || undefined}
+            {before && (showBefore || allowStandby) && <div key={`before ${key}`} className="absolute inset-0 bg-black" inert={!showBefore} data-parked={!showBefore || undefined}
               style={{ zIndex: showBefore ? 1 : 0 }} aria-hidden={!showBefore || undefined}>
               <CutSide project={current.project} timeline={before} url={beforeUrl} window={beforeWindow}
                 label={draftVersion ? "Proposed draft" : "The current edit"} fps={settings.fps} active={active} parkedAt={!showBefore ? leadIn : undefined} />
             </div>}
-            {edited && (showAfter || allowStandby) && <div className="absolute inset-0 bg-black" inert={!showAfter} data-parked={!showAfter || undefined}
+            {edited && (showAfter || allowStandby) && <div key="after" className="absolute inset-0 bg-black" inert={!showAfter} data-parked={!showAfter || undefined}
               style={{ zIndex: showAfter ? 1 : 0 }} aria-hidden={!showAfter || undefined}>
               <CutSide key={edited.joined.version} project={current.project} timeline={edited.joined.timeline} url={edited.url} window={afterWindow}
                 joins={edited.joined.clock} label={edited.url ? "The current edit" : "Proposed draft"} fps={settings.fps} active={active}
                 parkedAt={!showAfter ? edited.joined.clock.toMedia(leadIn) : undefined} />
             </div>}
-            {!showBefore && !showAfter && <div className="absolute inset-0 z-10 bg-black" />}
+            {!showBefore && !showAfter && <div key="cover" className="absolute inset-0 z-10 bg-black" />}
           </div>)}
           {!paired && (openingJoin || (draftVersion && !draft && !fullVideoUrl && !joined) ? <div className="absolute inset-0 grid place-content-center gap-2 text-sm text-muted" role="status">
             {draftFailed ? <>Couldn’t open this version.<button className="btn-ghost" onClick={onRetryDraft}>Retry</button></>

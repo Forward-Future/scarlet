@@ -653,6 +653,7 @@ export class RenderQueue {
       if (render.kind === "full" || render.kind === "export") {
         const custom = render.kind === "export" ? {
           exportHeight: render.height, exportRange: render.range ?? undefined, omitCaptions: render.exportOptions?.omitCaptions,
+          best: render.exportOptions?.bestQuality,
         } : {};
         encoding = await this.ctx.render.renderFullCached(project, timeline, this.ctx.paths.segments(project.id), output, {
           ...opts, ...custom, concurrency: Math.max(1, this.ctx.settings().render.concurrency),

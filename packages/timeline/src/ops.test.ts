@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ZodError } from "zod/v3";
 import {
-  applyOp, applyOps, clipEnd, emptyTimeline, makeMediaClip, makeTrack, OpError, shiftClip, splitClip, Timeline, trimHead, trimTail, WritableTimeline,
-  type CaptionClip, type ColorClip, type Marker, type MediaClip, type TimelineOp,
+  applyOp, applyOps, clipEnd, emptyTimeline, makeMediaClip, makeTrack, OpError, shiftClip, splitClip, trimHead, trimTail,
+  type CaptionClip, type ColorClip, type Marker, type MediaClip, type Timeline, type TimelineOp,
 } from "./index.js";
 
 const caption = (id: string, start: number, end: number, text = id): CaptionClip => ({ id, kind: "caption", enabled: true, timelineIn: start, timelineOut: end, text });
@@ -42,8 +42,8 @@ describe("moveClip", () => {
     const before = structuredClone(base);
     expect(() => applyOps(base, [{ op: "moveClip", clipId: "nope", timelineIn: 1 }])).toThrow("clip nope not found");
     expect(() => applyOps(base, [{ op: "moveClip", clipId: "a", timelineIn: 1, trackId: "v9" }])).toThrow("track v9 not found");
-    expect(() => applyOps(base, [{ op: "moveClip", clipId: "line", timelineIn: 1, trackId: "v1" }])).toThrow("clip line of kind caption cannot go on video track v1");
-    expect(() => applyOps(base, [{ op: "moveClip", clipId: "a", timelineIn: 1, trackId: "cap" }])).toThrow("clip a of kind media cannot go on caption track cap");
+    expect(() => applyOps(base, [{ op: "moveClip", clipId: "line", timelineIn: 1, trackId: "v1" }])).toThrow("clip kind caption cannot go on video track");
+    expect(() => applyOps(base, [{ op: "moveClip", clipId: "a", timelineIn: 1, trackId: "cap" }])).toThrow("clip kind media cannot go on caption track");
     expect(() => applyOp(base, { op: "moveClip", clipId: "a", timelineIn: 1, trackId: "v9" })).toThrow(OpError);
     expect(base).toEqual(before);
   });
@@ -84,6 +84,7 @@ describe("an op that can't be applied", () => {
   const refused: Array<[TimelineOp, string]> = [
     [{ op: "addClip", trackId: "v9", clip: makeMediaClip("cam", 0, 1, 50, { id: "new" }) }, "track v9 not found"],
     [{ op: "addClip", trackId: "a1", clip: makeMediaClip("cam", 0, 1, 50, { id: "a" }) }, "clip a already exists"],
+    [{ op: "addClip", trackId: "cap", clip: makeMediaClip("cam", 0, 1, 50, { id: "new" }) }, "clip kind media cannot go on caption track"],
     [{ op: "removeClip", clipId: "nope" }, "clip nope not found"],
     [{ op: "updateClip", clipId: "nope", patch: { volume: 0 } }, "clip nope not found"],
     [{ op: "splitClip", clipId: "nope", at: 5 }, "clip nope not found"],
@@ -145,67 +146,6 @@ describe("tracks and markers", () => {
     expect(added.markers.map(m => m.id)).toEqual(["early", "late"]);
     const patched = applyOps(added, [{ op: "updateMarker", markerId: "late", patch: { text: "Fix this", resolved: true } }, { op: "removeMarker", markerId: "early" }]);
     expect(patched.markers).toMatchObject([{ id: "late", time: 9, text: "Fix this", resolved: true }]);
-  });
-});
-
-describe("a clip on a track of the other kind, which the renderer would skip", () => {
-  const stray = () => makeMediaClip("cam", 0, 1, 50, { id: "new" });
-  /** The cut with a media clip under its caption track, as a version saved before this was refused. */
-  const misplaced = () => {
-    const tl = cut();
-    tl.tracks[2]!.clips.push(stray());
-    return tl;
-  };
-
-  it("is refused when updateTrack changes a track's kind under its clips", () => {
-    expect(() => applyOps(cut(), [{ op: "updateTrack", trackId: "cap", patch: { kind: "video" } }])).toThrow("clip line of kind caption cannot go on video track cap");
-  });
-
-  it("is refused when addClip leaves it there", () => {
-    expect(() => applyOps(cut(), [{ op: "addClip", trackId: "cap", clip: stray() }])).toThrow("clip new of kind media cannot go on caption track cap");
-    expect(() => applyOps(cut(), [{ op: "addClip", trackId: "v1", clip: caption("new", 30, 31) }])).toThrow("clip new of kind caption cannot go on video track v1");
-  });
-
-  it("is checked once every op of a batch is made, so the order of the ops doesn't matter", () => {
-    const add: TimelineOp = { op: "addClip", trackId: "v1", clip: caption("new", 30, 31) };
-    const convert: TimelineOp[] = [{ op: "removeClip", clipId: "a" }, { op: "removeClip", clipId: "b" }, { op: "updateTrack", trackId: "v1", patch: { kind: "caption" } }];
-    const added = applyOps(cut(), [add, ...convert]);
-    const converted = applyOps(cut(), [...convert, add]);
-    expect(added).toEqual(converted);
-    expect(added.tracks[0]).toMatchObject({ kind: "caption", clips: [{ id: "new" }] });
-    // A clip may also pass through a track of the other kind on its way.
-    expect(ids(applyOps(cut(), [{ op: "moveClip", clipId: "line", timelineIn: 2, trackId: "v1" }, { op: "moveClip", clipId: "line", timelineIn: 6, trackId: "cap" }]), 2)).toEqual(["line"]);
-    // A batch whose last op leaves one there is still refused.
-    expect(() => applyOps(cut(), [{ op: "updateTrack", trackId: "v1", patch: { kind: "caption" } }, { op: "removeClip", clipId: "a" }])).toThrow("clip b of kind media cannot go on caption track v1");
-  });
-
-  it("is refused when addTrack brings it", () => {
-    expect(() => applyOps(cut(), [{ op: "addTrack", track: { ...makeTrack("caption", "x", "t"), clips: [stray()] } }]))
-      .toThrow("clip new of kind media cannot go on caption track t");
-  });
-
-  it("is refused in a whole timeline that lists a media clip under a caption track", () => {
-    expect(WritableTimeline.safeParse(misplaced()).error?.issues).toMatchObject([{ path: ["tracks", 2, "clips", 1], message: "clip new of kind media cannot go on caption track cap" }]);
-  });
-
-  it("is refused in a whole timeline that lists a caption under a video or audio track", () => {
-    for (const [track, kind, id] of [[0, "video", "v1"], [1, "audio", "a1"]] as const) {
-      const captioned = cut();
-      // Two of them on the track: the first is the one named.
-      captioned.tracks[track]!.clips.push(caption("new", 30, 31), caption("next", 31, 32));
-      expect(WritableTimeline.safeParse(captioned).error?.issues).toMatchObject([{ message: `clip new of kind caption cannot go on ${kind} track ${id}` }]);
-    }
-  });
-
-  it("holds up other edits of a version that already has one, until an edit moves it or removes it", () => {
-    expect(() => applyOps(misplaced(), [{ op: "updateTrack", trackId: "a1", patch: { muted: true } }])).toThrow("clip new of kind media cannot go on caption track cap");
-    expect(ids(applyOps(misplaced(), [{ op: "moveClip", clipId: "new", timelineIn: 50, trackId: "v1" }]), 0)).toEqual(["a", "b", "new"]);
-    expect(ids(applyOps(misplaced(), [{ op: "removeClip", clipId: "new" }]), 2)).toEqual(["line"]);
-  });
-
-  it("leaves valid tracks alone, and a saved version that holds one readable", () => {
-    expect(applyOps(cut(), [{ op: "updateTrack", trackId: "a1", patch: { kind: "video", muted: true } }]).tracks[1]).toMatchObject({ kind: "video", muted: true });
-    expect(Timeline.parse(misplaced())).toEqual(misplaced());
   });
 });
 

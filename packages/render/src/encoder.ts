@@ -59,6 +59,14 @@ export function softwareEncoder(quality: RenderQuality): VideoEncoder {
   return { name: "libx264", cacheKey: "libx264", args: encoderArgs("libx264", quality), pixelFormat: "yuv420p" };
 }
 
+/**
+ * Original quality: software x264 at a rate that keeps up with camera originals (about 25 Mb/s for a 4K interview
+ * shot at 20 Mb/s), so an export adds no visible loss of its own. Hardware encoders can't match it per bit.
+ */
+export function bestEncoder(): VideoEncoder {
+  return { name: "libx264", cacheKey: "libx264-crf10", args: ["-preset", "slow", "-crf", "10"], pixelFormat: "yuv420p" };
+}
+
 export async function resolveEncoding(hwaccel: HwAccel | undefined, ffmpegPath: string | undefined, format: VideoFormat,
   quality: RenderQuality, warn?: (reason: string) => void, exporting = quality === "delivery", failed = new Set<string>()): Promise<VideoEncoder> {
   const policy = hwaccel ?? (exporting ? "auto" : "none");
@@ -102,6 +110,7 @@ interface RenderEncoderOptions {
   ffmpegPath?: string;
   quality?: RenderQuality;
   exportHeight?: number;
+  best?: boolean;
   signal?: AbortSignal;
   concurrency?: number;
   onProgress?: (fraction: number) => void;
@@ -116,7 +125,7 @@ export async function withRenderEncoder<O extends RenderEncoderOptions, R extend
   const failed = new Set<string>();
   const warnings: string[] = [];
   const warn = (reason: string) => warnings.push(reason);
-  const select = () => resolveEncoding(opts.hwaccel, opts.ffmpegPath, format, quality, warn, exporting, failed);
+  const select = async () => opts.best ? bestEncoder() : resolveEncoding(opts.hwaccel, opts.ffmpegPath, format, quality, warn, exporting, failed);
   opts.signal?.throwIfAborted();
   let encoding = await select();
   let concurrency = opts.concurrency;

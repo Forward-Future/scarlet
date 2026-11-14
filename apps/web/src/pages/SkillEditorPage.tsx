@@ -390,7 +390,8 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
         )}
         {/* Delete is plain beside Save, and red only under the pointer: the dialog it opens is where the red is. */}
         {!isNew && (
-          <button className="btn-quiet hover:text-bad" onClick={() => setConfirmDelete(true)}>
+          <button className="btn-quiet hover:text-bad" onClick={() => setConfirmDelete(true)} disabled={working}
+            title={working ? "Wait for Scarlet to finish revising this skill." : undefined}>
             Delete
           </button>
         )}

@@ -51,6 +51,8 @@ describe("the other inspection requests", () => {
 
   it("audition up to eight seconds of a source, of the mix or one confirmed voice", () => {
     expect(ok(SourceAudioRequest, { mediaId: "m1", from: 2, to: 10 })).toBe(true);
+    // 16.1 - 8.1 is a hair over 8 in floating point: an exact eight-second window still counts.
+    expect(ok(SourceAudioRequest, { mediaId: "m1", from: 8.1, to: 16.1 })).toBe(true);
     expect(ok(SourceAudioRequest, { mediaId: "m1", from: 2, to: 10, voice: "other voices" })).toBe(true);
     expect(reason(SourceAudioRequest, { mediaId: "m1", from: 2, to: 10.1 })).toBe("Choose a source audio window up to eight seconds");
     expect(reason(SourceAudioRequest, { mediaId: "m1", from: 2, to: 2 })).toBe("Choose a source audio window up to eight seconds");

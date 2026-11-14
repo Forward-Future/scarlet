@@ -4,11 +4,6 @@ on:
   push:
     branches: [master]
   workflow_call:
-  pull_request:
-
-concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: true
 
 jobs:
   build-and-test:

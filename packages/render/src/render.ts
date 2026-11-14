@@ -13,7 +13,7 @@ import { directDevice, encodeDirectPicture } from "./directPicture.js";
 import type { ProbeResult } from "./probe.js";
 
 import { hardwareEncoderFailure, withRenderEncoder, type VideoEncoder, type HwAccel, type RenderQuality } from "./encoder.js";
-export { encoderArgs, resolveVideoEncoder, type HwAccel, type RenderQuality } from "./encoder.js";
+export { bestEncoder, encoderArgs, resolveVideoEncoder, type HwAccel, type RenderQuality } from "./encoder.js";
 
 export interface RenderOptions extends FontOptions {
   pictureSource?: GraphOptions["pictureSource"];
@@ -26,6 +26,8 @@ export interface RenderOptions extends FontOptions {
   height?: number;
   /** Explicit output size for a user-requested export, independent of encoder quality. */
   exportHeight?: number;
+  /** An export at original quality: the software encoder at CRF 10 and 320 kb/s sound. */
+  best?: boolean;
   hwaccel?: HwAccel;
   /** The encoder already probed for this pass. Keep every part in its matching cache. */
   videoEncoder?: VideoEncoder;

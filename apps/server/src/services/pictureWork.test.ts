@@ -19,13 +19,21 @@ describe("picture lane", () => {
     };
     const [a, b, c, d] = [add("agent 1"), add("agent 2"), add("agent 3"), add("agent 4")];
     const monitor = add("monitor", true);
+    const scrub = add("scrub", true);
     await tick();
-    expect(started).toEqual(["agent 1", "agent 2"]);
+    // The editor's first frame has a slot kept for it; its second waits ahead of the agent's.
+    expect(started).toEqual(["agent 1", "agent 2", "monitor"]);
     expect(lane.queued).toBe(3);
     a.release(); await a.done; await tick();
-    expect(started).toEqual(["agent 1", "agent 2", "monitor"]);
-    for (const job of [b, monitor, c, d]) { job.release(); await job.done; await tick(); }
-    expect(started).toEqual(["agent 1", "agent 2", "monitor", "agent 3", "agent 4"]);
+    expect(started).toEqual(["agent 1", "agent 2", "monitor", "scrub"]);
+    // The kept slot is the editor's alone: the agent's third waits for one of its own two.
+    monitor.release(); await monitor.done; await tick();
+    expect(started).toEqual(["agent 1", "agent 2", "monitor", "scrub"]);
+    scrub.release(); await scrub.done; await tick();
+    expect(started).toEqual(["agent 1", "agent 2", "monitor", "scrub", "agent 3"]);
+    for (const job of [b, c, d]) { job.release(); await job.done; await tick(); }
+    expect(started).toEqual(["agent 1", "agent 2", "monitor", "scrub", "agent 3", "agent 4"]);
+    expect(lane.queued).toBe(0);
   });
 
   it("drops a cancelled request and frees its slot after a failure", async () => {

@@ -12,6 +12,13 @@ interface HostsState {
   apply(host: AgentHost): void;
 }
 
+/** Hosts the socket reported while a read of the list was on its way: they are newer than that read. */
+let reportedDuringLoad: Map<string, AgentHost> | undefined;
+/** A failed read tries again by itself a few times, so one hiccup at launch doesn't leave the Model row connecting. */
+const RETRY_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
+let retries = 0;
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
 export const useHostsStore = create<HostsState>((set, get) => ({
   hosts: [],
   customOpenaiModels: [],
@@ -19,15 +26,25 @@ export const useHostsStore = create<HostsState>((set, get) => ({
   status: "idle",
   error: null,
   async load() {
+    clearTimeout(retryTimer);
+    retryTimer = undefined;
     set({ status: "loading" });
+    const reported = reportedDuringLoad = new Map();
     try {
       const { hosts } = await api.hosts();
-      set({ hosts, status: "ready", error: null });
+      const merged = [...hosts.filter(h => !reported.has(h.id)), ...reported.values()];
+      retries = 0;
+      set({ hosts: merged, status: "ready", error: null });
     } catch (err) {
       set({ status: "error", error: errorMessage(err) });
+      const wait = RETRY_MS[retries++];
+      if (wait !== undefined) retryTimer = setTimeout(() => { retryTimer = undefined; if (get().status === "error") void get().load(); }, wait);
+    } finally {
+      if (reportedDuringLoad === reported) reportedDuringLoad = undefined;
     }
   },
   apply(host) {
+    reportedDuringLoad?.set(host.id, host);
     const hosts = get().hosts.filter((h) => h.id !== host.id);
     set({ hosts: [...hosts, host] });
   },

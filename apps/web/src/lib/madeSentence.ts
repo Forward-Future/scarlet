@@ -2,7 +2,7 @@ import type { EditKind, ThreadEdit } from "@scarlet/shared";
 import { editNote } from "./editKind";
 import { plural } from "./format";
 
-type Listed = Pick<ThreadEdit, "label" | "beforeCut" | "kind" | "summary" | "check">;
+type Listed = Pick<ThreadEdit, "label" | "beforeCut" | "kind" | "summary" | "check" | "elsewhere">;
 
 /** A stretch of the sentence: plain words, or a figure that reads in bold. */
 export type SentencePart = string | { strong: string };
@@ -23,7 +23,9 @@ const NAMED = 3;
  * says what Scarlet said about that edit. An edit made in several places is one edit, unless the list under the
  * sentence has a row for each place (`eachPlace`): then the sentence counts what that list shows.
  */
-export function madeSentence(edits: readonly Listed[], length: (seconds: number) => string, eachPlace = false): SentencePart[] {
+export function madeSentence(listed: readonly Listed[], length: (seconds: number) => string, eachPlace = false): SentencePart[] {
+  // An edit another request made is listed for a doubt this one raised about it. This request didn't make it.
+  const edits = listed.filter(e => !e.elsewhere);
   const cuts = edits.filter(e => e.beforeCut);
   const places = new Map<string, { edit: Listed; places: number }>();
   edits.forEach((edit, i) => {

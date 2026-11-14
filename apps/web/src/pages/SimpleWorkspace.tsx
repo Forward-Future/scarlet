@@ -13,7 +13,7 @@ import { useKeptEdits } from "../lib/keptEdits";
 import { needNumbers } from "../lib/needNumbers";
 import { QueueTray, useRewordingHold, type QueuedRequest } from "../components/chat/QueueTray";
 import { recordEditReview } from "../lib/editReviews";
-import { editKey, keepEdits } from "../lib/keptEdits";
+import { editKey, keepEdits, reviewKey } from "../lib/keptEdits";
 import { AgentChip, useAgentAvailability, useModelNeedsYou } from "../components/agent/AgentChip";
 import { Composer } from "../components/agent/Composer";
 import { useImportTranscription } from "../components/media/TranscriptionAction";
@@ -48,7 +48,7 @@ import { cutAudition, cutAuditionClock, isolatedReviewCut } from "../lib/cutAudi
 import { besides, removedSince } from "../lib/removedSince";
 import { usePlayerStore } from "../stores/player";
 import { verifiedJoinClock, type JoinClock } from "../lib/joinClock";
-import { buildThreads, firstCutDeliveries, isRedo, queueLabel, requestTarget, revisionTarget, stagedCuts, threadConversation, type Thread, type ThreadEntry } from "../lib/threads";
+import { buildThreads, firstCutDeliveries, isRecheck, isRedo, queueLabel, requestTarget, revisionTarget, stagedCuts, threadConversation, type Thread, type ThreadEntry } from "../lib/threads";
 import { runIsActive } from "../lib/taskRun";
 import { canPreviewMedia } from "../lib/upload";
 import { useProjectStore } from "../stores/project";
@@ -551,11 +551,11 @@ interface PassCall { index: number; askOrder?: number;
   /** The request about this cut that Scarlet is on, or the next one waiting, while it's sent back. */
   run?: Task;
   /** What the last version was and the note that sent it back, for a revised call. */
-  earlier?: { reason?: string; note: string } }
+  earlier?: { reason?: string; note?: string } }
 
 const callRowKey = (c: PassCall) => `call/${c.n}`;
 
-type Revision = { reason?: string; note: string };
+type Revision = { reason?: string; note?: string };
 const noRevisions: Revision[] = [];
 
 /**
@@ -600,7 +600,8 @@ function callRevisions(pass: Change, tasks: readonly Task[], changes: readonly C
     for (const index of indices) {
       const revisions = byCall.get(index) ?? [];
       const staged = previous && reviewReasons(previous, stagedCuts(previous).map(removed => ({ removed })))[index]?.join(" ");
-      revisions.unshift({ note: task.context.message ?? task.instruction,
+      // A recheck Scarlet asked for itself has no words of the editor's to show.
+      revisions.unshift({ note: isRecheck(task) ? undefined : task.context.message ?? task.instruction,
         reason: previous?.cutAssessments?.find(a => a.index === index)?.reason ?? (staged || undefined) });
       byCall.set(index, revisions);
     }
@@ -800,6 +801,11 @@ function PassSummary({ projectId, thread, edits, actions, aside, list: listState
   // One sent back for revision waits on Scarlet, and keeps its row in the list of what needs the editor until it is back.
   const sentBack = useMemo(() => edits.filter(e => e.check && !reviewed(e) && revising(e)).length, [edits, reviewed, revising]);
   const totalRows = edits.length + (pass?.calls.length ?? 0);
+  // While the pass makes its final check of the finished cut, the fixes it applies are marked New in the list: nothing
+  // else tells them from the cuts that went in before (2026-11-14).
+  const rerun = working ? thread.tasks.find(t => !!t.repeatAudit?.returns && !!t.startedAt && (t.state === "running" || t.state === "claimed")) : undefined;
+  const fresh = useMemo(() => new Set(rerun ? thread.changes.filter(c => c.taskId === rerun.id && (c.createdAt ?? "") >= rerun.startedAt!).map(c => c.id) : []),
+    [rerun, thread.changes]);
   const single = !working && !pass?.running && totalRows === 1 ? edits[0] : undefined;
   // A single preview follows the open card. An explicitly opened list keeps the timeline on the whole pass.
   const fullList = open === "all" && edits.length > 0;
@@ -850,9 +856,9 @@ function PassSummary({ projectId, thread, edits, actions, aside, list: listState
         busy: isWorking(sent),
         needs: !!e.check && !seen && !sent, sentBack: !!e.check && !seen && !!sent,
         // Ticked once the editor has kept it: a flagged edit they reviewed, or any edit they pressed Keep on.
-        decided: (!!e.check && seen) || kept.has(key),
+        decided: (!!e.check && seen) || kept.has(reviewKey(e)),
         version: e.previous.length ? e.previous.length + 1 : 0, title: revised ? undefined : e.check,
-        on: !!showing && matchesEdit(showing, e), open: () => actions.openEdit(thread, e) }];
+        on: !!showing && matchesEdit(showing, e), open: () => actions.openEdit(thread, e), fresh: fresh.has(e.changeId) }];
     }),
     // A call goes by its number, as on its card and on the timeline.
     ...(pass?.calls ?? []).map(c => ({ key: callRowKey(c), at: c.start, mark: c.at, hover: { threadId: thread.id, call: c.index }, label: c.reason, n: c.n, num: c.n as number | undefined, needs: c.state === "open", sentBack: c.state === "revising",
@@ -860,8 +866,8 @@ function PassSummary({ projectId, thread, edits, actions, aside, list: listState
       state: c.state === "approved" ? "Approved" : c.state === "skipped" ? "Skipped" : c.state === "revising" ? "Revising…" : c.version > 1 ? `v${c.version}` : undefined,
       value: c.state === "approved" ? "Approved" : c.state === "skipped" ? "Skipped" : c.state === "revising" ? "Revising…" : undefined,
       busy: c.state === "revising" && isWorking(c.run?.state),
-      version: c.version > 1 ? c.version : 0, title: c.earlier && `v${c.version - 1}: ${c.earlier.reason ?? "Scarlet’s earlier version."}\nYou: “${c.earlier.note}”`,
-      on: listening?.changeId === pass!.change.id && listening.index === c.index, word: undefined, revised: false,
+      version: c.version > 1 ? c.version : 0, title: c.earlier && `v${c.version - 1}: ${c.earlier.reason ?? "Scarlet’s earlier version."}${c.earlier.note ? `\nYou: “${c.earlier.note}”` : ""}`,
+      on: listening?.changeId === pass!.change.id && listening.index === c.index, word: undefined, revised: false, fresh: false,
       open: c.state === "revising" ? undefined : () => pass!.openCall(c.index) })),
   ].sort((a, b) => a.at - b.at);
   // While the pass waits on the editor, its calls are listed: every one of them, so a call keeps its place once it is
@@ -904,7 +910,7 @@ function PassSummary({ projectId, thread, edits, actions, aside, list: listState
       {filter === "calls" && row.num ? <EditBadge n={row.num} check={row.needs} />
         : <span className={row.needs ? "simple-pass-time is-need" : "simple-pass-time"}>{clockLabel(row.at)}{row.needs && <span>, needs you</span>}</span>}
       <span className="simple-pass-label">{filter === "calls" ? row.label : <>{row.decided && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}<span className="simple-pass-words">{row.label}</span>
-        {row.version > 0 && <EditVersion n={row.version} />}</>}</span>
+        {row.version > 0 && <EditVersion n={row.version} />}{row.fresh && <small className="edit-version is-new">New</small>}</>}</span>
       {filter === "calls" ? row.state && <span className={row.busy ? "simple-pass-value working-text" : "simple-pass-value"}>{row.state}</span>
         : row.value && <span className={row.busy && !row.word ? "simple-pass-value working-text" : "simple-pass-value"}>{row.value}</span>}
       {/* An applied edit sent back, or come back revised, says so after its amount, as a row of any other request's
@@ -989,7 +995,12 @@ function ThreadResult({ projectId, thread, edits, actions, aside, working, nests
   if (!needing) listedNeed.current.clear();
   const only = needing ? (edit: Omit<ThreadEdit, "at">) => (!!edit.check && !reviewed(edit)) || listedNeed.current.has(editKey(edit)) : undefined;
   if (only) for (const edit of edits) if (only(edit)) listedNeed.current.add(editKey(edit));
-  const made = useMemo(() => working ? undefined : madeSentence(edits, lengthLabel), [working, edits]);
+  const made = useMemo(() => {
+    if (working) return undefined;
+    const said = madeSentence(edits, lengthLabel);
+    // A request that only flagged an edit another one made has made nothing to say.
+    return said.length ? said : undefined;
+  }, [working, edits]);
   const showsList = open === "all" || needing || (!!single && !!shownEdit && !allNeed);
   // An edit made in several places is one row, listed when any of its places is picked, and a request about any of
   // them sits under that row: every place of a row the list shows counts as listed, as the list itself picks its rows.
@@ -1440,6 +1451,9 @@ function Turn({ projectId, thread, actions, pinned, pinHost, list: passList }: {
     }
     // A closing reply is drawn with the request it answers.
     if (closingReply(item) && runOf.has(item.replyTo!)) return [];
+    // An applied edit no request made is said once, by the sentence that lists it below, with its link (2026-11-14:
+    // "Put the camera in the bottom-right corner" read twice).
+    if (!owner && hasRows && item.kind === "change" && item.change.state === "approved") return [];
     // What a queued request says is in the tray.
     return item.taskId ? [] : [loose(item, i)];
   });
@@ -2481,7 +2495,8 @@ export function SimpleWorkspace() {
   const shownEdit = actions.showing;
   const shownAt = shownEdit && (shownEdit.at ?? shownEdit.range.start);
   // The applied edit on screen, so Revise is about it and not a proposal still waiting.
-  const shownChange = shownEdit && focusThread?.changes.find(c => belongsTo(shownEdit, c));
+  // An edit another request made is open here when this request flagged it (`Thread.flagged`).
+  const shownChange = shownEdit && [...focusThread?.changes ?? [], ...focusThread?.flagged ?? []].find(c => belongsTo(shownEdit, c));
   // Keep (K) records that the edit was reviewed and moves on to the next flagged edit that hasn't been; Revise (R) changes this one.
   const reviewingEdit = shownEdit && shownChange && focusThread ? shownEdit : undefined;
   const threadEdits = threadTimeline.edits;
@@ -2700,7 +2715,7 @@ export function SimpleWorkspace() {
     return { time: at, landed, title, summary: e.label,
       detail: e.beforeCut ? `Removed ${lengthLabel(e.beforeCut.removed.end - e.beforeCut.removed.start)}`
         : e.at !== undefined ? editKindWord(e) ?? "Cut" : [editKindWord(e), span(e.range)].filter(Boolean).join(" · "),
-      context: thread.changes.find(c => belongsTo(e, c))?.description,
+      context: [...thread.changes, ...thread.flagged ?? []].find(c => belongsTo(e, c))?.description,
       // A press on the edit's marker opens it, as its row in the chat does.
       open: () => actions.openEdit(thread, e) };
   };
@@ -3031,7 +3046,9 @@ export function SimpleWorkspace() {
   // Undo edit is about the open edit, so it puts back that edit, whatever the message box is aimed at just then: a
   // message still being written may be about another one.
   const openTarget = reviewingEdit && shownChange && focusThread ? threadTimeline.selectedTarget : undefined;
-  const undoTarget = openTarget && focusThread?.changes.some(c => c.id === openTarget.changeId && c.state === "approved") ? openTarget : undefined;
+  // An edit another request made, open here because this request flagged it, is undone from here too.
+  const undoTarget = openTarget && [...focusThread?.changes ?? [], ...focusThread?.flagged ?? []]
+    .some(c => c.id === openTarget.changeId && c.state === "approved") ? openTarget : undefined;
   // An edit sent back for revision has no card until its new version lands: its note and its decisions are about the
   // version on its way out, and its row in the chat says Scarlet is on it. It stays open meanwhile: the message box is
   // still aimed at it, ↑ ↓ step on and Esc closes it.
@@ -3105,7 +3122,7 @@ export function SimpleWorkspace() {
       {/* The call's number, the same as on its line in the chat and its dot on the timeline. */}
       <span className="edit-card-count" title={callPlace >= 0 ? `${callPlace + 1} of ${waitingCalls.length} still waiting for you` : undefined}>Cut {callNo.get(openCall.index)}</span>
       {callHistory.length > 0 && <EditVersion n={callHistory.length + 1}
-        title={`v${callHistory.length}: ${callHistory.at(-1)!.reason ?? "Scarlet’s earlier version."}\nYou: “${callHistory.at(-1)!.note}”`} />}
+        title={`v${callHistory.length}: ${callHistory.at(-1)!.reason ?? "Scarlet’s earlier version."}${callHistory.at(-1)!.note ? `\nYou: “${callHistory.at(-1)!.note}”` : ""}`} />}
       <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} />
       <span className="edit-card-side">
         <TranscriptLink open={callScriptOpen} disabled={!!conflict && !heard} toggle={() => setScriptFor(callScriptOpen ? undefined : callKey)} />
@@ -3319,9 +3336,17 @@ export function SimpleWorkspace() {
     // A message that came back with its aim names it from the aim itself: a cut by where it is, an edit by its name.
     : aimedAtItem ? `Revising ${aimed!.cutIndex !== undefined ? `the cut at ${clockLabel(aimed!.time)}` : aimed!.label ? `“${aimed!.label}”` : "this edit"}`
     : `${replyThread.question ? "Answering" : "Replying to"} “${replyThread.title}”`;
-  /** What a queued request is waiting for. */
-  const waitHint = (task: Task) => {
+  /**
+   * What a queued request is waiting for. Held by the pass whose calls are all made, it waits on Scarlet and not the
+   * editor: the pass goes in once Scarlet's revisions or rechecks of its cuts are done.
+   */
+  const waitFor = (task: Task) => {
     const wait = queueWait(task, tasks, changes);
+    const called = wait?.kind === "review" && actions.pass?.change.id === wait.change.id && !actions.pass.calls.some(c => c.state === "open");
+    return called ? { kind: "run" as const } : wait;
+  };
+  const waitHint = (task: Task) => {
+    const wait = waitFor(task);
     return !wait ? undefined : wait.kind === "review" ? "Starts once you’ve made your calls on the dialogue pass"
       : wait.kind === "question" ? "Starts once you’ve answered Scarlet" : "Starts when Scarlet finishes what it’s on";
   };
@@ -3331,7 +3356,7 @@ export function SimpleWorkspace() {
    * doesn't start until they act, whatever Scarlet is on meanwhile.
    */
   const waitsOnEditor = (task: Task) => {
-    const wait = queueWait(task, tasks, changes);
+    const wait = waitFor(task);
     return wait?.kind === "review" ? "Waits for your calls" : wait?.kind === "question" ? "Waits for your answer" : undefined;
   };
 
@@ -3402,7 +3427,7 @@ export function SimpleWorkspace() {
    * edit the box talks to stays its target, and Scarlet is told both. With nothing aimed it is a new edit about that
    * stretch. A queued request's words and a message being spoken are left as they are.
    */
-  const markRange = (marked: MarkedRange | undefined) => {
+  const markRange = (marked: MarkedRange | undefined, byKey?: boolean) => {
     const box = useUiStore.getState();
     if (rewordingItem || box.speaking) return;
     const was = box.agentContext && box.agentContext !== "whole" ? box.agentContext : undefined;
@@ -3411,7 +3436,8 @@ export function SimpleWorkspace() {
     if (was && was === wordsInCall.current && next) wordsInCall.current = next;
     setOfferedPoint(undefined);
     box.setAgentContext(next, next && was?.changeId ? was : undefined);
-    if (marked) box.focusComposer();
+    // A handle stepped a frame by ← or → keeps the keys, so the next press steps it again.
+    if (marked && !byKey) box.focusComposer();
   };
   // A click anywhere but the message box and the timeline takes a marked range off: the timeline says for itself
   // which of its presses do. A drag, a scroll or a press held and moved isn't a click.
@@ -3448,8 +3474,11 @@ export function SimpleWorkspace() {
       box.setAgentContext(picked);
     }
   };
-  // It left the queue meanwhile, taken out or begun: the box goes back to the message being written.
-  useEffect(() => { if (rewording && !queued.some(t => t.id === rewording.id)) setRewording(undefined); }, [queued, rewording]);
+  // It left the queue meanwhile, taken out or begun: the box goes back to the message being written. Not while the
+  // project's requests are still loading: the queue then reads empty, and the words restored from before would be lost.
+  useEffect(() => {
+    if (!current.reviewStatus && rewording && !queued.some(t => t.id === rewording.id)) setRewording(undefined);
+  }, [queued, rewording, current.reviewStatus]);
   useRewordingHold(rewording?.id, (id, on) => on ? queueAction(holdForRewording(id, true))
     // Letting go of a hold says nothing when it fails: the hold lapses by itself.
     : holdForRewording(id, false), () => setRewording(undefined));
@@ -3480,7 +3509,7 @@ export function SimpleWorkspace() {
     tray={queuedItems.length > 0 ? <QueueTray items={queuedItems} hint={queueHint} waits={queued[0] && waitsOnEditor(queued[0])} rewording={rewordingItem?.id} opened={trayOpen}
       onRemove={id => void queueAction(cancelTask(id)).catch(() => {})}
       // The editor's calls are theirs to put off: the request they hold back can start without them.
-      onStart={queued[0] && queueWait(queued[0], tasks, changes)?.kind === "review" ? id => void queueAction(startBeforeCalls(id)).catch(() => {}) : undefined}
+      onStart={queued[0] && waitFor(queued[0])?.kind === "review" ? id => void queueAction(startBeforeCalls(id)).catch(() => {}) : undefined}
       // The pencil of the request whose words are in the box puts them back as they were.
       onReword={id => {
         // A message being spoken is the box's until it is out: it would be saved over this request's words.

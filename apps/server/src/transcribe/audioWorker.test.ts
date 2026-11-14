@@ -176,6 +176,21 @@ describe("the audio helper's queue", () => {
     expect(helper!.killed).toEqual([undefined]);
   });
 
+  it("keeps an idle helper while an agent is at work, and stops it half a minute after", async () => {
+    const worker = await load();
+    let atWork = true;
+    worker.wanted = () => atWork;
+    const first = worker.request(fillers("a.wav"));
+    const [helper] = spawned.helpers;
+    helper!.reply({ id: 0, result: "a" });
+    await first;
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(helper!.killed).toEqual([]);
+    atWork = false;
+    vi.advanceTimersByTime(30_000);
+    expect(helper!.killed).toEqual([undefined]);
+  });
+
   it("does not fail a request made just after the idle helper was stopped when that helper exits", async () => {
     const worker = await load();
     const first = worker.request(fillers("a.wav"));

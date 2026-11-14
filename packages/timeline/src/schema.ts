@@ -301,22 +301,6 @@ export function duplicateClipId(tracks: Track[]): string | undefined {
   }
 }
 
-/** A caption track holds only captions, and video and audio tracks hold none. The renderer skips a clip on the other kind. */
-function clipFitsTrack(clip: Clip, track: Track): boolean {
-  if (track.kind === "caption") return clip.kind === "caption";
-  if (clip.kind === "caption") return false;
-  return true;
-}
-
-/** The first clip on each track that the track's kind can't hold: a track of the wrong kind would otherwise name every clip it holds. */
-export function misplacedClips(tracks: Track[]) {
-  return tracks.flatMap((track, t) => {
-    const c = track.clips.findIndex((clip) => !clipFitsTrack(clip, track));
-    const clip = track.clips[c];
-    return clip ? [{ path: ["tracks", t, "clips", c], message: `clip ${clip.id} of kind ${clip.kind} cannot go on ${track.kind} track ${track.id}` }] : [];
-  });
-}
-
 /** Validate new writes while keeping historical versions readable. */
 export const WritableTimeline = Timeline.superRefine((timeline, ctx) => {
   const issue = timelinePlanningIssue(timeline);
@@ -325,7 +309,6 @@ export const WritableTimeline = Timeline.superRefine((timeline, ctx) => {
   if (duplicate !== undefined) {
     ctx.addIssue({ code: "custom", path: ["tracks"], message: `duplicate clip id: ${duplicate}` });
   }
-  for (const issue of misplacedClips(timeline.tracks)) ctx.addIssue({ code: "custom", ...issue });
 });
 
 // ---------------------------------------------------------------------------
@@ -519,6 +502,13 @@ export const Change = z.object({
     check: z.string().trim().min(1).max(120).optional(),
     /** One sentence on what the edit did, side effects included. The edit's card shows this and nothing else. */
     summary: z.string().trim().min(1).max(SUMMARY_MAX).optional(), replaces: z.object({ changeId: Id, spot: z.number().int().nonnegative() }).optional() })).optional(),
+  /**
+   * Doubts a later request raised about this change's edits once they were in the video: the edit (`spot`, as its
+   * request lists it), the few words the editor reads and the run that raised it. That request lists the edit as one
+   * that needs the editor until they keep it there.
+   */
+  flags: z.array(z.object({ spot: z.number().int().nonnegative(), check: z.string().trim().min(1).max(120), taskId: Id,
+    at: z.string().datetime() })).optional(),
   /** Timeline ranges affected by the change (merged, with handles applied by the renderer). */
   ranges: z.array(TimeRange).default([]),
   state: ChangeState.default("proposed"),

@@ -49,7 +49,6 @@ import {
   makeTimeMap,
   mergeRanges,
   rangesOverlap,
-  replayOnCopy,
   timelineDuration,
   timelineFromKeepRanges,
   timelineToSource,
@@ -631,7 +630,11 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   };
   /** Note the list a tool showed the model word indices from. */
   const showWords = (mediaId: string, words: readonly TranscriptWord[] | null | undefined) => {
-    if (words) wordsRead.set(mediaId, { print: wordsPrint(words), count: words.length });
+    if (!words) return;
+    const print = wordsPrint(words);
+    // Words found since moved the indices on: which input each index was heard on is read again.
+    if (wordsRead.get(mediaId)?.print !== print) inputLabels.delete(mediaId);
+    wordsRead.set(mediaId, { print, count: words.length });
   };
   function sameWordsAsRead(mediaId: string, words: readonly TranscriptWord[]) {
     const read = wordsRead.get(mediaId);
@@ -2534,8 +2537,7 @@ ${OPS_DOC}`,
               if (inside.length) throw new Error(inside.map(e => `ops[${i}] ${e.edge} at ${(e.edge === "start" ? op.start : op.end).toFixed(2)} s falls inside “${e.transcriptSplitsWord}”, which is sounding there`).join("; ") +
                 ". Remove dialogue with dialogue_apply_cuts, where a word reference puts each edge in the recording's silence, or move the edge onto quiet (dialogue_check_join measures it).");
             }
-            // A step on the way, not a version: only the batch's result is checked, below, so a clip may meet a track of the other kind on the way.
-            on = replayOnCopy(on, [op]);
+            on = applyOps(on, [op]);
           }
         }
         // Dry-run against the pinned base before deriving the picture from the synchronized clips.
@@ -2552,6 +2554,23 @@ ${OPS_DOC}`,
         if (inset) body.timeline = applyOps(parsed.data, syncPictureOps((await getProject()).project, parsed.data, inset));
       }
       return propose(body, before, frameChanges);
+    },
+  );
+
+  tool(
+    "edit_flag",
+    "Flag an edit already in the video, this request's or an earlier one's, for the editor: a doubt they must settle by looking or listening, such as a black gap, a line heard twice or a join that may clip a word. The request you are running lists that edit as needing them (\"N need you\") and opens it on the timeline, with check as its reason, until they keep, revise or undo it. Nothing about the edit changes. Name the edit by where the problem is, as range in seconds on the current version (start equal to end for one moment), or by changeId and spot as change_get lists its edits. When several edits are there, the one covering most of the range is flagged and alsoThere names the others: flag the right one by changeId and spot. For an edit you are saving now, give check in timeline_propose's timelineEdits instead. A problem no edit made has nothing to flag: say so in your reply.",
+    {
+      check: z.string().trim().min(1).max(120).describe("A few words naming the doubt the editor must settle, as the edit's card shows it"),
+      range: z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().nonnegative() }).optional()
+        .describe("Where the problem is, in seconds on the current version"),
+      changeId: z.string().optional().describe("The change that made the edit; give spot with it instead of range"),
+      spot: z.number().int().nonnegative().optional().describe("Zero-based index of the edit in that change"),
+    },
+    async ({ check, range, changeId, spot }) => {
+      if ((changeId === undefined) !== (spot === undefined)) throw new Error("Give changeId and spot together.");
+      if ((changeId === undefined) === (range === undefined)) throw new Error("Give either range, or changeId with spot.");
+      return json(await client.flagEdit(ctx.projectId, { check, range, changeId, spot, taskId: ctx.taskId }));
     },
   );
 

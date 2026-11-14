@@ -308,6 +308,8 @@ export async function ingestMedia(
   } catch (e) {
     await rm(dest, { force: true });
     ctx.shutdown.throwIfAborted();
+    // An import stopped, by its project going to the trash, says so rather than blaming the file.
+    signal.throwIfAborted();
     throw badRequest("probe_failed", `ffprobe could not read the file: ${(e as Error).message}`);
   }
   let stored: MediaWithStatus;

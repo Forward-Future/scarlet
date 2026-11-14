@@ -16,6 +16,8 @@ const HOLD_SLOP_PX = 4;
 export const PRECISE_SLOWDOWN = 10;
 /** A drag that stops this still, for HOLD_MS, goes into the close-up where it is. */
 const STILL_SLOP_PX = 2;
+/** In the close-up, a hand that shifts less than this before letting go of a held press hasn't moved. */
+const PRECISE_SLOP_PX = 2;
 /** The close-up's row of pictures: this many, each this many frames after the one before. */
 const LOUPE_PICTURES = 9, LOUPE_STEP_FRAMES = 3;
 
@@ -85,7 +87,8 @@ interface RangeSelect {
   frameAt?(time: number, exact?: boolean): string | undefined;
   pictureAspect?: number;
   range?: TimeRange;
-  onRange(range: TimeRange | undefined): void;
+  /** `byKey` when a focused handle's ← or → moved it: the handle keeps the keys for the next step. */
+  onRange(range: TimeRange | undefined, byKey?: boolean): void;
   onSeek(time: number): void;
   onScrubStart?(gesture: AbortSignal): ((release?: ScrubRelease) => void) | undefined;
   /** A press on the ruler that never became a range. It takes off the range there was. */
@@ -163,7 +166,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
         clearTimeout(g.hold);
       }
       if (g.moved && !g.precise && Math.abs(g.x - g.stillX) > STILL_SLOP_PX) holdStill();
-      if (g.precise && g.x !== g.precise.x) g.precise.moved = true;
+      if (g.precise && Math.abs(g.x - g.precise.x) > PRECISE_SLOP_PX) g.precise.moved = true;
       if (g.moved || g.precise) g.paint ??= requestAnimationFrame(() => place(g));
     };
     const up = (event: globalThis.PointerEvent) => {
@@ -224,7 +227,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     const step = (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 10 : 1) / fps;
     const moved = toFrame(Math.max(start, Math.min(end, (edge === "start" ? range.start : range.end) + step)), fps);
     const next = edge === "start" ? { start: Math.min(moved, range.end - 1 / fps), end: range.end } : { start: range.start, end: Math.max(moved, range.start + 1 / fps) };
-    onRange(next);
+    onRange(next, true);
     onSeek(edge === "start" ? next.start : next.end);
   };
 
@@ -241,7 +244,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
         aria-label={`${edge === "start" ? "Start" : "End"} of the marked range, ${playbackClock(time)}`}
         title="Drag to adjust · hold for frame steps · ← → one frame"
         onPointerDown={e => { if (begin(e, edge)) { e.stopPropagation(); e.currentTarget.focus({ preventScroll: true }); } }}
-        onKeyDown={e => nudge(edge, e)} />;
+        data-range-handle="" onKeyDown={e => nudge(edge, e)} />;
     };
     // The close-up follows where the moving end is, also the instant a held press opens it with nothing drawn yet.
     const edgeTime = live?.at;

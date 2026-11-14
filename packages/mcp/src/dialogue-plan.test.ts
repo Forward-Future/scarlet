@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { DialogueCutsRequest } from "@scarlet/shared";
-import { createProject, emptyTimeline, makeMediaClip, type MediaAsset, type MediaClip } from "@scarlet/timeline";
+import { createProject, emptyTimeline, makeMediaClip, type MediaAsset } from "@scarlet/timeline";
 import { DialogueEvidence } from "./dialogue-decisions.js";
 import { joinEvidence, type JoinPage } from "./dialogue-join.js";
 import { cutsReach, dialogueGate, equivalentShifts, planDialogueCuts, resolveCutRange, type DialogueCutInput, type DialoguePlanSources } from "./dialogue-plan.js";
 import { firstCutRanges } from "./first-cut-ranges.js";
-import { timelineWords } from "./timeline-perception.js";
 
 const words = [
   { start: 1, end: 1.38, text: "finish" }, { start: 1.8, end: 2.2, text: "first" },
@@ -26,16 +25,6 @@ function fixture() {
   return { tl, sources, measured };
 }
 const cut = (c: Partial<DialogueCutInput>): DialogueCutInput => ({ kind: "retake", decision: "cut", reason: "Earlier take.", ...c });
-const refs = { word: { mediaId: "mic", fromWord: 1, toWord: 1 }, range: { mediaId: "mic", fromWord: 0, toWord: 2 } };
-/** A stretch of mic at a timeline time, on the audio track or, with track 0, the video track. */
-const take = (from: number, to: number, at: number, speed = 1, track = 1) => ({ track, clip: makeMediaClip("mic", from, to, at, { speed }) });
-type Take = ReturnType<typeof take>;
-function laidOut(takes: Take[]) {
-  const f = fixture();
-  for (const track of f.tl.tracks) track.clips = [];
-  for (const { track, clip } of takes) f.tl.tracks[track]!.clips.push(clip);
-  return f;
-}
 
 function partialWordFixture() {
   const { sources, tl } = fixture();
@@ -107,183 +96,6 @@ describe("dialogue plan", () => {
     const result = await resolveCutRange(tl, { occurrence: ref }, "cut", sources);
     expect(result).toMatchObject({ start: 6.8, end: 6.9, words: "go", problems: [expect.any(String), expect.any(String)] });
     await expect(resolveCutRange(tl, { occurrence: ref, start: 0, end: 1 }, "cut", sources)).rejects.toThrow("already identifies");
-  });
-
-  it("refuses a word reference the version plays twice, naming where it plays", async () => {
-    const { tl, sources } = fixture();
-    tl.tracks[1]!.clips.push(makeMediaClip("mic", 0, 5, 5));
-    const refused = /^Word #1 “first” in mic plays 2 times on version draft, at 1\.800–2\.200 s, 6\.800–7\.200 s\. A word index can't say which: give the range to remove as start\/end in timeline seconds\.$/;
-    await expect(resolveCutRange(tl, refs.word, "cut", sources)).rejects.toThrow(refused);
-    await expect(planDialogueCuts({ tl, localPauses: false, cuts: [cut(refs.word)] }, sources)).rejects.toThrow(refused);
-  });
-
-  // The take plays whole at 0 unless named, and #1 (1.80–2.20 s of mic, midpoint 2.00) plays once more as below.
-  it.each([
-    { name: "a copy on the video track", takes: [take(0, 5, 0), take(0, 5, 5, 1, 0)], times: "1.800–2.200 s, 6.800–7.200 s" },
-    { name: "a copy that overlaps it", takes: [take(0, 5, 0), take(0, 5, .1, 1, 0)], times: "1.800–2.200 s, 1.900–2.300 s" },
-    { name: "a copy that starts it where it ends", takes: [take(0, 5, 0), take(0, 5, .4, 1, 0)], times: "1.800–2.200 s, 2.200–2.600 s" },
-    ...[.5, 1, 2].map(s => ({ name: `a split copy at speed ${s}`, takes: [take(0, 5, 0, s), take(0, 2.8, 10, s), take(2.8, 5, 10 + 2.8 / s, s)],
-      times: `${(1.8 / s).toFixed(3)}–${(2.2 / s).toFixed(3)} s, ${(10 + 1.8 / s).toFixed(3)}–${(10 + 2.2 / s).toFixed(3)} s` })),
-    { name: "a split copy with a gap", takes: [take(0, 5, 0), take(0, 2.8, 10), take(2.8, 5, 13)], times: "1.800–2.200 s, 11.800–12.200 s" },
-    { name: "a split copy with a change of speed", takes: [take(0, 5, 0), take(0, 2.8, 10), take(2.8, 5, 12.8, 2)], times: "1.800–2.200 s, 11.800–12.200 s" },
-    { name: "a split copy across tracks", takes: [take(0, 5, 0), take(0, 2.8, 10, 1, 0), take(2.8, 5, 12.8)], times: "1.800–2.200 s, 11.800–12.200 s" },
-    { name: "a copy joined to a later part of the take", takes: [take(0, 5, 0), take(0, 2.5, 10), take(2.9, 5, 12.5)], times: "1.800–2.200 s, 11.800–12.200 s" },
-    { name: "two split copies", takes: [take(0, 2.8, 0), take(2.8, 5, 2.8), take(0, 2.8, 10), take(2.8, 5, 12.8)], times: "1.800–2.200 s, 11.800–12.200 s" },
-    { name: "two coincident split copies", takes: [take(0, 5, 0), take(0, 2.8, 10), take(2.8, 5, 12.8), take(0, 2.8, 10, 1, 0), take(2.8, 5, 12.8, 1, 0)],
-      times: "1.800–2.200 s, 11.800–12.200 s" },
-    { name: "two copies at speed 2", takes: [take(0, 5, 0, 2), take(0, 5, 5, 2)], times: "0.900–1.100 s, 5.900–6.100 s" },
-    { name: "copies at speeds .25 and .5", takes: [take(0, 2.8, 10, .25), take(0, 5, 12.5, .5, 0)], times: "16.100–16.900 s, 17.200–18.800 s" },
-    { name: "a retake that plays it again", takes: [take(0, 2.5, 0), take(0, 5, 5)], times: "1.800–2.200 s, 6.800–7.200 s" },
-    { name: "a copy that keeps only its middle", takes: [take(0, 5, 0), take(1.95, 2.1, 10)], times: "1.800–2.200 s, 10.000–10.150 s" },
-    { name: "the head of an overlapping clip", takes: [take(0, 2.5, 0), take(1.5, 5, 2, 1, 0)], times: "1.800–2.200 s, 2.300–2.700 s" },
-    { name: "a copy 30 ms later", takes: [take(0, 5, 0), take(0, 5, .03, 1, 0)], times: "1.800–2.200 s, 1.830–2.230 s" },
-    { name: "a copy that starts it 50 ms earlier, trimmed into it", takes: [take(1.95, 2.1, 4, 1, 0), take(1.9, 2.2, 3.95)], times: "3.950–4.250 s, 4.000–4.150 s" },
-    { name: "a mix of a sound and audio pair, a copy under a millisecond off and a split at speed 2",
-      takes: [take(0, 5, 0, 1, 0), take(0, 5, 0), take(0, 5, .0004), take(0, 2.8, 10, 2), take(2.8, 5, 11.4, 2)], times: "1.800–2.200 s, 10.900–11.100 s" },
-  ])("refuses a word that plays again in $name, naming both times", async ({ takes, times }) => {
-    const { tl, sources } = laidOut(takes);
-    await expect(resolveCutRange(tl, refs.word, "cut", sources)).rejects.toThrow(`Word #1 “first” in mic plays 2 times on version draft, at ${times}. A word index can't say which`);
-  });
-
-  it.each([
-    { name: "its last word plays twice though its first plays once", takes: [take(0, 5, 0), take(3, 5, 6)], error: "Word #2 “next” in mic plays 2 times on version draft, at 3.400–3.860 s, 6.400–6.860 s." },
-    { name: "its first word plays twice though its last plays once", takes: [take(0, 5, 0), take(0, 1.5, 6)], error: "Word #0 “finish” in mic plays 2 times on version draft, at 1.000–1.380 s, 7.000–7.380 s." },
-    { name: "all of it plays twice", takes: [take(0, 5, 0), take(0, 5, 5)], error: "Word #0 “finish” in mic plays 2 times on version draft, at 1.000–1.380 s, 6.000–6.380 s." },
-  ])("refuses a range when $name", async ({ takes, error }) => {
-    const { tl, sources } = laidOut(takes);
-    await expect(resolveCutRange(tl, refs.range, "cut", sources)).rejects.toThrow(error);
-  });
-
-  it("places a word once under a thousand coincident clips, whole and split, and refuses it when one more plays elsewhere", async () => {
-    const one = laidOut([take(0, 5, 10)]);
-    const alone = [await resolveCutRange(one.tl, refs.word, "cut", one.sources), await resolveCutRange(one.tl, refs.range, "cut", one.sources)];
-    const { tl, sources } = laidOut(Array.from({ length: 1000 }, () => [take(0, 5, 10, 1, 0), take(0, 2.8, 10), take(2.8, 5, 12.8)]).flat());
-    expect([await resolveCutRange(tl, refs.word, "cut", sources), await resolveCutRange(tl, refs.range, "cut", sources)]).toEqual(alone);
-    tl.tracks[1]!.clips.push(makeMediaClip("mic", 0, 5, 20));
-    await expect(resolveCutRange(tl, refs.word, "cut", sources)).rejects.toThrow("plays 2 times on version draft, at 11.800–12.200 s, 21.800–22.200 s.");
-  });
-
-  it("places a word once under 70,000 coincident clips", async () => {
-    const one = laidOut([take(0, 5, 10)]);
-    const alone = await resolveCutRange(one.tl, refs.word, "cut", one.sources);
-    const { tl, sources } = laidOut(Array.from({ length: 70_000 }, () => take(0, 5, 10)));
-    expect(await resolveCutRange(tl, refs.word, "cut", sources)).toEqual(alone);
-  });
-
-  it.each([
-    { name: "a split", takes: [take(0, 2.8, 10), take(2.8, 5, 12.8)] },
-    { name: "a split with a gap", takes: [take(0, 2.8, 10), take(2.8, 5, 13)] },
-    { name: "a split with a change of speed", takes: [take(0, 2.8, 10), take(2.8, 5, 12.8, 2)] },
-    { name: "a split across tracks", takes: [take(0, 2.8, 10, 1, 0), take(2.8, 5, 12.8)] },
-    { name: "a join", takes: [take(0, 2.5, 10), take(2.9, 5, 12.5)] },
-    { name: "the pieces in reverse order", takes: [take(2.8, 5, 0), take(0, 2.8, 10)] },
-    { name: "a whole clip over a split one", takes: [take(0, 5, 10, 1, 0), take(0, 2.8, 10), take(2.8, 5, 12.8)] },
-    { name: "two coincident split copies", takes: [take(0, 2.8, 10), take(2.8, 5, 12.8), take(0, 2.8, 10, 1, 0), take(2.8, 5, 12.8, 1, 0)] },
-    { name: "a sliver of it elsewhere without its midpoint", takes: [take(0, 1.9, 0), take(0, 5, 10)] },
-    { name: "a split a hair after its midpoint elsewhere", takes: [take(0, 2, 0), take(2.0000001, 5, 2), take(0, 5, 10)] },
-    { name: "an overlapping clip that plays another word of the take", takes: [take(0, 5, 10), take(.8, 1.5, 11.9, 1, 0)] },
-  ])("places a word once across $name", async ({ takes }) => {
-    const { tl, sources } = laidOut(takes);
-    expect(await resolveCutRange(tl, refs.word, "cut", sources)).toMatchObject({ spoken: { start: 11.8, end: 12.2 } });
-  });
-
-  it("places a word or a range once where it plays once around a split, a repeat or a gap inside it", async () => {
-    let { tl, sources } = laidOut([take(0, 2, 0), take(2, 5, 2)]);
-    expect(await resolveCutRange(tl, refs.word, "cut", sources)).toMatchObject({ spoken: { start: 2, end: 2.2 } });
-    ({ tl, sources } = laidOut([take(0, 2, 0), take(2.0000001, 5, 2)]));
-    await expect(resolveCutRange(tl, refs.word, "cut", sources)).rejects.toThrow("is not in version draft");
-    ({ tl, sources } = laidOut([take(0, 2.5, 0), take(2.5, 5, 2.5)]));
-    expect(await resolveCutRange(tl, refs.range, "cut", sources)).toMatchObject({ spoken: { start: 1, end: 3.86 } });
-    // Only #1, inside the range, plays again; then #1 is not on the version at all.
-    ({ tl, sources } = laidOut([take(0, 2.5, 0), take(1.5, 2.5, 2.5), take(2.5, 5, 3.5)]));
-    expect(await resolveCutRange(tl, refs.range, "cut", sources)).toMatchObject({ spoken: { start: 1, end: 4.86 } });
-    ({ tl, sources } = laidOut([take(0, 1.5, 0), take(3, 5, 1.5)]));
-    expect(await resolveCutRange(tl, refs.range, "cut", sources)).toMatchObject({ spoken: { start: 1, end: 2.36 } });
-  });
-
-  // The copies end before the first take does, so the version is as long as it alone.
-  it.each([
-    { name: "together, float noise included", takes: [take(0, 5, .00049999999999, 1, 0), take(0, 4, .00050000000001)] },
-    { name: "under a millisecond apart", takes: [take(0, 5, .00049999999999, 1, 0), take(0, 4, .0009)] },
-    { name: "15 ms apart", takes: [take(0, 5, .0005, 1, 0), take(0, 4, .0155)] },
-    { name: "29 ms apart", takes: [take(0, 5, .0005, 1, 0), take(0, 4, .0295)] },
-    { name: "a little apart each, 40 ms from the first to the last", takes: [take(0, 5, .0005, 1, 0), take(0, 4, .0205), take(0, 4, .0405)] },
-    { name: "a little apart each, the middle one first on another track", takes: [take(0, 5, .0005, 1, 0), take(0, 4, .0205, 1, 0), take(0, 4, .0105)] },
-    // Only #1 starts at the same time in both: #0 and #2 play apart, so the range is left out.
-    { name: "at another speed from the same start", takes: [take(0, 5, .0005, 1, 0), take(0, 5, .0005 + 1.8 - 1.8 / 1.3, 1.3)], word: true },
-  ])("places a word once, as timeline_transcript lists it, where clips play it $name", async ({ takes, word }) => {
-    const asked = word ? [refs.word] : [refs.word, refs.range];
-    const one = laidOut([takes[0]!]);
-    const alone = await Promise.all(asked.map(ref => resolveCutRange(one.tl, ref, "cut", one.sources)));
-    const { tl, sources } = laidOut(takes);
-    expect(timelineWords(tl, new Map([["mic", words]])).filter(w => w.index === 1)).toHaveLength(1);
-    expect(await Promise.all(asked.map(ref => resolveCutRange(tl, ref, "cut", sources)))).toEqual(alone);
-  });
-
-  it.each([0, .5, 2, 15, 29, 30, 31, 100])(
-    "refuses a word index exactly where timeline_transcript lists it more than once, at the times it lists (%s ms)", async ms => {
-      const { tl, sources } = laidOut([take(0, 5, 0), take(0, 5, ms / 1000, 1, 0)]);
-      const listed = timelineWords(tl, new Map([["mic", words]])).filter(w => w.index === 1);
-      const refused = await resolveCutRange(tl, refs.word, "cut", sources).then(() => undefined, (e: Error) => e.message);
-      expect(refused).toEqual(listed.length > 1 ? expect.stringContaining(`plays ${listed.length} times on version draft, at ${listed.map(w => `${w.start.toFixed(3)}–${w.end.toFixed(3)} s`).join(", ")}.`) : undefined);
-      expect(listed).toHaveLength(ms < 30 ? 1 : 2);
-    });
-
-  // Other words between two copies, and a word with the same text, change what the transcript lists, so they change
-  // what an index means. `texts` renames #0, #1, #2.
-  it.each([
-    { name: "short clips of another word between two copies 20 ms apart", takes: [take(0, 5, 0), take(0, 5, .02, 1, 0), take(.9, 1.5, 1.705), take(.9, 1.5, 1.71), take(.9, 1.5, 1.715)],
-      listed: "1.800–2.200 s, 1.820–2.220 s" },
-    { name: "the same, with a third copy later", takes: [take(0, 5, 0), take(0, 5, .02, 1, 0), take(.9, 1.5, 1.705), take(.9, 1.5, 1.71), take(.9, 1.5, 1.715), take(0, 5, 5)],
-      listed: "1.800–2.200 s, 1.820–2.220 s, 6.800–7.200 s" },
-    { name: "#0 said with #1's text just before one copy", texts: ["first", "first", "next"], takes: [take(0, 5, 0), take(0, 5, 5), take(.9, 1.5, 1.69)], listed: "6.800–7.200 s" },
-    { name: "#0 said with #1's text between two copies 50 ms apart", texts: ["first", "first", "next"], takes: [take(0, 5, 0), take(0, 5, .05, 1, 0), take(.9, 1.5, 1.725)],
-      listed: "1.800–2.200 s" },
-    { name: "a copy hidden by #0 and one 20 ms later", texts: ["first", "first", "other"],
-      takes: [take(0, 5, 0), take(0, 5, .02, 1, 0), take(.9, 1.5, 1.69), take(3.3, 4, 1.705), take(3.3, 4, 1.71), take(3.3, 4, 1.715)], listed: "1.820–2.220 s" },
-  ])("takes a word index where timeline_transcript lists it, with $name", async ({ takes, texts, listed }) => {
-    const { tl, sources } = laidOut(takes);
-    const said = texts ? words.map((w, i) => ({ ...w, text: texts[i]! })) : words;
-    sources.words = async () => said;
-    const times = timelineWords(tl, new Map([["mic", said]])).filter(w => w.index === 1).map(w => `${w.start.toFixed(3)}–${w.end.toFixed(3)} s`);
-    expect(times.join(", ")).toBe(listed);
-    if (times.length > 1) {
-      for (const ref of [refs.word, { mediaId: "mic", fromWord: 1, toWord: 2 }]) {
-        await expect(resolveCutRange(tl, ref, "cut", sources)).rejects.toThrow(`plays ${times.length} times on version draft, at ${listed}.`);
-      }
-    } else {
-      const [start, end] = listed.split(/[– ]/).map(Number);
-      expect((await resolveCutRange(tl, refs.word, "cut", sources)).spoken).toEqual({ start, end });
-    }
-  });
-
-  it("reads a word index beside a second mic of the same voice, as timeline_transcript lists both", async () => {
-    // mic2 holds the same words 10 ms later. With both mics from 0, the transcript lists mic's words there; mic2 plays again at 5.
-    const mic2 = words.map(w => ({ ...w, start: w.start + .01, end: w.end + .01 }));
-    const f = laidOut([take(0, 5, 0, 1, 0)]);
-    (await f.sources.project()).media.push({ id: "mic2", kind: "audio", name: "Mic 2", path: "mic2.wav", hasAudio: true });
-    f.sources.words = async id => id === "mic2" ? mic2 : words;
-    f.tl.tracks[1]!.clips.push(makeMediaClip("mic2", 0, 5, 0), makeMediaClip("mic2", 0, 5, 5));
-    const listed = timelineWords(f.tl, new Map([["mic", words], ["mic2", mic2]])).filter(w => w.index === 1).map(w => `${w.mediaId} ${w.start}`);
-    expect(listed).toEqual(["mic 1.8", "mic2 6.81"]);
-    expect((await resolveCutRange(f.tl, refs.word, "cut", f.sources)).spoken).toEqual({ start: 1.8, end: 2.2 });
-    expect((await resolveCutRange(f.tl, { ...refs.word, mediaId: "mic2" }, "cut", f.sources)).spoken).toEqual({ start: 6.81, end: 7.21 });
-    // Unlisted anywhere, mic2's word is placed from the one clip that plays it.
-    f.tl.tracks[1]!.clips.pop();
-    expect((await resolveCutRange(f.tl, { ...refs.word, mediaId: "mic2" }, "cut", f.sources)).spoken).toEqual({ start: 1.81, end: 2.21 });
-  });
-
-  it.each([
-    { name: "a muted track", mute: (f: ReturnType<typeof fixture>) => { f.tl.tracks[0]!.muted = true; } },
-    { name: "a disabled clip", mute: (f: ReturnType<typeof fixture>) => { f.tl.tracks[0]!.clips[0]!.enabled = false; } },
-    { name: "a clip at no volume", mute: (f: ReturnType<typeof fixture>) => { (f.tl.tracks[0]!.clips[0] as MediaClip).volume = 0; } },
-    { name: "a caption track", mute: (f: ReturnType<typeof fixture>) => { f.tl.tracks[0]!.kind = "caption"; } },
-  ])("counts no copy of a word on $name", async ({ mute }) => {
-    const f = fixture();
-    const alone = [await resolveCutRange(f.tl, refs.word, "cut", f.sources), await resolveCutRange(f.tl, refs.range, "cut", f.sources)];
-    f.tl.tracks[0]!.clips.push(makeMediaClip("mic", 0, 5, 5));
-    mute(f);
-    expect([await resolveCutRange(f.tl, refs.word, "cut", f.sources), await resolveCutRange(f.tl, refs.range, "cut", f.sources)]).toEqual(alone);
   });
 
   it("returns the fragment audible inside a real crossfade to the author of the cut, including an automatically staged retake", async () => {

@@ -5,7 +5,9 @@
  * time, a process spent about a second starting Node, loading ONNX Runtime and reading the weights before it
  * inferred anything: filler detection took 1.3 s a page with 0.4 s of it inference on the GPU. The helper starts on
  * the first request, takes one request at a time, and exits after half a minute without one, which frees the models'
- * memory. Inference stays out of the engine's own process, which serves playback.
+ * memory. It stays while an agent is at work, whose requests come a turn apart: on 2026-11-14 a pass's filler reads
+ * took 1-3 s each time the helper had gone in between, and 1-9 ms otherwise. Inference stays out of the engine's own
+ * process, which serves playback.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { isSea } from "node:sea";
@@ -75,8 +77,15 @@ function pump() {
   const job = queue.shift();
   if (!job) {
     if (child) hold(child, false);
-    idle = setTimeout(() => { child?.kill(); child = undefined; }, IDLE_MS);
-    idle.unref?.();
+    const rest = () => {
+      idle = setTimeout(() => {
+        if (child && audioWorker.wanted?.()) return rest();
+        child?.kill();
+        child = undefined;
+      }, IDLE_MS);
+      idle.unref?.();
+    };
+    rest();
     return;
   }
   current = job;
@@ -99,6 +108,8 @@ function pump() {
 export const audioWorker = {
   /** Where the helper's notes go: which processor each model runs on, and why a GPU was given up. */
   log: undefined as ((message: string) => void) | undefined,
+  /** Whether more requests are likely soon, which keeps an idle helper and its loaded models. */
+  wanted: undefined as (() => boolean) | undefined,
   /** Run one request in the helper. Aborting stops it, and the helper with it. */
   request<T>(message: AudioRequest, options: { signal?: AbortSignal; onProgress?: (done: number) => void } = {}): Promise<T> {
     const { signal, onProgress } = options;
