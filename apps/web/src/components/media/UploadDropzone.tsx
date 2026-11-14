@@ -3,10 +3,10 @@ import { create } from "zustand";
 import type { ProjectSummary } from "@scarlet/shared";
 import type { MediaAsset } from "@scarlet/timeline";
 import { dropTargets, fileDropZone } from "../../lib/dropTargets";
-import { errorMessage, IS_DESKTOP } from "../../lib/client";
+import { engineUnavailable, errorMessage, IS_DESKTOP } from "../../lib/client";
 import { canResumeFirstClip, matchAddedClip, resumeFirstClip } from "../../lib/firstClipFormat";
 import { fmtBytes } from "../../lib/format";
-import { addPendingImports, isLink, markImportStarted, pendingImports, removePendingImport, type PendingImport } from "../../lib/pendingImports";
+import { addPendingImports, isLink, markImportStarted, pendingImports, removePendingImport, retryInterruptedImport, type PendingImport } from "../../lib/pendingImports";
 import { importLocalFile, uploadMedia } from "../../lib/upload";
 import { useProjectStore } from "../../stores/project";
 import { Icon, Progress } from "../ui/primitives";
@@ -60,6 +60,8 @@ interface ProjectImports {
 const empty: ProjectImports = { items: [], localImport: null, pending: 0, ended: 0 };
 const useImports = create<Record<string, ProjectImports>>(() => ({}));
 const queues = new Map<string, Promise<void>>();
+// A lost engine stops every batch queued for that project until a fresh read can resume it.
+const disconnected = new Set<string>();
 /** Imports this session is already working through, so reopening a project doesn't queue them twice. */
 const queued = new Set<string>();
 const queueKey = (projectId: string, source: string) => JSON.stringify([projectId, source]);
@@ -107,7 +109,9 @@ export function enqueueImports(projectId: string, sources: ImportSource[], match
       const patch = (changes: Partial<UploadItem>) => update(projectId, state => ({
         items: state.items.map(item => item.id === id ? { ...item, ...changes } : item),
       }));
+      let keepPending = typeof source === "string" && disconnected.has(projectId);
       try {
+        if (keepPending) continue;
         let media: MediaAsset;
         // Check when this file gets its turn: earlier files may have finished without yielding any video.
         const deferFormat = !matchFormat && pendingImports(projectId).some(i => i.setsFormat);
@@ -128,12 +132,17 @@ export function enqueueImports(projectId: string, sources: ImportSource[], match
           window.setTimeout(() => dismiss(projectId, id), 6000);
         }
       } catch (error) {
+        if (typeof source === "string" && engineUnavailable(error)) {
+          disconnected.add(projectId);
+          keepPending = retryInterruptedImport(projectId, source);
+        }
+        if (keepPending) continue;
         if (error instanceof DOMException && error.name === "AbortError") dismiss(projectId, id);
         else update(projectId, state => ({ items: [...state.items.filter(item => item.id !== id),
           { id, name, progress: 0, state: "error", error: errorMessage(error) }] }));
       } finally {
         if (typeof source === "string") {
-          removePendingImport(projectId, source);
+          if (!keepPending) removePendingImport(projectId, source);
           queued.delete(queueKey(projectId, source));
         }
         update(projectId, state => ({ pending: state.pending - 1, ended: state.pending > 1 ? state.ended + 1 : 0, localImport: null }));
@@ -152,6 +161,13 @@ export function enqueueImports(projectId: string, sources: ImportSource[], match
  * wait, still saved, until it is on screen to show whether it is still new.
  */
 export function resumeImports(projectId: string, media: readonly MediaAsset[]) {
+  disconnected.delete(projectId);
+  // The new engine can answer the project read before the old import rejects. Recheck when its
+  // queue settles, so that late rejection still gets this reconnect's single retry.
+  const running = queues.get(projectId);
+  if (running) void running.then(() => {
+    if (disconnected.has(projectId)) return resumeImports(projectId, media);
+  });
   const waiting = pendingImports(projectId).filter(i => !queued.has(queueKey(projectId, i.source)) && (!i.setsFormat || canResumeFirstClip(projectId)));
   // Only a file whose copy had begun can already be in the project. One still waiting its turn is imported, also when
   // a file of the same name from another folder arrived meanwhile.

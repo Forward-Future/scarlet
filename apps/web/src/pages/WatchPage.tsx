@@ -171,6 +171,8 @@ interface PreviewProps {
     onPick?(point: AgentContext, action: "offer" | "attach"): void;
     /** The chosen edit is about to play on another version: don't start its passage on this one meanwhile. */
     holdPassage?: boolean;
+    /** A revision was requested from the open card. Its message box is outside the player. */
+    writeRequest?: number;
     /**
      * The edit whose listen the editor has started, shared with the page's own listen of a cut. An edit that was a cut
      * until its revision landed, or becomes one, is taken up as it was instead of started again.
@@ -364,8 +366,11 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const beforeClip = useRef<BeforePlayback>(null);
   // A click on the timeline outside the edit's passage stretches the passage to reach it, so the editor can hear
   // a little earlier or later and stay on the edit and its zoomed timeline. Choosing an edit again resets it.
-  const [reach, setReach] = useState<{ request: number; range: TimeRange; at: number; playing: boolean }>();
-  const reached = reach && threadView?.selected && reach.request === threadView.request ? reach : undefined;
+  const [reach, setReach] = useState<{ request: number; range: TimeRange; at: number; playing: boolean; edit: string; spot: number; original: TimeRange }>();
+  const selectedForReach = threadView?.selected;
+  const reached = reach && selectedForReach && reach.request === threadView.request && reach.edit === selectedForReach.changeId
+    && reach.spot === selectedForReach.spot && reach.original.start === selectedForReach.range.start
+    && reach.original.end === selectedForReach.range.end ? reach : undefined;
   const shownPassage = useRef<TimeRange>(undefined);
   const seekFull = useCallback((t: number) => {
     const selected = threadView?.selected;
@@ -380,7 +385,8 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     const inside = !!range && at >= range.start && at <= range.end && !onBefore;
     if (selected && range && !inside) {
       if (!threadView.framing) setBeforeOf(undefined);
-      setReach({ request: threadView.request, at, playing: onBefore ? !!beforeClip.current?.playing() : usePlayerStore.getState().playing,
+      setReach({ request: threadView.request, at, edit: selected.changeId, spot: selected.spot, original: selected.range,
+        playing: onBefore ? !!beforeClip.current?.playing() : usePlayerStore.getState().playing,
         range: { start: Math.min(range.start, at), end: Math.min(lastFrame, Math.max(range.end, at + REACH_AFTER_SECONDS)) } });
       return;
     }
@@ -491,7 +497,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     // An edit goes by its first version: a revision that lands under it is still the passage the editor chose.
     const first = selectedEdit?.previous[0] ?? selectedEdit;
     const chosen = `${first?.changeId}/${first?.spot}/${threadView?.request}`;
-    const again = played.current ? played.current.chosen === chosen && played.current.reached === reached : !reached && simple?.heard?.current === chosen;
+    const again = played.current ? played.current.chosen === chosen && (!reached || played.current.reached === reached) : !reached && simple?.heard?.current === chosen;
     played.current = { chosen, reached };
     if (simple?.heard) simple.heard.current = chosen;
     if (reached) {
@@ -571,6 +577,13 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
       window.removeEventListener("keydown", escape);
     };
   }, []);
+  const lastWriteRequest = useRef(simple.writeRequest);
+  useEffect(() => {
+    if (simple.writeRequest === lastWriteRequest.current) return;
+    lastWriteRequest.current = simple.writeRequest;
+    setExpanded(false);
+    if (document.fullscreenElement === stage.current) void document.exitFullscreen().catch(() => {});
+  }, [simple.writeRequest]);
   // Leave the comparison when its decision returns the editor to the thread list.
   const previousChange = useRef(change?.id);
   useEffect(() => {
@@ -640,7 +653,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
           {(source || cut || change || draftVersion) && <div className="monitor-controls">
             {/* Picking a speed hands the keys back to the page, so the arrows go on stepping through edits. */}
             <PreferenceSelect compact label="Playback speed" options={RATES} value={rate} valueLabel={`${rate}×`} disabled={!playable}
-              onChange={value => { player.setRate(value); (document.activeElement as HTMLElement | null)?.blur(); }} />
+              onChange={value => player.setRate(value)} onClose={() => (document.activeElement as HTMLElement | null)?.blur()} />
             <button className="btn-icon" onClick={e => { if (e.detail) e.currentTarget.blur(); void toggleFullscreen(); }} aria-label={expanded ? "Exit full screen" : "Full screen"} title={expanded ? "Exit full screen" : "Full screen"}>
               <Icon name="fullscreen" size={15} />
             </button>

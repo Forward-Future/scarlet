@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import * as imports from "../media/UploadDropzone";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
@@ -60,4 +61,26 @@ it("keeps a missing project distinct from other projects in Trash", async () => 
   await api.deleteProject(project.id);
   await initial.load("prj_missing");
   expect(useProjectStore.getState()).toMatchObject({ status: "error", trashedProject: null, current: null });
+});
+
+it("carries on with imports kept for the project when it opens, and again each time it is read after the engine came back", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const { project } = await api.createProject({ name: "Interview" });
+  const resume = vi.spyOn(imports, "resumeImports").mockResolvedValue(undefined);
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<MemoryRouter initialEntries={[`/p/${project.id}`]}><Routes>
+      <Route path="/p/:id" element={<ProjectLayout />} />
+    </Routes></MemoryRouter>));
+    await act(async () => vi.waitFor(() => expect(useProjectStore.getState().current?.id).toBe(project.id)));
+    expect(resume).toHaveBeenCalledWith(project.id, expect.any(Array));
+    // The engine restarts under the open project. The window stays up, and reads the project again once it is back:
+    // files that were importing when the engine went are waiting, saved, for exactly this.
+    resume.mockClear();
+    await act(async () => { await useProjectStore.getState().load(project.id); });
+    expect(resume).toHaveBeenCalledWith(project.id, useProjectStore.getState().current!.media);
+  } finally {
+    await act(() => root.unmount());
+  }
 });

@@ -60,3 +60,32 @@ it("keeps an unavailable provider actionable and reports a failed 202 task on th
     await act(() => root.unmount());
   }
 });
+
+it("reads a transcription the pause stopped as paused in the transcript pane too, and holds Transcribe while processing is paused", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const db = buildDb();
+  const project = { ...db.projects.find((p) => p.id === PRJ)!, mediaPaused: true };
+  const media = db.media[PRJ]!;
+  const music = media.find((m) => m.id === MED_MUSIC)!;
+  const stopped: Task = {
+    ...db.tasks[0]!, id: "transcription-stopped", projectId: PRJ, kind: "transcribe", agent: "api",
+    context: { mediaId: music.id }, state: "failed", interrupted: true, instruction: `Transcribe ${music.name}`, error: "Transcription was interrupted.",
+  };
+  const current: ProjectData = { id: PRJ, project, timeline: null, media, changes: [], notes: [], renders: [], tasks: [stopped], taskEvents: {}, versions: [] };
+  useProjectStore.setState({ current });
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(() => root.render(<MemoryRouter><TranscriptionAction asset={music} available /></MemoryRouter>));
+    // Nothing failed and nothing can be retried: the engine starts no transcription until processing is resumed.
+    expect(container.textContent).toBe("Transcription paused");
+    expect(container.querySelector('[role="alert"], button')).toBeNull();
+    // A recording with no run to resume keeps its button, held until then.
+    await act(() => useProjectStore.setState({ current: { ...current, tasks: [] } }));
+    expect(container.querySelector("button")).toMatchObject({ textContent: "Transcribe", disabled: true });
+    await act(() => useProjectStore.setState({ current: { ...current, tasks: [], project: { ...project, mediaPaused: false } } }));
+    expect(container.querySelector("button")).toMatchObject({ textContent: "Transcribe", disabled: false });
+  } finally {
+    await act(() => root.unmount());
+  }
+});

@@ -428,7 +428,7 @@ function ZoomPopover({ children, onKey }: { children: ReactNode; onKey(event: Ke
     if (open) { onKey(e.nativeEvent); e.stopPropagation(); }
   }}>
     <button ref={trigger} type="button" className="timeline-view-trigger" aria-label="Timeline controls"
-      title="Timeline controls · scroll or pinch to zoom" aria-expanded={open} aria-controls={id}
+      title="Timeline controls · scroll or pinch to zoom" aria-expanded={open} aria-controls={open ? id : undefined}
       onClick={e => { e.currentTarget.focus({ preventScroll: true }); setOpen(value => !value); }}>
       <Icon name="zoom" size={15} />
     </button>
@@ -491,7 +491,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
     return () => observer.disconnect();
   }, []);
   const track = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ id: number; start: number; lifetime: AbortController; finish?: () => void; time?: number; x: number; paint?: number } | null>(null);
+  const drag = useRef<{ id: number; start: number; span: number; lifetime: AbortController; finish?: () => void; time?: number; x: number; paint?: number } | null>(null);
   useLayoutEffect(() => () => {
     // A new working cut builds the timeline again. A drag held just then ends with the timeline it was on: the video
     // it paused carries on as it was, instead of staying paused under a pointer that no longer moves anything.
@@ -653,7 +653,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
     gesture.paint = undefined;
     const rect = slider.current!.getBoundingClientRect();
     if (rect.width <= 0) return;
-    const time = gesture.start + span * Math.max(0, Math.min(1, (gesture.x - rect.left) / rect.width));
+    const time = gesture.start + gesture.span * Math.max(0, Math.min(1, (gesture.x - rect.left) / rect.width));
     if (time === gesture.time) return;
     gesture.time = time;
     onSeek(time);
@@ -691,7 +691,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
         stopZoom();
         e.currentTarget.setPointerCapture(e.pointerId);
         const lifetime = new AbortController();
-        drag.current = { id: e.pointerId, start: from, x: e.clientX, lifetime, finish: onScrubStart?.(lifetime.signal) };
+        drag.current = { id: e.pointerId, start: from, span, x: e.clientX, lifetime, finish: onScrubStart?.(lifetime.signal) };
         seek();
       }}
       onPointerMove={e => {

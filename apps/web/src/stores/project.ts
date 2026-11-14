@@ -48,6 +48,8 @@ export interface ProjectData {
   taskEventScopes?: Record<string, "all" | "conversation">;
   versions?: VersionSummary[];
   historyRevision?: number;
+  /** Identity of the last full project read, including the one following an engine reconnect. */
+  loadRevision?: number;
   reviewStatus?: "loading" | "error";
   reviewError?: string;
   /**
@@ -313,7 +315,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
           current: {
             id, project: detail.project, timeline: detail.timeline, media: detail.project.media,
             changes: prev?.changes ?? [], notes: prev?.notes ?? [], learnings: prev?.learnings, tasks: prev?.tasks ?? [], renders: [],
-            taskEvents: prev?.taskEvents ?? {}, historyRevision: (prev?.historyRevision ?? 0) + 1, reviewStatus: needsHistory ? "loading" : undefined,
+            taskEvents: prev?.taskEvents ?? {}, loadRevision: request, historyRevision: (prev?.historyRevision ?? 0) + 1, reviewStatus: needsHistory ? "loading" : undefined,
           },
         });
         opening = undefined;

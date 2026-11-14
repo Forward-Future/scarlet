@@ -1896,6 +1896,10 @@ export function SimpleWorkspace() {
     threadTimeline.clear();
     setSourceChoice({ id, play });
     setPanel(null);
+    if (source?.id === id) {
+      player.seek(0);
+      if (play) player.play();
+    }
   }
   const backToVideo = () => {
     player.pause();
@@ -1950,12 +1954,14 @@ export function SimpleWorkspace() {
     setTargetLabel(label);
     useUiStore.getState().setAgentContext(target);
   }
+  const [writeRequest, setWriteRequest] = useState(0);
   function startRevision(thread: Thread, target: AgentContext, label: string) {
     // A message being spoken is in the box until it is out. Aiming the box builds it again, which would drop the
     // recording without a word: Revise waits, as Move here and the tag's × do.
     if (useUiStore.getState().speaking) return;
     player.pause();
     aimAt(thread, target, label);
+    setWriteRequest(n => n + 1);
     useUiStore.getState().focusComposer();
   }
   /**
@@ -3353,13 +3359,13 @@ export function SimpleWorkspace() {
               follow.current = pane.scrollHeight - pane.clientHeight - pane.scrollTop < 48;
             }}>
               {current.reviewStatus === "loading" ? <Loading label="Loading edits…" />
-                : current.reviewStatus === "error" ? <p className="simple-error" role="alert">{current.reviewError}
+                : current.reviewStatus === "error" ? <p className="simple-error" role="alert">{current.reviewError}{" "}
                   <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>
                 : ordered.length ? ordered.map(thread => <Turn key={thread.id} projectId={current.id} thread={thread} actions={actions}
                   pinned={pinned} pinHost={pinHost} list={listOf(thread.id)} />)
                 : !media.length && <p className="simple-empty">Drop footage here, then say what you want.</p>}
               {/* A new timeline that keeps failing to read is said after the conversation, which stays where it is. */}
-              {!current.reviewStatus && current.headError && <p className="simple-error" role="alert">{current.headError}
+              {!current.reviewStatus && current.headError && <p className="simple-error" role="alert">{current.headError}{" "}
                 <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>}
             </div>
             {/* The Transcript takes the chat's side, not this: what Scarlet is on, its Stop and its question stay in view. */}
@@ -3387,7 +3393,7 @@ export function SimpleWorkspace() {
                 ? { key: callPlaybackKey(listening.index, callTimeline.version), start: audition.start, side: listening.side,
                   beforeWindow: preparedCall?.before.window, afterWindow: preparedCall?.after.window,
                   beforeFile: preparedCall?.before.file, afterFile: preparedCall?.after.file } : undefined,
-            onGap: hearInBefore, onBand, onPick: pickPoint, holdPassage: cutWaits, heard: heardPick }} threadView={playerView}
+            onGap: hearInBefore, onBand, onPick: pickPoint, holdPassage: cutWaits, writeRequest, heard: heardPick }} threadView={playerView}
             workingCache={workingCache} draftVersion={previewVersion} draft={appliedCut ? beforeTimeline : pinnedCallVersion ? callTimeline : draft}
             openingJoin={openingJoin && !source && !appliedCut}
             draftFailed={openingJoin ? !!single.error || (!!single.preview && !listenJoined) : pinnedCallVersion ? !!savedBefore.error : !appliedCut && !!draftVersion && draftState?.version === draftVersion && !!draftState.failed}

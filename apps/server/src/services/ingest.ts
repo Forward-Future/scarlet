@@ -280,6 +280,7 @@ export async function ingestMedia(
     };
   } catch (e) {
     await rm(dest, { force: true });
+    ctx.shutdown.throwIfAborted();
     throw badRequest("probe_failed", `ffprobe could not read the file: ${(e as Error).message}`);
   }
   let stored: MediaWithStatus;

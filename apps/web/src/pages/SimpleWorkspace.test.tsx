@@ -9989,3 +9989,72 @@ it("keeps the call the editor is on, and the list of calls, when another call's 
   expect(call()?.querySelector(".edit-card-title")?.textContent).toContain("Breath before the price.");
   expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual(["Starts in the pause.", "Breath before the price.", "Repeated aside."]);
 });
+
+it("keeps a passage stretched by a skip through a reload of its edit's markers, but not onto an edit that came back moved", async () => {
+  earlierRequestOnly();
+  const later = laterRequest();
+  await show();
+  await act(async () => {});
+  const passages = vi.spyOn(player, "previewRange");
+  await click(editRows("chg_approved_2")[1]!);
+  await act(async () => {});
+  expect(openTitle()).toBe("captions");
+  // A skip past the passage's end stretches it to there: 0:00.2 to 0:02.4 becomes 0:00.2 to 0:07.2, the playhead at 0:05.2.
+  await act(async () => { player.pause(); });
+  await press("ArrowRight");
+  expect(passages.mock.calls.at(-1)).toMatchObject([{ start: 0.2, end: 7.2 }, expect.any(Number), 5.2, false]);
+  // The working cut moves on, and the edit is where it was. The stretch stands, taken up again as it was left.
+  passages.mockClear();
+  later.hold(later.earlier);
+  await headMoves("ver_moved");
+  await later.release();
+  expect(openTitle()).toBe("captions");
+  expect(passages.mock.calls.at(-1)).toMatchObject([{ start: 0.2, end: 7.2 }, expect.any(Number), 5.2, true]);
+  // It moves on again, and this time the edit comes back shorter: it was revised. The stretch was measured on the
+  // passage it had: kept, the transport stayed bound to seconds that are somewhere else now, and played from there.
+  // The edit's own passage is taken up, and still as the edit it was, not as one newly chosen.
+  passages.mockClear();
+  (later.lists[later.earlier] as { range: object }[])[1]!.range = { start: 0.2, end: 1.8 };
+  later.hold(later.earlier);
+  await headMoves("ver_moved_again");
+  await later.release();
+  expect(openTitle()).toBe("captions");
+  expect(passages.mock.calls.at(-1)).toMatchObject([{ start: 0.2, end: 1.8 }, expect.any(Number), undefined, true]);
+});
+
+it("leaves full screen when Revise hands the keyboard to the message box, which full screen hides", async () => {
+  appliedEdits();
+  await show();
+  await click(turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit")[0]!);
+  await act(async () => {});
+  const stage = container.querySelector<HTMLElement>(".cut-preview")!;
+  await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Full screen"]')!);
+  expect(stage.dataset.expanded).toBe("true");
+  // The card is still on screen over the timeline, with its keys. R aims the box at the edit and puts the caret in it.
+  useUiStore.setState({ composerFocus: 0 });
+  await press("r");
+  expect(useUiStore.getState().composerFocus).toBe(1);
+  expect(boxTag()).toBe("Edit at 0:00");
+  // The box is in the chat, behind the player: typed into unseen, the message went to Scarlet on Enter.
+  expect(stage.dataset.expanded).toBeUndefined();
+  expect(editPanel()).not.toBeNull();
+});
+
+it("takes a clip that's already showing back to its start, and plays it, when it is played from Media again", async () => {
+  await show();
+  const fromMedia = async () => {
+    await openMenu();
+    await click(menuRow("Media"));
+    await act(async () => { await vi.dynamicImportSettled(); });
+    await click(await vi.waitFor(() => { const b = container.querySelector<HTMLButtonElement>('button[aria-label^="Preview source"]'); if (!b) throw new Error("no Media row yet"); return b; }));
+  };
+  await fromMedia();
+  expect(container.querySelector('[aria-label="Source preview"]')).not.toBeNull();
+  // Some way into the clip, the editor plays it from Media again. Its player is already up, so nothing opens it anew.
+  await act(async () => usePlayerStore.setState({ time: 7 }));
+  const seek = vi.spyOn(player, "seek"), play = vi.spyOn(player, "play").mockImplementation(() => {});
+  await fromMedia();
+  expect(seek).toHaveBeenCalledWith(0);
+  expect(play).toHaveBeenCalledTimes(1);
+  expect(usePlayerStore.getState().time).toBe(0);
+});

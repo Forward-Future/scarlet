@@ -30,7 +30,7 @@ beforeEach(() => {
   project = workspace.ctx.repos.projects.insert(createProject("Test"));
 });
 afterEach(async () => {
-  await workspace.ctx.close();
+  if (!workspace.ctx.shutdown.aborted) await workspace.ctx.close();
   rmSync(directory, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
@@ -393,4 +393,23 @@ it("checks again as the file goes, so a clip placed or a second removal sent mea
   expect(events).toEqual(["twice"]);
   expect(ctx.repos.activity.count("type = 'media.removed'")).toBe(1);
   expect(ctx.repos.projects.listMedia(project.id).map(m => m.id)).toEqual(["placed"]);
+});
+
+it("returns a retryable shutdown response for an import interrupted during its probe", async () => {
+  const { ctx } = workspace;
+  const file = join(directory, "interview.mov");
+  writeFileSync(file, "fixture");
+  let probing!: () => void;
+  const began = new Promise<void>(resolve => { probing = resolve; });
+  vi.spyOn(ctx.render, "probeMedia").mockImplementation(async (_file, signal) => {
+    probing();
+    return new Promise((_resolve, reject) => signal!.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+  });
+  const request = api("POST", `/projects/${project.id}/media/import`, { path: file });
+  await began;
+  const closing = ctx.close();
+  const response = await request;
+  await closing;
+  expect(response.status).toBe(503);
+  expect(readdirSync(ctx.paths.media(project.id))).toEqual([]);
 });

@@ -356,3 +356,39 @@ it("carries on with files saved with a garbled mark, and doesn't let them set th
   expect(store.updateProject).not.toHaveBeenCalled();
   expect(pendingImports(project.id)).toEqual([]);
 });
+
+it("keeps interrupted files and links across a restart, with the same import ID and one retry", async () => {
+  const { enqueueImports } = await import("./UploadDropzone");
+  const { pendingImports } = await import("../../lib/pendingImports");
+  const { ScarletApiError } = await import("@scarlet/shared");
+  const path = "/clips/a.mov";
+  const link = "https://example.com/b.mov";
+  importLocalFile.mockRejectedValueOnce(new ScarletApiError(503, "http_error", ""));
+  await enqueueImports("prj", [path, link]);
+  expect(importLocalFile.mock.calls.map(call => call[1])).toEqual([path]);
+  const [first, next] = pendingImports("prj");
+  expect(first).toMatchObject({ source: path, interrupted: true, importId: expect.any(String) });
+  expect(next).toMatchObject({ source: link, started: false });
+
+  const resumed = await relaunch(localStorage.getItem(SAVED)!);
+  importLocalFile.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  await resumed.resumeImports("prj", []);
+  expect(importLocalFile).toHaveBeenCalledExactlyOnceWith("prj", path, expect.any(Function), first!.importId, false);
+  expect(pendingImports("prj").map(i => i.source)).toEqual([link]);
+  await resumed.resumeImports("prj", []);
+  expect(importLocalFile.mock.calls.at(-1)?.[1]).toBe(link);
+  expect(pendingImports("prj")).toEqual([]);
+});
+
+it("resumes when the new project's read arrives before the old import reports the disconnect", async () => {
+  const { enqueueImports, resumeImports } = await import("./UploadDropzone");
+  let reject!: (reason: Error) => void;
+  importLocalFile.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+  const job = enqueueImports("prj", ["/a.mov", "/b.mov"]);
+  await vi.waitFor(() => expect(reject).toBeTypeOf("function"));
+  await resumeImports("prj", []);
+  reject(new TypeError("Failed to fetch"));
+  await job;
+  await vi.waitFor(() => expect(importLocalFile.mock.calls.map(call => call[1])).toEqual(["/a.mov", "/a.mov", "/b.mov"]));
+  expect((await import("../../lib/pendingImports")).pendingImports("prj")).toEqual([]);
+});

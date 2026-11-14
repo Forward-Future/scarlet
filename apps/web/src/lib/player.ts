@@ -52,6 +52,8 @@ let lastClock: number | undefined;
  * as it was: it plays only if this is set or the video is playing, so a paused video stays paused.
  */
 let carry = false;
+// A passage set up again after its cleanup keeps whether it stopped upon reaching its end.
+let endedPassage = false;
 /**
  * A clip that plays over the monitor has the playhead and says where it is: Before on an edit that isn't a cut.
  * The attached media waits under it, and its clock isn't read: a pause or a seek of its own that lands late would
@@ -234,6 +236,8 @@ export const player = {
    */
   previewRange(range: TimeRange, fps: number, stillAt?: number, again = false) {
     const resume = again && (carry || isPlaying());
+    const ended = again && (ranOut || endedPassage);
+    endedPassage = false;
     playbackLog("transport passage", { start: range.start, end: range.end, stillAt, again, resume, at: usePlayerStore.getState().time, by: calledBy(2) });
     this.pause();
     audition = undefined;
@@ -242,8 +246,10 @@ export const player = {
     ranOut = false;
     this.seek(again ? usePlayerStore.getState().time : stillAt ?? owned.start, true);
     if (again ? resume : stillAt === undefined) this.play();
+    else if (ended && atOut) ranOut = true;
     return () => {
       if (passage !== owned) return;
+      endedPassage = ranOut;
       letGo();
       passage = undefined;
       atOut = false;
@@ -262,6 +268,7 @@ export const player = {
     passage = undefined;
     atOut = false;
     ranOut = false;
+    endedPassage = false;
     const owned = { ...next, fps };
     audition = owned;
     const time = usePlayerStore.getState().time;
