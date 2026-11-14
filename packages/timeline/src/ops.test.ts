@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ZodError } from "zod/v3";
 import {
   applyOp, applyOps, clipEnd, emptyTimeline, makeMediaClip, makeTrack, OpError, shiftClip, splitClip, Timeline, trimHead, trimTail, WritableTimeline,
-  type CaptionClip, type ColorClip, type Marker, type MediaClip, type Timeline, type TimelineOp,
+  type CaptionClip, type ColorClip, type Marker, type MediaClip, type TimelineOp,
 } from "./index.js";
 
 const caption = (id: string, start: number, end: number, text = id): CaptionClip => ({ id, kind: "caption", enabled: true, timelineIn: start, timelineOut: end, text });
