@@ -680,6 +680,8 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     }
     return chunk;
   }
+  /** The most words and gaps the engine reads in one other-input request (`/media/:id/other-input`). */
+  const OTHER_INPUT_WORDS = 5000, OTHER_INPUT_GAPS = 2000;
   // Which words of a recording were heard only on the input its dialogue isn't on, by transcript index, once their times are final.
   const inputLabels = new Map<string, Map<number, boolean>>();
   const noInputs = new Set<string>();
@@ -694,8 +696,16 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     const known = inputLabels.get(mediaId) ?? new Map<number, boolean>();
     inputLabels.set(mediaId, known);
     const ask = words.filter(w => !known.has(w.index));
-    const reading = await client.otherInput(ctx.projectId, mediaId, { words: ask.map(w => [w.start, w.end]), gaps: gaps.map(g => [g.start, g.end]) })
-      .catch(withoutOnce(`failed to read which input each word of ${mediaId} came from`, undefined));
+    // The engine takes at most OTHER_INPUT_WORDS words and OTHER_INPUT_GAPS gaps a request. A transcript read of a long
+    // recording, in segments, can hold several times that: it is asked in parts, and the answers put back in order.
+    const parts = Math.max(1, Math.ceil(ask.length / OTHER_INPUT_WORDS), Math.ceil(gaps.length / OTHER_INPUT_GAPS));
+    const read = async () => {
+      const answers = await Promise.all(Array.from({ length: parts }, (_, i) => client.otherInput(ctx.projectId, mediaId, {
+        words: ask.slice(i * OTHER_INPUT_WORDS, (i + 1) * OTHER_INPUT_WORDS).map(w => [w.start, w.end]),
+        gaps: gaps.slice(i * OTHER_INPUT_GAPS, (i + 1) * OTHER_INPUT_GAPS).map(g => [g.start, g.end]) })));
+      return { available: answers.every(a => a.available), words: answers.flatMap(a => a.words), gaps: answers.flatMap(a => a.gaps) };
+    };
+    const reading = await read().catch(withoutOnce(`failed to read which input each word of ${mediaId} came from`, undefined));
     if (!reading) return empty;
     if (!reading.available) { noInputs.add(mediaId); return empty; }
     const settled = settledThrough(mediaId);

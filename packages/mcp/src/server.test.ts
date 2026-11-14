@@ -789,6 +789,38 @@ describe("transcript tools", () => {
     }
   });
 
+  it("asks which input each word came from in parts the engine accepts, on a read longer than one part", async () => {
+    // 12,000 short words, read in segments with a large result budget: one read holds more words than one request takes.
+    const words = Array.from({ length: 12_000 }, (_, i) => ({ start: i * .3, end: i * .3 + .2, text: "a" }));
+    const state = makeState({ transcripts: { m1: { ...transcript, segments: [{ id: "all", start: 0, end: words.at(-1)!.end, text: "", words }] } } });
+    state.project.media = state.project.media.map(m => m.id === "m1" ? { ...m, duration: Math.ceil(words.at(-1)!.end) } : m);
+    const asked: number[] = [];
+    // The word at 3000 s, the 10,001st, came from the call.
+    state.otherInput = (_mediaId, read, gaps) => {
+      if (read.length > 5000 || gaps.length > 2000) throw new Error("more than one request takes");
+      asked.push(read.length);
+      return { available: true, words: read.map(([start]) => Math.abs(start - 3000) < .01), gaps: gaps.map(() => []) };
+    };
+    const fixture = await startMockServer(state);
+    const agent = new Client({ name: "other-input-parts", version: "1" });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    try {
+      const server = createScarletMcpServer(new ScarletClient({ baseUrl: fixture.url, token: "tok" }), {
+        projectId: "prj_test", agent: "claude", capabilities: agentCapabilities("claude", { resultChars: 200_000 }),
+        author: { type: "agent", name: "claude" },
+      });
+      await server.connect(a);
+      await agent.connect(b);
+      const read = textOf(await agent.callTool({ name: "transcript_get", arguments: { mediaId: "m1", granularity: "segment" } }) as CallToolResult);
+      expect(asked.length).toBeGreaterThan(1);
+      expect(asked.reduce((n, count) => n + count, 0)).toBeGreaterThan(5000);
+      expect(read).toContain("[other input] a");
+    } finally {
+      await agent.close();
+      await fixture.close();
+    }
+  });
+
   it("pages a 6,300-word transcript without losing words or the measured gap at a page boundary", async () => {
     const limit = 4_000;
     // The uninterrupted opening must split inside a segment. Subsequent quiet gaps exercise
