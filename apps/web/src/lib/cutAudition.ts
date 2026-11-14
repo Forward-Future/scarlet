@@ -14,26 +14,36 @@ const LONG_CUT = 10;
  * an applied cut plays all of it, since its shaded passage on the timeline lets the editor click ahead.
  */
 export function cutAudition(cut: TimeRange, side: "before" | "after", duration: number,
-  { others = [], whole = false, tailFrom, merged }: { others?: TimeRange[]; whole?: boolean; tailFrom?: number; merged?: Iterable<TimeRange> } = {}): Audition {
+  { others = [], whole = false, tailFrom, merged, beyond = false }: { others?: TimeRange[]; whole?: boolean; tailFrom?: number; merged?: Iterable<TimeRange>; beyond?: boolean } = {}): Audition {
   const at = (t: number) => Math.max(0, Math.min(duration, t));
   const start = at(cut.start - CUT_LEAD_SECONDS);
   if (side === "after") {
     const resume = Math.max(cut.end, tailFrom ?? cut.end);
     let end = at(resume + CUT_TAIL_SECONDS);
     const skips: Audition["skips"] = [];
+    // What came out either side of the listen. The listen never reaches it, but an editor who plays on does.
+    const later: TimeRange[] = [];
+    let past = false;
     // Each removal in the tail moves the stopping point forward and may bring another removal into earshot.
     // An indexed pass supplies its already-merged ranges starting at the first overlap.
     for (const range of merged ?? mergeRanges([cut, ...others])) {
+      if (past) { later.push(range); continue; }
       if (range.start >= end - 1e-6) {
         // Fractional frame times can put an exact stop a few ulps beyond the next join.
         end = Math.min(end, range.start);
-        break;
+        if (!beyond) break;
+        past = true;
+        later.push(range);
+        continue;
       }
-      if (range.end <= start) continue;
+      if (range.end <= start) {
+        if (beyond) later.push(range);
+        continue;
+      }
       skips.push({ ...range, removed: true });
       end = at(end + Math.max(0, range.end - Math.max(resume, range.start)));
     }
-    return { start, end, skips };
+    return later.length ? { start, end, skips, beyond: later } : { start, end, skips };
   }
   const end = at(Math.max(cut.end + CUT_LEAD_SECONDS, tailFrom === undefined ? 0 : tailFrom + CUT_TAIL_SECONDS));
   return { start, end, skips: !whole && cut.end - cut.start > LONG_CUT ? [{ start: cut.start + CUT_TAIL_SECONDS, end: cut.end - CUT_TAIL_SECONDS }] : [] };
