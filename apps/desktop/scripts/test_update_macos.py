@@ -53,6 +53,23 @@ class Timed:
         return now
 
 
+def exchange(address, message, *, wait_for_listener=False):
+    """Only the first connection may race bind/listen. Send each request exactly once."""
+    deadline = time.monotonic() + 2
+    while True:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(2)
+            try:
+                client.connect(str(address))
+            except (FileNotFoundError, ConnectionRefusedError):
+                if not wait_for_listener or time.monotonic() >= deadline:
+                    raise
+            else:
+                client.sendall((message + "\n").encode())
+                return client.recv(64).decode().strip()
+        time.sleep(0.01)
+
+
 @unittest.skipUnless(sys.platform == "darwin", "uses macOS code signing and directory exchange")
 class UpdateTest(unittest.TestCase):
     def setUp(self):
@@ -125,26 +142,17 @@ class UpdateTest(unittest.TestCase):
         address = updater.CACHE / "ready.sock"
         intent = updater.CACHE / "restart"
 
-        def exchange(message):
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-                client.settimeout(2)
-                client.connect(str(address))
-                client.sendall((message + "\n").encode())
-                return client.recv(64).decode().strip()
-
         with patch.object(updater, "busy", return_value=True):
-            worker = threading.Thread(target=updater.offer_update, args=(updater.Attendant(), time.monotonic() + 5))
+            attend = updater.Attendant()
+            self.addCleanup(attend.close)
+            worker = threading.Thread(target=updater.offer_update, args=(attend, time.monotonic() + 5))
             worker.start()
             try:
-                for _ in range(100):
-                    if address.exists():
-                        break
-                    time.sleep(0.01)
-                self.assertEqual(exchange("ready"), commit)
-                self.assertEqual(exchange("restart " + "c" * 40), "stale")
+                self.assertEqual(exchange(address, "ready", wait_for_listener=True), commit)
+                self.assertEqual(exchange(address, "restart " + "c" * 40), "stale")
                 self.assertFalse(intent.exists())
                 with patch.object(updater, "app_processes", return_value={"ffmpeg", "whisper-cli"}):
-                    self.assertEqual(exchange("restart " + commit), "accepted")
+                    self.assertEqual(exchange(address, "restart " + commit), "accepted")
             finally:
                 worker.join(6)
         self.assertFalse(address.exists())
@@ -292,16 +300,8 @@ class UpdateTest(unittest.TestCase):
         replies = []
 
         def click():
-            for _ in range(200):
-                if address.exists():
-                    break
-                time.sleep(0.01)
-            for message in ("ready", "restart " + commit):
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-                    client.settimeout(2)
-                    client.connect(str(address))
-                    client.sendall((message + "\n").encode())
-                    replies.append(client.recv(64).decode().strip())
+            replies.append(exchange(address, "ready", wait_for_listener=True))
+            replies.append(exchange(address, "restart " + commit))
 
         attend = updater.Attendant()
         window = threading.Thread(target=click)
@@ -637,48 +637,39 @@ class UpdateTest(unittest.TestCase):
         commit = "b" * 40
         address = updater.CACHE / "ready.sock"
         intent = updater.CACHE / "restart"
-        # A git that takes its time to say main is at the verified build, as GitHub does on a poor connection.
-        # It writes a line when it is asked and another when it answers.
+        # Hold both Git requests open until the window has got its answer from the worker.
         tools = updater.CACHE / "tools"
         tools.mkdir()
-        asked = updater.CACHE / "asked"
-        (tools / "git").write_text(f"#!/bin/sh\necho asked >> '{asked}'\nsleep 0.4\necho answered >> '{asked}'\n"
-                                   f"printf '{commit}\\trefs/heads/main\\n'\n")
+        first = updater.CACHE / "first-request"
+        release = updater.CACHE / "release-first"
+        second = updater.CACHE / "second-request"
+        (tools / "git").write_text(
+            f"#!/bin/sh\nif [ -f '{first}' ]; then\n  touch '{second}'\n  exec sleep 30\nfi\n"
+            f"touch '{first}'\nwhile [ ! -f '{release}' ]; do sleep 0.02; done\n"
+            f"printf '{commit}\\trefs/heads/main\\n'\n")
         (tools / "git").chmod(0o755)
         during, between, clicks, opened, said = [], [], [], [], []
         run = subprocess.run
 
-        def lines():
-            return len(asked.read_text().splitlines()) if asked.exists() else 0
-
         def ask(message):
             try:
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-                    client.settimeout(2)
-                    client.connect(str(address))
-                    client.sendall((message + "\n").encode())
-                    return client.recv(64).decode().strip()
+                return exchange(address, message)
             except OSError:
                 return "no answer"
 
         def window():
             """Keeps asking whether an update is ready, into the worker's second check of GitHub, then clicks Restart."""
             deadline = time.monotonic() + 20
-            while ask("ready") != commit and time.monotonic() < deadline:
+            while not first.exists() and time.monotonic() < deadline:
                 time.sleep(0.01)
-            second = 0
-            while second < 3 and time.monotonic() < deadline:
-                written = lines()
-                answer = ask("ready")
-                # An odd count that hasn't moved: git was waiting on GitHub from before the question until after its answer.
-                checking = written % 2 == 1 and lines() == written
-                (during if checking else between).append(answer)
-                if checking and written >= 3:
-                    second += 1
-                time.sleep(0.03)
-            while clicks[-1:] != ["accepted"] and time.monotonic() < deadline:
+            during.append(exchange(address, "ready", wait_for_listener=True))
+            release.touch()
+            while not second.exists() and time.monotonic() < deadline:
+                between.append(ask("ready"))
+                time.sleep(0.01)
+            if second.exists():
+                during.extend(ask("ready") for _ in range(3))
                 clicks.append(ask("restart " + commit))
-                time.sleep(0.03)
 
         def capture_open(args, **kwargs):
             if args[0] == "/usr/bin/open":
@@ -700,14 +691,12 @@ class UpdateTest(unittest.TestCase):
                     self.watch()
             finally:
                 scarlet.join(25)
-        self.assertGreaterEqual(len(during), 3)
-        self.assertEqual([answer for answer in during if answer != commit], [])
+        self.assertEqual(during, [commit] * 4)
         self.assertEqual([answer for answer in between if answer != commit], [])
         self.assertEqual(clicks, ["accepted"])
         self.assertEqual(opened, [(str(updater.APP), commit)])
         self.assertFalse(address.exists())
-        # No build was under way to stop.
-        self.assertEqual([line.split()[0] for line in said], ["Installed"])
+        self.assertEqual(said, [f"Installed {commit} at {updater.APP}."])
 
 
 if __name__ == "__main__":

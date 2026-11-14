@@ -1,11 +1,12 @@
 // Run with: node --test apps/desktop/scripts/smoke-engine.test.mjs
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { inspectPublicPayload } from "./smoke-engine-public.mjs";
 
 const script = fileURLToPath(new URL("./smoke-engine.mjs", import.meta.url));
 const exe = process.platform === "win32" ? ".exe" : "";
@@ -47,3 +48,46 @@ test("a bundle with a file missing fails before anything is created", (t) => {
   assert.deepEqual(readdirSync(temp), []);
   assert.deepEqual(filesUnder(home), []);
 });
+
+for (const windows of [false, true]) {
+  test(`checks the ${windows ? "Windows" : "macOS"} public payload for notices and external media tools`, (t) => {
+    const root = mkdtempSync(join(tmpdir(), "scarlet-package-test-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const dir = windows ? join(root, "Scarlet") : join(root, "Scarlet.app", "Contents", "MacOS");
+    const resources = windows ? dir : join(dir, "../Resources");
+    const licenses = join(resources, "licenses");
+    mkdirSync(dir, { recursive: true });
+    mkdirSync(join(licenses, "runtime"), { recursive: true });
+    writeFileSync(join(dir, windows ? "scarlet-engine.exe" : "scarlet-engine"), "engine");
+    copyFileSync(new URL("../../../LICENSE", import.meta.url), join(licenses, "scarlet.txt"));
+    for (const name of ["node.txt", "javascript.txt", "rust.txt"]) writeFileSync(join(licenses, "runtime", name), "notice");
+    if (windows) {
+      mkdirSync(join(licenses, "runtime/DirectML"));
+      mkdirSync(join(licenses, "runtime/Vulkan-Headers"));
+      for (const name of ["DirectML/LICENSE.txt", "DirectML/LICENSE-CODE.txt", "DirectML/ThirdPartyNotices.txt",
+        "Vulkan-Headers/MIT.txt", "Vulkan-Headers/NOTICE.txt"]) {
+        writeFileSync(join(licenses, "runtime", name), "notice");
+      }
+    } else {
+      copyFileSync(new URL("./Install-Scarlet-FFmpeg-macOS.sh", import.meta.url), join(resources, "Install-Scarlet-FFmpeg-macOS.sh"));
+    }
+    // A Finder DMG has an Applications symlink. A check must never traverse a link into the host filesystem.
+    const outside = mkdtempSync(join(tmpdir(), "scarlet-unrelated-"));
+    t.after(() => rmSync(outside, { recursive: true, force: true }));
+    writeFileSync(join(outside, "ffmpeg"), "outside this package");
+    symlinkSync(outside, join(root, "Applications"), process.platform === "win32" ? "junction" : "dir");
+    assert.equal(inspectPublicPayload(root, windows), dir);
+    const unexpected = join(resources, windows ? "ffprobe.exe" : "ffmpeg");
+    writeFileSync(unexpected, "binary");
+    assert.throws(() => inspectPublicPayload(root, windows), /Unexpected media tool/);
+    rmSync(unexpected);
+    if (!windows) {
+      const helper = join(resources, "Install-Scarlet-FFmpeg-macOS.sh");
+      writeFileSync(helper, "unexpected helper");
+      assert.throws(() => inspectPublicPayload(root, false), /helper differs/);
+      copyFileSync(new URL("./Install-Scarlet-FFmpeg-macOS.sh", import.meta.url), helper);
+    }
+    writeFileSync(join(licenses, "scarlet.txt"), "wrong license");
+    assert.throws(() => inspectPublicPayload(root, windows), /license differs/);
+  });
+}

@@ -268,13 +268,13 @@ it("describes an element as it is now, leaving out what is at its usual value", 
 });
 
 it("says who asked, as the nearest callers outside the log and the player, and nothing while the log is off", () => {
-  function pressedPlay() { return transport(); }
-  function transport() { return calledBy(); }
+  function pressedPlay(depth?: number) { return transport(depth); }
+  function transport(depth?: number) { return calledBy(depth); }
   const who = pressedPlay();
   expect(who).toMatch(/^pressedPlay@?.*playbackLog\.test\.ts:\d+:\d+/);
   expect(who).not.toMatch(/https?:|file:|\?/);
   expect(who!.split(" < ").length).toBeLessThanOrEqual(3);
-  expect(calledBy(1)!.split(" < ")).toHaveLength(1);
+  expect(pressedPlay(1)).toBe(who!.split(" < ")[0]);
   stopAppLog();
   expect(calledBy()).toBeUndefined();
   startAppLog(() => {});

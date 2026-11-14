@@ -7,7 +7,7 @@ import { isDialogueGuide } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { BUNDLED_SKILLS } from "../bundledSkills.js";
-import { openDb } from "../db.js";
+import { Db, migrate } from "../db.js";
 import { migrateQuickActions } from "./migrateQuickActions.js";
 import { assistantSkills, createSkill, deleteSkill, retireMergedSkills, reviseSkillContent, seedSkillList, updateSkill } from "./skills.js";
 import { createTask } from "./tasks.js";
@@ -48,6 +48,16 @@ describe("the skills Scarlet comes with", () => {
   };
   const oldSettings = (dialogue: unknown) => app.ctx.db.prepare("INSERT OR REPLACE INTO settings (id, json) VALUES (1, ?)")
     .run(JSON.stringify({ dialogue, render: { handleSeconds: 4 } }));
+
+  it("seeds straight dialogue cuts and offers splice smoothing as a separate skill", async () => {
+    await upgrade();
+    const guide = publicGuide()!;
+    expect(guide.source).toBe("bundled");
+    expect(guide.content).toMatch(/straight picture and audio cuts/i);
+    expect(guide.content).not.toMatch(/timeline_crossfade_audio|crossfadeFrames/);
+    const smoothing = app.ctx.repos.skills.select("name = ?", ["smooth-audio-cuts"])[0]!;
+    expect(smoothing.content).toContain("timeline_crossfade_audio");
+  });
 
   it("carries existing dialogue preferences into the editable skill once and keeps other settings", async () => {
     oldSettings({ aiCuts: { filler: "off", pause: "suggest", retake: "cut", coaching: "suggest" }, pauseTightness: "tight", crossfadeFrames: 6 });
@@ -250,12 +260,11 @@ describe("the skills Scarlet comes with", () => {
   it("makes a stock skill edited under an earlier build the editor's own, and keeps unedited ones current", async () => {
     await app.ctx.close();
     const path = join(dataDir, "scarlet.db");
-    const db = openDb(path);
+    await rm(path);
+    const db = new Db(path);
+    migrate(db, 19); // Before edited stock skills became the editor's own.
     const row = (id: string, name: string, extra: object) => db.prepare("INSERT INTO skills (id, name, scope, json, created_at, updated_at) VALUES (?, ?, 'team', ?, '', '')")
       .run(id, name, JSON.stringify({ id, name, description: "", content: shipped.replace("first-cut-dialogue", name), scope: "team", source: "bundled", ...extra }));
-    // Reopen the version 19 library, before edited stock skills became the editor's own.
-    db.exec("DROP INDEX media_import_request; DROP TABLE engines; DROP TABLE learnings");
-    db.pragma("user_version = 19");
     const unedited = shipped.replace("first-cut-dialogue", "untouched");
     row("skl_a", "untouched", { stockBase: unedited });
     row("skl_b", "merged", { stockBase: "An earlier stock text.", stockUpdate: { available: true, hash: "abc" } });

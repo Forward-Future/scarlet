@@ -12,7 +12,7 @@ import type { RenderAdapter, WaveformCache } from "./render/adapter.js";
 import { scarletRenderAdapter as defaultAdapter } from "./render/scarletRender.js";
 import type { RenderQueue } from "./services/renderQueue.js";
 import { execFile } from "node:child_process";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createTelemetry, type Telemetry } from "./telemetry/analytics.js";
 import { telemetryConfig } from "./telemetry/config.js";
 import { bundledWhisperCli, bundledWhisperGpu, LocalWhisperModel } from "./transcribe/localModel.js";
@@ -193,6 +193,9 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
   const pending = new Set<Promise<unknown>>();
   const shutdown = new AbortController();
   const log = options.log ?? ((m: string) => console.log(m));
+  if (whisperCli && process.platform === "linux") {
+    log(`[whisper] Bundled CPU runtime: ${basename(dirname(whisperCli)) === "whisper-cpu" ? "AVX2" : "baseline"}`);
+  }
   const projectControllers = new Map<string, AbortController>();
   const mediaControllers = new Map<string, AbortController>();
   function workerSignal(controllers: Map<string, AbortController>, id: string) {
@@ -213,6 +216,7 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
     telemetry: createTelemetry({
       config: telemetryConfig(env, options.telemetry?.posthogKey),
       idFile: paths.telemetryId,
+      preference: () => repos.settings.telemetryPreference(),
       log,
       fetch: options.telemetry?.fetch,
       now: options.telemetry?.now,
@@ -264,7 +268,12 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
       } catch {
         // It stays, as after a kill.
       }
-      db.close();
+      // Shutdown work can still record an event. Read the final privacy preference before closing the library.
+      try {
+        await ctx.telemetry.close();
+      } finally {
+        db.close();
+      }
     },
   };
   // Reads ctx.log when it happens, so a log set after startup still gets it.

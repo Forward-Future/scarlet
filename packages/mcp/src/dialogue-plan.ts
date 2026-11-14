@@ -8,6 +8,7 @@ import { normalizeTranscriptToken, type RepeatOccurrence, type DialogueCutKind, 
 import { clipsAt, frameAlignedRemoval, mergeRanges, timelineDuration, timelineToSource, type Project, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
 import { round3 } from "./analysis.js";
 import { cutScope, selectedRange } from "./cut-scope.js";
+import { quietKeptWords, type QuietKeptWord } from "./quiet-kept-word.js";
 import type { GapSound } from "./gap-sound.js";
 import type { DialogueEvidence } from "./dialogue-decisions.js";
 import { audibleMediaClips, edgeOnFrame, pageAt as scanPageAt, checkKeptWords, type ReadKeptWords, checkDialogueJoin, checkResumeQuote, dialogueCutPreview, dialogueJoinWords, joinEvidence, pageReaches, pauseCutRange, PAUSE_BEAT, wordCutRange, type JoinPage } from "./dialogue-join.js";
@@ -265,7 +266,7 @@ export type GateLine = Record<string, unknown> & { cut: number };
 
 export type DialoguePlan =
   | { outcome: "preserved"; kept?: TimeRange[] }
-  | { outcome: "needsRevision"; disputedEdges: Array<TimeRange & { reason: string }> }
+  | { outcome: "needsRevision"; disputedEdges: Array<TimeRange & { reason: string; quietKeptWord?: QuietKeptWord }> }
   | { outcome: "ready"; removals: ResolvedCut[]; decisions: PlannedDecision[]; gate: Map<number, GateLine>;
       /** Ranges the plan keeps on purpose, in timeline seconds: keep decisions, however they were given, and protected pictures. */
       kept: TimeRange[];
@@ -326,13 +327,17 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
   // A range given as words has its edges placed by Scarlet in the silence beside the words. When the agent decides
   // that silence in the range next to it, as a pause cut before a retake, the placed edge lands inside that range
   // and the plan used to be refused: once or twice on most passes, a turn each. The placed edge gives way to the
-  // range beside it. The words themselves reaching into another range is still the agent's overlap to fix.
+  // range beside it, and the gate says so. The words themselves reaching into another range is still the agent's overlap to fix.
   for (const placed of cuts) {
     if (!placed.spoken) continue;
     for (const other of cuts) {
       if (other === placed || other.end <= placed.start || other.start >= placed.end) continue;
-      if (other.end <= placed.spoken.start + 1e-6) placed.start = Math.max(placed.start, other.end);
-      else if (other.start >= placed.spoken.end - 1e-6) placed.end = Math.min(placed.end, other.start);
+      const edge = other.end <= placed.spoken.start + 1e-6 ? "start" : other.start >= placed.spoken.end - 1e-6 ? "end" : undefined;
+      if (!edge) continue;
+      const was = placed[edge];
+      placed[edge] = edge === "start" ? Math.max(placed.start, other.end) : Math.min(placed.end, other.start);
+      if (Math.abs(placed[edge] - was) > 1e-6) placed.notes = [...(placed.notes ?? []),
+        `Scarlet placed its ${edge} at ${r2(was)} s, inside cut ${other.input}; it moved to ${r2(placed[edge])} s to meet that cut.`];
     }
   }
   const sorted = [...cuts].sort((a, b) => a.start - b.start);
@@ -471,12 +476,14 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
   const { media, settings: { fps } } = project;
   const retained = sorted.filter(c => c.decision === "keep" || c.picture === "protect");
   const unreadJoinAudio: Array<{ cut: number; reasons: string[] }> = [];
+  const applied = mergeRanges(decisions.filter(d => !d.review), 1e-9);
+  const align = (r: TimeRange) => frameAlignedRemoval(r, fps, scope, kept);
+  const appliedFrames = applied.map(align);
+  const quiet = await quietKeptWords(tl, project, appliedFrames, [...kept, ...decisions.filter(d => d.review)], scope, sources);
+  if (quiet.length) return { outcome: "needsRevision", disputedEdges: quiet };
   const speechCuts = removals.flatMap((c, i) => c.kind !== "pause" && c.decision === "cut" ? [{ c, d: decisions[i]! }] : []);
   if (speechCuts.length && checkRetakes) {
-    const applied = mergeRanges(decisions.filter(d => !d.review), 1e-9);
     const optional = mergeRanges(decisions.filter(d => d.review), 1e-9);
-    const align = (r: TimeRange) => frameAlignedRemoval(r, fps, scope, kept);
-    const appliedFrames = applied.map(align);
     const atAfter = (at: number, ranges: TimeRange[]) => at - ranges.reduce((removed, r) =>
       removed + Math.max(0, Math.min(at, r.end) - r.start), 0);
     const onApplied = optional.map(align).map(r => ({ start: atAfter(r.start, appliedFrames), end: atAfter(r.end, appliedFrames) }));

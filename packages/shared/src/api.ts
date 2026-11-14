@@ -446,6 +446,8 @@ export interface RenderFileInfo {
   hasAudio: boolean;
   sampleRate?: number;
   channels?: number;
+  /** EBU R128 loudness of the file's sound, as heard with every gain and effect. Silence reads null. */
+  loudness?: { integratedLufs: number | null; loudnessRangeLu: number | null; truePeakDbtp: number | null };
 }
 
 export const RenderKind = z.enum(["segment", "full", "proxy", "preview", "playback", "export"]);
@@ -1131,7 +1133,10 @@ export type QuickAction = z.infer<typeof QuickAction>;
 
 export { LocalTranscriptionModel };
 
+export type TelemetryUnavailable = "environment" | "unconfigured";
+
 export const ServerSettings = z.object({
+  telemetryEnabled: z.boolean().default(true),
   editingTools: EditingTools.default({}),
   /** Transcription provider: "openai" (API key), "whispercpp" (local binary), "none" (no engine in this build: not a choice the editor can make). */
   transcription: z.object({

@@ -1,4 +1,4 @@
-import { desktop } from "./desktop";
+import { desktop, type DesktopPlatform } from "./desktop";
 
 interface DropTarget {
   highlight(over: boolean): void;
@@ -16,14 +16,14 @@ export function fileDropZone(hit: EventTarget | null) {
 }
 
 /** Dispatch one native drop to the most specific visible target. */
-export function listenForFileDrops(platform: "macos" | "windows") {
+export function listenForFileDrops(platform: DesktopPlatform) {
   let active = true;
   let previous: DropTarget | undefined;
   const unlisten = desktop.onDropFiles(event => {
     if (!active) return;
     const point = event.type === "leave" ? undefined : event.position;
-    // Wry's WKWebView adapter forwards AppKit points; WebView2 forwards screen pixels.
-    const scale = platform === "macos" ? 1 : window.devicePixelRatio;
+    // WebView2 reports screen pixels. WebKit passes through AppKit points or GTK widget coordinates.
+    const scale = platform === "windows" ? window.devicePixelRatio : 1;
     const hit = point ? document.elementFromPoint(point.x / scale, point.y / scale) : null;
     const element = fileDropZone(hit);
     const target = element ? dropTargets.get(element) : undefined;

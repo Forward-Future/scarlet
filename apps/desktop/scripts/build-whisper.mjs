@@ -1,6 +1,7 @@
 // Build the self-contained whisper-cli sidecars from the pinned upstream source.
 //
 // macOS: one build, which runs on the GPU through Metal.
+// Linux x64: a baseline CPU build and a Haswell build the engine selects on compatible CPUs.
 // Windows: the CPU build every PC can run, and a Vulkan build in binaries/whisper-gpu/ that the engine tries first.
 // Vulkan runs on any recent NVIDIA, AMD or Intel GPU and needs only the driver's loader at run time. Building it
 // needs the Vulkan SDK (VULKAN_SDK with Include, Lib/vulkan-1.lib and Bin/glslc.exe); GitHub's workflow installs it.
@@ -17,12 +18,21 @@ import { fileURLToPath } from "node:url";
 
 const revision = "d1be6fde11ac6e0407606b4e42fe72d34add8037"; // whisper.cpp v1.9.5
 const sourceHash = "645445da884df6dbd52b30f82d7be7c01d1767c938714e477e786b88d529e9f4";
-const triples = { "win32-x64": "x86_64-pc-windows-msvc", "darwin-arm64": "aarch64-apple-darwin", "darwin-x64": "x86_64-apple-darwin" };
+const triples = { "win32-x64": "x86_64-pc-windows-msvc", "darwin-arm64": "aarch64-apple-darwin", "darwin-x64": "x86_64-apple-darwin", "linux-x64": "x86_64-unknown-linux-gnu" };
 const target = triples[`${process.platform}-${process.arch}`];
 if (!target || (process.env.TAURI_ENV_TARGET_TRIPLE && process.env.TAURI_ENV_TARGET_TRIPLE !== target)) {
-  throw new Error("Build whisper-cli on the target architecture (Windows x64 or macOS arm64/x64).");
+  throw new Error("Build whisper-cli on the target architecture (Windows x64, macOS arm64/x64 or Linux x64).");
 }
 const windows = process.platform === "win32";
+const linux = process.platform === "linux";
+const platformFlags = {
+  win32: ["-A", "x64", "-DCMAKE_POLICY_DEFAULT_CMP0091=NEW", "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"],
+  darwin: ["-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0", "-DGGML_METAL_EMBED_LIBRARY=ON"],
+  linux: [],
+}[process.platform];
+// Pin both instruction sets: ggml's native-build defaults also depend on SOURCE_DATE_EPOCH.
+const x64Features = ["SSE42", "AVX", "F16C", "FMA", "AVX2", "BMI2"];
+const x64Flags = value => x64Features.map(feature => `-DGGML_${feature}=${value}`);
 const bin = fileURLToPath(new URL("../src-tauri/binaries/", import.meta.url));
 const sha = bytes => createHash("sha256").update(bytes).digest("hex");
 const recipe = sha(readFileSync(fileURLToPath(import.meta.url)));
@@ -33,7 +43,8 @@ const verified = ({ output }) => {
   return existsSync(receipt) && existsSync(output) && readFileSync(receipt, "utf8") === `${recipe} ${sha(readFileSync(output))}`;
 };
 
-const variants = [{ name: "CPU", output: join(bin, `whisper-cli-${target}${windows ? ".exe" : ""}`), flags: [] }];
+const variants = [{ name: "CPU", output: join(bin, `whisper-cli-${target}${windows ? ".exe" : ""}`), flags: linux ? x64Flags("OFF") : [] }];
+if (linux) variants.push({ name: "Haswell", output: join(bin, "whisper-cpu", "whisper-cli"), flags: x64Flags("ON") });
 const gpu = windows && { name: "Vulkan", output: join(bin, "whisper-gpu", "whisper-cli.exe"), flags: ["-DGGML_VULKAN=ON"], optional: !gpuRequired };
 if (gpu) {
   if (process.env.VULKAN_SDK) variants.push(gpu);
@@ -66,20 +77,19 @@ if (pending.length) {
     writeFileSync(archive, source);
     execFileSync(windows ? join(process.env.SystemRoot, "System32", "tar.exe") : "tar", ["-xzf", archive, "-C", work]);
     const cmake = process.env.CMAKE_COMMAND || "cmake";
-    for (const { name, output, flags } of pending) {
+    for (const [index, { name, output, flags }] of pending.entries()) {
       console.log(`[whisper] building the ${name} whisper-cli`);
-      const build = join(work, name === "CPU" ? "c" : "g");
+      const build = join(work, String(index));
       execFileSync(cmake, ["-S", join(work, `whisper.cpp-${revision}`), "-B", build, "-DCMAKE_BUILD_TYPE=Release",
         "-DBUILD_SHARED_LIBS=OFF", "-DGGML_NATIVE=OFF", "-DGGML_OPENMP=OFF", "-DWHISPER_BUILD_TESTS=OFF",
-        "-DWHISPER_BUILD_EXAMPLES=ON", "-DWHISPER_BUILD_SERVER=OFF", "-DWHISPER_CURL=OFF", ...flags,
-        ...(windows ? ["-A", "x64", "-DCMAKE_POLICY_DEFAULT_CMP0091=NEW", "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"]
-          : ["-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0", "-DGGML_METAL_EMBED_LIBRARY=ON"])], { stdio: "inherit" });
+        "-DWHISPER_BUILD_EXAMPLES=ON", "-DWHISPER_BUILD_SERVER=OFF", "-DWHISPER_CURL=OFF", ...flags, ...platformFlags], { stdio: "inherit" });
       execFileSync(cmake, ["--build", build, "--config", "Release", "--target", "whisper-cli", "--parallel", "4"], { stdio: "inherit" });
       mkdirSync(dirname(output), { recursive: true });
       copyFileSync(windows ? join(build, "bin/Release/whisper-cli.exe") : join(build, "bin/whisper-cli"), output);
       if (!windows) chmodSync(output, 0o755);
-      // A Vulkan build starts only where a driver installed the Vulkan loader, which a CI runner may lack.
-      if (!flags.length || existsSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "vulkan-1.dll"))) {
+      // Older x64 builders can produce the Haswell executable. The installed Linux smoke test exercises it on a capable runner.
+      // A Windows runner can lack the Vulkan loader needed to start the GPU program.
+      if (name === "CPU" || (name === "Vulkan" && existsSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "vulkan-1.dll")))) {
         execFileSync(output, ["--help"], { stdio: "ignore" });
       }
       writeFileSync(output + ".sha256", `${recipe} ${sha(readFileSync(output))}`);

@@ -1,4 +1,4 @@
-import type { EditReviewRequest } from "@scarlet/shared";
+import type { EditReviewRequest, TelemetryUnavailable } from "@scarlet/shared";
 import { createHmac, randomUUID } from "node:crypto";
 import { SCARLET_VERSION, type TelemetryConfig } from "./config.js";
 import { anonymousId, installId } from "./identity.js";
@@ -7,6 +7,10 @@ import { anonymousId, installId } from "./identity.js";
 export type TelemetryProperties = Readonly<Record<string, string | number | boolean>>;
 
 export interface Telemetry {
+  /** A launch configuration that prevents the editor from turning reporting on. */
+  readonly unavailable?: TelemetryUnavailable;
+  /** Apply a committed change immediately, including to a batch already in flight. */
+  refreshPreference(): void;
   /** False when nothing is collected or sent: turned off, no project key, or the id file can't be kept. */
   readonly active: boolean;
   recordEditReview(projectId: string, review: EditReviewRequest): void;
@@ -22,6 +26,7 @@ export interface Telemetry {
 
 export interface TelemetryOptions {
   config: TelemetryConfig;
+  preference?: () => { enabled: boolean; revision: number };
   /** Where the anonymous id is kept. */
   idFile: string;
   log?: (message: string) => void;
@@ -73,7 +78,10 @@ interface Delivery {
   retryAt: number;
 }
 
-const IDLE: Telemetry = {
+type Session = Omit<Telemetry, "refreshPreference" | "unavailable"> & { discard(): void };
+
+const IDLE: Session = {
+  discard() {},
   active: false,
   recordEditReview() {},
   record() {},
@@ -87,9 +95,60 @@ const IDLE: Telemetry = {
  * telemetry turned off or no project key it does nothing at all: no id file, no timer, no request.
  */
 export function createTelemetry(options: TelemetryOptions): Telemetry {
+  if (!options.config.enabled || !options.config.posthogKey) {
+    return { ...IDLE, unavailable: options.config.enabled ? "unconfigured" : "environment", refreshPreference() {} };
+  }
+
+  const key = options.config.posthogKey;
+  let session = IDLE;
+  let revision: number | undefined;
+  let started = false;
+  let phase: "open" | "closing" | "closed" = "open";
+
+  // Engines can share a library. Check before recording or posting, even if another engine saved the preference.
+  function current(): Session {
+    if (phase === "closed") return IDLE;
+    let preference;
+    try {
+      preference = options.preference?.() ?? { enabled: true, revision: 0 };
+    } catch {
+      // Usage reporting must never interrupt an edit or send without a known preference.
+      session.discard();
+      session = IDLE;
+      revision = undefined;
+      return IDLE;
+    }
+    if (revision !== preference.revision) {
+      revision = preference.revision;
+      session.discard();
+      session = preference.enabled && phase === "open" ? createSession(options, key, current) : IDLE;
+      if (started) session.start();
+    }
+    return session;
+  }
+  return {
+    get active() { return current().active; },
+    refreshPreference() { current(); },
+    recordEditReview(project, review) { current().recordEditReview(project, review); },
+    record(event, properties) { current().record(event, properties); },
+    flush() { return current().flush(); },
+    start() { started = true; current().start(); },
+    async close() {
+      if (phase !== "open") return;
+      const last = current();
+      phase = "closing";
+      try {
+        await last.close();
+      } finally {
+        phase = "closed";
+        last.discard();
+      }
+    },
+  };
+}
+
+function createSession(options: TelemetryOptions, key: string, refreshPreference: () => void): Session {
   const { config } = options;
-  const key = config.posthogKey;
-  if (!config.enabled || !key) return IDLE;
   const anonymous = anonymousId(options.idFile);
   if (!anonymous) return IDLE;
   const install = installId(anonymous);
@@ -139,9 +198,12 @@ export function createTelemetry(options: TelemetryOptions): Telemetry {
 
   async function drain(): Promise<void> {
     for (;;) {
+      refreshPreference();
+      if (closing.signal.aborted) return;
       const batch = delivery.failedBatch.length ? delivery.failedBatch : buffer.splice(0, config.flushBatchSize);
       if (!batch.length) return;
       const result = await send(batch);
+      if (closing.signal.aborted) return;
       if (result.sent) {
         delivery = { failedBatch: [], batchAttempts: 0, firstFailedAt: 0, failures: 0, retryAt: 0 };
         continue;
@@ -174,6 +236,12 @@ export function createTelemetry(options: TelemetryOptions): Telemetry {
 
   return {
     active: true,
+    discard() {
+      clearInterval(timer);
+      closing.abort();
+      buffer.length = 0;
+      delivery.failedBatch.length = 0;
+    },
     recordEditReview(projectId, { changeId, spot, decision }) {
       const editId = createHmac("sha256", anonymous).update(JSON.stringify(["edit", projectId, changeId, spot])).digest("hex");
       this.record("edit.reviewed", { decision, editId });

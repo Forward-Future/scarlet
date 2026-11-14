@@ -1,10 +1,6 @@
-// Downloads the static ffmpeg/ffprobe builds bundled with the desktop app and
-// puts them where Tauri expects sidecars: src-tauri/binaries/<name>-<triple>[.exe].
-// The installer places them beside the engine, which looks there first.
-//
-// Builds are pinned and checked against SHA-256 so every release ships the
-// same, native binaries: x86_64 for Windows, arm64 for Apple Silicon (no
-// Rosetta needed), x86_64 for Intel Macs.
+// Fetch checksum-pinned media tools for local development, local updaters and CI on macOS and Windows.
+// Linux uses its distribution's ffmpeg package for development and release builds.
+// Public installers use a separately installed FFmpeg and FFprobe.
 //
 // Usage: node scripts/fetch-ffmpeg.mjs [--target <rust triple>] [--force]
 //        (default target: this machine)
@@ -46,11 +42,33 @@ const flag = (name) => {
 const target = flag("--target") ?? process.env.TAURI_ENV_TARGET_TRIPLE ?? hostTriple();
 const force = args.includes("--force");
 const build = BUILDS[target];
-if (!build) {
-  console.error(`[ffmpeg] no pinned build for ${target}. Supported: ${Object.keys(BUILDS).join(", ")}`);
+const linux = target === "x86_64-unknown-linux-gnu";
+if (!build && !linux) {
+  console.error(`[ffmpeg] unsupported target ${target}`);
   process.exit(1);
 }
 const ext = target.includes("windows") ? ".exe" : "";
+function verifyEngine() {
+  const engine = join(binDir, `scarlet-engine-${target}${ext}`);
+  const stat = statSync(engine, { throwIfNoEntry: false });
+  if (!stat?.isFile() || !stat.size) throw new Error("Build the engine sidecar before packaging");
+}
+if (args.includes("--verify-engine")) {
+  verifyEngine();
+  process.exit(0);
+}
+if (linux) {
+  if (args.includes("--verify-only")) throw new Error("Use the Linux desktop bundle configuration with system FFmpeg.");
+  for (const tool of ["ffmpeg", "ffprobe"]) {
+    try {
+      execFileSync(tool, ["-version"], { stdio: "ignore" });
+    } catch (error) {
+      throw new Error(`Could not run ${tool}. Install the Ubuntu ffmpeg package with 'sudo apt install ffmpeg'.`, { cause: error });
+    }
+  }
+  console.log("[ffmpeg] using ffmpeg and ffprobe from PATH");
+  process.exit(0);
+}
 const outputs = ["ffmpeg", "ffprobe"].map((tool) => ({ tool, file: `${tool}${ext}`, dest: join(binDir, `${tool}-${target}${ext}`) }));
 
 // The receipt binds both installed binaries to the verified pinned archives.
@@ -76,9 +94,8 @@ async function installed() {
   }
 }
 if (args.includes("--verify-only")) {
-  const engine = join(binDir, `scarlet-engine-${target}${ext}`);
   if (!await installed()) throw new Error(`Run pnpm desktop:ffmpeg for ${target} before packaging`);
-  if (!existsSync(engine) || !statSync(engine).isFile() || !statSync(engine).size) throw new Error("Build the engine sidecar before packaging");
+  verifyEngine();
   process.exit(0);
 }
 if (!force && await installed()) {
@@ -133,7 +150,7 @@ try {
 
 function hostTriple() {
   const key = `${process.platform}-${process.arch}`;
-  const triple = { "win32-x64": "x86_64-pc-windows-msvc", "darwin-arm64": "aarch64-apple-darwin", "darwin-x64": "x86_64-apple-darwin" }[key];
+  const triple = { "win32-x64": "x86_64-pc-windows-msvc", "darwin-arm64": "aarch64-apple-darwin", "darwin-x64": "x86_64-apple-darwin", "linux-x64": "x86_64-unknown-linux-gnu" }[key];
   if (!triple) throw new Error(`no default target for ${key}; pass --target`);
   return triple;
 }

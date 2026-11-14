@@ -6,6 +6,9 @@ on:
       release:
         required: true
         type: boolean
+      early_access:
+        type: boolean
+        default: false
       version:
         required: true
         type: string
@@ -19,7 +22,7 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
-    if: ${{ !inputs.release || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    if: ${{ !inputs.release || (!inputs.early_access && github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     environment: ${{ inputs.release && 'release' || 'desktop-build' }}
     strategy:
       fail-fast: false
@@ -38,6 +41,7 @@ jobs:
             triple: x86_64-apple-darwin
             arch: x86_64
     env:
+      EARLY_ACCESS: ${{ inputs.early_access }}
       RELEASE_VERSION: ${{ inputs.version }}
       BUNDLE: apps/desktop/src-tauri/target/${{ matrix.triple }}/release/bundle
     steps:
@@ -56,6 +60,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.triple }}
+          components: rust-docs
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -64,7 +69,15 @@ jobs:
 
       - name: Stamp the shared release version before building
         shell: bash
-        run: node apps/desktop/scripts/release-version.mjs set "$RELEASE_VERSION" --tag "v$RELEASE_VERSION"
+        run: |
+          if [ "$EARLY_ACCESS" = true ]; then
+            node apps/desktop/scripts/release-version.mjs set "$RELEASE_VERSION"
+            node apps/desktop/scripts/early-access-product.mjs
+          else
+            node apps/desktop/scripts/release-version.mjs set "$RELEASE_VERSION" --tag "v$RELEASE_VERSION"
+          fi
+          product=$(node -p 'require("./apps/desktop/src-tauri/tauri.conf.json").productName')
+          echo "DESKTOP_PRODUCT=$product" >> "$GITHUB_ENV"
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -91,7 +104,7 @@ jobs:
           ./.github/scripts/use-windows-test-owner.ps1
           node apps/desktop/scripts/smoke-engine-startup.mjs "apps/desktop/src-tauri/binaries/scarlet-engine-${{ matrix.triple }}.exe"
 
-      - name: Fetch ffmpeg/ffprobe (pinned, checksum-verified)
+      - name: Fetch external media tools for the smoke test
         run: node apps/desktop/scripts/fetch-ffmpeg.mjs --target ${{ matrix.triple }}
 
       # Windows also gets a Vulkan whisper-cli for the GPU, built against the SDK's headers, loader and glslc.
@@ -128,28 +141,8 @@ jobs:
         if: runner.os == 'macOS'
         run: python3 -B apps/desktop/scripts/test_update_macos.py
 
-      - name: Test engine smoke script
-        if: runner.os == 'macOS'
-        run: node --test apps/desktop/scripts/smoke-engine.test.mjs
-
-      # Without these secrets the Mac app is signed ad hoc: it runs, but macOS asks
-      # before the first launch. Store them only in the main-only release environment for a signed,
-      # notarized build. Only the ones that are set are passed on, because
-      # Tauri treats an empty one as set.
-      - name: Apple signing secrets
-        if: inputs.release && runner.os == 'macOS'
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-            if [ -n "${!v}" ]; then { echo "$v<<__SCARLET_EOF__"; echo "${!v}"; echo "__SCARLET_EOF__"; } >> "$GITHUB_ENV"; echo "$v: set"; fi
-          done
+      - name: Test installer notices and engine smoke script
+        run: node --test apps/desktop/scripts/collect-public-notices.test.mjs apps/desktop/scripts/smoke-engine.test.mjs
 
       - name: Build installers
         uses: tauri-apps/tauri-action@v0
@@ -163,32 +156,119 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APP="$BUNDLE/macos/Scarlet.app"
+          APP="$BUNDLE/macos/$DESKTOP_PRODUCT.app"
           ls -la "$APP/Contents/MacOS"
           codesign --verify --deep --strict --verbose=2 "$APP"
           for f in "$APP"/Contents/MacOS/*; do codesign -dv "$f" 2>&1 | grep -E "^(Identifier|Format|flags|Signature)" | sed "s|^|$(basename "$f"): |"; done
           echo "engine entitlements:"; codesign -d --entitlements - "$APP/Contents/MacOS/scarlet-engine"
 
-      - name: Smoke test the bundled engine (ingest, render with captions, MCP)
-        if: runner.os == 'macOS'
+      - name: Stage external media tools for the package smoke test
         shell: bash
-        run: node apps/desktop/scripts/smoke-engine.mjs "$BUNDLE/macos/Scarlet.app/Contents/MacOS"
+        run: |
+          MEDIA_TOOLS="$RUNNER_TEMP/scarlet-media-tools"
+          mkdir -p "$MEDIA_TOOLS"
+          EXT=""; [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
+          for tool in ffmpeg ffprobe; do
+            cp "apps/desktop/src-tauri/binaries/$tool-${{ matrix.triple }}$EXT" "$MEDIA_TOOLS/$tool$EXT"
+          done
 
-      - name: Smoke test the Windows bundled engine (ingest, render with captions, MCP)
-        if: runner.os == 'Windows'
+      - name: Smoke test the bundled Mac engine (ingest, render with captions, MCP)
+        if: inputs.early_access && runner.os == 'macOS'
+        run: node apps/desktop/scripts/smoke-engine.mjs "$BUNDLE/macos/$DESKTOP_PRODUCT.app/Contents/MacOS" "$RUNNER_TEMP/scarlet-media-tools"
+
+      - name: Smoke test the bundled Windows engine (ingest, render with captions, MCP)
+        if: inputs.early_access && runner.os == 'Windows'
         shell: powershell
         run: |
           ./.github/scripts/use-windows-test-owner.ps1
-          node apps/desktop/scripts/smoke-engine.mjs "apps/desktop/src-tauri/target/${{ matrix.triple }}/release"
+          node apps/desktop/scripts/smoke-engine.mjs "apps/desktop/src-tauri/target/${{ matrix.triple }}/release" "$env:RUNNER_TEMP/scarlet-media-tools"
+
+      - name: Sign and notarize the Mac release
+        if: inputs.release && runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash .github/scripts/sign-macos-release.sh "${{ matrix.triple }}"
+
+      - name: Sign the Windows application and installers
+        if: inputs.release && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+          WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
+          WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in 'AZURE_TENANT_ID','AZURE_CLIENT_ID','AZURE_CLIENT_SECRET','WINDOWS_SIGNING_ENDPOINT','WINDOWS_SIGNING_ACCOUNT','WINDOWS_SIGNING_PROFILE') {
+            if (![Environment]::GetEnvironmentVariable($name)) { throw "Set $name in the release environment to publish Windows installers." }
+          }
+          Install-Module TrustedSigning -RequiredVersion 0.5.8 -Repository PSGallery -Force -Scope CurrentUser
+          $hook = (Resolve-Path .github/scripts/sign-windows-release.ps1).Path
+          $config = Join-Path $env:RUNNER_TEMP 'scarlet-signing.json'
+          @{ bundle = @{ windows = @{ signCommand = @{ cmd = 'pwsh'; args = @('-NoProfile','-NonInteractive','-File',$hook,'%1') } } } } |
+            ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 $config
+          pnpm --filter @scarlet/desktop exec tauri bundle --target ${{ matrix.triple }} --bundles nsis,msi --config "$config"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $installers = @(Get-ChildItem "$env:BUNDLE/nsis/*-setup.exe", "$env:BUNDLE/msi/*.msi")
+          if ($installers.Count -ne 2) { throw 'Expected both Windows installers.' }
+          foreach ($file in $installers) {
+            $sig = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($sig.Status -ne 'Valid' -or !$sig.TimeStamperCertificate) { throw "Invalid Authenticode signature on $file" }
+          }
 
       - name: Verify packaged versions and stage installers
         shell: bash
-        run: node apps/desktop/scripts/verify-desktop-package.mjs "${{ matrix.triple }}" "$RELEASE_VERSION" "$RUNNER_TEMP/scarlet-installers"
+        run: |
+          node apps/desktop/scripts/verify-desktop-package.mjs "${{ matrix.triple }}" "$RELEASE_VERSION" "$RUNNER_TEMP/scarlet-installers"
+          if [ "$EARLY_ACCESS" = true ] && [ "${{ matrix.triple }}" = aarch64-apple-darwin ]; then
+            cp apps/desktop/scripts/Install-Scarlet-FFmpeg-macOS.sh "$RUNNER_TEMP/scarlet-installers/"
+          fi
+
+      - name: Inspect the staged public installers and smoke test their engine with external media tools
+        if: ${{ !inputs.early_access }}
+        # On Windows, native pwsh starts the engine with the same environment used by the desktop shell.
+        run: node apps/desktop/scripts/smoke-engine-public.mjs "${{ runner.temp }}/scarlet-installers" "${{ runner.temp }}/scarlet-media-tools"
+
+      - name: Download the previous Early Access installer for the upgrade test
+        if: inputs.early_access
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.triple }}" in
+            aarch64-apple-darwin) suffix=macOS-Apple-Silicon.dmg; digest=0d0f3f7a9becc12acbcbdc8cbfe270eae3648bbdebdd33d486eed713558782af ;;
+            x86_64-apple-darwin) suffix=macOS-Intel.dmg; digest=0f8607ab70ddba13832c20c62402ca1eb489ec8ebfcb0bb30de26fbbee582111 ;;
+            x86_64-pc-windows-msvc) suffix=Windows-x64-Setup.exe; digest=56457ba7d9c15456198ecd00bfe3cff7a10a9196868859c8ba362e8d6be11363 ;;
+            *) exit 1 ;;
+          esac
+          previous="Scarlet-Early-Access-0.1.3-$suffix"
+          candidate="Scarlet-Early-Access-$RELEASE_VERSION-$suffix"
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/$previous" "https://github.com/Forward-Future/scarlet-releases/releases/download/v0.1.3-early-access.1/$previous"
+          node -e 'const {readFileSync} = require("node:fs"); const {createHash} = require("node:crypto"); if (createHash("sha256").update(readFileSync(process.argv[1])).digest("hex") !== process.argv[2]) throw Error("Incorrect previous installer digest");' "$RUNNER_TEMP/$previous" "$digest"
+          echo "PREVIOUS_EA_INSTALLER=$previous" >> "$GITHUB_ENV"
+          echo "CANDIDATE_EA_INSTALLER=$candidate" >> "$GITHUB_ENV"
+
+      - name: Upgrade the previous Mac Early Access app and reopen its library
+        if: inputs.early_access && runner.os == 'macOS'
+        shell: bash
+        run: bash .github/scripts/early-access-upgrade-macos.sh "$RUNNER_TEMP/$PREVIOUS_EA_INSTALLER" "$RUNNER_TEMP/scarlet-installers/$CANDIDATE_EA_INSTALLER" "$RELEASE_VERSION"
+
+      - name: Upgrade the previous Windows Early Access setup as a standard user
+        if: inputs.early_access && runner.os == 'Windows'
+        shell: pwsh
+        run: ./.github/scripts/early-access-upgrade-windows.ps1 -Previous "$env:RUNNER_TEMP\$env:PREVIOUS_EA_INSTALLER" -Candidate "$env:RUNNER_TEMP\scarlet-installers\$env:CANDIDATE_EA_INSTALLER" -Version $env:RELEASE_VERSION
 
       - name: Upload verified installers
         uses: actions/upload-artifact@v4
         with:
-          name: scarlet-desktop-${{ matrix.triple }}
+          name: ${{ inputs.early_access && format('scarlet-early-access-{0}', inputs.version) || 'scarlet-desktop' }}-${{ matrix.triple }}
           path: ${{ runner.temp }}/scarlet-installers/
           if-no-files-found: error
           overwrite: true

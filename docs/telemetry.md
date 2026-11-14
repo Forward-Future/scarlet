@@ -6,7 +6,9 @@ Packaged releases send these events to the Scarlet project in PostHog US Cloud. 
 
 ## Turning it off
 
-Set `SCARLET_TELEMETRY_ENABLED=false` in the environment the engine starts in. `0`, `no` and `off` work too. Nothing is collected or sent, and the id file is not created.
+In **Settings → About**, turn off **Send usage reports**. Scarlet saves this preference with the library and applies it immediately. Turning it off discards queued events and cancels sends in progress. Turning it back on starts collecting new events.
+
+To disable reporting before the first launch, set `SCARLET_TELEMETRY_ENABLED=false` in the engine environment. `0`, `no` and `off` work too. This overrides the saved preference and prevents creation of the telemetry ID on a fresh installation.
 
 ## What is sent
 

@@ -186,7 +186,7 @@ function recoveryInstruction(ctx: Ctx, task: Task, rootId?: string): string {
     if (ev.type === "answer") lines.push(`Editor answered: ${ev.text}`);
   }
   if (!rootId) return lines.join("\n");
-  lines.push("", "Resume this interrupted request. Read the current project and change states first. Continue only the unfinished work. Keep saved proposals and honor the editor’s decisions, including rejected or partially approved edits.");
+  lines.push("", "Resume this interrupted request. Continue only the unfinished work: the saved changes below and their states say what is done. Keep saved proposals and honor the editor’s decisions, including rejected or partially approved edits.");
   if (task.needsTranscripts?.length) {
     const ready = task.needsTranscripts.filter(id => hasTranscript(ctx, id));
     lines.push(`The previous attempt ended without the transcript of ${task.needsTranscripts.join(", ")}.${ready.length ? ` Ready now: ${ready.join(", ")}.` : ""}`);
@@ -212,7 +212,6 @@ function recoveryInstruction(ctx: Ctx, task: Task, rootId?: string): string {
   for (const [mediaId, ranges] of scans) {
     lines.push(`Scanned source seconds on ${mediaId}: ${mergeRanges(ranges).map(r => `${r.start}–${r.end}`).join(", ")}`);
   }
-  if (scans.size) lines.push("Start dialogue_scan at the original range start to restore saved findings and continue at gaps. Follow its nextFrom cursor.");
   for (const c of savedChanges(ctx, attempts)) {
     lines.push(`Saved change ${c.id} [${c.state}], version ${c.appliedVersion ?? c.toVersion}: ${c.description}`);
   }
