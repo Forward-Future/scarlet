@@ -11,6 +11,8 @@ mod updates;
 mod storage;
 mod logs;
 mod quit;
+#[cfg(target_os = "linux")]
+mod linux;
 
 use std::sync::{Arc, Mutex};
 
@@ -133,6 +135,10 @@ pub fn run() {
                 log::info!("login shell PATH {}", if found { "loaded" } else { "unavailable; using the built-in search paths" });
             });
             let handle = app.handle().clone();
+            #[cfg(target_os = "linux")]
+            if let Some(window) = handle.get_webview_window("main") {
+                linux::enable_voice_input(&window)?;
+            }
             let paths = resolve_paths(&handle)?;
             if let Ok(root) = handle.path().app_data_dir() {
                 handle.state::<commands::ExportDestinations>().load(root.join("export-destinations.json"));

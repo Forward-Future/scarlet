@@ -38,13 +38,13 @@ Install the native build dependencies and the codecs used for H.264/AAC playback
 ```sh
 sudo apt update
 sudo apt install build-essential cmake curl file libssl-dev libwebkit2gtk-4.1-dev \
-  libayatana-appindicator3-dev librsvg2-dev libxdo-dev ffmpeg \
+  libayatana-appindicator3-dev librsvg2-dev libxdo-dev ffmpeg bubblewrap socat \
   gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
 ```
 
 Then follow [Run from source](../README.md#run-from-source). Scarlet uses Ubuntu’s FFmpeg and FFprobe. The package includes its engine and a CPU build of Whisper.
 
-To install a Linux build from CI, download the Debian package artifact from a successful **Linux desktop** run, unzip it and run `sudo apt install ./<filename>.deb` using the downloaded filename. Launch **Scarlet** from the applications menu. [Linux desktop builds](https://github.com/Forward-Future/scarlet/actions/workflows/linux-desktop.yml)
+To install a Linux build from CI, download the `scarlet-linux-ubuntu-24.04-amd64` artifact from a successful **Linux desktop** run, unzip it and run `sudo apt install ./Scarlet-*-Ubuntu-24.04-amd64.deb` from the extracted directory. Launch **Scarlet** from the applications menu. [Linux desktop builds](https://github.com/Forward-Future/scarlet/actions/workflows/linux-desktop.yml)
 
 ## Transcription
 
