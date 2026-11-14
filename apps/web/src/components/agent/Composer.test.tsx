@@ -942,6 +942,27 @@ it("carries a tag inside the box for what the message revises, and its × hands 
   expect(useUiStore.getState().agentDraft).toBe("Keep the laugh");
 });
 
+it("carries a stretch marked on the timeline as a second tag, and its × takes off the stretch alone", async () => {
+  const cut: AgentContext = { changeId: "chg_1", cutIndex: 0, version: "v1", time: 125, end: 127, clipIds: [], label: "Cut at 2:05" };
+  await act(async () => useUiStore.getState().setAgentContext({ ...cut, markedRange: { start: 42, end: 51.5, version: "v2" } }));
+  await show({ targetTag: "Cut at 2:05" });
+  const tags = () => [...container.querySelectorAll(".composer-row > .composer-tag .composer-tag-name")].map(tag => tag.textContent);
+  // The cut's tag comes first, as it always did, and the stretch after it.
+  expect(tags()).toEqual(["Cut at 2:05", "0:42 – 0:51"]);
+  const clear = container.querySelector<HTMLButtonElement>(".composer-range .composer-tag-clear")!;
+  expect(clear.getAttribute("aria-label")).toBe("Take the marked range 0:42 – 0:51 off the message");
+  await act(async () => clear.click());
+  // The message is still about the cut, at the cut's own time.
+  expect(useUiStore.getState().agentContext).toEqual(cut);
+  expect(tags()).toEqual(["Cut at 2:05"]);
+  // A stretch marked with nothing open is the whole aim: taking it off leaves a new edit about the whole video.
+  await act(async () => useUiStore.getState().setAgentContext({ time: 42, end: 51.5, clipIds: [], markedRange: { start: 42, end: 51.5 } }));
+  await show();
+  expect(tags()).toEqual(["0:42 – 0:51"]);
+  await act(async () => container.querySelector<HTMLButtonElement>(".composer-range .composer-tag-clear")!.click());
+  expect(useUiStore.getState().agentContext).toBeNull();
+});
+
 it("keeps the tag's × from taking the box elsewhere while a spoken message is in it, which would drop the recording", async () => {
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });

@@ -18,7 +18,7 @@ import { useHostsStore } from "../stores/hosts";
 import { usePlayerStore } from "../stores/player";
 import { useProjectStore, type ProjectData } from "../stores/project";
 import { useSkillsStore } from "../stores/skills";
-import { useUiStore } from "../stores/ui";
+import { useUiStore, type AgentContext } from "../stores/ui";
 import { cutAudition, cutOnWorkingCut, lengthLabel, SimpleWorkspace } from "./SimpleWorkspace";
 import * as watch from "./WatchPage";
 import { madeSentence, sentenceText } from "../lib/madeSentence";
@@ -10168,4 +10168,58 @@ it("takes a clip that's already showing back to its start, and plays it, when it
   expect(seek).toHaveBeenCalledWith(0);
   expect(play).toHaveBeenCalledTimes(1);
   expect(usePlayerStore.getState().time).toBe(0);
+});
+
+/** A drag along the timeline's ruler, on a timeline one pixel a second wide. */
+async function markOnRuler(from: number, to: number) {
+  const slider = container.querySelector<HTMLElement>(".timeline-slider")!;
+  slider.getBoundingClientRect = () => ({ left: 0, top: 0, height: 40, width: Number(slider.getAttribute("aria-valuemax")) }) as DOMRect;
+  const pointer = (type: string, x: number) => new PointerEvent(type, { bubbles: true, button: 0, isPrimary: true, pointerId: 1, clientX: x });
+  await act(async () => {
+    container.querySelector(".timeline-range-zone")!.dispatchEvent(pointer("pointerdown", from));
+    document.dispatchEvent(pointer("pointermove", to));
+    document.dispatchEvent(pointer("pointerup", to));
+  });
+}
+
+it("starts a new edit about a stretch marked on the ruler, and keeps it while the editor looks around", async () => {
+  idle();
+  await show();
+  await markOnRuler(11, 16);
+  const marked = useUiStore.getState().agentContext as AgentContext;
+  expect(marked).toMatchObject({ time: 11, end: 16, markedRange: { start: 11, end: 16 } });
+  expect(marked.changeId).toBeUndefined();
+  // It is the message's own aim, with no tag of a cut or an edit, and no moment is offered beside it.
+  expect([boxTag(), offeredTime()]).toEqual([undefined, undefined]);
+  expect(container.querySelector(".timeline-range")).not.toBeNull();
+  // A skip moves the video, not the stretch: it stays until it is sent or taken off.
+  await press("ArrowRight");
+  expect(useUiStore.getState().agentContext).toBe(marked);
+  // Esc on a handle takes it off.
+  await act(async () => { container.querySelector(".timeline-range-handle")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+  expect(useUiStore.getState().agentContext).toBeNull();
+  expect(container.querySelector(".timeline-range")).toBeNull();
+});
+
+it("puts a marked stretch on the message beside the edit that's open, which stays what the message revises", async () => {
+  beforeClipReady();
+  await show();
+  await click(appliedRows()[1]!);
+  await act(async () => {});
+  const edit = useUiStore.getState().agentContext as AgentContext;
+  expect([openTitle(), boxTag()]).toEqual(["captions", "Edit at 0:04"]);
+  // Outside the edit's own passage: Scarlet is told both and works out which the words mean.
+  await markOnRuler(11, 16);
+  const both = useUiStore.getState().agentContext as AgentContext;
+  expect(both).toMatchObject({ changeId: edit.changeId, editIndex: edit.editIndex, time: edit.time, end: edit.end });
+  // The stretch began a few pixels past the edit's passage, which ends at 0:10, and landed on its edge.
+  const stretch = both.markedRange!;
+  expect(stretch.start).toBe(10);
+  expect(stretch.end).toBeGreaterThan(10);
+  expect([openTitle(), boxTag()]).toEqual(["captions", "Edit at 0:04"]);
+  // Closing the edit leaves the stretch: the message is then a new edit about it.
+  await press("Escape");
+  expect(openTitle()).toBeUndefined();
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 10, end: stretch.end, markedRange: stretch });
+  expect((useUiStore.getState().agentContext as AgentContext).changeId).toBeUndefined();
 });

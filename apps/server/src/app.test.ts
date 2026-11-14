@@ -372,9 +372,12 @@ describe("scarlet server", () => {
     await api("POST", `/changes/${older.json.change.id}/reject`, { body: {} });
     // Revise: creates a note and a task for the change author's agent
     const revised = await api<{ change: Change; note: Note; task: Task }>("POST", `/changes/${r.json.change.id}/revise`, {
-      body: { text: "Keep it at 4 seconds instead", position: { version: r.json.change.fromVersion, time: 1.75, end: 2.25, cutIndex: 0, clipIds: [] } },
+      body: { text: "Keep it at 4 seconds instead", position: { version: r.json.change.fromVersion, time: 1.75, end: 2.25, cutIndex: 0, clipIds: [],
+        markedRange: { version: r.json.change.fromVersion, start: 6, end: 7.5 } } },
     });
     expect(revised.status).toBe(200);
+    // A stretch the editor marked on the timeline goes with the request, and the cut keeps its own time.
+    expect(revised.json.task.context.markedRange).toEqual({ version: r.json.change.fromVersion, start: 6, end: 7.5 });
     expect(revised.json.change.state).toBe("revising");
     expect(revised.json.note.changeId).toBe(r.json.change.id);
     expect(revised.json.note).toMatchObject({ version: r.json.change.fromVersion, time: 1.75 });

@@ -52,7 +52,7 @@ import { buildThreads, firstCutDeliveries, isRedo, queueLabel, requestTarget, re
 import { runIsActive } from "../lib/taskRun";
 import { canPreviewMedia } from "../lib/upload";
 import { useProjectStore } from "../stores/project";
-import { playheadPoints, pointOf, useUiStore, type AgentContext } from "../stores/ui";
+import { markedRangeOf, playheadPoints, pointOf, useUiStore, withMarkedRange, type AgentContext, type MarkedRange } from "../stores/ui";
 import { CutPreview } from "./WatchPage";
 import { EditHoverContext, type TimelineDot, type TimelineGap } from "../components/review/TimelineScrubber";
 import "../simple.css";
@@ -1943,7 +1943,7 @@ export function SimpleWorkspace() {
     const aimed = box.agentContext;
     const asked = askedWords.current;
     askedWords.current = undefined;
-    if (!replyTo && !box.agentDraft.trim() && aimed && aimed !== "whole" && !aimed.changeId && aimed !== asked) box.setAgentContext(null);
+    if (!replyTo && !box.agentDraft.trim() && aimed && aimed !== "whole" && !aimed.changeId && !aimed.markedRange && aimed !== asked) box.setAgentContext(null);
   }, [current.id, replyTo, openDraft]);
   // What the next message revises: one cut, one edit, or the whole request. Shown above the box.
   const [targetLabel, setTargetLabel] = useState<string>();
@@ -2015,7 +2015,8 @@ export function SimpleWorkspace() {
       const { target: cutAim, label } = cutTarget(pass, index, cut);
       // Words chosen in the cut's passage still say where the editor was looking: only the cut they're about moves.
       const words = aimed === wordsInCall.current;
-      const target = words ? { ...cutAim, version: aimed.version, time: aimed.time, end: aimed.end, clipIds: aimed.clipIds, label: aimed.label } : cutAim;
+      const moved = words ? { ...cutAim, version: aimed.version, time: aimed.time, end: aimed.end, clipIds: aimed.clipIds, label: aimed.label } : cutAim;
+      const target = aimed.markedRange ? { ...moved, markedRange: aimed.markedRange } : moved;
       if (words) wordsInCall.current = target;
       ui.setAgentContext(target, aimed);
       setTargetLabel(shown => shown && label);
@@ -3084,6 +3085,8 @@ export function SimpleWorkspace() {
     // left from a cut or an edit that has since closed doesn't.
     if (why === "moved" && !aim.target && replyTo === aim.thread?.id && !aimForItem.current) return;
     const text = carry ? ui.agentDraft : "";
+    // A stretch marked on the ruler stays with the box as it is aimed elsewhere, until it is sent or taken off.
+    const marked = why === "sent" ? undefined : markedRangeOf(ui.agentContext);
     // The message moves with the aim: nothing of it is left behind for the request it was on.
     if (carry) { ui.setAgentContext(null); ui.setAgentDraft(""); }
     countAim();
@@ -3097,7 +3100,7 @@ export function SimpleWorkspace() {
     setTargetLabel(aim.target ? aim.label : undefined);
     // A message the editor made a new edit, by the tag's × or the line above the box, is about the whole video: typing
     // on doesn't pin it to the playhead.
-    box.setAgentContext(aim.target ?? (carry && !aim.thread ? "whole" : null));
+    box.setAgentContext(marked ? withMarkedRange(aim.target, marked) : aim.target ?? (carry && !aim.thread ? "whole" : null));
     if (text) box.setAgentDraft(box.agentDraft ? `${box.agentDraft} ${text}` : text);
   };
   // Before the page is drawn, so the box never shows a moment of what it was aimed at before.
@@ -3278,6 +3281,22 @@ export function SimpleWorkspace() {
     });
   }, [point, offeredPoint, written, speaking, playerVersion, source?.id, canOfferPoint]);
 
+  /**
+   * A stretch marked on the timeline's ruler, or taken off there. It goes on the message as it is aimed: a cut or an
+   * edit the box talks to stays its target, and Scarlet is told both. With nothing aimed it is a new edit about that
+   * stretch. A queued request's words and a message being spoken are left as they are.
+   */
+  const markRange = (marked: MarkedRange | undefined) => {
+    const box = useUiStore.getState();
+    if (rewordingItem || box.speaking) return;
+    const was = box.agentContext && box.agentContext !== "whole" ? box.agentContext : undefined;
+    if (!marked && !was?.markedRange) return;
+    const next = withMarkedRange(box.agentContext, marked);
+    if (was && was === wordsInCall.current && next) wordsInCall.current = next;
+    setOfferedPoint(undefined);
+    box.setAgentContext(next, next && was?.changeId ? was : undefined);
+    if (marked) box.focusComposer();
+  };
   const pickPoint = (picked: AgentContext, action: "offer" | "attach") => {
     const box = useUiStore.getState();
     if (replyTo || rewordingItem || box.speaking) return;
@@ -3422,7 +3441,7 @@ export function SimpleWorkspace() {
                 ? { key: callPlaybackKey(listening.index, callTimeline.version), start: audition.start, side: listening.side,
                   beforeWindow: preparedCall?.before.window, afterWindow: preparedCall?.after.window,
                   beforeFile: preparedCall?.before.file, afterFile: preparedCall?.after.file } : undefined,
-            onGap: hearInBefore, onBand, onPick: pickPoint, holdPassage: cutWaits, writeRequest, heard: heardPick }} threadView={playerView}
+            onGap: hearInBefore, onBand, onPick: pickPoint, onRange: markRange, holdPassage: cutWaits, writeRequest, heard: heardPick }} threadView={playerView}
             workingCache={workingCache} draftVersion={previewVersion} draft={appliedCut ? beforeTimeline : pinnedCallVersion ? callTimeline : draft}
             openingJoin={openingJoin && !source && !appliedCut}
             draftFailed={openingJoin ? !!single.error || (!!single.preview && !listenJoined) : pinnedCallVersion ? !!savedBefore.error : !appliedCut && !!draftVersion && draftState?.version === draftVersion && !!draftState.failed}
