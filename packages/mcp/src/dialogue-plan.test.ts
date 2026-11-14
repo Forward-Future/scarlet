@@ -132,6 +132,24 @@ describe("dialogue plan", () => {
     await expect(firstCutRanges(keep, project.id, mic, sources)).resolves.toEqual(straight);
   });
 
+  it("checks an isolated indexed keep against the audio and accepts the same footage as an explicit picture hold", async () => {
+    const { sources } = fixture();
+    const project = await sources.project();
+    const mic = { ...project.media[0]!, duration: 5 };
+    // The transcript puts the middle word in room tone. The voice resumes with the next take.
+    const spoken = [words[0]!, { start: 3.24, end: 3.86 }];
+    const rms = Array.from({ length: 250 }, (_, i) =>
+      spoken.some(w => w.start <= (i + .5) / 50 && (i + .5) / 50 < w.end) ? .15 : .0004);
+    sources.pages = () => [{ ...page, edges: joinEvidence(words, { from: 0, to: 5, rms, peaks: rms, speechActivity: spoken }) }];
+    const before = { start: 0, end: 1.45, fromWord: 0, toWord: 0 };
+    const middle = { start: 1.94, end: 2.22 };
+    const after = { start: 3.2, end: 5, fromWord: 2, toWord: 2 };
+    await expect(firstCutRanges([before, { ...middle, fromWord: 1, toWord: 1 }, after], project.id, mic, sources))
+      .rejects.toThrow(/first.*dBFS/s);
+    const pictureHold = await firstCutRanges([before, middle, after], project.id, mic, sources);
+    expect(pictureHold.ranges[1]).toMatchObject(middle);
+  });
+
   it("checks an automatically staged cut with unrelated words without decoding new audio", async () => {
     const { tl, sources } = fixture();
     const rms = Array<number>(250).fill(.2);
