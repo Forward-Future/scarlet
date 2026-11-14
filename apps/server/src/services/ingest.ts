@@ -26,6 +26,7 @@ import { actorFor, logActivity, quote } from "./activity.js";
 import { matchesSpeakerStream, savedSpeakerTurns } from "./recordingSpeakers.js";
 import { emissionStore, emissionStorePaths } from "./recordingAudio.js";
 import { prepareSourceProxies, sourcePreviews } from "./sourcePreviews.js";
+import { steadyCopy } from "./steadyCopy.js";
 
 export const WAVEFORM_POINTS_PER_SECOND = 50;
 const runFile = promisify(execFile);
@@ -217,6 +218,8 @@ export async function ingestMedia(
       if (process.platform === "darwin" && info.size >= 16 * 1024 * 1024) {
         // macOS cp uses clonefile on APFS and copies normally across volumes. The project owns an independent file.
         await runFile("/bin/cp", ["-c", await realpath(source.path), destination], { signal });
+      } else if (process.platform === "win32" && info.size >= 64 * 1024 * 1024) {
+        await steadyCopy(source.path, destination, signal);
       } else {
         await copyFile(source.path, destination, constants.COPYFILE_FICLONE);
       }
