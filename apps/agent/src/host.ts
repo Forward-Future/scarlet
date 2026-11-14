@@ -326,18 +326,19 @@ export class AgentHost {
       // Whether the engine has the completion. A task it cancelled itself is owed none.
       let landed = true;
       if (signal.reason !== "server-cancelled") {
-        const changeIds = await this.collectChangeIds(task.id);
-        const body = { state, ifStartedAt: task.startedAt, summary, error, changeIds, interrupted: (state === "cancelled" && this.stopped) || stopped ? true : undefined };
+        const body = { state, ifStartedAt: task.startedAt, summary, error, interrupted: (state === "cancelled" && this.stopped) || stopped ? true : undefined };
         // A post the engine misses is tried again. Forgotten here, the task stays running there until the engine
         // calls it interrupted and runs the finished request a second time. A copy does no harm: the engine ignores
         // the completion of an attempt it has already ended.
         landed = false;
+        // The engine answers with the changes it holds for the task, for the line below.
+        let changeIds: string[] = [];
         for (let attempt = 0; attempt < 3 && !landed; attempt++) {
           // One try while the host stops: stopping doesn't wait on an engine that may already be gone. No further
           // try either once the engine cancels the task or hands it out again: it has ended this attempt itself.
           if (attempt && signal.aborted) break;
           try {
-            await this.client.completeTask(task.id, body);
+            changeIds = (await this.client.completeTask(task.id, body)).task?.changeIds ?? [];
             landed = true;
           } catch (err) {
             this.log(`complete failed for task ${task.id}: ${errMsg(err)}`);
@@ -505,22 +506,6 @@ export class AgentHost {
       }),
     };
     return { systemPrompt, instruction, resumeSession, plan, cwd, mcp };
-  }
-
-  /** Change ids recorded in the task's events (the MCP server posts `change` events). */
-  private async collectChangeIds(taskId: string): Promise<string[]> {
-    try {
-      const { events, task } = await this.client.task(taskId);
-      const ids = new Set<string>(task.changeIds ?? []);
-      for (const e of events) {
-        const id = e.type === "change" ? (e.data?.changeId as string | undefined) : undefined;
-        if (id) ids.add(id);
-      }
-      return [...ids];
-    } catch (err) {
-      this.log(`task ${taskId}: could not read its change ids: ${errMsg(err)}`);
-      return [];
-    }
   }
 }
 
