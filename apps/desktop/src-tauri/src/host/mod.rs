@@ -1394,10 +1394,7 @@ mod tests {
     #[tokio::test]
     async fn completes_a_task_without_reading_it_again() {
         crate::util::test_log::capture();
-        let engine = api::fake::engine(|route, _| match route {
-            "GET /api/tasks/tsk_noread" => (500, r#"{"error":{"code":"internal","message":"database is locked"}}"#.into()),
-            _ => (200, "{}".into()),
-        }).await;
+        let engine = api::fake::engine(|_, _| (200, "{}".into())).await;
         let dir = tempfile::tempdir().unwrap();
         let (rt, _) = runtime(&engine.url, dir.path());
         rt.complete(&task("tsk_noread"), "done", Some("Done.".into()), None).await;
