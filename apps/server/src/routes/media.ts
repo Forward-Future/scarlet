@@ -18,6 +18,7 @@ import { serveFile, serveOriginal } from "../files.js";
 import { getTranscriptionProvider, importTranscriptionPolicy } from "../transcribe/index.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 import { transcriptReader } from "../services/transcriptReader.js";
+import { otherInputReader } from "../services/otherInput.js";
 import { sourceCacheStatuses, sourcePreviews } from "../services/sourcePreviews.js";
 import { pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
@@ -292,6 +293,18 @@ export function mediaRoutes(ctx: Ctx) {
     }
     return c.json(c.req.query("audioSources") === "1" && from !== null && to !== null && !omitWords
       ? await ctx.track(readSources(media.projectId, media, transcript, from, to)) : transcript);
+  });
+
+  /**
+   * Which of the given words were heard only on the input a recording's dialogue isn't on, and what sounded there alone
+   * in the given gaps. Source seconds. `available` is false for a recording without a mix and two such inputs.
+   */
+  r.post("/projects/:projectId/media/:mediaId/other-input", async c => {
+    const media = requireMedia(ctx, c.req.param("mediaId"), c.req.param("projectId"));
+    const range = z.tuple([z.number().finite().nonnegative(), z.number().finite().nonnegative()]).refine(([a, b]) => b >= a);
+    const { words, gaps } = await jsonBody(c, z.object({ words: z.array(range).max(5000).default([]), gaps: z.array(range).max(2000).default([]) }));
+    const toRange = ([start, end]: [number, number]) => ({ start, end });
+    return c.json(await ctx.track(otherInputReader(ctx).classify(media.projectId, media, words.map(toRange), gaps.map(toRange))));
   });
 
   /** Attempts at the same line near a source range, for comparing takes in review. Source seconds. */

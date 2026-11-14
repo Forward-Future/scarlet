@@ -1,6 +1,15 @@
-import { expect, it } from "vitest";
-import { otherInputSound, recordingInputs } from "./otherInput.js";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { expect, it, vi } from "vitest";
+import type { MediaAsset } from "@scarlet/timeline";
+import { otherInputReader, otherInputSound, recordingInputs } from "./otherInput.js";
 import { measureSources } from "./transcriptSources.js";
+
+const reads = vi.hoisted(() => ({ page: undefined as undefined | ((from: number) => ReturnType<typeof import("./transcriptSources.js")["measureSources"]>) }));
+vi.mock("./transcriptSources.js", async original => ({ ...await original<typeof import("./transcriptSources.js")>(),
+  sourceLabels: async () => ["Mix", "Mic", "Desktop"],
+  readSourceEnergy: async (_file: string, from: number) => reads.page!(from) }));
 
 const RATE = 8000, PAGE = 60;
 type Span = [from: number, to: number];
@@ -44,4 +53,27 @@ it("says nothing when no page shows each input sounding alone, so the mix can't 
   const only = page([[1, 50]], []);
   const said = [0, 60, 120].flatMap(offset => words([[1, 50]], offset));
   expect(await recordingInputs(said, 180, async () => only)).toBeUndefined();
+});
+
+it("says which words came from the other input, and what sounded there alone in a gap", async () => {
+  // Two minutes of a presenter on the microphone. In the second, a producer says "okay" at 113 s and a chime plays at 116 s.
+  const talk: Span[] = [[1, 50]];
+  const quiet = page(talk, []), second = page(talk, [[53, 54], [56, 56.5]]);
+  reads.page = from => from >= 60 ? second : quiet;
+  const dir = mkdtempSync(join(tmpdir(), "inputs-"));
+  writeFileSync(join(dir, "talk.mp4"), "");
+  const said = [...words(talk), ...words(talk, 60), { start: 113.2, end: 113.7, text: "okay" }];
+  const ctx = { paths: { media: () => dir }, projectSignal: () => new AbortController().signal,
+    repos: { transcripts: { get: () => ({ segments: [{ words: said }] }) } } } as never;
+  const media = { id: "med", kind: "video", hasAudio: true, path: "talk.mp4", duration: 120, transcriptId: "trs" } as MediaAsset;
+  const reading = await otherInputReader(ctx).classify("prj", media, [{ start: 61, end: 61.4 }, { start: 113.2, end: 113.7 }], [{ start: 114, end: 118 }, { start: 30, end: 31 }]);
+  expect(reading).toEqual({ available: true, words: [false, true], gaps: [[{ start: 116, end: 116.5 }], []] });
+  // A recording whose words are on both inputs says nothing.
+  const both = page([[1, 28]], [[31, 58]]);
+  reads.page = () => both;
+  const shared = { ...media, id: "two", path: "two.mp4" } as MediaAsset;
+  writeFileSync(join(dir, "two.mp4"), "x");
+  const twoPeople = [0, 60].flatMap(offset => [...words([[1, 28]], offset), ...words([[31, 58]], offset)]);
+  const other = { ...ctx as object, repos: { transcripts: { get: () => ({ segments: [{ words: twoPeople }] }) } } } as never;
+  expect((await otherInputReader(other).classify("prj", shared, [{ start: 35, end: 35.4 }], [])).available).toBe(false);
 });
