@@ -1490,7 +1490,7 @@ export class MockClient implements ScarletApi {
     return this.latency({ task }, 200);
   }
   async localModelStatus() { return { state: "ready" as const }; }
-  async settings(): Promise<{ settings: ServerSettings; transcriptionAvailable: boolean }> {
+  async settings(): Promise<{ settings: ServerSettings; transcriptionAvailable: boolean; transcriptionIssue?: string }> {
     this.requireAuth();
     return this.latency({ settings: this.db.settings, transcriptionAvailable: this.db.settings.transcription.provider !== "none" });
   }
