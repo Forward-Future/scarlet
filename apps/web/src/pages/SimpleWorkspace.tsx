@@ -163,6 +163,25 @@ function reviewCalls(change: Change, cuts: ReadonlyArray<Pick<CutReview["cuts"][
 }
 
 /** The latest attempt at a run: one that was interrupted carries on under a new task. */
+/** Where Keep goes from an edit Scarlet didn't flag, the one on `rows[shown]`: the next row of the list in time order,
+ * past the shown one and wrapping to earlier ones, with an edit that `still` waits or a call that does. A row is
+ * one edit made in several places, and goes by its first place that still waits. */
+export function keepGoesTo<C>(rows: readonly (readonly ThreadEdit[])[], shown: number, still: (e: ThreadEdit) => boolean,
+  calls: readonly { call: C; at: number }[]): { edit: ThreadEdit } | { call: C } | undefined {
+  const timeOf = (e: ThreadEdit) => e.at ?? e.range.start;
+  const here = rows[shown]?.[0];
+  if (!here) return;
+  const from = timeOf(here);
+  const items = [
+    ...rows.flatMap((row, i) => {
+      const edit = i === shown ? undefined : row.find(still);
+      return edit ? [{ at: timeOf(row[0]!), after: i > shown, next: { edit } }] : [];
+    }),
+    ...calls.map(c => ({ at: c.at, after: c.at > from, next: { call: c.call } })),
+  ].sort((a, b) => a.at - b.at);
+  return (items.find(n => n.at > from || (n.at === from && n.after)) ?? items[0])?.next;
+}
+
 function lastAttempt(task: Task | undefined, tasks: readonly Task[]) {
   for (let hops = 0; task?.retryTaskId && hops < 50; hops++) {
     const next = tasks.find(t => t.id === task!.retryTaskId);
@@ -2712,14 +2731,22 @@ export function SimpleWorkspace() {
     actions.playEdit(next);
   }
   // Keep wraps through the flagged rows that still wait, then reaches the request’s first waiting call.
-  // An unflagged edit goes on to the next unflagged one that hasn't been kept, wrapping the same way. With none of
-  // those left it goes to a flagged one that still waits, and the card closes once nothing is left to keep.
+  // An unflagged edit goes on to the next row of the list that hasn't been kept: an unflagged edit, a flagged one that
+  // still waits or a call that does, going past the ones that have and wrapping to earlier ones. The card closes once
+  // nothing is left to keep.
   const unkeptEdit = (e: ThreadEdit) => !e.check && !reviewed(e) && !revisingEdit(e);
   const rowAfterKeep = (still: (e: ThreadEdit) => boolean) => editsByRow.slice(shownRow + 1).find(row => row.some(still))
     ?? editsByRow.slice(0, Math.max(0, shownRow)).find(row => row.some(still));
-  const nextRowAfterKeep = !reviewingEdit ? undefined : (reviewingEdit.check ? undefined : rowAfterKeep(unkeptEdit)) ?? rowAfterKeep(waitingEdit);
-  const nextEditAfterKeep = nextRowAfterKeep && ((reviewingEdit?.check ? undefined : nextRowAfterKeep.find(unkeptEdit)) ?? nextRowAfterKeep.find(waitingEdit) ?? nextRowAfterKeep[0]);
-  const nextCallAfterKeep = !nextEditAfterKeep && reviewingEdit?.check && passThread?.id === focusThread?.id ? waitingCalls[0] : undefined;
+  const callsToKeepTo = pass && passThread?.id === focusThread?.id ? waitingCalls : [];
+  const afterUnflaggedKeep = reviewingEdit && !reviewingEdit.check
+    ? keepGoesTo(editsByRow, shownRow, e => unkeptEdit(e) || waitingEdit(e),
+      callsToKeepTo.map(call => ({ call, at: pass!.cutEdits?.find(c => c.index === call.index)?.range.start ?? call.start })))
+    : undefined;
+  const nextRowAfterKeep = !reviewingEdit || !reviewingEdit.check ? undefined : rowAfterKeep(waitingEdit);
+  const nextEditAfterKeep = afterUnflaggedKeep && "edit" in afterUnflaggedKeep ? afterUnflaggedKeep.edit
+    : nextRowAfterKeep && (nextRowAfterKeep.find(waitingEdit) ?? nextRowAfterKeep[0]);
+  const nextCallAfterKeep = afterUnflaggedKeep ? "call" in afterUnflaggedKeep ? afterUnflaggedKeep.call : undefined
+    : !nextEditAfterKeep && reviewingEdit?.check && passThread?.id === focusThread?.id ? waitingCalls[0] : undefined;
   const onCall = !!openCall && !openCallBack && !reviewingEdit;
   const upcomingCall = onCall ? nextCallAfterDecision : nextCallAfterKeep;
   const upcomingEdit = onCall && !upcomingCall ? passFlagged[0] : nextEditAfterKeep && waitingEdit(nextEditAfterKeep) ? nextEditAfterKeep : undefined;

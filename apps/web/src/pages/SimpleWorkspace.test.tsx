@@ -19,7 +19,7 @@ import { usePlayerStore } from "../stores/player";
 import { useProjectStore, type ProjectData } from "../stores/project";
 import { useSkillsStore } from "../stores/skills";
 import { useUiStore, type AgentContext } from "../stores/ui";
-import { cutAudition, cutOnWorkingCut, lengthLabel, SimpleWorkspace } from "./SimpleWorkspace";
+import { cutAudition, cutOnWorkingCut, keepGoesTo, lengthLabel, SimpleWorkspace } from "./SimpleWorkspace";
 import * as watch from "./WatchPage";
 import { madeSentence, sentenceText } from "../lib/madeSentence";
 import { QueueTray } from "../components/chat/QueueTray";
@@ -10222,4 +10222,18 @@ it("puts a marked stretch on the message beside the edit that's open, which stay
   expect(openTitle()).toBeUndefined();
   expect(useUiStore.getState().agentContext).toMatchObject({ time: 10, end: stretch.end, markedRange: stretch });
   expect((useUiStore.getState().agentContext as AgentContext).changeId).toBeUndefined();
+});
+
+it("goes from a kept edit Scarlet didn't flag to a call still waiting, or a flagged edit, when it comes next in the list", () => {
+  const edit = (at: number, check?: string, kept = false) => ({ changeId: "chg_pass", spot: at, label: `at ${at}`, range: { start: at, end: at + 1 }, previous: [], kept, ...(check && { check }) });
+  const rows = [[edit(13, undefined, true)], [edit(21)], [edit(35)], [edit(45, "Listen to the join.")], [edit(50)]];
+  const still = (e: object) => !(e as { kept: boolean }).kept;
+  // Kept on 0:21: the call at 0:27 waits on the editor and is next in the list, ahead of the edit at 0:35.
+  expect(keepGoesTo(rows, 1, still, [{ call: "cut 2", at: 27 }])).toEqual({ call: "cut 2" });
+  // Kept on 0:35: the flagged edit at 0:45 is next, ahead of the edit at 0:50.
+  expect(keepGoesTo(rows, 2, still, [])).toEqual({ edit: rows[3]![0] });
+  // Kept on the last: it wraps past the kept 0:13 to the first that still waits.
+  expect(keepGoesTo(rows, 4, still, [{ call: "cut 2", at: 27 }])).toEqual({ edit: rows[1]![0] });
+  // Nothing else waits: the card closes.
+  expect(keepGoesTo([[edit(13, undefined, true)], [edit(21)]], 1, still, [])).toBeUndefined();
 });
