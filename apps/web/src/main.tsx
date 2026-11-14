@@ -13,7 +13,7 @@ import "./workspace.css";
 
 async function launch() {
   const root = document.getElementById("root")!;
-  const desktopOnly = "Open Scarlet in the macOS or Windows desktop app.";
+  const desktopOnly = "Open Scarlet in the desktop app.";
   if (!isDesktop()) {
     root.textContent = desktopOnly;
     return;
@@ -28,7 +28,7 @@ async function launch() {
   try {
     const [native, view] = await Promise.all([desktop.info(), opening]);
     const { platform, localUpdates, customOpenaiModels, customClaudeModels } = native;
-    if (platform !== "macos" && platform !== "windows") {
+    if (platform !== "macos" && platform !== "windows" && platform !== "linux") {
       view.render(desktopOnly);
       return;
     }

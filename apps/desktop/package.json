@@ -2,7 +2,7 @@
   "name": "@scarlet/desktop",
   "version": "0.1.4",
   "private": true,
-  "description": "Scarlet for macOS and Windows with an embedded renderer, engine sidecar, and local agent host.",
+  "description": "Scarlet for macOS, Windows, and Linux with an embedded renderer, engine sidecar, and local agent host.",
   "license": "MIT",
   "type": "module",
   "scripts": {
