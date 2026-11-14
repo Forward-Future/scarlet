@@ -4,6 +4,7 @@ import { cutPlaybackWindow, firstIndex, mergeRanges, CUT_LEAD_SECONDS, snapToFra
 import { appliedCutClock, appliedCutSource } from "../../lib/appliedCutPlayback";
 import { api, IS_MOCK } from "../../lib/client";
 import { cutAudition, cutAuditionClock, isolatedReviewCut } from "../../lib/cutAudition";
+import { besides, removedSince } from "../../lib/removedSince";
 import { usePlayerStore } from "../../stores/player";
 import { useProjectStore } from "../../stores/project";
 import { singleCutDraft, type SingleCutDrafts } from "./useCutReview";
@@ -16,7 +17,8 @@ export interface CutToPrepare {
   cut: TimeRange;
   before: Version;
   nearby?: TimeRange[];
-  after?: { version: Version; removed?: TimeRange[] };
+  /** `current`: After is the video as it runs now, which also lacks whatever was cut since this cut's version. */
+  after?: { version: Version; removed?: TimeRange[]; current?: boolean };
   applied?: boolean;
   single?: { changeId: string; index: number; count: number };
 }
@@ -65,10 +67,12 @@ function nearbyCuts(edits: readonly ThreadEdit[], version: string, cut: TimeRang
   return skips.filter(r => r.start !== cut.start || r.end !== cut.end).map(({ start, end }) => ({ start, end }));
 }
 
-export function editToPrepare(edit: ThreadEdit, change: Change | undefined, edits: readonly ThreadEdit[]): CutToPrepare | undefined {
+export function editToPrepare(edit: ThreadEdit, change: Change | undefined, edits: readonly ThreadEdit[], head?: string): CutToPrepare | undefined {
   if (!edit.beforeCut) return;
   const { removed: cut, version } = edit.beforeCut;
-  return { cut, before: version, nearby: nearbyCuts(edits, version, cut), applied: true, after: change && appliedCutSource(change) };
+  const own = change && appliedCutSource(change);
+  const after = own && head && head !== version && head !== own.version ? { version: head, current: true } : own;
+  return { cut, before: version, nearby: nearbyCuts(edits, version, cut), applied: true, after };
 }
 
 export interface CutPlaybackWindow extends TimeRange { url: string }
@@ -112,12 +116,18 @@ export async function prepareCut(projectId: string, fps: number, target: CutToPr
     }
     if (target.after) return { timeline: await read(target.after.version), cut: target.cut, removed: target.after.removed };
   };
+  let nearby = target.nearby;
   const [before, edited] = await Promise.all([read(target.before), readAfter().catch(() => undefined)]);
   signal.throwIfAborted();
   const cut = edited?.cut ?? target.cut;
   const duration = timelineDuration(before);
   if (cut.start >= duration || cut.end <= cut.start) return;
-  const listen = cutAudition(cut, "after", duration, { others: target.nearby });
+  if (edited && target.after?.current) {
+    // What the video as it runs now no longer has besides this cut, in Before's clock, is stepped over too.
+    const since = removedSince(before, edited.timeline, fps);
+    nearby = [...nearby ?? [], ...besides(since, [cut, ...nearby ?? []], fps).map(s => s.removed)].sort((a, b) => a.start - b.start);
+  }
+  const listen = cutAudition(cut, "after", duration, { others: nearby });
   const after = edited?.timeline;
   const clock = edited && (target.applied ? appliedCutClock(before, edited.timeline, edited.removed, fps, cut, listen)
     : edited.removed && cutAuditionClock(before, edited.timeline, edited.removed, fps, cut, listen));

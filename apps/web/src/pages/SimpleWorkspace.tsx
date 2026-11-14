@@ -45,6 +45,7 @@ import { editFocus, editKindWord, editNote } from "../lib/editKind";
 import { player, type Audition } from "../lib/player";
 import { appliedCutClock, appliedCutSource, cutChange } from "../lib/appliedCutPlayback";
 import { cutAudition, cutAuditionClock, isolatedReviewCut } from "../lib/cutAudition";
+import { besides, removedSince } from "../lib/removedSince";
 import { usePlayerStore } from "../stores/player";
 import { verifiedJoinClock, type JoinClock } from "../lib/joinClock";
 import { buildThreads, firstCutDeliveries, isRedo, queueLabel, requestTarget, revisionTarget, stagedCuts, threadConversation, type Thread, type ThreadEntry } from "../lib/threads";
@@ -2390,11 +2391,14 @@ export function SimpleWorkspace() {
   // An applied cut is gone from the working cut, so it plays on the version before it, where the timeline shades
   // what came out. After steps over it, as the video plays now; Before plays through it.
   const beforeCut = reviewingEdit?.beforeCut;
-  const madeBy = useMemo(() => {
+  const ownSource = useMemo(() => {
     const change = reviewingEdit?.beforeCut && focusThread && cutChange(reviewingEdit, focusThread.changes);
     return change && appliedCutSource(change);
   }, [reviewingEdit, focusThread]);
-  const appliedAfterVersion = madeBy?.version;
+  // After plays the video as it runs now, which has this cut's join and those of every cut made since: a later batch
+  // of the pass, a revision or another request. Only the working edit itself, until it has loaded.
+  const playsNow = !!ownSource && !!beforeCut && !!head && timeline?.version === head && head !== beforeCut.version && head !== ownSource.version;
+  const appliedAfterVersion = playsNow ? head : ownSource?.version;
   const preparedEdit = reviewingEdit ? preparedCandidates.get(editPlaybackKey(reviewingEdit, appliedAfterVersion)) : undefined;
   const cutBefore = useReviewTimeline(current.id, beforeCut?.version, preparedEdit?.before.timeline ?? timeline);
   const beforeTimeline = cutBefore.timeline ?? undefined;
@@ -2409,8 +2413,19 @@ export function SimpleWorkspace() {
   const visiting = shownSide?.side === "before" ? shownSide.visit : undefined;
   // The pass's other cuts, in this cut's clock. Each goes by its time in the video as it runs now, as its row in the
   // pass's list and its tag in the message box do: "Cut at 3:04".
-  const otherEdits = useMemo(() => appliedCut ? threadEdits.flatMap(e => e !== reviewingEdit && e.beforeCut?.version === beforeCut!.version
-    ? [{ at: clockLabel(e.at ?? e.range.start), label: e.label, removed: e.beforeCut.removed }] : []) : [], [appliedCut, threadEdits, reviewingEdit, beforeCut]);
+  const sameVersion = useMemo(() => appliedCut ? threadEdits.flatMap(e => e !== reviewingEdit && e.beforeCut?.version === beforeCut!.version
+    ? [{ at: clockLabel(e.at ?? e.range.start), label: e.label as string | undefined, removed: e.beforeCut.removed }] : []) : [], [appliedCut, threadEdits, reviewingEdit, beforeCut]);
+  // A pass applies its cuts in batches, and this cut's version is the one before its own batch. What came out since,
+  // in later batches, revisions or other requests, isn't in the video as it runs now either: it's shaded here the
+  // same way, by its time now, and After steps over it.
+  const since = useMemo(() => appliedCut && playsNow && beforeTimeline && timeline ? removedSince(beforeTimeline, timeline, fps) : undefined,
+    [appliedCut, playsNow, beforeTimeline, timeline, fps]);
+  const otherEdits = useMemo(() => !since || !appliedCut ? sameVersion : [...sameVersion,
+    ...besides(since, [appliedCut, ...sameVersion.map(o => o.removed)], fps).map(({ removed, at }) => ({ at: clockLabel(at), removed,
+      label: threadEdits.find(e => e.beforeCut && Math.abs((e.at ?? e.range.start) - at) < 1.5 / fps)?.label }))]
+    .sort((a, b) => a.removed.start - b.removed.start), [sameVersion, since, appliedCut, threadEdits, fps]);
+  // The working edit's join for this cut is found by comparing it with the version before, as for a mixed save.
+  const madeBy = useMemo(() => playsNow ? { version: head!, removed: undefined } : ownSource, [ownSource, playsNow, head]);
   const otherCuts = useMemo(() => otherEdits.map(o => o.removed), [otherEdits]);
   const othersKey = useMemo(() => JSON.stringify(otherCuts), [otherCuts]);
   // Both sides use the same review window. After can travel farther on the source clock to play its kept tail.
@@ -2713,7 +2728,7 @@ export function SimpleWorkspace() {
     };
     const addEdit = (edit: ThreadEdit, thread: Thread | undefined, edits: ThreadEdit[]) => {
       if (!edit.beforeCut || !thread) return;
-      const target = editToPrepare(edit, cutChange(edit, thread.changes), edits);
+      const target = editToPrepare(edit, cutChange(edit, thread.changes), edits, timeline?.version === head ? head ?? undefined : undefined);
       if (!target) return;
       if (edit === reviewingEdit) {
         if (!beforeTimeline || (appliedSide === "after" && madeBy && !afterTimeline)) return;
