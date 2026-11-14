@@ -3,6 +3,7 @@ import { createStore, useStore } from "zustand";
 import { filmstripBatches, type TimeRange } from "@scarlet/timeline";
 import { api } from "../../lib/client";
 import { usePlayerStore } from "../../stores/player";
+import { useUiStore } from "../../stores/ui";
 import { arrowSeekTime, ignorePageShortcut, useHotkeys } from "../../lib/hotkeys";
 import { playbackClock } from "../../lib/format";
 import { playbackLog } from "../../lib/playbackLog";
@@ -488,6 +489,8 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
   label = "Position in the video", pictureAspect = 16 / 9, frameAt, previewStrip, hoverVideo, onSeek, onSelectTime, onScrubStart, highlight, marks, gaps, skippedRanges, onGap, onBand, range, onRange, fps = 30 }:
   TimelineScrubberProps & { subject: string; kept: RefObject<KeptView | undefined> }) {
   const litMark = useStore(useContext(EditHoverContext));
+  // The message box's icon is open: the passage the message is about lights up.
+  const aimLit = useUiStore(s => s.aimLit);
   const total = Number.isFinite(duration) ? Math.max(0, duration) : 0;
   const end = start + total;
   const position = Number.isFinite(playhead) ? Math.min(end, Math.max(start, playhead)) : start;
@@ -759,7 +762,7 @@ function Scrubber({ duration, start = 0, playhead, editMarkers, cue, waveform, a
         // Panned or zoomed out of view, the band draws nothing: clamped to the edge it would leave a sliver that reads as a mark there.
         ? highlight.band.end > from && highlight.band.start < to &&
           // Pointer only: the keyboard reaches Before with \.
-          <span aria-hidden="true" className={`simple-timeline-band${highlight.tone ? ` is-${highlight.tone}` : ""}${onBand ? " is-live" : ""}`} style={{ left: `${Math.min(100, Math.max(0, percent(highlight.band.start)))}%`,
+          <span aria-hidden="true" className={`simple-timeline-band${highlight.tone ? ` is-${highlight.tone}` : ""}${onBand ? " is-live" : ""}${aimLit ? " is-lit" : ""}`} style={{ left: `${Math.min(100, Math.max(0, percent(highlight.band.start)))}%`,
             width: `${Math.max(0, Math.min(100, percent(highlight.band.end)) - Math.max(0, percent(highlight.band.start)))}%` }}
             onPointerDown={onBand ? e => {
               if (e.button !== 0 || !e.isPrimary || drag.current) return;

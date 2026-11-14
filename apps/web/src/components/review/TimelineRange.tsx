@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import type { TimeRange } from "@scarlet/timeline";
 import { clockRange, lengthLabel, playbackClock } from "../../lib/format";
 import { QueuedImg } from "./QueuedImg";
+import { useUiStore } from "../../stores/ui";
 
 /** How near, in pixels, a dragged end comes to the edge of a cut or an edit before it lands on it. */
 export const RANGE_SNAP_PX = 7;
@@ -209,6 +210,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
   };
 
   const shown = live?.range ?? range;
+  const lit = useUiStore(s => s.aimLit);
   const nudge = (edge: "start" | "end", e: KeyboardEvent<HTMLButtonElement>) => {
     if (!range || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onRange(undefined); return; }
@@ -240,7 +242,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     // The close-up follows where the moving end is, also the instant a held press opens it with nothing drawn yet.
     const edgeTime = live?.at;
     layer = <>
-      <span aria-hidden="true" className={live ? "timeline-range is-live" : "timeline-range"} style={{ left: `${left}%`, width: `${Math.max(0, right - left)}%` }} />
+      <span aria-hidden="true" className={`timeline-range${live ? " is-live" : ""}${lit ? " is-lit" : ""}`} style={{ left: `${left}%`, width: `${Math.max(0, right - left)}%` }} />
       {live && !live.precise && <span aria-hidden="true" className="timeline-range-time" style={{ left: `${(left + right) / 2}%` }}>
         {clockRange(live.range.start, live.range.end)} · {lengthLabel(live.range.end - live.range.start)}</span>}
       {handle("start")}{handle("end")}

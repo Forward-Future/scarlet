@@ -89,6 +89,34 @@
   border: 1px solid var(--color-line); border-radius: 4px; font-size: 11.5px; line-height: 20px; color: var(--color-muted); white-space: nowrap; }
 /* The stretch marked on the timeline: lit like its band there, so the two read as one thing. */
 .composer-range { border-color: rgba(244, 241, 233, .55); color: var(--color-fg); font-variant-numeric: tabular-nums; }
+/* What the message is about, folded into one edit-point icon of a fixed size; hover, focus or a click opens its card. */
+.composer-aim { position: relative; flex: none; align-self: center; display: inline-flex; }
+.composer-aim-icon { position: relative; display: inline-grid; place-items: center; width: 26px; height: 28px; padding: 0; border: 0; border-radius: 6px;
+  background: none; color: var(--color-muted); cursor: pointer; }
+.composer-aim-icon:hover, .composer-aim-icon[aria-expanded="true"] { color: var(--color-fg); }
+.composer-aim-icon:focus-visible { outline: 2px solid var(--color-fg); outline-offset: 1px; }
+.composer-aim-card { position: absolute; z-index: 6; left: -6px; bottom: calc(100% + 8px); display: grid; width: max-content; min-width: 240px; max-width: 320px;
+  padding: 4px; border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-panel); box-shadow: 0 6px 20px #0005; }
+/* The gap between the icon and its card stays part of the hover, so the pointer can cross it. */
+.composer-aim-card::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 10px; }
+.composer-aim-row { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 4px 0 8px; border-radius: 6px; transition: background .4s; }
+.composer-aim-row.is-new { background: var(--color-raised); }
+.composer-aim-kind { display: grid; place-items: center; width: 16px; color: var(--color-dim); }
+.composer-aim-kind svg { width: 14px; height: 14px; }
+.composer-aim-name { color: var(--color-fg); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.composer-aim-detail { color: var(--color-dim); font-size: 12px; white-space: nowrap; }
+.composer-aim-clear { margin-left: auto; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px;
+  background: none; color: var(--color-dim); cursor: pointer; }
+.composer-aim-clear:hover:not(:disabled) { background: var(--color-raised); color: var(--color-fg); }
+.composer-aim-clear:disabled { opacity: .5; cursor: default; }
+@media (prefers-reduced-motion: no-preference) {
+  .composer-aim-icon.is-pulsing::after { content: ""; position: absolute; inset: 1px; border-radius: 8px; box-shadow: 0 0 0 0 rgba(244, 241, 233, .45);
+    animation: composer-aim-pulse .7s ease-out; pointer-events: none; }
+  @keyframes composer-aim-pulse { to { box-shadow: 0 0 0 7px rgba(244, 241, 233, 0); } }
+}
+/* While the icon is open, the timeline lights what the message is about. */
+.timeline-range.is-lit { box-shadow: 0 0 0 2px rgba(244, 241, 233, .4); }
+.simple-timeline-band.is-lit { box-shadow: 0 0 0 2px rgba(255, 160, 156, .55); }
 .composer-tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .composer-tag-clear { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--color-dim); cursor: pointer; }
 .composer-tag-clear:hover:not(:disabled) { background: var(--color-raised); color: var(--color-fg); }

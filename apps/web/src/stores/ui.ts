@@ -161,6 +161,9 @@ interface UiState {
   /** A spoken message is in the message box: being recorded, written down or sent. Like typed words, it keeps the box aimed where it was. */
   speaking: boolean;
   setSpeaking(v: boolean): void;
+  /** The message box's edit-point icon is open or hovered: the timeline lights what the message is about. */
+  aimLit: boolean;
+  setAimLit(v: boolean): void;
 
   /** Bumped to focus the composer's text box (e.g. after "Ask about this span"). */
   composerFocus: number;
@@ -315,6 +318,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   setVoiceHold: (voiceHold) => set({ voiceHold }),
   speaking: false,
   setSpeaking: (speaking) => { if (get().speaking !== speaking) set({ speaking }); },
+  aimLit: false,
+  setAimLit: (aimLit) => { if (get().aimLit !== aimLit) set({ aimLit }); },
 
   composerFocus: 0,
   focusComposer: () => set({ composerFocus: get().composerFocus + 1 }),
