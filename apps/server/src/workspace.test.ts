@@ -3649,6 +3649,7 @@ it("loads stock workflows on demand and leaves explicit selections and custom in
 it("applies requested edits and keeps suggestions and competing alternatives out of the cut until chosen", async () => {
   const path = projectsPath();
   const { ctx } = workspace;
+  const publish = vi.spyOn(ctx.bus, "publish");
   const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Add a marker",
     createdBy: { type: "human", name: "Editor" } });
   const submit = async (id: string, intent: string, taskId: string | undefined = task.id) => {
@@ -3659,7 +3660,7 @@ it("applies requested edits and keeps suggestions and competing alternatives out
   };
   const requested = await submit("requested", "requested");
   expect(requested).toMatchObject({ state: "approved", autoApplied: true, decidedBy: { type: "scarlet" } });
-  expect(ctx.repos.notifications.count()).toBe(0);
+  expect(publish.mock.calls.filter(([event]) => event.type === "notification")).toEqual([]);
   const suggestion = await submit("suggestion", "suggestion");
   const one = await submit("one", "alternative");
   const two = await submit("two", "alternative");
