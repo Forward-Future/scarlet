@@ -3402,7 +3402,7 @@ it("leaves a request queued when its host hangs up during a claim's long poll", 
   expect(ctx.repos.tasks.get(task.id)?.state).toBe("queued");
 });
 
-it.each(["a1", "alternate"])("requires an audio check of the version that plays, including repeats inside a kept take and across a ripple onto %s", async track => {
+it.each(["a1", "alternate"])("lets the model inspect repeats inside a kept take and a ripple onto %s without reopening the pass after approval", async track => {
   const { ctx } = workspace;
   const { host } = await (await api("POST", "/hosts/register", { name: "Host", platform: "test", agents: [{ id: "codex", installed: true }] })).json();
   const pass = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: { type: "human", name: "Editor" } });
@@ -3417,30 +3417,32 @@ it.each(["a1", "alternate"])("requires an audio check of the version that plays,
     { op: "addClip", trackId: "a1", clip: { id: "one", kind: "media", mediaId: "mic", sourceIn: 0, sourceOut: 1, timelineIn: 0 } },
     { op: "addClip", trackId: track, clip: { id: "two", kind: "media", mediaId: "mic", sourceIn: 2, sourceOut: 8, timelineIn: 1 } },
   ] }).change.toVersion;
-  expect((await finish()).state).toBe("queued");
-  await claim();
   const found = await (await check(version)).json();
   expect(found.unavailable).toBeUndefined();
   expect(found).toMatchObject({ heard: 2, remaining: 2, repeats: [{ phrase: "go", atJoin: true }, { phrase: "very", atJoin: false }] });
-  expect((await finish()).state).toBe("queued");
-  await claim();
   const keep = [{ id: found.repeats[1].id, reason: "Spoken emphasis" }];
   expect(await (await check(version, keep)).json()).toMatchObject({ heard: 2, remaining: 1 });
   const repaired = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, description: "Keep the second go",
     ops: [{ op: "rippleDelete", start: .5, end: 1 }] }).change.toVersion;
   expect((await check(version)).status).toBe(409);
-  expect((await finish()).state).toBe("queued");
-  await claim();
   expect(await (await check(repaired)).json()).toMatchObject({ heard: 1, remaining: 0, staged: 0 });
   const proposed = (await (await api("POST", projectsPath() + "/dialogue-cuts", { taskId: pass.id, fromVersion: repaired, description: "Shorten the tail",
     cuts: [{ start: 4, end: 5, review: true, reason: "Check the final beat." }] })).json()).changes[0] as Change;
   expect((await finish()).state).toBe("done");
   expect((await api("POST", `/changes/${proposed.id}/approve`, { restoredCuts: [] })).status).toBe(200);
-  expect(ctx.repos.tasks.get(pass.id)?.state).toBe("queued");
-  await claim();
+  expect(ctx.repos.tasks.get(pass.id)).toMatchObject({ state: "done", repeatAudit: { version: repaired } });
   const approved = ctx.repos.projects.header(project.id)!.head!;
-  expect(await (await check(approved)).json()).toMatchObject({ version: approved, heard: 1, remaining: 0 });
-  expect(await finish()).toMatchObject({ state: "done", repeatAudit: { remaining: 0, noFindings: false } });
+  expect(approved).not.toBe(repaired);
+  expect((await check(approved)).status).toBe(409);
+});
+
+it("finishes a first cut on audible footage when the model elects to finish without a repeat check", async () => {
+  const { ctx } = workspace;
+  const { task } = dialoguePassInParts();
+  saveTask(ctx, { ...task, state: "running", startedAt: new Date().toISOString() });
+  const response = await api("POST", `/tasks/${task.id}/complete`, { state: "done", summary: "The edit is ready." });
+  expect((await response.json()).task.state).toBe("done");
+  expect(ctx.repos.tasks.get(task.id)!.repeatAudit).toBeUndefined();
 });
 
 it("finds a six-word opening repeated inside the kept audio and clears it when the pickup is removed", async () => {
@@ -3464,7 +3466,7 @@ it("finds a six-word opening repeated inside the kept audio and clears it when t
   expect(await check((await corrected.json()).head)).toMatchObject({ heard: 0, remaining: 0, repeats: [] });
 });
 
-it("reports an unreadable recording and leaves its checked work resumable", async () => {
+it("reports an unavailable reading to the model and honors its decision to finish", async () => {
   const { ctx } = workspace;
   ctx.repos.projects.putMedia(project.id, { id: "mic", name: "Mic", path: "missing.wav", kind: "audio", hasAudio: true, duration: 2 }, "ready");
   const pass = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: { type: "human", name: "Editor" } });
@@ -3475,7 +3477,7 @@ it("reports an unreadable recording and leaves its checked work resumable", asyn
   const check = await api("POST", projectsPath() + `/tasks/${pass.id}/repeat-audit`, { version });
   expect(await check.json()).toMatchObject({ version, unavailable: [{ mediaId: "mic" }] });
   const done = await api("POST", `/tasks/${pass.id}/complete`, { state: "done" });
-  expect(await done.json()).toMatchObject({ task: { state: "failed", interrupted: true } });
+  expect(await done.json()).toMatchObject({ task: { state: "done", repeatAudit: { version, unavailable: [expect.stringContaining("mic")] } } });
 });
 
 it("hands a request held by a dialogue pass to a waiting host as soon as the editor decides the pass", async () => {
@@ -3871,16 +3873,14 @@ it.each(["dialogue cuts", "whole timeline"])("keeps the first-cut reply when a p
     ops: [{ op: "addClip", trackId: "a1", clip: { id: "raw", kind: "media", mediaId: "mic", timelineIn: 0, sourceIn: 0, sourceOut: 20 } }] }).change.toVersion;
   if (kind === "dialogue cuts") expect((await api("POST", projectsPath() + "/dialogue-cuts", { taskId: pass.id, fromVersion: base, description: "Pass",
     cuts: [{ start: 12, end: 13, review: false, reason: "slate" }] })).status).toBe(201);
-  const run = () => ctx.repos.tasks.put({ ...ctx.repos.tasks.get(pass.id)!, state: "running", startedAt: new Date().toISOString() });
-  run();
-  // The pass ends before its audio is checked, so the check runs next, in the same request.
-  const ended = await api("POST", `/tasks/${pass.id}/complete`, { state: "done", summary: "Review the flagged directions. The sponsor pickup remains after the outro." });
-  expect((await ended.json()).task).toMatchObject({ state: "queued", reply: "Review the flagged directions. The sponsor pickup remains after the outro." });
-  run();
+  const reply = "Review the flagged directions. The sponsor pickup remains after the outro.";
+  // An older engine already queued this follow-up. Its check can finish once and preserve the editor’s reply.
+  const version = ctx.repos.projects.header(project.id)!.head!;
+  ctx.repos.tasks.put({ ...ctx.repos.tasks.get(pass.id)!, state: "running", startedAt: new Date().toISOString(),
+    reply, repeatAudit: { version, returns: 1 } });
   await checkPassAudio(pass.id);
-  const checked = await api("POST", `/tasks/${pass.id}/complete`, { state: "done", summary: "I listened through the cut again and everything sounds clean." });
-  expect((await checked.json()).task).toMatchObject({ state: "done", repeatAudit: { remaining: 0, noFindings: true },
-    reply: "Review the flagged directions. The sponsor pickup remains after the outro." });
+  const checked = await api("POST", `/tasks/${pass.id}/complete`, { state: "done", summary: "Playback is clean." });
+  expect((await checked.json()).task).toMatchObject({ state: "done", repeatAudit: { remaining: 0, noFindings: true }, reply });
   expect(ctx.repos.tasks.get(pass.id)!.summary).toEqual(kind === "dialogue cuts" ? expect.stringContaining("Removed 1 s") : null);
 });
 

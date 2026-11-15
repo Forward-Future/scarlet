@@ -2,7 +2,7 @@ import { agentCapabilities, isAsideTask, isLearningCheck, isSkillEdit, planText,
 import { AgentId, type AgentHost, type CompleteTaskRequest, type Task, type TaskEvent, type TaskKind, type TaskPrompt, type User } from "@scarlet/shared";
 import { buildSystemPrompt } from "@scarlet/mcp/prompt";
 import { join } from "node:path";
-import { carriesAudio, describeDialogueRemovals, dialogueReceipt, dialogueRemovals, newId, type Author, type Change, type Project } from "@scarlet/timeline";
+import { describeDialogueRemovals, dialogueReceipt, dialogueRemovals, newId, type Author, type Change, type Project } from "@scarlet/timeline";
 import { mimeFor, styleGuidePath } from "./graphics.js";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
@@ -233,20 +233,6 @@ export function appendTaskEvent(ctx: Ctx, task: Task, ev: TaskEvent): { task: Ta
   return { task: next, event };
 }
 
-export function isDialoguePass(task: Task) {
-  return editsDialogue(task.kind) && task.context.editIndex === undefined && task.context.cutIndex === undefined &&
-    taskDialogueOperation(task) === "first-cut";
-}
-
-/** The same pass owns its verification, even when the editor's final call lands after the original run finished. */
-export function queueRepeatCheck(ctx: Ctx, task: Task, version: string, changeIds = task.changeIds) {
-  const receipt = task.repeatAudit?.version === version ? task.repeatAudit : undefined;
-  const queued = saveTask(ctx, { ...task, changeIds, state: "queued", hostId: null, session: undefined, finishedAt: undefined,
-    repeatAudit: { ...receipt, version, noFindings: undefined, returns: (receipt?.returns ?? 0) + 1 } });
-  ctx.bus.taskQueued({ taskId: task.id, projectId: task.projectId });
-  return queued;
-}
-
 export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): Task {
   if (FINISHED_TASK.has(task.state)) {
     throw conflict("task_finished", `task is already ${task.state}`);
@@ -288,29 +274,9 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
       if (change.taskId !== task.id) applyChoicesWhenDone(ctx, change);
     }
   }
-  // Scheduled editor decisions above can advance playback too. The receipt must name the version that actually plays.
-  if (body.state === "done" && task.startedAt && (task.state === "claimed" || task.state === "running") && isDialoguePass(task)) {
-    const project = ctx.repos.projects.get(task.projectId);
-    if (project?.head && (!task.context.branch || project.branch === task.context.branch) && !unmetTranscriptWaits(ctx, task.id).length) {
-      const timeline = resolveTimeline(ctx, project);
-      const audible = new Set(project.media.filter(carriesAudio).map(m => m.id));
-      const plays = timeline.tracks.some(t => !t.muted && t.clips.some(c => c.kind === "media" && c.enabled && c.volume > 0 && audible.has(c.mediaId)));
-      const receipt = task.repeatAudit?.version === project.head ? task.repeatAudit : undefined;
-      if (plays && (receipt?.remaining !== 0 || receipt.unavailable?.length)) {
-        if (receipt?.unavailable?.length || (receipt?.returns ?? 0) >= 2) {
-          body = { ...body, state: "failed", interrupted: true, error: receipt?.unavailable?.join(" ") ||
-            "The final audio check still has repeated dialogue to resolve. Resume to finish checking the saved edit." };
-        } else {
-          // The pass's closing words are kept for the editor while the check runs: the check's own are about the check.
-          const reply = task.reply ?? (body.summary?.trim() || undefined);
-          return queueRepeatCheck(ctx, reply ? { ...task, reply } : task, project.head, changeIds);
-        }
-      } else if (plays && receipt?.returns && receipt.noFindings) {
-        // The automatic check finished on the same playback, with nothing for the editor. Keep the pass's own words.
-        body = { ...body, summary: undefined };
-      }
-    }
-  }
+  // Older libraries can have a verification run already queued. Preserve its original closing note.
+  if (body.state === "done" && task.repeatAudit?.returns && task.repeatAudit.noFindings && task.reply)
+    body = { ...body, summary: undefined };
   const changes = body.state === "done" ? own() : [];
   const dialogue = changes.some(c => dialogueReceipt(c));
   // A pass saved in parts reports its removals once.
@@ -462,8 +428,8 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   });
   // Whether the host launches the CLI with its own to-do tool on.
   const plan = plans ? { plan: true } : {};
-  if (isDialoguePass(task) && task.repeatAudit?.returns) {
-    // The goal and what counts as done, not the steps: the tools say how they check and repair.
+  if (task.repeatAudit?.returns && editsDialogue(task.kind) && taskDialogueOperation(task) === "first-cut" && task.context.cutIndex === undefined && task.context.editIndex === undefined) {
+    // An older engine already queued this specific work. Finish it without replaying the original edit.
     const finish = "The dialogue pass has saved its editing work. What is left is the repeat check on the current playback: " +
       "no word the cuts clipped, and no accidental repeat, should play. Keep intentional speech with its reason. " +
       "The pass is done once dialogue_check_repeats on the current version has nothing outstanding. " +
