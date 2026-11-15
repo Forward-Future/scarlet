@@ -4,6 +4,10 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 15, 2026
+
+- Applying an edit that moved or re-added a clip after you cut inside it no longer leaves two clips playing over each other or brings back what you cut.
+
 ## November 14, 2026
 
 - Scarlet can read the pages you ask for in a PDF style guide on Mac and Windows, including consecutive pages that look alike.

@@ -4,6 +4,7 @@ import {
   assignSpots,
   canApproveSpots,
   changedSpots,
+  clipEnd,
   clipsAt,
   indexClipsAt,
   independentCutSpots,
@@ -850,6 +851,219 @@ describe("parallel changes", () => {
         { id: "d", timelineIn: 30, sourceIn: 30, sourceOut: 34 }, { timelineIn: 34, sourceIn: 35, sourceOut: 40 },
       ]);
     }
+  });
+
+  describe("placing footage after a cut approved since", () => {
+    const approve = (base: Timeline, ops: TimelineOp[], head: Timeline, spots?: number[]) => {
+      const to = applyOps(base, ops);
+      return planApply({ from: base, to, head, ops, spots, changeRanges: diffTimelines(base, to).ranges });
+    };
+    const cut = (base: Timeline, start: number, end: number) => applyOps(base, [{ op: "rippleDelete", start, end }]);
+    const withMarker = (base: Timeline) => applyOps(base, [{ op: "addMarker", marker: { id: "mk", time: 25, kind: "note", text: "n" } }]);
+    const clipsOf = (plan: ReturnType<typeof planApply>, trackId = "v1") =>
+      plan.kind === "conflict" ? [] : plan.timeline.tracks.find(t => t.id === trackId)!.clips;
+    /** One 30 s clip on V1. */
+    const whole = () => {
+      const base = timelineFromKeepRanges(P, "m1", [{ start: 0, end: 30 }]);
+      base.tracks[0]!.clips = [makeMediaClip("m1", 0, 30, 0, { id: "c" })];
+      return base;
+    };
+    /** `a` holds source 0–10 at 0 and `b` source 10–30 at 10, on V1. */
+    const twoClips = () => {
+      const base = whole();
+      base.tracks[0]!.clips = [makeMediaClip("m1", 0, 10, 0, { id: "a" }), makeMediaClip("m1", 10, 30, 10, { id: "b" })];
+      return base;
+    };
+    const splitMove: TimelineOp[] = [
+      { op: "splitClip", clipId: "c", at: 10, newClipId: "right" },
+      { op: "moveClip", clipId: "right", timelineIn: 11 },
+    ];
+    const moveB: TimelineOp = { op: "moveClip", clipId: "b", timelineIn: 11 };
+    /** Source 14–17 of the recording at 2–5. */
+    const cutaway = (opts: { enabled?: boolean } = {}) => makeMediaClip("m1", 14, 17, 2, { id: "cutaway", ...opts });
+
+    it("refuses a move of a piece the change split off when a cut approved since was in the piece after it", () => {
+      const base = whole();
+      // `right` would end at 16 over the piece after the cut, which starts at 15.
+      expect(approve(base, splitMove, cut(base, 15, 16))).toMatchObject({ ...footageChanged("right"), at: 11 });
+    });
+
+    it("refuses footage the change added back in place of a clip when a cut approved since was under it", () => {
+      const base = whole();
+      const ops: TimelineOp[] = [
+        { op: "removeClip", clipId: "c" },
+        { op: "addClip", trackId: "v1", clip: makeMediaClip("m1", 0, 30, 0, { id: "added" }) },
+      ];
+      // `added` would play the cut second again, and 14 s over the piece after the cut.
+      expect(approve(base, ops, cut(base, 15, 16))).toMatchObject({ ...footageChanged("added"), at: 0 });
+    });
+
+    it("refuses a move of a clip, by moveClip or by its start, when a cut approved since was inside it", () => {
+      const base = twoClips();
+      for (const op of [
+        moveB,
+        { op: "updateClip", clipId: "b", patch: { timelineIn: 11 } },
+      ] satisfies TimelineOp[]) {
+        // `b` would end at 26 over the piece after the cut, which starts at 25.
+        expect(approve(base, [op], cut(base, 25, 26))).toMatchObject({ ...footageChanged("b"), at: 11 });
+      }
+    });
+
+    it("refuses a clip of the recording the change added on another track when it plays a cut approved since", () => {
+      const base = whole();
+      base.tracks.push(makeTrack("video", "Cutaways", "v2"));
+      const ops: TimelineOp[] = [{ op: "addClip", trackId: "v2", clip: cutaway() }];
+      expect(approve(base, ops, cut(base, 15, 16))).toMatchObject({ ...footageChanged("cutaway"), at: 2 });
+    });
+
+    it("refuses a track the change added when its clip plays a cut approved since", () => {
+      const base = whole();
+      const track = makeTrack("video", "Cutaways", "v2");
+      track.clips.push(cutaway());
+      expect(approve(base, [{ op: "addTrack", track }], cut(base, 15, 16))).toMatchObject({ ...footageChanged("cutaway"), at: 2 });
+    });
+
+    it("refuses a clip the change turned on when it plays a cut approved since", () => {
+      const base = whole();
+      base.tracks.push({ ...makeTrack("video", "Cutaways", "v2"), clips: [cutaway({ enabled: false })] });
+      const ops: TimelineOp[] = [{ op: "updateClip", clipId: "cutaway", patch: { enabled: true } }];
+      expect(approve(base, ops, cut(base, 15, 16))).toMatchObject({ ...footageChanged("cutaway"), at: 2 });
+    });
+
+    it("still re-applies a move of a clip when a cut approved since was in the clip before it", () => {
+      const base = twoClips();
+      const plan = approve(base, [moveB], cut(base, 2, 3));
+      expect(plan.kind).toBe("rebased");
+      // `b` keeps the second's gap after the clip before it.
+      expect(clipsOf(plan)).toMatchObject([
+        { id: "a", timelineIn: 0, sourceIn: 0, sourceOut: 2 }, { timelineIn: 2, sourceIn: 3, sourceOut: 10 },
+        { id: "b", timelineIn: 10, sourceIn: 10, sourceOut: 30 },
+      ]);
+    });
+
+    it("still re-applies a clip the change added when a cut approved since was elsewhere", () => {
+      const base = whole();
+      base.tracks.push(makeTrack("video", "Inset", "v2"));
+      const ops: TimelineOp[] = [{ op: "addClip", trackId: "v2", clip: makeMediaClip("m2", 0, 4, 20, { id: "inset" }) }];
+      const plan = approve(base, ops, cut(base, 2, 3));
+      expect(plan.kind).toBe("rebased");
+      expect(clipsOf(plan, "v2")).toMatchObject([{ id: "inset", timelineIn: 19, sourceIn: 0, sourceOut: 4 }]);
+    });
+
+    it("still re-applies a gap the change put before a clip when a cut approved since was inside it", () => {
+      const base = twoClips();
+      const plan = approve(base, [{ op: "rippleInsertGap", at: 10, duration: 1 }], cut(base, 25, 26));
+      expect(plan.kind).toBe("rebased");
+      expect(clipsOf(plan)).toMatchObject([
+        { id: "a", timelineIn: 0, sourceIn: 0, sourceOut: 10 }, { id: "b", timelineIn: 11, sourceIn: 10, sourceOut: 25 },
+        { timelineIn: 26, sourceIn: 26, sourceOut: 30 },
+      ]);
+    });
+
+    it("still re-applies a caption the change added after a cut approved since", () => {
+      const base = whole();
+      base.tracks.push(makeTrack("caption", "Captions", "cc"));
+      const ops: TimelineOp[] = [{ op: "addClip", trackId: "cc", clip: { kind: "caption", id: "line", enabled: true, timelineIn: 20, timelineOut: 22, text: "hi" } }];
+      const plan = approve(base, ops, cut(base, 15, 16));
+      expect(plan.kind).toBe("rebased");
+      expect(clipsOf(plan, "cc")).toMatchObject([{ id: "line", timelineIn: 19, timelineOut: 21 }]);
+    });
+
+    it("still re-applies layered captions that a pause in the change splits, whatever changed since", () => {
+      const base = whole();
+      const captions = makeTrack("caption", "Captions", "cc");
+      captions.clips.push({ kind: "caption", id: "top", enabled: true, timelineIn: 0, timelineOut: 10, text: "top", style: { y: 0.2 } },
+        { kind: "caption", id: "low", enabled: true, timelineIn: 1, timelineOut: 9, text: "low", style: { y: 0.8 } });
+      base.tracks.push(captions);
+      const gap: TimelineOp = { op: "rippleInsertGap", at: 5, duration: 1 };
+      const marker = withMarker(base);
+      const captionAndGap: TimelineOp[] = [{ op: "addClip", trackId: "cc", clip: { kind: "caption", id: "line", enabled: true, timelineIn: 12, timelineOut: 14, text: "hi" } }, gap];
+      for (const [ops, head] of [
+        [captionAndGap, marker],
+        [captionAndGap, cut(base, 20, 21)],
+        // A trim brought in the same checks before this change.
+        [[{ op: "updateClip", clipId: "c", patch: { sourceOut: 29 } }, gap], marker],
+      ] satisfies Array<[TimelineOp[], Timeline]>) {
+        const plan = approve(base, ops, head);
+        expect(plan.kind).toBe("rebased");
+        // Each caption is cut in two by the pause; the pieces still lie over each other as before.
+        expect(clipsOf(plan, "cc").filter(c => c.id !== "line").map(c => `${c.timelineIn}–${clipEnd(c)}`).sort())
+          .toEqual(["0–5", "1–5", "6–10", "6–11"]);
+      }
+    });
+
+    it("still re-applies a card under a graphic on one track that a pause in the change splits", () => {
+      const base = whole();
+      const upper = makeTrack("video", "Upper", "v2");
+      upper.clips.push({ kind: "color", id: "card", enabled: true, timelineIn: 0, timelineOut: 10, color: "black", opacity: 1 },
+        makeMediaClip("g1", 0, 8, 1, { id: "graphic" }));
+      base.tracks.push(upper);
+      const ops: TimelineOp[] = [{ op: "moveClip", clipId: "graphic", timelineIn: 2 }, { op: "rippleInsertGap", at: 5, duration: 1 }];
+      const head = withMarker(base);
+      const plan = approve(base, ops, head);
+      expect(plan.kind).toBe("rebased");
+      expect(clipsOf(plan, "v2").map(c => `${c.kind} ${c.timelineIn}–${clipEnd(c)}`).sort())
+        .toEqual(["color 0–5", "color 6–11", "media 2–5", "media 6–11"]);
+    });
+
+    it("still re-applies a move that overlaps in the change itself when a cut approved since was after it", () => {
+      const base = whole();
+      const ops: TimelineOp[] = [splitMove[0]!, { op: "moveClip", clipId: "right", timelineIn: 9 }];
+      const plan = approve(base, ops, cut(base, 15, 16));
+      expect(plan.kind).toBe("rebased");
+      // `right` lies over the last second of `c`, as in the change.
+      expect(clipsOf(plan)).toMatchObject([
+        { id: "c", timelineIn: 0, sourceIn: 0, sourceOut: 10 }, { id: "right", timelineIn: 9, sourceIn: 10, sourceOut: 15 },
+        { timelineIn: 15, sourceIn: 16, sourceOut: 30 },
+      ]);
+    });
+
+    it("fast-forwards a move of a piece the change split off when nothing was approved since", () => {
+      const base = whole();
+      const plan = approve(base, splitMove, base);
+      expect(plan.kind).toBe("fast-forward");
+      expect(clipsOf(plan)).toMatchObject([
+        { id: "c", timelineIn: 0, sourceIn: 0, sourceOut: 10 }, { id: "right", timelineIn: 11, sourceIn: 10, sourceOut: 30 },
+      ]);
+    });
+
+    it("checks a move only when its spot is approved", () => {
+      const base = twoClips();
+      base.tracks.push({ ...makeTrack("caption", "Captions", "cc"),
+        clips: [{ kind: "caption", id: "line", enabled: true, timelineIn: 0, timelineOut: 2, text: "draft" }] });
+      const ops: TimelineOp[] = [
+        { op: "updateClip", clipId: "line", patch: { text: "final" } },
+        moveB,
+      ];
+      const to = applyOps(base, ops);
+      expect(assignSpots(base, ops, diffTimelines(base, to).ranges)).toEqual([0, 1]);
+      const head = cut(base, 25, 26);
+      const caption = approve(base, ops, head, [0]);
+      expect(caption.kind).toBe("partial");
+      expect(clipsOf(caption)).toEqual(head.tracks[0]!.clips);
+      expect(clipsOf(caption, "cc")).toMatchObject([{ id: "line", text: "final" }]);
+      expect(approve(base, ops, head, [1])).toMatchObject({ ...footageChanged("b"), at: 11 });
+    });
+
+    it("still re-applies a clip the change moved onto a track it added when a cut approved since was elsewhere", () => {
+      const base = whole();
+      base.tracks.push({ ...makeTrack("video", "Camera", "cam"), clips: [makeMediaClip("m2", 0, 30, 0, { id: "camera" })] });
+      // The shape a camera inset takes when it goes above the screen.
+      const track = makeTrack("video", "Camera inset", "inset-track");
+      const ops: TimelineOp[] = [
+        { op: "splitClip", clipId: "camera", at: 5, newClipId: "inset" },
+        { op: "splitClip", clipId: "inset", at: 10, newClipId: "rest" },
+        { op: "addTrack", track },
+        { op: "moveClip", clipId: "inset", timelineIn: 5, trackId: track.id },
+      ];
+      const plan = approve(base, ops, cut(base, 20, 21));
+      expect(plan.kind).toBe("rebased");
+      expect(clipsOf(plan, track.id)).toMatchObject([{ id: "inset", timelineIn: 5, sourceIn: 5, sourceOut: 10 }]);
+      expect(clipsOf(plan, "cam")).toMatchObject([
+        { id: "camera", timelineIn: 0, sourceIn: 0, sourceOut: 5 }, { id: "rest", timelineIn: 10, sourceIn: 10, sourceOut: 20 },
+        { timelineIn: 20, sourceIn: 21, sourceOut: 30 },
+      ]);
+    });
   });
 
   it("refuses to merge a whole-timeline replacement onto a moved cut", () => {
