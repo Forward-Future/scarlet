@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { TimeRange } from "@scarlet/timeline";
 import { TimelineScrubber } from "./TimelineScrubber";
-import { HOLD_MS, orderedRange, rangeEdges, snapTime } from "./TimelineRange";
+import { HOLD_MS, LOUPE_PICTURES, LOUPE_PX_PER_FRAME, orderedRange, rangeEdges, snapTime } from "./TimelineRange";
 
 /** The timeline by itself, a thousand pixels wide over 3000 seconds: three seconds a pixel. */
 let root: Root;
@@ -109,10 +109,12 @@ it("opens the close-up on a press held still on the ruler, to draw a range by fr
   await press(".timeline-range-zone", 100);
   await act(async () => { await new Promise(done => setTimeout(done, HOLD_MS + 50)); });
   expect(container.querySelector(".timeline-range-loupe b")?.textContent).toBe("5:00.000");
-  // Twenty pixels is 60 s on this timeline, and 6 s in the close-up.
-  await move(120);
-  await release(120);
-  expect(marked).toHaveBeenCalledExactlyOnceWith({ start: 300, end: 306 });
+  // Twenty pixels is 60 s on this timeline, and two frames in the close-up.
+  await move(100 + 2 * LOUPE_PX_PER_FRAME);
+  await release(100 + 2 * LOUPE_PX_PER_FRAME);
+  expect(marked).toHaveBeenCalledOnce();
+  expect(marked.mock.lastCall![0]!.start).toBe(300);
+  expect(marked.mock.lastCall![0]!.end).toBeCloseTo(300 + 2 / 30);
   expect(picks).toEqual([]);
   // Held and let go without moving, it draws nothing.
   marked.mockClear();
@@ -129,12 +131,18 @@ it("goes into the close-up when a drag stops and holds still, and the end it was
   expect(container.querySelector(".timeline-range-loupe")).toBeNull();
   await act(async () => { await new Promise(done => setTimeout(done, HOLD_MS + 50)); });
   expect(container.querySelector(".timeline-range-loupe b")?.textContent).toBe("7:30.000");
-  // The close-up shows the frame the end is on and a row of the video's pictures either side of it.
-  expect(container.querySelectorAll(".timeline-range-loupe-picture")).toHaveLength(9);
-  // Ten pixels on is 30 s on the timeline, and 3 s in the close-up.
-  await move(160);
-  await release(160);
-  expect(marked).toHaveBeenCalledExactlyOnceWith({ start: 300, end: 453 });
+  // The close-up's strip has a picture for each frame, the end's frame under its line, and two spare either side.
+  const strip = () => [...container.querySelectorAll<HTMLElement>(".timeline-range-loupe-picture")];
+  expect(strip()).toHaveLength(LOUPE_PICTURES + 4);
+  expect(container.querySelector<HTMLElement>(".timeline-range-loupe-picture.is-now")?.dataset.frame).toBe(String(450 * 30));
+  const loupe = container.querySelector<HTMLElement>(".timeline-range-loupe")!.style.left;
+  // A frame on, the strip slides by one picture under the line, and the close-up stays where it opened.
+  await move(150 + LOUPE_PX_PER_FRAME);
+  expect(container.querySelector<HTMLElement>(".timeline-range-loupe-picture.is-now")?.dataset.frame).toBe(String(450 * 30 + 1));
+  expect(container.querySelector<HTMLElement>(".timeline-range-loupe")!.style.left).toBe(loupe);
+  await release(150 + LOUPE_PX_PER_FRAME);
+  expect(marked).toHaveBeenCalledOnce();
+  expect(marked.mock.lastCall![0]!.end).toBeCloseTo(450 + 1 / 30);
 });
 
 it("takes the range off on a click on the timeline away from it, and keeps it through a scrub", async () => {
@@ -168,16 +176,17 @@ it("moves an end a frame at a time from the keyboard, and Esc takes the range of
   expect(marked).toHaveBeenLastCalledWith(undefined);
 });
 
-it("opens a close-up on a handle held still, where the end moves ten times slower and by frames", async () => {
+it("opens a close-up on a handle held still, where the end moves a frame at a time", async () => {
   await show({ start: 300, end: 450 });
   await press(".timeline-range-handle.is-end", 150);
   expect(container.querySelector(".timeline-range-loupe")).toBeNull();
   await act(async () => { await new Promise(done => setTimeout(done, HOLD_MS + 50)); });
   expect(container.querySelector(".timeline-range-loupe b")?.textContent).toBe("7:30.000");
-  // Thirty pixels is 90 s on this timeline, and 9 s in the close-up.
-  await move(180);
-  await release(180);
-  expect(marked).toHaveBeenCalledExactlyOnceWith({ start: 300, end: 459 });
+  // Thirty pixels is 90 s on this timeline, and three frames in the close-up.
+  await move(150 + 3 * LOUPE_PX_PER_FRAME);
+  await release(150 + 3 * LOUPE_PX_PER_FRAME);
+  expect(marked).toHaveBeenCalledOnce();
+  expect(marked.mock.lastCall![0]!.end).toBeCloseTo(450 + 3 / 30);
   expect(container.querySelector(".timeline-range-loupe")).toBeNull();
 });
 

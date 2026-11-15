@@ -4,7 +4,7 @@ import type { SourceCacheStatus } from "@scarlet/shared";
 import type { MediaAsset } from "@scarlet/timeline";
 import { api, errorMessage, IS_DESKTOP } from "../lib/client";
 import { desktop } from "../lib/desktop";
-import { ACCEPTED_MEDIA, canPreviewMedia, isPreparingMedia, MEDIA_FORMAT_HINT } from "../lib/upload";
+import { ACCEPTED_MEDIA, canPreviewMedia, isPreparingMedia, MEDIA_FORMAT_HINT, MEDIA_FORMATS } from "../lib/upload";
 import { clock } from "../lib/format";
 import { isLink } from "../lib/pendingImports";
 import { useProjectStore } from "../stores/project";
@@ -115,7 +115,7 @@ export function MediaPage({ uploads, onPlay }: {
           e.target.value = "";
         }} />
       </div>
-      <p id="media-file-types" className="mb-3 text-muted text-[12px]">{MEDIA_FORMAT_HINT}</p>
+      <p id="media-file-types" className="sr-only">{MEDIA_FORMAT_HINT}</p>
       {notice && <ImportTranscriptionNotice policy={importTranscription} />}
       {localImport && (
         <div className="card mb-3 px-3 py-2.5">
@@ -126,7 +126,7 @@ export function MediaPage({ uploads, onPlay }: {
       <InlineError>{pickerError || cacheError}</InlineError>
       <UploadList items={items} onDismiss={dismiss} />
       {media.length === 0 ? (
-        !localImport && <EmptyState title="Add your first file" body="Drop files here." action={
+        !localImport && <EmptyState title="Add your first file" body={`Drop files here (${MEDIA_FORMATS}).`} action={
           <button type="button" className="btn-primary" aria-describedby="media-file-types" disabled={adding} onClick={addFiles}>
             <Icon name="upload" /> Choose files
           </button>

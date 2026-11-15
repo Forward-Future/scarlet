@@ -1,10 +1,11 @@
 import { useSyncExternalStore } from "react";
-import { desktop, type UpdateBuild, type UpdateStatus } from "./desktop";
+import { desktop, type UpdateBuild, type UpdateSource, type UpdateStatus } from "./desktop";
 
 const NONE: UpdateStatus = { ready: null, building: null };
 const POLL_MS = 5000;
 
 let enabled = false;
+let source: UpdateSource | null = null;
 let status = NONE;
 let timer: ReturnType<typeof setTimeout> | undefined;
 const listeners = new Set<() => void>();
@@ -33,8 +34,14 @@ function subscribe(listener: () => void) {
   };
 }
 
-/** Only the installed app that the local updater looks after has updates to show. */
-export function enableUpdateStatus() { enabled = true; }
+/**
+ * Only an installed app that something updates has updates to show: a release, from the manifest it was built with,
+ * or a build from source that the local main updater looks after.
+ */
+export function enableUpdateStatus(from: UpdateSource = "local") { enabled = true; source = from; }
+
+/** Where this copy gets its updates, or null when it gets none. */
+export function updateSource(): UpdateSource | null { return enabled ? source : null; }
 
 /** What the updater has for this app: a build under way, and a verified one that installs on restart. */
 export function useUpdateStatus(): UpdateStatus {

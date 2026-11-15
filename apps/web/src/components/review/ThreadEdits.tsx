@@ -61,6 +61,53 @@ export function UndoEdit({ projectId, thread, target, onSent }: { projectId: str
   </>;
 }
 
+/** What Scarlet is asked to do when the editor saves a graphic from its card to use again. */
+export function saveTemplateInstruction(target: Pick<AgentContext, "editNumber" | "label">) {
+  const which = [target.editNumber && `edit ${target.editNumber}`, target.label && `“${target.label}”`].filter(Boolean).join(", ");
+  return `Save the graphic ${which ? `of ${which}` : "of this edit"} as a reusable template. Work out which parts of it change from one use to the next, ` +
+    "such as a name or a title, and make those its fields; keep everything else as it is. Give it a short name the editor can type after $. " +
+    "Leave the video as it is.";
+}
+
+/**
+ * Save a graphic as a template: a small bookmark icon on a graphic's card, before Undo edit, named "Save as template (T)"
+ * on hover, with T as its key. It sends Scarlet a request about just that edit, as Undo edit does, and the request reads
+ * "Save as template" in the chat and in the queue; what Scarlet is asked to do is the instruction, which is for the agent.
+ */
+export function SaveAsTemplate({ projectId, thread, target, onSent }: { projectId: string; thread: Thread; target: AgentContext; onSent?(): void }) {
+  const { effective, unavailableReason } = useAgentAvailability();
+  const createTask = useProjectStore(s => s.createTask);
+  const head = useProjectStore(s => s.current?.project.head ?? undefined);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function save() {
+    // One request per press: T held down, or pressed again while the first is on its way, sends nothing more.
+    if (busy) return;
+    if (!effective) { setError(unavailableReason); return; }
+    setBusy(true);
+    setError("");
+    try {
+      await createTask(projectId, { kind: "edit", ...effective, instruction: saveTemplateInstruction(target),
+        context: { version: head, ...requestPosition(target), threadId: thread.id, message: "Save as template" } });
+      onSent?.();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  useHotkeys(event => {
+    if (event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== "t") return;
+    event.preventDefault();
+    void save();
+  });
+  return <>
+    {error && <span className="simple-error" role="alert">{error}</span>}
+    <button type="button" className="edit-card-icon edit-card-template" aria-label="Save as template" aria-keyshortcuts="T" aria-busy={busy || undefined}
+      title={busy ? "Saving…" : "Save as template (T)"} disabled={busy} onClick={() => void save()}><Icon name="bookmark" size={14} /></button>
+  </>;
+}
+
 /**
  * The edit's number, as on the timeline; amber while it asks for a look. Once reviewed it fills and widens
  * to carry a check beside the number, so approving even a lone edit reads as a change of shape.
@@ -86,7 +133,8 @@ type ListedEdit = Omit<ThreadEdit, "at">;
  */
 export function useThreadEdits(projectId: string, thread: Thread | undefined): ListedEdit[] {
   const head = useProjectStore(s => s.current?.project.head ?? null);
-  const saved = useMemo(() => thread ? threadEditList(thread) : [], [thread]);
+  const media = useProjectStore(s => s.current?.media);
+  const saved = useMemo(() => thread ? threadEditList(thread, media) : [], [thread, media]);
   // An edit another request made counts here once this request flagged it.
   const applied = !!thread?.changes.some(c => c.state === "approved") || !!thread?.flagged?.length;
   const key = useThreadEditKey(projectId, head, thread);

@@ -42,8 +42,10 @@ export interface HostStatus {
 
 export type DesktopPlatform = "macos" | "windows" | "linux";
 
+export type UpdateSource = "local" | "release";
+
 export interface DesktopInfo {
-  localUpdates?: boolean;
+  updates?: UpdateSource | null;
   customOpenaiModels?: string[];
   customClaudeModels?: string[];
   version: string;
@@ -108,7 +110,7 @@ export interface DeveloperStorage extends StorageSize { kind: "cargo" | "scratch
  * part began, and that part's own share, expected to take `stepSeconds` from `stepStarted` (seconds since 1970).
  */
 export interface UpdateBuild { revision: string; done: number; step: number; stepStarted: number; stepSeconds: number }
-export interface UpdateStatus { ready: string | null; building: UpdateBuild | null }
+export interface UpdateStatus { ready: string | null; building: UpdateBuild | null; source?: UpdateSource | null }
 
 export const desktop = {
   async onDropFiles(cb: (event: import("@tauri-apps/api/webview").DragDropEvent) => void): Promise<Unlisten> {
@@ -144,6 +146,7 @@ export const desktop = {
   info: () => invoke<DesktopInfo>("desktop_info"),
   /** A verified build that installs on restart, and the build the updater has under way. */
   updateStatus: () => invoke<UpdateStatus>("update_status"),
+  checkForRelease: () => invoke<string | null>("check_for_release"),
   latestUpdateRevision: () => invoke<string>("latest_update_revision"),
   updateChangelog: (revision: string) => invoke<string>("update_changelog", { revision }),
   restartForUpdate: (revision: string) => invoke<void>("restart_for_update", { revision }),

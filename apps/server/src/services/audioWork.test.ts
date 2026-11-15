@@ -172,6 +172,27 @@ describe("audio lane", () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it("hands the lane on at once when the step it was kept for won't come", async () => {
+    vi.useFakeTimers();
+    try {
+      const lane = new AudioLane();
+      const { order, add } = harness(lane);
+      const whisper = add("whisper", { mediaId: "a", kind: "transcript" }, undefined, true);
+      await vi.advanceTimersByTimeAsync(0);
+      whisper.release(); await whisper.done;
+      const speakers = add("speakers", { mediaId: "a", kind: "speakers" });
+      // Releasing other work's hold changes nothing.
+      lane.release({ mediaId: "b", kind: "transcript" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(order).toEqual(["whisper"]);
+      // Its alignment won't follow: the speakers start now, not when the hold runs out.
+      lane.release({ mediaId: "a", kind: "transcript" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(order).toEqual(["whisper", "speakers"]);
+      speakers.release(); await speakers.done;
+    } finally { vi.useRealTimers(); }
+  });
+
   it("shares one lane per engine data directory", () => {
     expect(audioLane({ paths: { root: "/tmp/one" } })).toBe(audioLane({ paths: { root: "/tmp/one" } }));
     expect(audioLane({ paths: { root: "/tmp/one" } })).not.toBe(audioLane({ paths: { root: "/tmp/two" } }));

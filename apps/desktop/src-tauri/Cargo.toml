@@ -5,7 +5,7 @@ description = "Scarlet desktop: Single-user AI video editor (solo engine + local
 authors = ["Forward Future"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.90"
 
 [lib]
 name = "scarlet_desktop_lib"
@@ -36,6 +36,8 @@ flate2 = "1"
 sha2 = "0.10"
 regex = "1"
 url = "2"
+tauri-plugin-updater = "2.14.1"
+semver = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

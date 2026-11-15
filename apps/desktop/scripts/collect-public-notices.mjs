@@ -4,6 +4,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, write
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { CHROME_VERSION } from "./fetch-chrome.mjs";
 
 const root = resolve(import.meta.dirname, "../../..");
 const tauri = join(root, "apps/desktop/src-tauri");
@@ -179,6 +180,11 @@ async function main() {
   cpSync(join(sources, "whisper-audio-dependencies.txt"), join(dest, "whisper-audio-dependencies.txt"));
   cpSync(join(sources, "sherpa-dependencies.txt"), join(dest, "sherpa-dependencies.txt"));
   cpSync(join(sources, "onnxruntime-1.28.2-third-party.txt"), join(dest, "speaker-onnxruntime-1.28.2-third-party.txt"));
+  // Chrome for Testing's headless shell carries its own credits for Chromium and every library it links.
+  const chrome = join(tauri, "binaries/chrome-headless-shell/LICENSE.headless_shell");
+  if (!existsSync(chrome)) throw new Error("Run pnpm desktop:chrome to include the headless browser and its notices.");
+  writeFileSync(join(dest, "chrome-headless-shell.txt"), `Chrome for Testing headless shell ${CHROME_VERSION}\n` +
+    `https://googlechromelabs.github.io/chrome-for-testing/\n\n${read(chrome)}\n`);
   if (target.endsWith("windows-msvc")) cpSync(join(import.meta.dirname, "windows-runtime-notices"), dest, { recursive: true });
   console.log(`Wrote notices for Node ${process.version}, ${js.length} JavaScript/native packages and ${crates.length} ${target} crates.`);
 }

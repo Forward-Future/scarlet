@@ -10,11 +10,12 @@ const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const unsignedVersion = "0.1.20";
 const unsignedSource = "f2e8c84ce4d58ee9d8ee1f1d21b2c46ebee30d82";
 
-function releaseNotes(repository, sha, unsignedOnce, files, runId) {
+function releaseNotes(repository, sha, unsignedOnce, files, runId, updaterSignedOnly) {
   const notes = ["Download the DMG for your Mac’s chip (Apple Silicon or Intel), or choose the Setup EXE or MSI for Windows x64."];
-  if (unsignedOnce) {
+  if (unsignedOnce || updaterSignedOnly) {
     notes.push("The macOS apps are ad hoc signed and have not been notarized by Apple. Both Windows installers are unsigned. Your operating system may display a publisher warning when you open the download.");
   }
+  if (!unsignedOnce) notes.push("Once this version is installed, Scarlet downloads and verifies new stable releases in the background. Choose **Restart to update** when it’s ready.");
   const helper = "apps/desktop/scripts/Install-Scarlet-FFmpeg-macOS.sh";
   const helperLink = unsignedOnce
     ? `[Download the standalone setup helper](https://raw.githubusercontent.com/${repository}/${sha}/${helper})`
@@ -33,12 +34,13 @@ function releaseNotes(repository, sha, unsignedOnce, files, runId) {
   return notes.join("\n\n");
 }
 
-async function localInstallers(version, directory) {
+async function localInstallers(version, directory, unsignedOnce) {
   const suffixes = ["macOS-Apple-Silicon.dmg", "macOS-Intel.dmg", "Windows-x64-Setup.exe", "Windows-x64.msi"];
   const names = suffixes.map(suffix => `Scarlet-${version}-${suffix}`);
+  if (!unsignedOnce) names.push(`Scarlet-${version}-macOS-Apple-Silicon.app.tar.gz`, `Scarlet-${version}-macOS-Intel.app.tar.gz`, "latest.json");
   const entries = await readdir(directory, { withFileTypes: true });
   if (entries.length !== names.length || entries.some(entry => !entry.isFile() || !names.includes(entry.name))) {
-    throw new Error(`Expected exactly these four regular installer files in ${directory}: ${names.join(", ")}`);
+    throw new Error(`Expected exactly these release files in ${directory}: ${names.join(", ")}`);
   }
   const files = new Map();
   for (const name of names) {
@@ -107,7 +109,7 @@ async function inspectRelease(request, release, files) {
   return { missing, interrupted };
 }
 
-export async function publishDesktopRelease({ version, directory, repository, sha, token, unsignedOnce = false, runId, fetchImpl = fetch }) {
+export async function publishDesktopRelease({ version, directory, repository, sha, token, unsignedOnce = false, updaterSignedOnly = false, runId, fetchImpl = fetch }) {
   if (unsignedOnce && (repository !== "Forward-Future/scarlet" || version !== unsignedVersion || sha !== unsignedSource)) {
     throw new Error("The single unsigned release does not authorize this repository, version and source revision");
   }
@@ -116,10 +118,10 @@ export async function publishDesktopRelease({ version, directory, repository, sh
     throw new Error("Expected a stable major.minor.patch, installer directory, GITHUB_REPOSITORY, full GITHUB_SHA and GH_TOKEN");
   }
   if (unsignedOnce && !/^[1-9]\d*$/.test(runId)) throw new Error("The unsigned release needs its GitHub Actions run ID");
-  const files = await localInstallers(version, directory);
+  const files = await localInstallers(version, directory, unsignedOnce);
   const request = github(repository, token, fetchImpl);
   const tag = `v${version}`;
-  const notes = releaseNotes(repository, sha, unsignedOnce, files, runId);
+  const notes = releaseNotes(repository, sha, unsignedOnce, files, runId, updaterSignedOnly);
   const name = `Scarlet ${version}`;
   const original = await taggedCommit(request, tag);
   if (original && original !== sha) throw new Error(`Tag ${tag} points to ${original}, expected ${sha}`);
@@ -180,7 +182,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     if (process.argv.length !== (unsignedOnce ? 5 : 4)) throw new Error("Usage: publish-desktop-release.mjs <version> <installer-directory> [--unsigned-once]");
     console.log(await publishDesktopRelease({ version, directory, repository: process.env.GITHUB_REPOSITORY,
       sha: unsignedOnce ? process.env.RELEASE_SOURCE_SHA : process.env.GITHUB_SHA, token: process.env.GH_TOKEN, unsignedOnce,
-      runId: process.env.GITHUB_RUN_ID }));
+      updaterSignedOnly: process.env.UPDATER_SIGNED_ONLY === "true", runId: process.env.GITHUB_RUN_ID }));
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

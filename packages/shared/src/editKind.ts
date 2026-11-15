@@ -1,15 +1,16 @@
-import { clipRange, intervalCandidates, timelineDuration, type Change, type Clip, type Timeline, type TimeRange, type Track } from "@scarlet/timeline";
+import { clipRange, intervalCandidates, timelineDuration, type Change, type Clip, type MediaAsset, type Timeline, type TimeRange, type Track } from "@scarlet/timeline";
 
 /**
  * What an applied edit did to the cut, so the timeline can draw it for what it is:
  * - `cut` took footage out, `restore` put footage back in.
  * - `audio` changed only sound (levels, room tone, a swapped dialogue track).
  * - `zoom` and `reframe` moved or scaled the picture.
- * - `text` added or changed captions and titles, `overlay` laid b-roll, images or graphics over the picture.
+ * - `text` added or changed captions and titles, `overlay` laid b-roll or images over the picture.
+ * - `graphic` laid a graphic Scarlet made (a lower third, a title card) over the picture: a clip whose file is a graphic.
  * - `speed` changed how fast footage plays.
  * - `other` did several of these at once, or something else (an assembly, a sync).
  */
-export type EditKind = "cut" | "restore" | "audio" | "zoom" | "reframe" | "text" | "overlay" | "speed" | "other";
+export type EditKind = "cut" | "restore" | "audio" | "zoom" | "reframe" | "text" | "overlay" | "graphic" | "speed" | "other";
 
 type Op = Record<string, unknown>;
 /** `picture`: footage placed on the main picture track, which builds the cut rather than laying anything over it. */
@@ -27,6 +28,14 @@ const SAME_LENGTH = 0.02;
 interface Clocks {
   before?: Timeline;
   after?: Timeline;
+  /** The project's files, so a clip laid over the picture can be told for a graphic by what its file is. */
+  media?: readonly Pick<MediaAsset, "id" | "kind">[];
+}
+
+/** Whether a file is a graphic, from the project's files. Without them, nothing is. */
+function graphicFiles(media: Clocks["media"]) {
+  const ids = new Set(media?.filter(m => m.kind === "graphic").map(m => m.id));
+  return (clip: Clip) => clip.kind === "media" && ids.has(clip.mediaId);
 }
 
 function clipFinder(timeline: Timeline | undefined, batch: boolean) {
@@ -65,7 +74,8 @@ function settled(time: number, later: Op[]): number {
 }
 
 /** Each op's facet, and where it lands on the finished cut when that can be told. */
-function opFacets(change: Change, { before, after }: Clocks): { facet: Facet; range?: TimeRange }[] {
+function opFacets(change: Change, { before, after, media }: Clocks): { facet: Facet; range?: TimeRange }[] {
+  const isGraphic = graphicFiles(media);
   const ops = (change.ops ?? []) as Op[];
   const beforeClip = clipFinder(before, ops.length > 1);
   const afterClip = before === after ? beforeClip : clipFinder(after, ops.length > 1);
@@ -85,7 +95,7 @@ function opFacets(change: Change, { before, after }: Clocks): { facet: Facet; ra
     if (kind === "audio") return "audio";
     if (kind === "caption") return "text";
     if (kind !== "video") return "neutral";
-    return trackId === baseVideo ? "picture" : "overlay";
+    return trackId === baseVideo ? "picture" : isGraphic(clip) ? "graphic" : "overlay";
   };
   const range = (clip: Clip | undefined) => {
     if (!clip) return;
@@ -122,7 +132,7 @@ function opFacets(change: Change, { before, after }: Clocks): { facet: Facet; ra
           if (AUDIO_KEYS.has(key)) return { facet: "audio" as const, range: at };
           if (FRAMING_KEYS.has(key)) return { facet: "framing" as const, range: at };
           if (TEXT_KEYS.has(key)) return { facet: "text" as const, range: at };
-          if (OVERLAY_KEYS.has(key)) return { facet: "overlay" as const, range: at };
+          if (OVERLAY_KEYS.has(key)) return { facet: found && isGraphic(found.clip) ? "graphic" as const : "overlay" as const, range: at };
           if (key === "speed") return { facet: "speed" as const, range: at };
           if (key === "effects") return { facet: found?.track.kind === "audio" ? "audio" as const : "overlay" as const, range: at };
           return { facet: "other" as const, range: at };
@@ -147,7 +157,9 @@ function decide(facets: Facet[], framing: "zoom" | "reframe", { before, after }:
   // A cut can carry the trims and room tone that smooth its join; it is still a cut.
   if (set.has("cut") && !set.has("restore")) return "cut";
   if (set.has("restore") && !set.has("cut")) return "restore";
-  if (set.has("overlay") && [...set].every(f => f === "overlay" || f === "audio")) return "overlay";
+  // A graphic laid over the picture is a graphic, with or without sound. Laid with b-roll, it is one of the overlays.
+  if (set.has("graphic") && [...set].every(f => f === "graphic" || f === "audio")) return "graphic";
+  if ((set.has("overlay") || set.has("graphic")) && [...set].every(f => f === "overlay" || f === "graphic" || f === "audio")) return "overlay";
   if (set.size === 0) {
     // Only neutral steps: a removed or re-timed clip. Whether the cut got shorter or longer says which it was.
     const lengths = before && after ? timelineDuration(after) - timelineDuration(before) : 0;

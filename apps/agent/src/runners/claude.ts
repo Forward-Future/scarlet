@@ -16,6 +16,9 @@ const CLAUDE_PLAN_TOOLS = ["TaskCreate", "TaskUpdate", "TodoWrite"];
 const PLAN_READS = new Set(["TaskList", "TaskGet", "TodoRead"]);
 const STEP_STATE: Record<string, PlanStep["state"]> = { pending: "pending", in_progress: "in_progress", completed: "done" };
 
+/** Why a run whose Scarlet MCP server failed has failed: Claude Code carries on without it and calls the run a success. */
+const MCP_FAILED = "Scarlet's MCP server failed to start, so Claude Code had no editing tools.";
+
 /** The plan as Claude Code's to-do tools have left it, and their calls still waiting for a result. */
 interface ClaudePlanState {
   steps: Array<PlanStep & { id: string }>;
@@ -79,9 +82,10 @@ export interface ClaudeParseState {
   pendingQuestion?: { id: string; text: string };
   question?: string;
   questionPosted: boolean;
-  /** Set when the tool_result for the question arrived: the runner should stop the process. */
+  /** Set when the tool_result for the question arrived, or Scarlet's MCP server failed: the runner should stop the process. */
   shouldStop: boolean;
-  mcpConnected?: boolean;
+  /** Scarlet's MCP server as the init line reported it ("connected", "failed", …), when it was listed. */
+  mcpStatus?: string;
   sessionId?: string;
   /** The CLI opened a session. A resume that finds none fails before this. */
   started?: boolean;
@@ -118,7 +122,9 @@ export function parseClaudeLine(line: string, st: ClaudeParseState): RunnerEvent
       if (typeof msg.session_id === "string" && msg.session_id) st.sessionId = msg.session_id;
       const servers = (msg.mcp_servers as Array<{ name: string; status: string }> | undefined) ?? [];
       const scarlet = servers.find((s) => s.name === "scarlet");
-      st.mcpConnected = scarlet ? scarlet.status === "connected" : undefined;
+      st.mcpStatus = scarlet?.status;
+      // This runner offers only Scarlet's tools, so nothing useful can follow.
+      if (scarlet?.status === "failed") st.shouldStop = true;
       if (typeof msg.model === "string" && msg.model) st.model = msg.model;
       events.push({
         type: "log",
@@ -313,7 +319,7 @@ export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> 
       }
       if (st.shouldStop) {
         st.shouldStop = false;
-        // The question is posted; stop the agent instead of letting it ramble.
+        // The question is posted, or there are no tools; stop the agent instead of letting it ramble.
         setTimeout(() => handle.kill(), 250).unref();
       }
     },
@@ -322,11 +328,12 @@ export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> 
   const session = { sessionId: st.sessionId ?? (st.started ? opts.resumeSession : undefined), usage: claudeRunUsage(st, opts.model) };
   const early = earlyResult(st, outcome, session);
   if (early) return early;
-  const ok = !st.resultIsError && (outcome.code === 0 || st.result !== undefined);
+  const mcpFailed = st.mcpStatus === "failed";
+  const ok = !mcpFailed && !st.resultIsError && (outcome.code === 0 || st.result !== undefined);
   return {
     ok,
     summary: st.result || tailSummary(st.texts),
-    error: ok ? undefined : st.resultIsError ? st.result : `claude exited with code ${outcome.code}${outcome.stderr ? `: ${outcome.stderr.trim().slice(-800)}` : ""}`,
+    error: ok ? undefined : mcpFailed ? MCP_FAILED : st.resultIsError ? st.result : `claude exited with code ${outcome.code}${outcome.stderr ? `: ${outcome.stderr.trim().slice(-800)}` : ""}`,
     exitCode: outcome.code,
     resumeFailed: !ok && !!opts.resumeSession && !st.started || undefined,
     ...session,

@@ -6,7 +6,19 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 14, 2026
 
+- Ask Scarlet for a motion graphic, like a lower third or a title, and it makes one in your style and lays it over the picture as an edit you can revise.
+- Type $ in the message box to pick a saved graphic template, with a preview of each on your picture.
+- Save a graphic as a template with the bookmark on its card.
+- Drop a style guide in the chat and say so: Scarlet follows it for every graphic in that project, and asks when a font it names isn't installed.
+- Files dropped on the message box ride with your next message.
+- The timeline shows every edit in the stretch you're looking at, and gathers them into counts like "9 cuts" on the whole video.
+- After a dialogue pass, joins Scarlet couldn't listen to in a recording in another language are no longer counted as checked.
+- A spoken note still being cleaned up when its project goes to the Trash is no longer saved into that project.
+- A pause Scarlet trims on a sped-up or slowed-down clip plays as long as asked.
+- When Claude Code can't reach Scarlet's editing tools, the request now ends as Couldn't finish with Retry instead of looking finished.
+- Approving a trim that waited while you cut elsewhere no longer brings back footage you cut or leaves clips on top of each other.
 - Scarlet lets you know when a new version of your edition is ready to download.
+- On Mac and Windows, stable Scarlet downloads each published update and offers Restart to update when it’s ready.
 - A rule you approve stays saved if Scarlet stops after updating the skill.
 - Click the clock or press G to jump the playhead to a time you type.
 - An edit another request flagged can be revised and undone from the request that flagged it.

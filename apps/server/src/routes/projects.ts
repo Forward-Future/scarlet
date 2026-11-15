@@ -73,7 +73,7 @@ export function projectRoutes(ctx: Ctx) {
       const read = (version: string) => ctx.repos.versions.get(project.id, version)?.timeline;
       const head = project.head && read(project.head);
       return { version: project.head, edits: head
-        ? threadTimeline(thread, head, ctx.repos.versions.links(project.id), read, project.settings.fps) : [] };
+        ? threadTimeline(thread, head, ctx.repos.versions.links(project.id), read, project.settings.fps, requireProject(ctx, project.id).media) : [] };
     })();
     return c.json(result);
   });

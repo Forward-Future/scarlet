@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import os, { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, expect, it, vi, onTestFinished } from "vitest";
+import { afterEach, beforeEach, expect, it as vitestIt, vi, onTestFinished } from "vitest";
+import { partedIt } from "../../../test/parts";
 import { clipEnd, createProject, isPlayableMedia, cutPlaybackWindow, sha256, timelineDuration, timelineFromKeepRanges, Transform, type Change, type Clip, type Project } from "@scarlet/timeline";
 import { buildThreads, isThreadDone, taskPlan, threadRevision, type Render, type Task } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "./app.js";
@@ -34,6 +35,8 @@ import { purgeTrash } from "./services/trash.js";
 import { scarletRenderAdapter } from "./render/scarletRender.js";
 import { fallbackAdapter, type RenderAdapter } from "./render/adapter.js";
 import * as ffmpeg from "./render/ffmpeg.js";
+/** A full run spreads this file's tests over workspace.part*.test.ts. */
+const it = partedIt(vitestIt);
 
 let directory: string;
 let workspace: ScarletApp;
@@ -4731,7 +4734,7 @@ it("keeps the note on a cut that waits for the editor within a note's length, an
   expect((await assess(three.review, [{ index: 1, start: 14, end: 15, verdict: "cut", reason: "A breath." }])).status).toBe(200);
   const four = await submit(base, [{ start: 15, end: 16, review: true, reason: " " }]);
   expect(await listed(four.review)).toEqual([[2, 11], [14, 16]]);
-  expect(four.review.cutAssessments).toEqual([waits, { index: 1, start: 14, end: 16, verdict: "ask", provisional: true, reason: "Staged for a closer look." }]);
+  expect(four.review.cutAssessments).toEqual([waits, { index: 1, start: 14, end: 16, verdict: "ask", provisional: true, reason: "No note was saved for this cut." }]);
 });
 
 it("saves a part whose sure cut starts right where a carried cut's original range ends, after another request moved the edit", async () => {

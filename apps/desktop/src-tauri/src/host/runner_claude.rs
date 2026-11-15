@@ -19,9 +19,10 @@ pub struct ClaudeState {
     pub pending_question: Option<(String, String)>,
     pub question: Option<String>,
     pub question_posted: bool,
-    /// Set when the tool_result for the question arrived: the runner should stop the process.
+    /// Set when the tool_result for the question arrived, or Scarlet's MCP server failed: the runner should stop the process.
     pub should_stop: bool,
-    pub mcp_connected: Option<bool>,
+    /// Scarlet's MCP server as the init line reported it ("connected", "failed", …), when it was listed.
+    pub mcp_status: Option<String>,
     pub session_id: Option<String>,
     /// The CLI opened a session. A resume that finds none fails before this.
     pub started: bool,
@@ -38,6 +39,9 @@ pub struct ClaudeState {
 /// and its result names the step's id; TaskUpdate changes one step by id. A Claude Code from before those has
 /// TodoWrite, which takes the whole list. `--tools` takes the names a CLI knows and passes over the rest.
 pub const CLAUDE_PLAN_TOOLS: &str = "TaskCreate,TaskUpdate,TodoWrite";
+
+/// Why a run whose Scarlet MCP server failed has failed: Claude Code carries on without it and calls the run a success.
+const MCP_FAILED: &str = "Scarlet's MCP server failed to start, so Claude Code had no editing tools.";
 
 /// The plan as Claude Code's to-do tools have left it, and their calls still waiting for a result.
 #[derive(Debug, Default, Clone)]
@@ -180,7 +184,11 @@ pub fn parse_claude_line(line: &str, st: &mut ClaudeState) -> Vec<RunnerEvent> {
             let servers: Vec<Value> = msg.get("mcp_servers").and_then(Value::as_array).cloned().unwrap_or_default();
             let scarlet = servers.iter().find(|s| s.get("name").and_then(Value::as_str) == Some("scarlet"));
             let status = scarlet.and_then(|s| s.get("status")).map(value_text);
-            st.mcp_connected = scarlet.map(|_| status.as_deref() == Some("connected"));
+            st.mcp_status = status.clone();
+            // This runner offers only Scarlet's tools, so nothing useful can follow.
+            if status.as_deref() == Some("failed") {
+                st.should_stop = true;
+            }
             if let Some(m) = msg.get("model").and_then(Value::as_str).filter(|m| !m.is_empty()) {
                 st.model = Some(m.to_string());
             }
@@ -424,7 +432,7 @@ pub async fn run_claude(opts: RunOptions) -> RunResult {
         super::runner::report_usage(&on_usage, &mut sent_usage, claude_run_usage(&s, model.as_deref()));
         if s.should_stop {
             s.should_stop = false;
-            return true; // the question is posted; stop the agent instead of letting it ramble.
+            return true; // the question is posted, or there are no tools; stop the agent instead of letting it ramble.
         }
         false
     });
@@ -449,13 +457,16 @@ pub async fn run_claude(opts: RunOptions) -> RunResult {
     if let Some(result) = cut_short(&s.texts, s.question.as_ref(), s.question_posted, &outcome, &session) {
         return result;
     }
-    let ok = !s.result_is_error && (outcome.code == Some(0) || s.result.is_some());
+    let mcp_failed = s.mcp_status.as_deref() == Some("failed");
+    let ok = !mcp_failed && !s.result_is_error && (outcome.code == Some(0) || s.result.is_some());
     let summary = match s.result.as_deref() {
         Some(r) if !r.is_empty() => r.to_string(),
         _ => tail_summary(&s.texts),
     };
     let error = if ok {
         None
+    } else if mcp_failed {
+        Some(MCP_FAILED.into())
     } else if s.result_is_error {
         s.result.clone()
     } else {
@@ -500,7 +511,7 @@ mod tests {
         assert!(evs[4].text.contains("Invalid ops"));
         assert_eq!(evs[6].text, "Proposed one change: chg_1.");
         assert_eq!(st.result.as_deref(), Some("Proposed one change: chg_1."));
-        assert_eq!(st.mcp_connected, Some(true));
+        assert_eq!(st.mcp_status.as_deref(), Some("connected"));
         assert_eq!(st.session_id.as_deref(), Some("s1"));
     }
 
@@ -733,6 +744,62 @@ mod tests {
             assert!(started.elapsed() < std::time::Duration::from_secs(15), "waited {:?} for a CLI that had asked", started.elapsed());
             assert!(run.ok && run.question_posted, "{run:?}");
             assert_eq!((run.question.as_deref(), run.session_id.as_deref()), (Some("Keep the cold open?"), Some("s1")));
+        }
+
+        #[tokio::test]
+        async fn fails_a_run_whose_scarlet_mcp_server_failed_to_start() {
+            let dir = tempfile::tempdir().unwrap();
+            let mcp_failed = "Scarlet's MCP server failed to start, so Claude Code had no editing tools.";
+            // Recorded from claude 2.1.325: the server failed, and Claude answered without tools and called it a success.
+            let failed = r#"{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-4-1","mcp_servers":[{"name":"scarlet","status":"failed","source":"dynamic"}]}"#;
+            let success = r#"{"type":"result","subtype":"success","is_error":false,"result":"I can't reach the project's tools."}"#;
+            let (opts, events) = options("claude", dir.path(), Some(fake_cli(dir.path(), &[failed, success], "exit 0")));
+            let run = run_claude(opts).await;
+            assert_eq!((run.ok, run.error.as_deref(), run.aborted, run.timed_out, run.resume_failed), (false, Some(mcp_failed), false, false, false), "{run:?}");
+            assert_eq!((run.summary.as_str(), run.session_id.as_deref()), ("I can't reach the project's tools.", Some("s1")));
+            assert_eq!(events.lock().unwrap()[1].text, "Scarlet MCP server status: failed");
+
+            // Nothing useful can follow, so the CLI is stopped instead of left to write for minutes.
+            let (opts, _) = options("claude", dir.path(), Some(fake_cli(dir.path(), &[failed, TEXT], "sleep 30")));
+            let started = std::time::Instant::now();
+            let run = run_claude(opts).await;
+            assert!(started.elapsed() < std::time::Duration::from_secs(15), "waited {:?} for a CLI with no tools", started.elapsed());
+            assert_eq!((run.ok, run.error.as_deref(), run.aborted, run.timed_out, run.stalled), (false, Some(mcp_failed), false, false, false), "{run:?}");
+
+            // The server's failure is the cause, whatever the CLI made of it afterwards.
+            let errored = r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"Ran out of turns."}"#;
+            let (opts, _) = options("claude", dir.path(), Some(fake_cli(dir.path(), &[failed, errored], "exit 0")));
+            assert_eq!(run_claude(opts).await.error.as_deref(), Some(mcp_failed));
+            let (opts, _) = options("claude", dir.path(), Some(fake_cli(dir.path(), &[failed], "exit 3")));
+            assert_eq!(run_claude(opts).await.error.as_deref(), Some(mcp_failed));
+
+            // A resumed session is the same.
+            let (mut opts, _) = options("claude", dir.path(), Some(fake_cli(dir.path(), &[failed, success], "exit 0")));
+            opts.resume_session = Some("s1".into());
+            let run = run_claude(opts).await;
+            assert_eq!((run.ok, run.error.as_deref(), run.resume_failed, run.session_id.as_deref()), (false, Some(mcp_failed), false, Some("s1")), "{run:?}");
+
+            // A question it posted is still a question, and a cancel is still a cancel.
+            let ask = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q1","name":"mcp__scarlet__task_question","input":{"text":"Keep the cold open?"}}]}}"#;
+            let posted = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"q1","content":"Question posted"}]}}"#;
+            let (opts, _) = options("claude", dir.path(), Some(fake_cli(dir.path(), &[failed, ask, posted], "sleep 30")));
+            let run = run_claude(opts).await;
+            assert!(run.ok && run.question_posted, "{run:?}");
+            let (mut opts, _) = options("claude", dir.path(), Some(fake_cli(dir.path(), &[failed, TEXT], "sleep 30")));
+            let cancel = opts.cancel.clone();
+            opts.on_event = Arc::new(move |_| cancel.cancel());
+            let run = run_claude(opts).await;
+            assert_eq!((run.ok, run.error.as_deref(), run.aborted), (false, Some("cancelled"), true), "{run:?}");
+
+            // Only a failed server fails the run: one still starting, or not listed at all, keeps today's result.
+            let pending = r#"{"type":"system","subtype":"init","session_id":"s1","mcp_servers":[{"name":"scarlet","status":"pending"}]}"#;
+            let unlisted = r#"{"type":"system","subtype":"init","session_id":"s1","mcp_servers":[]}"#;
+            let no_change = r#"{"type":"result","subtype":"success","is_error":false,"result":"Nothing to change."}"#;
+            for init in [INIT, pending, unlisted] {
+                let (opts, _) = options("claude", dir.path(), Some(fake_cli(dir.path(), &[init, no_change], "exit 0")));
+                let run = run_claude(opts).await;
+                assert_eq!((run.ok, run.error.as_deref(), run.summary.as_str()), (true, None, "Nothing to change."), "{init}");
+            }
         }
 
         #[tokio::test]

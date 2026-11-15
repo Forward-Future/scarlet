@@ -47,9 +47,14 @@ for (const [target, dmgArch, arch, name, earlyAccess] of [
       cp "$7" "$app/Info.plist"
       for notice in scarlet.txt uhm.txt uhm-model-license.txt; do cp "$7" "$app/Resources/licenses/$notice"; done
       cp "$7" "$app/Resources/licenses/runtime/rust-standard-library.html"
-      for name in node javascript rust whisper-audio-dependencies sherpa-dependencies speaker-onnxruntime-1.28.2-third-party; do
+      for name in node javascript rust whisper-audio-dependencies sherpa-dependencies speaker-onnxruntime-1.28.2-third-party chrome-headless-shell; do
         cp "$7" "$app/Resources/licenses/runtime/$name.txt"
       done
+      chrome="$app/Resources/chrome-headless-shell"
+      mkdir -p "$chrome"
+      for name in LICENSE.headless_shell icudtl.dat chrome-headless-shell; do cp "$7" "$chrome/$name"; done
+      if [ ! -f "\${CHROME_MODE:-}" ]; then chmod 755 "$chrome/chrome-headless-shell"; fi
+      if [ -f "\${CHROME_MISSING:-}" ]; then rm "$chrome/chrome-headless-shell"; fi
     else rm -r "$2/${product}.app"; fi`);
     tool("plutil", `if [ "$2" = CFBundleIdentifier ]; then echo "${id}"; else cat "$6"; fi`);
     tool("lipo", `echo ${arch}`);
@@ -64,6 +69,22 @@ for (const [target, dmgArch, arch, name, earlyAccess] of [
     assert.throws(verify, /wrong-architecture/);
     tool("plutil", 'if [ "$2" = CFBundleIdentifier ]; then echo com.example.wrong; else cat "$6"; fi');
     assert.throws(verify, /wrong bundle identifier/);
+    tool("plutil", `if [ "$2" = CFBundleIdentifier ]; then echo "${id}"; else cat "$6"; fi`);
+    tool("lipo", `case "$2" in *chrome-headless-shell) echo wrong-browser;; *) echo ${arch};; esac`);
+    assert.throws(verify, /wrong-browser headless browser/);
+    tool("lipo", `echo ${arch}`);
+    verify();
+    // The stubbed disk image reads these switches from the test's environment.
+    const flags = join(root, "flags");
+    mkdirSync(flags, { recursive: true });
+    process.env.CHROME_MODE = join(flags, "not-executable");
+    process.env.CHROME_MISSING = join(flags, "missing");
+    t.after(() => { delete process.env.CHROME_MODE; delete process.env.CHROME_MISSING; });
+    writeFileSync(process.env.CHROME_MODE, "");
+    assert.throws(verify, /headless browser that isn't executable/);
+    rmSync(process.env.CHROME_MODE);
+    writeFileSync(process.env.CHROME_MISSING, "");
+    assert.throws(verify, /ENOENT.*chrome-headless-shell\/chrome-headless-shell'/);
   });
 }
 
@@ -75,12 +96,13 @@ test("checks Windows app and both installer resources before staging either inst
   const setup = join(release, "bundle/nsis/Scarlet Early Access_0.1.4_x64-setup.exe");
   const msi = join(release, "bundle/msi/Scarlet Early Access_0.1.4_x64_en-US.msi");
   tool("powershell.exe", `case "$SCARLET_VERIFY_FILE" in
-    *.msi) case "$4" in *OpenDatabase*ProductVersion*) ;; *) exit 2;; esac; printf '{"product":"Scarlet Early Access","upgradeCode":"{7C84D69F-5F09-50DE-84D2-2DEF58073B57}","version":"%s","names":["scarlet.txt","node.txt","JAVASC~1.TXT|javascript.txt","rust.txt","rust-standard-library.html","whisper-audio-dependencies.txt","sherpa-dependencies.txt","speaker-onnxruntime-1.28.2-third-party.txt","uhm.txt","uhm-model-license.txt","ThirdPartyNotices.txt","LICENSE-CODE.txt","LICENSE-LLVM.txt","nsis-3.13.txt"]}' "$(cat "$SCARLET_VERIFY_FILE")"; exit 0;;
+    *.msi) case "$4" in *OpenDatabase*ProductVersion*) ;; *) exit 2;; esac; printf '{"product":"Scarlet Early Access","upgradeCode":"{7C84D69F-5F09-50DE-84D2-2DEF58073B57}","version":"%s","names":["scarlet.txt","node.txt","JAVASC~1.TXT|javascript.txt","rust.txt","rust-standard-library.html","whisper-audio-dependencies.txt","sherpa-dependencies.txt","speaker-onnxruntime-1.28.2-third-party.txt","chrome-headless-shell.txt","chrome-headless-shell.exe","LICENSE.headless_shell","icudtl.dat","uhm.txt","uhm-model-license.txt","ThirdPartyNotices.txt","LICENSE-CODE.txt","LICENSE-LLVM.txt","nsis-3.13.txt"]}' "$(cat "$SCARLET_VERIFY_FILE")"; exit 0;;
     *.exe) case "$4" in *GetVersionInfo*ProductVersion*) ;; *) exit 2;; esac;;
     *) exit 2;;
   esac
   printf '{"product":"Scarlet Early Access","version":"%s"}' "$(cat "$SCARLET_VERIFY_FILE")"`);
-  tool("7z", 'for file in scarlet-desktop.exe scarlet.txt node.txt javascript.txt rust.txt rust-standard-library.html whisper-audio-dependencies.txt sherpa-dependencies.txt speaker-onnxruntime-1.28.2-third-party.txt uhm.txt uhm-model-license.txt ThirdPartyNotices.txt LICENSE-CODE.txt LICENSE-LLVM.txt nsis-3.13.txt; do echo "Path = $file"; done');
+  const payload = "scarlet-desktop.exe scarlet.txt node.txt javascript.txt rust.txt rust-standard-library.html whisper-audio-dependencies.txt sherpa-dependencies.txt speaker-onnxruntime-1.28.2-third-party.txt chrome-headless-shell.txt chrome-headless-shell/chrome-headless-shell.exe chrome-headless-shell/LICENSE.headless_shell chrome-headless-shell/icudtl.dat uhm.txt uhm-model-license.txt ThirdPartyNotices.txt LICENSE-CODE.txt LICENSE-LLVM.txt nsis-3.13.txt";
+  tool("7z", `for file in ${payload}; do echo "Path = $file"; done`);
   file(app, "0.1.4.0");
   file(setup);
   file(msi);
@@ -93,6 +115,8 @@ test("checks Windows app and both installer resources before staging either inst
   }
   tool("7z", 'echo "Path = scarlet-desktop.exe"');
   assert.throws(verify, /missing node.txt/);
+  tool("7z", `for file in ${payload.replace(" chrome-headless-shell/chrome-headless-shell.exe", "")}; do echo "Path = $file"; done`);
+  assert.throws(verify, /missing chrome-headless-shell.exe/);
   tool("7z", 'printf "Path = scarlet-desktop.exe\\nPath = ffmpeg.exe\\n"');
   assert.throws(verify, /unexpectedly bundles ffmpeg.exe/);
   tool("powershell.exe", `case "$SCARLET_VERIFY_FILE" in

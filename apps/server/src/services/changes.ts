@@ -595,7 +595,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       if (protectedSlot && clashes)
         throw conflict("cut_changed", "Two earlier review slots now cover the same footage. Their existing reviews are still saved.");
       if (!choice && (clashes || planned.some(c => overlaps(outer(c), outer(r))))) continue;
-      carried.push({ start: r.start, end: r.end, review: true, reason: r.reason, crossfade: r.crossfade ?? change.joinFades?.duration, ...(r.originalRange && { originalRange: r.originalRange }),
+      carried.push({ start: r.start, end: r.end, review: true, reason: r.reason, ...(r.held && { held: r.held }), crossfade: r.crossfade ?? change.joinFades?.duration, ...(r.originalRange && { originalRange: r.originalRange }),
         ...(r.kind && { kind: r.kind }), ...(r.legacySuggest && { legacySuggest: true }), ...((current || protectedSlot) && { preserveEdges: true }), protectedSlot, ...(recoveredCuts.has(r) && { recovered: true }),
         ...(assessment && { assessment }), ...(choice && !lapsed ? { choice } : { asked: { start: r.start, end: r.end }, ...(lapsed && { lapsed }) }) });
     }
@@ -719,7 +719,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     // Staged cuts the editor hasn't called that now sit against footage they chose to keep. Their call covers them.
     const joined: TimeRange[] = [];
     if (optional.length) {
-      const reasons = optional.map(({ start, end, reason, originalRange, kind, crossfade, legacySuggest }) => ({ start, end, reason, originalRange, ...(kind && { kind }), ...(crossfade && { crossfade }), ...(legacySuggest && { legacySuggest }) }));
+      const reasons = optional.map(({ start, end, reason, originalRange, kind, crossfade, legacySuggest, held }) => ({ start, end, reason, originalRange, ...(kind && { kind }), ...(crossfade && { crossfade }), ...(legacySuggest && { legacySuggest }), ...(held && { held }) }));
       const { change } = persistProposal(ctx, user, projectId, { fromVersion: version, intent: "suggestion", autoApprove: false,
         ops: ops(optional), description: whole && own ? own : `Review ${optional.length} optional dialogue ${optional.length === 1 ? "cut" : "cuts"}`,
         taskId, author, noteIds }, ids[1], reasons, { fold });
@@ -740,7 +740,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       // A replaced assessment still needs a recommendation on its new footage before the editor sees it.
       const ask = (index: number, { start, end }: TimeRange): CutAssessment => ({
         index, start, end, verdict: "ask", provisional: true,
-        reason: [...new Set(within({ start, end }).map(c => c.reason))].join(" ").slice(0, 800).trim() || "Staged for a closer look.",
+        reason: [...new Set(within({ start, end }).map(c => c.reason))].join(" ").slice(0, 800).trim() || "No note was saved for this cut.",
       });
       for (const [index, { removed: { start, end } }] of listed.entries()) {
         const inside = within({ start, end });
@@ -1630,7 +1630,7 @@ function recheckApprovedCut(ctx: Ctx, project: Project, change: Change, review: 
   const former = change.cutAssessments?.find(a => a.index === index);
   const assessments = [...(change.cutAssessments ?? []).filter(a => a.index !== index), {
     index, ...removed, verdict: "ask" as const, ...(former?.revised && { revised: true }), ...(former?.askOrder && { askOrder: former.askOrder }),
-    reason: former?.reason ?? change.cutReasons?.find(c => c.start >= removed.start - 1e-6 && c.start < removed.end)?.reason ?? "Check this passage." }];
+    reason: former?.reason ?? change.cutReasons?.find(c => c.start >= removed.start - 1e-6 && c.start < removed.end)?.reason ?? "No note was saved for this cut." }];
   const checked = { ...change, cutChoices: choices.filter(c => c.index !== index), cutAssessments: assessments.sort((a, b) => a.index - b.index) };
   const prior = change.taskId ? ctx.repos.tasks.get(change.taskId) : undefined;
   const task = createTask(ctx, { projectId: project.id, kind: "revise", agent: prior?.agent ?? ctx.settings().defaultAgent,
@@ -2158,7 +2158,7 @@ export function flagEdit(ctx: Ctx, projectId: string, task: Task, body: FlagEdit
   const links = ctx.repos.versions.links(projectId);
   // Every applied edit on the working cut, as its own request lists it, so a revision is flagged and not what it replaced.
   const edits = threads.filter(t => t.changes.some(c => c.state === "approved")).flatMap(thread =>
-    threadTimeline({ ...thread, flagged: undefined }, head, links, read, project.settings.fps).filter(e => !e.elsewhere).map(edit => ({ edit, thread })));
+    threadTimeline({ ...thread, flagged: undefined }, head, links, read, project.settings.fps, project.media).filter(e => !e.elsewhere).map(edit => ({ edit, thread })));
   const named = (e: { edit: ThreadEdit; thread: { title: string } }): FlaggedEdit => ({ changeId: e.edit.changeId, spot: e.edit.spot,
     label: e.edit.label, request: e.thread.title, range: e.edit.range, ...(e.edit.at !== undefined && { at: e.edit.at }) });
   let found: (typeof edits)[number] | undefined;

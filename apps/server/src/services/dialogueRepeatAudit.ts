@@ -17,7 +17,9 @@ const round = (n: number) => Math.round(n * 1000) / 1000;
 const span = (words: Heard[]) => ({ start: round(words[0]!.start), end: round(words.at(-1)!.end) });
 
 /** One side of a join as heard: a played stretch of a recording, its words read from the sound and its transcript words. */
-export interface JoinSide { mediaId: string; clipId: string; trackId: string; timelineStart: number; timelineEnd: number; source: TimeRange; heard: Word[]; said: Word[] }
+export interface JoinSide { mediaId: string; clipId: string; trackId: string; timelineStart: number; timelineEnd: number; source: TimeRange; heard: Word[]; said: Word[];
+  /** Why its sound wasn't read: the recording's language can't be read letter by letter. */
+  unheard?: string }
 
 const letters = (text: string) => normalizeTranscriptToken(text).replace(/[^a-z]/g, "").length;
 /** Reaches the edge of the played stretch: speech still sounding where the cut is. */
@@ -176,6 +178,10 @@ export async function auditDialogueAudio(ctx: Ctx, project: Project, tl: Timelin
           start: at(Math.max(w.start, source.start)), end: at(Math.min(w.end, source.end)) });
       };
       const lang = language || ctx.settings().transcription.language;
+      const side = ({ clip, track, source }: Placement) => {
+        const at = (t: number) => sourceToTimeline(clip, t);
+        return { mediaId, clipId: clip.id, trackId: track, timelineStart: at(source.start), timelineEnd: at(source.end), source };
+      };
       if (lang && lang !== "auto" && !alignsLanguage(lang)) {
         // Read the verbatim dialogue scan in its own language. Use the same authorised detector and page cache as the pass.
         const detector = dialogueDetector(ctx);
@@ -195,6 +201,9 @@ export async function auditDialogueAudio(ctx: Ctx, project: Project, tl: Timelin
             }
           }
         }
+        // Its joins still play. They go back unheard rather than as clean.
+        const unheard = `Its speech (${lang}) can't be read letter by letter, so these joins weren't heard.`;
+        for (const part of selected) sides.push({ ...side(part), heard: [], said: [], unheard });
       } else {
         const path = await emissionStore(ctx, project.id, file);
         store = await EmissionFile.open(path);
@@ -217,10 +226,7 @@ export async function auditDialogueAudio(ctx: Ctx, project: Project, tl: Timelin
           }
           const read = reader.finish();
           for (const word of read) add(part, word);
-          const { clip } = part;
-          const at = (t: number) => sourceToTimeline(clip, t);
-          sides.push({ mediaId, clipId: clip.id, trackId: part.track, timelineStart: at(part.source.start), timelineEnd: at(part.source.end), source: part.source,
-            heard: read, said: said.filter(w => w.end > part.source.start - 1 && w.start < part.source.end + 1) });
+          sides.push({ ...side(part), heard: read, said: said.filter(w => w.end > part.source.start - 1 && w.start < part.source.end + 1) });
         }
       }
       for (const w of heard) {
@@ -248,7 +254,17 @@ export async function auditDialogueAudio(ctx: Ctx, project: Project, tl: Timelin
     r.id += "-" + createHash("sha256").update(JSON.stringify([r.occurrences.first?.clipId, r.occurrences.second?.clipId, r.first.start])).digest("hex").slice(0, 12);
   }
   // Only the stretches read here meet: a part cut short by the scope ends where the scope does, not at a join.
-  const joins = joinSides(sides).filter(([a, b]) => { const ca = clipById(tl, a.clipId), cb = clipById(tl, b.clipId); return !!ca && !!cb && Math.abs(a.source.end - ca.sourceOut) < 1e-3 && Math.abs(b.source.start - cb.sourceIn) < 1e-3; })
-    .flatMap(([a, b]) => hearJoin(a, b));
-  return { version: tl.version, repeats, unavailable, joins };
+  const pairs = joinSides(sides).filter(([a, b]) => { const ca = clipById(tl, a.clipId), cb = clipById(tl, b.clipId); return !!ca && !!cb && Math.abs(a.source.end - ca.sourceOut) < 1e-3 && Math.abs(b.source.start - cb.sourceIn) < 1e-3; });
+  const joins = pairs.flatMap(([a, b]) => hearJoin(a, b));
+  const unheard = new Map<string, { mediaId: string; reason: string; at: Set<number> }>();
+  for (const [a, b] of pairs) {
+    // Where timeline_join_audit finds the join: a crossfade at the middle of its overlap.
+    const at = round(a.timelineEnd > b.timelineStart ? (a.timelineEnd + b.timelineStart) / 2 : b.timelineStart);
+    for (const s of [a, b]) if (s.unheard) {
+      let entry = unheard.get(s.mediaId);
+      if (!entry) unheard.set(s.mediaId, entry = { mediaId: s.mediaId, reason: s.unheard, at: new Set() });
+      entry.at.add(at);
+    }
+  }
+  return { version: tl.version, repeats, unavailable, joins, unheardJoins: [...unheard.values()] };
 }

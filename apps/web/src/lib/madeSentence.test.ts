@@ -45,3 +45,11 @@ it("says nothing for a request with no edits, and counts cuts whose length isn't
   expect(madeSentence([], length)).toEqual([]);
   expect(say([cut(5, 5), cut(9, 9)])).toBe("Made 2 cuts.");
 });
+
+it("counts the graphics a request made, and says what Scarlet said about a single one", () => {
+  const lower = (name: string) => ({ label: `Lower third: ${name}`, kind: "graphic" as const });
+  expect(say([lower("Daniel"), lower("Matt")])).toBe("Made 2 graphics.");
+  expect(say([cut(0, 60), lower("Daniel"), lower("Matt")])).toBe("Took out 1:00 in 1 cut, and made 2 graphics.");
+  expect(say([{ ...lower("Daniel"), summary: "Added a lower third naming Daniel as he first speaks." }])).toBe("Added a lower third naming Daniel as he first speaks.");
+  expect(say([lower("Daniel"), { label: "Punch in", kind: "zoom" }])).toBe("Made 2 edits: Lower third: Daniel, Punch in.");
+});

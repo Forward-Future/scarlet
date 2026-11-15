@@ -1,6 +1,38 @@
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
+/// Where this copy of Scarlet gets its updates. A release build checks the release manifest it was built with. A build
+/// made from source in `/Applications` is updated by the local main updater, which builds GitHub `main` (see
+/// `scripts/update-macos.py`); on a Mac that has that updater turned on, it keeps the app even when a release was
+/// installed over it. Any other copy (a dev build, a review build, the Windows PC's launcher builds) shows no updates.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    Local,
+    Release,
+}
+
+pub fn source(app: &AppHandle) -> Option<Source> {
+    let local = socket_path(app).is_some();
+    let local_enabled = local && local_updater_enabled(app);
+    if local_enabled { return Some(Source::Local); }
+    if crate::release_updates::configured(app) {
+        let exe = std::env::current_exe().ok()?;
+        if let Some(reason) = crate::release_updates::cannot_update_in_place(&exe) {
+            log::warn!("release updates are off for this copy: {reason}");
+            return None;
+        }
+        return Some(Source::Release);
+    }
+    (local && option_env!("SCARLET_RELEASE_CHANNEL").is_none()).then_some(Source::Local)
+}
+
+/// The local main updater's login item is installed (`update-macos.py enable`).
+fn local_updater_enabled(app: &AppHandle) -> bool {
+    let label = format!("{}.main-updater.plist", app.config().identifier);
+    crate::util::home_dir().join("Library/LaunchAgents").join(label).exists()
+}
+
 pub fn socket_path(app: &AppHandle) -> Option<PathBuf> {
     if !cfg!(target_os = "macos") {
         return None;
@@ -103,6 +135,7 @@ pub struct UpdateStatus {
     /// A verified build that installs on restart.
     ready: Option<String>,
     building: Option<UpdateBuild>,
+    source: Option<Source>,
 }
 
 /// The updater writes this file while it builds and removes it when the build ends.
@@ -129,14 +162,32 @@ fn build_status(raw: &[u8]) -> Option<UpdateBuild> {
 
 #[tauri::command]
 pub async fn update_status(app: AppHandle) -> UpdateStatus {
+    let source = app.try_state::<Source>().map(|source| *source);
+    if source == Some(Source::Release) {
+        let status = app.state::<crate::release_updates::ReleaseUpdates>().status();
+        let building = status.downloading.map(|(version, done)| UpdateBuild { revision: version, done, step: 0.0, step_started: 0.0, step_seconds: 0.0 });
+        return UpdateStatus { ready: status.ready, building, source };
+    }
     let ready = exchange(&app, "ready\n".into()).await.filter(|s| valid_revision(s));
-    UpdateStatus { ready, building: building(&app) }
+    UpdateStatus { ready, building: building(&app), source }
+}
+
+/// The editor asked from Settings: the newest release there is, or none when this is the newest. A release build only.
+#[tauri::command]
+pub async fn check_for_release(app: AppHandle) -> Result<Option<String>, String> {
+    if app.try_state::<Source>().map(|source| *source) != Some(Source::Release) {
+        return Err("This copy of Scarlet doesn’t update from releases.".into());
+    }
+    crate::release_updates::check_now(&app).await
 }
 
 /// The CHANGELOG.md of a build the updater has fetched, read from its private checkout of main, so hovering the update
 /// says what the build brings. Empty when that build has no changelog or the checkout doesn't have it yet.
 #[tauri::command]
 pub async fn update_changelog(app: AppHandle, revision: String) -> Result<String, String> {
+    if let Some(updates) = app.try_state::<crate::release_updates::ReleaseUpdates>() {
+        return Ok(updates.changelog(&revision));
+    }
     if !valid_revision(&revision) {
         return Err("Invalid update revision.".into());
     }
@@ -155,6 +206,13 @@ pub async fn update_changelog(app: AppHandle, revision: String) -> Result<String
 
 #[tauri::command]
 pub async fn restart_for_update(app: AppHandle, revision: String) -> Result<(), String> {
+    if app.try_state::<Source>().is_some_and(|source| *source == Source::Release) {
+        if !crate::quit::confirm_if_busy(&app).await {
+            return Err("Update postponed.".into());
+        }
+        return tauri::async_runtime::spawn_blocking(move || crate::release_updates::restart(&app, &revision)).await
+            .map_err(|e| e.to_string())?;
+    }
     if !valid_revision(&revision) {
         log::warn!("restart for an update refused: not a revision");
         return Err("Invalid update revision.".into());

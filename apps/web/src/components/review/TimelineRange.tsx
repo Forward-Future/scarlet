@@ -12,14 +12,19 @@ const PRESS_SLOP_PX = 3;
 /** A handle held still this long opens the close-up. */
 export const HOLD_MS = 350;
 const HOLD_SLOP_PX = 4;
-/** In the close-up the end moves this many times slower than the pointer, one frame at a time. */
-const PRECISE_SLOWDOWN = 10;
+/** In the close-up the end moves one frame for this many pixels the pointer moves, whatever the timeline's zoom. */
+export const LOUPE_PX_PER_FRAME = 10;
 /** A drag that stops this still, for HOLD_MS, goes into the close-up where it is. */
 const STILL_SLOP_PX = 2;
 /** In the close-up, a hand that shifts less than this before letting go of a held press hasn't moved. */
 const PRECISE_SLOP_PX = 2;
-/** The close-up's row of pictures: this many, each this many frames after the one before. */
-const LOUPE_PICTURES = 9, LOUPE_STEP_FRAMES = 3;
+/** The close-up's strip: one picture a frame, this many in view, each this wide (workspace.css --loupe-picture). */
+export const LOUPE_PICTURES = 7;
+const LOUPE_PICTURE_PX = 88;
+/** Pictures drawn past each side of the strip, so a step slides the next one in instead of popping it. */
+const LOUPE_SPARE = 2;
+/** The strip's pictures come in sheets of this many frames in a row, one request a sheet. */
+const LOUPE_SHEET = 20;
 
 const toFrame = (time: number, fps: number) => Math.round(time * fps) / fps;
 
@@ -67,8 +72,8 @@ interface Gesture {
   /** The range as last drawn. */
   last?: TimeRange;
   hold?: number;
-  /** The close-up: the time and pointer position it opened at, and whether the end has moved in it since. */
-  precise?: { time: number; x: number; moved?: boolean };
+  /** The close-up: the time and pointer position it opened at, where on the timeline it stands, and whether the end has moved in it since. */
+  precise?: { time: number; x: number; at: number; moved?: boolean };
   paint?: number;
   /** It let go having marked a range, not pressed a point. */
   marked?: boolean;
@@ -83,8 +88,10 @@ interface RangeSelect {
   start: number; end: number;
   fps: number;
   edges: readonly number[];
-  /** A picture of the video at a time, for the close-up's row of frames. */
+  /** A picture of the video at a time, for the close-up's strip of frames. */
   frameAt?(time: number, exact?: boolean): string | undefined;
+  /** One picture of each of these frames in a row, at `fps`: the close-up loads its strip a sheet at a time with it. */
+  sheet?: LoupeSheet;
   pictureAspect?: number;
   range?: TimeRange;
   /** `byKey` when a focused handle's ← or → moved it: the handle keeps the keys for the next step. */
@@ -103,8 +110,10 @@ interface RangeSelect {
  * still on the ruler opens the same close-up, to draw a range by frames from there, and so does a drag that stops and
  * holds still: the end it was moving carries on by frames. A click on the ruler takes the range off.
  */
-export function useRangeSelect({ slider, drag, from, span, start, end, fps, edges, frameAt, pictureAspect = 16 / 9, range, onRange, onSeek, onScrubStart, onPress, beforeGesture }: RangeSelect) {
-  const [live, setLive] = useState<{ range: TimeRange; moving: "start" | "end"; at: number; snapped: boolean; precise: boolean }>();
+export interface LoupeSheet { fps: number; url(frames: number[]): string }
+
+export function useRangeSelect({ slider, drag, from, span, start, end, fps, edges, frameAt, sheet, pictureAspect = 16 / 9, range, onRange, onSeek, onScrubStart, onPress, beforeGesture }: RangeSelect) {
+  const [live, setLive] = useState<{ range: TimeRange; moving: "start" | "end"; at: number; snapped: boolean; precise?: number }>();
   const gesture = useRef<Gesture>(undefined);
   const now = useRef({ edges, fps, start, end, onRange, onSeek, onPress });
   useLayoutEffect(() => { now.current = { edges, fps, start, end, onRange, onSeek, onPress }; });
@@ -119,7 +128,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     const perPixel = g.width > 0 ? g.span / g.width : 0;
     let time: number, snapped = false;
     if (g.precise) {
-      time = toFrame(g.precise.time + (g.x - g.precise.x) * perPixel / PRECISE_SLOWDOWN, fps);
+      time = toFrame(g.precise.time + (g.x - g.precise.x) / LOUPE_PX_PER_FRAME / fps, fps);
       // The close-up never pulls: a frame beside a cut has to be reachable. It only says when the end is on one.
       snapped = snapTime(time, edges, .5 / fps) !== undefined;
     } else {
@@ -131,7 +140,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     time = Math.max(start, Math.min(end, time));
     g.at = time;
     const next = g.last = orderedRange(g.anchor, time, start, end, fps);
-    setLive({ range: next, moving: time >= g.anchor ? "end" : "start", at: time, snapped, precise: !!g.precise });
+    setLive({ range: next, moving: time >= g.anchor ? "end" : "start", at: time, snapped, precise: g.precise?.at });
     onSeek(time);
   };
 
@@ -154,7 +163,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       g.stillX = g.x;
       g.still = window.setTimeout(() => {
         if (gesture.current !== g || g.precise || g.at === undefined) return;
-        g.precise = { time: g.at, x: g.x };
+        g.precise = { time: g.at, x: g.x, at: (g.at - g.from) / g.span * 100 };
         place(g);
       }, HOLD_MS);
     };
@@ -210,7 +219,8 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     // Held still, the press opens the close-up: on a handle at that end, on the ruler at the frame pressed.
     g.hold = window.setTimeout(() => {
       if (gesture.current !== g || g.moved) return;
-      g.precise = { time: edge && range ? (edge === "start" ? range.start : range.end) : anchor, x: g.x };
+      const time = edge && range ? (edge === "start" ? range.start : range.end) : anchor;
+      g.precise = { time, x: g.x, at: (time - g.from) / g.span * 100 };
       place(g);
     }, HOLD_MS);
     return true;
@@ -246,50 +256,59 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
         onPointerDown={e => { if (begin(e, edge)) { e.stopPropagation(); e.currentTarget.focus({ preventScroll: true }); } }}
         data-range-handle="" onKeyDown={e => nudge(edge, e)} />;
     };
-    // The close-up follows where the moving end is, also the instant a held press opens it with nothing drawn yet.
+    // The close-up stays where it opened and its strip slides under its line, also the instant a held press opens it with nothing drawn yet.
     const edgeTime = live?.at;
     layer = <>
       <span aria-hidden="true" className={`timeline-range${live ? " is-live" : ""}${lit ? " is-lit" : ""}`} style={{ left: `${left}%`, width: `${Math.max(0, right - left)}%` }} />
-      {live && !live.precise && <span aria-hidden="true" className="timeline-range-time" style={{ left: `${(left + right) / 2}%` }}>
+      {live && live.precise === undefined && <span aria-hidden="true" className="timeline-range-time" style={{ left: `${(left + right) / 2}%` }}>
         {clockRange(live.range.start, live.range.end)} · {lengthLabel(live.range.end - live.range.start)}</span>}
       {handle("start")}{handle("end")}
-      {live?.precise && edgeTime !== undefined && <RangeLoupe time={edgeTime} at={percent(edgeTime)} fps={fps} inside={live.moving === "end" ? "before" : "after"}
-        snapped={live.snapped} edges={edges} frameAt={frameAt} pictureAspect={pictureAspect} />}
+      {live?.precise !== undefined && edgeTime !== undefined && <RangeLoupe time={edgeTime} at={live.precise} fps={fps} last={Math.floor(end * fps + 1e-7)}
+        inside={live.moving === "end" ? "before" : "after"} snapped={live.snapped} edges={edges} frameAt={frameAt} sheet={sheet} pictureAspect={pictureAspect} />}
     </>;
   }
   return { begin, layer, marking: !!live };
 }
 
 /**
- * The close-up over a held end, as precise seeking shows it: the frame the end is on, and under it a row of the video's
- * pictures either side, a few frames apart. The row moves on only when the end passes one of its pictures, so its
- * pictures load once; a line over it shows where between them the end is. A tick marks each frame, and a red one the
- * edge of a cut or an edit.
+ * The close-up over a held end, as precise seeking shows it: a strip of the video's pictures, one a frame, slides under a
+ * line that stays still in its middle, so the picture under the line is the frame the end is on. The close-up stays where
+ * it opened. A tick under each picture marks its frame, a taller one each whole second with its time, and a red one the
+ * edge of a cut or an edit. The side of the line inside the range is shaded.
  */
-function RangeLoupe({ time, at, fps, inside, snapped, edges, frameAt, pictureAspect }: { time: number; at: number; fps: number; inside: "before" | "after";
-  snapped: boolean; edges: readonly number[]; frameAt?(time: number, exact?: boolean): string | undefined; pictureAspect: number }) {
+function RangeLoupe({ time, at, fps, last, inside, snapped, edges, frameAt, sheet, pictureAspect }: { time: number; at: number; fps: number; last: number;
+  inside: "before" | "after"; snapped: boolean; edges: readonly number[]; frameAt?(time: number, exact?: boolean): string | undefined;
+  sheet?: LoupeSheet; pictureAspect: number }) {
   const frame = Math.round(time * fps);
-  const first = (Math.floor(frame / LOUPE_STEP_FRAMES) - Math.floor(LOUPE_PICTURES / 2)) * LOUPE_STEP_FRAMES;
-  const count = LOUPE_PICTURES * LOUPE_STEP_FRAMES;
-  const share = (f: number) => (f - first) / count * 100;
-  const ticks = [];
-  for (let f = Math.max(0, first); f < first + count; f++) {
+  // Where the strip started: pictures keep their places in it, and it slides by whole frames, so each picture loads once.
+  const [origin] = useState(frame);
+  const reach = (LOUPE_PICTURES - 1) / 2 + LOUPE_SPARE;
+  const sheets = sheet && sheet.fps === fps ? sheet : undefined;
+  const pictures = [];
+  for (let f = Math.max(0, frame - reach); f <= Math.min(last, frame + reach); f++) {
     const edge = snapTime(f / fps, edges, .5 / fps) !== undefined;
-    ticks.push(<i key={f} className={`${f % Math.round(fps) === 0 ? "is-second" : ""}${edge ? " is-edge" : ""}`} style={{ left: `${share(f)}%` }} />);
+    const second = f % Math.round(fps) === 0;
+    let still: ReactNode = null;
+    if (sheets) {
+      const first = Math.floor(f / LOUPE_SHEET) * LOUPE_SHEET;
+      const count = Math.min(LOUPE_SHEET, last - first + 1);
+      const src = sheets.url(Array.from({ length: count }, (_, i) => first + i));
+      still = <img src={src} alt="" draggable={false} decoding="async" style={{ width: `${count * 100}%`, left: `${(first - f) * 100}%` }} />;
+    } else if (frameAt) still = <QueuedImg src={frameAt(f / fps, true)} alt="" draggable={false} decoding="async" />;
+    pictures.push(<span key={f} className={`timeline-range-loupe-picture${f === frame ? " is-now" : ""}`} data-frame={f}
+      style={{ left: (f - origin) * LOUPE_PICTURE_PX }}>
+      <span className="timeline-range-loupe-still">{still}</span>
+      <i className={`timeline-range-loupe-tick${second ? " is-second" : ""}${edge ? " is-edge" : ""}`} />
+      {second && <small>{playbackClock(f / fps).replace(/\.\d+$/, "")}</small>}
+    </span>);
   }
-  const pictures = Array.from({ length: LOUPE_PICTURES }, (_, i) => first + i * LOUPE_STEP_FRAMES);
-  const now = share(frame);
-  return <span className="timeline-range-loupe" role="status" style={{ left: `clamp(var(--loupe-half), ${at}%, calc(100% - var(--loupe-half)))` }}>
-    <span className="timeline-range-loupe-frame" style={{ aspectRatio: pictureAspect }}>
-      {frameAt && <img key={frame} src={frameAt(frame / fps, true)} alt="" draggable={false} decoding="async" />}
+  return <span className="timeline-range-loupe" role="status" data-inside={inside}
+    style={{ left: `clamp(var(--loupe-half), ${at}%, calc(100% - var(--loupe-half)))` } as CSSProperties}>
+    <span className="timeline-range-loupe-head"><b>{playbackClock(time)}</b>{snapped && <small>On an edit’s edge</small>}</span>
+    <span className="timeline-range-loupe-row" style={{ "--picture-height": `${LOUPE_PICTURE_PX / pictureAspect}px` } as CSSProperties}>
+      <span className="timeline-range-loupe-film" style={{ transform: `translateX(${(origin - frame) * LOUPE_PICTURE_PX - LOUPE_PICTURE_PX / 2}px)` }}>{pictures}</span>
+      <i className="timeline-range-loupe-now" />
     </span>
-    <span className="timeline-range-loupe-head"><b>{playbackClock(time)}</b><small>{snapped ? "On an edit’s edge" : "Frame steps"}</small></span>
-    <span className="timeline-range-loupe-row" data-inside={inside} style={{ "--now": `${now}%` } as CSSProperties}>
-      {pictures.map(f => <span key={f} className="timeline-range-loupe-picture" style={{ aspectRatio: pictureAspect }}>
-        {frameAt && f >= 0 && <QueuedImg src={frameAt(f / fps, true)} alt="" draggable={false} decoding="async" />}
-      </span>)}
-      <span className="timeline-range-loupe-ticks">{ticks}</span>
-      <i className="timeline-range-loupe-now" style={{ left: `${now}%` }} />
-    </span>
+    <span className="timeline-range-loupe-hint">Drag to move a frame at a time · let go to set</span>
   </span>;
 }

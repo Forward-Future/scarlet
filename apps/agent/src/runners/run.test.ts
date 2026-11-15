@@ -1,7 +1,10 @@
+import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { windowsAclShell } from "../private-files.js";
 import { runClaude } from "./claude.js";
 import { runCodex } from "./codex.js";
 import { runGemini } from "./gemini.js";
@@ -26,13 +29,63 @@ exit "\${FAKE_CODE:-0}"
 
 const mcp = { command: "node", args: ["/scarlet/mcp/cli.js"], env: { SCARLET_SERVER: "http://localhost:4000", SCARLET_TOKEN: "agent-token" } };
 
+// The same stand-in in Node, installed on Windows as npm installs each CLI: a .cmd shim beside its package. The shim
+// only fails. Scarlet starts the package's own entry with Node, so the request never passes through cmd.exe.
+const FAKE_NODE = `import { readFileSync, writeFileSync } from "node:fs";
+const dir = process.env.FAKE_DIR, args = process.argv.slice(2), NL = String.fromCharCode(10);
+writeFileSync(dir + "/args", args.map(a => a + NL).join(""));
+const input = [];
+for await (const chunk of process.stdin) input.push(chunk);
+writeFileSync(dir + "/stdin", Buffer.concat(input));
+writeFileSync(dir + "/server", process.env.SCARLET_SERVER ?? "");
+args.forEach((a, i) => { if (args[i - 1] === "--output-last-message" && process.env.FAKE_LAST) writeFileSync(a, process.env.FAKE_LAST); });
+process.stdout.write(readFileSync(dir + "/out"));
+if (process.env.FAKE_ERR) process.stderr.write(process.env.FAKE_ERR + NL);
+if (process.env.FAKE_SLEEP) await new Promise(r => setTimeout(r, Number(process.env.FAKE_SLEEP) * 1000));
+process.exitCode = Number(process.env.FAKE_CODE ?? 0);
+`;
+const NPM_PACKAGES = { claude: "@anthropic-ai/claude-code", codex: "@openai/codex", gemini: "@google/gemini-cli" } as const;
+
+/**
+ * Who can open a file: its permission bits on POSIX, and on Windows each access rule on it, by account, rights and
+ * kind. A private file is the current user's alone.
+ */
+const OWNER_ONLY = process.platform === "win32" ? ["current-user:FullControl:Allow"] : ["0600"];
+async function whoCanOpen(path: string): Promise<string[]> {
+  if (process.platform !== "win32") return [((await stat(path)).mode & 0o777).toString(8).padStart(4, "0")];
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    "$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User",
+    "$acl=[System.IO.File]::GetAccessControl($env:SCARLET_CHECKED_FILE)",
+    "$acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object {" +
+      " $who = if ($_.IdentityReference -eq $me) { 'current-user' } else { $_.IdentityReference.Value };" +
+      " $who + ':' + $_.FileSystemRights + ':' + $_.AccessControlType }",
+  ].join(";");
+  const shell = windowsAclShell();
+  const { stdout } = await promisify(execFile)(shell.executable, ["-NoProfile", "-NonInteractive", "-Command", script], {
+    windowsHide: true, env: { ...shell.env, SCARLET_CHECKED_FILE: path },
+  });
+  return stdout.split(/\r?\n/).filter(Boolean);
+}
+
 let root: string;
 let bin: string;
+const bins = new Map<unknown, string>();
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "scarlet-run-"));
   bin = join(root, "fake-cli");
   await writeFile(bin, FAKE_CLI);
   await chmod(bin, 0o755);
+  if (process.platform === "win32") {
+    for (const [name, pkg] of Object.entries(NPM_PACKAGES)) {
+      const dir = join(root, "npm", "node_modules", ...pkg.split("/"));
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "package.json"), JSON.stringify({ name: pkg, bin: { [name]: "cli.mjs" } }));
+      await writeFile(join(dir, "cli.mjs"), FAKE_NODE);
+      await writeFile(join(root, "npm", `${name}.cmd`), "@echo off\r\nexit /b 1\r\n");
+    }
+    bins.set(runClaude, join(root, "npm", "claude.cmd")).set(runCodex, join(root, "npm", "codex.cmd")).set(runGemini, join(root, "npm", "gemini.cmd"));
+  }
 });
 afterAll(async () => {
   await rm(root, { recursive: true, force: true });
@@ -61,7 +114,7 @@ async function run(runner: RunAgentFn, fake: Fake, opts: Partial<RunAgentOptions
     instruction: "Make the first cut",
     cwd,
     mcp,
-    bin,
+    bin: bins.get(runner) ?? bin,
     onEvent: (ev) => events.push(ev),
     env: {
       PATH: process.env.PATH,
@@ -84,7 +137,7 @@ const claudeQuestion = [
   '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"q1","content":"Question posted"}]}}',
 ];
 
-describe.skipIf(process.platform === "win32")("runClaude", { timeout: 20_000 }, () => {
+describe("runClaude", { timeout: 20_000 }, () => {
   it("writes its private control files, sends the request on stdin and reports the result with its session and tokens", async () => {
     const { result, events, cwd, args, stdin } = await run(runClaude, {
       lines: [
@@ -104,7 +157,7 @@ describe.skipIf(process.platform === "win32")("runClaude", { timeout: 20_000 }, 
     expect(await readFile(join(cwd, ".scarlet", "system.md"), "utf8")).toBe("SYS");
     // The MCP config holds the engine token.
     expect(JSON.parse(await readFile(join(cwd, ".scarlet", "mcp.json"), "utf8")).mcpServers.scarlet.env.SCARLET_TOKEN).toBe("agent-token");
-    expect((await stat(join(cwd, ".scarlet", "mcp.json"))).mode & 0o777).toBe(0o600);
+    expect(await whoCanOpen(join(cwd, ".scarlet", "mcp.json"))).toEqual(OWNER_ONLY);
   });
 
   it("takes the last messages as the summary and their tokens as the usage when the CLI exits cleanly without a result line", async () => {
@@ -154,6 +207,50 @@ describe.skipIf(process.platform === "win32")("runClaude", { timeout: 20_000 }, 
     expect(events.map((e) => e.type)).toEqual(["log", "question"]);
   });
 
+  it("fails a run whose Scarlet MCP server failed to start, and stops the CLI instead of letting it write without tools", async () => {
+    const mcpFailed = "Scarlet's MCP server failed to start, so Claude Code had no editing tools.";
+    // Recorded from claude 2.1.325: the server failed, and Claude answered without tools and called it a success.
+    const failed = '{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-4-1","mcp_servers":[{"name":"scarlet","status":"failed","source":"dynamic"}]}';
+    const success = '{"type":"result","subtype":"success","is_error":false,"result":"I can\'t reach the project\'s tools."}';
+    const { result, events } = await run(runClaude, { lines: [failed, success] });
+    expect(result).toMatchObject({ ok: false, error: mcpFailed, summary: "I can't reach the project's tools.", exitCode: 0, sessionId: "s1" });
+    expect(result).not.toHaveProperty("aborted");
+    expect(result.resumeFailed).toBeUndefined();
+    expect(events[1]).toMatchObject({ type: "error", text: "Scarlet MCP server status: failed" });
+
+    // Nothing useful can follow, so the CLI is stopped instead of left to write for minutes.
+    const started = Date.now();
+    const stopped = await run(runClaude, { lines: [failed, claudeText("m1", "Writing it all out.")], sleep: 30 });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(stopped.result).toMatchObject({ ok: false, error: mcpFailed });
+    expect(stopped.result).not.toHaveProperty("aborted");
+    expect(stopped.result).not.toHaveProperty("timedOut");
+
+    // The server's failure is the cause, whatever the CLI made of it afterwards.
+    expect((await run(runClaude, { lines: [failed, '{"type":"result","subtype":"error_max_turns","is_error":true,"result":"Ran out of turns."}'] })).result.error).toBe(mcpFailed);
+    expect((await run(runClaude, { lines: [failed], code: 3 })).result.error).toBe(mcpFailed);
+
+    // A resumed session is the same.
+    const resumed = await run(runClaude, { lines: [failed, success] }, { resumeSession: "s1" });
+    expect(resumed.result).toMatchObject({ ok: false, error: mcpFailed, sessionId: "s1" });
+    expect(resumed.result.resumeFailed).toBeUndefined();
+
+    // A question it posted is still a question, and a cancel is still a cancel.
+    expect((await run(runClaude, { lines: [failed, ...claudeQuestion], sleep: 30 })).result).toMatchObject({ ok: true, question: "Keep the cold open?", questionPosted: true });
+    // The cancel lands just after the first line, before the stop, once the stand-in has started its sleep: a group
+    // kill sent while the shell is still forking can miss the new process, which then holds the output open.
+    const controller = new AbortController();
+    const cancelled = await run(runClaude, { lines: [failed], sleep: 30 }, { signal: controller.signal, onEvent: () => setTimeout(() => controller.abort(), 100) });
+    expect(cancelled.result).toMatchObject({ ok: false, error: "cancelled", aborted: true });
+
+    // Only a failed server fails the run: one still starting, or not listed at all, keeps today's result.
+    const noChange = '{"type":"result","subtype":"success","is_error":false,"result":"Nothing to change."}';
+    for (const status of ["connected", "pending", undefined]) {
+      const init = JSON.stringify({ type: "system", subtype: "init", session_id: "s1", mcp_servers: status ? [{ name: "scarlet", status }] : [] });
+      expect((await run(runClaude, { lines: [init, noChange] })).result, String(status)).toMatchObject({ ok: true, error: undefined, summary: "Nothing to change." });
+    }
+  });
+
   it("tells a run that went silent from one at its time cap and one the host cancelled", async () => {
     const stalled = await run(runClaude, { lines: [claudeInit, claudeText("m1", "Reading.")], sleep: 30 }, { stallMs: 1500 });
     expect(stalled.result).toMatchObject({ ok: false, error: "stalled", timedOut: true, stalled: true, summary: "Reading.", sessionId: "s1" });
@@ -177,7 +274,7 @@ describe.skipIf(process.platform === "win32")("runClaude", { timeout: 20_000 }, 
   });
 });
 
-describe.skipIf(process.platform === "win32")("runCodex", { timeout: 20_000 }, () => {
+describe("runCodex", { timeout: 20_000 }, () => {
   const message = (text: string) => JSON.stringify({ type: "item.completed", item: { id: "i1", type: "agent_message", text } });
   const completed = '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":5}}';
 
@@ -243,7 +340,7 @@ describe.skipIf(process.platform === "win32")("runCodex", { timeout: 20_000 }, (
   });
 });
 
-describe.skipIf(process.platform === "win32")("runGemini", { timeout: 20_000 }, () => {
+describe("runGemini", { timeout: 20_000 }, () => {
   const init = '{"type":"init","session_id":"g1","model":"gemini-2.5-pro"}';
 
   it("writes its settings, policy and prompt into the task folder and reports the result with its tokens", async () => {
@@ -317,7 +414,7 @@ describe("runAgent", () => {
     expect(await runAgent({ ...base, model: "opus", effort: "" })).toEqual(refused);
   });
 
-  it.skipIf(process.platform === "win32")("lets through the model names the CLIs really use", async () => {
+  it("lets through the model names the CLIs really use", async () => {
     for (const model of ["opus", "claude-opus-4-1[1m]", "gpt-5.1-codex", "us.anthropic.claude-sonnet-4-5:0", "models/gemini-2.5-pro", "org/model@v2+exp"]) {
       // Past validation the fake CLI is started, and fails because it doesn't exist.
       const result = await runAgent({ ...base, model, effort: "high", serviceTier: "fast" });

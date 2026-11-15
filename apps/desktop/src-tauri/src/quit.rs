@@ -81,6 +81,30 @@ fn quit_now(app: &AppHandle) {
     app.exit(0);
 }
 
+/// Return the editor's choice if ending this session would stop work.
+pub async fn confirm_if_busy(app: &AppHandle) -> bool {
+    let Some(state) = app.try_state::<AppState>() else { return true };
+    let engine = state.engine.status();
+    let said = match (engine.url.as_deref(), engine.token.as_deref()) {
+        (Some(url), Some(token)) => under_way(url, token).await,
+        _ => None,
+    };
+    let running_here = state.host.status().await.running.len();
+    let Some(asked) = warning(&what_would_stop(said, running_here)) else { return true };
+    log::info!("asking before quitting: {asked}");
+    let dialog = app.dialog().message(asked).title("Quit Scarlet?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom("Quit".into(), "Cancel".into()));
+    #[cfg(windows)]
+    let dialog = match app.get_webview_window("main") {
+        Some(window) => dialog.parent(&window),
+        None => dialog,
+    };
+    let (answer, received) = tokio::sync::oneshot::channel();
+    dialog.show(move |yes| { let _ = answer.send(yes); });
+    received.await.unwrap_or(false)
+}
+
 /// Close the window or quit: ask first when that would stop work, and quit at once when it wouldn't.
 pub fn ask_before_quitting(app: &AppHandle) {
     static ASKING: AtomicBool = AtomicBool::new(false);
@@ -90,42 +114,11 @@ pub fn ask_before_quitting(app: &AppHandle) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let Some(state) = app.try_state::<AppState>() else {
+        if confirm_if_busy(&app).await {
             quit_now(&app);
-            return;
-        };
-        let engine = state.engine.status();
-        let said = match (engine.url.as_deref(), engine.token.as_deref()) {
-            (Some(url), Some(token)) => under_way(url, token).await,
-            _ => None,
-        };
-        let running_here = state.host.status().await.running.len();
-        let Some(asked) = warning(&what_would_stop(said, running_here)) else {
-            quit_now(&app);
-            return;
-        };
-        log::info!("asking before quitting: {asked}");
-        let quit = app.clone();
-        let dialog = app
-            .dialog()
-            .message(asked)
-            .title("Quit Scarlet?")
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom("Quit".into(), "Cancel".into()));
-        // On Windows a question with no owner can open behind the window it is about.
-        #[cfg(windows)]
-        let dialog = match app.get_webview_window("main") {
-            Some(window) => dialog.parent(&window),
-            None => dialog,
-        };
-        dialog.show(move |yes| {
-            if yes {
-                log::info!("quitting with work under way, as the editor chose");
-                quit_now(&quit);
-            } else {
-                ASKING.store(false, Ordering::SeqCst);
-            }
-        });
+        } else {
+            ASKING.store(false, Ordering::SeqCst);
+        }
     });
 }
 

@@ -106,11 +106,15 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
   let timedOut = false;
   let aborted = false;
   let killed = false;
+  let settled = false;
   let stderr = "";
   const kill = () => {
-    if (killed || !child.pid) return;
+    // Once the CLI and its output are gone, the system may give its process id to another program.
+    if (killed || settled || !child.pid) return;
     killed = true;
     stopCliTree(child);
+    // A process the CLI was starting as the kill went out can miss it, and keep the output open: send it again.
+    setTimeout(() => { if (!settled) stopCliTree(child); }, 1000).unref();
   };
   const timer = opts.timeoutMs === undefined ? undefined : setTimeout(() => {
     timedOut = true;
@@ -169,7 +173,6 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
   child.stderr!.on("data", addStderr);
 
   const done = new Promise<SpawnOutcome>((resolve) => {
-    let settled = false;
     const finish = (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
       settled = true;

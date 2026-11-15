@@ -86,15 +86,19 @@ jobs:
           engine=$(grep -E '/scarlet-engine$' <<< "$payload")
           resources=$(dirname "$engine")
           [[ "$resources" == /usr/lib/* ]]
-          for executable in "$engine" "$resources/whisper-cli" "$resources/whisper-cpu/whisper-cli" /usr/bin/scarlet-desktop; do
+          for executable in "$engine" "$resources/whisper-cli" "$resources/whisper-cpu/whisper-cli" \
+              "$resources/chrome-headless-shell/chrome-headless-shell" /usr/bin/scarlet-desktop; do
             test -s "$executable" && test -x "$executable"
           done
           for license in scarlet.txt uhm.txt uhm-model-license.txt runtime/node.txt runtime/rust.txt runtime/javascript.txt \
               runtime/rust-standard-library.html runtime/whisper-audio-dependencies.txt runtime/sherpa-dependencies.txt \
-              runtime/speaker-onnxruntime-1.28.2-third-party.txt; do
+              runtime/speaker-onnxruntime-1.28.2-third-party.txt runtime/chrome-headless-shell.txt; do
             test -s "$resources/licenses/$license"
           done
           if grep -Eq '/(ffmpeg|ffprobe)$' <<< "$payload"; then exit 1; fi
+          # The bundled browser's sandbox needs its AppArmor profile, which the package loads on installation.
+          test -s /etc/apparmor.d/scarlet-chrome-headless-shell
+          grep -q "$resources/chrome-headless-shell/chrome-headless-shell " /etc/apparmor.d/scarlet-chrome-headless-shell
           echo "engine_dir=$resources" >> "$GITHUB_OUTPUT"
           mkdir -p "$RUNNER_TEMP/linux-installer"
           cp "${debs[0]}" "$RUNNER_TEMP/linux-installer/Scarlet-$version-Ubuntu-24.04-amd64.deb"

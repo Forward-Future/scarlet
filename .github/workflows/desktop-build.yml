@@ -6,6 +6,9 @@ on:
       release:
         required: true
         type: boolean
+      platform_signing:
+        type: boolean
+        default: true
       early_access:
         type: boolean
         default: false
@@ -43,6 +46,7 @@ jobs:
     env:
       EARLY_ACCESS: ${{ inputs.early_access }}
       RELEASE_VERSION: ${{ inputs.version }}
+      SIGN_UPDATES: ${{ inputs.release }}
       BUNDLE: apps/desktop/src-tauri/target/${{ matrix.triple }}/release/bundle
     steps:
       - uses: actions/checkout@v4
@@ -107,6 +111,10 @@ jobs:
       - name: Fetch external media tools for the smoke test
         run: node apps/desktop/scripts/fetch-ffmpeg.mjs --target ${{ matrix.triple }}
 
+      # Bundled in every package. The installer build checks it again before bundling.
+      - name: Fetch the headless browser for motion graphics
+        run: node apps/desktop/scripts/fetch-chrome.mjs --target ${{ matrix.triple }}
+
       # Windows also gets a Vulkan whisper-cli for the GPU, built against the SDK's headers, loader and glslc.
       - name: Install the Vulkan SDK
         if: runner.os == 'Windows'
@@ -132,6 +140,9 @@ jobs:
             archs=$(lipo -archs "$f"); echo "$f: $archs"
             [[ " $archs " == *" ${{ matrix.arch }} "* ]] || { echo "::error::$f is $archs, expected ${{ matrix.arch }}"; exit 1; }
           done
+          chrome=apps/desktop/src-tauri/binaries/chrome-headless-shell/chrome-headless-shell
+          [[ $(lipo -archs "$chrome") == "${{ matrix.arch }}" ]] || { echo "::error::$chrome is not ${{ matrix.arch }}"; exit 1; }
+          "$chrome" --version
 
       - name: Rust tests
         working-directory: apps/desktop/src-tauri
@@ -147,7 +158,17 @@ jobs:
       # Source and local-main builds keep their local updater. Only the public packages get a release feed.
       - name: Select the public app's update feed
         shell: bash
-        run: echo "SCARLET_RELEASE_CHANNEL=${{ inputs.early_access && 'early-access' || 'stable' }}" >> "$GITHUB_ENV"
+        run: |
+          echo "SCARLET_RELEASE_CHANNEL=${{ inputs.early_access && 'early-access' || 'stable' }}" >> "$GITHUB_ENV"
+          if [ "$EARLY_ACCESS" != true ]; then
+            node --input-type=commonjs -e '
+              const fs = require("node:fs");
+              const file = "./apps/desktop/src-tauri/tauri.conf.json";
+              const config = require(file);
+              config.plugins = { ...config.plugins, ...require("./apps/desktop/src-tauri/tauri.stable.conf.json").plugins };
+              fs.writeFileSync(file, JSON.stringify(config));
+            '
+          fi
 
       - name: Build installers
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # action-v0.6.2
@@ -166,6 +187,20 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP"
           for f in "$APP"/Contents/MacOS/*; do codesign -dv "$f" 2>&1 | grep -E "^(Identifier|Format|flags|Signature)" | sed "s|^|$(basename "$f"): |"; done
           echo "engine entitlements:"; codesign -d --entitlements - "$APP/Contents/MacOS/scarlet-engine"
+          # The headless browser is sealed in the app's signature above. A release signs it with the Developer ID and checks that
+          # separately; a check build leaves Google's own signature on it, and the next step runs it from the app.
+
+      - name: Render a page in the packaged headless browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = macOS ]; then
+            chrome="$BUNDLE/macos/$DESKTOP_PRODUCT.app/Contents/Resources/chrome-headless-shell/chrome-headless-shell"
+          else
+            chrome="apps/desktop/src-tauri/target/${{ matrix.triple }}/release/chrome-headless-shell/chrome-headless-shell.exe"
+          fi
+          page=$("$chrome" --headless --dump-dom 'data:text/html,<p>rendered</p>')
+          [[ "$page" == *"<p>rendered</p>"* ]] || { echo "::error::The packaged headless browser returned: $page"; exit 1; }
 
       - name: Stage external media tools for the package smoke test
         shell: bash
@@ -189,7 +224,7 @@ jobs:
           node apps/desktop/scripts/smoke-engine.mjs "apps/desktop/src-tauri/target/${{ matrix.triple }}/release" "$env:RUNNER_TEMP/scarlet-media-tools"
 
       - name: Sign and notarize the Mac release
-        if: inputs.release && runner.os == 'macOS'
+        if: inputs.release && inputs.platform_signing && runner.os == 'macOS'
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -201,7 +236,7 @@ jobs:
         run: bash .github/scripts/sign-macos-release.sh "${{ matrix.triple }}"
 
       - name: Sign the Windows application and installers
-        if: inputs.release && runner.os == 'Windows'
+        if: inputs.release && inputs.platform_signing && runner.os == 'Windows'
         shell: pwsh
         env:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -241,6 +276,26 @@ jobs:
         if: ${{ !inputs.early_access }}
         # On Windows, native pwsh starts the engine with the same environment used by the desktop shell.
         run: node apps/desktop/scripts/smoke-engine-public.mjs "${{ runner.temp }}/scarlet-installers" "${{ runner.temp }}/scarlet-media-tools"
+
+      - name: Sign the verified update packages for this version
+        if: inputs.release
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        run: |
+          set -euo pipefail
+          : "${TAURI_SIGNING_PRIVATE_KEY:?Set the updater signing key in the protected release environment}"
+          packages="$RUNNER_TEMP/scarlet-installers"
+          if [ "$RUNNER_OS" = Windows ]; then
+            files=("$packages"/*-Setup.exe "$packages"/*.msi)
+          else
+            files=("$packages"/*.app.tar.gz)
+          fi
+          for package in "${files[@]}"; do
+            pnpm --filter @scarlet/desktop exec tauri signer sign --app-version "$RELEASE_VERSION" "$package" > /dev/null
+            test -s "$package.sig"
+          done
 
       - name: Download the previous Early Access installer for the upgrade test
         if: inputs.early_access

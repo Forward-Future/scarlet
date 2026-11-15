@@ -32,6 +32,8 @@ import type {
   ServerSettings,
   Skill,
   SkillVersion,
+  GraphicTemplateSummary,
+  TaskAttachment,
   RecordTaskUsageRequest,
   Task,
   TaskEvent,
@@ -643,6 +645,26 @@ export class ScarletClient {
   }
   hosts() {
     return this.get<{ hosts: AgentHost[] }>("/hosts");
+  }
+
+  // Graphic templates, picked in the message box with $name
+  listTemplates() {
+    return this.get<{ templates: GraphicTemplateSummary[] }>("/templates");
+  }
+  /** The template drawn with its sample fields on a transparent picture. `version` (its previewVersion) keeps a cached image from going stale. */
+  templatePreviewUrl(templateId: string, version?: string) {
+    const preview = this.fileUrl(`/templates/${apiPathId(templateId)}/preview`);
+    return version ? `${preview}${preview.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}` : preview;
+  }
+
+  // Attachments: files the editor drops on the message box, which ride on the next request
+  /** A file's bytes, as pasted or dropped in a browser, or a path on this machine, as the desktop app's drops give. */
+  uploadAttachment(projectId: string, file: Blob | { path: string }, name?: string) {
+    const path = `/projects/${apiPathId(projectId)}/attachments`;
+    if (!(file instanceof Blob)) return this.post<{ attachment: TaskAttachment }>(path, { path: file.path });
+    const fd = new FormData();
+    fd.append("file", file, name ?? (typeof File !== "undefined" && file instanceof File ? file.name : "attachment"));
+    return this.post<{ attachment: TaskAttachment }>(path, fd);
   }
 
   // Skills

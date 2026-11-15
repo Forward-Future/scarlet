@@ -221,7 +221,8 @@ export function summarizeProject(project: Project, timeline: Timeline | null): s
       m.fps ? `${m.fps} fps` : "",
       m.width && m.height ? `${m.width}x${m.height}` : "",
       m.hasAudio ? "audio" : "",
-      m.transcriptId ? "transcript" : "no transcript",
+      m.kind === "graphic" ? "" : m.transcriptId ? "transcript" : "no transcript",
+      m.graphic ? `drawn from ${m.graphic.source}${m.graphic.templateId ? ` (template ${m.graphic.templateId})` : ""}` : "",
     ]
       .filter(Boolean)
       .join(", ");

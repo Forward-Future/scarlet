@@ -20,13 +20,13 @@ import { createHash } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { readArtifact, writeArtifact } from "./workspace-files.js";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod/v3";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { boundedRippleOps, rippleDrift, cutAnchorOn, cutScope, selectedRange, flattenWords, searchTranscript, taskDialogueOperation, agentCapabilities, DEFAULT_RESULT_CHARS, type AgentCapabilities, JOIN_WORD_SECONDS, fuzzySearchTranscript, apiPathId, disabledEditingTools, type EditingTools, type ScarletToolName,
   CrossfadeFrames, SheetOptions, SheetRequest, CutReviewOptions, SourceAudioOptions, SoundPictureOptions, type InspectionResult, type InspectionWindow, type DialogueDetections, type PictureActivityWindow, ScarletApiError, SuggestLearningRequest, TaskSkillDraft, skillTaskTarget, skillEditTarget, type ScarletClient } from "@scarlet/shared";
-import type { RepeatEvidence, AgentId, DialogueScanPage, ProjectDetail, ProposeChangeRequest, Skill, Task, TaskEvent, WaveformResponse } from "@scarlet/shared";
+import type { GraphicRenderResponse, GraphicTemplate, GraphicTemplateSummary, RepeatEvidence, AgentId, DialogueScanPage, ProjectDetail, ProposeChangeRequest, Skill, Task, TaskEvent, WaveformResponse } from "@scarlet/shared";
 import type { Author, Change, MediaAsset, TimeRange } from "@scarlet/timeline";
 import {
   applyOps,
@@ -79,7 +79,7 @@ import { toolAnnotations } from "./annotations.js";
 import { MediaPreparing, describeError, errorResult, errorText, formatZodError, json, noteUnmeasured, text, toolRefusal, unavailable, unmeasured, unmeasuredLine, type ToolResult } from "./tool-result.js";
 import { registerPerception } from "./perception-tools.js";
 import { sourceRangeToTimeline, sourceToTimeline, timelineWords } from "./timeline-perception.js";
-import { KEPT_PAUSE_SECONDS, partLeftovers } from "./dialogue-leftovers.js";
+import { PAUSE_FLOOR_SECONDS, partLeftovers } from "./dialogue-leftovers.js";
 import { GAP_SECONDS, QUIET_PHRASE_CONTEXT, describeGapSound, gapSound, quietPhrases, speakingLevel, type GapLevels, type GapSound, type QuietPhrase } from "./gap-sound.js";
 import { keptSilences, pictureReading, pictureWindows, silences, type Silence } from "./silences.js";
 import { levelProfile } from "./media-profile.js";
@@ -940,13 +940,13 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   tool(
     "project_get",
-    "Get the project: settings (fps, width x height, aspect), every media asset (id, name, kind, duration s, fps, size, hasAudio, hasTranscript, provenance of generated assets), the head version, the edit's duration, and a per-track summary. For an assigned task, editContext contains the editor’s recorded selection, change or cut index, and note IDs when supplied. Media ids are what transcript, waveform and clip tools take as mediaId. For clip-level detail use timeline_get.",
+    "Get the project: settings (fps, width x height, aspect), every media asset (id, name, kind, duration s, fps, size, hasAudio, hasTranscript, provenance of generated assets, and for a graphic Scarlet drew the page it was drawn from, relative to the project's folder), the head version, the edit's duration, and a per-track summary. For an assigned task, editContext contains the editor’s recorded selection, change or cut index, and note IDs when supplied. Media ids are what transcript, waveform and clip tools take as mediaId. For clip-level detail use timeline_get.",
     {},
     async () => {
       const detail: ProjectDetail = await getProject();
       const media = detail.project.media.map((m) => ({
         id: m.id, name: m.name, kind: m.kind, duration: m.duration, fps: m.fps, width: m.width, height: m.height,
-        hasAudio: m.hasAudio, hasTranscript: Boolean(m.transcriptId), ...(m.provenance && { provenance: m.provenance }),
+        hasAudio: m.hasAudio, hasTranscript: Boolean(m.transcriptId), ...(m.provenance && { provenance: m.provenance }), ...(m.graphic && { graphic: m.graphic }),
       }));
       const tl = detail.timeline;
       lastTimeline = tl && tl.version !== "draft" ? tl : undefined;
@@ -1627,7 +1627,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   };
   const PauseRef = {
     afterWord: z.number().int().nonnegative().optional().describe("Pause reference, with mediaId: the transcript_get index of the word the pause follows. Scarlet trims the pause between it and the next word, both edges in the measured quiet."),
-    leave: z.number().finite().min(0.05).max(10).optional().describe(`With afterWord: seconds the pause should still play, word to word, default ${PAUSE_BEAT} s.`),
+    leave: z.number().finite().min(0.05).max(10).optional().describe(`Seconds of pause that should still play, word to word, as the editor hears it. Required with afterWord: how long a pause plays is yours to judge, by the delivery around it and the pace the skill asks for. Optional with fromWord/toWord: the pause the join plays, which is ${PAUSE_BEAT} s when omitted.`),
   };
   let checkedVersion: string | undefined;
   const checkedRepeats = new Map<string, RepeatEvidence>();
@@ -1644,11 +1644,11 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     }) };
   }
   tool("dialogue_check_repeats",
-    "Check what the audible dialogue plays across the current timeline, including kept takes and joins. Give its exact version. The independent speech reading returns repeated phrases, both occurrences in timeline seconds, and their surrounding words. Use dialogue_apply_cuts with removeRepeat to remove either measured occurrence listed under removable. The save checks playback again. Keep an intentional repeat by passing its measured id and a short editorial reason. Kept decisions belong to this pass. offset pages through the outstanding pairs, 25 at a time. The same reading hears each played join, letter by letter from the sound rather than the transcript: `joins` lists one whose edge cuts through a kept word (issue clipped: heard is what plays, expected the transcript's word) or plays a sound outside the kept words (issue fragment: a leftover of a removed take, a sigh, a breath, with keptWord, the first or last kept word, which plays whole, and keptWordAt where it starts or ends), with the side (out = before the join, in = after) and where it starts in the recording. Move that edge before you finish: the editor hears it. A clipped word needs the edge moved out to take it in whole; a fragment needs the edge moved past it, toward keptWordAt.",
+    "Check what the audible dialogue plays across the current timeline, including kept takes and joins. Give its exact version. The independent speech reading returns repeated phrases, both occurrences in timeline seconds, and their surrounding words. Use dialogue_apply_cuts with removeRepeat to remove either measured occurrence listed under removable. The save checks playback again. Keep an intentional repeat by passing its measured id and a short editorial reason. Kept decisions belong to this pass. offset pages through the outstanding pairs, 25 at a time. The same reading hears each played join, letter by letter from the sound rather than the transcript: `joins` lists one whose edge cuts through a kept word (issue clipped: heard is what plays, expected the transcript's word) or plays a sound outside the kept words (issue fragment: a leftover of a removed take, a sigh, a breath, with keptWord, the first or last kept word, which plays whole, and keptWordAt where it starts or ends), with the side (out = before the join, in = after) and where it starts in the recording. Move that edge before you finish: the editor hears it. A clipped word needs the edge moved out to take it in whole; a fragment needs the edge moved past it, toward keptWordAt. `unheardJoins` counts, per recording, the joins with a side in a language this reading can't hear letter by letter, between from and to in timeline seconds, so it checked nothing there: measure them with timeline_join_audit from/to.",
     { version: z.string(), keep: z.array(z.object({ id: z.string(), reason: z.string().trim().min(1).max(300) })).max(100).optional(), offset: z.number().int().nonnegative().optional() },
     async ({ version, keep, offset }) => json(await checkRepeats(version, keep, offset)));
 
-  const cutCoordinates = `To have Scarlet place the edges, give mediaId and the first and last removed word indices (fromWord/toWord), or mediaId and the word before a pause (afterWord, with optional leave in seconds). Measured word edges leave up to ${AIR_AFTER_SPEECH} s after kept speech and ${AIR_BEFORE_SPEECH} s before it resumes. For edges you place yourself, give start/end in TIMELINE seconds. The edge check preserves that padding where those times are already quiet.`;
+  const cutCoordinates = `To have Scarlet place the edges, give mediaId and the first and last removed word indices (fromWord/toWord), or mediaId and the word before a pause (afterWord, with leave: the seconds it should still play). Measured word edges leave up to ${AIR_AFTER_SPEECH} s after kept speech and ${AIR_BEFORE_SPEECH} s before it resumes, or the pause you give as leave, split the same way. For edges you place yourself, give start/end in TIMELINE seconds. The edge check preserves that padding where those times are already quiet.`;
   const crossfadeFrames = CrossfadeFrames.optional()
     .describe("Total audio-only overlap at the new dialogue joins, in project frames. Zero or omitted makes a straight cut.");
   const repeatedPhrase = z.string().trim().min(1);
@@ -1768,7 +1768,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   const shown = <T>(thing: T, ...key: Parameters<typeof listing>) => { listed.add(listing(...key)); return thing; };
   /** Pauses and doubled words this part still plays once its cuts are out, on the version it was planned on. */
   async function passedLeftovers(tl: Timeline, kept: Array<{ start: number; end: number }>,
-    decisions: Array<{ start: number; end: number; review: boolean }>, range?: { start: number; end: number }) {
+    decisions: Array<{ start: number; end: number; review: boolean }>, range?: { start: number; end: number }, pausesFrom?: number) {
     const decided = [...decisions, ...kept];
     if (!decided.length) return { pauses: [], repeats: [], gaps: [] };
     const scope = range ?? { start: Math.min(...decided.map(d => d.start)), end: Math.max(...decided.map(d => d.end)) };
@@ -1780,7 +1780,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       if (words) transcripts.set(id, words);
     }
     // A range staged for review still plays until the editor approves it.
-    return partLeftovers(timelineWords(tl, transcripts, scope), decisions.filter(d => !d.review), kept, transcripts);
+    return partLeftovers(timelineWords(tl, transcripts, scope), decisions.filter(d => !d.review), kept, transcripts, Math.max(PAUSE_FLOOR_SECONDS, pausesFrom ?? 0));
   }
   /** The version a part continues on, read once however many lists are placed on it. */
   const continued = new Map<string, Promise<Timeline>>();
@@ -1840,10 +1840,11 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   }
 
   tool("dialogue_apply_cuts",
-    `Save your decisions on an assembled version: cut, review or keep ranges, sorted and nonoverlapping. ${cutCoordinates} Cut ranges apply together; review stages a range for the editor; keep or omission retains it. Scarlet measures each retake, filler, pause and quoted production edge. An edge on sound moves a few frames onto silence, or onto the lowest level between two words said in one breath, and applies; a larger move narrows the cut and stages it. A pause's edge moves onto the quiet beside it. A short piece between cuts with a transcript word at room-tone level returns quietKeptWord with nearby measured sound in source seconds. Footage between separate removals stays in the timeline. \`gate\` lists changes to the measured plan with their evidence. Its ranges describe placement before the engine rounds to project frames. The returned timelineEdits describe the saved edits. An optional quote must verify before anything is saved. Save a long pass in parts and continue on \`continueFrom\`. For a first dialogue pass, send at most ${FIRST_CUT_BATCH_SIZE} nearby cut or review decisions as soon as they are ready, with any keep or protected ranges they depend on. An applied cut whose edge sits within ${SPEECH_BESIDE_EDGE} s of the sound it removes is flagged for the editor to watch and hear, since the picture can show a word starting that the sound has not reached; the gate says so. What Scarlet changed on its own comes back with why: \`stagedForEditor\` (confident cuts that wait for the editor), \`onFrames\` (edges put on whole frames) and \`droppedFromReview\` (an earlier part's staged cuts whose footage a later edit broke up). For a requested crossfade, \`joinCrossfades\` reports how many joins were faded and why any stayed straight. The result also lists what this part still plays, each thing once per pass, at \`at\` on continueFrom: keptSilences (2 s or more without words that no decision covers), keptPauses (${KEPT_PAUSE_SECONDS} s or more, with the afterWord that trims an untouched one), repeatedWords (said twice in a row, atJoin when a cut made it; fromWord/toWord name the first) and unexplainedSound (speaking-level sound the transcript has no word for, often what is left of a take beside a cut). These are evidence, not decisions: a pause can be a beat, a repeat emphasis, a sound a breath. Ranges your previous part staged on that version join this part's review (carriedForward). Cuts already handed to the editor keep their passage and note (heldForReview). \`description\` is your one-sentence summary for the editor.`,
+    `Save your decisions on an assembled version: cut, review or keep ranges, sorted and nonoverlapping. ${cutCoordinates} Cut ranges apply together; review stages a range for the editor; keep or omission retains it. Scarlet measures each retake, filler, pause and quoted production edge. An edge on sound moves a few frames onto silence, or onto the lowest level between two words said in one breath, and applies; a larger move narrows the cut and stages it. A pause's edge moves onto the quiet beside it. A short piece between cuts with a transcript word at room-tone level returns quietKeptWord with nearby measured sound in source seconds. Footage between separate removals stays in the timeline. \`gate\` lists changes to the measured plan with their evidence. Its ranges describe placement before the engine rounds to project frames. The returned timelineEdits describe the saved edits. An optional quote must verify before anything is saved. Save a long pass in parts and continue on \`continueFrom\`. For a first dialogue pass, send at most ${FIRST_CUT_BATCH_SIZE} nearby cut or review decisions as soon as they are ready, with any keep or protected ranges they depend on. The gate reports an applied cut whose edge sits within ${SPEECH_BESIDE_EDGE} s of the sound it removes, since the picture can show a word starting that the sound has not reached; whether that needs the editor is yours to judge. What Scarlet changed on its own comes back with why: \`stagedForEditor\` (confident cuts that wait for the editor), \`onFrames\` (edges put on whole frames) and \`droppedFromReview\` (an earlier part's staged cuts whose footage a later edit broke up). For a requested crossfade, \`joinCrossfades\` reports how many joins were faded and why any stayed straight. The result also lists what this part still plays, each thing once per pass, at \`at\` on continueFrom: keptSilences (2 s or more without words that no decision covers), keptPauses (the longest thirty of ${PAUSE_FLOOR_SECONDS} s or more, or from the length you give as pausesFrom, with the afterWord that trims an untouched one), repeatedWords (said twice in a row, atJoin when a cut made it; fromWord/toWord name the first) and unexplainedSound (speaking-level sound the transcript has no word for, often what is left of a take beside a cut). These are evidence, not decisions: a pause can be a beat, a repeat emphasis, a sound a breath. Ranges your previous part staged on that version join this part's review (carriedForward). Cuts already handed to the editor keep their passage and note (heldForReview). \`description\` is your one-sentence summary for the editor.`,
     { version: z.string(), description: z.string().min(1), crossfadeFrames, noteIds: z.array(z.string()).optional(),
       range: z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().positive() }).optional().describe("Requested TIMELINE range if only part of the edit is in scope"),
       only: z.enum(["pause", "filler", "retake", "coaching"]).optional().describe("For a request limited to one type of removal. Omit for a full dialogue pass."),
+      pausesFrom: z.number().finite().min(PAUSE_FLOOR_SECONDS).max(10).optional().describe("List in keptPauses the pauses this part still plays from this length in seconds, word to word. Yours to set from the pace the skill and the editor ask for; omit to see the longest ones"),
       cuts: z.array(z.object({ ...WordRef, ...PauseRef, start: z.number().finite().nonnegative().optional(), end: z.number().finite().positive().optional(),
         removeRepeat: z.object({ id: z.string(), occurrence: z.enum(["first", "second"]) }).optional().describe("For a retake, identify the occurrence heard by dialogue_check_repeats on this version. Scarlet places both edges using its measured words and waveform."),
         kind: z.enum(["pause", "filler", "retake", "coaching"]), decision: z.enum(["cut", "review", "keep"]),
@@ -1854,7 +1855,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
         reason: z.string().trim().min(1).describe("One short sentence for the editor about what they will hear or see"),
         check: z.string().trim().min(1).max(120).optional().describe("For a cut that applies: a few words naming a doubt the editor must settle by listening or looking. Marks the cut as needing them until they keep it; omit when nothing is in doubt") }))
         .describe("For a faint line that still plays, keptQuietPhrases returns mediaId and fromWord/toWord for use here, its position on continueFrom (at), and the phrase and neighboring speech levels in dBFS.") },
-    async ({ version, description, cuts: requested, noteIds, range, only, crossfadeFrames }) => {
+    async ({ version, description, cuts: requested, noteIds, range, only, crossfadeFrames, pausesFrom }) => {
       const operation = await dialogueOperation();
       if (ctx.taskId && operation === "first-cut" && requested.filter(c => c.decision !== "keep" && c.picture !== "protect").length > FIRST_CUT_BATCH_SIZE)
         throw new Error(`Save up to ${FIRST_CUT_BATCH_SIZE} nearby cut or review decisions in each first-pass batch, with their keep and protected ranges. Send the first settled group now. For the next group use source word references or map its positions on continueFrom with timeline_at.`);
@@ -1898,7 +1899,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       // Stretches without words this part still plays and leaves undecided, found before the edit moves.
       const undecided = only && only !== "pause" ? [] : await passedSilences(tl, plan.kept, all, range)
         .catch(without("failed to find the silences this part keeps", []));
-      const left = await passedLeftovers(tl, plan.kept, all, range)
+      const left = await passedLeftovers(tl, plan.kept, all, range, pausesFrom)
         .catch(without("failed to read what this part still plays", { pauses: [], repeats: [], gaps: [] }));
       await postEvent({ type: "log", text: "I’m applying the dialogue decisions to the timeline.", data: { kind: "editor_progress" } });
       const result = await client.submitDialogueCuts(ctx.projectId, { fromVersion: tl.version, description, cuts: all, range: scope, kept: plan.kept, crossfadeFrames,
@@ -2852,6 +2853,179 @@ ${OPS_DOC}`,
       );
       const { media } = await client.post<{ media: ProjectDetail["project"]["media"][number] }>(`/projects/${ctx.projectId}/media`, fd);
       return json(media);
+    },
+  );
+
+  // -- motion graphics -----------------------------------------------------
+
+  /** The page a harness with file tools wrote, and the files it links to by relative path. */
+  async function pageFromArtifact(path: string): Promise<{ html: string; assets: Array<{ name: string; data: Buffer<ArrayBuffer> }> }> {
+    const html = (await readArtifact(await artifactDir(), path)).toString("utf8");
+    const folder = dirname(path);
+    const assets: Array<{ name: string; data: Buffer<ArrayBuffer> }> = [];
+    const seen = new Set<string>();
+    for (const match of html.matchAll(/(?:\b(?:src|href)\s*=\s*["']|url\(\s*["']?)([^"')\s>#?]+)/gi)) {
+      const link = decodeURIComponent(match[1]!);
+      if (/^[a-z][a-z0-9+.-]*:/i.test(link) || link.startsWith("/") || link.startsWith("\\") || seen.has(link)) continue;
+      seen.add(link);
+      const data = await readArtifact(await artifactDir(), join(folder, link)).catch(() => undefined);
+      if (data) assets.push({ name: link, data });
+    }
+    return { html, assets };
+  }
+
+  const checkPictures = (checks: Array<{ time: number; jpeg?: string }>): ToolResult["content"] =>
+    checks.filter(c => c.jpeg).map(c => ({ type: "image" as const, mimeType: "image/jpeg", data: c.jpeg! }));
+
+  tool(
+    "graphic_render",
+    `Draw a motion graphic from a web page and add it to the project's media as a graphic with alpha, to place over the picture with timeline_propose (addClip of the returned mediaId on a video track above the footage; its clip can be shorter than the graphic). Send the page as html: a complete HTML document drawn at the project's size (or width/height) on a transparent background, so use viewport units or the frame's pixels. Or fill a saved template with template and fields. Time: CSS animations, transitions and Web Animations are paused and set to each frame's time, SVG animations too; a page that keeps its own clock defines window.scarletSeek(seconds), called before each frame, which may return a promise. Fonts load from @font-face rules or installed fonts. Link fonts and pictures by absolute path or file URL (an attachment's path works)${caps.files ? " or, with path, by a path relative to the page" : ""}; Scarlet keeps them with the graphic. Scarlet keeps the page with the graphic too: to revise one, read it with graphic_get, change it and render again with basedOn, which carries its files and template over, then point the clip at the new mediaId (updateClip). Returns the mediaId, the page's path, the box the graphic covers at a few moments (fractions of the frame, left/top/right/bottom), errors the page raised and files it couldn't load${caps.images ? ", and pictures of those moments over the edit at checkAt" : ""}. A page whose text asks for a font that isn't installed or loaded is not added: missingFonts names each, and installedFonts lists common families this machine has. When the editor named the font, in their words or the style guide, ask them with task_question whether they will add its file or which installed font to use; never substitute it yourself. A font only you chose: pick an installed one and render again.`,
+    {
+      html: z.string().min(1).max(500_000).optional().describe("The page, a complete HTML document"),
+      ...(caps.files ? { path: z.string().optional().describe("Or an HTML file in the task artifact directory") } : {}),
+      template: z.string().min(1).optional().describe("Fill this saved template instead: its id or name"),
+      fields: z.record(z.string()).optional().describe("The template's field values, by field name"),
+      basedOn: z.string().optional().describe("mediaId of the graphic this revises"),
+      duration: z.number().positive().max(600).optional().describe("Seconds; default the template's, or the revised graphic's"),
+      width: z.number().int().positive().max(8192).optional(),
+      height: z.number().int().positive().max(8192).optional(),
+      fps: z.number().positive().max(120).optional(),
+      name: z.string().trim().min(1).max(200).optional().describe("How the media list names it"),
+      checkAt: z.number().nonnegative().optional().describe("Timeline seconds where the graphic will start, on the head version; default the editor's playhead"),
+      checkTimes: z.array(z.number().nonnegative()).max(6).optional().describe("Seconds into the graphic to check; default three spread through it"),
+    },
+    async (args) => {
+      const { html, template, fields, basedOn, duration, width, height, fps, name, checkAt, checkTimes } = args;
+      const path = (args as { path?: string }).path;
+      if ([html, path, template].filter(v => v !== undefined).length > 1) return errorText("Send one of html, path or template.");
+      const page = path ? await pageFromArtifact(path) : undefined;
+      const context = ctx.task?.context;
+      const playhead = context && !context.mediaId ? context.time : undefined;
+      const fd = new FormData();
+      fd.append("options", JSON.stringify({
+        template, fields, basedOn, duration, width, height, fps, name, checkTimes,
+        checkAt: checkAt ?? playhead ?? 0, pictures: caps.images,
+        provenance: { name: ctx.author.name, model: ctx.author.model },
+      }));
+      const source = page?.html ?? html;
+      // As a file, so its line breaks arrive as written.
+      if (source !== undefined) fd.append("html", new Blob([source], { type: "text/html" }), "index.html");
+      for (const asset of page?.assets ?? []) fd.append("asset", new Blob([asset.data]), asset.name);
+      const result = await client.post<GraphicRenderResponse & { media?: MediaAsset }>(`/projects/${ctx.projectId}/graphics`, fd);
+      const checks = result.checks.map(({ jpeg: _jpeg, ...c }) => c);
+      const summary = {
+        ...(result.media ? { mediaId: result.media.id, name: result.media.name, source: result.source } : { added: false }),
+        duration: result.duration, width: result.width, height: result.height, fps: result.fps,
+        ...(result.missingFonts.length && { missingFonts: result.missingFonts, ...(result.installedFonts && { installedFonts: result.installedFonts }),
+          next: "Not added. A font the editor named: ask them whether they will add its file or which installed font to use. A font you chose: use an installed one." }),
+        ...(result.problems.length && { problems: result.problems }),
+        checks, ...(result.checkAt !== undefined && { checkAt: result.checkAt }), renderSeconds: round3(result.renderMs / 1000),
+      };
+      return { content: [{ type: "text", text: JSON.stringify(summary) }, ...checkPictures(result.checks)] };
+    },
+  );
+
+  tool(
+    "graphic_get",
+    "Read a graphic Scarlet drew: its page as it was drawn, where the page is, the files kept beside it (linked by those relative paths), its size, fps and duration, and the template and field values it was filled from. Revise it by changing the page and calling graphic_render with basedOn.",
+    { mediaId: z.string().min(1) },
+    async ({ mediaId }) => json(await client.get(`/projects/${ctx.projectId}/graphics/${apiPathId(mediaId)}`)),
+  );
+
+  tool(
+    "template_list",
+    "List the graphic templates saved in the editor's library, for every project: id, name (what the editor types after $), title, description and fields. template_get reads one.",
+    {},
+    async () => {
+      const { templates } = await client.get<{ templates: GraphicTemplateSummary[] }>("/templates");
+      return json(templates.map(t => ({ id: t.id, name: t.name, title: t.title, description: t.description, fields: t.fields })));
+    },
+  );
+
+  tool(
+    "template_get",
+    "Read a saved graphic template by id or name: its page with a {{Field}} placeholder wherever a field's value goes, its fields, the sample values its preview shows, the frame it was designed in, its usual duration and the moment its preview shows. graphic_render with template and fields draws it.",
+    { template: z.string().min(1).describe("Id or name") },
+    async ({ template }) => {
+      const { template: t } = await client.get<{ template: GraphicTemplate }>(`/templates/${encodeURIComponent(template.replace(/^\$/, ""))}`);
+      return json(t);
+    },
+  );
+
+  tool(
+    "template_save",
+    `Save a graphic as a template in the editor's library, for every project, or replace the template with the same name. The page has a {{Field}} placeholder wherever a field's value goes (the values are put in as text); fields lists them in the order the editor reads them, and sample gives each a value for the template's preview, which Scarlet draws at previewAt. basedOn names a graphic of this project whose files (fonts, pictures) the page links to, and absolute links to files of this project are kept with the template. The editor picks a template by typing $ and its name. Returns the template's id${caps.images ? " and its preview" : ""}, and any font the preview couldn't find.`,
+    {
+      name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/).max(64).describe("Lowercase words joined by hyphens, e.g. lower-third"),
+      title: z.string().trim().min(1).max(120),
+      description: z.string().max(2000).default("").describe("When to use it, in a line"),
+      fields: z.array(z.string().trim().min(1).max(60)).max(20),
+      html: z.string().min(1).max(500_000).optional(),
+      ...(caps.files ? { path: z.string().optional().describe("Or an HTML file in the task artifact directory") } : {}),
+      sample: z.record(z.string()),
+      basedOn: z.string().optional().describe("mediaId of the graphic it was made from"),
+      duration: z.number().positive().max(600).optional().describe("Seconds a use lasts by default"),
+      previewAt: z.number().nonnegative().optional().describe("Seconds into the graphic the preview shows; default halfway"),
+    },
+    async (args) => {
+      const path = (args as { path?: string }).path;
+      if (!args.html === !path) return errorText("Send the page as html or path.");
+      const html = path ? (await readArtifact(await artifactDir(), path)).toString("utf8") : args.html!;
+      const project = await getProject();
+      const { template, missingFonts, problems, preview } = await client.post<{ template: GraphicTemplate; missingFonts: Array<{ family: string; sample: string }>; problems: string[]; preview?: string }>("/templates", {
+        name: args.name, title: args.title, description: args.description, fields: args.fields, html, sample: args.sample,
+        projectId: ctx.projectId, basedOn: args.basedOn, duration: args.duration, previewAt: args.previewAt,
+        width: project.project.settings.width, height: project.project.settings.height,
+      });
+      const content: ToolResult["content"] = [{ type: "text", text: JSON.stringify({ templateId: template.id, name: template.name, fields: template.fields,
+        ...(missingFonts.length && { missingFonts }), ...(problems.length && { problems }) }) }];
+      if (caps.images && preview) content.push({ type: "image", mimeType: "image/png", data: preview });
+      return { content };
+    },
+  );
+
+  tool(
+    "style_guide_save",
+    `Save the project's style guide, which the editor gives once for the project: from then on every request in this project is given it. It replaces any guide before it. Give it a name (the file's name, or the guide's own title) and the text the editor pasted, or the attachment it is in${caps.files ? ", or a file in the task artifact directory" : ""}, or both.`,
+    {
+      name: z.string().trim().min(1).max(200),
+      text: z.string().max(200_000).optional(),
+      attachmentId: z.string().optional().describe("An attachment of this request"),
+      ...(caps.files ? { path: z.string().optional().describe("Or a file in the task artifact directory") } : {}),
+    },
+    async (args) => {
+      const path = (args as { path?: string }).path;
+      let attachmentId = args.attachmentId;
+      if (path) {
+        const fd = new FormData();
+        fd.append("file", new Blob([await readArtifact(await artifactDir(), path)]), basename(path));
+        attachmentId = (await client.post<{ attachment: { id: string } }>(`/projects/${ctx.projectId}/attachments`, fd)).attachment.id;
+      }
+      if (!args.text?.trim() && !attachmentId) return errorText("Give the guide's text or the attachment it is in.");
+      const { styleGuide } = await client.put<{ styleGuide: unknown }>(`/projects/${ctx.projectId}/style-guide`, { name: args.name, text: args.text, attachmentId });
+      return json(styleGuide);
+    },
+  );
+
+  tool(
+    "attachment_read",
+    `Read a file the editor attached to a request in this project, by its attachment id, or with styleGuide the project's style guide, when the prompt has a Style guide section (a project without one has nothing to read). Text comes back as text; ${caps.images ? "a picture comes back as the picture, and a PDF as pictures of its pages (pages, up to 8 a call; default the first 6) with pageCount when the file says it" : "a picture or a PDF comes back as its name, size and path only"}. A font file comes back as its path, for an @font-face rule.`,
+    {
+      attachmentId: z.string().optional(),
+      styleGuide: z.boolean().optional(),
+      pages: z.array(z.number().int().positive()).max(8).optional().describe("PDF pages to read, from 1"),
+    },
+    async ({ attachmentId, styleGuide, pages }) => {
+      if (!attachmentId === !styleGuide) return errorText("Name an attachment or the style guide.");
+      const doc = await client.post<{ name: string; path: string; size: number; mime?: string; text?: string; pageCount?: number;
+        pages?: Array<{ page: number; jpeg: string }>; image?: { mime: string; data: string } }>(`/projects/${ctx.projectId}/documents/read`,
+        { attachmentId, styleGuide, ...(caps.images && pages && { pages }), ...(!caps.images && { pages: [] }) });
+      const { text: body, pages: shots, image, ...about } = doc;
+      const content: ToolResult["content"] = [{ type: "text", text: JSON.stringify({ ...about, ...(shots && caps.images && { pagesShown: shots.map(p => p.page) }) }) }];
+      if (body !== undefined) content.push({ type: "text", text: body });
+      if (caps.images && image) content.push({ type: "image", mimeType: image.mime, data: image.data });
+      if (caps.images) for (const shot of shots ?? []) content.push({ type: "image", mimeType: "image/jpeg", data: shot.jpeg });
+      return { content };
     },
   );
 

@@ -1,6 +1,6 @@
 # Sources for runtime notices
 
-The release collector uses files from the installed package when available. These files supply texts missing from the published archives and notices for the separately linked speech libraries.
+The release collector uses files from the installed package when available. Chrome for Testing's headless shell archive supplies its own `LICENSE.headless_shell`, which ships beside the browser and is copied to `runtime/chrome-headless-shell.txt`. These files supply texts missing from the published archives and notices for the separately linked speech libraries.
 
 The Rust toolchain supplies its standard-library copyright and licence inventory in `share/doc/rust/COPYRIGHT-library.html` from the matching `rust-docs` component. On Windows, the Uhm ONNX Runtime redistributable also ships `dxcompiler.dll` and `dxil.dll`. Their product version is 1.8.2502.8, revision `b4711839e`. The copies in `windows-runtime-notices/DirectXShaderCompiler` include the notices from Microsoft's February 2025 release and the matching source licence. The NSIS installer includes Tauri's nsis-tauri-utils v0.5.3 helper. [DirectX Shader Compiler release](https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.8.2502) · [Compiler source](https://github.com/microsoft/DirectXShaderCompiler/tree/b4711839eb9a87da7c3436d9b212e0492359fbbd) · [Tauri NSIS helper](https://github.com/tauri-apps/nsis-tauri-utils/releases/tag/nsis_tauri_utils-v0.5.3)
 

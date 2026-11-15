@@ -15,7 +15,7 @@ permissions:
 
 # A newer push supersedes test builds. Releases, manual builds and retries get their own group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.run_attempt == '1' && vars.SCARLET_STABLE_RELEASES != 'true' && github.ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.run_attempt == '1' && vars.SCARLET_STABLE_RELEASES != 'true' && vars.SCARLET_STABLE_RELEASES != 'updater-signed' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.number.outputs.version }}
+      signing: ${{ steps.number.outputs.signing }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,12 +38,15 @@ jobs:
           node-version: 24
       - name: Test release tooling
         run: |
+          sudo apt-get update -qq && sudo apt-get install -y minisign
+          node --test .github/scripts/prepare-desktop-updates.test.mjs
           ruby .github/tests/desktop_permissions_test.rb
-          node --test apps/desktop/scripts/release-version.test.mjs apps/desktop/scripts/verify-desktop-package.test.mjs .github/scripts/publish-desktop-release.test.mjs
+          node --test apps/desktop/scripts/release-version.test.mjs apps/desktop/scripts/verify-desktop-package.test.mjs apps/desktop/scripts/fetch-chrome.test.mjs .github/scripts/publish-desktop-release.test.mjs
       - name: Resolve the version for this commit
         id: number
         env:
           EARLY_ACCESS_VERSION: ${{ inputs.early_access_version }}
+          SIGNING: ${{ vars.SCARLET_STABLE_RELEASES }}
         run: |
           node apps/desktop/scripts/release-version.mjs check
           if [ -n "$EARLY_ACCESS_VERSION" ]; then
@@ -51,18 +55,23 @@ jobs:
             version=$(node apps/desktop/scripts/release-version.mjs for-commit)
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$SIGNING" in
+            true|updater-signed) echo "signing=$SIGNING" >> "$GITHUB_OUTPUT" ;;
+            *) echo "signing=false" >> "$GITHUB_OUTPUT" ;;
+          esac
 
   build:
     needs: version
     uses: ./.github/workflows/desktop-build.yml
     with:
-      release: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.SCARLET_STABLE_RELEASES == 'true' }}
+      release: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.version.outputs.signing == 'true' || needs.version.outputs.signing == 'updater-signed') }}
+      platform_signing: ${{ needs.version.outputs.signing == 'true' }}
       version: ${{ needs.version.outputs.version }}
       early_access: ${{ github.event_name == 'workflow_dispatch' && inputs.early_access_version != '' }}
 
   publish:
     needs: [version, build, ci]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.SCARLET_STABLE_RELEASES == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.version.outputs.signing == 'true' || needs.version.outputs.signing == 'updater-signed')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -82,8 +91,16 @@ jobs:
           pattern: scarlet-desktop-*
           merge-multiple: true
           path: installers
+      - name: Verify the update signatures and assemble the public feed
+        env:
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y minisign
+          node .github/scripts/prepare-desktop-updates.mjs "$RELEASE_VERSION" installers
       - name: Publish the verified macOS and Windows installers together
         env:
           GH_TOKEN: ${{ github.token }}
+          UPDATER_SIGNED_ONLY: ${{ needs.version.outputs.signing == 'updater-signed' }}
           RELEASE_VERSION: ${{ needs.version.outputs.version }}
         run: node .github/scripts/publish-desktop-release.mjs "$RELEASE_VERSION" installers

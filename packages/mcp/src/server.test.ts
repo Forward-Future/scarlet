@@ -2819,7 +2819,8 @@ it("reports the pauses and doubled words a saved part still plays, and trims a p
   const tail = { kind: "pause", reason: "Room tone after the last word.", start: 6.2, end: 9.4, decision: "cut" };
   try {
     const first = await apply(tail);
-    expect(first.keptPauses).toEqual([{ at: 3.4, mediaId: "m1", seconds: .9, after: "have", before: "signatures.", afterWord: 4 }]);
+    // With no length asked for, every pause above the rhythm of speech is listed: which ones matter is the agent's call.
+    expect(first.keptPauses).toEqual([{ at: 1.4, mediaId: "m1", seconds: .6, after: "note.", before: "You", afterWord: 1 }, { at: 3.4, mediaId: "m1", seconds: .9, after: "have", before: "signatures.", afterWord: 4 }]);
     expect(first.repeatedWords).toEqual([{ at: 2.5, mediaId: "m1", text: "have have", fromWord: 3, toWord: 3 }]);
     // Saved again without touching them, they are not listed a second time: a save lists what is new.
     const again = await apply(tail);
@@ -2827,7 +2828,7 @@ it("reports the pauses and doubled words a saved part still plays, and trims a p
     expect(again).not.toHaveProperty("repeatedWords");
     // Named by the word it follows, the pause comes down to the beat, and with the first “have” out nothing is left to report.
     const second = await apply({ kind: "retake", reason: "Doubled “have”.", mediaId: "m1", fromWord: 3, toWord: 3, decision: "cut" },
-      { kind: "pause", reason: "Wait before “signatures”.", mediaId: "m1", afterWord: 4, decision: "cut" }, tail);
+      { kind: "pause", reason: "Wait before “signatures”.", mediaId: "m1", afterWord: 4, leave: .25, decision: "cut" }, tail);
     expect(second).not.toHaveProperty("keptPauses");
     expect(second).not.toHaveProperty("repeatedWords");
     const sent = (mock.requests.filter(r => r.path.endsWith("/dialogue-cuts")).at(-1)!.body as { cuts: Array<{ start: number; end: number; kind: string }> }).cuts;
@@ -2939,7 +2940,7 @@ it("says what the recording holds between two words, in the transcript and in wh
     expect(read.split("\n").slice(1)).toEqual(["#0 2.00-2.40 You", "#1 2.50-2.90 can",
       "  · 1.70 s gap, 0.70 s of it sound at speaking level that no word explains (3.10–3.50, 4.20–4.50)", "#2 4.60-5.00 see", "#3 5.05-5.30 all"]);
     // Trimmed as a pause by the word it follows, the sound in it comes out too, and the gate says so.
-    const trimmed = await apply({ kind: "pause", reason: "Wait before “see”.", mediaId: "m1", afterWord: 1, decision: "cut" });
+    const trimmed = await apply({ kind: "pause", reason: "Wait before “see”.", mediaId: "m1", afterWord: 1, leave: .25, decision: "cut" });
     expect(trimmed.gate.decisions).toEqual([expect.objectContaining({ outcome: "cut",
       evidence: "This pause holds 0.70 s of sound at speaking level that no word explains (3.10–3.50, 4.20–4.50 s in m1). It comes out with the pause." })]);
     expect(trimmed).not.toHaveProperty("unexplainedSound");
@@ -3321,9 +3322,10 @@ it("cuts by word reference: edges go in the measured gaps, and every gate decisi
       cuts: [{ ...ref, kind: "retake", decision: "cut", reason: "The second take is cleaner." }] } }) as CallToolResult;
     expect(applied.isError).toBeFalsy();
     // Both edges sit in measured silence, so the cut applies as decided. "welcome" starts 0.04 s after its start, close
-    // enough for the picture to show it beginning, so the cut carries a check for the editor and the report says why.
-    expect(mock.requests.find(r => r.path.endsWith("/dialogue-cuts"))?.body).toMatchObject({
-      description: "Remove the first attempt", cuts: [{ start: 1.067, end: 3.5, review: false, check: "A removed word starts right after the cut: watch and listen at the join." }] });
+    // enough for the picture to show it beginning: the report tells the agent, and the cut carries no check unless it gives one.
+    const saved = mock.requests.find(r => r.path.endsWith("/dialogue-cuts"))?.body as { cuts: Record<string, unknown>[] };
+    expect(saved).toMatchObject({ description: "Remove the first attempt", cuts: [{ start: 1.067, end: 3.5, review: false }] });
+    expect(saved.cuts[0]).not.toHaveProperty("check");
     expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut",
       range: [1.07, 3.5], evidence: expect.stringContaining("the removed sound starts") }]);
     // Without measured silence beside the words, the edge falls back to word timings and Scarlet stages the cut, saying why.

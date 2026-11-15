@@ -4,7 +4,7 @@ import { pct } from "../../lib/format";
 import { useProjectStore } from "../../stores/project";
 import { MenuItem } from "../shell/WorkspaceNavigation";
 import { Icon } from "../ui/primitives";
-import { ProgressRing } from "../ui/ProgressRing";
+import { ProgressLine } from "../ui/ProgressLine";
 
 /**
  * A reason to open Export, or nothing: the project's export stopped and the Export sheet hasn't shown why yet. The menu
@@ -32,8 +32,8 @@ function useExportStatus(): { status?: string; file?: string; running?: boolean;
 export function ExportButton({ onOpen }: { onOpen(): void }) {
   const { status, running, progress } = useExportStatus();
   const description = running ? status : undefined;
-  return <button type="button" className="btn-quiet" aria-haspopup="dialog" title={description} aria-description={description} onClick={onOpen}>
-    {running && <ProgressRing className="simple-export-ring" progress={progress} />}Export
+  return <button type="button" className="btn-quiet simple-export" aria-haspopup="dialog" title={description} aria-description={description} onClick={onOpen}>
+    Export{running && <ProgressLine progress={progress} />}
   </button>;
 }
 

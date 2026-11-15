@@ -29,6 +29,7 @@ pnpm build
 
 ```sh
 pnpm desktop:ffmpeg
+pnpm desktop:chrome
 node apps/desktop/scripts/build-whisper.mjs
 pnpm desktop:dev
 ```

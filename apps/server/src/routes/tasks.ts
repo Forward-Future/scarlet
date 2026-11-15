@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { checkAttachments } from "../services/graphics.js";
 import { z } from "zod/v3";
 import { CompleteTaskRequest, CreateTaskRequest, queueWait, RecordTaskUsageRequest, RepeatAuditRequest, RewordTaskRequest, RunChoice, TaskEvent, TaskState, UsageGroupBy, type Task } from "@scarlet/shared";
 import type { AppEnv } from "../auth.js";
@@ -42,6 +43,8 @@ export function taskRoutes(ctx: Ctx) {
     if (version && version !== "head" && !ctx.repos.versions.exists(project.id, version)) {
       throw badRequest("unknown_version", "The selected edit version does not belong to this project.");
     }
+    // Each attached file must be one the editor attached in this project; the stored name and size are what the agent is told.
+    const attachments = await checkAttachments(ctx, project.id, body.context?.attachments);
     const user = c.var.user;
     const threadId = body.context?.threadId;
     const { changeId, cutIndex } = body.context ?? {};
@@ -63,7 +66,7 @@ export function taskRoutes(ctx: Ctx) {
         fast: body.fast,
         serviceTier: body.serviceTier,
         instruction,
-        context: { ...(body.context ?? {}), ...(threadId || aboutCut ? { message: said, asked: said === body.instruction ? undefined : body.instruction } : {}) },
+        context: { ...(body.context ?? {}), attachments, ...(threadId || aboutCut ? { message: said, asked: said === body.instruction ? undefined : body.instruction } : {}) },
         createdBy: actorFor(user),
       });
       // A pass set to apply when Scarlet finishes waits for a call the editor sends back, instead of applying over it.

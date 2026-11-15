@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -36,5 +36,9 @@ export default defineConfig(({ command, mode }) => ({
     environment: "node",
     setupFiles: ["src/lib/domTestSetup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
+    // SimpleWorkspace.test.tsx is one long file that would hold a full run on one worker for minutes. A full run
+    // spreads it over its part files instead; named on the command line, it runs whole on its own.
+    exclude: [...configDefaults.exclude, ...(process.argv.some(arg => arg.includes("SimpleWorkspace.test"))
+      ? ["src/pages/SimpleWorkspace.part*.test.tsx"] : ["src/pages/SimpleWorkspace.test.tsx"])],
   },
 }));

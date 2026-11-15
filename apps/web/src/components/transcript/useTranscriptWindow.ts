@@ -47,7 +47,8 @@ export function useTranscriptWindow(source: MediaAsset | undefined, timeline: Ti
   const first = Math.min(span.first, lastPage);
   const last = Math.min(span.last, lastPage);
   const from = fixedRange?.start ?? first * SECONDS;
-  const to = fixedRange?.end ?? Math.min(end, (last + 1) * SECONDS);
+  // A fixed range is clamped to the footage, so the whole of it can be asked for with an open end.
+  const to = fixedRange ? Math.min(fixedRange.end, end) : Math.min(end, (last + 1) * SECONDS);
   useEffect(() => {
     if (fixedRange) return;
     let timer: number | undefined, pendingPage: number | undefined;
@@ -125,7 +126,7 @@ export function useTranscriptWindow(source: MediaAsset | undefined, timeline: Ti
     for (const t of transcripts.values()) t.segments.sort((a, b) => a.start - b.start);
     return { transcripts: [...transcripts.values()], loading, error };
   }, [visible, revision]);
-  return { ...result, assets, from, to, earlier: first > 0, later: last < lastPage,
+  return { ...result, assets, from, to, earlier: !fixedRange && first > 0, later: !fixedRange && last < lastPage,
     extend(direction: -1 | 1, keepSelection: boolean) {
       setWindow(w => {
         const first = Math.max(0, w.first + Math.min(direction, 0));

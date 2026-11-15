@@ -491,6 +491,7 @@ export function openDb(path: string): Db {
       (NEW.state = 'failed' AND json_extract(NEW.json, '$.interrupted') IS NOT 1))
     BEGIN DELETE FROM transcription_work WHERE task_id = NEW.id; END;`);
   ensureReadIndexes(db);
+  ensureGraphics(db);
   return db;
 }
 
@@ -519,6 +520,23 @@ function ensureProjectFormat(db: Db): void {
         AND json_extract(json, '$.kind') = 'video' AND json_extract(json, '$.width') > 0 AND json_extract(json, '$.height') > 0);
       UPDATE projects SET format_set = 1 WHERE EXISTS (SELECT 1 FROM activity
         WHERE project_id = projects.id AND type = 'project.updated' AND json_type(json, '$.data.settings') = 'object');`);
+  }, "immediate")();
+}
+
+/**
+ * Graphic templates and a project's style guide. Like the read indexes, they are installed by name rather than by a
+ * migration number, so a checkout and a release sharing a library don't take each other's numbers.
+ */
+export function ensureGraphics(db: Db): void {
+  const installed = () => db.prepare("SELECT 1 FROM pragma_table_info('projects') WHERE name = 'style_guide'").get() &&
+    db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'graphic_templates'").get();
+  if (installed()) return;
+  db.transaction(() => {
+    if (installed()) return;
+    db.exec(`CREATE TABLE IF NOT EXISTS graphic_templates (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );`);
+    if (!db.prepare("SELECT 1 FROM pragma_table_info('projects') WHERE name = 'style_guide'").get()) db.exec("ALTER TABLE projects ADD COLUMN style_guide TEXT;");
   }, "immediate")();
 }
 

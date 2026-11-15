@@ -5,7 +5,10 @@ import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-d
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { isDialogueGuide } from "@scarlet/shared";
 import { api } from "../../lib/client";
-import { buildDb, PRJ } from "../../lib/mock/fixtures";
+import { buildDb, PRJ, sampleTemplates } from "../../lib/mock/fixtures";
+import { dropTargets, fileDropZone } from "../../lib/dropTargets";
+import { useAttachmentsStore } from "../../stores/attachments";
+import { useTemplatesStore } from "../../stores/templates";
 import { buildThreads } from "../../lib/threads";
 import { useHostsStore } from "../../stores/hosts";
 import { usePlayerStore } from "../../stores/player";
@@ -14,12 +17,13 @@ import { useSkillsStore } from "../../stores/skills";
 import { playheadPoints, useUiStore, type AgentContext } from "../../stores/ui";
 import { NO_AGENT_REASON } from "./AgentChip";
 import * as mic from "./MicButton";
-import { Composer } from "./Composer";
+import { Composer, NEW_EDIT_HINT } from "./Composer";
 import { ARRIVAL_MS } from "./ComposerAim";
 import { NotePopover } from "./NotePopover";
 import { ProjectLayout } from "../shell/ProjectLayout";
 
-const stores = [useProjectStore.getState(), useUiStore.getState(), usePlayerStore.getState(), useHostsStore.getState(), useSkillsStore.getState()] as const;
+const stores = [useProjectStore.getState(), useUiStore.getState(), usePlayerStore.getState(), useHostsStore.getState(), useSkillsStore.getState(),
+  useTemplatesStore.getState(), useAttachmentsStore.getState()] as const;
 const db = buildDb();
 const project = db.projects.find(p => p.id === PRJ)!;
 const current: ProjectData = { id: PRJ, project, timeline: db.timelines[project.head!]!,
@@ -45,6 +49,8 @@ afterEach(async () => {
   usePlayerStore.setState(stores[2], true);
   useHostsStore.setState(stores[3], true);
   useSkillsStore.setState(stores[4], true);
+  useTemplatesStore.setState(stores[5], true);
+  useAttachmentsStore.setState(stores[6], true);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -1392,4 +1398,123 @@ it("says what went wrong with the microphone on the line over the box, until the
   // Refused again, it says so again once the mic lets go.
   await act(async () => { micProps.onError?.(denied); });
   expect(line()).toBe(denied);
+});
+
+it("asks for a new edit, with the skills and templates it takes, in an empty box", async () => {
+  await show();
+  expect(container.querySelector("textarea")!.placeholder).toBe("Describe an edit, / skills, $ templates");
+  expect(NEW_EDIT_HINT).toBe("Describe an edit, / skills, $ templates");
+});
+
+it("lists the graphic templates with $, as / lists the skills, and puts the chosen one's name in the box", async () => {
+  const templates = sampleTemplates();
+  const list = vi.spyOn(api, "listTemplates").mockResolvedValue({ templates });
+  await show();
+  const field = container.querySelector("textarea")!;
+  await act(() => field.focus());
+  const key = (key: string) => act(() => { field.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
+  const rows = () => Array.from(container.querySelectorAll('.composer-templates [role="option"].composer-template'));
+  await type("$");
+  expect(list).toHaveBeenCalledTimes(1);
+  const box = container.querySelector('[role="listbox"]')!;
+  expect(box.getAttribute("aria-label")).toBe("Graphic templates");
+  expect(box.classList.contains("composer-skills")).toBe(true);
+  expect(box.querySelector(".eyebrow")?.textContent).toBe("Templates");
+  expect(rows().map(r => r.querySelector(".composer-template-title")?.textContent)).toEqual(["Lower third", "Title card", "Pull quote"]);
+  // Each row: its picture over the frame under the playhead, its title, and its fields under it.
+  expect(rows()[0]!.querySelectorAll(".composer-template-thumb img")).toHaveLength(2);
+  expect(rows()[0]!.querySelector(".composer-template-fields")?.textContent).toBe("Name, Title");
+  // The project's style guide is the list's last line.
+  expect(box.lastElementChild?.textContent).toBe("Style guideBrand guide.pdf");
+  // The lit row's picture is over the player's.
+  expect(useTemplatesStore.getState().lit?.id).toBe("tpl_lower");
+  await key("ArrowDown");
+  expect(rows()[1]!.getAttribute("aria-selected")).toBe("true");
+  expect(useTemplatesStore.getState().lit?.id).toBe("tpl_title");
+  await key("Escape");
+  expect(container.querySelector('[role="listbox"]')).toBeNull();
+  expect(useTemplatesStore.getState().lit).toBeNull();
+  // What follows $ filters the list. Enter puts the name in the box in place of what was typed, with a space after it.
+  await type("Add a $quo");
+  expect(list).toHaveBeenCalledTimes(2);
+  expect(rows().map(r => r.querySelector(".composer-template-title")?.textContent)).toEqual(["Pull quote"]);
+  await key("Enter");
+  expect(field.value).toBe("Add a $pull-quote ");
+  expect(container.querySelector('[role="listbox"]')).toBeNull();
+  // A $ that isn't a template is the editor's own words.
+  await type("Budget is $9");
+  expect(container.textContent).toContain("No matching templates.");
+  await type("$");
+  await key("ArrowUp");
+  expect(container.querySelector(".composer-skill-footer [role='option']")?.getAttribute("aria-selected")).toBe("true");
+  await key("Enter");
+  expect(field.value).toBe("Make a template ");
+  expect(field.selectionStart).toBe("Make a template ".length);
+  expect(container.querySelector('[role="listbox"]')).toBeNull();
+  await type("$lower-third for Daniel");
+  await submit();
+  expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({ instruction: "$lower-third for Daniel" }));
+});
+
+it("says the library has no templates yet, and how to make one", async () => {
+  vi.spyOn(api, "listTemplates").mockResolvedValue({ templates: [] });
+  await act(() => useProjectStore.setState({ current: { ...current, project: { ...project, styleGuide: undefined } } }));
+  await show();
+  const field = container.querySelector("textarea")!;
+  await act(() => field.focus());
+  await type("$");
+  expect(container.querySelector('[role="listbox"] [role="status"]')?.textContent).toBe("No templates yet. Ask Scarlet to make one, or save a graphic from its card.");
+  expect(container.querySelector(".composer-style-guide")).toBeNull();
+});
+
+it("attaches files dropped or pasted on the box to the next message, in a line on top of the box", async () => {
+  const upload = vi.spyOn(api, "uploadAttachment").mockImplementation(async (_project, file, name) => ({
+    attachment: { id: `att_${name ?? (file as { path: string }).path}`, name: name ?? (file as { path: string }).path.split("/").pop()!, size: 10 } }));
+  await show();
+  const dock = container.querySelector<HTMLElement>(".composer-dock")!;
+  // The box is its own drop target: the desktop app's drops over it attach, and don't import media.
+  expect(dock.hasAttribute("data-file-drop")).toBe(true);
+  expect(fileDropZone(container.querySelector("textarea"))).toBe(dock);
+  await act(async () => dropTargets.get(dock)!.drop(["/Users/me/Brand guide.pdf"]));
+  expect(upload).toHaveBeenCalledWith(PRJ, { path: "/Users/me/Brand guide.pdf" });
+  const field = container.querySelector("textarea")!;
+  const paste = new Event("paste", { bubbles: true, cancelable: true }) as Event & { clipboardData: unknown };
+  paste.clipboardData = { files: [new File(["png"], "logo.png", { type: "image/png" })] };
+  await act(async () => { field.dispatchEvent(paste); });
+  expect(paste.defaultPrevented).toBe(true);
+  const names = () => Array.from(container.querySelectorAll(".composer-files .composer-file-name"), n => n.textContent);
+  expect(names()).toEqual(["Brand guide.pdf", "logo.png"]);
+  // The line sits on top of the box.
+  expect(container.querySelector(".composer-files")?.nextElementSibling?.classList.contains("composer-box")).toBe(true);
+  const remove = container.querySelectorAll<HTMLButtonElement>(".composer-file button");
+  expect(remove[1]!.title).toBe("Remove");
+  await act(async () => remove[1]!.click());
+  expect(names()).toEqual(["Brand guide.pdf"]);
+  await type("Use these colors for the lower thirds");
+  await submit();
+  expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
+    instruction: "Use these colors for the lower thirds",
+    context: expect.objectContaining({ attachments: [{ id: "att_/Users/me/Brand guide.pdf", name: "Brand guide.pdf", size: 10 }] }),
+  }));
+  expect(container.querySelector(".composer-files")).toBeNull();
+});
+
+it("says why a file couldn't be attached", async () => {
+  vi.spyOn(api, "uploadAttachment").mockRejectedValue(new Error("The file is too large."));
+  await show();
+  await act(async () => dropTargets.get(container.querySelector(".composer-dock")!)!.drop(["/Users/me/huge.mov"]));
+  expect(container.querySelector(".composer-file.is-failed")?.textContent).toContain("The file is too large.");
+});
+
+it("sends a message about a moment that carries files as a request about that moment, since a note takes none", async () => {
+  vi.spyOn(api, "uploadAttachment").mockResolvedValue({ attachment: { id: "att_logo", name: "logo.png", size: 3 } });
+  await show();
+  await selectPoint({ time: 11, clipIds: [] });
+  await act(async () => dropTargets.get(container.querySelector(".composer-dock")!)!.drop(["/Users/me/logo.png"]));
+  await type("Put this logo in the corner here");
+  await submit();
+  expect(useProjectStore.getState().createNote).not.toHaveBeenCalled();
+  expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
+    instruction: "Put this logo in the corner here", context: expect.objectContaining({ time: 11, attachments: [{ id: "att_logo", name: "logo.png", size: 3 }] }),
+  }));
 });

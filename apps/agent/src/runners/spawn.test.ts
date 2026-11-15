@@ -1,8 +1,19 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, relative } from "node:path";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { mcpEnv, nodeExecutable, quoteForCmd, resolveCli, resolveMcpCliPath, runnerSpec, spawnLines, spawnSpec, tailSummary, type SpawnLinesOptions } from "./spawn.js";
+
+// The kill goes through as usual unless a test asks to lose the next one, as a process being forked at that moment would.
+const stops = vi.hoisted(() => ({ calls: 0, lose: 0 }));
+vi.mock("../processTree.js", async (real) => {
+  const actual = await real<typeof import("../processTree.js")>();
+  return { ...actual, stopCliTree: (child: Parameters<typeof actual.stopCliTree>[0]) => {
+    stops.calls++;
+    if (stops.lose > 0) { stops.lose--; return; }
+    actual.stopCliTree(child);
+  } };
+});
 
 /** Run the rest of the test as if on another OS. Paths and the file system stay this machine's. */
 function onPlatform(platform: NodeJS.Platform) {
@@ -66,6 +77,23 @@ describe("spawnLines", { timeout: 20_000 }, () => {
     controller.abort();
     const outcome = await node("setInterval(()=>{},1000)", { signal: controller.signal }).done;
     expect(outcome).toMatchObject({ aborted: true, timedOut: false, killed: true });
+  });
+
+  it.skipIf(process.platform === "win32")("sends the kill again when the first one is missed, and none once the CLI is gone", async () => {
+    stops.calls = 0;
+    stops.lose = 1;
+    const started = Date.now();
+    const { handle, done } = node("console.log('up');setTimeout(()=>{},30000)", { onLine: () => handle.kill() });
+    expect(await done).toMatchObject({ killed: true, signal: "SIGKILL" });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(stops.calls).toBe(2);
+
+    stops.calls = 0;
+    const quick = node("console.log('done')");
+    await quick.done;
+    quick.handle.kill();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(stops.calls).toBe(0);
   });
 
   it("resolves with the spawn error instead of throwing when the executable can't be started", async () => {

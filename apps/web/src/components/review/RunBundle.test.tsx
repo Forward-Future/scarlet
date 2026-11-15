@@ -177,14 +177,14 @@ it("lists tokens by project, provider and model in Settings", async () => {
 /** Open the steps behind a question's line. */
 const openDetails = (host: HTMLElement) => act(() => host.querySelector<HTMLElement>(".req-toggle")!.click());
 
-it("keeps the ring of the work under way fading with motion reduced, and the ring around the menu's button, a spinner and the reconnecting dot with it", async () => {
+it("keeps the ring of the work under way fading with motion reduced, the line under a header button while it works, a spinner and the reconnecting dot with it", async () => {
   // A test has no styles, so the rules are read from the stylesheets. One rule stills every animation for reduced
   // motion, with !important (studio.css): the fade of a mark that says work is going on has to carry it to get past.
   const { readFileSync } = await import("node:fs");
   const reduced = (sheet: string, mark: string) => [...readFileSync(`${import.meta.dirname}/../../${sheet}`, "utf8")
     .matchAll(/@media \(prefers-reduced-motion: reduce\) \{((?:[^{}]|\{[^{}]*\})*)\}/g)]
     .flatMap(block => [...block[1]!.matchAll(/([^{}]+)\{([^{}]*)\}/g)]).find(rule => rule[1]!.includes(mark))?.[2]?.trim();
-  for (const [sheet, mark] of [["simple.css", '.req-mark[data-state="working"]'], ["simple.css", ".progress-ring.is-unknown"], ["index.css", ".animate-spin"], ["index.css", ".pulse"]] as const)
+  for (const [sheet, mark] of [["simple.css", '.req-mark[data-state="working"]'], ["simple.css", ".progress-line.is-unknown > span"], ["index.css", ".animate-spin"], ["index.css", ".pulse"]] as const)
     expect(reduced(sheet, mark), mark).toMatch(/(^|; )animation: .+ infinite !important;$/);
 });
 

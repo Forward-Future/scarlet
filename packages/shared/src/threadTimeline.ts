@@ -1,4 +1,4 @@
-import { appliedReviewChange, clipRange, historyLineage, intervalCandidates, makeTimeMap, removedJoins, reviewReasons, timelineDuration, withHandles, type Change, type Timeline, type TimeRange } from "@scarlet/timeline";
+import { appliedReviewChange, clipRange, historyLineage, intervalCandidates, makeTimeMap, removedJoins, reviewReasons, timelineDuration, withHandles, type Change, type MediaAsset, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { Thread } from "./threads.js";
 import { editKinds, type EditKind } from "./editKind.js";
 
@@ -191,7 +191,10 @@ export function changeRemovals(change: Change): { removed: TimeRange[]; version:
 }
 
 /** Project the conversation's changes into distinct edit identities before translating their times. */
-function savedEdits(thread: Thread, visible: (version: string) => boolean, read?: (version: string) => Timeline | undefined, fps = 30) {
+/** The project's files, so an edit that laid a graphic over the picture is told from b-roll. */
+type ProjectFiles = readonly Pick<MediaAsset, "id" | "kind">[];
+
+function savedEdits(thread: Thread, visible: (version: string) => boolean, read?: (version: string) => Timeline | undefined, fps = 30, media?: ProjectFiles) {
   const edits: SavedEdit[] = [];
   // The latest doubt this request's runs raised about an edit already in the video (`Change.flags`).
   const runs = new Set(thread.tasks?.map(t => t.id));
@@ -204,7 +207,7 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
   // An edit another request made comes first, as it was in the video before this request's own: a revision this
   // request then makes of it takes its place.
   for (const change of thread.flagged ?? []) {
-    for (const edit of savedEdits({ changes: [change] } as Pick<Thread, "changes"> as Thread, visible, read, fps)) {
+    for (const edit of savedEdits({ changes: [change] } as Pick<Thread, "changes"> as Thread, visible, read, fps, media)) {
       const flag = flagOn(change, edit.spot);
       if (!flag) continue;
       raise(edit, flag);
@@ -241,7 +244,7 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
     const ranges = entries.map(e => e.range);
     // A pure pass already computed the joins on its finished clock. Skipped calls are absent from that list.
     const rippleJoins = dialogue && !change.restoredCuts?.length ? dialogue : undefined;
-    const clocks = !rippleJoins && read ? { before: read(change.appliedOnto ?? change.fromVersion), after: read(appliedVersion) } : undefined;
+    const clocks = !rippleJoins && read ? { before: read(change.appliedOnto ?? change.fromVersion), after: read(appliedVersion), media } : { media };
     const fromSteps = editKinds(change, ranges, clocks, rippleJoins ?? (taken && returned && [...taken,
       ...returned.map(range => ({ range, facet: "restore" as const }))]));
     // What a built change's steps say is that footage was placed. An edit named on a join where footage was left out is a cut.
@@ -317,14 +320,14 @@ export function changeEdits(change: Change): Omit<ThreadEdit, "at">[] {
  * It sorts by each change's own clock, so it only approximates the timeline's order and includes undone work:
  * show it until threadTimeline's list for the working cut arrives, and number edits from that.
  */
-export function threadEditList(thread: Thread): Omit<ThreadEdit, "at">[] {
-  return savedEdits(thread, () => true).map(({ version: _version, named: _named, still: _still, resaved: _resaved, putBack: _putBack, ...edit }) => edit)
+export function threadEditList(thread: Thread, media?: ProjectFiles): Omit<ThreadEdit, "at">[] {
+  return savedEdits(thread, () => true, undefined, 30, media).map(({ version: _version, named: _named, still: _still, resaved: _resaved, putBack: _putBack, ...edit }) => edit)
     .sort((a, b) => a.range.start - b.range.start);
 }
 
 /** Return playable ranges on the working cut, never mixing clocks from different versions or branches. */
 export function threadTimeline(thread: Thread, head: Timeline, links: Parameters<typeof historyLineage>[0],
-  readVersion: (version: string) => Timeline | undefined, fps: number): ThreadEdit[] {
+  readVersion: (version: string) => Timeline | undefined, fps: number, media?: ProjectFiles): ThreadEdit[] {
   const { lineage, undone } = historyLineage(links, head.version);
   const duration = timelineDuration(head);
   if (!duration) return [];
@@ -333,7 +336,7 @@ export function threadTimeline(thread: Thread, head: Timeline, links: Parameters
     if (!timelines.has(version)) timelines.set(version, version === head.version ? head : readVersion(version));
     return timelines.get(version);
   };
-  const edits = savedEdits(thread, v => !undone.has(v) && (v === head.version || lineage.has(v)), read, fps);
+  const edits = savedEdits(thread, v => !undone.has(v) && (v === head.version || lineage.has(v)), read, fps, media);
   const maps = new Map<string, ReturnType<typeof makeTimeMap> | null>([[head.version, t => t]]);
   const result: ThreadEdit[] = [];
   // A request that saves the video again often lists every edit it has made so far, not only what that save changed:

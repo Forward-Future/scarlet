@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { desktop } from "../../lib/desktop";
 import { checkPublishedUpdate, type PublishedUpdate } from "../../lib/publishedUpdate";
+import { refreshUpdateStatus, updateSource } from "../../lib/updateStatus";
 
 export function UpdateSettings() {
   const [checking, setChecking] = useState(false);
@@ -10,7 +11,14 @@ export function UpdateSettings() {
     setChecking(true);
     setMessage("Checking for updates…");
     try {
-      if (__SCARLET_RELEASE_CHANNEL__) {
+      const source = updateSource();
+      if (source === "release") {
+        const newest = await desktop.checkForRelease();
+        setMessage(newest ? `Version ${newest} is available. Scarlet is getting it ready.` : "Scarlet is up to date.");
+        refreshUpdateStatus();
+        return;
+      }
+      if (!source && __SCARLET_RELEASE_CHANNEL__) {
         const found = await checkPublishedUpdate(__SCARLET_RELEASE_CHANNEL__);
         setUpdate(found);
         setMessage(found ? `Scarlet ${found.version} is available.` : "Scarlet is up to date.");

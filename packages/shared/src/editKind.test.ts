@@ -43,6 +43,23 @@ describe("telling what an applied edit did", () => {
       { before: base, after: withUpper })).toEqual(["overlay"]);
   });
 
+  it("names a graphic Scarlet made, laid over the picture, a graphic, and keeps b-roll and images overlays", () => {
+    const media = [{ id: "lower", kind: "graphic" as const }, { id: "broll", kind: "video" as const }];
+    const lower = makeMediaClip("lower", 0, 4, 10, { id: "l" });
+    const broll = makeMediaClip("broll", 0, 4, 30, { id: "b", volume: 0 });
+    const withLower = after(t => { t.tracks.push({ ...upper, clips: [lower] }); });
+    expect(editKinds(change([{ op: "addClip", trackId: "v2", clip: lower }]), [one], { before: base, after: withLower, media })).toEqual(["graphic"]);
+    // Faded in or out afterwards, it is still the graphic.
+    expect(editKinds(change([{ op: "updateClip", clipId: "l", patch: { videoFadeIn: 0.3 } }]), [one], { before: withLower, after: withLower, media }))
+      .toEqual(["graphic"]);
+    // Without the project's files nothing says it is a graphic.
+    expect(editKinds(change([{ op: "addClip", trackId: "v2", clip: lower }]), [one], { before: base, after: withLower })).toEqual(["overlay"]);
+    const both = after(t => { t.tracks.push({ ...upper, clips: [lower, broll] }); });
+    expect(editKinds(change([{ op: "addClip", trackId: "v2", clip: broll }]), [one], { before: base, after: both, media })).toEqual(["overlay"]);
+    expect(editKinds(change([{ op: "addClip", trackId: "v2", clip: lower }, { op: "addClip", trackId: "v2", clip: broll }]), [one],
+      { before: base, after: both, media })).toEqual(["overlay"]);
+  });
+
   it("names a speed change speed, not a cut, even though the cut gets shorter", () => {
     const faster = after(t => { (t.tracks[0]!.clips[0] as { speed: number }).speed = 2; });
     expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { speed: 2 } }]), [one], { before: base, after: faster })).toEqual(["speed"]);

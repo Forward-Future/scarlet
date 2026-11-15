@@ -3,7 +3,7 @@ require "yaml"
 
 class DesktopPermissionsTest < Minitest::Test
   MAIN_PUSH = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
-  STABLE_RELEASE = "#{MAIN_PUSH} && vars.SCARLET_STABLE_RELEASES == 'true'"
+  STABLE_RELEASE = "#{MAIN_PUSH} && (needs.version.outputs.signing == 'true' || needs.version.outputs.signing == 'updater-signed')"
 
   def setup
     workflows = File.expand_path("../workflows", __dir__)
@@ -44,6 +44,7 @@ class DesktopPermissionsTest < Minitest::Test
     linux = YAML.safe_load(File.read(File.expand_path("../workflows/linux-desktop.yml", __dir__)))
     [@entry, linux].each do |workflow|
       condition = "github.event_name == 'push' && github.run_attempt == '1' && vars.SCARLET_STABLE_RELEASES != 'true'"
+      condition += " && vars.SCARLET_STABLE_RELEASES != 'updater-signed'" if workflow == @entry
       assert_equal "${{ github.workflow }}-${{ #{condition} && github.ref || github.run_id }}",
         workflow.fetch("concurrency").fetch("group")
       assert_equal true, workflow.fetch("concurrency").fetch("cancel-in-progress")
@@ -60,7 +61,11 @@ class DesktopPermissionsTest < Minitest::Test
     assert_equal "${{ !inputs.release || (!inputs.early_access && #{MAIN_PUSH}) }}", @build.fetch("if")
     assert_equal "${{ inputs.release && 'release' || 'desktop-build' }}", @build.fetch("environment")
     secret_steps = @build.fetch("steps").select { |step| step.to_s.include?("secrets.APPLE_") }
-    assert_equal ["inputs.release && runner.os == 'macOS'"], secret_steps.map { |step| step.fetch("if") }
+    assert_equal ["inputs.release && inputs.platform_signing && runner.os == 'macOS'"], secret_steps.map { |step| step.fetch("if") }
+    assert_equal "${{ needs.version.outputs.signing == 'true' }}", @jobs.dig("build", "with", "platform_signing")
+    updater_steps = @build.fetch("steps").select { |step| step.to_s.include?("secrets.TAURI_SIGNING_PRIVATE_KEY") }
+    assert_equal ["inputs.release"], updater_steps.map { |step| step.fetch("if") }
+    assert_includes updater_steps.first.fetch("run"), 'signer sign --app-version "$RELEASE_VERSION"'
     [@jobs.fetch("version"), @build, @jobs.fetch("publish")].each do |job|
       assert_equal false, job.fetch("steps").first.fetch("with").fetch("persist-credentials")
     end

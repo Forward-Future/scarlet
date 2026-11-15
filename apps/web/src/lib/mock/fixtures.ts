@@ -5,6 +5,7 @@
  */
 import { isDialogueGuide } from "@scarlet/shared";
 import type {
+  GraphicTemplateSummary,
   Learning,
   AgentHost,
   ProjectSummary,
@@ -48,6 +49,10 @@ export interface MockDb {
   taskEvents: Record<string, TaskEvent[]>;
   hosts: AgentHost[];
   skills: Skill[];
+  /** Graphics saved to reuse, picked with $name in the message box. Library-wide, like skills. */
+  templates: GraphicTemplateSummary[];
+  /** Files dropped on the message box, by project. */
+  attachments: Record<string, { id: string; name: string; size: number; mime?: string }[]>;
   /** Rules Scarlet picked up from requests, waiting for the editor. */
   learnings: Learning[];
   skillVersions: Record<string, SkillVersion[]>;
@@ -255,6 +260,7 @@ export function buildDb(chatLayouts = false): MockDb {
     settings: { fps: 30, width: 1920, height: 1080, aspect: "16:9", sampleRate: 48000, audioChannels: 2 },
     media,
     head: "ver_3",
+    styleGuide: { name: "Brand guide.pdf", file: "style/brand-guide.pdf", savedAt: minutesAgo(60 * 24) },
     createdAt: minutesAgo(60 * 24 * 2),
     updatedAt: minutesAgo(4),
   };
@@ -718,11 +724,40 @@ export function buildDb(chatLayouts = false): MockDb {
     taskEvents,
     hosts,
     skills,
+    templates: sampleTemplates(),
+    attachments: {},
     learnings,
     skillVersions,
     settings,
     invites: [],
   };
+}
+
+/** Two graphics saved to reuse, as Scarlet would after the editor saved them from their cards. */
+export function sampleTemplates(): GraphicTemplateSummary[] {
+  return [
+    { id: "tpl_lower", name: "lower-third", title: "Lower third", description: "A name and a title in the lower left.", fields: ["Name", "Title"],
+      previewVersion: "1", createdAt: minutesAgo(60 * 24 * 6), updatedAt: minutesAgo(60 * 24 * 6) },
+    { id: "tpl_title", name: "title-card", title: "Title card", description: "A chapter title across the middle.", fields: ["Title", "Subtitle"],
+      previewVersion: "1", createdAt: minutesAgo(60 * 24 * 4), updatedAt: minutesAgo(60 * 24 * 4) },
+    { id: "tpl_quote", name: "pull-quote", title: "Pull quote", description: "A line the guest said, in large type.", fields: ["Quote", "Speaker"],
+      previewVersion: "1", createdAt: minutesAgo(60 * 24 * 2), updatedAt: minutesAgo(60 * 24 * 2) },
+  ];
+}
+
+/** A template's sample picture for the demo, drawn as the engine would: its graphic alone, on nothing, at 16:9. */
+export function templatePreviewSvg(template: Pick<GraphicTemplateSummary, "name" | "title">): string {
+  const body = template.name === "lower-third"
+    ? `<rect x="96" y="820" width="620" height="132" rx="6" fill="#111" fill-opacity=".86"/><rect x="96" y="820" width="10" height="132" fill="#e5484d"/>`
+      + `<text x="140" y="878" font-family="Inter,Helvetica,Arial" font-size="50" font-weight="700" fill="#fff">Daniel Kim</text>`
+      + `<text x="140" y="930" font-family="Inter,Helvetica,Arial" font-size="34" fill="#c8c8c8">Founder, Lattice Labs</text>`
+    : template.name === "title-card"
+      ? `<rect x="0" y="380" width="1920" height="320" fill="#0b0b0b" fill-opacity=".8"/>`
+        + `<text x="960" y="540" text-anchor="middle" font-family="Inter,Helvetica,Arial" font-size="110" font-weight="800" fill="#fff">Chapter One</text>`
+        + `<text x="960" y="624" text-anchor="middle" font-family="Inter,Helvetica,Arial" font-size="44" fill="#bdbdbd">Why agents edit now</text>`
+      : `<text x="160" y="470" font-family="Georgia,serif" font-size="96" font-style="italic" fill="#fff">“It finally just works.”</text>`
+        + `<text x="160" y="570" font-family="Inter,Helvetica,Arial" font-size="40" fill="#d0d0d0">— Daniel Kim</text>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080">${body}</svg>`)}`;
 }
 
 const SCRIPT = [

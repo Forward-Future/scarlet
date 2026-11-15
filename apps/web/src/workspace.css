@@ -312,24 +312,32 @@
 /* While a range is drawn, its own times are the ones to read: the bubble under the pointer steps aside. */
 .timeline-track.is-marking .scrub-preview { display: none; }
 .timeline-track.is-marking .timeline-playhead-time { visibility: hidden; }
-/* The close-up: the frame the held end is on, then a row of pictures either side and a tick for each frame. */
-.timeline-range-loupe { --loupe-half: 246px; position: absolute; z-index: 11; bottom: calc(100% + 8px); width: 492px; transform: translateX(-50%); display: grid; gap: 6px; padding: 8px;
+/* The close-up, as precise seeking: a strip of pictures, one a frame, slides under a line fixed in its middle. */
+.timeline-range-loupe { --loupe-picture: 88px; --loupe-half: calc(var(--loupe-picture) * 3.5 + 9px); position: absolute; z-index: 11; bottom: calc(100% + 8px);
+  width: calc(var(--loupe-picture) * 7); transform: translateX(-50%); display: grid; gap: 6px; padding: 8px;
   border: 1px solid #55524e; border-radius: 8px; background: #1a1918; box-shadow: 0 8px 24px rgb(0 0 0 / 45%); pointer-events: none; }
-.timeline-range-loupe-frame { justify-self: center; width: 240px; overflow: hidden; border-radius: 4px; background: #000; }
-.timeline-range-loupe-frame img, .timeline-range-loupe-picture img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.timeline-range-loupe-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 2px; }
-.timeline-range-loupe-head b { color: var(--color-fg); font: 600 13px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
-.timeline-range-loupe-head small { color: #aaa69e; font-size: 11px; }
-.timeline-range-loupe-row { position: relative; display: grid; grid-template-columns: repeat(9, 1fr); gap: 0; padding-bottom: 12px; border-radius: 3px; overflow: hidden; background: #2d2b28; }
-.timeline-range-loupe-picture { background: #000; box-shadow: inset -1px 0 0 #1a1918; }
-/* What the range holds, shaded from the held end toward the end that stays. */
-.timeline-range-loupe-row::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--now); background: rgba(244, 241, 233, .16); pointer-events: none; }
-.timeline-range-loupe-row[data-inside="after"]::after { inset: 0 0 0 auto; width: calc(100% - var(--now)); }
-.timeline-range-loupe-ticks { position: absolute; inset: auto 0 0; height: 12px; }
-.timeline-range-loupe-ticks i { position: absolute; bottom: 0; width: 1px; height: 5px; background: #87847f; }
-.timeline-range-loupe-ticks i.is-second { height: 10px; background: #c9c5bd; }
-.timeline-range-loupe-ticks i.is-edge { height: 100%; background: rgba(255, 160, 156, .9); }
-.timeline-range-loupe-now { position: absolute; z-index: 1; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #f4f1e9; box-shadow: 0 0 0 1px rgb(0 0 0 / 50%); }
+.timeline-range-loupe-head { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.timeline-range-loupe-head b { padding: 2px 6px; border-radius: 3px; background: #f4f1e9; color: #1a1918; font: 600 12px/1.2 var(--font-mono); font-variant-numeric: tabular-nums; }
+.timeline-range-loupe-head small { color: rgba(255, 160, 156, .95); font-size: 11px; }
+.timeline-range-loupe-row { position: relative; height: calc(var(--picture-height) + 18px); overflow: hidden; border-radius: 3px; background: #2d2b28; }
+.timeline-range-loupe-film { position: absolute; inset: 0 auto 0 50%; transition: transform 70ms linear; }
+@media (prefers-reduced-motion: reduce) { .timeline-range-loupe-film { transition: none; } }
+/* A picture's still is cropped to its slot; its frame tick hangs under it, and a whole second's is taller and carries its time. */
+.timeline-range-loupe-picture { position: absolute; top: 0; width: var(--loupe-picture); height: var(--picture-height); }
+.timeline-range-loupe-still { position: absolute; inset: 0; overflow: hidden; background: #000; box-shadow: inset -1px 0 0 #1a1918; }
+.timeline-range-loupe-still img { position: absolute; top: 0; left: 0; display: block; width: 100%; height: 100%; max-width: none; object-fit: cover; }
+.timeline-range-loupe-still img[style] { object-fit: fill; }
+.timeline-range-loupe-tick { position: absolute; left: 50%; top: calc(100% + 2px); width: 1px; height: 4px; background: #87847f; }
+.timeline-range-loupe-tick.is-second { height: 8px; background: #c9c5bd; }
+.timeline-range-loupe-tick.is-edge { top: 0; height: calc(100% + 12px); width: 2px; margin-left: -1px; background: rgba(255, 160, 156, .9); }
+.timeline-range-loupe-picture > small { position: absolute; left: calc(50% + 4px); top: calc(100% + 4px); color: #aaa69e; font: 10px/1 var(--font-mono); white-space: nowrap; }
+/* The side of the line the range holds is shaded. */
+.timeline-range-loupe-row::after { content: ""; position: absolute; inset: 0 50% 0 0; background: rgba(244, 241, 233, .14); pointer-events: none; }
+.timeline-range-loupe[data-inside="after"] .timeline-range-loupe-row::after { inset: 0 0 0 50%; }
+.timeline-range-loupe-now { position: absolute; z-index: 1; top: 0; left: 50%; height: var(--picture-height); width: var(--loupe-picture); margin-left: calc(var(--loupe-picture) / -2);
+  box-sizing: border-box; border: 2px solid #f4f1e9; border-radius: 2px; box-shadow: 0 0 0 1px rgb(0 0 0 / 50%); }
+.timeline-range-loupe-now::after { content: ""; position: absolute; left: 50%; top: 100%; width: 2px; height: 18px; margin-left: -1px; background: #f4f1e9; }
+.timeline-range-loupe-hint { justify-self: center; color: #8d8981; font-size: 11px; }
 .timeline-playhead.is-gliding, .timeline-playhead-time.is-gliding { transition: left .26s cubic-bezier(.3, .7, .3, 1), transform .26s cubic-bezier(.3, .7, .3, 1); }
 .timeline-playhead::before {
   content: ""; position: absolute; left: 50%; top: -5px; transform: translateX(-50%);
@@ -390,3 +398,41 @@
   font-size: 10px;
   opacity: .75;
 }
+
+/* The files the next message carries: a line attached to the top of the box, one row each, read as the queue's rows
+   are. Under the queue's tray it sits nearest the box. */
+.composer-dock[data-file-drop] { position: relative; }
+.composer-files { min-width: 0; margin-bottom: calc(-1 * var(--model-row-gap, 9px)); padding: 2px 4px; border: 1px solid var(--color-line); border-bottom: 0;
+  border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); font-size: 12.5px; color: var(--color-muted); }
+.composer-files + .composer-box { border-top-left-radius: 0; border-top-right-radius: 0; }
+.queue-tray + .composer-files { border-radius: 0; }
+.composer-file { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 30px; padding: 0 4px 0 6px; border-radius: 6px; }
+.composer-file:hover, .composer-file:focus-within { background: var(--color-raised); color: var(--color-fg); }
+.composer-file-icon { flex: none; display: inline-grid; place-items: center; width: 16px; color: var(--color-dim); }
+.composer-file-name { flex: 1 1 6em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-file.is-adding .composer-file-name { color: var(--color-dim); }
+.composer-file-state { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-dim); }
+.composer-file-state.is-bad { color: var(--color-bad); }
+.composer-file-remove { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: none;
+  color: var(--color-dim); cursor: pointer; }
+.composer-file:hover .composer-file-remove, .composer-file-remove:focus-visible { color: var(--color-muted); }
+.composer-file-remove:hover { background: var(--color-line); color: var(--color-fg); }
+/* A file held over the box: the box takes it for the message, not the project. */
+.composer-drop { position: absolute; inset: 4px; z-index: 6; display: grid; place-items: center; border: 2px dashed rgba(241, 241, 241, .4); border-radius: 10px;
+  background: rgba(24, 24, 24, .95); color: var(--color-fg); font-size: 13px; font-weight: 500; pointer-events: none; }
+
+/* The $ list reads as the / list does. Each template's row shows its picture over the frame under the playhead. */
+.composer-skill-list .composer-template { display: flex; align-items: center; gap: 10px; padding: 5px 8px 5px 5px; }
+.composer-template-thumb { position: relative; flex: none; width: 76px; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 4px; background: #0b0b0b;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06); }
+.composer-template-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.composer-template-thumb img + img { object-fit: fill; }
+.composer-template-words { display: grid; min-width: 0; }
+.composer-template-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--color-fg); }
+.composer-template-fields { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--color-dim); }
+.composer-style-guide { display: flex; gap: 10px; min-width: 0; padding: 6px 8px 2px; font-size: 12px; color: var(--color-dim); white-space: nowrap; }
+.composer-style-guide-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--color-muted); }
+/* The template lit in that list, over the player's picture until the list closes. */
+.template-on-picture { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
+/* A rail on the right of the player is resized from its left edge. */
+.chat-divider.is-left { right: auto; left: -5px; }

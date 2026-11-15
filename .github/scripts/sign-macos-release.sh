@@ -31,11 +31,17 @@ unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
 # resources, so they also need our Developer ID for Apple notarization.
 while IFS= read -r -d '' binary; do
   codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$binary"
-done < <(find apps/desktop/src-tauri/binaries/{speaker-runtime,uhm-runtime} -type f \( -name '*.dylib' -o -name '*.node' \) -print0)
+done < <(find apps/desktop/src-tauri/binaries/{speaker-runtime,uhm-runtime,chrome-headless-shell} -type f \( -name '*.dylib' -o -name '*.node' \) -print0)
+# The headless browser renders motion graphics. It runs its own renderer processes, which compile JavaScript.
+chrome=apps/desktop/src-tauri/binaries/chrome-headless-shell/chrome-headless-shell
+codesign --force --timestamp --options runtime --entitlements apps/desktop/src-tauri/ChromeEntitlements.plist \
+  --sign "$APPLE_SIGNING_IDENTITY" "$chrome"
+codesign --verify --strict --verbose=2 "$chrome"
 
 pnpm --filter @scarlet/desktop exec tauri bundle --target "$1" --bundles app,dmg
 app="$BUNDLE/macos/Scarlet.app"
 codesign --verify --deep --strict --verbose=2 "$app"
+codesign --verify --strict -R="anchor apple generic and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\"" "$app/Contents/Resources/chrome-headless-shell/chrome-headless-shell"
 codesign --verify -R="anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\"" "$app"
 xcrun stapler validate "$app"
 spctl --assess --type execute --verbose=2 "$app"

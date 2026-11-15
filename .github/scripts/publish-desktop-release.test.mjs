@@ -13,14 +13,17 @@ const tag = "v" + version;
 const unsigned = { unsignedOnce: true, runId: "1234" };
 const names = ["macOS-Apple-Silicon.dmg", "macOS-Intel.dmg", "Windows-x64-Setup.exe", "Windows-x64.msi"]
   .map(suffix => `Scarlet-${version}-${suffix}`);
+const updateFiles = [`Scarlet-${version}-macOS-Apple-Silicon.app.tar.gz`, `Scarlet-${version}-macOS-Intel.app.tar.gz`, "latest.json"];
+const stableAssets = [...names, ...updateFiles];
 const content = name => Buffer.from("fixture-" + name);
-const asset = name => ({ name, id: names.indexOf(name) + 1, state: "uploaded", size: content(name).length,
+const asset = name => ({ name, id: stableAssets.indexOf(name) + 1, state: "uploaded", size: content(name).length,
   digest: "sha256:" + createHash("sha256").update(content(name)).digest("hex") });
 
-async function fixture(t) {
+async function fixture(t, unsignedOnce = false) {
+  const expected = unsignedOnce ? names : stableAssets;
   const directory = await mkdtemp(path.join(tmpdir(), "scarlet-release-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  for (const name of names) await writeFile(path.join(directory, name), content(name));
+  for (const name of expected) await writeFile(path.join(directory, name), content(name));
   const state = {
     ref: null, release: null, assets: [], writes: [], rejectUpload: null, corruptDigest: false,
     draft: { id: 17, tag_name: tag, target_commitish: sha, draft: true, prerelease: false,
@@ -73,7 +76,7 @@ async function fixture(t) {
     }
     if (method === "PATCH" && route === "/releases/17") {
       assert.deepEqual(JSON.parse(body), { draft: false, make_latest: "legacy" });
-      assert.deepEqual(state.assets.map(file => file.name).sort(), names.slice().sort());
+      assert.deepEqual(state.assets.map(file => file.name).sort(), expected.slice().sort());
       state.release.draft = false;
       return reply(state.release);
     }
@@ -87,11 +90,19 @@ test("publishes one verified stable release and leaves a subsequent rerun read-o
   const remote = await fixture(t);
   assert.equal(await remote.publish(), remote.draft.html_url);
   assert.equal(remote.release.draft, false);
-  assert.equal(remote.writes.filter(write => write === "POST /releases/17/assets").length, 4);
+  assert.equal(remote.writes.filter(write => write === "POST /releases/17/assets").length, 7);
   assert.doesNotMatch(remote.release.body, /are unsigned|ad hoc signed/);
   remote.writes.length = 0;
   await remote.publish();
   assert.deepEqual(remote.writes, []);
+});
+
+test("the updater-signed release discloses OS signing and includes the same verified update feed", async t => {
+  const remote = await fixture(t);
+  await remote.publish({ updaterSignedOnly: true });
+  assert.match(remote.release.body, /Both Windows installers are unsigned/);
+  assert.match(remote.release.body, /Restart to update/);
+  assert.ok(remote.assets.some(asset => asset.name === "latest.json"));
 });
 
 test("resumes a partial draft and recovers an empty interrupted upload", async t => {
@@ -105,7 +116,7 @@ test("resumes a partial draft and recovers an empty interrupted upload", async t
   remote.rejectUpload = null;
   await remote.publish();
   assert.ok(remote.writes.includes("DELETE /releases/assets/42"));
-  assert.equal(remote.writes.filter(write => write === "POST /releases/17/assets").length, 3);
+  assert.equal(remote.writes.filter(write => write === "POST /releases/17/assets").length, 6);
 });
 
 test("accepts a preexisting annotated tag for the exact release revision", async t => {
@@ -131,9 +142,9 @@ test("rejects unexpected or missing local files before modifying any tags or rel
   const remote = await fixture(t);
   await rm(path.join(remote.directory, names[3]));
   await writeFile(path.join(remote.directory, "different.msi"), "wrong asset");
-  await assert.rejects(remote.publish, /exactly these four/);
+  await assert.rejects(remote.publish, /exactly these release files/);
   await rm(path.join(remote.directory, "different.msi"));
-  await assert.rejects(remote.publish, /exactly these four/);
+  await assert.rejects(remote.publish, /exactly these release files/);
   await writeFile(path.join(remote.directory, names[3]), "");
   await assert.rejects(remote.publish, /Empty installer/);
   assert.deepEqual(remote.writes, []);
@@ -143,11 +154,11 @@ test("refuses changed or extra remote assets and never repairs a published relea
   const remote = await fixture(t);
   remote.ref = { type: "commit", sha };
   remote.release = { ...remote.draft, draft: false };
-  remote.assets = names.slice(1).map(asset);
+  remote.assets = stableAssets.slice(1).map(asset);
   await assert.rejects(remote.publish, /is missing/);
   remote.assets.push({ ...asset(names[0]), digest: "sha256:wrong" });
   await assert.rejects(remote.publish, /does not match/);
-  remote.assets = [...names.map(asset), { ...asset(names[0]), name: "extra.dmg" }];
+  remote.assets = [...stableAssets.map(asset), { ...asset(names[0]), name: "extra.dmg" }];
   await assert.rejects(remote.publish, /Unexpected or duplicate/);
   assert.deepEqual(remote.writes, []);
 });
@@ -169,7 +180,7 @@ test("a concurrent tag change blocks publication after all the uploads", async t
 });
 
 test("the unsigned exception uploads exactly four verified installers and discloses their signing and media setup", async t => {
-  const remote = await fixture(t);
+  const remote = await fixture(t, true);
   await remote.publish(unsigned);
   assert.equal(remote.release.draft, false);
   assert.deepEqual(remote.assets.map(file => file.name), names);
@@ -184,7 +195,7 @@ test("the unsigned exception uploads exactly four verified installers and disclo
 });
 
 test("the unsigned exception rejects another version, another revision, an existing draft, or a preexisting exact tag", async t => {
-  const remote = await fixture(t);
+  const remote = await fixture(t, true);
   for (const override of [{ repository: "another/scarlet" }, { version: "9.9.9" }, { sha: otherSha }]) {
     await assert.rejects(remote.publish({ ...unsigned, ...override }), /does not authorize/);
   }
@@ -197,14 +208,16 @@ test("the unsigned exception rejects another version, another revision, an exist
 });
 
 test("only the original run resumes its partial unsigned draft and its empty interrupted upload", async t => {
-  const remote = await fixture(t);
+  const remote = await fixture(t, true);
   remote.rejectUpload = names[2];
   await assert.rejects(remote.publish(unsigned), /502/);
   assert.equal(remote.release.draft, true);
   remote.writes.length = 0;
   remote.rejectUpload = null;
   await assert.rejects(remote.publish({ ...unsigned, runId: "5678" }), /does not match the notes/);
+  for (const name of updateFiles) await writeFile(path.join(remote.directory, name), content(name));
   await assert.rejects(remote.publish(), /Only the original unsigned workflow/);
+  for (const name of updateFiles) await rm(path.join(remote.directory, name));
   assert.deepEqual(remote.writes, []);
   remote.assets.push({ name: names[2], id: 42, state: "starter", size: 0 });
   assert.equal(await remote.publish(unsigned), remote.draft.html_url);
@@ -212,7 +225,7 @@ test("only the original run resumes its partial unsigned draft and its empty int
 });
 
 test("an unsigned draft whose release notes change during upload stays private", async t => {
-  const remote = await fixture(t);
+  const remote = await fixture(t, true);
   remote.editNotesAfterUpload = names.at(-1);
   await assert.rejects(remote.publish(unsigned), /changed during upload/);
   assert.equal(remote.release.draft, true);
@@ -220,7 +233,7 @@ test("an unsigned draft whose release notes change during upload stays private",
 });
 
 test("a failure to create its tag leaves a marked unsigned draft that the same run can resume", async t => {
-  const remote = await fixture(t);
+  const remote = await fixture(t, true);
   remote.rejectTag = true;
   await assert.rejects(remote.publish(unsigned), /503/);
   assert.equal(remote.ref, null);
@@ -235,7 +248,7 @@ test("a failure to create its tag leaves a marked unsigned draft that the same r
 });
 
 test("the same unsigned run refuses changed existing bytes, notes and tags without writing", async t => {
-  const remote = await fixture(t);
+  const remote = await fixture(t, true);
   remote.rejectUpload = names[1];
   await assert.rejects(remote.publish(unsigned), /502/);
   remote.writes.length = 0;

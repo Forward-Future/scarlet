@@ -1,0 +1,11 @@
+# Ubuntu 24.04 lets only profiled programs create the user namespaces Chrome sandboxes its renderers in.
+# This lets Scarlet's bundled headless browser, which renders motion graphics, do the same as Ubuntu's own
+# profile for Google Chrome does.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile scarlet-chrome-headless-shell /usr/lib/Scarlet/chrome-headless-shell/chrome-headless-shell flags=(unconfined) {
+  userns,
+
+  include if exists <local/scarlet-chrome-headless-shell>
+}

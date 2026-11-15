@@ -360,7 +360,8 @@ pub fn desktop_log(level: Option<String>, message: UiLogMessage) {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopInfo {
-    pub local_updates: bool,
+    /// Where this copy gets its updates, when it gets any.
+    pub updates: Option<crate::updates::Source>,
     pub custom_openai_models: Vec<String>,
     pub custom_claude_models: Vec<String>,
     pub version: String,
@@ -375,7 +376,7 @@ pub struct DesktopInfo {
 #[tauri::command]
 pub fn desktop_info(app: AppHandle, state: State<'_, AppState>) -> DesktopInfo {
     DesktopInfo {
-        local_updates: crate::updates::socket_path(&app).is_some(),
+        updates: tauri::Manager::try_state::<crate::updates::Source>(&app).map(|source| *source),
         custom_openai_models: state.paths.custom_openai_models(),
         custom_claude_models: state.paths.custom_claude_models(),
         version: env!("CARGO_PKG_VERSION").into(),

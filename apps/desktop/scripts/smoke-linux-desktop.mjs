@@ -2,7 +2,7 @@
 // Usage on Ubuntu 24.04: node apps/desktop/scripts/smoke-linux-desktop.mjs
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -114,6 +114,16 @@ try {
   assert.match(url, /^http:\/\/127\.0\.0\.1:\d+$/);
   assert.ok(token);
   step("Installed desktop and engine ready");
+
+  // The engine renders motion graphics in the bundled headless browser, sandboxed under the package's AppArmor profile.
+  const engineEnv = readFileSync("/proc/" + pid + "/environ", "latin1").split("\0");
+  const chrome = engineEnv.find(entry => entry.startsWith("SCARLET_CHROME="))?.slice("SCARLET_CHROME=".length);
+  assert.match(chrome ?? "", /^\/usr\/lib\/.+\/chrome-headless-shell\/chrome-headless-shell$/, "The desktop shell points the engine at its bundled browser");
+  const page = execFileSync(chrome, ["--headless", "--user-data-dir=" + join(profile, "chrome"), "--dump-dom",
+    "data:text/html,<p id=graphic></p><script>graphic.textContent = [1, 2, 3].map(n => n * 2).join()</script>"],
+  { env: { HOME: profile, PATH: env.PATH, LANG: env.LANG }, encoding: "utf8", timeout: 60_000, stdio: ["ignore", "pipe", "inherit"] });
+  assert.match(page, /<p id="graphic">2,4,6<\/p>/);
+  step("Bundled headless browser ran the page's script in its sandbox");
 
   const fetchApi = (path, method = "GET", body) => fetch(url + "/api" + path, {
     method, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },

@@ -282,6 +282,10 @@ describe("native retake boundaries", () => {
     expect(cut.text).toBe("first");
     expect(cut.start).toBeCloseTo(1.44 + AIR_AFTER_SPEECH);
     expect(cut.end).toBeCloseTo(3.4 - AIR_BEFORE_SPEECH);
+    // The agent can say how long the join's pause plays instead: 0.3 s, split as the default padding is.
+    const roomy = wordCutRange(words, 1, 1, at, .3);
+    expect(roomy.start).toBeCloseTo(1.44 + .18);
+    expect(roomy.end).toBeCloseTo(3.4 - .12);
     // Without a kept neighbor the cut runs to the start or end of the material.
     expect(wordCutRange(words, 0, 0, at).start).toBe(0);
     expect(wordCutRange(words, 2, 2, at).end).toBe(Infinity);

@@ -24,6 +24,13 @@ fn main() {
     let _ = std::fs::create_dir_all(&dir);
     std::fs::create_dir_all(dir.join("uhm-runtime")).expect("create runtime resources directory");
     std::fs::create_dir_all(dir.join("speaker-runtime")).expect("create speaker runtime directory");
+    // Motion graphics render in the headless shell that `pnpm desktop:chrome` fetches here. Until then the folder holds a
+    // note, the app leaves SCARLET_CHROME unset and the engine looks for an installed Chrome.
+    let chrome = dir.join("chrome-headless-shell");
+    std::fs::create_dir_all(&chrome).expect("create headless browser directory");
+    if std::fs::read_dir(&chrome).map(|mut entries| entries.next().is_none()).unwrap_or(true) {
+        let _ = std::fs::write(chrome.join("README.txt"), "Run pnpm desktop:chrome to fetch the headless browser Scarlet renders motion graphics with.\n");
+    }
     if target == "x86_64-unknown-linux-gnu" {
         let cpu = dir.join("whisper-cpu");
         std::fs::create_dir_all(&cpu).expect("create optimized Whisper runtime directory");

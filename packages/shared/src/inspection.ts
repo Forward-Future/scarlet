@@ -29,6 +29,8 @@ export interface JoinHearing { at: number; mediaId: string; side: "out" | "in"; 
   /** A fragment: the kept word beside it, which plays whole, and where it starts (in) or ends (out) in the recording. */
   keptWord?: string; keptWordAt?: number;
   source: number }
+/** How many played joins have a side in a recording whose language can't be read letter by letter, and the timeline seconds they span. */
+export interface UnheardJoins { mediaId: string; reason: string; joins: number; from: number; to: number }
 export interface RepeatAuditResult {
   version: string;
   heard: number;
@@ -39,6 +41,8 @@ export interface RepeatAuditResult {
   unavailable?: { mediaId: string; reason: string }[];
   /** Joins in scope that sound cut through a kept word or play a leftover of a removed one. */
   joins?: JoinHearing[];
+  /** Joins in scope with a side that wasn't heard, per recording. */
+  unheardJoins?: UnheardJoins[];
 }
 
 /** Subtracting two times in seconds can land a hair past an exact limit (16.1 - 8.1 > 8): a window that long still counts. */

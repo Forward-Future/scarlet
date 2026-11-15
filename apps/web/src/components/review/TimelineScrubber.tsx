@@ -17,6 +17,7 @@ import { useTimelineZoom } from "./useTimelineZoom";
 import { rangeEdges, useRangeSelect } from "./TimelineRange";
 import { useArrival, useLaneHold, wavePhase } from "./laneLoading";
 import type { ProgressFocus } from "../player/SimpleProgress";
+import { editUnder, layoutEdits, type EditLayout, type TimelineEdit } from "./timelineEdits";
 
 /** Hovering a chat row lights its marker without re-rendering the workspace. */
 export const EditHoverContext = createContext(createStore<number | undefined>(() => undefined));
@@ -208,6 +209,11 @@ interface TimelineScrubberProps {
    * with them it draws no diamond for a caption clip or an edit.
    */
   marks?: TimelineDot[];
+  /**
+   * Every other applied edit on the working cut, drawn under the marks, quieter: a line, a bar or a tick each, gathered
+   * into counts where they would touch. A press opens the edit, or zooms to a count's stretch.
+   */
+  edits?: TimelineEdit[];
   /** Footage other cuts took out, marked over the version the timeline shows. */
   gaps?: TimelineGap[];
   /** Passages the current playback skips, in this timeline's clock. */
@@ -225,8 +231,6 @@ interface TimelineScrubberProps {
   onRange?(range: TimeRange | undefined, byKey?: boolean): void;
   /** The video's frame rate: a marked range's ends sit on frames. */
   fps?: number;
-  /** A line above the ruler: whose edits the marks are, in the simple view. */
-  heading?: ReactNode;
 }
 
 /**
@@ -292,6 +296,8 @@ export interface TimelineDot {
   quiet?: boolean;
   /** The edit or call that's open. Its marker is lit, and while its band is on the timeline the band stands in for it. */
   current?: boolean;
+  /** The applied edit the dot stands for ("changeId/spot"), so it isn't drawn a second time under the dot. */
+  edit?: string;
   /** Opens the edit. A press on its marker does this instead of starting a scrub. */
   open?(): void;
   /** The edit was applied a moment ago: its marker arrives with a moment, a cut's red closing up into it first. */
@@ -485,7 +491,7 @@ export function TimelineScrubber(props: TimelineScrubberProps) {
 }
 
 function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, subject, kept,
-  pictureAspect = 16 / 9, frameAt, previewStrip, hoverVideo, onSeek, onSelectTime, onScrubStart, highlight, marks, gaps, skippedRanges, onGap, onBand, range, onRange, fps = 30, heading }:
+  pictureAspect = 16 / 9, frameAt, previewStrip, hoverVideo, onSeek, onSelectTime, onScrubStart, highlight, marks, edits, gaps, skippedRanges, onGap, onBand, range, onRange, fps = 30 }:
   TimelineScrubberProps & { subject: string; kept: RefObject<KeptView | undefined> }) {
   const litMark = useStore(useContext(EditHoverContext));
   // The message box's icon is open: the passage the message is about lights up.
@@ -570,6 +576,19 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
     // A cut just applied: a sliver of its red closes up where the footage came out, then its marker arrives.
     return landed === "cut" ? [<i key={`${key}-closing`} aria-hidden="true" className="simple-timeline-closing" style={{ left: `${at}%` }} />, mark] : mark;
   })}</>, [markLayout, hotMark, litMark]);
+  // Every applied edit, under the marks. The playhead re-renders the strip every frame, so these are built only when
+  // the edits or the view change.
+  const editLayout = useMemo(() => edits?.length ? layoutEdits(edits, from, span, width,
+    markLayout.filter(mark => !mark.quiet).map(mark => ({ x: mark.at / 100 * width, w: mark.width }))) : [], [edits, from, span, width, markLayout]);
+  const [hotEdit, setHotEdit] = useState<string>();
+  const editNodes = useMemo(() => <>{editLayout.map(mark => {
+    const hot = mark.key === hotEdit;
+    if (mark.shape === "count") return <i key={mark.key} aria-hidden="true" className={`simple-timeline-edit is-count${hot ? " is-hot" : ""}`}
+      style={{ left: `${mark.at}%`, width: mark.width, marginLeft: -mark.width / 2 }}><span>{mark.label}</span></i>;
+    const kind = mark.edits[0]!.kind;
+    return <i key={mark.key} aria-hidden="true" data-kind={kind} className={`simple-timeline-edit is-${mark.shape}${hot ? " is-hot" : ""}`}
+      style={{ left: `${mark.at}%`, ...(mark.shape === "bar" || mark.shape === "dim") && { width: `${Math.max(0, mark.to - mark.at)}%`, "--edit-lane": mark.lane ?? 0 } as CSSProperties }} />;
+  })}</>, [editLayout, hotEdit]);
   // The hovered marker's note rides in the scrub preview, under its frame, so hovering shows one card.
   const hotDots = hotMark === undefined ? undefined : markLayout.find(mark => mark.key === hotMark)?.dots;
   const markNote = hotDots && <span className="simple-timeline-tip is-joined">
@@ -580,6 +599,18 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
       {dot.context && dot.context !== dot.summary && <em>{dot.context}</em>}
     </span>)}
     {hotDots.length > MOST_NOTES && <span><small>and {hotDots.length - 1} more here</small></span>}
+  </span>;
+  const hotEditMark = hotEdit === undefined ? undefined : editLayout.find(mark => mark.key === hotEdit);
+  const editNote = hotEditMark && <span className="simple-timeline-tip is-joined">
+    {hotEditMark.shape === "count" ? <span>
+      <b>{hotEditMark.label}</b>
+      <small>{playbackClock(hotEditMark.start)}–{playbackClock(hotEditMark.end)} · Click to zoom in</small>
+    </span> : hotEditMark.edits.map((dot, i) => <span key={i}>
+      <b>{dot.title}</b>
+      {dot.summary && <span className="simple-timeline-tip-summary">{dot.summary}</span>}
+      {dot.detail && <small>{dot.detail}</small>}
+      {dot.context && dot.context !== dot.summary && <em>{dot.context}</em>}
+    </span>)}
   </span>;
   // Skipped footage names its edit the same way.
   const [hotGap, setHotGap] = useState<TimelineGap>();
@@ -617,24 +648,39 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
   // Hovering a tick still lights its number.
   const [aimed, setAimed] = useState(false);
   const pressable = useMemo(() => markLayout.filter(mark => !mark.quiet), [markLayout]);
-  const markUnder = (e: PointerEvent<HTMLElement>) => {
+  // A count opens into its edits: a press zooms to its stretch. Zoomed in as far as the timeline goes, it opens its first.
+  const openEdits = (mark: EditLayout) => {
+    if (mark.shape !== "count") return mark.edits[0]!.open;
+    if (span > minSpan * 1.05) return () => {
+      const pad = Math.max(.5, (mark.end - mark.start) * .15);
+      fitRange(Math.max(start, mark.start - pad), Math.min(end, mark.end + pad));
+    };
+    return mark.edits.find(edit => edit.open)?.open;
+  };
+  // What needs the editor wins: a marker under the pointer comes before the applied edits drawn beneath it.
+  const markUnder = (e: PointerEvent<HTMLElement>): { mark?: MarkLayout; edit?: EditLayout; open?: () => void } => {
     const box = e.currentTarget.getBoundingClientRect();
     if (!box.width) return {};
     const at = (e.clientX - box.left) / box.width * 100;
     const press = nearestMark(pressable, at, box.width);
     const on = !!press && Math.abs(press.at - at) * box.width / 100 <= press.width / 2 + MARK_GAP;
+    if (on) return { mark: press, open: press.dots.find(dot => dot.open)?.open };
+    const edit = editUnder(editLayout, at, box.width);
+    if (edit) return { edit, open: openEdits(edit) };
     // The note names what a press would open.
-    return { mark: on ? press : nearestMark(markLayout, at, box.width), open: on ? press.dots.find(dot => dot.open)?.open : undefined };
+    return { mark: nearestMark(markLayout, at, box.width) };
   };
   const hoverMark = (e: PointerEvent<HTMLElement>) => {
     if (drag.current || e.pointerType === "touch") return;
-    const { mark, open } = markUnder(e);
+    const { mark, edit, open } = markUnder(e);
     setHotMark(mark?.key);
+    setHotEdit(edit?.key);
     setAimed(!!open);
   };
   // A press on a marker opens its edit, or the first edit of a pill, instead of starting a scrub.
   const pressMark = (e: PointerEvent<HTMLElement>) => {
     setHotMark(undefined);
+    setHotEdit(undefined);
     const { open } = markUnder(e);
     if (!open || e.button !== 0 || !e.isPrimary || drag.current) return;
     e.stopPropagation();
@@ -688,7 +734,9 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
   }, [start, end]);
   // Where a marked range's end lands when it comes near: the edges of the open edit, of footage cuts took out, and each marked edit.
   const edges = useMemo(() => rangeEdges(highlight?.band, gaps, marks), [highlight?.band, gaps, marks]);
-  const marking = useRangeSelect({ slider, drag, from, span, start, end, fps, edges, frameAt, pictureAspect, range, onRange: onRange ?? noRange, onSeek,
+  // The close-up's strip loads a run of frames per request from the same cache as the filmstrip.
+  const sheet = useMemo(() => previewStrip ? { fps: previewStrip.fps, url: (frames: number[]) => stripUrl(previewStrip, frames) } : undefined, [previewStrip]);
+  const marking = useRangeSelect({ slider, drag, from, span, start, end, fps, edges, frameAt, sheet, pictureAspect, range, onRange: onRange ?? noRange, onSeek,
     onScrubStart, onPress: selectPosition, beforeGesture: stopZoom });
   const zoomControls = <div className="timeline-zoom-row" role="group" aria-label="Timeline zoom">
     <button type="button" className="timeline-zoom-step" aria-label="Zoom out" title="Zoom out (−)" disabled={intendedSpan >= total} onClick={() => zoomBy(.5)}>−</button>
@@ -697,8 +745,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
     <button type="button" className="timeline-fit" aria-label="Fit timeline" title="Show full timeline (0)" disabled={intendedSpan >= total} onClick={() => fitRange()}>Fit</button>
   </div>;
   return <div className="timeline-panel" onKeyDown={e => handleZoomKey(e.nativeEvent)}>
-    {heading && <div className="timeline-heading">{heading}</div>}
-    <div ref={track} className={marking.marking ? "timeline-track is-marking" : "timeline-track"}><ScrubPreview start={from} duration={span} pictureAspect={pictureAspect} frameAt={frameAt} hoverVideo={hoverVideo} note={markNote || gapNote}>
+    <div ref={track} className={marking.marking ? "timeline-track is-marking" : "timeline-track"}><ScrubPreview start={from} duration={span} pictureAspect={pictureAspect} frameAt={frameAt} hoverVideo={hoverVideo} note={markNote || editNote || gapNote}>
     <div ref={slider} className="timeline-slider" role="slider" tabIndex={total ? 0 : -1} aria-disabled={!total}
       aria-label="Position in the video" aria-valuemin={start} aria-valuemax={end} aria-valuenow={position} aria-valuetext={playbackClock(position)}
       onPointerDown={e => {
@@ -771,8 +818,9 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
           <span aria-hidden="true" className="simple-timeline-cut" style={{ left: `${percent(highlight.band.start)}%` }}>
             {highlight.bandLabel && <span>{highlight.bandLabel}</span>}</span>)}
       {gapNodes}
-      {markLayout.length > 0 && <div aria-hidden="true" className={aimed ? "simple-timeline-hover is-aimed" : "simple-timeline-hover"}
-        onPointerMove={hoverMark} onPointerLeave={() => { setHotMark(undefined); setAimed(false); }} onPointerDown={pressMark} />}
+      {editNodes}
+      {(markLayout.length > 0 || editLayout.length > 0) && <div aria-hidden="true" className={aimed ? "simple-timeline-hover is-aimed" : "simple-timeline-hover"}
+        onPointerMove={hoverMark} onPointerLeave={() => { setHotMark(undefined); setHotEdit(undefined); setAimed(false); }} onPointerDown={pressMark} />}
       {markNodes}
       {marking.layer}
       {position >= from && position <= to && <>

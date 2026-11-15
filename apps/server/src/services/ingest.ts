@@ -711,6 +711,8 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     // scan pages run while alignment goes on. `aligning.through` says how far the times are final, and whatever
     // turns a word into a cut edge waits for alignment to pass it.
     const alignable = alignsLanguage(result.language) && result.segments.some(s => s.words.length);
+    // Whisper kept the lane for alignment, which this recording won't have: its speakers needn't wait out the hold.
+    if (!alignable && provider.name === "whispercpp") lane.release(work);
     if (alignable && !saved.alignment) early = !!save(result.segments, { through: 0, nextWord: 0, fraction: 0 });
     progress.aligning(saved.alignment?.fraction ?? 0);
     // The old process's scratch WAV is gone. Recreate the shared decode before alignment or the gap check reads it.

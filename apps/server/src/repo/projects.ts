@@ -1,4 +1,4 @@
-import { MediaAsset, Project, ProjectSettings, Timeline, timelineDuration, type Change, type Note } from "@scarlet/timeline";
+import { MediaAsset, Project, ProjectSettings, StyleGuide, Timeline, timelineDuration, type Change, type Note } from "@scarlet/timeline";
 import { countReviewDecisions, type ProjectSummary, type Task } from "@scarlet/shared";
 import { now, type Db } from "../db.js";
 import type { JsonStore } from "./store.js";
@@ -10,6 +10,7 @@ export type MediaWithStatus = MediaAsset & { status: MediaStatus; error?: string
 
 interface ProjectRow {
   completed_threads: string;
+  style_guide?: string | null;
   media_paused: number;
   archived: number;
   branch: string;
@@ -142,6 +143,11 @@ export class ProjectsRepo {
     return this.get(id)!;
   }
 
+  /** The project's one style guide, replacing any before it; undefined removes it. */
+  saveStyleGuide(id: string, guide: StyleGuide | undefined) {
+    this.db.prepare("UPDATE projects SET style_guide = ? WHERE id = ?").run(guide ? JSON.stringify(StyleGuide.parse(guide)) : null, id);
+  }
+
   saveCompletedThreads(id: string, threads: Record<string, string>) {
     this.db.prepare("UPDATE projects SET completed_threads = ?, review_revision = review_revision + 1 WHERE id = ?").run(JSON.stringify(threads), id);
   }
@@ -178,7 +184,7 @@ export class ProjectsRepo {
     // one cut sent back for revision keeps its other calls open while that revision is. Only then is the project read.
     // The task states are listed as the tasks_thread_pending index lists them, so that lookup uses it.
     return rows.map(row => ({
-      ...projectHeader(row), mediaCount: row.media_count, pendingChanges: row.may_wait ? this.reviewCount(row.id, row.review_revision, row.completed_threads) : 0, openNotes: row.open_notes,
+      ...projectHeader(row, false), mediaCount: row.media_count, pendingChanges: row.may_wait ? this.reviewCount(row.id, row.review_revision, row.completed_threads) : 0, openNotes: row.open_notes,
       poster: row.poster_id ? { mediaId: row.poster_id, time: Math.min(2, (row.poster_duration ?? 4) / 2) } : null,
       duration: row.head_duration ?? (row.head ? this.headDuration(row.id, row.head) : undefined),
     }));
@@ -239,7 +245,8 @@ export class ProjectsRepo {
 }
 
 const Header = Project.omit({ media: true });
-function projectHeader(row: ProjectRow): Omit<Project, "media"> {
-  return Header.parse({ id: row.id, completedThreads: JSON.parse(row.completed_threads), name: row.name, mediaPaused: !!row.media_paused, archived: Boolean(row.archived), branch: row.branch, settings: JSON.parse(row.settings), head: row.head,
+function projectHeader(row: ProjectRow, styleGuide = true): Omit<Project, "media"> {
+  // The list of projects leaves the guide out: pasted text can be long, and only an open project shows it.
+  return Header.parse({ ...(styleGuide && row.style_guide && { styleGuide: JSON.parse(row.style_guide) }), id: row.id, completedThreads: JSON.parse(row.completed_threads), name: row.name, mediaPaused: !!row.media_paused, archived: Boolean(row.archived), branch: row.branch, settings: JSON.parse(row.settings), head: row.head,
     createdAt: row.created_at, updatedAt: row.updated_at });
 }

@@ -82,6 +82,7 @@ export function uploadMedia(
 
 export const ACCEPTED_MEDIA = "video/*,audio/*,image/*,.mov,.mp4,.mkv,.wav,.mp3,.aac,.png,.jpg,.jpeg,.webp";
 export const MEDIA_FORMAT_HINT = "Common formats include MP4 and MOV video, WAV and MP3 audio, and PNG and JPEG images.";
+export const MEDIA_FORMATS = "MP4, MOV, WAV, MP3, PNG, JPEG";
 
 export function isPreparingMedia(m: MediaAsset): boolean {
   return m.status === "ingesting" || (m.status === undefined && m.kind !== "image" && !m.duration);

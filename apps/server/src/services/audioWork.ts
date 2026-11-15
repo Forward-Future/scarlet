@@ -142,6 +142,14 @@ export class AudioLane {
     }
   }
 
+  /** The step `work` kept the lane for won't come: let the next work have it now rather than when the hold runs out. */
+  release(work: AudioWork) {
+    if (!this.held || workKey(this.held.work) !== workKey(work)) return;
+    this.unhold();
+    this.begun.delete(workKey(work));
+    this.next();
+  }
+
   /** Work waiting for the lane, in the order it would run. */
   queued(): AudioWork[] {
     return this.ordered().map(entry => entry.work);

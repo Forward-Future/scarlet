@@ -14,13 +14,16 @@ describe("what a saved part still plays", () => {
   it("lists a pause by how long it plays with the cuts out, and names the word that trims an untouched one", () => {
     const { words, transcripts } = said([["one", 0], ["two", .4], ["three", 2], ["four", 5.3], ["five", 5.7], ["six", 6.6]]);
     // “two” to “three” plays 1.3 s untouched. “three” to “four” was 3 s and a cut leaves 1 s of it. “five” to “six” is 0.6 s.
-    const { pauses } = partLeftovers(words, [{ start: 2.8, end: 4.8 }], [], transcripts);
+    // Asked for pauses from 0.75 s, the first two are listed.
+    const { pauses } = partLeftovers(words, [{ start: 2.8, end: 4.8 }], [], transcripts, .75);
     expect(pauses).toEqual([
       { mediaId: "mic", source: { start: .7, end: 2 }, seconds: 1.3, after: "two", before: "three", afterWord: 1 },
       { mediaId: "mic", source: { start: 2.3, end: 5.3 }, seconds: 1, after: "three", before: "four" },
     ]);
     // Trimmed to the beat it is gone, and a pause the part chose to keep is not brought up again.
-    expect(partLeftovers(words, [{ start: 2.45, end: 5.2 }], [{ start: .8, end: 1.9 }], transcripts).pauses).toEqual([]);
+    expect(partLeftovers(words, [{ start: 2.45, end: 5.2 }], [{ start: .8, end: 1.9 }], transcripts, .75).pauses).toEqual([]);
+    // With no length given, every pause above the rhythm of speech is listed, the 0.6 s one too: the agent judges them.
+    expect(partLeftovers(words, [{ start: 2.8, end: 4.8 }], [], transcripts).pauses.map(p => p.seconds)).toEqual([1.3, 1, .6]);
   });
 
   it("reports a long phrase doubled by a ripple on the clock of the saved part", () => {

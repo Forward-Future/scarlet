@@ -28,16 +28,16 @@ async function launch() {
   });
   try {
     const [native, view] = await Promise.all([desktop.info(), opening]);
-    const { platform, localUpdates, customOpenaiModels, customClaudeModels } = native;
+    const { platform, updates, customOpenaiModels, customClaudeModels } = native;
     if (platform !== "macos" && platform !== "windows" && platform !== "linux") {
       view.render(desktopOnly);
       return;
     }
     // Loading the router and stores starts the editor. Wait for the native
     // handshake first, including when using the interview fixture.
-    if (localUpdates && !__SCARLET_RELEASE_CHANNEL__) {
+    if (updates) {
       restoreUpdatePlace();
-      enableUpdateStatus();
+      enableUpdateStatus(updates);
     }
     restoreLastProject();
     const [{ App }, hosts] = await Promise.all([
@@ -46,7 +46,7 @@ async function launch() {
     ]);
     hosts?.useHostsStore.setState({ customOpenaiModels: customOpenaiModels ?? [], customClaudeModels: customClaudeModels ?? [] });
     view.render(<StrictMode>
-      {__SCARLET_RELEASE_CHANNEL__ ? <ReleaseUpdateNotice channel={__SCARLET_RELEASE_CHANNEL__} /> : localUpdates && <UpdateButton />}
+      {updates ? <UpdateButton /> : __SCARLET_RELEASE_CHANNEL__ && <ReleaseUpdateNotice channel={__SCARLET_RELEASE_CHANNEL__} />}
       <App platform={platform} />
     </StrictMode>);
   } catch (error) {

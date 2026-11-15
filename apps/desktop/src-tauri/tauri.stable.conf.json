@@ -1,0 +1,14 @@
+{
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERCQjYyQ0M2Q0Y1N0RFMzgKUldRNDNsZlB4aXkyMnc4cyszcXlhWUwwOVY3WDUzODkyL0J3OUxDd2RNNTRaV1JSL05VS05zTVcK",
+      "endpoints": [
+        "https://github.com/Forward-Future/scarlet/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

@@ -102,6 +102,14 @@ export const MediaAsset = z.object({
     model: z.string().optional(),
   }).optional(),
   provenance: Provenance.optional(),
+  /** A graphic Scarlet drew from a web page: the page it keeps, so a later request can revise it. */
+  graphic: z.object({
+    /** The page, relative to the project's folder. Files it links to sit beside it. */
+    source: z.string(),
+    /** The saved template it was filled from, and with what. */
+    templateId: Id.optional(),
+    fields: z.record(z.string()).optional(),
+  }).optional(),
   /** Authenticated user who uploaded or imported the asset. */
   uploadedBy: Id.optional(),
   /** Server-side ingest state. Absent means ready. */
@@ -327,6 +335,20 @@ export const ProjectSettings = z.object({
 });
 export type ProjectSettings = z.infer<typeof ProjectSettings>;
 
+/**
+ * The style guide the editor gave this project, one per project. Scarlet reads it as written and follows it for every
+ * graphic it makes here. `text` is what the editor pasted; `file` is a file they attached, under the project's folder.
+ */
+export const StyleGuide = z.object({
+  /** How the chat and the $ list name it: the file's name, or the guide's own title for pasted text. */
+  name: z.string().min(1).max(200),
+  text: z.string().max(200_000).optional(),
+  /** Path relative to the project's folder. */
+  file: z.string().max(1024).optional(),
+  savedAt: z.string().datetime(),
+});
+export type StyleGuide = z.infer<typeof StyleGuide>;
+
 export const Project = z.object({
   /** Last conversation revision filed by the editor, independently of the timeline head. */
   completedThreads: z.record(z.string()).optional(),
@@ -339,6 +361,7 @@ export const Project = z.object({
   media: z.array(MediaAsset).default([]),
   /** Version id of the current (head) timeline. */
   head: Id.nullable().default(null),
+  styleGuide: StyleGuide.optional(),
   createdAt: z.string().datetime().optional(),
   updatedAt: z.string().datetime().optional(),
 });
@@ -480,7 +503,9 @@ export const Change = z.object({
     legacySuggest: z.literal(true).optional(),
     kind: z.enum(["pause", "filler", "retake", "coaching"]).optional(),
     /** Why the editor should look or listen before keeping this applied cut. */
-    check: z.string().trim().min(1).max(120).optional() })).optional(),
+    check: z.string().trim().min(1).max(120).optional(),
+    /** Why Scarlet held this cut for a closer look: what it measured at the edges. For the agent; the editor reads `reason`. */
+    held: z.string().optional() })).optional(),
   /** Second-pass recommendations on the immutable chronological cut-review plan. */
   cutAssessments: z.array(CutAssessment).optional(),
   /** A call rechecked against newer footage. Its index still identifies the same call in the original pass. */

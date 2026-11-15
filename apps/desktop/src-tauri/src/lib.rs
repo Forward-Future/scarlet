@@ -8,6 +8,7 @@ pub mod host;
 pub mod util;
 mod crisper;
 mod updates;
+mod release_updates;
 mod storage;
 mod logs;
 mod quit;
@@ -130,6 +131,7 @@ pub fn run() {
             storage::developer_storage,
             updates::update_status,
             updates::latest_update_revision,
+            updates::check_for_release,
             updates::update_changelog,
             updates::restart_for_update,
         ])
@@ -141,6 +143,16 @@ pub fn run() {
                 log::info!("login shell PATH {}", if found { "loaded" } else { "unavailable; using the built-in search paths" });
             });
             let handle = app.handle().clone();
+            let update_source = updates::source(&handle);
+            if update_source == Some(updates::Source::Release) {
+                handle.plugin(tauri_plugin_updater::Builder::new().build())?;
+                app.manage(release_updates::ReleaseUpdates::default());
+                release_updates::start(handle.clone());
+            }
+            if let Some(source) = update_source {
+                log::info!("updates: {source:?}");
+                app.manage(source);
+            }
             #[cfg(target_os = "linux")]
             if let Some(window) = handle.get_webview_window("main") {
                 linux::enable_voice_input(&window)?;
@@ -185,6 +197,7 @@ pub fn run() {
                 state.host.stop_blocking();
                 state.engine.stop_blocking();
             }
+            release_updates::install_on_quit(app_handle);
         }
     });
 }

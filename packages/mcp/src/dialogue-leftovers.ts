@@ -8,8 +8,12 @@ import { adjacentRepeatCandidates, normalizeTranscriptToken } from "@scarlet/sha
 import type { TimeRange, TranscriptWord } from "@scarlet/timeline";
 import type { TimelineWord } from "./timeline-perception.js";
 
-/** A pause the part still plays is listed from this length, word to word. */
-export const KEPT_PAUSE_SECONDS = 0.75;
+/**
+ * Under this, word to word, a gap is the rhythm of speech and not a pause, so it is never listed. Which pauses are worth
+ * a look above it is taste: the model says from what length it wants them (`pausesFrom`), by the pace its skill and the
+ * editor ask for. A fixed 0.75 s here hid every pause a skill calling half a second dead air would have cut (2026-11-14).
+ */
+export const PAUSE_FLOOR_SECONDS = 0.3;
 /** The second saying starts within this long of the first, as played. */
 export const REPEAT_WITHIN = 3;
 
@@ -50,7 +54,7 @@ const endsSentence = (text: string) => /[.?!]["'”’)\]]*$/u.test(text.trim())
  * `kept` the ones it keeps on purpose, all in timeline seconds. `transcripts` gives each word's time in its recording.
  */
 export function partLeftovers(words: readonly TimelineWord[], cuts: readonly TimeRange[], kept: readonly TimeRange[],
-  transcripts: ReadonlyMap<string, readonly TranscriptWord[]>, min = KEPT_PAUSE_SECONDS): { pauses: KeptPause[]; repeats: RepeatedWords[]; gaps: KeptGap[] } {
+  transcripts: ReadonlyMap<string, readonly TranscriptWord[]>, min = PAUSE_FLOOR_SECONDS): { pauses: KeptPause[]; repeats: RepeatedWords[]; gaps: KeptGap[] } {
   const removed = [...cuts].sort((a, b) => a.start - b.start);
   const cutIn = (from: number, to: number) => removed.reduce((sum, c) => sum + Math.max(0, Math.min(c.end, to) - Math.max(c.start, from)), 0);
   // A word plays when its middle does, the rule captions use.

@@ -30,6 +30,7 @@ import { cutFrameUrl, scrubFrameUrl } from "../components/review/thumbs";
 import { EditBeforePreview, useEditBefore, type BeforePlayback } from "../components/review/EditBeforePreview";
 import { useApprovalComparison } from "../components/review/SideBySideComparison";
 import { PlayerTimeline, type TimelineDot, type TimelineGap } from "../components/review/TimelineScrubber";
+import type { TimelineEdit } from "../components/review/timelineEdits";
 import { BeforeToggle } from "../components/review/BeforeToggle";
 import type { CutPlaybackWindow, PreparedCut } from "../components/review/usePrepareNextCut";
 import { FramingPreview } from "../components/review/FramingPreview";
@@ -37,6 +38,7 @@ import { useNotePositions } from "../lib/useNotePositions";
 import type { ProgressFocus } from "../components/player/SimpleProgress";
 import { editFocus } from "../lib/editKind";
 import { editKey } from "../lib/keptEdits";
+import { useTemplatesStore } from "../stores/templates";
 
 const noop = () => {};
 const documentVisible = () => !document.hidden;
@@ -159,9 +161,10 @@ interface PreviewProps {
    */
   simple: { cutPlayback?: { key: string; start: number; side: "before" | "after"; beforeFile?: string; afterFile?: string; beforeWindow?: CutPlaybackWindow; afterWindow?: CutPlaybackWindow };
     nextCutPlayback?: PreparedCut;
-    marks: TimelineDot[]; focus?: ProgressFocus; label?: string; compareHost?: HTMLElement | null; above?: ReactNode;
-    /** Above the ruler: whose edits the timeline marks. */
-    heading?: ReactNode;
+    marks: TimelineDot[];
+    /** Every other applied edit on the working cut, drawn under the marks. */
+    edits?: TimelineEdit[];
+    focus?: ProgressFocus; label?: string; compareHost?: HTMLElement | null; above?: ReactNode;
     gaps?: TimelineGap[]; skippedRanges?: TimeRange[]; onGap?(gap: TimelineGap, time: number): void;
     /** A click inside the shaded passage, when the playing side steps over it. */
     onBand?(time: number): void;
@@ -671,6 +674,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
           {atSelectedFrame && selectedTime !== undefined && selectedFrameUrl &&
             <SelectedCutFrame key={JSON.stringify([fullVideoUrl, selectedFrameUrl])} time={selectedTime} url={selectedFrameUrl} fps={fps} />}
           {simple.label && <div className="simple-on-video" role="status">{simple.label}</div>}
+          <TemplateOnPicture />
           {playingBefore && originalChange && selectedEdit ? <EditBeforePreview key={threadView?.request}
             change={originalChange} original={original} passage={selectedEdit.range} active={active} loading={loading}
             clock={<PlayerTime end={duration} coarse jump={jump} />} playbackRef={beforeClip} />
@@ -703,10 +707,16 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
             waveform={{ media: current.media, mediaPaused: current.project.mediaPaused, source, timeline: displayedTimeline, ...sameClockBefore && {
               audioFrom: playingBefore ? sameClockBefore : undefined, scaleWith: playingBefore ? displayedTimeline : sameClockBefore } }} frameAt={frameAt} onSeek={seekFull} onSelectTime={selectTime} onScrubStart={scrubStart}
             range={simple.onRange ? shownRange : undefined} onRange={simple.onRange ? markRange : undefined} fps={fps}
-            marks={simple.marks} gaps={simple.gaps} skippedRanges={simple.skippedRanges} onGap={simple.onGap} onBand={simple.onBand} heading={simple.heading}
+            marks={simple.marks} edits={simple.edits} gaps={simple.gaps} skippedRanges={simple.skippedRanges} onGap={simple.onGap} onBand={simple.onBand}
             highlight={simple.focus ?? (selectedEdit ? editFocus(selectedEdit, duration) : undefined)} />
         </div>
       </div>}
     </section>
   );
+}
+
+/** The template lit in the message box's $ list, drawn over the picture as it would sit there, until the list closes. */
+function TemplateOnPicture() {
+  const lit = useTemplatesStore(s => s.lit);
+  return lit ? <img key={lit.id} className="template-on-picture" src={lit.url} alt="" data-template={lit.id} /> : null;
 }

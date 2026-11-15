@@ -49,6 +49,28 @@ export interface PromptContext {
   timeLimitMinutes?: number;
   /** What the running harness delivers to the model (see agentCapabilities). Omitted = conservative defaults. */
   capabilities?: AgentCapabilities;
+  /** Files the editor attached to this request, where they are on disk. */
+  attachments?: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
+  /** Saved graphic templates the editor named with $name in their words. */
+  pickedTemplates?: Array<{ id: string; name: string; title: string; fields: string[] }>;
+  /** The project's style guide: pasted text in full, or the file it is in. */
+  styleGuide?: { name: string; text?: string; path?: string; mime?: string };
+}
+
+/** A size the editor reads, for a file. */
+function fileSize(bytes: number) {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+const FILE_KINDS: Array<[RegExp, string]> = [[/pdf/, "PDF"], [/^image\//, "image"], [/^font\/|ttf|otf|woff/, "font file"], [/^text\/|json/, "text"]];
+const fileKind = (mime: string | undefined, name: string) => FILE_KINDS.find(([test]) => test.test(mime ?? "") || test.test(name.toLowerCase()))?.[1] ?? "file";
+
+/** The project's style guide, as the editor gave it. */
+function styleGuideSection(guide: NonNullable<PromptContext["styleGuide"]>): string {
+  const lines = [`# Style guide\n\nThe editor gave this project a style guide, "${guide.name}", for every graphic made in it.`];
+  if (guide.path) lines.push(`It is in the ${fileKind(guide.mime, guide.path)} at ${guide.path}.`);
+  if (guide.text?.trim()) lines.push(guide.path ? `What they wrote with it:\n\n${guide.text.trim()}` : guide.text.trim());
+  return lines.join("\n\n");
 }
 
 /**
@@ -73,6 +95,7 @@ The editor sets the brief. You decide what context to inspect, which tools to us
 - Use requested intent for authorized edits, suggestion for optional or preview-only changes, and alternative for competing options. Check the returned state when reporting what applied. When Scarlet adjusts a submitted edit, such as moving an edge onto measured silence, the result lists each adjustment with its evidence. An edit can name its individual ranges in \`timelineEdits\`. A revision can link to its prior change and spot with \`replaces\` and to feedback with \`noteIds\`.
 - \`task_log\` can show the current activity, a finding, or both. Attach a saved change ID and spot to the exact phrase the editor can select to see the change. \`task_question\` hands a decision to the editor and pauses the task; the answer comes back as your next message.
 - Scarlet renders project media. \`render_request\` supports a short range or an explicitly requested full delivery.
+- A motion graphic is an HTML/CSS page Scarlet draws into a video with alpha (\`graphic_render\`), from your page or a saved template (\`template_list\`). It goes over the picture on a track of its own with \`timeline_propose\`, as an edit like any other. A project has one style guide, saved with \`style_guide_save\` when the editor gives you one.
 
 ## Writing for the editor
 
@@ -252,6 +275,12 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     if (c.changeId && c.cutIndex !== undefined) ctxLines.push(`- Staged cut being revised: index ${c.cutIndex} of ${c.changeId}. \`dialogue_revise_cut\` saves its new range.`);
     if (c.changeId && c.cutIndex !== undefined && ctx.replacedPass) ctxLines.push(`- The request names this cut in ${ctx.replacedPass}, the pass as the editor saw it. A revision or a later part of the pass replaced that pass since with ${c.changeId}, where the cut is index ${c.cutIndex} and may have moved.`);
     if (c.reviewAllCuts) ctxLines.push("- The editor requested individual review of every cut.");
+    for (const file of ctx.attachments ?? []) {
+      ctxLines.push(`- File the editor attached: "${file.name}" (${fileKind(file.mime, file.name)}, ${fileSize(file.size)}), attachment ${file.id}, at ${file.path}`);
+    }
+    for (const t of ctx.pickedTemplates ?? []) {
+      ctxLines.push(`- The editor picked the graphic template $${t.name}: "${t.title}" (template ${t.id}), with the fields ${t.fields.map(f => `"${f}"`).join(", ") || "none"}.`);
+    }
     if (ctxLines.length) {
       lines.push("");
       lines.push("## Context");
@@ -259,6 +288,8 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     }
     parts.push(`# Your task\n\n${lines.join("\n")}`);
   }
+
+  if (ctx.styleGuide) parts.push(styleGuideSection(ctx.styleGuide));
 
   // Notes
   if (ctx.notes?.length) {

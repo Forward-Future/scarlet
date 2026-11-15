@@ -2,7 +2,8 @@
 import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it as vitestIt, vi } from "vitest";
+import { partedIt } from "../../../../test/parts";
 import { fullRenderContext, REVISED_CHECK, ScarletApiError, Task, type Learning, type Skill, type SourceCacheStatus } from "@scarlet/shared";
 import { applyOps, makeMediaClip, makeTimeMap, makeTrack, planCutReview, timelineDuration, timelineFromKeepRanges, type MediaClip, type TimeMap } from "@scarlet/timeline";
 import { api } from "../lib/client";
@@ -18,6 +19,7 @@ import { useHostsStore } from "../stores/hosts";
 import { usePlayerStore } from "../stores/player";
 import { useProjectStore, type ProjectData } from "../stores/project";
 import { useSkillsStore } from "../stores/skills";
+import { useTemplatesStore } from "../stores/templates";
 import { useUiStore, type AgentContext } from "../stores/ui";
 import { SimpleWorkspace } from "./SimpleWorkspace";
 import { cutOnWorkingCut, keepGoesTo } from "../lib/passCalls";
@@ -31,6 +33,8 @@ import { enqueueImports } from "../components/media/UploadDropzone";
 
 import { ChangelogPage } from "./ChangelogPage";
 import { selectOption } from "../../test/selectOption";
+/** A full run spreads this file's tests over SimpleWorkspace.part*.test.tsx. */
+const it = partedIt(vitestIt);
 
 /** The message box has its own tests. Here it records what the workspace hands it, and draws the tray it is given. */
 type BoxProps = { onCreated?(task: { id: string }): void; onSent?(): void; tray?: React.ReactNode; targetTag?: string; targetIsPoint?: boolean; onClearTarget?(): void;
@@ -511,6 +515,114 @@ it("lists a thread's edits once, numbered, and opens one with its decisions unde
   expect([...container.querySelectorAll(".simple-timeline-mark.is-numbered")].map(d => d.classList.contains("is-on"))).toEqual([true, false, false]);
   // No row of edit points is drawn, with an edit open or closed.
   expect(container.querySelector(".timeline-cuts")).toBeNull();
+});
+
+/** An earlier request's pass of many cuts and a graphic, and the latest request's edits, on a working cut of `length` seconds. */
+const everyEdit = (length: number) => {
+  appliedEdits();
+  const cuts = Array.from({ length: 200 }, (_, i) => {
+    const at = 0.05 + i * (length - 0.1) / 200;
+    return { changeId: "chg_approved_1", spot: i, label: `Cut ${i + 1}`, range: { start: Math.max(0, at - 1.5), end: Math.min(length, at + 1.5) }, at,
+      beforeCut: { version: "ver_1", removed: { start: at, end: at + 0.4 } }, kind: "cut" as const, previous: [] };
+  });
+  const graphic = { changeId: "chg_approved_1", spot: 200, label: "Lower third for Daniel", range: { start: length * .3, end: length * .3 + 1.2 }, kind: "graphic" as never, previous: [] };
+  // Just the two requests: the pass first, then the request whose edits the timeline numbers.
+  const one = threadWith("chg_approved_1"), two = threadWith("chg_approved_2");
+  data = { ...data, changes: [...one.changes, ...two.changes], tasks: [...one.tasks, ...two.tasks], notes: [] };
+  useProjectStore.setState({ current: data });
+  const latest = two.id, earlier = one.id;
+  vi.mocked(api.threadEdits).mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId === earlier ? [...cuts, graphic] : threadId !== latest ? [] : [
+      { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, kind: "audio" as const, previous: [] },
+      { changeId: "chg_approved_2", spot: 1, label: "captions", range: { start: 0.2, end: 2.4 }, kind: "text" as const, previous: [] },
+      { changeId: "chg_approved_2", spot: 2, label: "wrap", range: { start: 11.5, end: 16 }, previous: [], check: CHECK, summary: SUMMARY },
+    ] }));
+  return { cuts, graphic };
+};
+const editMarks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-edit")];
+const countLabels = () => editMarks().filter(m => m.classList.contains("is-count")).map(m => m.textContent);
+
+it("draws every applied edit on the working cut under what needs the editor, gathered into counts on the whole video", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-slider") ? 1000 : 0; });
+  const length = timelineDuration(data.timeline!);
+  const { cuts } = everyEdit(length);
+  await show();
+  await act(async () => {});
+  // The whole video can't fit 200 lines: they gather into a few counts that say what they hold, and none touch.
+  const counts = countLabels();
+  expect(counts.length).toBeGreaterThan(1);
+  expect(counts.length).toBeLessThanOrEqual(12);
+  for (const label of counts) expect(label).toMatch(/^\d+ cuts( · \d+ (graphic|graphics|captions?|audio edits?|other edits?))*( · \d+ more)?$/);
+  const held = counts.reduce((sum, label) => sum + label!.split(" · ").filter(part => !/more$/.test(part)).reduce((n, part) => n + parseInt(part), 0)
+    + parseInt(label!.match(/(\d+) more$/)?.[1] ?? "0"), 0);
+  const drawn = editMarks().filter(m => !m.classList.contains("is-count")).length;
+  // Every edit of the earlier request on the working cut is in a count or drawn on its own. The latest request's have
+  // their numbered dots, and aren't drawn again under them.
+  expect(held + drawn).toBe(cuts.length + 1);
+  // What needs the editor is unchanged on top: the latest request's numbered dots, the flagged one amber.
+  const numbered = [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark.is-numbered")];
+  expect(numbered.map(d => [d.textContent, d.dataset.state])).toEqual([["1–2", undefined], ["3", "check"]]);
+  // Drawn after the counts, the marks sit over them.
+  const order = [...container.querySelectorAll(".simple-timeline-edit, .simple-timeline-mark")];
+  expect(order.findIndex(m => m.classList.contains("simple-timeline-mark"))).toBeGreaterThan(order.findLastIndex(m => m.classList.contains("simple-timeline-edit")));
+  // Hovering a count says what it holds and that a press zooms in.
+  const strip = timelineStrip();
+  // One clear of the numbered dots, which win a press over anything under them.
+  const dotsAt = [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")].map(d => parseFloat(d.style.left));
+  const first = editMarks().find(m => m.classList.contains("is-count") && dotsAt.every(at => Math.abs(at - parseFloat(m.style.left)) > 10))!;
+  await act(async () => { strip.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: parseFloat(first.style.left) * 10 })); });
+  const note = container.querySelector(".timeline-track .simple-timeline-tip.is-joined > span")!;
+  expect(note.querySelector("b")?.textContent).toBe(first.textContent);
+  expect(note.querySelector("small")?.textContent).toMatch(/Click to zoom in$/);
+  // A press on a count zooms to its stretch, and the count opens into the marks it held, with room for each.
+  zoomAtOnce();
+  const ruler = container.querySelector(".timeline-ruler")!.textContent;
+  await act(async () => { strip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(first.style.left) * 10 })); });
+  await act(async () => {});
+  expect(container.querySelector(".timeline-ruler")!.textContent).not.toBe(ruler);
+  expect(editPanel()).toBeNull();
+  for (let i = 0; i < 4 && countLabels().length; i++) {
+    const count = editMarks().find(m => m.classList.contains("is-count"))!;
+    await act(async () => { timelineStrip().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(count.style.left) * 10 })); });
+    await act(async () => {});
+  }
+  const lines = editMarks().filter(m => m.classList.contains("is-cut"));
+  expect(lines.length).toBeGreaterThan(1);
+  expect(countLabels()).toEqual([]);
+  // Hovering a line names its cut, and a press opens it in the card, as its row in the chat would.
+  const line = lines[1]!;
+  await act(async () => { timelineStrip().dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: parseFloat(line.style.left) * 10 })); });
+  expect(container.querySelector(".timeline-track .simple-timeline-tip.is-joined b")?.textContent).toMatch(/^Cut at \d+:\d\d$/);
+  expect(line.classList.contains("is-hot")).toBe(true);
+  await act(async () => { timelineStrip().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(line.style.left) * 10 })); });
+  await act(async () => {});
+  expect(editPanel()).not.toBeNull();
+});
+
+it("draws a graphic as a bar as long as it is on screen, and lets a dot that needs the editor win a press over an edit under it", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-slider") ? 1000 : 0; });
+  const length = timelineDuration(data.timeline!);
+  const { graphic } = everyEdit(length);
+  await show();
+  await act(async () => {});
+  zoomAtOnce();
+  // Zoomed to the graphic, it is a bar from where it comes on to where it goes.
+  for (let i = 0; i < 6; i++) await press("+");
+  const bars = () => editMarks().filter(m => m.classList.contains("is-bar"));
+  const seekTo = (t: number) => act(async () => { usePlayerStore.setState({ time: t }); });
+  await seekTo(graphic.range.start + .6);
+  for (let i = 0; i < 6 && !bars().length; i++) await press("+");
+  expect(bars().map(b => b.dataset.kind)).toContain("graphic");
+  const bar = bars().find(b => b.dataset.kind === "graphic")!;
+  expect(parseFloat(bar.style.width)).toBeGreaterThan(0);
+  // The latest request's flagged edit sits on cuts of the earlier pass: a press on its dot opens it, not a cut.
+  await press("0");
+  const wrap = [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark.is-numbered")].find(d => d.textContent === "3")!;
+  await act(async () => { timelineStrip().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(wrap.style.left) * 10 })); });
+  await act(async () => {});
+  expect(openTitle()).toBe("wrap");
+  // The open edit isn't drawn again under its band.
+  expect(editMarks().some(m => m.classList.contains("is-tick") && Math.abs(parseFloat(m.style.left) - parseFloat(wrap.style.left)) < .01)).toBe(false);
 });
 
 it("steps between a request's edits with the arrow keys, sideways or up and down, and keeps K and Esc", async () => {
@@ -1803,6 +1915,54 @@ it("undoes one applied edit by asking Scarlet to put back just that edit", async
   // Sent: the box is no longer aimed at the edit, and the player goes back to the whole timeline.
   expect(boxTag()).not.toBe("Edit at 0:00");
   expect(editPanel()).toBeNull();
+});
+
+it("saves a graphic from its card as a template, with an icon before Undo edit and T as its key", async () => {
+  appliedEdits();
+  // The engine says the second edit laid a graphic over the picture.
+  vi.mocked(api.threadEdits).mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [
+      { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, previous: [] },
+      { changeId: "chg_approved_2", spot: 1, label: "Lower third: Daniel", range: { start: 0.2, end: 2.4 }, previous: [], kind: "graphic" as const,
+        summary: "Added a lower third naming Daniel as he first speaks." },
+    ] }));
+  let sent!: () => void;
+  const createTask = vi.fn().mockImplementation(() => new Promise(resolve => { sent = () => resolve({ id: "task_template" }); }));
+  useProjectStore.setState({ createTask });
+  await show();
+  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await act(async () => {});
+  const panel = editPanel()!;
+  // The card names what the edit is, and its small icons come before Revise and Keep: Save as template, then Undo edit.
+  expect(panel.querySelector(".edit-card-length.is-kind")?.textContent).toBe("Graphic");
+  expect([...panel.querySelectorAll(".edit-card-acts button")].map(b => [b.textContent, b.getAttribute("aria-label"), b.getAttribute("aria-keyshortcuts"), b.getAttribute("title")]))
+    .toEqual([["", "Save as template", "T", "Save as template (T)"], ["", "Undo edit", "U", "Undo edit (U)"], ["Revise", null, "R", "Revise (R)"], ["Keep", null, "K", "Keep (K)"]]);
+  // T sends one request however long it is held, worded as Undo edit's is: about this edit, named "Save as template".
+  await press("t");
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "t", repeat: true, bubbles: true })); });
+  await press("t");
+  expect(createTask).toHaveBeenCalledTimes(1);
+  expect(createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
+    kind: "edit", agent: "claude", model: "opus",
+    instruction: expect.stringMatching(/^Save the graphic of edit 2, “Lower third: Daniel” as a reusable template\. Work out which parts of it change/),
+    context: expect.objectContaining({ changeId: "chg_approved_2", editIndex: 1, editNumber: 2, threadId: threadWith("chg_approved_2").id, message: "Save as template" }),
+  }));
+  await act(async () => sent());
+  // An edit that isn't a graphic has no such icon.
+  await press("ArrowUp");
+  await act(async () => {});
+  expect(editPanel()?.querySelector(".edit-card-template")).toBeNull();
+});
+
+it("draws the template lit in the message box's $ list over the player's picture until the list closes", async () => {
+  await show();
+  const monitor = container.querySelector(".watch-monitor")!;
+  expect(monitor.querySelector(".template-on-picture")).toBeNull();
+  await act(async () => useTemplatesStore.getState().setLit({ id: "tpl_lower", url: "data:image/png;base64,AA==" }));
+  const over = monitor.querySelector<HTMLImageElement>(".template-on-picture")!;
+  expect([over.getAttribute("src"), over.dataset.template]).toEqual(["data:image/png;base64,AA==", "tpl_lower"]);
+  await act(async () => useTemplatesStore.getState().setLit(null));
+  expect(monitor.querySelector(".template-on-picture")).toBeNull();
 });
 
 it("undoes the open edit with U, once however long the key is held", async () => {
@@ -5205,18 +5365,21 @@ const openMenu = () => click(container.querySelector('[aria-label="More"]')!);
 const moreButton = () => container.querySelector<HTMLElement>('[aria-label="More"]')!;
 /** A row of the menu by its name, whatever status or mark follows the name. */
 const menuRow = (name: string) => [...container.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(i => i.textContent?.trim().startsWith(name))!;
-/** The ring around the menu's button while videos cache, and how much of it is drawn, out of 100. */
-const cachingRing = () => moreButton().querySelector<SVGElement>(".simple-more-ring");
-const ringDrawn = (ring = cachingRing()) => Math.round(100 - Number(ring?.querySelector("circle + circle")?.getAttribute("stroke-dashoffset")));
+/** The line under the Media button's word while videos cache, and how much of it is filled, out of 100, or 0 while unmeasured. */
+const cachingLine = () => mediaButton().querySelector<HTMLElement>(".progress-line");
+const lineDrawn = (line = cachingLine()) => Math.round(parseFloat(line?.querySelector<HTMLElement>("span")?.style.width || "0"));
 const exportButton = () => buttonIn(container.querySelector(".simple-tools")!, "Export")!;
+/** The header's Media button, whatever mark follows its name. */
+const mediaButton = () => container.querySelector<HTMLElement>(".simple-tools .simple-media")!;
 /** What hovering the menu's button says. */
 const moreTitle = () => moreButton().querySelector<HTMLElement>(".simple-more")!.title;
 
-it("opens Media and Export from the header and keeps project tools in the menu", async () => {
+it("opens Media, Export and History from the header and keeps project tools in the menu", async () => {
   await show();
   const back = container.querySelector<HTMLAnchorElement>('a[href="/"]');
   expect(back?.getAttribute("aria-label")).toBe("All projects");
   const tools = container.querySelector(".simple-tools")!;
+  expect([...tools.querySelectorAll("button")].map(b => b.textContent?.trim()).slice(0, 3)).toEqual(["Media", "Export", "History"]);
   for (const [name, field] of [["Media", "#media-file-types"], ["Export", "#export-format"]] as const) {
     await click(buttonIn(tools, name)!);
     await act(async () => { await vi.dynamicImportSettled(); });
@@ -5227,13 +5390,12 @@ it("opens Media and Export from the header and keeps project tools in the menu",
   expect(moreButton().querySelector(".needs-you")).toBeNull();
   expect(moreButton().getAttribute("aria-description")).toBeNull();
   await openMenu();
-  expect(menuItems().filter(name => !name?.startsWith("Model") && name !== "Set up a model")).toEqual(["Learnings", "Media", "History", "Transcript", "Export", "Project settings", "App settings"]);
+  expect(menuItems().filter(name => !name?.startsWith("Model") && name !== "Set up a model")).toEqual(["Learnings", "Transcript", "Export", "Project settings", "App settings"]);
   expect(container.querySelector('[role="menu"] .menu-dot')).toBeNull();
   await click(menuItem("Project settings"));
   expect(useUiStore.getState().projectSettingsOpen).toBe(true);
   useUiStore.getState().setProjectSettingsOpen(false);
-  await openMenu();
-  await click(menuItem("History"));
+  await click(buttonIn(tools, "History")!);
   expect(document.querySelector("dialog[open]")?.textContent).toContain("History");
 });
 
@@ -5246,25 +5408,51 @@ const openTranscript = async () => {
   await vi.waitFor(() => expect(container.querySelector(".simple-transcript [data-w]")).not.toBeNull());
 };
 
-it("heads the Transcript with one row: its name once, its figures and help mark, and the way back", async () => {
+it("heads the Transcript as the chat is headed, with its name and a ×, and gives the column to the words alone", async () => {
   await show();
   await openTranscript();
-  const head = container.querySelector<HTMLElement>(".simple-subhead")!;
-  expect([...head.children].map(c => c.textContent || c.querySelector("[aria-label]")?.getAttribute("aria-label")))
-    .toEqual(["Transcript", "0:00–0:16 · 35 words", "Back to chat"]);
-  // The figures and the help mark are the pane's, drawn on the heading. The pane has no title of its own.
-  expect([...head.querySelectorAll(".simple-subhead-tools > *")].map(e => e.textContent || e.getAttribute("aria-label"))).toEqual(["0:00–0:16 · 35 words", "Keyboard shortcuts"]);
-  const pane = container.querySelector<HTMLElement>(".simple-transcript")!;
-  expect(pane.querySelector(".reading-toolbar, .reading-title, h2")).toBeNull();
-  expect((head.textContent! + pane.textContent!).match(/Transcript|Current edit/g)).toEqual(["Transcript"]);
-  // The help mark still opens the keys, under the heading.
-  await click(head.querySelector('[aria-label="Keyboard shortcuts"]')!);
-  expect(pane.querySelector(".reading-keys")?.textContent).toContain("Play from word");
-  await click(buttonIn(head, "Back to chat")!);
-  expect(container.querySelector(".simple-subhead, .simple-transcript")).toBeNull();
+  const rail = container.querySelector<HTMLElement>(".simple-transcript-rail")!;
+  // It is a column of its own on the right of the player, not in the chat.
+  expect(rail.previousElementSibling?.classList.contains("simple-stage")).toBe(true);
+  expect(container.querySelector(".simple-rail .simple-transcript, .simple-thread .simple-transcript")).toBeNull();
+  const head = rail.querySelector<HTMLElement>(".simple-header")!;
+  expect([...head.children].map(c => c.textContent || c.getAttribute("aria-label"))).toEqual(["Transcript", "Close transcript"]);
+  // No toolbar, figures, key box or notes: the words, and a dim line naming each turn's time.
+  const pane = rail.querySelector<HTMLElement>(".simple-transcript")!;
+  expect(pane.querySelector(".reading-toolbar, .reading-window, .reading-keys, [aria-label='Keyboard shortcuts'], .border-warn")).toBeNull();
+  expect(pane.querySelector(".reading-turn-head")?.textContent).toBe("0:00");
+  await click(head.querySelector('[aria-label="Close transcript"]')!);
+  expect(container.querySelector(".simple-transcript-rail, .simple-transcript")).toBeNull();
 });
 
-it("keeps what Scarlet is on above the message box while the Transcript is open, and goes back to the chat on Esc or a sent message", async () => {
+it("shows the whole transcript, places the playhead on a clicked word, lights the sentence it is in, and finds words", async () => {
+  await show();
+  await openTranscript();
+  const pane = container.querySelector<HTMLElement>(".simple-transcript")!;
+  // The whole of it, with no pages to load and no offer to transcribe a file without words.
+  expect(pane.textContent).not.toMatch(/Load (earlier|later) words|Transcribe/);
+  const seek = vi.spyOn(player, "seek"), play = vi.spyOn(player, "play");
+  const word = (i: number) => pane.querySelector<HTMLElement>(`[data-w="${i}"]`)!;
+  await click(word(5));
+  expect(seek).toHaveBeenCalled();
+  expect(play).not.toHaveBeenCalled();
+  await act(async () => usePlayerStore.setState({ time: seek.mock.calls.at(-1)![0] + 0.01 }));
+  expect(word(5).hasAttribute("data-current")).toBe(true);
+  expect(pane.querySelectorAll("[data-near]").length).toBeGreaterThan(1);
+  // Search marks every match and Enter places the playhead on the one in hand.
+  const field = pane.querySelector<HTMLInputElement>('input[type="search"]')!;
+  await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "the"); field.dispatchEvent(new Event("input", { bubbles: true })); });
+  const count = pane.querySelector(".transcript-search-count")!.textContent!;
+  expect(count).toMatch(/^1 of \d+$/);
+  expect(pane.querySelectorAll('[data-match="current"]').length).toBe(1);
+  seek.mockClear();
+  await act(async () => { field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  expect(seek).toHaveBeenCalledTimes(1);
+  await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "zzzz"); field.dispatchEvent(new Event("input", { bubbles: true })); });
+  expect(pane.querySelector(".transcript-search-count")!.textContent).toBe("No matches");
+});
+
+it("keeps the chat in view beside the Transcript, and closes the Transcript on Esc but not on a sent message", async () => {
   appliedEdits();
   // Scarlet has asked a question, and nothing else is running.
   const base = data.tasks.find(t => t.kind !== "transcribe")!;
@@ -5278,21 +5466,19 @@ it("keeps what Scarlet is on above the message box while the Transcript is open,
   const pin = () => container.querySelector<HTMLElement>(".simple-pin")!;
   const transcript = () => container.querySelector(".simple-transcript");
   await openTranscript();
-  // The transcript takes the chat's side. The request Scarlet is on keeps its place: its Stop, its question and Answer
-  // are still there, so the message box doesn't say Answer with no question on screen.
-  expect(chat().hidden).toBe(true);
+  // The transcript is beside the player: the chat and the request Scarlet is on stay in view, with its Stop, its question
+  // and Answer, so the message box doesn't say Answer with no question on screen.
+  expect(chat().hidden).toBe(false);
   expect(pin().hidden).toBe(false);
   expect(pin().querySelector(".unit-msg")?.textContent).toContain("Make the logo smaller.");
   expect(buttonIn(pin(), "Stop")).toBeTruthy();
   expect(pin().querySelector(".req-say")?.textContent).toBe("Smaller by how much?Answer");
   expect(boxTag()).toBe("Answer");
-  // Esc goes back to the chat.
-  await press("Escape");
-  expect(transcript()).toBeNull();
-  expect(chat().hidden).toBe(false);
-  // So does a message that was sent: the chat is where it went.
-  await openTranscript();
+  // A message that was sent leaves it open: the chat, where it went, is already in view.
   await act(async () => composer.props!.onSent!());
+  expect(transcript()).not.toBeNull();
+  // Esc closes it.
+  await press("Escape");
   expect(transcript()).toBeNull();
   // An edit that's open takes Esc first, then the Transcript.
   await click(turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit")[1]!);
@@ -5305,58 +5491,54 @@ it("keeps what Scarlet is on above the message box while the Transcript is open,
   expect(transcript()).toBeNull();
 });
 
-it("caches the edit without a ring on the picture or a word on the menu's Media row, which is about the videos", async () => {
+it("caches the edit without a ring on the picture or a word on the Media button, which is about the videos", async () => {
   const caching = { ...data.renders.find(r => r.kind === "full")!, id: "rnd_caching", state: "running" as const, progress: 0.42 };
   vi.spyOn(api, "renders").mockResolvedValue({ renders: [caching], fullRenderKeys: data.fullRenderKeys });
   await show();
   await act(async () => {});
   expect(container.querySelector(".simple-cache")).toBeNull();
-  expect(cachingRing()).toBeNull();
+  expect(cachingLine()).toBeNull();
+  expect(mediaButton().title).toBe("");
   await openMenu();
-  expect(menuRow("Media").textContent).toBe("Media");
+  expect(menuItems()).not.toContain("Media");
   expect(menuItems()).not.toContain("Pause caching");
 });
 
-it("marks the menu and its Media row when a file couldn't be read or a transcription stopped, and not otherwise", async () => {
+it("marks the Media button, not the menu, when a file couldn't be read or a transcription stopped, and not otherwise", async () => {
   await show();
   await act(async () => {});
-  expect(moreButton().querySelector(".needs-you")).toBeNull();
-  // A file that couldn't be read is explained only in Media, so the menu that leads there says so.
+  expect(mediaButton().querySelector(".menu-dot")).toBeNull();
+  // A file that couldn't be read is explained only in Media, so the button that leads there says so.
   const [broken, silent] = data.media.filter(m => m.kind === "video" || m.kind === "audio");
   data = { ...data, media: data.media.map(m => m.id === broken!.id ? { ...m, status: "failed" as const, error: "moov atom not found" } : m) };
   await act(async () => useProjectStore.setState({ current: data }));
-  expect(moreButton().querySelector(".needs-you")).not.toBeNull();
-  expect(moreButton().getAttribute("aria-description")).toBe(`Couldn’t read ${broken!.name}`);
+  expect(moreButton().querySelector(".needs-you")).toBeNull();
+  expect(mediaButton().querySelector(".menu-dot")?.getAttribute("aria-label")).toBe(`Couldn’t read ${broken!.name}`);
+  expect(mediaButton().title).toContain(`Couldn’t read ${broken!.name}`);
   await openMenu();
-  expect(menuRow("Media").querySelector(".menu-dot")?.getAttribute("aria-label")).toBe(`Couldn’t read ${broken!.name}`);
-  expect(menuRow("Media").title).toContain(`Couldn’t read ${broken!.name}`);
-  expect(menuRow("Learnings").querySelector(".menu-dot")).toBeNull();
+  expect(container.querySelector('[role="menu"] .menu-dot')).toBeNull();
   // So is a recording whose transcription stopped before it had a transcript.
   const stopped = { ...data.tasks[0]!, id: "task_transcribe_stopped", kind: "transcribe" as const, agent: "api" as const, state: "failed" as const, interrupted: true,
     error: "Transcription was interrupted.", instruction: `Transcribe ${silent!.name}`, context: { mediaId: silent!.id }, changeIds: [], createdAt: new Date().toISOString() };
   data = { ...data, media: data.media.map(m => m.id === silent!.id ? { ...m, transcriptId: undefined } : m), tasks: [...data.tasks, stopped] };
   await act(async () => useProjectStore.setState({ current: data }));
-  expect(moreButton().getAttribute("aria-description")).toBe("2 files need attention");
+  expect(mediaButton().querySelector(".menu-dot")?.getAttribute("aria-label")).toBe("2 files need attention");
 });
 
-it("marks the menu and its Media row when a file failed to import, until Media's list of imports lets it go", async () => {
+it("marks the Media button when a file failed to import, until Media's list of imports lets it go", async () => {
   vi.spyOn(api, "importMedia").mockRejectedValue(new Error("Scarlet couldn’t read this file."));
   await show();
   await act(async () => { await enqueueImports(PRJ, ["/Users/me/Movies/drone.mov"]); });
-  expect(moreButton().querySelector(".needs-you")).not.toBeNull();
-  expect(moreButton().getAttribute("aria-description")).toBe("Some files need attention");
-  await openMenu();
-  // The row the mark is about carries it, and says the same on hover.
-  expect([...container.querySelectorAll('[role="menu"] .menu-dot')]).toEqual([menuRow("Media").querySelector(".menu-dot")]);
-  expect(menuRow("Media").querySelector(".menu-dot")?.getAttribute("aria-label")).toBe("Some files need attention");
-  expect(menuRow("Media").title).toBe("Some files need attention");
+  expect(moreButton().querySelector(".needs-you")).toBeNull();
+  expect(mediaButton().querySelector(".menu-dot")?.getAttribute("aria-label")).toBe("Some files need attention");
+  expect(mediaButton().title).toBe("Some files need attention");
   // Media lists the file with why it failed. Dismissed there, nothing is marked.
-  await click(menuRow("Media"));
+  await click(mediaButton());
   await act(async () => { await vi.dynamicImportSettled(); });
   await vi.waitFor(() => expect(document.querySelector('dialog[open] [aria-label="Dismiss"]')).not.toBeNull());
   expect(document.querySelector("dialog[open]")?.textContent).toContain("Scarlet couldn’t read this file.");
   await click(document.querySelector('dialog[open] [aria-label="Dismiss"]')!);
-  expect(moreButton().querySelector(".needs-you")).toBeNull();
+  expect(mediaButton().querySelector(".menu-dot")).toBeNull();
   expect(container.querySelector(".simple-banner")).toBeNull();
 });
 
@@ -5460,24 +5642,23 @@ it("says how far a video's cache has got on the menu's Media row, with Pause und
   useProjectStore.setState({ updateProject });
   await show();
   await act(async () => {});
-  // Caching needs nothing from the editor, so the menu isn't marked for it. Media is inside the menu, so its button
-  // shows the caching instead: a ring drawn as far as the cache has got, named on hover in the Media row's words.
+  // Caching needs nothing from the editor, so nothing is marked for it. The Media button shows it: a line under its
+  // word filled as far as the cache has got, named on hover. The menu's button shows nothing.
   expect(moreButton().querySelector(".needs-you")).toBeNull();
-  expect(ringDrawn()).toBe(30);
-  expect(cachingRing()!.classList.contains("is-unknown")).toBe(false);
-  expect(moreTitle()).toBe("Caching 30%");
-  expect(moreButton().getAttribute("aria-description")).toBe("Caching 30%");
-  // The menu button draws the ring without repeating its status in text.
-  expect(moreButton().textContent).toBe("");
+  expect(moreButton().querySelector(".progress-line")).toBeNull();
+  expect(moreTitle()).toBe("More");
+  expect(lineDrawn()).toBe(30);
+  expect(cachingLine()!.classList.contains("is-unknown")).toBe(false);
+  expect(mediaButton().title).toBe("Caching 30%");
+  expect(mediaButton().getAttribute("aria-description")).toBe("Caching 30%");
+  expect(mediaButton().textContent).toBe("Media");
   await openMenu();
-  expect(menuRow("Media").querySelector(".menu-value")?.textContent).toBe("Caching 30%");
-  expect(menuRow("Media").title).toBe(rest.length ? `${rest.length} of ${rest.length + 1} videos cached` : "Caching for playback");
   await click(menuItem("Pause caching"));
   expect(updateProject).toHaveBeenCalledWith({ mediaPaused: true });
   expect(container.querySelector('[role="menu"]')).toBeNull();
 });
 
-it("draws a ring around the menu's button only while videos cache, under the mark for what needs the editor", async () => {
+it("draws a line under the Media button's word only while videos cache, and never on the menu's button", async () => {
   const [first, ...rest] = data.media.filter(m => m.kind === "video");
   const others = rest.map(m => ({ mediaId: m.id, state: "ready" as const }));
   const caches = vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [{ mediaId: first!.id, state: "ready" }, ...others] });
@@ -5491,34 +5672,35 @@ it("draws a ring around the menu's button only while videos cache, under the mar
   await show();
   await act(async () => {});
   // Every video cached: the button is as it always is.
-  expect(cachingRing()).toBeNull();
+  expect(cachingLine()).toBeNull();
   expect(moreTitle()).toBe("More");
-  expect(moreButton().getAttribute("aria-description")).toBeNull();
-  // A cache starts and the engine has no figure yet: a quarter of the ring, which turns.
+  expect(mediaButton().getAttribute("aria-description")).not.toMatch(/^Caching/);
+  // A cache starts and the engine has no figure yet: a short stretch of the line, which slides.
   await cachesBecome({ state: "caching" });
-  expect(cachingRing()!.classList.contains("is-unknown")).toBe(true);
-  expect(ringDrawn()).toBe(25);
-  expect(moreTitle()).toBe("Caching");
+  expect(cachingLine()!.classList.contains("is-unknown")).toBe(true);
+  expect(lineDrawn()).toBe(0);
+  expect(mediaButton().title).toBe("Caching");
+  expect(moreButton().querySelector(".progress-line")).toBeNull();
   await cachesBecome({ state: "caching", progress: 0.71 });
-  expect(cachingRing()!.classList.contains("is-unknown")).toBe(false);
-  expect(ringDrawn()).toBe(71);
-  expect(moreTitle()).toBe("Caching 71%");
-  // A file that needs the editor still marks the button, and is said first.
+  expect(cachingLine()!.classList.contains("is-unknown")).toBe(false);
+  expect(lineDrawn()).toBe(71);
+  expect(mediaButton().title).toBe("Caching 71%");
+  // A file that needs the editor marks the Media button, which says it first, and not the menu.
   const broken = rest[0] ?? first!;
   await cachesBecome({ state: "caching", progress: 0.71 }, { media: data.media.map(m => m.id === broken.id ? { ...m, status: "failed" as const, error: "moov atom not found" } : m) });
-  expect(moreButton().querySelector(".needs-you")).not.toBeNull();
-  expect(cachingRing()).not.toBeNull();
-  expect(moreTitle()).toBe(`Couldn’t read ${broken.name}. Caching 71%`);
+  expect(moreButton().querySelector(".needs-you")).toBeNull();
+  expect(cachingLine()).not.toBeNull();
+  expect(mediaButton().title).toBe(`Couldn’t read ${broken.name}. Caching 71%`);
   await cachesBecome({ state: "caching", progress: 0.71 }, { media: data.media.map(m => m.id === broken.id ? { ...m, status: "ready" as const, error: undefined } : m) });
-  // Paused, nothing is caching: the ring is gone, and nothing under the header says so. The menu's Media row does.
+  // Paused, nothing is caching: the ring is gone, and nothing under the header says so. The menu's Resume caching row does.
   await cachesBecome({ state: "uncached", queued: true }, { project: { ...data.project, mediaPaused: true } });
-  expect(cachingRing()).toBeNull();
+  expect(cachingLine()).toBeNull();
   expect(container.querySelector(".simple-banner")).toBeNull();
   // Cached: the ring goes.
   await cachesBecome({ state: "caching", progress: 0.9 }, { project: { ...data.project, mediaPaused: false } });
-  expect(ringDrawn()).toBe(90);
+  expect(lineDrawn()).toBe(90);
   await cachesBecome({ state: "ready" });
-  expect(cachingRing()).toBeNull();
+  expect(cachingLine()).toBeNull();
   expect(moreTitle()).toBe("More");
 });
 
@@ -5534,9 +5716,8 @@ it("says that caching is paused once, on the menu's Media row with Resume under 
   expect(container.querySelector(".simple-banner")).toBeNull();
   expect(container.querySelector("#simple-chat")!.textContent).not.toMatch(/paused|Resume/i);
   expect(moreButton().querySelector(".needs-you")).toBeNull();
+  expect(mediaButton().title).toBe("Caching is paused");
   await openMenu();
-  expect(menuRow("Media").querySelector(".menu-value")?.textContent).toBe("Paused");
-  expect(menuRow("Media").title).toBe("Caching is paused");
   await click(menuItem("Resume caching"));
   expect(updateProject).toHaveBeenCalledExactlyOnceWith({ mediaPaused: false });
 });
@@ -5681,17 +5862,17 @@ it("updates the Export button as the job advances without drawing the player or 
   preview.mockClear();
   const chat = composer.props;
   expect(chat).toBeDefined();
-  const ring = () => exportButton().querySelector<SVGElement>("svg");
+  const ring = () => exportButton().querySelector<HTMLElement>(".progress-line");
   const status = () => [exportButton().title, exportButton().getAttribute("aria-description")];
   expect(ring()).toBeNull();
   await exports({ ...running, phase: "choosing" });
   expect(ring()).toBeNull();
   await exports(running);
   expect(ring()?.getAttribute("aria-hidden")).toBe("true");
-  expect(ringDrawn(ring())).toBe(42);
+  expect(lineDrawn(ring())).toBe(42);
   expect(status()).toEqual(["Exporting 42%", "Exporting 42%"]);
   await exports({ ...running, progress: 0.5 });
-  expect(ringDrawn(ring())).toBe(50);
+  expect(lineDrawn(ring())).toBe(50);
   for (const job of [{ ...running, progress: 0 }, { ...running, progress: 0, waiting: true },
     { ...running, progress: 0.97 }, { ...running, phase: "saving" as const, progress: 1 }]) {
     await exports(job);
@@ -7643,8 +7824,7 @@ it("opens a clip from Media at its start, without the cut's marks, and returns t
   await act(async () => {});
   expect(container.querySelectorAll(".simple-timeline-mark").length).toBeGreaterThan(0);
   usePlayerStore.setState({ time: 12.5 });
-  await openMenu();
-  await click(menuRow("Media"));
+  await click(mediaButton());
   await act(async () => { await vi.dynamicImportSettled(); });
   const play = await vi.waitFor(() => { const b = container.querySelector<HTMLButtonElement>('button[aria-label^="Preview source"]'); if (!b) throw new Error("no Media row yet"); return b; });
   await click(play);
@@ -7672,8 +7852,7 @@ it("returns the cut to an open cut's join when a clip from Media was played over
   expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing “Keep the image test” · After");
   // The editor is inside the cut's passage, on that earlier version's clock.
   await act(async () => usePlayerStore.setState({ time: 11 }));
-  await openMenu();
-  await click(menuRow("Media"));
+  await click(mediaButton());
   await act(async () => { await vi.dynamicImportSettled(); });
   const play = await vi.waitFor(() => { const b = container.querySelector<HTMLButtonElement>('button[aria-label^="Preview source"]'); if (!b) throw new Error("no Media row yet"); return b; });
   await click(play);
@@ -7733,8 +7912,7 @@ it("bookmarks a place in the video itself while a suggestion, an open cut or a c
   expect(editPanel()).toBeNull();
   // Behind a clip from Media, it is where the video was left.
   await act(async () => usePlayerStore.setState({ time: 12.5 }));
-  await openMenu();
-  await click(menuRow("Media"));
+  await click(mediaButton());
   await act(async () => { await vi.dynamicImportSettled(); });
   const play = await vi.waitFor(() => { const b = container.querySelector<HTMLButtonElement>('button[aria-label^="Preview source"]'); if (!b) throw new Error("no Media row yet"); return b; });
   await click(play);
@@ -7745,25 +7923,24 @@ it("bookmarks a place in the video itself while a suggestion, an open cut or a c
 
 /** The Transcript's heading row, part by part, and the pane under it. */
 const transcriptHeading = () => {
-  const head = container.querySelector<HTMLElement>(".simple-subhead")!, pane = container.querySelector<HTMLElement>(".simple-transcript")!;
-  return { row: [...head.children].map(c => c.textContent), pane, said: (head.textContent! + pane.textContent!).match(/Transcript|interview-take2\.mp4/g) };
+  const head = container.querySelector<HTMLElement>(".simple-transcript-rail .simple-header > h1")!, pane = container.querySelector<HTMLElement>(".simple-transcript")!;
+  return { row: head.textContent, pane, said: (head.textContent! + pane.textContent!).match(/Transcript|interview-take2\.mp4/g) };
 };
 
 it("names a clip from Media once on the Transcript's heading, and keeps Mark unused words on a row under it", async () => {
   await show();
   await act(async () => {});
-  await openMenu();
-  await click(menuRow("Media"));
+  await click(mediaButton());
   await act(async () => { await vi.dynamicImportSettled(); });
   const play = await vi.waitFor(() => { const b = container.querySelector<HTMLButtonElement>('button[aria-label^="Preview source"]'); if (!b) throw new Error("no Media row yet"); return b; });
   await click(play);
   await openTranscript();
   // The clip's name is on the heading with the clip's own figures, and the pane has no title to say it again.
   const { row, pane, said } = transcriptHeading();
-  expect(row).toEqual(["Transcript · interview-take2.mp4", "0:00–0:20 · 44 words", "Back to chat"]);
+  expect(row).toBe("Transcript · interview-take2.mp4");
   expect(said).toEqual(["Transcript", "interview-take2.mp4"]);
   // What else the pane's toolbar held for a clip stays in the pane, on a row under the heading.
-  expect(pane.querySelector(".reading-tools")?.textContent).toBe("Mark unused words");
+  expect(pane.querySelector(".transcript-search .btn-quiet")?.textContent).toBe("Mark unused words");
 });
 
 it("names the footage on the Transcript's heading before the first cut, where the pane's title did", async () => {
@@ -7772,10 +7949,10 @@ it("names the footage on the Transcript's heading before the first cut, where th
   await show();
   await openTranscript();
   const { row, pane, said } = transcriptHeading();
-  expect(row).toEqual(["Transcript · interview-take2.mp4", "0:00–0:20 · 44 words", "Back to chat"]);
+  expect(row).toBe("Transcript · interview-take2.mp4");
   expect(said).toEqual(["Transcript", "interview-take2.mp4"]);
   // With no cut there are no unused words to mark, so nothing sits under the heading.
-  expect(pane.querySelector(".reading-tools")).toBeNull();
+  expect(pane.querySelector(".transcript-search .btn-quiet")).toBeNull();
 });
 
 it("writes a time past the first hour with its hour, over the player as on the line that names the box's aim", async () => {
@@ -8252,9 +8429,10 @@ it("gives Space back to the player after a row of the menu is clicked, and after
   expect(await spaceWhilePaused()).toBe(true);
   // A row that opens a drawer: closed again, the drawer hands focus back to what had it, which isn't ⋯ either.
   await pointerClick(more);
-  await pointerClick(menuItem("History"));
+  await pointerClick(menuItem("Export"));
+  await act(async () => { await vi.dynamicImportSettled(); });
   const drawer = document.querySelector<HTMLElement>("dialog[open]")!;
-  expect(drawer.textContent).toContain("History");
+  expect(drawer.querySelector("#export-format")).not.toBeNull();
   await pointerClick(drawer.querySelector<HTMLElement>('[aria-label="Close"]')!);
   expect(document.querySelector("dialog[open]")).toBeNull();
   expect(document.activeElement).toBe(document.body);
@@ -9076,8 +9254,7 @@ it("leaves a clip the editor started from Media playing when a suggestion's appl
   await click(buttonIn(container.querySelector('[aria-label="Suggestion"]')!, "Apply")!);
   expect(container.querySelector('[aria-label="Suggestion"]')).toBeNull();
   // While the engine works, the editor plays a clip from Media. Nothing they review is on screen then.
-  await openMenu();
-  await click(menuRow("Media"));
+  await click(mediaButton());
   await act(async () => { await vi.dynamicImportSettled(); });
   await click(await vi.waitFor(() => { const b = container.querySelector<HTMLButtonElement>('button[aria-label^="Preview source"]'); if (!b) throw new Error("no Media row yet"); return b; }));
   expect(container.querySelector('[aria-label="Source preview"]')).not.toBeNull();
@@ -9776,8 +9953,7 @@ it("plays a suggestion only on the editor's press on its line: its card comes ba
 it("starts a clip played from Media once: once it plays, nothing tells its player to start again", async () => {
   await show();
   await act(async () => {});
-  await openMenu();
-  await click(menuRow("Media"));
+  await click(mediaButton());
   await act(async () => { await vi.dynamicImportSettled(); });
   const row = await vi.waitFor(() => { const b = container.querySelector<HTMLButtonElement>('button[aria-label^="Preview source"]'); if (!b) throw new Error("no Media row yet"); return b; });
   await click(row);
@@ -9792,8 +9968,7 @@ it("starts a clip played from Media once: once it plays, nothing tells its playe
   await act(async () => usePlayerStore.setState({ playing: false }));
   expect(clip().autoplay).toBe(false);
   // Played again from Media, it starts again.
-  await openMenu();
-  await click(menuRow("Media"));
+  await click(mediaButton());
   await act(async () => { await vi.dynamicImportSettled(); });
   await click(await vi.waitFor(() => { const b = container.querySelector<HTMLButtonElement>('button[aria-label^="Preview source"]'); if (!b) throw new Error("no Media row yet"); return b; }));
   expect(clip().autoplay).toBe(true);
@@ -10462,8 +10637,7 @@ it("leaves full screen when Revise hands the keyboard to the message box, which 
 it("takes a clip that's already showing back to its start, and plays it, when it is played from Media again", async () => {
   await show();
   const fromMedia = async () => {
-    await openMenu();
-    await click(menuRow("Media"));
+    await click(mediaButton());
     await act(async () => { await vi.dynamicImportSettled(); });
     await click(await vi.waitFor(() => { const b = container.querySelector<HTMLButtonElement>('button[aria-label^="Preview source"]'); if (!b) throw new Error("no Media row yet"); return b; }));
   };
@@ -10557,26 +10731,40 @@ it("puts a marked stretch on the message beside the edit that's open, which stay
   expect((useUiStore.getState().agentContext as AgentContext).changeId).toBeUndefined();
 });
 
-it("keeps one list of every edit open at a time, and names the request the timeline marks above the ruler", async () => {
+it("keeps one list of every edit open at a time, and puts a request's edits on the timeline when its band is pressed", async () => {
   earlierRequestOnly(false);
   const later = laterRequest("chg_later", false);
   const intro = { changeId: "chg_later", spot: 1, label: "intro fade", range: { start: 0, end: 1 }, previous: [] };
   later.lists.chg_later = [{ changeId: "chg_later", spot: 0, label: "outro fade", range: { start: 13, end: 15 }, previous: [] }, intro];
-  const change = { ...later.change, timelineEdits: [{ label: "outro fade", range: { start: 13, end: 15 } }, { label: "intro fade", range: intro.range }] };
-  data = { ...data, changes: [...data.changes, change] };
+  // Each request has its band: the zooms asked for first, then the fades.
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const request = (id: string, instruction: string, changeId: string) => Task.parse({ id, projectId: PRJ, kind: "edit", agent: "claude",
+    instruction, state: "done", createdBy: { type: "human", name: "Editor" }, changeIds: [changeId], createdAt: at, finishedAt: at });
+  const change = { ...later.change, taskId: "task_fades", timelineEdits: [{ label: "outro fade", range: { start: 13, end: 15 } }, { label: "intro fade", range: intro.range }] };
+  data = { ...data, changes: [...data.changes.map(c => c.id === "chg_approved_2" ? { ...c, taskId: "task_zooms" } : c), change],
+    tasks: [request("task_zooms", "Frame the screen", "chg_approved_2"), request("task_fades", "Fade both ends", "chg_later")] };
+  later.lists[threadWith("chg_later").id] = later.lists.chg_later!;
+  later.lists[threadWith("chg_approved_2").id] = later.lists[later.earlier]!;
   useProjectStore.setState({ current: data });
   await showFolded();
   await act(async () => {});
-  // The latest request has the timeline. The line above the ruler says whose dots they are, and how many.
-  const heading = () => container.querySelector<HTMLElement>(".timeline-heading");
-  expect(heading()?.querySelector(".timeline-whose")?.textContent).toBe(threadWith("chg_later").title);
-  expect(heading()?.querySelector(".timeline-whose-count")?.textContent).toBe("· 2 edits");
-  // Its name brings the request into view in the chat.
-  const scrolled = vi.fn();
-  turnFor("chg_later").querySelector<HTMLElement>(".simple-pass")!.scrollIntoView = scrolled;
-  await click(heading()!.querySelector<HTMLElement>(".timeline-whose")!);
-  await act(async () => { await new Promise(resolve => requestAnimationFrame(() => resolve(undefined))); });
-  expect(scrolled).toHaveBeenCalled();
+  // Nothing above the ruler says whose dots they are: the latest request's band does, a shade lighter.
+  expect(container.querySelector(".timeline-heading")).toBeNull();
+  const band = (changeId: string) => turnFor(changeId).querySelector<HTMLElement>(".unit-msg")!;
+  expect(band("chg_later").classList.contains("is-marked")).toBe(true);
+  expect(band("chg_approved_2").classList.contains("is-marked")).toBe(false);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2"]);
+  // Pressing the earlier request's band puts its three edits on the timeline, and its band takes the shade.
+  await click(band("chg_approved_2"));
+  await act(async () => {});
+  expect(band("chg_approved_2").classList.contains("is-marked")).toBe(true);
+  expect(band("chg_later").classList.contains("is-marked")).toBe(false);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2", "3"]);
+  // And the latest's band brings its own back.
+  await click(band("chg_later"));
+  await act(async () => {});
+  expect(band("chg_later").classList.contains("is-marked")).toBe(true);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2"]);
   // Opening one request's list of every edit closes another's, so two "Hide" links never stand for one timeline.
   const toggle = (changeId: string) => turnFor(changeId).querySelector<HTMLElement>(".simple-pass-toggle")!;
   await click(toggle("chg_approved_2"));
@@ -10585,14 +10773,16 @@ it("keeps one list of every edit open at a time, and names the request the timel
   expect(toggle("chg_later").getAttribute("aria-expanded")).toBe("true");
   expect(toggle("chg_approved_2").getAttribute("aria-expanded")).toBe("false");
   expect([...container.querySelectorAll(".simple-pass-toggle")].filter(t => t.textContent === "Hide")).toHaveLength(1);
-  // An open card names its own edit: the line waits while it is open.
+  // A request's band with an edit of it open leaves the card and shows that request's edits.
   await click(editRows("chg_later")[0]!);
   await act(async () => {});
   expect(container.querySelector(".edit-card")).not.toBeNull();
-  expect(heading()).toBeNull();
-  await press("Escape");
+  await click(band("chg_approved_2"));
   await act(async () => {});
-  expect(heading()?.querySelector(".timeline-whose")?.textContent).toBe(threadWith("chg_later").title);
+  expect(container.querySelector(".edit-card")).toBeNull();
+  expect(toggle("chg_later").getAttribute("aria-expanded")).toBe("false");
+  expect(band("chg_approved_2").classList.contains("is-marked")).toBe(true);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2", "3"]);
 });
 
 it("goes from a kept edit Scarlet didn't flag to a call still waiting, or a flagged edit, when it comes next in the list", () => {

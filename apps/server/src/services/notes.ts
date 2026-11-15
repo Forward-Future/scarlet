@@ -3,6 +3,7 @@ import { clock, newId, type Note } from "@scarlet/timeline";
 import { cleanupNote } from "../cleanup.js";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
+import { notFound } from "../errors.js";
 import { createTask, parseAssignTo } from "./tasks.js";
 import { ensureHead } from "./timeline.js";
 import { actorFor, agentName, logActivity, quote } from "./activity.js";
@@ -51,6 +52,8 @@ export async function createNote(ctx: Ctx, user: User, projectId: string, input:
   };
   // The task names the note, so a note that fails to save must not leave its task queued.
   return ctx.db.transaction(() => {
+    // Cleanup waits on a provider, and meanwhile the project may have gone to the Trash or been removed for good.
+    if (!ctx.repos.projects.header(project.id)) throw notFound("project");
     let task: Task | undefined;
     if (target) {
       task = createTask(ctx, {

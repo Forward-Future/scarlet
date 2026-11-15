@@ -33,7 +33,7 @@ describe("claude stream-json parser", () => {
     expect(evs[4]!.text).toContain("Invalid ops");
     expect(evs[6]!.text).toBe("Proposed one change: chg_1.");
     expect(st.result).toBe("Proposed one change: chg_1.");
-    expect(st.mcpConnected).toBe(true);
+    expect(st.mcpStatus).toBe("connected");
     expect(st.sessionId).toBe("s1");
   });
   it("sees a resume that found no session as never started", () => {

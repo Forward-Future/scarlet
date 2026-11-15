@@ -1,5 +1,4 @@
 import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { TranscriptionAction, useTranscriptionAvailability } from "../media/TranscriptionAction";
 import { clock, clockRange, plural } from "../../lib/format";
 import { mediaPlaying } from "../../lib/hotkeys";
@@ -17,6 +16,22 @@ import { useTranscriptWindow } from "./useTranscriptWindow";
 import { useNotePositions } from "../../lib/useNotePositions";
 
 const emptyMedia: MediaAsset[] = [];
+const WHOLE = { start: 0, end: Infinity };
+/** A word as search compares it: lower case, without punctuation. */
+const bare = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
+/** Where the searched words start, each a run of `length` words: every word but the last matched whole, the last from its start. */
+export function findWords(words: { word: { text: string } }[], query: string) {
+  const terms = query.split(/\s+/).map(bare).filter(Boolean);
+  if (!terms.length) return [];
+  const texts = words.map(w => bare(w.word.text));
+  const found: number[] = [];
+  for (let i = 0; i + terms.length <= texts.length; i++) {
+    if (terms.every((term, j) => j === terms.length - 1 ? texts[i + j]!.startsWith(term) : texts[i + j] === term)
+      || (terms.length === 1 && texts[i]!.includes(terms[0]!))) found.push(i);
+  }
+  return found;
+}
+
 const wordKey = (w: MappedWord) => JSON.stringify([w.mediaId, w.segmentId, w.indexInSegment]);
 
 // Word text and timing stay fixed across playback, project updates and selections in other paragraphs.
@@ -35,13 +50,13 @@ const WordParagraph = memo(function WordParagraph({ words, from, to }: {
 });
 
 /**
- * `toolsHost` is given by a view that heads the transcript itself, as the simple view does: the pane then has no title
- * of its own, and its figures and help mark go on that heading (null until the heading is on the page).
+ * `simple` is the simple view's column beside the player, which heads the transcript itself: the pane is then the words
+ * alone, set as the chat is, with no toolbar, figures, key box or notes (the chat already holds those).
  */
-export function TranscriptPane({ source, draft, onAsk, toolsHost }: { draft?: Timeline; source?: MediaAsset; onAsk(words: AgentContext): void; toolsHost?: HTMLElement | null }) {
+export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timeline; source?: MediaAsset; onAsk(words: AgentContext): void; simple?: boolean }) {
   const project = useProjectStore(s => s.current?.project);
   const projectMedia = useProjectStore(s => s.current?.media ?? emptyMedia);
-  const projectNotes = useProjectStore(s => source ? undefined : s.current?.notes);
+  const projectNotes = useProjectStore(s => source || simple ? undefined : s.current?.notes);
   const projectTimeline = useProjectStore(s => s.current?.timeline);
   const transcriptionAvailable = useTranscriptionAvailability();
   const openNotePopover = useUiStore((s) => s.openNotePopover);
@@ -50,6 +65,8 @@ export function TranscriptPane({ source, draft, onAsk, toolsHost }: { draft?: Ti
   const [selected, setSelected] = useState<{ from: string; to: string } | null>(null);
   const [showKeys, setShowKeys] = useState(false);
   const [showCut, setShowCut] = useState(false);
+  const [query, setQuery] = useState("");
+  const [hit, setHit] = useState(0);
   const dragging = useRef(false);
   const anchor = useRef<string | null>(null);
   const moved = useRef(false);
@@ -59,7 +76,8 @@ export function TranscriptPane({ source, draft, onAsk, toolsHost }: { draft?: Ti
   const userScrolledAt = useRef(0);
 
   const timeline = draft ?? projectTimeline ?? null;
-  const page = useTranscriptWindow(source, timeline, projectMedia);
+  // The simple view reads the whole transcript at once, so it can be searched and scrolled end to end.
+  const page = useTranscriptWindow(source, timeline, projectMedia, simple ? WHOLE : undefined);
   const { assets, transcripts, from, to } = page;
   const fps = source?.fps || project?.settings.fps || 30;
   const notePositions = useNotePositions(timeline, projectNotes, fps);
@@ -78,7 +96,8 @@ export function TranscriptPane({ source, draft, onAsk, toolsHost }: { draft?: Ti
     }).map((w, index) => ({ ...w, index }));
   }, [transcripts, source, showCut, timeline, from, to]);
   const groups = useMemo(() => transcriptTurns(words), [words]);
-  const hasVoices = groups.some(g => g.voice);
+  // The simple view names voices only where there is more than one to tell apart.
+  const hasVoices = simple ? new Set(groups.map(g => g.voice ?? "")).size > 1 : groups.some(g => g.voice);
   const indices = useMemo(() => new Map(words.map(w => [wordKey(w), w.index])), [words]);
   const selFrom = selected && indices.get(selected.from), selTo = selected && indices.get(selected.to);
   const sel = selFrom != null && selTo != null ? { from: selFrom, to: selTo } : null;
@@ -118,23 +137,75 @@ export function TranscriptPane({ source, draft, onAsk, toolsHost }: { draft?: Ti
     if (!nodes?.length) return;
     const at = indexWordTimes(words);
     let previous: HTMLElement | undefined;
+    let near: HTMLElement[] = [];
+    // The simple view lights the sentence around the word the playhead is on, and the word itself more.
+    const sentence = (i: number) => {
+      const ends = (k: number) => /[.?!…]["”’)]*$/.test(words[k]?.word.text ?? "");
+      let a = i, b = i;
+      while (a > 0 && i - a < 30 && !ends(a - 1)) a--;
+      while (b < words.length - 1 && b - i < 30 && !ends(b)) b++;
+      return Array.from({ length: b - a + 1 }, (_, k) => nodes[a + k]!).filter(Boolean);
+    };
     const update = ({ time, playing }: ReturnType<typeof usePlayerStore.getState>) => {
-      const next = nodes[at(time)];
+      const index = at(time);
+      const next = nodes[index];
       if (next === previous) return;
       previous?.removeAttribute("data-current");
       next?.setAttribute("data-current", "");
       previous = next;
-      if (playing && Date.now() - userScrolledAt.current >= 2500) next?.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (simple) {
+        for (const node of near) node.removeAttribute("data-near");
+        near = next ? sentence(index) : [];
+        for (const node of near) node.setAttribute("data-near", "");
+      }
+      if (!next || Date.now() - userScrolledAt.current < 2500) return;
+      if (playing) next.scrollIntoView({ block: "center", behavior: "smooth" });
+      else if (simple && listRef.current) {
+        // Moved by a pick on the timeline or a skip: brought into view if it went out of it.
+        const box = listRef.current.getBoundingClientRect(), word = next.getBoundingClientRect();
+        if (word.top < box.top || word.bottom > box.bottom) next.scrollIntoView({ block: "center" });
+      }
     };
     update(usePlayerStore.getState());
     const unsubscribe = usePlayerStore.subscribe(update);
-    return () => { unsubscribe(); previous?.removeAttribute("data-current"); };
+    return () => { unsubscribe(); previous?.removeAttribute("data-current"); for (const node of near) node.removeAttribute("data-near"); };
   }, [words]);
+
+  const terms = query.trim().split(/\s+/).filter(Boolean).length;
+  const hits = useMemo(() => simple ? findWords(words, query) : [], [simple, words, query]);
+  const shownHit = hits.length ? Math.min(hit, hits.length - 1) : -1;
+  // Matches are marked on the words themselves, so the paragraphs aren't drawn again on each key.
+  useLayoutEffect(() => {
+    const nodes = wordNodes.current;
+    if (!nodes || !hits.length) return;
+    const marked: HTMLElement[] = [];
+    hits.forEach((start, n) => {
+      for (let k = 0; k < terms; k++) {
+        const node = nodes[start + k];
+        if (!node) continue;
+        node.setAttribute("data-match", n === shownHit ? "current" : "");
+        marked.push(node);
+      }
+    });
+    // The match in hand is kept in view as the search is typed and stepped through.
+    if (shownHit >= 0) { userScrolledAt.current = Date.now(); nodes[hits[shownHit]!]?.scrollIntoView({ block: "center" }); }
+    return () => { for (const node of marked) node.removeAttribute("data-match"); };
+  }, [hits, shownHit, terms, words]);
+  // Enter places the playhead on the match in view, then steps on to the next; Space plays from the words found.
+  const placed = useRef(false);
+  const goToHit = (step: 1 | -1) => {
+    if (!hits.length) return;
+    const next = placed.current ? (shownHit + step + hits.length) % hits.length : shownHit;
+    placed.current = true;
+    setHit(next);
+    const word = words[hits[next]!];
+    if (word?.placements[0]) player.seek(word.placements[0].start);
+  };
 
   if (!project) return null;
   if (!assets.length) return <EmptyState icon="diff" title="No speech media in this edit" body="The transcript follows audio and video clips with audible sound." />;
   const status = assets.filter(asset => !asset.transcriptId).map(asset => (
-    <div key={asset.id} className="flex flex-wrap items-center gap-2 px-4 py-2 text-[12px]">
+    <div key={asset.id} className={simple ? "transcript-missing" : "flex flex-wrap items-center gap-2 px-4 py-2 text-[12px]"}>
       <span className="text-muted">{asset.name}</span>
       <TranscriptionAction asset={asset} available={transcriptionAvailable} />
     </div>
@@ -180,6 +251,18 @@ export function TranscriptPane({ source, draft, onAsk, toolsHost }: { draft?: Ti
     return n.state !== "dismissed" && time != null && time >= from && time <= to ? [{ ...n, time }] : [];
   }).sort((a, b) => a.time - b.time);
 
+  const askAboutSelection = () => {
+    if (!range) return;
+    const selection = words.slice(selectedFrom, selectedTo + 1);
+    const selText = selection.map(w => w.word.text).join(" ");
+    const clipIds = [...new Set(selection.flatMap(w => w.placements.flatMap(p => p.clipId ? [p.clipId] : [])))];
+    const asked: AgentContext = { version: draft?.version ?? project.head ?? undefined, time: range.start, end: range.end, clipIds: source ? [] : clipIds, ...(source && { mediaId: source.id }), label: `“${selText.length > 40 ? `${selText.slice(0, 37)}…` : selText}”` };
+    setAgentContext(asked);
+    // The page can aim the box further: words inside a call that's open are about that call.
+    onAsk(asked);
+    focusComposer();
+    setSel(null);
+  };
   const retryNotes = notePositions.failed && <button className="btn-quiet" onClick={notePositions.retry}>Retry earlier notes</button>;
   const figures = <span className="reading-window">{clock(from)}–{clock(to)} · {plural(words.length, "word")}</span>;
   const markUnused = source && timeline && <button className="btn-quiet" onClick={() => setShowCut(v => !v)} aria-pressed={showCut}>Mark unused words</button>;
@@ -189,21 +272,34 @@ export function TranscriptPane({ source, draft, onAsk, toolsHost }: { draft?: Ti
 
   return (
     <div className="flex flex-col h-full" onMouseUp={() => (dragging.current = false)} onMouseLeave={() => (dragging.current = false)}>
-      {toolsHost === undefined ? <div className="reading-toolbar">
+      {!simple ? <div className="reading-toolbar">
         {retryNotes}
         <div className="reading-title"><h2>Transcript</h2><span>{source?.name ?? "Current edit · playback order"}</span></div>
         <div className="reading-tools">{figures}{markUnused}{help}</div>
-      </div> : <>
-        {/* One row heads the transcript, and it isn't the pane's: the figures and the help mark join it. */}
-        {toolsHost && createPortal(<>{figures}{help}</>, toolsHost)}
-        {(retryNotes || markUnused) && <div className="reading-tools px-4 py-1.5">{retryNotes}{markUnused}</div>}
-      </>}
+      </div> : <div className="transcript-search">
+        <Icon name="search" size={13} />
+        <input type="search" value={query} placeholder="Search the transcript" aria-label="Search the transcript"
+          onChange={e => { setQuery(e.target.value); setHit(0); placed.current = false; }}
+          onKeyDown={e => {
+            if (e.key === "Enter") { e.preventDefault(); goToHit(e.shiftKey ? -1 : 1); }
+            else if (e.key === "Escape" && query) { e.preventDefault(); e.stopPropagation(); setQuery(""); }
+          }} />
+        {query.trim() && <span className="transcript-search-count" title="Enter for the next, Shift + Enter for the one before">
+          {hits.length ? `${shownHit + 1} of ${hits.length}` : "No matches"}</span>}
+        {markUnused}
+      </div>}
       {showKeys && <div className="reading-keys"><span><kbd>← →</kbd> Move</span><span><kbd>Shift + ← →</kbd> Select</span><span><kbd>Enter</kbd> Play from word</span></div>}
-      {status}
+      {/* In the simple view a file with no transcript yet is said after the words, not over them. */}
+      {!simple && status}
       {page.loading && <p role="status" className="px-4"><Spinner /> Loading transcript…</p>}
       {page.error && <p role="alert" className="px-4">{page.error} <button className="btn-ghost" onClick={page.retry}>Retry transcript</button></p>}
       {!page.loading && !page.error && !words.length && !status.length && <p className="p-4 text-muted">No spoken words here.</p>}
-      {range && sel && (
+      {range && sel && simple && <div className="transcript-chosen">
+        <span>{clockRange(range.start, range.end)}</span>
+        <button type="button" className="simple-link" onClick={() => askAboutSelection()}>Ask about this</button>
+        <button type="button" className="simple-link simple-link-quiet" onClick={() => setSel(null)}>Clear</button>
+      </div>}
+      {range && sel && !simple && (
         <div className="flex items-center gap-1.5 px-3 py-1.5 bg-hi-dim border-b border-line text-[12px]">
           <span className="font-mono tnum text-fg">
             {clockRange(range.start, range.end)}
@@ -220,17 +316,7 @@ export function TranscriptPane({ source, draft, onAsk, toolsHost }: { draft?: Ti
           </button>}
           <button
             className="btn-primary py-1"
-            onClick={() => {
-              const selection = words.slice(selectedFrom, selectedTo + 1);
-              const selText = selection.map(w => w.word.text).join(" ");
-              const clipIds = [...new Set(selection.flatMap(w => w.placements.flatMap(p => p.clipId ? [p.clipId] : [])))];
-              const asked: AgentContext = { version: draft?.version ?? project.head ?? undefined, time: range.start, end: range.end, clipIds: source ? [] : clipIds, ...(source && { mediaId: source.id }), label: `“${selText.length > 40 ? `${selText.slice(0, 37)}…` : selText}”` };
-              setAgentContext(asked);
-              // The page can aim the box further: words inside a call that's open are about that call.
-              onAsk(asked);
-              focusComposer();
-              setSel(null);
-            }}
+            onClick={() => askAboutSelection()}
           >
             Ask about this
           </button>
@@ -250,7 +336,8 @@ export function TranscriptPane({ source, draft, onAsk, toolsHost }: { draft?: Ti
         onDoubleClick={e => { const w = wordAt(e.target); if (w) setSel({ from: w.index, to: w.index }); }}
         onClick={e => {
           const w = wordAt(e.target);
-          if (w && !moved.current && !e.shiftKey) { setSel(null); playWord(w); }
+          // In the simple view a click places the playhead on the word; Space plays from there.
+          if (w && !moved.current && !e.shiftKey) { setSel(null); if (simple) { if (w.placements[0]) seek(w.placements[0].start); } else playWord(w); }
         }}
         onFocus={(e) => {
           if (e.target === e.currentTarget) {
@@ -298,7 +385,8 @@ export function TranscriptPane({ source, draft, onAsk, toolsHost }: { draft?: Ti
           }
           next.focus();
         }}
-        className="reading-scroll" onScroll={e => {
+        className={simple ? "reading-scroll transcript-words" : "reading-scroll"}
+        title={simple ? "Click a word to play from it · Double-click or drag to choose words · Shift + ← → to select" : undefined} onScroll={e => {
           userScrolledAt.current = Date.now();
           const el = e.currentTarget;
           if (el.scrollHeight <= el.clientHeight) return;
@@ -314,7 +402,7 @@ export function TranscriptPane({ source, draft, onAsk, toolsHost }: { draft?: Ti
           if (!first) return null;
           return (
             <div className="reading-turn" key={wordKey(first)}>
-            {!source && assets.length > 1 && first?.mediaId !== groups[gi - 1]?.words[0]?.mediaId && (
+            {!source && (simple ? new Set(words.map(w => w.mediaId)).size : assets.length) > 1 && first?.mediaId !== groups[gi - 1]?.words[0]?.mediaId && (
               <p className="mt-2 mb-1 text-xs text-muted">{assets.find(asset => asset.id === first?.mediaId)?.name}</p>
             )}
             <div className="reading-turn-head">

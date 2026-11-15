@@ -51,6 +51,14 @@ export class Paths {
   get skills() {
     return join(this.root, "skills");
   }
+  /** Graphic templates, library-wide: one folder each, with the page's files and its preview. */
+  get templates() {
+    return join(this.root, "templates");
+  }
+  template(id: string) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("Invalid template directory.");
+    return join(this.templates, id);
+  }
   get tmp() {
     return join(this.root, "tmp");
   }
@@ -71,6 +79,18 @@ export class Paths {
   }
   segments(projectId: string) {
     return join(this.project(projectId), "segments");
+  }
+  /** Files the editor attached to messages, one folder each: `attachments/<id>/<name>`. */
+  attachments(projectId: string) {
+    return join(this.project(projectId), "attachments");
+  }
+  /** The pages graphics were drawn from, one folder each with the files they link to. */
+  graphics(projectId: string) {
+    return join(this.project(projectId), "graphics");
+  }
+  /** The project's style guide file, when it is a file. */
+  styleGuides(projectId: string) {
+    return join(this.project(projectId), "style-guide");
   }
   notes(projectId: string) {
     return join(this.project(projectId), "notes");

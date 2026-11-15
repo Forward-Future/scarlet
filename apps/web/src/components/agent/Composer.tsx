@@ -1,8 +1,10 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { agentTarget, type Task } from "@scarlet/shared";
+import { agentTarget, type Task, type TaskAttachment } from "@scarlet/shared";
 import { canStartCutReview, cutSummary, type Project } from "@scarlet/timeline";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
-import { errorMessage } from "../../lib/client";
+import { errorMessage, IS_DESKTOP } from "../../lib/client";
+import { dropTargets, fileDropZone } from "../../lib/dropTargets";
+import { useAttachmentsStore, type PendingAttachment } from "../../stores/attachments";
 import { isComposing } from "../../lib/hotkeys";
 import { clock, clockRange, lengthLabel, playbackClock } from "../../lib/format";
 import type { RecorderResult } from "../../lib/recorder";
@@ -78,6 +80,22 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const inputId = useId();
   const library = useSkillsStore(s => s.skills);
   const skills = useMemo(() => enabledSkills(library), [library]);
+  // Files dropped or pasted on the box ride on the next message, in a line on top of the box.
+  const attached = useAttachmentsStore(s => s.byProject[project.id]) ?? NO_FILES;
+  const attach = useAttachmentsStore(s => s.add);
+  const detach = useAttachmentsStore(s => s.remove);
+  const dock = useRef<HTMLDivElement>(null);
+  const [dropping, setDropping] = useState(false);
+  // The desktop app's drops arrive as paths, routed by where the pointer is: the box takes them over the workspace,
+  // which would add them to the project's media.
+  const attachPaths = useRef((paths: string[]) => attach(project.id, paths.map(path => ({ path }))));
+  attachPaths.current = (paths: string[]) => attach(project.id, paths.map(path => ({ path })));
+  useLayoutEffect(() => {
+    const el = dock.current;
+    if (!el) return;
+    dropTargets.set(el, { highlight: setDropping, drop: paths => attachPaths.current(paths) });
+    return () => { dropTargets.delete(el); };
+  }, []);
 
   // A key that gives the box the cursor (N, R) may still be held as it arrives. Its repeats are that same press, not
   // text: they would type "nnn" into the message. The next key pressed is the first one typed.
@@ -149,35 +167,53 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   };
 
   /** Continue the focused thread, start a note at a moment, or start a new request. */
-  const send = async (text: string, voiceTranscript?: string, anchor = displayAnchor, skillIds?: string[]) => {
+  /** Sends the message, and says whether the files attached to it went with it. An answer to Scarlet's question can't carry any: they wait for the next message. */
+  const send = async (text: string, voiceTranscript?: string, anchor = displayAnchor, skillIds?: string[], files?: TaskAttachment[]): Promise<boolean> => {
+    const attachments = files?.length ? files : undefined;
+    const carried = attachments && { attachments };
     if (question) {
       const answer = anchor?.editNumber ? `${[`Edit ${anchor.editNumber}`, anchor.label].filter(Boolean).join(" · ")} — ${text}`
         : anchor ? `At ${anchor.markedRange ? clockRange(anchor.time, anchor.end ?? anchor.time) : clock(anchor.time)}${sourceName ? ` in ${sourceName}` : ""} — ${text}` : text;
       await answerTask(question.id, answer, skillIds);
-      return;
+      return false;
     }
     if (!effective) throw new Error(unavailableReason);
     if (replying) {
       if (anchor?.changeId && ![...thread.changes, ...thread.flagged ?? []].some(c => c.id === anchor.changeId)) throw new Error("This suggestion is unavailable. Select the edit again.");
       const position = anchor && requestPosition(anchor);
-      if (revising) {
+      // A revision takes no files, so one that carries some is a request in the thread, as a reply is.
+      if (revising && !attachments) {
         await revise(revising.id, { text, skillIds, voiceTranscript, assignTo: agentTarget(effective.agent, effective.model),
           effort: effective.effort, serviceTier: effective.serviceTier, ...(position && { position }) });
       } else {
-        await createTask(project.id, { kind: "edit", ...effective, instruction: text, voiceTranscript, context: { skillIds, version: head, ...position, threadId: thread.id } });
+        await createTask(project.id, { kind: "edit", ...effective, instruction: text, voiceTranscript, context: { skillIds, version: head, ...position, threadId: thread.id, ...carried } });
       }
       recordEditReview(project.id, anchor, "revise");
     } else if (anchor?.mediaId) {
       const task = await createTask(project.id, { kind: "edit", ...effective, instruction: text, voiceTranscript,
-        context: { skillIds, version: anchor.version ?? head, mediaId: anchor.mediaId, time: anchor.time, end: anchor.end } });
+        context: { skillIds, version: anchor.version ?? head, mediaId: anchor.mediaId, time: anchor.time, end: anchor.end, ...carried } });
+      onCreated?.(task);
+    } else if (anchor && attachments) {
+      // A note at a moment takes no files, so a message that carries some is a request about that moment.
+      const task = await createTask(project.id, { kind: "edit", ...effective, instruction: text, voiceTranscript,
+        context: { skillIds, version: anchor.version ?? head, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, markedRange: anchor.markedRange, ...carried } });
       onCreated?.(task);
     } else if (anchor) {
       const { task } = await createNote(project.id, { skillIds, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, text, voiceTranscript, version: anchor.version ?? head, assignTo: agentTarget(effective.agent, effective.model), effort: effective.effort, serviceTier: effective.serviceTier });
       if (task) onCreated?.(task);
     } else {
-      const task = await createTask(project.id, { kind: "edit", ...effective, instruction: text, voiceTranscript, context: { skillIds, version: head } });
+      const task = await createTask(project.id, { kind: "edit", ...effective, instruction: text, voiceTranscript, context: { skillIds, version: head, ...carried } });
       onCreated?.(task);
     }
+    return true;
+  };
+  /** The files ready to go with a message, once any still being added have landed, and taking them off the line once it's out. */
+  const filesFor = async () => {
+    if (!useAttachmentsStore.getState().byProject[project.id]?.length) return { files: undefined, done: () => {} };
+    const ready = await useAttachmentsStore.getState().settled(project.id);
+    return { files: ready.flatMap(a => a.attachment ?? []), done: (carried: boolean) => {
+      if (carried) useAttachmentsStore.getState().sent(project.id, ready.map(a => a.key));
+    } };
   };
 
   // Whether the box has nothing left for the next message: no text, and no target the editor aimed it at meanwhile.
@@ -201,7 +237,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     setBusy(true);
     try {
       const skillIds = await commandSkillIds(draft);
-      await send(text, undefined, displayAnchor, skillIds);
+      const { files, done } = await filesFor();
+      done(await send(text, undefined, displayAnchor, skillIds, files));
       clearSentDraft(owner, { agentDraft: draft, agentContext: context });
       if (boxIsFree()) onSent?.();
     } catch (e) {
@@ -225,7 +262,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     if (voiceReword.current) return voiceReword.current.request?.onSave(text);
     const anchor = voiceAnchor.current === undefined ? displayAnchor : voiceAnchor.current;
     try {
-      await send(text, text, anchor);
+      const { files, done } = await filesFor();
+      done(await send(text, text, anchor, undefined, files));
     } catch (e) {
       // What was said isn't lost with the failed send: it waits in the box it was said into, which is kept through a
       // quit, still aimed where it was sent. Another request's box the editor turned to meanwhile is left as it is.
@@ -318,12 +356,20 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         {modelPicker && <div className="composer-model"><AgentChip threadInput={thread ? question ? "answer" : "reply" : undefined} /></div>}
       </div>
       {tray}
+      {attached.length > 0 && <AttachedFiles files={attached} onRemove={key => { detach(project.id, key); inputRef.current?.focus(); }} />}
       {/* Esc leaves a queued request's words as they were, unless the skill list took it first. */}
       {/* While an input method composes, Esc is its own: it puts away its candidates, and the words stay in the box. */}
       <div className={firstEditHint ? "composer-box first-edit-hint" : "composer-box"} onKeyDown={e => { if (rewording && e.key === "Escape" && !e.defaultPrevented && !isComposing(e)) rewording.onCancel(); }}
         onKeyDownCapture={e => {
           if (!e.repeat) arrivedByKey.current = false;
           else if (arrivedByKey.current) e.preventDefault();
+        }}
+        // A file pasted into the box is attached, as one dropped on it is. Pasted words are typed as usual.
+        onPaste={e => {
+          const files = Array.from(e.clipboardData?.files ?? []);
+          if (!files.length || rewording) return;
+          e.preventDefault();
+          attach(project.id, files);
         }}>
         <label htmlFor={inputId} className="composer-destination sr-only">{rewording ? "Changing the words of a queued request" : <>{mode}{editTitle && ` ${editTitle}`}</>}</label>
         <div className="composer-row">
@@ -336,7 +382,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
               title={recording || heard ? "Waits until what you’re saying is sent" : "New edit instead"} onClick={takeOffTarget}><Icon name="x" size={10} /></button>
           </span>}
           <SkillCommandInput key={owner} id={inputId} inputRef={inputRef} value={value} skills={skills}
-            placeholder={rewording ? "What should it ask instead?" : question ? "Answer Scarlet…" : displayAnchor?.changeId && context ? "What should change?" : replying ? "Write a follow-up…" : "Describe your edit or type / for skills"}
+            placeholder={rewording ? "What should it ask instead?" : question ? "Answer Scarlet…" : displayAnchor?.changeId && context ? "What should change?" : replying ? "Write a follow-up…" : NEW_EDIT_HINT}
             onChange={changeText} onSubmit={() => void submitText()} />
           {editHere && !tag && !rewording && !replying && !displayAnchor && !recording && !heard && <button type="button" className="composer-edit-here"
             aria-label={`Edit here at ${editHere.time}`} title={`Edit here at ${editHere.time}`} onClick={() => {
@@ -361,8 +407,48 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     </div>
   );
 
-  return <div className={none ? "composer-dock needs-agent" : "composer-dock"}>
+  // Files dropped on the box attach to the message. Dropped anywhere else in the workspace, they're added to the project.
+  return <div ref={dock} data-file-drop="" className={none ? "composer-dock needs-agent" : "composer-dock"}
+    onDragOver={e => {
+      if (!IS_DESKTOP && e.dataTransfer.types.includes("Files") && fileDropZone(e.target) === e.currentTarget) {
+        e.preventDefault();
+        e.stopPropagation();
+        setDropping(true);
+      }
+    }}
+    onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false); }}
+    onDrop={e => {
+      setDropping(false);
+      if (!IS_DESKTOP && e.dataTransfer.files.length && fileDropZone(e.target) === e.currentTarget) {
+        e.preventDefault();
+        e.stopPropagation();
+        attach(project.id, Array.from(e.dataTransfer.files));
+      }
+    }}>
     <InlineError>{error || (refused && unavailable && unavailableReason)}</InlineError>
     {editor}
+    {dropping && <div className="composer-drop" aria-hidden="true">Attach to your message</div>}
+  </div>;
+}
+
+/** What the empty box says when the message would start a new edit. */
+export const NEW_EDIT_HINT = "Describe an edit, / skills, $ templates";
+
+const NO_FILES: PendingAttachment[] = [];
+
+/**
+ * The files the next message carries, as a line attached to the top of the box, one row each, as the queue's rows
+ * read: a file mark, the name, and × to take it off. A file still on its way into the project is dim and says so; one
+ * that couldn't be added says why.
+ */
+function AttachedFiles({ files, onRemove }: { files: readonly PendingAttachment[]; onRemove(key: string): void }) {
+  return <div className="composer-files" role="group" aria-label="Files attached to your message">
+    {files.map(file => <div key={file.key} className={`composer-file is-${file.state}`} title={file.error ? `${file.name}: ${file.error}` : file.name}>
+      <span className="composer-file-icon"><Icon name="file" size={12} /></span>
+      <span className="composer-file-name">{file.name}</span>
+      {file.state === "adding" && <span className="composer-file-state" role="status">Adding…</span>}
+      {file.state === "failed" && <span className="composer-file-state is-bad" role="alert">{file.error ?? "Couldn’t add it"}</span>}
+      <button type="button" className="composer-file-remove" aria-label={`Remove ${file.name}`} title="Remove" onClick={() => onRemove(file.key)}><Icon name="x" size={11} /></button>
+    </div>)}
   </div>;
 }

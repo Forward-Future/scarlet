@@ -12,6 +12,7 @@
     "bundle": "tauri build",
     "bundle:debug": "tauri build --debug",
     "ffmpeg": "node scripts/fetch-ffmpeg.mjs",
+    "chrome": "node scripts/fetch-chrome.mjs",
     "build": "node -e \"console.log(\\\"@scarlet/desktop: skipped in pnpm -r build; run pnpm desktop:build for the Tauri bundle\\\")\"",
     "test": "node -e \"console.log(\\\"@scarlet/desktop: Rust tests run via pnpm desktop:test (cargo test)\\\")\"",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",

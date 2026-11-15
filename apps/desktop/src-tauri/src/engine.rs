@@ -132,6 +132,29 @@ fn select_engine(home: &Path, development: bool, sidecar: Option<&Path>, overrid
     Err(anyhow!("scarlet-engine sidecar not found (set SCARLET_ENGINE_CMD or build apps/server for the dev fallback)"))
 }
 
+/// The headless shell motion graphics render in: the packaged resource, or in development the copy
+/// `pnpm desktop:chrome` fetched. Before that fetch the folder holds only a note.
+fn bundled_chrome(resources: Option<&Path>, development: bool) -> Option<PathBuf> {
+    let exe = if cfg!(windows) { "chrome-headless-shell.exe" } else { "chrome-headless-shell" };
+    let checkout = development.then(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries"));
+    checkout.into_iter().chain(resources.map(Path::to_path_buf))
+        .map(|dir| dir.join("chrome-headless-shell").join(exe))
+        .find(|path| path.metadata().is_ok_and(|m| m.is_file() && m.len() > 0))
+}
+
+/// Points the engine at the bundled browser. A SCARLET_CHROME the editor set wins; without either, the engine
+/// looks for an installed Chrome.
+fn set_chrome_env(env: &mut std::collections::HashMap<String, String>, chrome: Option<&Path>) {
+    const KEY: &str = "SCARLET_CHROME";
+    if env.iter().any(|(key, value)| key.eq_ignore_ascii_case(KEY) && !value.trim().is_empty()) {
+        return;
+    }
+    env.retain(|key, _| !key.eq_ignore_ascii_case(KEY));
+    if let Some(chrome) = chrome {
+        env.insert(KEY.into(), chrome.to_string_lossy().trim_start_matches(r"\\?\").to_string());
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineStatus {
@@ -482,6 +505,7 @@ impl EngineManager {
                 env.insert("SCARLET_SKILLS_SEED".into(), skills.to_string_lossy().to_string());
             }
         }
+        set_chrome_env(&mut env, bundled_chrome(self.paths.resource_dir.as_deref(), tauri::is_dev()).as_deref());
         env.insert("SCARLET_DATA".into(), self.paths.data_dir.to_string_lossy().to_string());
 
         let mut cmd = tokio::process::Command::new(&launch.program);
@@ -859,6 +883,34 @@ mod tests {
         // In development the message says how to get an engine.
         let error = select_engine(&home, true, None, None, &cli).unwrap_err().to_string();
         assert!(error.contains("pnpm build"), "{error}");
+    }
+
+    #[test]
+    fn the_engine_renders_graphics_with_the_bundled_browser_unless_the_editor_chose_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = if cfg!(windows) { "chrome-headless-shell.exe" } else { "chrome-headless-shell" };
+        let folder = dir.path().join("chrome-headless-shell");
+        std::fs::create_dir(&folder).unwrap();
+        // An unfetched folder holds only the build script's note.
+        std::fs::write(folder.join("README.txt"), "fetch me").unwrap();
+        assert_eq!(bundled_chrome(Some(dir.path()), false), None);
+        std::fs::write(folder.join(exe), vec![1; 64]).unwrap();
+        let packaged = bundled_chrome(Some(dir.path()), false).unwrap();
+        assert_eq!(packaged, folder.join(exe));
+        assert_eq!(bundled_chrome(None, false), None);
+
+        let mut env = std::collections::HashMap::new();
+        set_chrome_env(&mut env, Some(&packaged));
+        assert_eq!(env["SCARLET_CHROME"], packaged.to_string_lossy());
+        let mut env = std::collections::HashMap::from([("SCARLET_CHROME".to_string(), "/opt/chrome".to_string())]);
+        set_chrome_env(&mut env, Some(&packaged));
+        assert_eq!(env["SCARLET_CHROME"], "/opt/chrome");
+        // Set to nothing, it is not a choice.
+        let mut env = std::collections::HashMap::from([("SCARLET_CHROME".to_string(), String::new())]);
+        set_chrome_env(&mut env, None);
+        assert!(!env.contains_key("SCARLET_CHROME"));
+        set_chrome_env(&mut env, Some(&packaged));
+        assert_eq!(env["SCARLET_CHROME"], packaged.to_string_lossy());
     }
 
     #[test]

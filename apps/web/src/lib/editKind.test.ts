@@ -23,6 +23,11 @@ describe("drawing an applied edit on the timeline", () => {
       .toMatchObject({ band: { start: 61, end: 61 }, bandLabel: "Cut" });
   });
 
+  it("names a graphic Scarlet laid over the picture apart from b-roll", () => {
+    expect(editKindWord(edit({ kind: "graphic" }))).toBe("Graphic");
+    expect(editKindWord(edit({ kind: "overlay" }))).toBe("Overlay");
+  });
+
   it("leaves an assembly or a mixed edit unnamed", () => {
     expect(editKindWord(edit({ kind: "other" }))).toBeUndefined();
     expect(editKindWord(edit({}))).toBeUndefined();

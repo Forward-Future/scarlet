@@ -52,7 +52,7 @@ export function reviewCalls(change: Change, cuts: ReadonlyArray<Pick<CutReview["
       const reasons = reviewReasons(change, cuts);
       cuts.forEach(({ removed }, index) => {
         if (!assessed.has(index)) calls.push({ ...removed, index, verdict: "ask", unchecked: true,
-          reason: reasons[index]?.filter(text => text !== change.description).join(" ") || "Staged for a closer look." });
+          reason: reasons[index]?.filter(text => text !== change.description).join(" ") || "No note was saved for this cut." });
       });
     }
   }

@@ -52,11 +52,13 @@ export function joinEvidence(words: Word[], wf: Waveform): JoinPage["edges"] {
 const reach = .75, wordMargin = .02, quietMargin = .03;
 
 /**
- * Default padding for a word-addressed removal. When Scarlet places an edge in a quiet run, it leaves
+ * Padding for a word-addressed removal when the model gives none. When Scarlet places an edge in a quiet run, it leaves
  * AIR_AFTER_SPEECH of room tone after the last kept word (its decay and release) and
  * AIR_BEFORE_SPEECH before kept speech resumes (a natural entrance, no clipped breath onset).
  * A run shorter than both splits proportionally. An edge the model already put in silence stays put:
- * pacing is the model's call, and timeline_join_audit reports the air either side.
+ * pacing is the model's call, and timeline_join_audit reports the air either side. How long a join's pause plays is
+ * pacing too, so the model can say it per cut (`leave`), by the pace its skill and the editor ask for; the split
+ * between the two sides stays in these proportions.
  */
 export const AIR_AFTER_SPEECH = .15;
 export const AIR_BEFORE_SPEECH = .10;
@@ -64,8 +66,8 @@ export const AIR_BEFORE_SPEECH = .10;
 /**
  * Where an edge sits in quiet run `run`. A `start` edge follows kept speech; an `end` edge precedes it.
  */
-export function padEdge(run: TimeRange, side: "start" | "end"): number {
-  const after = AIR_AFTER_SPEECH, before = AIR_BEFORE_SPEECH;
+export function padEdge(run: TimeRange, side: "start" | "end", air: { after: number; before: number } = { after: AIR_AFTER_SPEECH, before: AIR_BEFORE_SPEECH }): number {
+  const { after, before } = air;
   const length = run.end - run.start;
   const target = length < after + before
     ? run.start + length * after / (after + before)
@@ -837,8 +839,10 @@ function betweenWords(page: NonNullable<JoinPage["edges"]>, kept: Word, removed:
  * the default edge padding. `pageAt` returns measured evidence covering a source time. Without a kept
  * neighbor the edge runs to the start or end of the material.
  */
-export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t: number) => JoinPage["edges"] | undefined): WordCut {
+export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t: number) => JoinPage["edges"] | undefined, leave?: number): WordCut {
   const first = words[from]!, last = words[to]!;
+  // The pause the join should play, word to word, in the recording's seconds: split as the default padding is.
+  const air = leave === undefined ? undefined : { after: leave * AIR_AFTER_SPEECH / (AIR_AFTER_SPEECH + AIR_BEFORE_SPEECH), before: leave * AIR_BEFORE_SPEECH / (AIR_AFTER_SPEECH + AIR_BEFORE_SPEECH) };
   const problems: string[] = [], dips: string[] = [], retimed: string[] = [];
   // The kept word beside each edge, where the recording says it is.
   const heard = (kept: Word | undefined, neighbour: Word | undefined, side: "start" | "end") => {
@@ -861,7 +865,7 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
       return gaps(page).filter(q => {
         if (q.end - q.start < 2 * quietMargin) return false;
         const fits = side === "start" ? q.end > lo - keptSlack && q.start < hi + removedSlack : q.start < hi + keptSlack && q.end > lo - removedSlack;
-        const at = padEdge(q, side);
+        const at = padEdge(q, side, air);
         return fits && bounds.start < at && at < bounds.end;
       });
     };
@@ -879,7 +883,7 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
     if (run) {
       used[side] = seen ?? run;
       room[side] = { start: run.start + quietMargin, end: run.end - quietMargin };
-      return padEdge(run, side);
+      return padEdge(run, side, air);
     }
     // No run of silence: the two words run together. The lowest level between them, reaching a little way into each
     // word's timing and no further into the kept one than a quiet run may.
@@ -909,7 +913,7 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
   return { start, end, problems, dips, text, room, retimed };
 }
 
-/** Default word-to-word duration when a pause is explicitly shortened without a target. */
+/** The default padding either side of a join, together: what a join plays word to word when the model names no length. */
 export const PAUSE_BEAT = AIR_AFTER_SPEECH + AIR_BEFORE_SPEECH;
 /**
  * The source range that trims the pause between two neighboring words down to `leave` seconds, word to word. The

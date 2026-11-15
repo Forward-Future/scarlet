@@ -77,7 +77,8 @@ const transcript: StepSpec = { group: "transcript", verb: "Read", doing: "Readin
 /** Tools grouped into plain steps. Tools that make an edit show up as the edit itself. `once` skips a repeat of the same call. */
 const toolSteps: Record<string, StepSpec> = {
   project_get: project, timeline_get: project, timeline_summary: project, timeline_at: project, timeline_diff: project,
-  skills_list: project, media_list: project, change_list: project, change_get: project, notes_list: project,
+  skills_list: project, media_list: project, template_list: project, template_get: project, graphic_get: project,
+  attachment_read: { group: "attachment", verb: "Read", doing: "Reading", detail: n => n > 1 ? `${n} attached files` : "an attached file", once: true }, change_list: project, change_get: project, notes_list: project,
   timeline_transcript: { group: "edit-transcript", verb: "Read", doing: "Reading", detail: () => "the edit’s transcript", once: true },
   timeline_join_audit: { group: "joins", verb: "Checked", doing: "Checking", detail: n => n > 1 ? `${n} joins` : "a join", once: true },
   transcript_get: transcript,

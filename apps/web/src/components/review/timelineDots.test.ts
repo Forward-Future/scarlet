@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
 import { bandLabel, gapLabel, layoutMarks, nearestMark, type TimelineDot } from "./TimelineScrubber";
+import { countLabel, editUnder, layoutEdits, type EditLayout, type TimelineEdit } from "./timelineEdits";
 
 const dot = (time: number, n: number): TimelineDot => ({ time, n, title: `Edit ${n}` });
 const shapes = (layout: ReturnType<typeof layoutMarks>) => layout.map(m => `${m.label}${m.quiet ? "|" : ""}`);
@@ -119,5 +120,90 @@ describe("bandLabel", () => {
     expect(bandLabel("Audio", 20)).toBe("");
     // Before the track is measured there is nothing to fit it to.
     expect(bandLabel("Removed · 1.4 s", 0)).toBe("Removed · 1.4 s");
+  });
+});
+
+describe("layoutEdits", () => {
+  const edit = (time: number, kind: string, end = time): TimelineEdit => ({ key: `${kind}@${time}`, time, end, kind, title: `${kind} at ${time}` });
+  const shapes = (layout: EditLayout[]) => layout.map(m => m.shape === "count" ? m.label : `${m.shape}:${m.edits[0]!.kind}`);
+
+  it("names what a count holds, most first, two kinds at most", () => {
+    expect(countLabel([edit(1, "cut"), edit(2, "cut")])).toBe("2 cuts");
+    expect(countLabel([edit(1, "graphic", 3), edit(2, "cut"), edit(4, "graphic", 5)])).toBe("2 graphics · 1 cut");
+    expect(countLabel([edit(1, "cut"), edit(2, "cut"), edit(3, "zoom", 4), edit(5, "audio"), edit(6, "speed")])).toBe("2 cuts · 1 zoom · 2 more");
+    // A kind added since, or none, counts as another edit.
+    expect(countLabel([edit(1, "sparkle"), { ...edit(2, "x"), kind: undefined }])).toBe("2 other edits");
+    expect(countLabel([edit(1, "text", 2), edit(3, "text", 4), edit(5, "overlay", 6), edit(7, "audio")])).toBe("2 captions · 1 overlay · 1 more");
+  });
+
+  it("draws each edit for what it is when it has room", () => {
+    // 100 s across 1000 px.
+    const layout = layoutEdits([edit(10, "cut"), edit(20, "graphic", 25), edit(40, "overlay", 44), edit(50, "zoom", 60), edit(70, "reframe", 72),
+      edit(80, "audio"), edit(90, "text", 95), edit(96, "sparkle", 97)], 0, 100, 1000);
+    expect(shapes(layout)).toEqual(["cut:cut", "bar:graphic", "bar:overlay", "dim:zoom", "dim:reframe", "tick:audio", "dim:text", "tick:sparkle"]);
+    // A bar is as long as its edit is on screen.
+    expect(layout[1]).toMatchObject({ at: 20, to: 25 });
+    // A bar-like edit at one point is a tick.
+    expect(shapes(layoutEdits([edit(10, "graphic")], 0, 100, 1000))).toEqual(["tick:graphic"]);
+  });
+
+  it("leaves out what isn't in view and clips a bar to it", () => {
+    const layout = layoutEdits([edit(5, "cut"), edit(8, "graphic", 30), edit(60, "cut")], 10, 40, 400);
+    expect(shapes(layout)).toEqual(["bar:graphic"]);
+    expect(layout[0]).toMatchObject({ at: 0, to: 50 });
+  });
+
+  it("gathers marks that would touch into one count and keeps one with room apart", () => {
+    const layout = layoutEdits([edit(10, "cut"), edit(10.3, "cut"), edit(10.5, "cut"), edit(50, "cut")], 0, 100, 1000);
+    expect(shapes(layout)).toEqual(["3 cuts", "cut:cut"]);
+    expect(layout[0]).toMatchObject({ start: 10, end: 10.5 });
+    // Zoomed in, the count opens into its lines.
+    expect(shapes(layoutEdits([edit(10, "cut"), edit(10.3, "cut"), edit(10.5, "cut")], 9, 3, 1000))).toEqual(["cut:cut", "cut:cut", "cut:cut"]);
+  });
+
+  it("runs bars that overlap in lanes, and gathers them when there are too many or they are too short to tell apart", () => {
+    const lanes = layoutEdits([edit(10, "text", 90), edit(20, "graphic", 30), edit(25, "zoom", 40)], 0, 100, 1000);
+    expect(shapes(lanes)).toEqual(["dim:text", "bar:graphic", "dim:zoom"]);
+    expect(lanes.map(m => m.lane)).toEqual([0, 1, 2]);
+    expect(shapes(layoutEdits([edit(10, "text", 90), edit(20, "graphic", 30), edit(25, "zoom", 40), edit(28, "overlay", 35)], 0, 100, 1000)))
+      .toEqual(["1 graphic · 1 overlay · 2 more"]);
+    expect(shapes(layoutEdits([edit(10, "graphic", 10.5), edit(10.6, "graphic", 11)], 0, 100, 1000))).toEqual(["2 graphics"]);
+    // A short bar under a count joins it, which would hide it. A line with room runs on beneath it.
+    expect(shapes(layoutEdits([edit(10, "cut"), edit(10.3, "cut"), edit(11, "graphic", 12), edit(11.5, "cut")], 0, 100, 1000))).toEqual(["2 cuts · 1 graphic", "cut:cut"]);
+    // A cut inside one graphic's bar has room: the two are drawn apart.
+    expect(shapes(layoutEdits([edit(10, "graphic", 20), edit(15, "cut")], 0, 100, 1000))).toEqual(["bar:graphic", "cut:cut"]);
+  });
+
+  it("keeps hundreds of cuts across the whole video to a few counts that never touch", () => {
+    const many = Array.from({ length: 500 }, (_, i) => edit(i * 1.2 + 0.4, "cut")).concat([edit(100, "graphic", 106), edit(102, "graphic", 108)]);
+    const started = performance.now();
+    const layout = layoutEdits(many, 0, 600, 1200);
+    expect(performance.now() - started).toBeLessThan(50);
+    expect(layout.every(m => m.shape === "count")).toBe(true);
+    expect(layout.length).toBeLessThanOrEqual(12);
+    expect(layout.reduce((sum, m) => sum + m.edits.length, 0)).toBe(502);
+    for (let i = 1; i < layout.length; i++) {
+      const a = layout[i - 1]!, b = layout[i]!;
+      expect((b.at - a.at) * 12).toBeGreaterThanOrEqual((a.width + b.width) / 2);
+    }
+    expect(layout.some(m => /cuts · 2 graphics$/.test(m.label!))).toBe(true);
+  });
+
+  it("moves a count off a marker of what needs the editor, to the nearer side", () => {
+    const cuts = [edit(50, "cut"), edit(50.2, "cut"), edit(50.4, "cut")];
+    const [count] = layoutEdits(cuts, 0, 100, 1000);
+    expect(count).toMatchObject({ shape: "count", at: 50.2 });
+    const [moved] = layoutEdits(cuts, 0, 100, 1000, [{ x: 505, w: 17 }]);
+    // "3 cuts" is 50 px wide: it ends 6 px short of the marker's left edge.
+    expect(moved!.at * 10).toBeCloseTo(505 - 8.5 - 25 - 6);
+  });
+
+  it("picks a count under the pointer, else the nearest line, else the shortest bar", () => {
+    const layout = layoutEdits([edit(10, "cut"), edit(10.2, "cut"), edit(30, "graphic", 60), edit(40, "zoom", 45), edit(50, "cut")], 0, 100, 1000);
+    expect(editUnder(layout, 10.1, 1000)?.shape).toBe("count");
+    expect(editUnder(layout, 50.3, 1000)?.shape).toBe("cut");
+    expect(editUnder(layout, 42, 1000)?.edits[0]!.kind).toBe("zoom");
+    expect(editUnder(layout, 35, 1000)?.edits[0]!.kind).toBe("graphic");
+    expect(editUnder(layout, 80, 1000)).toBeUndefined();
   });
 });

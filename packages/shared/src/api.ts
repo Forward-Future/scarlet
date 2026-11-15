@@ -88,6 +88,24 @@
  *
  *  Skills
  *   GET    /skills?projectId=&taskId=&view=              → { skills: Skill[] }
+ *
+ *  Graphic templates (library-wide, like skills; the editor picks one with $name in the message box)
+ *   GET    /templates                                    → { templates: GraphicTemplateSummary[] }
+ *   GET    /templates/:templateId/preview                → image/png (the template drawn with its sample fields, transparent)
+ *   DELETE /templates/:templateId                        → {}
+ *   GET    /templates/:templateId                        → { template: GraphicTemplate }   (id or name; its page and sample values)
+ *   POST   /templates               SaveTemplateRequest  → { template: GraphicTemplate }   (saving a name that exists replaces it)
+ *
+ *  Graphics and the style guide
+ *   POST   /projects/:id/graphics   multipart (options: GraphicRenderRequest, html?, asset*) → GraphicRenderResponse
+ *   GET    /projects/:id/graphics/:mediaId               → { html, source, width, height, fps, duration, template?, fields? }
+ *   PUT    /projects/:id/style-guide SaveStyleGuideRequest → { styleGuide: StyleGuide }   (replaces the project's guide)
+ *   DELETE /projects/:id/style-guide                     → {}
+ *   GET    /projects/:id/attachments/:attachmentId       → the file (for reading an attachment or the guide)
+ *
+ *  Attachments (files the editor drops on the message box; they ride on the next request)
+ *   POST   /projects/:id/attachments  multipart (file)   → { attachment: TaskAttachment }
+ *
  *   POST   /skills                  UpsertSkillRequest   → { skill: Skill }
  *   GET    /skills/:skillId                              → { skill: Skill, versions: SkillVersion[], edits: Task[] }   (edits: the requests to revise it, in the order asked)
  *   PUT    /skills/:skillId         UpsertSkillRequest   → { skill: Skill }
@@ -297,7 +315,9 @@ export const DialogueCutsRequest = ProposeChangeRequest.pick({ description: true
     /** Editorial classification, also used to enforce the scope of a local pause edit. */
     kind: DialogueCutKind.optional(),
     /** A doubt the editor must settle by listening or looking. Marks an applied cut as needing them until they keep it. */
-    check: z.string().trim().min(1).max(120).optional() })
+    check: z.string().trim().min(1).max(120).optional(),
+    /** Why Scarlet held a cut the agent sent to apply: what it measured. Kept apart from the agent's reason. */
+    held: z.string().trim().min(1).max(800).optional() })
     .refine(c => !c.originalRange || (c.review && c.originalRange.start <= c.start && c.end <= c.originalRange.end),
       "A repaired range must be staged inside its originally proposed removal.")).min(1),
 });
@@ -637,6 +657,15 @@ export const TaskState = z.enum([
 ]);
 export type TaskState = z.infer<typeof TaskState>;
 
+/** A file the editor attached to a message, stored in the project's folder until the project is deleted. */
+export const TaskAttachment = z.object({
+  id: Id,
+  name: z.string().min(1).max(255),
+  size: z.number().int().nonnegative(),
+  mime: z.string().max(200).optional(),
+});
+export type TaskAttachment = z.infer<typeof TaskAttachment>;
+
 export const Task = z.object({
   id: Id,
   projectId: Id,
@@ -694,6 +723,8 @@ export const Task = z.object({
        * worded for them, such as Undo edit, it is the request's name in the chat ("Undo").
        */
       message: z.string().optional(),
+      /** Files the editor attached to this message. The engine gives the agent their paths. */
+      attachments: z.array(TaskAttachment).max(20).optional(),
       /** What such a request asked of the agent, without the thread's history. Its name alone doesn't say which edit, so the thread's later requests are told this. */
       asked: z.string().optional(),
     })
@@ -1060,6 +1091,126 @@ export type UsageResponse = z.infer<typeof UsageResponse>;
 // ---------------------------------------------------------------------------
 // Skills
 // ---------------------------------------------------------------------------
+
+/** Template names are what the editor types after $, so they follow the same rule as skill names. */
+export const TemplateSlug = SkillSlug;
+
+/**
+ * A graphic the editor can reuse: an HTML/CSS page with named fields that Scarlet fills in and renders over the
+ * picture. Saved library-wide, like skills.
+ */
+export const GraphicTemplateSummary = z.object({
+  id: Id,
+  /** What follows $ in a message, e.g. "lower-third". */
+  name: TemplateSlug,
+  /** How the list names it, e.g. "Lower third". */
+  title: z.string().min(1).max(120),
+  description: z.string().max(2000).default(""),
+  /** The fields that change from use to use, in order, as the editor reads them ("Name", "Title"). */
+  fields: z.array(z.string().min(1).max(60)).max(20),
+  /** Changes whenever the preview is drawn again, so the renderer can cache the image by it. */
+  previewVersion: z.string(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type GraphicTemplateSummary = z.infer<typeof GraphicTemplateSummary>;
+
+/** Values for a template's fields, by field name. */
+export const TemplateFields = z.record(z.string().max(2000));
+
+/** A saved template as the agent reads it: its page with `{{Field}}` placeholders and what it was drawn with. */
+export const GraphicTemplate = GraphicTemplateSummary.extend({
+  /** The page, with a `{{Field}}` placeholder wherever a field's value goes. */
+  html: z.string().min(1).max(500_000),
+  /** The values its preview is drawn with. */
+  sample: TemplateFields,
+  /** The frame it was designed in. A use renders at the project's size. */
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  /** Seconds a use lasts unless the agent says otherwise. */
+  duration: z.number().positive(),
+  /** The moment of the graphic the preview shows, in seconds. */
+  previewAt: z.number().nonnegative(),
+});
+export type GraphicTemplate = z.infer<typeof GraphicTemplate>;
+
+/** POST /templates: save a template, or replace the one with the same name. */
+export const SaveTemplateRequest = z.object({
+  name: TemplateSlug.max(64),
+  title: z.string().trim().min(1).max(120),
+  description: z.string().max(2000).default(""),
+  fields: z.array(z.string().trim().min(1).max(60)).max(20),
+  html: z.string().min(1).max(500_000),
+  sample: TemplateFields,
+  /** A graphic of this project whose files (fonts, pictures) the page links to. */
+  projectId: Id.optional(),
+  basedOn: Id.optional(),
+  width: z.number().int().positive().max(8192).optional(),
+  height: z.number().int().positive().max(8192).optional(),
+  duration: z.number().positive().max(600).optional(),
+  previewAt: z.number().nonnegative().optional(),
+});
+export type SaveTemplateRequest = z.infer<typeof SaveTemplateRequest>;
+
+/**
+ * POST /projects/:id/graphics, the `options` field of the multipart form; the page is the `html` file field, or the
+ * template's, and any `asset` file fields are files it links to by relative path (the part's filename).
+ */
+export const GraphicRenderRequest = z.object({
+  /** Fill this template instead of sending a page. Its id or name. */
+  template: z.string().min(1).optional(),
+  fields: TemplateFields.optional(),
+  /** The graphic this one revises: its files come along, and so does the template it was made from. */
+  basedOn: Id.optional(),
+  duration: z.number().positive().max(600).optional(),
+  width: z.number().int().positive().max(8192).optional(),
+  height: z.number().int().positive().max(8192).optional(),
+  fps: z.number().positive().max(120).optional(),
+  name: z.string().trim().min(1).max(200).optional(),
+  /** Timeline seconds to lay the check pictures over, on the head version. */
+  checkAt: z.number().nonnegative().optional(),
+  /** Seconds into the graphic to check; default three moments spread through it. */
+  checkTimes: z.array(z.number().nonnegative()).max(6).optional(),
+  /** Return the check pictures (JPEG), for a model that can see them. */
+  pictures: z.boolean().optional(),
+  provenance: z.object({ name: z.string().optional(), model: z.string().optional(), prompt: z.string().max(4000).optional() }).optional(),
+});
+export type GraphicRenderRequest = z.infer<typeof GraphicRenderRequest>;
+
+export const GraphicCheck = z.object({
+  /** Seconds into the graphic. */
+  time: z.number(),
+  /** The part of the frame the graphic covers at that moment, as fractions of the frame; null when nothing shows. */
+  box: z.object({ left: z.number(), top: z.number(), right: z.number(), bottom: z.number() }).nullable(),
+  /** The graphic over the picture at that moment, base64 JPEG, when pictures were asked for. */
+  jpeg: z.string().optional(),
+});
+
+export const GraphicRenderResponse = z.object({
+  /** Absent when the graphic was not imported (a font is missing). */
+  media: z.unknown().optional(),
+  /** The page Scarlet kept for this graphic, to read or revise. */
+  source: z.string().optional(),
+  missingFonts: z.array(z.object({ family: z.string(), sample: z.string() })),
+  /** With a font missing, the common families installed here. */
+  installedFonts: z.array(z.string()).optional(),
+  problems: z.array(z.string()),
+  checks: z.array(GraphicCheck),
+  /** Timeline seconds the checks were laid over, when there was a picture there. */
+  checkAt: z.number().optional(),
+  width: z.number(), height: z.number(), fps: z.number(), duration: z.number(),
+  renderMs: z.number(),
+});
+export type GraphicRenderResponse = z.infer<typeof GraphicRenderResponse>;
+
+/** PUT /projects/:id/style-guide: the project's one style guide, from pasted text or a file. */
+export const SaveStyleGuideRequest = z.object({
+  name: z.string().trim().min(1).max(200),
+  text: z.string().max(200_000).optional(),
+  /** A file the editor attached to a request in this project. */
+  attachmentId: Id.optional(),
+}).refine(b => b.text?.trim() || b.attachmentId, { message: "Give the guide's text or the attachment it is in." });
+export type SaveStyleGuideRequest = z.infer<typeof SaveStyleGuideRequest>;
 
 export const Skill = z.object({
   id: Id,

@@ -5,13 +5,14 @@ import { mediaProblems, mediaWarningLabel } from "../../lib/transcriptionProgres
 import { useProjectStore } from "../../stores/project";
 import { MenuItem } from "../shell/WorkspaceNavigation";
 import { Icon } from "../ui/primitives";
+import { ProgressLine } from "../ui/ProgressLine";
 import { cachePercent, useSourceCaches } from "./sourceCaches";
 
 /**
  * What's wrong with the project's media, in a few words, or nothing. A file Scarlet couldn't read or a transcription
- * that stopped is explained only in Media, so the menu that leads there is marked until it's dealt with.
+ * that stopped is explained only in Media, so the header's Media button is marked until it's dealt with.
  * A transcription the pause stopped isn't one: it starts again on resume. A file that failed to import never became
- * the project's, so only Media's list of imports says why: `importFailed` marks the menu for it the same way.
+ * the project's, so only Media's list of imports says why: `importFailed` marks the button for it the same way.
  */
 export function useMediaWarning(importFailed = false): string | undefined {
   const media = useProjectStore(s => s.current?.media);
@@ -23,8 +24,8 @@ export function useMediaWarning(importFailed = false): string | undefined {
 
 /**
  * What the project's videos are doing with their playback caches: caching and how far, or waiting their turn, and
- * whether the project is paused. It is about the videos only: the edit's own playback cache isn't counted. The menu's Media row and
- * the ring around the menu's button both read it, so they say the same thing.
+ * whether the project is paused. It is about the videos only: the edit's own playback cache isn't counted. The header's
+ * Media button reads it for its line and its hover, and the menu's caching row for Pause and Resume.
  * How far is counted across the videos being cached by their length, so the figure only goes up as one video
  * finishes and the next starts.
  */
@@ -56,19 +57,32 @@ export function useVideoCaching() {
 }
 
 /**
- * Media's rows in the simple view's menu. The Media row says what the videos are doing in a word or two (adding,
- * caching and how far, paused) and carries the mark when a file needs the editor; hover names the problem. Each
- * video's cache is in Media itself. While videos cache or wait to, a second row pauses the project's media
- * processing, which keeps finished parts. For as long as it is paused that row resumes it, whatever the videos are
- * doing: it is the only way to resume, and nothing else in the header or the chat says the project is paused.
- * Media's own rows say which of a file's jobs the pause holds.
+ * The header's Media button. While videos cache, a line under its word fills as far as they've got, as Export's does
+ * while it exports. It carries the amber mark when a file needs the editor, and hover names the problem ahead of what
+ * the videos are doing (adding, caching and how far, paused). Each video's cache is in Media itself.
  */
-export function MediaMenuItems({ importing, importFailed, onOpen, close }: { importing: number; importFailed?: boolean; onOpen(): void; close(): void }) {
+export function MediaButton({ importing, importFailed, onOpen }: { importing: number; importFailed?: boolean; onOpen(): void }) {
   const warning = useMediaWarning(importFailed);
-  const { paused, canPause, label, headline } = useVideoCaching();
+  const { active, progress, label, headline } = useVideoCaching();
+  const doing = importing > 0 ? `Adding ${plural(importing, "file")}` : label ?? headline;
+  const description = [warning, doing].filter(Boolean).join(". ") || undefined;
+  return <button type="button" className={`btn-quiet simple-media${warning ? " needs-you" : ""}`} aria-haspopup="dialog" title={description}
+    aria-description={description} onClick={onOpen}>
+    Media{warning && <span className="menu-dot" role="img" aria-label={warning} />}
+    {active && <ProgressLine progress={progress} />}
+  </button>;
+}
+
+/**
+ * Caching's row in the simple view's menu. While videos cache or wait to, it pauses the project's media processing,
+ * which keeps finished parts. For as long as it is paused it resumes it, whatever the videos are doing: it is the
+ * only way to resume, and nothing else in the header or the chat says the project is paused. Media's own rows say
+ * which of a file's jobs the pause holds.
+ */
+export function CachingMenuItem({ close }: { close(): void }) {
+  const { paused, canPause } = useVideoCaching();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const status = importing > 0 ? `adding ${importing}` : paused ? "Paused" : label;
 
   async function toggle() {
     setBusy(true);
@@ -80,14 +94,8 @@ export function MediaMenuItems({ importing, importFailed, onOpen, close }: { imp
     finally { setBusy(false); }
   }
 
-  return <>
-    <MenuItem onClick={() => { close(); onOpen(); }} title={[warning, headline].filter(Boolean).join(". ") || undefined}>
-      <Icon name="film" />Media
-      {status && <span className="menu-value">{status}</span>}
-      {warning && <span className="menu-dot" role="img" aria-label={warning} />}
-    </MenuItem>
-    {(canPause || paused) && <MenuItem disabled={busy} onClick={() => void toggle()}>
-      <Icon name={paused ? "play" : "pause"} />{error || (paused ? "Resume caching" : "Pause caching")}
-    </MenuItem>}
-  </>;
+  if (!canPause && !paused) return null;
+  return <MenuItem disabled={busy} onClick={() => void toggle()}>
+    <Icon name={paused ? "play" : "pause"} />{error || (paused ? "Resume caching" : "Pause caching")}
+  </MenuItem>;
 }

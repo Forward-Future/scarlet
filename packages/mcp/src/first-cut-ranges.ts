@@ -1,5 +1,5 @@
 import { timelineFromKeepRanges, type MediaAsset } from "@scarlet/timeline";
-import { dialogueAudioStream } from "./dialogue-join.js";
+import { dialogueAudioStream, PAUSE_BEAT } from "./dialogue-join.js";
 import { NoPauseToTrim, planDialogueCuts, SETTLED_MARGIN, type DialoguePlanSources } from "./dialogue-plan.js";
 import { measureQuietKeptWords } from "./quiet-kept-word.js";
 
@@ -67,7 +67,8 @@ export async function firstCutRanges(keep: FirstCutKeep[], projectId: string, au
       const split = left?.end ?? right?.start ?? (midpoint[l]! + midpoint[h]!) / 2;
       set(split, split, reason);
     };
-    const cut = { mediaId: audio.id, ...(adjacent ? { afterWord: l } : { fromWord: l + 1, toWord: h - 1 }),
+    // Two kept pieces that follow one another: the pause between them comes down to the default padding of a join.
+    const cut = { mediaId: audio.id, ...(adjacent ? { afterWord: l, leave: PAUSE_BEAT } : { fromWord: l + 1, toWord: h - 1 }),
       kind, decision: "cut" as const, reason: "Place the edges of the selected words." };
     try {
       const plan = await planDialogueCuts({ tl: source, cuts: [cut], only: kind, localPauses: false,
@@ -80,7 +81,7 @@ export async function firstCutRanges(keep: FirstCutKeep[], projectId: string, au
         const decision = plan.decisions[0]!;
         const note = plan.removals[0]?.notes?.join(" ");
         if (decision.review || note) {
-          issues.push(`${handles}: ${note || decision.reason} Inspect the source and supply exact seconds for these handles.`);
+          issues.push(`${handles}: ${note || decision.held || decision.reason} Inspect the source and supply exact seconds for these handles.`);
         } else {
           const detail = plan.gate.get(0)?.evidence;
           set(decision.start, decision.end, typeof detail === "string" ? detail : undefined);

@@ -145,6 +145,7 @@ function buildInstaller(rev) {
   const bins=path.join(src,'apps/desktop/src-tauri/binaries');
   run(tools.pnpm,['--filter','@scarlet/server','build:sea','--','--out',path.join(bins,'scarlet-engine-'+triple+'.exe')],src);
   run(process.execPath,['apps/desktop/scripts/fetch-ffmpeg.mjs','--target',triple],src);
+  run(process.execPath,['apps/desktop/scripts/fetch-chrome.mjs','--target',triple],src);
   status('Building the Windows app and installer. This can take several minutes…');
   // This installer stays on the same disk. Avoid spending minutes compressing the sidecars.
   const localBundle = JSON.stringify({bundle:{windows:{nsis:{compression:'none'}}}});

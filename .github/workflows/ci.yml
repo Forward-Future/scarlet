@@ -18,8 +18,14 @@ jobs:
             os: ubuntu-latest
           - name: macOS
             os: macos-26
+          # Opening a library on Windows sets its access rules through PowerShell, so the engine's tests take
+          # several times as long there as anywhere else. They get a runner of their own beside the rest.
           - name: Windows
             os: windows-latest
+            part: rest
+          - name: Windows engine
+            os: windows-latest
+            part: engine
     steps:
       - uses: actions/checkout@v4
 
@@ -62,27 +68,31 @@ jobs:
         run: |
           ./.github/scripts/use-windows-test-owner.ps1
           # Four packages' Vitest runs at once starve the 4-core Windows runner: timed tests miss their windows and
-          # workers miss Vitest's 60 s progress replies ("Timeout calling onTaskUpdate"). apps/server takes ~8 min on
-          # its own, so two at a time finishes in about the same wall time.
-          pnpm -r --workspace-concurrency=2 test
+          # workers miss Vitest's 60 s progress replies ("Timeout calling onTaskUpdate"). Two at a time, and the
+          # engine's own files in parallel on the other runner.
+          if ("${{ matrix.part }}" -eq "engine") { pnpm --filter @scarlet/server test }
+          else { pnpm -r --workspace-concurrency=2 --filter "!@scarlet/server" test }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/setup-python@v5
+        if: matrix.part != 'engine'
         with:
           python-version: '3.12'
 
       - name: Test transcription adapter and installer
+        if: matrix.part != 'engine'
         run: python -B -m unittest discover -s integrations/transcription/crisperwhisper
 
       - uses: dtolnay/rust-toolchain@stable
-        if: github.event_name == 'push' && runner.os != 'Linux'
+        if: github.event_name == 'push' && runner.os != 'Linux' && matrix.part != 'engine'
 
       - uses: swatinem/rust-cache@v2
-        if: github.event_name == 'push' && runner.os != 'Linux'
+        if: github.event_name == 'push' && runner.os != 'Linux' && matrix.part != 'engine'
         with:
           workspaces: apps/desktop/src-tauri -> target
 
       - name: Rust tests
-        if: github.event_name == 'push' && runner.os != 'Linux'
+        if: github.event_name == 'push' && runner.os != 'Linux' && matrix.part != 'engine'
         working-directory: apps/desktop/src-tauri
         env:
           CARGO_PROFILE_TEST_DEBUG: 0

@@ -21,6 +21,7 @@
     "desktop:dev": "pnpm -r --parallel --filter \"./packages/*\" --filter @scarlet/server --filter @scarlet/desktop run watch",
     "desktop:build": "pnpm --filter @scarlet/desktop bundle",
     "desktop:ffmpeg": "pnpm --filter @scarlet/desktop ffmpeg",
+    "desktop:chrome": "pnpm --filter @scarlet/desktop chrome",
     "desktop:test": "pnpm --filter @scarlet/desktop test:rust",
     "desktop:demo": "pnpm --filter @scarlet/desktop run demo"
   },

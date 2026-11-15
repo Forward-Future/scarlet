@@ -239,7 +239,7 @@ def node_bin():
 
 def build(transcript, head, attend):
     # Only this private clone is disposable. Keep the media tools whose hashes
-    # are rechecked by fetch-ffmpeg.mjs and build-whisper.mjs on every build.
+    # are rechecked by fetch-ffmpeg.mjs, fetch-chrome.mjs and build-whisper.mjs on every build.
     if not SOURCE.exists():
         with tempfile.TemporaryDirectory(dir=CACHE) as folder:
             checkout = Path(folder) / "source"
@@ -293,7 +293,7 @@ def assemble(run, progress, commit, candidate):
     clean_source(run)
     run("git", "reset", "--hard", commit)
     keep = []
-    for name in ("ffmpeg-*", "ffprobe-*", ".pinned-media-*", "whisper-cli-*"):
+    for name in ("ffmpeg-*", "ffprobe-*", ".pinned-media-*", "whisper-cli-*", "chrome-headless-shell", ".pinned-chrome.json"):
         keep.extend(["-e", "/apps/desktop/src-tauri/binaries/" + name])
     # Other untracked files were rejected above; the -e patterns preserve verified media tool caches.
     run("git", "clean", "-ffdx", *keep)
@@ -337,6 +337,7 @@ def build_app(run, progress, commit, candidate, native, version):
     run("pnpm", "--filter", "@scarlet/server", "build:sea", "--out", native / "binaries" / ("scarlet-engine-" + triple))
     progress.start("media")
     run("pnpm", "desktop:ffmpeg")
+    run("pnpm", "desktop:chrome")
     progress.start("app")
     run("pnpm", "--filter", "@scarlet/desktop", "exec", "tauri", "build", "--bundles", "app", "--config", "src-tauri/tauri.local-media.conf.json")
     progress.start("verify")

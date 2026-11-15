@@ -22,6 +22,8 @@ import type {
   ServerSettings,
   Skill,
   SkillVersion,
+  GraphicTemplateSummary,
+  TaskAttachment,
   Task,
   TaskEvent,
   UpsertSkillRequest,
@@ -33,7 +35,7 @@ import type { Author, Change, MediaAsset, Note, Project, Timeline, TimelineDiff,
 import { planRevert, toOtio, applyOps, canApproveSpots, clipEnd, withHandles, describeDiff, diffTimelines, emptyTimeline, formatTimecode, newId, planApply, timelineDuration, ASPECT_PRESETS, TimelineOp } from "@scarlet/timeline";
 import type { ActivityEntry, ApproveResponse, TrashedProject } from "@scarlet/shared";
 import type { ScarletApi } from "../api";
-import { buildDb, mc, SAMPLE_TRANSCRIPTION_MODEL, type MockDb } from "./fixtures";
+import { buildDb, mc, SAMPLE_TRANSCRIPTION_MODEL, templatePreviewSvg, type MockDb } from "./fixtures";
 import sampleWaveform from "./sample-waveform.json";
 
 class Emitter {
@@ -213,7 +215,7 @@ export class MockClient implements ScarletApi {
     const thread = this.projectThread(id, threadId);
     const head = project.head && this.db.timelines[project.head];
     return { version: project.head, edits: head ? threadTimeline(thread, head, this.db.versions[id] ?? [],
-      version => this.db.timelines[version], project.settings.fps) : [] };
+      version => this.db.timelines[version], project.settings.fps, this.db.media[id]) : [] };
   }
 
   async setThreadDone(id: string, threadId: string, done: boolean, revision: string) {
@@ -1209,6 +1211,24 @@ export class MockClient implements ScarletApi {
   async skills(): Promise<{ skills: Skill[] }> {
     this.requireAuth();
     return this.latency({ skills: this.db.skills }, 150);
+  }
+  // --- graphic templates and attachments -------------------------------------------------
+  async listTemplates(): Promise<{ templates: GraphicTemplateSummary[] }> {
+    this.requireAuth();
+    return this.latency({ templates: this.db.templates }, 120);
+  }
+  templatePreviewUrl(templateId: string): string {
+    const template = this.db.templates.find(t => t.id === templateId);
+    return template ? templatePreviewSvg(template) : "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%2F%3E";
+  }
+  async uploadAttachment(projectId: string, file: Blob | { path: string }, name?: string): Promise<{ attachment: TaskAttachment }> {
+    this.requireAuth();
+    this.projectById(projectId);
+    const named = name ?? (file instanceof Blob ? (typeof File !== "undefined" && file instanceof File ? file.name : "attachment") : file.path.split(/[\\/]/).pop() || "attachment");
+    const attachment: TaskAttachment = { id: newId("att"), name: named, size: file instanceof Blob ? file.size : 0,
+      ...(file instanceof Blob && file.type && { mime: file.type }) };
+    (this.db.attachments[projectId] ??= []).push(attachment);
+    return this.latency({ attachment }, 200);
   }
   async createSkill(body: UpsertSkillRequest): Promise<{ skill: Skill }> {
     this.requireAuth();
