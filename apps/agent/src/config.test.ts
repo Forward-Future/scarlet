@@ -87,17 +87,20 @@ describe("config", () => {
     expect((await stat(configPath(env))).mode & 0o777).toBe(0o600);
   });
 
-  it.skipIf(process.platform === "win32")("refuses a config that is a link or has a second name, so the token is never read from or shared with another file", async () => {
+  it.skipIf(process.platform === "win32")("refuses a config that is a link, so the token is never read from another file", async () => {
     const real = await home();
     await saveConfig({ server: "http://localhost:4000", token: "t" }, real);
-
     const linked = await home();
     await symlink(configPath(real), configPath(linked));
     await expect(loadConfig(linked)).rejects.toThrow(/ELOOP|EMLINK/);
+  });
 
+  it("refuses a config that has a second name, so the token is never shared with another file", async () => {
+    const real = await home();
+    await saveConfig({ server: "http://localhost:4000", token: "t" }, real);
     await link(configPath(real), join(real.SCARLET_HOME!, "copy.json"));
     await expect(loadConfig(real)).rejects.toThrow("Expected a private agent config file");
     await rm(join(real.SCARLET_HOME!, "copy.json"));
     expect(await loadConfig(real)).toMatchObject({ token: "t" });
-  });
+  }, configFileTimeout);
 });
