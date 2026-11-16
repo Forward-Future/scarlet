@@ -542,8 +542,12 @@ function isFootagePatch(op: TimelineOp): op is Extract<TimelineOp, { op: "update
   return op.op === "updateClip" && FOOTAGE_KEYS.some(key => op.patch[key] !== undefined);
 }
 
-/** An edit that can make the timeline play footage it didn't: a new clip or track, a trim, or a clip turned back on. */
+/**
+ * An edit that can make the timeline play footage it didn't: a new clip or track, a trim, a clip turned back on, or a
+ * clip moved to another track, where sound can become picture or picture sound.
+ */
 function addsFootage(op: TimelineOp): boolean {
+  if (op.op === "moveClip") return op.trackId !== undefined;
   if (op.op === "addClip") return op.clip.kind === "media";
   if (op.op === "addTrack") return op.track.clips.some(c => c.kind === "media");
   return op.op === "updateClip" && (op.patch.enabled === true || isFootagePatch(op));

@@ -1345,6 +1345,27 @@ describe("footage cut since an edit was made", () => {
     const head = applyOps(base, [{ op: "rippleDelete", start: 6, end: 9 }]);
     expect(() => replayOps(base, [{ op: "updateClip", clipId: "spare", patch: { enabled: true } }], head)).toThrow("the footage under clip spare changed since");
   });
+
+  it("refuses moving a clip to a track of the other kind when that kind's footage was cut since", () => {
+    const base = emptyTimeline(P);
+    base.tracks[0]!.clips = [makeMediaClip("m1", 0, 10, 0, { id: "pa", volume: 0 }), makeMediaClip("m1", 10, 20, 10, { id: "pb", volume: 0 })];
+    base.tracks[1]!.clips = [makeMediaClip("m1", 0, 20, 0, { id: "sound" })];
+    // The picture of 10–20 was cut; the sound still plays it, so as sound it may stay but as picture it may not.
+    const head = applyOps(base, [{ op: "removeClip", clipId: "pb" }]);
+    expect(() => replayOps(base, [{ op: "moveClip", clipId: "sound", trackId: "v1", timelineIn: 20 }], head)).toThrow("the footage under clip sound changed since");
+    base.tracks.push(makeTrack("audio", "A2", "a2"));
+    const kept = applyOps(base, [{ op: "removeClip", clipId: "pb" }]);
+    expect(replayOps(base, [{ op: "moveClip", clipId: "sound", trackId: "a2", timelineIn: 0 }], kept)
+      .tracks.find(t => t.id === "a2")!.clips).toMatchObject([{ id: "sound", sourceIn: 0, sourceOut: 20 }]);
+  });
+
+  it("refuses moving a picture clip to a sound track when the sound of its footage was cut since", () => {
+    const base = emptyTimeline(P);
+    base.tracks[0]!.clips = [makeMediaClip("m1", 0, 20, 0, { id: "picture", volume: 0 })];
+    base.tracks[1]!.clips = [makeMediaClip("m1", 0, 10, 0, { id: "sa" }), makeMediaClip("m1", 10, 20, 10, { id: "sb" })];
+    const head = applyOps(base, [{ op: "removeClip", clipId: "sb" }]);
+    expect(() => replayOps(base, [{ op: "moveClip", clipId: "picture", trackId: "a1", timelineIn: 20 }], head)).toThrow("the footage under clip picture changed since");
+  });
 });
 
 it("sees a transition from a colour card change the card's side of the join too", () => {
