@@ -1135,6 +1135,8 @@ export type UsageGroupBy = z.infer<typeof UsageGroupBy>;
 
 export const UsageTotals = z.object({
   runs: z.number().int().nonnegative(),
+  /** Model IDs recorded for the runs of this task. Only included in per-task totals. */
+  models: z.array(z.string()).optional(),
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
   cacheReadTokens: z.number().int().nonnegative(),

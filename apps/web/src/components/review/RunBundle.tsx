@@ -17,9 +17,11 @@ import { pendingMediaWaits, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
  * output, cache read and write, reasoning, and how many runs it took. Shown only when turned on in Settings → Usage.
  * The note is placed against the window, so the pinned request's scrolling box doesn't clip it.
  */
-type RunUsage = Omit<UsageTotals, "firstAt" | "lastAt">;
+type RunUsage = Omit<UsageTotals, "firstAt" | "lastAt" | "models">;
 
-function Tokens({ usage, className, time }: { usage?: RunUsage; className?: string; time?: string }) {
+function Tokens({ usage, className, time, details = [] }: {
+  usage?: RunUsage; className?: string; time?: string; details?: [label: string, value: string][];
+}) {
   const ref = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLSpanElement>(null);
   const id = useId();
@@ -71,8 +73,9 @@ function Tokens({ usage, className, time }: { usage?: RunUsage; className?: stri
   const label = tokenLabel(usage.totalTokens);
   const [count, unit] = label.split(" ");
   const breakdown = tokenBreakdown(usage);
+  const accessibleDetails = details.map(([name, value]) => `${name}: ${value}`).join(", ");
   return <><button ref={ref} type="button" className={`run-dim run-tokens${className ? ` ${className}` : ""}`} title=""
-    aria-label={`${time ? `${time} active time, ` : ""}${label}: ${breakdown}`} data-breakdown={breakdown}
+    aria-label={`${time ? `${time} active time, ` : ""}${label}: ${breakdown}${accessibleDetails ? `. ${accessibleDetails}` : ""}`} data-breakdown={breakdown}
     aria-expanded={open} aria-controls={open ? id : undefined}
     onPointerEnter={e => { if (e.pointerType !== "touch") setMode(value => value ?? "preview"); }}
     onPointerLeave={() => { if (!ref.current?.matches(":focus-visible")) setMode(value => value === "preview" ? null : value); }}
@@ -82,6 +85,7 @@ function Tokens({ usage, className, time }: { usage?: RunUsage; className?: stri
     {count}<span className="unit-token-word"> {unit}</span>
   </button>{open && createPortal(<span ref={panel} id={id} className="tokens-tip" aria-hidden data-escape-owner>
       {time && <span><span>Active time</span><b>{time}</b></span>}
+      {details.map(([name, value]) => <span key={name}><span>{name}</span><b>{value}</b></span>)}
       {parts.filter(([label, n]) => n || label === "Input" || label === "Output").map(([label, n]) =>
         <span key={label}><span>{label}</span><b>{n.toLocaleString()}</b></span>)}
       {usage.runs > 1 && <span><span>Runs</span><b>{usage.runs}</b></span>}
@@ -187,6 +191,12 @@ function useRunUsage(taskId: string, shown = true) {
   return useProjectStore(s => show ? s.current?.taskUsage?.[taskId] : undefined);
 }
 
+function runModelName(id: string) {
+  // Format versioned Claude IDs without resolving aliases against today's catalog.
+  const [, family, major, minor] = /^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)-(\d+)$/.exec(id) ?? [];
+  return family ? `Claude ${family.charAt(0).toUpperCase()}${family.slice(1)} ${major}.${minor}` : id;
+}
+
 /**
  * Active time and reported tokens for the whole request, including any attempts that carried it on.
  * Only the running request needs a ticking clock.
@@ -215,7 +225,18 @@ export function RequestMetrics({ attempts, events }: { attempts: readonly Task[]
     cacheReadTokens: sum("cacheReadTokens"), cacheWriteTokens: sum("cacheWriteTokens"),
     reasoningTokens: sum("reasoningTokens"), totalTokens,
   } : undefined;
-  return <Tokens usage={usage} time={time} className="unit-tokens" />;
+  const models = new Set<string>();
+  const efforts = new Set<string>();
+  for (const [i, task] of attempts.entries()) {
+    const report = reports[i];
+    if (!report) continue;
+    for (const model of report.models?.length ? report.models : [task.model ?? "Unknown"]) models.add(runModelName(model));
+    efforts.add(task.effort ? task.effort.charAt(0).toUpperCase() + task.effort.slice(1) : "Provider default");
+  }
+  return <Tokens usage={usage} time={time} className="unit-tokens" details={[
+    [models.size > 1 ? "Models" : "Model", [...models].join(", ")],
+    ["Thinking effort", [...efforts].join(", ")],
+  ]} />;
 }
 
 function WorkingRun({ task, events: all, changes, callNumber, say, result, stopAbove, onStop }: RunBundleProps) {

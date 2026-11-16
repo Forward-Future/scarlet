@@ -63,15 +63,20 @@ it("tells open windows the task's new totals after each run", async () => {
   const listen = (event: WsEvent) => void seen.push(event);
   workspace.ctx.bus.on("ws", listen);
   try {
-    await api.recordTaskUsage(task.id, { inputTokens: 10, outputTokens: 5, startedAt: "2026-11-05T10:00:00.000Z" });
+    await api.recordTaskUsage(task.id, { model: "claude-opus-5-5", inputTokens: 10, outputTokens: 5, startedAt: "2026-11-05T10:00:00.000Z" });
+    await api.recordTaskUsage(task.id, { model: "claude-opus-5-6", inputTokens: 1, cacheReadTokens: 100, startedAt: "2026-11-05T10:05:00.000Z" });
     await api.recordTaskUsage(task.id, { inputTokens: 1, cacheReadTokens: 100, startedAt: "2026-11-05T10:05:00.000Z" });
   } finally {
     workspace.ctx.bus.off("ws", listen);
   }
   const updates = seen.filter(e => e.type === "task.usage");
-  expect(updates.map(e => e.type === "task.usage" && [e.projectId, e.taskId, e.usage.runs, e.usage.totalTokens])).toEqual([
-    [project, task.id, 1, 15],
-    [project, task.id, 2, 116],
+  expect(updates.map(e => e.type === "task.usage" && [e.projectId, e.taskId, e.usage.runs, e.usage.totalTokens, e.usage.models])).toEqual([
+    [project, task.id, 1, 15, ["claude-opus-5-5"]],
+    [project, task.id, 2, 116, ["claude-opus-5-5", "claude-opus-5-6"]],
+    [project, task.id, 2, 116, ["claude-opus-5-5", "claude-opus-5-6"]],
+  ]);
+  expect((await api.projectUsage(project, "task")).groups).toEqual([
+    expect.objectContaining({ key: task.id, totalTokens: 116, models: ["claude-opus-5-5", "claude-opus-5-6"] }),
   ]);
 });
 

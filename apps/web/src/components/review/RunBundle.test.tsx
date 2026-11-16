@@ -445,7 +445,7 @@ it("ticks active time, updates reported tokens, and carries both metrics across 
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   const startedAt = Date.parse(task.startedAt!);
   vi.setSystemTime(startedAt + 4000);
-  const working = { ...task, state: "running" as const, finishedAt: undefined, workedMs: 0 };
+  const working = { ...task, effort: "high", state: "running" as const, finishedAt: undefined, workedMs: 0 };
   useUiStore.getState().setShowRunTokens(false);
   openProject();
   const view = render(<RequestMetrics attempts={[working]} events={{}} />);
@@ -462,11 +462,13 @@ it("ticks active time, updates reported tokens, and carries both metrics across 
   }));
   report(task.id, totals());
   expect(tokens()?.textContent).toBe("6s · 48.2K tokens");
-  const more = totals({ totalTokens: 1_310_000, cacheReadTokens: 1_305_800 });
+  expect(tokens()?.getAttribute("aria-label")).toContain("Model: opus, Thinking effort: High");
+  const more = totals({ totalTokens: 1_310_000, cacheReadTokens: 1_305_800, models: ["claude-opus-5-5"] });
   report(task.id, more);
   expect([tokens()?.textContent, tokens()?.dataset.breakdown]).toEqual(["6s · 1.3M tokens", tokenBreakdown(more)]);
   act(() => tokens()!.click());
-  expect(document.querySelector(".tokens-tip > span")?.textContent).toBe("Active time6s");
+  expect([...document.querySelectorAll(".tokens-tip > span")].slice(0, 3).map(row => row.textContent))
+    .toEqual(["Active time6s", "ModelClaude Opus 5.5", "Thinking effortHigh"]);
   act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(document.querySelector(".tokens-tip")).toBeNull();
 
@@ -480,11 +482,12 @@ it("ticks active time, updates reported tokens, and carries both metrics across 
   act(() => vi.advanceTimersByTime(3000));
   expect(time()).toBe("9s");
   const previous = { ...claimed, state: "cancelled" as const, workedMs: 9000, finishedAt: new Date().toISOString() };
-  const resumed = { ...working, id: "tsk_2", startedAt: new Date().toISOString() };
-  report(resumed.id, totals({ totalTokens: 112_000, cacheReadTokens: 107_800 }));
+  const resumed = { ...working, id: "tsk_2", effort: undefined, startedAt: new Date().toISOString() };
+  report(resumed.id, totals({ totalTokens: 112_000, cacheReadTokens: 107_800, models: ["claude-opus-5-6"] }));
   view.rerender(<RequestMetrics attempts={[previous, resumed]} events={{}} />);
   act(() => vi.advanceTimersByTime(3000));
   expect(tokens()?.textContent).toBe("12s · 1.4M tokens");
+  expect(tokens()?.getAttribute("aria-label")).toContain("Models: Claude Opus 5.5, Claude Opus 5.6, Thinking effort: High, Provider default");
   view.rerender(<RequestMetrics attempts={[previous, { ...resumed, state: "done", workedMs: 3000, finishedAt: new Date().toISOString() }]} events={{}} />);
   act(() => vi.advanceTimersByTime(10_000));
   expect(tokens()?.textContent).toBe("12s · 1.4M tokens");
