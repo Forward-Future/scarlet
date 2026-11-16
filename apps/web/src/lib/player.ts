@@ -54,8 +54,10 @@ let finished = false;
  * until they pause it: a listen stops at its end once, and never again while it is open.
  */
 let through = false;
+/** The listen's own skips and the removed footage beyond it. */
+const withBeyond = (a: Audition) => a.beyond?.length ? [...a.skips, ...a.beyond.map(r => ({ ...r, removed: true }))] : a.skips;
 /** Every passage After steps over: the listen's own skips, and once the editor plays on, the removed footage beyond it. */
-const stepped = (a: Audition) => through && a.beyond?.length ? [...a.skips, ...a.beyond.map(r => ({ ...r, removed: true })) ] : a.skips;
+const stepped = (a: Audition) => through ? withBeyond(a) : a.skips;
 /** The clock at the previous reading while playing, to see playback cross a boundary. */
 let lastClock: number | undefined;
 /**
@@ -319,8 +321,7 @@ export const player = {
     if (audition) {
       // Removed footage closes up on After. A point inside it lands where the footage resumes,
       // or just before the cut when a key or reverse play steps back into it.
-      const removed = (audition.beyond?.length ? [...audition.skips, ...audition.beyond.map(r => ({ ...r, removed: true }))] : audition.skips)
-        .find(s => s.removed && target > s.start && target < s.end);
+      const removed = withBeyond(audition).find(s => s.removed && target > s.start && target < s.end);
       if (removed) target = !st.scrubGesture && t < st.time ? removed.start : removed.end;
       finished = false;
       lastClock = undefined;

@@ -29,6 +29,7 @@ const toolActivity: Record<string, string> = {
   dialogue_check_repeats: "Checking the finished dialogue for repeats",
   media_profile: "Measuring the sound",
   screen_text: "Reading the text on screen",
+  faces: "Finding where the faces are",
   timeline_propose: "Proposing edit",
   timeline_crossfade_audio: "Smoothing dialogue",
   timeline_first_cut: "Building first edit",
@@ -55,6 +56,7 @@ const toolActivity: Record<string, string> = {
   skill_save_edit: "Saving skill",
   skills_list: "Reading skills",
   learning_suggest: "Noting a rule",
+  shorts_plan: "Starting the other shorts",
 };
 
 // New progress messages start with a short action. Older hosts also send

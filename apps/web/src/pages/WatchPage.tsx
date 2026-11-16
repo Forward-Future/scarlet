@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type Ref } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import type { ThreadEdit } from "@scarlet/shared";
@@ -30,7 +30,6 @@ import { cutFrameUrl, scrubFrameUrl } from "../components/review/thumbs";
 import { EditBeforePreview, useEditBefore, type BeforePlayback } from "../components/review/EditBeforePreview";
 import { useApprovalComparison } from "../components/review/SideBySideComparison";
 import { PlayerTimeline, type TimelineDot, type TimelineGap } from "../components/review/TimelineScrubber";
-import type { TimelineEdit } from "../components/review/timelineEdits";
 import { BeforeToggle } from "../components/review/BeforeToggle";
 import type { CutPlaybackWindow, PreparedCut } from "../components/review/usePrepareNextCut";
 import { FramingPreview } from "../components/review/FramingPreview";
@@ -39,6 +38,7 @@ import type { ProgressFocus } from "../components/player/SimpleProgress";
 import { editFocus } from "../lib/editKind";
 import { editKey } from "../lib/keptEdits";
 import { useTemplatesStore } from "../stores/templates";
+import { TransitionPicture } from "../components/agent/TemplateMenu";
 
 const noop = () => {};
 const documentVisible = () => !document.hidden;
@@ -162,8 +162,8 @@ interface PreviewProps {
   simple: { cutPlayback?: { key: string; start: number; side: "before" | "after"; beforeFile?: string; afterFile?: string; beforeWindow?: CutPlaybackWindow; afterWindow?: CutPlaybackWindow };
     nextCutPlayback?: PreparedCut;
     marks: TimelineDot[];
-    /** Every other applied edit on the working cut, drawn under the marks. */
-    edits?: TimelineEdit[];
+    typedTimes?: number[];
+    seekFromMessage?: Ref<(time: number) => void>;
     /** Changes each time the editor asks to see the whole timeline. */
     fit?: number;
     focus?: ProgressFocus; label?: string; compareHost?: HTMLElement | null; above?: ReactNode;
@@ -171,7 +171,7 @@ interface PreviewProps {
     /** A click inside the shaded passage, when the playing side steps over it. */
     onBand?(time: number): void;
     /** Timeline navigation offers the point to the composer. N attaches it explicitly. */
-    onPick?(point: AgentContext, action: "offer" | "attach"): void;
+    onPick?(point: AgentContext, how: "seek" | "n"): void;
     /** A stretch marked on the timeline's ruler for the message being written, or none once it is taken off there. */
     onRange?(range: MarkedRange | undefined, byKey?: boolean): void;
     /** The chosen edit is about to play on another version: don't start its passage on this one meanwhile. */
@@ -419,6 +419,9 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     player.seek(Math.min(t, lastFrame), true);
     if (draft || cut) player.prepare();
   }, [threadView, draft, cut, lastFrame]);
+  useImperativeHandle(simple.seekFromMessage, () => (time: number) => {
+    if (active && playable) seekFull(time);
+  }, [active, playable, seekFull]);
   // A drag on the timeline pauses what is playing until it ends. On Before that is the earlier version's clip. It is
   // held before the player is: the player's pause reaches the clip too, and would leave it stopped.
   const scrubStart = useCallback((gesture: AbortSignal) => {
@@ -438,12 +441,12 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   useLayoutEffect(() => { setSelectedTime(undefined); }, [cacheVersion, source?.id]);
   const selectedFrameUrl = useMemo(() => selectedTime === undefined ? undefined
     : cutFrameUrl(current.project, displayedTimeline, selectedTime, true, true), [current.project, displayedTimeline, selectedTime]);
-  const selectTime = (time: number, action: "offer" | "attach" = "offer") => {
+  const selectTime = (time: number, how: "seek" | "n" = "seek") => {
     const at = Math.min(time, lastFrame);
     if (!source) setSelectedTime(at);
     // The point is on the timeline the player is on, which is the one before while the edit's new timeline is read.
     const point = editTargetAt(at, draftVersion ?? current.timeline?.version ?? current.project.head ?? undefined, displayedTimeline, source?.id);
-    simple.onPick?.(point, action);
+    simple.onPick?.(point, how);
   };
 
   // The stretch marked for the message in the box, drawn while the timeline is the one it was marked on.
@@ -592,7 +595,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
       // Held down, N is one press too: it has already picked the moment and asked for the cursor.
       if (e.repeat) return;
       player.pause();
-      if (playable && duration > 0) selectTime(usePlayerStore.getState().time, "attach");
+      if (playable && duration > 0) selectTime(usePlayerStore.getState().time, "n");
       useUiStore.getState().focusComposer();
     }
   });
@@ -708,7 +711,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
             waveform={{ media: current.media, mediaPaused: current.project.mediaPaused, source, timeline: displayedTimeline, ...sameClockBefore && {
               audioFrom: playingBefore ? sameClockBefore : undefined, scaleWith: playingBefore ? displayedTimeline : sameClockBefore } }} frameAt={frameAt} onSeek={seekFull} onSelectTime={selectTime} onScrubStart={scrubStart}
             range={simple.onRange ? shownRange : undefined} onRange={simple.onRange ? markRange : undefined} fps={fps}
-            marks={simple.marks} edits={simple.edits} fit={simple.fit} gaps={simple.gaps} skippedRanges={simple.skippedRanges} onGap={simple.onGap} onBand={simple.onBand}
+            typedTimes={simple.typedTimes} marks={simple.marks} fit={simple.fit} gaps={simple.gaps} skippedRanges={simple.skippedRanges} onGap={simple.onGap} onBand={simple.onBand}
             highlight={simple.focus ?? (selectedEdit ? editFocus(selectedEdit, duration) : undefined)} />
         </div>
       </div>}
@@ -719,5 +722,6 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
 /** The template lit in the message box's $ list, drawn over the picture as it would sit there, until the list closes. */
 function TemplateOnPicture() {
   const lit = useTemplatesStore(s => s.lit);
+  if (lit?.transition) return <span className="template-on-picture" data-template={lit.id}><TransitionPicture transition={lit.transition} from={lit.from} to={lit.to} playing /></span>;
   return lit ? <img key={lit.id} className="template-on-picture" src={lit.url} alt="" data-template={lit.id} /> : null;
 }

@@ -10,6 +10,8 @@ let container: HTMLDivElement;
 let asked: { url: URL; signal: AbortSignal; answer(ok?: boolean): Promise<void> }[];
 let made: string[];
 let revoked: string[];
+let decoded: { finish(): void; fail(): void }[];
+let drawn: Array<string | number>;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -20,6 +22,17 @@ beforeEach(() => {
   asked = [];
   made = [];
   revoked = [];
+  decoded = [];
+  drawn = [];
+  vi.spyOn(HTMLImageElement.prototype, "decode").mockImplementation(function (this: HTMLImageElement) {
+    Object.defineProperties(this, { naturalWidth: { value: 640 }, naturalHeight: { value: 360 } });
+    return new Promise<void>((finish, fail) => decoded.push({ finish, fail }));
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    drawImage(frame: HTMLVideoElement | HTMLImageElement) {
+      drawn.push(frame instanceof HTMLVideoElement ? frame.currentTime : frame.src);
+    },
+  } as unknown as CanvasRenderingContext2D);
   vi.stubGlobal("fetch", vi.fn((input: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
     const signal = init!.signal!;
     signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
@@ -51,7 +64,8 @@ const show = async (duration = 100, start = 0, file?: string, aspect?: number, w
   return bar;
 };
 const bubble = () => container.querySelector<HTMLElement>('[aria-hidden="true"]')!;
-const still = () => container.querySelector("img")!;
+const picture = () => container.querySelector("canvas")!;
+const finishDecode = () => act(async () => decoded.at(-1)!.finish());
 const stamp = () => bubble().querySelector("span")!.textContent;
 const pointer = (bar: HTMLElement, type: string, clientX: number, init: PointerEventInit = {}) => act(async () => {
   bar.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, ...init }));
@@ -70,21 +84,24 @@ it("shows the time and a frame for where the pointer is, asking for one frame at
   // The frame is asked for at twice the bubble's width, ahead of background work, and stays hidden until it has loaded.
   expect(asked).toHaveLength(1);
   expect([asked[0]!.url.searchParams.get("t"), asked[0]!.url.searchParams.get("w"), asked[0]!.url.searchParams.get("priority")]).toEqual(["25", "640", "interactive"]);
-  expect(still().hidden).toBe(true);
+  expect(picture().hidden).toBe(true);
   // The pointer moves on twice while that frame is on its way. Neither move queues a request of its own.
   await pointer(bar, "pointermove", 400);
   await pointer(bar, "pointermove", 500);
   expect(stamp()).toBe("0:50.000");
   expect(asked).toHaveLength(1);
-  // The first frame arrives for a place the pointer has left: it isn't shown, and the latest place is asked for.
+  // Show completed samples during a sweep, then ask for the latest position.
   await asked[0]!.answer();
-  expect(still().getAttribute("src")).toBeNull();
+  expect(picture().hidden).toBe(true);
+  await finishDecode();
+  expect(drawn).toEqual(["blob:frame-1"]);
   expect(asked.map(a => a.url.searchParams.get("t"))).toEqual(["25", "50"]);
   await asked[1]!.answer();
-  expect(still().getAttribute("src")).toBe("blob:frame-1");
-  expect(still().hidden).toBe(true);
-  await act(async () => { still().dispatchEvent(new Event("load")); });
-  expect(still().hidden).toBe(false);
+  expect(picture().hidden).toBe(false);
+  expect(drawn).toEqual(["blob:frame-1"]);
+  await finishDecode();
+  expect(picture().hidden).toBe(false);
+  expect(drawn).toEqual(["blob:frame-1", "blob:frame-2"]);
   // Back over a place whose frame is showing asks for nothing.
   await pointer(bar, "pointermove", 500);
   expect(asked).toHaveLength(2);
@@ -92,9 +109,9 @@ it("shows the time and a frame for where the pointer is, asking for one frame at
 
 it("sizes the hover frame to the picture while giving edit notes their full width", async () => {
   const bar = await show(100, 0, "/portrait.mp4", 9 / 16, false);
-  expect(parseFloat(still().style.aspectRatio)).toBe(9 / 16);
+  expect(parseFloat(picture().style.aspectRatio)).toBe(9 / 16);
   expect(bubble().style.getPropertyValue("--scrub-picture-width")).toBe("min(180px, 22.5dvh)");
-  expect(parseFloat(bar.querySelector("video")!.style.aspectRatio)).toBe(9 / 16);
+  expect(bar.querySelector("video")!.hidden).toBe(true);
   expect(bubble().style.width).toBe("");
   Object.defineProperty(bubble(), "offsetWidth", { configurable: true, value: 180 });
   await pointer(bar, "pointerenter", 995);
@@ -108,21 +125,23 @@ it("calls off the frame on its way when the pointer leaves, and frees the last f
   const bar = await show();
   await pointer(bar, "pointermove", 100);
   await asked[0]!.answer();
-  await act(async () => { still().dispatchEvent(new Event("load")); });
+  await finishDecode();
   await pointer(bar, "pointermove", 900);
   expect(asked).toHaveLength(2);
   expect(asked[1]!.signal.aborted).toBe(false);
   await pointer(bar, "pointerleave", 900);
   // The engine's decoder is free at once, and the bubble is gone with its frame.
   expect(asked[1]!.signal.aborted).toBe(true);
-  expect([bubble().hidden, still().hidden]).toEqual([true, true]);
+  expect([bubble().hidden, picture().hidden]).toEqual([true, true]);
   // Over the timeline again, the same place is asked for afresh.
   await pointer(bar, "pointerenter", 900);
   expect(asked.map(a => a.url.searchParams.get("t"))).toEqual(["10", "90", "90"]);
   await asked[2]!.answer();
-  // The frame it replaces is freed, and the last one with the timeline.
+  // Decoded bytes were released on drawing. A late decode after unmount never paints.
   expect(revoked).toEqual(["blob:frame-1"]);
   await act(async () => root.render(null));
+  await finishDecode();
+  expect(drawn).toEqual(["blob:frame-1"]);
   expect(revoked).toEqual(["blob:frame-1", "blob:frame-2"]);
 });
 
@@ -132,13 +151,13 @@ it("keeps the time and hides the picture when a frame can't be had", async () =>
   await asked[0]!.answer(false);
   expect(bubble().hidden).toBe(false);
   expect(stamp()).toBe("0:30.000");
-  expect(still().hidden).toBe(true);
+  expect(picture().hidden).toBe(true);
   expect(made).toEqual([]);
   // A frame whose bytes can't be drawn stays hidden too.
   await pointer(bar, "pointermove", 600);
   await asked[1]!.answer();
-  await act(async () => { still().dispatchEvent(new Event("error")); });
-  expect(still().hidden).toBe(true);
+  await act(async () => decoded.at(-1)!.fail());
+  expect(picture().hidden).toBe(true);
 });
 
 it("follows a drag with exact frames, ignores a button held from elsewhere and touch, and hides when the drag ends", async () => {
@@ -187,14 +206,14 @@ it("ends a drag that is let go off the timeline, so the bubble goes when the poi
   expect(bubble().hidden).toBe(true);
 });
 
-it("seeks one muted movie on the timeline clock and only shows the latest completed hover", async () => {
+it("seeks one muted movie on the timeline clock and paints each completed seek", async () => {
   const bar = await show(40, 60, "/working-cut.mp4");
   const movie = bar.querySelector("video")!;
   let ready = 0, seeking = false, at = 0;
   const seek = vi.fn((t: number) => { at = t; seeking = true; });
   Object.defineProperties(movie, {
     readyState: { get: () => ready }, seeking: { get: () => seeking },
-    duration: { value: 100.02 }, videoWidth: { value: 960 }, currentTime: { get: () => at, set: seek },
+    duration: { value: 100.02 }, videoWidth: { value: 960 }, videoHeight: { value: 540 }, currentTime: { get: () => at, set: seek },
   });
   expect(movie.muted).toBe(true);
   expect(movie.preload).toBe("metadata");
@@ -210,21 +229,23 @@ it("seeks one muted movie on the timeline clock and only shows the latest comple
   seeking = false;
   movie.dispatchEvent(new Event("seeked"));
   expect(seek.mock.calls).toEqual([[70], [90]]);
-  expect(movie.hidden).toBe(true);
+  expect(drawn).toEqual([70]);
+  expect(picture().hidden).toBe(false);
   seeking = false;
   movie.dispatchEvent(new Event("seeked"));
-  expect(movie.hidden).toBe(false);
+  expect(picture().hidden).toBe(false);
   expect(movie.paused).toBe(true);
+  expect(drawn).toEqual([70, 90]);
   await pointer(bar, "pointerleave", 750);
-  expect(movie.hidden).toBe(true);
+  expect(picture().hidden).toBe(true);
   await pointer(bar, "pointerenter", 752);
-  expect(movie.hidden).toBe(false);
+  expect(picture().hidden).toBe(false);
   expect(seek).toHaveBeenCalledTimes(2);
   expect(asked).toHaveLength(0);
   await pointer(bar, "pointermove", 1000);
   expect(seek).toHaveBeenLastCalledWith(99.75);
   await pointer(bar, "pointerdown", 752, { buttons: 1 });
-  expect(movie.hidden).toBe(true);
+  expect(picture().hidden).toBe(true);
   expect(asked[0]!.url.searchParams.get("exact")).toBe("1");
 });
 
@@ -253,8 +274,8 @@ it.each(["error", "timeout"])("uses the engine at the current position when the 
   expect(movie.hasAttribute("src")).toBe(false);
   expect(asked.map(a => a.url.searchParams.get("t"))).toEqual(["35"]);
   await asked[0]!.answer();
-  still().dispatchEvent(new Event("load"));
-  expect(still().hidden).toBe(false);
+  await finishDecode();
+  expect(picture().hidden).toBe(false);
 });
 
 it("releases a slow obsolete decode once the pointer settles, and cancels a pending retarget on leave", async () => {
@@ -282,9 +303,58 @@ it("keeps a drag's bubble through the page handing it a new way to ask for frame
   await act(async () => root.render(<ScrubPreview start={120} duration={60} frameAt={newer} note={<em>Edit 2</em>}><div className="track" /></ScrubPreview>));
   expect(bubble().hidden).toBe(false);
   await asked[0]!.answer();
+  await finishDecode();
   await pointer(bar, "pointermove", 750, { buttons: 1 });
   expect([bubble().hidden, stamp()]).toEqual([false, "2:45.000"]);
   expect([asked.at(-1)!.url.searchParams.get("v"), asked.at(-1)!.url.searchParams.get("exact")]).toEqual(["2", "1"]);
   await pointer(bar, "pointerup", 750);
   expect(bubble().hidden).toBe(true);
+});
+
+it("holds the last drawn hover still while the pointer moves into another sample", async () => {
+  const bar = await show();
+  await pointer(bar, "pointerenter", 100);
+  await asked[0]!.answer();
+  await finishDecode();
+  expect(picture().hidden).toBe(false);
+  await pointer(bar, "pointermove", 800);
+  expect(stamp()).toBe("1:20.000");
+  expect(picture().hidden).toBe(false);
+  await asked[1]!.answer();
+  expect(drawn).toEqual(["blob:frame-1"]);
+  await finishDecode();
+  expect(drawn).toEqual(["blob:frame-1", "blob:frame-2"]);
+});
+
+it("keeps a visible movie frame through the next hover seek", async () => {
+  const bar = await show(100, 0, "/working-cut.mp4");
+  const movie = bar.querySelector("video")!;
+  let at = 0, seeking = false;
+  Object.defineProperties(movie, {
+    readyState: { get: () => seeking ? 1 : 4 }, seeking: { get: () => seeking },
+    duration: { value: 100 }, videoWidth: { value: 960 }, videoHeight: { value: 540 },
+    currentTime: { get: () => at, set: (t: number) => { at = t; seeking = true; } },
+  });
+  await pointer(bar, "pointerenter", 0);
+  expect(picture().hidden).toBe(false);
+  await pointer(bar, "pointermove", 800);
+  expect(at).toBe(80);
+  expect(picture().hidden).toBe(false);
+  await pointer(bar, "pointermove", 900);
+  expect(picture().hidden).toBe(false);
+  seeking = false;
+  movie.dispatchEvent(new Event("seeked"));
+  expect(at).toBe(90);
+});
+
+it("discards a late exact drag sample after the pointer moves", async () => {
+  const bar = await show();
+  await pointer(bar, "pointerdown", 300, { buttons: 1 });
+  await asked[0]!.answer();
+  await pointer(bar, "pointermove", 600, { buttons: 1 });
+  await finishDecode();
+  expect(drawn).toEqual([]);
+  await asked[1]!.answer();
+  await finishDecode();
+  expect(drawn).toEqual(["blob:frame-2"]);
 });

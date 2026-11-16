@@ -6,41 +6,30 @@ import { pathToFileURL } from "node:url";
 
 const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
-// The reviewed unsigned exception is limited to one version and names an immutable source commit.
-const unsignedVersion = "0.1.20";
-const unsignedSource = "f2e8c84ce4d58ee9d8ee1f1d21b2c46ebee30d82";
-
-function releaseNotes(repository, sha, unsignedOnce, files, runId, updaterSignedOnly) {
+function releaseNotes(repository, sha, updaterSignedOnly) {
   const notes = ["Download the DMG for your Mac’s chip (Apple Silicon or Intel), or choose the Setup EXE or MSI for Windows x64."];
-  if (unsignedOnce || updaterSignedOnly) {
+  if (updaterSignedOnly) {
     notes.push("The macOS apps are ad hoc signed and have not been notarized by Apple. Both Windows installers are unsigned. Your operating system may display a publisher warning when you open the download.");
   }
-  if (!unsignedOnce) notes.push(
+  notes.push(
     "If you’re using stable Scarlet 0.1.20 or earlier, quit Scarlet and install the download for your computer over your existing copy once. Your stable project library stays in place.",
     "After that, Scarlet downloads and verifies new stable releases in the background. Choose **Restart to update** when it’s ready.",
   );
   const helper = "apps/desktop/scripts/Install-Scarlet-FFmpeg-macOS.sh";
-  const helperLink = unsignedOnce
-    ? `[Download the standalone setup helper](https://raw.githubusercontent.com/${repository}/${sha}/${helper})`
-    : `[View the helper source](https://github.com/${repository}/blob/${sha}/${helper})`;
+  const helperLink = `[View the helper source](https://github.com/${repository}/blob/${sha}/${helper})`;
   notes.push(
     "Scarlet uses FFmpeg and FFprobe to import and export footage. If you already installed them for Early Access, you can use the same tools.",
     "**macOS.** Drag Scarlet into Applications. To install the media tools, run `bash /Applications/Scarlet.app/Contents/Resources/Install-Scarlet-FFmpeg-macOS.sh` in Terminal, then open Scarlet. " + helperLink,
     "**Windows.** Run `winget install --id Gyan.FFmpeg.Essentials --exact` in PowerShell, then run Scarlet Setup and open Scarlet from your regular Windows account.",
     "Early Access and stable Scarlet use separate project libraries. Continue opening existing Early Access projects in Scarlet Early Access.",
   );
-  if (unsignedOnce) {
-    const checksums = [...files].map(([name, { digest }]) => `${digest.slice("sha256:".length)}  ${name}`);
-    notes.push("### SHA-256 checksums", ["```text", ...checksums, "```"].join("\n"),
-      `<!-- scarlet-unsigned-release-run: ${runId} -->`);
-  }
   return notes.join("\n\n");
 }
 
-async function localInstallers(version, directory, unsignedOnce) {
-  const suffixes = ["macOS-Apple-Silicon.dmg", "macOS-Intel.dmg", "Windows-x64-Setup.exe", "Windows-x64.msi"];
-  const names = suffixes.map(suffix => `Scarlet-${version}-${suffix}`);
-  if (!unsignedOnce) names.push(`Scarlet-${version}-macOS-Apple-Silicon.app.tar.gz`, `Scarlet-${version}-macOS-Intel.app.tar.gz`, "latest.json");
+async function localInstallers(version, directory) {
+  const suffixes = ["macOS-Apple-Silicon.dmg", "macOS-Intel.dmg", "Windows-x64-Setup.exe", "Windows-x64.msi",
+    "macOS-Apple-Silicon.app.tar.gz", "macOS-Intel.app.tar.gz"];
+  const names = [...suffixes.map(suffix => `Scarlet-${version}-${suffix}`), "latest.json"];
   const entries = await readdir(directory, { withFileTypes: true });
   if (entries.length !== names.length || entries.some(entry => !entry.isFile() || !names.includes(entry.name))) {
     throw new Error(`Expected exactly these release files in ${directory}: ${names.join(", ")}`);
@@ -112,30 +101,19 @@ async function inspectRelease(request, release, files) {
   return { missing, interrupted };
 }
 
-export async function publishDesktopRelease({ version, directory, repository, sha, token, unsignedOnce = false, updaterSignedOnly = false, runId, fetchImpl = fetch }) {
-  if (unsignedOnce && (repository !== "Forward-Future/scarlet" || version !== unsignedVersion || sha !== unsignedSource)) {
-    throw new Error("The single unsigned release does not authorize this repository, version and source revision");
-  }
+export async function publishDesktopRelease({ version, directory, repository, sha, token, updaterSignedOnly = false, fetchImpl = fetch }) {
   if (!stableVersion.test(version) || !directory || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) ||
       !/^[a-f0-9]{40}$/.test(sha) || !token) {
     throw new Error("Expected a stable major.minor.patch, installer directory, GITHUB_REPOSITORY, full GITHUB_SHA and GH_TOKEN");
   }
-  if (unsignedOnce && !/^[1-9]\d*$/.test(runId)) throw new Error("The unsigned release needs its GitHub Actions run ID");
-  const files = await localInstallers(version, directory, unsignedOnce);
+  const files = await localInstallers(version, directory);
   const request = github(repository, token, fetchImpl);
   const tag = `v${version}`;
-  const notes = releaseNotes(repository, sha, unsignedOnce, files, runId, updaterSignedOnly);
+  const notes = releaseNotes(repository, sha, updaterSignedOnly);
   const name = `Scarlet ${version}`;
   const original = await taggedCommit(request, tag);
   if (original && original !== sha) throw new Error(`Tag ${tag} points to ${original}, expected ${sha}`);
   let release = await releaseForTag(request, tag);
-  if (unsignedOnce && original && !release) throw new Error(`Tag ${tag} already exists without this run’s release`);
-  if (!unsignedOnce && release?.draft && release.body?.includes("<!-- scarlet-unsigned-release-run:")) {
-    throw new Error(`Only the original unsigned workflow run may resume its draft for ${tag}`);
-  }
-  if (unsignedOnce && release && (release.name !== name || release.body !== notes || release.target_commitish !== sha)) {
-    throw new Error(`Existing release ${tag} does not match the notes, artifacts and source for this unsigned run`);
-  }
   if (release && (release.prerelease || (release.draft ? release.target_commitish !== sha : original !== sha))) {
     throw new Error(`Existing release ${tag} does not belong to this stable build of ${sha}`);
   }
@@ -162,13 +140,6 @@ export async function publishDesktopRelease({ version, directory, repository, sh
     const checked = await inspectRelease(request, release, files);
     if (checked.missing.length || checked.interrupted.length) throw new Error(`Incomplete uploads for ${tag}`);
     if (await taggedCommit(request, tag) !== sha) throw new Error(`Tag ${tag} changed during upload`);
-    if (unsignedOnce) {
-      const current = await releaseForTag(request, tag);
-      if (!current || current.id !== release.id || !current.draft || current.prerelease ||
-          current.target_commitish !== sha || current.name !== name || current.body !== notes) {
-        throw new Error(`The unsigned release draft for ${tag} changed during upload`);
-      }
-    }
     // GitHub selects Latest by semantic version, including when an older platform build finishes later.
     release = await request(`/releases/${release.id}`, { method: "PATCH", body: { draft: false, make_latest: "legacy" } });
   } else if (missing.length) {
@@ -179,13 +150,12 @@ export async function publishDesktopRelease({ version, directory, repository, sh
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const [version, directory, flag] = process.argv.slice(2);
-  const unsignedOnce = flag === "--unsigned-once";
+  const [version, directory] = process.argv.slice(2);
   try {
-    if (process.argv.length !== (unsignedOnce ? 5 : 4)) throw new Error("Usage: publish-desktop-release.mjs <version> <installer-directory> [--unsigned-once]");
+    if (process.argv.length !== 4) throw new Error("Usage: publish-desktop-release.mjs <version> <installer-directory>");
     console.log(await publishDesktopRelease({ version, directory, repository: process.env.GITHUB_REPOSITORY,
-      sha: unsignedOnce ? process.env.RELEASE_SOURCE_SHA : process.env.GITHUB_SHA, token: process.env.GH_TOKEN, unsignedOnce,
-      updaterSignedOnly: process.env.UPDATER_SIGNED_ONLY === "true", runId: process.env.GITHUB_RUN_ID }));
+      sha: process.env.GITHUB_SHA, token: process.env.GH_TOKEN,
+      updaterSignedOnly: process.env.UPDATER_SIGNED_ONLY === "true" }));
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

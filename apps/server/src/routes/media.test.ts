@@ -273,6 +273,8 @@ it("takes a file Scarlet couldn't read out of the project with everything kept f
   const others = [...await emissions("read"), (await savedSpeakerTurns(ctx, project.id, ctx.repos.projects.getMedia("read")!))!];
   const brokenStores = await emissions("broken");
   expect(brokenStores.length).toBeGreaterThan(1);
+  // A recording aligned in Spanish keeps that language's store beside the English one, and it goes too.
+  expect(brokenStores.filter(path => /\.es-[0-9a-f]{8}\.bin$/.test(path))).toHaveLength(brokenStores.length / 2);
   for (const kept of [...brokenStores, (await savedSpeakerTurns(ctx, project.id, broken))!, ...others]) writeFileSync(kept, "x");
   // A clip from a file placed while it was still being added. This version is in the history, not the working video.
   storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "placed", [{ start: 0, end: 4 }]), { parent: null });

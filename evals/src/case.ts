@@ -25,6 +25,8 @@ export interface CaseFile {
   sourceVersion: string;
   /** Recordings heard in the source version. */
   dialogueMedia: string[];
+  /** Fixed source transcript for audio-reference grading across candidate transcriptions. */
+  gradingEvidence?: { mediaId: string; sourceSha256: string; audioStream: number; sha256: string };
   request: { instruction: string; skillIds: string[]; skillNames: string[]; mediaId?: string; time?: number };
   origin?: { taskId: string; agent?: string; model?: string; effort?: string };
   reference?: {

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildClaudeCommand, claudeCanRunBare, claudeRunUsage, newClaudeState, parseClaudeLine } from "./claude.js";
 import { buildCodexCommand, newCodexState, parseCodexLine, tomlInlineTable, tomlString } from "./codex.js";
 import { buildGeminiCommand, newGeminiState, parseGeminiLine } from "./gemini.js";
@@ -231,6 +234,21 @@ describe("codex exec --json parser", () => {
     expect(evs[2]!.text).toBe("[x] Step 1\n[ ] Step 2\n[ ] Step 3");
     // A list Scarlet can't read is passed over.
     expect(parseCodexLine('{"type":"item.updated","item":{"id":"item_1","type":"todo_list"}}', st)).toEqual([]);
+  });
+  it.skipIf(process.platform !== "darwin")("allows the resolved Codex executable without opening its installation directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "scarlet-codex-"));
+    try {
+      const target = join(dir, 'codex "native"');
+      const link = join(dir, "codex");
+      writeFileSync(target, "fixture");
+      symlinkSync(target, link);
+      const cmd = buildCodexCommand({ instruction: "x", systemPrompt: "SYS", mcp, cwd: "/w" }, link, "/w/.scarlet");
+      const resolved = realpathSync(target);
+      expect(cmd.file).toBe(resolved);
+      expect(cmd.args).toContain(`permissions.scarlet.filesystem={":root"="deny",":minimal"="read",":workspace_roots"={"."="write"},${tomlString(resolved)}="read"}`);
+      expect(cmd.args).toContain("permissions.scarlet.network.enabled=false");
+      expect(cmd.args).not.toContain("danger-full-access");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   it("builds -c overrides as valid TOML", () => {
     expect(tomlString('a"b\\c')).toBe('"a\\"b\\\\c"');

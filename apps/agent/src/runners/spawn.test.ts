@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, relative } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { repeatStop } from "../processTree.js";
 import { mcpEnv, nodeExecutable, quoteForCmd, resolveCli, resolveMcpCliPath, runnerSpec, spawnLines, spawnSpec, tailSummary, type SpawnLinesOptions } from "./spawn.js";
 
 // The kill goes through as usual unless a test asks to lose the next one, as a process being forked at that moment would.
@@ -94,6 +95,30 @@ describe("spawnLines", { timeout: 20_000 }, () => {
     quick.handle.kill();
     await new Promise((resolve) => setTimeout(resolve, 1200));
     expect(stops.calls).toBe(0);
+  });
+
+  it("on Windows, sends the tree kill again only while the CLI lives, and after that stops waiting on its output", () => {
+    const live = { exitCode: null, signalCode: null };
+    const exited = { exitCode: 1, signalCode: null };
+    const killed = { exitCode: null, signalCode: "SIGTERM" as const };
+    expect(repeatStop(live, "win32")).toBe("kill-tree");
+    expect(repeatStop(exited, "win32")).toBe("release-output");
+    expect(repeatStop(killed, "win32")).toBe("release-output");
+    // POSIX kills the whole group again, leader or not.
+    for (const child of [live, exited, killed]) expect(repeatStop(child, "darwin")).toBe("kill-tree");
+  });
+
+  it.skipIf(process.platform === "win32")("on Windows, settles a stopped run whose CLI died while a process it started keeps the output open", async () => {
+    // The CLI starts a straggler on the same stdout and stays up until stopped.
+    const script = "const c=require('child_process').spawn(process.execPath,['-e','setTimeout(()=>{},30000)'],{stdio:['ignore','inherit','inherit']});console.log('pid '+c.pid);setTimeout(()=>{},30000)";
+    let straggler = 0;
+    const { handle, done } = node(script, { onLine: line => { straggler = Number(line.slice(4)); onPlatform("win32"); handle.kill(); } });
+    onTestFinished(() => { try { process.kill(straggler, "SIGKILL"); } catch { /* gone */ } });
+    const started = Date.now();
+    // taskkill isn't here, so the first stop falls back to killing the CLI alone, as a tree walk that missed the straggler would.
+    expect(await done).toMatchObject({ killed: true });
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(() => process.kill(straggler, 0)).not.toThrow();
   });
 
   it("resolves with the spawn error instead of throwing when the executable can't be started", async () => {

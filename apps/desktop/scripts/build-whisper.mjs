@@ -15,11 +15,11 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { hostTripleOrNone } from "./targets.mjs";
 
 const revision = "d1be6fde11ac6e0407606b4e42fe72d34add8037"; // whisper.cpp v1.9.5
 const sourceHash = "645445da884df6dbd52b30f82d7be7c01d1767c938714e477e786b88d529e9f4";
-const triples = { "win32-x64": "x86_64-pc-windows-msvc", "darwin-arm64": "aarch64-apple-darwin", "darwin-x64": "x86_64-apple-darwin", "linux-x64": "x86_64-unknown-linux-gnu" };
-const target = triples[`${process.platform}-${process.arch}`];
+const target = hostTripleOrNone();
 if (!target || (process.env.TAURI_ENV_TARGET_TRIPLE && process.env.TAURI_ENV_TARGET_TRIPLE !== target)) {
   throw new Error("Build whisper-cli on the target architecture (Windows x64, macOS arm64/x64 or Linux x64).");
 }

@@ -34,6 +34,11 @@ export function addUsage(a: AgentUsage | undefined, b: AgentUsage | undefined): 
   };
 }
 
+/** A run's usage, named for the model the run asked for when the CLI didn't say which model it used. */
+export function usageWithModel(usage: AgentUsage | undefined, model: string | undefined): AgentUsage | undefined {
+  return usage && !usage.model && model ? { ...usage, model } : usage;
+}
+
 /** Claude Code `usage` (result or per-message): input already excludes the cache. */
 export function claudeUsage(raw: unknown, model?: string): AgentUsage | undefined {
   const u = record(raw);

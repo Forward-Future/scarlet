@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync } from "node:fs";
+import { lstatSync, readdirSync, renameSync } from "node:fs";
 import { readdir, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { StorageProject, StorageSelection } from "@scarlet/shared";
@@ -72,15 +72,37 @@ export function validateSelection(ctx: Ctx, selected: StorageSelection, expired 
   }
 }
 
-/** The cached renders `clearSegments` would delete. Read while the selection is checked, so both see the same state. */
+/** A cached render claimed for deletion: no render looks for it under this name. */
+const CLAIMED = ".clearing-";
+
+/**
+ * Claim the cached renders `clearSegments` will delete, by renaming each out of the names renders look for. Called while
+ * the selection is checked, in the same transaction: a render that starts after it finds nothing to reuse and makes
+ * its segment again, instead of reusing one that is then deleted under it. A file that can't be renamed, such as one in
+ * use on Windows, isn't claimed and stays. Claims an earlier clear couldn't delete are picked up again.
+ */
 export function segmentFiles(ctx: Ctx, id: string): string[] {
   const dir = cacheDir(ctx, id);
   if (!dir) return [];
-  return readdirSync(dir, { withFileTypes: true }).filter(file => file.isFile() && segmentName.test(file.name)).map(file => join(dir, file.name));
+  const claimed: string[] = [];
+  for (const file of readdirSync(dir, { withFileTypes: true })) {
+    if (!file.isFile()) continue;
+    if (file.name.startsWith(CLAIMED) && segmentName.test(file.name.slice(CLAIMED.length))) claimed.push(join(dir, file.name));
+    else if (segmentName.test(file.name)) {
+      const target = join(dir, CLAIMED + file.name);
+      try {
+        renameSync(join(dir, file.name), target);
+        claimed.push(target);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") ctx.log(`[storage] kept the cached render ${file.name} of ${id}: ${(error as Error).message}`);
+      }
+    }
+  }
+  return claimed;
 }
 
 /**
- * Delete a project's cached renders, listed by `segmentFiles`, outside any transaction and without blocking the engine.
+ * Delete a project's cached renders, claimed by `segmentFiles`, outside any transaction and without blocking the engine.
  * A file that can't be deleted, such as one in use on Windows, stays for the next clear and stops no other.
  */
 export async function clearSegments(ctx: Ctx, id: string, files = segmentFiles(ctx, id)): Promise<void> {

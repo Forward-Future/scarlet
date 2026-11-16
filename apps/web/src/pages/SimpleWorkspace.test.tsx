@@ -38,7 +38,7 @@ const it = partedIt(vitestIt);
 
 /** The message box has its own tests. Here it records what the workspace hands it, and draws the tray it is given. */
 type BoxProps = { onCreated?(task: { id: string }): void; onSent?(): void; tray?: React.ReactNode; targetTag?: string; targetIsPoint?: boolean; onClearTarget?(): void;
-  editHere?: { time: string; onSelect(): void };
+  messageClock?: import("../lib/messageTimestamps").MessageClock;
   rewording?: { id: string; text: string; onChange(text: string): void; onSave(text: string, skillIds?: string[]): Promise<void>; onCancel(): void } };
 const composer = vi.hoisted(() => ({ props: undefined as BoxProps | undefined }));
 vi.mock("../components/agent/Composer", () => ({ Composer: (props: BoxProps) => { composer.props = props; return props.tray ?? null; } }));
@@ -471,24 +471,15 @@ it("lists a thread's edits once, numbered, and opens one with its decisions unde
   const thread = threadWith("chg_approved_2");
   data = { ...data, changes: thread.changes, tasks: thread.tasks, notes: [] };
   await act(async () => useProjectStore.setState({ current: data }));
-  // The latest request's edits are marked. Each dot names its edit by number, sums it up, and says where it runs on hover.
-  // The note joins the scrub preview's card, under the frame, instead of opening a second popup below the track.
+  // The latest request's edits are marked. Hovering a dot lights it and shows only the frame and its time: none of
+  // these waits on the editor, so nothing is written under the frame.
   const strip = container.querySelector<HTMLElement>(".simple-timeline-hover")!;
   strip.getBoundingClientRect = () => ({ left: 0, width: 1000 }) as DOMRect;
-  const tips: Element[] = [];
   for (const mark of container.querySelectorAll<HTMLElement>(".simple-timeline-mark")) {
     await act(async () => { strip.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: parseFloat(mark.style.left) * 10 })); });
     expect(mark.classList.contains("is-hot")).toBe(true);
-    expect(mark.querySelector(".simple-timeline-tip")).toBeNull();
-    tips.push(...[...container.querySelectorAll(".timeline-track .simple-timeline-tip.is-joined > span")].map(tip => tip.cloneNode(true) as Element));
+    expect(container.querySelector(".simple-timeline-need, .simple-timeline-tip")).toBeNull();
   }
-  await act(async () => { strip.dispatchEvent(new PointerEvent("pointerout", { bubbles: true })); });
-  expect(container.querySelector(".simple-timeline-tip")).toBeNull();
-  // Each names the request first, so a dot never reads as another request's "Edit 3".
-  const request = "Tighten the wrap, add music bed…";
-  expect(tips.map(tip => tip.querySelector("b")?.textContent)).toEqual([`${request} · 1 of 3 · 0:00`, `${request} · 2 of 3 · 0:00`, `${request} · 3 of 3 · 0:11`]);
-  expect(tips.map(tip => tip.querySelector(".simple-timeline-tip-summary")?.textContent)).toEqual(["music bed", "captions", "wrap"]);
-  expect(tips.map(tip => tip.querySelector("small")?.textContent)).toEqual(["0:00–0:16 · 16 s", "0:00–0:02 · 2.2 s", "0:11–0:16 · 4.5 s"]);
   // Each dot carries its edit's number, as in the chat: filled once kept, amber while it asks for a look.
   const dots = [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark.is-numbered")];
   expect(dots.map(d => d.querySelector(".simple-timeline-number")?.textContent)).toEqual(["1", "2", "3"]);
@@ -499,14 +490,15 @@ it("lists a thread's edits once, numbered, and opens one with its decisions unde
   await act(async () => { strip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(dots[2]!.style.left) * 10 })); });
   await act(async () => {});
   expect(openTitle()).toBe("wrap");
-  // The open edit's band says where it is, so its own dot goes. The timeline is zoomed to it, with the request's other
-  // edits out of view. Zoomed out to the whole video (0) they keep their dots, there to see and to press.
+  // The open edit's dot is lit at the start of its band. The timeline is zoomed to it, with the request's other edits
+  // out of view. Zoomed out to the whole video (0) they keep their dots, there to see and to press.
   const numbers = () => [...container.querySelectorAll(".simple-timeline-mark.is-numbered .simple-timeline-number")].map(n => n.textContent);
   expect(container.querySelector(".simple-timeline-band")).not.toBeNull();
-  expect(numbers()).toEqual([]);
+  expect(numbers()).toEqual(["3"]);
+  expect(container.querySelector(".simple-timeline-mark.is-on")?.textContent).toBe("3");
   await press("0");
   expect(container.querySelector(".simple-timeline-band")).not.toBeNull();
-  expect(numbers()).toEqual(["1", "2"]);
+  expect(numbers()).toEqual(["1", "2", "3"]);
   // An edit that runs most of the video has no band to draw: its dot stays, lit, among the others.
   await click(turn.querySelector<HTMLElement>(".simple-edits .simple-edit")!);
   await act(async () => {});
@@ -539,90 +531,16 @@ const everyEdit = (length: number) => {
     ] }));
   return { cuts, graphic };
 };
-const editMarks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-edit")];
-const countLabels = () => editMarks().filter(m => m.classList.contains("is-count")).map(m => m.textContent);
-
-it("draws every applied edit on the working cut under what needs the editor, gathered into counts on the whole video", async () => {
+it("marks only the edits of the request the timeline is on: another request's hundreds of cuts draw nothing", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-slider") ? 1000 : 0; });
-  const length = timelineDuration(data.timeline!);
-  const { cuts } = everyEdit(length);
+  everyEdit(timelineDuration(data.timeline!));
   await show();
   await act(async () => {});
-  // The whole video can't fit 200 lines: they gather into a few counts that say what they hold, and none touch.
-  const counts = countLabels();
-  expect(counts.length).toBeGreaterThan(1);
-  expect(counts.length).toBeLessThanOrEqual(12);
-  for (const label of counts) expect(label).toMatch(/^\d+ cuts( · \d+ (graphic|graphics|captions?|audio edits?|other edits?))*( · \d+ more)?$/);
-  const held = counts.reduce((sum, label) => sum + label!.split(" · ").filter(part => !/more$/.test(part)).reduce((n, part) => n + parseInt(part), 0)
-    + parseInt(label!.match(/(\d+) more$/)?.[1] ?? "0"), 0);
-  const drawn = editMarks().filter(m => !m.classList.contains("is-count")).length;
-  // Every edit of the earlier request on the working cut is in a count or drawn on its own. The latest request's have
-  // their numbered dots, and aren't drawn again under them.
-  expect(held + drawn).toBe(cuts.length + 1);
-  // What needs the editor is unchanged on top: the latest request's numbered dots, the flagged one amber.
-  const numbered = [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark.is-numbered")];
+  // The earlier request's 200 cuts and its graphic aren't drawn: no counts, bars or ticks under the dots.
+  expect(container.querySelector(".simple-timeline-edit")).toBeNull();
+  // The latest request's numbered dots are all there is, the flagged one amber.
+  const numbered = [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")];
   expect(numbered.map(d => [d.textContent, d.dataset.state])).toEqual([["1–2", undefined], ["3", "check"]]);
-  // Drawn after the counts, the marks sit over them.
-  const order = [...container.querySelectorAll(".simple-timeline-edit, .simple-timeline-mark")];
-  expect(order.findIndex(m => m.classList.contains("simple-timeline-mark"))).toBeGreaterThan(order.findLastIndex(m => m.classList.contains("simple-timeline-edit")));
-  // Hovering a count says what it holds and that a press zooms in.
-  const strip = timelineStrip();
-  // One clear of the numbered dots, which win a press over anything under them.
-  const dotsAt = [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")].map(d => parseFloat(d.style.left));
-  const first = editMarks().find(m => m.classList.contains("is-count") && dotsAt.every(at => Math.abs(at - parseFloat(m.style.left)) > 10))!;
-  await act(async () => { strip.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: parseFloat(first.style.left) * 10 })); });
-  const note = container.querySelector(".timeline-track .simple-timeline-tip.is-joined > span")!;
-  expect(note.querySelector("b")?.textContent).toBe(first.textContent);
-  expect(note.querySelector("small")?.textContent).toMatch(/Click to zoom in$/);
-  // A press on a count zooms to its stretch, and the count opens into the marks it held, with room for each.
-  zoomAtOnce();
-  const ruler = container.querySelector(".timeline-ruler")!.textContent;
-  await act(async () => { strip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(first.style.left) * 10 })); });
-  await act(async () => {});
-  expect(container.querySelector(".timeline-ruler")!.textContent).not.toBe(ruler);
-  expect(editPanel()).toBeNull();
-  for (let i = 0; i < 4 && !countLabels().includes("1 cut"); i++) {
-    const count = editMarks().find(m => m.classList.contains("is-count"))!;
-    await act(async () => { timelineStrip().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(count.style.left) * 10 })); });
-    await act(async () => {});
-  }
-  // Zoomed in, the counts open into smaller ones, down to a count of one cut. A cut is never drawn as a line.
-  expect(countLabels()).toContain("1 cut");
-  expect(editMarks().filter(m => m.classList.contains("is-cut"))).toEqual([]);
-  // Hovering a count of one names its cut, and a press opens it in the card, as its row in the chat would.
-  const one = editMarks().find(m => m.textContent === "1 cut")!;
-  await act(async () => { timelineStrip().dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: parseFloat(one.style.left) * 10 })); });
-  expect(container.querySelector(".timeline-track .simple-timeline-tip.is-joined b")?.textContent).toMatch(/^Cut at \d+:\d\d$/);
-  expect(one.classList.contains("is-hot")).toBe(true);
-  await act(async () => { timelineStrip().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(one.style.left) * 10 })); });
-  await act(async () => {});
-  expect(editPanel()).not.toBeNull();
-});
-
-it("draws a graphic as a bar as long as it is on screen, and lets a dot that needs the editor win a press over an edit under it", async () => {
-  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-slider") ? 1000 : 0; });
-  const length = timelineDuration(data.timeline!);
-  const { graphic } = everyEdit(length);
-  await show();
-  await act(async () => {});
-  zoomAtOnce();
-  // Zoomed to the graphic, it is a bar from where it comes on to where it goes.
-  for (let i = 0; i < 6; i++) await press("+");
-  const bars = () => editMarks().filter(m => m.classList.contains("is-bar"));
-  const seekTo = (t: number) => act(async () => { usePlayerStore.setState({ time: t }); });
-  await seekTo(graphic.range.start + .6);
-  for (let i = 0; i < 6 && !bars().length; i++) await press("+");
-  expect(bars().map(b => b.dataset.kind)).toContain("graphic");
-  const bar = bars().find(b => b.dataset.kind === "graphic")!;
-  expect(parseFloat(bar.style.width)).toBeGreaterThan(0);
-  // The latest request's flagged edit sits on cuts of the earlier pass: a press on its dot opens it, not a cut.
-  await press("0");
-  const wrap = [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark.is-numbered")].find(d => d.textContent === "3")!;
-  await act(async () => { timelineStrip().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(wrap.style.left) * 10 })); });
-  await act(async () => {});
-  expect(openTitle()).toBe("wrap");
-  // The open edit isn't drawn again under its band.
-  expect(editMarks().some(m => m.classList.contains("is-tick") && Math.abs(parseFloat(m.style.left) - parseFloat(wrap.style.left)) < .01)).toBe(false);
 });
 
 it("steps between a request's edits with the arrow keys, sideways or up and down, and keeps K and Esc", async () => {
@@ -851,27 +769,24 @@ it("goes to After at a point picked outside the passage on Before, where Before 
   expect([openTitle(), sideShown(), playhead(), video.paused]).toEqual(["captions", "After", 3, false]);
 });
 
-it("offers Edit here on Before and After once the editor has taken the revision tag off", async () => {
+it("aims a new edit at a pick on Before and After once the editor has taken the revision tag off", async () => {
   beforeClipReady();
   await show();
   await captionsOnBefore();
   // The box talks to the edit that's open, and a pick doesn't move it.
   await pressTimeline(8);
   expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 8, ["Edit at 0:04", false]]);
-  expect(offeredTime()).toBeUndefined();
   await press(" ");
   await act(async () => composer.props!.onClearTarget!());
   await pressTimeline(8.5);
-  expect([sideShown(), playhead(), offeredTime(), boxTag()]).toEqual(["Before", 8.5, "0:08", undefined]);
+  expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 8.5, ["At 0:08", true]]);
   await skipKey("ArrowLeft", true);
-  expect([sideShown(), playhead(), offeredTime(), boxTag()]).toEqual(["Before", 7.5, "0:07", undefined]);
+  expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 7.5, ["At 0:07", true]]);
   await click(compareButton(editPanel()!));
   await act(async () => {});
   await press(" ");
   await skipKey("ArrowRight", true);
-  expect([sideShown(), playhead(), offeredTime(), boxTag()]).toEqual(["After", 5, "0:05", undefined]);
-  await chooseEditHere();
-  expect(pointTag()).toEqual(["At 0:05", true]);
+  expect([sideShown(), playhead(), pointTag()]).toEqual(["After", 5, ["At 0:05", true]]);
 });
 
 it("goes to After at the point picked while Before is still opening, since there is no clip to move", async () => {
@@ -1164,11 +1079,11 @@ it("gives the timeline to the latest request when its edit lands, though the edi
   await act(async () => {});
   expect(openTitle()).toBe("wrap");
   await press("Escape");
-  expect(numbered()).toEqual([["3", "check"]]);
+  expect(numbered()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
   // The request proposes its edit. Nothing is applied yet, so the timeline stays where the editor was.
   await event(d => ({ ...d, changes: [...d.changes, { ...later.change, taskId: "task_later", state: "ready" as const }] }));
   await act(async () => {});
-  expect(numbered()).toEqual([["3", "check"]]);
+  expect(numbered()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
   // The edit is applied, flagged, and the timeline is on it.
   later.lists.task_later = landed;
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_later" ? { ...later.change, taskId: "task_later" } : c),
@@ -1217,10 +1132,10 @@ it("lets go of an open edit that is no longer in its request's list, and goes ba
   await click(editRows("chg_approved_2")[1]!);
   await act(async () => {});
   expect(openTitle()).toBe("captions");
-  // While "music bed" is open in an earlier request, only that edit is marked.
+  // While "music bed" is open in an earlier request, that request's edits are marked, the open one lit.
   await press("ArrowUp");
   expect(openTitle()).toBe("music bed");
-  expect(numbered()).toEqual([["1", undefined]]);
+  expect(numbered()).toEqual([["1", undefined], ["2", undefined], ["3", undefined]]);
   // The edit is undone. Its request no longer lists it.
   later.lists[later.earlier] = (later.lists[later.earlier] as object[]).slice(1);
   await headMoves("ver_undone");
@@ -1272,12 +1187,12 @@ it("stays with an earlier request that has an edit to check through a reload of 
   await click(editRows("chg_approved_2")[1]!);
   await act(async () => {});
   await press("Escape");
-  expect(numbered()).toEqual([["3", "check"]]);
+  expect(numbered()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
   // Its markers load again, and fail once on the way. Neither says the edit was looked at.
   later.hold(later.earlier);
   await headMoves("ver_moved");
   await later.release();
-  expect(numbered()).toEqual([["3", "check"]]);
+  expect(numbered()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
   const good = later.lists[later.earlier]!;
   later.lists[later.earlier] = new Error("Engine unreachable");
   await headMoves("ver_failed");
@@ -1286,7 +1201,7 @@ it("stays with an earlier request that has an edit to check through a reload of 
   later.lists[later.earlier] = good;
   await headMoves("ver_back");
   await act(async () => {});
-  expect(numbered()).toEqual([["3", "check"]]);
+  expect(numbered()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
   // The editor sends "wrap" back for revision. It no longer waits on them, so the timeline is back on the latest request.
   const base = buildDb().tasks.find(t => t.id === "task_done")!;
   await event(d => ({ ...d, tasks: [...d.tasks, { ...base, id: "task_revise_wrap", state: "queued" as const, createdAt: new Date().toISOString(),
@@ -1309,7 +1224,7 @@ it("stays with an earlier request's flagged edit after a look at it, when the la
   await click(editRows("chg_approved_2")[1]!);
   await act(async () => {});
   await press("Escape");
-  expect(numbered()).toEqual([["3", "check"]]);
+  expect(numbered()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
 });
 
 it("keeps an open edit through markers that fail to load, unless a newer request arrived meanwhile", async () => {
@@ -1555,7 +1470,7 @@ it("leaves the edits quiet when the project's history arrives slowly, after the 
   expect(container.querySelector("[data-landed], .simple-timeline-closing")).toBeNull();
 });
 
-it("marks only the flagged cut of a dialogue pass that is the latest request, from the start", async () => {
+it("numbers every cut of a dialogue pass that is the latest request, from the start, the flagged one amber", async () => {
   appliedEdits();
   data = { ...data, tasks: [...data.tasks, { ...data.tasks.find(t => t.id === "task_done")!, id: "task_pass", kind: "edit" as const,
     instruction: "/dialogue-pass", context: { message: "/dialogue-pass" }, changeIds: ["chg_approved_2"] }] };
@@ -1565,8 +1480,9 @@ it("marks only the flagged cut of a dialogue pass that is the latest request, fr
   await show();
   await act(async () => {});
   expect(turnFor("chg_approved_2").querySelector(".simple-pass")).not.toBeNull();
-  // A pass can leave hundreds of settled cuts. Only the one that asks for a look is marked.
-  expect([...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")].map(m => m.dataset.state)).toEqual(["check"]);
+  // Its cuts are numbered in timeline order, as its list goes; where they crowd they share pills of runs.
+  expect([...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")].map(m => [m.textContent, m.dataset.state]))
+    .toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
 });
 
 /**
@@ -1706,7 +1622,7 @@ it("goes back to the latest request once the request the editor went to has noth
   await click(earlier.querySelectorAll(".simple-edits .simple-edit")[1]!);
   await act(async () => {});
   await press("Escape");
-  expect(numbered()).toEqual([["3", "check"]]);
+  expect(numbered()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
   // Once "wrap" is kept nothing there waits for the editor, and the timeline is back on the latest request.
   await click(earlier.querySelector(".simple-pass-need")!);
   await act(async () => {});
@@ -1851,12 +1767,13 @@ it("keeps the editor's answer and a note of theirs to two lines, with the whole 
   };
   await show();
   await act(async () => {});
-  // A long message keeps to two lines everywhere, and the whole message is in its title (2026-11-10: an answer and a
-  // loose note showed in full, however long, with no title).
+  // A long message keeps to two lines everywhere (2026-11-10: an answer and a loose note showed in full, however long),
+  // and a click opens the rest, as a reply does (2026-11-15: the editor had no way to read a long request once sent).
   const answer = container.querySelector<HTMLElement>(".req-say.is-yours")!;
-  expect([answer.textContent, answer.getAttribute("title"), foldsAt(answer)]).toEqual([ANSWER, ANSWER, 2]);
+  expect([answer.textContent, foldsAt(answer), answer.classList.contains("said")]).toEqual([ANSWER, 2, true]);
   const note = [...container.querySelectorAll<HTMLElement>(".simple-turn > .simple-msg.from-you")].find(m => m.textContent?.includes(NOTE))!;
-  expect([note.getAttribute("title"), foldsAt(note.querySelector("p")!)]).toEqual([NOTE, 2]);
+  expect([foldsAt(note.querySelector("p")!), note.querySelector("p")!.classList.contains("said")]).toEqual([2, true]);
+  for (const words of container.querySelectorAll<HTMLElement>(".unit-msg > p, .subunit-msg > p")) expect(words.classList.contains("said")).toBe(true);
 });
 
 it("stops aiming the message box at a request that is no longer in the project", async () => {
@@ -2184,10 +2101,9 @@ it("marks every place a suggestion changes: its band on the one the player is on
   await press("0");
   expect(band()).toEqual([12.5, 6.3]);
   expect(dots().map(d => d.style.left)).toEqual(["43.75%", "75%"]);
-  // A dot names its place as the suggestion's on hover.
+  // Hovering a dot shows its frame and time, with nothing written under them.
   await act(async () => { timelineStrip().dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 437.5 })); });
-  const note = container.querySelector(".timeline-track .simple-timeline-tip.is-joined > span")!;
-  expect([note.querySelector("b")?.textContent, note.querySelector("small")?.textContent]).toEqual(["Suggestion · 0:07", "0:07–0:08 · 1.0 s"]);
+  expect(container.querySelector(".simple-timeline-need, .simple-timeline-tip")).toBeNull();
   // A press on a dot moves the player and the band to that place, and the timeline zooms to it as it does to an edit
   // that opens: 0:07–0:16. Of the other two places, the one at 0:07 is in view there, as a dot.
   seek.mockClear();
@@ -2449,7 +2365,7 @@ it("hands the editor the cuts a finished pass never checked, as calls, instead o
   expect(call().querySelector(".edit-card-title")?.textContent).toBe("Not checked yet. Breath before the price.");
 });
 
-it("marks only what needs the editor once a pass is applied, and its settled cuts while its list is open", async () => {
+it("numbers an applied pass's cuts on the timeline while it has the timeline, as while its list is open", async () => {
   appliedEdits();
   data = { ...data, tasks: [...data.tasks, { ...data.tasks.find(t => t.id === "task_done")!, id: "task_pass", kind: "edit" as const,
     instruction: "/dialogue-pass", context: { message: "/dialogue-pass" }, changeIds: ["chg_approved_2"] }] };
@@ -2471,12 +2387,12 @@ it("marks only what needs the editor once a pass is applied, and its settled cut
   const pass = turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
   const marks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")];
   expect(marks()).toEqual([]);
-  // Its open list brings the pass's cuts onto the timeline: settled ones faint, the flagged one amber.
+  // Its open list brings the pass's cuts onto the timeline, numbered, the flagged one amber.
   await click(pass.querySelector(".simple-pass-toggle")!);
   await act(async () => {});
-  expect(marks().map(m => m.classList.contains("is-quiet"))).toEqual([true, true, false]);
-  expect(marks()[2]!.dataset.state).toBe("check");
-  // The row under the pointer lights its tick and shows its number.
+  const drawn = () => marks().map(m => [m.textContent, m.dataset.state]);
+  expect(drawn()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
+  // The row under the pointer lights its dot.
   const row = pass.querySelector(".simple-pass-list button")!;
   await act(async () => { row.dispatchEvent(new PointerEvent("pointerover", { bubbles: true })); });
   expect(marks()[0]!.classList.contains("is-hot")).toBe(true);
@@ -2490,13 +2406,13 @@ it("marks only what needs the editor once a pass is applied, and its settled cut
   expect(editPanel()).not.toBeNull();
   await press("Escape");
   await act(async () => {});
-  expect(marks().map(m => m.classList.contains("is-quiet"))).toEqual([true, true, false]);
-  // Closed, only the edit that asks for a look stays marked.
+  expect(drawn()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
+  // Closed, the pass keeps the timeline while its flagged cut waits on the editor, and its cuts stay numbered.
   await click(pass.querySelector(".simple-pass-toggle")!);
-  expect(marks().map(m => m.dataset.state)).toEqual(["check"]);
+  expect(drawn()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
 });
 
-it("lists just an applied pass's flagged cut from need you, and shows its settled cuts on the timeline once every edit is listed", async () => {
+it("lists just an applied pass's flagged cut from need you, and every edit from its link, its cuts numbered on the timeline", async () => {
   appliedEdits();
   data = { ...data, tasks: [...data.tasks, { ...data.tasks.find(t => t.id === "task_done")!, id: "task_pass", kind: "edit" as const,
     instruction: "/dialogue-pass", context: { message: "/dialogue-pass" }, changeIds: ["chg_approved_2"] }] };
@@ -2517,14 +2433,11 @@ it("lists just an applied pass's flagged cut from need you, and shows its settle
   // The row that needs the editor has its time in amber, and no dot before its words.
   expect([list()?.querySelector(".simple-pass-label")?.textContent, list()?.querySelector(".simple-pass-time")?.className, list()?.querySelector("button")?.getAttribute("aria-current")]).toEqual(["wrap", "simple-pass-time is-need", "true"]);
   expect(editPanel()).not.toBeNull();
-  // The settled cuts aren't on the timeline for this list: only the whole list puts them there.
-  expect(marks().filter(m => m.classList.contains("is-quiet"))).toEqual([]);
   await click(need());
   expect([list(), need().getAttribute("aria-pressed"), !!editPanel()]).toEqual([null, "false", true]);
   await click(need());
   expect(list()?.querySelectorAll("li").length).toBe(1);
-  // Kept, nothing waits on the editor, so that list goes. The link lists every edit, and the timeline shows them too:
-  // settled cuts as faint ticks.
+  // Kept, nothing waits on the editor, so that list goes. The link lists every edit, and the timeline numbers them.
   await press("k");
   await act(async () => {});
   expect(editPanel()).toBeNull();
@@ -2533,11 +2446,11 @@ it("lists just an applied pass's flagged cut from need you, and shows its settle
   await act(async () => {});
   expect(list()?.getAttribute("aria-label")).toBe("Every edit");
   expect(list()?.querySelectorAll("li")).toHaveLength(3);
-  expect(marks().map(m => m.classList.contains("is-quiet"))).toEqual([true, true, true]);
-  // The row under the pointer lights its tick.
+  expect(marks().map(m => m.textContent)).toEqual(["1", "2", "3"]);
+  // The row under the pointer lights its dot.
   await act(async () => { list()!.querySelector("button")!.dispatchEvent(new PointerEvent("pointerover", { bubbles: true })); });
   expect(marks()[0]!.classList.contains("is-hot")).toBe(true);
-  // The link, which now says Hide, closes the list, and the ticks go with it.
+  // The link, which now says Hide, closes the list, and the dots go with it.
   expect([pass.querySelector(".simple-pass-toggle")?.textContent, pass.querySelector(".simple-pass-toggle")?.getAttribute("aria-expanded")]).toEqual(["Hide", "true"]);
   await click(pass.querySelector(".simple-pass-toggle")!);
   expect(list()).toBeNull();
@@ -2643,21 +2556,21 @@ const appliedPass = (flagged: boolean) => {
   return later;
 };
 const passToggle = () => turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass .simple-pass-toggle")!;
-const ticks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")].map(m => m.classList.contains("is-quiet") ? "tick" : m.dataset.state ?? "dot");
+const ticks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")].map(m => m.dataset.state ?? "dot");
 
-it("shows a settled pass's cuts as faint ticks while its full list is open, and gives a request that arrives meanwhile the timeline once it closes", async () => {
+it("numbers a settled pass's cuts while it has the timeline, and gives a request that arrives under its open list the timeline once it closes", async () => {
   const later = appliedPass(false);
   await show();
   await act(async () => {});
-  expect(ticks()).toEqual([]);
-  // Nothing in the pass needs the editor. Its cuts are on the timeline only while its list is open.
+  expect(ticks()).toEqual(["dot", "dot", "dot"]);
+  // Nothing in the pass needs the editor. It is the latest request, so its cuts are numbered, and its open list keeps them.
   await click(passToggle());
   await act(async () => {});
-  expect(ticks()).toEqual(["tick", "tick", "tick"]);
+  expect(ticks()).toEqual(["dot", "dot", "dot"]);
   // A request arrives while the list is open. The list keeps the timeline until it closes.
   await event(d => ({ ...d, changes: [...d.changes, later.change] }));
   await act(async () => {});
-  expect(ticks()).toEqual(["tick", "tick", "tick"]);
+  expect(ticks()).toEqual(["dot", "dot", "dot"]);
   await click(passToggle());
   await act(async () => {});
   expect(numbered()).toEqual([["1", "check"]]);
@@ -2696,20 +2609,20 @@ it("gives the timeline back to a pass's open list when another request's edit cl
   await act(async () => {});
   await click(passToggle());
   await act(async () => {});
-  expect(ticks()).toEqual(["tick", "tick", "check"]);
+  expect(ticks()).toEqual(["dot", "dot", "check"]);
   // The other request has an edit to check of its own. With the pass's list still open, its cuts come back all the same.
   await click(turnFor("chg_later").querySelector(".simple-pass-need")!);
   await act(async () => {});
   expect(openTitle()).toBe("outro fade");
   await press("Escape");
   await act(async () => {});
-  expect(ticks()).toEqual(["tick", "tick", "check"]);
+  expect(ticks()).toEqual(["dot", "dot", "check"]);
   // A third request's edit lands while the list is open. When the list closes the timeline is on it.
   const third = { ...later.change, id: "chg_third", description: "Lower the music", createdAt: new Date(Date.now() + 1000).toISOString() };
   later.lists.chg_third = [{ changeId: "chg_third", spot: 0, label: "music level", range: { start: 5, end: 9 }, previous: [], check: "It may be too quiet now" }];
   await event(d => ({ ...d, changes: [...d.changes, third] }));
   await act(async () => {});
-  expect(ticks()).toEqual(["tick", "tick", "check"]);
+  expect(ticks()).toEqual(["dot", "dot", "check"]);
   await click(passToggle());
   await act(async () => {});
   expect(numbered()).toEqual([["1", "check"]]);
@@ -2850,6 +2763,28 @@ it("keeps a call whose save is still on its way when an earlier save fails, and 
   await act(async () => saves[2]!.fail("Busy again."));
   expect(passCard().querySelector(".simple-error")?.textContent).toBe("Busy again.");
   await act(async () => saves[3]!.land());
+  expect(need()).toBe("1 needs you");
+  expect(passCard().querySelector(".simple-error")).toBeNull();
+  expect(call().querySelector('[role="alert"]')).toBeNull();
+});
+
+it("says nothing when an earlier save fails after a later one carrying its calls has landed", async () => {
+  flagged();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: c.cutAssessments!.map(a => ({ ...a, verdict: "ask" as const })) } : c) };
+  useProjectStore.setState({ current: data });
+  const saves: { land(): void; fail(reason: string): void }[] = [];
+  vi.spyOn(api, "saveCutChoices").mockImplementation((id, body) => new Promise((resolve, reject) => saves.push({
+    land: () => resolve(savedCalls(id, body)), fail: reason => reject(new Error(reason)) })));
+  await show();
+  await act(async () => {});
+  const need = () => passCard().querySelector(".simple-pass-need")?.textContent;
+  await reviewCalls();
+  await press("a");
+  await press("a");
+  expect(saves).toHaveLength(2);
+  // The second save lands with both calls, then the first one fails: both calls were saved.
+  await act(async () => saves[1]!.land());
+  await act(async () => saves[0]!.fail("The engine is busy."));
   expect(need()).toBe("1 needs you");
   expect(passCard().querySelector(".simple-error")).toBeNull();
   expect(call().querySelector('[role="alert"]')).toBeNull();
@@ -3205,22 +3140,22 @@ it("keeps the other calls' dots on the timeline while a call is open, so one pre
   const dots = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark.is-numbered")];
   const numbers = () => dots().map(d => d.querySelector(".simple-timeline-number")?.textContent);
   expect(numbers()).toEqual(["1", "2", "3"]);
-  // The open call's band says where it is, so its own dot goes. The calls still waiting that are in view keep theirs.
+  // The open call's dot is lit at the start of its band. The calls still waiting that are in view keep theirs.
   await openCall("Breath before the price.");
   expect(container.querySelector(".simple-timeline-band")).not.toBeNull();
-  expect(numbers()).toEqual(["1", "3"]);
-  expect(dots().map(d => d.dataset.state)).toEqual(["check", "check"]);
+  expect(numbers()).toEqual(["1", "2", "3"]);
+  expect(dots().map(d => [d.dataset.state, d.classList.contains("is-on")])).toEqual([["check", false], ["check", true], ["check", false]]);
   // A press on one opens that call in the card, and the timeline zooms to it.
   const strip = container.querySelector<HTMLElement>(".simple-timeline-hover")!;
   strip.getBoundingClientRect = () => ({ left: 0, width: 1000 }) as DOMRect;
-  await act(async () => { strip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(dots()[1]!.style.left) * 10 })); });
+  await act(async () => { strip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(dots()[2]!.style.left) * 10 })); });
   await act(async () => {});
   expect(onVideo()).toBe("Showing cut at 0:11 · 3 of 3 · After");
-  expect(numbers()).toEqual(["2"]);
+  expect(dots().find(d => d.classList.contains("is-on"))?.textContent).toBe("3");
   // Zoomed out to the whole video (0), the other calls are there to see and to press without closing this one.
   await press("0");
   expect(call()).not.toBeNull();
-  expect(numbers()).toEqual(["1", "2"]);
+  expect(numbers()).toEqual(["1", "2", "3"]);
 });
 
 it("plays a call's cut footage from a click inside its passage on the timeline", async () => {
@@ -4661,11 +4596,36 @@ it("puts a queued request's words back in the box as they stood when Scarlet qui
   await act(async () => {});
   expect(composer.props?.rewording).toBeUndefined();
   // Words kept for a request Scarlet has started since are let go.
-  localStorage.setItem("scarlet.rewording.v1", JSON.stringify({ projectId: PRJ, id: "task_started_since", text: "Too late" }));
+  localStorage.setItem(`scarlet.rewording.v1:${PRJ}`, JSON.stringify({ projectId: PRJ, id: "task_started_since", text: "Too late" }));
   await reopen(`/p/${PRJ}`);
   await act(async () => {});
   expect(composer.props?.rewording).toBeUndefined();
+  expect(localStorage.getItem(`scarlet.rewording.v1:${PRJ}`)).toBeNull();
+});
+
+it("keeps the words being changed for each project's queued request apart, so rewording in one leaves another's alone", async () => {
+  runningPass();
+  const holdForRewording = vi.fn().mockResolvedValue(undefined);
+  data = { ...data, tasks: [...data.tasks, callRequest("task_queued_revision", 2, { kind: "edit" as const, instruction: "Keep the aside.",
+    context: { ...callRequest("task_queued_revision", 2, {}).context, message: "Keep the aside." } })] };
+  useProjectStore.setState({ current: data, holdForRewording, rewordTask: vi.fn() });
+  // Another project's words, being changed when it was last on screen.
+  const other = JSON.stringify({ projectId: "prj_other", id: "task_other", text: "Shorter intro" });
+  localStorage.setItem("scarlet.rewording.v1:prj_other", other);
+  await show();
+  await act(async () => {});
+  await click(container.querySelector('[aria-label="Queued requests"] .queue-reword')!);
+  await act(async () => composer.props!.rewording!.onChange("Keep the aside, but trim it."));
+  expect(JSON.parse(localStorage.getItem(`scarlet.rewording.v1:${PRJ}`)!)).toMatchObject({ id: "task_queued_revision", text: "Keep the aside, but trim it." });
+  expect(localStorage.getItem("scarlet.rewording.v1:prj_other")).toBe(other);
+  // Words kept in the slot every project shared before come back for their own project, and move to its own slot.
+  await act(async () => composer.props!.rewording!.onCancel());
+  localStorage.setItem("scarlet.rewording.v1", JSON.stringify({ projectId: PRJ, id: "task_queued_revision", text: "Kept before" }));
+  await reopen(`/p/${PRJ}`);
+  await act(async () => {});
+  expect(composer.props?.rewording).toMatchObject({ id: "task_queued_revision", text: "Kept before" });
   expect(localStorage.getItem("scarlet.rewording.v1")).toBeNull();
+  expect(localStorage.getItem("scarlet.rewording.v1:prj_other")).toBe(other);
 });
 
 it("offers no way to fold the queue while one of several queued requests has its words in the box", async () => {
@@ -5400,7 +5360,7 @@ it("opens Media, Export and History from the header and keeps project tools in t
   expect(back?.getAttribute("aria-label")).toBe("All projects");
   const tools = container.querySelector(".simple-tools")!;
   expect([...tools.querySelectorAll("button")].map(b => b.textContent?.trim()).slice(0, 3)).toEqual(["Media", "Export", "History"]);
-  for (const [name, field] of [["Media", "#media-file-types"], ["Export", "#export-format"]] as const) {
+  for (const [name, field] of [["Media", "#media-file-types"], ["Export", "#export-range"]] as const) {
     await click(buttonIn(tools, name)!);
     await act(async () => { await vi.dynamicImportSettled(); });
     const dialog = container.querySelector("dialog[open]")!;
@@ -5410,7 +5370,7 @@ it("opens Media, Export and History from the header and keeps project tools in t
   expect(moreButton().querySelector(".needs-you")).toBeNull();
   expect(moreButton().getAttribute("aria-description")).toBeNull();
   await openMenu();
-  expect(menuItems().filter(name => !name?.startsWith("Model") && name !== "Set up a model")).toEqual(["Learnings", "Transcript", "Export", "Project settings", "App settings"]);
+  expect(menuItems().filter(name => !name?.startsWith("Model") && name !== "Set up a model")).toEqual(["Learnings", "Transcript", "Export", "Make shorts", "Project settings", "App settings"]);
   expect(container.querySelector('[role="menu"] .menu-dot')).toBeNull();
   await click(menuItem("Project settings"));
   expect(useUiStore.getState().projectSettingsOpen).toBe(true);
@@ -5926,8 +5886,11 @@ it("marks the menu while a rule waits in Learnings, and lists each with its skil
   await show();
   expect(moreButton().querySelector(".needs-you")).not.toBeNull();
   expect(moreButton().getAttribute("aria-description")).toBe("2 rules to review in Learnings");
-  // Nothing about it is in the chat or the message box.
-  expect(container.querySelector(".simple-thread")!.textContent).not.toMatch(/punchline|Learn/);
+  // Each is said once in the chat, under the request it came from.
+  const from = container.querySelector<HTMLElement>(`.unit[data-run="${data.tasks[0]!.id}"]`)!;
+  expect([...from.querySelectorAll(".simple-learned")].map(l => l.textContent))
+    .toEqual(["Learned for dialogue-pass: “Leave the breath before a punchline.” Review", "Learned for frame-screen: “Keep a laugh in.” Review"]);
+  expect(container.querySelectorAll(".simple-learned")).toHaveLength(2);
   await openMenu();
   expect(menuRow("Learnings").querySelector(".menu-dot")?.getAttribute("aria-label")).toBe("2 rules to review");
   await click(menuRow("Learnings"));
@@ -5965,6 +5928,30 @@ it("marks the menu while a rule waits in Learnings, and lists each with its skil
   // Esc closes the list and leaves the rest as it was.
   await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
   expect(container.querySelector('[role="dialog"][aria-label="Learnings"]')).toBeNull();
+});
+
+it("opens Learnings at a rule from Review on its line in the chat, and takes the line away once the rule is decided", async () => {
+  useSkillsStore.setState({ skills: [skillNamed("skl_dialogue", "dialogue-pass")], status: "ready", error: null });
+  data = { ...data, learnings: [learning("lrn_a"), learning("lrn_b", { rule: "Keep a laugh in.", said: "Don’t cut the laugh." })] };
+  useProjectStore.setState({ current: data });
+  await show();
+  const line = () => [...container.querySelectorAll<HTMLElement>(".simple-learned")].find(l => l.textContent?.includes("laugh"));
+  await click(buttonIn(line()!, "Review")!);
+  const panel = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Learnings"]')!;
+  // The rule it came from is the one marked in the list.
+  expect([...panel.querySelectorAll(".learn-item[aria-current=true] .learn-rule")].map(r => r.textContent)).toEqual(["Keep a laugh in."]);
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  // Opened from the menu, no rule is singled out.
+  await openMenu();
+  await click(menuRow("Learnings"));
+  expect(container.querySelector(".learn-item[aria-current=true]")).toBeNull();
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  // Approved (saving) or declined, it has left the chat.
+  await act(async () => {
+    data = { ...data, learnings: [learning("lrn_a", { state: "saving" }), learning("lrn_b", { rule: "Keep a laugh in.", state: "declined" })] };
+    useProjectStore.setState({ current: data });
+  });
+  expect(container.querySelector(".simple-learned")).toBeNull();
 });
 
 it("names a rule's skill in full on hover, and moves the decisions under it together where the panel is too narrow for both", async () => {
@@ -6212,7 +6199,8 @@ it("leaves a finished request as its heading and what it made: no time on it, an
   expect(words.lastChild?.textContent).toBe(requestTextFor("task_done"));
   // It was sent about a moment on the timeline. The box said which while it was written; the heading doesn't.
   expect(words.querySelector(".simple-revising")).toBeNull();
-  expect(unit.querySelector(".unit-msg")?.getAttribute("title")).toBe(requestTextFor("task_done"));
+  // Long words fold to two lines and open on a click, as a reply does: the band has no title to read them in.
+  expect([words.classList.contains("said"), unit.querySelector(".unit-msg")?.getAttribute("title")]).toEqual([true, null]);
   expect(unit.querySelector(".simple-msg.from-you")).toBeNull();
   expect(run.querySelector(".req-time, .run-list, .req-steps, .simple-pass-chevron, .run-chevron")).toBeNull();
   // Diagnostic lines with clip ids stay out of the editor's view.
@@ -6413,16 +6401,9 @@ it("greys out the pass's other cuts on After, and a click into one plays it in B
   expect(gap().classList.contains("is-skipped")).toBe(true);
   // It goes by its time, as its row in the pass's list and its tag in the message box do, not by a number of its own.
   expect(gap().querySelector(".simple-timeline-gap-label")?.textContent).toBe("Cut at 0:06");
-  // Hovered, its note joins the scrub preview's card like a marker's.
-  expect(container.querySelector(".simple-timeline-tip")).toBeNull();
+  // Hovered, it shows the frame and its time like anywhere on the timeline: the tag already says which cut it is.
   await act(async () => { gap().dispatchEvent(new PointerEvent("pointerover", { bubbles: true })); });
-  const gapNote = container.querySelector(".timeline-track .simple-timeline-tip.is-joined")!;
-  expect(gap().querySelector(".simple-timeline-tip")).toBeNull();
-  expect(gapNote.querySelector("b")?.textContent).toBe("Cut at 0:06 · 1.0 s");
-  expect(gapNote.textContent).toContain("Drop the false start");
-  expect(gapNote.querySelector("em")).toBeNull();
-  // The grey and the tag already say After skips it: the note doesn't repeat that.
-  expect(gapNote.querySelector("small")).toBeNull();
+  expect(container.querySelector(".simple-timeline-tip, .simple-timeline-need")).toBeNull();
   expect(container.querySelector(".edit-card-switched")).toBeNull();
 
   // Without layout the click lands on the gap's first frame. It plays Before from there instead of seeking past the gap.
@@ -6495,13 +6476,13 @@ it("keeps an edit that left its request's list closed when it is listed again, i
   await headMoves("ver_undone");
   await act(async () => {});
   expect(editPanel()).toBeNull();
-  expect(numbered()).toEqual([["2", "check"]]);
+  expect(numbered()).toEqual([["1", undefined], ["2", "check"]]);
   // Put back, it stays closed.
   later.lists[later.earlier] = all;
   await headMoves("ver_redone");
   await act(async () => {});
   expect(editPanel()).toBeNull();
-  expect(numbered()).toEqual([["3", "check"]]);
+  expect(numbered()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
 });
 
 it("gives the timeline to a request that arrived while an earlier request's edit was open, when that edit's markers then fail", async () => {
@@ -6529,7 +6510,7 @@ it("gives the timeline to a request that arrived under a pass's open list once t
   await act(async () => {});
   await click(passToggle());
   await act(async () => {});
-  expect(ticks()).toEqual(["tick", "tick", "check"]);
+  expect(ticks()).toEqual(["dot", "dot", "check"]);
   // A request's flagged edit lands while the list is open. The editor looks at it and closes it without keeping it.
   await event(d => ({ ...d, changes: [...d.changes, later.change] }));
   await act(async () => {});
@@ -6538,7 +6519,7 @@ it("gives the timeline to a request that arrived under a pass's open list once t
   expect(openTitle()).toBe("outro fade");
   await press("Escape");
   await act(async () => {});
-  expect(ticks()).toEqual(["tick", "tick", "check"]);
+  expect(ticks()).toEqual(["dot", "dot", "check"]);
   // The list closes. The new request has the timeline, as it would without the look.
   await click(passToggle());
   await act(async () => {});
@@ -7035,13 +7016,13 @@ it("keeps the waiting pass's flagged edit on the timeline, numbered after its ca
   const strip = () => { const el = container.querySelector<HTMLElement>(".simple-timeline-hover")!; el.getBoundingClientRect = () => ({ left: 0, width: 1000 }) as DOMRect; return el; };
   const dot = [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")].find(m => m.textContent === "4")!;
   await act(async () => { strip().dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 1, clientX: parseFloat(dot.style.left) * 10 })); });
-  expect(container.querySelector(".simple-timeline-tip b")?.textContent).toBe("Edit 4 · 0:13");
+  expect(container.querySelector(".simple-timeline-need")?.textContent).toBe("Edit 4 needs you");
   await act(async () => { strip().dispatchEvent(new PointerEvent("pointerleave", { bubbles: true, pointerId: 1 })); });
   // With a call open and the whole video in view, the flagged edit still has its dot: "4 need you" still counts it.
   await openCall("Breath before the price.");
   await press("0");
   expect(call()).not.toBeNull();
-  expect([marks(), needYou()]).toEqual([["1", "3", "4"], "4 need you"]);
+  expect([marks(), needYou()]).toEqual([["1", "2", "3", "4"], "4 need you"]);
   await press("Escape");
   // A request waits behind the pass. It is the latest, so the timeline goes to it: the window asks for its edits, as
   // only the timeline does for a request that has applied none.
@@ -7074,14 +7055,14 @@ it("keeps the number a call or a flagged edit was shown under when another call 
   expect([needYou(), numbers()]).toEqual(["4 need you", [["1", "A clean retake."], ["2", "Breath before the price."], ["3", "wrap"], ["4", "Repeated aside."]]]);
   const marks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")].map(m => m.textContent);
   expect(marks()).toEqual(["1", "2", "4", "3"]);
-  // Its number is past the calls' own run, so its dot says the number alone, not "Cut 4 of 3".
+  // Hovered, each says it needs the editor by its number alone, not "Cut 4 of 3".
   const strip = () => { const el = container.querySelector<HTMLElement>(".simple-timeline-hover")!; el.getBoundingClientRect = () => ({ left: 0, width: 1000 }) as DOMRect; return el; };
   const tip = async (n: string) => {
     const dot = [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")].find(m => m.textContent === n)!;
     await act(async () => { strip().dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 1, clientX: parseFloat(dot.style.left) * 10 })); });
-    return container.querySelector(".simple-timeline-tip b")?.textContent;
+    return container.querySelector(".simple-timeline-need")?.textContent;
   };
-  expect([await tip("2"), await tip("4"), await tip("3")]).toEqual(["Cut 2 of 3 · 0:06", "Cut 4 · 0:11", "Edit 3 · 0:13"]);
+  expect([await tip("2"), await tip("4"), await tip("3")]).toEqual(["Cut 2 needs you", "Cut 4 needs you", "Edit 3 needs you"]);
   // Opened again, the project shows the numbers the editor has seen.
   await act(async () => root.unmount());
   root = createRoot(container);
@@ -8080,24 +8061,22 @@ const idle = () => {
   useProjectStore.setState({ current: data });
 };
 const pointTag = () => [composer.props!.targetTag, composer.props!.targetIsPoint];
-const offeredTime = () => composer.props!.editHere?.time;
-const chooseEditHere = () => act(async () => composer.props!.editHere!.onSelect());
-
-it("offers the latest manual seek for a new request and attaches it only when Edit here is chosen", async () => {
+it("aims a new edit at the latest manual seek at once, with no second press", async () => {
   idle();
   await show();
-  expect([offeredTime(), boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, undefined, null]);
+  expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
   await press("ArrowRight");
-  expect([offeredTime(), boxTag(), useUiStore.getState().agentContext]).toEqual(["0:05", undefined, null]);
+  expect(pointTag()).toEqual(["At 0:05", true]);
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 5 });
   const slider = container.querySelector<HTMLElement>(".timeline-slider")!;
   await act(async () => { slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })); });
-  expect([offeredTime(), boxTag()]).toEqual(["0:10", undefined]);
-  // Playback and a subsequent pause offer no timestamp of their own.
+  expect(pointTag()).toEqual(["At 0:10", true]);
+  // Playback lets go of an empty box's moment, and a pause picks none of its own.
   await act(async () => usePlayerStore.setState({ playing: true }));
-  expect(offeredTime()).toBeUndefined();
+  expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
   await act(async () => usePlayerStore.setState({ playing: false, time: 14 }));
-  expect([offeredTime(), boxTag()]).toEqual([undefined, undefined]);
-  // On a drag, the offered time is where the editor let go.
+  expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
+  // On a drag, the moment is where the editor let go.
   slider.getBoundingClientRect = () => ({ left: 0, width: Number(slider.getAttribute("aria-valuemax")) }) as DOMRect;
   slider.setPointerCapture = vi.fn();
   const pointer = (type: string, x: number) => new PointerEvent(type, { bubbles: true, button: 0, isPrimary: true, pointerId: 1, clientX: x });
@@ -8106,11 +8085,8 @@ it("offers the latest manual seek for a new request and attaches it only when Ed
     slider.dispatchEvent(pointer("pointermove", 8));
     slider.dispatchEvent(pointer("pointerup", 9));
   });
-  expect([offeredTime(), boxTag(), useUiStore.getState().agentContext]).toEqual(["0:09", undefined, null]);
-  await chooseEditHere();
   expect(pointTag()).toEqual(["At 0:09", true]);
   expect(useUiStore.getState().agentContext).toMatchObject({ time: 9 });
-  expect(offeredTime()).toBeUndefined();
   await act(async () => useUiStore.getState().setAgentDraft("Zoom in here"));
   await act(async () => usePlayerStore.setState({ playing: true, time: 12 }));
   expect(pointTag()).toEqual(["At 0:09", true]);
@@ -8125,18 +8101,16 @@ it("offers the latest manual seek for a new request and attaches it only when Ed
   expect(useUiStore.getState().agentContext).toBe("whole");
 });
 
-it("releases an empty box's attached point on a seek or playback, and offers the new point only on a manual seek", async () => {
+it("moves an empty box's point to the next manual seek, and releases it on playback", async () => {
   idle();
   await show();
   await press("n");
   expect(pointTag()).toEqual(["At 0:00", true]);
   await press("ArrowRight");
-  expect([boxTag(), offeredTime(), useUiStore.getState().agentContext]).toEqual([undefined, "0:05", null]);
-  await chooseEditHere();
   expect(pointTag()).toEqual(["At 0:05", true]);
   await act(async () => usePlayerStore.setState({ playing: true }));
   await act(async () => usePlayerStore.setState({ playing: false, time: 0 }));
-  expect([boxTag(), offeredTime(), useUiStore.getState().agentContext]).toEqual([undefined, undefined, null]);
+  expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
 });
 
 it("drops an empty box's timestamp when the working cut changes at the same clock time", async () => {
@@ -8145,7 +8119,7 @@ it("drops an empty box's timestamp when the working cut changes at the same cloc
   await press("n");
   expect(useUiStore.getState().agentContext).toMatchObject({ time: 0, version: data.project.head });
   await event(d => ({ ...d, project: { ...d.project, head: "ver_new_cut" }, timeline: { ...d.timeline!, version: "ver_new_cut" } }));
-  expect([playhead(), boxTag(), offeredTime(), useUiStore.getState().agentContext]).toEqual([0, undefined, undefined, null]);
+  expect([playhead(), boxTag(), useUiStore.getState().agentContext]).toEqual([0, undefined, null]);
 });
 
 it("gives the message box the cursor on N, about the moment the playhead is on, and opens no second box to write in", async () => {
@@ -8188,7 +8162,7 @@ it("leaves a box aimed at an edit or at Scarlet's question as it is when a point
   await show();
   expect(boxTag()).toBe("Answer");
   await press("ArrowRight");
-  expect([boxTag(), useUiStore.getState().agentContext, offeredTime()]).toEqual(["Answer", null, undefined]);
+  expect([boxTag(), useUiStore.getState().agentContext]).toEqual(["Answer", null]);
   // With an edit open the box revises that edit, wherever the playhead goes.
   appliedEdits();
   await show();
@@ -8196,8 +8170,19 @@ it("leaves a box aimed at an edit or at Scarlet's question as it is when a point
   await act(async () => {});
   expect(boxTag()).toBe("Edit at 0:00");
   await press("ArrowRight");
-  expect([boxTag(), offeredTime()]).toEqual(["Edit at 0:00", undefined]);
+  expect(boxTag()).toBe("Edit at 0:00");
   expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_approved_2", editIndex: 1 });
+});
+
+it("keeps a message being written about the whole video so through a seek, though nothing aimed it yet", async () => {
+  idle();
+  await show();
+  await act(async () => useUiStore.getState().setAgentDraft("Tighten the intro"));
+  await press("ArrowRight");
+  expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
+  // N still takes the current time.
+  await press("n");
+  expect(pointTag()).toEqual(["At 0:05", true]);
 });
 
 it("doesn't bring back a point picked in an earlier visit on an empty box, and keeps one with its message", async () => {
@@ -8452,7 +8437,7 @@ it("gives Space back to the player after a row of the menu is clicked, and after
   await pointerClick(menuItem("Export"));
   await act(async () => { await vi.dynamicImportSettled(); });
   const drawer = document.querySelector<HTMLElement>("dialog[open]")!;
-  expect(drawer.querySelector("#export-format")).not.toBeNull();
+  expect(drawer.querySelector("#export-range")).not.toBeNull();
   await pointerClick(drawer.querySelector<HTMLElement>('[aria-label="Close"]')!);
   expect(document.querySelector("dialog[open]")).toBeNull();
   expect(document.activeElement).toBe(document.body);
@@ -8579,6 +8564,9 @@ it("opens the edits so far and keeps the selected cut open when a running pass s
   // No sentence sums the pass up yet, so the link alone says what it opens, and counts it.
   expect(pass().querySelector(".simple-made")).toBeNull();
   expect([link().textContent, link().title]).toEqual(["See 1 edit so far", "Show the edits Scarlet has made so far, in order"]);
+  await withSimpleSheet(async () => {
+    expect(styled(link(), "color", "text-decoration-color")).toEqual(["#eae5da", "#ae9d79"]);
+  });
   await click(link());
   await act(async () => {});
   expect([pass().querySelector(".simple-pass-list")?.getAttribute("aria-label"), pass().querySelectorAll(".simple-pass-list > li").length, link().textContent])
@@ -8653,12 +8641,13 @@ it("leaves another request's edit open when a pass with its full list open leave
   // The link is worded for the rows it opens: the applied cut and the pass's two calls, which are listed among its
   // edits. So it isn't "See it".
   expect(pass().querySelector(".simple-pass-toggle")?.textContent).toBe("See all");
-  // Its full list is open, so its applied edit is on the timeline as a faint tick.
+  // Its full list is open. While it waits on the editor only its calls and flagged edits are marked: its applied cut
+  // isn't, and neither is a call this staged pass can't place on the working cut.
   await click(pass().querySelector(".simple-pass-toggle")!);
   await act(async () => {});
   expect(list()).toBe("Every edit");
   expect(pass().querySelectorAll(".simple-pass-list > li")).toHaveLength(3);
-  expect(ticks()).toEqual(["tick"]);
+  expect(ticks()).toEqual([]);
   // The editor opens an edit of the other request, with the list still open.
   await click(buttonIn(turnFor("chg_approved_2"), "See edit")!);
   await act(async () => {});
@@ -8675,11 +8664,12 @@ it("leaves another request's edit open when a pass with its full list open leave
   expect(list()).toBe("Every edit");
   expect(openTitle()).toBe("music bed");
   expect(editPanel()).not.toBeNull();
-  // Closed, the timeline goes back to the pass's open list.
+  // Closed, the timeline goes back to the pass's open list. While its call is revised nothing of it waits on the
+  // editor, so its applied cut is numbered there.
   await press("Escape");
   await act(async () => {});
   expect(editPanel()).toBeNull();
-  expect(ticks()).toEqual(["tick"]);
+  expect(ticks()).toEqual(["dot"]);
 });
 
 it("says a stopped pass's cut wasn't checked, lists a skipped call as Skipped, and says why the pass couldn't apply", async () => {
@@ -8999,12 +8989,15 @@ it("says in a suggestion's request why the video moved on from it, queues the re
   await act(async () => useProjectStore.setState(st => ({ current: { ...st.current!, taskUsage: { task_redo: { runs: 1, inputTokens: 2_000, outputTokens: 10_000,
     cacheReadTokens: 200_000, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 212_000, firstAt: null, lastAt: null } } } })));
   expect([...unit().querySelectorAll(".unit-msg > .unit-tokens, .unit-msg > .unit-stop")].map(el => el.textContent)).toEqual(["212K tokens", "Stop"]);
-  useUiStore.getState().setShowRunTokens(false);
   // The suggestion comes back made again: the line gives way to it, and it plays from the same block.
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_redo" ? { ...t, state: "done" as const, finishedAt: new Date().toISOString(), changeIds: ["chg_redone"],
       summary: "Trimmed the pause where it sits now." } : t),
     changes: [...d.changes, { ...ready, id: "chg_redone", taskId: "task_redo", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }] }));
   expect(unit().closest(".simple-chat")).not.toBeNull();
+  // Done, its tokens stay in its heading, and none of its rows repeat them.
+  expect([...unit().querySelectorAll(".unit-msg > .unit-tokens, .unit-msg > .unit-stop")].map(el => el.textContent)).toEqual(["212K tokens"]);
+  expect(unit().querySelectorAll(".run-tokens").length).toBe(1);
+  useUiStore.getState().setShowRunTokens(false);
   expect(unit().querySelector(".unit-state")?.textContent).toBe("Suggestion");
   expect(unit().querySelector(".simple-suggest")?.textContent).toBe("Trimmed the pause where it sits now.");
   expect(unit().textContent).not.toMatch(/The video changed|Redo on the current edit|Sent back/);
@@ -10481,15 +10474,13 @@ it("keeps the conversation and the cut on screen when the edit moves on and its 
     // The player plays that cut as itself, not the new version's footage at its places.
     await act(async () => player.play());
     expect(loader).toHaveBeenLastCalledWith(PRJ, shown);
-    // Edit here attaches a point on the timeline the editor can see while the new one is loading.
+    // A press on the timeline aims a new edit at a point on the timeline the editor can see while the new one is loading.
     await act(async () => player.pause());
     const slider = container.querySelector<HTMLElement>(".timeline-slider")!;
     slider.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100 }) as DOMRect;
     slider.setPointerCapture = vi.fn();
     const pointer = (type: string) => new PointerEvent(type, { bubbles: true, button: 0, isPrimary: true, pointerId: 1, clientX: 50 });
     await act(async () => { slider.dispatchEvent(pointer("pointerdown")); slider.dispatchEvent(pointer("pointerup")); });
-    expect(useUiStore.getState().agentContext).toBeNull();
-    await chooseEditHere();
     expect(useUiStore.getState().agentContext).toMatchObject({ version: shown });
     // The store reads it again by itself, and only once that has kept failing is it said after the conversation,
     // which stays, with Retry.
@@ -10692,7 +10683,7 @@ it("starts a new edit about a stretch marked on the ruler, and keeps it while th
   expect(marked).toMatchObject({ time: 11, end: 16, markedRange: { start: 11, end: 16 } });
   expect(marked.changeId).toBeUndefined();
   // It is the message's own aim, with no tag of a cut or an edit, and no moment is offered beside it.
-  expect([boxTag(), offeredTime()]).toEqual([undefined, undefined]);
+  expect(boxTag()).toBeUndefined();
   expect(container.querySelector(".timeline-range")).not.toBeNull();
   // A skip moves the video, not the stretch: it stays until it is sent or taken off.
   await press("ArrowRight");
@@ -10785,6 +10776,16 @@ it("keeps one list of every edit open at a time, and puts a request's edits on t
   await act(async () => {});
   expect(band("chg_later").classList.contains("is-marked")).toBe(true);
   expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2"]);
+  // Pressed again, the marked band lets go: no band is shaded and no request's edits are numbered on the timeline.
+  await click(band("chg_later"));
+  await act(async () => {});
+  expect(container.querySelectorAll(".unit-msg.is-marked")).toHaveLength(0);
+  expect(numbered()).toEqual([]);
+  // And a press marks it again.
+  await click(band("chg_later"));
+  await act(async () => {});
+  expect(band("chg_later").classList.contains("is-marked")).toBe(true);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2"]);
   // Opening one request's list of every edit closes another's, so two "Hide" links never stand for one timeline.
   const toggle = (changeId: string) => turnFor(changeId).querySelector<HTMLElement>(".simple-pass-toggle")!;
   await click(toggle("chg_approved_2"));
@@ -10846,3 +10847,81 @@ it("goes from a kept edit Scarlet didn't flag to a call still waiting, or a flag
   expect(keepGoesTo([[edit(13, undefined, true)], [edit(21)]], 1, still, [])).toBeUndefined();
 });
 
+
+it("shows draft timestamps on the player timeline, with seeking reserved for the timestamp click", async () => {
+  idle();
+  await show();
+  const clock = composer.props!.messageClock!;
+  const start = usePlayerStore.getState().time;
+  await act(() => {
+    useUiStore.getState().setAgentContext({ time: 5, version: clock.version, clipIds: [], fromMessage: true });
+    useUiStore.getState().setAgentDraft("Compare 0:05, 0:08 and 0:05");
+  });
+  const marks = () => Array.from(container.querySelectorAll<HTMLElement>(".timeline-message-time")).map(mark => mark.dataset.time);
+  expect(marks()).toEqual(["5", "8"]);
+  expect(usePlayerStore.getState().time).toBe(start);
+  await act(() => clock.seek(8));
+  expect(usePlayerStore.getState().time).toBe(8);
+  await act(() => useUiStore.getState().setAgentDraft(""));
+  expect(marks()).toEqual([]);
+});
+
+// --- Make shorts ---------------------------------------------------------------------------------------------------
+
+/** A short made from the long video, as Make shorts leaves it: vertical, and said to come from that video. */
+const asShort = (notice = true) => event(d => ({ ...d, project: { ...d.project, name: "Agents fail without tools",
+  settings: { ...d.project.settings, width: 1080, height: 1920, aspect: "9:16" as const },
+  source: { projectId: "prj_long", name: "Weekly interview", ...(notice && { notice: true }) } } }));
+
+it("offers Make shorts in the ⋯ menu after Export, and makes them from a form that opens the first short", async () => {
+  const made = vi.spyOn(api, "makeShorts").mockResolvedValue({ projects: [{ id: "prj_short1" }, { id: "prj_short2" }] as never, task: {} as never });
+  await act(async () => root.render(<MemoryRouter initialEntries={[`/p/${PRJ}`]}><SimpleWorkspace /><Address /></MemoryRouter>));
+  await openMenu();
+  const items = [...container.querySelectorAll('[role="menu"] [role="menuitem"]')].map(item => item.textContent?.trim());
+  expect(items.indexOf("Make shorts")).toBe(items.indexOf("Export") + 1);
+  await click([...container.querySelectorAll('[role="menuitem"]')].find(item => item.textContent?.trim() === "Make shorts")!);
+  const dialog = container.ownerDocument.querySelector('dialog[open]')!;
+  expect(dialog.querySelector("h2")?.textContent).toBe("Make shorts");
+  expect([...dialog.querySelectorAll("label")].map(l => l.textContent)).toEqual(["How many", "Shape", "Length", "Captions"]);
+  expect([...dialog.querySelectorAll('[role="combobox"]')].map(b => b.textContent)).toEqual(["Up to 3", "Vertical · 9:16", "Under 60 s each", "On"]);
+  expect(dialog.textContent).toContain("Makes a new project for each short, starting from this video’s finished edit. This video isn’t changed.");
+  await click(buttonIn(dialog, "Make shorts")!);
+  expect(made).toHaveBeenCalledWith(PRJ, { count: 3, aspect: "9:16", maxSeconds: 60, captions: true, agent: "claude", model: "opus" });
+  expect(container.querySelector("#address")?.textContent).toBe("/p/prj_short1");
+});
+
+it("names the video a short was made from under its title, and links to it", async () => {
+  await showFolded();
+  await asShort(false);
+  const title = container.querySelector(".simple-header h1")!;
+  expect(title.querySelector(".simple-header-name")?.textContent).toBe("Agents fail without tools");
+  expect(title.querySelector(".simple-header-source")?.textContent).toBe("From Weekly interview");
+  expect(title.querySelector(".simple-header-source a")?.getAttribute("href")).toBe("/p/prj_long");
+  // A short isn't made into shorts again.
+  await openMenu();
+  expect([...container.querySelectorAll('[role="menuitem"]')].map(item => item.textContent?.trim())).not.toContain("Make shorts");
+  // Once that video is gone, its name stays, without a link.
+  await event(d => ({ ...d, project: { ...d.project, source: { ...d.project.source!, gone: true } } }));
+  expect(container.querySelector(".simple-header-source a")).toBeNull();
+});
+
+it("opens a short's chat with a line that says it is a new project, which stays until its × is pressed", async () => {
+  const saved = vi.spyOn(api, "updateProject").mockImplementation(async () => {
+    const { project } = useProjectStore.getState().current!;
+    return { project: { ...project, source: { ...project.source!, notice: undefined } } };
+  });
+  await showFolded();
+  await asShort();
+  const note = container.querySelector<HTMLElement>(".simple-chat > .simple-source-note")!;
+  expect(container.querySelector(".simple-chat")!.firstElementChild).toBe(note);
+  expect(note.querySelector("p")?.textContent).toBe("New project, made from Weekly interview. That video isn’t changed.");
+  expect(note.querySelector("a")?.getAttribute("href")).toBe("/p/prj_long");
+  await click(note.querySelector('[aria-label="Dismiss"]')!);
+  expect(container.querySelector(".simple-source-note")).toBeNull();
+  expect(saved).toHaveBeenCalledWith(PRJ, { sourceNotice: false });
+  // Dismissed, it stays so when the chat is drawn again.
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await showFolded();
+  expect(container.querySelector(".simple-source-note")).toBeNull();
+});

@@ -4,7 +4,7 @@
  * provides context (timestamps, clip ids, notes, the change being revised)
  * and includes the applicable skills verbatim.
  */
-import { taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, type AgentCapabilities, type Skill, type Task } from "@scarlet/shared";
+import { taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, skillExtends, type AgentCapabilities, type Skill, type Task } from "@scarlet/shared";
 import type { Change, Note, Project, Timeline, TimelineDiff } from "@scarlet/timeline";
 import { clipById, describeDiff, formatTimecode } from "@scarlet/timeline";
 import { summarizeProject } from "./analysis.js";
@@ -51,8 +51,9 @@ export interface PromptContext {
   capabilities?: AgentCapabilities;
   /** Files the editor attached to this request, where they are on disk. */
   attachments?: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
-  /** Saved graphic templates the editor named with $name in their words. */
-  pickedTemplates?: Array<{ id: string; name: string; title: string; fields: string[] }>;
+  /** Saved templates the editor named with $name in their words, or that a skill they chose names (`skill`). */
+  pickedTemplates?: Array<{ id: string; name: string; title: string; fields: string[]; kind?: "graphic" | "transition";
+    transition?: { type: string; duration: number; direction?: string; color?: string }; skill?: string }>;
   /** The project's style guide: pasted text in full, or the file it is in. */
   styleGuide?: { name: string; text?: string; path?: string; mime?: string };
 }
@@ -96,6 +97,7 @@ The editor sets the brief. You decide what context to inspect, which tools to us
 - \`task_log\` can show the current activity, a finding, or both. Attach a saved change ID and spot to the exact phrase the editor can select to see the change. \`task_question\` hands a decision to the editor and pauses the task; the answer comes back as your next message.
 - Scarlet renders project media. \`render_request\` supports a short range or an explicitly requested full delivery.
 - A motion graphic is an HTML/CSS page Scarlet draws into a video with alpha (\`graphic_render\`), from your page or a saved template (\`template_list\`). It goes over the picture on a track of its own with \`timeline_propose\`, as an edit like any other. A project has one style guide, saved with \`style_guide_save\` when the editor gives you one.
+- A $name in the editor's words or in a skill is a saved template (\`template_list\`): a graphic, or a transition, which \`timeline_transition\` puts on the joins it names.
 
 ## Writing for the editor
 
@@ -275,11 +277,23 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     if (c.changeId && c.cutIndex !== undefined) ctxLines.push(`- Staged cut being revised: index ${c.cutIndex} of ${c.changeId}. \`dialogue_revise_cut\` saves its new range.`);
     if (c.changeId && c.cutIndex !== undefined && ctx.replacedPass) ctxLines.push(`- The request names this cut in ${ctx.replacedPass}, the pass as the editor saw it. A revision or a later part of the pass replaced that pass since with ${c.changeId}, where the cut is index ${c.cutIndex} and may have moved.`);
     if (c.reviewAllCuts) ctxLines.push("- The editor requested individual review of every cut.");
+    // Make shorts: which short this is, what it was made from and what the editor chose in the form.
+    const short = c.short;
+    if (short) {
+      const settings = typeof ctx.project === "string" ? undefined : ctx.project.project.settings;
+      ctxLines.push(`- This project is short ${short.index} of ${short.count} the editor made from “${short.sourceName}” (project ${short.sourceProjectId}) with Make shorts. It started as a copy of that video’s finished edit (its version ${short.sourceVersion}), with the same footage, transcripts and timeline times${settings ? `, on a ${settings.width}×${settings.height} (${short.aspect}) canvas` : ""}. That video isn’t changed.`);
+      ctxLines.push(`- The editor asked for shorts under ${short.maxSeconds} s each, ${short.captions ? "with captions" : "without captions"}.`);
+      if (short.moment) ctxLines.push(`- This short’s moment, chosen by the first short’s run: ${short.moment.start.toFixed(2)}–${short.moment.end.toFixed(2)} s on the copied timeline (${formatTimecode(short.moment.start, fps)}–${formatTimecode(short.moment.end, fps)}), “${short.moment.title}”.`);
+      else if (short.index === 1) ctxLines.push(`- You choose the moment${short.count === 1 ? "" : "s for all " + short.count + " shorts"} from the whole edit, and save ${short.count === 1 ? "it" : "them"} with \`shorts_plan\` before you cut. This project takes the first.`);
+    }
     for (const file of ctx.attachments ?? []) {
       ctxLines.push(`- File the editor attached: "${file.name}" (${fileKind(file.mime, file.name)}, ${fileSize(file.size)}), attachment ${file.id}, at ${file.path}`);
     }
     for (const t of ctx.pickedTemplates ?? []) {
-      ctxLines.push(`- The editor picked the graphic template $${t.name}: "${t.title}" (template ${t.id}), with the fields ${t.fields.map(f => `"${f}"`).join(", ") || "none"}.`);
+      const who = t.skill ? `The skill ${t.skill} names` : "The editor picked";
+      ctxLines.push(t.kind === "transition"
+        ? `- ${who} the transition template $${t.name}: "${t.title}" (template ${t.id}), a ${t.transition?.type ?? "transition"} over ${t.transition?.duration ?? "?"} s.`
+        : `- ${who} the graphic template $${t.name}: "${t.title}" (template ${t.id}), with the fields ${t.fields.map(f => `"${f}"`).join(", ") || "none"}.`);
     }
     if (ctxLines.length) {
       lines.push("");
@@ -327,7 +341,11 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 
   // Skills
   if (ctx.skills.length) {
-    const blocks = ctx.skills.map((s) => `## ${s.name}\n\n${s.description}\n\n${stripFrontmatter(s.content).trim()}`);
+    const blocks = ctx.skills.map((s) => {
+      const base = skillExtends(s);
+      const layered = base && ctx.skills.some(o => o.name === base) ? `\n\nThis builds on ${base}, above. Where the two differ, follow this one.` : "";
+      return `## ${s.name}\n\n${s.description}${layered}\n\n${stripFrontmatter(s.content).trim()}`;
+    });
     parts.push(`# Your skills\n\nThe editor’s request and selected skills give the brief. Consult other enabled guides through skills_list as needed. Preserve the editor’s stated preferences and protected moments.\n\n${blocks.join("\n\n---\n\n")}`);
   }
 

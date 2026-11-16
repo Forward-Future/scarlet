@@ -214,23 +214,13 @@ it("shows the desktop build version and telemetry disclosure under About", async
   }
 });
 
-it("saves just the changed preference on the Tools tab", async () => {
-  const { settings } = buildDb();
-  vi.spyOn(api, "settings").mockResolvedValue({ settings, transcriptionAvailable: true });
-  const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({
-    settings: { ...settings, editingTools: { ...settings.editingTools, ...patch.editingTools } },
-  }));
+it("lists Scarlet's tools under the skills, with nothing to switch off", async () => {
   await mount(<SettingsPage />, "/settings#tools");
-  // The tools are Scarlet's, and nothing describes a way to save a skill that no control offers.
-  expect(el.querySelector(".tools-subheading p")?.textContent).toBe("Scarlet can use these from its next request.");
-  expect(el.querySelector(".tool-inventory")!.textContent).not.toMatch(/Saving a skill|assistant/);
-  expect(named("Frame inspection").getAttribute("aria-checked")).toBe("true");
-  await click(named("Frame inspection"));
-  expect(save).toHaveBeenCalledWith({ editingTools: { pictures: false } });
-  expect(named("Frame inspection").getAttribute("aria-checked")).toBe("false");
-  const restore = [...el.querySelectorAll("button")].find(b => b.textContent === "Restore tool defaults")!;
-  await click(restore);
-  expect(named("Frame inspection").getAttribute("aria-checked")).toBe("true");
+  const tools = el.querySelector('[aria-label="Editing tools"]')!;
+  expect(tools.querySelector("p")?.textContent).toBe("Scarlet can use all of these on every request.");
+  expect(tools.textContent).toContain("Frame inspection");
+  expect(tools.querySelector('[role="switch"]')).toBeNull();
+  expect(el.textContent).not.toMatch(/Optional tools|Restore tool defaults/);
 });
 
 it("previews an older skill version, restores it into the draft, and protects unsaved work", async () => {
@@ -242,20 +232,22 @@ it("previews an older skill version, restores it into the draft, and protects un
     { path: "/settings/skills", element: <p>Skill library</p> },
   ], { initialEntries: [`/settings/skills/${skill.id}`] });
   await act(async () => root.render(<RouterProvider router={router} />));
-  const editor = el.querySelector<HTMLTextAreaElement>('[aria-label="Skill markdown"]')!;
-  await selectOption(named("Version history"), /^v1 ·/);
-  expect(editor.readOnly).toBe(true);
-  const olderBody = editor.value;
+  const editor = () => el.querySelector<HTMLTextAreaElement>('[aria-label="Skill markdown"]')!;
+  await selectOption(named("Version history"), /^First version/);
+  expect(editor()).toBeNull();
+  // The version reads line by line; what Restore puts in the editor is the same text.
+  const words = (text: string) => text.replaceAll("\u200b", "").replace(/\s+/g, "");
+  const olderBody = words(el.querySelector('[aria-label="Skill markdown, v1"]')!.textContent!);
   expect(olderBody).toContain("(v1)");
   const button = (label: string) => [...el.querySelectorAll("button")].find(b => b.textContent?.trim() === label)!;
   await click(button("Restore v1"));
-  expect(editor.readOnly).toBe(false);
-  expect(editor.value).toBe(olderBody);
+  expect(editor().readOnly).toBe(false);
+  expect(words(editor().value)).toBe(olderBody);
   expect(button("Save").disabled).toBe(false);
   await click(button("← Skill library"));
   expect(el.querySelector("dialog")?.textContent).toContain("Save your skill changes?");
   await click(button("Stay"));
-  expect(editor.value).toBe(olderBody);
+  expect(words(editor().value)).toBe(olderBody);
   await click(button("← Skill library"));
   await click(button("Discard changes"));
   expect(el.textContent).toBe("Skill library");

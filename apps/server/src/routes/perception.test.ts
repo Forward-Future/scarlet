@@ -1,12 +1,23 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { createProject } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { ffmpeg } from "../render/ffmpeg.js";
-import { parseEbur128 } from "./perception.js";
+import { parseEbur128 } from "../render/loudness.js";
+
+// A reading of the picture does what the test says, or reads as usual when it says nothing.
+const picture = vi.hoisted(() => ({ next: undefined as undefined | ((signal?: AbortSignal) => Promise<unknown>) }));
+vi.mock("../services/screenText.js", async real => {
+  const actual = await real<typeof import("../services/screenText.js")>();
+  return { ...actual, screenText: (...args: Parameters<typeof actual.screenText>) => {
+    const next = picture.next;
+    picture.next = undefined;
+    return next ? next(args[3]?.signal) : actual.screenText(...args);
+  } };
+});
 
 const summary = (integrated: string, range: string, peak: string) => `[Parsed_ebur128_0 @ 0x600001] t: 2.9  TARGET:-23 LUFS    M: -18.1 S: -18.2     I: -99.0 LUFS       LRA:  88.0 LU
 [Parsed_ebur128_0 @ 0x600001] Summary:
@@ -94,4 +105,32 @@ it("refuses a range that isn't one, and a source with no sound", async () => {
   expect(await refused("", "screen")).toEqual([400, "no_audio"]);
   expect(await refused("", "nothing")).toEqual([404, "not_found"]);
   expect((await loudness("", "voice", "prj_other")).status).toBe(404);
+});
+
+it("answers a reading of the picture for what went wrong: the caller's mistake, a recording not ready, or the engine's fault", async () => {
+  const { ctx } = workspace;
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(join(ctx.paths.media(projectId), "clip.mp4"), "");
+  ctx.repos.projects.putMedia(projectId, { id: "clip", name: "Clip", path: "clip.mp4", kind: "video", duration: 4 }, "ready");
+  ctx.repos.projects.putMedia(projectId, { id: "fresh", name: "Fresh", path: "clip.mp4", kind: "video" }, "ready");
+  const ask = async (route: string, media: string, query = "", signal?: AbortSignal) => {
+    const res = await workspace.app.request(`/api/projects/${projectId}/media/${media}/${route}${query}`,
+      { headers: { Authorization: `Bearer ${accessToken(ctx)}` }, signal });
+    return { status: res.status, code: res.status === 499 ? undefined : ((await res.json()) as any).error?.code };
+  };
+  for (const route of ["screen-text", "faces"]) {
+    expect(await ask(route, "clip", "?from=5")).toEqual({ status: 400, code: "bad_range" });
+    expect(await ask(route, "clip", "?from=2&to=1")).toEqual({ status: 400, code: "bad_range" });
+    expect(await ask(route, "voice")).toEqual({ status: 400, code: "no_picture" });
+    expect(await ask(route, "fresh")).toEqual({ status: 409, code: "not_ready" });
+    // The screen recording's file was never there.
+    expect(await ask(route, "screen")).toEqual({ status: 404, code: "not_found" });
+  }
+  picture.next = async () => { throw new Error("the model wouldn't load"); };
+  expect(await ask("screen-text", "clip")).toEqual({ status: 500, code: "internal_error" });
+  const gone = new AbortController();
+  picture.next = signal => new Promise((_, reject) => signal!.addEventListener("abort", () => reject(new Error("stopped")), { once: true }));
+  const asked = ask("screen-text", "clip", "", gone.signal);
+  setTimeout(() => gone.abort(), 20);
+  expect((await asked).status).toBe(499);
 });

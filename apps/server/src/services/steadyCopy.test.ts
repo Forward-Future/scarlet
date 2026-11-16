@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, it } from "vitest";
-import { steadyCopy } from "./steadyCopy.js";
+import { cloneOrSteadyCopy, steadyCopy } from "./steadyCopy.js";
 
 const dir = mkdtempSync(join(tmpdir(), "scarlet-copy-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -30,4 +30,31 @@ it("stops when the import is cancelled", async () => {
   const cancel = new AbortController();
   cancel.abort(new Error("cancelled"));
   await expect(steadyCopy(source, destination, cancel.signal, { chunk: 64 * 1024 })).rejects.toThrow("cancelled");
+});
+
+it("copies a large file steadily where the disk can't clone it, and clones it where it can", async () => {
+  const source = join(dir, "camera.mp4");
+  writeFileSync(source, randomBytes(300_000));
+  const refused: string[] = [];
+  await cloneOrSteadyCopy(source, join(dir, "steady.mp4"), undefined, { smallBytes: 1000, clone: async (_from, to) => (refused.push(to), false) });
+  expect(refused).toEqual([join(dir, "steady.mp4")]);
+  expect(digest(join(dir, "steady.mp4"))).toBe(digest(source));
+  // The platform's own clone, or a steady copy when this disk has none.
+  await cloneOrSteadyCopy(source, join(dir, "cloned.mp4"), undefined, { smallBytes: 1000 });
+  expect(digest(join(dir, "cloned.mp4"))).toBe(digest(source));
+  // A small file is copied as it is.
+  await cloneOrSteadyCopy(source, join(dir, "small.mp4"));
+  expect(digest(join(dir, "small.mp4"))).toBe(digest(source));
+});
+
+it("leaves nothing behind when a copy stops part-way", async () => {
+  const source = join(dir, "stopping.mp4"), destination = join(dir, "partial.mp4");
+  writeFileSync(source, randomBytes(300_000));
+  const cancel = new AbortController();
+  await expect(cloneOrSteadyCopy(source, destination, cancel.signal, { smallBytes: 1000, clone: async () => {
+    writeFileSync(destination, "part");
+    cancel.abort(new Error("cancelled"));
+    return false;
+  } })).rejects.toThrow("cancelled");
+  expect(existsSync(destination)).toBe(false);
 });

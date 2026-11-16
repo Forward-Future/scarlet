@@ -1,5 +1,6 @@
 import { join, resolve } from "node:path";
 import { statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { extractFrame, extractFilmstrip, fileInDirectory, fileInDirectoryAsync, probeMedia, renderTimelineFrame } from "@scarlet/render";
 import { clipEnd, FILMSTRIP_SEEK_BATCH, MAX_CUT_PLAYBACK_SECONDS, planPlaybackSegments, planSegments, snapToFrame, timelineDuration, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
@@ -18,7 +19,7 @@ import { AnalysisCache } from "../services/analysisCache.js";
 import { pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
 import { jsonBody, numberParam, requireProject, requireProjectHeader } from "./util.js";
-import { measureLoudness } from "./perception.js";
+import { measuredLoudness, type Loudness } from "../render/loudness.js";
 
 /** Index visible clip intervals once so one still stats only the files that can contribute to its pixels. */
 function frameSources(timeline: Timeline) {
@@ -307,8 +308,20 @@ export function renderRoutes(ctx: Ctx) {
     if (!file) throw notFound("render file");
     const { duration, width, height, fps, bitrate, videoCodec, audioCodec, hasAudio, sampleRate, channels } = await probeMedia(file);
     // The rendered sound's loudness, with every gain and effect applied: what processing did, beside the source's figures.
-    const loudness = hasAudio ? await ctx.track(measureLoudness(file, undefined, undefined, c.req.raw.signal)) : undefined;
-    return c.json({ render, fileInfo: { duration, width, height, fps, bitrate, videoCodec, audioCodec, hasAudio, sampleRate, channels, ...(loudness && { loudness }) } });
+    // Measured once per file. A measurement that fails leaves the probe's figures standing and says why it's missing.
+    let loudness: Loudness | undefined, loudnessUnavailable: string | undefined;
+    if (hasAudio) {
+      const info = await stat(file);
+      try {
+        loudness = await measuredLoudness(ctx, file, [info.size, info.ctimeMs, info.mtimeMs], { stop: ctx.shutdown, signal: c.req.raw.signal });
+      } catch (error) {
+        if (c.req.raw.signal.aborted || ctx.shutdown.aborted) throw error;
+        loudnessUnavailable = error instanceof Error ? error.message : String(error);
+        ctx.log(`[renders] loudness of ${render.id} unavailable: ${loudnessUnavailable}`);
+      }
+    }
+    return c.json({ render, fileInfo: { duration, width, height, fps, bitrate, videoCodec, audioCodec, hasAudio, sampleRate, channels,
+      ...(loudness && { loudness }), ...(loudnessUnavailable !== undefined && { loudnessUnavailable }) } });
   });
 
   r.get("/renders/:renderId/filmstrip", async c => {

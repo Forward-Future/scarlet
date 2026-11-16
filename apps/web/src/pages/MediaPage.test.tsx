@@ -229,9 +229,9 @@ it("adds a link like any file: its dialog closes at once, Media says it is downl
     await act(async () => finish());
     expect(adding()).toBeFalsy();
     expect([...container.querySelectorAll(".media-row .media-file .truncate")].map(name => name.textContent)).toContain("interview.mp4");
-    // The queue emptied, so the next link added is counted from one again.
-    await add("https://example.com/clips/broll.mov");
-    expect(adding()).toEqual(["broll.mov", "File 1 of 1", "Downloading…", false]);
+    // The queue emptied, so the next link added is counted from one again. Its name reads without the address's escapes.
+    await add("https://example.com/clips/B%20roll%20caf%C3%A9%2emov");
+    expect(adding()).toEqual(["B roll café.mov", "File 1 of 1", "Downloading…", false]);
   } finally {
     await act(() => root.unmount());
     container.remove();

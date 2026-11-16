@@ -8,9 +8,10 @@ import { clipRange, intervalCandidates, timelineDuration, type Change, type Clip
  * - `text` added or changed captions and titles, `overlay` laid b-roll or images over the picture.
  * - `graphic` laid a graphic Scarlet made (a lower third, a title card) over the picture: a clip whose file is a graphic.
  * - `speed` changed how fast footage plays.
+ * - `transition` set how the picture moves from one clip to the next at a join (a swipe, a dissolve, a dip).
  * - `other` did several of these at once, or something else (an assembly, a sync).
  */
-export type EditKind = "cut" | "restore" | "audio" | "zoom" | "reframe" | "text" | "overlay" | "graphic" | "speed" | "other";
+export type EditKind = "cut" | "restore" | "audio" | "zoom" | "reframe" | "text" | "overlay" | "graphic" | "speed" | "transition" | "other";
 
 type Op = Record<string, unknown>;
 /** `picture`: footage placed on the main picture track, which builds the cut rather than laying anything over it. */
@@ -134,6 +135,8 @@ function opFacets(change: Change, { before, after, media }: Clocks): { facet: Fa
           if (TEXT_KEYS.has(key)) return { facet: "text" as const, range: at };
           if (OVERLAY_KEYS.has(key)) return { facet: found && isGraphic(found.clip) ? "graphic" as const : "overlay" as const, range: at };
           if (key === "speed") return { facet: "speed" as const, range: at };
+          // A transition is at its join, the clip's start, not along the clip.
+          if (key === "transitionIn") return { facet: "transition" as const, range: found ? { start: found.clip.timelineIn, end: found.clip.timelineIn } : at };
           if (key === "effects") return { facet: found?.track.kind === "audio" ? "audio" as const : "overlay" as const, range: at };
           return { facet: "other" as const, range: at };
         });

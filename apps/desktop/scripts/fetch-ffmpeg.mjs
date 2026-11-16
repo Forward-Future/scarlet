@@ -6,11 +6,12 @@
 //        (default target: this machine)
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, createReadStream, createWriteStream, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { hostTriple, option, unzip } from "./targets.mjs";
 
 const RIEDL = "https://ffmpeg.martin-riedl.de/download/macos";
 const BUILDS = {
@@ -35,11 +36,7 @@ const BUILDS = {
 const here = dirname(fileURLToPath(import.meta.url));
 const binDir = resolve(here, "../src-tauri/binaries");
 const args = process.argv.slice(2);
-const flag = (name) => {
-  const i = args.indexOf(name);
-  return i >= 0 ? args[i + 1] : undefined;
-};
-const target = flag("--target") ?? process.env.TAURI_ENV_TARGET_TRIPLE ?? hostTriple();
+const target = option(args, "--target") ?? process.env.TAURI_ENV_TARGET_TRIPLE ?? hostTriple();
 const force = args.includes("--force");
 const build = BUILDS[target];
 const linux = target === "x86_64-unknown-linux-gnu";
@@ -146,26 +143,6 @@ try {
   renameSync(pending, receiptFile);
 } finally {
   rmSync(work, { recursive: true, force: true });
-}
-
-function hostTriple() {
-  const key = `${process.platform}-${process.arch}`;
-  const triple = { "win32-x64": "x86_64-pc-windows-msvc", "darwin-arm64": "aarch64-apple-darwin", "darwin-x64": "x86_64-apple-darwin", "linux-x64": "x86_64-unknown-linux-gnu" }[key];
-  if (!triple) throw new Error(`no default target for ${key}; pass --target`);
-  return triple;
-}
-
-/** bsdtar reads zips on Windows 10+ and macOS; Git Bash's GNU tar does not, hence the explicit path. */
-function unzip(zip, dest) {
-  mkdirSync(dest, { recursive: true });
-  if (process.platform === "win32") {
-    const tar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
-    execFileSync(tar, ["-xf", zip, "-C", dest], { stdio: "inherit" });
-  } else if (existsSync("/usr/bin/unzip")) {
-    execFileSync("/usr/bin/unzip", ["-q", "-o", zip, "-d", dest], { stdio: "inherit" });
-  } else {
-    execFileSync("tar", ["-xf", zip, "-C", dest], { stdio: "inherit" });
-  }
 }
 
 function findFile(dir, name) {

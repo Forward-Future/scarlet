@@ -6,6 +6,7 @@
  * fifteen times slower. A line whose pixels are the same as in the frame before is not read again.
  */
 import { readFile } from "node:fs/promises";
+import { iou } from "./faceModel.js";
 import { loadRuntime, withInference, type Sessions } from "./uhm.js";
 import type { PinnedModel } from "./localModel.js";
 
@@ -94,14 +95,6 @@ function fingerprint(rgb: Buffer, width: number, box: readonly number[]) {
   return key;
 }
 
-/** How much of `a` and `b` overlap, as a share of both together. */
-export function overlap(a: readonly number[], b: readonly number[]) {
-  const w = Math.min(a[2]!, b[2]!) - Math.max(a[0]!, b[0]!), h = Math.min(a[3]!, b[3]!) - Math.max(a[1]!, b[1]!);
-  if (w <= 0 || h <= 0) return 0;
-  const both = w * h, area = (r: readonly number[]) => (r[2]! - r[0]!) * (r[3]! - r[1]!);
-  return both / (area(a) + area(b) - both);
-}
-
 /** Mean difference in grey between two frames over a box, from every other pixel. */
 function boxDifference(a: Buffer, b: Buffer, width: number, box: readonly number[]) {
   const [x0, y0, x1, y1] = box as [number, number, number, number];
@@ -154,7 +147,7 @@ export async function runScreenTextWorker(frames: string, width: number, height:
     const unread: Array<{ box: [number, number, number, number]; key: string; width: number }> = [];
     const before = lastFrames.get(`${width}x${height}`);
     for (const box of boxes) {
-      const same = before?.lines.find(l => overlap(l.box, box) >= 0.7);
+      const same = before?.lines.find(l => iou(l.box, box) >= 0.7);
       if (same && boxDifference(before!.rgb, rgb, width, box) < SAME_PIXELS) {
         lines.push({ text: same.text, confidence: same.confidence, box });
         continue;
@@ -203,3 +196,5 @@ export async function runScreenTextWorker(frames: string, width: number, height:
   return out;
 }
 
+
+/** How much of two boxes overlap, as a share of both together: the same measure faces use. */

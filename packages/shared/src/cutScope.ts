@@ -113,21 +113,26 @@ export function rippleDrift() {
   };
 }
 
-/** Each synchronized ripple shortens the selected passage for the next one. Check and measure the ranges that will play. */
+/**
+ * Each synchronized ripple shortens the selected passage for the next one. Check and measure the ranges that will play.
+ * A removal is checked against the selection as the removals before it were asked, which is the edit it was written on,
+ * and placed inside the selection as they were made: an earlier removal rounded out to a whole frame can carry a later
+ * one's start a little before the selection's, where it is held.
+ */
 export function boundedRippleOps(ops: readonly TimelineOp[], scope: TimeRange, fps: number, duration: number) {
-  let end = scope.end;
+  let end = scope.end, askedEnd = scope.end;
   const runsToEnd = Math.abs(duration - end) < 1e-6;
   const drift = rippleDrift();
   return ops.map(op => {
-    if (op.op !== "rippleDelete" || op.trackIds || op.end <= op.start)
+    if (op.op !== "rippleDelete" || op.trackIds || op.end <= op.start || op.start < scope.start - 1e-6 || op.end > askedEnd + 1e-6)
       throw new Error("Ripple operations must stay inside the selected timeline range as it shortens.");
-    const placed = drift.place(op);
-    if (placed.start < scope.start || placed.end > end + 1e-6)
-      throw new Error("Ripple operations must stay inside the selected timeline range as it shortens.");
+    const shifted = drift.place(op);
+    const placed = { start: Math.min(Math.max(shifted.start, scope.start), end), end: Math.max(Math.min(shifted.end, end), scope.start) };
     const aligned = frameAlignedRemoval(placed, fps, { start: scope.start, end });
     if (runsToEnd && Math.abs(placed.end - end) < 1e-6) aligned.end = end;
     drift.removed(op, aligned);
     end -= aligned.end - aligned.start;
+    askedEnd -= op.end - op.start;
     return { ...op, ...aligned };
   });
 }

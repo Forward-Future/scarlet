@@ -1,7 +1,9 @@
 name: Pull request checks
 
 on:
+  # Closing or merging a PR starts a run in its group that cancels the checks still running, then does nothing.
   pull_request:
+    types: [opened, synchronize, reopened, closed]
 
 permissions:
   contents: read
@@ -13,18 +15,16 @@ concurrency:
 jobs:
   fast:
     name: Build, type-check and smoke tests
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup
         with:
           node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
       # Workspace builds run tsc in dependency order. The renderer type-checks before Vite builds it.
       - name: Build and type-check the workspace
         run: pnpm -r build
@@ -34,4 +34,5 @@ jobs:
           pnpm --filter @scarlet/server exec vitest run src/projectScope.test.ts
 
   platforms:
+    if: github.event.action != 'closed'
     uses: ./.github/workflows/ci.yml

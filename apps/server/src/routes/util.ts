@@ -1,9 +1,22 @@
+import { MaxFileSizeExceededError, MaxPartsExceededError, MaxTotalSizeExceededError, MultipartParseError } from "@remix-run/multipart-parser/future";
 import type { Context } from "hono";
 import type { ZodTypeAny, z } from "zod/v3";
 import type { Project } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest, HttpError, notFound } from "../errors.js";
+
+/**
+ * Rethrow what went wrong reading a multipart form as the caller's answer: over its size limit is `tooLarge()`, a broken
+ * form or one with too many parts is `invalid()` (or `tooManyParts()` when given). Errors already meant for the caller
+ * pass through, and anything else is rethrown as it was.
+ */
+export function multipartError(error: unknown, answers: { tooLarge: () => HttpError; invalid: () => HttpError; tooManyParts?: () => HttpError }): never {
+  if (error instanceof MaxFileSizeExceededError || error instanceof MaxTotalSizeExceededError) throw answers.tooLarge();
+  if (error instanceof MaxPartsExceededError) throw (answers.tooManyParts ?? answers.invalid)();
+  if (error instanceof MultipartParseError) throw answers.invalid();
+  throw error;
+}
 
 /** Whole timeline replacements and OTIO imports carry clips, keyframes and per-clip metadata. */
 export const TIMELINE_JSON_BYTES = 32 * 1024 * 1024;

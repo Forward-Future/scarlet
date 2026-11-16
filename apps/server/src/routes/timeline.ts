@@ -11,6 +11,7 @@ import { ensureHead, resolveTimeline } from "../services/timeline.js";
 import { jsonBody, requireProject, requireProjectHeader } from "./util.js";
 import { actorFor, logActivity, quote } from "../services/activity.js";
 import { applyChoicesWhenDone } from "../services/changes.js";
+import { buildHandoff } from "../services/handoff.js";
 
 export function timelineRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
@@ -124,6 +125,14 @@ export function timelineRoutes(ctx: Ctx) {
         "Content-Disposition": `attachment; filename="${safeName}-${timeline.version}.otio"`,
       },
     });
+  });
+
+  r.post("/projects/:id/versions/:v/handoff", async (c) => {
+    requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), c.req.param("id"));
+    const body = await jsonBody(c, z.object({ folder: z.string().min(1).max(4096) }));
+    const project = requireProject(ctx, c.req.param("id"));
+    const timeline = resolveTimeline(ctx, project, c.req.param("v"));
+    return c.json(await buildHandoff(ctx, project, timeline, body.folder, c.req.raw.signal));
   });
 
   return r;

@@ -55,7 +55,18 @@ describe("boundedRippleOps", () => {
     expect(placed[1]!.end).toBeCloseTo(60 - (12 - 301 / 30), 9);
   });
 
+  it("holds a later removal inside the selection when an earlier one rounded out to a whole frame", () => {
+    // 10.005–10.020 s is under a frame, and goes out as the frame 10.0–10.0333 s. 10.005 s on the edit as asked is then
+    // 9.9867 s, before the selection's start: it is placed at the start.
+    const placed = boundedRippleOps([ripple(10.005, 10.02), ripple(10.005, 10.5)], { start: 10, end: 20 }, 30, 60);
+    expect(placed[0]!.start).toBeCloseTo(10, 9);
+    expect(placed[0]!.end).toBeCloseTo(301 / 30, 9);
+    expect(placed[1]!.start).toBeCloseTo(10, 9);
+    expect(placed[1]!.end).toBeLessThanOrEqual(10.5);
+  });
+
   it("still refuses a removal outside the selection as it shortens", () => {
+    expect(() => boundedRippleOps([ripple(9.9, 10.5)], { start: 10, end: 20 }, 30, 60)).toThrow(/inside the selected timeline range/);
     expect(() => boundedRippleOps([ripple(1, 2), ripple(3, 9.5)], { start: 0, end: 10 }, 30, 20)).toThrow(/inside the selected timeline range/);
   });
 });

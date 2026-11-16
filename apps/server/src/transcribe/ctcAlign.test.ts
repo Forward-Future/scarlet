@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscriptSegment } from "@scarlet/timeline";
@@ -7,14 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ffmpeg from "../render/ffmpeg.js";
 import { AudioLane } from "../services/audioWork.js";
 import {
-  alignGroup, alignmentGroups, applyTimings, CLASSES, ctcAlign, FRAME_SAMPLES, framesFor, planChunks, SAMPLE_RATE,
-  SEPARATOR, stitchChunks, WILDCARD, wordLabels,
+  alignerHeard, alignGroup, alignmentGroups, applyTimings, CLASSES, ctcAlign, FRAME_SAMPLES, framesFor, planChunks, SAMPLE_RATE, SPANISH_CTC_LETTERS,
+  SEPARATOR, stitchChunks, unplacedGaps, WILDCARD, wordLabels,
 } from "./ctcAlign.js";
 import { LocalWhisperModel } from "./localModel.js";
 import { audioWorker } from "./audioWorker.js";
 import { EmissionFile } from "./emissions.js";
 import { readAcousticWindow, readCachedAcousticWords } from "./acousticWords.js";
-import { alignsLanguage, alignTranscript, alignWords, WordAligner, type AlignmentCheckpoint, type AlignRequest } from "./wordAlign.js";
+import { alignsLanguage, alignTranscript, alignWords, pcmWavHeader, WordAligner, type AlignmentCheckpoint, type AlignRequest } from "./wordAlign.js";
 
 const letters = "ETAONIHSRDLUMWCFGYPBVK'XJQZ";
 const id = (ch: string) => ch === "_" ? 0 : ch === "|" ? SEPARATOR : 5 + letters.indexOf(ch);
@@ -51,9 +51,15 @@ describe("text normalization", () => {
     expect(wordLabels("(laughs)")).toBeNull();
   });
 
-  it("accepts English language codes and names only", () => {
-    for (const language of [undefined, "", "en", "english", "EN-us"]) expect(alignsLanguage(language)).toBe(true);
-    for (const language of ["de", "german", "es", "zh"]) expect(alignsLanguage(language)).toBe(false);
+  it("uses the Spanish checkpoint's distinct letter IDs for accents, ñ and ü", () => {
+    expect(wordLabels("¿Mañana?", SPANISH_CTC_LETTERS)).toEqual([19, 7, 36, 7, 20, 7]);
+    expect(wordLabels("ÁÉÍÓÚÜ", SPANISH_CTC_LETTERS)).toEqual([33, 34, 35, 37, 39, 40]);
+    expect(wordLabels("niño", SPANISH_CTC_LETTERS)).not.toEqual(wordLabels("nino", SPANISH_CTC_LETTERS));
+  });
+
+  it("accepts English and Spanish language codes and names", () => {
+    for (const language of [undefined, "", "en", "english", "EN-us", "es", "ES-MX", "es_ES", "spanish", "Español"]) expect(alignsLanguage(language)).toBe(true);
+    for (const language of ["de", "german", "fr", "zh"]) expect(alignsLanguage(language)).toBe(false);
   });
 });
 
@@ -69,6 +75,13 @@ describe("CTC Viterbi", () => {
     expect(ctcAlign(emissions("ALLL"), 0, 4, spell("ALL"))).toEqual([[0, 0], [1, 1], [3, 3]]);
     expect(ctcAlign(emissions("ALL"), 0, 3, spell("ALL"))).toBeNull();
     expect(ctcAlign(emissions("A"), 0, 1, [])).toBeNull();
+  });
+
+  it("reads labels after the needed ones as optional context, and gives spans only to the needed ones", () => {
+    const lp = emissions("_HI_|_YOU_|___");
+    expect(ctcAlign(lp, 0, 14, spell("HI|YOU|"), CLASSES, 3)).toEqual([[1, 1], [2, 2], [4, 4]]);
+    // Context the window doesn't reach costs nothing: the path can stop after any of it.
+    expect(ctcAlign(lp, 0, 7, spell("HI|YOU|"), CLASSES, 3)).toEqual([[1, 1], [2, 2], [4, 4]]);
   });
 
   it("lets a wildcard absorb unspellable speech between spelled neighbors", () => {
@@ -103,6 +116,27 @@ describe("word timing", () => {
     expect(timings.map(t => !!t)).toEqual([true, false, false, true]);
     expect(alignGroup(em("_HI_|_TWENTY_|_", 0), [{ text: "20", start: 0, end: 0 }, { text: "30", start: 0, end: 0 }, { text: "hi", start: 0, end: 0 }], 0, 0.3))
       .toEqual([undefined, undefined, undefined]);
+  });
+
+  it("reads the next run's first words as context, so speech past the run's end isn't counted as its last word", () => {
+    // "it", then "right" inside the window's margin, with the model also hearing a word end through "right".
+    const frames = "_IT_|_RIGHT_|_";
+    const lp = emissions(frames, 0.6);
+    for (let t = 6; t <= 10; t++) lp[t * CLASSES + SEPARATOR] = Math.log(0.3);
+    const window = { logProbs: lp, frames: frames.length, origin: 0 };
+    const [alone] = alignGroup(window, [{ text: "it", start: 0, end: 0.1 }], 0, 0.28);
+    const [read] = alignGroup(window, [{ text: "it", start: 0, end: 0.1 }], 0, 0.28, undefined, [{ text: "right", start: 0.1, end: 0.2 }]);
+    expect(alone!.end).toBeGreaterThan(0.2);
+    expect(read!.end).toBeCloseTo(0.1);
+    expect(read!.score).toBeCloseTo(0.6);
+  });
+
+  it("gives no confidence to a word whose letters the path found seconds apart", () => {
+    const spread = `_T${"_".repeat(30)}HANK_|_`;
+    const [thank] = alignGroup(em(spread, 0), [{ text: "thank", start: 0, end: 1 }], 0, spread.length * 0.02);
+    expect(thank!.score).toBe(0);
+    const [spoken] = alignGroup(em("_THANK_|_", 0), [{ text: "thank", start: 0, end: 0.2 }], 0, 0.18);
+    expect(spoken!.score).toBeCloseTo(0.9);
   });
 
   it("scores words the audio does not contain near zero", () => {
@@ -173,6 +207,50 @@ describe("grouping and fallback", () => {
     expect(out[0]).toMatchObject({ start: 0.1, end: 3, text: "a b c" });
     expect(out[1]).toMatchObject({ start: 3, end: 6 });
     expect(out[1]!.words[1]).toEqual(expect.objectContaining({ text: "e" }));
+    // What the aligner heard goes with each word it tried: b scored too low, and e was never tried.
+    expect(out.flatMap(s => s.words).map(w => alignerHeard.get(w))).toEqual([true, false, true, true, undefined, true]);
+  });
+
+  describe("on the sound between placed words", () => {
+    // "one" and "three" placed; "two" not, with Whisper's estimate running 8.5 s over a pause.
+    const run = (words: Array<[string, number, number]>) => [segment(0, 10, [["one", 0, 0.5], ...words, ["three", 9, 9.5]])];
+    const placed = (n: number) => [{ start: 0, end: 0.5, score: 1 }, ...Array.from({ length: n }, () => undefined), { start: 9, end: 9.5, score: 1 }];
+    const times = (out: TranscriptSegment[]) => out[0]!.words.slice(1, -1).map(w => [w.text, w.start, w.end]);
+
+    it("names the stretch between the placed words, and none past the last placed word until alignment is done", () => {
+      expect(unplacedGaps(run([["two", 0.5, 9]]), placed(1))).toEqual([{ start: 0.5, end: 9 }]);
+      const open = [segment(0, 10, [["one", 0, 0.5], ["two", 0.5, 4]])];
+      expect(unplacedGaps(open, [{ start: 0, end: 0.5, score: 1 }], undefined, 0, false)).toEqual([]);
+      expect(unplacedGaps(open, [{ start: 0, end: 0.5, score: 1 }])).toEqual([{ start: 0.5, end: 4 }]);
+    });
+
+    it("keeps a word on the sound its estimate covers, the whole of it when the word is alone there", () => {
+      const out = applyTimings(run([["two", 0.5, 9]]), placed(1), undefined, 0, () => [{ start: 0.6, end: 1 }]);
+      expect(times(out)).toEqual([["two", 0.6, 1]]);
+      // Its estimate starts on a sliver of the word before: the stretch it covers most is its own.
+      const sliver = applyTimings(run([["two", 0.5, 9]]), placed(1), undefined, 0, () => [{ start: 0.5, end: 0.55 }, { start: 2, end: 4 }]);
+      expect(times(sliver)).toEqual([["two", 2, 4]]);
+    });
+
+    it("takes sound just past an estimate that falls short of it", () => {
+      const out = applyTimings(run([["two", 1, 1.3]]), placed(1), undefined, 0, () => [{ start: 1.45, end: 1.9 }]);
+      expect(times(out)).toEqual([["two", 1.45, 1.9]]);
+    });
+
+    it("shares a stretch of sound between the words on it, each from its estimate", () => {
+      const out = applyTimings(run([["two", 1, 1.4], ["too", 1.4, 2.5]]), placed(2), undefined, 0, () => [{ start: 0.9, end: 1.8 }]);
+      expect(times(out)).toEqual([["two", 0.9, 1.4], ["too", 1.4, 1.8]]);
+      // Moved later onto the sound it names, a word keeps its length.
+      const later = applyTimings(run([["two", 1, 1.3], ["too", 1.3, 2]]), placed(2), undefined, 0, () => [{ start: 1.45, end: 2.4 }]);
+      expect(times(later)).toEqual([["two", 1.45, 1.75], ["too", 1.75, 2.4]]);
+    });
+
+    it("gives a word over no sound no time, right after the word before, so it holds up no pause", () => {
+      const out = applyTimings(run([["two", 0.5, 9], ["...", 9, 9]]), placed(2), undefined, 0, () => []);
+      expect(times(out)).toEqual([["two", 0.5, 0.5], ["...", 9, 9]]);
+      // Nothing measured: the estimate is fitted between the placed words as before.
+      expect(times(applyTimings(run([["two", 0.4, 9.2]]), placed(1), undefined, 0, () => undefined))).toEqual([["two", 0.5, 9]]);
+    });
   });
 
   it("keeps a transcript untouched when nothing aligned, and clips runs at its open ends", () => {
@@ -193,6 +271,25 @@ describe("transcript alignment", () => {
   afterEach(async () => { vi.restoreAllMocks(); log.mockReset(); await rm(dir, { recursive: true, force: true }); });
   const ctx = () => ({ paths: { root: dir, tmp: dir }, log });
   const signal = new AbortController().signal;
+
+  it("selects Spanish for regional tags and names, shares its cached frames across pages and preserves text", async () => {
+    const wav = join(dir, "decoded.wav"), file = join(dir, "recording.bin");
+    const segments = [segment(0, 2, [["¿Mañana?", 1, 1], ["sí.", 1, 1]])];
+    const requests: AlignRequest[] = [];
+    vi.spyOn(audioWorker, "request").mockImplementation(async message => {
+      const request: AlignRequest = JSON.parse(readFileSync((message as { request: string }).request, "utf8"));
+      requests.push(request);
+      return [[{ start: .2, end: .8, score: .95 }, { start: 1.2, end: 1.4, score: .9 }]] as never;
+    });
+    const words = await alignTranscript(ctx(), { source: "source.mov", wav, language: "ES-MX", segments, signal, emissions: file });
+    expect(words[0]!.words).toEqual([{ text: "¿Mañana?", start: .2, end: .8 }, { text: "sí.", start: 1.2, end: 1.4 }]);
+    await alignWords(ctx(), wav, segments, { language: "spanish", signal, emissions: { file, offset: 5, duration: 2, wav: async () => wav } });
+    await alignWords(ctx(), wav, segments, { language: "en", signal, emissions: { file, wav: async () => wav } });
+    expect(requests.map(r => r.language)).toEqual(["es", "es", undefined]);
+    expect(requests[0]!.store!.file).toBe(requests[1]!.store!.file);
+    expect(requests[0]!.store!.file).not.toBe(requests[2]!.store!.file);
+    expect(requests[1]!.store!.offset).toBe(5);
+  });
 
   it("aligns in bounded worker turns and carries placed words into the next turn", async () => {
     const segments = Array.from({ length: 24 }, (_, k) => segment(30 * k, 30 * k + 25, [["hello", 30 * k + 1, 30 * k + 2], ["2024", 30 * k + 2, 30 * k + 3]]));
@@ -374,12 +471,37 @@ describe("transcript alignment", () => {
     const segments = [segment(0, 2, [["hola", 0, 1], ["amigo", 1, 2]])];
     const worker = vi.spyOn(audioWorker, "request").mockRejectedValue(new Error("worker crashed"));
     const decode = vi.spyOn(ffmpeg, "extractWav").mockResolvedValue();
-    expect(await alignTranscript(ctx(), { source: "a.mov", language: "es", segments, signal })).toBe(segments);
+    expect(await alignTranscript(ctx(), { source: "a.mov", language: "fr", segments, signal })).toBe(segments);
     expect(worker).not.toHaveBeenCalled();
     expect(await alignTranscript(ctx(), { source: "a.mov", language: "english", segments, signal })).toBe(segments);
     expect(decode).toHaveBeenCalledTimes(1);
     // The failure is the only line: nothing says words were placed.
     expect(log.mock.calls).toEqual([["[align] a.mov: worker crashed"]]);
+  });
+
+  it("reads the next run's first words with each run, and puts words it couldn't place on the recording's sound", async () => {
+    // A tone at 0-0.4 s and 3-3.4 s, digital silence between.
+    const wav = join(dir, "decoded.wav");
+    const pcm = Buffer.alloc(4 * SAMPLE_RATE * 2);
+    for (let i = 0; i < 4 * SAMPLE_RATE; i++) {
+      const t = i / SAMPLE_RATE;
+      if (t < 0.4 || (t >= 3 && t < 3.4)) pcm.writeInt16LE(Math.round(12000 * Math.sin(2 * Math.PI * 220 * t)), i * 2);
+    }
+    await writeFile(wav, Buffer.concat([pcmWavHeader(pcm.length), pcm]));
+    const segments = [segment(0, 3.4, [["hello", 0, 0.4], ["there", 0.4, 2.9], ["friend", 3, 3.4]]), segment(40, 41, [["later", 40, 40.5], ["on", 40.5, 41]])];
+    const requests: AlignRequest[] = [];
+    vi.spyOn(audioWorker, "request").mockImplementation(async message => {
+      const request: AlignRequest = JSON.parse(readFileSync((message as { request: string }).request, "utf8"));
+      requests.push(request);
+      return request.groups.map(g => g.words.map(w => w.text === "there" ? null : { start: w.start, end: w.end, score: 0.9 })) as never;
+    });
+    const out = await alignWords(ctx(), wav, segments, { language: "en", signal });
+    expect(requests[0]!.groups.map(g => g.next?.map(w => w.text))).toEqual([["later", "on"], undefined]);
+    // "there" covers none of the silence: at most the moment the voice detector holds on after the tone.
+    const [hello, there, friend] = out[0]!.words;
+    expect([hello, friend].map(w => [w!.start, w!.end])).toEqual([[0, 0.4], [3, 3.4]]);
+    expect(there!.start).toBe(0.4);
+    expect(there!.end).toBeLessThan(0.7);
   });
 
   it("stops when the transcription is cancelled", async () => {

@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { writePrivateFile } from "../private-files.js";
 import { briefInput, DEFAULT_STALL_MS, isQuestionTool, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
 import { earlyResult, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
-import { geminiUsage } from "./usage.js";
+import { geminiUsage, usageWithModel } from "./usage.js";
 import type { AgentUsage } from "@scarlet/shared";
 
 export interface GeminiParseState {
@@ -179,7 +179,7 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
   });
   const outcome = await handle.done;
 
-  const usage = st.usage && !st.usage.model && opts.model ? { ...st.usage, model: opts.model } : st.usage;
+  const usage = usageWithModel(st.usage, opts.model);
   const early = earlyResult(st, outcome, { usage });
   if (early) return early;
   const ok = !st.failed && (outcome.code === 0 || st.result?.status === "success");

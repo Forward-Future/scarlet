@@ -7,6 +7,7 @@ it.each([
   ["DELETE", "/projects/p1", "project.trash"],
   ["POST", "/projects/p1/versions/3/revert", "version.revert"],
   ["GET", "/projects/p1/versions/3/export.otio", "timeline.export_otio"],
+  ["POST", "/projects/p1/versions/3/handoff", "timeline.export_handoff"],
   ["POST", "/changes/c1/approve", "change.approve"],
   ["POST", "/projects/p1/media", "media.upload"],
   ["POST", "/projects/p1/media/import", "media.import"],

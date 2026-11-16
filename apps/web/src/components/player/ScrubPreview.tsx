@@ -17,9 +17,10 @@ function unload(video: HTMLVideoElement) {
 }
 
 /** Seek a paused copy of the playable file. Keep the decoder open between hovers. */
-function hoverMovie(video: HTMLVideoElement, lastFrame: number, useStill: () => void) {
+function hoverMovie(video: HTMLVideoElement, lastFrame: number, paint: (frame: HTMLVideoElement) => void, useStill: () => void) {
   let time: number | undefined;
   let requested: number | undefined;
+  let drawn: number | undefined;
   let timeout: number | undefined;
 
   function clearWait() {
@@ -29,25 +30,31 @@ function hoverMovie(video: HTMLVideoElement, lastFrame: number, useStill: () => 
   function fail() {
     if (!video.hasAttribute("src")) return;
     clearWait();
-    video.hidden = true;
     unload(video);
     if (time !== undefined) useStill();
   }
   function seek() {
     if (time === undefined || !video.hasAttribute("src")) return;
+    let ready = false;
     if (video.readyState >= 1 && Number.isFinite(video.duration) && video.duration > 0) {
       // The MP4's audio can extend past the final picture.
       const at = Math.floor(Math.min(time, lastFrame) * 4) / 4;
       if (at >= video.duration || (video.readyState >= 2 && !video.videoWidth)) { fail(); return; }
       const matches = Math.abs(video.currentTime - at) < 0.001;
-      video.hidden = video.seeking || !matches || video.readyState < 2;
-      // When a seek finishes, go straight to the latest pointer position.
-      if (!video.seeking && video.hidden && requested !== at) {
+      const decoded = !video.seeking && video.readyState >= 2;
+      ready = decoded && matches;
+      // A completed seek is useful even if the pointer has moved again. Never draw the
+      // decoder's empty surface, or a frame left over from a previous hover session.
+      if (decoded && (matches || requested === video.currentTime) && drawn !== video.currentTime) {
+        paint(video);
+        drawn = video.currentTime;
+      }
+      if (!video.seeking && !ready && requested !== at) {
         requested = at;
         video.currentTime = at;
       }
     }
-    if (video.hidden) timeout ??= window.setTimeout(fail, 500);
+    if (!ready) timeout ??= window.setTimeout(fail, 500);
     else clearWait();
   }
   function progress() { clearWait(); seek(); }
@@ -57,7 +64,7 @@ function hoverMovie(video: HTMLVideoElement, lastFrame: number, useStill: () => 
   video.addEventListener("error", fail);
   return {
     show(at: number) { time = at; seek(); return video.hasAttribute("src"); },
-    hide() { time = undefined; video.hidden = true; clearWait(); },
+    hide() { time = requested = drawn = undefined; clearWait(); },
     dispose() {
       video.removeEventListener("loadedmetadata", progress);
       video.removeEventListener("loadeddata", progress);
@@ -68,19 +75,22 @@ function hoverMovie(video: HTMLVideoElement, lastFrame: number, useStill: () => 
   };
 }
 
-export function ScrubPreview({ start = 0, duration, pictureAspect = 16 / 9, frameAt, hoverVideo, note, children }: {
+export function ScrubPreview({ start = 0, duration, pictureAspect = 16 / 9, frameAt, hoverVideo, suspended, note, pin, children }: {
   start?: number;
   duration: number;
   pictureAspect?: number;
   frameAt(time: number, exact?: boolean): string | undefined;
   hoverVideo?: HoverVideo;
+  suspended?: boolean;
   /** What the pointer is over, shown under the frame in the same card. */
   note?: ReactNode;
+  /** A time to show instead of the one under the pointer, as a marker's own while the pointer is on it. */
+  pin?: number;
   children: ReactNode;
 }) {
   const bar = useRef<HTMLDivElement>(null);
   const bubble = useRef<HTMLDivElement>(null);
-  const still = useRef<HTMLImageElement>(null);
+  const picture = useRef<HTMLCanvasElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const label = useRef<HTMLSpanElement>(null);
   const file = hoverVideo?.url, lastFrame = hoverVideo?.lastFrame;
@@ -101,16 +111,34 @@ export function ScrubPreview({ start = 0, duration, pictureAspect = 16 / 9, fram
   // Scarlet works. The bubble reads the latest one without being set up again: that would drop a drag in progress.
   const frameSource = useRef(frameAt);
   useLayoutEffect(() => { frameSource.current = frameAt; }, [frameAt]);
+  // The bubble shows a pinned time from the next paint, without being set up again.
+  const pinned = useRef(pin);
+  const repaint = useRef<() => void>(undefined);
+  useLayoutEffect(() => { pinned.current = pin; repaint.current?.(); }, [pin]);
   useLayoutEffect(() => {
-    if (!(duration > 0 && Number.isFinite(duration))) return;
-    const track = bar.current!, tip = bubble.current!, img = still.current!, stamp = label.current!;
+    if (suspended || !(duration > 0 && Number.isFinite(duration))) return;
+    const track = bar.current!, tip = bubble.current!, canvas = picture.current!, stamp = label.current!;
     let x = 0;
     let dragId: number | undefined;
     let time: number | undefined;
     let wanted: string | undefined;
     let pending: { url: string; controller: AbortController } | undefined;
     let retarget: number | undefined;
-    let displayed: { url: string; objectUrl: string; ready: boolean } | undefined;
+    let displayed: string | undefined;
+    const context = canvas.getContext("2d");
+    // Keep the last decoded pixels on screen while either source seeks the next frame.
+    function draw(frame: HTMLVideoElement | HTMLImageElement) {
+      const width = frame instanceof HTMLVideoElement ? frame.videoWidth : frame.naturalWidth;
+      const height = frame instanceof HTMLVideoElement ? frame.videoHeight : frame.naturalHeight;
+      if (!context || !width || !height) return;
+      const scale = Math.min(1, WIDTH * 2 / Math.max(width, height));
+      const w = Math.max(1, Math.round(width * scale));
+      const h = Math.max(1, Math.round(height * scale));
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+      context.drawImage(frame, 0, 0, w, h);
+      canvas.hidden = false;
+    }
     let paint = 0;
 
     // A cache miss decodes a frame on the engine. Keep one request in flight
@@ -119,32 +147,44 @@ export function ScrubPreview({ start = 0, duration, pictureAspect = 16 / 9, fram
       window.clearTimeout(retarget);
       const request = new AbortController();
       pending = { url, controller: request };
+      let objectUrl: string | undefined;
       try {
         const response = await fetch(url, { signal: request.signal });
         if (!response.ok) throw Error("Unavailable preview frame");
         const bytes = await response.blob();
-        if (request.signal.aborted || wanted !== url) return;
-        if (displayed) URL.revokeObjectURL(displayed.objectUrl);
-        displayed = { url, objectUrl: URL.createObjectURL(bytes), ready: false };
-        img.src = displayed.objectUrl;
+        if (request.signal.aborted) return;
+        objectUrl = URL.createObjectURL(bytes);
+        const image = new Image();
+        image.src = objectUrl;
+        await image.decode();
+        if (request.signal.aborted || (dragId !== undefined && wanted !== url)) return;
+        draw(image);
+        displayed = url;
       } catch {
-        if (!request.signal.aborted) img.hidden = true;
+        if (!request.signal.aborted && wanted === url) {
+          canvas.hidden = true;
+          displayed = undefined;
+        }
       } finally {
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
         if (pending?.controller === request) {
           window.clearTimeout(retarget);
           pending = undefined;
-          if (wanted && wanted !== url && wanted !== displayed?.url) void fetchStill(wanted);
+          if (wanted && wanted !== url && wanted !== displayed) void fetchStill(wanted);
         }
       }
     }
     function sample() {
       if (time === undefined) return;
       const url = interactiveFrameUrl(frameSource.current(time, dragId !== undefined), WIDTH * 2);
+      if (!url) {
+        canvas.hidden = true;
+        displayed = undefined;
+      }
       if (wanted === url) return;
       wanted = url;
       window.clearTimeout(retarget);
-      img.hidden = !displayed?.ready || url !== displayed.url;
-      if (!url || displayed?.url === url) {
+      if (!url || displayed === url) {
         pending?.controller.abort();
         pending = undefined;
       } else if (!pending) void fetchStill(url);
@@ -155,17 +195,13 @@ export function ScrubPreview({ start = 0, duration, pictureAspect = 16 / 9, fram
         }, RETARGET_MS);
       }
     }
-    const movie = video.current && lastFrame !== undefined ? hoverMovie(video.current, lastFrame, sample) : undefined;
-    function settled(event: Event) {
-      if (displayed) displayed.ready = event.type === "load";
-      img.hidden = !displayed?.ready || wanted !== displayed.url;
-    }
+    const movie = video.current && lastFrame !== undefined ? hoverMovie(video.current, lastFrame, draw, sample) : undefined;
     function update() {
       paint = 0;
       const rect = track.getBoundingClientRect();
       if (!rect.width) return;
       const offset = Math.max(0, Math.min(rect.width, x - rect.left));
-      time = start + duration * (offset / rect.width);
+      time = dragId === undefined && pinned.current !== undefined ? pinned.current : start + duration * (offset / rect.width);
       const text = playbackClock(time);
       if (stamp.textContent !== text) stamp.textContent = text;
       tip.hidden = false;
@@ -190,7 +226,8 @@ export function ScrubPreview({ start = 0, duration, pictureAspect = 16 / 9, fram
       pending = undefined;
       time = wanted = undefined;
       movie?.hide();
-      tip.hidden = img.hidden = true;
+      displayed = undefined;
+      tip.hidden = canvas.hidden = true;
     }
     function down(event: PointerEvent) {
       if (!event.isPrimary || event.button !== 0) return;
@@ -199,6 +236,8 @@ export function ScrubPreview({ start = 0, duration, pictureAspect = 16 / 9, fram
       move(event);
     }
     function leave() { if (dragId === undefined) hide(); }
+    // Only while the bubble is up: a pin that comes or goes then shows at once.
+    repaint.current = () => { if (!tip.hidden && !paint) paint = requestAnimationFrame(update); };
     function finish(event: PointerEvent) {
       if (event.pointerId !== dragId) return;
       dragId = undefined;
@@ -215,9 +254,8 @@ export function ScrubPreview({ start = 0, duration, pictureAspect = 16 / 9, fram
     // timeline, it would leave the drag on: the bubble would stay up and ask for an exact frame on every move.
     window.addEventListener("pointerup", finish);
     window.addEventListener("pointercancel", finish);
-    img.addEventListener("load", settled);
-    img.addEventListener("error", settled);
     return () => {
+      repaint.current = undefined;
       hide();
       movie?.dispose();
       track.removeEventListener("pointermove", move);
@@ -229,19 +267,15 @@ export function ScrubPreview({ start = 0, duration, pictureAspect = 16 / 9, fram
       track.removeEventListener("lostpointercapture", finish);
       window.removeEventListener("pointerup", finish);
       window.removeEventListener("pointercancel", finish);
-      img.removeEventListener("load", settled);
-      img.removeEventListener("error", settled);
-      img.removeAttribute("src");
-      if (displayed) URL.revokeObjectURL(displayed.objectUrl);
     };
-  }, [start, duration, file, lastFrame]);
+  }, [start, duration, file, lastFrame, suspended]);
 
   return <div ref={bar} className="relative">
     {children}
     <div ref={bubble} hidden aria-hidden="true" style={{ "--scrub-picture-width": pictureWidth, width: note ? WIDTH : undefined } as CSSProperties}
       className="scrub-preview pointer-events-none absolute bottom-full left-0 z-10 max-w-full overflow-hidden rounded-md border border-line bg-panel text-center shadow-lg">
-      {file && <video ref={video} hidden muted playsInline preload="metadata" style={{ aspectRatio: pictureAspect }} className="mx-auto max-w-full bg-black object-contain" />}
-      <img ref={still} hidden alt="" decoding="async" style={{ aspectRatio: pictureAspect }} className="mx-auto max-w-full bg-black object-contain" />
+      {file && <video ref={video} hidden muted playsInline preload="metadata" />}
+      <canvas ref={picture} hidden style={{ aspectRatio: pictureAspect }} className="mx-auto max-w-full bg-black object-contain" />
       <span ref={label} className="block py-0.5 font-mono text-xs tnum" />
       {note}
     </div>

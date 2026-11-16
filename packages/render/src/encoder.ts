@@ -116,7 +116,11 @@ interface RenderEncoderOptions {
   onProgress?: (fraction: number) => void;
 }
 
-/** Retry an export as a whole so remuxing can never mix segments from different encoders. */
+/**
+ * Retry a render as a whole with the next encoder, so remuxing can never mix segments from different encoders. A
+ * preview falls back as an export does: a hardware encoder that fails retries on the next one and finally on x264,
+ * which also reads the footage with the software decoder.
+ */
 export async function withRenderEncoder<O extends RenderEncoderOptions, R extends { warnings: string[] }>(
   format: VideoFormat, opts: O, render: (attempt: O & { videoEncoder: VideoEncoder }) => Promise<R>,
 ): Promise<R> {
@@ -141,16 +145,16 @@ export async function withRenderEncoder<O extends RenderEncoderOptions, R extend
       result.warnings = [...warnings, ...result.warnings];
       return result;
     } catch (error) {
-      if (!exporting || opts.signal?.aborted || !hardwareEncoderFailure(error, encoding.name)) throw error;
+      if (opts.signal?.aborted || !hardwareEncoderFailure(error, encoding.name)) throw error;
       if ((concurrency ?? 1) > 1 && busyEncoder(error)) {
         concurrency = 1;
-        warn(`${encoding.name} could not open parallel sessions (${failureReason(error)}); retried the export one section at a time.`);
+        warn(`${encoding.name} could not open parallel sessions (${failureReason(error)}); retried the ${exporting ? "export" : "preview"} one section at a time.`);
       } else {
         const previous = encoding.name;
         failed.add(previous);
         encoding = await select();
         concurrency = opts.concurrency;
-        warn(`${previous} could not encode this export (${failureReason(error)}); retried with ${encoding.name}.`);
+        warn(`${previous} could not encode this ${exporting ? "export" : "preview"} (${failureReason(error)}); retried with ${encoding.name}.`);
       }
     }
   }

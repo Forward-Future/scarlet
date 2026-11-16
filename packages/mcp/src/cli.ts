@@ -78,7 +78,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   const opts = parseArgs(argv);
   const client = new ScarletClient({ baseUrl: opts.server, token: opts.token });
-  const [{ settings }, assignment] = await Promise.all([
+  const [, assignment] = await Promise.all([
     client.settings(), opts.task ? client.forProject(opts.project).task(opts.task) : undefined,
   ]);
   const task = assignment?.task;
@@ -88,7 +88,6 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       task.startedAt !== taskStartedAt || !["claimed", "running"].includes(task.state)))
     throw new Error("This task attempt is no longer active.");
   const server = createScarletMcpServer(client, {
-    editingTools: settings.editingTools,
     projectId: opts.project,
     taskId: opts.task,
     taskStartedAt,

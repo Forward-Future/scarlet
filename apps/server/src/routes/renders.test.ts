@@ -16,10 +16,18 @@ let workspace: ScarletApp;
 let project: Project;
 let version: string;
 let fails = false;
+// The loudness measurement fails when a test says so, as an ffmpeg that can't read the sound would.
+const loudness = vi.hoisted(() => ({ fails: false }));
+vi.mock("../render/loudness.js", async real => {
+  const actual = await real<typeof import("../render/loudness.js")>();
+  return { ...actual, measuredLoudness: (...args: Parameters<typeof actual.measuredLoudness>) =>
+    loudness.fails ? Promise.reject(new Error("ffmpeg ebur128 exited with 1")) : actual.measuredLoudness(...args) };
+});
 
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "scarlet-render-routes-test-"));
   fails = false;
+  loudness.fails = false;
   workspace = createApp({
     dataDir: directory, skillsSeedDir: join(directory, "empty-seed"), env: {}, log: () => {},
     render: {
@@ -167,6 +175,16 @@ it("measures a finished render's file when asked to, and only then", async () =>
   expect(Object.keys(fileInfo!).sort()).toEqual(["audioCodec", "bitrate", "channels", "duration", "fps", "hasAudio", "height", "loudness", "sampleRate", "videoCodec", "width"]);
   // The sound as rendered, with its gain and effects, measured the way media_profile measures a source.
   expect(Object.keys(fileInfo!.loudness!).sort()).toEqual(["integratedLufs", "loudnessRangeLu", "truePeakDbtp"]);
+});
+
+it("keeps a finished render's figures when its loudness can't be measured, and says why it's missing", async () => {
+  const { id } = section();
+  await settle();
+  loudness.fails = true;
+  const { status, body: { fileInfo } } = await read(`/renders/${id}?inspectFile=true`);
+  expect(status).toBe(200);
+  expect(fileInfo).toMatchObject({ width: 160, height: 90, fps: 25, hasAudio: true, loudnessUnavailable: "ffmpeg ebur128 exited with 1" });
+  expect(fileInfo).not.toHaveProperty("loudness");
 });
 
 it("has no file to measure for a render that failed, and says so when a finished one's file is gone", async () => {

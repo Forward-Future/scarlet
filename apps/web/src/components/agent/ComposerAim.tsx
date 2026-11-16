@@ -46,9 +46,11 @@ export function ComposerAim({ items, disabled, disabledReason }: { items: AimIte
     const now = new Set(items.map(i => i.key));
     const before = known.current;
     known.current = now;
-    // Only something added shows: stepping from one cut to the next swaps one line for another, and stays folded.
+    // Only something added shows, also the first thing aimed in an empty box: stepping from one cut to the next swaps
+    // one line for another, and stays folded.
     const added = before && now.size > before.size && items.find(i => !before.has(i.key));
     if (added) setArrived(added.key);
+    else if (!now.size) { setArrived(undefined); setPinned(false); setHovered(false); }
   }, [keys]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!arrived) return;
@@ -63,15 +65,39 @@ export function ComposerAim({ items, disabled, disabledReason }: { items: AimIte
   const open = hovered || pinned || !!arrived;
   useEffect(() => { setLit(hovered || pinned); }, [hovered, pinned, setLit]);
   useEffect(() => () => { clearTimeout(leave.current); setLit(false); }, [setLit]);
+  const close = () => { clearTimeout(leave.current); setPinned(false); setHovered(false); setArrived(undefined); };
+  // Opened by a click or by focus, the card stays until a press elsewhere or Esc, wherever the keyboard is: a click
+  // focuses the icon in some windows (WebView2, WebKitGTK) and not in others (WKWebView), and opens it alike in each.
+  const own = useRef<HTMLSpanElement>(null);
+  const held = pinned || hovered;
+  useEffect(() => {
+    if (!held) return;
+    const press = (e: PointerEvent) => { if (!own.current?.contains(e.target as Node | null)) { setPinned(false); setHovered(false); } };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+      if (own.current?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+    };
+    document.addEventListener("pointerdown", press, true);
+    window.addEventListener("keydown", key, true);
+    return () => {
+      document.removeEventListener("pointerdown", press, true);
+      window.removeEventListener("keydown", key, true);
+    };
+  }, [held]); // eslint-disable-line react-hooks/exhaustive-deps
   const enter = () => { clearTimeout(leave.current); setHovered(true); };
   const exit = () => { clearTimeout(leave.current); leave.current = window.setTimeout(() => setHovered(false), LEAVE_MS); };
+  // Nothing aimed: the box has no icon, but this stays mounted so the first thing aimed arrives.
+  if (!items.length) return null;
   const summary = items.map(i => i.name).join(" and ");
-  return <span className="composer-aim" onPointerEnter={enter} onPointerLeave={exit}
+  return <span ref={own} className="composer-aim" onPointerEnter={enter} onPointerLeave={exit}
     onFocus={() => setPinned(true)}
     onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setPinned(false); }}
-    onKeyDown={e => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); setPinned(false); setHovered(false); setArrived(undefined); (e.target as HTMLElement).blur(); } }}>
+    onKeyDown={e => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); close(); (e.target as HTMLElement).blur(); } }}>
     <button type="button" className={pulse ? "composer-aim-icon is-pulsing" : "composer-aim-icon"} aria-label={`About ${summary}`}
-      aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setPinned(v => !v)}>
+      aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setPinned(true)}>
       <EditPoint />
     </button>
     {open && <span id={id} className="composer-aim-card" role="group" aria-label="What this message is about">

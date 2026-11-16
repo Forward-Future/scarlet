@@ -122,6 +122,7 @@ pub fn run() {
             commands::keep_video_export,
             commands::discard_video_export,
             commands::finish_video_export,
+            commands::finish_folder_export,
             commands::reveal_path,
             commands::pick_files,
             commands::desktop_log,

@@ -244,6 +244,13 @@ pub struct CodexCommand {
 
 #[allow(clippy::too_many_arguments)]
 pub fn build_codex_command(model: Option<&str>, effort: Option<&str>, service_tier: Option<&str>, system_prompt: &str, instruction: &str, plan: bool, mcp: &McpSpec, cwd: &Path, bin: &str, tmp_dir: &Path) -> CodexCommand {
+    // Seatbelt re-executes Codex to load AGENTS.md. Launch the real file and
+    // grant only that file: its Homebrew symlink is not covered by the grant.
+    #[cfg(target_os = "macos")]
+    let executable = std::fs::canonicalize(bin).ok().map(|path| path.to_string_lossy().into_owned());
+    #[cfg(not(target_os = "macos"))]
+    let executable: Option<String> = None;
+    let executable_read = executable.as_ref().map(|path| format!(",{}=\"read\"", toml_string(path))).unwrap_or_default();
     let last_message_path = tmp_dir.join("last-message.md");
     // Forward slashes keep the TOML readable and work for node on Windows.
     let to_toml = |p: &str| p.replace('\\', "/");
@@ -271,7 +278,7 @@ pub fn build_codex_command(model: Option<&str>, effort: Option<&str>, service_ti
         // editor's notes, their earlier answers and their skills, so on a long timeline those would be cut off.
         "-c".into(), "project_doc_max_bytes=4194304".into(),
         "-c".into(), r#"default_permissions="scarlet""#.into(),
-        "-c".into(), r#"permissions.scarlet.filesystem={":root"="deny",":minimal"="read",":workspace_roots"={"."="write"}}"#.into(),
+        "-c".into(), format!("permissions.scarlet.filesystem={{\":root\"=\"deny\",\":minimal\"=\"read\",\":workspace_roots\"={{\".\"=\"write\"}}{executable_read}}}"),
         "-c".into(), "permissions.scarlet.network.enabled=false".into(),
         "-c".into(), r#"mcp_servers.scarlet.default_tools_approval_mode="approve""#.into(),
         "-c".into(), "mcp_servers.scarlet.required=true".into(),
@@ -306,7 +313,7 @@ pub fn build_codex_command(model: Option<&str>, effort: Option<&str>, service_ti
     args.push("-".to_string());
     let mut files = BTreeMap::new();
     files.insert(cwd.join("AGENTS.md"), system_prompt.to_string());
-    CodexCommand { cmd: RunnerCommand { file: bin.to_string(), args, stdin: Some(instruction.to_string()), files }, last_message_path }
+    CodexCommand { cmd: RunnerCommand { file: executable.unwrap_or_else(|| bin.to_string()), args, stdin: Some(instruction.to_string()), files }, last_message_path }
 }
 
 pub async fn run_codex(mut opts: RunOptions) -> RunResult {
@@ -483,6 +490,22 @@ mod tests {
         assert_eq!(evs[2].text, "[x] Step 1\n[ ] Step 2\n[ ] Step 3");
         // A list Scarlet can't read is passed over.
         assert!(feed(&[r#"{"type":"item.updated","item":{"id":"item_1","type":"todo_list"}}"#], &mut st).is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn grants_only_the_resolved_codex_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("codex \"native\"");
+        let link = dir.path().join("codex");
+        std::fs::write(&target, "fixture").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let resolved = std::fs::canonicalize(&target).unwrap().to_string_lossy().into_owned();
+        let cmd = build_codex_command(None, None, None, "SYS", "x", false, &mcp(), Path::new("/w"), link.to_str().unwrap(), Path::new("/w/.scarlet")).cmd;
+        assert_eq!(cmd.file, resolved);
+        assert!(cmd.args.contains(&format!("permissions.scarlet.filesystem={{\":root\"=\"deny\",\":minimal\"=\"read\",\":workspace_roots\"={{\".\"=\"write\"}},{path}=\"read\"}}", path = toml_string(&resolved))));
+        assert!(cmd.args.contains(&"permissions.scarlet.network.enabled=false".to_string()));
+        assert!(!cmd.args.iter().any(|arg| arg.contains("danger-full-access")));
     }
 
     #[test]

@@ -14,6 +14,8 @@ export interface AgentPick {
 export interface AgentContext {
   /** Source-media time when a media ID is present, or cut time otherwise. */
   mediaId?: string;
+  /** A point attached by a timestamp in the draft. It follows the words until they change or are removed. */
+  fromMessage?: boolean;
   version?: string;
   time: number;
   end?: number;
@@ -238,11 +240,11 @@ export const useUiStore = create<UiState>((set, get) => ({
     set({ agent });
   },
 
-  showRunTokens: (() => { try { return localStorage.getItem(RUN_TOKENS_KEY) === "shown"; } catch { return false; } })(),
+  showRunTokens: (() => { try { return localStorage.getItem(RUN_TOKENS_KEY) !== "hidden"; } catch { return true; } })(),
   setShowRunTokens: (v) => {
     try {
-      if (v) localStorage.setItem(RUN_TOKENS_KEY, "shown");
-      else localStorage.removeItem(RUN_TOKENS_KEY);
+      if (v) localStorage.removeItem(RUN_TOKENS_KEY);
+      else localStorage.setItem(RUN_TOKENS_KEY, "hidden");
     } catch { /* Keep the choice for this session. */ }
     set({ showRunTokens: v });
   },

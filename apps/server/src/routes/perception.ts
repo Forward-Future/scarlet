@@ -1,53 +1,14 @@
-import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
-import { fileInDirectoryAsync, LOCAL_MEDIA_INPUT } from "@scarlet/render";
-import { Hono } from "hono";
+import { fileInDirectoryAsync } from "@scarlet/render";
+import { Hono, type Context } from "hono";
+import type { MediaAsset } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
-import { badRequest, notFound } from "../errors.js";
-import { FFMPEG, ffmpegPosition } from "../render/ffmpeg.js";
-import { AnalysisCache } from "../services/analysisCache.js";
+import { badRequest, conflict, HttpError, notFound } from "../errors.js";
+import { measuredLoudness } from "../render/loudness.js";
+import { faces } from "../services/faces.js";
 import { screenText } from "../services/screenText.js";
 import { optionalNumberParam, requireMedia } from "./util.js";
-
-interface Loudness { integratedLufs: number | null; loudnessRangeLu: number | null; truePeakDbtp: number | null }
-
-/** Read ffmpeg's ebur128 summary. Silence reports -inf, which JSON cannot carry, so it becomes null. */
-export function parseEbur128(stderr: string): Loudness {
-  const summary = stderr.slice(stderr.lastIndexOf("Summary:"));
-  const value = (re: RegExp) => {
-    const m = re.exec(summary);
-    const n = m ? Number(m[1]) : NaN;
-    return Number.isFinite(n) ? n : null;
-  };
-  return {
-    integratedLufs: value(/\bI:\s+(-?[\d.]+|-inf)\s+LUFS/),
-    loudnessRangeLu: value(/\bLRA:\s+(-?[\d.]+)\s+LU\b/),
-    truePeakDbtp: value(/\bPeak:\s+(-?[\d.]+|-inf)\s+dBFS/),
-  };
-}
-
-export function measureLoudness(file: string, from: number | undefined, to: number | undefined, signal: AbortSignal): Promise<Loudness> {
-  const args = ["-hide_banner", "-nostats", "-nostdin"];
-  if (from !== undefined) args.push("-ss", ffmpegPosition(from));
-  if (to !== undefined) args.push("-t", String(to - (from ?? 0)));
-  args.push(...LOCAL_MEDIA_INPUT, "-i", file, "-vn", "-map", "0:a:0", "-af", "ebur128=peak=true:framelog=verbose", "-f", "null", "-");
-  return new Promise((resolve, reject) => {
-    signal.throwIfAborted();
-    const child = spawn(FFMPEG, args, { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
-    let stderr = "";
-    const onAbort = () => child.kill("SIGKILL");
-    signal.addEventListener("abort", onAbort, { once: true });
-    child.stderr.on("data", (d: Buffer) => { stderr = (stderr + d.toString("utf8")).slice(-8192); });
-    child.on("error", reject);
-    child.on("close", code => {
-      signal.removeEventListener("abort", onAbort);
-      if (signal.aborted) reject(signal.reason);
-      else if (code !== 0) reject(new Error(`ffmpeg ebur128 exited with ${code}: ${stderr.slice(-400)}`));
-      else resolve(parseEbur128(stderr));
-    });
-  });
-}
 
 function requireSourceRange(from: number | undefined, to: number | undefined) {
   if ((from !== undefined && from < 0) || (from !== undefined && to !== undefined && to <= from)) {
@@ -58,10 +19,6 @@ function requireSourceRange(from: number | undefined, to: number | undefined) {
 /** Read-only measurements the agent tools need beyond waveforms and transcripts. */
 export function perceptionRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
-  // The cache also charges for each key, and this one carries the file's path and fingerprint:
-  // about 600 bytes a result. Keep a few hundred; a budget under one entry keeps none.
-  const loudness = new AnalysisCache<Loudness>(() => 24, 256 * 1024, 1);
-
   // Integrated loudness (EBU R128) of a source's first audio stream, optionally for a range.
   r.get("/projects/:projectId/media/:mediaId/loudness", async c => {
     const media = requireMedia(ctx, c.req.param("mediaId"), c.req.param("projectId"));
@@ -71,27 +28,48 @@ export function perceptionRoutes(ctx: Ctx) {
     const file = await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path);
     if (!file) throw notFound("source file");
     const info = await stat(file);
-    const key = JSON.stringify(["ebur128", file, media.hash, info.size, info.ctimeMs, info.mtimeMs, from, to]);
     // A measurement someone asked for, such as a running edit's, isn't stopped by a pause of the project's media work.
-    const result = await loudness.get(key, signal => ctx.track(measureLoudness(file, from, to, AbortSignal.any([signal, ctx.projectSignal(media.projectId)]))));
+    const result = await measuredLoudness(ctx, file, [media.hash, info.size, info.ctimeMs, info.mtimeMs], { from, to,
+      stop: ctx.projectSignal(media.projectId) });
     return c.json({ mediaId: media.id, ...(from !== undefined && { from }), ...(to !== undefined && { to }), ...result });
   });
 
-  // The text on screen in a range of a video, read once and kept. A range not read yet is read now: the answer waits up
-  // to `wait` seconds (default 30) and says how much it has read, and the reading carries on for the next ask.
-  r.get("/projects/:projectId/media/:mediaId/screen-text", async c => {
-    const media = requireMedia(ctx, c.req.param("mediaId"), c.req.param("projectId"));
+  /**
+   * A reading of a video's picture over a range. What the caller asked wrong is a 400 and a recording not ready to read
+   * is a 409; a caller that went away gets 499. Anything else is the engine's fault and goes to the error handler as a 500.
+   */
+  const readPicture = <T>(name: string, read: (media: MediaAsset & { projectId: string }, range: { from?: number; to?: number },
+    opts: { waitMs: number; signal: AbortSignal }, c: Context<AppEnv>) => Promise<T>) => async (c: Context<AppEnv>) => {
+    const media = requireMedia(ctx, c.req.param("mediaId") ?? "", c.req.param("projectId") ?? "");
     if (media.kind !== "video") throw badRequest("no_picture", "Only a video has a picture to read.");
-    const number = (name: string) => optionalNumberParam(c.req.query(name), name);
+    const number = (key: string) => optionalNumberParam(c.req.query(key), key);
     const from = number("from"), to = number("to"), wait = number("wait");
     requireSourceRange(from, to);
-    try {
-      return c.json(await screenText(ctx, media, { from, to }, { query: c.req.query("q") || undefined,
-        waitMs: Math.max(0, Math.min(60, wait ?? 30)) * 1000, signal: c.req.raw.signal }));
-    } catch (error) {
-      throw badRequest("screen_text", error instanceof Error ? error.message : String(error));
+    // The reading checks these too: asked here first, they are answered for what they are rather than as a fault.
+    const duration = media.duration;
+    if (!duration) throw conflict("not_ready", "The recording is still being prepared. Ask again in a moment.");
+    if (!await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path)) throw notFound("source file");
+    if (!(Math.min(duration, to ?? duration) > Math.max(0, from ?? 0))) {
+      throw badRequest("bad_range", `Choose a range inside the recording's ${duration.toFixed(2)} s.`);
     }
-  });
+    const signal = c.req.raw.signal;
+    try {
+      const result = await read(media, { from, to }, { waitMs: Math.max(0, Math.min(60, wait ?? 30)) * 1000, signal }, c);
+      return signal.aborted ? new Response(null, { status: 499 }) : c.json(result as object);
+    } catch (error) {
+      if (signal.aborted) return new Response(null, { status: 499 });
+      if (error instanceof HttpError) throw error;
+      throw new Error(`${name}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+  };
+
+  // The text on screen in a range of a video, read once and kept. A range not read yet is read now: the answer waits up
+  // to `wait` seconds (default 30) and says how much it has read, and the reading carries on for the next ask.
+  r.get("/projects/:projectId/media/:mediaId/screen-text", readPicture("screen text", (media, range, opts, c) =>
+    screenText(ctx, media, range, { ...opts, query: c.req.query("q") || undefined })));
+
+  // Where the faces are in a range of a video, found once and kept. A range not read yet is read now, as screen text is.
+  r.get("/projects/:projectId/media/:mediaId/faces", readPicture("faces", (media, range, opts) => faces(ctx, media, range, opts)));
 
   return r;
 }

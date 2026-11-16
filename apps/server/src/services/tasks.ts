@@ -1,4 +1,4 @@
-import { agentCapabilities, isAsideTask, isLearningCheck, isSkillEdit, planText, reviewItemPath, splitAgentTarget, TaskPlan, dialogueCommand, taskDialogueOperation, taskRunKind } from "@scarlet/shared";
+import { agentCapabilities, isAsideTask, isLearningCheck, isSkillEdit, planText, reviewItemPath, splitAgentTarget, TaskPlan, dialogueCommand, skillCommands, taskDialogueOperation, taskRunKind } from "@scarlet/shared";
 import { AgentId, type AgentHost, type CompleteTaskRequest, type Task, type TaskEvent, type TaskKind, type TaskPrompt, type User } from "@scarlet/shared";
 import { buildSystemPrompt } from "@scarlet/mcp/prompt";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ import { restoreUnreplacedProposal } from "./revisionState.js";
 import { assistantSkills } from "./skills.js";
 import { applyChoicesWhenDone, changeDiff, cutRevisionReference, passToRevise, retireStaleSaves } from "./changes.js";
 import { resolveTimeline } from "./timeline.js";
+import { runAttemptIds } from "./runAttempts.js";
 import { learningCheckContext, skillEditEnded, startLearningCheck } from "./learnings.js";
 
 /** States a task never leaves. */
@@ -72,8 +73,8 @@ export function stagesCut(kind: TaskKind, change: Change): boolean {
 }
 
 function requestedDialogue(ctx: Ctx, text: string) {
-  if (!dialogueCommand(text)) return;
-  return dialogueCommand(text, ctx.repos.skills.select("name IN ('dialogue-pass','first-cut-dialogue','tighten-pauses-here')"));
+  const names = skillCommands(text).map(command => command.name).filter(Boolean);
+  if (names.length) return dialogueCommand(text, ctx.repos.skills.select("name IN (SELECT value FROM json_each(?))", [JSON.stringify(names)]));
 }
 
 /** Upgrade old requests and their answers once, before a host or the renderer reads them. */
@@ -281,9 +282,9 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
     for (const change of own()) applyChoicesWhenDone(ctx, change);
     retireStaleSaves(ctx, task);
     // A run resumed after a quit may finish without saving another part. Its earlier attempts' pass still applies.
-    const rootId = task.resumeRootId;
-    if (rootId) for (const change of ctx.repos.changes.select(`project_id = ? AND state = 'ready' AND json_extract(json, '$.taskId') IN
-        (SELECT id FROM tasks WHERE project_id = ? AND (id = ? OR json_extract(json, '$.resumeRootId') = ?))`, [task.projectId, task.projectId, rootId, rootId])) {
+    const attempts = task.resumeRootId && runAttemptIds(task.projectId, task.resumeRootId);
+    if (attempts) for (const change of ctx.repos.changes.select(`project_id = ? AND state = 'ready' AND json_extract(json, '$.taskId') IN (${attempts.sql})`,
+        [task.projectId, ...attempts.params])) {
       if (change.taskId !== task.id) applyChoicesWhenDone(ctx, change);
     }
   }
@@ -483,9 +484,14 @@ function graphicsContext(ctx: Ctx, project: Project, task: Task) {
   if (task.kind === "skill_from_change" || isAsideTask(task)) return {};
   const attachments = (task.context.attachments ?? []).map(a => ({ ...a, mime: a.mime ?? mimeFor(a.name), path: join(ctx.paths.attachments(project.id), a.id, a.name) }));
   const said = task.context.message ?? task.instruction;
-  const names = [...new Set([...said.matchAll(/(?:^|[^\w$])\$([a-z0-9][a-z0-9-]*)/g)].map(m => m[1]!))];
+  const named = (text: string) => [...text.matchAll(/(?:^|[^\w$])\$([a-z0-9][a-z0-9-]*)/g)].map(m => m[1]!);
+  // A skill the editor chose can name templates too ("every time we go to the screen recording, use $swipe").
+  const chosen = (task.context.skillIds ?? []).map(id => ctx.repos.skills.get(id)).filter(s => !!s && s.enabled);
+  const fromSkill = new Map(chosen.flatMap(skill => named(skill!.content).map(name => [name, skill!.name] as const)).reverse());
+  const names = [...new Set([...named(said), ...fromSkill.keys()])];
   const pickedTemplates = names.map(name => ctx.repos.templates.select("name = ?", [name])[0]).filter(t => !!t)
-    .map(t => ({ id: t.id, name: t.name, title: t.title, fields: t.fields }));
+    .map(t => ({ id: t.id, name: t.name, title: t.title, fields: t.fields, kind: t.kind, ...(t.transition && { transition: t.transition }),
+      ...(!named(said).includes(t.name) && fromSkill.has(t.name) && { skill: fromSkill.get(t.name) }) }));
   const guide = project.styleGuide;
   const guidePath = styleGuidePath(ctx, project.id, guide);
   return {
@@ -664,9 +670,18 @@ function claimNext(ctx: Ctx, host: AgentHost, taskId?: string, freeAgents?: stri
   const thread = (t: string) => `coalesce(json_extract(${t}.json, '$.context.threadId'), ${t}.id)`;
   const aboutOne = (t: string) => `(json_extract(${t}.json, '$.context.changeId') IS NOT NULL
     AND (json_extract(${t}.json, '$.context.cutIndex') IS NOT NULL OR json_extract(${t}.json, '$.context.editIndex') IS NOT NULL))`;
-  const beside = (a: string, b: string) => `(${aboutOne(a)} AND ${aboutOne(b)} AND NOT (${thread(a)} IS ${thread(b)}
-    AND json_extract(${a}.json, '$.context.cutIndex') IS json_extract(${b}.json, '$.context.cutIndex')
-    AND json_extract(${a}.json, '$.context.editIndex') IS json_extract(${b}.json, '$.context.editIndex')))`;
+  // The cut or edit a request is about, as requestTargetKey in @scarlet/shared keys it: a call by its pass's thread and
+  // index, an applied edit by the change and spot it was first made at, followed back through each revision's `replaces`.
+  const edited = (t: string) => `(WITH RECURSIVE up(id, spot, n) AS (
+      SELECT json_extract(${t}.json, '$.context.changeId'), json_extract(${t}.json, '$.context.editIndex'), 0
+      UNION ALL SELECT json_extract(c.json, '$.timelineEdits[' || up.spot || '].replaces.changeId'),
+        json_extract(c.json, '$.timelineEdits[' || up.spot || '].replaces.spot'), up.n + 1
+      FROM up JOIN changes c ON c.id = up.id
+      WHERE up.n < 50 AND json_extract(c.json, '$.timelineEdits[' || up.spot || '].replaces.changeId') IS NOT NULL)
+    SELECT json_array('edit', id, spot) FROM up ORDER BY n DESC LIMIT 1)`;
+  const target = (t: string) => `CASE WHEN json_extract(${t}.json, '$.context.cutIndex') IS NOT NULL
+    THEN json_array('call', ${thread(t)}, json_extract(${t}.json, '$.context.cutIndex')) ELSE ${edited(t)} END`;
+  const beside = (a: string, b: string) => `(${aboutOne(a)} AND ${aboutOne(b)} AND (${target(a)}) IS NOT (${target(b)}))`;
   // A resumed run keeps the place in line of the run it continues: requests asked while that run worked still wait for it.
   // It takes that run's row number as well as its time, so a request asked in the same millisecond as that run doesn't pass it.
   const place = (t: string) => {

@@ -26,6 +26,22 @@ export function trashedLine(deletedAt: string, purgeAt?: string): string {
   return `Deleted ${relTime(deletedAt)} · gone for good ${days === 0 ? "today" : `in ${plural(days, "day")}`}`;
 }
 
+/** The day something happened, for a heading over a list by day: "Today", "Yesterday", "Nov 13", or with its year. */
+export function dayName(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const days = Math.round((new Date(now).setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }) });
+}
+
+/** The time of day, as "9:35 AM" where the clock reads that way. */
+export function clockTime(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
 export function absTime(iso?: string): string {
   if (!iso) return "";
   const d = new Date(iso);

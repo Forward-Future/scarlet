@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { emptyTimeline, makeMediaClip, makeTrack, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
 import { fuzzySearchTranscript, normalizeTranscriptToken } from "@scarlet/shared";
 import { auditJoin, formatTimelineTranscript, newJoins, round, sourceRangeToTimeline, sourceToTimeline, timelineJoins, timelineWords, type Reading } from "./timeline-perception.js";
+import { pictureEntranceReader } from "./picture-entrance.js";
 import { captionSourceClips } from "./analysis.js";
 import { levelProfile, pauseStats, retakeGroups } from "./media-profile.js";
 
@@ -211,4 +212,57 @@ it("lists the same timeline words as scanning every word per clip, across many c
     expect(listed.length).toBeGreaterThan(20);
     expect(listed).toEqual(scanEveryWord(tl, transcripts, range));
   }
+});
+
+describe("picture-to-first-word timing", () => {
+  const inventory = [{ id: "cam", kind: "video", duration: 12 }];
+  const transcript = words([["before", 2.9, 3.2], ["[breath]", 5.61, 5.7], ["first", 5.8, 6.1]]);
+  function example() {
+    const tl = emptyTimeline("p");
+    tl.tracks[0]!.clips = [makeMediaClip("cam", 0, 4.01, 0, { volume: 0 }), makeMediaClip("cam", 6.01, 9, 4.01, { volume: 0 })];
+    tl.tracks[1]!.clips = [makeMediaClip("cam", 0, 3.6, 0), makeMediaClip("cam", 5.6, 9, 3.6)];
+    return tl;
+  }
+  function read(tl: Timeline, list = transcript, through = Infinity) {
+    const side = timelineJoins(tl)[0]!.tracks[0]!;
+    return pictureEntranceReader(tl, inventory, 25)(side, list, list, through);
+  }
+  it("uses the first displayed picture and supports a word starting before it", () => {
+    expect(read(example())).toMatchObject({ status: "measured", gapMs: -240, firstWord: "first", wordIndex: 2, previousWordIndex: 0, pictureAt: 4.04 });
+  });
+  it("withholds the score for a clipped word, unsettled alignment, or an onset in a fade", () => {
+    expect(read(example(), words([["first", 5.55, 5.85]]))).toMatchObject({ status: "word-trimmed", onsetTrimMs: 50 });
+    expect(read(example(), transcript, 5.7).status).toBe("unavailable");
+    const tl = example(), clip = tl.tracks[1]!.clips[1]!;
+    if (clip.kind !== "media") throw new Error("Expected incoming audio");
+    clip.audioFadeIn = .3;
+    expect(read(tl)).toMatchObject({ status: "onset-in-fade", fadeOverOnsetMs: 100 });
+    clip.audioFadeIn = 0;
+    clip.audioFadeOut = 1;
+    expect(read(tl, words([["last", 8.75, 8.95]]))).toMatchObject({ status: "onset-in-fade", fadeOverOnsetMs: 250 });
+    expect(read(tl).status).toBe("measured");
+  });
+  it("distinguishes rendered transitions from a requested transition too short to play", () => {
+    const tl = example(), clip = tl.tracks[0]!.clips[1]!;
+    if (clip.kind !== "media") throw new Error("Expected incoming camera");
+    for (const type of ["dissolve", "push", "dip"] as const) {
+      clip.transitionIn = { type, duration: .4, direction: "left" };
+      expect(read(tl).status).toBe("unavailable");
+    }
+    clip.transitionIn = { type: "dissolve", duration: .02, direction: "left" };
+    expect(read(tl)).toMatchObject({ status: "measured", gapMs: -240 });
+  });
+  it("does not score an audio cut covered by another shot, a picture fade, or a hidden picture", () => {
+    const tl = example(), cover = makeTrack("video", "Cover");
+    cover.clips = [makeMediaClip("cam", 20, 30, 0, { volume: 0 })];
+    tl.tracks.push(cover);
+    expect(read(tl).status).toBe("unavailable");
+    cover.hidden = true;
+    expect(read(tl).status).toBe("measured");
+    const clip = tl.tracks[0]!.clips[1]!;
+    if (clip.kind === "media") clip.videoFadeIn = .2;
+    expect(read(tl).status).toBe("unavailable");
+    tl.tracks[0]!.hidden = true;
+    expect(read(tl).status).toBe("unavailable");
+  });
 });

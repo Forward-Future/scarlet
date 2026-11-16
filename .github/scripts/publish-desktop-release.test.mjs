@@ -10,7 +10,6 @@ const sha = "f2e8c84ce4d58ee9d8ee1f1d21b2c46ebee30d82";
 const otherSha = "2".repeat(40);
 const version = "0.1.20";
 const tag = "v" + version;
-const unsigned = { unsignedOnce: true, runId: "1234" };
 const names = ["macOS-Apple-Silicon.dmg", "macOS-Intel.dmg", "Windows-x64-Setup.exe", "Windows-x64.msi"]
   .map(suffix => `Scarlet-${version}-${suffix}`);
 const updateFiles = [`Scarlet-${version}-macOS-Apple-Silicon.app.tar.gz`, `Scarlet-${version}-macOS-Intel.app.tar.gz`, "latest.json"];
@@ -19,8 +18,8 @@ const content = name => Buffer.from("fixture-" + name);
 const asset = name => ({ name, id: stableAssets.indexOf(name) + 1, state: "uploaded", size: content(name).length,
   digest: "sha256:" + createHash("sha256").update(content(name)).digest("hex") });
 
-async function fixture(t, unsignedOnce = false) {
-  const expected = unsignedOnce ? names : stableAssets;
+async function fixture(t) {
+  const expected = stableAssets;
   const directory = await mkdtemp(path.join(tmpdir(), "scarlet-release-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   for (const name of expected) await writeFile(path.join(directory, name), content(name));
@@ -64,7 +63,6 @@ async function fixture(t, unsignedOnce = false) {
       const file = asset(name);
       if (state.corruptDigest) file.digest = "sha256:" + "0".repeat(64);
       if (name === state.retargetAfterUpload) state.ref = { type: "commit", sha: otherSha };
-      if (name === state.editNotesAfterUpload) state.release.body = "Missing signing disclosure";
       state.assets.push(file);
       return reply(file);
     }
@@ -180,87 +178,16 @@ test("a concurrent tag change blocks publication after all the uploads", async t
   assert.ok(!remote.writes.some(write => write.startsWith("PATCH")));
 });
 
-test("the unsigned exception uploads exactly four verified installers and discloses their signing and media setup", async t => {
-  const remote = await fixture(t, true);
-  await remote.publish(unsigned);
-  assert.equal(remote.release.draft, false);
-  assert.deepEqual(remote.assets.map(file => file.name), names);
-  assert.match(remote.release.body, /macOS apps are ad hoc signed and have not been notarized by Apple/);
-  assert.match(remote.release.body, /Both Windows installers are unsigned/);
-  assert.ok(remote.release.body.includes(`https://raw.githubusercontent.com/Forward-Future/scarlet/${sha}/apps/desktop/scripts/Install-Scarlet-FFmpeg-macOS.sh`));
-  assert.match(remote.release.body, /winget install --id Gyan\.FFmpeg\.Essentials --exact/);
-  for (const file of remote.assets) assert.ok(remote.release.body.includes(`${file.digest.slice(7)}  ${file.name}`));
-  remote.writes.length = 0;
-  assert.equal(await remote.publish(unsigned), remote.draft.html_url);
-  assert.deepEqual(remote.writes, []);
-});
-
-test("the unsigned exception rejects another version, another revision, an existing draft, or a preexisting exact tag", async t => {
-  const remote = await fixture(t, true);
-  for (const override of [{ repository: "another/scarlet" }, { version: "9.9.9" }, { sha: otherSha }]) {
-    await assert.rejects(remote.publish({ ...unsigned, ...override }), /does not authorize/);
-  }
-  remote.release = remote.draft;
-  await assert.rejects(remote.publish(unsigned), /does not match the notes/);
-  remote.release = null;
-  remote.ref = { type: "commit", sha };
-  await assert.rejects(remote.publish(unsigned), /already exists/);
-  assert.deepEqual(remote.writes, []);
-});
-
-test("only the original run resumes its partial unsigned draft and its empty interrupted upload", async t => {
-  const remote = await fixture(t, true);
-  remote.rejectUpload = names[2];
-  await assert.rejects(remote.publish(unsigned), /502/);
-  assert.equal(remote.release.draft, true);
-  remote.writes.length = 0;
-  remote.rejectUpload = null;
-  await assert.rejects(remote.publish({ ...unsigned, runId: "5678" }), /does not match the notes/);
-  for (const name of updateFiles) await writeFile(path.join(remote.directory, name), content(name));
-  await assert.rejects(remote.publish(), /Only the original unsigned workflow/);
-  for (const name of updateFiles) await rm(path.join(remote.directory, name));
-  assert.deepEqual(remote.writes, []);
-  remote.assets.push({ name: names[2], id: 42, state: "starter", size: 0 });
-  assert.equal(await remote.publish(unsigned), remote.draft.html_url);
-  assert.deepEqual(remote.writes, ["DELETE /releases/assets/42", "POST /releases/17/assets", "POST /releases/17/assets", "PATCH /releases/17"]);
-});
-
-test("an unsigned draft whose release notes change during upload stays private", async t => {
-  const remote = await fixture(t, true);
-  remote.editNotesAfterUpload = names.at(-1);
-  await assert.rejects(remote.publish(unsigned), /changed during upload/);
-  assert.equal(remote.release.draft, true);
-  assert.ok(!remote.writes.some(write => write.startsWith("PATCH")));
-});
-
-test("a failure to create its tag leaves a marked unsigned draft that the same run can resume", async t => {
-  const remote = await fixture(t, true);
+test("a failure to create its tag leaves a draft that a rerun resumes", async t => {
+  const remote = await fixture(t);
   remote.rejectTag = true;
-  await assert.rejects(remote.publish(unsigned), /503/);
+  await assert.rejects(remote.publish(), /503/);
   assert.equal(remote.ref, null);
   assert.equal(remote.release.draft, true);
-  assert.match(remote.release.body, /<!-- scarlet-unsigned-release-run: 1234 -->/);
   assert.deepEqual(remote.writes, ["POST /releases", "POST /git/refs"]);
   remote.writes.length = 0;
   remote.rejectTag = false;
-  assert.equal(await remote.publish(unsigned), remote.draft.html_url);
+  assert.equal(await remote.publish(), remote.draft.html_url);
   assert.equal(remote.writes[0], "POST /git/refs");
   assert.ok(!remote.writes.includes("POST /releases"));
-});
-
-test("the same unsigned run refuses changed existing bytes, notes and tags without writing", async t => {
-  const remote = await fixture(t, true);
-  remote.rejectUpload = names[1];
-  await assert.rejects(remote.publish(unsigned), /502/);
-  remote.writes.length = 0;
-  remote.assets[0].digest = "sha256:wrong";
-  await assert.rejects(remote.publish(unsigned), /does not match this build/);
-  remote.assets[0] = asset(names[0]);
-  const expectedNotes = remote.release.body;
-  remote.release.body += " altered";
-  await assert.rejects(remote.publish(unsigned), /does not match the notes/);
-  remote.release.body = expectedNotes;
-  remote.ref = { type: "commit", sha: otherSha };
-  await assert.rejects(remote.publish(unsigned), /points to/);
-  assert.deepEqual(remote.writes, []);
 });

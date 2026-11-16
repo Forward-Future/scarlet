@@ -4,7 +4,7 @@
  * a random loopback port), the engine/agent-host status, and
  * a few native helpers. The renderer checks this bridge before loading the editor.
  */
-import type { AgentAvailability } from "@scarlet/shared";
+import type { AgentAvailability, HandoffFile } from "@scarlet/shared";
 import { invoke as nativeInvoke } from "@tauri-apps/api/core";
 import { appLog, withoutAddresses } from "./appLog";
 
@@ -136,6 +136,8 @@ export const desktop = {
   keepVideoExport: (ticket: number) => invoke<void>("keep_video_export", { ticket }),
   discardVideoExport: (ticket: number) => invoke<void>("discard_video_export", { ticket }),
   finishVideoExport: (ticket: number, url: string) => invoke<string>("finish_video_export", { ticket, url }),
+  /** Write the folder for finishing the edit in another app at the chosen destination. Returns its path. */
+  finishFolderExport: (ticket: number, files: HandoffFile[]) => invoke<string>("finish_folder_export", { ticket, files }),
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
   /** Save the logs and a system report as one .zip the editor picks a place for. Null when cancelled. */
   exportLogs: () => invoke<string | null>("export_logs"),

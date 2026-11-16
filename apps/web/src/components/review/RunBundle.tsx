@@ -10,10 +10,46 @@ import { runningTranscription, transcriptionProgressLabel, transcriptsProgress }
 import { runAim, runIsActive, runItems, runLines, runSummary, type RunItem, type RunLine } from "../../lib/taskRun";
 import { pendingMediaWaits, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
 
-/** Tokens the agent used on this request, with the full breakdown on hover. Shown only when turned on in Settings → Usage. */
-function Tokens({ usage }: { usage?: UsageTotals }) {
+/**
+ * Tokens the agent used on a request. Hovering or focusing the count opens a note above it with every part: input,
+ * output, cache read and write, reasoning, and how many runs it took. Shown only when turned on in Settings → Usage.
+ * The note is placed against the window, so the pinned request's scrolling box doesn't clip it.
+ */
+function Tokens({ usage, className }: { usage?: UsageTotals; className?: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [open, setOpen] = useState(false);
+  const [tip, setTip] = useState<{ right: number; bottom: number } | null>(null);
+  // While the note is open it follows the count, which moves when the pinned request grows or the chat scrolls.
+  useLayoutEffect(() => {
+    if (!open) { setTip(null); return; }
+    let frame = 0;
+    const place = () => {
+      const box = ref.current?.getBoundingClientRect();
+      if (box) setTip(was => {
+        const right = window.innerWidth - box.right, bottom = window.innerHeight - box.top + 6;
+        return was?.right === right && was.bottom === bottom ? was : { right, bottom };
+      });
+      frame = requestAnimationFrame(place);
+    };
+    place();
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
   if (!usage?.totalTokens) return null;
-  return <span className="run-dim run-tokens" title={tokenBreakdown(usage)}>{tokenLabel(usage.totalTokens)}</span>;
+  const parts: [string, number][] = [
+    ["Input", usage.inputTokens], ["Output", usage.outputTokens], ["Cache read", usage.cacheReadTokens],
+    ["Cache write", usage.cacheWriteTokens], ["Reasoning", usage.reasoningTokens],
+  ];
+  return <span ref={ref} className={`run-dim run-tokens${className ? ` ${className}` : ""}`} tabIndex={0} title=""
+    aria-label={`${tokenLabel(usage.totalTokens)}: ${tokenBreakdown(usage)}`} data-breakdown={tokenBreakdown(usage)}
+    onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}>
+    {tokenLabel(usage.totalTokens)}
+    {tip && <span className="tokens-tip" aria-hidden style={tip}>
+      {parts.filter(([label, n]) => n || label === "Input" || label === "Output").map(([label, n]) =>
+        <span key={label}><span>{label}</span><b>{n.toLocaleString()}</b></span>)}
+      {usage.runs > 1 && <span><span>Runs</span><b>{usage.runs}</b></span>}
+      <span className="tokens-tip-total"><span>Total</span><b>{usage.totalTokens.toLocaleString()}</b></span>
+    </span>}
+  </span>;
 }
 
 const voicePhase: Record<SpeakerProgress["phase"], string> = {
@@ -26,7 +62,7 @@ const voicePhase: Record<SpeakerProgress["phase"], string> = {
  * next, as a card's note does: there is no button, only the pointer changes over it, and the reply ends in an ellipsis
  * while it's folded. However much Scarlet writes, a request stays a few lines tall.
  */
-export function Said({ text, className }: { text: string; className?: string }) {
+export function Said({ text, lead, className, children }: { text: string; lead?: ReactNode; className?: string; children?: ReactNode }) {
   const ref = useRef<HTMLParagraphElement>(null);
   const [clipped, setClipped] = useState(false);
   const [open, setOpen] = useState(false);
@@ -42,7 +78,7 @@ export function Said({ text, className }: { text: string; className?: string }) 
   }, [text, open]);
   const opens = clipped || open;
   return <p ref={ref} className={`${className ? `${className} ` : ""}said${open ? " is-open" : clipped ? " is-clipped" : ""}`}
-    title={clipped && !open ? "Show all of it" : undefined} aria-expanded={opens ? open : undefined} onClick={opens ? () => setOpen(!open) : undefined}>{text}</p>;
+    title={clipped && !open ? "Show all of it" : undefined} aria-expanded={opens ? open : undefined} onClick={opens ? () => setOpen(!open) : undefined}>{lead}{children ?? text}</p>;
 }
 
 /**
@@ -108,19 +144,19 @@ export function RunBundle(props: RunBundleProps) {
   return runIsActive(props.task) ? <WaitingRun {...props} /> : <FinishedRun {...props} />;
 }
 
-function useRunUsage(taskId: string) {
-  const show = useUiStore(s => s.showRunTokens);
+/** The tokens a run used, when those show. A run under a heading has them in the heading, so its rows don't. */
+function useRunUsage(taskId: string, shown = true) {
+  const show = useUiStore(s => s.showRunTokens) && shown;
   return useProjectStore(s => show ? s.current?.taskUsage?.[taskId] : undefined);
 }
 
 /**
- * The tokens a request has used so far, in its heading before Stop while Scarlet has it. The host reports the count as
- * each of the agent's messages lands, so it climbs while Scarlet works. Shown only when turned on in Settings → Usage.
+ * The tokens a request has used, in its heading at the right, before Stop while Scarlet has it. The host reports the
+ * count as each of the agent's messages lands, so it climbs while Scarlet works, and it stays once the request is done.
+ * Shown only when turned on in Settings → Usage.
  */
-export function LiveTokens({ taskId }: { taskId: string }) {
-  const usage = useRunUsage(taskId);
-  if (!usage?.totalTokens) return null;
-  return <span className="run-dim run-tokens unit-tokens" title={tokenBreakdown(usage)}>{tokenLabel(usage.totalTokens)}</span>;
+export function RequestTokens({ taskId }: { taskId: string }) {
+  return <Tokens usage={useRunUsage(taskId)} className="unit-tokens" />;
 }
 
 function WorkingRun({ task, events: all, changes, callNumber, say, result, stopAbove, onStop }: RunBundleProps) {
@@ -165,7 +201,7 @@ function WorkingRun({ task, events: all, changes, callNumber, say, result, stopA
 }
 
 function WaitingRun({ task, events, changes, say, result, banded, onStop }: RunBundleProps) {
-  const usage = useRunUsage(task.id);
+  const usage = useRunUsage(task.id, !banded);
   const asking = task.state === "waiting_for_user";
   const waiting = task.state === "queued";
   const [open, setOpen] = useState(false);
@@ -199,13 +235,13 @@ function WaitingRun({ task, events, changes, say, result, banded, onStop }: RunB
 }
 
 function FinishedRun({ task, finalChange, say, told, result, recovery, summary, listedAbove, showing, banded, onOpen, onResume, onWaitForTranscripts }: RunBundleProps) {
-  const usage = useRunUsage(task.id);
+  const usage = useRunUsage(task.id, !banded);
   // Finished. A run that ended without the transcripts it waited for says so, since what it saved is only part of the request.
   const paused = taskNeedsTranscripts(task);
   const stopped = task.state === "cancelled";
   const failed = task.state === "failed";
   const state = runEnded(task);
-  const aside = <Tokens usage={usage} />;
+  const aside = usage?.totalTokens ? <Tokens usage={usage} /> : undefined;
   const rows = result?.(aside);
   const action = !paused && recovery && <button type="button" className="simple-link req-recover" onClick={recovery.run}>{recovery.label}</button>;
   const made = summary ?? (state ? stoppedSummary(task, finalChange) : runSummary(task, finalChange));

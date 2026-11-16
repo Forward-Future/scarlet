@@ -9,8 +9,8 @@ function temporaryAudio(name: string) {
   return /^(?:recording|chunk)_[a-z0-9]{12}\.wav$/.test(name) ||
     /^wcpp_[a-z0-9]{12}\.(?:wav|json)$/.test(name) || /^speech_[a-z0-9]{12}\.[^./\\]*$/.test(name) ||
     /^(?:recording-)?[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.wav$/.test(name) ||
-    // The frames a screen-text read was working through.
-    /^screen-text-[0-9a-f-]{36}\.rgb$/.test(name) ||
+    // The frames a screen-text or face read was working through.
+    /^(?:screen-text|faces)-[0-9a-f-]{36}\.rgb$/.test(name) ||
     // The sound a hole reread cut out, and a word alignment's answer written beside its audio.
     /^holes_[A-Za-z0-9_-]+\.wav$/.test(name) ||
     /\.wav\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.align\.json$/.test(name);
@@ -49,7 +49,7 @@ export function sweepLeftovers(ctx: Ctx, now = Date.now()): number {
   const projects = join(ctx.paths.root, "projects");
   if (!lstatSync(projects, { throwIfNoEntry: false })?.isDirectory()) return removed;
   const known = ctx.db.prepare("SELECT 1 FROM media WHERE id = ?");
-  const knownNote = ctx.db.prepare("SELECT 1 FROM notes WHERE id = ?");
+  const namedRecording = ctx.db.prepare("SELECT 1 FROM notes WHERE project_id = ? AND json_extract(json, '$.audioPath') = ?");
   for (const project of readdirSync(projects, { withFileTypes: true })) {
     if (!project.isDirectory()) continue;
     const id = project.name;
@@ -59,11 +59,8 @@ export function sweepLeftovers(ctx: Ctx, now = Date.now()): number {
       const media = /^(med_[A-Za-z0-9]+)\.[A-Za-z0-9]+$/.exec(name)?.[1];
       return !!media && !known.get(media);
     });
-    // A voice note's recording is saved before its words are read and its note written. One with no note never became one.
-    sweep(ctx.paths.notes(id), name => {
-      const note = /^(note_[A-Za-z0-9]+)\.[A-Za-z0-9]+$/.exec(name)?.[1];
-      return !!note && !knownNote.get(note);
-    });
+    // A voice note's recording is saved before its words are read and its note written. One no note names never became one.
+    sweep(ctx.paths.notes(id), name => /^note_[A-Za-z0-9]+\.[A-Za-z0-9]+$/.test(name) && !namedRecording.get(id, name));
     sweep(ctx.paths.proxies(id), name => name.endsWith(".part.mp4"));
     // A full source cache keeps its parts in a folder of its own.
     try {
@@ -74,7 +71,7 @@ export function sweepLeftovers(ctx: Ctx, now = Date.now()): number {
     // An export or a full preview cut off while its parts were joined: a whole video under a name nothing uses again.
     sweep(ctx.paths.renders(id), name => name.endsWith(".assembly.mp4"));
     sweep(ctx.paths.segments(id), name => /\.part\.(mp4|m4a)$/.test(name));
-    sweep(ctx.paths.waveforms(id), name => name.endsWith(".part") || /^speakers-.*\.tmp$/.test(name) || /\.screen-text\.json\.[0-9a-f-]{36}\.tmp$/.test(name));
+    sweep(ctx.paths.waveforms(id), name => name.endsWith(".part") || /^speakers-.*\.tmp$/.test(name) || /\.(?:screen-text|faces)\.json\.[0-9a-f-]{36}\.tmp$/.test(name));
   }
   if (removed) ctx.log(`[storage] removed ${removed} leftover working ${removed === 1 ? "file" : "files"} from an earlier session`);
   return removed;

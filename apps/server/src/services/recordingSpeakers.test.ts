@@ -38,7 +38,7 @@ async function speakerFixture() {
     return Buffer.from("[]");
   });
   return {
-    failing, workers,
+    ctx, failing, workers,
     said: () => logs.filter(line => line.startsWith("[speakers]")),
     /** Speaker turns for a new recording. */
     async analyse(name: string) {
@@ -260,4 +260,22 @@ it("labels a transcript while the project's media work is paused only when the p
   await ctx.speakers.ensure(ctx, project.id, media, transcript, undefined, false);
   expect(linked()).not.toBe("trs_camera");
   expect(ctx.repos.transcripts.get(linked())?.speakerAnalysis?.version).toBe(speakerAnalysisVersion);
+});
+
+it("starts the next analysis when one stops before its recording is looked up", async () => {
+  const { ctx, analyse } = await speakerFixture();
+  // The first fails before it looks for its recording; the second waits its turn behind it.
+  // Other work in the fixture may ask for the signal too, so fail only the first analysis's own call.
+  const real = ctx.mediaSignal.bind(ctx);
+  let thrown = false;
+  vi.spyOn(ctx, "mediaSignal").mockImplementation(id => {
+    if (!thrown && new Error().stack?.includes("analysed")) { thrown = true; throw new Error("project gone"); }
+    return real(id);
+  });
+  // Whichever analysis meets the failure, every one queued behind it still settles.
+  const both = Promise.all([analyse("first").catch(error => error), analyse("second").catch(error => error)]);
+  const settled = await Promise.race([both.then(() => "done"), new Promise(resolve => setTimeout(() => resolve("stuck"), 5000))]);
+  expect(settled).toBe("done");
+  expect(thrown).toBe(true);
+  expect((await both).some(result => result instanceof Error && result.message === "project gone")).toBe(true);
 });

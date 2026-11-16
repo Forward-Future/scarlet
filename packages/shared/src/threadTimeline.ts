@@ -124,8 +124,10 @@ const NAMED_SLACK = 0.05;
 function rangedJoins(ranges: TimeRange[], kinds: EditKind[], cuts: Cut[]) {
   const joins = new Map<number, Cut>();
   if (!ranges.some((r, spot) => r.end > r.start && kinds[spot] === "cut")) return joins;
-  const points = new Set(ranges.filter(r => r.start === r.end).map(r => r.start));
-  const free = cuts.filter(cut => !points.has(cut.range.start));
+  // A join an edit named as a point takes is that edit's, found within the same hundredth as namedJoins finds it, so
+  // the footage it removed is counted once.
+  const claimed = new Set(namedJoins(ranges, cuts).values());
+  const free = cuts.filter(cut => !claimed.has(cut));
   const candidates = intervalCandidates(free, cut => cut.range.start, cut => cut.range.start);
   const pairs = ranges.flatMap((range, spot) => range.end > range.start && kinds[spot] === "cut"
     ? candidates(range.start - NAMED_SLACK, range.end + NAMED_SLACK).map(cut => ({ spot, cut, off: Math.abs((range.start + range.end) / 2 - cut.range.start) })) : [])
@@ -190,10 +192,10 @@ export function changeRemovals(change: Change): { removed: TimeRange[]; version:
   }
 }
 
-/** Project the conversation's changes into distinct edit identities before translating their times. */
 /** The project's files, so an edit that laid a graphic over the picture is told from b-roll. */
 type ProjectFiles = readonly Pick<MediaAsset, "id" | "kind">[];
 
+/** Project the conversation's changes into distinct edit identities before translating their times. */
 function savedEdits(thread: Thread, visible: (version: string) => boolean, read?: (version: string) => Timeline | undefined, fps = 30, media?: ProjectFiles) {
   const edits: SavedEdit[] = [];
   // The latest doubt this request's runs raised about an edit already in the video (`Change.flags`).
@@ -205,14 +207,25 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
     edit.recheck = flag.at;
   };
   // An edit another request made comes first, as it was in the video before this request's own: a revision this
-  // request then makes of it takes its place.
+  // request then makes of it takes its place. So does one its own request or any other made since (`replaces`): the
+  // list shows the edit as it is now, never a version that has left the video.
   for (const change of thread.flagged ?? []) {
     for (const edit of savedEdits({ changes: [change] } as Pick<Thread, "changes"> as Thread, visible, read, fps, media)) {
+      const replaces = change.timelineEdits?.[edit.spot]?.replaces;
+      const prior = replaces ? edits.findIndex(e => matchesEdit(e, replaces)) : -1;
       const flag = flagOn(change, edit.spot);
-      if (!flag) continue;
+      if (prior < 0 && !flag) continue;
       raise(edit, flag);
       edit.elsewhere = true;
-      edits.push(edit);
+      if (prior < 0) {
+        edits.push(edit);
+        continue;
+      }
+      const replaced = edits[prior]!;
+      edit.previous = [...replaced.previous, { changeId: replaced.changeId, spot: replaced.spot }];
+      // As with a revision made here: the editor was asked to check the edit, so its new version is theirs to check.
+      if (replaced.check && !edit.check) edit.check = REVISED_CHECK;
+      edits[prior] = edit;
     }
   }
   for (const change of thread.changes) {
@@ -251,7 +264,9 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
     const kinds = built && taken ? fromSteps.map((kind, spot) => taken.some(cut => cut.range.start >= ranges[spot]!.start - NAMED_SLACK &&
       cut.range.start <= ranges[spot]!.end + NAMED_SLACK) ? "cut" : kind) : fromSteps;
     const joins = named && cuts ? rangedJoins(ranges, kinds, cuts) : undefined;
-    const atJoin = taken?.length ? namedJoins(ranges, taken) : undefined;
+    // A cut named at a point is the join nearest it: an agent names times to the hundredth, and the join its removals
+    // made can fall between ("271.28" for 271.2833), which read the cut as some other edit.
+    const atJoin = taken?.length ? namedJoins(ranges, taken) : named && rippled?.length ? namedJoins(ranges, rippled) : undefined;
     const beforeVersion = change.appliedReview?.originalVersion ?? built?.version ?? change.fromVersion;
     const shown = new Map<Cut, SavedEdit>();
     for (const [spot, item] of entries.entries()) {
@@ -281,7 +296,9 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
       const kind = edit.beforeCut ? "cut" : kinds[spot];
       if (kind) edit.kind = kind;
       if (found && edit.named && kind === "other" && range.start === range.end) edit.still = true;
-      if (found && edit.named && range.start === range.end) edit.resaved = true;
+      // Only a save that took footage out at the point can have moved a cut's join there. A punch-in or a title named on a
+      // join changed no footage, and is an edit of its own.
+      if (found && edit.named && range.start === range.end && edit.beforeCut) edit.resaved = true;
       const back = edit.named && kind === "restore" ? returned?.filter(r => r.start <= range.end + NAMED_SLACK && r.end >= range.start - NAMED_SLACK) : undefined;
       if (back?.length) edit.putBack = { start: Math.min(...back.map(r => r.start)), end: Math.max(...back.map(r => r.end)) };
       const prior = item.replaces ? edits.findIndex(e => matchesEdit(e, item.replaces!)) : -1;
@@ -309,9 +326,12 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
   return edits;
 }
 
+/** A saved edit as it is listed, without what only placing it on the working cut needs. */
+const listed = ({ version: _version, named: _named, still: _still, resaved: _resaved, putBack: _putBack, ...edit }: SavedEdit): Omit<ThreadEdit, "at"> => edit;
+
 /** The edits one applied change made, in its own clock, as History lists them under its version. */
 export function changeEdits(change: Change): Omit<ThreadEdit, "at">[] {
-  return savedEdits({ changes: [change] } as Pick<Thread, "changes"> as Thread, () => true).map(({ version: _version, named: _named, still: _still, resaved: _resaved, putBack: _putBack, ...edit }) => edit)
+  return savedEdits({ changes: [change] } as Pick<Thread, "changes"> as Thread, () => true).map(listed)
     .sort((a, b) => (a.beforeCut?.removed.start ?? a.range.start) - (b.beforeCut?.removed.start ?? b.range.start));
 }
 
@@ -321,7 +341,7 @@ export function changeEdits(change: Change): Omit<ThreadEdit, "at">[] {
  * show it until threadTimeline's list for the working cut arrives, and number edits from that.
  */
 export function threadEditList(thread: Thread, media?: ProjectFiles): Omit<ThreadEdit, "at">[] {
-  return savedEdits(thread, () => true, undefined, 30, media).map(({ version: _version, named: _named, still: _still, resaved: _resaved, putBack: _putBack, ...edit }) => edit)
+  return savedEdits(thread, () => true, undefined, 30, media).map(listed)
     .sort((a, b) => a.range.start - b.range.start);
 }
 

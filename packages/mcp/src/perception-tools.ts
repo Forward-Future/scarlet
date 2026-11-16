@@ -7,8 +7,10 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ScarletApiError, type ProjectDetail, type ScarletClient, type ScarletToolName, type WaveformResponse } from "@scarlet/shared";
 import { timelineDuration, type Project, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 import { auditJoin, formatTimelineTranscript, newJoins, timelineJoins, timelineWords, type JoinAudit, type TimelineJoin } from "./timeline-perception.js";
+import { pictureEntranceReader } from "./picture-entrance.js";
 import { levelProfile, pauseStats, retakeGroups } from "./media-profile.js";
 import { json, text } from "./tool-result.js";
+import { OTHER_INPUT } from "./analysis.js";
 
 type ToolRegistrar = <Shape extends z.ZodRawShape>(name: ScarletToolName, description: string, shape: Shape,
   handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<CallToolResult>) => void;
@@ -82,6 +84,7 @@ export function registerPerception(deps: PerceptionDeps) {
       if (!readings.has(key)) readings.set(key, hi > lo ? deps.readLevels(mediaId, lo, hi).catch(without(`failed to read the levels of ${mediaId} for a join audit`, undefined)) : Promise.resolve(undefined));
       return readings.get(key)!;
     };
+    const entrance = pictureEntranceReader(tl, project.media, project.settings.fps);
     const audits: JoinAudit[] = [];
     for (const join of joins) {
       const number = all.findIndex(j => Math.abs(j.at - join.at) < 1e-3) + 1;
@@ -93,14 +96,15 @@ export function registerPerception(deps: PerceptionDeps) {
           deps.transcriptWords(side.out.mediaId, false, side.out.source + 2).catch(without(`failed to read the words of ${side.out.mediaId} for a join audit`, null)),
           deps.transcriptWords(side.in.mediaId, false, side.in.source + 2).catch(without(`failed to read the words of ${side.in.mediaId} for a join audit`, null)),
         ]);
+        const pictureEntrance = entrance(side, inWords, outWords, deps.settledThrough(side.in.mediaId));
         if (!out || !inn) {
-          audits.push({ join: number, at: join.at, trackId: side.trackId,
+          audits.push({ join: number, at: join.at, pictureEntrance, trackId: side.trackId,
             out: { mediaId: side.out.mediaId, source: side.out.source }, in: { mediaId: side.in.mediaId, source: side.in.source },
             levels: "", verdict: "check: no level reading for this join (waveform unavailable)" });
           continue;
         }
         const near = (list: TranscriptWord[] | null, t: number) => list?.filter(w => w.end > t - 2 && w.start < t + 2);
-        audits.push(auditJoin(number, join.at, side, out, inn, { out: outWords ?? undefined, in: near(inWords, side.in.source) }));
+        audits.push({ ...auditJoin(number, join.at, side, out, inn, { out: outWords ?? undefined, in: near(inWords, side.in.source) }), pictureEntrance });
       }
     }
     return audits;
@@ -127,7 +131,7 @@ export function registerPerception(deps: PerceptionDeps) {
         const asked = [...new Set(shown.filter(w => w.mediaId === mediaId).map(w => w.index))].map(index => ({ index, start: source[index]!.start, end: source[index]!.end }));
         marked.set(mediaId, await deps.otherInputWords(mediaId, asked).catch(() => new Set<number>()));
       }
-      shown = shown.map(w => marked.get(w.mediaId)?.has(w.index) ? { ...w, text: `[other input] ${w.text}` } : w);
+      shown = shown.map(w => marked.get(w.mediaId)?.has(w.index) ? { ...w, text: `${OTHER_INPUT} ${w.text}` } : w);
     }
     if (shown.length) deps.readPassage(tl.version, { start: Math.max(0, range.start),
       end: shown.length < words.length ? shown.at(-1)!.end : Math.min(duration, range.end) });
@@ -138,12 +142,12 @@ export function registerPerception(deps: PerceptionDeps) {
   }
 
   tool("timeline_transcript",
-    "What the audience hears on a timeline version (default head): transcript words in playback order with TIMELINE seconds, and a ‖ line at every join between kept source ranges showing the source jump and the words either side. Each mediaId line identifies the source of the #indices that follow. Use this mediaId and those transcript_get indices in dialogue_check_join or dialogue_apply_cuts. lines groups words between pauses and joins (`time #firstIndex text`); words lists `start-end #index word` for exact edges. Read it after an edit to check that sentences still read naturally across each join. A word heard only on the input a recording's dialogue isn't on (a producer on a call, playback) reads [other input]: it is not the speaker.",
+    "What the audience hears on a timeline version (default head): transcript words in playback order with TIMELINE seconds, and a ‖ line at every join between kept source ranges showing the source jump and the words either side. Each mediaId line identifies the source of the #indices that follow. Use this mediaId and those transcript_get indices in dialogue_check_join or dialogue_apply_cuts. lines groups words between pauses and joins (`time #firstIndex text`); words lists `start-end #index word` for exact edges. Read it after an edit to check that sentences still read naturally across each join. A word heard only on the input a recording's dialogue isn't on (a producer on a call, playback) reads " + OTHER_INPUT + ": it is not the speaker.",
     { version: z.string().optional(), from: z.number().min(0).optional().describe("Timeline seconds"), to: z.number().min(0).optional().describe("Timeline seconds"),
       detail: z.enum(["lines", "words"]).default("lines") }, readTranscript);
 
   tool("timeline_join_audit",
-    "Measure joins on a changeId's saved version, or a version (default head) with optional at (join times) or from/to. Each audible track reports out.lastWord and its aligned source end, out.wordEndToJoin (timeline seconds from that word to the cut, at the center of a crossfade), voice activity, clipped words, and a verdict. For pacing use wordEndToJoin. airAfter/airBefore count quiet at each handle that voice detection also calls quiet. levelQuiet counts low-level sound at those handles independently. The RMS strip gives dBFS in 20 ms steps either side with the level jump in dB.",
+    "Measure joins on a changeId's saved version, or a version (default head) with optional at (join times) or from/to. Each audible track reports out.lastWord and its aligned source end, out.wordEndToJoin (timeline seconds from that word to the cut, at the center of a crossfade), voice activity, clipped words, and a verdict. pictureEntrance.gapMs measures from the first displayed frame of the incoming take to its first aligned spoken word. Positive means a wait, negative means the voice leads the picture. A trimmed word or an unverified picture has no score. Use this with the brief and the sound at the edge when deciding whether to shorten a wait. airAfter/airBefore count quiet at each handle that voice detection also calls quiet. levelQuiet counts low-level sound at those handles independently. The RMS strip gives dBFS in 20 ms steps either side with the level jump in dB.",
     { changeId: z.string().optional(), version: z.string().optional(), at: z.array(z.number().min(0)).max(MAX_AUDITS).optional(),
       from: z.number().min(0).optional(), to: z.number().min(0).optional() },
     async ({ changeId, version, at, from, to }) => {
@@ -244,6 +248,32 @@ export function registerPerception(deps: PerceptionDeps) {
       const lines = page.map(s => `${s.start.toFixed(1)}-${s.end.toFixed(1)} [${pct(s.box[0])}-${pct(s.box[2])}% x, ${pct(s.box[1])}-${pct(s.box[3])}% y] ${s.text}`);
       const more = offset + page.length < read.spans.length ? [`offset ${offset + page.length} for the next ${Math.min(200, read.spans.length - offset - page.length)}.`] : [];
       return text([head, ...lines, ...more].join("\n"));
+    });
+
+  tool("faces",
+    "Where the faces are in a video's frame over time, found from its picture. Each face is followed as a track, numbered by when it first appears: a track follows position from frame to frame, not who it is, so two people who swap places swap tracks, and a face that leaves and comes back over the same place keeps its number. `spans` split each track's time where its face moves or turns: `start`-`end` in SOURCE seconds; `box` [left, top, right, bottom] as fractions of the frame, holding the face throughout the span (the detector's box runs from about the hairline to just under the chin, inside the ears: the hair above and the shoulders below are outside it); `yaw`, roughly where it looks, in degrees from facing the camera, positive toward the frame's right, to the nearest 5; and the detector's `confidence` (0..1). `tracks` gives each track's first and last second in the range, its seconds on screen, its usual box and the detector's usual confidence (a face in a picture or a pattern on a shelf can be found too, usually less surely), and `frame` the video's width and height in pixels, for a box's shape; `track` lists one track's spans. Frames are looked at twice a second, and four times where faces move; a face under about 2% of the frame's width, turned past profile or seen only for a moment can be missed. A video is read once and kept: a range not read yet is read now, and the answer says how much was read when it returns, while track numbers can still change; call again for the rest. Spans are listed in time order, 200 at a time; `offset` pages on. timeline_at maps source seconds to the edit." +
+      (deps.seesFrames ? " media_frame at a span's start second shows the frame its box was measured on." : ""),
+    { mediaId: z.string(), from: z.number().min(0).optional(), to: z.number().min(0).optional(),
+      track: z.number().int().min(1).optional().describe("Only this track's spans"),
+      offset: z.number().int().min(0).default(0) },
+    async ({ mediaId, from, to, track, offset }) => {
+      const { project } = await deps.getProject();
+      const asset = project.media.find(m => m.id === mediaId);
+      if (!asset) throw new Error(`Media ${mediaId} is not in this project. Use project_get for media ids.`);
+      if (asset.kind !== "video") throw new Error(`Media ${mediaId} is ${asset.kind}: only a video has faces to find.`);
+      const qs = new URLSearchParams({ ...(from !== undefined && { from: String(from) }), ...(to !== undefined && { to: String(to) }) }).toString();
+      const read = await client.get<{ from: number; to: number; width?: number; height?: number; readSeconds: number; done: boolean; error?: string;
+        tracks: Array<{ track: number }>; spans: Array<{ track: number }> }>(
+        `/projects/${encodeURIComponent(deps.projectId)}/media/${encodeURIComponent(mediaId)}/faces${qs ? `?${qs}` : ""}`);
+      if (track !== undefined && read.done && !read.tracks.some(t => t.track === track)) {
+        throw new Error(`No track ${track} in ${read.from.toFixed(1)}-${read.to.toFixed(1)} s; this range has ${read.tracks.length ? `tracks ${read.tracks.map(t => t.track).join(", ")}` : "no faces"}.`);
+      }
+      const spans = track === undefined ? read.spans : read.spans.filter(s => s.track === track);
+      const page = spans.slice(offset, offset + 200), left = spans.length - offset - page.length;
+      return json({ mediaId, from: read.from, to: read.to, ...(read.width && read.height && { frame: [read.width, read.height] }),
+        ...(!read.done && { reading: `${read.readSeconds.toFixed(0)} of ${(read.to - read.from).toFixed(0)} s read so far${read.error ? `, stopped: ${read.error}` : ", still reading: call again for the rest"}` }),
+        tracks: read.tracks, spanCount: spans.length, spans: page,
+        ...(left > 0 && { next: `offset ${offset + page.length} for the next ${Math.min(200, left)}` }) });
     });
 
   return {

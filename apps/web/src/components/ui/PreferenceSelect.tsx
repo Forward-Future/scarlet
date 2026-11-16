@@ -1,9 +1,13 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { mediaPlaying } from "../../lib/hotkeys";
 import { Icon } from "./primitives";
 
-type Choice<T> = { value: T; label: string };
+/**
+ * `detail` is a second, dimmer line under the label; `tag` is a word at the row's right, such as "Now"; a new
+ * `group` starts a heading over the rows that share it, such as a day.
+ */
+type Choice<T> = { value: T; label: string; detail?: string; tag?: string; group?: string };
 
 /** Where the list can be seen: inside the open dialog or the element that is full screen, which draw over the page. */
 function layerOf(trigger: HTMLElement | null) {
@@ -11,10 +15,13 @@ function layerOf(trigger: HTMLElement | null) {
   return trigger?.closest("dialog") ?? (full?.contains(trigger) ? full : document.body);
 }
 
-/** `title` is what the field says on hover, such as its whole value where a narrow place cuts it short. */
-export function PreferenceSelect<const T extends string | number>({ id, label, options, value, onChange, onClose, disabled, compact, valueLabel, title }: {
+/**
+ * `title` is what the field says on hover, such as its whole value where a narrow place cuts it short. `more` ends a
+ * long list that shows only its latest choices: picking it shows the rest and leaves the list open.
+ */
+export function PreferenceSelect<const T extends string | number>({ id, label, options, value, onChange, onClose, disabled, compact, valueLabel, title, more }: {
   id?: string; label?: string; options: Choice<T>[]; value: T; onChange(value: NoInfer<T>): void; onClose?(): void;
-  disabled?: boolean; compact?: boolean; valueLabel?: string; title?: string;
+  disabled?: boolean; compact?: boolean; valueLabel?: string; title?: string; more?: { label: string; onPick(): void };
 }) {
   const generatedId = useId();
   const triggerId = id ?? generatedId;
@@ -26,11 +33,14 @@ export function PreferenceSelect<const T extends string | number>({ id, label, o
   const initialIndex = Math.max(0, selected);
   const unavailable = disabled || options.length === 0;
   const open = active !== null && !unavailable;
-  const index = Math.min(active ?? 0, options.length - 1);
+  // The rows the keys step through: every choice, then `more` when there is one.
+  const last = options.length - (more ? 0 : 1);
+  const index = Math.min(active ?? 0, last);
 
   useEffect(() => { if (unavailable) setActive(null); }, [unavailable]);
 
   function choose(i: number) {
+    if (more && i === options.length) return more.onPick();
     const option = options[i];
     if (option && option.value !== value && !trigger.current?.matches(":disabled")) onChange(option.value);
     setActive(null);
@@ -66,7 +76,7 @@ export function PreferenceSelect<const T extends string | number>({ id, label, o
   }, [open, options.length]);
 
   useLayoutEffect(() => {
-    if (open) panel.current?.children[index]?.scrollIntoView({ block: "nearest" });
+    if (open) document.getElementById(list + "-" + index)?.scrollIntoView({ block: "nearest" });
   }, [open, index]);
 
   useEffect(() => {
@@ -94,10 +104,10 @@ export function PreferenceSelect<const T extends string | number>({ id, label, o
         // While something plays, Space pauses it, as it does from any button that keeps focus. Enter and the arrows still open the list.
         if (e.key === " " && !open && mediaPlaying()) return;
         switch (e.key) {
-          case "ArrowDown": setActive(open ? Math.min(options.length - 1, index + 1) : initialIndex); break;
+          case "ArrowDown": setActive(open ? Math.min(last, index + 1) : initialIndex); break;
           case "ArrowUp": setActive(open ? Math.max(0, index - 1) : initialIndex); break;
           case "Home": setActive(0); break;
-          case "End": setActive(options.length - 1); break;
+          case "End": setActive(last); break;
           case "Enter": case " ": if (open) choose(index); else setActive(initialIndex); break;
           case "Escape": if (!open) return; setActive(null); onClose?.(); break;
           default: {
@@ -114,10 +124,17 @@ export function PreferenceSelect<const T extends string | number>({ id, label, o
       <span className={open ? "-rotate-90" : "rotate-90"}><Icon name="chevron" size={12} /></span>
     </button>
     {open && createPortal(<ul ref={panel} role="listbox" id={list} aria-labelledby={triggerId} data-shortcut-overlay className="preference-options">
-      {options.map((option, i) => <li key={option.value} id={list + "-" + i} role="option" aria-selected={i === selected}
-        data-active={i === index} onPointerMove={() => setActive(i)} onMouseDown={e => e.preventDefault()} onClick={() => choose(i)}>
-        {option.label}{i === selected && <Icon name="check" size={14} />}
-      </li>)}
+      {options.map((option, i) => <Fragment key={option.value}>
+        {option.group && option.group !== options[i - 1]?.group && <li role="presentation" className="preference-group">{option.group}</li>}
+        <li id={list + "-" + i} role="option" aria-selected={i === selected} data-detailed={option.detail ? "" : undefined}
+          data-active={i === index} onPointerMove={() => setActive(i)} onMouseDown={e => e.preventDefault()} onClick={() => choose(i)}>
+          {option.detail ? <span className="preference-option-text"><span>{option.label}</span><span className="preference-option-detail">{option.detail}</span></span> : option.label}
+          {option.tag && <span className="preference-option-tag">{option.tag}</span>}
+          {i === selected && <Icon name="check" size={14} />}
+        </li>
+      </Fragment>)}
+      {more && <li id={list + "-" + options.length} role="option" aria-selected={false} className="preference-more" data-active={index === options.length}
+        onPointerMove={() => setActive(options.length)} onMouseDown={e => e.preventDefault()} onClick={() => choose(options.length)}>{more.label}</li>}
     </ul>, layerOf(trigger.current))}
   </>;
 }

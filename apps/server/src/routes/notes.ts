@@ -1,7 +1,6 @@
 import { rm, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
-import { isMultipartRequest, MaxFileSizeExceededError, MaxPartsExceededError, MaxTotalSizeExceededError,
-  MultipartParseError, parseMultipartRequest } from "@remix-run/multipart-parser/future";
+import { isMultipartRequest, parseMultipartRequest } from "@remix-run/multipart-parser/future";
 import { Hono } from "hono";
 import { z } from "zod/v3";
 import { CreateNoteRequest, ModelTuning, UpdateNoteRequest } from "@scarlet/shared";
@@ -15,7 +14,7 @@ import { createNote } from "../services/notes.js";
 import { requestAttempt, requireLocalPauseTarget, requireProjectEditAttempt } from "../services/taskAttempt.js";
 import { notify } from "../services/notify.js";
 import { getTranscriptionProvider, spokenText } from "../transcribe/index.js";
-import { formFile, formString, jsonBody, numberParam, requireProjectHeader } from "./util.js";
+import { formFile, formString, jsonBody, multipartError, numberParam, requireProjectHeader } from "./util.js";
 
 const NO_SPEECH = "Didn’t catch any words. Try again, or type it.";
 const NOT_CONFIGURED = "To use voice, select and configure OpenAI or local whisper.cpp transcription in Settings.";
@@ -42,9 +41,7 @@ export async function voiceForm(request: Request, maxBytes = 64 * 1024 * 1024) {
       }
     }
   } catch (error) {
-    if (error instanceof MaxFileSizeExceededError || error instanceof MaxTotalSizeExceededError || error instanceof MaxPartsExceededError) throw tooLarge();
-    if (error instanceof MultipartParseError) throw badRequest("bad_voice_form", "Invalid voice recording form.");
-    throw error;
+    multipartError(error, { tooLarge, tooManyParts: tooLarge, invalid: () => badRequest("bad_voice_form", "Invalid voice recording form.") });
   }
   return fields;
 }

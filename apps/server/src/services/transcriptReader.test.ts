@@ -17,7 +17,10 @@ it("installs read indexes on a populated library and keeps cached words current 
   migrate(db);
   const version = db.pragma("user_version", { simple: true });
   const repos = createRepos(db);
-  repos.projects.insert({ ...createProject("Legacy transcript"), id: "p" });
+  // Populate this older library using the columns it had before the current engine opens it.
+  const project = createProject("Legacy transcript");
+  db.prepare("INSERT INTO projects (id, name, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+    .run("p", project.name, JSON.stringify(project.settings), project.createdAt, project.updatedAt);
   repos.tasks.put({ id: "task", projectId: "p", kind: "edit", agent: "codex", state: "done", context: {}, changeIds: [],
     instruction: "First cut", createdBy: { type: "human", name: "Editor" }, question: null, summary: null, hostId: null });
   const document = (text: string) => ({ id: "t", mediaId: "mic", projectId: "p", segments: [{ id: "s", start: 0, end: 1, text, words: [] }] });

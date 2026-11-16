@@ -1,4 +1,4 @@
-import { MaxFileSizeExceededError, MaxPartsExceededError, MaxTotalSizeExceededError, MultipartParseError, parseMultipartRequest } from "@remix-run/multipart-parser/future";
+import { parseMultipartRequest } from "@remix-run/multipart-parser/future";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
@@ -12,7 +12,7 @@ import { serveFile } from "../files.js";
 import { requestAttempt, requireLocalPauseTarget, requireProjectEditAttempt } from "../services/taskAttempt.js";
 import { assetPath, deleteTemplate, findAttachment, findTemplate, mimeFor, graphicSource, MAX_ATTACHMENT_BYTES, MAX_DOCUMENT_PAGES, readDocument, removeStyleGuide, renderProjectGraphic,
   saveAttachment, saveStyleGuide, saveTemplate, templatePreviewPath, templateSummary } from "../services/graphics.js";
-import { jsonBody, requireProject, requireProjectHeader } from "./util.js";
+import { jsonBody, multipartError, requireProject, requireProjectHeader } from "./util.js";
 
 export function graphicRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
@@ -35,21 +35,27 @@ export function graphicRoutes(ctx: Ctx) {
     return serveFile(c.req.raw, templatePreviewPath(ctx, template), { contentType: "image/png", cacheControl: "private, max-age=31536000, immutable" });
   });
 
+  /** A run may change the library's templates only while it is live and allowed to change its project. */
+  function requireTemplateAttempt(request: Request) {
+    const attempt = requestAttempt(request);
+    if (!attempt) return undefined;
+    const task = ctx.repos.tasks.get(attempt.taskId);
+    if (!task) throw badRequest("invalid_task", "Unknown task.");
+    return requireProjectEditAttempt(ctx, attempt, task.projectId);
+  }
+
   r.post("/templates", async (c) => {
     const body = await jsonBody(c, SaveTemplateRequest, 4 * 1024 * 1024);
-    const attempt = requestAttempt(c.req.raw);
-    if (attempt) {
-      const task = ctx.repos.tasks.get(attempt.taskId);
-      if (!task) throw badRequest("invalid_task", "Unknown task.");
-      requireProjectEditAttempt(ctx, attempt, task.projectId);
-      if (body.projectId && body.projectId !== task.projectId) throw badRequest("invalid_task", "Task must belong to this project.");
-    }
+    const task = requireTemplateAttempt(c.req.raw);
+    if (task && body.projectId && body.projectId !== task.projectId) throw badRequest("invalid_task", "Task must belong to this project.");
     const saved = await saveTemplate(ctx, body, c.var.user, c.req.raw.signal);
     return c.json(saved, 201);
   });
 
   r.delete("/templates/:templateId", async (c) => {
-    await deleteTemplate(ctx, requireTemplate(c.req.param("templateId")), c.var.user);
+    const template = requireTemplate(c.req.param("templateId"));
+    requireTemplateAttempt(c.req.raw);
+    await deleteTemplate(ctx, template, c.var.user);
     return c.json({});
   });
 
@@ -57,17 +63,19 @@ export function graphicRoutes(ctx: Ctx) {
 
   r.post("/projects/:id/attachments", async (c) => {
     const project = requireProjectHeader(ctx, c.req.param("id"));
+    requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), project.id);
     ctx.paths.ensureProject(project.id);
+    const tooLarge = () => new HttpError(413, "attachment_too_large", `An attachment can be up to ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
     // The desktop app's own drops arrive as paths, as /media/import's do: the engine copies the file in.
     if (c.req.header("content-type")?.startsWith("application/json")) {
       const { path } = await jsonBody(c, z.object({ path: z.string().min(1).max(4096) }));
       const info = isAbsolute(path) ? await stat(path).catch(() => null) : null;
       if (!info?.isFile()) throw notFound("file");
-      if (info.size > MAX_ATTACHMENT_BYTES) throw new HttpError(413, "attachment_too_large", `An attachment can be up to ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
+      if (info.size > MAX_ATTACHMENT_BYTES) throw tooLarge();
       const attachment = await saveAttachment(ctx, project.id, basename(path), createReadStream(path), mimeFor(path), c.req.raw.signal);
       return c.json({ attachment }, 201);
     }
-    if (Number(c.req.header("content-length")) > MAX_ATTACHMENT_BYTES + 64 * 1024) throw new HttpError(413, "attachment_too_large", `An attachment can be up to ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
+    if (Number(c.req.header("content-length")) > MAX_ATTACHMENT_BYTES + 64 * 1024) throw tooLarge();
     try {
       for await (const part of parseMultipartRequest(c.req.raw, { maxFileSize: MAX_ATTACHMENT_BYTES, maxParts: 8 })) {
         if (part.name !== "file" || !part.isFile) continue;
@@ -75,9 +83,7 @@ export function graphicRoutes(ctx: Ctx) {
         return c.json({ attachment }, 201);
       }
     } catch (error) {
-      if (error instanceof MaxFileSizeExceededError || error instanceof MaxTotalSizeExceededError) throw new HttpError(413, "attachment_too_large", `An attachment can be up to ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
-      if (error instanceof MultipartParseError || error instanceof MaxPartsExceededError) throw badRequest("bad_upload", "Incomplete or invalid upload. Please try again.");
-      throw error;
+      multipartError(error, { tooLarge, invalid: () => badRequest("bad_upload", "Incomplete or invalid upload. Please try again.") });
     }
     throw badRequest("missing_file", "multipart field `file` is required");
   });
@@ -134,10 +140,8 @@ export function graphicRoutes(ctx: Ctx) {
         }
       }
     } catch (error) {
-      if (error instanceof HttpError) throw error;
-      if (error instanceof MaxFileSizeExceededError || error instanceof MaxTotalSizeExceededError) throw new HttpError(413, "assets_too_large", "The graphic's files are too large together.");
-      if (error instanceof MultipartParseError || error instanceof MaxPartsExceededError) throw badRequest("bad_upload", "Incomplete or invalid upload.");
-      throw error;
+      multipartError(error, { tooLarge: () => new HttpError(413, "assets_too_large", "The graphic's files are too large together."),
+        invalid: () => badRequest("bad_upload", "Incomplete or invalid upload.") });
     }
     if (!options) throw badRequest("missing_options", "multipart field `options` is required");
     const signal = AbortSignal.any([ctx.projectSignal(project.id), c.req.raw.signal]);

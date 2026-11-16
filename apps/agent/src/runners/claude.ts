@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { writePrivateFile } from "../private-files.js";
 import { briefInput, DEFAULT_STALL_MS, isQuestionTool, planEvent, prettyToolName, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
 import { earlyResult, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
-import { addUsage, claudeUsage } from "./usage.js";
+import { addUsage, claudeUsage, usageWithModel } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
 
 /**
@@ -218,7 +218,7 @@ export function parseClaudeLine(line: string, st: ClaudeParseState): RunnerEvent
 /** The run's usage: the result totals, else the sum of the messages seen before the process stopped. */
 export function claudeRunUsage(st: ClaudeParseState, model?: string): AgentUsage | undefined {
   const usage = st.usage ?? Object.values(st.messageUsage).reduce<AgentUsage | undefined>(addUsage, undefined);
-  return usage && !usage.model && model ? { ...usage, model } : usage;
+  return usageWithModel(usage, model);
 }
 
 function flattenToolResult(content: unknown): string {

@@ -57,6 +57,7 @@ import { now } from "../db.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { notify } from "./notify.js";
 import { createTask, editsDialogue, FINISHED_TASK, parseAssignTo, isDialoguePass, queueRepeatCheck, saveTask, stagesCut } from "./tasks.js";
+import { runAttemptIds, runRoot } from "./runAttempts.js";
 import { ensureHead, resolveTimeline, storeValidatedVersion, storeVersion } from "./timeline.js";
 import { actorFor, authorName, logActivity, quote } from "./activity.js";
 import { proposalAfterRevisions, resumeReviewState } from "./revisionState.js";
@@ -271,8 +272,10 @@ export function proposeChange(ctx: Ctx, user: User, projectId: string, body: Pro
   return ctx.db.transaction(() => {
     checkAttempt?.();
     requireUnscopedEdit(ctx, body.taskId ? ctx.repos.tasks.get(body.taskId) : undefined);
+    const withdrawn = withdrawable(ctx, projectId, body);
     const aligned = opsOnWholeFrames(ctx, projectId, body);
     const result = persistProposal(ctx, user, projectId, aligned);
+    for (const earlier of withdrawn) putAway(ctx, earlier, WITHDRAWN, result.change.id);
     // Inside a selected passage the engine places each removal itself, so the agent is told each one it moved.
     if (!aligned.range || !body.ops || aligned.ops?.length !== body.ops.length) return result;
     const round3 = (t: number) => Math.round(t * 1000) / 1000;
@@ -284,6 +287,25 @@ export function proposeChange(ctx: Ctx, user: User, projectId: string, body: Pro
     });
     return onWholeFrames.length ? { ...result, onWholeFrames } : result;
   }, "immediate")();
+}
+
+const WITHDRAWN = "Replaced by a later option from the same request.";
+
+/**
+ * The earlier options a proposal withdraws. An agent sees how a suggestion or an alternative looks only once it is
+ * saved, so it saves drafts; with no way to take one back, a cold-open request left the editor six options to play,
+ * three of them drafts, where it meant to offer three (2026-11-15). Only the request's own options that still wait for
+ * the editor can go: anything they have decided, and anything another request made, stays as it is.
+ */
+function withdrawable(ctx: Ctx, projectId: string, body: ProposeChangeRequest): Change[] {
+  return [...new Set(body.withdraws ?? [])].map(id => {
+    const earlier = ctx.repos.changes.get(id);
+    if (!body.taskId || !earlier || earlier.projectId !== projectId || earlier.taskId !== body.taskId || earlier.state !== "ready" ||
+        !["suggestion", "alternative"].includes(earlier.intent ?? "")) {
+      throw badRequest("invalid_withdrawal", `${id} isn't a suggestion or alternative of this request that is waiting for the editor, so it can't be withdrawn.`);
+    }
+    return earlier;
+  });
 }
 
 /**
@@ -350,16 +372,17 @@ function opsOnWholeFrames(ctx: Ctx, projectId: string, body: ProposeChangeReques
 
 // A resumed run still owns its earlier parts. A cut the editor sent back can be in a successor made by its own task.
 function dialogueParts(projectId: string, rootId: string) {
+  const attempts = runAttemptIds(projectId, rootId);
   const ids = `WITH RECURSIVE parts(id) AS (
-    SELECT id FROM changes WHERE project_id = ? AND json_extract(json, '$.taskId') IN
-      (SELECT id FROM tasks WHERE project_id = ? AND (id = ? OR json_extract(json, '$.resumeRootId') = ?))
+    SELECT id FROM changes WHERE project_id = ? AND json_extract(json, '$.taskId') IN (${attempts.sql})
     UNION SELECT c.id FROM parts JOIN tasks t ON json_extract(t.json, '$.context.changeId') = parts.id
       JOIN changes c ON json_extract(c.json, '$.taskId') = t.id
       WHERE c.project_id = ? AND t.project_id = ? AND json_extract(t.json, '$.context.cutIndex') IS NOT NULL
     UNION SELECT json_extract(c.json, '$.replacedBy') FROM parts JOIN changes c ON c.id = parts.id
       WHERE json_extract(c.json, '$.rejectReason') = ? AND json_extract(c.json, '$.replacedBy') IS NOT NULL
   ) SELECT id FROM parts`;
-  return { ids, args: [projectId, projectId, projectId, rootId, rootId, projectId, projectId, REVISED] };
+  // The first parameter is the caller's own `project_id = ?`, which comes before these ids in each query.
+  return { ids, args: [projectId, projectId, ...attempts.params, projectId, projectId, REVISED] };
 }
 
 /**
@@ -1151,13 +1174,23 @@ export function foldStrandedPasses(ctx: Ctx): void {
   }
 }
 
+/**
+ * What a timeline plays on the tracks `base` has. A staged cut keeps its footage when a later save lays a picture over
+ * it: passes that reframed the presenter were refused 18 times in eight runs for "taking away" cuts whose footage they
+ * left in place (2026-11-15). The mapper itself doesn't count how a clip is framed.
+ */
+function footageOf(timeline: Timeline, base: Timeline): Timeline {
+  const kept = new Set(base.tracks.map(t => `${t.kind}:${t.id}`));
+  return { ...timeline, tracks: timeline.tracks.filter(t => kept.has(`${t.kind}:${t.id}`)) };
+}
+
 /** Later saves by the producing run can move a published call on the timeline but must preserve its footage and edges. */
 function assertStagedCallsStand(ctx: Ctx, project: Project, task: Task, base: Timeline, next: Timeline): void {
-  const parts = dialogueParts(project.id, task.resumeRootId ?? task.id);
+  const parts = dialogueParts(project.id, runRoot(task));
   const waiting = ctx.repos.changes.select(`project_id = ? AND state IN ('ready','revising') AND json_extract(json, '$.intent') = 'suggestion'
     AND json_array_length(json, '$.cutReasons') > 0 AND id IN (${parts.ids})`, parts.args);
   if (!waiting.length) return;
-  const place = makeStagedCutMapper(base, next, project.settings.fps);
+  const place = makeStagedCutMapper(footageOf(base, base), footageOf(next, base), project.settings.fps);
   for (const change of waiting) {
     const review = prepareCutReview(ctx, change).review;
     if (!review) continue;
@@ -1687,9 +1720,8 @@ const SAVED_AGAIN = "Scarlet saved this work again on the video as it was by the
  * (2026-11-11). One with nothing applied after it by its run still waits.
  */
 export function retireStaleSaves(ctx: Ctx, task: Task): void {
-  const rootId = task.resumeRootId ?? task.id;
-  const own = ctx.repos.changes.select(`project_id = ? AND json_extract(json, '$.taskId') IN
-    (SELECT id FROM tasks WHERE project_id = ? AND (id = ? OR json_extract(json, '$.resumeRootId') = ?))`, [task.projectId, task.projectId, rootId, rootId], "created_at ASC, rowid ASC");
+  const attempts = runAttemptIds(task.projectId, runRoot(task));
+  const own = ctx.repos.changes.select(`project_id = ? AND json_extract(json, '$.taskId') IN (${attempts.sql})`, [task.projectId, ...attempts.params], "created_at ASC, rowid ASC");
   // In the order they were saved: two saves can share a millisecond, and only one made after the refused save replaces it.
   for (const [at, stale] of own.entries()) {
     if (stale.state !== "ready" || stale.intent !== "requested" || !stale.error?.startsWith(STALE_SAVE)) continue;
@@ -1704,15 +1736,24 @@ export function retireStaleSaves(ctx: Ctx, task: Task): void {
  * Apply a dialogue pass with the editor's calls once its run has finished, when the editor asked for that.
  * Cuts the editor didn't call follow Scarlet's verdict. Null while the run is still going, nothing was asked, or a cut
  * still waits on the editor.
+ *
+ * A pass whose staged cuts Scarlet settled itself, every one, asking the editor nothing, goes in the same way when its
+ * run finishes. The window used to be what applied it, once it saw the finished run: with the window closed, or a run
+ * no window watches, the cuts Scarlet had held and then decided stayed out of the video, waits of ten seconds among
+ * them (2026-11-15).
  */
 export function applyChoicesWhenDone(ctx: Ctx, change: Change): Change | null {
-  if (!change.applyWhenDone || change.state !== "ready") return null;
+  if (change.state !== "ready") return null;
+  const unasked = !change.applyWhenDone && change.intent === "suggestion" && !!change.cutReasons?.length && !!change.cutAssessments?.length
+    && change.cutAssessments.every(a => a.verdict !== "ask" && !a.provisional) && !change.error;
+  if (!change.applyWhenDone && !unasked) return null;
   const task = latestAttempt(ctx, change.taskId);
   // Only a run that finished applies it. One still going isn't done, and one that stopped early left staged cuts
   // unchecked: those are the editor's calls now, and applying on their next call would skip the rest unasked.
   if (task && task.state !== "done") return null;
   if (task?.context.branch && task.context.branch !== ctx.repos.projects.header(change.projectId)?.branch) return null;
-  const user = ctx.repos.users.get(change.applyWhenDone.userId) ?? ctx.repos.users.primary() ?? { id: change.applyWhenDone.userId, name: "Editor" };
+  const asked = change.applyWhenDone?.userId;
+  const user = (asked && ctx.repos.users.get(asked)) || ctx.repos.users.primary() || { id: asked ?? "editor", name: "Editor" };
   // Never let this stop the run from finishing: on any problem the calls stay saved for the editor to apply.
   try {
     const review = prepareCutReview(ctx, change).review;
@@ -1725,6 +1766,8 @@ export function applyChoicesWhenDone(ctx: Ctx, change: Change): Change | null {
     return approveChange(ctx, user, { ...change, applyWhenDone: undefined }, { restoredCuts: keptCuts(change, review) }).change;
   } catch (error) {
     ctx.log(`[review] Could not apply ${change.id} when its pass finished: ${error}`);
+    // Nobody asked for this one: it stays as it was, for the window to apply or to say why it can't.
+    if (unasked) return null;
     // A video that moved under the pass names the cut it moved under. Anything else is in the log.
     const moved = error instanceof HttpError && error.code === "cut_review_stale";
     return saveChange(ctx, { ...change, applyWhenDone: undefined,
@@ -2193,7 +2236,16 @@ export function flagEdit(ctx: Ctx, projectId: string, task: Task, body: FlagEdit
   let alsoThere: (typeof edits) = [];
   if (body.changeId !== undefined) {
     found = edits.find(e => e.edit.changeId === body.changeId && e.edit.spot === body.spot);
-    if (!found) throw notFound(`edit ${body.spot} of change ${body.changeId} on the working cut`);
+    if (!found) {
+      // A cold-open request flagged each of its three options here, which still waited for the editor, and was told
+      // only that nothing was found (2026-11-15). An option carries its doubt from when it is saved.
+      const staged = ctx.repos.changes.get(body.changeId);
+      if (staged?.projectId === projectId && staged.state === "ready") {
+        throw badRequest("not_applied", `${body.changeId} waits for the editor and isn't in the video, so edit_flag can't mark it. ` +
+          "Give the doubt as the edit's check when you save it with timeline_propose, and withdraw this one there.");
+      }
+      throw notFound(`edit ${body.spot} of change ${body.changeId} on the working cut`);
+    }
   } else {
     const { start, end } = body.range!;
     // A cut is a point, where it joins; any other edit is the footage it changed. Each is weighed by how much of the
@@ -2212,7 +2264,10 @@ export function flagEdit(ctx: Ctx, projectId: string, task: Task, body: FlagEdit
   }
   const change = ctx.repos.changes.get(found!.edit.changeId)!;
   const flags = change.flags ?? [];
-  if (!flags.some(f => f.spot === found!.edit.spot && f.taskId === task.id && f.check === body.check))
+  // A resumed run is a new task of the same run: the doubt it flags again is the one its earlier attempt flagged.
+  const root = runRoot(task);
+  const sameRun = (taskId: string) => taskId === task.id || (ctx.repos.tasks.get(taskId)?.resumeRootId ?? taskId) === root;
+  if (!flags.some(f => f.spot === found!.edit.spot && f.check === body.check && sameRun(f.taskId)))
     saveChange(ctx, { ...change, flags: [...flags, { spot: found!.edit.spot, check: body.check, taskId: task.id, at: now() }] });
   logActivity(ctx, { projectId, actor: { type: "scarlet", name: "Scarlet" }, type: "change.flagged",
     summary: `Scarlet flagged ${quote(found!.edit.label)}: ${quote(body.check, 120)}`,

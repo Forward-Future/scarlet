@@ -5,7 +5,7 @@ import { adjacentRepeatCandidates, cutAnchorOn, normalizeTranscriptToken, type J
 import type { Ctx } from "../context.js";
 import { acousticWordReader } from "../transcribe/acousticWords.js";
 import { EmissionFile } from "../transcribe/emissions.js";
-import { alignsLanguage, measureRecordingWords } from "../transcribe/wordAlign.js";
+import { readsEnglishSpeech, measureRecordingWords } from "../transcribe/wordAlign.js";
 import { transcriptLanguage } from "./transcriptReader.js";
 import { dialogueDetector } from "./dialogueDetections.js";
 import { emissionStore, recordingWav, type RecordingAudio } from "./recordingAudio.js";
@@ -182,7 +182,7 @@ export async function auditDialogueAudio(ctx: Ctx, project: Project, tl: Timelin
         const at = (t: number) => sourceToTimeline(clip, t);
         return { mediaId, clipId: clip.id, trackId: track, timelineStart: at(source.start), timelineEnd: at(source.end), source };
       };
-      if (lang && lang !== "auto" && !alignsLanguage(lang)) {
+      if (lang && lang !== "auto" && !readsEnglishSpeech(lang)) {
         // Read the verbatim dialogue scan in its own language. Use the same authorised detector and page cache as the pass.
         const detector = dialogueDetector(ctx);
         const pages = new Map<number, Word[]>();

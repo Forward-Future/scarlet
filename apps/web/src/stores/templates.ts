@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { GraphicTemplateSummary } from "@scarlet/shared";
+import type { GraphicTemplateSummary, TransitionStyle } from "@scarlet/shared";
 import { api, errorMessage } from "../lib/client";
 
 /**
@@ -19,10 +19,13 @@ interface TemplatesState {
   error: string | null;
   /** Read the library again. The list the box already has stays on screen meanwhile. */
   load(): Promise<void>;
-  /** The template lit in the $ list, drawn over the player's picture while it is. */
-  lit: { id: string; url: string } | null;
-  setLit(lit: { id: string; url: string } | null): void;
+  /** The template lit in the $ list, drawn over the player's picture while it is: a graphic's picture, or a transition
+   * playing between the pictures either side of the next cut. */
+  lit: LitTemplate | null;
+  setLit(lit: LitTemplate | null): void;
 }
+
+export type LitTemplate = { id: string; url: string; transition?: undefined } | { id: string; url?: undefined; transition: TransitionStyle; from?: string; to?: string };
 
 let loading: Promise<void> | undefined;
 
@@ -33,7 +36,7 @@ export const useTemplatesStore = create<TemplatesState>((set, get) => ({
   lit: null,
   setLit: lit => {
     const was = get().lit;
-    if (was?.id === lit?.id && was?.url === lit?.url) return;
+    if (was?.id === lit?.id && was?.url === lit?.url && (!lit?.transition || (was?.transition && was.from === lit.from && was.to === lit.to))) return;
     set({ lit });
   },
   load: () => {

@@ -138,12 +138,13 @@ export class RecordingSpeakers {
   private async analysed(ctx: Ctx, projectId: string, media: MediaAsset, decoded: DecodedRecording | undefined, priority: boolean,
     previous: Promise<void>, placed: () => void): Promise<SpeakerTurn[]> {
     // Queue in request order, even when one lookup fails. Only placement is serialized; workers still run concurrently.
-    await previous;
-    const pause = ctx.mediaSignal(projectId);
-    // Trash, a quit and a change of the transcription settings stop an analysis whoever waits for it.
-    const always = AbortSignal.any([ctx.projectSignal(projectId), ctx.repos.settings.transcriptionSignal]);
-    let file: string, info: Stats;
+    // Whatever happens before the lookup is placed, the next request is let go: it waits on this one.
+    let file: string, info: Stats, pause: AbortSignal, always: AbortSignal;
     try {
+      await previous;
+      pause = ctx.mediaSignal(projectId);
+      // Trash, a quit and a change of the transcription settings stop an analysis whoever waits for it.
+      always = AbortSignal.any([ctx.projectSignal(projectId), ctx.repos.settings.transcriptionSignal]);
       if (!priority) pause.throwIfAborted();
       always.throwIfAborted();
       const source = await fileInDirectoryAsync(ctx.paths.media(projectId), media.path);

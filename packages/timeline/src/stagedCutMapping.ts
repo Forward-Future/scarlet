@@ -64,11 +64,15 @@ function passageReader(timeline: Timeline) {
   return (start: number, end: number) => {
     const tracks = layers.flatMap(({ track, clipsIn }) => {
       const clips = clipsIn(start, end).filter(c => c.timelineIn < end - EPS && clipEnd(c) > start + EPS).map(c => {
-        const { id, label, ...part } = shiftClip(trimTail(trimHead(c, start), end), -start);
+        const { id, label, ...shifted } = shiftClip(trimTail(trimHead(c, start), end), -start);
+        // How a clip is framed, still or moving, isn't what it plays: a pass that punched in on footage a staged cut waits on left the
+        // cut's footage where it was, and applying the editor's approval refused it as changed (2026-11-15).
+        const part = shifted.kind === "media" ? (({ transform: _t, keyframes: _k, opacity: _o, effects: _e, ...rest }) => rest)(shifted) : shifted;
         if (part.kind !== "media" || c.kind !== "media") return part;
         // A split elsewhere can reset a distant fade. Only its active part belongs to the passage.
         for (const key of ["audioFadeIn", "videoFadeIn"] as const) if (start >= c.timelineIn + c[key] - EPS) part[key] = 0;
         for (const key of ["audioFadeOut", "videoFadeOut"] as const) if (end <= clipEnd(c) - c[key] + EPS) part[key] = 0;
+        if (start > c.timelineIn + EPS) delete part.transitionIn;
         return { ...part, fadeStart: part.audioFadeIn || part.videoFadeIn ? c.timelineIn - start : undefined,
           fadeEnd: part.audioFadeOut || part.videoFadeOut ? clipEnd(c) - start : undefined };
       });

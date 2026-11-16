@@ -1,0 +1,66 @@
+name: Set up the Scarlet toolchain
+description: >-
+  pnpm (its version comes from package.json "packageManager"), Node.js, optionally the workspace's dependencies, and
+  optionally the stable Rust toolchain with the desktop shell's build cache. Runs after actions/checkout.
+
+inputs:
+  node-version:
+    description: Node.js version. Checks use 22, the oldest supported; installers ship and build with 24.
+    required: true
+  pnpm-cache:
+    description: Cache the pnpm store between runs.
+    default: "true"
+  install:
+    description: Run `pnpm install --frozen-lockfile` for the whole workspace.
+    default: "true"
+  rust:
+    description: Install the stable Rust toolchain and cache the desktop shell's target directory.
+    default: "false"
+  rust-targets:
+    description: Comma-separated target triples to add to the toolchain.
+    default: ""
+  rust-components:
+    description: Comma-separated rustup components to add to the toolchain.
+    default: ""
+  rust-cache-key:
+    description: Extra key for the Rust build cache.
+    default: ""
+  rust-cache-on-failure:
+    description: Save the Rust build cache even when the job fails.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      if: inputs.pnpm-cache == 'true'
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      if: inputs.pnpm-cache != 'true'
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install
+      if: inputs.install == 'true'
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    # Pinned by commit, so the toolchain is named here rather than taken from the action's ref.
+    - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      if: inputs.rust == 'true'
+      with:
+        toolchain: stable
+        targets: ${{ inputs.rust-targets }}
+        components: ${{ inputs.rust-components }}
+
+    - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      if: inputs.rust == 'true'
+      with:
+        workspaces: apps/desktop/src-tauri -> target
+        key: ${{ inputs.rust-cache-key }}
+        cache-on-failure: ${{ inputs.rust-cache-on-failure }}

@@ -4,6 +4,7 @@ export * from "./time.js";
 export { firstIndex, intervalCandidates } from "./intervals.js";
 export * from "./ids.js";
 export * from "./ops.js";
+export * from "./transitions.js";
 export * from "./diff.js";
 export * from "./rebase.js";
 export * from "./leftOut.js";
@@ -15,3 +16,5 @@ export * from "./stagedCutMapping.js";
 export * from "./joinCrossfade.js";
 
 export * from "./history.js";
+export * from "./handoff.js";
+export * from "./fcpxml.js";

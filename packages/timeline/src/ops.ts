@@ -192,7 +192,10 @@ function applyToDraft(tl: Timeline, op: TimelineOp): Timeline {
       const patch = { ...op.patch };
       delete patch.id;
       delete patch.kind;
-      const merged = Clip.parse({ ...found.clip, ...patch });
+      const next: Record<string, unknown> = { ...found.clip, ...patch };
+      // A null transition takes the transition off: the join is a straight cut again.
+      if (next.transitionIn === null) delete next.transitionIn;
+      const merged = Clip.parse(next);
       found.track.clips[found.index] = merged;
       sortClips(found.track);
       return tl;
@@ -439,6 +442,8 @@ export function splitClip(clip: Clip, at: number, newId: string): [Clip, Clip] {
   if (right.kind === "media") {
     right.audioFadeIn = 0;
     right.videoFadeIn = 0;
+    // A transition plays at the join it was put on, not at a split made inside the clip.
+    delete right.transitionIn;
   }
   return [left, right];
 }

@@ -65,6 +65,11 @@ describe("telling what an applied edit did", () => {
     expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { speed: 2 } }]), [one], { before: base, after: faster })).toEqual(["speed"]);
   });
 
+  it("names a transition put on a join a transition, at its join", () => {
+    const pushed = after(t => { (t.tracks[0]!.clips[0] as { transitionIn?: unknown }).transitionIn = { type: "push", duration: 0.4, direction: "left" }; });
+    expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { transitionIn: { type: "push", duration: 0.4, direction: "left" } } }]), [one], { before: base, after: pushed })).toEqual(["transition"]);
+  });
+
   it("calls footage placed on the main picture track an assembly, and a removed clip that shortens the cut a cut", () => {
     expect(editKinds(change([{ op: "addClip", trackId: picture.id, clip: makeMediaClip("cam", 0, 60, 0) },
       { op: "addClip", trackId: "v2", clip: makeMediaClip("screen", 0, 60, 0) }]), [one],

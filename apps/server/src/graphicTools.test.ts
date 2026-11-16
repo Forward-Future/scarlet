@@ -100,7 +100,10 @@ describe.skipIf(!hasChrome())("graphics", () => {
     expect(saved.isError, textOf(saved)).toBeFalsy();
     expect(images(saved)).toHaveLength(1);
     const { templateId } = JSON.parse(textOf(saved));
-    expect(JSON.parse(textOf(await call("template_list", {})))).toEqual([{ id: templateId, name: "name-card", title: "Name card", description: "A name, bottom left", fields: ["Name"] }]);
+    // Beside the transitions every library starts with.
+    const listed = JSON.parse(textOf(await call("template_list", {}))) as Array<{ kind: string }>;
+    expect(listed.filter(t => t.kind === "graphic")).toEqual([{ id: templateId, kind: "graphic", name: "name-card", title: "Name card", description: "A name, bottom left", fields: ["Name"] }]);
+    expect(listed.find(t => t.kind === "transition")).toMatchObject({ name: "dip-to-black", transition: { type: "dip", duration: 0.6 } });
     expect(JSON.parse(textOf(await call("template_get", { template: "$name-card" })))).toMatchObject({ html: PAGE, sample: { Name: "Ada Lovelace" }, width: 320 });
     const filled = JSON.parse(textOf(await call("graphic_render", { template: "name-card", fields: { Name: "Grace" } })));
     expect(filled).toMatchObject({ name: "Name card – Grace.mov", duration: expect.closeTo(1, 1) });

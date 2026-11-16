@@ -13,13 +13,14 @@ import { clipRange, mergeRanges, sha256, planPlaybackSegments, planSegments, sna
 import type { Clip, MediaAsset, Project, Timeline, TimeRange, Track } from "@scarlet/timeline";
 import { buildFilterGraph, clipPlacement, fillsFrames, holdsFrame, holdsSample, proxyHeightForClip, videoClockStart } from "./graph.js";
 import { isImagePath } from "./probe.js";
+import { motionsIn, planTransitions, type TransitionMotion } from "./transitions.js";
 import { copyOriginalPicture, wholeOriginalPicture } from "./pictureCopy.js";
 import { effectKind } from "./effects.js";
 import { fileInDirectory } from "./assetPath.js";
 import { FfmpegError, failureReason, fnum, runFfmpeg, LOCAL_MEDIA_INPUT } from "./exec.js";
 import { outputSize, renderRange, type RenderOptions, type RenderQuality } from "./render.js";
 
-import { resolveEncoding, withRenderEncoder } from "./encoder.js";
+import { withRenderEncoder } from "./encoder.js";
 
 /** Preserve compositing order while visiting each clip only in segments it intersects. */
 function segmentTimelines(timeline: Timeline, ranges: TimeRange[]): Timeline[] {
@@ -98,9 +99,14 @@ function mediaFingerprint(asset: MediaAsset | undefined, format: SegmentKeyOptio
 
 /** Fingerprint times at the precision passed to FFmpeg. Include sample offsets
  * separately: adelay rounds to samples before formatting its argument. */
-function segmentClip(clip: Clip, range: TimeRange, media: Map<string, MediaAsset>, settings: Project["settings"], track: Pick<Track, "kind" | "hidden" | "muted">, format: SegmentKeyOptions) {
+function segmentClip(clip: Clip, range: TimeRange, media: Map<string, MediaAsset>, settings: Project["settings"], track: Pick<Track, "kind" | "hidden" | "muted">, format: SegmentKeyOptions,
+  motions?: readonly TransitionMotion[]) {
   const p = clipPlacement(clip, range, 0.5 / settings.sampleRate);
   if (!p) return undefined;
+  // A transition's movement in this section, on the section's own clock. Absent for every clip none moves, so their
+  // part of the key is as it was.
+  const moving = motionsIn(motions, range.start, range.end).map(m => ({ ...m, start: fnum(m.start), end: fnum(m.end) }));
+  const motion = moving.length ? moving : undefined;
   const source = clip.kind === "media" ? media.get(clip.mediaId) : undefined;
   const still = !!source && (source.kind === "image" || (source.kind === "graphic" && isImagePath(source.path)));
   // As the graph places it: a clip is in a section for a frame of its picture or, with less than that, for a sample
@@ -114,13 +120,15 @@ function segmentClip(clip: Clip, range: TimeRange, media: Map<string, MediaAsset
     const { timelineOut: _out, ...visual } = rest;
     return { ...visual, placement };
   }
+  // The transition into a clip is drawn from `motion`, where it shows; elsewhere it changes nothing.
+  delete (rest as Partial<typeof rest> & { transitionIn?: unknown }).transitionIn;
   const asset = media.get(rest.mediaId);
   // Footage off the project's frames is drawn filled to them. Saying so here sets its sections apart from the ones
   // cached before it was, and leaves every other clip's part of the key as it has been.
   const frameFill = (track.kind === "video" && !track.hidden && !!asset && fillsFrames(rest, asset, settings.fps)) || undefined;
   if (!asset?.hash || rest.effects.some(effect => effect.enabled && effect.type === "lut")) {
     // Pending/legacy sources and external LUTs retain the old placement-sensitive identity.
-    return { ...rest, timelineIn, range, media: mediaFingerprint(asset, format), frameFill };
+    return { ...rest, timelineIn, range, media: mediaFingerprint(asset, format), frameFill, motion };
   }
   const { sourceIn, sourceOut: _out, ...input } = rest;
   const videoStart = videoClockStart(rest, p.local0);
@@ -132,7 +140,7 @@ function segmentClip(clip: Clip, range: TimeRange, media: Map<string, MediaAsset
   return { ...input, placement, media: mediaFingerprint(asset, format),
     seek: fnum(sourceIn + p.local0 * rest.speed), sourceDuration: fnum(p.vis * rest.speed),
     videoStart: fnum(videoStart), audioStart: fnum(audioStart), shift: fnum(p.pos - videoStart), delaySamples: format.pictureOnly ? undefined : Math.round(p.pos * settings.sampleRate),
-    videoFadeStart: fadeStart(rest.videoFadeOut), audioFadeStart: fadeStart(rest.audioFadeOut), frameFill };
+    videoFadeStart: fadeStart(rest.videoFadeOut), audioFadeStart: fadeStart(rest.audioFadeOut), frameFill, motion };
 }
 
 /** Fingerprint the rendered window independently of its absolute timeline position. */
@@ -144,10 +152,12 @@ export function segmentKey(
   media = new Map(project.media.map(asset => [asset.id, asset])),
 ): string {
   const o: SegmentKeyOptions = typeof quality === "string" ? { quality } : quality;
-  const tracks = timeline.tracks
+  // As the graph draws it: transitions add layers around their joins and move the clips either side.
+  const transitions = planTransitions(timeline, media, project.settings.fps);
+  const tracks = transitions.timeline.tracks
     .map((t) => {
       const clips = t.clips.filter(c => c.enabled !== false)
-        .map(c => segmentClip(c, range, media, project.settings, t, o)).filter(c => c !== undefined);
+        .map(c => segmentClip(c, range, media, project.settings, t, o, transitions.motions.get(c.id))).filter(c => c !== undefined);
       return { kind: t.kind, muted: t.muted, hidden: t.hidden, captionStyle: t.captionStyle, clips };
     })
     .filter((t) => t.clips.length > 0);
@@ -540,9 +550,13 @@ export interface PlaybackSegmentResult {
 export async function renderPlaybackSegment(project: Project, timeline: Timeline, range: TimeRange, cacheDir: string, output: string, opts: RenderOptions): Promise<PlaybackSegmentResult | void> {
   const quality = "preview";
   const size = outputSize(project.settings, quality, opts.height, opts.exportHeight);
+  // A hardware encoder that fails here retries the section with the next one, and finally with x264.
+  if (!opts.videoEncoder) {
+    return withRenderEncoder({ ...size, fps: project.settings.fps }, { ...opts, quality },
+      attempt => renderPlaybackSegment(project, timeline, range, cacheDir, output, attempt) as Promise<PlaybackSegmentResult>);
+  }
   const warnings: string[] = [];
-  const videoEncoder = await resolveEncoding(opts.hwaccel, opts.ffmpegPath, { ...size, fps: project.settings.fps }, quality,
-    reason => warnings.push(reason));
+  const videoEncoder = opts.videoEncoder;
   const encoder = videoEncoder.cacheKey;
   await fs.mkdir(cacheDir, { recursive: true });
   const [part] = segmentTimelines(timeline, [range]);

@@ -192,7 +192,8 @@ describe("otio", () => {
     project.media.push({ id: "m1", kind: "video", name: "a.mp4", path: "a.mp4", duration: 60, fps: 30 });
     const tl = timelineFromKeepRanges(project.id, "m1", [{ start: 1, end: 3 }, { start: 5, end: 8 }]);
     const otio = toOtio(project, tl, { mediaRoot: "C:/media" }) as { tracks: { children: unknown[] } };
-    expect(otio.tracks.children.length).toBe(2);
+    // V1, A1, and V1's sound on an audio track of its own: other apps play sound from audio tracks only.
+    expect(otio.tracks.children.length).toBe(3);
     const json = JSON.stringify(otio);
     expect(json).toContain("ExternalReference.1");
     expect(json).toContain("file:///C:/media/a.mp4");
@@ -275,7 +276,8 @@ describe("otio", () => {
       const own = (c: MediaClip) => [Math.round(c.sourceIn * fps), Math.round((c.sourceOut - c.sourceIn) * fps), fps, fps];
       for (const [i, track] of (toOtio(pass, cut) as Doc).tracks.children.entries()) {
         expect(track.children).toHaveLength(41);
-        expect(track.children.map(c => numbers(c.source_range))).toEqual((cut.tracks[i]!.clips as MediaClip[]).map(own));
+        // The third track is V1's sound, cut as V1 is.
+        expect(track.children.map(c => numbers(c.source_range))).toEqual((cut.tracks[i === 2 ? 0 : i]!.clips as MediaClip[]).map(own));
       }
     }
   });
@@ -351,11 +353,11 @@ describe("otio", () => {
     expect(overlaps.length).toBeGreaterThan(0);
     expect(Math.max(...overlaps)).toBeLessThan(1e-9);
     const otio = toOtio(project, cut) as { tracks: { children: Array<{ name: string; children: Array<{ OTIO_SCHEMA: string }> }> } };
-    expect(otio.tracks.children.map(t => t.name)).toEqual(["V1", "A1"]);
+    expect(otio.tracks.children.map(t => t.name)).toEqual(["V1", "A1", "V1 sound"]);
     for (const track of otio.tracks.children) expect(track.children.map(c => c.OTIO_SCHEMA)).toEqual(Array(41).fill("Clip.2"));
     // A real overlap still gets its own layer.
     const stacked = applyOps(cut, [{ op: "addClip", trackId: "v1", clip: makeMediaClip("v", 0, 2, 1) }]);
-    expect((toOtio(project, stacked) as typeof otio).tracks.children.map(t => t.name)).toEqual(["V1", "V1 (layer 2)", "A1"]);
+    expect((toOtio(project, stacked) as typeof otio).tracks.children.map(t => t.name)).toEqual(["V1", "V1 (layer 2)", "A1", "V1 sound", "V1 sound (layer 2)"]);
   });
 });
 

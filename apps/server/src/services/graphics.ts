@@ -11,13 +11,14 @@ import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { findChrome, graphicCoverage, graphicOver, renderPdfDocument, renderGraphic, renderGraphicStill, renderTimelineFrame, type MissingFont } from "@scarlet/render";
-import { GraphicTemplate, type GraphicRenderRequest, type GraphicRenderResponse, type GraphicTemplateSummary, type SaveStyleGuideRequest, type SaveTemplateRequest, type TaskAttachment, type User } from "@scarlet/shared";
+import { GraphicTemplate, type TransitionStyle, type GraphicRenderRequest, type GraphicRenderResponse, type GraphicTemplateSummary, type SaveStyleGuideRequest, type SaveTemplateRequest, type TaskAttachment, type User } from "@scarlet/shared";
 import { newId, type MediaAsset, type Project, type StyleGuide } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { actorFor, logActivity, quote } from "./activity.js";
 import { ingestMedia } from "./ingest.js";
+import { safeFileName } from "./fileName.js";
 import { previewPictures } from "./previewPictures.js";
 import { resolveTimeline } from "./timeline.js";
 
@@ -34,7 +35,7 @@ const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 
 /** A file name kept as the editor gave it, minus anything that could leave its folder or hide it. */
 export function attachmentName(name: string): string {
-  const base = basename(name.replace(/\\/g, "/")).replace(/[\u0000-\u001f<>:"|?*]/g, "_").replace(/^\.+/, "").trim().slice(0, 200);
+  const base = safeFileName(basename(name.replace(/\\/g, "/")), "_").replace(/^\.+/, "").trim().slice(0, 200);
   return base || "attachment";
 }
 
@@ -102,10 +103,13 @@ export async function saveStyleGuide(ctx: Ctx, projectId: string, body: SaveStyl
     const found = await findAttachment(ctx, projectId, body.attachmentId);
     if (!found) throw badRequest("unknown_attachment", "That attachment isn't in this project. Ask the editor to attach the guide again.");
     const staging = `${folder}.${randomUUID()}`;
-    await mkdir(staging, { recursive: true, mode: 0o700 });
-    await cp(found.path, join(staging, found.attachment.name));
-    await rm(folder, { recursive: true, force: true });
-    await rename(staging, folder);
+    try {
+      await mkdir(staging, { recursive: true, mode: 0o700 });
+      await cp(found.path, join(staging, found.attachment.name));
+      await swapInFolder(staging, folder);
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+    }
     file = relative(ctx.paths.project(projectId), join(folder, found.attachment.name)).split(sep).join("/");
   } else await rm(folder, { recursive: true, force: true });
   const guide: StyleGuide = { name: body.name, ...(body.text?.trim() && { text: body.text }), ...(file && { file }), savedAt: now() };
@@ -122,6 +126,25 @@ export async function removeStyleGuide(ctx: Ctx, projectId: string, user: User |
   const project = ctx.repos.projects.get(projectId);
   if (project) ctx.bus.publish({ type: "project.updated", projectId, project });
   logActivity(ctx, { projectId, actor: actorFor(user), type: "project.style_guide", summary: "The style guide was removed" });
+}
+
+/**
+ * Put a folder made beside `folder` in its place. The folder there before is moved aside first and put back if the new
+ * one can't go in, so `folder` is never left missing while the database points at it. The one aside is then removed.
+ */
+export async function swapInFolder(staging: string, folder: string) {
+  const aside = `${folder}.old-${randomUUID()}`;
+  const hadOld = await rename(folder, aside).then(() => true, (error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  });
+  try {
+    await rename(staging, folder);
+  } catch (error) {
+    if (hadOld) await rename(aside, folder).catch(() => undefined);
+    throw error;
+  }
+  if (hadOld) await rm(aside, { recursive: true, force: true }).catch(() => undefined);
 }
 
 /** Where the guide's file is, when it is a file. */
@@ -150,32 +173,45 @@ export function assetPath(name: string): string {
   return parts.join("/");
 }
 
-const LINKS = /(\b(?:src|href)\s*=\s*["']|url\(\s*["']?)([^"')\s>]+)/gi;
+/** A link in a page: a quoted attribute or `url()` up to its closing quote (spaces and all), or an unquoted one. */
+const LINKS = /(\b(?:src|href)\s*=\s*|url\(\s*)(?:"([^"]*)"|'([^']*)'|([^"')\s>]+))/gi;
+
+/** The file a link names, when it names one by absolute path or file URL. A file URL is decoded by its parser. */
+function linkedFile(link: string): string | undefined {
+  try {
+    if (/^file:/i.test(link)) return resolve(fileURLToPath(link));
+  } catch { return undefined; }
+  if (!isAbsolute(link) || link.startsWith("//")) return undefined;
+  // The page reads a plain path as a URL, so `%20` is a space. A `%` that isn't an escape (`100%.png`) stays as written.
+  try { return resolve(decodeURIComponent(link)); } catch { return resolve(link); }
+}
 
 /**
  * Bring the files of this library that a page links to by absolute path or file URL (an attachment, a style guide's
  * font, another graphic's picture) into its folder, and link them there. A graphic keeps working when the attachment
  * or the project it came from is gone.
  */
-async function adoptLinkedFiles(html: string, folder: string, roots: string[]): Promise<string> {
+export async function adoptLinkedFiles(html: string, folder: string, roots: string[]): Promise<string> {
   const copies = new Map<string, string>();
   for (const match of html.matchAll(LINKS)) {
-    const link = match[2]!;
-    let file: string | undefined;
-    try {
-      if (/^file:/i.test(link)) file = fileURLToPath(link);
-      else if (isAbsolute(link) && !link.startsWith("//")) file = link;
-    } catch { continue; }
-    if (!file || copies.has(link)) continue;
-    file = resolve(decodeURIComponent(file));
-    if (!roots.some(root => inside(root, file!))) continue;
+    const link = (match[2] ?? match[3] ?? match[4] ?? "").trim();
+    if (!link || copies.has(link)) continue;
+    let file = linkedFile(link);
+    // A path with a literal `%` that decoding read as an escape is the file as written.
+    if (file && !(await stat(file).catch(() => null))?.isFile() && !/^file:/i.test(link) && resolve(link) !== file) file = resolve(link);
+    if (!file || !roots.some(root => inside(root, file!))) continue;
     if (!(await stat(file).catch(() => null))?.isFile()) continue;
-    const name = `linked/${createHash("sha256").update(file).digest("hex").slice(0, 8)}-${basename(file)}`;
+    const name = `${createHash("sha256").update(file).digest("hex").slice(0, 8)}-${basename(file)}`;
     await mkdir(join(folder, "linked"), { recursive: true });
-    await cp(file, join(folder, name));
-    copies.set(link, name);
+    await cp(file, join(folder, "linked", name));
+    copies.set(link, `linked/${encodeURIComponent(name)}`);
   }
-  return copies.size ? html.replace(LINKS, (all, lead: string, link: string) => copies.has(link) ? lead + copies.get(link) : all) : html;
+  if (!copies.size) return html;
+  return html.replace(LINKS, (all, lead: string, double?: string, single?: string, bare?: string) => {
+    const copy = copies.get((double ?? single ?? bare ?? "").trim());
+    if (!copy) return all;
+    return lead + (double !== undefined ? `"${copy}"` : single !== undefined ? `'${copy}'` : copy);
+  });
 }
 
 /** Copy a folder's files, except its page, into another. */
@@ -244,7 +280,12 @@ export const TEMPLATE_PREVIEW_WIDTH = 640;
  * Save a template, or replace the one with the same name. Its page and the files it links to go in its library folder,
  * and its preview is drawn with the sample values.
  */
-export async function saveTemplate(ctx: Ctx, body: SaveTemplateRequest, user: User | null, signal?: AbortSignal): Promise<{ template: GraphicTemplate; missingFonts: MissingFont[]; problems: string[]; preview: string }> {
+export async function saveTemplate(ctx: Ctx, body: SaveTemplateRequest, user: User | null, signal?: AbortSignal): Promise<{ template: GraphicTemplate; missingFonts: MissingFont[]; problems: string[]; preview?: string }> {
+  if (body.transition) {
+    if (body.html !== undefined) throw badRequest("page_or_transition", "A template is a graphic's page or a transition, not both.");
+    return { template: await saveTransitionTemplate(ctx, { ...body, transition: body.transition }, user), missingFonts: [], problems: [] };
+  }
+  if (body.html === undefined) throw badRequest("missing_page", "Send the graphic's page as html, or a transition.");
   const fields = [...new Set(body.fields)];
   const found = placeholders(body.html);
   const unused = fields.filter(f => !found.includes(f));
@@ -283,8 +324,7 @@ export async function saveTemplate(ctx: Ctx, body: SaveTemplateRequest, user: Us
       id, name: body.name, title: body.title, description: body.description, fields, previewVersion,
       createdAt: existing?.createdAt ?? stamp, updatedAt: stamp, html, sample: body.sample, width, height, duration, previewAt,
     });
-    await rm(folder, { recursive: true, force: true });
-    await rename(staging, folder);
+    await swapInFolder(staging, folder);
     ctx.repos.templates.put(template);
     logActivity(ctx, { projectId: body.projectId ?? null, actor: actorFor(user), type: "template.saved",
       summary: `${existing ? "Replaced" : "Saved"} the graphic template $${template.name}`, data: { templateId: template.id } });
@@ -294,10 +334,58 @@ export async function saveTemplate(ctx: Ctx, body: SaveTemplateRequest, user: Us
   }
 }
 
+type TransitionTemplateRequest = SaveTemplateRequest & { transition: TransitionStyle };
+
+/** A transition template has no page: what it is, is how the picture moves. */
+async function saveTransitionTemplate(ctx: Ctx, body: TransitionTemplateRequest, user: User | null): Promise<GraphicTemplate> {
+  if (body.fields.length) throw badRequest("template_fields", "A transition has no fields.");
+  const existing = ctx.repos.templates.select("name = ?", [body.name])[0];
+  // A graphic of the same name kept its page in the library folder; the transition that replaces it has none.
+  if (existing) await rm(ctx.paths.template(existing.id), { recursive: true, force: true });
+  const template = putTransitionTemplate(ctx, body, existing);
+  logActivity(ctx, { projectId: body.projectId ?? null, actor: actorFor(user), type: "template.saved",
+    summary: `${existing ? "Replaced" : "Saved"} the transition template $${template.name}`, data: { templateId: template.id } });
+  return template;
+}
+
+function putTransitionTemplate(ctx: Ctx, body: TransitionTemplateRequest, existing?: GraphicTemplate) {
+  const stamp = now();
+  const template = GraphicTemplate.parse({
+    id: existing?.id ?? newId("tpl"), kind: "transition", transition: body.transition, name: body.name, title: body.title, description: body.description,
+    fields: [], previewVersion: randomUUID().slice(0, 8), createdAt: existing?.createdAt ?? stamp, updatedAt: stamp,
+    html: "", sample: {}, width: 1920, height: 1080, duration: body.transition.duration, previewAt: 0,
+  });
+  ctx.repos.templates.put(template);
+  return template;
+}
+
+/** Transitions every library starts with. One the editor deletes stays deleted. */
+export const STOCK_TRANSITIONS: TransitionTemplateRequest[] = ([
+  { name: "swipe", title: "Swipe", description: "The next picture pushes the last one off to the left.", transition: { type: "push", duration: 0.4, direction: "left" } },
+  { name: "whip-pan", title: "Whip pan", description: "A fast push with a sideways blur, like a whip of the camera.", transition: { type: "whip", duration: 0.3, direction: "left" } },
+  { name: "slide", title: "Slide", description: "The next picture slides in from the right over the last one.", transition: { type: "slide", duration: 0.4, direction: "left" } },
+  { name: "dissolve", title: "Dissolve", description: "One picture fades into the next.", transition: { type: "dissolve", duration: 0.5, direction: "left" } },
+  { name: "dip-to-black", title: "Dip to black", description: "Fades down to black and up into the next picture.", transition: { type: "dip", duration: 0.6, direction: "left", color: "#000000" } },
+] satisfies Omit<TransitionTemplateRequest, "fields" | "sample">[]).map(t => ({ ...t, fields: [], sample: {} }));
+
+export function seedStockTransitions(ctx: Ctx): number {
+  let seeded = 0;
+  for (const stock of STOCK_TRANSITIONS) {
+    if (ctx.repos.templates.select("name = ?", [stock.name])[0]) continue;
+    const deleted = ctx.db.prepare("SELECT 1 FROM activity WHERE type = 'template.deleted' AND json_extract(json, '$.data.name') = ? LIMIT 1").get(stock.name);
+    if (deleted) continue;
+    putTransitionTemplate(ctx, stock);
+    seeded++;
+  }
+  return seeded;
+}
+
 export async function deleteTemplate(ctx: Ctx, template: GraphicTemplate, user: User | null) {
   ctx.repos.templates.remove(template.id);
   await rm(ctx.paths.template(template.id), { recursive: true, force: true });
-  logActivity(ctx, { projectId: null, actor: actorFor(user), type: "template.deleted", summary: `Deleted the graphic template $${template.name}`, data: { templateId: template.id } });
+  // The name stays in the record, so a transition Scarlet comes with isn't brought back once the editor deletes it.
+  logActivity(ctx, { projectId: null, actor: actorFor(user), type: "template.deleted", summary: `Deleted the ${template.kind === "transition" ? "transition" : "graphic"} template $${template.name}`,
+    data: { templateId: template.id, name: template.name } });
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +425,7 @@ export async function renderProjectGraphic(ctx: Ctx, project: Project, input: Gr
   const templateRef = o.template ?? (input.html === undefined ? based?.media.graphic?.templateId : undefined);
   const template = templateRef ? findTemplate(ctx, templateRef) : null;
   if (templateRef && !template) throw notFound(`template ${templateRef}`);
+  if (template?.kind === "transition") throw badRequest("transition_template", `$${template.name} is a transition: put it on a join with timeline_transition.`);
   if (input.html !== undefined && o.template) throw badRequest("page_or_template", "Send a page or name a template, not both.");
   if (input.html === undefined && !template) throw badRequest("missing_page", "Send the graphic's page as html, or name a template to fill.");
   const fields = template ? (o.fields ?? (based?.media.graphic?.templateId === template.id ? based.media.graphic.fields : undefined) ?? {}) : undefined;

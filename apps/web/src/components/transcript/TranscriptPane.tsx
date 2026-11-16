@@ -1,10 +1,9 @@
 import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { TranscriptionAction, useTranscriptionAvailability } from "../media/TranscriptionAction";
-import { clock, clockRange, plural } from "../../lib/format";
+import { TranscriptionStatus } from "../media/TranscriptionAction";
+import { clock, clockRange } from "../../lib/format";
 import { mediaPlaying } from "../../lib/hotkeys";
 import { player } from "../../lib/player";
 import type { MediaAsset, Timeline } from "@scarlet/timeline";
-import { noteThread } from "@scarlet/shared";
 import { cutWords, mapWords, sourceWords, selectionRange, indexWordTimes, type MappedWord } from "../../lib/transcriptMap";
 import { usePlayerStore } from "../../stores/player";
 import { useProjectStore } from "../../stores/project";
@@ -13,15 +12,16 @@ import { EmptyState, Icon, Spinner } from "../ui/primitives";
 
 import { transcriptTurns } from "./transcriptTurns";
 import { useTranscriptWindow } from "./useTranscriptWindow";
-import { useNotePositions } from "../../lib/useNotePositions";
 
 const emptyMedia: MediaAsset[] = [];
 const WHOLE = { start: 0, end: Infinity };
 /** A word as search compares it: lower case, without punctuation. */
 const bare = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
-/** Where the searched words start, each a run of `length` words: every word but the last matched whole, the last from its start. */
-export function findWords(words: { word: { text: string } }[], query: string) {
-  const terms = query.split(/\s+/).map(bare).filter(Boolean);
+/** The words searched for, as `findWords` compares them: a run of punctuation alone is no word. */
+export const searchTerms = (query: string) => query.split(/\s+/).map(bare).filter(Boolean);
+/** Where the searched words start, each a run of `terms.length` words: every word but the last matched whole, the last from its start. */
+export function findWords(words: { word: { text: string } }[], query: string | string[]) {
+  const terms = typeof query === "string" ? searchTerms(query) : query;
   if (!terms.length) return [];
   const texts = words.map(w => bare(w.word.text));
   const found: number[] = [];
@@ -43,27 +43,23 @@ const WordParagraph = memo(function WordParagraph({ words, from, to }: {
     return <Fragment key={key}>{i > 0 && " "}<span data-w={w.index} data-word-key={key} role="button" tabIndex={-1}
       aria-label={w.cut ? `${w.word.text} (unused in edit)` : w.word.text}
       className={`rounded px-[2px] py-0.5 -mx-px cursor-pointer hover:bg-raised data-[current]:bg-hi data-[current]:text-bg data-[current]:hover:bg-hi ${w.cut ? "line-through text-dim decoration-dim/70" : "text-fg"} ${w.index >= from && w.index <= to ? "bg-hi-dim" : ""}`}
-      title={w.cut ? `Play from here · Unused in edit (source ${clock(w.word.start)})` : `Play from here · ${clock(w.placements[0]!.start)}${w.word.speaker ? ` · ${w.word.speaker}` : ""}`}>
+      title={w.cut ? `Unused in edit · source ${clock(w.word.start)}` : `${clock(w.placements[0]!.start)}${w.word.speaker ? ` · ${w.word.speaker}` : ""}`}>
       {w.word.text}
     </span></Fragment>;
   })}</p>;
 });
 
 /**
- * `simple` is the simple view's column beside the player, which heads the transcript itself: the pane is then the words
- * alone, set as the chat is, with no toolbar, figures, key box or notes (the chat already holds those).
+ * The simple view's Transcript column beside the player, which heads it: a search field, then the words alone, set as
+ * the chat is, with no toolbar, figures, key box or notes (the chat already holds those).
  */
-export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timeline; source?: MediaAsset; onAsk(words: AgentContext): void; simple?: boolean }) {
+export function TranscriptPane({ source, draft, onAsk }: { draft?: Timeline; source?: MediaAsset; onAsk(words: AgentContext): void }) {
   const project = useProjectStore(s => s.current?.project);
   const projectMedia = useProjectStore(s => s.current?.media ?? emptyMedia);
-  const projectNotes = useProjectStore(s => source || simple ? undefined : s.current?.notes);
   const projectTimeline = useProjectStore(s => s.current?.timeline);
-  const transcriptionAvailable = useTranscriptionAvailability();
-  const openNotePopover = useUiStore((s) => s.openNotePopover);
   const setAgentContext = useUiStore((s) => s.setAgentContext);
   const focusComposer = useUiStore((s) => s.focusComposer);
   const [selected, setSelected] = useState<{ from: string; to: string } | null>(null);
-  const [showKeys, setShowKeys] = useState(false);
   const [showCut, setShowCut] = useState(false);
   const [query, setQuery] = useState("");
   const [hit, setHit] = useState(0);
@@ -76,11 +72,9 @@ export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timel
   const userScrolledAt = useRef(0);
 
   const timeline = draft ?? projectTimeline ?? null;
-  // The simple view reads the whole transcript at once, so it can be searched and scrolled end to end.
-  const page = useTranscriptWindow(source, timeline, projectMedia, simple ? WHOLE : undefined);
+  // The whole transcript is read at once, so it can be searched and scrolled end to end.
+  const page = useTranscriptWindow(source, timeline, projectMedia, WHOLE);
   const { assets, transcripts, from, to } = page;
-  const fps = source?.fps || project?.settings.fps || 30;
-  const notePositions = useNotePositions(timeline, projectNotes, fps);
   const words = useMemo(() => {
     let mapped: MappedWord[] = [];
     if (source && transcripts[0]) {
@@ -96,49 +90,26 @@ export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timel
     }).map((w, index) => ({ ...w, index }));
   }, [transcripts, source, showCut, timeline, from, to]);
   const groups = useMemo(() => transcriptTurns(words), [words]);
-  // The simple view names voices only where there is more than one to tell apart.
-  const hasVoices = simple ? new Set(groups.map(g => g.voice ?? "")).size > 1 : groups.some(g => g.voice);
+  // Voices are named only where there is more than one to tell apart.
+  const hasVoices = useMemo(() => new Set(groups.map(g => g.voice ?? "")).size > 1, [groups]);
+  // Recordings are named only where the words come from more than one.
+  const severalRecordings = useMemo(() => !source && new Set(words.map(w => w.mediaId)).size > 1, [source, words]);
   const indices = useMemo(() => new Map(words.map(w => [wordKey(w), w.index])), [words]);
   const selFrom = selected && indices.get(selected.from), selTo = selected && indices.get(selected.to);
   const sel = selFrom != null && selTo != null ? { from: selFrom, to: selTo } : null;
   const setSel = (span: { from: number; to: number } | null) => setSelected(span
     ? { from: wordKey(words[span.from]!), to: wordKey(words[span.to]!) } : null);
-  const scrollAnchor = useRef<{ word: string; top: number } | null>(null);
-  const extend = (direction: -1 | 1) => {
-    if (page.loading || (direction < 0 ? !page.earlier : !page.later)) return;
-    const list = listRef.current;
-    const nodes = wordNodes.current;
-    if (list && nodes) {
-      const top = list.getBoundingClientRect().top;
-      let lo = 0, hi = nodes.length;
-      // Words are laid out in reading order. Avoid measuring every line above the viewport.
-      while (lo < hi) {
-        const mid = (lo + hi) >>> 1;
-        if (nodes[mid]!.getBoundingClientRect().bottom < top) lo = mid + 1;
-        else hi = mid;
-      }
-      const el = nodes[lo];
-      if (el) scrollAnchor.current = { word: el.dataset.wordKey!, top: el.getBoundingClientRect().top };
-    }
-    page.extend(direction, !!sel || dragging.current);
-  };
   useLayoutEffect(() => {
-    const saved = scrollAnchor.current, list = listRef.current;
-    wordNodes.current = list?.querySelectorAll<HTMLElement>("[data-w]");
+    wordNodes.current = listRef.current?.querySelectorAll<HTMLElement>("[data-w]");
     keyboardStops.current = undefined;
-    if (!saved || !list || page.loading) return;
-    const index = indices.get(saved.word);
-    const el = index !== undefined && wordNodes.current?.[index];
-    if (el) list.scrollTop += el.getBoundingClientRect().top - saved.top;
-    scrollAnchor.current = null;
-  }, [indices, page.loading, projectNotes, notePositions.times, page.earlier, page.later]);
+  }, [indices, page.loading]);
   useLayoutEffect(() => {
     const nodes = wordNodes.current;
     if (!nodes?.length) return;
     const at = indexWordTimes(words);
     let previous: HTMLElement | undefined;
     let near: HTMLElement[] = [];
-    // The simple view lights the sentence around the word the playhead is on, and the word itself more.
+    // The sentence around the word the playhead is on is lit, and the word itself more.
     const sentence = (i: number) => {
       const ends = (k: number) => /[.?!…]["”’)]*$/.test(words[k]?.word.text ?? "");
       let a = i, b = i;
@@ -153,14 +124,12 @@ export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timel
       previous?.removeAttribute("data-current");
       next?.setAttribute("data-current", "");
       previous = next;
-      if (simple) {
-        for (const node of near) node.removeAttribute("data-near");
-        near = next ? sentence(index) : [];
-        for (const node of near) node.setAttribute("data-near", "");
-      }
+      for (const node of near) node.removeAttribute("data-near");
+      near = next ? sentence(index) : [];
+      for (const node of near) node.setAttribute("data-near", "");
       if (!next || Date.now() - userScrolledAt.current < 2500) return;
       if (playing) next.scrollIntoView({ block: "center", behavior: "smooth" });
-      else if (simple && listRef.current) {
+      else if (listRef.current) {
         // Moved by a pick on the timeline or a skip: brought into view if it went out of it.
         const box = listRef.current.getBoundingClientRect(), word = next.getBoundingClientRect();
         if (word.top < box.top || word.bottom > box.bottom) next.scrollIntoView({ block: "center" });
@@ -171,8 +140,9 @@ export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timel
     return () => { unsubscribe(); previous?.removeAttribute("data-current"); for (const node of near) node.removeAttribute("data-near"); };
   }, [words]);
 
-  const terms = query.trim().split(/\s+/).filter(Boolean).length;
-  const hits = useMemo(() => simple ? findWords(words, query) : [], [simple, words, query]);
+  // One list of terms both finds the matches and says how many words each one underlines.
+  const terms = useMemo(() => searchTerms(query), [query]);
+  const hits = useMemo(() => findWords(words, terms), [words, terms]);
   const shownHit = hits.length ? Math.min(hit, hits.length - 1) : -1;
   // Matches are marked on the words themselves, so the paragraphs aren't drawn again on each key.
   useLayoutEffect(() => {
@@ -180,7 +150,7 @@ export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timel
     if (!nodes || !hits.length) return;
     const marked: HTMLElement[] = [];
     hits.forEach((start, n) => {
-      for (let k = 0; k < terms; k++) {
+      for (let k = 0; k < terms.length; k++) {
         const node = nodes[start + k];
         if (!node) continue;
         node.setAttribute("data-match", n === shownHit ? "current" : "");
@@ -204,11 +174,12 @@ export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timel
 
   if (!project) return null;
   if (!assets.length) return <EmptyState icon="diff" title="No speech media in this edit" body="The transcript follows audio and video clips with audible sound." />;
+  // A file with no transcript yet is said after the words, plainly: Media is where a transcription is started.
   const status = assets.filter(asset => !asset.transcriptId).map(asset => (
-    <div key={asset.id} className={simple ? "transcript-missing" : "flex flex-wrap items-center gap-2 px-4 py-2 text-[12px]"}>
+    <p key={asset.id} className="transcript-missing">
       <span className="text-muted">{asset.name}</span>
-      <TranscriptionAction asset={asset} available={transcriptionAvailable} />
-    </div>
+      <TranscriptionStatus asset={asset} />
+    </p>
   ));
 
   const range = sel ? selectionRange(words, sel.from, sel.to) : null;
@@ -246,10 +217,6 @@ export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timel
       setSel({ from: start, to: i });
     }
   };
-  const notes = (projectNotes ?? []).flatMap(n => {
-    const time = notePositions.times.get(n.id);
-    return n.state !== "dismissed" && time != null && time >= from && time <= to ? [{ ...n, time }] : [];
-  }).sort((a, b) => a.time - b.time);
 
   const askAboutSelection = () => {
     if (!range) return;
@@ -263,20 +230,11 @@ export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timel
     focusComposer();
     setSel(null);
   };
-  const retryNotes = notePositions.failed && <button className="btn-quiet" onClick={notePositions.retry}>Retry earlier notes</button>;
-  const figures = <span className="reading-window">{clock(from)}–{clock(to)} · {plural(words.length, "word")}</span>;
   const markUnused = source && timeline && <button className="btn-quiet" onClick={() => setShowCut(v => !v)} aria-pressed={showCut}>Mark unused words</button>;
-  const help = <button className="btn-icon" aria-label="Keyboard shortcuts" title="Keyboard shortcuts" aria-expanded={showKeys} onClick={() => setShowKeys(v => !v)}>
-    <Icon name="help" size={15} />
-  </button>;
 
   return (
     <div className="flex flex-col h-full" onMouseUp={() => (dragging.current = false)} onMouseLeave={() => (dragging.current = false)}>
-      {!simple ? <div className="reading-toolbar">
-        {retryNotes}
-        <div className="reading-title"><h2>Transcript</h2><span>{source?.name ?? "Current edit · playback order"}</span></div>
-        <div className="reading-tools">{figures}{markUnused}{help}</div>
-      </div> : <div className="transcript-search">
+      <div className="transcript-search">
         <Icon name="search" size={13} />
         <input type="search" value={query} placeholder="Search the transcript" aria-label="Search the transcript"
           onChange={e => { setQuery(e.target.value); setHit(0); placed.current = false; }}
@@ -287,45 +245,16 @@ export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timel
         {query.trim() && <span className="transcript-search-count" title="Enter for the next, Shift + Enter for the one before">
           {hits.length ? `${shownHit + 1} of ${hits.length}` : "No matches"}</span>}
         {markUnused}
-      </div>}
-      {showKeys && <div className="reading-keys"><span><kbd>← →</kbd> Move</span><span><kbd>Shift + ← →</kbd> Select</span><span><kbd>Enter</kbd> Play from word</span></div>}
-      {/* In the simple view a file with no transcript yet is said after the words, not over them. */}
-      {!simple && status}
+      </div>
       {page.loading && <p role="status" className="px-4"><Spinner /> Loading transcript…</p>}
       {page.error && <p role="alert" className="px-4">{page.error} <button className="btn-ghost" onClick={page.retry}>Retry transcript</button></p>}
       {!page.loading && !page.error && !words.length && !status.length && <p className="p-4 text-muted">No spoken words here.</p>}
-      {range && sel && simple && <div className="transcript-chosen">
+      {range && sel && <div className="transcript-chosen">
         <span>{clockRange(range.start, range.end)}</span>
         <button type="button" className="simple-link" onClick={() => askAboutSelection()}>Ask about this</button>
         <button type="button" className="simple-link simple-link-quiet" onClick={() => setSel(null)}>Clear</button>
       </div>}
-      {range && sel && !simple && (
-        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-hi-dim border-b border-line text-[12px]">
-          <span className="font-mono tnum text-fg">
-            {clockRange(range.start, range.end)}
-          </span>
-          <div className="flex-1" />
-          {!source && !draft && <button
-            className="btn-ghost py-1"
-            onClick={() => {
-              openNotePopover(range.start, range.end);
-              setSel(null);
-            }}
-          >
-            <Icon name="note" size={12} /> Note
-          </button>}
-          <button
-            className="btn-primary py-1"
-            onClick={() => askAboutSelection()}
-          >
-            Ask about this
-          </button>
-          <button className="btn-icon" aria-label="Clear selection" title="Clear selection" onClick={() => setSel(null)}>
-            <Icon name="x" size={11} />
-          </button>
-        </div>
-      )}
-      <div ref={listRef} tabIndex={0} role="group" aria-label="Transcript words and notes"
+      <div ref={listRef} tabIndex={0} role="group" aria-label="Transcript words"
         onMouseDown={e => {
           const word = wordAt(e.target);
           if (!word) return;
@@ -336,8 +265,8 @@ export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timel
         onDoubleClick={e => { const w = wordAt(e.target); if (w) setSel({ from: w.index, to: w.index }); }}
         onClick={e => {
           const w = wordAt(e.target);
-          // In the simple view a click places the playhead on the word; Space plays from there.
-          if (w && !moved.current && !e.shiftKey) { setSel(null); if (simple) { if (w.placements[0]) seek(w.placements[0].start); } else playWord(w); }
+          // A click places the playhead on the word; it doesn't play. Space plays from there.
+          if (w && !moved.current && !e.shiftKey) { setSel(null); if (w.placements[0]) seek(w.placements[0].start); }
         }}
         onFocus={(e) => {
           if (e.target === e.currentTarget) {
@@ -385,25 +314,16 @@ export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timel
           }
           next.focus();
         }}
-        className={simple ? "reading-scroll transcript-words" : "reading-scroll"}
-        title={simple ? "Click a word to play from it · Double-click or drag to choose words · Shift + ← → to select" : undefined} onScroll={e => {
-          userScrolledAt.current = Date.now();
-          const el = e.currentTarget;
-          if (el.scrollHeight <= el.clientHeight) return;
-          if (el.scrollTop <= 1) extend(-1);
-          else if (el.scrollHeight - el.scrollTop - el.clientHeight < 48) extend(1);
-        }}>
-        {page.earlier && <button className="btn-quiet" onClick={() => extend(-1)}>Load earlier words</button>}
+        className="reading-scroll transcript-words"
+        title="Click a word to place the playhead there · Double-click or drag to choose words · Shift + ← → to select"
+        onScroll={() => { userScrolledAt.current = Date.now(); }}>
         {groups.map((g, gi) => {
-          const start = g.words[0]?.placements[0]?.start ?? -1;
-          const nextStart = groups[gi + 1]?.words[0]?.placements[0]?.start ?? Infinity;
-          const here = start < 0 ? [] : notes.filter((n) => n.time >= (gi === 0 ? -Infinity : start) && n.time < nextStart);
           const first = g.words[0];
           if (!first) return null;
           return (
             <div className="reading-turn" key={wordKey(first)}>
-            {!source && (simple ? new Set(words.map(w => w.mediaId)).size : assets.length) > 1 && first?.mediaId !== groups[gi - 1]?.words[0]?.mediaId && (
-              <p className="mt-2 mb-1 text-xs text-muted">{assets.find(asset => asset.id === first?.mediaId)?.name}</p>
+            {severalRecordings && first.mediaId !== groups[gi - 1]?.words[0]?.mediaId && (
+              <p className="mt-2 mb-1 text-xs text-muted">{assets.find(asset => asset.id === first.mediaId)?.name}</p>
             )}
             <div className="reading-turn-head">
               {hasVoices && <span className="reading-speaker" data-known={!!g.voice}>
@@ -422,22 +342,10 @@ export function TranscriptPane({ source, draft, onAsk, simple }: { draft?: Timel
               return <WordParagraph key={wordKey(first)} words={paragraph}
                 from={overlaps ? Math.max(selectedFrom, first.index) : -1} to={overlaps ? Math.min(selectedTo, last.index) : -1} />;
             })}
-            {here.map((n) => (
-              <button
-                key={n.id}
-                tabIndex={-1}
-                onClick={() => seek(n.time)}
-                className={`mb-3 block w-full text-left rounded-r-lg border-l-2 px-3 py-2 text-[12px] leading-snug ${n.state === "resolved" ? "border-dim bg-raised/40 text-dim" : "border-warn bg-warn/5 text-muted"}`}
-              >
-                <span className="font-medium text-fg">{n.author.name} · {clock(n.time)}</span> {noteThread(n).text}
-                {n.state === "in_progress" && <span className="block mt-1 text-fg">With Scarlet</span>}
-                {n.state === "resolved" && <span className="block mt-1">Done</span>}
-              </button>
-            ))}
             </div>
           );
         })}
-        {page.later && <button className="btn-quiet" onClick={() => extend(1)}>Load later words</button>}
+        {status}
       </div>
     </div>
   );

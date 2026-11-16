@@ -4,8 +4,10 @@
  * still verify its own edit. Scarlet reports; the model decides.
  */
 import { clipDuration, formatTimecode, type MediaClip, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
+import type { PictureEntrance } from "./picture-entrance.js";
 import { normalizeTranscriptToken } from "@scarlet/shared";
 import { captionSourceClips, dbfs, isTag, wordsByMidpoint } from "./analysis.js";
+import { QUIET_PEAK, quietRms } from "./gap-sound.js";
 
 // ---------------------------------------------------------------------------
 // Joins and time mapping
@@ -26,14 +28,15 @@ const eps = 1e-4;
 /** A longer overlap, or one clip inside another, is a layer rather than a crossfaded cut. */
 export const MAX_CROSSFADE = 1;
 
-function audible(project: Project | undefined, clip: MediaClip, muted: boolean) {
+type AudioInventory = { media: readonly { id: string; kind: string; hasAudio?: boolean }[] };
+function audible(project: AudioInventory | undefined, clip: MediaClip, muted: boolean) {
   if (muted || !clip.enabled || clip.volume <= 0) return false;
   const asset = project?.media.find(m => m.id === clip.mediaId);
   return !asset || asset.kind === "audio" || asset.hasAudio !== false;
 }
 
 /** Every join between kept source ranges on the audible tracks, in playback order. */
-export function timelineJoins(tl: Timeline, project?: Project): TimelineJoin[] {
+export function timelineJoins(tl: Timeline, project?: AudioInventory): TimelineJoin[] {
   const found: Array<TrackJoin & { at: number }> = [];
   for (const track of tl.tracks) {
     if (track.kind === "caption") continue;
@@ -213,8 +216,6 @@ export function formatTimelineTranscript(words: TimelineWord[], joins: TimelineJ
 /** One measured source window: RMS and peaks 0..1 per bucket, and voice activity. */
 export interface Reading { from: number; to: number; peaks: number[]; rms?: number[]; speechActivity?: TimeRange[] }
 
-/** Same thresholds as dialogue_check_join's quiet runs: low RMS, low peak and no detected voice. */
-export const QUIET_RMS = .01, QUIET_PEAK = .05;
 /** Less air than this after the last kept word usually clips its decay or the breath. */
 const MIN_AIR_AFTER = .06;
 /** Less air than this before kept speech resumes usually clips the onset. */
@@ -230,6 +231,7 @@ const STRIP_STEP = .02, STRIP_REACH = .3;
 const wordMargin = .03;
 
 export interface JoinAudit {
+  pictureEntrance?: PictureEntrance;
   join: number;
   at: number;
   trackId: string;
@@ -252,7 +254,8 @@ function bucketing(r: Reading) {
   const step = (r.to - r.from) / Math.max(1, n);
   // A span that only touches a bucket boundary (within float error) does not voice it.
   const voiced = (s: number, e: number) => (r.speechActivity ?? []).some(v => v.start < e - 1e-6 && v.end > s + 1e-6);
-  const low = (i: number) => i >= 0 && i < n && (r.rms?.[i] ?? 0) <= QUIET_RMS && r.peaks[i]! <= QUIET_PEAK;
+  const quietBelow = quietRms(r.rms ?? []);
+  const low = (i: number) => i >= 0 && i < n && (r.rms?.[i] ?? 0) <= quietBelow && r.peaks[i]! <= QUIET_PEAK;
   return {
     step,
     level: (i: number) => (i >= 0 && i < n ? dbfs(r.rms?.[i] ?? r.peaks[i]!) : undefined),

@@ -94,6 +94,19 @@ it("saves a timeline file straight from the engine, with no render", async () =>
   expect(useUiStore.getState().exportStarNotice).toBe("unseen");
 });
 
+it("saves a folder for another app: asks the engine what goes in it, linked where it will be, and has the app write it", async () => {
+  vi.mocked(desktop.chooseVideoExport).mockResolvedValue({ ticket: 14, path: "/Users/me/Exports/Interview" });
+  const files = [{ path: "Interview.fcpxml", text: "<fcpxml/>" }, { path: "Media/cam.mov", source: "/lib/cam.mov", size: 3 }];
+  const handoff = vi.spyOn(api, "handoff").mockResolvedValue({ files, mediaBytes: 3 });
+  const write = vi.spyOn(desktop, "finishFolderExport").mockResolvedValue("/Users/me/Exports/Interview");
+  await exportFile(project, { name: "Interview", format: "folder", video: { kind: "export", quality: "delivery" } });
+  expect(asked.request).not.toHaveBeenCalled();
+  expect(handoff).toHaveBeenCalledExactlyOnceWith(PRJ, project.project.head!, "/Users/me/Exports/Interview");
+  expect(write).toHaveBeenCalledExactlyOnceWith(14, files);
+  expect(job()).toMatchObject({ phase: "done", path: "/Users/me/Exports/Interview" });
+  expect(useUiStore.getState().exportStarNotice).toBe("unseen");
+});
+
 it.each([
   ["failed", "ffmpeg ran out of disk", "ffmpeg ran out of disk"],
   ["failed", undefined, "The render stopped."],

@@ -552,3 +552,36 @@ it("starts requests about different cuts or edits together, and every other requ
   await finish(whole.id);
   expect(await claim()).toBe(late.id);
 });
+
+it("knows an applied edit by where it was made, from whichever thread or version a request names it", async () => {
+  const send = async (instruction: string, context: Record<string, unknown>) =>
+    (await api<{ task: Task }>("POST", `/projects/${project.id}/tasks`, { kind: "edit", agent: "claude", instruction, context })).body.task;
+  const { body: { host } } = await api<{ host: { id: string } }>("POST", "/hosts/register", { name: "test", platform: "test", agents: [{ id: "claude", installed: true }] });
+  const claim = async () => {
+    for (;;) {
+      const { task } = (await api<{ task: Task | null }>("POST", `/hosts/${host.id}/claim`, {})).body;
+      if (task?.kind !== "learning_check") return task?.id ?? null;
+    }
+  };
+  const ts = new Date().toISOString();
+  const change = (id: string, timelineEdits: unknown[]) => app.ctx.repos.changes.put({ id, projectId: project.id, fromVersion: "v1", toVersion: "v2",
+    description: "Edit", author: { type: "agent", name: "Claude" }, noteIds: [], timelineEdits, ranges: [], state: "approved", renders: [], createdAt: ts, updatedAt: ts } as never);
+  // A2 revised A's edit 0, at its own spot 1.
+  change("chg_A", [{ label: "Zoom", range: { start: 2, end: 3 } }]);
+  change("chg_A2", [{ label: "Title", range: { start: 0, end: 1 } }, { label: "Zoom", range: { start: 2, end: 3 }, replaces: { changeId: "chg_A", spot: 0 } }]);
+  change("chg_B", [{ label: "Wrap", range: { start: 5, end: 6 } }]);
+  // From its own thread, from the request that flagged it, and about its revision: one edit, so one at a time.
+  const own = await send("Hold the zoom longer", { threadId: "tsk_zoom", changeId: "chg_A", editIndex: 0 });
+  const flagged = await send("Ease out of the zoom", { threadId: "tsk_flagger", changeId: "chg_A", editIndex: 0 });
+  const revised = await send("Zoom less", { threadId: "tsk_zoom", changeId: "chg_A2", editIndex: 1 });
+  // The first edit of another change in the same thread is another edit, and runs beside it.
+  const other = await send("Shorten the wrap", { threadId: "tsk_zoom", changeId: "chg_B", editIndex: 0 });
+  expect(await claim()).toBe(own.id);
+  expect(await claim()).toBe(other.id);
+  expect(await claim()).toBeNull();
+  await api("POST", `/tasks/${own.id}/complete`, { state: "done" });
+  expect(await claim()).toBe(flagged.id);
+  expect(await claim()).toBeNull();
+  await api("POST", `/tasks/${flagged.id}/complete`, { state: "done" });
+  expect(await claim()).toBe(revised.id);
+});

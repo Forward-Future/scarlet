@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { dialogueShortcut, isDialogueGuide, skillCommands, type Skill, type UpsertSkillRequest } from "@scarlet/shared";
 import { api, errorMessage } from "../lib/client";
+import { changedDuringLoad } from "./changedDuringLoad";
 
 interface SkillsState {
   skills: Skill[];
@@ -43,8 +44,8 @@ export async function commandSkillIds(draft: string): Promise<string[] | undefin
 }
 
 let loading: Promise<void> | undefined;
-/** Skills saved, reported or removed while a read of the library was on its way: newer than that read. `null` is removed. */
-let changedDuringLoad: Map<string, Skill | null> | undefined;
+/** Skills saved, reported or removed while a read of the library was on its way: newer than that read. */
+const changes = changedDuringLoad<Skill>();
 
 export const useSkillsStore = create<SkillsState>((set, get) => ({
   skills: [],
@@ -53,19 +54,15 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   load() {
     if (loading) return loading;
     set({ status: "loading", error: null });
-    const changed = changedDuringLoad = new Map();
+    const read = changes.begin();
     loading = api.skills()
-      .then(({ skills }) => {
-        const kept = skills.filter(s => !changed.has(s.id));
-        const merged = [...kept, ...[...changed.values()].filter((s): s is Skill => !!s)].sort((a, b) => a.name.localeCompare(b.name));
-        set({ skills: merged, status: "ready", error: null });
-      })
+      .then(({ skills }) => set({ skills: read.merge(skills).sort((a, b) => a.name.localeCompare(b.name)), status: "ready", error: null }))
       .catch(err => set({ status: "error", error: errorMessage(err) }))
-      .finally(() => { loading = undefined; if (changedDuringLoad === changed) changedDuringLoad = undefined; });
+      .finally(() => { loading = undefined; read.end(); });
     return loading;
   },
   apply(skill) {
-    changedDuringLoad?.set(skill.id, skill);
+    changes.set(skill.id, skill);
     const rest = get().skills.filter((s) => s.id !== skill.id);
     set({ skills: [...rest, skill].sort((a, b) => a.name.localeCompare(b.name)) });
   },
@@ -88,7 +85,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   },
   async remove(id) {
     await api.deleteSkill(id);
-    changedDuringLoad?.set(id, null);
+    changes.set(id, null);
     set({ skills: get().skills.filter((s) => s.id !== id) });
   },
 }));

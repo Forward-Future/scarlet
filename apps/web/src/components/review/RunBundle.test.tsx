@@ -11,7 +11,7 @@ import { useUiStore } from "../../stores/ui";
 import type { MediaAsset } from "@scarlet/timeline";
 import { TranscriptLine } from "../media/TranscriptionAction";
 import { UsageSettings } from "../shell/UsageSettings";
-import { LiveTokens, RunBundle, runEnded, Said } from "./RunBundle";
+import { RequestTokens, RunBundle, runEnded, Said } from "./RunBundle";
 
 const task: Task = {
   id: "tsk_1", projectId: "prj_1", kind: "edit", agent: "claude", model: "opus", instruction: "Tighten the intro",
@@ -56,9 +56,8 @@ it("labels token counts at a glance and breaks them down without cost", () => {
     `${(1200).toLocaleString()} input · ${(3000).toLocaleString()} output · ${(44_000).toLocaleString()} cache read · 5 cache write · 2 runs`);
 });
 
-it("keeps tokens out of the chat until the editor turns them on", () => {
-  expect(localStorage.getItem("scarlet.runTokens")).toBeNull();
-  expect(useUiStore.getState().showRunTokens).toBe(false);
+it("shows tokens in the chat until the editor turns them off", () => {
+  act(() => useUiStore.getState().setShowRunTokens(false));
   openProject({ [task.id]: totals() });
   const view = render(<RunBundle task={task} events={[]} changes={[]} />);
   // One row: what the run amounts to. A finished request has no time on it and no steps to open.
@@ -111,7 +110,13 @@ it("adds the request's tokens to its finished run line, and updates live", () =>
   act(() => useProjectStore.getState().applyEvent({ type: "task.usage", projectId: "prj_1", taskId: task.id, usage: totals() }));
   const tokens = view.host.querySelector(".run-tokens");
   expect(tokens?.textContent).toBe("48.2K tokens");
-  expect(tokens?.getAttribute("title")).toContain("cache read");
+  expect(tokens?.getAttribute("aria-label")).toContain("cache read");
+  // Hovering or focusing the count opens every part of it under the count; it closes again when the pointer leaves.
+  act(() => (tokens as HTMLElement).focus());
+  expect([...view.host.querySelectorAll(".tokens-tip > span")].map(row => row.textContent)).toEqual([
+    `Input${(1200).toLocaleString()}`, `Output${(3000).toLocaleString()}`, `Cache read${(44_000).toLocaleString()}`, `Total${(48_200).toLocaleString()}`]);
+  act(() => (tokens as HTMLElement).blur());
+  expect(view.host.querySelector(".tokens-tip")).toBeNull();
   expect(view.host.textContent).not.toMatch(/\$|cost/i);
 
   // Another project's report never lands here.
@@ -162,15 +167,15 @@ it("lists tokens by project, provider and model in Settings", async () => {
   expect(text).not.toMatch(/agent/i);
   expect(text).not.toMatch(/\$|cost/i);
 
-  // The switch is off by default and remembers the editor's choice.
+  // The switch reflects the editor's choice and remembers it.
   const toggle = view.host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Show tokens in the chat"]')!;
   expect(toggle.getAttribute("aria-checked")).toBe("false");
   act(() => toggle.click());
   expect(toggle.getAttribute("aria-checked")).toBe("true");
   expect(useUiStore.getState().showRunTokens).toBe(true);
-  expect(localStorage.getItem("scarlet.runTokens")).toBe("shown");
-  act(() => toggle.click());
   expect(localStorage.getItem("scarlet.runTokens")).toBeNull();
+  act(() => toggle.click());
+  expect(localStorage.getItem("scarlet.runTokens")).toBe("hidden");
   view.unmount();
 });
 
@@ -302,13 +307,16 @@ it("says a run that ended without its transcripts is paused, and offers to finis
   const banded = render(<RunBundle task={paused} events={[]} changes={[]} banded onResume={onResume} onWaitForTranscripts={onWait} />);
   expect([...banded.host.querySelectorAll(".req-row")].map(row => row.textContent)).toEqual(["Transcript 18%Finish when ready"]);
   banded.unmount();
-  // The tokens the run used, when those show, end its one row. They don't bring back a second that says "Nothing saved".
+  // The tokens the run used, when those show, are in the heading: they don't end its row or bring back one that says "Nothing saved".
   act(() => useUiStore.getState().setShowRunTokens(true));
   act(() => useProjectStore.setState(s => ({ current: { ...s.current!, taskUsage: { [paused.id]: totals() } } })));
   const counted = render(<RunBundle task={paused} events={[]} changes={[]} banded onResume={onResume} onWaitForTranscripts={onWait} />);
-  expect([...counted.host.querySelectorAll(".req-row")].map(row => row.textContent)).toEqual([`Transcript 18%Finish when ready${tokenLabel(totals().totalTokens)}`]);
-  expect(counted.host.querySelector(".run-wait .req-right .run-tokens")?.getAttribute("title")).toBe(tokenBreakdown(totals()));
+  expect([...counted.host.querySelectorAll(".req-row")].map(row => row.textContent)).toEqual(["Transcript 18%Finish when ready"]);
   counted.unmount();
+  // With no heading, they end its one row.
+  const unheaded = render(<RunBundle task={paused} events={[]} changes={[]} onResume={onResume} onWaitForTranscripts={onWait} />);
+  expect(unheaded.host.querySelector(".run-wait .req-right .run-tokens")?.getAttribute("data-breakdown")).toBe(tokenBreakdown(totals()));
+  unheaded.unmount();
   act(() => useUiStore.getState().setShowRunTokens(false));
 
   // The transcript stopped: nothing is being made to wait for, so the action is the one that starts it again, as on
@@ -421,17 +429,29 @@ it("leaves a question's tokens to its heading, and has a row for them with no he
   bare.unmount();
 });
 
-it("counts a working request's tokens as they're reported, with every part on hover, only when turned on", () => {
+it("leaves a finished request's tokens to its heading, and has them on its row with no heading", () => {
+  useUiStore.getState().setShowRunTokens(true);
+  openProject({ [task.id]: totals() });
+  const banded = render(<RunBundle task={task} events={[]} changes={[]} banded />);
+  expect(banded.host.querySelector(".run-tokens")).toBeNull();
+  banded.unmount();
+  const bare = render(<RunBundle task={task} events={[]} changes={[]} />);
+  expect(bare.host.querySelector(".req-result .req-right > .run-tokens")?.textContent).toBe("48.2K tokens");
+  bare.unmount();
+  useUiStore.getState().setShowRunTokens(false);
+});
+
+it("counts a request's tokens as they're reported, with every part on hover, only when turned on", () => {
   useUiStore.getState().setShowRunTokens(false);
   openProject({ [task.id]: totals({ totalTokens: 212_000 }) });
-  const view = render(<LiveTokens taskId={task.id} />);
+  const view = render(<RequestTokens taskId={task.id} />);
   expect(view.host.textContent).toBe("");
   act(() => useUiStore.getState().setShowRunTokens(true));
   expect(view.host.querySelector(".unit-tokens")?.textContent).toBe("212K tokens");
   const more = totals({ totalTokens: 1_310_000 });
   act(() => useProjectStore.setState(s => ({ current: { ...s.current!, taskUsage: { [task.id]: more } } })));
   const tokens = view.host.querySelector<HTMLElement>(".unit-tokens")!;
-  expect([tokens.textContent, tokens.title]).toEqual(["1.3M tokens", tokenBreakdown(more)]);
+  expect([tokens.textContent, tokens.dataset.breakdown]).toEqual(["1.3M tokens", tokenBreakdown(more)]);
   view.unmount();
 });
 

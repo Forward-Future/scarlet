@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as Ort from "onnxruntime-node";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CLASSES, FRAME_SAMPLES, framesFor, SAMPLE_RATE, SEPARATOR } from "./ctcAlign.js";
+import { CLASSES, FRAME_SAMPLES, framesFor, SAMPLE_RATE, SEPARATOR, SPANISH_CTC_LETTERS } from "./ctcAlign.js";
 import { EmissionFile } from "./emissions.js";
 import * as uhm from "./uhm.js";
 import { runAlignWorker, type AlignRequest } from "./wordAlign.js";
@@ -15,13 +15,13 @@ const id = (ch: string) => ch === "_" ? 0 : ch === "|" ? SEPARATOR : 5 + letters
  * Audio the stand-in model can read: one spike in every 20 ms frame, and its place in the frame is the class that
  * frame holds. `speech` maps a frame to the characters said from it ("_" blank, "|" separator, a letter).
  */
-function audio(seconds: number, speech: Record<number, string>) {
+function audio(seconds: number, speech: Record<number, string>, letterId = id) {
   const samples = new Int16Array(seconds * SAMPLE_RATE);
   for (let frame = 0; frame * FRAME_SAMPLES < samples.length; frame++) samples[frame * FRAME_SAMPLES] = 20000;
   for (const [first, said] of Object.entries(speech)) [...said].forEach((ch, i) => {
     const at = (Number(first) + i) * FRAME_SAMPLES;
     samples[at] = 0;
-    samples[at + id(ch)] = 20000;
+    samples[at + letterId(ch)] = 20000;
   });
   return samples;
 }
@@ -49,7 +49,8 @@ function wav(samples: Int16Array, format: { rate?: number; channels?: number } =
 type Session = { provider: string; runs: number[]; released: boolean };
 
 /** A runtime whose model names, for each frame, the class the spike in its audio stands for. `wrong` providers hear the next class. */
-function runtime(options: { wrong?: string[]; frames?: (samples: number) => number } = {}) {
+function runtime(options: { classes?: number; wrong?: string[]; frames?: (samples: number) => number } = {}) {
+  const classes = options.classes ?? CLASSES;
   const sessions: Session[] = [];
   const ort = {
     Tensor: class { constructor(readonly type: string, readonly data: Float32Array, readonly dims: number[]) {} },
@@ -62,14 +63,14 @@ function runtime(options: { wrong?: string[]; frames?: (samples: number) => numb
           const input = input_values.data;
           session.runs.push(input.length);
           const frames = (options.frames ?? framesFor)(input.length);
-          const data = new Float32Array(frames * CLASSES);
+          const data = new Float32Array(frames * classes);
           for (let frame = 0; frame < frames; frame++) {
             let heard = 0;
-            for (let c = 1; c < CLASSES; c++) if (input[frame * FRAME_SAMPLES + c]! > input[frame * FRAME_SAMPLES + heard]!) heard = c;
-            if (options.wrong?.includes(session.provider)) heard = (heard + 1) % CLASSES;
-            data[frame * CLASSES + heard] = 10;
+            for (let c = 1; c < classes; c++) if (input[frame * FRAME_SAMPLES + c]! > input[frame * FRAME_SAMPLES + heard]!) heard = c;
+            if (options.wrong?.includes(session.provider)) heard = (heard + 1) % classes;
+            data[frame * classes + heard] = 10;
           }
-          return { logits: { dims: [1, frames, CLASSES], data } };
+          return { logits: { dims: [1, frames, classes], data } };
         },
         async release() { session.released = true; },
       };
@@ -104,6 +105,24 @@ describe("the aligner in the audio helper", () => {
     expect(you!.end).toBeCloseTo(at + 0.32, 3);
     expect(hi!.score).toBeGreaterThan(0.9);
   };
+
+  it.each([true, false])("verifies Spanish GPU output and recovers word timings on CPU with stored emissions %s", async stored => {
+    const classes = 5 + SPANISH_CTC_LETTERS.length;
+    const { ort, sessions } = runtime({ classes, wrong: ["webgpu"] });
+    vi.spyOn(uhm, "loadRuntime").mockReturnValue(ort);
+    vi.spyOn(uhm, "webgpuAvailable").mockReturnValue(true);
+    const kept = new uhm.Sessions();
+    const file = join(dir, "spanish.wav");
+    await writeFile(file, wav(audio(4, { 100: "__A_Ñ_O__" }, ch => ch === "_" ? 0 : 5 + SPANISH_CTC_LETTERS.indexOf(ch))));
+    const group = { start: 2.1, end: 2.4, words: [{ text: "año", start: 2.1, end: 2.4 }] };
+    const input = await request([group], { language: "es", ...(stored && { store: { file: join(dir, "es.bin"), offset: 0 } }) });
+    const [timings] = await runAlignWorker(file, "spanish.onnx", input, undefined, kept);
+    expect(timings![0]!.start).toBeCloseTo(2.04, 1);
+    expect(timings![0]!.end).toBeCloseTo(2.14, 1);
+    expect(timings![0]!.score).toBeGreaterThan(0.9);
+    expect(sessions.map(s => [s.provider, s.released])).toEqual([["webgpu", true], ["cpu", false]]);
+    expect(kept.gpuFailed.has("spanish.onnx")).toBe(true);
+  });
 
   it("times a run's words from the audio around its Whisper times, one pass for runs that nearly touch", async () => {
     const { ort, sessions } = runtime();

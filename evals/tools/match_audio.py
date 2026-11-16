@@ -4,6 +4,7 @@ Requires NumPy, ffprobe and ffmpeg. Run `python match_audio.py --help` for usage
 """
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -255,6 +256,17 @@ def map_audio(raw, final, raw_duration, final_duration, fps, upper_band=None):
             'unmappedFinal': unknown, 'removedSource': None if unknown else removed}
 
 
+def source_identity(raw, final, raw_track, final_track):
+    def digest(path):
+        h = hashlib.sha256()
+        with path.open('rb') as source:
+            for block in iter(lambda: source.read(4 * 1024 * 1024), b''):
+                h.update(block)
+        return h.hexdigest()
+    return dict(sourceSha256=digest(raw), audioStream=raw_track,
+                editorSha256=digest(final), editorAudioStream=final_track)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('raw', type=Path)
@@ -277,6 +289,7 @@ def main():
                 soundtrack(args.final, args.final_track, HIGH_RATE, band, final_delay))
 
     result = map_audio(raw, final, raw_duration, final_duration, fps, upper_band)
+    result['inputs'] = source_identity(args.raw, args.final, args.raw_track, args.final_track)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode='w', dir=output.parent, delete=False) as draft:
         temp = Path(draft.name)

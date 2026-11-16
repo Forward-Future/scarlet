@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { AGENT_LABEL, type AgentAvailability, type AgentHost, type AgentId, type ModelOptions } from "@scarlet/shared";
 import { api, errorMessage } from "../lib/client";
+import { changedDuringLoad } from "./changedDuringLoad";
 
 interface HostsState {
   hosts: AgentHost[];
@@ -13,7 +14,10 @@ interface HostsState {
 }
 
 /** Hosts the socket reported while a read of the list was on its way: they are newer than that read. */
-let reportedDuringLoad: Map<string, AgentHost> | undefined;
+const reports = changedDuringLoad<AgentHost>();
+/** Reads overlap (a refresh while the first read is out): the latest one started says how the list stands, and an older one finishing late changes nothing once a newer one has. */
+let started = 0;
+let shown = 0;
 /** A failed read tries again by itself a few times, so one hiccup at launch doesn't leave the Model row connecting. */
 const RETRY_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
 let retries = 0;
@@ -29,22 +33,26 @@ export const useHostsStore = create<HostsState>((set, get) => ({
     clearTimeout(retryTimer);
     retryTimer = undefined;
     set({ status: "loading" });
-    const reported = reportedDuringLoad = new Map();
+    const read = reports.begin();
+    const seq = ++started;
     try {
       const { hosts } = await api.hosts();
-      const merged = [...hosts.filter(h => !reported.has(h.id)), ...reported.values()];
+      if (seq < shown) return;
+      shown = seq;
       retries = 0;
-      set({ hosts: merged, status: "ready", error: null });
+      set({ hosts: read.merge(hosts), status: "ready", error: null });
     } catch (err) {
+      // Only the latest read's failure is the list's: an older one's is stale, and a newer one is still on its way.
+      if (seq !== started) return;
       set({ status: "error", error: errorMessage(err) });
       const wait = RETRY_MS[retries++];
       if (wait !== undefined) retryTimer = setTimeout(() => { retryTimer = undefined; if (get().status === "error") void get().load(); }, wait);
     } finally {
-      if (reportedDuringLoad === reported) reportedDuringLoad = undefined;
+      read.end();
     }
   },
   apply(host) {
-    reportedDuringLoad?.set(host.id, host);
+    reports.set(host.id, host);
     const hosts = get().hosts.filter((h) => h.id !== host.id);
     set({ hosts: [...hosts, host] });
   },

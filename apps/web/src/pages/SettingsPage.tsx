@@ -365,8 +365,8 @@ export function SettingsPage() {
         {tab === "models" && <ModelSettings />}
         {tab === "tools" && (
           <>
-            <section className="card p-5" aria-label="Editing tools"><EditingToolsSettings /></section>
             <Outlet />
+            <EditingToolsSettings />
           </>
         )}
         {tab === "usage" && (

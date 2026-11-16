@@ -1,11 +1,12 @@
-import { conflict, notFound } from "../errors.js";
+import { badRequest, conflict, notFound } from "../errors.js";
 import { cancelTask } from "../services/tasks.js";
 import { holdTranscriptions, recoverIngestInBackground } from "../services/ingest.js";
 import { recoverSourcePreviews } from "../services/sourcePreviews.js";
 import { withActivity } from "../services/projectActivity.js";
 import { recoverTasks } from "../services/taskRecovery.js";
 import { Hono } from "hono";
-import { buildThreads, EditReviewRequest, threadTimeline, threadRevision, ThreadDisposition, CreateProjectRequest, UpdateProjectRequest, type ProjectDetail } from "@scarlet/shared";
+import { buildThreads, EditReviewRequest, threadTimeline, threadRevision, ThreadDisposition, CreateProjectRequest, MakeShortsRequest, ShortsPlanRequest, UpdateProjectRequest, type ProjectDetail } from "@scarlet/shared";
+import { makeShorts, planShorts } from "../services/shorts.js";
 import { createProject, hasInitialTimeline } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
@@ -35,6 +36,20 @@ export function projectRoutes(ctx: Ctx) {
     ctx.paths.ensureProject(project.id);
     ctx.bus.publish({ type: "project.updated", projectId: project.id, project });
     return c.json({ project }, 201);
+  });
+
+  // Make shorts: a new project for each short, made from this one's finished edit. The first starts working at once.
+  r.post("/projects/:id/shorts", async (c) => {
+    const body = await jsonBody(c, MakeShortsRequest);
+    const project = requireProjectHeader(ctx, c.req.param("id"));
+    if (body.agent === "api") throw badRequest("agent_unavailable", "Choose Claude, Codex or Gemini to make shorts.");
+    return c.json(await makeShorts(ctx, c.var.user, project.id, body, c.req.raw.signal), 201);
+  });
+
+  // The first short's run saves the moments it chose, and the other shorts start with theirs.
+  r.post("/tasks/:id/shorts-plan", async (c) => {
+    const body = await jsonBody(c, ShortsPlanRequest);
+    return c.json(planShorts(ctx, c.var.user, c.req.param("id"), body));
   });
 
   r.get("/projects/:id", (c) => {

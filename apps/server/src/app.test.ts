@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Change, MediaAsset, Note, Project, Timeline } from "@scarlet/timeline";
 import type { ActivityEntry, AgentHost, Learning, Render, Skill, SkillVersion, Task, TaskEvent, User } from "@scarlet/shared";
@@ -785,6 +786,8 @@ describe("scarlet server", () => {
     await api("POST", `/tasks/${task.id}/complete`, { body: { state: "done", summary: "Added a rule to keep laughter." } });
     const detail = (await api<{ skill: Skill; versions: SkillVersion[]; edits: Task[] }>("GET", `/skills/${skill.id}`)).json;
     expect(detail.versions.map(v => v.author?.type)).toEqual(["human", "agent"]);
+    // The history says what each version changed: Scarlet's carries the words that asked for it.
+    expect(detail.versions.map(v => [v.note, v.from])).toEqual([["First version", undefined], ["Never cut laughter.", "request"]]);
     expect(detail.edits).toMatchObject([{ id: task.id, state: "done", resultSkillId: skill.id, summary: "Added a rule to keep laughter." }]);
     expect((await api("POST", endpoint, { body: draft })).status).toBe(403);
     // One that ends without a revision says so in its own words. It is not a failure.
@@ -1264,6 +1267,24 @@ describe("scarlet server", () => {
     expect(otio.OTIO_SCHEMA).toBe("Timeline.1");
     expect(text).toContain("ExternalReference.1");
     expect(text).toContain(media.path);
+  });
+
+  it("lists the folder for finishing the edit in another app, linked where it will be saved", async () => {
+    const folder = join(fixtureDir, "Exports", "Test Cut");
+    const mediaUrl = pathToFileURL(join(folder, "Media", "test.mp4")).href;
+    const r = await api<import("@scarlet/shared").HandoffResponse>("POST", `/projects/${project.id}/versions/head/handoff`, { body: { folder } });
+    expect(r.status).toBe(200);
+    const paths = r.json.files.map((f) => f.path);
+    expect(paths).toEqual(expect.arrayContaining(["Test Cut.fcpxml", "Test Cut.otio", "Read me.txt", "Media/test.mp4"]));
+    const copy = r.json.files.find((f) => f.path === "Media/test.mp4") as { source: string; size: number };
+    expect(copy.source).toBe(join(dataDir, "projects", project.id, "media", media.path));
+    expect(copy.size).toBe(testMp4.length);
+    expect(r.json.mediaBytes).toBe(testMp4.length);
+    const fcpxml = (r.json.files.find((f) => f.path === "Test Cut.fcpxml") as { text: string }).text;
+    expect(fcpxml).toContain(`src="${mediaUrl}"`);
+    const otio = (r.json.files.find((f) => f.path === "Test Cut.otio") as { text: string }).text;
+    expect(otio).toContain(mediaUrl);
+    expect((await api("POST", `/projects/${project.id}/versions/head/handoff`, { body: { folder: "relative/folder" } })).status).toBe(400);
   });
 
   it("handles settings and validation errors", async () => {

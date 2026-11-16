@@ -32,9 +32,6 @@ it("lands a just-applied edit with a moment: a cut's red closes up first, any ot
   const closing = container.querySelectorAll<HTMLElement>(".simple-timeline-closing");
   expect(closing).toHaveLength(1);
   expect(closing[0]!.style.left).toBe(marks[0]!.style.left);
-  // A settled edit drawn as a faint tick has no moment.
-  await show(0, [{ time: 20, title: "Edit 1", n: 1, quiet: true, landed: "cut" }]);
-  expect(container.querySelector("[data-landed], .simple-timeline-closing")).toBeNull();
 });
 
 it("glides the playhead through a jump, and follows playback and small steps as before", async () => {

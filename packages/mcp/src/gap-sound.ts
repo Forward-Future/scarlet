@@ -10,6 +10,30 @@ import { dbfs, isTag } from "./analysis.js";
 export interface GapLevels { from: number; to: number; rms: number[] }
 export interface GapSound { seconds: number; runs: TimeRange[] }
 
+/**
+ * Where a recording is quiet: RMS and peak at most these (0..1 per bucket), RMS within QUIET_ABOVE_FLOOR_DB of the
+ * recording's own floor (quietRms), and no voice detected. Cut edges go in such quiet (dialogue_check_join). Word
+ * alignment keeps the words it can't confirm on sound louder than QUIET_RMS.
+ */
+export const QUIET_RMS = .01, QUIET_PEAK = .05;
+/**
+ * Quiet sits no more than this above the recording's floor. On a recording whose room tone is near -70 dBFS, a fixed
+ * -40 dBFS took the dip between two words said in one breath, 38 dB above the room, for quiet: a pass's cut ended
+ * there, between "this game" and "let me", and the gate applied it (2026-11-15).
+ */
+export const QUIET_ABOVE_FLOOR_DB = 20;
+/** No floor is taken as lower than this: digital silence would leave nothing quiet. */
+const LOWEST_FLOOR_RMS = 1e-4;
+
+/** The RMS at or under which a bucket of these levels is quiet: QUIET_RMS, or less on a recording with a low floor. */
+export function quietRms(rms: ArrayLike<number>): number {
+  if (!rms.length) return QUIET_RMS;
+  const sorted = Float64Array.from(rms).sort();
+  // The quietest fiftieth: a minute of dense speech still has a second of pauses, and a tenth of it is already words' tails.
+  const floor = Math.max(LOWEST_FLOOR_RMS, sorted[Math.floor(sorted.length * 0.02)]!);
+  return Math.min(QUIET_RMS, floor * 10 ** (QUIET_ABOVE_FLOOR_DB / 20));
+}
+
 /** A gap between two words is described from this length. */
 export const GAP_SECONDS = 0.4;
 /** Sound counts when it is within this of the level speech sits at. A sibilant's hiss and room tone fall well under it. */

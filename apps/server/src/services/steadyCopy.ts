@@ -1,4 +1,10 @@
-import { open, utimes } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { constants } from "node:fs";
+import { copyFile, open, realpath, rm, stat, utimes } from "node:fs/promises";
+import { dirname } from "node:path";
+import { promisify } from "node:util";
+
+const run = promisify(execFile);
 
 /** How much may be written before it is flushed to disk. */
 const FLUSH_EVERY = 64 * 1024 * 1024;
@@ -49,5 +55,47 @@ export async function steadyCopy(source: string, destination: string, signal?: A
     await utimes(destination, Number(atimeNs) / 1e9, Number(mtimeNs) / 1e9);
   } finally {
     await input.close();
+  }
+}
+
+/** Below this a plain copy is quick enough that it needn't be throttled. */
+const SMALL_COPY = 16 * 1024 * 1024;
+
+/**
+ * Share the source's blocks when the disk can: an APFS clone on a Mac, a reflink on Linux. Says whether it did.
+ * macOS `cp -c` clones within a volume and silently copies in full across volumes, so a Mac clones only within one.
+ */
+async function cloneFile(source: string, destination: string, signal?: AbortSignal): Promise<boolean> {
+  if (process.platform === "darwin") {
+    const [from, into] = await Promise.all([stat(source), stat(dirname(destination))]);
+    if (from.dev !== into.dev) return false;
+    await run("/bin/cp", ["-c", await realpath(source), destination], { signal });
+    return true;
+  }
+  try {
+    await copyFile(source, destination, constants.COPYFILE_FICLONE_FORCE);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "EACCES" || code === "EPERM") throw error;
+    await rm(destination, { force: true });
+    return false;
+  }
+}
+
+/**
+ * Copy a file into the library as its own file: a clone where the disk allows it, which is instant and takes no space,
+ * and otherwise `steadyCopy`, so a large recording on a disk without clones doesn't stall the engine. A copy that fails
+ * leaves nothing at the destination.
+ */
+export async function cloneOrSteadyCopy(source: string, destination: string, signal?: AbortSignal,
+  options: { smallBytes?: number; clone?: typeof cloneFile } = {}): Promise<void> {
+  try {
+    signal?.throwIfAborted();
+    if ((await stat(source)).size < (options.smallBytes ?? SMALL_COPY)) await copyFile(source, destination, constants.COPYFILE_FICLONE);
+    else if (!(await (options.clone ?? cloneFile)(source, destination, signal))) await steadyCopy(source, destination, signal);
+  } catch (error) {
+    await rm(destination, { force: true });
+    throw error;
   }
 }

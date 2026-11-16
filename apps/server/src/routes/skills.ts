@@ -5,7 +5,7 @@ import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { requestAttempt, requireActiveAttempt } from "../services/taskAttempt.js";
 import { badRequest, conflict, forbidden, notFound } from "../errors.js";
-import { assistantSkills, createSkill, deleteSkill, latestSkillEdit, reviseSkillContent, skillEdits, updateSkill } from "../services/skills.js";
+import { assistantSkills, createSkill, deleteSkill, latestSkillEdit, reviseSkillContent, skillEdits, skillHistory, updateSkill } from "../services/skills.js";
 import { createTask, FINISHED_TASK, saveTask } from "../services/tasks.js";
 import { approveLearning, declineLearning, openLearnings, requireApprovedLearningEdit, reviseLearning, suggestLearning } from "../services/learnings.js";
 import { actorFor, agentName, logActivity, quote } from "../services/activity.js";
@@ -40,7 +40,7 @@ export function skillRoutes(ctx: Ctx) {
 
   r.get("/skills/:skillId", (c) => {
     const skill = requireSkill(c.req.param("skillId"));
-    return c.json({ skill, versions: ctx.repos.skillVersions.list(skill.id), edits: skillEdits(ctx, skill.id) });
+    return c.json({ skill, versions: skillHistory(ctx, skill.id), edits: skillEdits(ctx, skill.id) });
   });
 
   r.put("/skills/:skillId", async (c) => {

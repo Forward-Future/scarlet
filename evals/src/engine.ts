@@ -84,7 +84,7 @@ export class Engine {
     return this.get<{ tasks: TaskRecord[] }>(`/projects/${enc(projectId)}/tasks${state ? `?state=${enc(state)}` : ""}`).then(r => r.tasks);
   }
   change(changeId: string) { return this.get<{ change: Change }>(`/changes/${enc(changeId)}?view=record`).then(r => r.change); }
-  skills() { return this.get<{ skills: Array<{ id: string; name: string; version?: number }> }>(`/skills`).then(r => r.skills); }
+  skills() { return this.get<{ skills: Array<{ id: string; name: string; version?: number; enabled?: boolean }> }>(`/skills`).then(r => r.skills); }
   async transcript(mediaId: string) {
     try {
       return await this.get<{ segments: Array<{ words?: Array<{ text: string; start: number; end: number }> }> }>(`/media/${enc(mediaId)}/transcript`);

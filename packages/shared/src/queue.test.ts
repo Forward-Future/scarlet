@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { Change } from "@scarlet/timeline";
-import { queueOrder, queueWait } from "./threads.js";
+import { queueOrder, queueWait, requestTargetKey, runsBeside } from "./threads.js";
 import type { Task } from "./api.js";
 
 const task = (id: string, state: Task["state"], minute: number, context: Partial<Task["context"]> = {}): Task => ({
@@ -172,4 +172,34 @@ it("lets requests about different cuts or edits run at once, and keeps every oth
   expect(queueWait(later, [{ ...captions, state: "running" }, later], [])).toEqual({ kind: "run", task: { ...captions, state: "running" } });
   // A pass's calls still hold a revision of an edit the pass isn't about.
   expect(queueWait(zoomFix, [pass, first, zoomFix], [review])).toEqual({ kind: "review", change: review });
+});
+
+// The engine's claim query keys requests the same way (`beside` in claimNext); tasks.test.ts runs the same cases there.
+it.each([
+  { name: "two edits of one change in one thread", a: { threadId: "t", changeId: "A", editIndex: 0 }, b: { threadId: "t", changeId: "A", editIndex: 1 }, beside: true },
+  { name: "the first edits of two changes in one thread", a: { threadId: "t", changeId: "A", editIndex: 0 }, b: { threadId: "t", changeId: "B", editIndex: 0 }, beside: true },
+  { name: "one edit, sent from its own thread and from the request that flagged it", a: { threadId: "t", changeId: "A", editIndex: 0 }, b: { threadId: "flagger", changeId: "A", editIndex: 0 }, beside: false },
+  { name: "one edit, sent about its first version and about its revision", a: { threadId: "t", changeId: "A", editIndex: 0 }, b: { threadId: "t", changeId: "A3", editIndex: 0 }, beside: false },
+  { name: "a revised edit and another edit of the change it was first made in", a: { threadId: "t", changeId: "A", editIndex: 1 }, b: { threadId: "t", changeId: "A3", editIndex: 0 }, beside: true },
+  { name: "two calls of one pass", a: { threadId: "pass", changeId: "P", cutIndex: 1 }, b: { threadId: "pass", changeId: "P", cutIndex: 2 }, beside: true },
+  { name: "one call, sent about two versions of its pass", a: { threadId: "pass", changeId: "P", cutIndex: 2 }, b: { threadId: "pass", changeId: "P2", cutIndex: 2 }, beside: false },
+  { name: "a call and an applied edit", a: { threadId: "pass", changeId: "P", cutIndex: 0 }, b: { threadId: "pass", changeId: "P", editIndex: 0 }, beside: true },
+  { name: "an edit and the whole video", a: { threadId: "t", changeId: "A", editIndex: 0 }, b: { threadId: "t" }, beside: false },
+])("keys a request by the cut or edit it is about: $name", ({ a, b, beside }) => {
+  // A2 revises A's edit 0 at its spot 1, and A3 revises that at its spot 0.
+  const changes = [{ id: "A" }, { id: "A2", timelineEdits: [{ label: "Other", range: { start: 0, end: 1 } }, { label: "Zoom", range: { start: 2, end: 3 }, replaces: { changeId: "A", spot: 0 } }] },
+    { id: "A3", timelineEdits: [{ label: "Zoom", range: { start: 2, end: 3 }, replaces: { changeId: "A2", spot: 1 } }] }] as Change[];
+  const x = task("x", "queued", 1, a), y = task("y", "running", 0, b);
+  expect(runsBeside(x, y, changes)).toBe(beside);
+  expect(runsBeside(y, x, changes)).toBe(beside);
+  expect(queueWait(x, [y, x], changes)).toEqual(beside ? undefined : { kind: "run", task: y });
+});
+
+it("names an applied edit by where it was first made, a call by its pass's thread", () => {
+  const changes = [{ id: "A2", timelineEdits: [{ label: "Zoom", range: { start: 2, end: 3 }, replaces: { changeId: "A", spot: 0 } }] }] as Change[];
+  expect(requestTargetKey(task("x", "queued", 1, { changeId: "A2", editIndex: 0 }), changes)).toBe(JSON.stringify(["edit", "A", 0]));
+  expect(requestTargetKey(task("x", "queued", 1, { changeId: "A2", editIndex: 0 }))).toBe(JSON.stringify(["edit", "A2", 0]));
+  expect(requestTargetKey(task("x", "queued", 1, { threadId: "pass", changeId: "P", cutIndex: 3 }))).toBe(JSON.stringify(["call", "pass", 3]));
+  expect(requestTargetKey(task("x", "queued", 1, { cutIndex: 3 }))).toBeUndefined();
+  expect(requestTargetKey(task("x", "queued", 1))).toBeUndefined();
 });

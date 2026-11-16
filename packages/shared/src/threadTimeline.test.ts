@@ -34,6 +34,23 @@ describe("reviewing one thread on the working interview timeline", () => {
     expect(restored.find(e => e.spot === 3)?.range).toEqual(named[3]!.range);
   });
 
+  it("reads each cut an agent named to the second as the cut it made, wherever its join falls between hundredths", () => {
+    // A fit-length request named its five cuts to the hundredth of a second, and the joins its removals made fell between
+    // those: three of them listed as edits that weren't cuts, and the request said it made edits, not what it took out (2026-11-15).
+    const removals = [{ start: 60.1234, end: 70.4567 }, { start: 120.3333, end: 135.6789 }, { start: 300.1111, end: 318.2222 }];
+    const cuts = { ...change, toVersion: head.version, ops: removals.map(({ start, end }) => ({ op: "rippleDelete", start, end })).reverse(),
+      timelineEdits: [{ label: "Cut the aside", range: { start: 60.12, end: 60.12 } }, { label: "Cut the walkthrough", range: { start: 110, end: 110 } },
+        { label: "Cut the side note", range: { start: 274.43, end: 274.43 } }] };
+    const edits = threadTimeline(thread([cuts]), head, links, () => earlier, 30);
+    expect(edits.map(e => [e.label, e.kind, e.beforeCut?.removed])).toEqual([
+      ["Cut the aside", "cut", removals[0]], ["Cut the walkthrough", "cut", removals[1]], ["Cut the side note", "cut", removals[2]]]);
+    // A cut named by the seconds around the join a point named a hair off it already took doesn't take it too: the
+    // footage is counted once.
+    const both = { ...cuts, timelineEdits: [...cuts.timelineEdits, { label: "Tighten the opening", range: { start: 59, end: 61.5 } }] };
+    const once = threadTimeline(thread([both]), head, links, () => earlier, 30).filter(e => e.beforeCut?.removed.start === removals[0]!.start);
+    expect(once.map(e => e.label)).toEqual(["Cut the aside"]);
+  });
+
   it("lists an edit once when a later save of the same request names it again", () => {
     // A pass that saves the video a second time lists every edit it has made so far, not only what that save changed.
     const first = { ...change, timelineEdits: [
@@ -195,6 +212,14 @@ describe("reviewing one thread on the working interview timeline", () => {
     expect(alone[0]!.at).toBeUndefined();
     expect(alone[0]!.range.start).toBeCloseTo(99);
     expect(alone[0]!.range.end).toBeCloseTo(99.2);
+
+    // A save of the whole video that took footage out somewhere else, with a punch-in named on the cut's join, didn't
+    // move that join: the punch-in is an edit of its own, and the cut keeps its own sentence.
+    const elsewhere = keep("v2", [0, 99], [101, 200], [210, 3468]);
+    const punch = save("punch", "v1", "v2", [{ label: "Punch in", range: { start: 99, end: 99 }, summary: "Punched in on the answer." }]);
+    const named = { ...pass, timelineEdits: [{ label: "Remove the delivery aside", range: { start: 99, end: 99 }, summary: "Took out the aside." }] };
+    const both = threadTimeline(thread([named, punch]), elsewhere, all.slice(0, 3), v => v === "v2" ? elsewhere : read(v), 30);
+    expect(both.map(e => [e.changeId, e.summary])).toEqual([["batch", "Took out the aside."], ["punch", "Punched in on the answer."]]);
   });
 
   it("shows the footage a change left out as it built the video from the pieces to keep, each stretch a cut", () => {
@@ -330,5 +355,21 @@ describe("a doubt a later request raises about an edit already in the video", ()
     const revise = Task.parse({ ...run("revise-run", "framing"), kind: "revise", context: { threadId: "framing", changeId: "pass", editIndex: 1 } });
     const threads = buildThreads({ changes: [{ ...pass, flags }, revision], notes: [], tasks: [run("cutting", "dialogue"), run("framing-run", "framing"), revise] });
     expect(threads.map(t => [t.id, t.tasks.map(x => x.id)])).toEqual(expect.arrayContaining([["dialogue", ["cutting"]], ["framing", ["framing-run", "revise-run"]]]));
+  });
+
+  it("lists the edit as it is now once the request that made it revised it, and not the version it replaced", () => {
+    // The dialogue request revised its own edit after the framing request raised the doubt.
+    const own = { ...change, id: "own-fix", threadId: "dialogue", taskId: "cutting-fix", fromVersion: "v1", toVersion: "v2", createdAt: "2026-01-03T00:00:00Z",
+      timelineEdits: [{ label: "Close the gap", range: { start: 724, end: 726 }, replaces: { changeId: "pass", spot: 1 } }] };
+    const threads = buildThreads({ changes: [{ ...pass, flags }, zooms, own], notes: [], tasks: [run("cutting", "dialogue"), run("framing-run", "framing"), run("cutting-fix", "dialogue")] });
+    const framing = threads.find(t => t.id === "framing")!, dialogue = threads.find(t => t.id === "dialogue")!;
+    expect(framing.flagged?.map(c => c.id)).toEqual(["pass", "own-fix"]);
+    expect(dialogue.changes.map(c => c.id)).toEqual(["pass", "own-fix"]);
+    expect(threadEditList(framing).map(e => [e.changeId, e.label, e.check, e.elsewhere, e.previous])).toEqual([
+      ["zooms", "Frame the spreadsheet", undefined, undefined, []],
+      ["own-fix", "Close the gap", REVISED_CHECK, true, [{ changeId: "pass", spot: 1 }]]]);
+    // Undoing the revision puts the version with the doubt back in the video, and back in the list.
+    const undone = threadTimeline(framing, { ...head, version: "undo" }, [...links, { version: "undo", parent: "v2", revertsVersion: "v2" }], () => earlier, 30);
+    expect(undone.filter(e => e.elsewhere).map(e => [e.changeId, e.check])).toEqual([["pass", flags[0]!.check]]);
   });
 });

@@ -132,18 +132,15 @@ export function captionWordMapper(words: readonly TranscriptWord[]): (clip: Medi
   return clip => mapWordsThroughClip(clip, inClip(clip.sourceIn, clip.sourceOut).map(i => words[i]!));
 }
 
-/** Media clips whose audio is actually heard (enabled, unmuted track, volume > 0). */
+/** Each track's media clips whose audio is actually heard (enabled, unmuted track, volume > 0), track by track. */
+export function audibleClipsByTrack(timeline: Timeline): MediaClip[][] {
+  return timeline.tracks.filter(track => track.kind !== "caption" && !track.muted)
+    .map(track => track.clips.filter((clip): clip is MediaClip => clip.kind === "media" && clip.enabled !== false && (clip.volume ?? 1) > 0));
+}
+
+/** Media clips whose audio is actually heard, in timeline order (track order for clips that start together). */
 export function audibleMediaClips(timeline: Timeline): MediaClip[] {
-  const clips: MediaClip[] = [];
-  for (const track of timeline.tracks) {
-    if (track.kind === "caption" || track.muted) continue;
-    for (const clip of track.clips) {
-      if (clip.kind !== "media" || clip.enabled === false) continue;
-      if ((clip.volume ?? 1) <= 0) continue;
-      clips.push(clip);
-    }
-  }
-  return clips.sort((a, b) => a.timelineIn - b.timelineIn);
+  return audibleClipsByTrack(timeline).flat().sort((a, b) => a.timelineIn - b.timelineIn);
 }
 
 /** Use the audible edit by default. A named source also includes its enabled, muted placements. */
@@ -244,6 +241,9 @@ export function round3(n: number): number {
 
 /** A transcript word that is a bracketed tag, such as [BLANK_AUDIO], and not something said. */
 export const isTag = (text: string) => /^\s*\[.*\]\s*$/.test(text);
+
+/** How a transcript read marks a word heard only on the input a recording's dialogue isn't on: it is not the speaker. */
+export const OTHER_INPUT = "[other input]";
 
 /** Linear level 0..1 → dBFS, floored at -99. Every audio tool reports levels this way. */
 export function dbfs(v: number): number {

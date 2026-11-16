@@ -18,11 +18,12 @@
  * item.updated, item.completed, turn.completed, turn.failed, error).
  */
 import { mkdir, readFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { writePrivateFile } from "../private-files.js";
 import { briefInput, DEFAULT_STALL_MS, isQuestionTool, planEvent, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
 import { earlyResult, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
-import { addUsage, codexUsage } from "./usage.js";
+import { addUsage, codexUsage, usageWithModel } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
 
 export interface CodexParseState {
@@ -219,6 +220,12 @@ export function buildCodexCommand(
   bin: string,
   tmpDir: string,
 ): CodexCommand {
+  // Seatbelt must be able to re-execute Codex while loading AGENTS.md. Launch the
+  // real file: granting its target alone does not permit a Homebrew symlink.
+  let executable: string | undefined;
+  if (process.platform === "darwin") {
+    try { executable = realpathSync(bin); } catch { /* Keep normal missing-CLI reporting. */ }
+  }
   const lastMessagePath = join(tmpDir, "last-message.md");
   // Forward slashes keep the TOML readable and work for node on Windows.
   const toToml = (p: string) => p.replace(/\\/g, "/");
@@ -243,7 +250,7 @@ export function buildCodexCommand(
     // Codex's own to-do tool, which it reports as `todo_list` items. A Codex without this key refuses it under --strict-config.
     ...(opts.plan ? ["-c", "tools.update_plan.enabled=true"] : []),
     "-c", 'default_permissions="scarlet"',
-    "-c", 'permissions.scarlet.filesystem={":root"="deny",":minimal"="read",":workspace_roots"={"."="write"}}',
+    "-c", `permissions.scarlet.filesystem={":root"="deny",":minimal"="read",":workspace_roots"={"."="write"}${executable ? `,${tomlString(executable)}="read"` : ""}}`,
     "-c", 'permissions.scarlet.network.enabled=false',
     "-c", 'mcp_servers.scarlet.default_tools_approval_mode="approve"',
     "-c", "mcp_servers.scarlet.required=true",
@@ -264,7 +271,7 @@ export function buildCodexCommand(
     "-",
   ];
   return {
-    file: bin,
+    file: executable ?? bin,
     args,
     stdin: opts.instruction,
     files: { [join(opts.cwd, "AGENTS.md")]: opts.systemPrompt },
@@ -305,7 +312,7 @@ export async function runCodex(opts: RunAgentOptions): Promise<RunAgentResult> {
   } catch {
     /* not written */
   }
-  const usage = st.usage && !st.usage.model && opts.model ? { ...st.usage, model: opts.model } : st.usage;
+  const usage = usageWithModel(st.usage, opts.model);
   const early = earlyResult(st, outcome, { usage });
   if (early) return early;
   // A failure line fails the run whatever it says, an empty reason included.

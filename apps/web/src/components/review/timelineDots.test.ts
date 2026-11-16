@@ -1,10 +1,9 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
 import { bandLabel, gapLabel, layoutMarks, nearestMark, type TimelineDot } from "./TimelineScrubber";
-import { countLabel, editUnder, layoutEdits, type EditLayout, type TimelineEdit } from "./timelineEdits";
 
 const dot = (time: number, n: number): TimelineDot => ({ time, n, title: `Edit ${n}` });
-const shapes = (layout: ReturnType<typeof layoutMarks>) => layout.map(m => `${m.label}${m.quiet ? "|" : ""}`);
+const shapes = (layout: ReturnType<typeof layoutMarks>) => layout.map(m => m.label);
 
 describe("layoutMarks", () => {
   // 100 s across 1000 px: 1 s is 10 px, and a numbered circle needs 20 px to its neighbour.
@@ -41,10 +40,40 @@ describe("layoutMarks", () => {
     expect(shapes(layoutMarks([dot(10, 1), { time: 10.01, title: "Call" }], 0, 100, 1000))).toEqual(["1+"]);
   });
 
-  it("leaves a settled edit as a faint tick that joins no pill and takes no room", () => {
-    const settled = { ...dot(10.2, 1), quiet: true };
-    expect(shapes(layoutMarks([dot(10, 2), settled, dot(40, 3)], 0, 100, 1000))).toEqual(["2", "1|", "3"]);
-    expect(shapes(layoutMarks([{ ...dot(10, 1), quiet: true }, { ...dot(10.4, 2), quiet: true }], 0, 100, 1000))).toEqual(["1|", "2|"]);
+  it("caps a run's reach, so a dense pass reads as several runs that never touch", () => {
+    // 119 cuts, one every 5 s across 600 s and 900 px: each 7.5 px from the next, so every circle would touch.
+    const pass = Array.from({ length: 119 }, (_, i) => dot(5 * i + 2, i + 1));
+    const layout = layoutMarks(pass, 0, 600, 900);
+    expect(layout.map(m => m.label)).toEqual(["1–14", "15–28", "29–42", "43–56", "57–70", "71–84", "85–98", "99–112", "113–119"]);
+    // Together the runs hold every cut once, in order.
+    expect(layout.flatMap(m => m.dots.map(d => d.n))).toEqual(pass.map(d => d.n));
+    for (const m of layout) expect((Math.max(...m.times) - Math.min(...m.times)) / 600 * 900).toBeLessThanOrEqual(104);
+    // No pill touches the next, and none leaves the track.
+    for (let i = 1; i < layout.length; i++) {
+      const a = layout[i - 1]!, b = layout[i]!;
+      expect((b.at - a.at) / 100 * 900).toBeGreaterThanOrEqual(a.width / 2 + b.width / 2 + 3 - 1e-6);
+    }
+    expect(layout.at(-1)!.at / 100 * 900 + layout.at(-1)!.width / 2).toBeLessThanOrEqual(900 + 1e-6);
+  });
+
+  it("keeps the open edit's own circle out of every pill, the runs either side moved clear of it", () => {
+    const pass = Array.from({ length: 30 }, (_, i) => ({ ...dot(5 * i + 2, i + 1), current: i === 14 }));
+    const layout = layoutMarks(pass, 0, 150, 300);
+    const open = layout.find(m => m.dots.some(d => d.current))!;
+    expect([open.label, open.dots.length]).toEqual(["15", 1]);
+    for (let i = 1; i < layout.length; i++) {
+      const a = layout[i - 1]!, b = layout[i]!;
+      expect((b.at - a.at) / 100 * 300).toBeGreaterThanOrEqual(a.width / 2 + b.width / 2 + 3 - 1e-6);
+    }
+    expect(layout.flatMap(m => m.dots.map(d => d.n))).toEqual(pass.map(d => d.n));
+  });
+
+  it("works out its runs for the zoom on its way, so the pills don't change on the way there", () => {
+    const pass = Array.from({ length: 40 }, (_, i) => dot(5 * i + 2, i + 1));
+    // Halfway through a zoom from the whole 200 s to 0–40 s, the runs are already the ones at 0–40 s.
+    const landed = layoutMarks(pass, 0, 40, 1000).map(m => m.label);
+    const midway = layoutMarks(pass, 0, 120, 1000, 40).filter(m => m.times[0]! <= 40).map(m => m.label);
+    expect(midway.slice(0, landed.length)).toEqual(landed);
   });
 
   it("never puts a call's number and an edit's in one pill, though their circles would touch", () => {
@@ -75,15 +104,6 @@ describe("nearestMark", () => {
   it("picks nothing far from every edit", () => {
     expect(nearestMark(layout, 30, 1000)).toBeUndefined();
     expect(nearestMark(layout, 52, 1000)?.label).toBe("3");
-  });
-
-  it("picks the circle drawn under the pointer, though a settled cut's tick inside it is nearer", () => {
-    // Edit 7's circle spans 91.5 to 108.5 px. Settled edit 8's tick takes no room, so it sits inside the circle at 103 px.
-    const crowded = layoutMarks([dot(10, 7), { ...dot(10.3, 8), quiet: true }], 0, 100, 1000);
-    expect(shapes(crowded)).toEqual(["7", "8|"]);
-    expect([10, 10.2, 10.3, 10.5, 10.7].map(at => nearestMark(crowded, at, 1000)?.label)).toEqual(["7", "7", "7", "7", "7"]);
-    // Past the circle's edge the tick is the nearer marker again.
-    expect(nearestMark(crowded, 10.9, 1000)?.label).toBe("8");
   });
 });
 
@@ -120,93 +140,5 @@ describe("bandLabel", () => {
     expect(bandLabel("Audio", 20)).toBe("");
     // Before the track is measured there is nothing to fit it to.
     expect(bandLabel("Removed · 1.4 s", 0)).toBe("Removed · 1.4 s");
-  });
-});
-
-describe("layoutEdits", () => {
-  const edit = (time: number, kind: string, end = time): TimelineEdit => ({ key: `${kind}@${time}`, time, end, kind, title: `${kind} at ${time}` });
-  const shapes = (layout: EditLayout[]) => layout.map(m => m.shape === "count" ? m.label : `${m.shape}:${m.edits[0]!.kind}`);
-
-  it("names what a count holds, most first, two kinds at most", () => {
-    expect(countLabel([edit(1, "cut"), edit(2, "cut")])).toBe("2 cuts");
-    expect(countLabel([edit(1, "graphic", 3), edit(2, "cut"), edit(4, "graphic", 5)])).toBe("2 graphics · 1 cut");
-    expect(countLabel([edit(1, "cut"), edit(2, "cut"), edit(3, "zoom", 4), edit(5, "audio"), edit(6, "speed")])).toBe("2 cuts · 1 zoom · 2 more");
-    // A kind added since, or none, counts as another edit.
-    expect(countLabel([edit(1, "sparkle"), { ...edit(2, "x"), kind: undefined }])).toBe("2 other edits");
-    expect(countLabel([edit(1, "text", 2), edit(3, "text", 4), edit(5, "overlay", 6), edit(7, "audio")])).toBe("2 captions · 1 overlay · 1 more");
-  });
-
-  it("draws each edit for what it is when it has room, and only counts a cut", () => {
-    // 100 s across 1000 px. A cut is never a line of its own: a lone one is a count of one.
-    const layout = layoutEdits([edit(10, "cut"), edit(20, "graphic", 25), edit(40, "overlay", 44), edit(50, "zoom", 60), edit(70, "reframe", 72),
-      edit(80, "audio"), edit(90, "text", 95), edit(96, "sparkle", 97)], 0, 100, 1000);
-    expect(shapes(layout)).toEqual(["1 cut", "bar:graphic", "bar:overlay", "dim:zoom", "dim:reframe", "tick:audio", "dim:text", "tick:sparkle"]);
-    // A bar is as long as its edit is on screen.
-    expect(layout[1]).toMatchObject({ at: 20, to: 25 });
-    // A bar-like edit at one point is a tick.
-    expect(shapes(layoutEdits([edit(10, "graphic")], 0, 100, 1000))).toEqual(["tick:graphic"]);
-  });
-
-  it("leaves out what isn't in view and clips a bar to it", () => {
-    const layout = layoutEdits([edit(5, "cut"), edit(8, "graphic", 30), edit(60, "cut")], 10, 40, 400);
-    expect(shapes(layout)).toEqual(["bar:graphic"]);
-    expect(layout[0]).toMatchObject({ at: 0, to: 50 });
-  });
-
-  it("gathers cuts near each other into one count and counts one far from the rest apart", () => {
-    const layout = layoutEdits([edit(10, "cut"), edit(10.3, "cut"), edit(10.5, "cut"), edit(50, "cut")], 0, 100, 1000);
-    expect(shapes(layout)).toEqual(["3 cuts", "1 cut"]);
-    expect(layout[0]).toMatchObject({ start: 10, end: 10.5 });
-    // Zoomed in, the count opens into smaller counts, never into lines.
-    expect(shapes(layoutEdits([edit(10, "cut"), edit(12, "cut"), edit(14, "cut")], 9, 6, 1000))).toEqual(["1 cut", "1 cut", "1 cut"]);
-    // Before the track is measured nothing can be counted, so no cut is drawn.
-    expect(shapes(layoutEdits([edit(10, "cut"), edit(20, "graphic", 25)], 0, 100, 0))).toEqual(["bar:graphic"]);
-  });
-
-  it("runs bars that overlap in lanes, and gathers them when there are too many or they are too short to tell apart", () => {
-    const lanes = layoutEdits([edit(10, "text", 90), edit(20, "graphic", 30), edit(25, "zoom", 40)], 0, 100, 1000);
-    expect(shapes(lanes)).toEqual(["dim:text", "bar:graphic", "dim:zoom"]);
-    expect(lanes.map(m => m.lane)).toEqual([0, 1, 2]);
-    expect(shapes(layoutEdits([edit(10, "text", 90), edit(20, "graphic", 30), edit(25, "zoom", 40), edit(28, "overlay", 35)], 0, 100, 1000)))
-      .toEqual(["1 graphic · 1 overlay · 2 more"]);
-    expect(shapes(layoutEdits([edit(10, "graphic", 10.5), edit(10.6, "graphic", 11)], 0, 100, 1000))).toEqual(["2 graphics"]);
-    // A short bar under a count joins it, which would hide it.
-    expect(shapes(layoutEdits([edit(10, "cut"), edit(10.3, "cut"), edit(11, "graphic", 12), edit(11.5, "cut")], 0, 100, 1000))).toEqual(["3 cuts · 1 graphic"]);
-    // A cut inside one graphic's long bar: the bar runs on, the cut is counted over it.
-    expect(shapes(layoutEdits([edit(10, "graphic", 20), edit(15, "cut")], 0, 100, 1000))).toEqual(["bar:graphic", "1 cut"]);
-  });
-
-  it("keeps hundreds of cuts across the whole video to a few counts that never touch", () => {
-    const many = Array.from({ length: 500 }, (_, i) => edit(i * 1.2 + 0.4, "cut")).concat([edit(100, "graphic", 106), edit(102, "graphic", 108)]);
-    const started = performance.now();
-    const layout = layoutEdits(many, 0, 600, 1200);
-    expect(performance.now() - started).toBeLessThan(50);
-    expect(layout.every(m => m.shape === "count")).toBe(true);
-    expect(layout.length).toBeLessThanOrEqual(12);
-    expect(layout.reduce((sum, m) => sum + m.edits.length, 0)).toBe(502);
-    for (let i = 1; i < layout.length; i++) {
-      const a = layout[i - 1]!, b = layout[i]!;
-      expect((b.at - a.at) * 12).toBeGreaterThanOrEqual((a.width + b.width) / 2);
-    }
-    expect(layout.some(m => /cuts · 2 graphics$/.test(m.label!))).toBe(true);
-  });
-
-  it("moves a count off a marker of what needs the editor, to the nearer side", () => {
-    const cuts = [edit(50, "cut"), edit(50.2, "cut"), edit(50.4, "cut")];
-    const [count] = layoutEdits(cuts, 0, 100, 1000);
-    expect(count).toMatchObject({ shape: "count", at: 50.2 });
-    const [moved] = layoutEdits(cuts, 0, 100, 1000, [{ x: 505, w: 17 }]);
-    // "3 cuts" is 50 px wide: it ends 6 px short of the marker's left edge.
-    expect(moved!.at * 10).toBeCloseTo(505 - 8.5 - 25 - 6);
-  });
-
-  it("picks a count under the pointer, else the nearest tick, else the shortest bar", () => {
-    const layout = layoutEdits([edit(10, "cut"), edit(10.2, "cut"), edit(30, "graphic", 60), edit(40, "zoom", 45), edit(70, "audio"), edit(85, "cut")], 0, 100, 1000);
-    expect(editUnder(layout, 10.1, 1000)?.shape).toBe("count");
-    expect(editUnder(layout, 85.3, 1000)).toMatchObject({ shape: "count", label: "1 cut" });
-    expect(editUnder(layout, 70.3, 1000)?.shape).toBe("tick");
-    expect(editUnder(layout, 42, 1000)?.edits[0]!.kind).toBe("zoom");
-    expect(editUnder(layout, 35, 1000)?.edits[0]!.kind).toBe("graphic");
-    expect(editUnder(layout, 80, 1000)).toBeUndefined();
   });
 });

@@ -4,17 +4,15 @@
  * holds still costs one reading. Each line of text becomes a span from the first frame that shows it to the first
  * that doesn't. This is evidence for the model, never a decision.
  */
-import { createHash, randomUUID } from "node:crypto";
-import { closeSync, openSync, writeSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { fileInDirectory, probeMedia, screenFrameSize, screenFrames } from "@scarlet/render";
+import { probeMedia, screenFrameSize } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { audioWorker } from "../transcribe/audioWorker.js";
 import { LocalWhisperModel } from "../transcribe/localModel.js";
 import { SCREEN_TEXT_MODELS, type ScreenLine } from "../transcribe/screenTextModel.js";
-import { pictureDecoder, pictureLane } from "./pictureWork.js";
+import { pictureReader, r3, withFrames, type VideoMedia } from "./pictureReading.js";
 
 /** Bump when the reading changes: the models, the sampling or how lines become spans. Kept readings are read again. */
 const SCREEN_TEXT_VERSION = 2;
@@ -29,8 +27,6 @@ const MIN_CONFIDENCE = 0.7;
 
 /** A line of text on screen: source seconds, its words, and its box as fractions of the frame (left, top, right, bottom). */
 export interface ScreenTextSpan { start: number; end: number; text: string; box: [number, number, number, number]; confidence: number }
-
-interface Kept { identity: string; chunks: Record<string, ScreenTextSpan[]> }
 
 /** Mean grey of each cell of a cols × rows grid over the frame, from every other pixel. */
 export function pictureGrid(rgb: Buffer, width: number, height: number, cols = 32, rows = 18): Float32Array {
@@ -54,7 +50,6 @@ export function pictureChanged(before: Float32Array, after: Float32Array) {
 }
 
 const plain = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
 /** How alike two readings are, 0..1: one minus their edit distance over the longer one's length. */
 function likeness(a: string, b: string) {
@@ -145,19 +140,6 @@ export function screenTextMatches(text: string, query: string) {
   return !!q && plain(text).includes(q);
 }
 
-interface Recording {
-  kept?: Promise<Kept>;
-  /** Windows waiting to be read, in order, and the one being read. */
-  queue: number[];
-  /** Windows a request asked for. The rest are read unasked, and a pause of the project's media work holds them. */
-  asked: Set<number>;
-  reading?: Promise<void>;
-  /** Wakes those waiting for windows to be read. */
-  waiters: Set<() => void>;
-  error?: string;
-}
-
-const recordings = new Map<string, Recording>();
 const models = new Map<string, LocalWhisperModel[]>();
 
 function modelsFor(ctx: Ctx) {
@@ -166,117 +148,34 @@ function modelsFor(ctx: Ctx) {
   return list;
 }
 
-function keptPath(ctx: Ctx, media: MediaAsset & { projectId: string }) {
-  return join(ctx.paths.waveforms(media.projectId), `${media.id}.screen-text.json`);
-}
-
 function identity(media: MediaAsset) {
   return createHash("sha256").update(JSON.stringify([SCREEN_TEXT_VERSION, media.hash ?? media.path, media.duration,
     Object.values(SCREEN_TEXT_MODELS).map(m => m.sha256), SCREEN_TEXT_FPS, SCREEN_TEXT_CHUNK])).digest("hex");
 }
 
-async function loadKept(ctx: Ctx, media: MediaAsset & { projectId: string }): Promise<Kept> {
-  const id = identity(media);
-  try {
-    const kept = JSON.parse(await readFile(keptPath(ctx, media), "utf8")) as Kept;
-    if (kept.identity === id && kept.chunks && typeof kept.chunks === "object") return kept;
-  } catch { /* Not read yet, or from another reading. */ }
-  return { identity: id, chunks: {} };
-}
-
-async function save(ctx: Ctx, media: MediaAsset & { projectId: string }, kept: Kept) {
-  const path = keptPath(ctx, media), temp = `${path}.${randomUUID()}.tmp`;
-  await mkdir(ctx.paths.waveforms(media.projectId), { recursive: true });
-  await writeFile(temp, JSON.stringify(kept));
-  await rename(temp, path);
-}
-
 /** Read one window of a recording: decode it a second at a time, read the frames that changed, and make spans. */
-async function readWindow(ctx: Ctx, media: MediaAsset & { projectId: string }, file: string, index: number, signal: AbortSignal): Promise<ScreenTextSpan[]> {
-  const duration = media.duration ?? 0;
-  const start = index * SCREEN_TEXT_CHUNK, end = Math.min(duration, start + SCREEN_TEXT_CHUNK);
+async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end }: { start: number; end: number }, signal: AbortSignal): Promise<ScreenTextSpan[]> {
   const source = media.width && media.height ? { width: media.width, height: media.height } : await probeMedia(file);
   const { width, height } = screenFrameSize(source.width, source.height);
-  // CUDA shrinks each frame on the GPU before it comes back to memory. VideoToolbox hands back every 4K frame whole:
-  // ten seconds of a 4K recording took 2.6 s that way and 0.5 s on the CPU (M-series, 2026-11-13).
-  const gpu = await pictureDecoder(ctx.settings().render.hwaccel);
-  const decoder = gpu === "cuda" ? gpu : undefined;
   const [finder, reader, letters] = await Promise.all(modelsFor(ctx).map(m => m.get(signal))) as [string, string, string];
   const read: Array<{ at: number; lines: ScreenLine[] }> = [];
   let last: Float32Array | undefined;
   for (let from = start; from < end - 1e-6; from += BATCH_SECONDS) {
     const to = Math.min(end, from + BATCH_SECONDS);
-    const frames = join(ctx.paths.tmp, `screen-text-${randomUUID()}.rgb`);
-    await mkdir(ctx.paths.tmp, { recursive: true });
-    const fd = openSync(frames, "w");
-    // Closed once: after the first close the number belongs to whichever file opens next, another window's frames.
-    let open = true;
-    const close = () => { if (open) { open = false; closeSync(fd); } };
-    const picked: number[] = [];
-    try {
-      await pictureLane(ctx).run(() => screenFrames(file, { start: from, end: to }, { fps: SCREEN_TEXT_FPS, width, height, decoder, signal,
-        onFallback: reason => ctx.log(`[screen-text] ${media.id}: ${reason}`) }, (i, rgb) => {
-        const grid = pictureGrid(rgb, width, height);
-        if (last && !pictureChanged(last, grid)) return;
-        last = grid;
-        picked.push(from + i / SCREEN_TEXT_FPS);
-        writeSync(fd, rgb);
-      }), { signal });
-      close();
-      if (picked.length) {
-        const lines = await audioWorker.request<ScreenLine[][]>({ kind: "screenText", frames, width, height, finder, reader, letters }, { signal });
-        picked.forEach((at, i) => read.push({ at, lines: lines[i] ?? [] }));
-      }
-    } finally {
-      close();
-      await rm(frames, { force: true });
-    }
+    await withFrames(ctx, media, file, "screen-text", { start: from, end: to, fps: SCREEN_TEXT_FPS, width, height, signal }, (_, rgb) => {
+      const grid = pictureGrid(rgb, width, height);
+      if (last && !pictureChanged(last, grid)) return false;
+      last = grid;
+      return true;
+    }, async (frames, picked) => {
+      const lines = await audioWorker.request<ScreenLine[][]>({ kind: "screenText", frames, width, height, finder, reader, letters }, { signal });
+      picked.forEach((at, i) => read.push({ at, lines: lines[i] ?? [] }));
+    });
   }
   return spansFromFrames(read, end, width, height);
 }
 
-function recordingFor(ctx: Ctx, media: MediaAsset & { projectId: string }) {
-  const key = `${ctx.paths.root}\0${media.id}\0${identity(media)}`;
-  let state = recordings.get(key);
-  if (!state) recordings.set(key, state = { queue: [], asked: new Set(), waiters: new Set() });
-  state.kept ??= loadKept(ctx, media);
-  return state;
-}
-
-/** Read the windows queued for a recording, one after another, saving each as it is read. */
-function readQueued(ctx: Ctx, media: MediaAsset & { projectId: string }, file: string, state: Recording) {
-  if (state.reading) return;
-  state.reading = ctx.track((async () => {
-    const kept = await state.kept!;
-    while (state.queue.length) {
-      const index = state.queue[0]!;
-      const signal = state.asked.has(index) ? ctx.projectSignal(media.projectId) : ctx.mediaSignal(media.projectId);
-      if (signal.aborted) {
-        // Paused or gone: what nobody asked for waits for the next request.
-        if (!state.asked.has(index)) { state.queue = state.queue.filter(i => state.asked.has(i)); continue; }
-        break;
-      }
-      if (!kept.chunks[index]) {
-        try {
-          kept.chunks[index] = await readWindow(ctx, media, file, index, signal);
-          state.error = undefined;
-          await save(ctx, media, kept);
-        } catch (error) {
-          // A pause stopped a window read unasked, which a request may since have asked for: look again.
-          if (signal.aborted) continue;
-          state.error = error instanceof Error ? error.message : String(error);
-          ctx.log(`[screen-text] ${media.id} at ${index * SCREEN_TEXT_CHUNK} s: ${state.error}`);
-          state.queue = [];
-        }
-      }
-      state.queue.shift();
-      for (const wake of state.waiters) wake();
-    }
-  })()).finally(() => {
-    state.reading = undefined;
-    for (const wake of state.waiters) wake();
-  });
-}
+const reading = pictureReader<ScreenTextSpan[]>({ name: "screen-text", window: SCREEN_TEXT_CHUNK, identity, read: readWindow });
 
 export interface ScreenTextResult {
   mediaId: string;
@@ -294,45 +193,9 @@ export interface ScreenTextResult {
  */
 export async function screenText(ctx: Ctx, media: MediaAsset & { projectId: string }, range: { from?: number; to?: number },
   opts: { query?: string; waitMs?: number; signal?: AbortSignal } = {}): Promise<ScreenTextResult> {
-  if (media.kind !== "video") throw new Error("Only a video has a picture to read.");
-  const duration = media.duration;
-  if (!duration) throw new Error("The recording is still being prepared. Ask again in a moment.");
-  const file = fileInDirectory(ctx.paths.media(media.projectId), media.path);
-  if (!file) throw new Error("The recording's file is missing.");
-  const from = Math.max(0, range.from ?? 0), to = Math.min(duration, range.to ?? duration);
-  if (!(to > from)) throw new Error(`Choose a range inside the recording's ${duration.toFixed(2)} s.`);
-  const state = recordingFor(ctx, media);
-  const kept = await state.kept!;
-  const wanted: number[] = [];
-  for (let i = Math.floor(from / SCREEN_TEXT_CHUNK); i * SCREEN_TEXT_CHUNK < to; i++) wanted.push(i);
-  const missing = () => wanted.filter(i => !kept.chunks[i]);
-  // Once a video is asked about, all of it is read: the asked-for windows first, then the rest in order, so a later
-  // search across the whole video answers at once. Windows already queued keep their place behind the asked ones.
-  const every = Array.from({ length: Math.ceil(duration / SCREEN_TEXT_CHUNK) }, (_, i) => i).filter(i => !kept.chunks[i]);
-  if (every.length && (missing().length || !state.reading)) {
-    const first = missing();
-    for (const i of first) state.asked.add(i);
-    const current = state.reading && state.queue.length ? [state.queue[0]!] : [];
-    state.queue = [...new Set([...current, ...first, ...state.queue, ...every])];
-    state.error = undefined;
-    readQueued(ctx, media, file, state);
-  }
-  if (missing().length) {
-    const waitMs = opts.waitMs ?? 30_000;
-    await new Promise<void>(resolve => {
-      const timer = setTimeout(done, waitMs);
-      const check = () => { if (!missing().length || !state.reading) done(); };
-      function done() { clearTimeout(timer); state.waiters.delete(check); opts.signal?.removeEventListener("abort", done); resolve(); }
-      state.waiters.add(check);
-      opts.signal?.addEventListener("abort", done, { once: true });
-      check();
-    });
-  }
-  const ready = wanted.filter(i => kept.chunks[i]);
-  const spans = joinSpans(ready.flatMap(i => kept.chunks[i]!))
-    .filter(s => s.end > from && s.start < to)
+  const read = await reading.read(ctx, media, range, opts);
+  const spans = joinSpans(read.ready.flatMap(w => w.value))
+    .filter(s => s.end > read.from && s.start < read.to)
     .filter(s => !opts.query || screenTextMatches(s.text, opts.query));
-  const readSeconds = ready.reduce((n, i) => n + Math.max(0, Math.min(to, (i + 1) * SCREEN_TEXT_CHUNK) - Math.max(from, i * SCREEN_TEXT_CHUNK)), 0);
-  return { mediaId: media.id, from, to, spans, readSeconds: r3(readSeconds), done: ready.length === wanted.length,
-    ...(state.error && ready.length < wanted.length && { error: state.error }) };
+  return { mediaId: media.id, from: read.from, to: read.to, spans, readSeconds: read.readSeconds, done: read.done, ...(read.error && { error: read.error }) };
 }

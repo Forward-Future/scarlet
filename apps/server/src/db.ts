@@ -456,17 +456,9 @@ const MIGRATIONS: string[] = [
      BEGIN
        UPDATE media SET json = json_set(json, '$.lastTranscription', json_extract(OLD.json, '$.lastTranscription')) WHERE id = NEW.id;
      END;`,
-  // An engine can miss a brief opt-out in another engine. Its buffered events still belong to the old preference.
-  `ALTER TABLE settings ADD COLUMN telemetry_revision INTEGER NOT NULL DEFAULT 0;
-   CREATE TRIGGER telemetry_preference_changed AFTER UPDATE OF json ON settings
-   WHEN coalesce(json_extract(OLD.json, '$.telemetryEnabled'), 1) != coalesce(json_extract(NEW.json, '$.telemetryEnabled'), 1)
-   BEGIN
-     -- Older engines write only the settings they understand. Preserve an opt-out across such a save.
-     UPDATE settings SET json = json_set(NEW.json, '$.telemetryEnabled', json('false'))
-       WHERE id = NEW.id AND json_type(NEW.json, '$.telemetryEnabled') IS NULL;
-     UPDATE settings SET telemetry_revision = telemetry_revision + 1
-       WHERE id = NEW.id AND json_type(NEW.json, '$.telemetryEnabled') IS NOT NULL;
-   END;`,
+  // Was the telemetry revision, now installed by name (ensureTelemetryRevision). Releases have counted this number, so
+  // it stays, doing nothing: a library that ran it has the column, and one that hasn't gets it by name.
+  `SELECT 1;`,
 ];
 
 export function openDb(path: string): Db {
@@ -492,6 +484,7 @@ export function openDb(path: string): Db {
     BEGIN DELETE FROM transcription_work WHERE task_id = NEW.id; END;`);
   ensureReadIndexes(db);
   ensureGraphics(db);
+  ensureProjectSource(db);
   return db;
 }
 
@@ -505,7 +498,37 @@ export function migrate(db: Db, throughVersion = MIGRATIONS.length): void {
       db.pragma(`user_version = ${i + 1}`);
     }, "immediate")();
   }
-  if (throughVersion === MIGRATIONS.length) ensureProjectFormat(db);
+  if (throughVersion === MIGRATIONS.length) {
+    ensureProjectFormat(db);
+    ensureTelemetryRevision(db);
+  }
+}
+
+/**
+ * Run `ddl` once to add `column` to `table`, unless it is there already: a schema change installed by name rather than
+ * by a migration number, so a checkout and a release sharing a library don't take each other's numbers.
+ */
+export function ensureColumn(db: Db, table: string, column: string, ddl: string): void {
+  const installed = () => db.prepare("SELECT 1 FROM pragma_table_info(?) WHERE name = ?").get(table, column);
+  if (installed()) return;
+  db.transaction(() => {
+    // Another engine opening this library may have added it since. Look again with the write lock held.
+    if (!installed()) db.exec(ddl);
+  }, "immediate")();
+}
+
+/** An engine can miss a brief opt-out in another engine. Its buffered events still belong to the old preference. */
+function ensureTelemetryRevision(db: Db): void {
+  ensureColumn(db, "settings", "telemetry_revision", `ALTER TABLE settings ADD COLUMN telemetry_revision INTEGER NOT NULL DEFAULT 0;
+   CREATE TRIGGER IF NOT EXISTS telemetry_preference_changed AFTER UPDATE OF json ON settings
+   WHEN coalesce(json_extract(OLD.json, '$.telemetryEnabled'), 1) != coalesce(json_extract(NEW.json, '$.telemetryEnabled'), 1)
+   BEGIN
+     -- Older engines write only the settings they understand. Preserve an opt-out across such a save.
+     UPDATE settings SET json = json_set(NEW.json, '$.telemetryEnabled', json('false'))
+       WHERE id = NEW.id AND json_type(NEW.json, '$.telemetryEnabled') IS NULL;
+     UPDATE settings SET telemetry_revision = telemetry_revision + 1
+       WHERE id = NEW.id AND json_type(NEW.json, '$.telemetryEnabled') IS NOT NULL;
+   END;`);
 }
 
 /** A release with later numbered migrations can share this library. Install the format flag once on either schema. */
@@ -524,20 +547,23 @@ function ensureProjectFormat(db: Db): void {
 }
 
 /**
+ * The project a short was made from, and whether the line in its chat that says so is still shown. Installed by name,
+ * as the graphics columns are, so a checkout and a release sharing a library don't take each other's numbers.
+ */
+export function ensureProjectSource(db: Db): void {
+  ensureColumn(db, "projects", "source", "ALTER TABLE projects ADD COLUMN source TEXT; ALTER TABLE projects ADD COLUMN source_notice INTEGER NOT NULL DEFAULT 0;");
+}
+
+/**
  * Graphic templates and a project's style guide. Like the read indexes, they are installed by name rather than by a
  * migration number, so a checkout and a release sharing a library don't take each other's numbers.
  */
 export function ensureGraphics(db: Db): void {
-  const installed = () => db.prepare("SELECT 1 FROM pragma_table_info('projects') WHERE name = 'style_guide'").get() &&
-    db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'graphic_templates'").get();
-  if (installed()) return;
-  db.transaction(() => {
-    if (installed()) return;
-    db.exec(`CREATE TABLE IF NOT EXISTS graphic_templates (
-      id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-    );`);
-    if (!db.prepare("SELECT 1 FROM pragma_table_info('projects') WHERE name = 'style_guide'").get()) db.exec("ALTER TABLE projects ADD COLUMN style_guide TEXT;");
-  }, "immediate")();
+  ensureColumn(db, "projects", "style_guide", "ALTER TABLE projects ADD COLUMN style_guide TEXT;");
+  if (db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'graphic_templates'").get()) return;
+  db.exec(`CREATE TABLE IF NOT EXISTS graphic_templates (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );`);
 }
 
 /** These derived lookups can coexist with any library that has task events and transcripts.

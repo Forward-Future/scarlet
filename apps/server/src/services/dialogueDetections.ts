@@ -11,7 +11,7 @@ import { extractWav } from "../render/ffmpeg.js";
 import { UhmDetector } from "../transcribe/uhm.js";
 import { getTranscriptionProvider } from "../transcribe/index.js";
 import { readAcousticWindow } from "../transcribe/acousticWords.js";
-import { alignmentVersion, alignsLanguage, alignWords } from "../transcribe/wordAlign.js";
+import { alignmentVersion, readsEnglishSpeech, alignWords } from "../transcribe/wordAlign.js";
 import { bundledWhisperModel } from "../transcribe/localModel.js";
 import { resolveLocalRuntime, resolvedBinary, type LocalRuntime } from "../transcribe/localRuntime.js";
 import { transcriptLanguage } from "./transcriptReader.js";
@@ -84,7 +84,7 @@ export function dialogueDetector(ctx: Ctx) {
   async function cachedSpeech(projectId: string, media: MediaAsset, file: string, from: number, to: number,
     stream: number | undefined, defaultLanguage: string | undefined): Promise<DialogueDetections | undefined> {
     const language = transcriptLanguage(ctx, projectId, media) || defaultLanguage;
-    if (language !== "auto" && !alignsLanguage(language)) return;
+    if (language !== "auto" && !readsEnglishSpeech(language)) return;
     const imported = join(ctx.paths.media(projectId), media.path);
     for (const path of await emissionStorePaths(ctx, projectId, file, imported, stream)) {
       const words = await readAcousticWindow(path, from, to);

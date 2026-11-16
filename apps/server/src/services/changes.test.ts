@@ -6,7 +6,7 @@ import { createProject, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
 import { localUser } from "../auth.js";
 import { scarletRenderAdapter } from "../render/scarletRender.js";
-import { proposeChange } from "./changes.js";
+import { flagEdit, proposeChange } from "./changes.js";
 import { createTask } from "./tasks.js";
 
 let directory: string;
@@ -39,4 +39,25 @@ it("places an agent's later ripple removal on the footage it was written for, af
   // The footage after the second removal resumes at 23.0 s of the source, inside the 22.01–23.01 s asked, not before it.
   const clips = cut.timeline.tracks.find(t => t.id === "a1")!.clips;
   expect(clips.map(c => c.kind === "media" && c.sourceIn)).toEqual([0, 12, expect.closeTo(631 / 30 + (12 - 301 / 30), 9)]);
+});
+
+it("flags an edit once for a run, also when the run was resumed as a new attempt", async () => {
+  const { ctx } = workspace;
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "mic", path: "mic.wav", kind: "audio", duration: 20, hasAudio: true }, "ready");
+  const by = { type: "human" as const, name: "Editor" };
+  const cutting = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Assemble", createdBy: by });
+  const made = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: cutting.id, description: "Assemble",
+    ops: [{ op: "addClip", trackId: "a1", clip: { id: "raw", kind: "media", mediaId: "mic", timelineIn: 0, sourceIn: 0, sourceOut: 20 } }],
+    timelineEdits: [{ label: "Open on the answer", range: { start: 0, end: 4 } }] }).change;
+  expect(made.state).toBe("approved");
+  const first = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Check the music", createdBy: by });
+  const resumed = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Check the music", createdBy: by, resumeRootId: first.id });
+  const body = { changeId: made.id, spot: 0, check: "The music swells over the answer" };
+  flagEdit(ctx, project.id, first, body);
+  flagEdit(ctx, project.id, resumed, body);
+  expect(ctx.repos.changes.get(made.id)!.flags).toMatchObject([{ spot: 0, check: body.check, taskId: first.id }]);
+  // Another request that finds the same doubt flags it on its own.
+  const other = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Check the mix", createdBy: by });
+  flagEdit(ctx, project.id, other, body);
+  expect(ctx.repos.changes.get(made.id)!.flags).toHaveLength(2);
 });

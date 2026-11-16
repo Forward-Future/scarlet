@@ -7,6 +7,7 @@
 import { adjacentRepeatCandidates, normalizeTranscriptToken } from "@scarlet/shared";
 import type { TimeRange, TranscriptWord } from "@scarlet/timeline";
 import type { TimelineWord } from "./timeline-perception.js";
+import { isTag } from "./analysis.js";
 
 /**
  * Under this, word to word, a gap is the rhythm of speech and not a pause, so it is never listed. Which pauses are worth
@@ -58,7 +59,7 @@ export function partLeftovers(words: readonly TimelineWord[], cuts: readonly Tim
   const removed = [...cuts].sort((a, b) => a.start - b.start);
   const cutIn = (from: number, to: number) => removed.reduce((sum, c) => sum + Math.max(0, Math.min(c.end, to) - Math.max(c.start, from)), 0);
   // A word plays when its middle does, the rule captions use.
-  const heard = words.filter(w => w.end > w.start && !/^\[.*\]$/.test(w.text) && normalizeTranscriptToken(w.text) &&
+  const heard = words.filter(w => w.end > w.start && !isTag(w.text) && normalizeTranscriptToken(w.text) &&
     !removed.some(c => c.start <= (w.start + w.end) / 2 && (w.start + w.end) / 2 < c.end));
   const sourceOf = (w: TimelineWord) => transcripts.get(w.mediaId)?.[w.index];
   const pauses: KeptPause[] = [];

@@ -10,6 +10,7 @@ import { prepareCutReview } from "./changes.js";
 import { skillEditEnded, startLearningCheck } from "./learnings.js";
 import { latestTranscription, startTranscription, transcribeForDialogue } from "./ingest.js";
 import { getTranscriptionProvider, presetLabel } from "../transcribe/index.js";
+import { runAttempts, runRoot } from "./runAttempts.js";
 
 /** The change row can be durable even if its id hasn't yet been copied onto the task. */
 function savedChanges(ctx: Ctx, tasks: Task[]) {
@@ -30,12 +31,11 @@ const LOST_WORKER_ATTEMPTS = 3;
 function reconcileTask(ctx: Ctx, task: Task, unstarted: boolean, quit: boolean): Task {
   let saved = settleTask(ctx, task, unstarted);
   ctx.log(`[task] ${task.id} recovered after its worker stopped: ${task.state} → ${saved.state}${saved.error ? ` (${saved.error})` : ""}`);
-  const rootId = task.resumeRootId ?? task.id;
+  const attempts = runAttempts(task.projectId, runRoot(task));
   // Only the attempts that lost their worker count. A pass that came through three quits, or that the editor resumed
   // by hand, still carries on by itself the first time its worker goes missing.
   if (!quit && saved.state === "failed" && saved.interrupted) saved = saveTask(ctx, { ...saved, lostWorker: true });
-  const again = quit || ctx.repos.tasks.count(`project_id = ? AND (id = ? OR json_extract(json, '$.resumeRootId') = ?)
-    AND json_extract(json, '$.lostWorker') = 1`, [task.projectId, rootId, rootId]) < LOST_WORKER_ATTEMPTS;
+  const again = quit || ctx.repos.tasks.count(`${attempts.where} AND json_extract(json, '$.lostWorker') = 1`, attempts.params) < LOST_WORKER_ATTEMPTS;
   let carriesOn = false;
   // A learning check cut short isn't run again: its request has moved on, and the next message is read anyway.
   if (again && saved.state === "failed" && saved.interrupted && saved.kind !== "transcribe" && saved.kind !== "learning_check") {
@@ -233,8 +233,8 @@ function unchecked(ctx: Ctx, change: Change): string {
 }
 
 function recoveryInstruction(ctx: Ctx, task: Task, rootId?: string): string {
-  const attempts = rootId ? ctx.repos.tasks.select("project_id = ? AND (id = ? OR json_extract(json, '$.resumeRootId') = ?)",
-    [task.projectId, rootId, rootId], "created_at, rowid") : [task];
+  const run = rootId && runAttempts(task.projectId, rootId);
+  const attempts = run ? ctx.repos.tasks.select(run.where, run.params, "created_at, rowid") : [task];
   const events = attempts.flatMap(t => ctx.repos.taskEvents.list(t.id, rootId ? "conversation" : "questionsAndAnswers"));
   const lines = [attempts[0]!.instruction];
   for (const ev of events) {

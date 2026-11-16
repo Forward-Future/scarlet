@@ -18,7 +18,7 @@ import { resolveTimeline } from "../services/timeline.js";
 import { emissionStorePaths } from "../services/recordingAudio.js";
 import { transcriptLanguage } from "../services/transcriptReader.js";
 import { readCachedAcousticWords } from "../transcribe/acousticWords.js";
-import { alignsLanguage } from "../transcribe/wordAlign.js";
+import { readsEnglishSpeech } from "../transcribe/wordAlign.js";
 import { jsonBody, requireMedia, requireProject } from "./util.js";
 
 interface WindowPlan {
@@ -225,7 +225,7 @@ export function inspectionRoutes(ctx: Ctx) {
     if (media.kind !== "audio" && !media.hasAudio) throw badRequest("no_audio", "Choose a source with dialogue.");
     if (!media.duration || to > media.duration + 0.000001) throw badRequest("outside_media", "Window exceeds source duration.");
     const language = transcriptLanguage(ctx, media.projectId, media) || ctx.settings().transcription.language;
-    if (language !== "auto" && !alignsLanguage(language)) return c.json([]);
+    if (language !== "auto" && !readsEnglishSpeech(language)) return c.json([]);
     const file = await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path);
     if (!file) throw notFound("source file");
     const imported = join(ctx.paths.media(media.projectId), media.path);

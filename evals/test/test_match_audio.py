@@ -1,4 +1,6 @@
 """Synthetic audio regression tests. Run with python -B -m unittest discover -s evals/test -p test_match_audio.py."""
+import hashlib
+import tempfile
 import sys
 import unittest
 from pathlib import Path
@@ -6,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from match_audio import RATE, map_audio
+from match_audio import RATE, map_audio, source_identity
 
 
 class AudioMatchTest(unittest.TestCase):
@@ -26,6 +28,16 @@ class AudioMatchTest(unittest.TestCase):
         self.assertEqual(result['removedSource'], [[0., 1.], [2., 5.], [7., 8.]])
         self.assertEqual([seg['rawStart'] for seg in result['segments']], [5., 1., 5.])
         self.assertEqual([join['finalTime'] for join in result['joins']], [2., 3.])
+
+    def test_map_identity_binds_both_file_contents_and_streams(self):
+        with tempfile.TemporaryDirectory() as folder:
+            raw, final = (Path(folder) / name for name in ("camera", "editor"))
+            raw.write_bytes(b"source")
+            final.write_bytes(b"edit")
+            identity = source_identity(raw, final, 1, 0)
+            self.assertEqual(identity, dict(sourceSha256=hashlib.sha256(b"source").hexdigest(),
+                                            editorSha256=hashlib.sha256(b"edit").hexdigest(),
+                                            audioStream=1, editorAudioStream=0))
 
     def test_foreign_insert_stays_unmapped(self):
         foreign = self.rng.normal(0, .1, RATE)

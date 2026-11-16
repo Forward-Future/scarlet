@@ -10,6 +10,7 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, re
 import { dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { hostTriple, option, unzip } from "./targets.mjs";
 
 // Stable 157.0.8103.78 from Chrome for Testing's last-known-good-versions-with-downloads.json.
 // The sums are of the archives as downloaded from that listing on 2026-11-14.
@@ -44,11 +45,7 @@ export function installedChrome(target, folder = dest, receipt = receiptFile) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const flag = name => {
-    const i = args.indexOf(name);
-    return i >= 0 ? args[i + 1] : undefined;
-  };
-  const target = flag("--target") ?? process.env.TAURI_ENV_TARGET_TRIPLE ?? hostTriple();
+  const target = option(args, "--target") ?? process.env.TAURI_ENV_TARGET_TRIPLE ?? hostTriple();
   const build = BUILDS[target];
   if (!build) throw new Error(`[chrome] unsupported target ${target}`);
   if (args.includes("--verify-only")) {
@@ -98,26 +95,6 @@ async function main() {
     console.log(`[chrome] ${join(dest, chromeExecutable(target))} (${(folderSize(dest) / 1024 / 1024).toFixed(0)} MB)`);
   } finally {
     rmSync(work, { recursive: true, force: true });
-  }
-}
-
-function hostTriple() {
-  const key = `${process.platform}-${process.arch}`;
-  const triple = { "win32-x64": "x86_64-pc-windows-msvc", "darwin-arm64": "aarch64-apple-darwin", "darwin-x64": "x86_64-apple-darwin", "linux-x64": "x86_64-unknown-linux-gnu" }[key];
-  if (!triple) throw new Error(`no default target for ${key}; pass --target`);
-  return triple;
-}
-
-/** bsdtar reads zips on Windows 10+ and macOS; Git Bash's GNU tar does not, hence the explicit path. */
-function unzip(zip, to) {
-  mkdirSync(to, { recursive: true });
-  if (process.platform === "win32") {
-    const tar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
-    execFileSync(tar, ["-xf", zip, "-C", to], { stdio: "inherit" });
-  } else if (existsSync("/usr/bin/unzip")) {
-    execFileSync("/usr/bin/unzip", ["-q", "-o", zip, "-d", to], { stdio: "inherit" });
-  } else {
-    execFileSync("tar", ["-xf", zip, "-C", to], { stdio: "inherit" });
   }
 }
 

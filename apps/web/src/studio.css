@@ -344,12 +344,9 @@
 .settings-page form[data-unsaved] button[type="submit"]:focus,
 .skill-editor-toolbar[data-unsaved] > .btn-primary[data-esc-focus]:focus,
 .skill-chat .composer-send[data-esc-focus]:focus { outline: 2px solid var(--color-muted); outline-offset: 2px; }
-.tools-subheading, .tool-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.tools-subheading { margin-bottom: 8px; }
-.tools-subheading h4 { font-size: 14px; font-weight: 600; }
-.tools-subheading p, .tool-inventory p { color: var(--color-muted); font-size: 12px; }
-.tool-setting-row { padding-block: 12px; }
-.tool-inventory { margin-top: 8px; border-top: 1px solid var(--color-line); font-size: 12px; }
+.tool-settings { margin-top: 28px; }
+.tool-setting-row { padding: 12px 14px; }
+.tool-inventory { font-size: 12px; }
 .tool-inventory summary { padding-top: 12px; color: var(--color-muted); cursor: pointer; }
 .tool-inventory dl { display: grid; gap: 12px; margin: 15px 0; }
 .tool-inventory dt { display: flex; align-items: baseline; gap: 6px; font-weight: 500; }
@@ -392,8 +389,37 @@
 /* The heading over the instructions. After it, when the skill was saved again since the editor's unsaved changes were
    made: one line that says so, then its two actions as plain text links. The line is no taller than the heading. */
 .skill-instructions-head { display: flex; align-items: center; gap: 14px; flex: none; min-width: 0; padding: 8px 16px; border-bottom: 1px solid var(--color-line); background: var(--color-panel); }
+/* A skill's instructions: the field's own text is clear over the same words drawn under it, where each $template and
+   /skill of the editor's has a faint fill that doesn't move the text. */
+.skill-instructions { position: relative; display: flex; flex: 1; min-height: 0; }
+.skill-instructions > .skill-instructions-text, .skill-instructions > .skill-instructions-field { position: absolute; inset: 0; margin: 0; overflow-y: auto;
+  white-space: pre-wrap; overflow-wrap: break-word; border: 0; scrollbar-gutter: stable; }
+.skill-instructions > .skill-instructions-text { color: var(--color-fg); pointer-events: none; scrollbar-color: transparent transparent; }
+.skill-instructions > .skill-instructions-field { background: transparent; color: transparent; caret-color: var(--color-fg); outline: none; }
+.skill-instructions > .skill-instructions-field::selection { background: rgba(255, 255, 255, .22); color: transparent; }
+.skill-instructions-caret { display: inline-block; width: 0; }
+.skill-instructions > .composer-skills { position: absolute; z-index: 10; }
+.skill-keyword { border-radius: 3px; background: rgba(255, 255, 255, .09); box-shadow: 0 0 0 2px rgba(255, 255, 255, .09); color: var(--color-fg); white-space: nowrap; }
+.skill-keyword.is-hover { background: rgba(255, 255, 255, .16); box-shadow: 0 0 0 2px rgba(255, 255, 255, .16); }
+/* Over a keyword, what it is: its picture, its name and its kind. */
+.skill-keyword-note { position: absolute; z-index: 10; display: flex; align-items: center; gap: 10px; max-width: 420px; padding: 6px 12px 6px 6px; transform: translateY(-100%);
+  border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-panel); box-shadow: 0 6px 20px #0005; font-size: 13px; line-height: 1.35;
+  color: var(--color-fg); pointer-events: none; }
+.skill-keyword-note:not(:has(.composer-template-thumb)) { padding-left: 12px; }
+.skill-keyword-words { display: grid; min-width: 0; }
+.skill-keyword-words small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--color-dim); }
 .skill-kept { display: flex; align-items: center; gap: 12px; min-width: 0; font-size: 12.5px; line-height: 15px; color: var(--color-muted); white-space: nowrap; }
 .skill-kept .simple-link { color: var(--color-fg); }
+/* A version picked from the history: what it changed is marked in its text, which can't be edited. */
+.skill-instructions-head > .simple-link { font-size: 12.5px; color: var(--color-fg); }
+.skill-version-said { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--color-muted); }
+.skill-details > .skill-version-text { grid-column: 1 / -1; }
+.skill-version-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.skill-version-text [data-changed] { box-shadow: -10px 0 0 -8px var(--color-muted); }
+/* "When to use it" is one line in a field: its marks say enough without the bar. */
+.skill-details > .skill-version-text [data-changed] { box-shadow: none; }
+.skill-version-text ins { text-decoration: none; border-radius: 2px; background: rgb(126 212 179 / 16%); }
+.skill-version-text del { color: var(--color-bad); text-decoration-color: rgb(255 160 156 / 70%); opacity: .8; }
 .version-row {
   padding: 10px 12px;
   border: 1px solid var(--color-line);
@@ -435,6 +461,16 @@
   min-height: 32px; padding: 5px 8px; border-radius: 6px; cursor: pointer; overflow-wrap: anywhere;
 }
 .preference-options svg { flex: none; }
+/* A list by day, such as a skill's history: a small heading over each day's rows. */
+.preference-options .preference-group { padding: 10px 8px 3px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--color-dim); cursor: default; }
+.preference-options .preference-group:first-child { padding-top: 6px; }
+.preference-options [data-detailed] { align-items: flex-start; max-width: 26rem; padding-block: 6px 7px; }
+.preference-option-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.preference-option-text > :first-child { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 18px; }
+.preference-option-detail { font-size: 11.5px; line-height: 16px; color: var(--color-dim); }
+.preference-option-tag { flex: none; margin-left: 8px; font-size: 11.5px; line-height: 18px; color: var(--color-muted); }
+.preference-options [data-detailed] svg { margin-top: 2px; }
+.preference-options .preference-more { margin-top: 4px; border-top: 1px solid var(--color-line); border-radius: 0 0 6px 6px; color: var(--color-muted); font-size: 12.5px; }
 .preference-options [data-active="true"] { background: var(--color-raised); }
 
 /* Each edit a version made, such as every cut of a dialogue pass, with its revisions. */
@@ -450,3 +486,5 @@
 /* The full history's entries keep one colour. A small mark before the words says which were approved, put back or went wrong. */
 .history-mark { display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; vertical-align: 0.14em; }
 .import-transcription-notice .simple-link { font-size: inherit; color: var(--color-fg); }
+/* A short sits under the video it was made from, set in from it. */
+.list .project-card.is-short { margin-left: 44px; }

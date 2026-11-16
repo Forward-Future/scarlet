@@ -4,7 +4,8 @@ import { createRoot } from "react-dom/client";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { expect, it, vi } from "vitest";
 import { api } from "../lib/client";
-import { buildDb } from "../lib/mock/fixtures";
+import { buildDb, sampleTemplates } from "../lib/mock/fixtures";
+import { useTemplatesStore } from "../stores/templates";
 import { useHostsStore } from "../stores/hosts";
 import { useSkillsStore } from "../stores/skills";
 import { useUiStore } from "../stores/ui";
@@ -153,10 +154,21 @@ it("sends the editor's words to Scarlet and shows the revision it saved", async 
     await act(async () => { await vi.advanceTimersByTimeAsync(1100); });
     expect([...el.querySelectorAll(".skill-chat .req-say")].map(p => p.textContent)).toEqual(["Added a rule for the cold open.", "Added a rule to keep laughter."]);
     expect(el.querySelector('.skill-chat [role="status"]')).toBeNull();
-    expect(body.value).toContain("Never cut laughter.");
-    expect(body.readOnly).toBe(false);
+    // The version Scarlet saved opens as the history shows it, with what it changed marked, and the message box
+    // still takes the next request.
+    const changes = el.querySelector(`[aria-label="Skill markdown, v${skill.version}"]`)!;
+    expect([...changes.querySelectorAll("ins")].map(i => i.textContent).filter(Boolean)).toEqual(["Never cut laughter."]);
+    expect(el.querySelector(".skill-instructions-head")!.textContent).toContain(`v${skill.version}`);
     expect(box.disabled).toBe(false);
-    expect(el.textContent).toContain(`v${skill.version}`);
+    // Done goes back to the skill to edit, as it does from the history.
+    await act(async () => [...el.querySelectorAll("button")].find(b => b.textContent === "Done")!.click());
+    const edited = el.querySelector<HTMLTextAreaElement>('[aria-label="Skill markdown"]')!;
+    expect(edited.value).toContain("Never cut laughter.");
+    expect(edited.readOnly).toBe(false);
+    expect(box.disabled).toBe(false);
+    // The history leads with the version Scarlet saved, as the skill stands now.
+    await act(async () => el.querySelector<HTMLButtonElement>('[aria-label="Version history"]')!.click());
+    expect(document.querySelector('[role="option"]')!.textContent).toMatch(new RegExp(`v${skill.version}Now$`));
   } finally {
     await act(async () => root.unmount());
     el.remove();
@@ -237,7 +249,7 @@ const write = async (field: HTMLInputElement | HTMLTextAreaElement, text: string
 const named = (el: Element, text: string) => [...el.querySelectorAll("button")].find(b => b.textContent?.trim() === text);
 const markdown = (el: Element) => el.querySelector<HTMLTextAreaElement>('[aria-label="Skill markdown"]')!;
 
-it("lists each version once with the newest marked current, and offers Restore only for an older one", async () => {
+it("lists what each version changed, newest first, and shows a picked one with its changes until Done", async () => {
   const db = buildDb();
   const skill = db.skills.find(s => s.version === 2)!;
   const versions = db.skillVersions[skill.id]!;
@@ -246,28 +258,57 @@ it("lists each version once with the newest marked current, and offers Restore o
   const { el } = view;
   const picker = () => el.querySelector<HTMLButtonElement>('[aria-label="Version history"]')!;
   const choices = () => [...document.querySelectorAll<HTMLElement>('[role="option"]')];
-  const restore = () => [...el.querySelectorAll("button")].find(b => b.textContent?.trim().startsWith("Restore"));
-  const body = el.querySelector<HTMLTextAreaElement>('[aria-label="Skill markdown"]')!;
+  const pick = async (i: number) => { await act(async () => picker().click()); await act(async () => choices()[i]!.click()); };
+  const said = () => el.querySelector(".skill-version-said")?.textContent;
   try {
-    // Closed, the picker says the page shows the current version. Open, the newest version is that one, listed once.
-    expect(picker().textContent).toBe("Current version");
+    // Closed, the picker is the history. Open, each version says what it changed, who saved it and when, by day.
+    expect(picker().textContent).toBe("History");
     await act(async () => picker().click());
     expect(choices()).toHaveLength(2);
-    expect(choices()[0]!.textContent).toMatch(/^v2 · Claude Code · .+ · current$/);
-    expect(choices()[0]!.getAttribute("aria-selected")).toBe("true");
-    expect(choices()[1]!.textContent).toMatch(/^v1 · Demo Editor · /);
-    expect(choices()[1]!.textContent).not.toContain("current");
-    // The older one reads as it was, with the way to put it back.
-    await act(async () => choices()[1]!.click());
-    expect(body.readOnly).toBe(true);
-    expect(body.value).toContain("(v1)");
-    expect(restore()?.textContent?.trim()).toBe("Restore v1");
-    // Back on the newest there is nothing to restore: it is the skill as it stands.
+    expect(choices()[0]!.textContent).toMatch(/^Changed the openingScarlet · .+ · v2Now$/);
+    expect(choices()[1]!.textContent).toMatch(/^First versionDemo Editor · .+ · v1$/);
+    expect(document.querySelectorAll(".preference-group").length).toBeGreaterThan(0);
+    // While the skill is being edited, no version is picked.
+    expect(choices().some(c => c.getAttribute("aria-selected") === "true")).toBe(false);
     await act(async () => picker().click());
-    await act(async () => choices()[0]!.click());
-    expect(picker().textContent).toBe("Current version");
-    expect(body.readOnly).toBe(false);
-    expect(restore()).toBeUndefined();
+    // An older one reads as it was, with the way to put it back, and can't be edited.
+    await pick(1);
+    expect(markdown(el)).toBeNull();
+    expect(el.querySelector('[aria-label="Skill markdown, v1"]')!.textContent).toContain("(v1)");
+    expect(said()).toMatch(/^v1, the first version/);
+    expect(named(el, "Restore v1")).toBeDefined();
+    // The newest shows what it changed from the one before, with the way to undo it.
+    await pick(0);
+    expect(said()).toMatch(/^What Scarlet changed in v2/);
+    expect(el.querySelector('[aria-label="Skill markdown, v2"] [data-changed] del')!.textContent).toContain("(v1)");
+    expect(named(el, "Undo this change")).toBeDefined();
+    expect(named(el, "Restore v2")).toBeUndefined();
+    // Done goes back to editing the skill as it stands.
+    await act(async () => named(el, "Done")!.click());
+    expect(markdown(el).readOnly).toBe(false);
+    expect(said()).toBeUndefined();
+  } finally {
+    await view.close();
+  }
+});
+
+it("lists the latest eight versions until the older ones are asked for", async () => {
+  const db = buildDb();
+  const first = db.skills.find(s => s.version === 2)!;
+  const versions = Array.from({ length: 12 }, (_, i) => ({ version: i + 1, content: `${first.content}\n${i}`, note: `Change ${i + 1}`,
+    author: { type: "human" as const, id: "usr_other", name: "Sam" }, createdAt: new Date(Date.now() - (12 - i) * 3_600_000).toISOString() }));
+  const skill = { ...first, version: 12, content: versions.at(-1)!.content };
+  vi.spyOn(api, "skill").mockImplementation(async () => ({ skill, versions }));
+  const view = await open(`/settings/skills/${skill.id}`);
+  const choices = () => [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+  try {
+    await act(async () => view.el.querySelector<HTMLButtonElement>('[aria-label="Version history"]')!.click());
+    expect(choices()).toHaveLength(9);
+    expect(choices().at(-1)!.textContent).toBe("Show 4 older versions");
+    await act(async () => choices().at(-1)!.click());
+    // The rest join the list, which stays open.
+    expect(choices()).toHaveLength(12);
+    expect(choices().at(-1)!.textContent).toMatch(/^Change 1Sam · /);
   } finally {
     await view.close();
   }
@@ -454,7 +495,7 @@ it("takes an answer to Scarlet's question whichever version is showing, and a ne
   const showOlder = async () => {
     await act(async () => view.el.querySelector<HTMLElement>('[aria-label="Version history"]')!.click());
     await act(async () => [...document.querySelectorAll<HTMLElement>('[role="option"]')][1]!.click());
-    expect(markdown(view.el).value).toContain("(v1)");
+    expect(view.el.querySelector('[aria-label="Skill markdown, v1"]')!.textContent).toContain("(v1)");
   };
   let view = await open(`/settings/skills/${skill.id}`);
   try {
@@ -472,7 +513,7 @@ it("takes an answer to Scarlet's question whichever version is showing, and a ne
     await write(box(), "A quarter.");
     await act(async () => box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     expect(answer).toHaveBeenCalledWith("task_q", "A quarter.");
-    expect(markdown(view.el).value).toContain("(v1)");
+    expect(view.el.querySelector('[aria-label="Skill markdown, v1"]')!.textContent).toContain("(v1)");
     // With the answer sent, Scarlet has the request again and the box waits.
     expect(box().disabled).toBe(true);
   } finally {
@@ -499,9 +540,21 @@ it("draws each request as a project's chat does: its words in a band with where 
   try {
     // The editor's words head each request, with where it stands at their right: a word once it stopped early, nothing once done.
     expect(units().map(u => [...u.querySelector(".unit-msg")!.children].map(c => c.className))).toEqual([
-      ["simple-who", "", "unit-state"], ["simple-who", "", "unit-state"], ["simple-who", "", "unit-state"], ["simple-who", "", "unit-state", "simple-link unit-stop"]]);
+      ["simple-who", "said", "unit-state"], ["simple-who", "said", "unit-state"], ["simple-who", "said", "unit-state"], ["simple-who", "said", "unit-state", "simple-link unit-stop"]]);
     expect(units().map(u => u.querySelector(".unit-msg p")!.textContent)).toEqual(["Keep the cold open.", "Cut every breath.", "Be stricter about filler.", "Tighten the pauses."]);
     expect(units().map(u => u.querySelector(".unit-state")!.textContent)).toEqual(["", "Stopped", "Couldn’t finish", ""]);
+    // Words longer than two lines open in full on a click and fold on the next, as a reply does (2026-11-15: a long request
+    // couldn't be read once sent). There's no button, only the pointer.
+    await view.quit();
+    const tooLong = vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(900);
+    view = await open(`/settings/skills/${skill.id}`);
+    const words = () => units()[0]!.querySelector<HTMLElement>(".unit-msg > p")!;
+    expect([words().className, words().getAttribute("aria-expanded"), words().title]).toEqual(["said is-clipped", "false", "Show all of it"]);
+    await act(async () => words().click());
+    expect([words().className, words().getAttribute("aria-expanded")]).toEqual(["said is-open", "true"]);
+    await act(async () => words().click());
+    expect(words().className).toBe("said is-clipped");
+    tooLong.mockRestore();
     // Under the heading: Scarlet's reply, nothing for a request that was stopped, why one couldn't finish, what Scarlet is doing.
     expect(units().map(u => u.querySelector(".req")?.textContent)).toEqual(["Added a rule for the cold open.", undefined, "stalled: no output for 10 minutes", "Revising the skill…"]);
     expect(units()[2]!.querySelector(".req-say")!.className).toBe("req-say is-note is-bad");
@@ -746,5 +799,52 @@ it("holds Restore while a skill revision runs and shows its saved words when it 
     await act(async () => named(view.el, "Stop")!.click());
     expect(markdown(view.el).value).toContain("Keep the laugh.");
     expect(view.el.querySelector(".unit-state")?.textContent).toBe("Stopped");
+  } finally { await view.close(); }
+});
+
+it("lists the templates with $ at the cursor in a skill's instructions and in its chat, and marks each $template and /skill of the editor's", async () => {
+  const db = buildDb();
+  const skill = { ...db.skills[0]!, content: "---\nname: frame-screen\ndescription: Frame the screen.\n---\n\nKeep $9 and the price.\n" };
+  vi.spyOn(api, "skill").mockImplementation(async () => ({ skill, versions: db.skillVersions[skill.id] ?? [] }));
+  vi.spyOn(api, "listTemplates").mockResolvedValue({ templates: sampleTemplates() });
+  vi.spyOn(api, "skills").mockResolvedValue({ skills: [{ ...db.skills[0]!, name: "dialogue-pass" }] } as never);
+  useTemplatesStore.setState(useTemplatesStore.getInitialState());
+  const view = await open(`/settings/skills/${skill.id}`);
+  const { el } = view;
+  const body = markdown(el);
+  const type = (field: HTMLTextAreaElement, value: string) => act(async () => {
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value")!.set!.call(field, value);
+    field.setSelectionRange(value.length, value.length);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const key = (field: HTMLTextAreaElement, name: string) => act(async () => { field.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })); });
+  const titles = () => [...el.querySelectorAll(".composer-templates .composer-template-title")].map(t => t.textContent);
+  const marked = () => [...el.querySelectorAll(".skill-instructions-text .skill-keyword")].map(k => k.textContent);
+  try {
+    await act(async () => {});
+    // A $ that isn't the editor's template is plain words.
+    expect(marked()).toEqual([]);
+    await act(async () => body.focus());
+    // $ at the end of a line lists the templates there, graphics and then transitions, as the message box does.
+    await type(body, `${body.value}Every time I go from my camera to the screen recording, use $`);
+    expect([...el.querySelectorAll(".composer-templates .eyebrow")].map(e => e.textContent)).toEqual(["Graphics", "Transitions"]);
+    expect(titles()).toEqual(["Lower third", "Title card", "Pull quote", "Swipe", "Dip to black"]);
+    expect(el.querySelector(".skill-instructions .composer-style-guide")).toBeNull();
+    await type(body, `${body.value}sw`);
+    expect(titles()).toEqual(["Swipe"]);
+    await key(body, "Enter");
+    expect(body.value).toMatch(/use \$swipe $/);
+    expect(el.querySelector(".composer-templates")).toBeNull();
+    // The template's name and a skill's have a faint fill in the text drawn under the field.
+    await type(body, `${body.value}after /dialogue-pass, and $nothing.`);
+    expect(marked()).toEqual(["$swipe", "/dialogue-pass"]);
+    expect(el.querySelector(".skill-instructions-text")!.textContent).toBe(`${body.value}​`);
+    // The skill's own message box lists templates with $ and has no list for /.
+    const ask = el.querySelector<HTMLTextAreaElement>('[aria-label="Tell Scarlet what to change in this skill"]')!;
+    await act(async () => ask.focus());
+    await type(ask, "/dial");
+    expect(el.querySelector(".skill-chat [role='listbox']")).toBeNull();
+    await type(ask, "Every time we cut to the screen, use $sw");
+    expect([...el.querySelectorAll(".skill-chat .composer-template-title")].map(t => t.textContent)).toEqual(["Swipe"]);
   } finally { await view.close(); }
 });

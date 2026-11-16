@@ -3,6 +3,7 @@ import { agentTarget, type Task, type TaskAttachment } from "@scarlet/shared";
 import { canStartCutReview, cutSummary, type Project } from "@scarlet/timeline";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage, IS_DESKTOP } from "../../lib/client";
+import { messageTimestamps, type MessageClock } from "../../lib/messageTimestamps";
 import { dropTargets, fileDropZone } from "../../lib/dropTargets";
 import { useAttachmentsStore, type PendingAttachment } from "../../stores/attachments";
 import { isComposing } from "../../lib/hotkeys";
@@ -12,7 +13,7 @@ import { useSpeech } from "../../lib/speech";
 import type { Thread } from "../../lib/threads";
 import { useProjectStore } from "../../stores/project";
 import { commandSkillIds, enabledSkills, useSkillsStore } from "../../stores/skills";
-import { markedRangeOf, playheadPoints, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
+import { editTargetAt, markedRangeOf, pointOf, playheadPoints, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
 import { Icon, Spinner, InlineError } from "../ui/primitives";
 import { AgentChip, useAgentAvailability } from "./AgentChip";
 import { SkillCommandInput } from "./SkillCommandInput";
@@ -40,8 +41,7 @@ interface ComposerProps {
   targetTag?: string;
   /** The tag is a moment a new edit is about ("At 18:28"), not something being revised. Its × makes the message about the whole video. */
   targetIsPoint?: boolean;
-  /** A moment the editor navigated to and can attach to this message. */
-  editHere?: { time: string; onSelect(): void };
+  messageClock?: MessageClock;
   /** What taking the tag off does. Without it, the message becomes a reply to the whole request. */
   onClearTarget?(): void;
   /**
@@ -53,7 +53,7 @@ interface ComposerProps {
   rewording?: Rewording;
   selectedEdit?: AgentContext; onClearSelectedEdit?(): void; thread?: Thread; onCreated?(task: Task): void; onSent?(): void; modelPicker?: boolean }
 
-function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetIsPoint, onClearTarget, rewording, editHere }: ComposerProps & { project: Project }) {
+function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetIsPoint, onClearTarget, rewording, messageClock }: ComposerProps & { project: Project }) {
   const media = useProjectStore(s => s.current?.media);
   const createTask = useProjectStore((s) => s.createTask);
   const createNote = useProjectStore((s) => s.createNote);
@@ -178,6 +178,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       return false;
     }
     if (!effective) throw new Error(unavailableReason);
+    let context: Parameters<typeof createTask>[1]["context"];
     if (replying) {
       if (anchor?.changeId && ![...thread.changes, ...thread.flagged ?? []].some(c => c.id === anchor.changeId)) throw new Error("This suggestion is unavailable. Select the edit again.");
       const position = anchor && requestPosition(anchor);
@@ -185,26 +186,26 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       if (revising && !attachments) {
         await revise(revising.id, { text, skillIds, voiceTranscript, assignTo: agentTarget(effective.agent, effective.model),
           effort: effective.effort, serviceTier: effective.serviceTier, ...(position && { position }) });
-      } else {
-        await createTask(project.id, { kind: "edit", ...effective, instruction: text, voiceTranscript, context: { skillIds, version: head, ...position, threadId: thread.id, ...carried } });
+        recordEditReview(project.id, anchor, "revise");
+        return true;
       }
-      recordEditReview(project.id, anchor, "revise");
+      context = { skillIds, version: head, ...position, threadId: thread.id, ...carried };
     } else if (anchor?.mediaId) {
-      const task = await createTask(project.id, { kind: "edit", ...effective, instruction: text, voiceTranscript,
-        context: { skillIds, version: anchor.version ?? head, mediaId: anchor.mediaId, time: anchor.time, end: anchor.end, ...carried } });
-      onCreated?.(task);
+      context = { skillIds, version: anchor.version ?? head, mediaId: anchor.mediaId, time: anchor.time, end: anchor.end, ...carried };
     } else if (anchor && attachments) {
       // A note at a moment takes no files, so a message that carries some is a request about that moment.
-      const task = await createTask(project.id, { kind: "edit", ...effective, instruction: text, voiceTranscript,
-        context: { skillIds, version: anchor.version ?? head, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, markedRange: anchor.markedRange, ...carried } });
-      onCreated?.(task);
+      context = { skillIds, version: anchor.version ?? head, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, markedRange: anchor.markedRange, ...carried };
     } else if (anchor) {
       const { task } = await createNote(project.id, { skillIds, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, text, voiceTranscript, version: anchor.version ?? head, assignTo: agentTarget(effective.agent, effective.model), effort: effective.effort, serviceTier: effective.serviceTier });
       if (task) onCreated?.(task);
+      return true;
     } else {
-      const task = await createTask(project.id, { kind: "edit", ...effective, instruction: text, voiceTranscript, context: { skillIds, version: head, ...carried } });
-      onCreated?.(task);
+      context = { skillIds, version: head, ...carried };
     }
+    const task = await createTask(project.id, { kind: "edit", ...effective, instruction: text, voiceTranscript, context });
+    // A reply stays in its thread; anything else is a new request the page goes to.
+    if (replying) recordEditReview(project.id, anchor, "revise");
+    else onCreated?.(task);
     return true;
   };
   /** The files ready to go with a message, once any still being added have landed, and taking them off the line once it's out. */
@@ -301,6 +302,25 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     }
   };
 
+  // A new note uses the first timestamp in its text. Replies, selected transcript words and marked ranges already
+  // have a destination. A saved point stays on its original source/version even if the editor browses elsewhere.
+  const typedPoint = context && context !== "whole" && context.fromMessage ? context : undefined;
+  // Only a message the editor hasn't aimed takes its place from its words. A moment they picked stays where it is
+  // whatever times are typed, and once they took the aim off with × ("whole") a typed time doesn't put it back.
+  const aimsByText = !context || !!typedPoint;
+  const inputClock = !replying && !rewording && (!displayAnchor || pointOf(displayAnchor)) ? messageClock : undefined;
+  const sameClock = !typedPoint || (typedPoint.version === inputClock?.version && typedPoint.mediaId === inputClock?.mediaId);
+  const duration = inputClock?.duration ?? 0;
+  const times = useMemo(() => messageTimestamps(value, duration), [value, duration]);
+  const firstTime = times[0]?.time;
+  useLayoutEffect(() => {
+    if (rewording || replying || !aimsByText) return;
+    if (typedPoint && !sameClock && messageTimestamps(value, Infinity).some(t => t.time === typedPoint.time)) return;
+    if (inputClock && firstTime !== undefined) {
+      if (sameClock && firstTime === typedPoint?.time) return;
+      setContext({ ...editTargetAt(firstTime, inputClock.version, inputClock.timeline, inputClock.mediaId), fromMessage: true });
+    } else if (typedPoint) setContext(null);
+  }, [value, firstTime, inputClock, typedPoint, sameClock, rewording, replying, aimsByText, setContext]);
   const tagWords = targetTag && `${targetTag.charAt(0).toLowerCase()}${targetTag.slice(1)}`;
   // What the tag's message does, for its hover note: a cut or an edit is revised, a question answered, an edit replied to.
   const tagAct = !targetTag ? undefined : question && targetTag === "Answer" ? "Answering Scarlet’s question"
@@ -359,7 +379,15 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       {attached.length > 0 && <AttachedFiles files={attached} onRemove={key => { detach(project.id, key); inputRef.current?.focus(); }} />}
       {/* Esc leaves a queued request's words as they were, unless the skill list took it first. */}
       {/* While an input method composes, Esc is its own: it puts away its candidates, and the words stay in the box. */}
-      <div className={firstEditHint ? "composer-box first-edit-hint" : "composer-box"} onKeyDown={e => { if (rewording && e.key === "Escape" && !e.defaultPrevented && !isComposing(e)) rewording.onCancel(); }}
+      {/* Backspace in an empty box takes a picked moment off, as it would a tag. A held Backspace that just emptied the box doesn't. */}
+      <div className={firstEditHint ? "composer-box first-edit-hint" : "composer-box"} onKeyDown={e => {
+        if (rewording && e.key === "Escape" && !e.defaultPrevented && !isComposing(e)) rewording.onCancel();
+        if (e.key === "Backspace" && !e.repeat && !e.defaultPrevented && !isComposing(e) && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey &&
+            placeTag && targetIsPoint && !recording && !heard && e.target === inputRef.current && !inputRef.current.value) {
+          e.preventDefault();
+          takeOffTarget();
+        }
+      }}
         onKeyDownCapture={e => {
           if (!e.repeat) arrivedByKey.current = false;
           else if (arrivedByKey.current) e.preventDefault();
@@ -373,7 +401,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         }}>
         <label htmlFor={inputId} className="composer-destination sr-only">{rewording ? "Changing the words of a queued request" : <>{mode}{editTitle && ` ${editTitle}`}</>}</label>
         <div className="composer-row">
-          {aimItems.length > 0 && <ComposerAim items={aimItems} disabled={recording || heard} disabledReason="Waits until what you’re saying is sent" />}
+          {/* Mounted with nothing aimed too, so the first thing added to an empty box arrives: it draws nothing until then. */}
+          {!rewording && <ComposerAim items={aimItems}disabled={recording || heard} disabledReason="Waits until what you’re saying is sent" />}
           {wordTag && <span className="composer-tag" title={tagAct}>
             <span className="composer-tag-name">{wordTag}</span>
             {/* A spoken message stays where it was said until it is out: aiming the box elsewhere would drop it. */}
@@ -383,12 +412,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
           </span>}
           <SkillCommandInput key={owner} id={inputId} inputRef={inputRef} value={value} skills={skills}
             placeholder={rewording ? "What should it ask instead?" : question ? "Answer Scarlet…" : displayAnchor?.changeId && context ? "What should change?" : replying ? "Write a follow-up…" : NEW_EDIT_HINT}
-            onChange={changeText} onSubmit={() => void submitText()} />
-          {editHere && !tag && !rewording && !replying && !displayAnchor && !recording && !heard && <button type="button" className="composer-edit-here"
-            aria-label={`Edit here at ${editHere.time}`} title={`Edit here at ${editHere.time}`} onClick={() => {
-              editHere.onSelect();
-              inputRef.current?.focus();
-            }}>Edit here</button>}
+            timestamps={sameClock ? times : undefined} onTimestamp={inputClock?.seek} onChange={changeText} onSubmit={() => void submitText()} />
           {/* The reason is only for a mic with no agent to talk to. While a message sends or is written down the spinner says why. */}
           <MicButton onResult={(r) => void onVoice(r)} onStart={() => {
             dismissFirstEditHint();

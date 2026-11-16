@@ -340,6 +340,20 @@ it("carries on with a list saved before first files were marked", async () => {
   expect(pendingImports("other")).toEqual([{ projectId: "other", source: "/clips/z.mov", at }]);
 });
 
+it.each([
+  ["Caf%C3%A9%20take.mp4", "Café take.mp4"],
+  ["Caf%C3%A9%20take.mp4", "Caf%C3%A9%20take.mp4"],
+  ["Caf%C3%A9%20take%2Emp4", "Café take.mp4"],
+])("recognises a saved link ending in %s when its file is named %s", async (segment, name) => {
+  const at = "2026-11-06T20:00:00.000Z";
+  const link = `https://example.com/clips/${segment}`;
+  const { resumeImports } = await relaunch(JSON.stringify([{ projectId: "prj", source: link, at }]));
+  const arrived = { ...video(name, 1920, 1080, 30), provenance: { by: "human", createdAt: at } } as MediaAsset;
+  await resumeImports("prj", [arrived]);
+  expect(importLocalFile).not.toHaveBeenCalled();
+  expect(localStorage.getItem(SAVED)).toBeNull();
+});
+
 it("carries on with files saved with a garbled mark, and doesn't let them set the format", async () => {
   const project = createProject("Interview");
   const at = "2026-11-06T20:00:00.000Z";

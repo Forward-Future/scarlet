@@ -42,9 +42,9 @@ pnpm desktop:dev
 
 3. **Review it in context.** Open an edit from the conversation or timeline. On a cut, open the transcript to see the words Scarlet marked for removal. Press `\` to hear the removed footage and press it again to hear the join. When a dialogue pass asks about a cut, approve it, skip it or ask for a revision. You can also revise or undo an applied edit. Earlier versions stay in the project history.
 
-4. **Export the cut.** Click **Export** in the project header to save the whole video or a selected range as an MP4. To keep editing in DaVinci Resolve, export the timeline as an OpenTimelineIO (`.otio`) file.
+4. **Export the cut.** Click **Export** in the project header to save the whole video or a selected range as an MP4. To finish the edit in DaVinci Resolve, Final Cut Pro or Premiere Pro, choose **Advanced export**: it saves a folder with the timeline (`.fcpxml` and `.otio`), a copy of the footage, the captions as a `.srt` file, and a Read me with how to open it in each app and what doesn't carry over.
 
-   <img src="assets/export-formats.png" width="600" alt="Scarlet’s Export dialog shows the whole edit selected, with Video (.mp4) and Resolve timeline (.otio) in the format menu.">
+   <img src="assets/export-advanced.png" width="600" alt="Scarlet’s Advanced export sheet lists what the folder holds: the timeline, a copy of the footage, the captions as a SubRip file and a Read me, then what doesn't carry over.">
 
 Scarlet stores projects and renders video on your computer. CrisperWhisper is the default local transcription choice. Until you install its separately licensed weights, Scarlet uses Whisper large-v3-turbo, which downloads on first use. Your connected AI provider receives your editing request and the project context the agent uses, which can include transcript excerpts and video frames. [Choose or add a transcription model](docs/transcription-models.md)
 

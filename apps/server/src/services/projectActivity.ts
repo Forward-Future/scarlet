@@ -25,8 +25,9 @@ export async function withActivity(ctx: Ctx, summaries: ProjectSummary[]): Promi
     WHERE state IN ('claimed','running') AND kind IN ${REQUESTS} GROUP BY project_id`)
     .all() as { project_id: string; n: number }[]).map(row => [row.project_id, row.n]));
 
-  const importing = new Map((ctx.db.prepare("SELECT project_id, count(*) AS n FROM media WHERE status = 'ingesting' GROUP BY project_id")
-    .all() as { project_id: string; n: number }[]).map(row => [row.project_id, row.n]));
+  // A file an engine is still reading keeps its claim until that engine sees the pause, which another engine does a moment later.
+  const importing = new Map((ctx.db.prepare(`SELECT project_id, count(*) AS n, count(ingest_pid) AS running FROM media
+    WHERE status = 'ingesting' GROUP BY project_id`).all() as { project_id: string; n: number; running: number }[]).map(row => [row.project_id, row]));
 
   // A transcription waiting its turn counts as none of it done, so the figure doesn't jump when another file joins.
   const transcribing = new Map<string, { fractions: number[]; known: boolean; running: boolean }>();
@@ -48,7 +49,7 @@ export async function withActivity(ctx: Ctx, summaries: ProjectSummary[]): Promi
     const edits = editing.get(id);
     if (edits) add(id, { kind: "editing", count: edits });
     const imports = importing.get(id);
-    if (imports) add(id, { kind: "importing", count: imports });
+    if (imports) add(id, { kind: "importing", count: imports.n, ...(!imports.running && paused.has(id) && { paused: true }) });
     const words = transcribing.get(id);
     if (words) {
       const fraction = words.known ? words.fractions.reduce((a, b) => a + b, 0) / words.fractions.length : undefined;

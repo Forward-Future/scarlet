@@ -18,6 +18,16 @@ it("keeps dialogue take-selection advice in the selected skill", () => {
   expect(buildSystemPrompt({ project, skills: [skill({ name: "dialogue-pass", content: dialogue })] })).toContain(advice);
 });
 
+it("reads an editor's style after the guide it builds on, and has it win where they differ", () => {
+  const guide = skill({ id: "skl_dp", name: "dialogue-pass", content: "---\nname: dialogue-pass\ndescription: Cut dialogue.\n---\nAbout a quarter second at a join." });
+  const style = skill({ id: "skl_me", name: "my-style", content: "---\nname: my-style\ndescription: Mine.\nextends: dialogue-pass\n---\nA tenth of a second at a join." });
+  const prompt = buildSystemPrompt({ project: "A project.", skills: [guide, style] });
+  expect(prompt.indexOf("## dialogue-pass")).toBeLessThan(prompt.indexOf("## my-style"));
+  expect(prompt).toContain("This builds on dialogue-pass, above. Where the two differ, follow this one.");
+  // Alone, it says nothing about a guide that isn't there.
+  expect(buildSystemPrompt({ project: "A project.", skills: [style] })).not.toContain("builds on");
+});
+
 describe("the prompt for revising a skill", () => {
   it("is about the skill alone: its description and instructions as they stand, then what an editing agent is told", () => {
     const prompt = buildSystemPrompt({ project: "A project the task only borrows.", editSkill: skill(), skills: [skill({ id: "other", name: "other-skill", content: "Other brief." })],

@@ -18,19 +18,38 @@ export function removeTrashed(ctx: Ctx, selected: StorageSelection[], expired = 
     for (const project of selected) {
       if (!project.deletedAt) throw new Error("Expected a trashed project");
       validateSelection(ctx, project, expired);
-      const id = project.id;
-      ctx.db.prepare("INSERT INTO storage_purges VALUES (?)").run(id);
-      ctx.db.prepare("DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)").run(id);
-      ctx.db.prepare("DELETE FROM notifications WHERE json_extract(json, '$.projectId') = ?").run(id);
-      for (const table of ["changes", "notes", "renders", "tasks", "task_usage", "transcripts", "timeline_versions", "activity"]) {
-        ctx.db.prepare(`DELETE FROM ${table} WHERE project_id = ?`).run(id);
-      }
-      ctx.repos.projects.remove(id);
+      removeRows(ctx, project.id);
     }
   }, "immediate")();
   if (selected.length) {
     ctx.log(`[trash] removed ${selected.length} ${selected.length === 1 ? "project" : "projects"} for good${expired ? ` after ${TRASH_DAYS} days in the trash` : ""}: ${selected.map(p => p.id).join(", ")}`);
   }
+  return finishPurges(ctx);
+}
+
+/** A project's rows, and a purge row so its folder is deleted after them. Run inside a transaction. */
+function removeRows(ctx: Ctx, id: string) {
+  ctx.db.prepare("INSERT OR IGNORE INTO storage_purges VALUES (?)").run(id);
+  ctx.db.prepare("DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)").run(id);
+  ctx.db.prepare("DELETE FROM notifications WHERE json_extract(json, '$.projectId') = ?").run(id);
+  for (const table of ["changes", "notes", "renders", "tasks", "task_usage", "transcripts", "timeline_versions", "activity"]) {
+    ctx.db.prepare(`DELETE FROM ${table} WHERE project_id = ?`).run(id);
+  }
+  ctx.repos.projects.remove(id);
+}
+
+/**
+ * Remove projects the editor never saw, with their files, without passing through the Trash: the shorts of a Make
+ * shorts that failed part-way. Nothing was started in them, so there is nothing to wait for.
+ */
+export function discardProjects(ctx: Ctx, ids: string[], why: string): Promise<void> {
+  const removed = ctx.db.transaction(() => ids.filter(id => {
+    if (!ctx.db.prepare("SELECT 1 FROM projects WHERE id = ?").get(id)) return false;
+    checkedProjectDir(ctx, id);
+    removeRows(ctx, id);
+    return true;
+  }), "immediate")();
+  if (removed.length) ctx.log(`[trash] removed ${removed.length} ${removed.length === 1 ? "project" : "projects"} at once, ${why}: ${removed.join(", ")}`);
   return finishPurges(ctx);
 }
 

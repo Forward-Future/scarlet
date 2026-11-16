@@ -189,6 +189,18 @@ export function buildThreads(d: Source): Thread[] {
     if (!thread || thread.changes.includes(change) || thread.flagged?.includes(change)) continue;
     (thread.flagged ??= []).push(change);
   }
+  // A later version of a flagged edit, revised or undone from the request that made it, comes too: the request that
+  // raised the doubt lists the edit as it is now. Oldest first, so each version follows the one it replaces.
+  const byAge = d.changes.toSorted((x, y) => ts(x.createdAt) - ts(y.createdAt));
+  for (const thread of threads) {
+    const flagged = thread.flagged;
+    if (!flagged) continue;
+    for (const change of byAge) {
+      if (thread.changes.includes(change) || flagged.includes(change)) continue;
+      if (change.timelineEdits?.some(e => e.replaces && flagged.some(f => f.id === e.replaces!.changeId))) flagged.push(change);
+    }
+    flagged.sort((x, y) => ts(x.createdAt) - ts(y.createdAt));
+  }
   return threads;
 }
 
@@ -227,8 +239,28 @@ export function skillCommands(draft: string) {
   });
 }
 
+function firstCutName(name: string | undefined) {
+  return name === "dialogue-pass" || name === "first-cut-dialogue";
+}
+
+/**
+ * The guide a skill builds on, named by `extends:` in its header. An editor's own style ("cut my joins tighter, act on
+ * my notes to the editor") then runs with the guide it adds to, and the guide's later improvements reach it, instead
+ * of a copy of the guide drifting apart from it.
+ */
+export function skillExtends(skill: Pick<Skill, "content">): string | undefined {
+  const header = /^---\r?\n([\s\S]*?)\r?\n---/.exec(skill.content)?.[1];
+  const value = header && /^extends:[ \t]*(.*)$/m.exec(header)?.[1]?.trim().replace(/^["']|["']$/g, "").replace(/^\//, "");
+  return value || undefined;
+}
+
+/** Whether a skill adds to the dialogue pass, so its command asks for one. */
+export function extendsDialoguePass(skill: Skill) {
+  return skill.enabled && !isDialogueGuide(skill) && firstCutName(skillExtends(skill));
+}
+
 export function isDialogueGuide(skill: Skill) {
-  return (skill.name === "dialogue-pass" || skill.name === "first-cut-dialogue") && (skill.bundledName === skill.name ||
+  return firstCutName(skill.name) && (skill.bundledName === skill.name ||
     (!skill.bundledName && (skill.source === "bundled" || skill.source === "seed")));
 }
 
@@ -236,8 +268,12 @@ type DialogueOperation = NonNullable<Task["context"]["dialogueOperation"]>;
 
 /** A custom entry owns its command name even when disabled. The shipped guide is optional advice for the product shortcut. */
 export function dialogueShortcut(name: string, library: readonly Skill[]): DialogueOperation | undefined {
-  if (name !== "dialogue-pass" && name !== "first-cut-dialogue" && name !== "tighten-pauses-here") return;
   const entry = library.find(skill => skill.name === name);
+  if (entry && extendsDialoguePass(entry)) return "first-cut";
+  if (!firstCutName(name) && name !== "tighten-pauses-here") {
+    if (entry?.enabled && firstCutName(entry.bundledName)) return "first-cut";
+    return;
+  }
   if (entry && !isDialogueGuide(entry)) return;
   return name === "tighten-pauses-here" ? "local-pauses" : "first-cut";
 }
@@ -311,13 +347,29 @@ function stillMaking(pass: Change, run: Task, tasks: readonly Task[], changes: r
 }
 
 /**
- * The one cut or edit a request is about, when it is about one: a call of a pass sent back, or an applied edit revised
- * or undone from its card. Requests in one thread about the same cut or edit name the same thing.
+ * The one cut or edit a request is about, when it is about one, as a key two requests share exactly when they are about
+ * the same thing. Undefined for a request about the whole video.
+ *
+ * - A call of a pass (`cutIndex`): `["call", thread, cutIndex]`. Every version of a pass is saved in the pass's thread,
+ *   and a revision of one call saves the whole pass again under a new id, so the thread names the pass across its versions.
+ * - An applied edit (`editIndex`), revised or undone from its card or from the list of the request that flagged it:
+ *   `["edit", changeId, spot]` of the edit's first version. A revision is a new change whose edit `replaces` the one it
+ *   revised, so with `changes` the chain is followed back to where the edit was first made; requests about it then name
+ *   the same edit whichever version they were sent about, and whichever thread they were sent from.
+ *
+ * The engine's claim query builds the same key in SQL (`claimNext` in apps/server/src/services/tasks.ts): keep the two in step.
  */
-function oneTarget(task: Task): string | undefined {
+export function requestTargetKey(task: Task, changes: readonly Pick<Change, "id" | "timelineEdits">[] = []): string | undefined {
   const { changeId, cutIndex, editIndex, threadId } = task.context;
   if (!changeId || (cutIndex === undefined && editIndex === undefined)) return undefined;
-  return JSON.stringify([threadId ?? task.id, cutIndex ?? null, editIndex ?? null]);
+  if (cutIndex !== undefined) return JSON.stringify(["call", threadId ?? task.id, cutIndex]);
+  let at = { changeId, spot: editIndex! };
+  for (let hops = 0; hops < 50; hops++) {
+    const back = changes.find(c => c.id === at.changeId)?.timelineEdits?.[at.spot]?.replaces;
+    if (!back) break;
+    at = back;
+  }
+  return JSON.stringify(["edit", at.changeId, at.spot]);
 }
 
 /**
@@ -327,10 +379,10 @@ function oneTarget(task: Task): string | undefined {
  * onto the video as it is when it lands, and one that meets footage another request changed is told so, with where,
  * and saves again on the current video. Any other request is about the whole video, or about footage nothing names
  * ahead of time, so it runs alone. Two requests about the same cut or edit keep the order they were asked in.
- * The engine's claim query applies the same rule.
+ * The engine's claim query applies the same rule. What counts as the same cut or edit is `requestTargetKey`'s.
  */
-export function runsBeside(a: Task, b: Task): boolean {
-  const x = oneTarget(a), y = oneTarget(b);
+export function runsBeside(a: Task, b: Task, changes: readonly Pick<Change, "id" | "timelineEdits">[] = []): boolean {
+  const x = requestTargetKey(a, changes), y = requestTargetKey(b, changes);
   return !!x && !!y && x !== y;
 }
 
@@ -378,13 +430,13 @@ export function queueWait(task: Task, tasks: readonly Task[], changes: readonly 
   if (task.state !== "queued" || task.kind === "transcribe" || isAsideTask(task)) return undefined;
   const others = takingTurns(task, tasks);
   const active = others.filter(t => ACTIVE_STATES.has(t.state));
-  const inTheWay = active.filter(t => !runsBeside(task, t));
+  const inTheWay = active.filter(t => !runsBeside(task, t, changes));
   const first = inTheWay[0];
   if (first?.state === "waiting_for_user") return { kind: "question", task: first };
   const review = heldBy(task, tasks, changes);
   if (first) return review ? { kind: "review", change: review } : { kind: "run", task: first };
   const before = inLine(tasks);
-  const ahead = others.filter(t => t.state === "queued" && before(t, task) && !runsBeside(task, t) && !goesAhead(task, t, tasks, changes));
+  const ahead = others.filter(t => t.state === "queued" && before(t, task) && !runsBeside(task, t, changes) && !goesAhead(task, t, tasks, changes));
   if (ahead.length) return { kind: "ahead", count: ahead.length };
   if (review) return { kind: "review", change: review };
   // A pass still being made by a run this request could otherwise work beside holds it until that run is done.
@@ -404,7 +456,7 @@ export function queueOrder(tasks: readonly Task[], changes: readonly Change[]): 
   const order: Task[] = [];
   for (;;) {
     const next = waiting.find(q => !heldBy(q, tasks, changes)
-      && !waiting.some(r => r !== q && r.projectId === q.projectId && before(r, q) && !runsBeside(q, r) && !goesAhead(q, r, tasks, changes)));
+      && !waiting.some(r => r !== q && r.projectId === q.projectId && before(r, q) && !runsBeside(q, r, changes) && !goesAhead(q, r, tasks, changes)));
     if (!next) return [...order, ...waiting];
     order.push(next);
     waiting = waiting.filter(t => t !== next);

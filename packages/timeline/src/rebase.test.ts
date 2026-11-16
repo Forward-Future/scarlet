@@ -880,7 +880,7 @@ describe("parallel changes", () => {
     ];
     const moveB: TimelineOp = { op: "moveClip", clipId: "b", timelineIn: 11 };
     /** Source 14–17 of the recording at 2–5. */
-    const cutaway = (opts: { enabled?: boolean } = {}) => makeMediaClip("m1", 14, 17, 2, { id: "cutaway", ...opts });
+    const cutaway = () => makeMediaClip("m1", 14, 17, 2, { id: "cutaway" });
 
     it("refuses a move of a piece the change split off when a cut approved since was in the piece after it", () => {
       const base = whole();
@@ -909,25 +909,11 @@ describe("parallel changes", () => {
       }
     });
 
-    it("refuses a clip of the recording the change added on another track when it plays a cut approved since", () => {
-      const base = whole();
-      base.tracks.push(makeTrack("video", "Cutaways", "v2"));
-      const ops: TimelineOp[] = [{ op: "addClip", trackId: "v2", clip: cutaway() }];
-      expect(approve(base, ops, cut(base, 15, 16))).toMatchObject({ ...footageChanged("cutaway"), at: 2 });
-    });
-
     it("refuses a track the change added when its clip plays a cut approved since", () => {
       const base = whole();
       const track = makeTrack("video", "Cutaways", "v2");
       track.clips.push(cutaway());
       expect(approve(base, [{ op: "addTrack", track }], cut(base, 15, 16))).toMatchObject({ ...footageChanged("cutaway"), at: 2 });
-    });
-
-    it("refuses a clip the change turned on when it plays a cut approved since", () => {
-      const base = whole();
-      base.tracks.push({ ...makeTrack("video", "Cutaways", "v2"), clips: [cutaway({ enabled: false })] });
-      const ops: TimelineOp[] = [{ op: "updateClip", clipId: "cutaway", patch: { enabled: true } }];
-      expect(approve(base, ops, cut(base, 15, 16))).toMatchObject({ ...footageChanged("cutaway"), at: 2 });
     });
 
     it("still re-applies a move of a clip when a cut approved since was in the clip before it", () => {
@@ -1329,4 +1315,47 @@ describe("approving some spots of a batch", () => {
     expect(moved.kind).toBe("partial");
     if (moved.kind === "partial") expect(changedSpots(moved.timeline, to)).toEqual([]);
   });
+});
+
+describe("footage cut since an edit was made", () => {
+  it("refuses an edit that brings cut footage back as a new clip, as it refuses a trim that does", () => {
+    const base = take();
+    base.tracks.push(makeTrack("video", "Overlay", "v2"));
+    const head = applyOps(base, [{ op: "rippleDelete", start: 6, end: 9 }]);
+    // Laid over the start: the part of the take the current version cut, as its own clip.
+    const ops: TimelineOp[] = [{ op: "addClip", trackId: "v2", clip: makeMediaClip("m1", 6, 9, 1, { id: "back" }) }];
+    expect(() => replayOps(base, ops, head)).toThrow("the footage under clip back changed since");
+    // Footage the current version kept is fine.
+    expect(replayOps(base, [{ op: "addClip", trackId: "v2", clip: makeMediaClip("m1", 12, 14, 1, { id: "kept" }) }], head)
+      .tracks.find(t => t.id === "v2")!.clips).toMatchObject([{ id: "kept", sourceIn: 12 }]);
+  });
+
+  it("refuses a picture trim into footage cut from the picture alone, while the sound still plays it", () => {
+    const base = emptyTimeline(P);
+    base.tracks[0]!.clips = [makeMediaClip("m1", 0, 10, 0, { id: "v1a", volume: 0 }), makeMediaClip("m1", 10, 20, 15, { id: "v1b", volume: 0 })];
+    base.tracks[1]!.clips = [makeMediaClip("m1", 0, 20, 0, { id: "sound" })];
+    const head = applyOps(base, [{ op: "removeClip", clipId: "v1b" }]);
+    const ops: TimelineOp[] = [{ op: "updateClip", clipId: "v1a", patch: { sourceOut: 15 } }];
+    expect(() => replayOps(base, ops, head)).toThrow("the footage under clip v1a changed since");
+  });
+
+  it("refuses turning back on a clip whose footage was cut since", () => {
+    const base = take();
+    base.tracks.push({ ...makeTrack("video", "Overlay", "v2"), clips: [{ ...makeMediaClip("m1", 6, 9, 1, { id: "spare" }), enabled: false }] });
+    const head = applyOps(base, [{ op: "rippleDelete", start: 6, end: 9 }]);
+    expect(() => replayOps(base, [{ op: "updateClip", clipId: "spare", patch: { enabled: true } }], head)).toThrow("the footage under clip spare changed since");
+  });
+});
+
+it("sees a transition from a colour card change the card's side of the join too", () => {
+  const base = emptyTimeline(P);
+  const card = { id: "card", kind: "color" as const, color: "#ff0000", timelineIn: 0, timelineOut: 4, enabled: true, opacity: 1 };
+  base.tracks[0]!.clips = [card, makeMediaClip("m1", 0, 4, 4, { id: "shot" })];
+  // A join a hair apart, as ripples leave them, is still the join the transition plays at.
+  base.tracks[0]!.clips[1]!.timelineIn = 4.0004;
+  const to = applyOps(base, [{ op: "updateClip", clipId: "shot", patch: { transitionIn: { type: "dissolve", duration: 1, direction: "left" } } }]);
+  const spots = changedSpots(base, to);
+  expect(spots).toHaveLength(1);
+  expect(spots[0]!.after.start).toBeCloseTo(3.5, 3);
+  expect(spots[0]!.after.end).toBeCloseTo(4.5, 3);
 });

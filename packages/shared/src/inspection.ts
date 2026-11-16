@@ -33,6 +33,8 @@ export interface JoinHearing { at: number; mediaId: string; side: "out" | "in"; 
 export interface UnheardJoins { mediaId: string; reason: string; joins: number; from: number; to: number }
 export interface RepeatAuditResult {
   version: string;
+  /** The version the check named, when the edit had moved on from it and the check read the current one instead. */
+  readInsteadOf?: string;
   heard: number;
   remaining: number;
   repeats: RepeatEvidence[];
@@ -56,7 +58,7 @@ export const RepeatAuditRequest = z.object({
 
 export const SheetOptions = {
   from: z.number().finite().nonnegative(), to: z.number().finite().positive(),
-  count: z.number().int().min(6).max(12).default(9),
+  count: z.number().int().min(2).max(12).default(9),
   mode: z.enum(["uniform", "scene", "activity"]).default("uniform"),
   focus: z.number().finite().nonnegative().optional().describe("Include frames immediately before and at this time"),
 };

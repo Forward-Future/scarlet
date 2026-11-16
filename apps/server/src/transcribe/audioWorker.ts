@@ -1,5 +1,6 @@
 /**
- * One helper process that keeps the aligner, the filler model and the screen-text reader loaded between requests.
+ * One helper process that keeps the aligner, the filler model, the screen-text reader and the face detector loaded
+ * between requests.
  *
  * A dialogue pass asks for both once per scan page, 120 times for two hour-long recordings. Started fresh each
  * time, a process spent about a second starting Node, loading ONNX Runtime and reading the weights before it
@@ -19,7 +20,9 @@ export type AudioRequest =
   /** `origin`: source seconds of the start of `wav`. */
   | { kind: "fillers"; wav: string; model: string; origin: number }
   /** `frames`: packed RGB frames of `width` by `height`, one after another (screenTextModel.ts). */
-  | { kind: "screenText"; frames: string; width: number; height: number; finder: string; reader: string; letters: string };
+  | { kind: "screenText"; frames: string; width: number; height: number; finder: string; reader: string; letters: string }
+  /** `frames`: packed RGB frames of `width` by `height`, one after another, each side at most 640 (faceModel.ts). */
+  | { kind: "faces"; frames: string; width: number; height: number; model: string };
 
 type Reply = { id: number; result?: unknown; error?: string; progress?: number } | { note: string };
 /** `worker`: the helper the job was sent to. `cancel`: stops listening to its signal, in the queue and then at work. */
@@ -132,20 +135,22 @@ export const audioWorker = {
 
 /** The helper's side: answer requests in order until the engine goes away. */
 export function serveAudioWorker() {
-  const ready = Promise.all([import("./uhm.js"), import("./wordAlign.js"), import("./screenTextModel.js")]);
+  const ready = Promise.all([import("./uhm.js"), import("./wordAlign.js"), import("./screenTextModel.js"), import("./faceModel.js")]);
   let sessions: import("./uhm.js").Sessions | undefined;
   let chain: Promise<void> = Promise.resolve();
   const send = (reply: Reply) => { if (process.connected) process.send!(reply); };
   process.on("message", (message: AudioRequest & { id: number }) => {
     chain = chain.then(async () => {
       try {
-        const [uhm, align, screen] = await ready;
+        const [uhm, align, screen, faces] = await ready;
         sessions ??= new uhm.Sessions(note => send({ note }));
         const result = message.kind === "align"
           ? await align.runAlignWorker(message.wav, message.model, message.request, progress => send({ id: message.id, progress }), sessions)
           : message.kind === "screenText"
             ? await screen.runScreenTextWorker(message.frames, message.width, message.height, message.finder, message.reader, message.letters, sessions)
-            : await uhm.runFillerWorker(message.wav, message.model, message.origin, sessions);
+            : message.kind === "faces"
+              ? await faces.runFaceWorker(message.frames, message.width, message.height, message.model, sessions)
+              : await uhm.runFillerWorker(message.wav, message.model, message.origin, sessions);
         send({ id: message.id, result });
       } catch (error) {
         send({ id: message.id, error: error instanceof Error ? error.message : String(error) });

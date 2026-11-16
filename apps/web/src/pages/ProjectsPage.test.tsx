@@ -694,3 +694,43 @@ it("shows one window-wide update on Projects while building and when ready", asy
     vi.unstubAllGlobals();
   }
 });
+
+it("lists each short under the video it was made from, in the order they were made, and a short whose video isn't listed on its own", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const previous = useProjectStore.getState();
+  const db = buildDb();
+  const base = db.projects.find(p => p.id === PRJ)!;
+  const tall = { ...base.settings, aspect: "9:16" as const, width: 1080, height: 1920 };
+  const row = (id: string, name: string, extra: Partial<ProjectSummary> = {}): ProjectSummary => ({ id, name, head: base.head, settings: base.settings,
+    mediaCount: 1, poster: null, pendingChanges: 0, openNotes: 0, duration: 41, createdAt: "2030-01-10T12:00:00.000Z", ...extra });
+  const from = (projectId: string, name: string) => ({ settings: tall, source: { projectId, name } });
+  // Newest first, as the engine lists them: the shorts were edited after the long video.
+  const library = [
+    row("prj_s2", "The wrong flight", { ...from("prj_long", "Weekly interview"), createdAt: "2030-01-10T12:00:02.000Z" }),
+    row("prj_s1", "Agents fail without tools", { ...from("prj_long", "Weekly interview"), createdAt: "2030-01-10T12:00:01.000Z" }),
+    row("prj_other", "Tech brief"),
+    row("prj_long", "Weekly interview", { duration: 2400, mediaCount: 3 }),
+    row("prj_lost", "From an archived video", from("prj_archived", "Old talk")),
+  ];
+  vi.spyOn(api, "projects").mockResolvedValue({ projects: library });
+  vi.spyOn(api, "trash").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings });
+  useProjectStore.setState({ list: library, listStatus: "ready", listError: null });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<MemoryRouter><ProjectsPage /></MemoryRouter>));
+    const cards = [...container.querySelectorAll(".project-card")];
+    expect(cards.map(card => [card.querySelector("h2")?.textContent, card.classList.contains("is-short")])).toEqual([
+      ["Tech brief", false], ["Weekly interview", false], ["Agents fail without tools", true], ["The wrong flight", true], ["From an archived video", false]]);
+    expect(cards.map(card => card.querySelector(".project-caption p")?.textContent)).toEqual([
+      "0:41·1 file", "40:00·3 files·2 shorts", "0:41·1080×1920·From Weekly interview", "0:41·1080×1920·From Weekly interview", "0:41·1080×1920·From Old talk"]);
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useProjectStore.setState(previous, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});

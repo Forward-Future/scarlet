@@ -23,6 +23,7 @@ import { sourceCacheStatuses, sourcePreviews } from "../services/sourcePreviews.
 import { pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
 import { getWaveform, ingestMedia, readWaveformCache, removeUnreadableMedia, settleAlignment, startTranscription, transcriptionHeld, writeHashedFile } from "../services/ingest.js";
+import { realignTranscript } from "../services/realign.js";
 import { jsonBody, numberParam, optionalNumberParam, requireMedia, requireProjectHeader } from "./util.js";
 
 const ImportRequest = z
@@ -187,6 +188,15 @@ export function mediaRoutes(ctx: Ctx) {
   r.get("/projects/:id/playback-caches", async (c) => {
     const project = requireProjectHeader(ctx, c.req.param("id"));
     return c.json({ caches: await sourceCacheStatuses(ctx, project.id) });
+  });
+
+  // Place a saved transcript's words again with the current aligner. The words and their indices stay.
+  r.post("/projects/:id/media/:mediaId/realign", async (c) => {
+    const project = requireProjectHeader(ctx, c.req.param("id"));
+    const media = requireMedia(ctx, c.req.param("mediaId"), project.id);
+    requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), project.id);
+    requireAudio(media);
+    return c.json(await ctx.track(realignTranscript(ctx, project.id, media.id, ctx.projectSignal(project.id))));
   });
 
   r.post("/projects/:id/media/:mediaId/prepare", async (c) => {

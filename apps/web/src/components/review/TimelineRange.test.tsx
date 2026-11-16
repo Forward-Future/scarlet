@@ -135,10 +135,17 @@ it("goes into the close-up when a drag stops and holds still, and the end it was
   const strip = () => [...container.querySelectorAll<HTMLElement>(".timeline-range-loupe-picture")];
   expect(strip()).toHaveLength(LOUPE_PICTURES + 4);
   expect(container.querySelector<HTMLElement>(".timeline-range-loupe-picture.is-now")?.dataset.frame).toBe(String(450 * 30));
+  // The held frame is the biggest, and its neighbours step down in size the further they are from it.
+  const width = (frame: number) => parseFloat(container.querySelector<HTMLElement>(`.timeline-range-loupe-picture[data-frame="${frame}"]`)!.style.width);
+  const held = 450 * 30;
+  expect(width(held)).toBeGreaterThan(width(held + 1));
+  expect(width(held + 1)).toBeGreaterThan(width(held + 2));
+  expect(width(held - 1)).toBe(width(held + 1));
   const loupe = container.querySelector<HTMLElement>(".timeline-range-loupe")!.style.left;
   // A frame on, the strip slides by one picture under the line, and the close-up stays where it opened.
   await move(150 + LOUPE_PX_PER_FRAME);
   expect(container.querySelector<HTMLElement>(".timeline-range-loupe-picture.is-now")?.dataset.frame).toBe(String(450 * 30 + 1));
+  expect(width(held + 1)).toBeGreaterThan(width(held));
   expect(container.querySelector<HTMLElement>(".timeline-range-loupe")!.style.left).toBe(loupe);
   await release(150 + LOUPE_PX_PER_FRAME);
   expect(marked).toHaveBeenCalledOnce();

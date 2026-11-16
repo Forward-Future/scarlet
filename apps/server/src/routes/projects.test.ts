@@ -193,5 +193,13 @@ it("lists what Scarlet is doing in each project: a request it is on, then files 
   // Paused, the caching is held; the transcription still running goes on, as a pass waiting for it needs.
   ctx.repos.projects.update(project.id, { mediaPaused: true });
   expect((await activity())[project.id]).toContainEqual({ kind: "caching", count: 1, fraction: 0.5, paused: true });
+  // The import is held once the engine reading it lets go of it, as a stopped import does.
+  expect((await activity())[project.id]).toContainEqual({ kind: "importing", count: 1 });
+  ctx.db.prepare("UPDATE media SET ingest_pid = NULL WHERE id = 'incoming'").run();
+  expect((await activity())[project.id]).toContainEqual({ kind: "importing", count: 1, paused: true });
   expect((await activity())[project.id]).toContainEqual({ kind: "transcribing", count: 2, fraction: 0.125 });
+
+  // Resumed, the import goes on.
+  ctx.repos.projects.update(project.id, { mediaPaused: false });
+  expect((await activity())[project.id]).toContainEqual({ kind: "importing", count: 1 });
 });

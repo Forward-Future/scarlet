@@ -30,6 +30,7 @@ export async function firstCutRanges(keep: FirstCutKeep[], projectId: string, au
     if (r.fromWord === undefined) continue;
     if (r.toWord! < r.fromWord || r.toWord! >= ref.length)
       throw new Error(`keep[${i}] needs an inclusive word range in ${audio.id}, #0–#${ref.length - 1}.`);
+    sources.sameWordsAsRead?.(audio.id, ref, r.fromWord, r.toWord);
     furthest = Math.max(furthest, r.toWord!);
   }
   const words = await sources.words(audio.id, (ref[furthest + 1] ?? ref[furthest]!).end + SETTLED_MARGIN);

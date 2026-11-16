@@ -49,27 +49,19 @@ jobs:
       SIGN_UPDATES: ${{ inputs.release }}
       BUNDLE: apps/desktop/src-tauri/target/${{ matrix.triple }}/release/bundle
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      # pnpm version comes from package.json "packageManager".
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
+      # Installs after the version stamp below.
+      - uses: ./.github/actions/setup
         with:
           node-version: 24
-          cache: pnpm
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.triple }}
-          components: rust-docs
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: apps/desktop/src-tauri -> target
-          key: ${{ matrix.triple }}
+          install: false
+          rust: true
+          rust-targets: ${{ matrix.triple }}
+          rust-components: rust-docs
+          rust-cache-key: ${{ matrix.triple }}
 
       - name: Stamp the shared release version before building
         shell: bash
@@ -306,7 +298,7 @@ jobs:
         run: ./.github/scripts/early-access-upgrade-windows.ps1 -Previous "$env:RUNNER_TEMP\$env:PREVIOUS_EA_INSTALLER" -Candidate "$env:RUNNER_TEMP\scarlet-installers\$env:CANDIDATE_EA_INSTALLER" -Version $env:RELEASE_VERSION
 
       - name: Upload verified installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ inputs.early_access && format('scarlet-early-access-{0}', inputs.version) || 'scarlet-desktop' }}-${{ matrix.triple }}
           path: ${{ runner.temp }}/scarlet-installers/

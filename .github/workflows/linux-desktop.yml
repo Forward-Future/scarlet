@@ -10,7 +10,7 @@ permissions:
 
 # A newer push supersedes test builds. Releases, manual builds and retries get their own group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.run_attempt == '1' && vars.SCARLET_STABLE_RELEASES != 'true' && github.ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.run_attempt == '1' && vars.SCARLET_STABLE_RELEASES != 'true' && vars.SCARLET_STABLE_RELEASES != 'updater-signed' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -24,23 +24,19 @@ jobs:
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_TEST_DEBUG: 0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      # Installs after the version stamp below.
+      - uses: ./.github/actions/setup
         with:
           node-version: 24
-          cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rust-docs
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: apps/desktop/src-tauri -> target
-          key: linux-desktop-amd64
-          cache-on-failure: true
+          install: false
+          rust: true
+          rust-components: rust-docs
+          rust-cache-key: linux-desktop-amd64
+          rust-cache-on-failure: true
 
       - name: Install native build and headless test tools
         run: |
@@ -114,14 +110,14 @@ jobs:
       # Keep a failed smoke fixture installable for diagnosis without publishing a candidate.
       - name: Retain the package for reproducing a smoke failure
         if: failure() && steps.package.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-smoke-debug-${{ github.run_attempt }}
           path: ${{ runner.temp }}/linux-installer/*.deb
           retention-days: 2
 
       - name: Upload the verified Linux candidate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: scarlet-linux-ubuntu-24.04-amd64
           path: ${{ runner.temp }}/linux-installer/*.deb

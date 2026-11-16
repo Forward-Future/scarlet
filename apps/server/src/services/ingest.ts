@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
-import { constants, existsSync, statSync } from "node:fs";
-import { execFile } from "node:child_process";
-import { copyFile, readFile, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
+import { existsSync, statSync } from "node:fs";
+import { readFile, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
-import { promisify } from "node:util";
 import { downloadImport } from "./importUrl.js";
 import { hasInitialTimeline, newId, ProjectSettings, videoFormat, type MediaAsset, type MediaKind, type Project, type Transcript, type TranscriptSegment } from "@scarlet/timeline";
 import { engineIsAlive, type Ctx } from "../context.js";
@@ -12,12 +10,12 @@ import { now } from "../db.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { humanDuration } from "../logText.js";
 import type { MediaWithStatus } from "../repo/projects.js";
-import type { Task, User } from "@scarlet/shared";
+import { decodeImportFilename, importLinkFilename, type Task, type User } from "@scarlet/shared";
 import { cancelTask, createTask, hasTranscript, saveTask } from "./tasks.js";
 import { recordTaskFinished } from "../telemetry/events.js";
 import { availableTranscriptionProvider, getTranscriptionProvider, effectiveProviderName, type importTranscriptionPolicy, type TranscriptionProvider } from "../transcribe/index.js";
 import { claimTranscriptionWork, openTranscriptionWork, transcriptionIdentity, type TranscriptionResume } from "./transcriptionWork.js";
-import { alignsLanguage, alignTranscript, type AlignmentCheckpoint } from "../transcribe/wordAlign.js";
+import { alignmentVersion, alignsLanguage, alignTranscript, type AlignmentCheckpoint } from "../transcribe/wordAlign.js";
 import { fillTranscriptHoles } from "../transcribe/transcriptHoles.js";
 import { extractWav } from "../render/ffmpeg.js";
 import { audioLane, whisperLane, type AudioWork } from "./audioWork.js";
@@ -27,10 +25,9 @@ import { actorFor, logActivity, quote } from "./activity.js";
 import { matchesSpeakerStream, savedSpeakerTurns } from "./recordingSpeakers.js";
 import { emissionStore, emissionStorePaths } from "./recordingAudio.js";
 import { prepareSourceProxies, sourcePreviews } from "./sourcePreviews.js";
-import { steadyCopy } from "./steadyCopy.js";
+import { cloneOrSteadyCopy } from "./steadyCopy.js";
 
 const WAVEFORM_POINTS_PER_SECOND = 50;
-const runFile = promisify(execFile);
 const GiB = 1024 ** 3;
 const URL_IMPORT_BYTES = 64 * GiB;
 const DOWNLOAD_RESERVE = GiB;
@@ -120,12 +117,7 @@ function safeExt(name: string): string {
 
 function filenameFromResponse(cd: string | undefined, url: string): string {
   const m = cd && (/filename\*=UTF-8''([^;]+)/i.exec(cd) ?? /filename="?([^";]+)"?/i.exec(cd));
-  if (m?.[1]) {
-    // A plain name can hold a "%" that isn't an escape: "100% done.mp4".
-    try { return decodeURIComponent(m[1]); } catch { return m[1]; }
-  }
-  const path = new URL(url).pathname.split("/").pop();
-  return path && path.includes(".") ? path : "download";
+  return m?.[1] ? decodeImportFilename(m[1]) : importLinkFilename(url)?.name ?? "download";
 }
 
 /** Hash incoming bytes as they are staged, without rereading an upload or download. */
@@ -241,19 +233,8 @@ export async function ingestMedia(
     if (!info?.isFile()) throw badRequest("path_not_found", `no file at ${source.path}`);
     if (!opts.name) name = basename(source.path);
     const destination = join(mediaDir, mediaId + safeExt(name));
-    try {
-      if (process.platform === "darwin" && info.size >= 16 * 1024 * 1024) {
-        // macOS cp uses clonefile on APFS and copies normally across volumes. The project owns an independent file.
-        await runFile("/bin/cp", ["-c", await realpath(source.path), destination], { signal });
-      } else if (process.platform === "win32" && info.size >= 64 * 1024 * 1024) {
-        await steadyCopy(source.path, destination, signal);
-      } else {
-        await copyFile(source.path, destination, constants.COPYFILE_FICLONE);
-      }
-    } catch (error) {
-      await rm(destination, { force: true });
-      throw error;
-    }
+    // The project owns an independent file: a clone where the disk allows it, a throttled copy otherwise.
+    await cloneOrSteadyCopy(source.path, destination, signal);
     const { importId } = source;
     if (importId && info.size > 0) {
       let lastReport = -Infinity;
@@ -384,9 +365,14 @@ async function backgroundIngest(ctx: Ctx, projectId: string, asset: MediaAsset) 
   try {
     signal.throwIfAborted();
     if (preparation?.stage === "fingerprint" && !asset.hash) {
+      // A pause ends the wait for its turn at once, and the next file still waits for the one ahead.
       const previous = hashQueue.get(ctx);
       const job = (async () => {
-        await previous;
+        if (previous) await new Promise<void>((resolve, reject) => {
+          const stop = () => reject(signal.reason);
+          signal.addEventListener("abort", stop, { once: true });
+          previous.then(resolve).finally(() => signal.removeEventListener("abort", stop));
+        });
         signal.throwIfAborted();
         const { size, mtimeMs, ctimeMs } = await stat(src);
         const report = reportStage("fingerprint");
@@ -395,7 +381,7 @@ async function backgroundIngest(ctx: Ctx, projectId: string, asset: MediaAsset) 
         if (latest.size !== size || latest.mtimeMs !== mtimeMs || latest.ctimeMs !== ctimeMs) throw new Error("Source changed while fingerprinting. Reimport the recording.");
         asset.fingerprintStamp = {size,mtimeMs,ctimeMs};
       })();
-      hashQueue.set(ctx, job.catch(() => {}));
+      hashQueue.set(ctx, Promise.all([previous, job.catch(() => {})]).then(() => {}));
       await job;
     }
     if (asset.kind === "video" && !asset.previewMode && !(preparation?.stage === "waveform" && existsSync(proxy))) {
@@ -669,6 +655,8 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     // Word alignment follows. In the same lane, the lane waits for it rather than starting another recording.
     const lane = whisperLane(ctx, provider.separateWhisperLane);
     const result = saved.aligned ?? (provider.name === "whispercpp" ? await lane.run(work, signal, transcribe, { more: lane === audioLane(ctx) }) : await transcribe());
+    const configuredLanguage = ctx.settings().transcription.language;
+    const language = result.language || (configuredLanguage === "auto" ? undefined : configuredLanguage);
     // A rerun keeps the readable transcript, including a speaker-labelled revision or an older unlinked one,
     // until the replacement is complete. A first transcript can publish its words while alignment runs.
     const previous = ctx.db.prepare(`SELECT t.id, json_extract(t.json, '$.aligning') IS NULL AS complete
@@ -684,12 +672,12 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
       signal.throwIfAborted();
       if (ctx.repos.tasks.get(task.id)?.state !== "running") return null;
       if (aligning) {
-        saved.saveAlignment(aligning, { segments, language: result.language, modelLabel: model }, replacing ? undefined : id);
+        saved.saveAlignment(aligning, { segments, language, modelLabel: model }, replacing ? undefined : id);
         if (replacing) return null; // The previous completed transcript remains the readable one.
       }
       const savedAt = now();
-      const transcript: Transcript = { id, mediaId: asset.id, language: result.language, provider: provider.name, localModel: provider.localModel, modelLabel: model, segments,
-        createdAt: savedAt, ...(aligning && { aligning: { through: aligning.through } }) };
+      const transcript: Transcript = { id, mediaId: asset.id, language, provider: provider.name, localModel: provider.localModel, modelLabel: model, segments,
+        createdAt: savedAt, ...(aligning ? { aligning: { through: aligning.through } } : alignsLanguage(language) && { alignment: alignmentVersion }) };
       ctx.repos.transcripts.put({ ...transcript, projectId });
       const current = ctx.repos.projects.getMedia(asset.id);
       let speakerSource: MediaAsset | undefined;
@@ -710,7 +698,7 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     // that takes several times as long as Whisper, so the words are saved first: a dialogue pass reads them and its
     // scan pages run while alignment goes on. `aligning.through` says how far the times are final, and whatever
     // turns a word into a cut edge waits for alignment to pass it.
-    const alignable = alignsLanguage(result.language) && result.segments.some(s => s.words.length);
+    const alignable = alignsLanguage(language) && result.segments.some(s => s.words.length);
     // Whisper kept the lane for alignment, which this recording won't have: its speakers needn't wait out the hold.
     if (!alignable && provider.name === "whispercpp") lane.release(work);
     if (alignable && !saved.alignment) early = !!save(result.segments, { through: 0, nextWord: 0, fraction: 0 });
@@ -733,8 +721,8 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
       try {
         if (!wav) await extractWav(src, full, { signal });
         return await fillTranscriptHoles({ wav: full, segments, tmpDir: ctx.paths.tmp, signal, log: message => ctx.log(`${message} (${asset.id})`),
-          read: provider.name !== "whispercpp" ? undefined : async laid => (await lane.run(work, signal, () => provider.transcribe({ path: laid, dialogueWindow: {}, tmpDir: ctx.paths.tmp, signal, language: result.language }))).segments,
-          align: async found => alignTranscript(ctx, { source: src, wav: full, language: result.language, segments: found, signal,
+          read: provider.name !== "whispercpp" ? undefined : async laid => (await lane.run(work, signal, () => provider.transcribe({ path: laid, dialogueWindow: {}, tmpDir: ctx.paths.tmp, signal, language }))).segments,
+          align: async found => alignTranscript(ctx, { source: src, wav: full, language, segments: found, signal,
             emissions: await emissionStore(ctx, projectId, src), work: { mediaId: asset.id, kind: "alignment" } }) });
       } catch (error) {
         signal.throwIfAborted();
@@ -744,7 +732,7 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     };
     let publishedThrough = saved.alignment?.through ?? 0;
     const finishedAlignment = saved.alignment?.complete;
-    const aligned = finishedAlignment ? result.segments : await alignTranscript(ctx, { source: src, wav, language: result.language, segments: result.segments, signal, resume: saved.alignment,
+    const aligned = finishedAlignment ? result.segments : await alignTranscript(ctx, { source: src, wav, language, segments: result.segments, signal, resume: saved.alignment,
       emissions: alignable ? await emissionStore(ctx, projectId, src) : undefined, hold: speakersFirst,
       work: { mediaId: asset.id, kind: "alignment" }, onProgress: progress.aligning,
       onTurn: (soFar, through, cursor) => {

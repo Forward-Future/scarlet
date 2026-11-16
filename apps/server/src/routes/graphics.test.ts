@@ -7,8 +7,10 @@ import { findChrome, hasChrome } from "@scarlet/render";
 import { createProject, type Project } from "@scarlet/timeline";
 import type { GraphicRenderResponse, GraphicTemplate, GraphicTemplateSummary, Task, TaskAttachment, TaskPrompt } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
+import { seedStockTransitions } from "../services/graphics.js";
 import { accessToken } from "../auth.js";
-import { createTask } from "../services/tasks.js";
+import { createTask, saveTask } from "../services/tasks.js";
+import { createSkill } from "../services/skills.js";
 import { purgeTrash } from "../services/trash.js";
 
 let directory: string;
@@ -36,6 +38,10 @@ async function attach(name: string, content: string, type = "text/plain") {
   const res = await api("POST", `/projects/${project.id}/attachments`, form);
   expect(res.status).toBe(201);
   return (await res.json() as { attachment: TaskAttachment }).attachment;
+}
+/** The library's graphic templates, without the transitions every library starts with. */
+async function graphics() {
+  return (await (await api("GET", "/templates")).json() as { templates: GraphicTemplateSummary[] }).templates.filter(t => t.kind === "graphic");
 }
 async function prompt(task: Task) {
   return (await (await api("GET", `/tasks/${task.id}/prompt`)).json() as TaskPrompt).systemPrompt;
@@ -171,9 +177,9 @@ describe.skipIf(!hasChrome())("graphics and templates", () => {
       html: LOWER_THIRD, sample: { Name: "Ada Lovelace", Title: "Guest" }, projectId: project.id, width: 320, height: 180, duration: 1 });
     expect(saved.status).toBe(201);
     const { template } = await saved.json() as { template: GraphicTemplate };
-    const list = await (await api("GET", "/templates")).json() as { templates: GraphicTemplateSummary[] };
-    expect(list.templates).toEqual([expect.objectContaining({ id: template.id, name: "lower-third", fields: ["Name", "Title"], previewVersion: template.previewVersion })]);
-    expect(list.templates[0]).not.toHaveProperty("html");
+    const list = await graphics();
+    expect(list).toEqual([expect.objectContaining({ id: template.id, kind: "graphic", name: "lower-third", fields: ["Name", "Title"], previewVersion: template.previewVersion })]);
+    expect(list[0]).not.toHaveProperty("html");
     const preview = await api("GET", `/templates/${template.id}/preview`);
     expect(preview.headers.get("content-type")).toBe("image/png");
     const png = Buffer.from(await preview.arrayBuffer());
@@ -198,10 +204,70 @@ describe.skipIf(!hasChrome())("graphics and templates", () => {
     const again = await (await api("POST", "/templates", { name: "lower-third", title: "Lower third v2", fields: ["Name"], html: "<b style='color:#fff'>{{Name}}</b>", sample: { Name: "Ada" } })).json() as { template: GraphicTemplate };
     expect(again.template.id).toBe(template.id);
     expect(again.template.previewVersion).not.toBe(template.previewVersion);
-    expect((await (await api("GET", "/templates")).json() as { templates: unknown[] }).templates).toHaveLength(1);
+    expect(await graphics()).toHaveLength(1);
 
     expect((await api("DELETE", `/templates/${template.id}`)).status).toBe(200);
     expect((await api("GET", `/templates/${template.id}/preview`)).status).toBe(404);
     expect(existsSync(workspace.ctx.paths.template(template.id))).toBe(false);
+  });
+});
+
+describe("what a run may change", () => {
+  it("keeps a skill's run, and a run that has ended, from adding attachments or deleting a template", async () => {
+    const editor = { type: "human", name: "Ed" } as const;
+    const skill = createTask(workspace.ctx, { projectId: project.id, kind: "skill_edit", agent: "claude", instruction: "Shorter pauses", state: "running", createdBy: editor });
+    const edit = createTask(workspace.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Tighten it", state: "running", createdBy: editor });
+    const startedAt = new Date().toISOString();
+    for (const task of [skill, edit]) saveTask(workspace.ctx, { ...task, startedAt });
+    const as = (taskId: string, started: string) => ({ "X-Scarlet-Task": taskId, "X-Scarlet-Task-Started-At": started });
+    const send = (method: string, path: string, headers: Record<string, string>, body?: FormData) =>
+      workspace.app.request("/api" + path, { method, body, headers: { ...auth(), ...headers } });
+    const form = () => { const f = new FormData(); f.append("file", new Blob(["notes"], { type: "text/plain" }), "notes.txt"); return f; };
+    const swipe = (await (await api("GET", "/templates")).json() as { templates: GraphicTemplateSummary[] }).templates.find(t => t.name === "swipe")!;
+
+    expect((await send("POST", `/projects/${project.id}/attachments`, as(skill.id, startedAt), form())).status).toBe(403);
+    expect((await send("POST", `/projects/${project.id}/attachments`, as(edit.id, "2020-01-01T00:00:00.000Z"), form())).status).toBe(409);
+    expect((await send("DELETE", `/templates/${swipe.id}`, as(skill.id, startedAt))).status).toBe(403);
+    expect((await api("GET", `/templates/${swipe.id}`)).status).toBe(200);
+    // The edit's own live run, and the editor, may.
+    expect((await send("POST", `/projects/${project.id}/attachments`, as(edit.id, startedAt), form())).status).toBe(201);
+    expect((await send("DELETE", `/templates/${swipe.id}`, as(edit.id, startedAt))).status).toBe(200);
+    expect((await send("POST", `/projects/${project.id}/attachments`, {}, form())).status).toBe(201);
+  });
+});
+
+describe("transition templates", () => {
+  const transitions = async () => (await (await api("GET", "/templates")).json() as { templates: GraphicTemplateSummary[] }).templates.filter(t => t.kind === "transition");
+
+  it("starts every library with a few, and one the editor deletes stays deleted", async () => {
+    expect((await transitions()).map(t => [t.name, t.transition?.type])).toEqual([
+      ["dip-to-black", "dip"], ["dissolve", "dissolve"], ["slide", "slide"], ["swipe", "push"], ["whip-pan", "whip"]]);
+    const swipe = (await transitions()).find(t => t.name === "swipe")!;
+    expect((await api("DELETE", `/templates/${swipe.id}`)).status).toBe(200);
+    expect(seedStockTransitions(workspace.ctx)).toBe(0);
+    expect((await transitions()).map(t => t.name)).not.toContain("swipe");
+  });
+
+  it("saves one with no page, names it in a request's prompt, and won't draw it as a graphic", async () => {
+    const res = await api("POST", "/templates", { name: "push-up", title: "Push up", transition: { type: "push", duration: 0.5, direction: "up" } });
+    expect(res.status).toBe(201);
+    const { template } = await res.json() as { template: GraphicTemplate };
+    expect(template).toMatchObject({ kind: "transition", html: "", fields: [], transition: { type: "push", duration: 0.5, direction: "up" } });
+    expect((await api("POST", "/templates", { name: "both", title: "Both", html: "<p></p>", transition: { type: "dissolve", duration: 1 } })).status).toBe(400);
+    expect((await api("POST", "/templates", { name: "neither", title: "Neither" })).status).toBe(400);
+    const task = createTask(workspace.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "$push-up into every chapter", createdBy: { type: "human", name: "Ed" } });
+    expect(await prompt(task)).toContain(`- The editor picked the transition template $push-up: "Push up" (template ${template.id}), a push over 0.5 s.`);
+    const form = new FormData();
+    form.append("options", JSON.stringify({ template: "push-up" }));
+    const drawn = await api("POST", `/projects/${project.id}/graphics`, form);
+    expect(drawn.status).toBe(400);
+    expect(await drawn.text()).toContain("$push-up is a transition: put it on a join with timeline_transition.");
+  });
+
+  it("names a transition a chosen skill uses, as the skill names it", async () => {
+    const skill = createSkill(workspace.ctx, null, { name: "frame-screen", description: "Frame the screen.", content: "Every time I go to the screen recording, use $swipe.\n" });
+    const task = createTask(workspace.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Frame the demo", createdBy: { type: "human", name: "Ed" },
+      context: { skillIds: [skill.id] } });
+    expect(await prompt(task)).toMatch(/- The skill frame-screen names the transition template \$swipe: "Swipe" \(template tpl_\w+\), a push over 0\.4 s\./);
   });
 });

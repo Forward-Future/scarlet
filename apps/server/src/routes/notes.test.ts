@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import { createProject, timelineFromKeepRanges, type Note, type Project } from "
 import type { Task } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken, localUser } from "../auth.js";
+import { sweepLeftovers } from "../services/leftovers.js";
 import { createNote } from "../services/notes.js";
 import { storeVersion } from "../services/timeline.js";
 import { OpenAIProvider } from "../transcribe/openai.js";
@@ -96,6 +97,33 @@ it("refuses a voice request it has no words for, and still keeps a voice note th
   expect(heard.status).toBe(201);
   expect(heard.body.task).toMatchObject({ kind: "note", agent: "claude", instruction: "Trim the intro" });
   expect(saved()).toEqual({ notes: 3, tasks: 1 });
+});
+
+it("keeps every saved note's recording through the next start's sweep, in the Trash too, and removes one no note in its project names", async () => {
+  const kept = (await voice()).body.note!;
+  app.ctx.env.openaiKey = "unused-fixture";
+  app.ctx.repos.settings.update({ transcription: { provider: "openai" } });
+  const transcribe = vi.spyOn(OpenAIProvider.prototype, "transcribe").mockRejectedValue(new Error("upstream said no"));
+  const failed = (await voice()).body.note!;
+  transcribe.mockResolvedValue({ segments: [{ start: 0, end: 1, text: "Trim the intro" }] });
+  const heard = (await voice("claude")).body.note!;
+  const named = [kept, failed, heard].map(note => note.audioPath!).sort();
+  // A recording no note names, and another project's file under the name of this one's recording.
+  const orphan = join(app.ctx.paths.notes(project.id), "note_orphan0000000.wav");
+  await writeFile(orphan, "fixture");
+  const other = app.ctx.repos.projects.insert(createProject("Other fixture"));
+  app.ctx.paths.ensureProject(other.id);
+  const borrowed = join(app.ctx.paths.notes(other.id), kept.audioPath!);
+  await writeFile(borrowed, "fixture");
+  const later = Date.now() + 2 * 86_400_000;
+  expect(sweepLeftovers(app.ctx, later)).toBe(2);
+  expect((await recordings()).sort()).toEqual(named);
+  expect(existsSync(orphan)).toBe(false);
+  expect(existsSync(borrowed)).toBe(false);
+  // A project in the Trash keeps its notes until it is removed for good, so their recordings stay too.
+  await trash();
+  expect(sweepLeftovers(app.ctx, later)).toBe(0);
+  expect((await recordings()).sort()).toEqual(named);
 });
 
 it.each(["dictated", "recorded"] as const)("stops cleaning up a %s note once its request is cancelled, and keeps the note as spoken", async kind => {

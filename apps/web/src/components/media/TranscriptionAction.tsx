@@ -6,7 +6,7 @@ import { transcriptionPaused, transcriptionProgressLabel, transcriptionTasks } f
 import { isPreparingMedia } from "../../lib/upload";
 import { absTime } from "../../lib/format";
 import { useProjectStore } from "../../stores/project";
-import { Chip, ConfirmDialog, Icon, Spinner } from "../ui/primitives";
+import { ConfirmDialog, Icon } from "../ui/primitives";
 import { MediaStatusLine } from "./MediaStatusLine";
 
 const unknownNotice = "Audio may be sent to OpenAI, depending on your transcription settings.";
@@ -67,11 +67,6 @@ export function ImportTranscriptionNotice({ policy }: { policy: ReturnType<typeo
       : <button type="button" className="simple-link" disabled={fixing} onClick={() => void turnOnLocal()}>{fix.label}</button>}</>}
     {fixError && <span role="alert" className="block text-bad">{fixError}</span>}
   </p>;
-}
-
-/** Older servers can still accept transcription requests when the capability is unknown. */
-export function useTranscriptionAvailability() {
-  return useImportTranscription().available;
 }
 
 function useTranscriptionRun(asset: MediaAsset) {
@@ -173,34 +168,17 @@ export function TranscriptLine({ asset, available, cloud = false }: { asset: Med
   </MediaStatusLine>;
 }
 
-/** The transcript pane's way to start a transcription. A Media row uses `TranscriptLine`. */
-export function TranscriptionAction({ asset, available }: { asset: MediaAsset; available?: boolean | null }) {
-  const transcribe = useProjectStore((s) => s.transcribe);
-  const [error, setError] = useState("");
-  const [starting, setStarting] = useState(false);
-  const { running, latest, paused, mediaPaused } = useTranscriptionRun(asset);
-  if (starting || running) {
-    const progress = transcriptionProgressLabel(running?.progress);
-    return <Chip tone="info"><Spinner className="size-2.5" /> Transcribing{progress && ` · ${progress}`}</Chip>;
-  }
-  if (isPreparingMedia(asset)) return null;
-  if (paused) return <Chip>Transcription paused</Chip>;
-  if (available === false) return <Link to="/settings" className="btn-ghost">Set up transcription</Link>;
-  async function start() {
-    if (starting) return;
-    setError("");
-    setStarting(true);
-    try {
-      await transcribe(asset.id);
-    } catch (error) {
-      setError(errorMessage(error));
-    } finally {
-      setStarting(false);
-    }
-  }
-  const failure = error || (latest?.state === "failed" ? latest.error || "Transcription failed." : "");
-  return <div className="flex max-w-full flex-wrap items-center gap-2">
-    {failure && <span role="alert" className="text-bad text-[12px] break-words">{failure}</span>}
-    <button className="btn-ghost" disabled={available === undefined || mediaPaused} title={mediaPaused ? "Resume caching to transcribe this file." : undefined} onClick={() => void start()}>{failure ? "Retry transcription" : "Transcribe"}</button>
-  </div>;
+/**
+ * How a file's transcript stands in the Transcript column, in a few plain words: the column offers nothing to press
+ * for it. Media is where a transcription is started or retried (`TranscriptLine`).
+ */
+export function TranscriptionStatus({ asset }: { asset: MediaAsset }) {
+  const { running, latest, paused } = useTranscriptionRun(asset);
+  const progress = transcriptionProgressLabel(running?.progress);
+  const text = running ? running.progress?.stage === "queued" ? "Waiting to transcribe" : progress ? `Transcribing ${progress}` : "Transcribing…"
+    : isPreparingMedia(asset) ? "Adding"
+    : paused ? "Transcription paused"
+    : latest?.state === "failed" ? "Transcription stopped"
+    : "No transcript";
+  return <span>{text}</span>;
 }

@@ -6,7 +6,7 @@
  */
 import { dialogueCommand, AGENT_LABEL, beginRevision, buildThreads, restoredReviewState, threadRevision, threadTimeline, countReviewDecisions, fullRenderContext, taskNeedsTranscripts, taskRecoveryAction, splitAgentTarget, ScarletApiError, SkillSlug, isAsideTask, isSkillEdit, ReviseLearningRequest } from "@scarlet/shared";
 import { appliedCutReview, appliedReviewChange, applyReviewRemovals, makeStagedCutMapper, contentHash, planCutReview, reviewedTimeline } from "@scarlet/timeline";
-import type { ApproveLearningRequest, EditSkillRequest, Learning, RunChoice, UsageGroupBy, UsageResponse, UsageTotals } from "@scarlet/shared";
+import type { ApproveLearningRequest, EditSkillRequest, Learning, MakeShortsRequest, RunChoice, UsageGroupBy, UsageResponse, UsageTotals } from "@scarlet/shared";
 import type {
   AgentHost,
   AgentId,
@@ -32,8 +32,8 @@ import type {
   WsEvent,
 } from "@scarlet/shared";
 import type { Author, Change, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript } from "@scarlet/timeline";
-import { planRevert, toOtio, applyOps, canApproveSpots, clipEnd, withHandles, describeDiff, diffTimelines, emptyTimeline, formatTimecode, newId, planApply, timelineDuration, ASPECT_PRESETS, TimelineOp } from "@scarlet/timeline";
-import type { ActivityEntry, ApproveResponse, TrashedProject } from "@scarlet/shared";
+import { planRevert, toOtio, toFcpxml, usedMedia, handoffFileNames, handoffLosses, handoffReadMe, toSrt, captionTracks, exactRate, type HandoffSource, applyOps, canApproveSpots, clipEnd, withHandles, describeDiff, diffTimelines, emptyTimeline, formatTimecode, newId, planApply, timelineDuration, ASPECT_PRESETS, TimelineOp } from "@scarlet/timeline";
+import type { ActivityEntry, ApproveResponse, HandoffFile, HandoffResponse, TrashedProject } from "@scarlet/shared";
 import type { ScarletApi } from "../api";
 import { buildDb, mc, SAMPLE_TRANSCRIPTION_MODEL, templatePreviewSvg, type MockDb } from "./fixtures";
 import sampleWaveform from "./sample-waveform.json";
@@ -231,12 +231,33 @@ export class MockClient implements ScarletApi {
     return { completedThreads };
   }
 
+  /** As the engine does, without copying files: each short is a project on the long video's footage and finished edit. */
+  async makeShorts(id: string, body: MakeShortsRequest): Promise<{ projects: Project[]; task: Task }> {
+    this.requireAuth();
+    const source = this.projectById(id);
+    const dims = ASPECT_PRESETS[body.aspect]!;
+    const projects: Project[] = [];
+    for (let index = 1; index <= body.count; index++) {
+      const { project } = await this.createProject({ name: `Short ${index} of ${body.count}`, settings: { ...source.settings, ...dims, aspect: body.aspect } });
+      Object.assign(project, { head: source.head, media: source.media, source: { projectId: source.id, name: source.name, notice: true } });
+      this.db.media[project.id] = this.db.media[source.id] ?? [];
+      this.db.versions[project.id] = (this.db.versions[source.id] ?? []).filter(v => v.version === source.head);
+      Object.assign(this.db.summaries[project.id]!, { head: source.head, mediaCount: source.media.length, source: project.source });
+      projects.push(project);
+    }
+    const task = this.makeTask(projects[0]!.id, { kind: "edit", agent: body.agent, model: body.model, effort: body.effort, serviceTier: body.serviceTier,
+      instruction: `Make ${body.count === 1 ? "a vertical short" : `up to ${body.count} vertical shorts, each`} under ${body.maxSeconds} s${body.captions ? "" : ", without captions"}.`,
+      context: { short: { index: 1, count: body.count, sourceProjectId: source.id, sourceName: source.name, sourceVersion: source.head ?? "", aspect: body.aspect,
+        maxSeconds: body.maxSeconds, captions: body.captions, projectIds: projects.map(p => p.id) } } });
+    return this.latency({ projects, task }, 400);
+  }
   async updateProject(id: string, body: Record<string, unknown>): Promise<{ project: Project }> {
     this.requireAuth();
     const project = this.projectById(id);
     const s = this.summary(id);
     const expected = body.expectedFormat as Pick<Project, "head" | "settings"> | undefined;
     if (expected && (project.head !== expected.head || JSON.stringify(project.settings) !== JSON.stringify(expected.settings))) return { project };
+    if (body.sourceNotice === false && project.source) project.source = { ...project.source, notice: undefined };
     if (typeof body.mediaPaused === "boolean") project.mediaPaused = body.mediaPaused;
     if (typeof body.archived === "boolean") {
       project.archived = body.archived;
@@ -528,6 +549,31 @@ export class MockClient implements ScarletApi {
     const tl = this.db.timelines[version === "head" ? (project.head ?? "") : version];
     const otio = tl ? toOtio({ ...project, media: this.db.media[projectId] ?? project.media }, tl, { mediaRoot: "C:/scarlet/media" }) : {};
     return `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(otio, null, 2))}`;
+  }
+
+  /** The demo's folder for another app: real timeline files, with the sample video standing in for every clip. */
+  async handoff(projectId: string, version: string, folder: string): Promise<HandoffResponse> {
+    const stored = this.projectById(projectId);
+    const project = { ...stored, media: this.db.media[projectId] ?? stored.media };
+    const tl = this.db.timelines[version === "head" ? (project.head ?? "") : version];
+    if (!tl) throw notFound("Version");
+    const base = folder.split(/[\\/]/).filter(Boolean).pop() || project.name;
+    const assets = usedMedia(project, tl);
+    const names = handoffFileNames(assets.map(a => a.name));
+    const sources = new Map<string, HandoffSource>(assets.map((a, i) => [a.id, {
+      url: `file://${encodeURI(`${folder}/Media/${names[i]}`)}`, fileName: names[i]!, hasVideo: a.kind !== "audio", hasAudio: a.hasAudio !== false,
+      rate: a.fps ? exactRate(a.fps).rate : undefined, width: a.width, height: a.height, duration: a.duration ?? 0,
+    }]));
+    const captions = captionTracks(tl).map(({ cues }) => ({ path: `${base} captions.srt`, text: toSrt(cues) })).slice(0, 1);
+    const files: HandoffFile[] = [
+      { path: `${base}.fcpxml`, text: toFcpxml(project, tl, sources) },
+      { path: `${base}.otio`, text: JSON.stringify(toOtio(project, tl, { sources }), null, 2) },
+      ...captions,
+      { path: "Read me.txt", text: handoffReadMe({ projectName: project.name, timelineFiles: { fcpxml: `${base}.fcpxml`, otio: `${base}.otio` },
+        captionFiles: captions.map(c => c.path), losses: handoffLosses(project, tl, sources), warnings: [] }) },
+      ...names.map(name => ({ path: `Media/${name}`, source: "/sample.mp4", size: 0 })),
+    ];
+    return this.latency({ files, mediaBytes: 0 }, 250);
   }
 
   // --- changes -------------------------------------------------------------------------
@@ -1279,7 +1325,7 @@ export class MockClient implements ScarletApi {
       current.version += 1;
       current.updatedAt = now();
       (this.db.skillVersions[skillId] ??= []).push({ version: current.version, content: current.content,
-        author: { type: "agent", id: task.agent, name: AGENT_NAMES[task.agent], model: task.model }, createdAt: current.updatedAt });
+        author: { type: "agent", id: task.agent, name: AGENT_NAMES[task.agent], model: task.model }, createdAt: current.updatedAt, note: body.prompt.trim(), from: "request" });
       this.emit({ type: "skill.updated", skill: { ...current } });
       this.updateTask(task, { state: "done", resultSkillId: skillId, summary: "Added it as a section at the end of the instructions.", finishedAt: now() });
     })();
@@ -1316,7 +1362,7 @@ export class MockClient implements ScarletApi {
       skill.version += 1;
       skill.updatedAt = now();
       (this.db.skillVersions[skill.id] ??= []).push({ version: skill.version, content: skill.content,
-        author: { type: "agent", id: "claude", name: AGENT_NAMES.claude }, createdAt: skill.updatedAt });
+        author: { type: "agent", id: "claude", name: AGENT_NAMES.claude }, createdAt: skill.updatedAt, note: learning.rule, from: "learning" });
       this.emit({ type: "skill.updated", skill: { ...skill } });
       learning.state = "saved";
       this.emit({ type: "learning.updated", projectId, learning: { ...learning } });
@@ -1349,7 +1395,8 @@ export class MockClient implements ScarletApi {
     Object.assign(skill, body, { scope: "team", projectId: null, ownerId: null, agents: [], updatedAt: now() });
     if (contentChanged) {
       skill.version += 1;
-      (this.db.skillVersions[skillId] ??= []).push({ version: skill.version, content: skill.content, author: this.human(), createdAt: now() });
+      // The engine names a save by the parts it changed; the demo says only that the editor changed it.
+      (this.db.skillVersions[skillId] ??= []).push({ version: skill.version, content: skill.content, author: this.human(), createdAt: now(), note: "Changed the skill" });
     }
     this.emit({ type: "skill.updated", skill: { ...skill } });
     return this.latency({ skill }, 200);
@@ -1416,7 +1463,7 @@ export class MockClient implements ScarletApi {
   async updateSettings(body: Partial<ServerSettings>): Promise<{ settings: ServerSettings }> {
     this.requireAuth();
     const previous = this.db.settings.render;
-    this.db.settings = { ...this.db.settings, ...body, editingTools: { ...this.db.settings.editingTools, ...body.editingTools }, transcription: { ...this.db.settings.transcription, ...body.transcription }, noteCleanup: { ...this.db.settings.noteCleanup, ...body.noteCleanup }, render: { ...this.db.settings.render, ...body.render } };
+    this.db.settings = { ...this.db.settings, ...body, transcription: { ...this.db.settings.transcription, ...body.transcription }, noteCleanup: { ...this.db.settings.noteCleanup, ...body.noteCleanup }, render: { ...this.db.settings.render, ...body.render } };
     if (previous.hwaccel !== this.db.settings.render.hwaccel || previous.previewHeight !== this.db.settings.render.previewHeight) this.emit({ type: "render.settings.updated" });
     return this.latency({ settings: this.db.settings }, 250);
   }

@@ -27,6 +27,7 @@ import { OpenAIProvider } from "./transcribe/openai.js";
 import { importTranscriptionPolicy } from "./transcribe/index.js";
 import { WhisperCppProvider } from "./transcribe/whispercpp.js";
 import { speakerAnalysisVersion } from "./transcribe/speakerLabels.js";
+import { alignmentVersion } from "./transcribe/wordAlign.js";
 import { LocalWhisperModel } from "./transcribe/localModel.js";
 import { audioWorker } from "./transcribe/audioWorker.js";
 import { recoverIngest, transcribeMedia } from "./services/ingest.js";
@@ -786,6 +787,28 @@ it("finishes a legacy transcript left part-aligned without recognizing its audio
     expect(t.reader).not.toHaveBeenCalled();
     expect(t.linked()).toMatchObject({ segments: [{ id: "first", words: [{ start: 10.1 }] }, { id: "second", words: [{ start: 400.1 }] }] });
     expect(t.linked()?.aligning).toBeUndefined();
+  } finally { t.restore(); }
+});
+
+it("places an older transcript's words again with the current aligner, keeping its words and speakers, and leaves a current one alone", async () => {
+  const t = twoTurnTranscription();
+  const old = t.ctx.repos.transcripts.put({ id: "older", projectId: project.id, mediaId: t.media.id, language: "en", provider: "whispercpp",
+    localModel: "whispercpp", createdAt: "2020-01-01T00:00:00.000Z", speakerAnalysis: { version: speakerAnalysisVersion, count: 1 }, segments: [
+      { id: "first", text: "hello again", start: 10, end: 12, words: [{ text: "hello", start: 10.1, end: 10.5, detectedSpeaker: 1 }, { text: "again", start: 11, end: 11.4, detectedSpeaker: 1 }] },
+    ] });
+  t.ctx.repos.projects.putMedia(project.id, { ...t.media, transcriptId: old.id }, "ready");
+  try {
+    const realign = () => api("POST", `${projectsPath()}/media/${t.media.id}/realign`, {});
+    const first = await realign();
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({ state: "realigned", words: 2, moved: 2 });
+    const now = t.linked()!;
+    expect(now.id).not.toBe(old.id);
+    expect(now).toMatchObject({ alignment: alignmentVersion, speakerAnalysis: old.speakerAnalysis,
+      segments: [{ id: "first", words: [{ text: "hello", start: 10.2, detectedSpeaker: 1 }, { text: "again", start: 11.1, detectedSpeaker: 1 }] }] });
+    expect(t.reader).not.toHaveBeenCalled();
+    expect(await (await realign()).json()).toEqual({ state: "current" });
+    expect(t.linked()!.id).toBe(now.id);
   } finally { t.restore(); }
 });
 
@@ -1938,6 +1961,49 @@ it("keeps the voice roles saved on a recording while its import is still being f
     expect(speakerAnalysis).toHaveBeenCalledWith(ctx, project.id, expect.objectContaining({ voiceRoles: { me: 1, other: 2 } }));
     expect(ctx.repos.projects.getMedia(media.id)).toMatchObject({ status: "ready", hash: await originalHash(source), voiceRoles: { me: 1, other: 2 } });
   } finally { finish(); provider.mockRestore(); }
+});
+
+it("lets go of a paused project's import waiting to be fingerprinted, and keeps fingerprints in turn", async () => {
+  const { ctx } = workspace;
+  const other = ctx.repos.projects.insert(createProject("Other"));
+  const originalHash = ctx.render.hashFile;
+  let finish!: () => void;
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  const hash = vi.spyOn(ctx.render, "hashFile").mockImplementation(async (...args) => { await gate; return originalHash(...args); });
+  vi.spyOn(ctx.render, "probeMedia").mockResolvedValue({ kind: "audio", duration: 10, hasAudio: true });
+  const add = async (projectId: string, name: string) => {
+    const source = join(directory, name);
+    writeFileSync(source, name);
+    const result = await api("POST", `/projects/${projectId}/media/import`, { path: source });
+    expect(result.status).toBe(201);
+    return (await result.json()).media as { id: string; path: string };
+  };
+  const row = (id: string) => ctx.db.prepare("SELECT status, ingest_pid FROM media WHERE id = ?").get(id);
+  const hashed = () => hash.mock.calls.map(([file]) => basename(file));
+  const activity = async () => ((await (await api("GET", "/projects")).json()).projects as Array<{ id: string; activity?: unknown }>)
+    .find(p => p.id === other.id)?.activity;
+  try {
+    const x = await add(project.id, "x.wav");
+    await vi.waitFor(() => expect(hashed()).toEqual([x.path]));
+    const y = await add(other.id, "y.wav");
+    const z = await add(project.id, "z.wav");
+    await api("PATCH", `/projects/${other.id}`, { mediaPaused: true });
+    // y waits behind x, and lets go at once rather than when x is fingerprinted.
+    await vi.waitFor(async () => {
+      expect(row(y.id)).toEqual({ status: "ingesting", ingest_pid: null });
+      expect(await activity()).toEqual([{ kind: "importing", count: 1, paused: true }]);
+    });
+    // z, queued behind y, still waits for x.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(hashed()).toEqual([x.path]);
+    finish();
+    await Promise.all(ctx.pending);
+    expect(hashed()).toEqual([x.path, z.path]);
+    expect([row(x.id), row(z.id)]).toMatchObject([{ status: "ready" }, { status: "ready" }]);
+    await api("PATCH", `/projects/${other.id}`, { mediaPaused: false });
+    await vi.waitFor(() => expect(row(y.id)).toMatchObject({ status: "ready" }));
+    expect(hashed()).toEqual([x.path, z.path, y.path]);
+  } finally { finish(); }
 });
 
 it("prepares a complete proxy for imported footage only when the GPU can encode it", async () => {
@@ -3385,10 +3451,12 @@ it.each(["a1", "alternate"])("requires an audio check of the version that plays,
   expect(await (await check(version, keep)).json()).toMatchObject({ heard: 2, remaining: 1 });
   const repaired = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, description: "Keep the second go",
     ops: [{ op: "rippleDelete", start: .5, end: 1 }] }).change.toVersion;
-  expect((await check(version)).status).toBe(409);
+  // Kept repeats are decisions about the version they were heard on, so a check that keeps needs that version.
+  expect((await check(version, keep)).status).toBe(409);
   expect((await finish()).state).toBe("queued");
   await claim();
-  expect(await (await check(repaired)).json()).toMatchObject({ heard: 1, remaining: 0, staged: 0 });
+  // A check that keeps nothing reads the edit as it is now and names the version it was given.
+  expect(await (await check(version)).json()).toMatchObject({ version: repaired, readInsteadOf: version, heard: 1, remaining: 0, staged: 0 });
   const proposed = (await (await api("POST", projectsPath() + "/dialogue-cuts", { taskId: pass.id, fromVersion: repaired, description: "Shorten the tail",
     cuts: [{ start: 4, end: 5, review: true, reason: "Check the final beat." }] })).json()).changes[0] as Change;
   expect((await finish()).state).toBe("done");
@@ -3926,6 +3994,35 @@ it("keeps the editor's calls through the pass's next part and applies them as so
   const head = ctx.repos.projects.get(project.id)!.head!;
   expect(head).toBe(applied.appliedVersion);
   expect(timelineDuration(ctx.repos.versions.get(project.id, head)!.timeline)).toBeCloseTo(17);
+});
+
+it("applies a pass when its run finishes with every staged cut settled by Scarlet, and leaves one with a call for the editor", async () => {
+  const { ctx } = workspace;
+  vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "mic", path: "mic.wav", kind: "audio", duration: 20, hasAudio: true }, "ready");
+  const pass = async (verdicts: Array<"cut" | "keep" | "ask">) => {
+    const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: { type: "human", name: "Editor" } });
+    const head = ctx.repos.projects.get(project.id)!.head;
+    const base = head ?? proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: task.id, description: "Assemble",
+      ops: [{ op: "addClip", trackId: "a1", clip: { id: "raw", kind: "media", mediaId: "mic", timelineIn: 0, sourceIn: 0, sourceOut: 20 } }] }).change.toVersion;
+    const res = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: base, description: "Part",
+      cuts: [{ start: 2, end: 3, review: true, reason: "a held restart" }, { start: 5, end: 6, review: true, reason: "a held aside" }] });
+    expect(res.status).toBe(201);
+    const [staged] = (await res.json() as { changes: Change[] }).changes;
+    expect((await api("POST", `/changes/${staged!.id}/cut-assessments`, { fromVersion: staged!.fromVersion, toVersion: staged!.toVersion,
+      assessments: verdicts.map((verdict, index) => ({ index, start: 2 + 3 * index, end: 3 + 3 * index, verdict, reason: `Cut ${index}: ${verdict}.` })) })).status).toBe(200);
+    expect((await api("POST", `/tasks/${task.id}/complete`, { state: "done", summary: "Done." })).status).toBe(200);
+    return ctx.repos.changes.get(staged!.id)!;
+  };
+  // Scarlet asked about one: the pass waits for the editor.
+  const waiting = await pass(["cut", "ask"]);
+  expect(waiting.state).toBe("ready");
+  expect((await api("POST", `/changes/${waiting.id}/reject`, {})).status).toBe(200);
+  // Scarlet cut one and kept the other, and asked nothing: the pass goes in with its verdicts.
+  const applied = await pass(["cut", "keep"]);
+  expect(applied).toMatchObject({ state: "approved", restoredCuts: [1] });
+  expect(ctx.repos.projects.get(project.id)!.head).toBe(applied.appliedVersion);
+  expect(timelineDuration(ctx.repos.versions.get(project.id, applied.appliedVersion!)!.timeline)).toBeCloseTo(19);
 });
 
 /** A dialogue pass on a 20 s recording (or one of another length) that saves its cuts in parts, with the cut list, calls and notes of each part's review. */
@@ -6117,6 +6214,35 @@ it("reads an edit's range that runs past the timeline's end as reaching the end,
   expect(over.timelineEdits).toEqual([{ label: "outro", range: { start: 110, end: 120 } }]);
 });
 
+it("lets a request withdraw its own options still waiting for the editor, and nothing else", async () => {
+  const { ctx } = workspace;
+  ctx.repos.projects.putMedia(project.id, { id: "camera", name: "Interview", kind: "video", path: "camera.mov" }, "ready");
+  const base = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 120 }]), { parent: null });
+  ctx.repos.projects.update(project.id, { head: base.version });
+  const request = (instruction: string) => createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction, createdBy: { type: "human", name: "Editor" } });
+  const task = request("Give me options for a cold open");
+  const other = request("Suggest a dimmer opening");
+  const propose = (taskId: string, opacity: number, extra: object = {}) => api("POST", projectsPath() + "/changes?summary=true", { taskId,
+    intent: "alternative", description: `Opening at ${opacity}`, skipRender: true, fromVersion: base.version,
+    ops: [{ op: "updateClip", clipId: base.tracks[0]!.clips[0]!.id, patch: { opacity } }], ...extra });
+  const draft = (await (await propose(task.id, 0.9)).json()).change;
+  const elsewhere = (await (await propose(other.id, 0.7)).json()).change;
+  // Another request's option isn't this one's to take back.
+  const refused = await propose(task.id, 0.8, { withdraws: [elsewhere.id] });
+  expect(refused.status).toBe(400);
+  expect((await refused.json()).error.code).toBe("invalid_withdrawal");
+  const final = (await (await propose(task.id, 0.8, { withdraws: [draft.id] })).json()).change;
+  expect(ctx.repos.changes.get(draft.id)).toMatchObject({ state: "rejected", rejectedFrom: "ready", replacedBy: final.id });
+  expect(ctx.repos.changes.get(final.id)!.state).toBe("ready");
+  expect(ctx.repos.changes.get(elsewhere.id)!.state).toBe("ready");
+  // Once withdrawn, it can't be withdrawn again.
+  expect((await propose(task.id, 0.6, { withdraws: [draft.id] })).status).toBe(400);
+  // An option still waiting for the editor isn't in the video to flag: the run is told how to carry its doubt.
+  const flag = await api("POST", projectsPath() + "/edit-flags", { taskId: task.id, check: "Room tone rises at the join", changeId: final.id, spot: 0 });
+  expect(flag.status).toBe(400);
+  expect(await flag.json()).toMatchObject({ error: { code: "not_applied" } });
+});
+
 it("revises an edit saved with an empty list of named edits by its range, as one saved with no list", async () => {
   const { ctx } = workspace;
   ctx.repos.projects.putMedia(project.id, { id: "camera", name: "Interview", kind: "video", path: "camera.mov" }, "ready");
@@ -6249,6 +6375,12 @@ it("keeps a pass's own later save from changing footage under a cut that waits f
     description: "Trim the top", ops: [{ op: "rippleDelete", start: 2, end: 4 }] }).change;
   expect(elsewhere.state).toBe("approved");
   expect(ctx.repos.changes.get(staged.id)!.state).toBe("ready");
+  // Reframing the footage under a staged cut leaves it there too: passes that reframed the presenter were refused
+  // for taking away cuts they left in place (2026-11-15).
+  const reframed = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id,
+    description: "Frame the presenter closer", ops: [{ op: "updateClip", clipId: "raw", patch: { transform: { x: 0, y: 0, scale: 1.13 }, opacity: .9 } }] }).change;
+  expect(reframed.state).toBe("approved");
+  expect(ctx.repos.changes.get(staged.id)!.state).toBe("ready");
 });
 
 it("puts away a save the video had moved on from once its run has saved the work again", async () => {
@@ -6284,12 +6416,12 @@ it("records the editor's dialogue shortcut across rewords, answers, retries, not
   const guide = ctx.repos.skills.select("name = ?", ["dialogue-pass"])[0]!;
   const task = async (instruction: string, context = {}) => (await (await api("POST", projectsPath() + "/tasks",
     { agent: "codex", instruction, context })).json()).task as Task;
-  await api("PATCH", `/skills/${guide.id}`, { enabled: false });
+  await api("PUT", `/skills/${guide.id}`, { enabled: false });
   const noGuide = await task("Do /dialogue-pass now");
   expect(noGuide.context.dialogueOperation).toBe("first-cut");
   const rewordedWithoutGuide = await (await api("POST", `/tasks/${noGuide.id}/reword`, { text: "Here /tighten-pauses-here" })).json();
   expect(rewordedWithoutGuide.task.context.dialogueOperation).toBe("local-pauses");
-  await api("PATCH", `/skills/${guide.id}`, { enabled: true });
+  await api("PUT", `/skills/${guide.id}`, { enabled: true });
   const pinned = await task("Use the selected guide", { skillIds: [guide.id], dialogueOperation: "first-cut" });
   expect(pinned.context.dialogueOperation).toBe("none");
   const queued = await task("Start here /TIGHTEN-PAUSES-HERE with this pause", { skillIds: [guide.id] });
@@ -6317,11 +6449,15 @@ it("records the editor's dialogue shortcut across rewords, answers, retries, not
   const custom = await task("/tighten-pauses-here");
   expect(custom.context.dialogueOperation).toBe("none");
   const shadow = ctx.repos.skills.select("name = ?", ["tighten-pauses-here"])[0]!;
-  await api("PATCH", `/skills/${shadow.id}`, { enabled: false });
+  await api("PUT", `/skills/${shadow.id}`, { enabled: false });
   expect((await task("/tighten-pauses-here")).context.dialogueOperation).toBe("none");
   expect((await task("/dialogue-pass")).context.dialogueOperation).toBe("first-cut");
-  await api("PATCH", `/skills/${guide.id}`, { content: "# My first cut" });
+  await api("PUT", `/skills/${guide.id}`, { content: "# My first cut" });
   expect((await task("/dialogue-pass")).context.dialogueOperation).toBe("first-cut");
+  expect((await api("PUT", `/skills/${guide.id}`, { name: "my-first-pass" })).status).toBe(200);
+  expect((await task("/my-first-pass")).context.dialogueOperation).toBe("first-cut");
+  await api("PUT", `/skills/${guide.id}`, { enabled: false });
+  expect((await task("/my-first-pass")).context.dialogueOperation).toBe("none");
   await api("DELETE", `/skills/${guide.id}`);
   expect((await task("/dialogue-pass")).context.dialogueOperation).toBe("first-cut");
   await api("POST", "/skills", { name: "dialogue-pass", content: "# My different guide", scope: "team" });

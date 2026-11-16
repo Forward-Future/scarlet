@@ -16,14 +16,14 @@ import { CLASSES, FRAME_SECONDS, framesFor, planChunks } from "./ctcAlign.js";
 const MAGIC = 0x4d454353; // "SCEM"
 const VERSION = 1;
 const HEADER = 16;
-const ROW = CLASSES * 4;
+
 
 export class EmissionFile {
   readonly chunks: ReturnType<typeof planChunks>;
   readonly frames: number;
   private readonly data: number;
 
-  private constructor(private readonly handle: FileHandle, readonly samples: number, private readonly flags: Uint8Array) {
+  private constructor(private readonly handle: FileHandle, readonly samples: number, private readonly flags: Uint8Array, readonly classes: number) {
     this.chunks = planChunks(samples);
     this.frames = framesFor(samples);
     this.data = dataOffset(this.chunks.length);
@@ -33,19 +33,21 @@ export class EmissionFile {
    * Open a recording's store. With `samples` (the length of its 16 kHz decode) a missing or mismatched store is
    * created empty. Without it, null means there is nothing saved to read.
    */
-  static async open(path: string, samples?: number): Promise<EmissionFile | null> {
+  static async open(path: string, samples?: number, classes = CLASSES): Promise<EmissionFile | null> {
+    // Keep the original English store readable; a different row width also has a distinct header.
+    const version = classes === CLASSES ? VERSION : (classes << 16) | VERSION;
     for (let attempt = 0; attempt < 2; attempt++) {
       let handle: FileHandle | undefined;
       try {
         handle = await open(path, samples === undefined ? "r" : "r+");
         const head = Buffer.alloc(HEADER);
         const { bytesRead } = await handle.read(head, 0, HEADER, 0);
-        const saved = bytesRead === HEADER && head.readUInt32LE(0) === MAGIC && head.readUInt32LE(4) === VERSION ? head.readUInt32LE(8) : undefined;
+        const saved = bytesRead === HEADER && head.readUInt32LE(0) === MAGIC && head.readUInt32LE(4) === version ? head.readUInt32LE(8) : undefined;
         const count = saved === undefined ? -1 : planChunks(saved).length;
         if (saved !== undefined && head.readUInt32LE(12) === count && (samples === undefined || samples === saved)) {
           const flags = Buffer.alloc(count);
           if (count) await handle.read(flags, 0, count, HEADER);
-          const file = new EmissionFile(handle, saved, flags);
+          const file = new EmissionFile(handle, saved, flags, classes);
           handle = undefined;
           return file;
         }
@@ -59,11 +61,11 @@ export class EmissionFile {
       try {
         const head = Buffer.alloc(dataOffset(count));
         head.writeUInt32LE(MAGIC, 0);
-        head.writeUInt32LE(VERSION, 4);
+        head.writeUInt32LE(version, 4);
         head.writeUInt32LE(samples, 8);
         head.writeUInt32LE(count, 12);
         await fresh.write(head, 0, head.length, 0);
-        await fresh.truncate(head.length + framesFor(samples) * ROW);
+        await fresh.truncate(head.length + framesFor(samples) * classes * 4);
       } finally { await fresh.close(); }
     }
     throw new Error("Could not prepare the recording's alignment store.");
@@ -87,8 +89,8 @@ export class EmissionFile {
   /** Save one window's kept frames: `rows` is (keep[1] − keep[0]) × CLASSES log-probabilities. */
   async write(index: number, rows: Float32Array) {
     const [from, to] = this.chunks[index]!.keep;
-    if (rows.length !== (to - from) * CLASSES) throw new Error("Alignment window has the wrong number of frames.");
-    await this.handle.write(Buffer.from(rows.buffer, rows.byteOffset, rows.byteLength), 0, rows.byteLength, this.data + from * ROW);
+    if (rows.length !== (to - from) * this.classes) throw new Error("Alignment window has the wrong number of frames.");
+    await this.handle.write(Buffer.from(rows.buffer, rows.byteOffset, rows.byteLength), 0, rows.byteLength, this.data + from * this.classes * 4);
     // The flag says the rows can be trusted, so they reach the disk first.
     await this.handle.datasync();
     this.flags[index] = 1;
@@ -98,8 +100,8 @@ export class EmissionFile {
   /** Log-probabilities of frames [from, to). Every window holding them must be saved. */
   async read(from: number, to: number): Promise<Float32Array> {
     if (this.missing(from, to).length) throw new Error("Alignment frames were read before they were saved.");
-    const bytes = Buffer.alloc(Math.max(0, to - from) * ROW);
-    if (bytes.length) await this.handle.read(bytes, 0, bytes.length, this.data + from * ROW);
+    const bytes = Buffer.alloc(Math.max(0, to - from) * this.classes * 4);
+    if (bytes.length) await this.handle.read(bytes, 0, bytes.length, this.data + from * this.classes * 4);
     return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.length / 4);
   }
 

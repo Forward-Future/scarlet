@@ -40,6 +40,7 @@ import { INDEXED_MP4_INPUT, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, ffmpegMajor, 
 import { effectFilters, effectKind, escapeFilterPath } from "./effects.js";
 import { resolveFontFile, type FontOptions } from "./fonts.js";
 import { hasIndexedAvc, isImagePath, matchesCanvasFormat, probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
+import { motionFilters, motionOffsets, motionsIn, planTransitions, type TransitionMotion } from "./transitions.js";
 
 export interface GraphOptions extends FontOptions {
   decoder?: "videotoolbox" | "videotoolbox-hevc" | "cuda";
@@ -502,6 +503,10 @@ async function writeFilterGraph(
   const media = new Map(project.media.map((m) => [m.id, m]));
   const probes = opts.probes ?? new Map<string, ProbeResult>();
   const effectCtx = { mediaRoot: opts.mediaRoot, warn };
+  // Transitions add picture-only layers around their joins and move the clips either side.
+  const transitions = planTransitions(timeline, media, fps);
+  timeline = transitions.timeline;
+  const motionsOf = (id: string): TransitionMotion[] => motionsIn(transitions.motions.get(id), R0, R1);
 
   const inputs: string[] = [];
   const inputArgs: string[] = [];
@@ -569,6 +574,7 @@ async function writeFilterGraph(
 
   const videoForMedia = (clip: MediaClip, idx: number, still: boolean, p: Placement, cudaScale: boolean, sharedStart?: number, held = false, filled = false) => {
     const speed = clip.speed ?? 1;
+    const moves = motionsOf(clip.id);
     const tf = resolveTransform(clip, warn);
     const chain: string[] = [];
     // Repeat the first picture on the clock the image demuxer's loop gives a still: one tick a frame.
@@ -594,6 +600,8 @@ async function writeFilterGraph(
     // Clip-local → output time.
     const shift = p.pos - localStart;
     if (shift !== 0) chain.push(`setpts=PTS${offset(shift)}`);
+    // A transition's fades and blur run on the output clock, across the clip and the layer that continues it.
+    chain.push(...motionFilters(moves, W, c => ffColor(c)));
     // Overlay shows a layer's last picture for one project frame, however long its source showed it, and of two
     // pictures that land on one frame it shows the first. Filled, the layer has one picture on every frame: each
     // held until the next, and the last to the end of its stream.
@@ -601,7 +609,8 @@ async function writeFilterGraph(
     const lbl = label("v");
     lines.push(`[${idx}:v]${chain.join(",")}${lbl}`);
     const pos = overlayPosition(tf, shift ? `(t${signed(-shift)})` : "t");
-    overlay(lbl, pos.x, pos.y, p, filled);
+    const moved = motionOffsets(moves, W, H);
+    overlay(lbl, moved.x ? `${pos.x}+${moved.x}` : pos.x, moved.y ? `${pos.y}+${moved.y}` : pos.y, p, filled);
   };
 
   const videoForColor = (clip: ColorClip, p: Placement) => {
@@ -613,10 +622,14 @@ async function writeFilterGraph(
       ...transformChain(tf, W, H),
     ];
     if (p.pos > 0) chain.push(`setpts=PTS+round(${fnum(p.pos)}/TB)`);
+    // A colour can be the picture a transition leaves: it fades, dips or moves on the output clock as footage does.
+    const moves = motionsOf(clip.id);
+    chain.push(...motionFilters(moves, W, c => ffColor(c)));
     const lbl = label("c");
     lines.push(`${chain.join(",")}${lbl}`);
     const pos = overlayPosition(tf, "t");
-    overlay(lbl, pos.x, pos.y, p);
+    const moved = motionOffsets(moves, W, H);
+    overlay(lbl, moved.x ? `${pos.x}+${moved.x}` : pos.x, moved.y ? `${pos.y}+${moved.y}` : pos.y, p);
   };
 
   const audioForMedia = (clip: MediaClip, idx: number, p: Placement, skip: number) => {
@@ -699,7 +712,7 @@ async function writeFilterGraph(
       const still = isStill(asset, file);
       const wantVideo = showVideo && asset.kind !== "audio" && holdsFrame(p, fps, still);
       const speed = clip.speed ?? 1;
-      const wantAudio = includeAudio && !track.muted && clip.volume > 0 && holdsSample(p.vis * speed, SR) && (await hasAudio(asset, file));
+      const wantAudio = includeAudio && !track.muted && clip.volume > 0 && !transitions.layers.has(clip.id) && holdsSample(p.vis * speed, SR) && (await hasAudio(asset, file));
       if (!wantVideo && !wantAudio) continue;
 
       const srcStart = clip.sourceIn + p.local0 * speed;
@@ -719,7 +732,8 @@ async function writeFilterGraph(
         !clip.transform && !clip.keyframes?.length && !clip.effects.length && await assetStoredAsShown(asset);
       // FFmpeg's packet scan can discover AAC priming that is absent from the
       // movie index. Preserve it whenever the graph reads sound.
-      const shared = sharedReads?.get(clip);
+      // A clip a transition moves reads its own picture: the shared read assumes plain cuts.
+      const shared = motionsOf(clip.id).length ? undefined : sharedReads?.get(clip);
       const indexedPicture = opts.indexedInputs && !includeAudio;
       let indexedOriginal = !!asset.previewClock && hasIndexedAvc(asset);
       const open = (input: string, start: number, hardware: boolean, duration = p.vis * speed) => addInput([
@@ -755,7 +769,7 @@ async function writeFilterGraph(
         // A single frame already seeks to the picture shown at its time.
         videoForMedia(clip, idx, still, visible, cudaScale && !proxy, shared ? pictureSeek - shared.start / fps : undefined, held,
           !opts.singleFrame && fillsFrames(clip, asset, fps));
-        if (opts.directPicture && opts.pictureOnly && !opts.pictureFilter && !opts.singleFrame && firstLayer && !shared && !proxy && !still &&
+        if (opts.directPicture && opts.pictureOnly && !opts.pictureFilter && !opts.singleFrame && firstLayer && !shared && !proxy && !still && !motionsOf(clip.id).length &&
             directExportPicture(clip, visible, asset, await verifiedProbe(asset), W, H, fps, D)) {
           directPicture = { file, start: pictureSeek, frames: Math.round(D * fps) };
         }

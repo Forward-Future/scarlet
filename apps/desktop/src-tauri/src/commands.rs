@@ -289,6 +289,76 @@ pub async fn finish_video_export(app: AppHandle, state: State<'_, AppState>, des
     saved
 }
 
+/// One file of the folder an editor takes to another app: its text, or a copy of a file in Scarlet's library.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+pub enum HandoffFile {
+    Text { path: String, text: String },
+    Copy { path: String, source: String },
+}
+
+/// A path inside the folder: relative, with no step out of it.
+fn inside_folder(path: &str) -> Result<std::path::PathBuf, String> {
+    let mut out = std::path::PathBuf::new();
+    for part in path.split('/') {
+        if part.is_empty() || part == "." || part == ".." || part.contains(['\\', ':']) {
+            return Err("The export named a file outside its folder".into());
+        }
+        out.push(part);
+    }
+    if out.as_os_str().is_empty() { return Err("The export named a file outside its folder".into()) }
+    Ok(out)
+}
+
+/// Write the hand-off folder at `dest`: built beside it under a hidden name and renamed into place once whole, so the
+/// chosen name never holds half a folder. Copies come only from Scarlet's library. On an APFS volume a copy is a clone.
+pub(crate) fn write_handoff_folder(dest: &std::path::Path, files: &[HandoffFile], library: &std::path::Path, demo: bool) -> Result<(), String> {
+    if dest.symlink_metadata().is_ok() {
+        return Err("Something with that name is already there. Export again and choose another name.".into());
+    }
+    let parent = dest.parent().ok_or("Unsupported save destination")?;
+    let library = library.canonicalize().map_err(|e| format!("Scarlet's library is unavailable ({})", e.kind()))?;
+    let stem = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let staging = tempfile::Builder::new().prefix(&format!(".{stem}.scarlet-")).tempdir_in(parent)
+        .map_err(|e| format!("Could not write to the chosen folder ({})", e.kind()))?;
+    for file in files {
+        let path = match file { HandoffFile::Text { path, .. } | HandoffFile::Copy { path, .. } => path };
+        let target = staging.path().join(inside_folder(path)?);
+        if let Some(dir) = target.parent() { std::fs::create_dir_all(dir).map_err(|e| format!("Could not write the folder ({})", e.kind()))?; }
+        match file {
+            HandoffFile::Text { text, .. } => std::fs::write(&target, text).map_err(|e| format!("Could not write the folder ({})", e.kind()))?,
+            HandoffFile::Copy { source, .. } if demo && source == "/sample.mp4" => {
+                std::fs::write(&target, include_bytes!("../../../web/public/sample.mp4")).map_err(|e| format!("Could not copy the footage ({})", e.kind()))?
+            }
+            HandoffFile::Copy { source, .. } => {
+                let from = std::path::Path::new(source).canonicalize().map_err(|e| format!("Could not copy the footage ({})", e.kind()))?;
+                if !from.starts_with(&library) { return Err("The export named a file outside Scarlet's library".into()) }
+                std::fs::copy(&from, &target).map_err(|e| format!("Could not copy the footage ({})", e.kind()))?;
+            }
+        }
+    }
+    let staged = staging.keep();
+    std::fs::rename(&staged, dest).map_err(|e| {
+        let _ = std::fs::remove_dir_all(&staged);
+        format!("Could not save the folder ({})", e.kind())
+    })
+}
+
+/// Save the folder for finishing the edit in another app where the editor chose, then forget the destination.
+#[tauri::command]
+pub async fn finish_folder_export(app: AppHandle, state: State<'_, AppState>, destinations: State<'_, ExportDestinations>, ticket: u64, files: Vec<HandoffFile>) -> Result<String, String> {
+    let path = destinations.change(|paths| (paths.get(&ticket).map(|d| d.path.clone()), false))?.ok_or("Export destination expired")?;
+    let (dest, library, demo) = (path.clone(), state.paths.data_dir.clone(), crate::is_demo(&app));
+    let saved = tauri::async_runtime::spawn_blocking(move || write_handoff_folder(&dest, &files, &library, demo)).await.map_err(|e| e.to_string())?;
+    // Never where it went: the editor typed the folder's name.
+    match &saved {
+        Ok(()) => log::info!("export folder saved"),
+        Err(e) => log::warn!("export folder could not be saved: {e}"),
+    }
+    destinations.change(|paths| { let kept = paths.remove(&ticket).is_some_and(|d| d.kept); ((), kept) })?;
+    saved.map(|()| path.to_string_lossy().into_owned())
+}
+
 /// Show a saved file in Finder / Explorer.
 #[tauri::command]
 pub async fn reveal_path(app: AppHandle, path: String) -> Result<(), String> {
@@ -391,6 +461,34 @@ pub fn desktop_info(app: AppHandle, state: State<'_, AppState>) -> DesktopInfo {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn writes_a_handoff_folder_from_the_library_only() {
+        use super::{write_handoff_folder, HandoffFile};
+        let library = tempfile::tempdir().unwrap();
+        std::fs::write(library.path().join("cam.mov"), b"footage").unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let dest = out.path().join("Interview");
+        let files = vec![
+            HandoffFile::Text { path: "Interview.fcpxml".into(), text: "<fcpxml/>".into() },
+            HandoffFile::Copy { path: "Media/cam.mov".into(), source: library.path().join("cam.mov").to_string_lossy().into_owned() },
+        ];
+        write_handoff_folder(&dest, &files, library.path(), false).unwrap();
+        assert_eq!(std::fs::read(dest.join("Media/cam.mov")).unwrap(), b"footage");
+        assert_eq!(std::fs::read_to_string(dest.join("Interview.fcpxml")).unwrap(), "<fcpxml/>");
+        // Never over something already there, never from outside the library, never outside the folder.
+        assert!(write_handoff_folder(&dest, &files, library.path(), false).is_err());
+        let outside = out.path().join("secret.txt");
+        std::fs::write(&outside, b"no").unwrap();
+        let stray = vec![HandoffFile::Copy { path: "Media/x".into(), source: outside.to_string_lossy().into_owned() }];
+        assert!(write_handoff_folder(&out.path().join("Two"), &stray, library.path(), false).is_err());
+        let escape = vec![HandoffFile::Text { path: "../escape.txt".into(), text: "x".into() }];
+        assert!(write_handoff_folder(&out.path().join("Three"), &escape, library.path(), false).is_err());
+        assert!(!out.path().join("escape.txt").exists());
+        // A failed export leaves nothing behind: no folder, no hidden staging folder.
+        let names: Vec<_> = std::fs::read_dir(out.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        assert_eq!({ let mut n = names; n.sort(); n }, vec!["Interview".to_string(), "secret.txt".to_string()]);
+    }
+
     use super::*;
 
     #[test]

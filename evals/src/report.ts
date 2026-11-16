@@ -26,6 +26,10 @@ export function evaluationMarkdown(ev: Evaluation): string {
   lines.push(`Versions: source ${score.versions.source} → applied ${score.versions.applied} → proposed ${score.versions.proposed}. ` +
     `Edge level: loudest level frame ${ev.edgeOptions.window === "around" ? `within ±${ev.edgeOptions.windowSeconds * 1000} ms` : `over ${ev.edgeOptions.windowSeconds * 1000} ms on the kept side`}` +
     ` (${ev.evidence.map(e => `${e.mediaId}: ${e.levels ?? "no levels"}, ${e.words} words`).join("; ")}).`, "");
+  if (score.headline.verifiedPictureCuts !== undefined) {
+    const h = score.headline;
+    lines.push(`Picture-to-first-word timing matched ${h.matchedPictureEntrances} of ${h.eligibleEditorEntrances} eligible editor entrances (${h.verifiedPictureCuts} verified pictures). Mean absolute timing error: ${h.pictureEntranceErrorMs ?? "—"} ms. See [individual entrances](picture-entrances.json).`, "");
+  }
   lines.push("| | Applied | Review |", "|---|---|---|");
   lines.push(`| Cuts | ${a.removal.cuts} | ${r ? `${r.removal.cuts} (${r.items} review items)` : "–"} |`);
   lines.push(`| Removed | ${col(t => s(t.removal.seconds))} |`);
@@ -160,6 +164,14 @@ export function runMarkdown(title: string, rows: TrialRow[]): string {
   const keys = ["appliedSeconds", "reviewSeconds", "appliedSpeechEdges", "reviewSpeechEdges", "clippedWordsOnSound", "needsYourCall", "heldByScarlet", "gapsLeft", "looseJoins",
     "deadAirSeconds", "repeatsLeft", "repeatsAtJoins", "sharedAppliedJoins", "sharedAppliedJoinGapMedianAbsErrorMs", "checkJoinCoverage",
     "wordF1", "timeF1", "edgeF1At20ms", "requiredLinesMissing", "toolErrors", "activeMinutes", "tokens"];
+  if (rows.some(r => r.headline?.verifiedPublishedWords !== undefined))
+    keys.push("verifiedPublishedWords", "missingVerifiedWords", "verifiedWordRecall");
+  if (rows.some(r => r.headline?.labeledSourceWords !== undefined))
+    keys.push("labeledSourceWords", "retainedSkippedWords", "differingLabeledWords", "differingWordFraction");
+  if (rows.some(r => r.headline?.editorWordRemovingCuts !== undefined))
+    keys.push("recoveredWordRemovingCuts", "editorWordRemovingCuts", "matchedAudioJoins", "matchedPauseErrorMs");
+  if (rows.some(r => r.headline?.verifiedPictureCuts !== undefined))
+    keys.push("verifiedPictureCuts", "eligibleEditorEntrances", "matchedPictureEntrances", "pictureEntranceErrorMs", "pictureEntranceBiasMs", "candidateTrimmedEntrances", "candidateEntrancesInFade");
   const lines = [`# ${title}`, "", `| Case | Config | Trials (done) | ${keys.join(" | ")} |`, `|---|---|---|${keys.map(() => "---").join("|")}|`];
   for (const [key, group] of groups) {
     const [caseId, config] = key.split("\u0000");

@@ -56,6 +56,14 @@ export function timelinePlanningIssue(timeline: Timeline): string | undefined {
   return sourceAnchorIssue(mainFootage(timeline), 4, MAX_PLAN_ENTRIES);
 }
 
+/** A join: one clip ends within this many seconds of where the next starts. Transitions are planned and compared by it. */
+export const JOIN_SLACK = 1e-3;
+
+/** Whether a clip ending at `end` meets one starting at `start`. */
+export function meets(end: number, start: number): boolean {
+  return Math.abs(end - start) <= JOIN_SLACK;
+}
+
 /** Snap a time in seconds to the nearest frame boundary. */
 export function snapToFrame(seconds: number, fps: number): number {
   return Math.round(seconds * fps) / fps;
@@ -92,6 +100,24 @@ export function mergeRanges(ranges: TimeRange[], gap = 0): TimeRange[] {
   return out;
 }
 
+/** What of `ranges` none of `minus` covers, merged and in order. */
+export function subtractRanges(ranges: TimeRange[], minus: TimeRange[]): TimeRange[] {
+  const cut = mergeRanges(minus);
+  const out: TimeRange[] = [];
+  for (const r of mergeRanges(ranges)) {
+    let start = r.start;
+    for (const c of cut) {
+      if (c.end <= start) continue;
+      if (c.start >= r.end) break;
+      if (c.start > start) out.push({ start, end: c.start });
+      start = Math.max(start, c.end);
+      if (start >= r.end) break;
+    }
+    if (r.end > start) out.push({ start, end: r.end });
+  }
+  return out;
+}
+
 export function rangesOverlap(a: TimeRange, b: TimeRange): boolean {
   return a.start < b.end && b.start < a.end;
 }
@@ -117,12 +143,16 @@ export function clipsAt(timeline: Timeline, t: number): Array<{ track: Track; cl
   return out;
 }
 
+/** Whole seconds as hours, minutes and seconds. */
+export function hms(whole: number): { h: number; m: number; s: number } {
+  const t = Math.max(0, Math.floor(whole));
+  return { h: Math.floor(t / 3600), m: Math.floor((t % 3600) / 60), s: t % 60 };
+}
+
 export function formatTimecode(seconds: number, fps = 30): string {
   // A frame-aligned time such as 69 / 30 can land a few ulps below its frame; floor would show the frame before.
   const total = Math.max(0, seconds) + 1e-6;
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = Math.floor(total % 60);
+  const { h, m, s } = hms(total);
   const f = Math.floor((total - Math.floor(total)) * fps);
   const pad = (n: number, w = 2) => n.toString().padStart(w, "0");
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}.${pad(f)}` : `${m}:${pad(s)}.${pad(f)}`;
@@ -130,10 +160,8 @@ export function formatTimecode(seconds: number, fps = 30): string {
 
 /** Where something is in the video, for people, to the second: 0:05, 1:02:07. Minutes alone would read 62:07 past an hour. */
 export function clock(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds + 1e-6));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const r = String(s % 60).padStart(2, "0");
+  const { h, m, s } = hms(seconds + 1e-6);
+  const r = String(s).padStart(2, "0");
   return h ? `${h}:${String(m).padStart(2, "0")}:${r}` : `${m}:${r}`;
 }
 

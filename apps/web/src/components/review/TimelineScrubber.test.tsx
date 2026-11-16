@@ -34,8 +34,8 @@ const released = vi.fn();
 const show = (zoom?: { start: number; end: number }) => act(async () => root.render(
   <TimelineScrubber start={0} duration={3000} playhead={100} frameAt={() => undefined} onSeek={t => seeks.push(t)} onSelectTime={t => picks.push(t)}
     onScrubStart={() => released} highlight={zoom && { view: zoom, band: zoom }} />));
-const pointer = (type: string, x: number) => act(async () => {
-  container.querySelector(".timeline-slider")!.dispatchEvent(new PointerEvent(type, { pointerId: 1, button: 0, isPrimary: true, clientX: x, bubbles: true }));
+const pointer = (type: string, x: number, y = 0) => act(async () => {
+  container.querySelector(".timeline-slider")!.dispatchEvent(new PointerEvent(type, { pointerId: 1, button: 0, isPrimary: true, clientX: x, clientY: y, bubbles: true }));
 });
 /** The zoom to or from a highlighted change has run its course. */
 const zoomed = () => act(async () => { await new Promise(done => setTimeout(done, 400)); });
@@ -70,4 +70,69 @@ it("points its controls' button at the controls only while they are open", async
   expect(button.getAttribute("aria-controls")).toBeNull();
   await act(async () => button.click());
   expect(document.getElementById(button.getAttribute("aria-controls")!)).not.toBeNull();
+});
+
+it("reveals a typed timestamp outside the zoomed window without seeking the player", async () => {
+  const render = (times: number[]) => act(async () => root.render(
+    <TimelineScrubber duration={3000} playhead={100} frameAt={() => undefined} onSeek={t => seeks.push(t)}
+      highlight={{ view: { start: 90, end: 110 } }} typedTimes={times} />));
+  await render([]);
+  await render([500]);
+  await zoomed();
+  expect(container.querySelector(".timeline-message-time")?.getAttribute("data-time")).toBe("500");
+  expect(container.querySelector(".timeline-slider")?.getAttribute("aria-valuenow")).toBe("100");
+  expect(seeks).toEqual([]);
+});
+
+it("pulls up from a scrub to jog consecutive frames and commits the release frame once", async () => {
+  const range = vi.fn();
+  const rate = 24000 / 1001;
+  await act(async () => root.render(<TimelineScrubber start={0} duration={20} playhead={0} fps={rate}
+    frameAt={time => `/frame/${Math.round(time * rate)}`} onSeek={t => seeks.push(t)} onSelectTime={t => picks.push(t)}
+    onRange={range} range={{ start: 12, end: 13 }} onScrubStart={() => released} />));
+  const lens = () => container.querySelector<HTMLElement>(".scrub-loupe");
+  const frame = Math.round(8 * rate);
+  await pointer("pointerdown", 400, 80);
+  await pointer("pointermove", 400, 69);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(lens()).toBeNull();
+  await pointer("pointermove", 400, 40);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(lens()?.dataset.frame).toBe(String(frame));
+  expect(container.querySelector(".timeline-playhead-time")).toBeNull();
+  expect(lens()?.querySelector(".scrub-loupe-picture img")?.getAttribute("src")).toBe(`/frame/${frame}`);
+  const cell = lens()?.querySelectorAll(".scrub-loupe-cell")[5];
+  await pointer("pointermove", 410, 80);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(lens()?.dataset.frame).toBe(String(frame + 1));
+  expect(lens()?.querySelectorAll(".scrub-loupe-cell")[4]).toBe(cell);
+  expect(seeks.at(-1)).toBeCloseTo((frame + 1) / rate, 8);
+  expect(picks).toEqual([]);
+  await pointer("pointerup", 420, 40);
+  await pointer("lostpointercapture", 420, 40);
+  expect(picks).toEqual([(frame + 2) / rate]);
+  expect(range).not.toHaveBeenCalled();
+  expect(released).toHaveBeenCalledOnce();
+  expect(lens()).toBeNull();
+  expect(container.querySelector(".timeline-playhead-time")).not.toBeNull();
+});
+
+it("keeps the final partial frame inside the clip and drops the loupe if capture is lost", async () => {
+  const fps = 25;
+  await act(async () => root.render(<TimelineScrubber start={10} duration={1.01} playhead={10} fps={fps}
+    previewStrip={{ id: "cached-cut", version: "version", fps }} frameAt={() => undefined}
+    onScrubStart={() => released} onSeek={t => seeks.push(t)} onSelectTime={t => picks.push(t)} />));
+  await pointer("pointerdown", 1000, 65);
+  await pointer("pointermove", 1000, 12);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  const lens = container.querySelector<HTMLElement>(".scrub-loupe")!;
+  expect(lens.dataset.frame).toBe("275");
+  const sheet = new URL(lens.querySelector<HTMLImageElement>(".scrub-loupe-picture img")!.src);
+  expect(sheet.searchParams.get("frames")!.split(",").at(-1)).toBe("275");
+  await pointer("pointermove", 1100, 12);
+  await pointer("lostpointercapture", 1100, 12);
+  expect(seeks.at(-1)).toBe(11);
+  expect(picks).toEqual([]);
+  expect(released).toHaveBeenCalledOnce();
+  expect(container.querySelector(".scrub-loupe")).toBeNull();
 });

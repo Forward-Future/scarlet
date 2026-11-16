@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { findBoxes, letterClasses, overlap, readLetters, type ScreenLine } from "../transcribe/screenTextModel.js";
+import { findBoxes, letterClasses, readLetters, type ScreenLine } from "../transcribe/screenTextModel.js";
+import { iou } from "../transcribe/faceModel.js";
 import { joinSpans, pictureChanged, pictureGrid, sameLine, screenTextMatches, spansFromFrames, type ScreenTextSpan } from "./screenText.js";
 
 const line = (text: string, box: ScreenLine["box"], confidence = 0.95): ScreenLine => ({ text, confidence, box });
@@ -80,7 +81,7 @@ describe("reading a frame", () => {
     expect(rest).toEqual([]);
     // 16 by 4 pixels grow by 16 × 4 × 1.5 / 40 = 2.4 on each side.
     expect(box).toEqual({ x0: 1.6, y0: 2.6, x1: 22.4, y1: 11.4 });
-    expect(overlap([0, 0, 10, 10], [5, 0, 15, 10])).toBeCloseTo(1 / 3);
+    expect(iou([0, 0, 10, 10], [5, 0, 15, 10])).toBeCloseTo(1 / 3);
   });
 
   it("reads letters from the reader's scores, dropping blanks and repeats", () => {

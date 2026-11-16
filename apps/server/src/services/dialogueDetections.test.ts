@@ -23,7 +23,7 @@ vi.mock("@scarlet/render", async original => ({
   speechActivityOf: async () => [{ start: 4, end: 5 }],
 }));
 // Word alignment downloads a model and runs a worker; these tests cover scan scheduling, not timing.
-vi.mock("../transcribe/wordAlign.js", async original => ({ ...await original<typeof import("../transcribe/wordAlign.js")>(), alignmentVersion: 1, alignWords: async (_ctx: unknown, _wav: string, segments: unknown) => segments }));
+vi.mock("../transcribe/wordAlign.js", async original => ({ ...await original<typeof import("../transcribe/wordAlign.js")>(), alignWords: async (_ctx: unknown, _wav: string, segments: unknown) => segments }));
 vi.mock("../render/ffmpeg.js", async original => ({
   ...await original<typeof import("../render/ffmpeg.js")>(),
   extractWav: async (_file: string, target: string) => {
@@ -80,7 +80,7 @@ it("reads the selected input's existing acoustic words with transcription off", 
   expect(await kept()).toEqual(unavailable);
   // The older engine used the path as imported. Seed its exact filename independently of the current writer.
   const info = await stat(imported);
-  const legacy = createHash("sha256").update(JSON.stringify([1, [imported, info.size, info.mtimeMs, info.ctimeMs, 1]])).digest("hex");
+  const legacy = createHash("sha256").update(JSON.stringify([3, [imported, info.size, info.mtimeMs, info.ctimeMs, 1]])).digest("hex");
   const legacyFile = join(ctx.paths.waveforms(project.id), `emissions-${legacy.slice(0, 32)}.bin`);
   const canonical = await emissionStore(ctx, project.id, file, 1);
   expect(legacyFile).not.toBe(canonical);

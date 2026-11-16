@@ -26,10 +26,13 @@ describe("a contact sheet request", () => {
     expect(ok(SheetRequest, { from: 10, to: 22.5, mode: "scene" })).toBe(true);
   });
 
-  it("takes six to twelve frames and a focus inside the window", () => {
+  it("takes two to twelve frames and a focus inside the window", () => {
     expect(ok(SheetRequest, { from: 0, to: 30, count: 6 })).toBe(true);
+    // Two frames either side of a moment are a sheet too: passes asked for two and three and were refused (2026-11-15).
+    expect(ok(SheetRequest, { from: 134, to: 135, count: 2 })).toBe(true);
+    expect(ok(SheetRequest, { from: 0, to: 30, count: 1 })).toBe(false);
     expect(ok(SheetRequest, { from: 0, to: 30, count: 12 })).toBe(true);
-    for (const count of [5, 13, 7.5]) expect(ok(SheetRequest, { from: 0, to: 30, count }), String(count)).toBe(false);
+    for (const count of [13, 7.5]) expect(ok(SheetRequest, { from: 0, to: 30, count }), String(count)).toBe(false);
     expect(ok(SheetRequest, { from: 10, to: 30, focus: 10 })).toBe(true);
     expect(reason(SheetRequest, { from: 10, to: 30, focus: 30 })).toBe("Focus must be within the window");
     expect(reason(SheetRequest, { from: 10, to: 30, focus: 9.9 })).toBe("Focus must be within the window");

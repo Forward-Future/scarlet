@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { gapSound, speakingLevel, type GapLevels } from "@scarlet/mcp/gap-sound";
 import { normalizeTranscriptToken } from "@scarlet/shared";
 import { newId, type TimeRange, type TranscriptSegment, type TranscriptWord } from "@scarlet/timeline";
-import { SAMPLE_RATE } from "./ctcAlign.js";
+import { alignerHeard, SAMPLE_RATE } from "./ctcAlign.js";
 import { openWav, pcmWavHeader } from "./wordAlign.js";
 
 /** A stretch without words is read again from this length. Shorter ones are the pauses inside a sentence. */
@@ -50,17 +50,10 @@ export async function wavLevels(path: string, signal?: AbortSignal): Promise<Gap
   } finally { await wav.close(); }
 }
 
-/**
- * The stretches of a recording that hold sound at speaking level between two transcript words a second or more
- * apart, before the first word or after the last. Word times must be the aligned ones: Whisper's own stretch a word
- * across the wait beside it, which hides exactly these.
- */
-export function transcriptHoles(segments: TranscriptSegment[], levels: GapLevels): TimeRange[] {
-  const words = segments.flatMap(s => s.words).filter(spoken).sort((a, b) => a.start - b.start);
-  const step = levels.rms.length ? (levels.to - levels.from) / levels.rms.length : 0;
-  if (!step) return [];
+/** The level speech sits at around a time, from the LEVEL_CHUNK of the recording it falls in, each chunk worked out once. */
+function speakingLevels(levels: GapLevels, step: number): (t: number) => number {
   const speech = new Map<number, number>();
-  const speechAt = (t: number) => {
+  return t => {
     const chunk = Math.floor(t / LEVEL_CHUNK);
     let db = speech.get(chunk);
     if (db === undefined) {
@@ -70,6 +63,18 @@ export function transcriptHoles(segments: TranscriptSegment[], levels: GapLevels
     }
     return db;
   };
+}
+
+/**
+ * The stretches of a recording that hold sound at speaking level between two transcript words a second or more
+ * apart, before the first word or after the last. Word times must be the aligned ones: Whisper's own stretch a word
+ * across the wait beside it, which hides exactly these.
+ */
+export function transcriptHoles(segments: TranscriptSegment[], levels: GapLevels): TimeRange[] {
+  const words = segments.flatMap(s => s.words).filter(spoken).sort((a, b) => a.start - b.start);
+  const step = levels.rms.length ? (levels.to - levels.from) / levels.rms.length : 0;
+  if (!step) return [];
+  const speechAt = speakingLevels(levels, step);
   const holes: TimeRange[] = [];
   const consider = (start: number, end: number) => {
     if (end - start < HOLE_GAP) return;
@@ -103,17 +108,8 @@ const MIN_WORD = 0.05;
 export function wordsOnSound(segments: TranscriptSegment[], levels: GapLevels): { segments: TranscriptSegment[]; moved: number } {
   const step = levels.rms.length ? (levels.to - levels.from) / levels.rms.length : 0;
   if (!step) return { segments, moved: 0 };
-  const speech = new Map<number, number>();
-  const quietBelow = (t: number) => {
-    const chunk = Math.floor(t / LEVEL_CHUNK);
-    let db = speech.get(chunk);
-    if (db === undefined) {
-      const from = Math.max(0, Math.floor((chunk * LEVEL_CHUNK - levels.from) / step)), to = Math.min(levels.rms.length, Math.ceil(((chunk + 1) * LEVEL_CHUNK - levels.from) / step));
-      db = speakingLevel({ from: 0, to: 1, rms: levels.rms.slice(from, to) });
-      speech.set(chunk, db);
-    }
-    return Math.min(db - BELOW_SPEECH_QUIET_DB, WORD_QUIET_DBFS);
-  };
+  const speechAt = speakingLevels(levels, step);
+  const quietBelow = (t: number) => Math.min(speechAt(t) - BELOW_SPEECH_QUIET_DB, WORD_QUIET_DBFS);
   const quiet = (i: number, floor: number) => 20 * Math.log10(Math.max(levels.rms[i]!, 1e-10)) < floor;
   let moved = 0;
   const out = segments.map(seg => {
@@ -137,6 +133,56 @@ export function wordsOnSound(segments: TranscriptSegment[], levels: GapLevels): 
     return changed ? { ...seg, words } : seg;
   });
   return { segments: moved ? out : segments, moved };
+}
+
+/**
+ * A Whisper segment whose loudest moment stays this far under the recording's typical line wasn't said. On one
+ * recording the lines Whisper wrote over waits ("Thank you." fourteen times, "I don't know.") peaked 14.5–48 dB under
+ * the median line, and the quietest line spoken 7.2 dB under it (2026-11-15).
+ */
+const UNHEARD_BELOW_LINES_DB = 11;
+/** Under this a segment wasn't said, whatever the recording's level: a silent track's lines all sit far below it. */
+const UNHEARD_DBFS = -60;
+/** A recording needs this many segments for its median line to say what its speech sounds like. */
+const LINES_FOR_LEVEL = 5;
+/** Read this much either side of a segment's words: a word's edge can sit a step inside its sound. */
+const LINE_PAD = 0.05;
+
+/**
+ * The segments Whisper wrote over quiet, taken out. Whisper writes a line where nothing was said, "Thank you." most
+ * often: on one recording fourteen of them stood over waits of up to 40 s, a pass read each as a line and kept the
+ * wait around it, and the editor's cut had none of them. A spoken line's loudest moment reaches near the level the
+ * recording's other lines reach, so a segment quiet throughout is taken out whole; a segment with one loud word keeps
+ * all its words. A quiet line is also a muttered aside, though: "You can get a screenshot of that." sat 25 dB under
+ * the speech on the same recording. The aligner tells them apart (`heard`): it finds the letters of an aside in the
+ * sound and none of an invented line's, so a quiet segment whose words it placed stays. Without the aligner's word,
+ * only a segment under UNHEARD_DBFS goes.
+ */
+export function withoutUnheardSegments(segments: TranscriptSegment[], levels: GapLevels,
+  heard: (word: TranscriptWord) => boolean | undefined = () => undefined): { segments: TranscriptSegment[]; dropped: TranscriptSegment[] } {
+  const step = levels.rms.length ? (levels.to - levels.from) / levels.rms.length : 0;
+  if (!step) return { segments, dropped: [] };
+  const peakOf = (seg: TranscriptSegment) => {
+    const words = seg.words.filter(w => !label(w.text) && normalizeTranscriptToken(w.text));
+    if (!words.length) return undefined;
+    const from = Math.max(0, Math.floor((Math.min(...words.map(w => w.start)) - LINE_PAD - levels.from) / step));
+    const to = Math.min(levels.rms.length, Math.ceil((Math.max(...words.map(w => w.end)) + LINE_PAD - levels.from) / step));
+    if (to <= from) return undefined;
+    let peak = 0;
+    for (let i = from; i < to; i++) peak = Math.max(peak, levels.rms[i]!);
+    return 20 * Math.log10(Math.max(peak, 1e-10));
+  };
+  const peaks = segments.map(peakOf);
+  const measured = peaks.filter((p): p is number => p !== undefined).sort((a, b) => a - b);
+  const typical = measured.length >= LINES_FOR_LEVEL ? measured[Math.floor(measured.length / 2)]! : undefined;
+  const notHeard = (seg: TranscriptSegment) => {
+    const verdicts = seg.words.map(heard).filter((v): v is boolean => v !== undefined);
+    return verdicts.length > 0 && verdicts.filter(Boolean).length * 2 < verdicts.length;
+  };
+  const unheard = segments.map((seg, i) => peaks[i] !== undefined &&
+    (peaks[i]! < UNHEARD_DBFS || (typical !== undefined && peaks[i]! <= typical - UNHEARD_BELOW_LINES_DB && notHeard(seg))));
+  const dropped = segments.filter((_, i) => unheard[i]);
+  return dropped.length ? { segments: segments.filter((_, i) => !unheard[i]), dropped } : { segments, dropped };
 }
 
 /** Where a stretch of the recording sits in the audio laid end to end. */
@@ -226,8 +272,13 @@ export async function fillTranscriptHoles(input: { wav: string; segments: Transc
   read?(wav: string): Promise<TranscriptSegment[]>; align(found: TranscriptSegment[]): Promise<TranscriptSegment[]>; log(message: string): void }) {
   const { wav, signal } = input;
   const levels = await wavLevels(wav, signal);
+  const heardOnly = withoutUnheardSegments(input.segments, levels, word => alignerHeard.get(word));
+  if (heardOnly.dropped.length) {
+    const lines = heardOnly.dropped.map(s => `“${s.text.trim()}” at ${s.words[0]!.start.toFixed(1)} s`);
+    input.log(`[transcribe] took out ${lines.length} ${lines.length === 1 ? "line" : "lines"} Whisper wrote over quiet: ${lines.slice(0, 6).join(", ")}${lines.length > 6 ? ", …" : ""}`);
+  }
   // Placed on the sound first: a word stretched over a wait would hide the stretch the holes are looked for in.
-  const { segments, moved } = wordsOnSound(input.segments, levels);
+  const { segments, moved } = wordsOnSound(heardOnly.segments, levels);
   if (moved) input.log(`[transcribe] brought ${moved} ${moved === 1 ? "word" : "words"} in from the quiet beside ${moved === 1 ? "it" : "them"}`);
   if (!input.read) return segments;
   const holes = transcriptHoles(segments, levels);

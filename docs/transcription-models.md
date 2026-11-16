@@ -49,4 +49,4 @@ For synthetic audio in which someone says “I, I agree,” the adapter can retu
 }
 ```
 
-Scarlet uses those times for editing and can refine English word boundaries with its local acoustic aligner. New local transcripts record which model option produced them.
+Scarlet uses those times for editing and can refine English and Spanish word boundaries from the audio. The first Spanish alignment downloads a 356 MB model, which Scarlet reuses locally. Words the model cannot confidently place keep their provider times. To refine a previously saved Spanish transcript, transcribe the recording again. New local transcripts record which model option produced them. [Spanish alignment model and attribution](https://huggingface.co/parseh/aligner-es/tree/d2b70028033dac453897da0cafaa98ce3a6121b9)

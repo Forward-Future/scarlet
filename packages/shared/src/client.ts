@@ -12,6 +12,7 @@ import type { AcousticWordsRequest, DialogueRangeRequest, DialogueScanRequest, D
 import type { Author, Change, CutAssessment, CutReview, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript, TranscriptWord } from "@scarlet/timeline";
 import type {
   ActivityEntry,
+  MakeShortsRequest,
   AgentHost,
   ApproveResponse,
   TrashedProject,
@@ -33,6 +34,10 @@ import type {
   Skill,
   SkillVersion,
   GraphicTemplateSummary,
+  GraphicTemplate,
+  GraphicRenderResponse,
+  SaveTemplateRequest,
+  SaveStyleGuideRequest,
   TaskAttachment,
   RecordTaskUsageRequest,
   Task,
@@ -60,6 +65,7 @@ import type {
   StagedCutRevision,
   LocalModelStatus,
   TelemetryUnavailable,
+  HandoffResponse,
 } from "./api.js";
 
 /**
@@ -260,6 +266,10 @@ export class ScarletClient {
   }
   updateProject(id: string, body: Record<string, unknown>) {
     return this.patch<{ project: Project }>(`/projects/${id}`, body);
+  }
+  /** Make shorts: a project for each short, made from this one's finished edit. The first short's run starts at once. */
+  makeShorts(id: string, body: MakeShortsRequest) {
+    return this.post<{ projects: Project[]; task: Task }>(`/projects/${id}/shorts`, body);
   }
   deleteProject(id: string) {
     return this.delete<Record<string, never>>(`/projects/${id}`);
@@ -651,6 +661,30 @@ export class ScarletClient {
   listTemplates() {
     return this.get<{ templates: GraphicTemplateSummary[] }>("/templates");
   }
+  /** A template by id or name; a `$` before the name, as the editor types it, is dropped. */
+  template(idOrName: string) {
+    return this.get<{ template: GraphicTemplate }>(`/templates/${encodeURIComponent(idOrName.replace(/^\$/, ""))}`);
+  }
+  /** Save a template, or replace the one with the same name. A graphic's comes back with its preview and what it couldn't draw. */
+  saveTemplate(body: SaveTemplateRequest) {
+    return this.post<{ template: GraphicTemplate; missingFonts?: Array<{ family: string; sample: string }>; problems?: string[]; preview?: string }>("/templates", body);
+  }
+  /** Draw a graphic from a page: `options` (GraphicRenderRequest), the page as `html`, and the files it links to as `asset`s. */
+  renderGraphic(projectId: string, form: FormData) {
+    return this.post<GraphicRenderResponse & { media?: MediaAsset }>(`/projects/${apiPathId(projectId)}/graphics`, form);
+  }
+  /** A graphic Scarlet drew: its page, where it is, its files, size and timing, and the template it was filled from. */
+  graphic(projectId: string, mediaId: string) {
+    return this.get<Record<string, unknown>>(`/projects/${apiPathId(projectId)}/graphics/${apiPathId(mediaId)}`);
+  }
+  saveStyleGuide(projectId: string, body: SaveStyleGuideRequest) {
+    return this.put<{ styleGuide: unknown }>(`/projects/${apiPathId(projectId)}/style-guide`, body);
+  }
+  /** Read an attachment or the style guide: text as text, a picture as itself, a PDF as pictures of its `pages`. */
+  readDocument(projectId: string, body: { attachmentId?: string; styleGuide?: boolean; pages?: number[] }) {
+    return this.post<{ name: string; path: string; size: number; mime?: string; text?: string; pageCount?: number;
+      pages?: Array<{ page: number; jpeg: string }>; image?: { mime: string; data: string } }>(`/projects/${apiPathId(projectId)}/documents/read`, body);
+  }
   /** The template drawn with its sample fields on a transparent picture. `version` (its previewVersion) keeps a cached image from going stale. */
   templatePreviewUrl(templateId: string, version?: string) {
     const preview = this.fileUrl(`/templates/${apiPathId(templateId)}/preview`);
@@ -731,6 +765,11 @@ export class ScarletClient {
   restoreProject(projectId: string) {
     return this.post<{ project: Project }>(`/projects/${projectId}/restore`);
   }
+  /** What the folder for finishing the edit in another app holds, linked as it will sit at `folder`. */
+  handoff(projectId: string, version: string, folder: string) {
+    return this.post<HandoffResponse>(`/projects/${projectId}/versions/${version}/handoff`, { folder });
+  }
+
   importOtio(projectId: string, otio: unknown, opts: { autoApprove?: boolean } = {}) {
     return this.post<{ change: Change; timeline: Timeline }>(`/projects/${projectId}/import/otio`, { otio, autoApprove: opts.autoApprove });
   }

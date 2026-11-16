@@ -10,7 +10,7 @@ import { basename, delimiter, dirname, extname, isAbsolute, join } from "node:pa
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { findOnPath, needsCmdShell } from "../detect.js";
-import { stopCliTree } from "../processTree.js";
+import { repeatStop, stopCliTree } from "../processTree.js";
 import type { RunAgentResult } from "./types.js";
 
 export interface SpawnLinesOptions {
@@ -114,7 +114,12 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
     killed = true;
     stopCliTree(child);
     // A process the CLI was starting as the kill went out can miss it, and keep the output open: send it again.
-    setTimeout(() => { if (!settled) stopCliTree(child); }, 1000).unref();
+    setTimeout(() => {
+      if (settled) return;
+      if (repeatStop(child) === "kill-tree") return stopCliTree(child);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }, 1000).unref();
   };
   const timer = opts.timeoutMs === undefined ? undefined : setTimeout(() => {
     timedOut = true;

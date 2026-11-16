@@ -30,7 +30,9 @@ function quoted(passages: string[]): string {
  * around it and × declines it. Nothing is saved without Approve. The list opens under the header from the menu and
  * closes on Esc or a press outside it.
  */
-export function LearningsPanel({ onClose }: { onClose(): void }) {
+export function LearningsPanel({ onClose, focus }: { onClose(): void;
+  /** The rule to bring into view as the list opens: Review on the line under the request it came from opened it. */
+  focus?: string }) {
   const learnings = useProjectStore(s => s.current?.learnings);
   const list = openLearnings(learnings);
   const panel = useRef<HTMLDivElement>(null);
@@ -51,6 +53,7 @@ export function LearningsPanel({ onClose }: { onClose(): void }) {
   const rewording = useRef<(() => void) | null>(null);
   useEffect(() => {
     panel.current?.focus();
+    if (focus) [...panel.current?.querySelectorAll<HTMLElement>("[data-learning]") ?? []].find(row => row.dataset.learning === focus)?.scrollIntoView?.({ block: "nearest" });
     // The skill picker's list is drawn outside the panel, over the page. A press in it is a press in the panel.
     const press = (e: PointerEvent) => {
       const at = e.target as Element | null;
@@ -75,13 +78,13 @@ export function LearningsPanel({ onClose }: { onClose(): void }) {
     <h2 className="learn-title">Learnings</h2>
     {list.length > 0 && skillsError !== null && <p className="learn-problem" role="alert">Couldn’t load skills.{skillsError && ` ${skillsError}`}{" "}
       <button type="button" className="simple-link" onClick={() => void loadSkills()}>Retry</button></p>}
-    {list.length ? <ol className="learn-list">{list.map(l => <LearningRow key={l.id} learning={l} rewording={rewording} />)}</ol>
+    {list.length ? <ol className="learn-list">{list.map(l => <LearningRow key={l.id} learning={l} rewording={rewording} focused={l.id === focus} />)}</ol>
       : <div className="learn-empty"><p>Nothing to learn yet.</p>
         <p>When something you ask for reads like a rule, it waits here for you to approve.</p></div>}
   </div>;
 }
 
-function LearningRow({ learning, rewording }: { learning: Learning; rewording: { current: (() => void) | null } }) {
+function LearningRow({ learning, rewording, focused }: { learning: Learning; rewording: { current: (() => void) | null }; focused?: boolean }) {
   const skills = useSkillsStore(s => s.skills);
   const [skillId, setSkillId] = useState(learning.skillId);
   const [busy, setBusy] = useState(false);
@@ -168,7 +171,7 @@ function LearningRow({ learning, rewording }: { learning: Learning; rewording: {
   const replaces = chosen === learning.skillId && learning.replaces?.length ? quoted(learning.replaces) : "";
   const skillName = options.find(o => o.value === chosen)?.label;
 
-  return <li className="learn-item" aria-busy={saving || undefined}>
+  return <li className="learn-item" data-learning={learning.id} aria-current={focused || undefined} aria-busy={saving || undefined}>
     {editing ? <textarea ref={field} className="learn-rule learn-rule-edit" aria-label="Rule" rows={1} maxLength={280} spellCheck value={draft}
       onChange={e => setDraft(e.target.value.replace(/[\r\n]+/g, " "))}
       onKeyDown={e => {

@@ -7,10 +7,17 @@ import { auditDialogueAudio } from "./dialogueRepeatAudit.js";
 import { prepareCutReview } from "./changes.js";
 import { appendTaskEvent, editsDialogue, saveTask } from "./tasks.js";
 import { resolveTimeline } from "./timeline.js";
+import { runAttempts, runRoot } from "./runAttempts.js";
 
 export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<typeof RepeatAuditRequest>, signal: AbortSignal) {
   if (taskDialogueOperation(task) === "local-pauses") throw badRequest("local_pauses", "This request only tightens local pauses.");
   const { projectId } = task;
+  // A check that keeps nothing reads the edit as it is now. A pass named a version a save or a review had moved on from
+  // 27 times in eight runs, and each refusal cost a round trip to learn the version (2026-11-15). Kept repeats are
+  // decisions about what the pass heard on the version it names, so they still need that version.
+  const head = ctx.repos.projects.header(projectId)?.head;
+  const named = request.version;
+  if (!request.keep.length && head && head !== named) request = { ...request, version: head };
   function current() {
     const owner = ctx.repos.tasks.get(task.id);
     if (!owner || owner.startedAt !== task.startedAt || (request.startedAt && owner.startedAt !== request.startedAt) ||
@@ -28,8 +35,9 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
   const check = await ctx.track(auditDialogueAudio(ctx, project, tl, task, AbortSignal.any([signal, ctx.projectSignal(projectId)])));
   return ctx.db.transaction(() => {
     const owner = current();
-    const root = owner.resumeRootId ?? owner.id;
-    const attempts = ctx.repos.tasks.select("project_id = ? AND (id = ? OR json_extract(json,'$.resumeRootId') = ?)", [projectId, root, root]);
+    const root = runRoot(owner);
+    const run = runAttempts(projectId, root);
+    const attempts = ctx.repos.tasks.select(run.where, run.params);
     const ids = JSON.stringify(attempts.map(t => t.id));
     const rows = ctx.db.prepare(`SELECT json_extract(json,'$.data') AS data FROM task_events
       WHERE task_id IN (SELECT value FROM json_each(?)) AND json_extract(json,'$.data.kind') IN ('dialogue_preserved','repeat_kept')`).all(ids) as { data: string }[];
@@ -102,7 +110,7 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
     const joins = check.joins.filter(j => !stagedRanges.some(r => r.start - frame <= j.at && j.at <= r.end + frame));
     const noFindings = !check.repeats.length && !joins.length && !unheardJoins.length && !unavailable.length;
     saveTask(ctx, { ...owner, state: "running", repeatAudit: { version: tl.version, remaining: repeats.length, unavailable, returns, noFindings } });
-    return { version: tl.version, heard: check.repeats.length, staged: staged.length, remaining: repeats.length,
+    return { version: tl.version, ...(named !== tl.version && { readInsteadOf: named }), heard: check.repeats.length, staged: staged.length, remaining: repeats.length,
       repeats: repeats.slice(request.offset, request.offset + 25), ...(request.offset + 25 < repeats.length && { nextOffset: request.offset + 25 }),
       ...(check.unavailable.length && { unavailable: check.unavailable }),
       ...(check.joins.length && { joins }), ...(unheardJoins.length && { unheardJoins }) };

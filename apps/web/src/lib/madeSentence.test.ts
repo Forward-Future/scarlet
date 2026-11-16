@@ -53,3 +53,9 @@ it("counts the graphics a request made, and says what Scarlet said about a singl
   expect(say([{ ...lower("Daniel"), summary: "Added a lower third naming Daniel as he first speaks." }])).toBe("Added a lower third naming Daniel as he first speaks.");
   expect(say([lower("Daniel"), { label: "Punch in", kind: "zoom" }])).toBe("Made 2 edits: Lower third: Daniel, Punch in.");
 });
+
+it("counts transitions beside the other edits a request made", () => {
+  const zoom = (n: number) => ({ label: `Zoom ${n}`, kind: "zoom" as const });
+  const swipe = (n: number) => ({ label: `Swipe ${n}`, kind: "transition" as const });
+  expect(say([zoom(1), zoom(2), zoom(3), zoom(4), swipe(1), swipe(2), swipe(3), swipe(4)])).toBe("Made 4 zooms and 4 transitions.");
+});

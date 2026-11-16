@@ -1,31 +1,31 @@
 /** Replay the published editor's word selection through Scarlet's join placement and review gate, one join at a time. */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { DialogueEvidence } from "../../packages/mcp/src/dialogue-decisions.ts";
-import { joinEvidence } from "../../packages/mcp/src/dialogue-join.ts";
-import { planDialogueCuts, type DialoguePlanSources } from "../../packages/mcp/src/dialogue-plan.ts";
-import { frameAligned, timelineToSource, type Project } from "../../packages/timeline/src/index.ts";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import type { DialoguePlanSources } from "../../packages/mcp/src/dialogue-plan.ts";
+import type { Project } from "../../packages/timeline/src/index.ts";
 import { cli, isMain, main } from "./args.ts";
 import { loadCase } from "./case.ts";
 import { Engine } from "./engine.ts";
 import { round } from "./metrics.ts";
-import { cacheDir, readJson, resultsDir, timestamp, writeChosenJson } from "./paths.ts";
+import { REPO_ROOT, cacheDir, readJson, resultsDir, timestamp, writeChosenJson } from "./paths.ts";
 import { audibleClips } from "./timeline.ts";
 
-type Reading = Parameters<typeof joinEvidence>[1];
+type Reading = Parameters<typeof import("../../packages/mcp/src/dialogue-join.ts").joinEvidence>[1];
 interface AudioJoin {
   rawOut: number; rawIn: number; finalTime: number; earliestFinal: number; latestFinal: number;
   highBandFinal?: number; highBandEarliestFinal?: number; highBandLatestFinal?: number;
 }
 interface AudioMap { rawDuration: number; frameRate: number; joins: AudioJoin[] }
-interface Placement { start: number; end: number; spacingErrorMs: number; wrongWords: number }
+interface Placement { start: number; end: number; spacingErrorMs: number; wrongWords: number; wrongWordIndices: number[]; untouched?: boolean }
 interface Row {
   index: number;
-  outcome: "backward" | "uncertain" | "pause" | "terminal" | "outside" | "needsRevision" | "applied" | "review";
+  outcome: "backward" | "uncertain" | "pause" | "terminal" | "outside" | "needsRevision" | "untrimmed" | "applied" | "review";
+  afterWord?: number;
   fromWord?: number; toWord?: number; placement?: Placement; frameAligned?: Placement;
 }
-interface Result { caseId: string; inputs: string; rows: Row[] }
+interface Result { caseId: string; inputs: string; rows: Row[]; leave?: number }
 
 export function wordSelection(midpoints: number[], j: AudioJoin, frame: number) {
   if (j.rawIn <= j.rawOut) return "backward";
@@ -48,7 +48,7 @@ function summarize(rows: Row[]) {
   };
   return { referenceJoins: rows.length, eligible: scored.length + counts("needsRevision"),
     backward: counts("backward"), uncertain: counts("uncertain"), pauseOnly: counts("pause"), terminal: counts("terminal"), outside: counts("outside"),
-    applied: counts("applied"), review: counts("review"), needsRevision: counts("needsRevision"),
+    applied: counts("applied"), review: counts("review"), needsRevision: counts("needsRevision"), untrimmed: counts("untrimmed"),
     proposed: scores("placement"), frameAligned: scores("frameAligned") };
 }
 
@@ -65,12 +65,20 @@ async function readWaveforms(id: string, duration: number, path: string, engineU
   return pages;
 }
 
-const USAGE = "wordEdges.ts --case ID --reference-map match_audio.json [--waveforms cached.json] [--engine URL] [--baseline previous.json] [--out result.json]";
+const USAGE = "wordEdges.ts --case ID --reference-map match_audio.json [--leave SECONDS] [--checkout PATH] [--waveforms cached.json] [--engine URL] [--baseline previous.json] [--out result.json]";
 
 async function run() {
   const { values } = cli({ case: { type: "string" }, "reference-map": { type: "string" }, waveforms: { type: "string" },
-    engine: { type: "string" }, baseline: { type: "string" }, out: { type: "string" } }, USAGE);
+    engine: { type: "string" }, baseline: { type: "string" }, out: { type: "string" }, leave: { type: "string" }, checkout: { type: "string" } }, USAGE);
   if (!values.case || !values["reference-map"]) throw new Error(USAGE);
+  const leave = values.leave === undefined ? undefined : Number(values.leave);
+  if (leave !== undefined && (!values.leave?.trim() || !Number.isFinite(leave) || leave < 0)) throw new Error("--leave needs a nonnegative duration in seconds.");
+  // Keep the referee fixed. Only the engine, its measurement logic and timeline rounding change between checkouts.
+  const source = (file: string) => pathToFileURL(resolve(values.checkout ?? REPO_ROOT, "packages", file)).href;
+  const { DialogueEvidence }: typeof import("../../packages/mcp/src/dialogue-decisions.ts") = await import(source("mcp/src/dialogue-decisions.ts"));
+  const { joinEvidence }: typeof import("../../packages/mcp/src/dialogue-join.ts") = await import(source("mcp/src/dialogue-join.ts"));
+  const { planDialogueCuts, NoPauseToTrim }: typeof import("../../packages/mcp/src/dialogue-plan.ts") = await import(source("mcp/src/dialogue-plan.ts"));
+  const { frameAligned, timelineToSource }: typeof import("../../packages/timeline/src/index.ts") = await import(source("timeline/src/index.ts"));
   const loaded = loadCase(values.case), c = loaded.file;
   const tl = loaded.timeline(c.sourceVersion);
   if (!tl) throw new Error("The case lacks its source timeline. Rebuild it from the raw assembly.");
@@ -108,26 +116,48 @@ async function run() {
     if (![j.rawOut, j.rawIn, j.earliestFinal, j.finalTime, j.latestFinal].every(Number.isFinite) ||
       j.earliestFinal > j.finalTime + .001 || j.latestFinal < j.finalTime - .001) throw new Error(`Invalid timing or uncertainty at join ${index + 1}.`);
     const picked = wordSelection(midpoints, j, 1 / map.frameRate);
-    if (typeof picked === "string") { rows.push({ index, outcome: picked }); continue; }
+    let selection: { fromWord?: number; toWord?: number; afterWord?: number };
+    if (picked === "pause" && leave !== undefined) {
+      const afterWord = midpoints.findLastIndex(w => w < j.rawOut);
+      if (afterWord < 0 || afterWord + 1 >= midpoints.length) { rows.push({ index, outcome: "terminal" }); continue; }
+      selection = { afterWord };
+    } else if (typeof picked === "string") { rows.push({ index, outcome: picked }); continue; }
+    else selection = picked;
     if (j.rawOut < clip.sourceIn || j.rawIn > clip.sourceOut) { rows.push({ index, outcome: "outside" }); continue; }
-    const result = await planDialogueCuts({ tl, localPauses: false, cuts: [{ mediaId: id, ...picked, kind: "retake", decision: "cut", reason: "Published word selection." }] }, sources);
-    if (result.outcome === "needsRevision") { rows.push({ index, ...picked, outcome: "needsRevision" }); continue; }
+    const cut = { ...selection, mediaId: id, leave, kind: selection.afterWord === undefined ? "retake" as const : "pause" as const,
+      decision: "cut" as const, reason: "Published word selection." };
+    let result;
+    try {
+      result = await planDialogueCuts({ tl, localPauses: false, cuts: [cut] }, sources);
+    } catch (error) {
+      if (!NoPauseToTrim || !(error instanceof NoPauseToTrim)) throw error;
+      // The original gap still plays. Score it on the same words without inventing a picture cut.
+      const unchanged = { start: j.rawOut, end: j.rawOut, spacingErrorMs: round((j.rawIn - j.rawOut) * 1000, 3),
+        wrongWords: 0, wrongWordIndices: [], untouched: true };
+      rows.push({ index, ...selection, outcome: "untrimmed", placement: unchanged, frameAligned: unchanged });
+      continue;
+    }
+    if (result.outcome === "needsRevision") { rows.push({ index, ...selection, outcome: "needsRevision" }); continue; }
     if (result.outcome !== "ready" || result.decisions.length !== 1) throw new Error(`No placement returned for reference join ${index + 1}.`);
     const d = result.decisions[0]!;
     const measure = (range: { start: number; end: number }): Placement => {
       const start = timelineToSource(clip, range.start), end = timelineToSource(clip, range.end);
-      const wrongWords = midpoints.filter((w, i) => (start <= w && w < end) !== (picked.fromWord <= i && i <= picked.toWord)).length;
+      const wrongWordIndices = midpoints.flatMap((w, i) => {
+        const shouldRemove = selection.fromWord !== undefined && selection.toWord !== undefined && selection.fromWord <= i && i <= selection.toWord;
+        return (start <= w && w < end) !== shouldRemove ? [i] : [];
+      });
       // Holding the outer words fixed, each second of extra removal shortens the gap those words play by one second.
-      return { start, end, spacingErrorMs: round(((j.rawIn - j.rawOut) - (end - start)) * 1000, 3), wrongWords };
+      return { start, end, spacingErrorMs: round(((j.rawIn - j.rawOut) - (end - start)) * 1000, 3),
+        wrongWords: wrongWordIndices.length, wrongWordIndices };
     };
-    rows.push({ index, ...picked, outcome: d.review ? "review" : "applied", placement: measure(d), frameAligned: measure(frameAligned(d, c.fps)) });
+    rows.push({ index, ...selection, outcome: d.review ? "review" : "applied", placement: measure(d), frameAligned: measure(frameAligned(d, c.fps)) });
   }
   const inputs = createHash("sha256").update(JSON.stringify([map, tl, c.fps, words, readings])).digest("hex");
-  const result: Result = { caseId: c.id, inputs, rows };
+  const result: Result = { caseId: c.id, inputs, rows, leave };
   const summary = summarize(rows);
   const previous = values.baseline ? readJson<Result>(values.baseline) : undefined;
   if (previous && (previous.inputs !== inputs || previous.caseId !== c.id || previous.rows.length !== rows.length ||
-    previous.rows.some((r, i) => r.index !== rows[i]!.index || r.fromWord !== rows[i]!.fromWord || r.toWord !== rows[i]!.toWord))) {
+    previous.rows.some((r, i) => r.index !== rows[i]!.index || r.fromWord !== rows[i]!.fromWord || r.toWord !== rows[i]!.toWord || r.afterWord !== rows[i]!.afterWord))) {
     throw new Error("Baseline case, reference, eligible word labels, timeline, transcript and waveforms must match for a paired comparison.");
   }
   const shared = previous && rows.filter((r, i) => r.frameAligned && previous.rows[i]?.frameAligned).map(r => r.index);
