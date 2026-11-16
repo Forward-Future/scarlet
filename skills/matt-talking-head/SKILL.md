@@ -33,13 +33,13 @@ Use a two-frame audio crossfade at dialogue joins and a straight picture cut. Br
 
 ## Show the demo
 
-During a synchronized screen demo, keep my camera inset at a consistent size in the bottom right. Start with the inset size you would otherwise use. Widen the frame by 15% at the same height, then scale the widened frame up by 20% in both dimensions. Preserve the camera footage’s proportions as you adjust the crop. Zoom in within the inset, cropping some from both sides and a little from the top. Keep my face comfortably framed with a little headroom, and round all four corners of the inset. Frame the moving recording around what I am showing. Fill the picture with the game or preview pane when I play it, the passage when I read it, or the chart and its labels when I discuss a result. Go wide enough to show both sides of a comparison or keep a tall demo intact. Keep controls I use and words I read clear of the inset.
+During a synchronized screen demo, keep my camera inset at a consistent size in the bottom right. Start with the inset size you would otherwise use and scale it up by 20% in both dimensions, then crop the sides for a narrower frame. Aim for 1.5:1 (width to height), with room to go up to 2:1 if the framing needs it. Adjust the crop and zoom so my full chest stays in frame throughout the demo and my face has a little headroom. Round all four corners of the inset. Frame the moving recording around what I am showing. Fill the picture with the game or preview pane when I play it, the passage when I read it, or the chart and its labels when I discuss a result. Go wide enough to show both sides of a comparison or keep a tall demo intact. Keep controls I use and words I read clear of the inset.
 
 Follow the narration. Ease into the subject as I mention it, settling in about a second. Hold through small pointer movements. Ease back out or across when the subject changes. When the narration moves quickly between related details, one wider frame can cover them. Check frames through the move and at the reveal for the label, control or result the viewer needs to see.
 
 ## Camera punch-ins
 
-On full-screen camera footage, cut from wide to head and shoulders across a jump cut or on a line that needs emphasis. About 115–130% is a starting point when the source stays sharp. Hold for a few seconds, follow my actual face position, and keep my eyes and mouth comfortably framed. Return wide at the end of the thought. Keep the demo inset steady.
+On full-screen camera footage, change the framing at every jump cut, wide to head and shoulders or back, so no cut jumps. Place them once the dialogue cuts are in, and again on any cut I approve later. Cuts close together can share the tight framing. Push in on a line that needs emphasis as well. About 115–130% is a starting point when the source stays sharp. Hold for a few seconds, follow my actual face position, and keep my eyes and mouth comfortably framed. Return wide at the end of the thought. Keep the demo inset steady.
 
 ## When requested
 
