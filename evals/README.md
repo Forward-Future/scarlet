@@ -74,14 +74,21 @@ version's timeline: the source, the applied cut, the proposed cut and the refere
   The second delivery must begin within three seconds of the first ending. For phrases over five words, the two
   starts must be within 25 seconds of each other. The reference count includes deliberate emphasis ("very, very").
 - A typed or silent demonstration is a gap here. The reference's own count is the floor a cut can reach.
+- **What the task left.** The headline gaps, dead air and doubled words are measured on the edit the task ended on:
+  the applied cut plus the task's own later changes (closing-check repairs, staged picks it applied). With an engine,
+  that is the head of the task's branch whenever one of the task's changes made it. `recommended…` and the
+  `restartsLeft`/`silencesLeft` counts take out, too, every staged cut still waiting for the editor that the agent
+  marked `cut`, including cuts staged on earlier versions: they go in with the editor's calls. `stagedWaiting` counts
+  those earlier-version cuts. Scored on the applied version, a pass whose closing check cut a 73-second wait was
+  charged for it (2026-11-17).
 
 **Held by Scarlet.** Staged cuts the agent submitted as `cut`: the measured edit needs review.
 
 **Against a reference** (the editor's final or approved cut). This section is scored at three operating points:
 
 - `applied`: the confident cuts alone.
-- `recommended`: applied plus the review items the AI marked `cut`.
-- `proposed`: applied plus every review item.
+- `recommended`: what the task left, less every staged item the AI marked `cut`.
+- `proposed`: what the task left, less every staged item.
 
 The metrics are:
 

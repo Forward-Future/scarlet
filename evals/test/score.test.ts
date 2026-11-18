@@ -101,3 +101,38 @@ describe("scoring a synthetic run", () => {
     expect(score.headline).toMatchObject({ appliedCuts: 1, reviewCuts: 1, wordF1: 1, edgeF1At20ms: 1, requiredLinesMissing: 0 });
   });
 });
+
+describe("what a task left, with staged cuts still waiting", () => {
+  // The pass applied line 2's cut (A), then its closing check took out line 7 (F). Cuts it staged on the source version,
+  // before either, still wait for the editor: line 5 recommended cut, line 8 a question.
+  const S = cut("S", MIC, [[0, 20]]);
+  const A = cut("A", MIC, [[0, 4], [6, 20]]);
+  const F = cut("F", MIC, [[0, 4], [6, 14], [16, 20]]);
+  const editor = cut("E", MIC, [[0, 4], [6, 10], [12, 14], [16, 20]]);
+  const applied = change({ id: "chg_a", intent: "requested", state: "approved", fromVersion: "S", toVersion: "A", appliedVersion: "A",
+    cutReasons: [{ start: 4, end: 6, reason: "Earlier take of line 2." }] });
+  const staged: ReviewChangeExport = { id: "chg_w", state: "ready", fromVersion: "S", toVersion: "W", firstCut: false, cuts: [
+    { index: 0, removed: { start: 10, end: 12 }, sources: [{ mediaId: MIC, start: 10, end: 12 }], reasons: [], decision: "pending",
+      assessment: { verdict: "cut", reason: "Earlier take of line 5.", inspected: true } },
+    { index: 1, removed: { start: 16, end: 18 }, sources: [{ mediaId: MIC, start: 16, end: 18 }], reasons: [], decision: "pending",
+      assessment: { verdict: "ask", reason: "Keep line 8?", inspected: true } }] };
+  const score = scoreRun({
+    media: [media(MIC)], timelines: { source: S, applied: A, proposed: A, final: F }, appliedChange: applied, waiting: [staged],
+    evidence: new Map([[MIC, lines(MIC, 10)]]), reference: { label: "editor", timeline: editor },
+  });
+
+  it("measures the edit the task ended on, not the applied version", () => {
+    expect(score.versions.final).toBe("F");
+    expect(score.pacing.final!.gaps).not.toEqual(score.pacing.applied.gaps);
+    expect(score.headline.gapsLeft).toBe(score.pacing.final!.gaps.inside + score.pacing.final!.gaps.atJoins);
+    expect(score.headline.deadAirSeconds).toBe(score.pacing.final!.gaps.excessSeconds);
+  });
+
+  it("counts staged cuts from an earlier version in what the editor gets", () => {
+    expect(score.headline).toMatchObject({ stagedWaiting: 2, needsYourCall: 1 });
+    // Accepting the picks takes line 5 out of the edit the task left: exactly the editor's cut.
+    expect(score.reference!.operatingPoints.recommended.cut!.words.f1).toBe(1);
+    expect(score.reference!.operatingPoints.proposed.cut!.words.precision).toBeLessThan(1);
+    expect(score.pacing.recommended!.joins).toBe(score.pacing.final!.joins + 1);
+  });
+});

@@ -23,6 +23,8 @@ export interface Artifacts {
   /** Every part's plan, the first being `plan`. */
   plans?: SubmittedPlan[];
   reviewExport?: ReviewChangeExport;
+  /** Reviews the task staged on other versions that still wait for the editor. */
+  waiting?: ReviewChangeExport[];
   reviewSource: "engine" | "local" | "none";
   versions: { source: string; applied: string; proposed: string; final?: string };
   timelines: Map<string, Timeline>;
@@ -33,7 +35,7 @@ export const mediaInfo = (m: { id: string; kind: string; name?: string; duration
 
 type Decide = (review: Change, timeline: (v: string) => Promise<Timeline>) => Promise<{ source: "engine" | "local"; changes: ReviewChangeExport[] }>;
 
-async function assemble(task: TaskRecord, events: EventLike[], changes: Change[], project: { id: string; fps: number; media: MediaInfo[] },
+async function assemble(task: TaskRecord, events: EventLike[], changes: Change[], project: { id: string; fps: number; media: MediaInfo[]; head?: string },
   load: (v: string) => Promise<Timeline>, decide: Decide, partial = false): Promise<Artifacts> {
   const owned = changes.filter(c => !c.taskId || c.taskId === task.id);
   const requested = owned.filter(c => c.intent === "requested" && c.state === "approved")
@@ -69,6 +71,9 @@ async function assemble(task: TaskRecord, events: EventLike[], changes: Change[]
     seen.add(next.id);
     finalVersion = next.appliedVersion ?? next.toVersion;
   }
+  // The task's branch ends where the task left it. When the walk above stops short of that head and one of the task's
+  // own changes made it, the head is what it left playing: a run scored a version from nine minutes before it ended.
+  if (project.head && project.head !== finalVersion && landed.some(c => (c.appliedVersion ?? c.toVersion) === project.head)) finalVersion = project.head;
   // The last submission on each version of the chain is the plan that version's part applied.
   const chain = [source, ...parts.map(p => p.appliedVersion ?? p.toVersion)];
   const plans = chain.flatMap(v => submitted.filter(p => p.version === v).slice(-1));
@@ -95,7 +100,14 @@ async function assemble(task: TaskRecord, events: EventLike[], changes: Change[]
     reviewExport = result.changes.find(c => c.id === review.id);
     reviewSource = reviewExport ? result.source : "none";
   }
-  return { task, events, projectId: project.id, fps: project.fps, media: project.media, changes, applied, parts, review, plan, plans, reviewExport, reviewSource,
+  // Staged cuts on earlier versions the editor has yet to decide go in with the editor's calls.
+  const waiting: ReviewChangeExport[] = [];
+  for (const change of reviews.filter(c => c.state === "ready" && c.id !== review?.id)) {
+    if (partial && (!timelines.has(change.fromVersion) || !timelines.has(change.toVersion))) continue;
+    const item = (await decide(change, timeline).catch(() => undefined))?.changes.find(c => c.id === change.id);
+    if (item) waiting.push(item);
+  }
+  return { task, events, projectId: project.id, fps: project.fps, media: project.media, changes, applied, parts, review, plan, plans, reviewExport, waiting, reviewSource,
     versions: { source, applied: appliedVersion, proposed, ...(finalVersion !== appliedVersion && { final: finalVersion }) }, timelines };
 }
 
@@ -106,7 +118,9 @@ export async function gatherTask(engine: Engine, taskId: string, cached?: (v: st
   const task = usage ? { ...record, usage } : record;
   const project = await engine.project(task.projectId);
   const changes = await Promise.all(task.changeIds.map(id => engine.change(id)));
-  return assemble(task, events, changes, { id: project.id, fps: project.settings.fps, media: project.media.map(mediaInfo) },
+  const branch = typeof task.context.branch === "string" ? task.context.branch : undefined;
+  const head = branch ? (await engine.branches(task.projectId).catch(() => [])).find(b => b.name === branch)?.head : undefined;
+  return assemble(task, events, changes, { id: project.id, fps: project.settings.fps, media: project.media.map(mediaInfo), head },
     async v => cached?.(v) ?? engine.timeline(task.projectId, v),
     (review, timeline) => reviewDecisions(engine, task.projectId, [review], timeline, project.media, taskId));
 }
@@ -183,7 +197,7 @@ function evaluateArtifacts(a: Artifacts, evidence: ReadonlyMap<string, MediaEvid
     timelines: { source: a.timelines.get(a.versions.source)!, applied: a.timelines.get(a.versions.applied)!, proposed: a.timelines.get(a.versions.proposed)!,
       reviewBase: a.review ? a.timelines.get(a.review.fromVersion) : undefined, plan: a.plan ? a.timelines.get(a.plan.version) : undefined,
       final: a.versions.final ? a.timelines.get(a.versions.final) : undefined },
-    appliedChange: a.applied, reviewChange: a.review, review: a.reviewExport, plan: a.plan,
+    appliedChange: a.applied, reviewChange: a.review, review: a.reviewExport, waiting: a.waiting, plan: a.plan,
     appliedParts: a.parts?.map(change => ({ change, from: a.timelines.get(change.fromVersion)! })),
     plans: a.plans?.map(plan => ({ plan, timeline: a.timelines.get(plan.version)! })),
     timelineAt: v => a.timelines.get(v),

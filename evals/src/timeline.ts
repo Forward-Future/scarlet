@@ -134,6 +134,20 @@ export function timelineRangeToSource(tl: Timeline, media: readonly MediaInfo[],
   return out;
 }
 
+/** Where source ranges play on a timeline: the timeline ranges of every audible clip that plays them, merged. */
+export function sourceToTimeline(tl: Timeline, media: readonly MediaInfo[], ranges: readonly SourceRange[]): Range[] {
+  const out: Range[] = [];
+  for (const c of audibleClips(tl, media)) {
+    const speed = c.speed ?? 1;
+    for (const r of ranges) {
+      if (r.mediaId !== c.mediaId) continue;
+      const start = Math.max(r.start, c.sourceIn), end = Math.min(r.end, c.sourceOut);
+      if (end - start > 1e-6) out.push({ start: c.timelineIn + (start - c.sourceIn) / speed, end: c.timelineIn + (end - c.sourceIn) / speed });
+    }
+  }
+  return merge(out);
+}
+
 /** Group source ranges by recording and merge them. */
 export function byMedia(ranges: readonly SourceRange[]): Map<string, Range[]> {
   const out = new Map<string, Range[]>();

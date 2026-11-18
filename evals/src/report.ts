@@ -167,7 +167,7 @@ export interface TrialRow { caseId: string; config: string; trial: number; taskI
 export function runMarkdown(title: string, rows: TrialRow[]): string {
   const groups = new Map<string, TrialRow[]>();
   for (const row of rows) groups.set(`${row.caseId}\u0000${row.config}`, [...(groups.get(`${row.caseId}\u0000${row.config}`) ?? []), row]);
-  const keys = ["appliedSeconds", "reviewSeconds", "appliedSpeechEdges", "reviewSpeechEdges", "clippedWordsOnSound", "needsYourCall", "heldByScarlet", "gapsLeft", "looseJoins",
+  const keys = ["appliedSeconds", "reviewSeconds", "appliedSpeechEdges", "reviewSpeechEdges", "clippedWordsOnSound", "needsYourCall", "heldByScarlet", "stagedWaiting", "gapsLeft", "looseJoins",
     "deadAirSeconds", "recommendedDeadAirSeconds", "recommendedLooseJoins", "restartsLeft", "silencesLeft", "dividedJoins", "repeatsLeft", "repeatsAtJoins", "sharedAppliedJoins", "sharedAppliedJoinGapMedianAbsErrorMs", "checkJoinCoverage",
     "wordF1", "timeF1", "edgeF1At20ms", "requiredLinesMissing", "toolErrors", "activeMinutes", "tokens"];
   if (rows.some(r => r.headline?.verifiedPublishedWords !== undefined))
