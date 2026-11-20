@@ -5630,6 +5630,149 @@ it("carries a pass's next part and the editor's reviewed cuts onto an edit that 
   expect(timelineDuration(ctx.repos.versions.get(project.id, head)!.timeline)).toBeCloseTo(15);
 });
 
+function usePickup(at: number) {
+  const { ctx } = workspace;
+  ctx.repos.projects.putMedia(project.id, { id: "pickup", name: "Pickup", path: "pickup.wav", kind: "audio", duration: 1, hasAudio: true }, "ready");
+  const change = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", autoApprove: true, description: "Use the pickup.",
+    ops: [{ op: "splitClip", clipId: "raw", at, newClipId: "middle" },
+      { op: "splitClip", clipId: "middle", at: at + 1, newClipId: "tail" },
+      { op: "updateClip", clipId: "middle", patch: { mediaId: "pickup", sourceIn: 0, sourceOut: 1 } }] }).change;
+  expect(change.state).toBe("approved");
+  return change;
+}
+
+it("refuses a stale confident dialogue cut when an equal-length pickup replaced footage inside it", async () => {
+  const { ctx } = workspace;
+  const { task, base, staged, submit } = dialoguePassInParts();
+  const one = await submit(base, [staged(15, 16)]);
+  const replaced = usePickup(6.5);
+  const res = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: base, description: "Part",
+    cuts: [{ start: 6, end: 8, review: false, reason: "false start" }] });
+  expect(res.status).toBe(409);
+  expect(await res.json()).toMatchObject({ error: { code: "cut_changed" } });
+  expect(ctx.repos.projects.get(project.id)!.head).toBe(replaced.toVersion);
+  expect(ctx.repos.versions.get(project.id, replaced.toVersion)!.timeline.tracks.flatMap(t => t.clips))
+    .toContainEqual(expect.objectContaining({ id: "middle", mediaId: "pickup", timelineIn: 6.5, sourceIn: 0, sourceOut: 1 }));
+  expect(ctx.repos.changes.get(one.review.id)!.state).toBe("ready");
+});
+
+it("refuses a stale staged dialogue cut when an equal-length pickup replaced footage inside its restorable range", async () => {
+  const { ctx } = workspace;
+  const { task, base } = dialoguePassInParts();
+  const replaced = usePickup(7.5);
+  const res = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: base, description: "Part",
+    cuts: [{ start: 6, end: 7, originalRange: { start: 6, end: 9 }, review: true, reason: "narrowed retake" }] });
+  expect(res.status).toBe(409);
+  expect(await res.json()).toMatchObject({ error: { code: "cut_changed" } });
+  expect(ctx.repos.projects.get(project.id)!.head).toBe(replaced.toVersion);
+  expect(ctx.repos.versions.get(project.id, replaced.toVersion)!.timeline.tracks.flatMap(t => t.clips))
+    .toContainEqual(expect.objectContaining({ id: "middle", mediaId: "pickup", timelineIn: 7.5, sourceIn: 0, sourceOut: 1 }));
+});
+
+it("applies a stale dialogue cut cleanly after a shift and non-audio video reframe over the cut range", async () => {
+  const { ctx } = workspace;
+  vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
+  const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: { type: "human", name: "Editor" } });
+  ctx.repos.projects.putMedia(project.id, { id: "cam", name: "cam", path: "cam.mp4", kind: "video", duration: 20, hasAudio: true }, "ready");
+  const base = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: task.id, description: "Assemble",
+    ops: [{ op: "addClip", trackId: "v1", clip: { id: "raw", kind: "media", mediaId: "cam", timelineIn: 0, sourceIn: 0, sourceOut: 20 } }] }).change.toVersion;
+  const shifted = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", autoApprove: true, description: "Trim and punch in",
+    ops: [{ op: "rippleDelete", start: 0, end: 2 }, { op: "updateClip", clipId: "raw", patch: { transform: { x: 0, y: 0, scale: 1.2 } } }] }).change;
+  expect(shifted.state).toBe("approved");
+  const res = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: base, description: "Part",
+    cuts: [{ start: 6, end: 8, review: false, reason: "false start" }] });
+  expect(res.status).toBe(201);
+  const { changes } = await res.json() as { changes: Change[] };
+  expect(changes).toMatchObject([{ state: "approved" }]);
+  expect(ctx.repos.changes.get(changes[0]!.id)!.cutReasons).toMatchObject([{ start: 4, end: 6, reason: "false start" }]);
+  const head = ctx.repos.versions.get(project.id, ctx.repos.projects.get(project.id)!.head!)!.timeline;
+  expect(timelineDuration(head)).toBeCloseTo(16);
+  expect(straightCuts(head.tracks.find(t => t.id === "v1")!.clips)).toMatchObject([
+    { mediaId: "cam", sourceIn: 2, sourceOut: 6, transform: { scale: 1.2 } },
+    { mediaId: "cam", sourceIn: 8, sourceOut: 20, transform: { scale: 1.2 } },
+  ]);
+});
+
+it("refuses a stale dialogue cut when audio volume changed inside it", async () => {
+  const { ctx } = workspace;
+  const { task, base } = dialoguePassInParts();
+  const adjusted = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", autoApprove: true, description: "Lower volume",
+    ops: [{ op: "splitClip", clipId: "raw", at: 6.5, newClipId: "middle" },
+      { op: "splitClip", clipId: "middle", at: 7.5, newClipId: "tail" },
+      { op: "updateClip", clipId: "middle", patch: { volume: 0.5 } }] }).change;
+  expect(adjusted.state).toBe("approved");
+  const res = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: base, description: "Part",
+    cuts: [{ start: 6, end: 8, review: false, reason: "false start" }] });
+  expect(res.status).toBe(409);
+  expect(await res.json()).toMatchObject({ error: { code: "cut_changed" } });
+  expect(ctx.repos.projects.get(project.id)!.head).toBe(adjusted.toVersion);
+  expect(ctx.repos.versions.get(project.id, adjusted.toVersion)!.timeline.tracks.flatMap(t => t.clips))
+    .toContainEqual(expect.objectContaining({ id: "middle", volume: 0.5, timelineIn: 6.5 }));
+});
+
+it("refuses to carry a called staged cut whose interior was replaced by an equal-length pickup before the next part", async () => {
+  const { ctx } = workspace;
+  const { task, base, staged, submit, choose, listed } = dialoguePassInParts();
+  const one = await submit(base, [staged(12, 14)]);
+  expect((await choose(one.review, [{ index: 0, choice: "cut" }])).status).toBe(200);
+  const replaced = usePickup(12.5);
+  const res = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: replaced.toVersion, description: "Part 2",
+    cuts: [{ start: 2, end: 3, review: false, reason: "false start" }] });
+  expect(res.status).toBe(409);
+  expect(await res.json()).toMatchObject({ error: { code: "cut_changed",
+    details: { changeId: one.review.id, index: 0, currentVersion: replaced.toVersion } } });
+  expect(ctx.repos.projects.get(project.id)!.head).toBe(replaced.toVersion);
+  expect(ctx.repos.versions.get(project.id, replaced.toVersion)!.timeline.tracks.flatMap(t => t.clips))
+    .toContainEqual(expect.objectContaining({ id: "middle", mediaId: "pickup", timelineIn: 12.5, sourceIn: 0, sourceOut: 1 }));
+  expect(ctx.repos.changes.get(one.review.id)).toMatchObject({ state: "ready", cutChoices: [{ index: 0, choice: "cut" }] });
+
+  const revised = await api("POST", `/changes/${one.review.id}/staged-cuts/0`, { version: replaced.toVersion,
+    start: 12, end: 12.5, reason: "Keep the pickup." });
+  expect(revised.status).toBe(201);
+  const unblocked = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: replaced.toVersion, description: "Part 2",
+    cuts: [{ start: 2, end: 3, review: false, reason: "false start" }] });
+  expect(unblocked.status).toBe(201);
+  const body = await unblocked.json() as { changes: Change[] };
+  const review = ctx.repos.changes.get(body.changes.find(c => c.intent === "suggestion")!.id)!;
+  expect(await listed(review)).toEqual([[11, 11.5]]);
+  const head = ctx.repos.versions.get(project.id, ctx.repos.projects.get(project.id)!.head!)!.timeline;
+  expect(head.tracks.flatMap(t => t.clips))
+    .toContainEqual(expect.objectContaining({ id: "middle", mediaId: "pickup", timelineIn: 11.5, sourceIn: 0, sourceOut: 1 }));
+});
+
+it("refuses a stale candidate cut on the recovering path when an equal-length pickup replaced footage inside it", async () => {
+  const { ctx } = workspace;
+  const { task, base, staged, submit } = dialoguePassInParts();
+  const one = await submit(base, [staged(15, 16)]);
+  createTask(ctx, { projectId: project.id, kind: "revise", agent: "codex", instruction: "Tighten the cut.",
+    createdBy: { type: "human", name: "Editor" }, context: { changeId: one.review.id, cutIndex: 0 } });
+  const replaced = usePickup(6.5);
+  const res = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: base, description: "Part 2",
+    cuts: [{ start: 6, end: 8, review: false, reason: "false start" }] });
+  expect(res.status).toBe(409);
+  expect(await res.json()).toMatchObject({ error: { code: "cut_changed" } });
+  expect(ctx.repos.projects.get(project.id)!.head).toBe(replaced.toVersion);
+  expect(ctx.repos.versions.get(project.id, replaced.toVersion)!.timeline.tracks.flatMap(t => t.clips))
+    .toContainEqual(expect.objectContaining({ id: "middle", mediaId: "pickup", timelineIn: 6.5, sourceIn: 0, sourceOut: 1 }));
+});
+
+it("drops an uncalled staged cut whose interior was replaced by an equal-length pickup before the next part", async () => {
+  const { ctx } = workspace;
+  const { task, base, staged, submit, listed } = dialoguePassInParts();
+  const one = await submit(base, [staged(12, 14), staged(16, 17)]);
+  const replaced = usePickup(12.5);
+  const res = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: replaced.toVersion, description: "Part 2",
+    cuts: [{ start: 2, end: 3, review: false, reason: "false start" }] });
+  expect(res.status).toBe(201);
+  const body = await res.json() as { changes: Change[]; droppedFromReview?: Array<{ changeId: string; version: string; start: number; end: number; why: string }> };
+  expect(body.droppedFromReview).toEqual([expect.objectContaining({ changeId: one.review.id, version: base, start: 12, end: 14 })]);
+  const review = ctx.repos.changes.get(body.changes.find(c => c.intent === "suggestion")!.id)!;
+  expect(await listed(review)).toEqual([[15, 16]]);
+  const head = ctx.repos.versions.get(project.id, ctx.repos.projects.get(project.id)!.head!)!.timeline;
+  expect(head.tracks.flatMap(t => t.clips))
+    .toContainEqual(expect.objectContaining({ id: "middle", mediaId: "pickup", timelineIn: 11.5, sourceIn: 0, sourceOut: 1 }));
+});
+
 it("lists only the cuts that went in when a pass with a skipped call is applied onto an edit that moved", async () => {
   const { ctx } = workspace;
   const { task, base, staged, submit, listed } = dialoguePassInParts();

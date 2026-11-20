@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 20, 2026
 
+- A dialogue pass no longer removes a take you swapped in while it was working.
 - The model picker lists Standard speed once for Claude models instead of twice.
 - A skill Scarlet comes with that you edited and then set back to Scarlet's own text gets Scarlet's updates again.
 - When Scarlet puts your camera in the corner over a screen recording, it now frames you instead of shrinking the whole camera shot into the box, and follows your skill's size, shape, how much of you to show and rounded corners.

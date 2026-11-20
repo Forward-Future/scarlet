@@ -7,7 +7,7 @@ import { boundedRippleOps, rippleDrift, cutAnchorOn, cutScope, selectedRange, se
 import { agentTarget, beginRevision, callNumbers, threadTimeline, type ApproveResponse, type FlagEditRequest, type KeepEditsRequest, type KeptEdit, type UnkeepEditsRequest, type AgentId, type ProposeChangeRequest, type Task, type ThreadEdit, type User } from "@scarlet/shared";
 import { z } from "zod/v3";
 import { ReviseRequest as ReviseRequestSchema } from "@scarlet/shared";
-import { frameAligned, frameAlignedRemoval, isPublishedCall, onFrame, makeStagedCutMapper,
+import { frameAligned, frameAlignedRemoval, isPublishedCall, onFrame, makeStagedCutMapper, type StagedCutMapping,
   SUMMARY_MAX,
   crossfadeJoins,
   type JoinFades,
@@ -461,7 +461,8 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     }
     // The editor or another request can change the edit while a part is being decided. Its cuts are anchored in
     // the footage, so they move onto the current version unless footage inside one of them changed.
-    const toHead = head === fromVersion ? undefined : makeTimeMap(base, resolveTimeline(ctx, project, head), fps);
+    const headTimeline = head === fromVersion ? base : resolveTimeline(ctx, project, head);
+    const toHead = head === fromVersion ? undefined : makeStagedCutMapper(base, headTimeline, fps);
     // A pass saved in parts: the run's previous parts left their staged cuts waiting. They join this part's review so
     // they stay reviewable once this part's cuts apply. A run resumed after an interruption still owns its earlier parts.
     const rootId = taskId && (sourceTask?.resumeRootId ?? taskId);
@@ -479,7 +480,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       .filter(c => c.intent === "suggestion" && c.id.endsWith("_review") && c.cutReasons?.length &&
         (pending.has(c.id) || c.state === "ready")) : [];
     const recovering = waiting.some(c => c.cutEdits?.length || pending.has(c.id));
-    const current = recovering ? resolveTimeline(ctx, project, head) : undefined;
+    const current = recovering ? headTimeline : undefined;
     const protectedCuts = new Map<TimeRange, string>();
     const recoveredCuts = new Set<TimeRange>();
     const alreadyRemoved: { changeId: string; index: number; version: string; at: number }[] = [];
@@ -492,6 +493,8 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     const covers = (a: TimeRange, r: TimeRange) => r.start >= a.start - 1e-5 && r.end <= a.end + 1e-5;
     const editorChoice = (change: Change, r: TimeRange) => change.cutChoices?.find(c => covers(c, r))?.choice;
     const assessmentOf = (change: Change, r: TimeRange) => change.cutAssessments?.find(a => covers(a, r));
+    const usable = (m: StagedCutMapping): m is Extract<StagedCutMapping, { kind: "exact" | "shortened" }> =>
+      m.kind === "exact" || (m.kind === "shortened" && m.range.end - m.range.start >= 1 / fps - 1e-6);
     const changed = new Set<TimeRange>();
     // Staged cuts from an earlier part that nobody called and whose footage a later edit broke up. They leave the review,
     // and the agent is told which, so it can stage them again if it still means them.
@@ -500,40 +503,37 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     // Ordinary earlier parts retain their existing decisions when they move onto this part’s input.
     const earlier = !current ? waiting.map(change => {
       if (change.fromVersion === fromVersion) return change;
-      const map = makeTimeMap(resolveTimeline(ctx, project, change.fromVersion), base, fps);
-      const move = <T extends TimeRange>(r: T): T | undefined => {
-        const start = map(r.start, "right"), end = map(r.end, "left");
-        return start === null || end === null || Math.abs(end - start - (r.end - r.start)) > 1 / fps ? undefined : { ...r, start, end };
-      };
-      // What is left of a range's footage, from its first frame still in the video to its last.
-      const left = <T extends TimeRange>(r: T): T | undefined => {
-        const frames = Math.round((r.end - r.start) * fps);
-        let start: number | null = null, end: number | null = null;
-        for (let i = 0; i < frames && start === null; i++) start = map(i ? r.start + i / fps : r.start, "right");
-        for (let i = 0; i < frames && end === null; i++) end = map(i ? r.end - i / fps : r.end, "left");
-        // Footage the edit put in between, or clips it reordered, would stretch the range over footage nobody called.
-        if (start === null || end === null || end - start < 1 / fps - 1e-6 || end - start > r.end - r.start + 1 / fps) return undefined;
-        return { ...r, start, end };
-      };
+      const map = makeStagedCutMapper(resolveTimeline(ctx, project, change.fromVersion), base, fps);
       const cutReasons = change.cutReasons!.flatMap(r => {
-        const moved = move(r), range = r.originalRange && move(r.originalRange);
-        if (moved && (!r.originalRange || range)) return [{ ...moved, ...(range && { originalRange: range }) }];
-        if (!r.legacySuggest && !editorChoice(change, r) && assessmentOf(change, r)?.verdict !== "ask") 
-          return drop(change, r, "A later edit changed the footage inside this staged cut, and nobody had called it.");
-        const rest = left(r), around = r.originalRange && left(r.originalRange);
-        if (!rest || (r.originalRange && !around)) return drop(change, r, "None of this staged cut's footage is left in one piece on the new version.");
-        const placed = { ...rest, ...(around && { originalRange: around }) };
-        changed.add(placed);
+        const mapped = map(r), orig = r.originalRange && map(r.originalRange);
+        const exact = mapped.kind === "exact" && (!orig || orig.kind === "exact");
+        if (!exact) {
+          const called = !!r.legacySuggest || !!editorChoice(change, r) || assessmentOf(change, r)?.verdict === "ask";
+          if (!called)
+            return drop(change, r, "A later edit changed the footage inside this staged cut, and nobody had called it.");
+          const clash = mapped.kind === "conflict" ? mapped : orig?.kind === "conflict" ? orig : undefined;
+          if (clash) {
+            const index = prepareCutReview(ctx, change).review?.cuts.findIndex(cut => covers(cut.removed, r));
+            throw conflict("cut_changed", `The previous part's staged cut at ${r.start.toFixed(2)} s needs a new look: ${clash.reason}`,
+              { changeId: change.id, ...(index !== undefined && index >= 0 && { index }), currentVersion: head, range: clash.range });
+          }
+        }
+        if (!usable(mapped) || (orig && !usable(orig)))
+          return drop(change, r, "None of this staged cut's footage is left in one piece on the new version.");
+        const placed = { ...r, ...mapped.range, ...(orig && { originalRange: orig.range }) };
+        if (!exact) changed.add(placed);
         return [placed];
       });
       const cutAssessments = change.cutAssessments?.flatMap(a => {
-        const exact = move(a);
-        if (exact) return [exact];
-        const shortened = a.verdict === "ask" && left(a);
-        return shortened ? [{ ...shortened, inspected: undefined }] : [];
+        const mapped = map(a);
+        if (mapped.kind === "exact") return [{ ...a, ...mapped.range }];
+        return a.verdict === "ask" && usable(mapped) ? [{ ...a, ...mapped.range, inspected: undefined }] : [];
       });
       return { ...change, cutReasons, cutAssessments,
-        cutChoices: change.cutChoices?.flatMap(c => move(c) ?? left(c) ?? []) };
+        cutChoices: change.cutChoices?.flatMap(c => {
+          const mapped = map(c);
+          return usable(mapped) ? [{ ...c, ...mapped.range }] : [];
+        }) };
     }) : waiting.map(change => {
       const review = prepareCutReview(ctx, change).review;
       if (!review) throw conflict("cut_changed", "The previous part's cut list is unavailable. Its review is still saved.");
@@ -586,11 +586,11 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     // The editor's call on a staged cut stands: a later part doesn't decide that range again.
     const moveToHead = (r: TimeRange) => {
       if (!toHead) return r;
-      const start = toHead(r.start, "right"), end = toHead(r.end, "left");
-      if (start === null || end === null || Math.abs(end - start - (r.end - r.start)) > 1 / fps) {
+      const mapped = toHead(r);
+      if (mapped.kind !== "exact") {
         throw conflict("cut_changed", `The edit changed around ${r.start.toFixed(1)} s while this part was decided. Reread the current timeline and map that passage again.`);
       }
-      return { start, end };
+      return mapped.range;
     };
     const kept = body.kept ?? [];
     if (body.cuts.some(c => kept.some(k => (c.originalRange ?? c).start < k.end && k.start < (c.originalRange ?? c).end)))
@@ -691,7 +691,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     }
     if (toHead) {
       if (!current) cuts = cuts.map(c => ({ ...c, ...moveToHead(c), ...(c.originalRange && { originalRange: moveToHead(c.originalRange) }) }));
-      duration = timelineDuration(resolveTimeline(ctx, project, head));
+      duration = timelineDuration(headTimeline);
     }
     // Whole frames: a cut of a whole number of frames moves everything after it by whole frames, so the cached preview
     // sections after it still match. Rounding inward never removes more than the plan; a sub-frame cut rounds to the nearest
