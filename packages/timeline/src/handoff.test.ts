@@ -33,6 +33,11 @@ describe("rates and timecode", () => {
     expect(handoffFileNames(["cam.mov", "Cam.mov", "a/b:c.wav", ""])).toEqual(["cam.mov", "Cam 2.mov", "a b c.wav", "Media"]);
   });
 
+  it("keeps names that differ only in Unicode composition apart, as macOS compares them", () => {
+    expect(handoffFileNames(["Café.mov", "Cafe\u0301.mov", "CAFE\u0301.MOV"]))
+      .toEqual(["Café.mov", "Cafe\u0301 2.mov", "CAFE\u0301 3.MOV"]);
+  });
+
   it("names the copies as Windows will write them: no trailing dots or spaces, no device names", () => {
     expect(handoffFileNames(["take.mov. ", "notes. . ", "CON.mov", "nul", "Com1.tar.gz", "lpt9.wav", "console.mov", "aux.mov"]))
       .toEqual(["take.mov", "notes", "CON_.mov", "nul_", "Com1_.tar.gz", "lpt9_.wav", "console.mov", "aux_.mov"]);
