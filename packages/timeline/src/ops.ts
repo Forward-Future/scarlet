@@ -359,6 +359,14 @@ function withCaptionStyle<P extends { captionStyle?: Partial<CaptionStyle> }>(cu
   return patch.captionStyle ? { ...patch, captionStyle: { ...current, ...patch.captionStyle } } : patch;
 }
 
+/** The overlap in timeline seconds when `left` and `right` carry a centered audio crossfade; 0 otherwise. */
+export function crossfadeOverlap(left: Clip, right: Clip): number {
+  if (left.kind !== "media" || right.kind !== "media" || right.timelineIn <= left.timelineIn + MEET) return 0;
+  const overlap = clipEnd(left) - right.timelineIn;
+  if (overlap <= 0 || Math.abs(left.audioFadeOut - overlap) > 1e-6 || Math.abs(right.audioFadeIn - overlap) > 1e-6) return 0;
+  return overlap;
+}
+
 /**
  * A centered audio crossfade a removal reaches goes back to the straight cut at its centre first: two clips on one track
  * that overlap by exactly the fades they carry there. Cut through as it is, the overlap would leave one side fading out
@@ -373,9 +381,9 @@ export function straightenCrossfades(track: Track, start: number, end: number) {
     if (left.kind !== "media" || !left.audioFadeOut || leftEnd < start - MEET) continue;
     for (let j = i + 1; j < clips.length && clips[j]!.timelineIn < leftEnd - MEET; j++) {
       const right = clips[j]!;
-      const overlap = leftEnd - right.timelineIn;
-      if (right.kind !== "media" || right.timelineIn <= left.timelineIn + MEET || Math.abs(left.audioFadeOut - overlap) > 1e-6 ||
-          Math.abs(right.audioFadeIn - overlap) > 1e-6 || start > leftEnd + MEET || end < right.timelineIn - MEET) continue;
+      if (right.kind !== "media" || start > leftEnd + MEET || end < right.timelineIn - MEET) continue;
+      const overlap = crossfadeOverlap(left, right);
+      if (!overlap) continue;
       const join = right.timelineIn + overlap / 2;
       clips[i] = { ...trimTail(left, join), audioFadeOut: 0 };
       clips[j] = { ...trimHead(right, join), audioFadeIn: 0 };

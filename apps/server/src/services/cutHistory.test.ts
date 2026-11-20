@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { applyOps, createProject, timelineFromKeepRanges, type Project } from "@scarlet/timeline";
+import { applyOps, createProject, emptyTimeline, makeMediaClip, timelineFromKeepRanges, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
 import { localUser } from "../auth.js";
 import { recordHistoryEdit, rejectEdits } from "./cutHistory.js";
@@ -113,4 +113,88 @@ it("undoes a request whose only edit is rejected, whatever it changed", () => {
     marked.version, ctx.repos.projects.get(project.id)!.branch ?? "main");
   expect(change).toMatchObject({ rejects: true, description: "Rejected · Title" });
   expect(ctx.repos.versions.get(project.id, after.head!)!.timeline.markers).toEqual([]);
+});
+
+const REPEAT_PUNCH = { x: 0, y: 0, scale: 1.15, rotation: 0 };
+
+function videoScales(version: string) {
+  return app.ctx.repos.versions.get(project.id, version)!.timeline.tracks
+    .find(t => t.kind === "video")!.clips.map(c => c.kind === "media" && c.transform?.scale);
+}
+
+function repeatedPunchChange(changeId: string) {
+  const { ctx } = app;
+  const user = localUser(ctx);
+  ctx.repos.projects.putMedia(project.id, { id: "camera", name: "interview.mov", kind: "video", path: "camera.mov" }, "ready");
+  const tl = emptyTimeline(project.id);
+  tl.tracks[0]!.clips = [
+    makeMediaClip("camera", 0, 10, 0, { id: "intro", volume: 0 }),
+    makeMediaClip("camera", 10, 20, 10, { id: "occ1", volume: 0 }),
+    makeMediaClip("camera", 25, 30, 20, { id: "mid", volume: 0 }),
+    makeMediaClip("camera", 10, 20, 25, { id: "occ2", volume: 0 }),
+  ];
+  const first = storeVersion(ctx, project.id, tl, { parent: null });
+  const ops = [
+    { op: "updateClip" as const, clipId: "occ1", patch: { transform: REPEAT_PUNCH } },
+    { op: "updateClip" as const, clipId: "occ2", patch: { transform: REPEAT_PUNCH } },
+  ];
+  const punched = storeVersion(ctx, project.id, applyOps(first, ops), { parent: first.version, changeId });
+  ctx.repos.changes.put({
+    id: changeId, projectId: project.id, description: "Punched in on repeated clips",
+    author: { type: "agent", id: "codex", name: "codex" }, state: "approved", noteIds: [], renders: [], ranges: [],
+    fromVersion: first.version, toVersion: punched.version, appliedOnto: first.version, appliedVersion: punched.version, ops,
+    timelineEdits: [
+      { label: "Punch in first occurrence", range: { start: 10, end: 20 } },
+      { label: "Punch in second occurrence", range: { start: 25, end: 35 } },
+    ],
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  });
+  ctx.repos.projects.update(project.id, { head: punched.version });
+  const branch = ctx.repos.projects.get(project.id)!.branch ?? "main";
+  const spot0 = { changeId, spot: 0, label: "Punch in first occurrence", range: { start: 10, end: 20 } };
+  const spot1 = { changeId, spot: 1, label: "Punch in second occurrence", range: { start: 25, end: 35 } };
+  const reject = (edits: Parameters<typeof rejectEdits>[4]) =>
+    rejectEdits(ctx, user, project.id, "thread", edits, ctx.repos.projects.get(project.id)!.head!, branch);
+  return { ctx, punched, spot0, spot1, reject };
+}
+
+it("rejects one punch-in on repeated footage without reverting the second occurrence", () => {
+  const { ctx, spot0, spot1, reject } = repeatedPunchChange("chg_repeat");
+
+  const afterFirst = reject([spot0]);
+  expect(afterFirst.change).toMatchObject({
+    rejects: true,
+    timelineEdits: [{ label: "Punch in first occurrence", replaces: { changeId: "chg_repeat", spot: 0 } }],
+  });
+  expect(videoScales(afterFirst.project.head!)).toEqual([undefined, undefined, undefined, 1.15]);
+
+  // Re-rejecting spot 0 refuses without touching spot 1.
+  expect(() => reject([spot0])).toThrow("This edit can’t be put back as it was.");
+  expect(videoScales(ctx.repos.projects.get(project.id)!.head!)).toEqual([undefined, undefined, undefined, 1.15]);
+
+  // Rejecting spot 1 reverts spot 1.
+  const afterSecond = reject([spot1]);
+  expect(videoScales(afterSecond.project.head!)).toEqual([undefined, undefined, undefined, undefined]);
+});
+
+it("reverts both pieces of a split repeated occurrence and refuses ambiguous lineage", () => {
+  const { ctx, punched, spot0, reject } = repeatedPunchChange("chg_repeat_split");
+
+  // Split the first occurrence with a ripple delete; rejecting spot 0 reverts both surviving pieces and keeps spot 1.
+  const split = storeVersion(ctx, project.id, applyOps(punched, [{ op: "rippleDelete", start: 14, end: 15 }]), { parent: punched.version });
+  ctx.repos.projects.update(project.id, { head: split.version });
+  const reverted = reject([spot0]);
+  expect(videoScales(reverted.project.head!)).toEqual([undefined, undefined, undefined, undefined, 1.15]);
+
+  // Ambiguous lineage (both occurrences replaced by fresh clips in the same gap) is refused.
+  const ambiguous = storeVersion(ctx, project.id, applyOps(punched, [
+    { op: "removeClip", clipId: "occ1" },
+    { op: "removeClip", clipId: "mid" },
+    { op: "removeClip", clipId: "occ2" },
+    { op: "addClip", trackId: "v1", clip: makeMediaClip("camera", 10, 20, 10, { id: "fresh1", volume: 0, transform: REPEAT_PUNCH }) },
+    { op: "addClip", trackId: "v1", clip: makeMediaClip("camera", 10, 20, 20, { id: "fresh2", volume: 0, transform: REPEAT_PUNCH }) },
+  ]), { parent: punched.version });
+  ctx.repos.projects.update(project.id, { head: ambiguous.version });
+  expect(() => reject([spot0])).toThrow("This edit can’t be put back as it was.");
+  expect(ctx.repos.projects.get(project.id)!.head).toBe(ambiguous.version);
 });
