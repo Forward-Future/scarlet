@@ -87,6 +87,9 @@ export function sourceStart(source: HandoffSource | undefined): number {
 /** Names Windows keeps for devices, whatever extension follows them. */
 const RESERVED = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])$/i;
 
+/** As a file system compares names: without case, and on macOS without regard to how the letters are composed. */
+const fileNameKey = (name: string): string => name.normalize("NFC").toLowerCase();
+
 /** File names that are safe on macOS and Windows, unique within the folder. */
 export function handoffFileNames(names: string[]): string[] {
   const used = new Set<string>();
@@ -99,8 +102,8 @@ export function handoffFileNames(names: string[]): string[] {
     const dot = clean.lastIndexOf(".");
     const [stem, ext] = dot > 0 ? [clean.slice(0, dot), clean.slice(dot)] : [clean, ""];
     let name = clean;
-    for (let n = 2; used.has(name.toLowerCase()); n++) name = `${stem} ${n}${ext}`;
-    used.add(name.toLowerCase());
+    for (let n = 2; used.has(fileNameKey(name)); n++) name = `${stem} ${n}${ext}`;
+    used.add(fileNameKey(name));
     return name;
   });
 }
