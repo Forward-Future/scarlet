@@ -161,8 +161,9 @@ export function renderRoutes(ctx: Ctx) {
       if (preview && file) {
         try {
           const local = time - (preview.range?.start ?? 0);
-          return await extractFrame(file, Math.max(0, local - 0.1 / fps), {
-            width: Math.round(width * Math.min(1, size / Math.max(width, height))), signal,
+          // The middle of the frame: its start can round either side of `local` in the preview's clock.
+          return await extractFrame(file, Math.max(0, local + 0.5 / fps), {
+            width: Math.round(width * Math.min(1, size / Math.max(width, height))), signal, fps,
           });
         } catch {
           signal.throwIfAborted();

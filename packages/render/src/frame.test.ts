@@ -41,3 +41,43 @@ it("draws one area of a frame at the width asked for, with the grid over it", as
     expect(gridded.at(192, 300)[1]!).toBeGreaterThan(gridded.at(180, 300)[1]! + 40);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+it("gives the frame on screen at a time inside a frame, at a frame's start and inside the last frame", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-frame-"));
+  try {
+    const fine = join(dir, "red-blue.mp4"), coarse = join(dir, "red-blue-coarse.mp4");
+    // 48 frames at 24 fps: red before 1 s, blue from 1 s. The last red frame starts at 0.958 s, the last blue one at 1.958 s.
+    // Then the same on a clock that counts whole frames, which rounds any time between them.
+    for (const [file, clock] of [[fine, []], [coarse, ["-video_track_timescale", "24"]]] as const) {
+      await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "color=red:s=320x180:r=24:d=2",
+        "-vf", "drawbox=color=blue:t=fill:enable=gte(t\\,1)", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "1", ...clock, file]);
+    }
+    const colour = async (file: string, t: number, fps?: number) => {
+      const [r, , b] = (await pixels(await extractFrame(file, t, { width: 32, fps }), 32)).at(16, 9);
+      return r! > b! ? "red" : "blue";
+    };
+    for (const [file, fps] of [[fine, 24], [fine, undefined], [coarse, 24]] as const) {
+      // Inside the last red frame, just before the change, and right at its end.
+      expect(await Promise.all([0, 0.96, 0.98, 0.999].map(t => colour(file, t, fps)))).toEqual(["red", "red", "red", "red"]);
+      // Exactly on a frame's start, and on it as written to the millisecond.
+      expect(await colour(file, 1, fps)).toBe("blue");
+      expect(await colour(file, 0.958, fps)).toBe("red");
+      // Inside the last frame, and at the video's end.
+      expect(await Promise.all([1.96, 1.98, 1.999, 2].map(t => colour(file, t, fps)))).toEqual(["blue", "blue", "blue", "blue"]);
+    }
+    // Two times inside one frame give the same picture.
+    expect((await extractFrame(fine, 0.96, { width: 32, fps: 24 })).equals(await extractFrame(fine, 0.99, { width: 32, fps: 24 }))).toBe(true);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+it("gives the first frame for a time before the video's first frame", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-frame-"));
+  try {
+    const file = join(dir, "late.mp4");
+    // The picture starts half a second into the file, after its sound.
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "color=red:s=320x180:r=24:d=1", "-f", "lavfi", "-i", "anullsrc=d=1.5",
+      "-vf", "setpts=PTS+0.5/TB", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-threads", "1", file]);
+    const [r, , b] = (await pixels(await extractFrame(file, 0.1, { width: 32, fps: 24 }), 32)).at(16, 9);
+    expect(r! - b!).toBeGreaterThan(100);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

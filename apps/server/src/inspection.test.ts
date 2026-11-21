@@ -617,7 +617,7 @@ it("samples a previously watched section at its local frame time for scrubbing",
   const url = client.fileUrl(`/projects/${projectId}/versions/${version}/frame`) + "&frame=265";
   const response = await workspace.app.request(url);
   expect(response.status).toBe(200);
-  expect(Buffer.from(await response.arrayBuffer())).toEqual(await extractFrame(file, (15 - .1) / 25, { width: 160 }));
+  expect(Buffer.from(await response.arrayBuffer())).toEqual(await extractFrame(file, 15.5 / 25, { width: 160, fps: 25 }));
 });
 
 it("samples a completed preview once per strip and refuses it for another timeline version", async () => {
