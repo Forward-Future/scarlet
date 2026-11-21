@@ -61,7 +61,7 @@ function holds(shown: ShownCut, now: ShownCut) {
   return !!shown.head && shown.timeline?.version === shown.head;
 }
 
-function sync() {
+function sync(force = false) {
   const shown = useShownCutStore.getState();
   const now = latest();
   if (now.projectId === shown.projectId && now.head === shown.head && now.timeline === shown.timeline) {
@@ -71,7 +71,7 @@ function sync() {
     return;
   }
   // The same working cut read again is taken up at once, as is anything while nothing whole is on screen.
-  if (holds(shown, now) && (now.head !== shown.head || now.timeline?.version !== shown.head)) {
+  if (!force && holds(shown, now) && (now.head !== shown.head || now.timeline?.version !== shown.head)) {
     heldBack = true;
     if (!useCaughtUpStore.getState().waiting) useCaughtUpStore.setState({ waiting: true });
     return;
@@ -94,7 +94,7 @@ function sync() {
   useShownCutStore.setState(now, true);
 }
 
-useProjectStore.subscribe(sync);
+useProjectStore.subscribe(() => sync());
 usePlayerStore.subscribe((now, was) => {
   if (now.playing === was.playing) return;
   clearTimeout(settle);
@@ -103,9 +103,17 @@ usePlayerStore.subscribe((now, was) => {
   // Paused, by the editor or at a listen's end, the newest working cut comes up at once. A player being swapped has
   // let go of its video and is about to take up the next.
   // After the player has read where its video stopped, which a pause does once it says it has stopped.
-  if (player.element()) queueMicrotask(sync);
+  if (player.element()) queueMicrotask(() => sync());
   else settle = setTimeout(() => { settle = undefined; sync(); }, SETTLE_MS);
 });
+
+/**
+ * Takes up the newest working cut now, also while the video plays: it holds the open edit's own revision, which the
+ * editor asked for and its card comes back on. Anything else that landed meanwhile comes up with it.
+ */
+export function takeUpLatest() {
+  sync(true);
+}
 
 /** The player shows the working cut, with nothing open on it. */
 export function showingWorkingCut(on: boolean) {

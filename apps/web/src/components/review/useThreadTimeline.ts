@@ -3,6 +3,8 @@ import { matchesEdit, type EditRef, type Thread, type ThreadEdit } from "@scarle
 import { errorMessage } from "../../lib/client";
 import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
 import { useUiStore, type AgentContext } from "../../stores/ui";
+import { useProjectStore } from "../../stores/project";
+import { takeUpLatest } from "../../stores/shownCut";
 import { editGroups } from "./ThreadEdits";
 import { originalReviewRef } from "../../lib/editReviews";
 import { editMoments } from "./EditReferences";
@@ -24,9 +26,20 @@ export function useThreadTimeline(projectId: string, head: string | null, thread
     if (!head || !thread) return;
     let live = true;
     requestThreadEdits(key, projectId, thread.id).then(({ edits, version }) => {
+      if (!live) return;
+      // While the video plays, the working cut on screen holds (`useShownCut`) and the engine answers for the newer one
+      // waiting behind it, as when another request of this thread saves an edit. The list on screen stays, with the
+      // open edit's card and its listen, until playback stops and the newer working cut comes up and is read. The open
+      // edit's own revision is the exception: its card comes back on the new version as it lands.
+      if (version !== head && version === useProjectStore.getState().current?.project.head) {
+        const open = shownLast.current?.owner === owner ? shownLast.current.edit : undefined;
+        const now = open && edits.find(e => !e.rejected && matchesEdit(e, open));
+        if (open && now && (now.changeId !== open.changeId || now.spot !== open.spot)) takeUpLatest();
+        return;
+      }
       // An edit the editor rejected is no longer in the video: it has no dot, no number and no place among the edits to
       // step through. Its row in the chat's list still opens it, to show where it was.
-      if (live) setResult(version === head ? { key, edits: edits.filter(e => !e.rejected), rejected: edits.filter(e => e.rejected) }
+      setResult(version === head ? { key, edits: edits.filter(e => !e.rejected), rejected: edits.filter(e => e.rejected) }
         : { key, error: "The project timeline has changed. Refresh the edit markers." });
     }, error => { if (live) setResult({ key, error: errorMessage(error) }); });
     return () => { live = false; };
