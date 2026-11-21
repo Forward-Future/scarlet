@@ -328,7 +328,7 @@ export const DialogueCutsRequest = ProposeChangeRequest.pick({ description: true
     check: z.string().trim().min(1).max(120).optional(),
     /** Why Scarlet held a cut the agent sent to apply: what it measured. Kept apart from the agent's reason. */
     held: z.string().trim().min(1).max(800).optional(),
-    /** Scarlet staged this cut because nothing it measures can settle its join: only the editor's ear can. No later cut takes its place. */
+    /** Scarlet placed this staged cut on a same-word join, which nothing it measures can settle. A record only: since 2026-11-21 it is staged as any held cut is. */
     unheard: z.literal(true).optional(),
     /** Scarlet held this cut for how its join measured, and it applies as placed only because the agent sent it with unsureJoins cut. */
     appliedAsPlaced: z.literal(true).optional() })
@@ -826,20 +826,25 @@ export const Task = z.object({
   hostId: Id.nullable().default(null),
   /** The skill a skill_from_change task produced, or a skill_edit task revised. */
   resultSkillId: Id.optional(),
-  /** The most recent measured playback and any outstanding request to finish checking it. */
+  /**
+   * What the pass's latest repeat check measured, on the version it read: evidence kept with the request for the window
+   * and the evals. It holds nothing open: a pass that says it is done is done (2026-11-21).
+   */
   repeatAudit: z.object({
-    version: z.string(), remaining: z.number().int().nonnegative().optional(),
+    version: z.string(),
+    /** The repeats, restarts, long silences, divided sentences and pictures the check listed that the pass hadn't cut, changed, kept or staged. */
+    remaining: z.number().int().nonnegative().optional(),
     /** Every audible passage in scope was checked and there were no repeats or joins to review. */
     noFindings: z.boolean().optional(),
-    unavailable: z.array(z.string()).optional(), returns: z.number().int().nonnegative().default(0),
+    unavailable: z.array(z.string()).optional(),
     /**
-     * How many times the pass has gone back for its closing check, in all. `returns` starts again whenever a check gets
-     * somewhere; this doesn't, so a check that fixes one finding and makes another stops instead of running for ever.
+     * How many times an engine before 2026-11-21 sent the pass back to work for a closing check on this version, and in
+     * all (`totalReturns`), and when it last did (`queuedAt`). None does now; kept on the passes stored with them.
      */
+    returns: z.number().int().nonnegative().default(0),
     totalReturns: z.number().int().nonnegative().optional(),
-    /** When the pass last went back for its closing check: an answer given before then was the pass's, not the check's. */
     queuedAt: z.string().datetime().optional(),
-    /** The pass had finished and the check it went back for couldn't run: why. The pass stands; Retry runs the check. */
+    /** The pass had finished and the closing check an earlier engine sent it back for couldn't run: why. */
     failed: z.string().optional(),
   }).optional(),
   /** Change(s) produced. */
@@ -937,13 +942,15 @@ export function taskNeedsTranscripts(task: Task): boolean {
 export function taskRecoveryAction(task: Task, hasLinkedChange: boolean): "resume" | "retry" | undefined {
   if (task.kind === "transcribe" || task.resultSkillId) return;
   if (task.state === "cancelled" || taskWasStopped(task) || taskNeedsTranscripts(task)) return "resume";
-  if (closingCheckFailed(task)) return "retry";
   if (canRetryTask(task) && !hasLinkedChange) return task.resumeRootId ? "resume" : "retry";
   // A run that failed after saving picks up where it left off, keeping what it saved.
   if (task.state === "failed") return "resume";
 }
 
-/** A finished pass whose closing check for repeats couldn't run. The pass stands; Retry runs the check again. */
+/**
+ * A finished pass an engine before 2026-11-21 sent back for a closing check that couldn't run. No check is owed now and
+ * no Retry runs one: the engine clears this record when it starts (`settleClosingChecks`).
+ */
 export function closingCheckFailed(task: Task): boolean {
   return task.state === "done" && !!task.repeatAudit?.failed;
 }

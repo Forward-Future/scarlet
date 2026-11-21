@@ -108,6 +108,57 @@ describe("dialogue plan", () => {
     expect(inWords).toMatchObject({ outcome: "ready", decisions: [{ start: 1.3, end: 1.7, review: true }] });
   });
 
+  it("starts a word cut before the breath after the kept word unless breath keep asks, and names the breath in the gate either way", async () => {
+    // “simulation.” sounds to 1.4 s, the room for 80 ms, a breath at -50 dBFS to 1.6 s, the room again, “I thought”
+    // from 1.82 s, with the speech detector on throughout (dialogue-join.test.ts).
+    const { tl, sources } = fixture();
+    const said = [{ start: 1, end: 1.4, text: "simulation." }, { start: 1.82, end: 2, text: "I" }, { start: 2, end: 2.3, text: "thought" }, { start: 3, end: 3.4, text: "test" }];
+    const sound = [[1, 1.4], [1.82, 2.3], [3, 3.4]];
+    const rms = Array.from({ length: 250 }, (_, i) => sound.some(([a, b]) => a! <= i/50 && i/50 < b!) ? .12 : i/50 >= 1.48 && i/50 < 1.6 ? .003 : i/50 >= 1.4 && i/50 < 1.82 ? .0008 : .0004);
+    sources.pages = () => [{ ...page, edges: joinEvidence(said, { from: 0, to: 5, peaks: rms, rms, speechActivity: [{ start: 1, end: 2.32 }, { start: 3, end: 3.42 }] }) }];
+    sources.words = async () => said;
+    const request = { tl, localPauses: false, cuts: [cut({ mediaId: "mic", fromWord: 1, toWord: 2 })] };
+    const measured = "A breath follows “simulation”: 0.12 s at up to -50 dBFS (32 dB under the word), in no word; the cut starts ";
+    // By default, the stock skill's: in the room right after the word, on its frame.
+    const plan = await planDialogueCuts(request, sources);
+    expect(plan).toMatchObject({ outcome: "ready", decisions: [{ start: 1.433, end: 2.967, review: false }] });
+    if (plan.outcome !== "ready") return;
+    expect(dialogueGate(plan).decisions).toEqual([{ cut: 0, kind: "retake", words: "I thought", asked: "cut", outcome: "cut", range: [1.43, 2.97],
+      evidence: measured + "before it (breath cut)." }]);
+    // Asked to keep it: in the quiet after the breath, padded as usual, and the breath plays.
+    const kept = await planDialogueCuts(request, { ...sources, breath: "keep" });
+    expect(kept).toMatchObject({ outcome: "ready", decisions: [{ start: expect.closeTo(1.65, 1), end: plan.decisions[0]!.end, review: false }] });
+    if (kept.outcome !== "ready") return;
+    expect(kept.decisions[0]!.start).toBeGreaterThan(1.6);
+    expect(kept.gate.get(0)?.evidence).toBe(measured + "after it, so it plays (breath keep).");
+    // Without a breath there the gate says nothing of one, kept or not.
+    const { sources: plain } = fixture();
+    const without = await planDialogueCuts({ tl, localPauses: false, cuts: [cut(refs.word)] }, { ...plain, breath: "keep" });
+    expect(without).toMatchObject({ outcome: "ready", decisions: [{ start: expect.closeTo(1.49, 1), review: false }] });
+    expect(without.outcome === "ready" && without.gate.get(0)).toEqual({ cut: 0, kind: "retake", words: "first", asked: "cut", outcome: "cut", range: expect.any(Array) });
+  });
+
+  it("names in the gate a breath the quiet after the kept word holds, and keeps it when asked", async () => {
+    // “yeah, it's okay”: the room 0.1 s after “okay”, a breath at -46 dBFS to 1.7 s with the detector still on, the
+    // quiet to “so” at 2.4 s (dialogue-join.test.ts).
+    const { tl, sources } = fixture();
+    const said = [{ start: .6, end: 1, text: "it's" }, { start: 1, end: 1.4, text: "okay" }, { start: 2.4, end: 2.6, text: "so" }, { start: 3.2, end: 3.6, text: "next" }];
+    const sound = [[.6, 1.4], [2.4, 2.6], [3.2, 3.6]];
+    const rms = Array.from({ length: 250 }, (_, i) => sound.some(([a, b]) => a! <= i/50 && i/50 < b!) ? .12 : i/50 >= 1.5 && i/50 < 1.7 ? .005 : .0004);
+    sources.pages = () => [{ ...page, edges: joinEvidence(said, { from: 0, to: 5, peaks: rms, rms, speechActivity: [{ start: .6, end: 1.72 }, { start: 2.4, end: 2.62 }, { start: 3.2, end: 3.62 }] }) }];
+    sources.words = async () => said;
+    const request = { tl, localPauses: false, cuts: [cut({ kind: "filler", mediaId: "mic", fromWord: 2, toWord: 2 })] };
+    const measured = "A breath follows “okay”: 0.20 s at up to -46 dBFS (28 dB under the word), in no word; the cut starts ";
+    const plan = await planDialogueCuts(request, sources);
+    // On the frame nearest 0.05 s after the word, before the breath at 1.5 s, as before.
+    expect(plan).toMatchObject({ outcome: "ready", decisions: [{ start: 1.467, review: false }] });
+    expect(plan.outcome === "ready" && plan.gate.get(0)?.evidence).toBe(measured + "before it (breath cut).");
+    const kept = await planDialogueCuts(request, { ...sources, breath: "keep" });
+    expect(kept).toMatchObject({ outcome: "ready", decisions: [{ start: expect.closeTo(1.75, 1), review: false }] });
+    expect(kept.outcome === "ready" && kept.decisions[0]!.start).toBeGreaterThan(1.7);
+    expect(kept.outcome === "ready" && kept.gate.get(0)?.evidence).toBe(measured + "after it, so it plays (breath keep).");
+  });
+
   it("keeps short named words inside a removal when the only quiet is on their far sides", async () => {
     const { tl, sources } = fixture();
     const said = [
@@ -126,8 +177,8 @@ describe("dialogue plan", () => {
     if (plan.outcome === "ready") expect(plan.decisions[0]!.held).toBe("The words named run on into the ones beside them at the start and end: no pause or low point where they part, a join in running speech. As placed the join plays “… ready ‖ again …”. Kept, it plays “… ready now start over again …”.");
   });
 
-  it("starts a cut where a restart's repeated word begins and holds it for the editor, even when told to cut unsure joins", async () => {
-    // “there was a time where would … where you would”: the levels of the recording, in 20 ms steps (dialogue-join.test.ts).
+  /** “there was a time where would … where you would”: the levels of the recording, in 20 ms steps (dialogue-join.test.ts). */
+  function sameWordFixture() {
     const { tl, sources } = fixture();
     const first = [-45.4, -51.4, -53.1, -47.7, -45.4, -43, -42, -32.7, -30.4, -29.2, -28.1, -27.5, -29.2, -37.2, -36.7, -37, -35.6, -33.3, -33.7, -37.9, -40.9, -40.4,
       -39.1, -38.5, -38.1, -39.4, -39.9, -38.9, -37.9, -36.6, -36.4, -42.7, -42.8, -45, -51.2, -58.4, -64.8, -66.6, -60.9, -66.7, -67.6, -71, -73.7];
@@ -143,18 +194,46 @@ describe("dialogue plan", () => {
       { start: 2.8, end: 3.3, text: "would" }];
     sources.pages = () => [{ ...page, edges: joinEvidence(said, { from: 0, to: 5, rms, peaks: rms, speechActivity: [{ start: .4, end: 1.64 }, { start: 2.38, end: 3.3 }] }) }];
     sources.words = async () => said;
-    const plan = await planDialogueCuts({ tl, localPauses: false, unsureJoins: "cut", cuts: [cut({ mediaId: "mic", fromWord: 4, toWord: 5 })] }, sources);
+    return { tl, sources };
+  }
+
+  it("starts a cut where a restart's repeated word begins and stages it by default, with what was measured", async () => {
+    const { tl, sources } = sameWordFixture();
+    const plan = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ mediaId: "mic", fromWord: 4, toWord: 5 })] }, sources);
     expect(plan).toMatchObject({ outcome: "ready", decisions: [{ start: expect.closeTo(36 / 30, 5), review: true }] });
     if (plan.outcome !== "ready") return;
-    // The engine lets no later cut of the pass take this one's place: it is the editor's to hear from here on.
     expect(plan.decisions[0]!.unheard).toBe(true);
-    expect(plan.decisions[0]!.held).toContain("it waits for the editor as a call: record ask on it. Nothing else is needed on this cut. " +
+    expect(plan.decisions[0]!.held).toBe("Placed from 1.2 s, where the first “where” begins: the word before runs into it with no pause, so Scarlet found its start by matching it to the second “where” on their sound. " +
+      "No kept word is cut as measured. Nothing Scarlet measures says how the join plays: like any join it can't place cleanly, a cut there applies as placed with unsureJoins cut and otherwise waits in review, where cut, ask or keep is your call. " +
       "As placed the join plays “… there was a time ‖ where you would …”. Kept, it plays “… was a time where would where you would …”.");
+  });
+
+  it("applies a same-word join where Scarlet placed it when the model sends unsure joins to cut", async () => {
+    const { tl, sources } = sameWordFixture();
+    const plan = await planDialogueCuts({ tl, localPauses: false, unsureJoins: "cut", cuts: [cut({ mediaId: "mic", fromWord: 4, toWord: 5 })] }, sources);
+    expect(plan).toMatchObject({ outcome: "ready", decisions: [{ start: expect.closeTo(36 / 30, 5), review: false, appliedAsPlaced: true }] });
+    if (plan.outcome !== "ready") return;
+    // Applied, it is in the video: nothing marks it as a staged join.
+    expect(plan.decisions[0]!.unheard).toBeUndefined();
+    expect(plan.decisions[0]!.held).toBeUndefined();
+    expect(dialogueGate(plan).decisions[0]).toMatchObject({ cut: 0, outcome: "cut",
+      evidence: expect.stringContaining("Applied as placed, as unsureJoins asked: Placed from 1.2 s, where the first “where” begins") });
+  });
+
+  it("leaves a range that keeps the first delivery playing twice as given, and says from where a cut takes it out", async () => {
+    const { tl, sources } = sameWordFixture();
     // Given as the repeated “would” alone, with the voice in right after the cut, the range leaves “where ‖ where”
-    // playing: the cut takes the first “where” too.
+    // playing. Scarlet doesn't take the first “where” too: the model didn't name it.
     const repeat = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ start: 1.43, end: 2.37 })] }, sources);
-    expect(repeat).toMatchObject({ outcome: "ready", decisions: [{ start: expect.closeTo(36 / 30, 5), review: true }] });
-    if (repeat.outcome === "ready") expect(repeat.decisions[0]!.held).toContain("took out the first “where” too, which the range as given left playing twice");
+    expect(repeat.outcome).toBe("ready");
+    if (repeat.outcome !== "ready") return;
+    expect(repeat.decisions[0]!.start).toBeGreaterThan(1.4);
+    expect(repeat.decisions[0]!.unheard).toBeUndefined();
+    expect(dialogueGate(repeat).decisions[0]!.evidence).toContain("The range as given leaves the first “where” playing twice: the take says it again right after the cut. " +
+      "A cut from 1.200 s takes it out too: the first “where” begins there, matched on its sound to the second, and the word before runs into it with no pause.");
+    // Resent from those seconds, the cut starts on the matched start of the first “where”, as one named by its words does.
+    const resent = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ start: 1.2, end: 2.37 })] }, sources);
+    expect(resent).toMatchObject({ outcome: "ready", decisions: [{ start: expect.closeTo(36 / 30, 5), review: true, unheard: true }] });
   });
 
   it("meets an earlier join a cut stops a few frames short of, so no flash plays between them", async () => {

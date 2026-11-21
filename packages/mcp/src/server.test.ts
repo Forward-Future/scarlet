@@ -2673,6 +2673,57 @@ it("never asks the editor about, or cuts as placed, a staged cut whose edge is i
   }
 });
 
+it("saves a cut on a same-word join, which only the model's review decides, and returns what was measured there", async () => {
+  const original = { extra: mock.state.extra, timeline: mock.state.timeline, waveform: mock.state.waveform, transcripts: mock.state.transcripts };
+  const editor = await connect();
+  // “there was a time where would … where you would”, with the levels of the recording in 20 ms steps
+  // (dialogue-join.test.ts): “time” runs into the first “where”, and the second starts out of a pause.
+  const first = [-45.4, -51.4, -53.1, -47.7, -45.4, -43, -42, -32.7, -30.4, -29.2, -28.1, -27.5, -29.2, -37.2, -36.7, -37, -35.6, -33.3, -33.7, -37.9, -40.9, -40.4,
+    -39.1, -38.5, -38.1, -39.4, -39.9, -38.9, -37.9, -36.6, -36.4, -42.7, -42.8, -45, -51.2, -58.4, -64.8, -66.6, -60.9, -66.7, -67.6, -71, -73.7];
+  const second = [-74.6, -44.4, -37.4, -33.7, -31.9, -32.4, -36.7, -39.5, -40.3, -41.7, -42.3, -40.7];
+  const db = (t: number) => {
+    const i = Math.floor(t / .02 + 1e-9);
+    return t >= .9 - 1e-9 && i - 45 < first.length ? first[i - 45]! : i >= 118 && i - 118 < second.length ? second[i - 118]!
+      : (t >= .4 && t < .9) || (i >= 130 && t < 3.3) ? -36 : -70;
+  };
+  const said: Array<[string, number, number]> = [["there", .62, .76], ["was", .76, .9], ["a", .9, .98], ["time", .98, 1.22], ["where", 1.22, 1.42],
+    ["would", 1.42, 1.62], ["where", 2.34, 2.54], ["you", 2.54, 2.7], ["would", 2.8, 3.3]];
+  const words = said.map(([text, start, end]) => ({ text, start, end }));
+  mock.state.transcripts = { m1: { ...transcript, segments: [{ id: "s1", start: 0, end: 6, text: said.map(w => w[0]).join(" "), words }] } };
+  const tl = emptyTimeline(mock.state.project.id);
+  tl.version = "same-word";
+  tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 6, 0)];
+  mock.state.timeline = tl;
+  mock.state.waveform = (mediaId, from, to, points) => {
+    const rms = Array.from({ length: points }, (_, i) => 10 ** (db(from + (i + .5) * (to - from) / points) / 20));
+    return { mediaId, from, to, peaks: rms, rms, speechActivity: [{ start: .4, end: 1.64 }, { start: 2.38, end: 3.3 }] };
+  };
+  mock.state.extra = (req, res) => {
+    let result;
+    if (req.path === "/projects/prj_test/changes/cut") result = { change: { projectId: "prj_test" } };
+    else if (req.path.endsWith("/cut-assessments")) result = { total: 1, assessed: 1, needsDecision: 0 };
+    else return false;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify(result));
+    return true;
+  };
+  try {
+    // The check offers where the first “where” begins, matched on its sound to the second.
+    const check = JSON.parse(textOf(await editor.callTool({ name: "dialogue_check_join", arguments: { version: tl.version, start: 1.22, end: 2.34 } }) as CallToolResult));
+    const { start, end } = check.sameWordJoin as { start: number; end: number };
+    // A cut staged there is the model's to record. Cut is saved like any verdict, with the measurement beside it.
+    const saved = await editor.callTool({ name: "dialogue_review_save", arguments: { changeId: "cut", fromVersion: tl.version, toVersion: tl.version,
+      assessments: [{ index: 0, start, end, verdict: "cut", reason: "The second take says the line whole." }] } }) as CallToolResult;
+    expect(saved.isError).toBeFalsy();
+    expect(mock.requests.find(r => r.path.endsWith("/cut-assessments"))?.body).toMatchObject({ assessments: [{ index: 0, verdict: "cut" }] });
+    expect(JSON.parse(textOf(saved)).sameWordJoins).toEqual([{ index: 0,
+      reason: expect.stringMatching(/The cut starts as the first “where” begins.*matching the two “where”s on their sound.*Nothing Scarlet measures says how the join plays/) }]);
+  } finally {
+    await editor.close();
+    Object.assign(mock.state, original);
+  }
+});
+
 it("checks a join under a picture that has no sound, without asking the engine for its levels", async () => {
   const original = { extra: mock.state.extra, timeline: mock.state.timeline, waveform: mock.state.waveform, media: mock.state.project.media };
   const isolated = await connect();
@@ -4332,6 +4383,69 @@ it("cuts by word reference: edges go in the measured gaps, and every gate decisi
         cuts: [{ ...ref, kind: "retake", decision: "cut", reason: "The second take is cleaner." }] } }) as CallToolResult));
       expect(staged.gate.decisions[0]).toMatchObject({ cut: 0, outcome: "review", evidence: expect.stringContaining("No measured silence between “everyone” and “welcome”") });
     } finally { await deaf.close(); }
+  } finally {
+    Object.assign(mock.state, original);
+    await editor.close();
+  }
+});
+
+it("starts a word reference's cut before a breath after the kept word, or after it with breath keep, in a check and a save alike", async () => {
+  const original = { extra: mock.state.extra, timeline: mock.state.timeline, waveform: mock.state.waveform, transcripts: mock.state.transcripts };
+  // A fresh session: words a session has already read stay cached for it.
+  const editor = await connect();
+  // “simulation.” sounds to 1.4 s, the room for 80 ms, a breath at -50 dBFS to 1.6 s, the room again, “I thought” from
+  // 1.82 s, with the speech detector on from the word to the end of “thought”.
+  const words = [{ text: "simulation.", start: 1, end: 1.4 }, { text: "I", start: 1.82, end: 2 }, { text: "thought", start: 2, end: 2.3 }, { text: "test", start: 3, end: 3.4 }];
+  mock.state.transcripts = { m1: { id: "t-breath", mediaId: "m1", segments: [{ id: "s", start: 1, end: 3.4, text: "simulation. I thought test", words }] } };
+  const sound = [[1, 1.4], [1.82, 2.3], [3, 3.4]];
+  mock.state.waveform = (mediaId, from, to, points) => {
+    const rms = Array.from({ length: points }, (_, i) => {
+      const t = from + (i + .5) * (to - from) / points;
+      return sound.some(([a, b]) => a! <= t && t < b!) ? .12 : t >= 1.48 && t < 1.6 ? .003 : t >= 1.4 && t < 1.82 ? .0008 : .0004;
+    });
+    return { mediaId, from, to, peaks: rms, rms, speechActivity: [{ start: 1, end: 2.32 }, { start: 3, end: 3.42 }] };
+  };
+  const tl = emptyTimeline(mock.state.project.id);
+  tl.version = "breath";
+  tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 6, 0)];
+  mock.state.timeline = tl;
+  mock.state.extra = (req, res) => {
+    if (!req.path.endsWith("/dialogue-cuts")) return false;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ changes: [] }));
+    return true;
+  };
+  const ref = { mediaId: "m1", fromWord: 1, toWord: 2 };
+  const measured = "A breath follows “simulation”: 0.12 s at up to -50 dBFS (32 dB under the word), in no word; the cut starts ";
+  try {
+    const check = async (args: object) => JSON.parse(textOf(await editor.callTool({ name: "dialogue_check_join", arguments: { version: tl.version, ...ref, ...args } }) as CallToolResult));
+    // By default the cut starts in the room right after “simulation.”, before the breath.
+    const cut = await check({});
+    expect(cut).toMatchObject({ status: "unchanged", words: "I thought", breath: measured + "before it (breath cut)." });
+    expect(cut.originalRange.start).toBeGreaterThan(1.4);
+    expect(cut.originalRange.start).toBeLessThan(1.48);
+    // Kept, it starts in the quiet after the breath; the end is where it was.
+    const kept = await check({ breath: "keep" });
+    expect(kept).toMatchObject({ status: "unchanged", breath: measured + "after it, so it plays (breath keep).", originalRange: { end: cut.originalRange.end } });
+    expect(kept.originalRange.start).toBeGreaterThan(1.6);
+    // A list takes the call's breath for each of its removals.
+    const listed = JSON.parse(textOf(await editor.callTool({ name: "dialogue_check_join", arguments: { version: tl.version, breath: "keep", cuts: [ref] } }) as CallToolResult));
+    expect(listed.joins[0]).toMatchObject({ originalRange: kept.originalRange, breath: kept.breath });
+
+    // A save places the cut the same way and names the breath in the gate.
+    const save = async (args: object) => {
+      const r = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Remove the aside", ...args,
+        cuts: [{ ...ref, kind: "retake", decision: "cut", reason: "The second take is cleaner.", summary: "Cuts “I thought” after “simulation.”" }] } }) as CallToolResult;
+      expect(r.isError, textOf(r)).toBeFalsy();
+      const body = mock.requests.findLast(q => q.path.endsWith("/dialogue-cuts"))?.body as { cuts: Array<{ start: number; end: number }> };
+      return { gate: JSON.parse(textOf(r)).gate.decisions, saved: body.cuts[0]! };
+    };
+    const byDefault = await save({});
+    expect(byDefault.saved).toMatchObject({ start: cut.originalRange.start, end: cut.originalRange.end });
+    expect(byDefault.gate).toEqual([expect.objectContaining({ cut: 0, outcome: "cut", evidence: measured + "before it (breath cut)." })]);
+    const keeping = await save({ breath: "keep" });
+    expect(keeping.saved).toMatchObject({ start: kept.originalRange.start, end: kept.originalRange.end });
+    expect(keeping.gate).toEqual([expect.objectContaining({ cut: 0, outcome: "cut", evidence: measured + "after it, so it plays (breath keep)." })]);
   } finally {
     Object.assign(mock.state, original);
     await editor.close();

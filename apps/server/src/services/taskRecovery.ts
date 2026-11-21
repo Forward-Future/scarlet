@@ -1,12 +1,12 @@
 import { toolAnnotations } from "@scarlet/mcp/annotations";
-import { beginRevision, closingCheckFailed, DialogueScanPage, planText, taskNeedsTranscripts, taskPlan, taskRecoveryAction, type RunChoice, type Task } from "@scarlet/shared";
+import { beginRevision, DialogueScanPage, planText, taskNeedsTranscripts, taskPlan, taskRecoveryAction, type RunChoice, type Task } from "@scarlet/shared";
 import os from "node:os";
 import { mergeRanges, type Change, type TimeRange } from "@scarlet/timeline";
 import { processIsAlive, type Ctx } from "../context.js";
 import { now } from "../db.js";
 import { conflict, notFound } from "../errors.js";
 import { logId } from "../logText.js";
-import { appendTaskEvent, cancelTask, createTask, dropWaitingLooks, FINISHED_TASK, hasTranscript, isDialoguePass, PROJECT_EDIT_KINDS, queueRepeatCheck, recordWorkThrough, RESUMABLE, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
+import { appendTaskEvent, cancelTask, createTask, dropWaitingLooks, FINISHED_TASK, hasTranscript, PROJECT_EDIT_KINDS, recordWorkThrough, RESUMABLE, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
 import { recordTaskFinished } from "../telemetry/events.js";
 import { prepareCutReview } from "./changes.js";
 import { skillEditEnded, startLearningCheck } from "./learnings.js";
@@ -387,24 +387,16 @@ export function retryTask(ctx: Ctx, id: string, choice: RunChoice = {}): Task {
 
 /**
  * Called with the write lock held. `afterProjectStop`: a pause of the project's editing put the run back in line.
- * `byEditor`: the editor's own Retry or Resume, which gives a pass's closing check its full allowance again.
+ * `byEditor`: the editor's own Retry or Resume, which starts an ordinary run of the request.
  */
 function resumeTask(ctx: Ctx, task: Task, opts: { choice?: RunChoice; afterProjectStop?: boolean; byEditor?: boolean }): Task {
   const { choice = {}, afterProjectStop = false, byEditor = false } = opts;
   const id = task.id;
   if (task.retryTaskId) return ctx.repos.tasks.get(task.retryTaskId)!;
-  // The pass finished; only its closing check couldn't run. Retry runs that check again, as the same request, on the
-  // video as it plays now, with its full allowance of returns. A pass recorded as failed for this before the pass was
-  // kept as finished (2026-11-18) is picked up the same way, rather than starting the pass over.
-  const checkOnly = closingCheckFailed(task) || (task.state === "failed" && !task.interrupted && isDialoguePass(task) && !!task.reply && !!task.repeatAudit);
-  if (!afterProjectStop && checkOnly) {
-    const head = ctx.repos.projects.get(task.projectId)?.head;
-    if (!head) throw conflict("not_retryable", "This request cannot be retried.");
-    const run = choice.agent ? { agent: choice.agent, model: choice.model, effort: choice.effort, fast: choice.fast, serviceTier: choice.serviceTier } : {};
-    const queued = queueRepeatCheck(ctx, { ...task, ...run, repeatAudit: { ...task.repeatAudit!, returns: 0, totalReturns: 0, failed: undefined } }, head);
-    ctx.log(`[task] ${id} closing check retried`);
-    return queued;
-  }
+  // Retry and Resume pick up the run, never a closing check: since 2026-11-21 a dialogue pass that says it is done is
+  // done, and its repeat check is evidence the model reads in its own run. Until then Retry on a finished pass whose
+  // check couldn't run sent it back for the check alone, and Resume of a pass stopped for findings outstanding finished
+  // checking it.
   const action = afterProjectStop ? "resume" : taskRecoveryAction(task, savedChanges(ctx, [task]).length > 0);
   if (!action) throw conflict("not_retryable", "This request cannot be retried.");
   const resumeRootId = action === "resume" ? task.resumeRootId ?? id : undefined;
@@ -415,10 +407,12 @@ function resumeTask(ctx: Ctx, task: Task, opts: { choice?: RunChoice; afterProje
     resumesAfterProjectStop: afterProjectStop || undefined, wordsRead: true,
     context: { ...task.context, threadId: task.context.threadId ?? id, message: task.context.message ?? task.instruction },
   });
-  // The pass's closing words, and how far its closing check has got, go on with the run however it stopped: a quit
-  // during the check lost the pass's words and started the check's count again. The editor's own Retry or Resume gives
-  // the check its full allowance again, as Retry of a check that couldn't run does.
-  const audit = task.repeatAudit && (byEditor ? { ...task.repeatAudit, returns: 0, totalReturns: 0, failed: undefined } : task.repeatAudit);
+  // The pass's closing words, and what its repeat check last measured, go on with the run however it stopped: a quit
+  // once lost the pass's words. The editor's own Retry or Resume starts an ordinary run, so the marks of a closing check
+  // an engine before 2026-11-21 sent the pass back for stay behind, and the window doesn't name the run that check.
+  // Scarlet's own resume after a quit or a pause keeps them, and an engine that starts finishes a check left waiting in
+  // line that way (`settleClosingChecks`).
+  const audit = task.repeatAudit && (byEditor ? { ...task.repeatAudit, returns: 0, totalReturns: undefined, queuedAt: undefined, failed: undefined } : task.repeatAudit);
   // A request the editor started ahead of their calls was at work: it isn't put behind those calls again.
   if (task.startsBeforeCalls || audit || task.reply) {
     retry = saveTask(ctx, { ...retry, startsBeforeCalls: task.startsBeforeCalls, repeatAudit: audit, reply: task.reply });

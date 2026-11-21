@@ -58,9 +58,10 @@ describe("what a run that ended early offers", () => {
     expect(taskRecoveryAction(task({ changeIds: ["chg_1"] }), false)).toBe("resume");
   });
 
-  it("retries the closing check of a finished pass that couldn't run it", () => {
-    expect(taskRecoveryAction(task({ state: "done", repeatAudit: { version: "v1", returns: 1, failed: "401" } }), true)).toBe("retry");
-    expect(taskRecoveryAction(task({ state: "done", repeatAudit: { version: "v1", returns: 1 } }), true)).toBeUndefined();
+  it("offers nothing for a finished pass, whatever its repeat check left or couldn't run", () => {
+    // Since 2026-11-21 a pass that says it is done is done: no closing check is owed, so none is offered again.
+    expect(taskRecoveryAction(task({ state: "done", repeatAudit: { version: "v1", returns: 1, failed: "401" } }), true)).toBeUndefined();
+    expect(taskRecoveryAction(task({ state: "done", repeatAudit: { version: "v1", returns: 0, remaining: 3 } }), true)).toBeUndefined();
   });
 
   it("offers nothing for a transcription, a run that produced a skill, or one that finished or still runs", () => {

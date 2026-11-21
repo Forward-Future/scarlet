@@ -7,7 +7,7 @@ An editor can ask Scarlet to cut a repeated line with an empty skill library. Sc
 A skill, a guide and a workflow are the same thing: an editable file of editorial direction. Ask these in order and stop at the first yes.
 
 1. **Did the editor say it for this request?** It is the request and its task context. The engine carries it into the prompt as said (the `## Context` lines in `packages/mcp/src/prompt.ts`).
-2. **Must it hold when every skill is deleted?** It is Scarlet's: code where the edit is saved, with an editor setting when the editor should control it. Scarlet reports each time it acts on it.
+2. **Must it hold when every skill is deleted?** It is Scarlet's: code where the edit is saved, with an editor setting when the editor should control it. Scarlet reports each time it acts on it. Code that refuses, holds, moves or replaces what the model asked is only ever for safety: the edit's integrity, the editor's own decisions, or damage nobody would choose, such as a word cut while it sounds ([rule 5](AI-AGENTS.md)). Anything else code finds, it reports, and the model decides.
 3. **Is it a fact about the footage or the edit?** It is a measurement, returned by a tool as evidence. If the model would have to work it out by hand, the tool is missing: build it, don't write a sentence asking the model to estimate.
 4. **Is it how to call one tool or read its result?** It goes in that tool's description, schema or result, and nowhere else.
 5. **Is it how Scarlet works whatever the task: versions, the two clocks, safety, how to write to the editor?** It goes in `SCARLET_INTRO`.
@@ -15,14 +15,17 @@ A skill, a guide and a workflow are the same thing: an editable file of editoria
 
 If none fits, the sentence is probably not needed (rule 4 in [How Scarlet works with AI agents](AI-AGENTS.md)).
 
-Two checks catch most mistakes:
+Three checks catch most mistakes:
 
 - **Delete the skill.** If Scarlet can no longer do the operation, stay in scope or keep a promise to the editor, something that belongs to Scarlet was in the skill.
 - **Swap the editor.** If a different editor with different taste would have to change the prompt, a tool description or engine code to get their result, taste is in Scarlet.
+- **Swap the model.** If a stronger model would have to work around Scarlet's code to do better, that code patches today's model. It reports what it found instead of refusing or overriding, and the evals judge taking it out by whether quality holds ([rule 18](AI-AGENTS.md)).
+
+These hold for every feature, not only dialogue: framing, captions, punch-ins, graphics, transitions and sync follow the same split. Where a tool needs a default, the default is the stock skill's and an argument lets the model do otherwise; the argument's description says "Your skill says which".
 
 What a skill says about a tool: it may name a tool so the model finds it, and say why this kind of work reaches for it. It does not say how the tool works, what it returns, what Scarlet enforces or which request is in scope. Those are already said by the tool, the prompt or the task context, and a skill the editor rewrites or deletes can't be where they live.
 
-Each thing is said once. The engine also writes a few instructions of its own (the repeat check that finishes a dialogue pass, a redo after a conflict, a resumed run's recap; `taskPrompt` in `apps/server/src/services/tasks.ts`, `changes.ts`, `taskRecovery.ts`). They state the scope and the goal of that run. They don't restate a tool description or a skill.
+Each thing is said once. The engine also writes a few instructions of its own (a redo after a conflict, a resumed run's recap; `taskPrompt` in `apps/server/src/services/tasks.ts`, `changes.ts`, `taskRecovery.ts`). They state the scope and the goal of that run. They don't restate a tool description or a skill.
 
 ## Where a new behavior belongs
 

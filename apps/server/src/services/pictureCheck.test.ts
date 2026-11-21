@@ -71,7 +71,8 @@ async function complete(task: Task, summary: string) {
 
 // A camera flash between two stretches of screen, and the camera back while the screen still showed what was talked
 // about: both were reported on a pass's saves on project 88 and left as they were (2026-11-21). The closing check counts
-// them until the pass changes the picture there or keeps them with its reason.
+// them until the pass changes the picture there or keeps them with its reason. The count is evidence: a pass that says
+// it is done is done, whatever it still lists (2026-11-21).
 const flash = { id: "picture-brief:cam@506.9", kind: "brief", from: 298, to: 298.45, shows: ["cam-2"], before: ["screen-1"], after: ["screen-2"] };
 const off = { id: "picture-off:screen:voz:1017", kind: "offPicture", from: 303.3, to: 316.4, mediaId: "screen", unchanged: true,
   said: "make these one line", reads: [{ from: 303.25, to: 306.13, said: "make these one line and put the disabled ones below the active ones" }] };
@@ -85,9 +86,6 @@ it("counts the pictures the check lists until each is kept with its reason", asy
   const found = await check(task, version, { pictures: { version, findings: [flash, off] } });
   expect(found).toMatchObject({ version, remaining: 2, pictures: [flash, off] });
   expect(ctx.repos.tasks.get(task.id)?.repeatAudit).toMatchObject({ version, remaining: 2, noFindings: false });
-  // The pass ends with them outstanding, and goes back for its closing check.
-  expect((await complete(task, "Framed the demos.")).state).toBe("queued");
-  start(task);
   const kept = await check(task, version, { keep: [{ id: off.id, reason: "He turns to camera to land the point." }], pictures: { version, findings: [flash, off] } });
   expect(kept).toMatchObject({ remaining: 1, pictures: [flash] });
   // A keep holds when the same finding is read again.
@@ -95,6 +93,19 @@ it("counts the pictures the check lists until each is kept with its reason", asy
   // Once the picture there changes, the check no longer lists it, and the pass finishes.
   expect(await check(task, version, { pictures: { version, findings: [off] } })).toMatchObject({ remaining: 0 });
   expect((await complete(task, "Framed the demos.")).state).toBe("done");
+});
+
+it("finishes a pass that says it is done with pictures still listed, and keeps what the check left on record", async () => {
+  const { ctx } = workspace;
+  recording("voz");
+  ctx.repos.settings.update({ transcription: { language: "es" } });
+  const task = pass();
+  const version = assemble(task, [["one", "voz", 0, 15, 0]]);
+  expect(await check(task, version, { pictures: { version, findings: [flash, off] } })).toMatchObject({ remaining: 2, pictures: [flash, off] });
+  // Nothing sends it back for them: they were evidence for the model, and the receipt keeps the count.
+  const done = await complete(task, "Framed the demos.");
+  expect(done).toMatchObject({ state: "done", summary: "Framed the demos.", repeatAudit: { version, remaining: 2, noFindings: false } });
+  expect(done.interrupted).toBeUndefined();
 });
 
 it("refuses pictures read on another version, and a keep that names none of the findings", async () => {

@@ -69,6 +69,19 @@ const LEAD_ABOVE_ROOM = 2.5;
  * editor was already looking away from the camera (2026-11-18).
  */
 export function quietBuckets(rms: ArrayLike<number>, peaks: ArrayLike<number>, from: number, step: number, voice: ReadonlyArray<{ start: number; end: number }>, quietBelow = quietRms(rms, step), words?: ReadonlyArray<TimeRange>): boolean[] {
+  return quietReading(rms, peaks, from, step, voice, quietBelow, words).quiet;
+}
+
+/** A breath the quiet after a word holds: the sound over the room between the word and the quiet, and its loudest level in dBFS. */
+export interface HeldBreath extends TimeRange { db: number }
+
+/**
+ * quietBuckets, and the breaths that quiet holds. The quiet is the same; the breaths it counted as part of a pause are
+ * a measurement too. Whether a cut after the word plays the breath is the model's call (`breath` on a word reference,
+ * 2026-11-21): with the breath folded into the quiet, the edge padded from the word cut it whatever was asked, and nothing
+ * said one was there.
+ */
+export function quietReading(rms: ArrayLike<number>, peaks: ArrayLike<number>, from: number, step: number, voice: ReadonlyArray<{ start: number; end: number }>, quietBelow = quietRms(rms, step), words?: ReadonlyArray<TimeRange>): { quiet: boolean[]; breaths: HeldBreath[] } {
   const n = rms.length;
   const level = Array.from({ length: n }, (_, i) => rms[i]! <= quietBelow && peaks[i]! <= QUIET_PEAK);
   // Ticks: a short run above the room, still far under speech, between two buckets at room level.
@@ -107,6 +120,7 @@ export function quietBuckets(rms: ArrayLike<number>, peaks: ArrayLike<number>, f
     led += step;
     quiet.push(still);
   }
+  const breaths: HeldBreath[] = [];
   if (words?.length) {
     const spoken = (k: number) => words.some(w => w.start < from + (k + 1) * step - 1e-6 && w.end > from + k * step + 1e-6);
     for (let i = 1; i < n; i++) {
@@ -117,9 +131,13 @@ export function quietBuckets(rms: ArrayLike<number>, peaks: ArrayLike<number>, f
       for (; k >= 0 && !quiet[k] && rms[k]! <= QUIET_RMS && !spoken(k); k--) if (rms[k]! <= quietBelow && peaks[k]! <= QUIET_PEAK) room = k;
       if (k < 0 || quiet[k]) continue;
       for (let j = room; j < i; j++) quiet[j] = true;
+      // What rises over the room in that stretch, a tick aside, is the breath the quiet now holds.
+      let first = -1, last = -1, loudest = 0;
+      for (let j = room; j < i; j++) if (!level[j]) { if (first < 0) first = j; last = j; loudest = Math.max(loudest, rms[j]!); }
+      if (first >= 0) breaths.push({ start: from + first * step, end: from + (last + 1) * step, db: dbfs(loudest) });
     }
   }
-  return quiet;
+  return { quiet, breaths };
 }
 
 /** A gap between two words is described from this length. */

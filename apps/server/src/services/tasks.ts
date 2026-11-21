@@ -2,7 +2,7 @@ import { agentCapabilities, workspaceCapabilities, isAsideTask, SIDE_CHECK_KINDS
 import { AgentId, type AgentHost, type CompleteTaskRequest, type Task, type TaskEvent, type TaskKind, type TaskPrompt, type User } from "@scarlet/shared";
 import { buildSystemPrompt } from "@scarlet/mcp/prompt";
 import { join } from "node:path";
-import { carriesAudio, describeDialogueRemovals, dialogueReceipt, dialogueRemovals, newId, type Author, type Change, type Project } from "@scarlet/timeline";
+import { describeDialogueRemovals, dialogueReceipt, dialogueRemovals, newId, type Author, type Change, type Project } from "@scarlet/timeline";
 import { mimeFor, styleGuidePath } from "./graphics.js";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
@@ -268,26 +268,28 @@ export function isDialoguePass(task: Task) {
 }
 
 /**
- * How many times in all a pass goes back for its closing check before it stops and waits for the editor's Resume. A
- * guard on what an unattended loop can cost, not an editorial threshold: a check that fixed one finding and made
- * another went back again and again, each time in a fresh session that cost about 2M tokens on Codex.
+ * Closing checks an engine before 2026-11-21 left behind. That engine sent a dialogue pass that said it was done back
+ * to work, as the same request in a fresh session, while its repeat check still listed findings: about 2M tokens a
+ * return on Codex, on the word of finders some of which read only English. The check is now evidence the model reads,
+ * and a pass that says it is done is done (`completeTask`), so a stored check has nothing left to run for. One waiting
+ * to start, or put back in line by a quit or a pause, finishes as done with the pass's words, as the pass would have
+ * finished. One that asked the editor a question waits for the answer, and one holding the answer carries on with it,
+ * as any run does. A finished pass whose check couldn't run isn't owed one any more, so the record that offered Retry
+ * for it goes; what the check measured stays (2026-11-21).
  */
-export const MOST_CLOSING_CHECKS = 4;
-
-/** A pass that ends with outstanding findings on the version that plays runs again, as the same request, to resolve them. */
-export function queueRepeatCheck(ctx: Ctx, task: Task, version: string, changeIds = task.changeIds) {
-  const receipt = task.repeatAudit?.version === version ? task.repeatAudit : undefined;
-  const queuedAt = now();
-  const closed = recordWorkThrough(task, queuedAt);
-  // A previously finished pass may predate the persisted clock. Its latest claim is still measurable.
-  const workedMs = closed.workedMs ?? pausedWork(ctx, task) ?? (task.startedAt && task.finishedAt
-    ? Math.max(0, Date.parse(task.finishedAt) - Date.parse(task.startedAt)) : undefined);
-  const queued = saveTask(ctx, { ...closed, workedMs, changeIds, state: "queued", hostId: null, session: undefined, finishedAt: undefined, error: undefined,
-    repeatAudit: { ...receipt, version, noFindings: undefined, failed: undefined, returns: (receipt?.returns ?? 0) + 1,
-      totalReturns: (task.repeatAudit?.totalReturns ?? 0) + 1, queuedAt } });
-  ctx.db.afterCommit(() => ctx.log(`[task] repeat_check task=${logId(task.id)} project=${logId(task.projectId)} outcome=queued attempt=${queued.repeatAudit!.returns}`));
-  ctx.bus.taskQueued({ taskId: task.id, projectId: task.projectId });
-  return queued;
+export function settleClosingChecks(ctx: Ctx): void {
+  ctx.db.transaction(() => {
+    for (const task of ctx.repos.tasks.select("state = 'queued' AND json_extract(json, '$.repeatAudit.returns') > 0", [], "created_at, rowid")) {
+      if (!isDialoguePass(task)) continue;
+      const last = ctx.repos.taskEvents.list(task.id, "questionsAndAnswers").at(-1);
+      if (last?.type === "answer" && last.at >= (task.startedAt ?? "")) continue;
+      completeTask(ctx, task, { state: "done" });
+      ctx.db.afterCommit(() => ctx.log(`[task] closing_check_settled task=${logId(task.id)} project=${logId(task.projectId)} outcome=done`));
+    }
+    for (const task of ctx.repos.tasks.select("state = 'done' AND json_extract(json, '$.repeatAudit.failed') IS NOT NULL", [], "created_at, rowid")) {
+      saveTask(ctx, { ...task, repeatAudit: { ...task.repeatAudit!, failed: undefined } });
+    }
+  }, "immediate")();
 }
 
 export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): Task {
@@ -318,14 +320,6 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
   if (task.kind === "skill_from_change" && body.state === "done" && !task.resultSkillId) {
     body = { state: "failed", error: "The requested skill was not saved. Request it again from the approved change." };
   }
-  // The pass had finished and only its closing check was running (2026-11-18: Codex refused the check's sign-in). The
-  // pass's work and words stand, so it finishes as done; the check that didn't run is said beside it, with Retry.
-  const checkFailed = body.state === "failed" && !body.engineLost && isDialoguePass(task) && !!task.reply && !!task.repeatAudit
-    ? body.error?.trim() || "The closing check stopped." : undefined;
-  if (checkFailed) {
-    task = { ...task, repeatAudit: { ...task.repeatAudit!, failed: checkFailed } };
-    body = { state: "done", changeIds: body.changeIds };
-  }
   const changeIds = [...new Set([...task.changeIds, ...(body.changeIds ?? [])])];
   const own = () => changeIds.flatMap(id => {
     const change = ctx.repos.changes.get(id);
@@ -344,29 +338,13 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
       if (change.taskId !== task.id) applyChoicesWhenDone(ctx, change);
     }
   }
-  // Scheduled editor decisions above can advance playback too. The receipt must name the version that actually plays.
-  if (body.state === "done" && !checkFailed && task.startedAt && (task.state === "claimed" || task.state === "running") && isDialoguePass(task)) {
-    const project = ctx.repos.projects.get(task.projectId);
-    if (project?.head && (!task.context.branch || project.branch === task.context.branch) && !unmetTranscriptWaits(ctx, task.id).length) {
-      const timeline = resolveTimeline(ctx, project);
-      const audible = new Set(project.media.filter(carriesAudio).map(m => m.id));
-      const plays = timeline.tracks.some(t => !t.muted && t.clips.some(c => c.kind === "media" && c.enabled && c.volume > 0 && audible.has(c.mediaId)));
-      const receipt = task.repeatAudit?.version === project.head ? task.repeatAudit : undefined;
-      if (plays && (receipt?.remaining !== 0 || receipt.unavailable?.length)) {
-        if (receipt?.unavailable?.length || (receipt?.returns ?? 0) >= 2 || (task.repeatAudit?.totalReturns ?? 0) >= MOST_CLOSING_CHECKS) {
-          body = { ...body, state: "failed", interrupted: true, error: receipt?.unavailable?.join(" ") ||
-            "The final check still has repeats, silences, divided sentences or pictures to resolve. Resume to finish checking the saved edit." };
-        } else {
-          // The pass's closing words are kept for the editor while the check runs: the check's own are about the check.
-          const reply = task.reply ?? (body.summary?.trim() || undefined);
-          return queueRepeatCheck(ctx, reply ? { ...task, reply } : task, project.head, changeIds);
-        }
-      } else if (plays && receipt?.returns && receipt.noFindings) {
-        // The automatic check finished on the same playback, with nothing for the editor. Keep the pass's own words.
-        body = { ...body, summary: undefined };
-      }
-    }
-  }
+  // A dialogue pass that says it is done is done, whatever its repeat check still lists. What the check last measured
+  // stays on the task as it was recorded (`repeatAudit`: the version, what remained, whether it found nothing, what it
+  // couldn't read), for the editor's window and for the evals that count what a pass left. Until 2026-11-21 the engine
+  // sent a pass with findings outstanding back to work in a fresh session, up to four times, and failed it after that:
+  // each return cost about 2M tokens on Codex, and finders some of which read only English decided it. Whether a listed
+  // repeat, silence or divided sentence is cut, kept or staged for the editor, and whether a listed picture is changed or
+  // kept, is the model's call, made in its run.
   const changes = body.state === "done" ? own() : [];
   const dialogue = changes.some(c => dialogueReceipt(c));
   // A pass saved in parts reports its removals once.
@@ -550,19 +528,15 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   }
   const events = ctx.repos.taskEvents.list(task.id, "questionsAndAnswers");
   const last = events.at(-1);
-  // A pass's closing check is the same request run again. The answer it is told is one to its own question: one the pass
-  // was given before the check began is among the earlier questions and answers.
-  const checking = isDialoguePass(task) && !!task.repeatAudit?.returns;
-  const checkFrom = checking ? task.repeatAudit?.queuedAt : undefined;
-  const answered = last?.type === "answer" && (!checkFrom || last.at >= checkFrom);
+  const answered = last?.type === "answer";
   // A run interrupted before it finished carries on in the CLI session it was working in, when its host still has it.
   const interrupted = !last && !!task.resumeRootId;
   const resumeSession = !opts.fresh && (answered || interrupted) && task.session?.agent === task.agent && RESUMABLE.has(task.agent) ? task.session.id : undefined;
   // A resumed attempt is told where its run stands as it starts, not as it stood when it was put back in line: the
   // editor may have decided some of what it saved while it waited behind other requests or a pause. One that carries on
   // in its own session is told it too, since the session never had it: the edits refused after its last save, the cuts
-  // a later part replaced while it was away. A fresh closing check is told the request instead.
-  const recap = !!task.resumeRootId && (resumeSession ? !answered : !checking);
+  // a later part replaced while it was away.
+  const recap = !!task.resumeRootId && !(resumeSession && answered);
   const before = recap ? ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.retryTaskId') = ?", [task.projectId, task.id])[0] : undefined;
   const instruction = before ? recoveryInstruction(ctx, before, task.resumeRootId, task.id) : task.instruction;
   // The run is launched with its harness's to-do tool, and asked to lay out its steps, when the harness has one and the
@@ -598,17 +572,6 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     return { systemPrompt, instruction: answered ? `The editor answered: "${last!.text.trim()}"\nContinue the task with that answer.`
       : `${task.resumesAfterProjectStop ? PAUSED : INTERRUPTED}\n\n${instruction.trim()}`, resumeSession, ...launch };
   }
-  if (checking) {
-    // The goal and what counts as done, not the steps: the tools say how they check and repair.
-    const finish = "The dialogue pass has saved its editing work. What is left is the closing check on the current playback: " +
-      "no word the cuts clipped should play, each repeat, silence and divided sentence the check lists is cut, kept " +
-      "with its reason, or staged for the editor when you doubt it, and each picture it lists is changed or kept with its reason, " +
-      "as the skill and the editor ask. " +
-      "The pass is done once dialogue_check_repeats on the current version has nothing outstanding. " +
-      "Honor the editor’s scope, preferences, protected footage and decisions.";
-    return { systemPrompt, instruction: finish + "\nEditor’s request: " + firstAsked(ctx, task).trim() +
-      (answered ? "\nThe editor answered: " + last!.text : ""), ...launch };
-  }
   return { systemPrompt, instruction: firstMessage(instruction.trim()), ...launch };
 }
 
@@ -635,22 +598,6 @@ function graphicsContext(ctx: Ctx, project: Project, task: Task) {
  */
 function firstMessage(instruction: string) {
   return instruction.startsWith("/") ? `The editor's request: ${instruction}` : instruction;
-}
-
-/**
- * What a request asked as it was first sent: the editor's words, and for a follow-up the thread's earlier requests with
- * them, which hold the scope and preferences they gave before. An attempt that resumed or retried it has Scarlet's
- * account of the run as its own instruction, so the first attempt's is read.
- */
-function firstAsked(ctx: Ctx, task: Task): string {
-  let first = (task.resumeRootId && ctx.repos.tasks.get(task.resumeRootId)) || task;
-  // A Retry starts a run of its own: the attempt it tried again holds the words as sent.
-  for (let hops = 0; hops < 10; hops++) {
-    const [earlier] = ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.retryTaskId') = ?", [task.projectId, first.id]);
-    if (!earlier) break;
-    first = earlier;
-  }
-  return first.instruction;
 }
 
 /**

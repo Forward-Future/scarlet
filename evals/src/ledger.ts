@@ -31,7 +31,8 @@ const USAGE = `Usage:
   tsx evals/src/ledger.ts board [--last 10]                            the scoreboard, oldest first
 
 --ledger dialogue|picture picks the ledger (default dialogue).
-check exits 1 when an entry marked fixed fails or can't be checked. --record appends the run to the scoreboard.
+check exits 1 when an entry marked fixed fails or can't be checked, and skips retired entries. --record appends the
+run to the scoreboard.
 On the dialogue ledger, check also sweeps the editor's library (leftovers.ts) and prints each kind of mistake his
 edits play now, per 10 minutes, beside the last recorded run and each entry's count from when it was reported.`;
 
@@ -84,7 +85,10 @@ export interface Entry {
   cause: Cause;
   /** The PRs or commits that fixed it. */
   fix?: string;
-  status: "fixed" | "open";
+  /** `retired`: no longer checked, and kept for its history. `retired` says why (evals/DIALOGUE.md step 6). */
+  status: "fixed" | "open" | "retired";
+  /** Why a retired entry is no longer checked: the trials or change that showed it, such as a rule taken out because current models pass without it. */
+  retired?: string;
   check: Check;
   /** What the check can't show, or anything the next thread must know before trusting its verdict. */
   note?: string;
@@ -147,14 +151,25 @@ export function loadLedger(path = ledgerPath()): LedgerFile {
   if (file.schema !== 1 || !Array.isArray(file.entries)) throw new Error("ledger.json is not a schema 1 ledger.");
   const ids = new Set<string>();
   for (const e of file.entries) {
-    if (!e.id || !e.reported || !e.said || !e.cause || !e.status || !e.check?.kind) throw new Error(`Entry ${e.id ?? "(no id)"} needs id, reported, said, cause, status and check.`);
     if (ids.has(e.id)) throw new Error(`Two entries are named ${e.id}.`);
     ids.add(e.id);
-    if (e.check.kind === "replay" && (!e.check.case || !e.check.expect?.length)) throw new Error(`Entry ${e.id}: a replay check needs a case and what to expect.`);
-    const problem = classProblem(e);
-    if (problem) throw new Error(`Entry ${e.id}: ${problem} See evals/DIALOGUE.md step 2.`);
+    const problem = entryProblem(e) ?? classProblem(e);
+    if (problem) throw new Error(`Entry ${e.id ?? "(no id)"}: ${problem} See evals/DIALOGUE.md.`);
   }
   return file;
+}
+
+/** What an entry is missing or gets wrong, apart from its class, if anything. */
+export function entryProblem(e: Entry): string | undefined {
+  if (!e.id || !e.reported || !e.said || !e.cause || !e.status || !e.check?.kind) return "needs id, reported, said, cause, status and check.";
+  if (!["fixed", "open", "retired"].includes(e.status)) return `status is fixed, open or retired, not ${e.status}.`;
+  if (e.status === "retired" && !e.retired?.trim()) return "a retired entry says why in `retired`: the trials or change that showed it no longer needs checking.";
+  if (e.check.kind === "replay" && (!e.check.case || !e.check.expect?.length)) return "a replay check needs a case and what to expect.";
+  // A replay sends the reported run's own requests through today's code, so a model's mistake passes it only by the
+  // code overriding the model: a block that caps every model after it (docs/AI-AGENTS.md rule 5, 2026-11-21).
+  if (e.cause === "model" && e.status !== "retired" && (e.check.kind === "replay" || e.check.kind === "command"))
+    return "the model's mistake is checked by trials (or none), not by replaying its requests or a unit test of Scarlet's code: those pass only by the code overriding the model.";
+  return undefined;
 }
 
 /** What a dialogue entry's class is missing, if anything. */
@@ -380,17 +395,21 @@ async function ledgerCli(argv = process.argv.slice(2)) {
   const ledger = loadLedger();
   if (command === "list") {
     for (const e of ledger.entries) {
-      console.log(`${e.status.padEnd(5)} ${e.cause.padEnd(10)} ${e.check.kind.padEnd(7)} ${e.id} · ${e.reported} · "${e.said.slice(0, 90)}"${e.fix ? ` · ${e.fix}` : ""}`);
+      console.log(`${e.status.padEnd(7)} ${e.cause.padEnd(10)} ${e.check.kind.padEnd(7)} ${e.id} · ${e.reported} · "${e.said.slice(0, 90)}"${e.fix ? ` · ${e.fix}` : ""}`);
+      if (e.retired) console.log(`      retired: ${e.retired}`);
       if (e.note) console.log(`      note: ${e.note}`);
     }
     return;
   }
   if (command !== "check") throw new Error(USAGE);
   const only = list(values.id);
-  const entries = only.length ? ledger.entries.filter(e => only.includes(e.id)) : ledger.entries;
-  if (only.length && entries.length !== only.length) throw new Error(`Unknown entry: ${only.filter(id => !entries.some(e => e.id === id)).join(", ")}`);
+  const named = only.length ? ledger.entries.filter(e => only.includes(e.id)) : ledger.entries;
+  if (only.length && named.length !== only.length) throw new Error(`Unknown entry: ${only.filter(id => !named.some(e => e.id === id)).join(", ")}`);
+  // A retired entry is history, not a check: it neither passes nor fails.
+  const entries = named.filter(e => e.status !== "retired"), retired = named.filter(e => e.status === "retired");
   const { results, passes } = await runChecks(entries, line => console.error(line));
   console.log(table(entries, results));
+  if (retired.length) console.log(`Retired, not checked: ${retired.map(e => e.id).join(", ")}.`);
   const git = gitState();
   const base = baseRow(loadBoard());
   console.log("\n" + againstBase(entries, results, passes, base).join("\n"));

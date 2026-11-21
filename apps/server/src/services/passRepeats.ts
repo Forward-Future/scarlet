@@ -121,13 +121,14 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
     // A picture finding is settled once the pass keeps it with its reason, or changes the picture there.
     const pictures = pictureFindings.filter(p => !kept.has(p.id));
     const remaining = repeats.length + silences.length + fragments.length + pictures.length;
-    const returns = last?.version === tl.version && (last.remaining === undefined || remaining >= last.remaining) ? last.returns : 0;
     // A join inside a range staged for review isn't played yet; the review reads it.
     const joins = check.joins.filter(j => !stagedRanges.some(r => r.start - frame <= j.at && j.at <= r.end + frame));
     const noFindings = !check.repeats.length && !check.silences.length && !check.fragments.length && !joins.length && !unheardJoins.length && !unavailable.length &&
       !pictureFindings.length;
-    // How many times in all the pass went back for this check, and when it last did, go on whatever this reading finds.
-    saveTask(ctx, { ...owner, state: "running", repeatAudit: { version: tl.version, remaining, unavailable, returns, noFindings,
+    // The receipt: what this reading left on the version it read, recorded with the request for the editor's window and
+    // the evals. It holds nothing open: a pass that says it is done is done (2026-11-21). What an earlier engine noted of
+    // sending the pass back for a closing check goes on as it was; the window names such a check while it runs.
+    saveTask(ctx, { ...owner, state: "running", repeatAudit: { version: tl.version, remaining, unavailable, noFindings, returns: last?.returns ?? 0,
       ...(last?.totalReturns !== undefined && { totalReturns: last.totalReturns }), ...(last?.queuedAt && { queuedAt: last.queuedAt }) } });
     return { version: tl.version, ...(named !== tl.version && { readInsteadOf: named }), heard: check.repeats.length, staged: staged.length, remaining,
       // One offset pages the repeats and the divided sentences together: a pass asked for the next pages of both at once.

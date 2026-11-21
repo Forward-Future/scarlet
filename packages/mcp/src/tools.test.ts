@@ -782,6 +782,22 @@ describe("tool annotations", () => {
     } finally { await c.close(); }
   });
 
+  it("offers the breath after the last kept word as the model's call, cut by default, wherever a word reference's cut is placed", async () => {
+    // Whether a breath before the quiet plays is taste: the stock skill cuts it, and an editor's skill can keep it (2026-11-21).
+    const task = Task.parse({ id: "breath-task", state: "running", projectId: "prj_test", kind: "edit", agent: "codex", instruction: "/first-cut-dialogue",
+      context: {}, createdBy: { type: "human", name: "Editor" } });
+    const c = await connect({ agent: "codex", taskId: task.id, task, author: { type: "agent", id: "codex", name: "codex" } });
+    try {
+      const { tools } = await c.listTools();
+      for (const name of ["dialogue_check_join", "dialogue_apply_cuts"]) {
+        const schema = tools.find(t => t.name === name)!.inputSchema as { properties: Record<string, { type?: string; enum?: string[]; description?: string }>; required?: string[] };
+        expect(schema.properties.breath, name).toMatchObject({ type: "string", enum: ["cut", "keep"] });
+        expect(schema.properties.breath!.description, name).toMatch(/^A breath after the last kept word.*cut \(the default\).*keep .*Your skill says which\.$/);
+        expect(schema.required ?? [], name).not.toContain("breath");
+      }
+    } finally { await c.close(); }
+  });
+
   it("marks exactly the tools that change something as writes, and nothing as destructive", () => {
     expect(every.filter(name => !toolAnnotations(name).readOnlyHint).sort()).toEqual([...writes].sort());
     for (const name of every.filter(n => n !== "web_capture")) {

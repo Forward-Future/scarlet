@@ -33,7 +33,11 @@ node_modules/.bin/tsc -p evals/tsconfig.json
 
 Every mistake the editor reports in a dialogue cut is an entry with a check, and every change to dialogue cutting is
 run against all of them: [DIALOGUE.md](DIALOGUE.md) says how. `ledger.ts check` runs the free checks (unit tests, and
-replays of the model's real requests through today's code) and compares with the last recorded run.
+replays of the model's real requests through today's code) and compares with the last recorded run. A replay checks
+Scarlet's code, not the model: a mistake the model made is checked by model passes (`trials`), and `ledger.ts` refuses
+a replay or command check for one. An entry whose check no longer means anything, such as one for a rule taken out
+because current models pass without it, is retired with the reason and kept as history (`docs/AI-AGENTS.md` rules 5
+and 18).
 
 ## The picture ledger
 

@@ -285,10 +285,10 @@ export function buildSystemPrompt(ctx: PromptContext): string {
       // 4.5 minutes of that recording, three passes flagged 2 or 3 of about ten word cuts at one in four, one of the two
       // mistakes among them in two passes, and a pass at half flagged five, both among them (2026-11-18). So the order
       // is the model's, and how far down it the editor is asked to look is their setting.
-      // Once, in the run that made the cuts. The closing check that may follow runs in a fresh session with no memory of
-      // that order: asked again, it flagged a second share of the same cuts, 27-60% of the word cuts on three passes at
-      // "about one in four" (2026-11-20). Its own doubts it stages as any run does.
-      if (!t.repeatAudit?.returns) ctxLines.push(`- Before the pass is done, read back what the video plays where your cuts took words out, and order those cuts from the most likely to be wrong to the least: a cut is wrong when the editor, hearing the result, would put words back, take more out or choose the other delivery. The editor asked to check ${CHECK_IN_SHARE[ctx.checkIn ?? "balanced"]} of them: flag that many from the top of your order, each with what could be wrong. A cut you already flagged or staged for them counts.`);
+      // Every run of a pass is asked. Until 2026-11-21 the closing check the engine sent a finished pass back for wasn't:
+      // in a fresh session with no memory of the order, asked again, it flagged a second share of the same cuts, 27-60%
+      // of the word cuts on three passes at "about one in four" (2026-11-20). No pass is sent back now.
+      ctxLines.push(`- Before the pass is done, read back what the video plays where your cuts took words out, and order those cuts from the most likely to be wrong to the least: a cut is wrong when the editor, hearing the result, would put words back, take more out or choose the other delivery. The editor asked to check ${CHECK_IN_SHARE[ctx.checkIn ?? "balanced"]} of them: flag that many from the top of your order, each with what could be wrong. A cut you already flagged or staged for them counts.`);
       // A repeat kept with dialogue_check_repeats plays on and is never shown to the editor. Across his ten edits of
       // 2026-11-20, 9 of 10 passes kept 7-30 listed repeats each, plain restarts among them ("Gemini four and | Gemini
       // four just came out", kept as "the first use names the model family"), while 1 of 166 phrases playing twice was

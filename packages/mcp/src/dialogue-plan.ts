@@ -12,7 +12,7 @@ import { edgeOvershoots } from "./edge-overshoot.js";
 import { heardOnlyVerbatim, timelineWords } from "./timeline-perception.js";
 import type { GapSound } from "./gap-sound.js";
 import type { DialogueEvidence } from "./dialogue-decisions.js";
-import { edgeOnFrame, pageAt as scanPageAt, checkKeptWords, type ReadKeptWords, dialogueJoinChecker, checkResumeQuote, dialogueCutPreview, dialogueJoinWords, joinEvidence, pageReaches, pauseCutRange, DEFAULT_PACE, splitLeave, type JoinPace, quietFrameNote, dialogueAudioStream, soundBesideEdge, wordCutRange, type JoinPage } from "./dialogue-join.js";
+import { edgeOnFrame, pageAt as scanPageAt, checkKeptWords, type ReadKeptWords, dialogueJoinChecker, checkResumeQuote, dialogueCutPreview, dialogueJoinWords, joinEvidence, pageReaches, pauseCutRange, DEFAULT_PACE, splitLeave, type Breath, type JoinPace, quietFrameNote, dialogueAudioStream, soundBesideEdge, wordCutRange, SAME_WORD_UNHEARD, type JoinPage } from "./dialogue-join.js";
 
 /** Every clip of a recording that sounds on this version, in track and clip order. */
 const audibleMediaClips = (tl: Timeline) => audibleClipsByTrack(tl).flat();
@@ -72,6 +72,11 @@ export interface DialoguePlanSources {
   crossfadeFrames?: number;
   /** The room tone the model asked joins to leave either side (its skill's pace). Scarlet's default when absent. */
   pace?: JoinPace;
+  /**
+   * Whether a word reference's cut starts before or after a breath between the last kept word and the quiet: the
+   * model's call, by its skill. "cut", the stock skill's, when absent.
+   */
+  breath?: Breath;
   /**
    * Sound at speaking level in a stretch of a recording that holds no transcript word, when its levels can be read.
    * With `betweenWords`, the stretch runs word to word and is read clear of each word's own edge.
@@ -169,7 +174,7 @@ async function placeWordCut(tl: Timeline, words: TranscriptWord[], ref: { mediaI
   // The pace, `leave` and `voiceIn` are what the editor hears; the quiet is measured in the recording, which the clip plays at its speed.
   const speed = playing?.speed ?? 1, asked = sources.pace ?? DEFAULT_PACE;
   const pace = { after: asked.after * speed, before: asked.before * speed };
-  const cut = wordCutRange(words, fromWord, toWord, pageAt, ref.leave === undefined ? undefined : ref.leave * speed, pace, ref.voiceIn === undefined ? undefined : ref.voiceIn * speed);
+  const cut = wordCutRange(words, fromWord, toWord, pageAt, ref.leave === undefined ? undefined : ref.leave * speed, pace, ref.voiceIn === undefined ? undefined : ref.voiceIn * speed, sources.breath);
   if (ref.clipId && clips[0]) {
     // No neighboring recognized word can justify removing a long unmeasured lead-in or tail at a clip boundary.
     const { sourceIn, sourceOut } = clips[0];
@@ -185,6 +190,7 @@ async function placeWordCut(tl: Timeline, words: TranscriptWord[], ref: { mediaI
   if (ref.clipId && (cut.end <= cut.start || cut.start >= words[fromWord]!.end || cut.end <= words[toWord]!.start)) {
     cut.start = words[fromWord]!.start;
     cut.end = words[toWord]!.end;
+    cut.breath = undefined;
     cut.problems.push("The measured gaps do not bracket the spoken occurrence. Review its word boundaries.");
   }
   const fps = (await sources.project()).settings.fps;
@@ -207,7 +213,8 @@ async function placeWordCut(tl: Timeline, words: TranscriptWord[], ref: { mediaI
     `Keep them if they play as one word, or remove them with a word beside them.`);
   // Where the words themselves play: the edges sit in the silence either side of them.
   const spoken = { start: Math.max(start, place(words[fromWord]!.start, "start", words[fromWord]!)), end: Math.min(end, place(words[toWord]!.end, "end", words[toWord]!)) };
-  return { start, end, words: cut.text, problems: cut.problems, dips: [...cut.dips, ...cut.retimed], spoken, source: { start: round3(cut.start), end: Number.isFinite(cut.end) ? round3(cut.end) : null } };
+  return { start, end, words: cut.text, problems: cut.problems, dips: [...cut.dips, ...cut.retimed], ...(cut.breath && { breath: cut.breath }), spoken,
+    source: { start: round3(cut.start), end: Number.isFinite(cut.end) ? round3(cut.end) : null } };
 }
 
 /** Where a clip plays an instant of the recording, held to the part of it the clip plays. */
@@ -471,6 +478,8 @@ type ResolvedCut = Omit<DialogueCutInput, "mediaId" | "fromWord" | "toWord" | "a
   wordEdgeProblems?: string[];
   /** Edges Scarlet placed at a dip in the level between two words that run together. */
   wordEdgeDips?: string[];
+  /** A breath Scarlet measured after the last kept word, and which side of it the cut starts (`breath`). */
+  wordEdgeBreath?: string;
   /** What Scarlet measured in the range that the agent's words for it do not say. */
   notes?: string[];
   /** Where a word reference's words play. Its edges were placed by Scarlet in the silence beyond them. */
@@ -491,7 +500,7 @@ interface PlannedDecision extends TimeRange {
   check?: string;
   /** Why Scarlet held a cut the agent sent to apply: what it measured at the edges. The agent's reason stays its own. */
   held?: string;
-  /** Nothing Scarlet measures can settle this join (a same-word join): the cut waits for the editor, and the engine lets no later cut replace it. */
+  /** Staged where Scarlet placed a same-word join, which nothing it measures can settle. A record only: the engine treats it as any staged cut. */
   unheard?: true;
   /** Held for how its join measured, applied as placed only because the agent sent unsureJoins cut. */
   appliedAsPlaced?: true;
@@ -613,7 +622,8 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
     return { ...rest, start: resolved.start, end: resolved.end, input: i, ...("air" in resolved && resolved.air && { air: resolved.air }),
       ...(clean.length && { cleanAlternatives: clean.map(a => ({ fromWord: a.fromWord, toWord: a.toWord })) }),
       ...("wordRef" in resolved && { words: resolved.words, wordEdgeProblems: resolved.problems,
-        ...("spoken" in resolved && { spoken: resolved.spoken, wordEdgeDips: resolved.dips }), ...("notes" in resolved && { notes: resolved.notes }) }) };
+        ...("spoken" in resolved && { spoken: resolved.spoken, wordEdgeDips: resolved.dips, ...(resolved.breath && { wordEdgeBreath: resolved.breath }) }),
+        ...("notes" in resolved && { notes: resolved.notes }) }) };
   }))).filter(c => c !== undefined);
   // Named before anything else is checked, so the caller can set these aside and plan the rest.
   if (unplaced.length) return { outcome: "needsRevision", disputedEdges: unplaced.sort((a, b) => a.cuts[0]! - b.cuts[0]!) };
@@ -689,8 +699,6 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
   // there. Of eighteen calls one pass handed the editor, fifteen were held this way, asked about as "listen for the end
   // of …", and most were a word or a few frames off (2026-11-16).
   const inSound = new Map<number, { reason: string; inWord: boolean }>();
-  /** Cuts whose join Scarlet placed without a measurement that says it plays clean: the editor's to hear. */
-  const unheard = new Set<number>();
   const decisions = removals.map(c => {
     const decided: PlannedDecision = { start: c.start, end: c.end, reason: c.reason, review: c.decision === "review", kind: c.kind,
       originalRange: undefined, ...(c.check && { check: c.check }), ...(c.summary && { summary: c.summary }) };
@@ -707,17 +715,25 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
       return next;
     };
     // A restart that begins on the word the first take broke off after, with no pause for the cut to start in: the
-    // cut starts where that word begins, found by matching it to the retake's, and waits for the editor, since
-    // nothing here can hear the join (sameWordJoin). A cut already there waits the same way.
+    // cut starts where that word begins, found by matching it to the retake's (sameWordJoin). Nothing here can hear
+    // that join. Such a cut used to wait for the editor whatever unsureJoins said, and the engine let no later cut
+    // replace it (his rule, 2026-11-17). Since 2026-11-21 it is held as any join Scarlet can't place cleanly is, and
+    // unsureJoins cut applies it where Scarlet placed it: the model decides; the default is in the skill.
     const same = c.kind === "retake" && c.decision !== "keep" ? checkJoin({ start: c.start, end: c.end }, c.spoken, c.air) : undefined;
     const offered = same?.sameWordJoin, said = offered && "“" + offered.word + "”";
+    // A range that starts right after kept words the take says again leaves them playing twice. Scarlet used to extend
+    // the cut back over them; that took out words the model never named, so since 2026-11-21 the gate says where a cut
+    // that takes them out starts, and the model resends it there or doesn't. The range goes on as given.
+    if (offered?.takesFirst) {
+      const twice = "“" + offered.takesFirst + "”", them = offered.takesFirst.includes(" ") ? "them" : "it";
+      c.notes = [...(c.notes ?? []), `The range as given leaves the first ${twice} playing twice: the take says ${them} again right after the cut. ` +
+        `A cut from ${offered.start.toFixed(3)} s takes ${them} out too: the first ${said} begins there, matched on its sound to the second, and the word before runs into it with no pause.`];
+    }
     // Said of the cut as saved: the check's own words offer the seconds, and a pass sent the cut again on them.
-    const placed = same?.sameWord ? { start: same.start, end: same.end, reason: same.reason ?? "" } : offered && { start: offered.start, end: offered.end,
-      reason: `Staged from ${r2(offered.start)} s, where the first ${said} begins: the word before runs into it with no pause, so Scarlet found its start by matching it to the second ${said} on their sound` +
-        `${offered.takesFirst ? `, and took out the first ${said} too, which the range as given left playing twice` : ""}. No kept word is cut as measured. ` +
-        "Scarlet can't hear the join and neither can you, so it waits for the editor as a call: record ask on it. Nothing else is needed on this cut." };
+    const placed = same?.sameWord ? { start: same.start, end: same.end, reason: same.reason ?? "" } : offered && !offered.takesFirst && { start: offered.start, end: offered.end,
+      reason: `Placed from ${r2(offered.start)} s, where the first ${said} begins: the word before runs into it with no pause, so Scarlet found its start by matching it to the second ${said} on their sound. ` +
+        `No kept word is cut as measured. ${SAME_WORD_UNHEARD}` };
     if (placed) {
-      unheard.add(c.input);
       inSound.set(c.input, { inWord: false, reason: placed.reason });
       return adjust({ ...decided, start: placed.start, end: placed.end, review: true, held: placed.reason, unheard: true }, placed.reason);
     }
@@ -799,11 +815,13 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
   // A cut the model decided that Scarlet held only for how its join measured applies as placed when the model said
   // so. A hold for the selection or footage marked to keep stays: that is the editor's, not a measurement. So does an
   // edge inside a word that is sounding there: offered the way round, one pass sent 21 of its 33 saves with
-  // unsureJoins cut and applied ten such edges (2026-11-16).
+  // unsureJoins cut and applied ten such edges (2026-11-16). A same-word join applies too (2026-11-21): no word is
+  // clipped there, and whether a join no one has heard goes in is the model's call, by its skill.
   if (req.unsureJoins === "cut") decisions.forEach((d, i) => {
     const c = removals[i]!;
-    if (c.decision !== "cut" || !d.review || !d.held || d.held === CROSSES_SCOPE || inSound.get(c.input)?.inWord || unheard.has(c.input)) return;
-    decisions[i] = { ...d, review: false, held: undefined, originalRange: undefined, appliedAsPlaced: true };
+    if (c.decision !== "cut" || !d.review || !d.held || d.held === CROSSES_SCOPE || inSound.get(c.input)?.inWord) return;
+    const { unheard: _staged, ...applied } = d;
+    decisions[i] = { ...applied, review: false, held: undefined, originalRange: undefined, appliedAsPlaced: true };
     const line = report.findLast(l => l.cut === c.input);
     if (line) Object.assign(line, { outcome: "cut", evidence: `Applied as placed, as unsureJoins asked: ${line.evidence}` });
   });
@@ -1055,6 +1073,11 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
   for (const c of removals) if (c.words && !gate.has(c.input)) {
     const d = decisions[removals.indexOf(c)]!;
     gate.set(c.input, { cut: c.input, kind: c.kind, words: c.words, asked: c.decision, outcome: d.review ? "review" : "cut", range: [r2(d.start), r2(d.end)] });
+  }
+  // A breath after the last kept word is reported whichever side of it the cut starts, so the model sees what `breath` chose between.
+  for (const c of removals) {
+    const line = c.wordEdgeBreath ? gate.get(c.input) : undefined;
+    if (line) line.evidence = [typeof line.evidence === "string" ? line.evidence : "", c.wordEdgeBreath].filter(Boolean).join(" ");
   }
   return { outcome: "ready", removals, decisions, gate, kept,
     ...(unreadJoinAudio.length && { unreadJoinAudio: unreadJoinAudio.sort((a, b) => a.cut - b.cut) }) };

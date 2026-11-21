@@ -7,9 +7,11 @@
  * read past them. A pass on project 88 laid the screen over the camera from 4:53, left 0.45 s of camera before the next
  * screen clip, then went back to the camera for 13 s while the speaker read his prompt off the screen and 4 s later its
  * reply, and showed 2 s of the model list he went on talking about at 5:38 between stretches of camera, with all of it
- * reported on its saves (2026-11-21). The closing check is the one list a pass works through to the end: each finding
- * is fixed or kept with a reason, as a repeat or a silence is. Whether a moment of a picture, or the camera while the
- * screen still shows what was being talked about, is right is the model's call; the skill says what the editor likes.
+ * reported on its saves (2026-11-21). The closing check lists them beside the repeats and silences, each to be fixed or
+ * kept with a reason, as a repeat or a silence is. Like those it is evidence: a pass that says it is done is done, and
+ * nothing sends it back for a finding it left (`docs/AI-AGENTS.md` rule 4). Whether a moment of a picture, or the camera
+ * while the screen still shows what was being talked about, is right is the model's call; the skill says what the editor
+ * likes.
  */
 import { clipEnd, type MediaClip, type Timeline } from "@scarlet/timeline";
 import type { BriefPicture } from "./brief-pictures.js";
