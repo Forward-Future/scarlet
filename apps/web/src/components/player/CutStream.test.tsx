@@ -47,6 +47,7 @@ const alert = () => container.querySelector('[role="alert"]')?.textContent;
 /** Whether the player marks its video as waiting for a section. The monitor's play button shows that, in place of its icon. */
 const waiting = () => video().hasAttribute("data-waiting");
 const button = () => container.querySelector("button");
+const posterOf = () => video().getAttribute("poster")!;
 
 it("keeps the player mounted and reports the playback budget for an older timeline", async () => {
   const old = structuredClone(timeline);
@@ -221,4 +222,33 @@ it("plays on through a new version of the working cut, from where the editor was
   await act(async () => root.render(<CutStream project={project} timeline={timeline} version="later" onStart={onStart} />));
   expect(open).toHaveBeenCalledTimes(2);
   expect(el.play).toHaveBeenCalledTimes(2);
+});
+
+it("shows the video as it plays before it plays: every layer at the playhead, not the top clip's footage", async () => {
+  // A screen with the camera inset over it is the video's picture there. The camera's own footage is not.
+  const framed = structuredClone(timeline);
+  const camera = framed.tracks.find(t => t.kind === "video")!;
+  framed.tracks.push({ ...camera, id: "inset", clips: camera.clips.map(c => ({ ...c, id: `${c.id}_inset`, transform: { x: 0.3, y: 0.3, scale: 0.3, rotation: 0, cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0 } })) });
+  await act(async () => root.render(<CutStream project={project} timeline={framed} version="framed" onStart={onStart} />));
+  const poster = new URL(posterOf());
+  expect(poster.pathname).toMatch(new RegExp(`/projects/${PRJ}/versions/framed/frame$`));
+  expect(poster.searchParams.get("view")).toBe("monitor");
+  expect(poster.searchParams.get("frame")).toBe(String(Math.floor(4 * project.settings.fps)));
+});
+
+it("keeps the picture up while a version saved during a pause loads its own", async () => {
+  const loads: HTMLImageElement[] = [];
+  const Picture = window.Image;
+  vi.stubGlobal("Image", class extends Picture { constructor() { super(); loads.push(this); } });
+  const loaded = (version: string) => act(async () => loads.findLast(p => p.src.includes(`/versions/${version}/`))!.onload?.(new Event("load")));
+  await act(async () => root.render(<CutStream project={project} timeline={timeline} version="before" onStart={onStart} />));
+  await loaded("before");
+  const before = posterOf();
+  // A save while the editor watches paused puts up a new player for the new version, at the same moment.
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await act(async () => root.render(<CutStream project={project} timeline={timeline} version="after" onStart={onStart} />));
+  expect(posterOf()).toBe(before);
+  await loaded("after");
+  expect(posterOf()).toMatch(/\/versions\/after\/frame/);
 });

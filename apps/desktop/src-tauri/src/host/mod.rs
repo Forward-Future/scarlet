@@ -23,6 +23,7 @@ pub mod runner_gemini;
 pub mod spawn;
 pub mod types;
 pub mod usage;
+pub mod workspace;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -174,6 +175,15 @@ pub struct HostStatus {
     pub configured: bool,
 }
 
+/// Remove the control file in a run's folder that holds the engine token, if the run left one: Claude Code's MCP
+/// config. Codex and agy take the token in their environment and session instead.
+pub fn remove_token_file(dir: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(dir.join(".scarlet").join("mcp.json")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
 /// A finished task keeps only its artifacts. The CLI control files include the engine token.
 pub fn remove_control_files(dir: &Path) -> std::io::Result<()> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Ok(()) };
@@ -193,33 +203,71 @@ pub fn remove_control_files(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Claude Code keeps a cwd's sessions in ~/.claude/projects/<real cwd with every
-/// character other than a letter or digit as "-">. Names over 200 characters get
-/// a hash suffix we can't reproduce, so those are left alone.
-pub fn claude_project_dir(real_cwd: &Path, home: &Path) -> Option<PathBuf> {
+/// Where Claude Code keeps its sessions and their to-do lists: CLAUDE_CONFIG_DIR when it is set, else ~/.claude.
+/// A relative CLAUDE_CONFIG_DIR is read from each CLI's own folder, which Scarlet can't speak for, so it is left alone.
+pub fn claude_config_dir(env: &HashMap<String, String>, home: &Path) -> Option<PathBuf> {
+    match crate::util::env_get(env, "CLAUDE_CONFIG_DIR") {
+        None => Some(home.join(".claude")),
+        Some(dir) => Some(PathBuf::from(dir)).filter(|dir| dir.is_absolute()),
+    }
+}
+
+/// Claude Code keeps a cwd's sessions in <its folder>/projects/<real cwd with every character other than a letter or
+/// digit as "-">. A name over 200 characters keeps its first 200 and ends in a hash of the path Scarlet can't
+/// reproduce, so that folder is found by its first 200 characters and by its sessions, which name the cwd.
+pub fn claude_project_dir(real_cwd: &Path, claude_dir: &Path) -> Option<PathBuf> {
     let name: String = real_cwd.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
-    (name.len() <= 200 && name.chars().any(|c| c.is_ascii_alphanumeric())).then(|| home.join(".claude").join("projects").join(name))
+    if !name.chars().any(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let projects = claude_dir.join("projects");
+    if name.len() <= 200 {
+        return Some(projects.join(name));
+    }
+    let prefix = format!("{}-", &name[..200]);
+    // Another folder that long can share those 200 characters: only the one whose sessions name this cwd is its.
+    std::fs::read_dir(&projects).ok()?.flatten().map(|entry| entry.path()).find(|dir| {
+        let hashed = dir.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix(&prefix))
+            .is_some_and(|hash| !hash.is_empty() && hash.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+        hashed && sessions_name_cwd(dir, real_cwd)
+    })
+}
+
+/// Whether a Claude project folder's sessions were held in `real_cwd`: each session's messages carry their `cwd`,
+/// within its first lines.
+fn sessions_name_cwd(dir: &Path, real_cwd: &Path) -> bool {
+    use std::io::BufRead;
+    let cwd = real_cwd.to_string_lossy();
+    std::fs::read_dir(dir).into_iter().flatten().flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|e| e == "jsonl"))
+        .filter_map(|entry| std::fs::File::open(entry.path()).ok())
+        .any(|file| {
+            std::io::BufReader::new(file).lines().take(20).map_while(Result::ok)
+                .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+                .find_map(|message| message.get("cwd").and_then(Value::as_str).map(|said| said == cwd))
+                .unwrap_or(false)
+        })
 }
 
 /// Delete the Claude sessions of one finished Scarlet task: only the project folder named after its task folder,
-/// and the to-do list of each session in it.
-pub fn remove_claude_sessions(real_cwd: &Path, home: &Path) -> std::io::Result<()> {
+/// and the to-do list of each session in it. `claude_dir` is where Claude Code keeps them (`claude_config_dir`).
+pub fn remove_claude_sessions(real_cwd: &Path, claude_dir: &Path) -> std::io::Result<()> {
     if !real_cwd.parent().and_then(Path::file_name).is_some_and(|n| n == TASKS_DIR) {
         return Ok(());
     }
-    let Some(dir) = claude_project_dir(real_cwd, home) else { return Ok(()) };
+    let Some(dir) = claude_project_dir(real_cwd, claude_dir) else { return Ok(()) };
     match std::fs::symlink_metadata(&dir) {
         Ok(m) if m.is_dir() => {
-            // Claude Code keeps a session's to-do list apart from it, in ~/.claude/tasks/<session id>, and a session
+            // Claude Code keeps a session's to-do list apart from it, in <its folder>/tasks/<session id>, and a session
             // is `<session id>.jsonl` here. Only a name of hex digits and dashes is read as an id: "...jsonl" would
-            // name ~/.claude itself. A list that can't be removed is left.
+            // name its folder itself. A list that can't be removed is left.
             for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
                 let name = entry.file_name();
                 let Some(id) = name.to_str().and_then(|n| n.strip_suffix(".jsonl")) else { continue };
                 if id.is_empty() || !id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
                     continue;
                 }
-                let list = home.join(".claude").join("tasks").join(id);
+                let list = claude_dir.join("tasks").join(id);
                 if std::fs::symlink_metadata(&list).is_ok_and(|m| m.is_dir()) {
                     let _ = std::fs::remove_dir_all(&list);
                 }
@@ -243,16 +291,17 @@ fn last_used(dir: &Path) -> Option<std::time::SystemTime> {
     std::iter::once(artifacts.clone()).chain(files).filter_map(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok()).chain(meta.modified().ok()).max()
 }
 
-/// Remove task folders unused for `TASK_DIR_DAYS`, including artifacts.
-pub fn prune_task_dirs(tasks_root: &Path, now: std::time::SystemTime, home: Option<&Path>) {
+/// Remove task folders unused for `TASK_DIR_DAYS`, including artifacts, and the Claude sessions they left in
+/// `claude_dir` (`claude_config_dir`).
+pub fn prune_task_dirs(tasks_root: &Path, now: std::time::SystemTime, claude_dir: Option<&Path>) {
     let Ok(entries) = std::fs::read_dir(tasks_root) else { return };
     let max_age = Duration::from_secs(TASK_DIR_DAYS * 86_400);
     for entry in entries.flatten() {
         let old = last_used(&entry.path()).and_then(|t| now.duration_since(t).ok()).is_some_and(|age| age > max_age);
         if old {
             // A run that never finished left its Claude sessions behind. They go with its folder.
-            if let (Some(home), Some(real)) = (home, real_path(&entry.path())) {
-                if let Err(e) = remove_claude_sessions(&real, home) {
+            if let (Some(claude_dir), Some(real)) = (claude_dir, real_path(&entry.path())) {
+                if let Err(e) = remove_claude_sessions(&real, claude_dir) {
                     log::warn!("could not remove Claude sessions of {}: {e}", entry.path().display());
                 }
             }
@@ -379,6 +428,8 @@ pub struct HostRuntime {
     wake: Notify,
     subscriptions_changed: Notify,
     paths: Paths,
+    /// Where Claude Code keeps its sessions (`claude_config_dir`). None: nowhere Scarlet can tell, so they are left.
+    claude_dir: Option<PathBuf>,
     mcp: McpLauncher,
     models: HashMap<String, String>,
     /// Optional cap on one run. None: a working agent takes as long as it needs.
@@ -760,21 +811,17 @@ impl HostRuntime {
         send_event(&self.api, task_id, task.started_at.as_deref(), &ev).await;
     }
 
-    /// Where a run's events go: the sink its runner writes to, the task that sends them on in order to the
-    /// engine, and a question the CLI's output carried.
+    /// Where a run's events go: the sink its runner writes to, and the task that sends them on in order to the engine.
     /// An event's time is taken as the CLI writes it, not when its turn to be sent comes. Behind a slow engine a
     /// backlog would otherwise carry the one instant it was sent at, later than events the engine saved meanwhile.
-    fn forward_events(&self, task_id: &str, started_at: Option<String>) -> (runner::EventSink, tokio::task::JoinHandle<()>, Arc<StdMutex<Option<String>>>) {
+    fn forward_events(&self, task_id: &str, started_at: Option<String>) -> (runner::EventSink, tokio::task::JoinHandle<()>) {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, RunnerEvent)>();
-        let question_seen: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
         let consumer = {
             let api = self.api.clone();
             let task_id = task_id.to_string();
-            let qs = question_seen.clone();
             tokio::spawn(async move {
                 while let Some((at, ev)) = rx.recv().await {
                     if ev.kind == "question" {
-                        *qs.lock().unwrap() = Some(ev.text.clone());
                         continue; // the MCP server posts the question event itself
                     }
                     if ev.kind == "result" {
@@ -788,7 +835,7 @@ impl HostRuntime {
         let sink: runner::EventSink = Arc::new(move |ev| {
             let _ = tx.send((now_iso(), ev));
         });
-        (sink, consumer, question_seen)
+        (sink, consumer)
     }
 
     #[cfg(test)]
@@ -841,22 +888,9 @@ impl HostRuntime {
             .unwrap_or_default();
         log_completion(task_id, &body, ack.as_ref(), elapsed_ms);
         let handover = (!landed && self.cancel.is_cancelled()).then_some(CompleteTaskRequest { engine_lost: true, ..body });
+        let carries_on = ack.as_ref().is_some_and(|ack| ack.session_carries_on == Some(true));
         let dir = self.run_dir(task);
-        // An attempt the editor stopped can still be winding down when the attempt that resumes it is at work in
-        // the folder they share. The folder and its CLI session are then the newer attempt's, to clean when it ends.
-        let newer = {
-            let running = self.running.lock().unwrap();
-            match run {
-                Some(mine) => {
-                    mine.superseded.load(Ordering::SeqCst)
-                        || running.values().any(|other| !Arc::ptr_eq(other, mine) && other.run_dir == dir && other.seq > mine.seq)
-                }
-                None => running
-                    .get(task_id)
-                    .is_some_and(|mine| running.values().any(|other| other.run_dir == dir && other.seq > mine.seq)),
-            }
-        };
-        if newer {
+        if self.newer_attempt(task, run) {
             log::info!("task {task_id}: left its folder to a newer attempt at the same run");
             if let Some(body) = handover {
                 self.undelivered.hand_over(task_id, body);
@@ -870,15 +904,17 @@ impl HostRuntime {
         }
         // A run the host cut short keeps its CLI session: the attempt that resumes it carries on there.
         // So does one whose completion never landed: the engine takes it for interrupted and resumes it.
+        // So does one the engine handed to a later attempt, as a pause does, though the host never stopped it.
         // The folder's prune removes it if nothing ever does.
-        if let Some(real) = real.filter(|_| landed && !interrupted && !child_env(&self.paths.home).contains_key("CLAUDE_CONFIG_DIR")) {
-            if let Err(e) = remove_claude_sessions(&real, &self.paths.home) {
+        let session_stays = !landed || interrupted || carries_on;
+        if let (Some(real), Some(claude_dir), false) = (real, self.claude_dir.as_deref(), session_stays) {
+            if let Err(e) = remove_claude_sessions(&real, claude_dir) {
                 log::warn!("task {task_id}: could not remove its Claude sessions: {e}");
             }
         }
         // A Codex run keeps its thread in a home beside the folder, on the same terms.
         let codex_home = runner_codex::codex_home_dir(&dir);
-        if landed && !interrupted && std::fs::symlink_metadata(&codex_home).is_ok_and(|m| m.is_dir()) {
+        if !session_stays && std::fs::symlink_metadata(&codex_home).is_ok_and(|m| m.is_dir()) {
             if let Err(e) = std::fs::remove_dir_all(&codex_home) {
                 log::warn!("task {task_id}: could not remove its Codex home: {e}");
             }
@@ -886,6 +922,53 @@ impl HostRuntime {
         // Handed over once its folder is clean: the attempt that resumes the run works in the same folder.
         if let Some(body) = handover {
             self.undelivered.hand_over(task_id, body);
+        }
+    }
+
+    /// An attempt the editor stopped can still be winding down when the attempt that resumes it is at work in the
+    /// folder they share. The folder and its CLI session are then the newer attempt's, to clean when it ends.
+    fn newer_attempt(&self, task: &Task, run: Option<&Arc<RunningTask>>) -> bool {
+        let dir = self.run_dir(task);
+        let running = self.running.lock().unwrap();
+        match run {
+            Some(mine) => {
+                mine.superseded.load(Ordering::SeqCst)
+                    || running.values().any(|other| !Arc::ptr_eq(other, mine) && other.run_dir == dir && other.seq > mine.seq)
+            }
+            None => running
+                .get(&task.id)
+                .is_some_and(|mine| running.values().any(|other| other.run_dir == dir && other.seq > mine.seq)),
+        }
+    }
+
+    /// Hand the editor the question the run stopped on. Once the engine has it the run is paused, not over: its
+    /// folder and CLI session stay for the attempt that carries on with the answer, which writes its control files
+    /// again. The file holding the engine token goes now, rather than at the folder's prune two weeks on.
+    async fn ask_editor(&self, task: &Task, question: &str, session_id: Option<&str>, cancel: &CancellationToken, run: Option<&Arc<RunningTask>>) {
+        // Confirm with the engine even when a provider reported tool success.
+        for attempt in 1..=3 {
+            let posted = tokio::select! {
+                _ = cancel.cancelled() => return,
+                r = self.api.post_task_question(task, question, session_id) => r,
+            };
+            match posted {
+                Ok(waiting) => {
+                    log_question(task, if waiting { "waiting" } else { "not_waiting" });
+                    if !self.newer_attempt(task, run) {
+                        if let Err(e) = remove_token_file(&self.run_dir(task)) {
+                            log::warn!("task {}: could not remove the file with its token: {e}", task.id);
+                        }
+                    }
+                    return;
+                }
+                Err(e) if attempt == 3 => {
+                    let error = format!("Could not deliver the editor question: {e}");
+                    log_question(task, "undelivered");
+                    log::warn!("task {}: {error}", task.id);
+                    return self.complete_attempt(task, "failed", None, Some(error), run).await;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(250 * attempt)).await,
+            }
         }
     }
 
@@ -937,7 +1020,7 @@ impl HostRuntime {
         };
 
         // Events: forwarded in order by a consumer task so completion waits for them.
-        let (sink, consumer, question_seen) = self.forward_events(&task.id, task.started_at.clone());
+        let (sink, consumer) = self.forward_events(&task.id, task.started_at.clone());
 
         let env = detect::runner_env(&task.agent, &self.agents.read().await, &child_env(&self.paths.home));
         let model = task.model.clone().or_else(|| self.models.get(&task.agent).cloned());
@@ -957,6 +1040,8 @@ impl HostRuntime {
             instruction: p.instruction,
             resume_session: p.resume_session,
             plan: p.plan,
+            refused_tool: p.refused_tool,
+            workspace: p.workspace,
             cwd: p.cwd,
             mcp: p.mcp,
             on_event: sink.clone(),
@@ -1000,31 +1085,9 @@ impl HostRuntime {
         // Record tokens for every outcome, including a cancel or a pause for a question.
         self.record_usage(&task, usage.as_ref()).await;
 
-        let question_seen = question_seen.lock().unwrap().clone();
-        match outcome(&result, cancel.is_cancelled(), question_seen, self.timeout, self.stall) {
+        match outcome(&result, cancel.is_cancelled(), self.timeout, self.stall) {
             Outcome::Cancelled { summary } => self.complete_attempt(&task, "cancelled", summary, Some("cancelled".into()), run.as_ref()).await,
-            Outcome::Question(q) => {
-                // Confirm with the engine even when a provider reported tool success.
-                for attempt in 1..=3 {
-                    let posted = tokio::select! {
-                        _ = cancel.cancelled() => return,
-                        r = self.api.post_task_question(&task, &q, result.session_id.as_deref()) => r,
-                    };
-                    match posted {
-                        Ok(waiting) => {
-                            log_question(&task, if waiting { "waiting" } else { "not_waiting" });
-                            return;
-                        }
-                        Err(e) if attempt == 3 => {
-                            let error = format!("Could not deliver the editor question: {e}");
-                            log_question(&task, "undelivered");
-                            log::warn!("task {}: {error}", task.id);
-                            return self.complete_attempt(&task, "failed", None, Some(error), run.as_ref()).await;
-                        }
-                        Err(_) => tokio::time::sleep(Duration::from_millis(250 * attempt)).await,
-                    }
-                }
-            }
+            Outcome::Question(q) => self.ask_editor(&task, &q, result.session_id.as_deref(), &cancel, run.as_ref()).await,
             Outcome::Done { summary } => self.complete_attempt(&task, "done", Some(summary), None, run.as_ref()).await,
             Outcome::Failed { error, summary, stopped } => {
                 self.post_event(&task, "error", error.clone(), None).await;
@@ -1049,16 +1112,23 @@ impl HostRuntime {
         if let Some(started_at) = &task.started_at {
             mcp.env.insert("SCARLET_TASK_STARTED_AT".into(), started_at.clone());
         }
-        Ok(Prepared { system_prompt: prompt.system_prompt, instruction: prompt.instruction, resume_session: prompt.resume_session, plan: prompt.plan, cwd, mcp })
+        // A request's agent gets its harness's own tools, and launchers for the programs this machine has. An engine from
+        // before them leaves `workspace` out, and the run has Scarlet's tools only, as it did.
+        let workspace = if prompt.workspace {
+            Some(workspace::workspace_tools(&cwd, self.paths.resource_dir.as_deref(), &crate::util::env_map())?)
+        } else {
+            None
+        };
+        Ok(Prepared { system_prompt: prompt.system_prompt, instruction: prompt.instruction, resume_session: prompt.resume_session, plan: prompt.plan, refused_tool: prompt.refused_tool, workspace, cwd, mcp })
     }
 
     async fn run(self: Arc<Self>) {
         let tasks_root = self.paths.work_dir.join(TASKS_DIR);
         let pids = self.paths.work_dir.join("agent-pids");
-        let home = (!child_env(&self.paths.home).contains_key("CLAUDE_CONFIG_DIR")).then(|| self.paths.home.clone());
+        let claude_dir = self.claude_dir.clone();
         let cleanup = tokio::task::spawn_blocking(move || {
             spawn::stop_orphans(&pids);
-            prune_task_dirs(&tasks_root, std::time::SystemTime::now(), home.as_deref());
+            prune_task_dirs(&tasks_root, std::time::SystemTime::now(), claude_dir.as_deref());
         });
         let env = child_env(&self.paths.home);
         let _ = tokio::join!(self.detect_agents(&env), cleanup);
@@ -1153,13 +1223,14 @@ enum Outcome {
 }
 
 /// Read it off the runner's result. `cancelled`: the task or the host was stopped while it ran.
-/// `question_seen`: a question the CLI's output carried that the result does not.
-fn outcome(result: &RunResult, cancelled: bool, question_seen: Option<String>, timeout: Option<Duration>, stall: Option<Duration>) -> Outcome {
+/// A question is the result's alone: the runner drops one the MCP server refused or that had no words, and a copy
+/// kept from the CLI's output would post it to the editor all the same.
+fn outcome(result: &RunResult, cancelled: bool, timeout: Option<Duration>, stall: Option<Duration>) -> Outcome {
     let summary = (!result.summary.is_empty()).then(|| result.summary.clone());
     if cancelled || result.aborted {
         return Outcome::Cancelled { summary };
     }
-    if let Some(question) = result.question.clone().or(question_seen) {
+    if let Some(question) = result.question.clone() {
         return Outcome::Question(question);
     }
     if result.ok {
@@ -1207,6 +1278,9 @@ struct Prepared {
     instruction: String,
     resume_session: Option<String>,
     plan: bool,
+    refused_tool: Option<String>,
+    /// The harness's own shell, file and web tools, for a request (`workspace` on the engine's prompt).
+    workspace: Option<types::Workspace>,
     cwd: PathBuf,
     mcp: McpSpec,
 }
@@ -1284,6 +1358,7 @@ impl HostManager {
             wake: Notify::new(),
             subscriptions_changed: Notify::new(),
             paths: self.paths.clone(),
+            claude_dir: claude_config_dir(&crate::util::env_map(), &self.paths.home),
             mcp,
             models,
             timeout,
@@ -1421,6 +1496,8 @@ mod tests {
                 config_file: work_root.join("desktop.json"), work_dir: work_root.to_owned(), home: work_root.join("home"),
                 data_dir: work_root.join("data"), log_dir: work_root.join("logs"), resource_dir: None,
             },
+            // Claude Code's own folder under the test's home, whatever the machine running the tests has set.
+            claude_dir: Some(work_root.join("home").join(".claude")),
             mcp: McpLauncher { program: "scarlet-engine".into(), prefix_args: vec![] },
             models: HashMap::new(),
             timeout: None,
@@ -1519,15 +1596,14 @@ mod tests {
         std::fs::create_dir_all(folder.join(".scarlet")).unwrap();
         std::fs::create_dir_all(folder.join("artifacts")).unwrap();
         std::fs::write(folder.join(".scarlet").join("mcp.json"), "sct_test").unwrap();
-        let session = claude_project_dir(&real_path(&folder).unwrap(), &rt.paths.home).unwrap();
+        let session = claude_project_dir(&real_path(&folder).unwrap(), rt.claude_dir.as_deref().unwrap()).unwrap();
         std::fs::create_dir_all(&session).unwrap();
         (folder, session)
     }
 
-    /// Whether a finished run's Claude session went. Scarlet leaves another Claude store alone, so where the tests
-    /// run with one set (CLAUDE_CONFIG_DIR) the session staying is right.
+    /// Whether a finished run's Claude session went.
     fn session_gone(session: &Path) -> bool {
-        !session.exists() || crate::util::env_map().contains_key("CLAUDE_CONFIG_DIR")
+        !session.exists()
     }
 
     /// Wait for something another task is about to do.
@@ -1628,6 +1704,69 @@ mod tests {
         // An answer without a state confirms delivery without claiming it was saved as done.
         let (level, _) = crate::util::test_log::find(&["[host] completion task=tsk_noread", "requested=done state=unknown outcome=unconfirmed", "changes=0"]).expect("no completion line");
         assert_eq!(level, log::Level::Info);
+    }
+
+    #[tokio::test]
+    async fn a_run_the_engine_hands_to_a_later_attempt_keeps_its_session() {
+        let engine = api::fake::engine(|route, _| match route {
+            // Paused: the engine ends this attempt and hands its session to the one that resumes the run.
+            "POST /api/tasks/tsk_paused/complete" => (200, json!({ "task": { "state": "cancelled", "sessionCarriesOn": true } }).to_string()),
+            _ => (200, json!({ "task": { "state": "cancelled" } }).to_string()),
+        }).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (rt, _) = runtime(&engine.url, dir.path());
+        let with_codex_home = |task: &Task| {
+            let (folder, session) = claude_run_files(&rt, task);
+            let codex_home = runner_codex::codex_home_dir(&folder);
+            std::fs::create_dir_all(&codex_home).unwrap();
+            (folder, session, codex_home)
+        };
+        let paused = task("tsk_paused");
+        let (folder, session, codex_home) = with_codex_home(&paused);
+        rt.complete(&paused, "cancelled", None, Some("cancelled".into())).await;
+        // The host didn't cut it short, and says so; the file with the token goes as ever.
+        assert_eq!(engine.bodies("POST /api/tasks/tsk_paused/complete")[0]["interrupted"], json!(false));
+        assert!(!folder.join(".scarlet").exists());
+        // The CLI sessions stay for the attempt that carries on in them.
+        assert!(session.exists(), "the Claude session the resumed attempt carries on in was removed");
+        assert!(codex_home.exists(), "the Codex home the resumed attempt carries on in was removed");
+
+        // The same completion with no hand-over is the run's end: they go.
+        let stopped = task("tsk_stopped");
+        let (_, session, codex_home) = with_codex_home(&stopped);
+        rt.complete(&stopped, "cancelled", None, Some("cancelled".into())).await;
+        assert!(session_gone(&session) && !codex_home.exists());
+    }
+
+    #[tokio::test]
+    async fn a_run_paused_on_a_question_keeps_its_session_and_drops_the_file_with_its_token() {
+        let engine = api::fake::engine(|route, _| match route {
+            "POST /api/tasks/tsk_ask/question" | "POST /api/tasks/tsk_older/question" => (200, r#"{"waiting":true}"#.into()),
+            _ => (500, String::new()),
+        }).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (rt, _) = runtime(&engine.url, dir.path());
+        let ask = task("tsk_ask");
+        let (folder, session) = claude_run_files(&rt, &ask);
+        std::fs::write(folder.join(".scarlet").join("system.md"), "SYS").unwrap();
+        rt.ask_editor(&ask, "Keep the cold open?", Some("s1"), &CancellationToken::new(), None).await;
+        assert_eq!(engine.bodies("POST /api/tasks/tsk_ask/question"), [json!({ "text": "Keep the cold open?", "sessionId": "s1", "startedAt": "2026-11-08T10:00:00.000Z" })]);
+        // Paused, not over: nothing is completed, and the session and folder stay for the answer.
+        assert!(engine.bodies("POST /api/tasks/tsk_ask/complete").is_empty());
+        assert!(session.exists() && folder.join("artifacts").exists() && folder.join(".scarlet").join("system.md").exists());
+        // The file with the engine token doesn't wait two weeks for the folder's prune. The resumed run writes its own.
+        assert!(!folder.join(".scarlet").join("mcp.json").exists(), "the token stayed on disk through the pause");
+
+        // An attempt that pauses beside a newer one at the same run leaves the newer one's file alone.
+        let older = task("tsk_older");
+        let newer = Task { resume_root_id: Some("tsk_older".into()), ..task("tsk_newer") };
+        for attempt in [&older, &newer] {
+            let run = RunningTask::new(attempt.project_id.clone(), attempt.agent.clone(), CancellationToken::new(), rt.run_dir(attempt));
+            rt.running.lock().unwrap().insert(attempt.id.clone(), Arc::new(run));
+        }
+        let (folder, _) = claude_run_files(&rt, &newer);
+        rt.ask_editor(&older, "Which take?", None, &CancellationToken::new(), None).await;
+        assert!(folder.join(".scarlet").join("mcp.json").exists(), "the newer attempt's control file was removed");
     }
 
     #[test]
@@ -1867,7 +2006,7 @@ mod tests {
         }).await;
         let dir = tempfile::tempdir().unwrap();
         let (rt, _sent) = runtime(&engine.url, dir.path());
-        let (sink, consumer, question) = rt.forward_events("tsk_late", Some("2026-11-08T10:00:00.000Z".into()));
+        let (sink, consumer) = rt.forward_events("tsk_late", Some("2026-11-08T10:00:00.000Z".into()));
         // The CLI writes two lines back to back, then asks its question and ends.
         let before = now_iso();
         sink(RunnerEvent::new("tool", "scarlet.timeline_get"));
@@ -1881,7 +2020,6 @@ mod tests {
         let posted = engine.bodies("POST /api/tasks/tsk_late/events");
         assert!(posted.iter().all(|event| event["startedAt"] == "2026-11-08T10:00:00.000Z"));
         assert_eq!(posted.iter().map(|event| event["text"].as_str().unwrap()).collect::<Vec<_>>(), ["scarlet.timeline_get", "Read the timeline."]);
-        assert_eq!(question.lock().unwrap().as_deref(), Some("Which take?"));
         // Each carries the moment it was written. The second waited behind the first for its turn to be sent: stamped
         // then, a backlog would bunch at one instant, later than events the engine saved meanwhile.
         let stamped: Vec<&str> = posted.iter().map(|event| event["at"].as_str().unwrap()).collect();
@@ -2130,7 +2268,7 @@ mod tests {
     #[test]
     fn reads_what_to_do_with_a_run_off_its_result() {
         let ten = Some(Duration::from_secs(600));
-        let read = |result: &RunResult| outcome(result, false, None, None, ten);
+        let read = |result: &RunResult| outcome(result, false, None, ten);
         let said = RunResult { summary: "Cut two pauses.".into(), ..Default::default() };
 
         // Finished: its summary, or a plain "Done." when it said nothing.
@@ -2139,14 +2277,12 @@ mod tests {
 
         // Cancelled wins over everything, whether the runner saw it or only the host did.
         assert_eq!(read(&RunResult { aborted: true, ok: true, question: Some("Keep?".into()), ..said.clone() }), Outcome::Cancelled { summary: Some("Cut two pauses.".into()) });
-        assert_eq!(outcome(&RunResult { ok: true, ..Default::default() }, true, None, None, ten), Outcome::Cancelled { summary: None });
+        assert_eq!(outcome(&RunResult { ok: true, ..Default::default() }, true, None, ten), Outcome::Cancelled { summary: None });
 
-        // A question pauses the task, from the result or from the stream when the result lost it. Even a run
-        // that failed after asking pauses: the editor's answer starts the next attempt.
+        // A question the result carries pauses the task. Even a run that failed after asking pauses: the editor's answer
+        // starts the next attempt.
         assert_eq!(read(&RunResult { ok: true, question: Some("Keep the cold open?".into()), ..Default::default() }), Outcome::Question("Keep the cold open?".into()));
-        assert_eq!(outcome(&RunResult { ok: true, ..Default::default() }, false, Some("Which take?".into()), None, ten), Outcome::Question("Which take?".into()));
-        assert_eq!(outcome(&RunResult { question: Some("From the result".into()), ..Default::default() }, false, Some("From the stream".into()), None, ten), Outcome::Question("From the result".into()));
-        assert_eq!(outcome(&RunResult { error: Some("exited 1".into()), ..Default::default() }, false, Some("Which take?".into()), None, ten), Outcome::Question("Which take?".into()));
+        assert_eq!(read(&RunResult { error: Some("exited 1".into()), question: Some("Which take?".into()), ..Default::default() }), Outcome::Question("Which take?".into()));
 
         // Failed on its own: the runner's reason, and nothing to resume.
         assert_eq!(read(&RunResult { error: Some("claude exited with code 1".into()), ..said.clone() }), Outcome::Failed { error: "claude exited with code 1".into(), summary: Some("Cut two pauses.".into()), stopped: false });
@@ -2156,7 +2292,7 @@ mod tests {
         let stalled = RunResult { timed_out: true, stalled: true, error: Some("stalled".into()), ..Default::default() };
         assert_eq!(read(&stalled), Outcome::Failed { error: "stalled: the agent wrote nothing for 10 minutes".into(), summary: None, stopped: true });
         let capped = RunResult { timed_out: true, error: Some("timed out".into()), ..Default::default() };
-        assert_eq!(outcome(&capped, false, None, Some(Duration::from_secs(45 * 60)), ten), Outcome::Failed { error: "timed out after 45 minutes, the limit for one agent run".into(), summary: None, stopped: true });
+        assert_eq!(outcome(&capped, false, Some(Duration::from_secs(45 * 60)), ten), Outcome::Failed { error: "timed out after 45 minutes, the limit for one agent run".into(), summary: None, stopped: true });
         // A timeout with no cap set here keeps the runner's own word for it.
         assert_eq!(read(&capped), Outcome::Failed { error: "timed out".into(), summary: None, stopped: true });
     }
@@ -2268,8 +2404,8 @@ mod tests {
         // Escaping checked against Claude Code 2.1.316: real path, every non-alphanumeric character as "-".
         let cwd = Path::new("/Users/me/Library/Application Support/com.forwardfuture.scarlet/work/tasks-v2/ab12");
         let name = "-Users-me-Library-Application-Support-com-forwardfuture-scarlet-work-tasks-v2-ab12";
-        assert_eq!(claude_project_dir(cwd, home.path()), Some(home.path().join(".claude").join("projects").join(name)));
-        assert_eq!(claude_project_dir(&Path::new("/").join("x".repeat(250)), home.path()), None);
+        let claude = home.path().join(".claude");
+        assert_eq!(claude_project_dir(cwd, &claude), Some(claude.join("projects").join(name)));
         let projects = home.path().join(".claude").join("projects");
         for n in [name, "-Users-me-Library-Application-Support-com-forwardfuture-scarlet-work-tasks-v2-cd34", "-Users-me-project"] {
             std::fs::create_dir_all(projects.join(n)).unwrap();
@@ -2287,8 +2423,8 @@ mod tests {
             std::fs::create_dir_all(lists.join(list)).unwrap();
             std::fs::write(lists.join(list).join("1.json"), "{}").unwrap();
         }
-        remove_claude_sessions(Path::new("/Users/me/project"), home.path()).unwrap(); // not a task folder
-        remove_claude_sessions(cwd, home.path()).unwrap();
+        remove_claude_sessions(Path::new("/Users/me/project"), &claude).unwrap(); // not a task folder
+        remove_claude_sessions(cwd, &claude).unwrap();
         let names = |dir: &Path| {
             let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
             names.sort();
@@ -2297,6 +2433,65 @@ mod tests {
         assert_eq!(names(&projects), ["-Users-me-Library-Application-Support-com-forwardfuture-scarlet-work-tasks-v2-cd34", "-Users-me-project"]);
         // The run's list goes with its session. Another session's stays, and so does a folder that isn't named by a session id.
         assert_eq!(names(&lists), [other, "notes"]);
+    }
+
+    #[test]
+    fn finds_claude_sessions_wherever_claude_code_keeps_them() {
+        let home = Path::new("/Users/me");
+        let env = |dir: Option<&str>| dir.map(|d| ("CLAUDE_CONFIG_DIR".to_string(), d.to_string())).into_iter().collect::<HashMap<_, _>>();
+        assert_eq!(claude_config_dir(&env(None), home), Some(home.join(".claude")));
+        // A folder of the user's own: its sessions are removed there, not left for ever.
+        let own = std::env::temp_dir().join("claude-config");
+        assert_eq!(claude_config_dir(&env(Some(own.to_str().unwrap())), home), Some(own));
+        // One named from wherever the CLI starts, or empty, is nowhere Scarlet can speak for.
+        assert_eq!(claude_config_dir(&env(Some("relative/claude")), home), None);
+        assert_eq!(claude_config_dir(&env(Some("")), home), None);
+
+        // Removing and pruning both look in that folder.
+        let root = tempfile::tempdir().unwrap();
+        let claude = root.path().join("my-claude");
+        let task = root.path().join("tasks-v2").join("t1");
+        std::fs::create_dir_all(&task).unwrap();
+        let real = real_path(&task).unwrap();
+        let session = claude_project_dir(&real, &claude).unwrap();
+        assert!(session.starts_with(claude.join("projects")));
+        std::fs::create_dir_all(&session).unwrap();
+        remove_claude_sessions(&real, &claude).unwrap();
+        assert!(!session.exists());
+        std::fs::create_dir_all(&session).unwrap();
+        prune_task_dirs(&root.path().join("tasks-v2"), std::time::SystemTime::now() + Duration::from_secs(15 * 86_400), Some(&claude));
+        assert!(!session.exists() && !task.exists());
+    }
+
+    #[test]
+    fn finds_the_claude_project_folder_of_a_path_too_long_to_name_whole() {
+        let root = tempfile::tempdir().unwrap();
+        let claude = root.path().join(".claude");
+        let projects = claude.join("projects");
+        // Two task folders deep enough that Claude Code's names keep only their first 200 characters, which they share.
+        let deep = Path::new("/").join("w".repeat(190)).join("tasks-v2");
+        let (mine, other) = (deep.join("aaaa1111"), deep.join("aaaa2222"));
+        let full: String = mine.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+        assert!(full.len() > 200);
+        let prefix = &full[..200];
+        // Claude Code adds a hash of the path. Each folder's sessions name the cwd they ran in.
+        let session = |hash: &str, cwd: &Path| {
+            let dir = projects.join(format!("{prefix}-{hash}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            let lines = [json!({"type":"summary","summary":"Trim"}), json!({"type":"user","cwd": cwd.to_string_lossy(),"sessionId":"s"})];
+            std::fs::write(dir.join("3f1c2b9e-0000-4000-8000-000000000000.jsonl"), lines.map(|l| l.to_string()).join("\n")).unwrap();
+            dir
+        };
+        let theirs = session("1x2y3z", &other);
+        let ours = session("9q8r7s", &mine);
+        // A folder with no session to say whose it is, and one whose name goes on past a hash, are no one's.
+        std::fs::create_dir_all(projects.join(format!("{prefix}-abc"))).unwrap();
+        std::fs::create_dir_all(projects.join(format!("{prefix}-abc.d"))).unwrap();
+        assert_eq!(claude_project_dir(&mine, &claude), Some(ours.clone()));
+        assert_eq!(claude_project_dir(&other, &claude), Some(theirs.clone()));
+        assert_eq!(claude_project_dir(&deep.join("aaaa3333"), &claude), None);
+        remove_claude_sessions(&mine, &claude).unwrap();
+        assert!(!ours.exists() && theirs.exists());
     }
 
     #[test]

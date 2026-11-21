@@ -91,14 +91,16 @@ export interface PutBack { words: TranscriptWord[]; replaced: TranscriptWord[] }
  */
 export async function putBackWords(segments: readonly TranscriptSegment[], pages: readonly SaidPage[],
   frames: (start: number, end: number) => Promise<Emissions | undefined>, signal?: AbortSignal): Promise<{ segments: TranscriptSegment[]; found: PutBack[] }> {
-  // Copies of the transcript's words, retimed in place; each remembers its segment.
-  const home = new Map<TranscriptWord, string>();
+  // Copies of the transcript's words, retimed in place; each remembers its segment by place, not id: a segment split
+  // where two windows' readings hand over keeps its id in both halves, and a word filed by id went into both (seen
+  // on two recordings, 2026-11-20).
+  const home = new Map<TranscriptWord, number>();
   const original = new Map<TranscriptWord, TranscriptWord>();
-  for (const s of segments) for (const w of s.words) {
+  segments.forEach((s, i) => { for (const w of s.words) {
     const copy = { ...w };
-    home.set(copy, s.id);
+    home.set(copy, i);
     original.set(w, copy);
-  }
+  } });
   const base = [...original.values()].filter(w => token(w)).sort((x, y) => x.start - y.start);
   // Each page is compared with the transcript's words over the same minute, and a little either side for a word
   // the two place on different sides of the page's edge.
@@ -113,6 +115,8 @@ export async function putBackWords(segments: readonly TranscriptSegment[], pages
   });
   const current = [...base];
   const found: PutBack[] = [];
+  // Words beside a run that the aligner placed again with it, and those it couldn't, which kept their old times.
+  const placed = new Set<TranscriptWord>(), unplaced = new Set<TranscriptWord>();
   for (const run of runs) {
     signal?.throwIfAborted();
     const { added, replaced } = run;
@@ -139,19 +143,31 @@ export async function putBackWords(segments: readonly TranscriptSegment[], pages
     const words = added.map((w, k) => {
       const t = timed[before.length + k]!;
       const put: TranscriptWord = { text: w.text, start: t.start, end: Math.max(t.start, t.end), ...(w.confidence !== undefined && { confidence: w.confidence }) };
-      home.set(put, home.get(replaced[0] ?? run.after ?? after[0]!) ?? segments.find(s => s.words.length)?.id ?? "");
+      home.set(put, home.get(replaced[0] ?? run.after ?? after[0]!) ?? Math.max(0, segments.findIndex(s => s.words.length)));
+      placed.add(put);
       return put;
     });
     [...before, ...after].forEach((w, k) => {
       const t = timed[k < before.length ? k : k + added.length];
-      if (t && t.score >= MIN_SCORE) { w.start = t.start; w.end = Math.max(t.start, t.end); }
+      if (t && t.score >= MIN_SCORE) { w.start = t.start; w.end = Math.max(t.start, t.end); placed.add(w); }
+      else unplaced.add(w);
     });
     current.splice(at, replaced.length, ...words);
     found.push({ words, replaced: replaced.slice() });
   }
   if (!found.length) return { segments: [...segments], found };
   // The order is the one the runs were put in, not the times: a word the aligner couldn't place kept its time, which
-  // can now sit past a neighbour it placed. Such a word goes between its neighbours.
+  // can now cover or sit past a neighbour it placed. Such a word goes between its neighbours, and takes no time where
+  // they leave it none. Moving the placed words instead pushed a restart put back under a stale "When" to its end, at
+  // no length: "When[60.36-60.86] when[0] you,[0] when[0]" (2026-11-20).
+  const stale = (w: TranscriptWord) => unplaced.has(w) && !placed.has(w);
+  current.forEach((w, k) => {
+    if (!stale(w)) return;
+    const lo = current[k - 1]?.end ?? -Infinity;
+    const hi = Math.max(lo, current.slice(k + 1).find(n => !stale(n))?.start ?? Infinity);
+    w.start = Math.min(Math.max(w.start, lo), hi);
+    w.end = Math.min(Math.max(w.end, w.start), hi);
+  });
   current.forEach((w, k) => {
     const previous = current[k - 1], next = current[k + 1];
     if (previous && w.start < previous.end) {
@@ -169,8 +185,8 @@ export async function putBackWords(segments: readonly TranscriptSegment[], pages
   };
   const gone = new Set(found.flatMap(f => f.replaced));
   const added = found.flatMap(f => f.words);
-  const out = segments.map(s => {
-    const words = [...s.words.map(w => original.get(w)!).filter(w => !gone.has(w)), ...added.filter(w => home.get(w) === s.id)]
+  const out = segments.map((s, i) => {
+    const words = [...s.words.map(w => original.get(w)!).filter(w => !gone.has(w)), ...added.filter(w => home.get(w) === i)]
       .sort((x, y) => rank(x) - rank(y));
     return words.length
       ? { ...s, words, start: Math.min(s.start, words[0]!.start), end: Math.max(s.end, words.at(-1)!.end), text: words.map(w => w.text).join(" ") }

@@ -1228,13 +1228,23 @@ describe("scarlet server", () => {
     ).json.change;
     await api("POST", `/changes/${trim.id}/approve`, { body: {} });
     await api("POST", `/changes/${trim.id}/unapprove`);
-    const types = (await api<{ activity: ActivityEntry[] }>("GET", `/projects/${p.id}/activity`)).json.activity.map((a) => a.type);
+    const log = (await api<{ activity: ActivityEntry[] }>("GET", `/projects/${p.id}/activity`)).json.activity;
+    const types = log.map((a) => a.type);
     expect(types).toEqual(expect.arrayContaining(["media.added", "change.proposed", "change.approved", "change.undone"]));
+    const approved = log.find((a) => a.type === "change.approved" && a.data.changeId === trim.id)!;
+    expect(approved.data).toMatchObject({
+      changeId: trim.id, branch: "main", author: { type: "agent", id: "claude", name: "Claude" },
+      onto: first.appliedVersion, durationBefore: 6, durationAfter: 5, opsCount: 1,
+    });
     const undone = (await api<{ activity: ActivityEntry[] }>("GET", `/projects/${p.id}/activity?type=change.undone`)).json.activity;
     expect(undone[0]!.summary).toMatch(/undid the approval of “Trim the tail”/);
+    expect(undone[0]!.data).toMatchObject({ changeId: trim.id, branch: "main", version: first.appliedVersion, durationBefore: 5, durationAfter: 6 });
 
     // Round trip through DaVinci: export, trim by hand, import as a change by the importer.
     const otio = (await api<Record<string, any>>("GET", `/projects/${p.id}/versions/head/export.otio`)).json; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const exported = (await api<{ activity: ActivityEntry[] }>("GET", `/projects/${p.id}/activity?type=export.completed`)).json.activity;
+    expect(exported).toHaveLength(1);
+    expect(exported[0]!.data).toMatchObject({ format: "otio", version: first.appliedVersion, duration: 6 });
     otio.tracks.children[0].children[0].source_range.duration.value -= 30; // 1 s shorter at 30 fps
     const imported = await api<{ change: Change; timeline: Timeline }>("POST", `/projects/${p.id}/import/otio`, { body: { otio } });
     expect(imported.status).toBe(201);
@@ -1246,9 +1256,11 @@ describe("scarlet server", () => {
     expect(bad.status).toBe(400);
     expect(bad.json.error.code).toBe("otio_import");
 
-    // Restoring a version is recorded.
+    // Restoring a version is recorded with before/after durations.
     await api("POST", `/projects/${p.id}/versions/${first.fromVersion}/checkout`);
-    expect((await api<{ activity: ActivityEntry[] }>("GET", `/projects/${p.id}/activity?type=version.restored`)).json.activity).toHaveLength(1);
+    const restored = (await api<{ activity: ActivityEntry[] }>("GET", `/projects/${p.id}/activity?type=version.restored`)).json.activity;
+    expect(restored).toHaveLength(1);
+    expect(restored[0]!.data).toMatchObject({ branch: "main", version: first.fromVersion, from: first.appliedVersion, durationBefore: 6, durationAfter: 0 });
 
     // Delete → trash → restore; purge only after 30 days.
     expect((await api("DELETE", `/projects/${p.id}`)).status).toBe(200);

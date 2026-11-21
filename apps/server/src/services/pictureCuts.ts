@@ -117,3 +117,18 @@ export async function pictureCuts(ctx: Ctx, media: MediaAsset & { projectId: str
   const cuts = read.ready.flatMap(w => w.value).filter(c => c.at >= read.from && c.at < read.to);
   return { mediaId: media.id, from: read.from, to: read.to, cuts, readSeconds: read.readSeconds, done: read.done, ...(read.error && { error: read.error }) };
 }
+
+/**
+ * Where a recording's picture has been read for cuts, as merged stretches of source seconds, and the cuts there that
+ * change at least `share` of the picture at once. Starts reading what hasn't been read and waits up to `waitMs` for it.
+ */
+export async function pictureChanges(ctx: Ctx, media: MediaAsset & { projectId: string }, share: number, waitMs: number): Promise<{ read: Array<[number, number]>; at: number[] }> {
+  const result = await reading.read(ctx, media, {}, { waitMs });
+  const read: Array<[number, number]> = [];
+  for (const w of result.ready) {
+    const last = read.at(-1);
+    if (last && Math.abs(last[1] - w.start) < 1e-6) last[1] = w.end;
+    else read.push([w.start, w.end]);
+  }
+  return { read, at: result.ready.flatMap(w => w.value).filter(c => c.share >= share).map(c => c.at).sort((a, b) => a - b) };
+}

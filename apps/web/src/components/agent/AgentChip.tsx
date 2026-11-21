@@ -139,24 +139,12 @@ function stillConnecting(hostsReady: boolean, localHost: HostStatus | null) {
   return !hostsReady || (isDesktop() && !localHost?.agents.length) || (!!localHost && !localHost.connected && !localHost.error);
 }
 
-/** The selected model and effort, with model settings and local sign-in in the menu. */
 /**
- * No model can run a request, and waiting won't change that: there is something to set up, or a host that was signed
- * in is offline. The simple view marks its menu for this.
+ * The selected model and effort, with model settings and local sign-in in the menu.
+ * `variant="header"` draws it as a quiet header button that marks itself when no model is ready.
+ * `variant="menu"` draws it as a row of a menu: "Model", then the one in use, opening the selector beside the row.
  */
-export function useModelNeedsYou(): boolean {
-  const { agents, none, hasConfiguredHost } = useAgentAvailability();
-  const hostsReady = useHostsStore(s => s.status === "ready");
-  const localHost = useLocalHost();
-  const checkingLocalAgents = isDesktop() && !localHost?.agents.length;
-  const needsSetup = hostsReady && !checkingLocalAgents && !hasConfiguredHost && !localHost?.agents.some(isConfiguredAgent);
-  return none && (agents.length > 0 || needsSetup || !stillConnecting(hostsReady, localHost));
-}
-
-/**
- * `variant="menu"` draws it as a row of a menu: "Model", then the one in use. The selector opens beside the row.
- */
-export function AgentChip({ direction = "up", threadInput, variant = "chip" }: { direction?: "up" | "down"; threadInput?: "reply" | "answer"; variant?: "chip" | "menu" | "icon" }) {
+export function AgentChip({ direction = "up", threadInput, variant = "chip" }: { direction?: "up" | "down"; threadInput?: "reply" | "answer"; variant?: "chip" | "menu" | "header" | "icon" }) {
   const inProject = !!useMatch("/p/:id/*");
   const setSetupOpen = useUiStore((s) => s.setAgentSetupOpen);
   const { agents, choices, selected, effective, none, unavailableReason, hasCatalog, hasConfiguredHost } = useAgentAvailability();
@@ -244,22 +232,37 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
   const checkingLocalAgents = isDesktop() && !localHost?.agents.length;
   const needsSetup = hostsReady && !checkingLocalAgents && !hasConfiguredHost && !localHost?.agents.some(isConfiguredAgent);
   const inMenu = variant === "menu";
+  const inHeader = variant === "header";
   const iconOnly = variant === "icon";
   const emptyCatalog = agents.length > 0 && !hasCatalog;
   if (!open && !iconOnly && !agents.length && !needsSetup) {
-    // The menu's row stays and says why no request can run. Still connecting needs nothing from the editor. A host
-    // that was signed in and is offline does: the row carries the menu's mark, and opens the sign-in, which says why.
+    // The menu row and header button stay and say why no request can run. Still connecting needs nothing from the editor.
+    // A host that was signed in and is offline does: the control carries the amber mark and opens sign-in, which says why.
     const connecting = stillConnecting(hostsReady, localHost);
     if (inMenu) return <button type="button" role="menuitem" className={`${MENU_ITEM_CLASS} text-fg`} onClick={() => setSetupOpen(true)}>
       <EffortDial level={0} />Model<span className="menu-value">{connecting ? "Connecting…" : "Offline"}</span>{!connecting && <span className="menu-dot" aria-hidden />}</button>;
+    if (inHeader) {
+      const warning = connecting ? undefined : "No model is ready";
+      return <button type="button" className={`btn-quiet simple-model${warning ? " needs-you" : ""}`} aria-haspopup="dialog"
+        aria-description={warning} title={warning ?? "Connecting to model"} onClick={() => setSetupOpen(true)}>
+        <span className="truncate">{connecting ? "Connecting…" : "Offline"}</span>
+        {warning && <span className="menu-dot" role="img" aria-label={warning} />}
+      </button>;
+    }
     return threadInput ? <button type="button" className="btn-quiet" onClick={() => setSetupOpen("models")}>Models</button> : null;
   }
 
-  if (!open && !iconOnly && none && !emptyCatalog && inProject) {
+  if (!open && !iconOnly && none && !emptyCatalog && (inProject || inHeader)) {
     const setUp = agents.length ? "Choose visible models" : "Set up a model";
     return inMenu
       ? <button type="button" role="menuitem" className={`${MENU_ITEM_CLASS} text-fg`} onClick={() => setSetupOpen(agents.length ? "models" : true)}>
         <EffortDial level={0} />{setUp}<span className="menu-dot" aria-hidden /></button>
+      : inHeader
+        ? <button type="button" className="btn-quiet simple-model needs-you" aria-haspopup="dialog"
+          aria-description={unavailableReason} title={unavailableReason} onClick={() => setSetupOpen(agents.length ? "models" : true)}>
+          <span className="truncate">{setUp}</span>
+          <span className="menu-dot" role="img" aria-label="No model is ready" />
+        </button>
       : <button type="button" className="btn-quiet" onClick={() => setSetupOpen(agents.length ? "models" : true)}>{setUp}</button>;
   }
   if (!open && !iconOnly && none && !emptyCatalog && (agents.length || !needsSignIn.length)) {
@@ -306,8 +309,8 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={iconOnly ? "Choose model" : emptyCatalog ? "Refresh models" : `Model: ${details}. Change model, effort or speed`}
-        aria-description={iconOnly && selected ? details : answerHint}
-        title={iconOnly ? (selected ? `Model: ${details}` : "Choose model") : answerHint ?? (emptyCatalog ? unavailableReason : selected ? effortTitle : undefined)}
+        aria-description={iconOnly && selected ? details : inHeader && emptyCatalog ? (answerHint ?? unavailableReason) : answerHint}
+        title={iconOnly ? (selected ? `Model: ${details}` : "Choose model") : inHeader ? (emptyCatalog ? (answerHint ?? unavailableReason) : selected ? `Model: ${details}${answerHint ? ` — ${answerHint}` : ""}` : answerHint) : answerHint ?? (emptyCatalog ? unavailableReason : selected ? effortTitle : undefined)}
         onClick={() => {
           if (!open) {
             setScope(selected?.agent);
@@ -320,12 +323,16 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
         {...(inMenu && { role: "menuitem" })}
         className={inMenu ? `${MENU_ITEM_CLASS} text-fg`
           : iconOnly ? "btn-icon aria-expanded:bg-raised aria-expanded:text-fg"
+          : inHeader ? `btn-quiet simple-model aria-expanded:bg-raised aria-expanded:text-fg${none ? " needs-you" : ""}`
           : `inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] hover:text-fg ${none ? "border-warn/40 text-warn" : "border-line text-muted hover:border-dim"}`}
       >
         {iconOnly ? <EffortDial level={effortLevel(efforts, dialEffort?.id)} /> : inMenu ? <>
           <EffortDial level={selected ? effortLevel(efforts, dialEffort?.id) : 0} />
           {emptyCatalog ? label : <>Model<span className="menu-value truncate">{label}</span></>}
           {none && <span className="menu-dot" aria-hidden />}
+        </> : inHeader ? <>
+          <span className="truncate">{label}</span>
+          {selected ? <EffortDial level={effortLevel(efforts, dialEffort?.id)} /> : <span className="menu-dot" role="img" aria-label={unavailableReason} />}
         </> : <>
           {none && <span className="size-1.5 rounded-full bg-warn" aria-hidden />}
           <span className="truncate">{label}</span>

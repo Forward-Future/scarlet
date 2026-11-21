@@ -49,6 +49,7 @@ const toolActivity: Record<string, string> = {
   asset_add: "Adding media",
   graphic_render: "Drawing a graphic",
   graphic_get: "Reading a graphic",
+  web_capture: "Capturing a page from the web",
   style_guide_save: "Saving the style guide",
   attachment_read: "Reading an attached file",
   export_otio: "Exporting timeline",
@@ -57,7 +58,6 @@ const toolActivity: Record<string, string> = {
   skill_save_edit: "Saving skill",
   skills_list: "Reading skills",
   learning_suggest: "Noting a rule",
-  shorts_plan: "Starting the other shorts",
 };
 
 // New progress messages start with a short action. Older hosts also send

@@ -33,7 +33,7 @@ it("takes back the newest step first, one per press, and only in its own project
   expect(api.unkeepEdits).toHaveBeenCalledWith("prj", { threadId: "thr", edits: [{ changeId: "chg", spot: 1 }] });
   expect(undoWords(lastStep(steps(), "prj")!)).toMatchObject({ label: "Undo revision" });
   expect(await undoLast("prj", { changes: [], tasks: [task("task_a", "queued")] }, noRevert)).toMatchObject({ taskId: "task_a" });
-  expect(api.cancelTask).toHaveBeenCalledWith("task_a");
+  expect(api.cancelTask).toHaveBeenCalledWith("task_a", false, true);
   expect(lastStep(steps(), "prj")).toBeUndefined();
   expect(lastStep(steps(), "other")).toMatchObject({ taskId: "task_x" });
 });
@@ -47,7 +47,7 @@ it("stops a revision under way, and takes out what it already put in the video, 
   // It was picked up again as a second attempt, which is still running.
   const tasks = [task("task_r", "failed", { changeId: "edit" }, { retryTaskId: "task_r2" }), task("task_r2", "running", { changeId: "edit" })];
   await undoLast("prj", { changes, tasks }, revert);
-  expect(api.cancelTask).toHaveBeenCalledWith("task_r2");
+  expect(api.cancelTask).toHaveBeenCalledWith("task_r2", false, true);
   expect(revert.mock.calls).toEqual([["ver_2"], ["ver_1"]]);
 });
 

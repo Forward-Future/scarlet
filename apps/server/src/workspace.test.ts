@@ -6,7 +6,7 @@ import { basename, dirname, join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it as vitestIt, vi, onTestFinished } from "vitest";
 import { partedIt } from "../../../test/parts";
-import { clipEnd, createProject, isPlayableMedia, cutPlaybackWindow, planPlaybackSegments, sha256, spanningSections, timelineDuration, timelineFromKeepRanges, Transform, type Change, type Clip, type Project } from "@scarlet/timeline";
+import { clipEnd, createProject, isPlayableMedia, cutPlaybackWindow, LEFT_OUT_READING, planPlaybackSegments, sha256, spanningSections, timelineDuration, timelineFromKeepRanges, Transform, type Change, type Clip, type Project } from "@scarlet/timeline";
 import { buildThreads, isThreadDone, queueOrder, queueWait, taskPlan, taskRecoveryAction, threadRevision, type Render, type Task } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "./app.js";
 import { BUNDLED_SKILLS } from "./bundledSkills.js";
@@ -1729,6 +1729,11 @@ it("reads the footage a change left out as it built the video, when it is applie
   ctx.repos.changes.put({ ...change, id: "chg_ripple", ops: [{ op: "rippleDelete", start: 1, end: 2 }], leftOut: undefined });
   recordLeftOutFootage(ctx);
   expect(ctx.repos.changes.get("chg_ripple")!.leftOut).toEqual({ joins: [] });
+  // Joins an earlier reading found are read again with this one, once.
+  expect(change.leftOut.reading).toBe(LEFT_OUT_READING);
+  ctx.repos.changes.put({ ...change, leftOut: { version: change.leftOut.version, joins: [...change.leftOut.joins, { at: 12, removed: { start: 27, end: 28 } }] } });
+  recordLeftOutFootage(ctx);
+  expect(ctx.repos.changes.get(change.id)!.leftOut).toEqual(change.leftOut);
   const stamp = ctx.repos.changes.get(change.id)!.updatedAt;
   const read = vi.spyOn(ctx.repos.changes, "parse");
   recordLeftOutFootage(ctx);
@@ -3139,6 +3144,47 @@ it("serves active upload types as sandboxed attachments on both original routes 
       expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes);
     }
   }
+});
+
+it("keeps where a picture from the web came from, with the page as captured, and serves that capture", async () => {
+  const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("page")]);
+  const upload = (fields: Record<string, string | [Buffer, string]>) => {
+    const form = new FormData();
+    form.append("file", new Blob([gif]), "article.gif");
+    form.append("kind", "image");
+    for (const [name, value] of Object.entries(fields)) {
+      if (typeof value === "string") form.append(name, value); else form.append(name, new Blob([value[0]]), value[1]);
+    }
+    return api("POST", projectsPath() + "/media", form);
+  };
+  const url = "https://theledger.example/2026/11/agents";
+  const source = JSON.stringify({ url, capturedAt: "2026-11-21T12:00:00.000Z", region: { left: 0, top: 0, right: 1, bottom: 0.6 }, capture: "../../escape.png" });
+  const res = await upload({ source, capture: [png, "page.png"] });
+  expect(res.status).toBe(201);
+  const { media } = await res.json();
+  // The capture is kept under the project's own name for it, whatever the request said.
+  expect(media.source).toMatchObject({ url, capturedAt: "2026-11-21T12:00:00.000Z", region: { left: 0, top: 0, right: 1, bottom: 0.6 } });
+  expect(media.source.capture).toMatch(/^sources\/[0-9a-f-]+\.png$/);
+  const served = await api("GET", `/media/${media.id}/source-capture`);
+  expect([served.status, served.headers.get("content-type")]).toEqual([200, "image/png"]);
+  expect(Buffer.from(await served.arrayBuffer())).toEqual(png);
+  // An address alone is enough; it has no capture to serve.
+  const bare = await (await upload({ source: JSON.stringify({ url }) })).json();
+  expect(bare.media.source).toEqual({ url });
+  expect((await api("GET", `/media/${bare.media.id}/source-capture`)).status).toBe(404);
+  // Refused: a capture without an address, an address that isn't on the web, and a capture that isn't a picture. None leaves a file.
+  const sources = workspace.ctx.paths.sources(project.id);
+  const before = readdirSync(sources).length;
+  for (const [fields, code] of [
+    [{ capture: [png, "page.png"] }, "bad_capture"],
+    [{ source: JSON.stringify({ url: "file:///etc/passwd" }) }, "bad_source"],
+    [{ source: JSON.stringify({ url }), capture: [Buffer.from("<script>"), "page.png"] }, "bad_capture"],
+  ] as const) {
+    const refused = await upload(fields as Record<string, string | [Buffer, string]>);
+    expect([refused.status, (await refused.json()).error?.code]).toEqual([400, code]);
+  }
+  expect(readdirSync(sources).length).toBe(before);
 });
 
 it("rejects invalid skill destinations before changing the old mirror", async () => {
@@ -6912,6 +6958,17 @@ it("keeps a pass's own later save from changing footage under a cut that waits f
   const reframed = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id,
     description: "Frame the presenter closer", ops: [{ op: "updateClip", clipId: "raw", patch: { transform: { x: 0, y: 0, scale: 1.13 }, opacity: .9 } }] }).change;
   expect(reframed.state).toBe("approved");
+  expect(ctx.repos.changes.get(staged.id)!.state).toBe("ready");
+  // So does laying the screen over it on a track that already shows it elsewhere: refused, a pass left the screen off
+  // over two calls and the camera flashed full frame between screens once they were approved (2026-11-20).
+  ctx.repos.projects.putMedia(project.id, { id: "screen", name: "screen", path: "screen.mov", kind: "video", duration: 60, hasAudio: false }, "ready");
+  const screen = (id: string, timelineIn: number, sourceIn: number, sourceOut: number) =>
+    ({ id, kind: "media" as const, mediaId: "screen", timelineIn, sourceIn, sourceOut });
+  expect(proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, description: "Show the screen",
+    ops: [{ op: "addTrack", track: { id: "v_screen", kind: "video", name: "Screen", clips: [screen("s0", 0, 0, 2)] } }] }).change.state).toBe("approved");
+  const laid = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, description: "Show the screen through the restart",
+    ops: [{ op: "addClip", trackId: "v_screen", clip: screen("s1", 5, 5, 20) }] }).change;
+  expect(laid.state).toBe("approved");
   expect(ctx.repos.changes.get(staged.id)!.state).toBe("ready");
 });
 

@@ -33,7 +33,7 @@ import { ExportStarNotice } from "../components/shell/ExportStarNotice";
 vi.mock("../components/shell/AppShell", () => ({
   AppShell: () => <Outlet />,
 }));
-vi.mock("./ProjectsPage", () => ({ ProjectsPage: () => <><Link to="/">Projects</Link><WindowActions /></>, ImportUrlModal: () => null }));
+vi.mock("./ProjectsPage", () => ({ ProjectsPage: () => <><Link to="/">Projects</Link><WindowActions /></> }));
 vi.mock("../components/agent/Composer", () => ({ Composer: () => null }));
 
 let root: Root;
@@ -189,11 +189,44 @@ it("keeps decoded stills through cache lookup and slow frame requests until a re
     expect(strip().querySelector(".filmstrip-wait")).toBeNull();
     await tick(4000);
     expect(overlay()?.hasAttribute("data-leaving")).toBe(false);
+    // A new still covers the held one in its own slot; the rest stay held until every new still has settled.
     await act(() => { own()[0]!.dispatchEvent(new Event("load")); });
+    const heldCells = [...overlay()!.children];
+    expect(heldCells.map(cell => cell.hasAttribute("data-covered"))).toEqual([true, false]);
+    expect(overlay()?.hasAttribute("data-leaving")).toBe(false);
+    await act(() => { own()[1]!.dispatchEvent(new Event("load")); });
     expect(overlay()?.hasAttribute("data-leaving")).toBe(true);
     await tick(650);
     expect(overlay()).toBeNull();
     expect(own()[0]!.hasAttribute("data-loaded")).toBe(true);
+  } finally { vi.useRealTimers(); }
+});
+
+it("hands on the stills it shows when it is built again before its own have all landed, as a pass's saves do", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(84);
+  const scrubber = (version: string, duration: number) =>
+    <TimelineScrubber duration={duration} playhead={0} frameAt={t => `/${version}/frame/${t}`} onSeek={() => {}} />;
+  const strip = () => container.querySelector<HTMLElement>(".timeline-filmstrip")!;
+  const own = () => [...strip().querySelectorAll<HTMLImageElement>(":scope > div:not(.filmstrip-held) > img")];
+  const held = () => [...strip().querySelectorAll(".filmstrip-held > div")];
+  const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  vi.useFakeTimers();
+  try {
+    await show(scrubber("v1", 8));
+    const first = own();
+    await act(() => { for (const img of first) img.dispatchEvent(new Event("load")); });
+    // The next cut's first still lands; its second is still on its way when the cut after it arrives.
+    await show(scrubber("v2", 9));
+    await tick(4000);
+    const second = own();
+    await act(() => { second[0]!.dispatchEvent(new Event("load")); });
+    await show(scrubber("v3", 10));
+    expect(own().every(img => !img.hasAttribute("data-loaded"))).toBe(true);
+    // Its own first still, and the first cut's second where its own hadn't reached.
+    expect(held().map(cell => cell.querySelector("img"))).toEqual([second[0], first[1]]);
+    // Nothing of its own yet: the timeline still shows pictures.
+    expect(strip().querySelector(".filmstrip-held")?.hasAttribute("data-leaving")).toBe(false);
   } finally { vi.useRealTimers(); }
 });
 
@@ -917,7 +950,7 @@ it("plays a short cut file on its version clock and hands an out-of-window seek 
   expect(play.mock.contexts.filter(el => el !== video)).toHaveLength(0);
 });
 
-it("keeps decoded frames across the gap between a new working version and its timeline", async () => {
+it("keeps the lanes through the gap between a new working version and its timeline, then holds their stills", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(84);
   const noop = () => {};
@@ -927,11 +960,12 @@ it("keeps decoded frames across the gap between a new working version and its ti
   expect(originals).toHaveLength(2);
   await act(() => { originals.forEach(img => img.dispatchEvent(new Event("load"))); });
 
+  // Until the new head's timeline is read the lanes aren't built again: the stills stay as they were.
   const project = { ...data.project, head: "next" };
   await act(() => useProjectStore.setState({ current: { ...data, project } }));
   const held = () => container.querySelector(".filmstrip-held");
-  expect(held()?.querySelector("img")).toBe(originals[0]);
-  expect(held()?.hasAttribute("data-leaving")).toBe(false);
+  expect(held()).toBeNull();
+  expect([...container.querySelectorAll(".timeline-filmstrip img")]).toEqual(originals);
   await act(() => useProjectStore.setState({ current: { ...data, project, timeline: { ...data.timeline!, version: "next" } } }));
   expect(held()?.querySelector("img")).toBe(originals[0]);
   const replacements = [...container.querySelectorAll<HTMLImageElement>(".timeline-filmstrip > div:not(.filmstrip-held) img")];

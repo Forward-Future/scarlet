@@ -58,6 +58,8 @@ function audioSpans({ source, timeline, media, original }: WaveformMedia, start:
 const KEPT_PEAKS = 32;
 // Completed and in-flight source windows are shared by the cut and comparison views.
 const peakCache = new Map<string, { id: string; from: number; to: number; points: number; read: Promise<WaveformResponse> }>();
+/** How much coarser than asked a window read already may be and still answer: a few bars more per bucket than drawn. */
+const COARSE_ENOUGH = 0.75;
 const peakPoints = (from: number, to: number) => Math.min(8192, Math.max(128, Math.ceil((to - from) * 100)));
 
 /** The part of a window read already that covers `from`–`to`, on the read's own buckets. */
@@ -70,8 +72,10 @@ function peaksWithin(wave: WaveformResponse, from: number, to: number): Waveform
 }
 
 /**
- * A recording's peaks over one source window. A window read already that holds this one at least as finely answers
- * it without a read: zooming in, and back out to a window seen before, ask the engine for nothing.
+ * A recording's peaks over one source window. A window read already that holds this one nearly as finely answers
+ * it without a read: zooming in, and back out to a window seen before, ask the engine for nothing. Neither does each
+ * new working cut of a pass, whose window is a little shorter than the last and so asks for a little finer peaks than
+ * the capped read already has; on 2026-11-21 each of those took 15 s under the pass's load and the sound never drew.
  */
 export function sourcePeaks(id: string, from: number, to: number) {
   const key = JSON.stringify([id, from, to]);
@@ -80,7 +84,7 @@ export function sourcePeaks(id: string, from: number, to: number) {
   let within = false;
   if (!entry) {
     entry = [...peakCache.values()].findLast(held => held.id === id && held.from <= from && held.to >= to
-      && held.points / (held.to - held.from) >= points / (to - from));
+      && held.points / (held.to - held.from) >= COARSE_ENOUGH * points / (to - from));
     within = !!entry;
   }
   if (!entry) {

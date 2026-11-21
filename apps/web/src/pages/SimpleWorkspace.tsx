@@ -6,7 +6,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { ChatRail } from "../components/shell/ChatRail";
 import { ConnectionStatus } from "../components/shell/StatusIndicators";
 import { Dropdown, MenuItem } from "../components/shell/WorkspaceNavigation";
-import { appliedReviewChange, isPublishedCall, mapStagedCut, makeTimeMap, timelineDuration, type Change, type CutAssessment, type Project, type TimeRange, type Timeline } from "@scarlet/timeline";
+import { appliedReviewChange, isPublishedCall, mapStagedCut, makeTimeMap, timelineDuration, type Change, type CutAssessment, type TimeRange, type Timeline } from "@scarlet/timeline";
 import { closingCheckFailed, isAsideTask, fullRenderContext, isProjectEditTask, matchesEdit, queueOrder, queueWaits, requestTargetKey, requestText, REVISED_CHECK, threadEditList, type EditRef, type Learning, type Task, type ThreadEdit } from "@scarlet/shared";
 import { EditBadge, editGroups, EditVersion, RejectEdit, RejectedMark, ThreadAction, ThreadEdits, useRejecting, useReviewed, useRevising, useThreadEdits } from "../components/review/ThreadEdits";
 import { useKeptEdits } from "../lib/keptEdits";
@@ -17,7 +17,7 @@ import { TipButton } from "../components/ui/TipButton";
 import { recordEditReview } from "../lib/editReviews";
 import { lastStep, recordUndo, undoKey, undoLast, undoWords, useUndoStore } from "../lib/undo";
 import { editKey, keepEdits, reviewKey } from "../lib/keptEdits";
-import { AgentChip, useAgentAvailability, useModelNeedsYou } from "../components/agent/AgentChip";
+import { AgentChip, useAgentAvailability } from "../components/agent/AgentChip";
 import { Composer, type PausedAt } from "../components/agent/Composer";
 import { useImportTranscription } from "../components/media/TranscriptionAction";
 import { Dropzone, useImportCount, useUploader } from "../components/media/UploadDropzone";
@@ -28,7 +28,9 @@ import { usePlaybackCache } from "../components/player/usePlaybackCache";
 import { focusAround } from "../components/player/SimpleProgress";
 import { useCutReview, useSingleCutDraft, type SingleCutDrafts } from "../components/review/useCutReview";
 import { callToPrepare, editToPrepare, usePrepareReviewCuts, type PreparedCut, type CutToPrepare } from "../components/review/usePrepareNextCut";
-import { CutMark, EditPassage } from "../components/review/CutTranscript";
+import { CutMark, CutWordsLine, EditPassage } from "../components/review/CutTranscript";
+import { editDetail } from "../lib/editDetail";
+import { editSource, SourceLink, SourceRow } from "../components/review/EditSource";
 import { useReviewTimeline } from "../components/review/useReviewTimeline";
 import { ReviewActions } from "../components/review/ReviewActions";
 import { BeforeToggle } from "../components/review/BeforeToggle";
@@ -36,10 +38,9 @@ import { ignorePageShortcut, isEditableTarget, useHotkeys } from "../lib/hotkeys
 import { RequestMetrics, RunBundle, runEnded, Said } from "../components/review/RunBundle";
 import { OtherTakes } from "../components/review/OtherTakes";
 import { ExportSheet } from "../components/review/ExportVideo";
-import { MakeShortsSheet } from "../components/review/MakeShorts";
-import { ExportButton, ExportMenuItem, useExportWarning } from "../components/review/ExportMenuItem";
+import { ExportButton } from "../components/review/ExportMenuItem";
 import { useThreadTimeline } from "../components/review/useThreadTimeline";
-import { Drawer, Icon, Loading } from "../components/ui/primitives";
+import { Icon, Loading } from "../components/ui/primitives";
 import { api, errorMessage } from "../lib/client";
 import { readTimeline } from "../lib/timelineCache";
 import { appLog } from "../lib/appLog";
@@ -83,7 +84,6 @@ const SIMPLE_RAIL_MIN = 320;
 const transcriptRailWidth = (available: number) => Math.max(300, Math.min(400, available * 0.26));
 const TRANSCRIPT_RAIL_MIN = 260;
 
-const ChangelogPage = lazy(async () => ({ default: (await import("./ChangelogPage")).ChangelogPage }));
 const TranscriptPane = lazy(async () => ({ default: (await import("../components/transcript/TranscriptPane")).TranscriptPane }));
 const noEdits: ThreadEdit[] = [];
 const noop = () => {};
@@ -118,7 +118,7 @@ function afterPlayerMount(start: () => () => void) {
   };
 }
 
-type Panel = "media" | "history" | "export" | "learnings" | "shorts" | null;
+type Panel = "media" | "export" | "learnings" | null;
 
 /** Each project keeps its own: rewording a request in one project leaves the words kept for another as they are. */
 const LEGACY_REWORDING_KEY = "scarlet.rewording.v1";
@@ -265,7 +265,8 @@ interface ChatActions {
 
 /**
  * A rule Scarlet picked up from this request, under what the request did: the skill it is for and the rule in quotes,
- * then Review, which opens Learnings at it. Nothing is decided here; the line goes once the editor decides in Learnings.
+ * then Review, which opens Learnings at it, and Decline, which turns the rule down from here. The line goes once the
+ * editor decides, here or in Learnings.
  */
 function LearnedLine({ learning, onReview }: { learning: Learning; onReview?(id: string): void }) {
   const skill = useSkillsStore(s => s.skills.find(k => k.id === learning.skillId)?.name);
@@ -273,11 +274,23 @@ function LearnedLine({ learning, onReview }: { learning: Learning; onReview?(id:
   // again from here: the line says "Learned:" without the name, and Learnings tries again as it opens.
   const loadSkills = useSkillsStore(s => s.load);
   useEffect(() => { if (useSkillsStore.getState().status === "idle") void loadSkills(); }, [loadSkills]);
+  const [declining, setDeclining] = useState(false);
+  const [failed, setFailed] = useState("");
+  const decline = () => {
+    setDeclining(true);
+    setFailed("");
+    useProjectStore.getState().declineLearning(learning.id)
+      .catch(e => setFailed(errorMessage(e)))
+      .finally(() => setDeclining(false));
+  };
   return <p className="simple-learned">
     <Icon name="bulb" size={13} />
     <span>{skill ? `Learned for ${skill}: ` : "Learned: "}<span className="simple-learned-rule">“{learning.rule}”</span>
       {onReview && <> <button type="button" className="simple-learned-review" onClick={() => onReview(learning.id)}
-        title="Approve, revise or decline it in Learnings">Review</button></>}</span>
+        title="Approve or revise it in Learnings">Review</button></>}
+      {" "}<button type="button" className="simple-learned-decline" disabled={declining} onClick={decline}
+        title="Don't learn this">Decline</button>
+      {failed && <span className="simple-learned-failed" role="alert"> Couldn't decline. {failed}</span>}</span>
   </p>;
 }
 
@@ -333,44 +346,13 @@ function CallStanding({ run, answer }: { run?: Task; answer?(): void }) {
     : <span className="edit-card-status working-text" role="status">Revising…</span>;
 }
 
-/** What Approve chooses on a call: the cut, or for a revision that left the footage in, keeping it. */
+/** What Keep chooses on a call: the cut, or for a revision that left the footage in, keeping it. */
 const approves = (call: Pick<CutAssessment, "proposes"> | undefined): CutChoice => call?.proposes ?? "cut";
 
-type ProjectSource = NonNullable<Project["source"]>;
-
-/** The video a short was made from, by name: a link to it, unless it is in the trash or gone. */
-function SourceName({ source }: { source: ProjectSource }) {
-  return source.gone ? <span>{source.name}</span> : <Link to={`/p/${source.projectId}`}>{source.name}</Link>;
-}
-
-function SourceLine({ source }: { source: ProjectSource }) {
-  return <span className="simple-header-source" title={`From ${source.name}`}>From <SourceName source={source} /></span>;
-}
-
 /**
- * The first thing in a short's chat: that it is a new project, and the video it was made from. It stays until the
- * editor dismisses it with its ×.
- */
-function SourceNote({ projectId, source }: { projectId: string; source: ProjectSource }) {
-  const [gone, setGone] = useState(false);
-  const updateProject = useProjectStore(s => s.updateProject);
-  if (gone) return null;
-  return <section className="simple-turn simple-source-note" aria-label="New project">
-    <div className="simple-msg from-scarlet">
-      <span className="simple-who">Scarlet</span>
-      <p className="said">New project, made from <SourceName source={source} />. That video isn’t changed.</p>
-      <button type="button" className="btn-icon simple-source-dismiss" aria-label="Dismiss" title="Dismiss"
-        // Through the store, so the project it holds says the note is dismissed and it doesn't come back with the chat.
-        onClick={() => { setGone(true); void updateProject({ sourceNotice: false }, projectId).catch(() => setGone(false)); }}>
-        <Icon name="x" size={12} /></button>
-    </div>
-  </section>;
-}
-
-/**
- * A call's decisions and their keys: Approve (A) makes the change Scarlet proposed, Skip (S) leaves it out, and the
- * chosen one stays pressed. A revision that left the cut's footage in proposes keeping it, so there Approve keeps it
- * and Skip cuts as first staged. Revise (R) aims the message box at this call, so feedback on it goes ahead of
+ * A call's decisions and their keys, the same as an applied edit's card: Keep (K) makes the change Scarlet proposed,
+ * the × that rejects it (X) leaves it out, and the chosen one stays pressed. A revision that left the cut's footage in
+ * proposes keeping it, so there Keep keeps it and Reject edit cuts as first staged. Revise (R) aims the message box at this call, so feedback on it goes ahead of
  * requests waiting for the pass.
  */
 function CallActions({ choice, proposes = "cut", disabled, decide, revise }: { choice?: CutChoice; proposes?: CutChoice; disabled: boolean; decide(choice: CutChoice): void; revise(): void }) {
@@ -379,17 +361,17 @@ function CallActions({ choice, proposes = "cut", disabled, decide, revise }: { c
     if (disabled || event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
     const key = event.key.toLowerCase();
     if (key === "r") { event.preventDefault(); revise(); return; }
-    const chosen = key === "a" ? proposes : key === "s" ? skips : undefined;
+    const chosen = key === "k" ? proposes : key === "x" ? skips : undefined;
     if (chosen) { event.preventDefault(); decide(chosen); }
   });
   // The decisions stay on the card for the next call. Clicked, one lets go of the focus (WebView2 leaves it there), or
   // Space would press it again on the next call while the video is paused. Pressed by keyboard, it keeps it.
   return <div className="review-actions">
-    <button type="button" className="btn-quiet" data-key="R" data-log-control="revise-call" aria-keyshortcuts="R" title="Revise (R)" disabled={disabled} onClick={revise}>Revise</button>
-    <button type="button" className="btn-primary" data-key="A" data-log-control="approve-call" aria-keyshortcuts="A" title="Approve (A)" aria-pressed={choice === proposes} disabled={disabled}
-      onClick={letGo(() => decide(proposes))}>Approve</button>
-    {/* Skip is a small × after the decision, named on hover, so the row's one button is Approve. */}
-    <button type="button" className="edit-card-icon edit-card-skip" data-log-control="skip-call" aria-label="Skip" aria-keyshortcuts="S" title="Skip (S)" aria-pressed={choice === skips}
+    <button type="button" className="btn-ghost" data-key="R" data-log-control="revise-call" aria-keyshortcuts="R" title="Revise (R)" disabled={disabled} onClick={revise}>Revise</button>
+    <button type="button" className="btn-primary" data-key="K" data-log-control="approve-call" aria-keyshortcuts="K" title="Keep (K)" aria-pressed={choice === proposes} disabled={disabled}
+      onClick={letGo(() => decide(proposes))}>Keep</button>
+    {/* Reject edit is a small × after the decision, named on hover, as on an applied edit's card, so the row's one button is Keep. */}
+    <button type="button" className="edit-card-icon edit-card-skip" data-log-control="skip-call" aria-label="Reject edit" aria-keyshortcuts="X" title="Reject edit (X)" aria-pressed={choice === skips}
       disabled={disabled} onClick={letGo(() => decide(skips))}><Icon name="x" size={12} /></button>
   </div>;
 }
@@ -548,7 +530,7 @@ function Made({ parts, link }: { parts: readonly SentencePart[]; link?: ReactNod
  * its number with Scarlet's note and, once decided or sent back, a word for where it stands. For you shows that list
  * by default and opens the first one still waiting when pressed. See all lists every edit, calls included, in timeline
  * order. Once Scarlet is done, what the pass applied is one sentence above the list. A row is one line and opens its
- * edit or call in the card on the timeline, where Approve and Skip move on to the next call. A request about one cut
+ * edit or call in the card on the timeline, where Keep and Reject edit move on to the next call. A request about one cut
  * or edit that is still in the chat (`nests`) sits directly under that cut's or edit's row. `aside` is what the run
  * used, when that shows.
  */
@@ -641,8 +623,8 @@ function PassSummary({ projectId, thread, edits, rejected = noRejected, actions,
     // A call goes by its number, as on its card and on the timeline.
     ...(pass?.calls ?? []).map(c => ({ key: callRowKey(c), at: c.start, displayAt: c.start, mark: c.at, hover: { threadId: thread.id, call: c.index }, label: c.summary, n: c.n, num: c.n as number | undefined, needs: c.state === "open", sentBack: c.state === "revising",
       decided: c.state === "approved" || c.state === "skipped",
-      state: c.state === "approved" ? "Approved" : c.state === "skipped" ? "Skipped" : c.state === "revising" ? "Revising…" : c.version > 1 ? `v${c.version}` : undefined,
-      value: c.state === "approved" ? "Approved" : c.state === "skipped" ? "Skipped" : c.state === "revising" ? "Revising…" : undefined,
+      state: c.state === "approved" ? "Kept" : c.state === "skipped" ? "Rejected" : c.state === "revising" ? "Revising…" : c.version > 1 ? `v${c.version}` : undefined,
+      value: c.state === "approved" ? "Kept" : c.state === "skipped" ? "Rejected" : c.state === "revising" ? "Revising…" : undefined,
       busy: c.state === "revising" && isWorking(c.run?.state),
       version: c.version > 1 ? c.version : 0, title: c.earlier && `v${c.version - 1}: ${c.earlier.reason ?? "Scarlet’s earlier version."}${c.earlier.note ? `\nYou: “${c.earlier.note}”` : ""}`,
       on: listening?.changeId === pass!.change.id && listening.index === c.index, word: undefined, revised: false, rejected: false, fresh: false,
@@ -726,7 +708,7 @@ function PassSummary({ projectId, thread, edits, rejected = noRejected, actions,
         {/* What else the moment holds, which unfolds its edits under the row and folds them again. */}
         {more && moment && <span className="simple-pass-more" aria-expanded={!!open} title={open ? "Hide its edits" : "Show its edits"}
           onClick={e => { e.stopPropagation(); fold(moment); }}>{more}</span>}</>}</span>
-      {/* The word a row ends on (v2, Approved, Revising…) says on hover what the requests about its cut or edit took:
+      {/* The word a row ends on (v2, Kept, Revising…) says on hover what the requests about its cut or edit took:
           their time and tokens, nothing else. The rest of the row keeps the row's own hover. */}
       {filter === "calls" ? row.state && <span className={row.busy ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(row.key)}>{row.state}</span>
         : row.value && <span className={row.busy && !row.word ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(row.key)}>{row.value}</span>}
@@ -1082,7 +1064,7 @@ function Turn({ projectId, thread, actions, pinned, pinHost, list: passList, rep
   }) : []);
   // What the requests about each listed cut or edit took: their active time and, when those show, tokens. A request
   // about one cut or edit leaves the chat once it's done, and its figures went with it; the word its row ends on
-  // (v2, Approved, Revising…) says them on hover.
+  // (v2, Kept, Revising…) says them on hover.
   const spent = new Map<string, string>();
   if (owner && hasRows) {
     const about = new Map<string, Task[]>();
@@ -1334,18 +1316,15 @@ export function SimpleWorkspace() {
   const uploads = useUploader(current.id);
   const importing = useImportCount(current.id);
   const importFailed = uploads.items.some(item => item.state === "error");
-  // What the menu is marked for: a rule to review, an export that stopped, no model to run a request. A file Media has
-  // to explain marks the header's Media button instead.
+  // What the menu is marked for: a rule to review in Learnings. Media, Export and Model mark their own header buttons.
   const toLearn = useProjectStore(s => learningsToReview(s.current?.learnings));
-  const exportWarning = useExportWarning();
-  const modelNeedsYou = useModelNeedsYou();
   const { notice, local } = useImportTranscription();
-  // A new project opens on Media, and an old link to History opens that drawer: both arrive as
-  // ?panel=. It is read once and taken off the address, so a reload or the way back doesn't open the drawer again.
+  // A new project opens on Media, arriving as ?panel=media. It is read once and taken off the address, so a reload
+  // or the way back doesn't open the drawer again.
   const [search, setSearch] = useSearchParams();
   // The rule a line in the chat opened Learnings at.
   const [learnFocus, setLearnFocus] = useState<string>();
-  const [panel, setPanel] = useState<Panel>(() => { const asked = search.get("panel"); return asked === "media" || asked === "history" ? asked : null; });
+  const [panel, setPanel] = useState<Panel>(() => (search.get("panel") === "media" ? "media" : null));
   // The cut, edit or call that was open when Scarlet last closed arrives the same way, as ?open=, and is read once too.
   const [reopen, setReopen] = useState(() => search.get("open") ?? undefined);
   useEffect(() => {
@@ -1938,9 +1917,7 @@ export function SimpleWorkspace() {
     ?? (hasCut ? undefined : previewable.find(m => m.kind === "video" && m.status !== "failed") ?? previewable[0]);
   const [transcript, setTranscript] = useState(false);
   const [menuError, setMenuError] = useState("");
-  const needsYou = [toLearn > 0 && `${plural(toLearn, "rule")} to review in Learnings`, exportWarning, modelNeedsYou && "No model is ready"]
-    .filter((reason): reason is string => !!reason);
-  const menuSays = needsYou.join(". ");
+  const menuSays = toLearn > 0 ? `${plural(toLearn, "rule")} to review in Learnings` : "";
   // A clip from Media and the cut each keep their own place: the clip opens at its start, not at the cut's time on
   // it, and going back returns the cut to where it was left.
   const cutPlace = useRef<number>(undefined);
@@ -2692,7 +2669,7 @@ export function SimpleWorkspace() {
     // Until it has been opened again, what is to be opened is still what was open.
     : reviewingEdit && focusThread ? `edit:${focusThread.id}:${reviewingEdit.changeId}:${reviewingEdit.spot}` : reopen;
   const panelNow = useRef(panel);
-  panelNow.current = panel === "media" || panel === "history" ? panel : null;
+  panelNow.current = panel === "media" ? panel : null;
   // Open again what was open at the last quit, once its request and its calls are here. One that is gone since, a call
   // decided or a pass applied meanwhile, opens nothing.
   const reviewRead = cutReview.review !== undefined || !!cutReview.error;
@@ -2737,7 +2714,9 @@ export function SimpleWorkspace() {
     : shownEdit ? `Showing “${shownEdit.label}” at ${clockLabel(reviewRange?.start ?? shownEdit.at ?? shownEdit.range.start)}`
     : chosenSource && source === chosenSource ? `Showing ${chosenSource.name}` : undefined;
   // A call's passage is shaded where its footage is on the working cut. One that can't be placed there shades nothing.
-  const lineFocus = listening ? callView ? callView.focus : heard && callTimeline && focusAround(heard, callDuration ?? 0, conflict ? "Current passage" : `Removed · ${lengthLabel(heard.end - heard.start)}`)
+  // A call's cut isn't in the video until the editor approves it, so its band is drawn as any cut's with a dashed edge.
+  const callFocus = listening ? callView ? callView.focus : heard && callTimeline && focusAround(heard, callDuration ?? 0, conflict ? "Current passage" : `Removed · ${lengthLabel(heard.end - heard.start)}`) : undefined;
+  const lineFocus = listening ? callFocus ? { ...callFocus, tone: "proposed" as const } : undefined
     : places.length ? suggestionLine
     : appliedCut ? focusAround(appliedCut, beforeDuration, `Removed · ${lengthLabel(appliedCut.end - appliedCut.start)}`, { playbackEnd: afterListen?.end })
     // Until the earlier version arrives, a line marks the join in the working cut and says how much came out there.
@@ -3235,9 +3214,20 @@ export function SimpleWorkspace() {
   // A marker left for the editor changed nothing in the video: its card says what it is, and has nothing to compare or undo.
   const shownMarker = !!reviewingEdit?.marker;
   const shownKind = reviewingEdit && (shownMarker ? "To do" : editKindWord(reviewingEdit));
+  // The card's first line says exactly what the edit did: a cut's words, struck, or for any other edit what its steps
+  // set (a caption's words, the file laid over the picture, how far a zoom goes). A moment holds several edits, and a
+  // spot marked for the editor changed nothing, so neither has one.
+  const editDid = !reviewingEdit || threadTimeline.selectedMoment || shownMarker ? undefined
+    : beforeCut ? cutBefore.timeline && <CutWordsLine key={editKey(reviewingEdit)} timeline={cutBefore.timeline} media={media}
+      range={beforeCut.removed} length={lengthLabel(removedLength)} verb="Took out" />
+    : (detail => detail && <p className="edit-card-what">{detail}</p>)(editDetail(shownChange, reviewingEdit, { timeline, media }));
   // The transcript stays folded away. Its icon on the card opens it for this edit only.
   const scriptKey = reviewingEdit && beforeCut ? editKey(reviewingEdit) : undefined;
   const scriptOpen = !!scriptKey && scriptFor === scriptKey;
+  // B-roll from the web says where it came from, behind its own icon, and folds again on the next edit as a cut's words do.
+  const shownSource = reviewingEdit && !beforeCut ? editSource(reviewingEdit, timeline ?? undefined, media) : undefined;
+  const sourceKey = shownSource && `source ${editKey(reviewingEdit!)}`;
+  const sourceOpen = !!sourceKey && scriptFor === sourceKey;
   // Reject edit is about the open edit, whatever the message box is aimed at just then: a message
   // still being written may be about another one.
   const openTarget = reviewingEdit && shownChange && focusThread ? threadTimeline.selectedTarget : undefined;
@@ -3318,7 +3308,8 @@ export function SimpleWorkspace() {
         : editPlace >= 0 && <span className="edit-card-count" title="Edits still to check">{editPlace + 1} of {flaggedRows.length}</span>}
       {/* The note explains the choice and includes any cue for the editor to check. */}
       {/* It's on up to two lines, so an edit with a short note is a single line. A clipped note opens on a click. */}
-      <EditNote key={editKey(reviewingEdit)} text={editNote(reviewingEdit, !!reviewRange)} />
+      {editDid ? <div className="edit-card-text">{editDid}<EditNote key={editKey(reviewingEdit)} text={editNote(reviewingEdit, !!reviewRange)} /></div>
+        : <EditNote key={editKey(reviewingEdit)} text={editNote(reviewingEdit, !!reviewRange)} />}
       {/* A moment of a pass's list is its edits together: the pill says how many, and names them on hover. */}
       {threadTimeline.selectedMoment ? <span className="edit-card-length is-kind" title={threadTimeline.selectedMoment.members.map(e => e.label).join("\n")}>
         {threadTimeline.selectedMoment.edits.length} edits</span>
@@ -3327,17 +3318,31 @@ export function SimpleWorkspace() {
           edit's kind, in amber: a press plays just that part, and its times are on hover. */}
       {reviewRange && <button type="button" className="edit-card-length is-check" onClick={playCheck}
         title={`Play the part to check, ${checkSpan(reviewRange)}`}>Check</button>}
+    </div>
+    {/* A cut reads from the version before it. Until that arrives the mark stands alone and says the words are on their
+        way, as a call's does. When it couldn't be read the passage offers to ask again, with why on hover. */}
+    {scriptOpen && beforeCut && <div className="thread-passage">{cutBefore.timeline
+      ? <EditPassage key={editKey(reviewingEdit)} timeline={cutBefore.timeline} media={media} range={beforeCut.removed} length={lengthLabel(removedLength)} others={otherCuts} />
+      : <div className="edit-passage"><p className="review-spoken"><CutMark length={lengthLabel(removedLength)} />{" "}
+        {cutBefore.error ? <button type="button" className="btn-quiet" title={cutBefore.error} onClick={cutBefore.retry}>Retry transcript</button>
+          : <span className="edit-passage-wait working-text" role="status">Loading the words…</span>}</p></div>}</div>}
+    {sourceOpen && shownSource && <SourceRow key={sourceKey} file={shownSource} />}
+    {/* The controls are a row of their own under the note: Before/After and the transcript at the left, the decisions at
+        the right, the same on every card. */}
+    <div className="edit-card-controls">
       <span className="edit-card-side">
-        {/* A cut's words open under this row, behind a small icon. An edit that isn't a cut has none. */}
-        {scriptKey && <TranscriptLink open={scriptOpen} toggle={() => setScriptFor(scriptOpen ? undefined : scriptKey)} />}
         {beforeCut ? <BeforeToggle key={cutSwitched ? `click-${shownSide!.take}` : "sides"} on={appliedSide === "before"} flash={cutSwitched}
           shortcutActive={workspaceActive} disabled={!cutKey} toggle={() => chooseCutSide(appliedSide === "after" ? "before" : "after")} />
           : !shownMarker && <span ref={setCompareHost} className="review-compare" />}
+        {/* A cut's words open above this row, behind a small icon. An edit that isn't a cut has none. */}
+        {scriptKey && <TranscriptLink open={scriptOpen} toggle={() => setScriptFor(scriptOpen ? undefined : scriptKey)} />}
+        {/* B-roll from the web says where it came from behind an icon in the same place. */}
+        {sourceKey && <SourceLink open={sourceOpen} toggle={() => setScriptFor(sourceOpen ? undefined : sourceKey)} />}
       </span>
       <span className="edit-card-acts">
         <ReviewActions revise={() => actions.revise(focusThread, shownChange)} approve={keepShown}
           approveLabel={shownMarker ? "Done" : "Keep"} approveKey={shownMarker ? "D" : "K"} />
-        {/* Reject edit is a small × after Keep, as Skip is after a call's Approve: it puts back just this edit, also on
+        {/* Reject edit is a small × after Keep, as on a call's card: it puts back just this edit, also on
             a moment's card. The edit leaves the timeline where it is and the card stays, saying Rejected. A spot marked for the editor changed nothing, so
             it has none. Each edit has its own: one on its way for the edit before doesn't hold this one's back. */}
         {appliedTarget && rejectTarget && !shownMarker && <RejectEdit key={`reject ${openEditKey}`} projectId={current.id} thread={focusThread} target={rejectTarget}
@@ -3365,17 +3370,10 @@ export function SimpleWorkspace() {
         }} />}
       </span>
     </div>
-    {/* A cut reads from the version before it. Until that arrives the mark stands alone and says the words are on their
-        way, as a call's does. When it couldn't be read the passage offers to ask again, with why on hover. */}
-    {scriptOpen && beforeCut && <div className="thread-passage">{cutBefore.timeline
-      ? <EditPassage key={editKey(reviewingEdit)} timeline={cutBefore.timeline} media={media} range={beforeCut.removed} length={lengthLabel(removedLength)} others={otherCuts} />
-      : <div className="edit-passage"><p className="review-spoken"><CutMark length={lengthLabel(removedLength)} />{" "}
-        {cutBefore.error ? <button type="button" className="btn-quiet" title={cutBefore.error} onClick={cutBefore.retry}>Retry transcript</button>
-          : <span className="edit-passage-wait working-text" role="status">Loading the words…</span>}</p></div>}</div>}
   </section> : undefined;
 
   // A call the pass wasn't sure about opens the same card, as the same single row: Scarlet's reason, then Revise (R),
-  // Approve (A) and Skip (S), the × after them. The last call applies the pass. A call sent back for revision keeps its
+  // Keep (K) and Reject edit (X), the × after them. The last call applies the pass. A call sent back for revision keeps its
   // note and Before/After, and says Scarlet is on it where the decisions were.
   const savedHistory = (openCall && revisions?.get(openCall.index)) ?? noRevisions;
   const callHistory = returningCall ? savedHistory.slice(0, -1) : savedHistory;
@@ -3404,15 +3402,11 @@ export function SimpleWorkspace() {
       <span className="edit-card-count" title={callAt !== undefined ? `Cut at ${clockLabel(callAt)}` : undefined}>Cut {callNo.get(openCall.index)}</span>
       {callHistory.length > 0 && <EditVersion n={callHistory.length + 1}
         title={`v${callHistory.length}: ${callHistory.at(-1)!.reason ?? "Scarlet’s earlier version."}${callHistory.at(-1)!.note ? `\nYou: “${callHistory.at(-1)!.note}”` : ""}`} />}
-      <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} />
-      <span className="edit-card-side">
-        <TranscriptLink open={callScriptOpen} disabled={!!conflict && !heard} toggle={() => setScriptFor(callScriptOpen ? undefined : callKey)} />
-        {/* Until the cut is placed on the working cut there is nothing to play it on, as with an applied cut. */}
-        <BeforeToggle key={listening.at === undefined && visit?.side !== "before" ? "sides" : `click-${listening.take}`} on={!conflict && listening.side === "before"} shortcutActive={workspaceActive} disabled={!heard || !!conflict}
-          flash={!conflict && listening.side === "before" && (listening.at !== undefined || visit?.side === "before")} toggle={() => listenSide(listening.side === "after" ? "before" : "after")} />
-      </span>
-      {openCallBack ? <CallStanding run={cutRuns.get(openCall.index)} answer={answeringCut && passThread ? () => actions.reply(passThread) : undefined} />
-        : <CallActions choice={passChoices[openCall.index]} proposes={approves(openCall)} disabled={!!deciding} decide={choice => void decideCut(choice)} revise={reviseReview} />}
+      {/* What Keep would take out, struck, over Scarlet's reason. A revision that leaves the footage in has no such line. */}
+      {callWords && !conflict && approves(openCall) === "cut" ? <div className="edit-card-text">
+        <CutWordsLine key={callKey} timeline={callWords.timeline} media={media} range={callWords.range} length={callLength!} verb="Takes out" />
+        <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} /></div>
+        : <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} />}
     </div>
     {/* A call hasn't come out yet, so its words are marked in amber. When the pass's version couldn't be loaded there
         is nothing to read them on: the passage stops waiting and offers to ask again, as it does for the words. */}
@@ -3422,6 +3416,16 @@ export function SimpleWorkspace() {
     </> : <div className="edit-passage"><p className="review-spoken"><CutMark length={callLength!} />{" "}
       {placing && stagedOn.error ? <button type="button" className="btn-quiet" title={stagedOn.error} onClick={stagedOn.retry}>Retry transcript</button>
         : <span className="edit-passage-wait working-text" role="status">Loading the words…</span>}</p></div>}</div>}
+    <div className="edit-card-controls">
+      <span className="edit-card-side">
+        {/* Until the cut is placed on the working cut there is nothing to play it on, as with an applied cut. */}
+        <BeforeToggle key={listening.at === undefined && visit?.side !== "before" ? "sides" : `click-${listening.take}`} on={!conflict && listening.side === "before"} shortcutActive={workspaceActive} disabled={!heard || !!conflict}
+          flash={!conflict && listening.side === "before" && (listening.at !== undefined || visit?.side === "before")} toggle={() => listenSide(listening.side === "after" ? "before" : "after")} />
+        <TranscriptLink open={callScriptOpen} disabled={!!conflict && !heard} toggle={() => setScriptFor(callScriptOpen ? undefined : callKey)} />
+      </span>
+      {openCallBack ? <CallStanding run={cutRuns.get(openCall.index)} answer={answeringCut && passThread ? () => actions.reply(passThread) : undefined} />
+        : <CallActions choice={passChoices[openCall.index]} proposes={approves(openCall)} disabled={!!deciding} decide={choice => void decideCut(choice)} revise={reviseReview} />}
+    </div>
   </section> : undefined;
 
   // A suggestion that isn't a dialogue pass opens the same card on top of the timeline, as the same single row:
@@ -3433,6 +3437,8 @@ export function SimpleWorkspace() {
     {stripError && <p className="text-bad" role="alert">{stripError}</p>}
     <div className="edit-card-bar">
       <EditNote key={suggestion.id} text={suggestionNote!} />
+    </div>
+    <div className="edit-card-controls">
       <span className="edit-card-side">
         <BeforeToggle on={side === "before"} shortcutActive={workspaceActive}
           toggle={() => setSide(side === "after" ? "before" : "after")} />
@@ -3884,30 +3890,23 @@ export function SimpleWorkspace() {
           <header className="simple-header">
             <Link to="/" className="simple-back" onClick={() => player.pause()} title="All projects" aria-label="All projects">
               <span className="rotate-180 inline-flex"><Icon name="arrow" size={13} /></span></Link>
-            {/* A short says which video it was made from, under its name, for as long as it is open. */}
-            <h1 title={current.project.name} className={current.project.source ? "has-source" : undefined}>
-              {current.project.source ? <><span className="simple-header-name">{current.project.name}</span><SourceLine source={current.project.source} /></> : current.project.name}
-            </h1>
+            <h1 title={current.project.name}>{current.project.name}</h1>
             <ConnectionStatus />
             {/* The menu's button is marked when something inside needs the editor, and the row that does carries the
-                same mark. While videos cache, the ring is on the Media button. */}
+                same mark. Media, Export and Model mark their own header buttons. */}
             <div className="simple-tools">
               <MediaButton importing={importing} importFailed={importFailed} onOpen={() => setPanel("media")} />
               <ExportButton onOpen={() => setPanel("export")} />
-              <button type="button" className="btn-quiet" aria-haspopup="dialog" onClick={() => setPanel("history")}>History</button>
+              <AgentChip variant="header" direction="down" threadInput={replyThread ? replyThread.question ? "answer" : "reply" : undefined} />
               <Dropdown label="More" align="right" width={240} description={menuSays || undefined}
-                button={<span className={`btn-icon simple-more${needsYou.length ? " needs-you" : ""}`} title={menuSays || "More"}>
+                button={<span className={`btn-icon simple-more${menuSays ? " needs-you" : ""}`} title={menuSays || "More"}>
                   <Icon name="more" /></span>}>
                 {close => <>
                   <MenuItem onClick={() => { close(); setLearnFocus(undefined); setPanel("learnings"); }} title={toLearn ? `${plural(toLearn, "rule")} to review` : undefined}>
                     <Icon name="bulb" />Learnings{toLearn > 0 && <span className="menu-dot" role="img" aria-label={`${plural(toLearn, "rule")} to review`} />}</MenuItem>
                   <CachingMenuItem close={close} />
                   <MenuItem onClick={() => { close(); setTranscript(v => !v); }}><Icon name="diff" />{transcript ? "Hide transcript" : "Transcript"}</MenuItem>
-                  <ExportMenuItem onOpen={() => setPanel("export")} close={close} />
-                  {/* A short is made from the long video, not from another short. */}
-                  {!current.project.source && <MenuItem onClick={() => { close(); setPanel("shorts"); }}><Icon name="portrait" />Make shorts</MenuItem>}
                   <div role="separator" className="my-1 border-t border-line" />
-                  <AgentChip variant="menu" direction="down" threadInput={replyThread ? replyThread.question ? "answer" : "reply" : undefined} />
                   <MenuItem onClick={() => { close(); useUiStore.getState().setProjectSettingsOpen(true); }}><Icon name="monitor" />Project settings</MenuItem>
                   <MenuItem to="/settings" onClick={close}><Icon name="settings" />App settings</MenuItem>
                 </>}
@@ -3925,7 +3924,6 @@ export function SimpleWorkspace() {
               const pane = e.currentTarget;
               follow.current = pane.scrollHeight - pane.clientHeight - pane.scrollTop < 48;
             }}>
-              {current.project.source?.notice && <SourceNote projectId={current.id} source={current.project.source} />}
               {current.reviewStatus === "loading" ? <Loading label="Loading edits…" />
                 : current.reviewStatus === "error" ? <p className="simple-error" role="alert">{current.reviewError}{" "}
                   <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>
@@ -3995,11 +3993,7 @@ export function SimpleWorkspace() {
     </main>
     {panel === "media" && <MediaDrawer uploads={uploads} notice={local ? undefined : notice}
       onPlay={id => previewSource(id, true)} onClose={() => setPanel(null)} />}
-    <Drawer open={panel === "history"} title="History" width={640} onClose={() => setPanel(null)}>
-      <Suspense fallback={<Loading label="Opening history…" />}><ChangelogPage /></Suspense>
-    </Drawer>
     {panel === "export" && <ExportSheet hasCut={hasCut} onClose={() => setPanel(null)} />}
-    {panel === "shorts" && <MakeShortsSheet onClose={() => setPanel(null)} />}
   </EditHoverContext.Provider>;
 }
 

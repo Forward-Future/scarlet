@@ -23,7 +23,7 @@ export type AudioRequest =
   /** `frames`: packed RGB frames of `width` by `height`, one after another (screenTextModel.ts). */
   | { kind: "screenText"; frames: string; width: number; height: number; finder: string; reader: string; letters: string }
   /** `frames`: packed RGB frames of `width` by `height`, one after another, each side at most 640 (faceModel.ts). */
-  | { kind: "faces"; frames: string; width: number; height: number; model: string };
+  | { kind: "faces"; frames: string; width: number; height: number; model: string; eyes?: { mesh: string; blendshapes: string } };
 
 type Reply = { id: number; result?: unknown; error?: string; progress?: number } | { note: string };
 /**
@@ -161,7 +161,7 @@ export function serveAudioWorker() {
           : message.kind === "screenText"
             ? await screen.runScreenTextWorker(message.frames, message.width, message.height, message.finder, message.reader, message.letters, sessions)
             : message.kind === "faces"
-              ? await faces.runFaceWorker(message.frames, message.width, message.height, message.model, sessions)
+              ? await faces.runFaceWorker(message.frames, message.width, message.height, message.model, sessions, message.eyes)
               : await uhm.runFillerWorker(message.wav, message.model, message.origin, sessions);
         send({ id: message.id, result });
       } catch (error) {

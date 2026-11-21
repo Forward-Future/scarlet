@@ -74,7 +74,18 @@ export interface RepeatAuditResult {
   joins?: JoinHearing[];
   /** Joins in scope with a side that wasn't heard, per recording. */
   unheardJoins?: UnheardJoins[];
+  /**
+   * What the picture does that the pass has neither changed nor kept: a picture on screen for under a second between
+   * two others, or a recording laid over the main picture that is off it while it still shows what it showed. They
+   * count in `remaining`.
+   */
+  pictures?: PictureCheckFinding[];
 }
+
+/** A picture finding the closing check lists, read by Scarlet's MCP server on the version checked. */
+export const PictureCheckFinding = z.object({ id: z.string().min(1), kind: z.enum(["brief", "offPicture"]),
+  from: z.number().finite(), to: z.number().finite() }).passthrough();
+export type PictureCheckFinding = z.infer<typeof PictureCheckFinding>;
 
 /** Subtracting two times in seconds can land a hair past an exact limit (16.1 - 8.1 > 8): a window that long still counts. */
 const WINDOW_SLACK = 1e-6;
@@ -84,6 +95,8 @@ export const RepeatAuditRequest = z.object({
   keep: z.array(z.object({ id: z.string().min(1), reason: z.string().trim().min(1).max(300) })).max(100).default([]),
   offset: z.number().int().nonnegative().default(0),
   silencesFrom: z.number().finite().min(0.3).max(30).default(SILENCE_LEFT_SECONDS),
+  /** What the picture does on `version`, read beside the dialogue: the check counts what isn't kept. */
+  pictures: z.object({ version: z.string().min(1), findings: z.array(PictureCheckFinding).max(500) }).optional(),
 });
 
 export const SheetOptions = {

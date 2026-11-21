@@ -10,7 +10,7 @@ import { basename, delimiter, dirname, extname, isAbsolute, join } from "node:pa
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { findOnPath, needsCmdShell } from "../detect.js";
-import { repeatStop, stopCliTree } from "../processTree.js";
+import { forgetCli, KILL_AFTER_MS, killCliTree, noteCli, repeatStop, stopCliTree } from "../processTree.js";
 import type { RunAgentResult } from "./types.js";
 
 export interface SpawnLinesOptions {
@@ -27,6 +27,8 @@ export interface SpawnLinesOptions {
   timeoutMs?: number;
   /** Stop the process once it has written nothing to stdout for this long. */
   stallMs?: number;
+  /** How long a stopped process has to finish before its group is killed. Default `KILL_AFTER_MS`. */
+  killAfterMs?: number;
   onLine: (line: string) => void;
   onStderr?: (chunk: string) => void;
 }
@@ -50,8 +52,15 @@ export interface SpawnHandle {
   kill: () => void;
 }
 
-/** Node runs a timer set for longer than this (about 24.8 days) after 1 ms instead. */
-const MAX_TIMER_MS = 2 ** 31 - 1;
+/** How often a run's watchdog looks at the clock. Matches the desktop host. */
+const WATCH_TICK_MS = 1000;
+/**
+ * A look this late means the computer was asleep since the last one: its stall and time limits don't count that. A busy
+ * machine is late by seconds, not this. Matches the desktop host.
+ */
+export const ASLEEP_AFTER_MS = 30_000;
+/** The watchdog's clock. A monotonic one, as the desktop host's: the wall clock jumps when it is set. Tests replace it. */
+export const watchClock = { now: (): number => performance.now() };
 
 /** Quote one argument for a cmd.exe command string. */
 export function quoteForCmd(arg: string): string {
@@ -114,42 +123,56 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
   let settled = false;
   let stderr = "";
   let interruptTimer: NodeJS.Timeout | undefined;
+  const killAfterMs = opts.killAfterMs ?? KILL_AFTER_MS;
   const kill = () => {
     // Once the CLI and its output are gone, the system may give its process id to another program.
     if (killed || settled || !child.pid) return;
     killed = true;
-    stopCliTree(child);
-    // A process the CLI was starting as the kill went out can miss it, and keep the output open: send it again.
+    // Asked first, so Claude Code can write its session for the attempt that resumes it; killed if it doesn't end.
+    stopCliTree(child, killAfterMs);
+    // A process the CLI was starting as the stop went out can miss it, and keep the output open: stop it again. On
+    // POSIX that is a kill after the CLI's time to finish; Windows stops the whole tree at once, so a second later.
+    const windows = process.platform === "win32";
     setTimeout(() => {
       if (settled) return;
-      if (repeatStop(child) === "kill-tree") return stopCliTree(child);
+      if (repeatStop(child) === "kill-tree") return windows ? stopCliTree(child) : killCliTree(child);
       child.stdout?.destroy();
       child.stderr?.destroy();
-    }, 1000).unref();
+    }, windows ? 1000 : killAfterMs + 1000).unref();
   };
   const stop = () => {
     if (opts.interrupt?.()) interruptTimer ??= setTimeout(kill, 2000).unref();
     else kill();
   };
-  const timer = opts.timeoutMs === undefined ? undefined : setTimeout(() => {
-    timedOut = true;
-    stop();
-  }, Math.min(opts.timeoutMs, MAX_TIMER_MS));
-  // The agent CLIs stream an event for every step, tool call and message, so a long silence means a hang.
-  let lastOutput = Date.now();
+  // The agent CLIs stream an event for every step, tool call and message, so a long silence means a hang. Neither the
+  // silence nor the run's time counts while the computer sleeps: Windows' clock counts on through a suspend, so a run
+  // would otherwise wake up stalled, or past its limit.
+  let lastOutput = watchClock.now();
   let stalled = false;
-  let stallTimer: NodeJS.Timeout | undefined;
-  const watchStall = () => {
-    if (!opts.stallMs) return;
-    const quiet = Date.now() - lastOutput;
-    if (quiet >= opts.stallMs) {
-      stalled = timedOut = true;
-      stop();
-      return;
+  let watchTimer: NodeJS.Timeout | undefined;
+  let looked = lastOutput;
+  let awake = 0;
+  const tick = Math.max(10, Math.min(WATCH_TICK_MS, opts.stallMs || Infinity, opts.timeoutMs ?? Infinity));
+  const watch = () => {
+    const now = watchClock.now();
+    const gap = now - looked;
+    looked = now;
+    if (gap >= ASLEEP_AFTER_MS) {
+      lastOutput = now;
+    } else {
+      awake += gap;
+      if (opts.timeoutMs !== undefined && awake >= opts.timeoutMs) {
+        timedOut = true;
+        return stop();
+      }
+      if (opts.stallMs && now - lastOutput >= opts.stallMs) {
+        stalled = timedOut = true;
+        return stop();
+      }
     }
-    stallTimer = setTimeout(watchStall, Math.min(opts.stallMs - quiet, MAX_TIMER_MS));
+    watchTimer = setTimeout(watch, tick);
   };
-  watchStall();
+  if (opts.timeoutMs !== undefined || opts.stallMs) watchTimer = setTimeout(watch, tick);
   const onAbort = () => {
     aborted = true;
     stop();
@@ -175,7 +198,7 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
   let buf = "";
   child.stdout!.setEncoding("utf8");
   child.stdout!.on("data", (chunk: string) => {
-    lastOutput = Date.now();
+    lastOutput = watchClock.now();
     buf += chunk;
     let idx: number;
     while ((idx = buf.indexOf("\n")) >= 0) {
@@ -187,16 +210,22 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
   child.stderr!.setEncoding("utf8");
   child.stderr!.on("data", addStderr);
 
+  // Noted for the next launch, which stops a CLI this one left running when it crashed. In the background: `ps` is slow
+  // beside a CLI that reads its prompt at once.
+  const noting = child.pid ? noteCli(child.pid, spec.file).catch((err) => addStderr(`could not note the CLI for the next launch: ${err instanceof Error ? err.message : String(err)}\n`)) : undefined;
   const done = new Promise<SpawnOutcome>((resolve) => {
     const finish = (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      clearTimeout(stallTimer);
+      clearTimeout(watchTimer);
       clearTimeout(interruptTimer);
       opts.signal?.removeEventListener("abort", onAbort);
       if (buf.trim()) emitLine(buf.replace(/\r$/, ""));
-      resolve({ code, signal, timedOut, stalled, aborted, killed, stderr });
+      const outcome = { code, signal, timedOut, stalled, aborted, killed, stderr };
+      const pid = child.pid;
+      if (!noting || !pid) return resolve(outcome);
+      // After the note is written, so one written late isn't left behind.
+      void noting.then(() => forgetCli(pid)).catch(() => undefined).finally(() => resolve(outcome));
     };
     child.on("error", (err) => {
       stderr += `\nspawn error: ${err.message}`;

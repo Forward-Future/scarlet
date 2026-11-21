@@ -507,7 +507,9 @@ async function writeFilterGraph(
   const probes = opts.probes ?? new Map<string, ProbeResult>();
   const effectCtx = { mediaRoot: opts.mediaRoot, warn };
   // Transitions add picture-only layers around their joins and move the clips either side.
-  const transitions = opts.transitions ? { timeline, ...opts.transitions } : planTransitions(timeline, media, fps);
+  const transitions = opts.transitions
+    ? { timeline, motions: opts.transitions.motions, layers: opts.transitions.layers }
+    : planTransitions(timeline, media, fps);
   timeline = transitions.timeline;
   const motionsOf = (id: string): TransitionMotion[] => motionsIn(transitions.motions.get(id), R0, R1);
 

@@ -32,6 +32,18 @@ impl AgentUsage {
         }
     }
 
+    /// What is left of this count once `earlier` is taken off, each kind of token on its own and never under zero.
+    pub fn less(self, earlier: &AgentUsage) -> AgentUsage {
+        AgentUsage {
+            model: self.model,
+            input_tokens: self.input_tokens.saturating_sub(earlier.input_tokens),
+            output_tokens: self.output_tokens.saturating_sub(earlier.output_tokens),
+            cache_read_tokens: self.cache_read_tokens.saturating_sub(earlier.cache_read_tokens),
+            cache_write_tokens: self.cache_write_tokens.saturating_sub(earlier.cache_write_tokens),
+            reasoning_tokens: self.reasoning_tokens.saturating_sub(earlier.reasoning_tokens),
+        }
+    }
+
     /// Fill in the requested model when the CLI did not name one.
     pub fn or_model(mut self, model: Option<&str>) -> AgentUsage {
         if self.model.is_none() {
@@ -82,7 +94,8 @@ pub fn codex_usage(raw: Option<&Value>, model: Option<&str>) -> Option<AgentUsag
     normalize_codex_usage(raw, model, ["input_tokens", "output_tokens", "cached_input_tokens", "cache_write_input_tokens", "reasoning_output_tokens"])
 }
 
-/// Codex App Server reports the cumulative usage of the ephemeral thread.
+/// Codex App Server reports the thread's usage: `total` from its first turn, which a resumed thread carries over from
+/// the runs before, and `last` for the latest model call.
 pub fn codex_app_server_usage(raw: Option<&Value>, model: Option<&str>) -> Option<AgentUsage> {
     normalize_codex_usage(raw, model, ["inputTokens", "outputTokens", "cachedInputTokens", "cacheWriteInputTokens", "reasoningOutputTokens"])
 }
@@ -101,17 +114,37 @@ fn normalize_codex_usage(raw: Option<&Value>, model: Option<&str>, keys: [&str; 
 }
 
 /// Gemini usage: ACP `PromptResponse.usage` (camelCase) or legacy `result.stats` (snake_case).
+/// In `agy acp`, `inputTokens` already excludes cached reads and writes (`inputTokens + cachedReadTokens +
+/// cachedWriteTokens + outputTokens == totalTokens`). When `totalTokens` instead matches `inputTokens + outputTokens`,
+/// subtract cache counts so `input_tokens` stays uncached.
 pub fn gemini_usage(raw: Option<&Value>, model: Option<&str>) -> Option<AgentUsage> {
     if let Some(s) = counts(raw, &["inputTokens", "outputTokens", "cachedReadTokens", "cachedWriteTokens", "thoughtTokens"]) {
+        let raw_input = token_count(s.get("inputTokens"));
+        let output = token_count(s.get("outputTokens"));
         let cached = token_count(s.get("cachedReadTokens"));
         let written = token_count(s.get("cachedWriteTokens"));
+        let cache = cached.saturating_add(written);
+        let total = token_count(s.get("totalTokens"));
+        let input_includes_cache = total > 0
+            && cache > 0
+            && raw_input >= cache
+            && raw_input.saturating_add(output).abs_diff(total)
+                < raw_input.saturating_add(cache).saturating_add(output).abs_diff(total);
+        let input = if input_includes_cache { raw_input.saturating_sub(cache) } else { raw_input };
+        // `reasoning_tokens` is part of `output_tokens`. agy's output already holds its thoughts (`totalTokens` adds up
+        // without them, and a step that only thought counts output tokens); where they are reported apart (the total
+        // counts them on top, or output is smaller than they are), they are output too.
+        let thought = token_count(s.get("thoughtTokens"));
+        let counted = input.saturating_add(cache).saturating_add(output);
+        let thought_apart = thought > 0
+            && (output < thought || (total > 0 && counted.saturating_add(thought).abs_diff(total) < counted.abs_diff(total)));
         return Some(AgentUsage {
             model: model_name(model),
-            input_tokens: token_count(s.get("inputTokens")).saturating_sub(cached).saturating_sub(written),
-            output_tokens: token_count(s.get("outputTokens")),
+            input_tokens: input,
+            output_tokens: if thought_apart { output.saturating_add(thought) } else { output },
             cache_read_tokens: cached,
             cache_write_tokens: written,
-            reasoning_tokens: token_count(s.get("thoughtTokens")),
+            reasoning_tokens: thought,
         });
     }
     let s = counts(raw, &["input_tokens", "output_tokens", "input", "cached"])?;
@@ -128,6 +161,32 @@ pub fn gemini_usage(raw: Option<&Value>, model: Option<&str>) -> Option<AgentUsa
         cache_read_tokens: cached,
         ..Default::default()
     })
+}
+
+/// One `PLANNER_RESPONSE` step from `agy`'s `transcript.jsonl`: `input_tokens` already excludes cache reads.
+pub fn gemini_transcript_step_usage(raw: Option<&Value>, model: Option<&str>) -> Option<AgentUsage> {
+    let step = raw.and_then(Value::as_object)?;
+    if step.get("type").and_then(Value::as_str) != Some("PLANNER_RESPONSE") {
+        return None;
+    }
+    let u = counts(raw, &["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "thought_tokens", "reasoning_tokens"])?;
+    let usage = AgentUsage {
+        model: model_name(model),
+        input_tokens: token_count(u.get("input_tokens")),
+        output_tokens: token_count(u.get("output_tokens")),
+        cache_read_tokens: token_count(u.get("cache_read_tokens")),
+        cache_write_tokens: token_count(u.get("cache_write_tokens")),
+        reasoning_tokens: token_count(u.get("thought_tokens").or_else(|| u.get("reasoning_tokens"))),
+    };
+    if usage.input_tokens == 0
+        && usage.output_tokens == 0
+        && usage.cache_read_tokens == 0
+        && usage.cache_write_tokens == 0
+        && usage.reasoning_tokens == 0
+    {
+        return None;
+    }
+    Some(usage)
 }
 
 #[cfg(test)]
@@ -150,12 +209,29 @@ mod tests {
         assert_eq!(gemini, Some(AgentUsage { model: Some("gemini-3-pro".into()), input_tokens: 200, output_tokens: 300, cache_read_tokens: 1000, ..Default::default() }));
         assert_eq!(gemini_usage(Some(&json!({"input_tokens": 1200, "cached": 1000})), None).map(|u| u.input_tokens), Some(200));
 
+        // Real `agy acp` PromptResponse.usage: inputTokens is already uncached (2151 + 7634 + 18 = 9803).
         let gemini_acp = gemini_usage(
-            Some(&json!({"inputTokens": 1500, "outputTokens": 250, "cachedReadTokens": 900, "cachedWriteTokens": 100, "thoughtTokens": 80})),
-            Some("gemini-3.1-pro"),
+            Some(&json!({"inputTokens": 2151, "outputTokens": 18, "cachedReadTokens": 7634, "cachedWriteTokens": 0, "thoughtTokens": 15, "totalTokens": 9803})),
+            Some("gemini-4-neon"),
         );
         assert_eq!(
             gemini_acp,
+            Some(AgentUsage {
+                model: Some("gemini-4-neon".into()),
+                input_tokens: 2151,
+                output_tokens: 18,
+                cache_read_tokens: 7634,
+                cache_write_tokens: 0,
+                reasoning_tokens: 15,
+            })
+        );
+        // Inclusive ACP usage (totalTokens == inputTokens + outputTokens) still separates cache from input.
+        let gemini_acp_inclusive = gemini_usage(
+            Some(&json!({"inputTokens": 1500, "outputTokens": 250, "cachedReadTokens": 900, "cachedWriteTokens": 100, "thoughtTokens": 80, "totalTokens": 1750})),
+            Some("gemini-3.1-pro"),
+        );
+        assert_eq!(
+            gemini_acp_inclusive,
             Some(AgentUsage {
                 model: Some("gemini-3.1-pro".into()),
                 input_tokens: 500,
@@ -164,6 +240,32 @@ mod tests {
                 cache_write_tokens: 100,
                 reasoning_tokens: 80,
             })
+        );
+
+        // Thoughts reported apart from output are output too: the total counts them on top, or output is smaller.
+        let apart = |raw: Value| gemini_usage(Some(&raw), None).map(|u| (u.input_tokens, u.output_tokens, u.reasoning_tokens));
+        assert_eq!(apart(json!({"inputTokens": 100, "outputTokens": 60, "thoughtTokens": 50, "cachedReadTokens": 40, "totalTokens": 250})), Some((100, 110, 50)));
+        assert_eq!(apart(json!({"inputTokens": 100, "outputTokens": 20, "thoughtTokens": 50})), Some((100, 70, 50)));
+        // agy's own, where the output holds them, stays as it is (above too).
+        assert_eq!(apart(json!({"inputTokens": 100, "outputTokens": 60, "thoughtTokens": 50, "cachedReadTokens": 40, "totalTokens": 200})), Some((100, 60, 50)));
+
+        let step = gemini_transcript_step_usage(
+            Some(&json!({"step_index": 3, "type": "PLANNER_RESPONSE", "status": "DONE", "input_tokens": 2151, "cache_read_tokens": 7634, "output_tokens": 18})),
+            Some("gemini-4-neon"),
+        );
+        assert_eq!(
+            step,
+            Some(AgentUsage {
+                model: Some("gemini-4-neon".into()),
+                input_tokens: 2151,
+                output_tokens: 18,
+                cache_read_tokens: 7634,
+                ..Default::default()
+            })
+        );
+        assert_eq!(
+            gemini_transcript_step_usage(Some(&json!({"type": "GENERIC", "input_tokens": 10})), None),
+            None
         );
     }
 

@@ -15,6 +15,7 @@ import { recordRenderFinished } from "../telemetry/events.js";
 import { prepareSourceProxies } from "./sourcePreviews.js";
 import { resolveTimeline } from "./timeline.js";
 import { editorFirst } from "./editorFirst.js";
+import { logActivity } from "./activity.js";
 
 export interface RenderInput {
   projectId: string;
@@ -540,7 +541,10 @@ export class RenderQueue {
       createdAt: now(),
     });
     this.ctx.bus.publish({ type: "render.updated", projectId: render.projectId, render });
-    if (cached) return render;
+    if (cached) {
+      if (kept) this.recordExportActivity(render);
+      return render;
+    }
     this.ctx.db.afterCommit(() => {
       if (owner) this.owners.set(render.id, new Map([[owner, input.speculative ? "preparation" : "viewer"]]));
       if (owner && input.kind === "full" && input.quality === "preview") this.backgroundCaches.add(render.id);
@@ -599,7 +603,30 @@ export class RenderQueue {
     this.ctx.bus.publish({ type: "render.updated", projectId: saved.projectId, render: saved });
     this.ctx.bus.renderFinished({ renderId: saved.id, projectId: saved.projectId, state: outcome.state });
     recordRenderFinished(this.ctx, saved);
+    if (outcome.state === "done" && saved.export) this.recordExportActivity(saved);
     return saved;
+  }
+
+  /** Record a completed video export in the permanent project log without storing local file paths or names. */
+  private recordExportActivity(render: Render) {
+    logActivity(this.ctx, {
+      projectId: render.projectId,
+      actor: { type: "scarlet", name: "Scarlet" },
+      type: "export.completed",
+      summary: "Exported video (.mp4)",
+      data: {
+        format: "mp4",
+        renderId: render.id,
+        version: render.version,
+        kind: render.kind,
+        quality: render.quality,
+        ...(render.range && { range: render.range }),
+        ...(render.exportOptions && { exportOptions: render.exportOptions }),
+        ...(render.durationSeconds !== undefined && { durationSeconds: render.durationSeconds }),
+        ...(render.width && { width: render.width }),
+        ...(render.height && { height: render.height }),
+      },
+    });
   }
 
   private preparingOnly(id: string): boolean {

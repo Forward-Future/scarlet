@@ -24,6 +24,7 @@ it("names a few edits that aren't cuts, and counts many by kind", () => {
   expect(say(frames)).toBe("Made 4 reframes.");
   expect(say([...frames, { label: "Lower-third: Matt", kind: "overlay" }, { label: "Assemble" }])).toBe("Made 4 reframes, 1 overlay and 1 other edit.");
   expect(say(["One", "Two", "Three", "Four"].map(label => ({ label })))).toBe("Made 4 edits.");
+  expect(say([...frames, { label: "The Ledger’s article", kind: "broll" }, { label: "Launch demo", kind: "broll" }])).toBe("Made 4 reframes and 2 B-roll shots.");
 });
 
 it("says what Scarlet said about the one edit a request made", () => {

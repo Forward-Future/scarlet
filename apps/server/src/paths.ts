@@ -77,6 +77,10 @@ export class Paths {
     return join(this.project(projectId), "attachments");
   }
   /** The pages graphics were drawn from, one folder each with the files they link to. */
+  /** Pages captured from the web for B-roll, kept to show where a picture came from. */
+  sources(projectId: string) {
+    return join(this.project(projectId), "sources");
+  }
   graphics(projectId: string) {
     return join(this.project(projectId), "graphics");
   }

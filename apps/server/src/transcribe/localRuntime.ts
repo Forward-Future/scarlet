@@ -50,6 +50,8 @@ export interface LocalRuntime {
   adapterOwnsModel?: boolean;
   separateWhisperLane?: boolean;
   gpuBinary?: string;
+  /** The executable is the one Scarlet ships (`ctx.whisperCli`), not one the editor chose. */
+  bundled?: boolean;
   reason?: string;
 }
 
@@ -83,6 +85,7 @@ export function resolveLocalRuntime(ctx: Pick<Ctx, "paths" | "whisperCli" | "whi
   return { selected, active: selected === "custom" ? "custom" : "whispercpp", binary, model,
     adapterOwnsModel: settings.localModel === "custom" && !!customBinary && !model,
     separateWhisperLane: bundledBinary && bundledWhisperOnGpu(), gpuBinary: bundledBinary ? ctx.whisperGpu : undefined,
+    ...(bundledBinary && { bundled: true }),
     reason: presetIssue ? presetIssue + "Scarlet is using bundled Whisper." : undefined };
 }
 

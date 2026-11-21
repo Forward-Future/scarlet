@@ -11,7 +11,7 @@ import { UhmDetector } from "../transcribe/uhm.js";
 import { getTranscriptionProvider } from "../transcribe/index.js";
 import { readAcousticWindow } from "../transcribe/acousticWords.js";
 import { alignmentVersion, readsEnglishSpeech, alignWords } from "../transcribe/wordAlign.js";
-import { bundledWhisperModel } from "../transcribe/localModel.js";
+import { BUNDLED_WHISPER_CPP, bundledWhisperModel } from "../transcribe/localModel.js";
 import { resolveLocalRuntime, resolvedBinary, type LocalRuntime } from "../transcribe/localRuntime.js";
 import { transcriptLanguage } from "./transcriptReader.js";
 import { sourceEnergyReader } from "./sourceEnergy.js";
@@ -51,7 +51,10 @@ async function localModelIdentity(runtime: LocalRuntime) {
   if (!binary) throw conflict("transcription_unavailable", "The local transcription executable could not be found.");
   // Preserve existing Whisper checkpoints. The preset also depends on its adapter script.
   const model = runtime.model ? fileStamp(runtime.model) : runtime.adapterOwnsModel ? "adapter-owned" : `bundled:${bundledWhisperModel.name}`;
-  return Promise.all([fileStamp(binary), model,
+  // The bundled executable is identified by the source it is built from: an update installs it again with new file
+  // times, and keyed on those, every page saved before the update stopped matching.
+  const executable = runtime.bundled ? `bundled:whisper.cpp@${BUNDLED_WHISPER_CPP}` : fileStamp(binary);
+  return Promise.all([executable, model,
     ...(runtime.script ? [fileStamp(runtime.script)] : [])]);
 }
 

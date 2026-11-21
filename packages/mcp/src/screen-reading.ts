@@ -59,6 +59,18 @@ const sourceAt = (clip: MediaClip, t: number) => clip.sourceIn + (t - clip.timel
 export function screenReadings(tl: Timeline, words: readonly TimelineWord[], lines: ReadonlyMap<string, readonly ScreenLine[]>): ScreenReading[] {
   const played = pictureClips(tl, new Set(lines.keys()));
   if (!played.length) return [];
+  return readingsAt(words, lines, t => played.filter(({ clip }) => t >= clip.timelineIn && t < clipEnd(clip))
+    .map(({ clip, mediaId }) => ({ mediaId, source: (x: number) => sourceAt(clip, x), end: clipEnd(clip) })));
+}
+
+/** Where a recording's text could be read at a moment of the video: its source second there, and the video time it stops playing on. */
+export interface ReadPlace { mediaId: string; source: (t: number) => number; end: number }
+
+/**
+ * The readings among these words: runs of heard words found, in order, in the text a recording shows where `at` places
+ * it as they are said, on picture or not.
+ */
+export function readingsAt(words: ReadonlyArray<Pick<TimelineWord, "text" | "start" | "end">>, lines: ReadonlyMap<string, readonly ScreenLine[]>, at: (t: number) => ReadPlace[]): ScreenReading[] {
   const heard = words.map(w => ({ ...w, tokens: tokens(w.text) })).filter(w => w.tokens.length);
   // Each heard token, with the word it came from.
   const stream = heard.flatMap((w, word) => w.tokens.map(token => ({ token, word })));
@@ -71,10 +83,10 @@ export function screenReadings(tl: Timeline, words: readonly TimelineWord[], lin
     const w = heard[stream[i]!.word]!;
     const t = (w.start + w.end) / 2;
     let best: { length: number; run: Run } | undefined;
-    for (const { clip, mediaId } of played) {
-      if (t < clip.timelineIn || t >= clipEnd(clip)) continue;
-      const s = sourceAt(clip, t);
-      const spans = tokenized.get(mediaId)!;
+    for (const { mediaId, source, end } of at(t)) {
+      const s = source(t);
+      const spans = tokenized.get(mediaId);
+      if (!spans) continue;
       // What is on screen as the word is said, read top to bottom, left to right: a sentence runs on to the next line.
       const shown = spans.map((span, index) => ({ span, index })).filter(({ span }) => span.start - SLACK <= s && s <= span.end + SLACK)
         .sort((a, b) => a.span.box[1] - b.span.box[1] || a.span.box[0] - b.span.box[0]);
@@ -87,7 +99,7 @@ export function screenReadings(tl: Timeline, words: readonly TimelineWord[], lin
         if (k < MIN_RUN || letters < MIN_LETTERS || (best && best.length >= k)) continue;
         const lastWord = heard[stream[i + k - 1]!.word]!;
         best = { length: k, run: { mediaId, first: stream[i]!.word, last: stream[i + k - 1]!.word,
-          source: [sourceAt(clip, w.start), sourceAt(clip, Math.min(lastWord.end, clipEnd(clip)))],
+          source: [source(w.start), source(Math.min(lastWord.end, end))],
           lines: new Set(page.slice(p, p + k).map(x => x.line)) } };
       }
     }

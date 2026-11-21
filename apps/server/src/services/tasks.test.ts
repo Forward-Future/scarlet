@@ -64,8 +64,9 @@ it("builds the one prompt every host uses, with answers in the system prompt for
   expect(first.instruction).toBe("Tighten the intro");
   expect(first.resumeSession).toBeUndefined();
   expect(first.systemPrompt).toContain("# You are editing a video in Scarlet");
-  // Claude runs without file tools, so the prompt leaves out the artifact directory; Codex can write there.
-  expect(first.systemPrompt).not.toContain("Your task artifact directory");
+  // Every request has its harness's own shell and file tools, so the prompt names the artifact directory to each.
+  expect(first.systemPrompt).toContain(`Your task artifact directory is: ${workDir}`);
+  expect(first.workspace).toBe(true);
   const codex = await claimed("codex");
   expect((await api<TaskPrompt>("GET", `/tasks/${codex.id}/prompt?workDir=${encodeURIComponent(workDir)}`)).body.systemPrompt)
     .toContain(`Your task artifact directory is: ${workDir}`);

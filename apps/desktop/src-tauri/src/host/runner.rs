@@ -27,8 +27,14 @@ pub struct RunOptions {
     pub resume_session: Option<String>,
     /// Launch the CLI with its own to-do tool on. The engine decides (`plan` in the task's prompt).
     pub plan: bool,
+    /// The engine's words for a run to carry on with after Scarlet refused one of its harness's own tools, `{tool}`
+    /// standing for the tool (`refusedTool` in the task's prompt). Only agy needs telling.
+    pub refused_tool: Option<String>,
     /// Per-task workspace. The agent may write temp files here.
     pub cwd: PathBuf,
+    /// The harness's own shell, file and web tools, beside Scarlet's, for a request. None for a side check or a skill's
+    /// edit, whose runs have Scarlet's tools only.
+    pub workspace: Option<super::types::Workspace>,
     pub mcp: McpSpec,
     pub on_event: EventSink,
     pub on_usage: Option<UsageSink>,
@@ -106,7 +112,25 @@ pub(super) fn stderr_tail(stderr: &str) -> String {
 }
 
 /// Dispatch on `opts.agent`.
-pub async fn run_agent(opts: RunOptions) -> RunResult {
+/// A CLI's environment for a run: without Scarlet's own variables (the token among them), the workspace's launchers
+/// first on its PATH. Codex reads its MCP server's variables from its own, and adds them back itself.
+pub fn workspace_env(env: &HashMap<String, String>, workspace: Option<&super::types::Workspace>) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = env.iter().filter(|(k, _)| !k.to_ascii_uppercase().starts_with("SCARLET_")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    if let Some(bin) = workspace.and_then(|w| w.bin_dir.as_ref()) {
+        let key = out.keys().find(|k| k.eq_ignore_ascii_case("PATH")).cloned().unwrap_or_else(|| "PATH".into());
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let joined = match out.get(&key).filter(|p| !p.is_empty()) {
+            Some(path) => format!("{}{sep}{path}", bin.to_string_lossy()),
+            None => bin.to_string_lossy().into_owned(),
+        };
+        out.insert(key, joined);
+    }
+    out
+}
+
+pub async fn run_agent(mut opts: RunOptions) -> RunResult {
+    // Scarlet's own variables stay out of every CLI, so its shell never holds the token.
+    opts.env = workspace_env(&opts.env, opts.workspace.as_ref());
     let invalid_model = opts.model.as_deref().is_some_and(|m|
         !m.starts_with(|c: char| c.is_ascii_alphanumeric()) || !m.chars().all(|c| c.is_ascii_alphanumeric() || "._:/@+[]-".contains(c)));
     let invalid_option = [opts.effort.as_deref(), opts.service_tier.as_deref()].into_iter().flatten().any(|id|
@@ -166,6 +190,8 @@ pub(crate) mod testing {
             env: crate::util::env_map(),
             task: None,
             plan: false,
+            refused_tool: None,
+            workspace: None,
         };
         (opts, events)
     }

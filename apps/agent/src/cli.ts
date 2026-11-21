@@ -12,21 +12,18 @@
  */
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { mkdir, mkdtemp } from "node:fs/promises";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
-import { agentCapabilities, ScarletClient } from "@scarlet/shared";
+import { ScarletClient } from "@scarlet/shared";
 import type { AgentId } from "@scarlet/shared";
-import { buildSystemPrompt } from "@scarlet/mcp/prompt";
 import { readTokenFile } from "@scarlet/mcp/cli";
 import { loadConfig, requireConfig, sameServer, saveConfig, workRoot } from "./config.js";
-import { apiKeyVars, cmdShellArgs, detect, findOnPath, formatAvailability, needsCmdShell, runnerEnv, stripVars } from "./detect.js";
+import { apiKeyVars, cmdShellArgs, detect, findOnPath, formatAvailability, needsCmdShell, stripVars } from "./detect.js";
 import { privateDirectory } from "./private-files.js";
-import { AgentHost, removeControlFiles } from "./host.js";
-import { runAgent } from "./runners/index.js";
-import { mcpEnv, nodeExecutable, resolveMcpCliPath } from "./runners/spawn.js";
+import { AgentHost } from "./host.js";
+import { killStoppedNow } from "./processTree.js";
 
 interface Parsed {
   command: string;
@@ -63,7 +60,7 @@ const USAGE = `scarlet-agent <command>
   auth    claude|codex|gemini      sign in with your Claude, ChatGPT or Google account (opens the browser)
   status                           show detected agent CLIs
   run     --project ID --agent claude|codex|gemini [--model M] "instruction"
-                                   one-shot run against a project (no server task)
+                                   ask the engine for one request and run it here
 `;
 
 async function prompt(question: string): Promise<string> {
@@ -168,44 +165,33 @@ async function cmdRun(flags: Record<string, string>, positional: string[]): Prom
   if (!instruction) throw new Error("instruction is required");
   if (flags.timeout && !(Number(flags.timeout) > 0)) throw new Error("--timeout takes a number of minutes");
   const client = new ScarletClient({ baseUrl: cfg.server, token: cfg.token });
-  const detail = await client.workspace(projectId);
-  const { skills } = await client.skills({ projectId, view: "prompt" }).catch((err) => {
-    console.error(`[scarlet-agent] could not load the project's skills; running without them: ${err instanceof Error ? err.message : String(err)}`);
-    return { skills: [] };
-  });
-  await privateDirectory(workRoot());
-  const cwd = await mkdtemp(join(workRoot(), "oneshot-"));
-  await privateDirectory(cwd);
-  const artifacts = join(cwd, "artifacts");
-  await mkdir(artifacts, { mode: 0o700 });
-  const systemPrompt = buildSystemPrompt({
-    project: { project: detail.project, timeline: detail.timeline },
-    task: { kind: "edit", instruction, agent, context: {} },
-    skills: skills.filter((s) => s.enabled),
-    workDir: artifacts,
-    capabilities: agentCapabilities(agent),
-  });
-  const model = flags.model ?? cfg.models?.[agent];
-  const result = await runAgent({
-    agent,
-    model,
-    systemPrompt,
-    instruction,
-    cwd,
-    mcp: {
-      command: nodeExecutable(),
-      args: [resolveMcpCliPath()],
-      env: mcpEnv({ SCARLET_SERVER: cfg.server, SCARLET_TOKEN: cfg.token, SCARLET_PROJECT: projectId, SCARLET_AGENT: agent, SCARLET_MODEL: model, SCARLET_WORKDIR: artifacts }),
-    },
+  const root = workRoot();
+  await privateDirectory(root);
+  // A request like any other: the engine builds its prompt, and the host runs it in a task folder it cleans up.
+  const host = new AgentHost({
+    client,
+    config: cfg,
+    saveConfig: (c) => saveConfig(c),
+    workRoot: root,
     timeoutMs: flags.timeout ? Number(flags.timeout) * 60_000 : undefined,
-    env: runnerEnv(agent, await detect({ models: cfg.models }), process.env),
-    onCodexFallback: reason => console.error(`[host] codex-fallback task=none attempt=unknown reason=${reason}`),
-    onEvent: (ev) => console.log(`[${ev.type}] ${ev.text}`),
-  }).finally(() => removeControlFiles(cwd).catch(error => {
-    console.error(`[scarlet-agent] could not clean one-shot folder ${cwd}: ${error instanceof Error ? error.message : String(error)}`);
-  }));
-  console.log(`\n${result.ok ? "OK" : "FAILED"}${result.question ? ` (question: ${result.question})` : ""}\n${result.summary}${result.error ? `\nerror: ${result.error}` : ""}`);
-  process.exitCode = result.ok ? 0 : 1;
+    log: (msg) => console.error(`[scarlet-agent] ${msg}`),
+    onRunnerEvent: (_task, ev) => console.log(`[${ev.type}] ${ev.text}`),
+  });
+  const stop = new AbortController();
+  const cancel = () => stop.abort();
+  process.once("SIGINT", cancel);
+  let task;
+  try {
+    await host.stopOrphans();
+    task = await host.runOne(projectId, { kind: "edit", agent, model: flags.model ?? cfg.models?.[agent], instruction }, stop.signal);
+  } finally {
+    process.off("SIGINT", cancel);
+    killStoppedNow();
+  }
+  const ok = task.state === "done";
+  const question = task.state === "waiting_for_user" ? task.question : null;
+  console.log(`\n${ok ? "OK" : question ? "WAITING" : "FAILED"}${question ? ` (question: ${question})` : ""}\n${task.summary ?? ""}${task.error ? `\nerror: ${task.error}` : ""}`);
+  process.exitCode = ok || question ? 0 : 1;
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {

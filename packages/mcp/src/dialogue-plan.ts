@@ -380,6 +380,44 @@ async function resolvePauseCut(tl: Timeline, ref: { mediaId: string; afterWord: 
     source: { start: round3(cut.start), end: round3(cut.end) }, plays: round3(plays) };
 }
 
+/**
+ * What a pause given in timeline seconds holds besides quiet, recording by recording: words the transcript has there,
+ * words only the scan read, and sound at speaking level no word explains. A pause named by its word is read for all
+ * three (resolvePauseCut); one typed in seconds was applied as typed, words and all (found reviewing the planner,
+ * 2026-11-20).
+ */
+async function secondsPauseHolds(tl: Timeline, range: TimeRange, sources: DialoguePlanSources): Promise<string[]> {
+  const project = await sources.project();
+  const found: string[] = [];
+  for (const clip of audibleMediaClips(tl)) {
+    const lo = Math.max(range.start, clip.timelineIn), hi = Math.min(range.end, clip.timelineIn + clipDuration(clip));
+    if (hi - lo <= 1e-6 || !project.media.some(m => m.id === clip.mediaId && (m.kind === "audio" || m.hasAudio))) continue;
+    const from = timelineToSource(clip, lo), to = timelineToSource(clip, hi);
+    const words = await sources.words(clip.mediaId, to + SETTLED_MARGIN, false).catch(() => null);
+    // A recording with no words, such as music under the talk, is not read for speech.
+    if (!words?.length) continue;
+    const on = (t: number) => clip.timelineIn + (t - clip.sourceIn) / (clip.speed ?? 1);
+    const where = (start: number, end: number) => `${on(start).toFixed(2)}–${on(end).toFixed(2)} s on version ${tl.version} (${start.toFixed(2)}–${end.toFixed(2)} s in ${clip.mediaId})`;
+    const middle = (w: TimeRange) => (w.start + w.end) / 2;
+    // A word the range only reaches into is its edge's, which the join check measures; one whose middle is inside is in the pause.
+    const said = words.filter(w => w.text.trim() && middle(w) > from && middle(w) < to);
+    if (said.length) found.push(`It holds “${said.map(w => w.text.trim()).join(" ")}” at ${where(said[0]!.start, said.at(-1)!.end)}.`);
+    const asWordAt = (w: TimeRange & { text: string }, index: number) => ({ mediaId: clip.mediaId, index, text: w.text.trim(), start: w.start, end: w.end });
+    const scanned = scanWords(sources.evidence, clip.mediaId, from - HEARD_REACH - 1, to + HEARD_REACH + 1);
+    const unwritten = scanned.length ? heardOnlyVerbatim(words.flatMap((w, i) => w.end >= from - 2 * HEARD_REACH - 1 && w.start <= to + 2 * HEARD_REACH + 1 ? [asWordAt(w, i)] : []),
+      scanned.map(asWordAt), w => w).filter(r => middle(r.source) > from && middle(r.source) < to) : [];
+    if (unwritten.length) found.push(`The scan read ${unwritten.map(r => `“${r.text}” at ${where(r.source.start, r.source.end)}`).join(" and ")} there, words the transcript doesn't have.`);
+    if (said.length || unwritten.length) continue;
+    // Sound clear of the words the range reaches into at its edges.
+    const start = Math.max(from, ...words.filter(w => w.start < from && w.end > from).map(w => w.end));
+    const end = Math.min(to, ...words.filter(w => w.start < to && w.end > to).map(w => w.start));
+    const held = end - start > .1 ? await sources.sound?.(clip.mediaId, { start, end }).catch(() => undefined) : undefined;
+    if (held?.runs.length) found.push(`It holds ${held.seconds.toFixed(2)} s of sound at speaking level that no word explains, at ${
+      held.runs.map(r => where(r.start, r.end)).join(", ")}.`);
+  }
+  return found;
+}
+
 type CutRef = { occurrence?: RepeatOccurrence; start?: number; end?: number; mediaId?: string; fromWord?: number; toWord?: number; afterWord?: number; leave?: number; voiceIn?: number };
 
 /** A cut given in timeline seconds, as removed words, or as the pause after a word, resolved to timeline seconds on `tl`. */
@@ -556,6 +594,15 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
         ` To remove sound there, give the range in timeline seconds as the kind of cut it is.`, cuts: [i] });
       return undefined;
     }
+    // A pause given in seconds is read for what it holds, as one named by its word is.
+    if (c.kind === "pause" && c.decision !== "keep" && c.picture !== "protect" && afterWord === undefined && c.mediaId === undefined) {
+      const holds = await secondsPauseHolds(tl, resolved, sources);
+      if (holds.length) {
+        unplaced.push({ reason: `cuts[${i}]: ${holds.join(" ")} A pause trim removes quiet only, so this one was not saved. Decide on those words as you would ` +
+          `on any: a take said again is a retake to cut, and words that belong play as they are. To remove them with the wait, give the range as the kind of cut it is.`, cuts: [i] });
+        return undefined;
+      }
+    }
     // A word range whose edges found no measured quiet goes to the editor. When the same words play from another
     // saying of them with quiet at both edges, the agent can pick that one and the cut can apply as decided: on one
     // pass, two of eight such held cuts had one.
@@ -690,8 +737,10 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
     // An edge left in sound: what Scarlet measured goes with the held cut, for the model's review. Named words say what
     // goes, so the quiet or low points that keep or take another word are no help there; a pass offered them resent
     // cuts that broke the sentence (2026-11-16).
-    if (join.inSound?.length && c.kind !== "pause") {
-      const named = c.words !== undefined && !join.inWord?.length;
+    // A pause too: it is quiet from end to end, and one whose edge stays in sound was typed into speech. Applied as
+    // typed, a pause given in seconds kept an edge inside a word (found reviewing the planner, 2026-11-20).
+    if (join.inSound?.length) {
+      const named = c.words !== undefined && c.kind !== "pause" && !join.inWord?.length;
       inSound.set(c.input, { inWord: !!join.inWord?.length, reason: named
         ? `The words named run on into the ones beside them at the ${join.inSound.join(" and ")}: no pause or low point where they part, a join in running speech.`
         : join.reason ?? "" });
@@ -710,7 +759,7 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
     // starts a tenth of a second after the word does. Its edges go onto the measured quiet beside them: that keeps
     // the word and leaves a little more air, so it stays the cut the agent decided. An edge with no quiet in reach
     // stays where the agent put it, and so does a pause whose move would reach into the range beside it.
-    if (c.kind === "pause") {
+    if (c.kind === "pause" && !join.inSound?.length) {
       const i = sorted.indexOf(c), frame = 1 / project.settings.fps + 1e-6;
       const removed = (n?: ResolvedCut) => n && n.decision !== "keep" && n.picture !== "protect" ? n : undefined;
       const before = removed(sorted[i-1]), after = removed(sorted[i+1]);

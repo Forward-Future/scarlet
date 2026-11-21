@@ -12,7 +12,7 @@ import { levelProfile, pauseStats, retakeGroups } from "./media-profile.js";
 import { json, noteEvidenceMiss, text } from "./tool-result.js";
 import { OTHER_INPUT } from "./analysis.js";
 import { screenReadings, type ScreenLine } from "./screen-reading.js";
-import { motionSpans, type MotionSecond } from "./screen-motion.js";
+import { motionSpans, type DetailFrame, type MotionSecond } from "./screen-motion.js";
 import type { RecordingCut } from "./brief-pictures.js";
 
 type ToolRegistrar = <Shape extends z.ZodRawShape>(name: ScarletToolName, description: string, shape: Shape,
@@ -22,9 +22,10 @@ interface PerceptionDeps {
   tool: ToolRegistrar;
   client: ScarletClient;
   projectId: string;
-  /** The agent's own read of a version: edits it proposes next are based on it. */
-  getTimeline(version?: string): Promise<Timeline>;
-  /** A version read to measure or compare, which leaves the base of the agent's next edit alone. */
+  /**
+   * A version read to measure or compare, which leaves the base of the agent's next edit alone. Every read here is one:
+   * only timeline_get, timeline_at and project_get move that base.
+   */
   peekTimeline(version: string): Promise<Timeline>;
   /** The portion of an edited transcript actually returned to the agent. */
   readPassage(version: string, range: { start: number; end: number }): void;
@@ -138,19 +139,34 @@ export function registerPerception(deps: PerceptionDeps) {
    * where their picture changes), with the words heard over a range of the timeline: the evidence for the video beside a
    * framed stretch.
    */
-  async function besideOn(tl: Timeline, project: Project, sources: Array<{ id: string; from: number; to: number }>, range: { start: number; end: number }, wait: number) {
-    const [text, motion, transcripts] = await Promise.all([
+  async function besideOn(tl: Timeline, project: Project, sources: Array<{ id: string; from: number; to: number }>, range: { start: number; end: number }, wait: number,
+    clocks: Array<{ id: string; from: number; to: number }> = []) {
+    const videos = new Set(project.media.filter(m => m.kind === "video").map(m => m.id));
+    const [text, motion, cuts, transcripts, eyes] = await Promise.all([
       readPictures<{ spans: ScreenLine[] }>("screen-text", sources, wait),
-      readPictures<{ seconds: MotionSecond[] }>("screen-motion", sources, wait),
+      readPictures<{ seconds: MotionSecond[]; detail?: DetailFrame[] }>("screen-motion", sources, wait),
+      readPictures<{ cuts: RecordingCut[] }>("picture-cuts", sources, wait),
       wordsFor(tl, project).catch(() => new Map<string, TranscriptWord[]>()),
+      // Where the speaker looks, in the picture of the recording heard beside each stretch: its face seen longest there.
+      Promise.all(clocks.filter(c => videos.has(c.id)).map(async ({ id, from, to }) => {
+        const read = await client.get<{ from: number; to: number; readSeconds: number; done: boolean; error?: string;
+          tracks: Array<{ track: number; seconds: number }>; spans: Array<{ track: number; start: number; end: number; eyesDown?: number; box: number[] }> }>(
+          `/projects/${encodeURIComponent(deps.projectId)}/media/${encodeURIComponent(id)}/faces?from=${from}&to=${to}&wait=${wait}`);
+        const main = [...read.tracks].sort((a, b) => b.seconds - a.seconds)[0]?.track;
+        return { id, spans: read.spans.filter(s => s.track === main),
+          unread: read.done ? undefined : `${id}: ${read.readSeconds.toFixed(0)} of ${(read.to - read.from).toFixed(0)} s of its faces read so far${read.error ? `, stopped: ${read.error}` : ", still reading: call again for the rest"}` };
+      })).catch(() => []),
     ]);
     return {
       evidence: {
         lines: new Map(text.reads.map(({ id, read }) => [id, read.spans])),
         seconds: new Map(motion.reads.map(({ id, read }) => [id, read.seconds])),
+        detail: new Map(motion.reads.map(({ id, read }) => [id, read.detail ?? []])),
+        cuts: new Map(cuts.reads.map(({ id, read }) => [id, read.cuts])),
         words: transcripts.size ? timelineWords(tl, transcripts, range) : [],
+        eyes: new Map(eyes.map(e => [e.id, e.spans])),
       },
-      unread: [...text.unread, ...motion.unread],
+      unread: [...text.unread, ...motion.unread, ...cuts.unread, ...eyes.flatMap(e => e.unread ? [e.unread] : [])],
     };
   }
 
@@ -222,7 +238,7 @@ export function registerPerception(deps: PerceptionDeps) {
   }
 
   async function readTranscript({ version, from, to, detail }: { version?: string; from?: number; to?: number; detail: "lines" | "words" }) {
-    const [tl, { project }] = await Promise.all([deps.getTimeline(version), deps.getProject()]);
+    const [tl, { project }] = await Promise.all([deps.peekTimeline(version ?? "head"), deps.getProject()]);
     const duration = timelineDuration(tl);
     const range = { start: from ?? 0, end: to ?? duration };
     const transcripts = await wordsFor(tl, project);
@@ -272,7 +288,7 @@ export function registerPerception(deps: PerceptionDeps) {
         tl = after;
         joins = newJoins(before, after, project);
       } else {
-        tl = await deps.getTimeline(version);
+        tl = await deps.peekTimeline(version ?? "head");
         joins = timelineJoins(tl, project);
       }
       const all = timelineJoins(tl, project);
@@ -291,7 +307,7 @@ export function registerPerception(deps: PerceptionDeps) {
     "Summarize what changed between two timeline versions: duration, the edits in plain lines, the affected ranges, and how many joins were added or removed.",
     { from: z.string().describe("Earlier version"), to: z.string().optional().describe("Later version; default head") },
     async ({ from, to }) => {
-      const after = await deps.getTimeline(to);
+      const after = await deps.peekTimeline(to ?? "head");
       const [{ diff, description }, before, { project }] = await Promise.all([
         client.diff(deps.projectId, from, after.version, "id"), deps.peekTimeline(from), deps.getProject()]);
       const added = newJoins(before, after, project).length, removed = newJoins(after, before, project).length;
@@ -370,7 +386,7 @@ export function registerPerception(deps: PerceptionDeps) {
       mediaId: z.string().optional().describe("The recording whose text on screen to match"),
       offset: z.number().int().min(0).default(0) },
     async ({ version, from, to, mediaId, offset }) => {
-      const [tl, { project }] = await Promise.all([deps.getTimeline(version), deps.getProject()]);
+      const [tl, { project }] = await Promise.all([deps.peekTimeline(version ?? "head"), deps.getProject()]);
       const range = { start: from ?? 0, end: to ?? timelineDuration(tl) };
       const found = await readingsOn(tl, project, range, { mediaId, wait: 20 });
       if (!found) return text(`Version ${tl.version} plays no transcribed speech.`);
@@ -391,7 +407,7 @@ export function registerPerception(deps: PerceptionDeps) {
       mediaId: z.string().optional().describe("The recording whose picture to follow"),
       offset: z.number().int().min(0).default(0) },
     async ({ version, from, to, mediaId, offset }) => {
-      const [tl, { project }] = await Promise.all([deps.getTimeline(version), deps.getProject()]);
+      const [tl, { project }] = await Promise.all([deps.peekTimeline(version ?? "head"), deps.getProject()]);
       const range = { start: from ?? 0, end: to ?? timelineDuration(tl) };
       const { spans, ids, unread } = await motionOn(tl, project, range, { mediaId, wait: 20 });
       const pct = (n: number) => Math.round(n * 1000) / 10;
@@ -403,7 +419,7 @@ export function registerPerception(deps: PerceptionDeps) {
     });
 
   tool("faces",
-    "Where the faces are in a video's frame over time, found from its picture. Each face is followed as a track, numbered by when it first appears: a track follows position from frame to frame, not who it is, so two people who swap places swap tracks, and a face that leaves and comes back over the same place keeps its number. `spans` split each track's time where its face moves or turns: `start`-`end` in SOURCE seconds; `box` [left, top, right, bottom] as fractions of the frame, holding the face throughout the span (the detector's box runs from about the hairline to just under the chin, inside the ears: the hair above and the shoulders below are outside it); `eyes` [x, y], the point midway between the eyes as fractions of the frame, where it usually is through the span; `yaw`, roughly where it looks, in degrees from facing the camera, positive toward the frame's right, to the nearest 5; and the detector's `confidence` (0..1). `tracks` gives each track's first and last second in the range, its seconds on screen, its usual box and eyes and the detector's usual confidence (a face in a picture or a pattern on a shelf can be found too, usually less surely), and `frame` the video's width and height in pixels, for a box's shape; `track` lists one track's spans. Frames are looked at twice a second, and four times where faces move; a face under about 2% of the frame's width, turned past profile or seen only for a moment can be missed. A video is read once and kept: a range not read yet is read now, and the answer says how much was read when it returns, while track numbers can still change; call again for the rest. Spans are listed in time order, 200 at a time; `offset` pages on. timeline_at maps source seconds to the edit." +
+    "Where the faces are in a video's frame over time, found from its picture. Each face is followed as a track, numbered by when it first appears: a track follows position from frame to frame, not who it is, so two people who swap places swap tracks, and a face that leaves and comes back over the same place keeps its number. `spans` split each track's time where its face moves or turns, or its eyes look down or back up: `start`-`end` in SOURCE seconds; `box` [left, top, right, bottom] as fractions of the frame, holding the face throughout the span (the detector's box runs from about the hairline to just under the chin, inside the ears: the hair above and the shoulders below are outside it); `eyes` [x, y], the point midway between the eyes as fractions of the frame, where it usually is through the span; `yaw`, roughly where it looks, in degrees from facing the camera, positive toward the frame's right, to the nearest 5; `eyesDown`, how far the eyes usually look down through the span, 0 level or up to 1 fully down (a presenter reading a laptop below the camera reads about 0.5 or more, at the lens about 0.1), left out where the face is too small to read its eyes; and the detector's `confidence` (0..1). `tracks` gives each track's first and last second in the range, its seconds on screen, its usual box and eyes and the detector's usual confidence (a face in a picture or a pattern on a shelf can be found too, usually less surely), and `frame` the video's width and height in pixels, for a box's shape; `track` lists one track's spans. Frames are looked at twice a second, and four times where faces move; a face under about 2% of the frame's width, turned past profile or seen only for a moment can be missed. A video is read once and kept: a range not read yet is read now, and the answer says how much was read when it returns, while track numbers can still change; call again for the rest. Spans are listed in time order, 200 at a time; `offset` pages on. timeline_at maps source seconds to the edit." +
       (deps.seesFrames ? " media_frame at a span's start second shows the frame its box was measured on." : ""),
     { mediaId: z.string(), from: z.number().min(0).optional(), to: z.number().min(0).optional(),
       track: z.number().int().min(1).optional().describe("Only this track's spans"),

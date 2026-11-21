@@ -1,5 +1,6 @@
-/** One inventory for Settings and MCP registration. Every tool is always
- * offered; only the harness's capabilities limit what a session sees. */
+/** One inventory for Settings and MCP registration. A session is offered the tools its harness can use (its
+ * capabilities) and its request calls for: a skill edit, a learning check or an area check gets only its own few
+ * (`tool` in packages/mcp/src/server.ts). */
 export const EDITING_TOOL_GROUPS = [
   { title: "Timeline editing", description: "Read the timeline, trim dialogue, frame the picture and propose changes.",
     tools: ["project_get", "timeline_get", "timeline_at", "timeline_diff", "timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync"] },
@@ -12,9 +13,9 @@ export const EDITING_TOOL_GROUPS = [
   { title: "Review and delivery", description: "Follow review notes, preview a change and render a delivery.",
     tools: ["change_get", "change_list", "edit_flag", "notes_list", "note_reply", "note_resolve", "render_request", "render_status"] },
   { title: "Requests and skills", description: "Report progress, ask editorial questions, use saved instructions and offer rules to add to them.",
-    tools: ["task_log", "task_question", "skills_list", "learning_suggest", "skill_save_from_change", "skill_save_edit", "shorts_plan"] },
-  { title: "Motion graphics", description: "Draw graphics from web pages, and read the files and style guide the editor gave.",
-    tools: ["graphic_render", "graphic_get", "style_guide_save", "attachment_read"] },
+    tools: ["task_log", "task_question", "skills_list", "learning_suggest", "skill_save_from_change", "skill_save_edit"] },
+  { title: "Motion graphics", description: "Draw graphics from web pages, capture pages from the web, and read the files and style guide the editor gave.",
+    tools: ["graphic_render", "graphic_get", "web_capture", "style_guide_save", "attachment_read"] },
   { title: "Frame inspection", description: "Examine a source frame or several moments from an edit together.",
     tools: ["media_frame", "frame_contact_sheet", "frame_contact_sheet_batch", "screen_area"] },
   { title: "Edit comparison", description: "Listen to source audio or compare both sides of a proposed edit.",

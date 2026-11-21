@@ -592,6 +592,42 @@ it("scans for a request sent about a point and for a revision as it does for a w
   }
 });
 
+it("keeps pages the bundled Whisper read through an update that installs it again, and not a chosen one's", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-dialogue-update-"));
+  onTestFinished(async () => { vi.restoreAllMocks(); await rm(dir, { recursive: true, force: true }); });
+  const dataDir = join(dir, "data"), bin = join(dir, "bin"), cli = join(bin, process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli");
+  await mkdir(bin, { recursive: true });
+  await writeFile(cli, "whisper build");
+  const app = createApp({ dataDir, skillsSeedDir: join(dir, "empty-seed"), env: { SCARLET_BIN_DIR: bin }, log: () => {} });
+  onTestFinished(() => app.ctx.close());
+  vi.spyOn(WhisperCppProvider.prototype, "transcribeWav").mockResolvedValue({ language: "en", segments: [] });
+  vi.spyOn(UhmDetector.prototype, "detect").mockResolvedValue([]);
+  expect(app.ctx.whisperCli).toBe(cli);
+  const project = app.ctx.repos.projects.insert(createProject("Update test"));
+  app.ctx.paths.ensureProject(project.id);
+  const media = app.ctx.repos.projects.putMedia(project.id, { id: "mic", name: "Mic", kind: "audio", path: "mic.wav", duration: 120 }, "ready");
+  await writeFile(join(app.ctx.paths.media(project.id), media.path), "recording");
+  app.ctx.repos.settings.update({ transcription: { provider: "whispercpp" } });
+  vi.spyOn(app.ctx.speakers, "turns").mockResolvedValue([{ start: 0, end: 60, speaker: 1 }]);
+  const request = (route: string, from: number, to: number) => app.app.request(`/api/projects/${project.id}/dialogue-${route}`, {
+    method: "POST", headers: { Authorization: `Bearer ${accessToken(app.ctx)}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ mediaId: media.id, from, to }),
+  });
+  expect((await request("detections", 0, 60)).ok).toBe(true);
+  expect(await (await request("checkpoints", 0, 120)).json()).toEqual([{ start: 0, end: 60 }]);
+  // An update writes the same build again: new file times, a new signature.
+  await rm(cli);
+  await writeFile(cli, "whisper build, signed again");
+  expect(await (await request("checkpoints", 0, 120)).json()).toEqual([{ start: 0, end: 60 }]);
+  // An executable the editor chose is known only by its file: replaced, its pages are read again.
+  app.ctx.repos.settings.update({ transcription: { localModel: "custom", whisperCppPath: cli, whisperModelPath: join(dir, "model.bin") } });
+  await writeFile(join(dir, "model.bin"), "weights");
+  expect((await request("detections", 0, 60)).ok).toBe(true);
+  expect(await (await request("checkpoints", 0, 120)).json()).toEqual([{ start: 0, end: 60 }]);
+  await writeFile(cli, "another build");
+  expect(await (await request("checkpoints", 0, 120)).json()).toEqual([]);
+});
+
 it("reads the words of overlapping saved pages once each, handing over at a word both pages read", () => {
   const w = (text: string, start: number) => ({ text, start, end: start + .3 });
   // Two pages that overlap from 58 s to 60 s read the words there twice, and a short re-read of 70-80 s sits less far

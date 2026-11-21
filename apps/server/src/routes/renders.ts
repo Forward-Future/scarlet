@@ -16,7 +16,7 @@ import { serveFile } from "../files.js";
 import { logId, throttledLog } from "../logText.js";
 import { ensureProjectHead } from "../services/timeline.js";
 import { AnalysisCache } from "../services/analysisCache.js";
-import { pictureDecoder, pictureLane } from "../services/pictureWork.js";
+import { framePriority, pictureDecoder, pictureLane, type PicturePriority } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
 import { jsonBody, numberParam, requireProject, requireProjectHeader } from "./util.js";
 import { measuredLoudness, type Loudness } from "../render/loudness.js";
@@ -80,7 +80,7 @@ export function renderRoutes(ctx: Ctx) {
   const frames = new AnalysisCache<Buffer>(jpeg => jpeg.length, undefined, Infinity);
   // A GPU or a preview copy that fails does so for every frame of a scrub, so the retry is logged once a minute.
   const retried = throttledLog(line => ctx.log(line));
-  async function requestFrame(request: Request, projectId: string, key: string, priority: boolean, cacheControl: string, decode: (signal: AbortSignal) => Promise<Buffer>, etag?: string) {
+  async function requestFrame(request: Request, projectId: string, key: string, priority: PicturePriority, cacheControl: string, decode: (signal: AbortSignal) => Promise<Buffer>, etag?: string) {
     try {
       const headers = { "Cache-Control": cacheControl, ...(etag ? { ETag: etag } : {}) };
       // Only the editor's window asks for a cut's pictures: background work yields while they look (editorFirst.ts).
@@ -153,7 +153,7 @@ export function renderRoutes(ctx: Ctx) {
     const size = monitor ? 960 : c.req.query("w") === "640" ? 640 : 160;
     const key = frameKey([project.id, version, frame, size, inputs, sourcesAt.read(range, paths, ctx.paths.media(project.id))], sourcesAt.transitions);
     const sameFormat = c.req.query("format") === `${width}x${height}@${fps}`;
-    return requestFrame(c.req.raw, project.id, key, monitor || c.req.query("priority") === "interactive", sameFormat ? "private, no-cache" : "no-store", async signal => {
+    return requestFrame(c.req.raw, project.id, key, monitor || framePriority(c.req.query("priority")), sameFormat ? "private, no-cache" : "no-store", async signal => {
       const time = frame / fps;
       const targetHeight = Math.min(height, ctx.settings().render.previewHeight, Math.ceil(size * height / Math.max(width, height)));
       const preview = ctx.renders.coveringPreview(project, version, range, targetHeight);

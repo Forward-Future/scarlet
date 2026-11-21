@@ -23,8 +23,9 @@ describe("drawing an applied edit on the timeline", () => {
       .toMatchObject({ band: { start: 61, end: 61 }, bandLabel: "Cut" });
   });
 
-  it("names a graphic Scarlet laid over the picture apart from b-roll", () => {
+  it("names a graphic Scarlet laid over the picture apart from B-roll, and B-roll apart from other overlays", () => {
     expect(editKindWord(edit({ kind: "graphic" }))).toBe("Graphic");
+    expect(editKindWord(edit({ kind: "broll" }))).toBe("B-roll");
     expect(editKindWord(edit({ kind: "overlay" }))).toBe("Overlay");
   });
 

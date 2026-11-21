@@ -348,6 +348,40 @@ it("closes only the picker on Esc when it opened from a menu's Model row, and gi
   }
 });
 
+it("opens a menu row's model selector beside the menu when there is room, and under the row when narrow", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const oldHosts = useHostsStore.getState();
+  useHostsStore.setState({ hosts: buildDb().hosts, status: "ready" });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const selectorSize = (size: number) => function (this: HTMLElement) { return this.getAttribute("aria-label") === "Model selector" ? size : 0; };
+  try {
+    vi.stubGlobal("innerWidth", 1280);
+    vi.stubGlobal("innerHeight", 780);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(selectorSize(352));
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(selectorSize(250));
+    await act(() => root.render(<MemoryRouter><Dropdown label="More" button="⋯">{() => <AgentChip variant="menu" direction="down" />}</Dropdown></MemoryRouter>));
+    await act(() => container.querySelector<HTMLButtonElement>('button[aria-label="More"]')!.click());
+    const row = container.querySelector<HTMLButtonElement>('[role="menu"] [aria-haspopup="dialog"]')!;
+    vi.spyOn(container.querySelector('[role="menu"]')!, "getBoundingClientRect").mockReturnValue(new DOMRect(130, 50, 240, 312));
+    vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(134, 246, 232, 32));
+    await act(() => row.click());
+    const selector = () => container.querySelector<HTMLElement>('[role="dialog"][aria-label="Model selector"]')!;
+    expect([selector().style.left, selector().style.top]).toEqual(["376px", "246px"]);
+    // Narrow window: falls back under the row.
+    vi.stubGlobal("innerWidth", 560);
+    await act(() => { window.dispatchEvent(new Event("resize")); });
+    expect([selector().style.left, selector().style.top]).toEqual(["14px", "284px"]);
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useHostsStore.setState(oldHosts, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
 it("says the model list couldn't be read, with Refresh to try again, when a signed-in agent offers no models", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const oldHosts = useHostsStore.getState();

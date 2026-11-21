@@ -12,7 +12,8 @@ const steps: { value: CheckIn; label: string }[] = [
 
 /**
  * How much Scarlet checks with the editor. At the end of a pass Scarlet orders its cuts by how likely each is to be
- * wrong; this picks how far down that order the editor is asked to look. The same for every project, saved as chosen.
+ * wrong, and the repeats it would keep by how likely each is a restart; this picks how far down each order the editor
+ * is asked to look. The same for every project, saved as chosen.
  */
 export function CheckInSettings() {
   const [value, setValue] = useState<CheckIn | null>(null);
@@ -53,7 +54,7 @@ export function CheckInSettings() {
           <PreferenceSelect id="check-in" value={value} disabled={busy} options={steps} onChange={next => void choose(next)} />
         </div>
       </div>
-      <p className="transcription-status text-muted">{CHECK_IN_SHARE[value].replace(/^a/, "A")} of the cuts that take words out: the ones Scarlet thinks most likely to be wrong. They go into the video either way and wait in For you until you keep them.</p>
+      <p className="transcription-status text-muted">{CHECK_IN_SHARE[value].replace(/^a/, "A")} of the cuts that take words out: the ones Scarlet thinks most likely to be wrong. They go into the video either way and wait in For you until you keep them. The same share of the lines said twice that Scarlet would leave in comes to you as a call: Keep takes one out.</p>
       {error && <InlineError>{error}</InlineError>}
     </section>
   );

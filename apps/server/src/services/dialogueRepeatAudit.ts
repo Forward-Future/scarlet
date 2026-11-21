@@ -162,7 +162,7 @@ const LONGEST_WORD = 1.5;
  */
 function restarts(spoken: Heard[]) {
   const found = [];
-  for (const r of findRestarts(spoken.map(w => w.text), spoken.map(w => w.start), spoken.map(w => w.end))) {
+  for (const r of findRestarts(spoken.map(w => w.text), spoken.map(w => w.start), spoken.map(w => w.end), { cutOffWords: true })) {
     const again = r.again ?? r.length;
     const attempt = spoken.slice(r.at, r.next), a = spoken.slice(r.at, r.at + r.length), b = spoken.slice(r.next, r.next + again);
     const before = spoken.slice(Math.max(0, r.at - 5), r.at), after = spoken.slice(r.next + again, r.next + again + 7);

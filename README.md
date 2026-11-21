@@ -56,7 +56,7 @@ Instead of waiting for full re-renders or hunting through a timeline, Scarlet re
 ### Built-in editing workflows (Skills) & Learnings
 
 <p align="center">
-  <img src="assets/scarlet-skills.png" width="100%" alt="Scarlet Settings → Tools & skills showing categorized, editable Markdown editing workflows such as dialogue-pass, make-shorts, add-captions, frame-screen, motion-graphics, and punch-in.">
+  <img src="assets/scarlet-skills.png" width="100%" alt="Scarlet Settings → Tools & skills showing categorized, editable Markdown editing workflows such as dialogue-pass, add-captions, frame-screen, motion-graphics, and punch-in.">
 </p>
 
 Type `/` in the composer to run one of Scarlet’s built-in editing workflows. Every workflow is an editable Markdown guide shared across your projects—customize them in **Settings → Tools & skills**, compose your own style on top of shipped guides, or turn an approved edit into a reusable skill.
@@ -71,7 +71,6 @@ Type `/` in the composer to run one of Scarlet’s built-in editing workflows. E
 | `/b-roll` | Plans B-roll and graphic spots as To-dos first, then sources or creates only the ones you ask for. |
 | `/speed-through-waits` | Speeds through installs, builds, and loading screens while keeping tracks in sync and speech at normal speed. |
 | `/fit-length` | Trims an edit down to a target runtime by removing the least essential passages first. |
-| `/make-shorts` | Turns the strongest self-contained moments of a long video into standalone `9:16`, `1:1`, or `4:5` short projects with captions. |
 | `/tighten-pauses-here` | Focuses pause tightening on a selected passage or the region around the playhead. |
 
 **Learnings:** When a request sounds like a recurring preference (for example, *“Keep laughs in—only cut dead air after them”*), Scarlet surfaces it as a suggested rule. Approve it to update your skill automatically, edit the wording in place, or dismiss it. [Browse all workflows →](skills/README.md)
@@ -91,7 +90,6 @@ So your agent edits from real measurements instead of guesswork, Scarlet analyze
 - **Direct MP4 export:** Export the full cut or a custom time range in **Compressed**, **High** (hardware-accelerated), or **Original quality**.
 - **Caption files:** Export the captions alone as SubRip (`.srt`) or WebVTT (`.vtt`), for the whole video or a custom range.
 - **Finish in your NLE (`Advanced export`):** Save a self-contained handoff folder with `.fcpxml` (DaVinci Resolve, Final Cut Pro), `.otio` (Premiere Pro 26.5+, DaVinci Resolve), copies of the used footage, `.srt` captions, and a plain-English Read me explaining how to open it in each app and what does not carry over.
-- **Make shorts from any cut:** Use **Make shorts** in the `⋯` menu to spin off vertical (`9:16`), square (`1:1`), or portrait (`4:5`) short projects from your finished edit without modifying the main video.
 - **Native desktop app & open MCP engine:** Built with Tauri 2 (Rust shell + local SQLite/Node engine + FFmpeg + headless Chrome) for macOS (Apple Silicon & Intel), Windows x64, and Ubuntu 24.04 x86-64. Power users can also connect external MCP clients (`pnpm mcp`) or run the headless engine via Docker (`docker compose up -d`).
 
 ---

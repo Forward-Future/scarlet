@@ -7,9 +7,21 @@ import { resolveVideoEncoder, type HwAccel } from "@scarlet/render";
  * and left the transcript it was waiting for about two cores. Picture decodes take turns, a few at a time per engine,
  * and the editor's own requests (the monitor, a frame being scrubbed) go ahead of the agent's.
  */
+/**
+ * Whose picture it is. The editor's own (the monitor, a frame being scrubbed) has a slot kept for it; the timeline's
+ * stills go ahead of the agent's but take no kept slot, so a scrub still finds one free. On 2026-11-21 a pass's frames
+ * held the lane for a whole pass and the timeline's stills, each 1m40s in line, never landed between its saves.
+ */
+export type PicturePriority = boolean | "timeline";
+/** A frame request's `priority`: "interactive" for the editor's own, "timeline" for the timeline's stills. */
+export function framePriority(query: string | undefined): PicturePriority {
+  return query === "interactive" ? true : query === "timeline" ? "timeline" : false;
+}
+const rankOf = (priority: PicturePriority = false) => priority === true ? 2 : priority === "timeline" ? 1 : 0;
+
 export class PictureLane {
   private active = 0;
-  private readonly waiting: Array<{ priority: boolean; start(): void }> = [];
+  private readonly waiting: Array<{ rank: number; start(): void }> = [];
 
   /**
    * `slots` decodes run at a time, and the editor's own may take `reserved` more. On 2026-11-11 a frame the editor
@@ -18,22 +30,23 @@ export class PictureLane {
    */
   constructor(readonly slots: number, readonly reserved = 1) {}
 
-  private room(priority: boolean) { return this.active < this.slots + (priority ? this.reserved : 0); }
+  private room(rank: number) { return this.active < this.slots + (rank === 2 ? this.reserved : 0); }
 
-  async run<T>(job: () => Promise<T>, options: { priority?: boolean; signal?: AbortSignal } = {}): Promise<T> {
-    const { priority = false, signal } = options;
+  async run<T>(job: () => Promise<T>, options: { priority?: PicturePriority; signal?: AbortSignal } = {}): Promise<T> {
+    const { signal } = options;
+    const rank = rankOf(options.priority);
     signal?.throwIfAborted();
-    if (this.room(priority)) this.active++;
+    if (this.room(rank)) this.active++;
     else {
       await new Promise<void>((resolve, reject) => {
-        const entry = { priority, start: () => { signal?.removeEventListener("abort", cancel); resolve(); } };
+        const entry = { rank, start: () => { signal?.removeEventListener("abort", cancel); resolve(); } };
         const cancel = () => {
           const index = this.waiting.indexOf(entry);
           if (index >= 0) this.waiting.splice(index, 1);
           reject(signal!.reason);
         };
-        // The editor's requests go after earlier ones of their own, ahead of the agent's.
-        const index = priority ? this.waiting.findIndex(w => !w.priority) : -1;
+        // Each request goes after earlier ones of its own rank, ahead of lower ones: the editor's, the timeline's, the agent's.
+        const index = this.waiting.findIndex(w => w.rank < rank);
         this.waiting.splice(index < 0 ? this.waiting.length : index, 0, entry);
         signal?.addEventListener("abort", cancel, { once: true });
       });
@@ -43,8 +56,8 @@ export class PictureLane {
       return await job();
     } finally {
       this.active--;
-      // The first in line that has room: the editor's while any slot is free, the agent's while one of its own is.
-      for (let index; (index = this.waiting.findIndex(w => this.room(w.priority))) >= 0;) {
+      // The first in line that has room: the editor's while any slot is free, the others' while one of their own is.
+      for (let index; (index = this.waiting.findIndex(w => this.room(w.rank))) >= 0;) {
         this.active++;
         this.waiting.splice(index, 1)[0]!.start();
       }

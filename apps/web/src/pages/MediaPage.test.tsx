@@ -9,7 +9,6 @@ import * as client from "../lib/client";
 import { desktop } from "../lib/desktop";
 import { PhysicalPosition } from "@tauri-apps/api/dpi";
 import { listenForFileDrops } from "../lib/dropTargets";
-import { pendingImports } from "../lib/pendingImports";
 import { dispatchWsEvent } from "../lib/realtime";
 import { MediaDrawer } from "../components/media/MediaDrawer";
 import { Dropzone, useUploader } from "../components/media/UploadDropzone";
@@ -99,13 +98,6 @@ it("accepts dropped files throughout the empty and populated Media drawer", asyn
     await act(() => add.click());
     expect(pick).toHaveBeenCalledTimes(1);
 
-    const fromLink = [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Add from a link")!;
-    await act(() => fromLink.click());
-    const urlField = container.querySelector("#import-url")!;
-    hit.mockReturnValue(urlField);
-    await act(() => { urlField.dispatchEvent(event); deliver({ type: "drop", paths, position }); });
-    expect(startPaths).toHaveBeenCalledTimes(1);
-    expect(start).toHaveBeenCalledTimes(1);
   } finally {
     stop();
     await act(() => root.unmount());
@@ -164,143 +156,6 @@ it("tracks the native selection from the first pending import through media prep
     expect(container.querySelector("progress")).toBeNull();
   } finally {
     await act(() => root.unmount());
-    useProjectStore.setState(previous, true);
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  }
-});
-
-it("queues links as downloads and reports a failed, finished or cancelled transfer in Media", async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  const previous = useProjectStore.getState();
-  const db = buildDb();
-  const project = db.projects.find(p => p.id === PRJ)!;
-  const arrived = { ...db.media[PRJ]!.find(m => m.kind === "video")!, id: "med_link", name: "interview.mp4", status: "ingesting" as const };
-  useProjectStore.setState({ current: {
-    id: PRJ, project, timeline: null, media: db.media[PRJ]!, changes: [], notes: [], renders: [], tasks: [], taskEvents: {}, versions: [],
-  } });
-  vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
-  vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
-  let fail!: () => void;
-  let finish!: () => void;
-  const imports = vi.spyOn(api, "importMedia")
-    .mockImplementationOnce(() => new Promise((_, reject) => { fail = () => reject(new Error("Couldn’t download that URL: 404")); }))
-    .mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ media: arrived }); }))
-    .mockImplementationOnce((_id, _body, signal) => new Promise((_resolve, reject) => {
-      signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
-    }));
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
-  function Panel() { return <MediaPage uploads={useUploader(PRJ)} onPlay={vi.fn()} />; }
-  const button = (text: string) => [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === text)!;
-  const add = async (link: string) => {
-    await act(async () => button("Add from a link").click());
-    const field = container.querySelector<HTMLInputElement>("#import-url")!;
-    await act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, link);
-      field.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    await act(async () => { container.querySelector<HTMLFormElement>("#import-link")!.requestSubmit(); });
-  };
-  /** The file being added, as its card reads: its name, its place in the batch, the step, and whether the bar has a share to show. */
-  const adding = () => { const bar = container.querySelector('progress[aria-label^="Import progress"]'); const card = bar?.closest(".card");
-    return card && [card.querySelector("span[title]")?.textContent, card.querySelector(".tnum.shrink-0")?.textContent, card.querySelector('[role="status"]')?.textContent, bar!.hasAttribute("value")]; };
-  const drive = "https://drive.google.com/file/d/1Qx7mB2kPz9LrT4vN8cYwE6uJ/view?usp=sharing";
-  try {
-    await act(async () => root.render(<MemoryRouter><Panel /></MemoryRouter>));
-    await add(drive);
-    // The dialog is gone while the link still downloads. A Drive link has no file name in it, so it goes by the link.
-    expect(container.querySelector("dialog")).toBeNull();
-    expect(imports).toHaveBeenCalledExactlyOnceWith(PRJ, { url: drive, importId: expect.any(String) }, expect.any(AbortSignal));
-    expect(adding()).toEqual([drive, "File 1 of 1", "Downloading…", false]);
-    // Nothing waits for it. Files can still be chosen, and another link joins the queue behind it. Until its turn
-    // the card counts it, as it counts the files of one drop.
-    expect(button("Add files").disabled).toBe(false);
-    await add("https://example.com/clips/interview.mp4?token=abc");
-    expect(container.querySelector("dialog")).toBeNull();
-    expect(imports).toHaveBeenCalledOnce();
-    expect(adding()).toEqual([drive, "File 1 of 2", "Downloading…", false]);
-    // The first link failed. Its row says why, with a × that puts it away, and the next link's turn begins under the file name it ends in.
-    await act(async () => fail());
-    const failed = [...container.querySelectorAll("ul.mb-3 > li")].find(row => row.textContent?.includes(drive))!;
-    expect([failed.querySelector(".truncate")?.textContent, failed.querySelector("span.text-bad")?.textContent, failed.querySelector("div.text-bad")?.textContent, failed.querySelector("button")?.getAttribute("aria-label")])
-      .toEqual([drive, "Failed", "Couldn’t download that URL: 404", "Dismiss"]);
-    expect(imports.mock.calls[1]).toEqual([PRJ, { url: "https://example.com/clips/interview.mp4?token=abc", importId: expect.any(String) }, expect.any(AbortSignal)]);
-    expect(adding()).toEqual(["interview.mp4", "File 2 of 2", "Downloading…", false]);
-    // Downloaded, it is a file in the list like any other, being prepared.
-    await act(async () => finish());
-    expect(adding()).toBeFalsy();
-    expect([...container.querySelectorAll(".media-row .media-file .truncate")].map(name => name.textContent)).toContain("interview.mp4");
-    // The queue emptied, so the next link added is counted from one again. Its name reads without the address's escapes.
-    await add("https://example.com/clips/B%20roll%20caf%C3%A9%2emov");
-    expect(adding()).toEqual(["B roll café.mov", "File 1 of 1", "Downloading…", false]);
-    // Cancel is attached to the live download. A link queued behind it still gets its turn.
-    const following = "https://example.com/after-cancel.png";
-    imports.mockResolvedValueOnce({ media: { ...arrived, id: "med_after_cancel", name: "after-cancel.png" } });
-    await add(following);
-    expect(imports).toHaveBeenCalledTimes(3);
-    await act(async () => button("Cancel download").click());
-    expect(imports.mock.calls[2]![2]?.aborted).toBe(true);
-    expect(imports).toHaveBeenLastCalledWith(PRJ, { url: following, importId: expect.any(String) }, expect.any(AbortSignal));
-    expect(pendingImports(PRJ)).toEqual([]);
-    expect(container.textContent).not.toContain("B roll café.mov");
-    expect(container.textContent).toContain("after-cancel.png");
-  } finally {
-    await act(() => root.unmount());
-    container.remove();
-    localStorage.removeItem("scarlet.imports.v1");
-    useProjectStore.setState(previous, true);
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  }
-});
-
-it("leaves Add files on after files are picked while a link downloads, until one of them is being copied in", async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  const previous = useProjectStore.getState();
-  const db = buildDb();
-  const project = db.projects.find(p => p.id === PRJ)!;
-  const arrived = { ...db.media[PRJ]!.find(m => m.kind === "video")!, id: "med_link", name: "interview.mp4", status: "ingesting" as const };
-  // A project of its own: a link an earlier test left downloading would still hold the fixture project's queue.
-  const id = "prj_picks";
-  useProjectStore.setState({ current: {
-    id, project: { ...project, id }, timeline: null, media: db.media[PRJ]!, changes: [], notes: [], renders: [], tasks: [], taskEvents: {}, versions: [],
-  } });
-  vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
-  vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
-  vi.spyOn(client, "IS_DESKTOP", "get").mockReturnValue(true);
-  vi.spyOn(desktop, "pickFiles").mockResolvedValue(["/media/clip.mov"]);
-  let finish!: () => void;
-  vi.spyOn(api, "importMedia")
-    .mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ media: arrived }); }))
-    .mockImplementation(() => new Promise(() => {}));
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
-  function Panel() { return <MediaPage uploads={useUploader(id)} onPlay={vi.fn()} />; }
-  const button = (text: string) => [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === text)!;
-  try {
-    await act(async () => root.render(<MemoryRouter><Panel /></MemoryRouter>));
-    await act(async () => button("Add from a link").click());
-    const field = container.querySelector<HTMLInputElement>("#import-url")!;
-    await act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "https://example.com/clips/interview.mp4");
-      field.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    await act(async () => { container.querySelector<HTMLFormElement>("#import-link")!.requestSubmit(); });
-    // Files picked while the link downloads wait behind it, and more can be picked meanwhile.
-    await act(async () => button("Add files").click());
-    expect(container.textContent).toContain("File 1 of 2");
-    expect(button("Add files").disabled).toBe(false);
-    // Once the link is in, the picked file is copied in, and that holds the picker until it is in.
-    await act(async () => finish());
-    expect(container.querySelector("progress")?.getAttribute("aria-label")).toBe("Import progress for clip.mov");
-    expect(button("Add files").disabled).toBe(true);
-  } finally {
-    await act(() => root.unmount());
-    container.remove();
-    localStorage.removeItem("scarlet.imports.v1");
     useProjectStore.setState(previous, true);
     vi.restoreAllMocks();
     vi.unstubAllGlobals();

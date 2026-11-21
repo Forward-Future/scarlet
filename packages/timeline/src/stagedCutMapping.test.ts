@@ -48,14 +48,31 @@ it("rejects repeated source occurrences in either version even when one copy kep
   expect(mapStagedCut(head, from, range, 30)).toMatchObject({ kind: "conflict" });
 });
 
-it("detects a changed sound, hidden overlay, or disabled clip on otherwise identical footage", () => {
+it("detects a changed sound or a disabled clip on otherwise identical footage", () => {
   const from = original();
   const mic = from.tracks[1]!.clips[0]!;
   const mixed = applyOps(from, [{ op: "updateClip", clipId: mic.id, patch: { volume: 0.5 } }]);
   expect(mapStagedCut(from, mixed, range, 30)).toMatchObject({ kind: "conflict", range });
-  const hidden = applyOps(from, [{ op: "addTrack", track: { id: "overlay", kind: "video", name: "Overlay", hidden: true, muted: true,
-    clips: [makeMediaClip("overlay", 0, 1, 7, { enabled: false })] } }]);
-  expect(mapStagedCut(from, hidden, range, 30)).toMatchObject({ kind: "conflict", range });
+  const disabled = applyOps(from, [{ op: "updateClip", clipId: from.tracks[0]!.clips[0]!.id, patch: { enabled: false } }]);
+  expect(mapStagedCut(from, disabled, range, 30)).toMatchObject({ kind: "conflict", range });
+});
+
+it("finds the same footage under a picture laid over it, on a new track or one that already had pictures elsewhere", () => {
+  // A framing save that laid the screen over a waiting call was refused, so the screen was left off over the call's
+  // footage: once the call was approved, the camera flashed full frame for under a second (Neon review 2, 2026-11-20).
+  const screen = (clips: ReturnType<typeof makeMediaClip>[]) => ({ op: "addTrack" as const, track: { id: "v_screen", kind: "video" as const, name: "Screen", clips } });
+  const from = applyOps(original(), [screen([makeMediaClip("screen", 0, 2, 0)])]);
+  const laid = applyOps(from, [{ op: "addClip", trackId: "v_screen", clip: makeMediaClip("screen", 2, 10, 2) }]);
+  expect(mapStagedCut(from, laid, range, 30)).toEqual({ kind: "exact", range });
+  const inset = applyOps(laid, [{ op: "addTrack", track: { id: "v_presenter", kind: "video", name: "Presenter", hidden: true,
+    clips: [makeMediaClip("camera", 4, 11, 4, { enabled: false })] } }]);
+  expect(mapStagedCut(from, inset, range, 30)).toEqual({ kind: "exact", range });
+  // Taking the picture laid over away again is framing too.
+  expect(mapStagedCut(laid, from, range, 30)).toEqual({ kind: "exact", range });
+  // Over a recording that is only sound, every picture is laid over it.
+  const sound = timelineFromKeepRanges("project", "mic", [{ start: 0, end: 20 }], { audioMediaId: "mic" });
+  const voice = { ...sound, tracks: sound.tracks.filter(t => t.kind === "audio") };
+  expect(mapStagedCut(voice, applyOps(voice, [screen([makeMediaClip("screen", 0, 20, 0)])]), range, 30)).toEqual({ kind: "exact", range });
 });
 
 it("finds the same footage after it was reframed, as a punch-in leaves it", () => {

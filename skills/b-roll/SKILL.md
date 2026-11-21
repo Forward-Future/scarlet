@@ -18,7 +18,7 @@ Cover what's being said with something the viewer can see. Plan in words first; 
 ## Then, make the ones asked for
 
 - When the editor sends a To do back asking for it, make that one and only that one.
-- For B-roll, use footage in the project's Media. If nothing there fits, say what to shoot or find, and leave the To do in place.
+- For B-roll, use footage in the project's Media, or the page on the web the line is about (an article, a post, a site), framed as the line needs. If neither fits, say what to shoot or find, and leave the To do in place.
 - For a graphic, follow /motion-graphics.
 - Keep the speaker's voice running under B-roll. Never cover the face on the line that carries the point.
 - Hold B-roll about 2 to 5 seconds and come in and out on a beat, not mid-word.

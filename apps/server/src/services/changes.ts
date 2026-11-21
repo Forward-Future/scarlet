@@ -21,6 +21,7 @@ import { frameAligned, frameAlignedRemoval, isPublishedCall, onFrame, makeStaged
   CUT_TAIL_SECONDS,
   isolatedReviewCut,
   leftOutJoins,
+  LEFT_OUT_READING,
   applyReviewRemovals,
   appliedCutReview,
   appliedReviewChange,
@@ -1171,7 +1172,7 @@ function leftOutOf(ctx: Ctx, project: Omit<Project, "media">, change: Change): C
     const found = leftOutJoins(resolveTimeline(ctx, project, change.fromVersion), resolveTimeline(ctx, project, change.toVersion), project.settings.fps);
     if (!found) return { joins: [] };
     const original = storeVersion(ctx, project.id, found.original, { parent: change.fromVersion, description: "Footage left out, for review" });
-    return { version: original.version, joins: found.joins };
+    return { version: original.version, joins: found.joins, reading: LEFT_OUT_READING };
   } catch (err) {
     ctx.log(`[edit] couldn’t read the footage ${change.id} left out: ${(err as Error).message}`);
     return undefined;
@@ -1180,9 +1181,22 @@ function leftOutOf(ctx: Ctx, project: Omit<Project, "media">, change: Change): C
 
 /**
  * Read the footage left out by changes an earlier build applied without looking: a video built from the pieces to
- * keep showed none of what it left out as cuts (2026-11-12). Runs once as Scarlet starts.
+ * keep showed none of what it left out as cuts (2026-11-12). Joins an earlier reading found are read again: it took a
+ * screen and a camera inset laid over a camera already cut for footage left out, and called every framed demo a Cut
+ * (2026-11-20). Runs once as Scarlet starts.
  */
 export function recordLeftOutFootage(ctx: Ctx): void {
+  const stale = (ctx.db.prepare(`SELECT json FROM changes INDEXED BY changes_left_out_reread WHERE state = 'approved'
+    AND json_array_length(json_extract(json, '$.leftOut.joins')) > 0 AND coalesce(json_extract(json, '$.leftOut.reading'), 1) < 2
+    ORDER BY created_at`).all() as { json: string }[]).map(row => ctx.repos.changes.parse(row.json));
+  for (const change of stale) {
+    const project = ctx.repos.projects.header(change.projectId);
+    const leftOut = project && leftOutOf(ctx, project, change);
+    if (!leftOut) continue;
+    ctx.repos.changes.put({ ...change, leftOut });
+    const was = change.leftOut!.joins.length;
+    if (leftOut.joins.length !== was) ctx.log(`[edit] ${change.id} read again: ${was} stretches of footage were taken for left out, ${leftOut.joins.length} are`);
+  }
   // The index holds only the changes still to read. Left to choose, SQLite would read every applied change by its state.
   const built = (ctx.db.prepare(`SELECT json FROM changes INDEXED BY changes_left_out_unread WHERE state = 'approved'
     AND json_extract(json, '$.leftOut') IS NULL AND json_array_length(coalesce(json_extract(json, '$.ops'), '[]')) > 0
@@ -2117,7 +2131,23 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
       outcome === "partial"
         ? `${user.name} approved ${spots!.length} of ${change.ranges.length} spots of ${quote(saved.description)}`
         : `${user.name} approved ${quote(saved.description)}${outcome === "rebased" ? " (merged into the latest edit)" : ""}`,
-    data: { changeId: saved.id, threadId: saved.threadId, outcome, version: target, onto: head },
+    data: {
+      changeId: saved.id,
+      threadId: saved.threadId,
+      ...(saved.taskId && { taskId: saved.taskId }),
+      branch: project.branch,
+      author: saved.author,
+      outcome,
+      version: target,
+      onto: head,
+      durationBefore: timelineDuration(headTl),
+      durationAfter: timelineDuration(snapshot.timeline),
+      editCount: saved.timelineEdits?.length ?? saved.ranges.length,
+      rangesCount: saved.ranges.length,
+      ...(saved.ops?.length && { opsCount: saved.ops.length }),
+      ...(saved.approvedSpots && { approvedSpots: saved.approvedSpots }),
+      ...(saved.restoredCuts?.length && { restoredCuts: saved.restoredCuts }),
+    },
   });
   return { change: saved, project: updated, outcome };
 }
@@ -2193,7 +2223,16 @@ export function unapproveChange(ctx: Ctx, user: User, change: Change): { change:
     actor: actorFor(user),
     type: "change.undone",
     summary: `${user.name} undid the approval of ${quote(change.description)}${change.decidedBy && change.decidedBy.id !== user.id ? ` (approved by ${change.decidedBy.name})` : ""}`,
-    data: { changeId: change.id, threadId: change.threadId, version: onto, from: applied },
+    data: {
+      changeId: change.id,
+      threadId: change.threadId,
+      ...(change.taskId && { taskId: change.taskId }),
+      branch: project.branch,
+      version: onto,
+      from: applied,
+      durationBefore: timelineDuration(resolveTimeline(ctx, project, applied)),
+      durationAfter: timelineDuration(resolveTimeline(ctx, project, onto)),
+    },
   });
   return { change: saved, project: updated };
 }

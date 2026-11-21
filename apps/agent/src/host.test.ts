@@ -1,14 +1,15 @@
 import { EventEmitter, once } from "node:events";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import { type AddressInfo } from "node:net";
 import { ScarletClient, type Task, type TaskEvent } from "@scarlet/shared";
 import * as mock from "@scarlet/mcp/mock";
-import { AgentHost, claudeProjectDir, humanDuration, promptTimeLimit, pruneTaskDirs, removeClaudeSessions, removeControlFiles, stalledReason, timedOutReason, type HostOptions } from "./host.js";
+import { AgentHost, claudeConfigDir, claudeProjectDir, claudeProjectDirs, humanDuration, promptTimeLimit, pruneTaskDirs, removeClaudeSessions, removeControlFiles, stalledReason, timedOutReason, type HostOptions } from "./host.js";
+import { codexHomeDir } from "./runners/codex.js";
 import { DEFAULT_STALL_MS } from "./runners/types.js";
 import type { RunAgentFn, RunAgentOptions } from "./runners/types.js";
 
@@ -47,6 +48,12 @@ interface Srv {
   failNext: Partial<Record<"heartbeat" | "claim" | "prompt" | "complete", number>>;
   /** What the engine says the task's state is. */
   taskState: Task["state"];
+  /** The engine hands this attempt's CLI session to a later attempt (`sessionCarriesOn`), as a pause of editing does. */
+  carriesOn?: boolean;
+  /** The engine's words for a refused tool, in the prompt it builds. */
+  refusedTool?: string;
+  /** The engine launches this run with the harness's own tools (`workspace`). */
+  workspace?: boolean;
 }
 
 async function startServer(questionFailures = 0): Promise<Srv> {
@@ -83,7 +90,7 @@ async function startServer(questionFailures = 0): Promise<Srv> {
       return srv.claimGate ? srv.claimGate().then(answer) : answer();
     }
     if (req.method === "GET" && ["/tasks/task_1", "/tasks/resumed"].includes(req.path)) {
-      return send(200, { task: { ...task, id: req.path.split("/").pop(), state: srv.taskState }, events: srv.taskEvents });
+      return send(200, { task: { ...task, id: req.path.split("/").pop(), state: srv.taskState, ...(srv.carriesOn && { sessionCarriesOn: true }) }, events: srv.taskEvents });
     }
     const prompt = /^\/tasks\/([^/]+)\/prompt$/.exec(req.path);
     if (req.method === "GET" && prompt) {
@@ -93,9 +100,10 @@ async function startServer(questionFailures = 0): Promise<Srv> {
       srv.prompts.push({ id: prompt[1]!, ...query });
       const last = srv.taskEvents.filter((e) => e.type === "question" || e.type === "answer").at(-1);
       const resumeSession = !query.fresh && last?.type === "answer" ? srv.session : undefined;
+      const words = { ...(srv.refusedTool && { refusedTool: srv.refusedTool }), ...(srv.workspace && { workspace: true }) };
       return send(200, resumeSession
-        ? { systemPrompt: `SYS ${query.workDir}`, instruction: `The editor answered: "${last!.text}"`, resumeSession }
-        : { systemPrompt: `SYS ${query.workDir}`, instruction: task.instruction });
+        ? { systemPrompt: `SYS ${query.workDir}`, instruction: `The editor answered: "${last!.text}"`, resumeSession, ...words }
+        : { systemPrompt: `SYS ${query.workDir}`, instruction: task.instruction, ...words });
     }
     if (req.method === "POST" && req.path === "/tasks/task_1/events") {
       const store = () => {
@@ -119,7 +127,7 @@ async function startServer(questionFailures = 0): Promise<Srv> {
       res.once("finish", () => srv.events.emit("complete"));
       // The engine keeps the ids of the changes the run's events named, and answers with them.
       const changeIds = srv.taskEvents.flatMap((e) => (e.type === "change" ? [String(e.data?.changeId)] : []));
-      return send(200, { task: { ...task, state: (req.body as { state: string }).state, changeIds } });
+      return send(200, { task: { ...task, state: (req.body as { state: string }).state, changeIds, ...(srv.carriesOn && { sessionCarriesOn: true }) } });
     }
     return false;
   };
@@ -223,7 +231,7 @@ async function claudeHome(): Promise<string> {
 async function claudeRunFiles(cwd: string, home: string): Promise<string> {
   await mkdir(join(cwd, ".scarlet"), { recursive: true });
   await writeFile(join(cwd, ".scarlet", "mcp.json"), "token");
-  const session = claudeProjectDir(await realpath(cwd), home)!;
+  const session = claudeProjectDir(await realpath(cwd), join(home, ".claude"))!;
   await mkdir(session, { recursive: true });
   return session;
 }
@@ -366,7 +374,9 @@ describe("AgentHost", { timeout: 30_000 }, () => {
       runs.push(opts);
       if (runs.length === 1) {
         await writeFile(join(opts.mcp.env.SCARLET_WORKDIR!, "first.otio"), "first attempt");
-        await writeFile(join(opts.cwd, "mcp.json"), "token");
+        await mkdir(join(opts.cwd, ".scarlet"), { recursive: true });
+        await writeFile(join(opts.cwd, ".scarlet", "mcp.json"), "token");
+        await writeFile(join(opts.cwd, ".scarlet", "system.md"), "SYS");
         opts.onEvent({ type: "question", text: "Keep the intro?" });
         return { ok: true, summary: "", question: "Keep the intro?", questionPosted: true, sessionId: "sess-1", usage: { inputTokens: 5, outputTokens: 6, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 } };
       }
@@ -383,8 +393,9 @@ describe("AgentHost", { timeout: 30_000 }, () => {
     expect(srv.server.requests.filter(req => req.path.endsWith("/question"))).toHaveLength(2);
     expect(srv.taskEvents).toEqual([expect.objectContaining({ type: "question", text: "Keep the intro?" })]);
     expect(srv.questions.at(-1)).toEqual({ startedAt: undefined, text: "Keep the intro?", sessionId: "sess-1" });
-    // A paused task keeps its CLI files for the resumed session.
-    expect(await readFile(join(runs[0]!.cwd, "mcp.json"), "utf8")).toBe("token");
+    // The answer may be days away: the file with the engine token goes now, and the resumed run writes it again.
+    await expect(readFile(join(runs[0]!.cwd, ".scarlet", "mcp.json"), "utf8")).rejects.toThrow();
+    expect(await readFile(join(runs[0]!.cwd, ".scarlet", "system.md"), "utf8")).toBe("SYS");
 
     // The editor answers; the server re-queues the task and the host continues the CLI session that asked.
     const completed = once(srv.events, "complete", { signal });
@@ -485,6 +496,102 @@ describe("AgentHost", { timeout: 30_000 }, () => {
     await startHostAndWait(host, once(srv.events, "runnerStarted", { signal }));
     await host.stop();
     expect(srv.completes).toMatchObject([{ state: "cancelled", interrupted: true, summary: "partial" }]);
+  });
+
+  it("asks the editor only a question the run ended on, not one the runner saw refused", async ({ signal }) => {
+    const srv = await startServer();
+    const { host } = makeHost(srv, async (opts) => {
+      // The question was refused for its shape, and the model carried on to finish the edit.
+      opts.onEvent({ type: "question", text: '{"text":"Keep?","options":"yes"}' });
+      return { ok: true, summary: "Kept it." };
+    });
+    await startHostAndWait(host, once(srv.events, "complete", { signal }));
+    expect(srv.questions).toEqual([]);
+    expect(srv.completes).toMatchObject([{ state: "done", summary: "Kept it." }]);
+  });
+
+  it("keeps the CLI session and Codex home of an attempt the engine hands on to the one that resumes it", async ({ signal }) => {
+    const home = await claudeHome();
+    const sessions = () => readdir(join(home, ".claude", "projects"));
+    // The run ends as the engine pauses the project's editing: it says the session carries on, in its answer to the
+    // completion or on the task it cancelled.
+    const end = async (how: "complete" | "cancelled") => {
+      const srv = await startServer();
+      srv.carriesOn = true;
+      let made = { cwd: "", session: "" };
+      const wss = how === "cancelled" ? new WebSocketServer({ host: "127.0.0.1", port: 0 }) : undefined;
+      if (wss) {
+        onTestFinished(() => new Promise<void>((resolve) => wss.close(() => resolve())));
+        await once(wss, "listening", { signal });
+        wss.on("connection", (ws) => srv.events.on("cancel", () => ws.send(JSON.stringify({ type: "task.updated", task: { ...task, state: "cancelled", sessionCarriesOn: true } }))));
+      }
+      const { host } = makeHost(srv, async (opts) => {
+        made = { cwd: opts.cwd, session: await claudeRunFiles(opts.cwd, home) };
+        await mkdir(codexHomeDir(opts.cwd), { recursive: true });
+        if (!wss) return { ok: true, summary: "Paused." };
+        const aborted = once(opts.signal!, "abort");
+        srv.events.emit("runnerStarted");
+        await aborted;
+        return { ok: false, summary: "", aborted: true, error: "cancelled" };
+      }, wss && `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`);
+      await startHostAndWait(host, once(srv.events, wss ? "runnerStarted" : "complete", { signal }));
+      if (wss) srv.events.emit("cancel");
+      await vi.waitFor(() => expect(host.runningTaskIds).toEqual([]), { timeout: 5_000 });
+      return made;
+    };
+    for (const how of ["complete", "cancelled"] as const) {
+      const { cwd, session } = await end(how);
+      // The token still goes; the session and the thread stay for the attempt that carries on in them.
+      expect(await readdir(cwd)).toEqual(["artifacts"]);
+      expect(await sessions()).toContain(basename(session));
+      expect((await readdir(dirname(cwd))).includes(basename(codexHomeDir(cwd)))).toBe(true);
+    }
+  });
+
+  it("hands the runner the engine's words for a refused tool", async ({ signal }) => {
+    const srv = await startServer();
+    srv.refusedTool = "{tool} doesn't run in Scarlet.";
+    const seen: RunAgentOptions[] = [];
+    const { host } = makeHost(srv, async (opts) => {
+      seen.push(opts);
+      return { ok: true, summary: "" };
+    });
+    await startHostAndWait(host, once(srv.events, "complete", { signal }));
+    expect(seen[0]!.refusedTool).toBe("{tool} doesn't run in Scarlet.");
+  });
+
+  it.skipIf(process.platform === "win32")("gives a request's runner its workspace, with launchers for the programs it found, and a side check none", async ({ signal }) => {
+    const bin = await mkdtemp(join(tmpdir(), "scarlet-host-bin-"));
+    onTestFinished(() => rm(bin, { recursive: true, force: true }));
+    await writeFile(join(bin, "ffmpeg"), "#!/bin/sh\n", { mode: 0o755 });
+    for (const workspace of [true, false]) {
+      const srv = await startServer();
+      srv.workspace = workspace;
+      const seen: RunAgentOptions[] = [];
+      const { host } = makeHost(srv, async (opts) => {
+        seen.push(opts);
+        return { ok: true, summary: "" };
+      }, undefined, { env: { PATH: bin, SCARLET_CHROME: "" } });
+      await startHostAndWait(host, once(srv.events, "complete", { signal }));
+      if (!workspace) { expect(seen[0]!.workspace).toBeUndefined(); continue; }
+      const ws = seen[0]!.workspace!;
+      expect(ws.binDir).toBe(join(seen[0]!.cwd, ".tools"));
+      // The ffmpeg on its PATH, by a launcher in the task folder; the folder it lives in is what the shell may read.
+      expect(ws.readDirs).toContain(bin);
+      expect(await readFile(join(ws.binDir!, "ffmpeg"), "utf8")).toBe(`#!/bin/sh\nexec '${join(bin, "ffmpeg")}' "$@"\n`);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("clears the notes of CLIs an earlier launch left as it starts", async ({ signal }) => {
+    const srv = await startServer();
+    srv.queue.length = 0;
+    const root = await mkdtemp(join(tmpdir(), "scarlet-host-pids-"));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    await mkdir(join(root, "agent-pids"), { recursive: true });
+    // A CLI the earlier launch noted, long gone.
+    await writeFile(join(root, "agent-pids", "999999"), "/usr/local/bin/claude\nMon Jan  1 00:00:00 2001\n999998\nnode\nMon Jan  1 00:00:00 2001");
+    await startHostAndWait(makeHost(srv, async () => ({ ok: true, summary: "" }), undefined, { workRoot: root }).host, once(srv.events, "claim", { signal }));
+    expect(await readdir(join(root, "agent-pids"))).toEqual([]);
   });
 
   it("posts a run's events one at a time, in the order written, and completes only after the last has landed", async ({ signal }) => {
@@ -724,6 +831,7 @@ describe("AgentHost when a run or the engine misbehaves", { timeout: 30_000 }, (
   it("hands back a task it claimed while shutting down, and logs it when the engine refuses", async ({ signal }) => {
     const stopDuringClaim = async (refuse: boolean) => {
       const srv = await startServer();
+      srv.queue[0]!.startedAt = "2026-04-01T12:00:00.000Z";
       const release = new AbortController();
       if (refuse) srv.failNext.complete = 503;
       const { lines, log } = logging();
@@ -756,7 +864,8 @@ describe("AgentHost when a run or the engine misbehaves", { timeout: 30_000 }, (
       return { srv, lines };
     };
     const handed = await stopDuringClaim(false);
-    expect(handed.srv.completes).toEqual([{ state: "cancelled", interrupted: true }]);
+    // Tied to the attempt it claimed, so a later claim of the task can't be ended by it.
+    expect(handed.srv.completes).toEqual([{ state: "cancelled", interrupted: true, ifStartedAt: "2026-04-01T12:00:00.000Z" }]);
     expect(handed.lines.filter((line) => line.includes("hand back"))).toEqual([]);
 
     const refused = await stopDuringClaim(true);
@@ -941,49 +1050,64 @@ describe("pruneTaskDirs", () => {
     const [first, old, recent] = [join(tasks, "first"), join(tasks, "old"), join(tasks, "recent")];
     const now = Date.now();
     const daysAgo = (days: number) => new Date(now - days * 86_400_000);
+    const claude = join(home, ".claude");
     for (const [dir, days] of [[first, 20], [old, 12], [recent, 2]] as const) {
-      await mkdir(claudeProjectDir(dir, home)!, { recursive: true });
+      await mkdir(claudeProjectDir(dir, claude)!, { recursive: true });
       await mkdir(join(dir, "artifacts"), { recursive: true });
       for (const p of [dir, join(dir, "artifacts")]) await utimes(p, daysAgo(days), daysAgo(days));
     }
     const sessions = async () => (await readdir(join(home, ".claude", "projects"))).sort();
-    const sessionsOf = (...dirs: string[]) => dirs.map((dir) => basename(claudeProjectDir(dir, home)!)).sort();
-    // Told no home, as when Claude Code keeps its files elsewhere, it leaves every session where it is.
+    const sessionsOf = (...dirs: string[]) => dirs.map((dir) => basename(claudeProjectDir(dir, claude)!)).sort();
+    // Told no folder, it leaves every session where it is.
     await pruneTaskDirs(root, now);
     expect((await readdir(tasks)).sort()).toEqual(["old", "recent"]);
     expect(await sessions()).toEqual(sessionsOf(first, old, recent));
     // Five days on, the second folder is old too. Its sessions go with it, and the recent folder keeps its own.
-    await pruneTaskDirs(root, now + 5 * 86_400_000, home);
+    await pruneTaskDirs(root, now + 5 * 86_400_000, claude);
     expect(await readdir(tasks)).toEqual(["recent"]);
     expect(await sessions()).toEqual(sessionsOf(first, recent));
   });
 
-  it("is given the user's home when the host starts, and none when Claude Code keeps its files elsewhere", async ({ signal }) => {
+  it("is told where Claude Code keeps its files when the host starts: the home, or CLAUDE_CONFIG_DIR", async ({ signal }) => {
     const home = await claudeHome();
-    // A host started over one old task folder, whose run was cut short and left its session in the home.
-    const startOver = async (env?: NodeJS.ProcessEnv) => {
+    // A host started over one old task folder, whose run was cut short and left its session behind.
+    const startOver = async (claude: string, env?: NodeJS.ProcessEnv) => {
       const root = await realpath(await mkdtemp(join(tmpdir(), "scarlet-prune-")));
       onTestFinished(() => rm(root, { recursive: true, force: true }));
       const old = join(root, "tasks-v2", "old");
       await mkdir(old, { recursive: true });
       await utimes(old, new Date(Date.now() - 20 * 86_400_000), new Date(Date.now() - 20 * 86_400_000));
-      await mkdir(claudeProjectDir(old, home)!, { recursive: true });
+      await mkdir(claudeProjectDir(old, claude)!, { recursive: true });
       const srv = await startServer();
       srv.queue.length = 0;
       // The host prunes before it registers, so by its first claim it is done.
       await startHostAndWait(makeHost(srv, async () => ({ ok: true, summary: "" }), undefined, { workRoot: root, env }).host, once(srv.events, "claim", { signal }));
-      return { folders: await readdir(join(root, "tasks-v2")), session: basename(claudeProjectDir(old, home)!) };
+      return { folders: await readdir(join(root, "tasks-v2")), sessions: await readdir(join(claude, "projects")) };
     };
-    const sessions = () => readdir(join(home, ".claude", "projects"));
+    expect(await startOver(join(home, ".claude"))).toEqual({ folders: [], sessions: [] });
+    // CLAUDE_CONFIG_DIR moves Claude Code's files out of the home: its sessions are there, and go from there.
+    const config = join(home, "claude-config");
+    expect(await startOver(config, { ...process.env, CLAUDE_CONFIG_DIR: config })).toEqual({ folders: [], sessions: [] });
+    expect(claudeConfigDir({ CLAUDE_CONFIG_DIR: config }, home)).toBe(config);
+    expect(claudeConfigDir({}, home)).toBe(join(home, ".claude"));
+    // A relative one is read from each run's own folder: nothing the host can name.
+    expect(claudeConfigDir({ CLAUDE_CONFIG_DIR: "claude" }, home)).toBeUndefined();
+  });
 
-    const plain = await startOver();
-    expect(plain.folders).toEqual([]);
-    expect(await sessions()).toEqual([]);
-
-    // CLAUDE_CONFIG_DIR moves Claude Code's files out of the home, so nothing there is the run's to remove.
-    const elsewhere = await startOver({ ...process.env, CLAUDE_CONFIG_DIR: join(home, "claude-config") });
-    expect(elsewhere.folders).toEqual([]);
-    expect(await sessions()).toEqual([elsewhere.session]);
+  it("removes a finished run's session from CLAUDE_CONFIG_DIR", async ({ signal }) => {
+    const home = await claudeHome();
+    const config = join(home, "claude-config");
+    const srv = await startServer();
+    let cwd = "";
+    const { host } = makeHost(srv, async (opts) => {
+      cwd = opts.cwd;
+      await mkdir(claudeProjectDir(await realpath(opts.cwd), config)!, { recursive: true });
+      return { ok: true, summary: "Done." };
+    }, undefined, { env: { ...process.env, CLAUDE_CONFIG_DIR: config } });
+    await startHostAndWait(host, once(srv.events, "complete", { signal }));
+    await vi.waitFor(() => expect(host.runningTaskIds).toEqual([]), { timeout: 5_000 });
+    expect(await readdir(cwd)).toEqual(["artifacts"]);
+    expect(await readdir(join(config, "projects"))).toEqual([]);
   });
 });
 
@@ -993,27 +1117,58 @@ describe("removeClaudeSessions", () => {
     onTestFinished(() => rm(home, { recursive: true, force: true }));
     // Escaping checked against Claude Code 2.1.316: real path, every non-alphanumeric character as "-".
     const cwd = "/Users/me/Library/Application Support/com.forwardfuture.scarlet/work/tasks-v2/ab12";
-    expect(claudeProjectDir(cwd, home)).toBe(join(home, ".claude", "projects", "-Users-me-Library-Application-Support-com-forwardfuture-scarlet-work-tasks-v2-ab12"));
-    expect(claudeProjectDir("/" + "x".repeat(250), home)).toBeUndefined();
+    const claude = join(home, ".claude");
+    expect(claudeProjectDir(cwd, claude)).toBe(join(home, ".claude", "projects", "-Users-me-Library-Application-Support-com-forwardfuture-scarlet-work-tasks-v2-ab12"));
+    expect(claudeProjectDir("/" + "x".repeat(250), claude)).toBeUndefined();
     const projects = join(home, ".claude", "projects");
     for (const name of ["-Users-me-Library-Application-Support-com-forwardfuture-scarlet-work-tasks-v2-ab12", "-Users-me-Library-Application-Support-com-forwardfuture-scarlet-work-tasks-v2-cd34", "-Users-me-project"]) {
       await mkdir(join(projects, name), { recursive: true });
     }
     // Claude Code 2.1.316 keeps a session's to-do list apart from its transcript, in ~/.claude/tasks/<session id>.
     const [run, other] = ["3f1c2b9e-0000-4000-8000-000000000000", "9a8b7c6d-1111-4000-8000-000000000000"];
-    await writeFile(join(claudeProjectDir(cwd, home)!, `${run}.jsonl`), "{}");
+    await writeFile(join(claudeProjectDir(cwd, claude)!, `${run}.jsonl`), "{}");
     await writeFile(join(projects, "-Users-me-project", `${other}.jsonl`), "{}");
     // Two files in the task's project folder that are no session. Read as an id, the second would name ~/.claude.
-    for (const stray of ["notes.jsonl", "...jsonl"]) await writeFile(join(claudeProjectDir(cwd, home)!, stray), "{}");
+    for (const stray of ["notes.jsonl", "...jsonl"]) await writeFile(join(claudeProjectDir(cwd, claude)!, stray), "{}");
     const lists = join(home, ".claude", "tasks");
     for (const list of [run, other, "notes"]) {
       await mkdir(join(lists, list), { recursive: true });
       await writeFile(join(lists, list, "1.json"), "{}");
     }
-    await removeClaudeSessions("/Users/me/project", home); // not a task folder
-    await removeClaudeSessions(cwd, home);
+    await removeClaudeSessions("/Users/me/project", claude); // not a task folder
+    await removeClaudeSessions(cwd, claude);
     expect((await readdir(projects)).sort()).toEqual(["-Users-me-Library-Application-Support-com-forwardfuture-scarlet-work-tasks-v2-cd34", "-Users-me-project"]);
     // The run's list goes with its session. Another session's stays, and so does a folder that isn't named by a session id.
     expect((await readdir(lists)).sort()).toEqual([other, "notes"]);
+  });
+
+  it("finds a long path's session folder, which Claude Code names by its first 200 characters and a hash, by the cwd its sessions ran in", async () => {
+    const home = await mkdtemp(join(tmpdir(), "scarlet-home-"));
+    onTestFinished(() => rm(home, { recursive: true, force: true }));
+    const claude = join(home, ".claude");
+    // Two task folders under a long work root share their first 200 characters.
+    const root = `/Users/me/${"deep/".repeat(40)}work/tasks-v2`;
+    const [cwd, other] = [`${root}/ab12`, `${root}/cd34`];
+    const prefix = cwd.replace(/[^a-zA-Z0-9]/g, "-").slice(0, 200);
+    expect(other.replace(/[^a-zA-Z0-9]/g, "-").slice(0, 200)).toBe(prefix);
+    const session = (dir: string, ranIn: string) => writeFile(join(dir, "3f1c2b9e-0000-4000-8000-000000000000.jsonl"),
+      `${JSON.stringify({ type: "summary", summary: "x" })}\n${JSON.stringify({ type: "user", cwd: ranIn, message: {} })}\n`);
+    const [mine, theirs] = [join(claude, "projects", `${prefix}-1k2j3h`), join(claude, "projects", `${prefix}-9z8y7x`)];
+    for (const dir of [mine, theirs, join(claude, "projects", `${prefix}-notahash.md`)]) await mkdir(dir, { recursive: true });
+    await session(mine, cwd);
+    await session(theirs, other);
+    expect(await claudeProjectDirs(cwd, claude)).toEqual([mine]);
+    await removeClaudeSessions(cwd, claude);
+    expect((await readdir(join(claude, "projects"))).sort()).toEqual([`${prefix}-9z8y7x`, `${prefix}-notahash.md`]);
+  });
+
+  it("removes the sessions of an older one-shot run's folder", async () => {
+    const home = await mkdtemp(join(tmpdir(), "scarlet-home-"));
+    onTestFinished(() => rm(home, { recursive: true, force: true }));
+    const claude = join(home, ".claude");
+    const oneshot = "/Users/me/.scarlet/work/oneshot-Ab3dE9";
+    await mkdir(claudeProjectDir(oneshot, claude)!, { recursive: true });
+    await removeClaudeSessions(oneshot, claude);
+    expect(await readdir(join(claude, "projects"))).toEqual([]);
   });
 });

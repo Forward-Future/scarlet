@@ -5,13 +5,15 @@ import { clipRange, intervalCandidates, timelineDuration, type Change, type Clip
  * - `cut` took footage out, `restore` put footage back in.
  * - `audio` changed only sound (levels, room tone, a swapped dialogue track).
  * - `zoom` and `reframe` moved or scaled the picture.
- * - `text` added or changed captions and titles, `overlay` laid b-roll or images over the picture.
+ * - `text` added or changed captions and titles.
+ * - `broll` laid footage, or a picture taken from the web, over the picture: B-roll.
+ * - `overlay` laid anything else over the picture (a logo or a lower third from a file, a colour card), or B-roll mixed with it.
  * - `graphic` laid a graphic Scarlet made (a lower third, a title card) over the picture: a clip whose file is a graphic.
  * - `speed` changed how fast footage plays.
  * - `transition` set how the picture moves from one clip to the next at a join (a swipe, a dissolve, a dip).
  * - `other` did several of these at once, or something else (an assembly, a sync).
  */
-export type EditKind = "cut" | "restore" | "audio" | "zoom" | "reframe" | "text" | "overlay" | "graphic" | "speed" | "transition" | "other";
+export type EditKind = "cut" | "restore" | "audio" | "zoom" | "reframe" | "text" | "broll" | "overlay" | "graphic" | "speed" | "transition" | "other";
 
 type Op = Record<string, unknown>;
 /**
@@ -40,14 +42,20 @@ const TOUCH = 0.05;
 interface Clocks {
   before?: Timeline;
   after?: Timeline;
-  /** The project's files, so a clip laid over the picture can be told for a graphic by what its file is. */
-  media?: readonly Pick<MediaAsset, "id" | "kind">[];
+  /** The project's files, so a clip laid over the picture can be told for a graphic or for B-roll by what its file is. */
+  media?: readonly Pick<MediaAsset, "id" | "kind" | "source">[];
 }
 
-/** Whether a file is a graphic, from the project's files. Without them, nothing is. */
-function graphicFiles(media: Clocks["media"]) {
-  const ids = new Set(media?.filter(m => m.kind === "graphic").map(m => m.id));
-  return (clip: Clip) => clip.kind === "media" && ids.has(clip.mediaId);
+/**
+ * What a clip laid over the picture is, from the project's files: a graphic Scarlet made, B-roll (footage, or a picture
+ * taken from the web) or another overlay. Without the files, an overlay.
+ */
+function laidFiles(media: Clocks["media"]) {
+  const files = new Map(media?.map(m => [m.id, m]));
+  return (clip: Clip): "graphic" | "broll" | "overlay" => {
+    const file = clip.kind === "media" ? files.get(clip.mediaId) : undefined;
+    return file?.kind === "graphic" ? "graphic" : file && (file.kind === "video" || file.source) ? "broll" : "overlay";
+  };
 }
 
 function clipFinder(timeline: Timeline | undefined, batch: boolean) {
@@ -87,7 +95,7 @@ function settled(time: number, later: Op[]): number {
 
 /** Each op's facet, and where it lands on the finished cut when that can be told. */
 function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
-  const isGraphic = graphicFiles(media);
+  const laid = laidFiles(media);
   const ops = (change.ops ?? []) as Op[];
   const beforeClip = clipFinder(before, ops.length > 1);
   const afterClip = before === after ? beforeClip : clipFinder(after, ops.length > 1);
@@ -107,7 +115,7 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
     if (kind === "audio") return "audio";
     if (kind === "caption") return "text";
     if (kind !== "video") return "neutral";
-    return trackId === baseVideo ? "picture" : isGraphic(clip) ? "graphic" : "overlay";
+    return trackId === baseVideo ? "picture" : laid(clip);
   };
   const range = (clip: Clip | undefined) => {
     if (!clip) return;
@@ -146,7 +154,7 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
           if (AUDIO_KEYS.has(key)) return { facet: "audio" as const, range: at };
           if (FRAMING_KEYS.has(key)) return { facet: "framing" as const, range: at };
           if (TEXT_KEYS.has(key)) return { facet: "text" as const, range: at };
-          if (OVERLAY_KEYS.has(key)) return { facet: found && isGraphic(found.clip) ? "graphic" as const : "overlay" as const, range: at };
+          if (OVERLAY_KEYS.has(key)) return { facet: found && found.track.id !== baseVideo ? laid(found.clip) : "overlay" as const, range: at };
           if (key === "speed") return { facet: "speed" as const, range: at };
           // A transition is at its join, the clip's start, not along the clip.
           if (key === "transitionIn") return { facet: "transition" as const, range: found ? { start: found.clip.timelineIn, end: found.clip.timelineIn } : at };
@@ -200,9 +208,12 @@ function decide(facets: Facet[], framing: "zoom" | "reframe", { before, after }:
   // A cut can carry the trims and room tone that smooth its join; it is still a cut.
   if (set.has("cut") && !set.has("restore")) return "cut";
   if (set.has("restore") && !set.has("cut")) return "restore";
-  // A graphic laid over the picture is a graphic, with or without sound. Laid with b-roll, it is one of the overlays.
+  // A graphic laid over the picture is a graphic, and B-roll is B-roll, with or without sound. Laid together, or with
+  // another overlay, they are overlays.
   if (set.has("graphic") && [...set].every(f => f === "graphic" || f === "audio")) return "graphic";
-  if ((set.has("overlay") || set.has("graphic")) && [...set].every(f => f === "overlay" || f === "graphic" || f === "audio")) return "overlay";
+  if (set.has("broll") && [...set].every(f => f === "broll" || f === "audio")) return "broll";
+  const laidOver = (f: Facet) => f === "overlay" || f === "broll" || f === "graphic" || f === "audio";
+  if ((set.has("overlay") || set.has("broll") || set.has("graphic")) && [...set].every(laidOver)) return "overlay";
   if (set.size === 0) {
     // Only neutral steps: a removed or re-timed clip. Whether the cut got shorter or longer says which it was.
     const moved = lengths();

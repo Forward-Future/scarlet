@@ -51,6 +51,19 @@ describe("leftOutJoins", () => {
     expect(leftOutJoins(next, next)).toBeNull();
   });
 
+  it("finds nothing left out by a screen and an inset laid over a camera already cut where they join", () => {
+    // The camera is cut first. The demo then lays the screen and a camera inset over it, piece by piece, following those
+    // cuts: the screen recorded with the camera skips the same stretches, and nothing more comes out.
+    const cut = screenAndCamera([[10, 20], [25, 40], [60, 70]], { offset: 0 });
+    const camera = cut.tracks[2]!;
+    const before: Timeline = { ...cut, tracks: [cut.tracks[1]!, camera] };
+    const inset = { ...camera, id: "inset", clips: camera.clips.map(c => ({ ...c, id: `${c.id}_inset` })) };
+    const framed: Timeline = { ...cut, tracks: [cut.tracks[1]!, camera, cut.tracks[0]!, inset] };
+    expect(leftOutJoins(before, framed)).toBeNull();
+    // Without the camera's cuts there before, the same pieces left the footage between them out.
+    expect(leftOutJoins(empty, framed)!.joins.map(j => j.at)).toEqual([0, 10, 25]);
+  });
+
   it("opens the join on a track that plays through it or has nothing there", () => {
     // The screen comes in at the third piece, and a title holds across the first join.
     const built = screenAndCamera([[0, 10], [14, 20], [30, 40]], { screenFrom: 2, offset: 0 });

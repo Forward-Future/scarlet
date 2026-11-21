@@ -45,6 +45,23 @@ const LOWER_THIRD = `<!doctype html><html><head><style>html,body{margin:0;width:
 .lt{position:absolute;left:8%;bottom:12%;padding:2% 3%;background:#c81e3c;color:#fff;font:bold 14px sans-serif;animation:in .4s both}
 @keyframes in{from{opacity:0;transform:translateY(40%)}}</style></head><body><div class="lt">{{Name}}<br><small>{{Title}}</small></div></body></html>`;
 
+describe("pages from the web", () => {
+  it("captures only public pages on the web, never a file or the machine's own network", async () => {
+    for (const url of ["file:///etc/passwd", "http://localhost:4317/api/projects", "http://127.0.0.1:9", "http://10.0.0.8/", "http://[::1]/",
+      "http://192.168.1.20/admin", "http://169.254.169.254/latest", "chrome://settings", "javascript:alert(1)", "not a url", "http://printer.local/"]) {
+      const res = await api("POST", `/projects/${project.id}/web-captures`, { url });
+      expect([res.status, (await res.json() as { error: { code: string } }).error.code], url).toEqual([400, "bad_url"]);
+    }
+  });
+
+  it.skipIf(!hasChrome() || !process.env.SCARLET_TEST_WEB)("draws a public page, with its title and words", async () => {
+    const res = await api("POST", `/projects/${project.id}/web-captures`, { url: "https://example.com", width: 800, height: 600 });
+    expect(res.status).toBe(200);
+    const shot = await res.json() as { png: string; title: string; width: number; height: number };
+    expect([shot.title, shot.width, shot.height, Buffer.from(shot.png, "base64").subarray(1, 4).toString()]).toEqual(["Example Domain", 800, 600, "PNG"]);
+  });
+});
+
 describe("attachments", () => {
   it("copies in a file the desktop app names by its path", async () => {
     const dir = mkdtempSync(join(tmpdir(), "att-"));

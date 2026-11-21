@@ -38,21 +38,6 @@ function removeRows(ctx: Ctx, id: string) {
   ctx.repos.projects.remove(id);
 }
 
-/**
- * Remove projects the editor never saw, with their files, without passing through the Trash: the shorts of a Make
- * shorts that failed part-way. Nothing was started in them, so there is nothing to wait for.
- */
-export function discardProjects(ctx: Ctx, ids: string[], why: string): Promise<void> {
-  const removed = ctx.db.transaction(() => ids.filter(id => {
-    if (!ctx.db.prepare("SELECT 1 FROM projects WHERE id = ?").get(id)) return false;
-    checkedProjectDir(ctx, id);
-    removeRows(ctx, id);
-    return true;
-  }), "immediate")();
-  if (removed.length) ctx.log(`[trash] removed ${removed.length} ${removed.length === 1 ? "project" : "projects"} at once, ${why}: ${removed.join(", ")}`);
-  return finishPurges(ctx);
-}
-
 /** Folders being deleted now, so two sweeps never delete the same one at once. */
 const deleting = new Map<string, Promise<void>>();
 

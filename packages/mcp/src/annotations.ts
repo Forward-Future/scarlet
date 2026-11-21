@@ -21,7 +21,11 @@ const READ_TOOLS = new Set<string>([
   "screen_text", "screen_reading", "screen_motion", "faces", "lip_sync", "graphic_get", "attachment_read",
 ]);
 
+/** A page from the web: it changes nothing in the project, and what it reads is the open web. */
+const fromWeb: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+
 /** Add new read-only tools to READ_TOOLS; anything else is treated as a write. */
 export function toolAnnotations(name: ScarletToolName | string): ToolAnnotations {
+  if (name === "web_capture") return fromWeb;
   return READ_TOOLS.has(name) ? read : write;
 }

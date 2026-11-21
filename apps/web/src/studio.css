@@ -453,11 +453,62 @@
 }
 .about-changelog, .about-telemetry { min-width: 0; padding: 20px; }
 .about-changelog h2, .about-telemetry h2 { font-size: 17px; line-height: 1.25; font-weight: 600; letter-spacing: -.02em; }
-.about-release-day h3 { margin: 14px 0 4px; font-size: 12px; font-weight: 500; color: var(--color-dim); }
-.about-release-day ul { list-style: disc; padding-inline-start: 15px; }
-.about-release-day li { padding-block: 9px; color: var(--color-muted); line-height: 1.55; }
-.about-release-day li::marker { color: var(--color-dim); }
-.about-release-day li + li { border-top: 1px solid var(--color-line); }
+.about-changelog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 12px;
+}
+.about-changelog-date { font-size: 12px; font-weight: 500; color: var(--color-dim); }
+.about-change-list { display: grid; gap: 10px; list-style: disc; padding-inline-start: 16px; }
+.about-change-list li { color: var(--color-muted); line-height: 1.5; }
+.about-change-list li::marker { color: var(--color-dim); }
+.about-changelog-more {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-muted);
+  text-decoration: underline;
+  text-decoration-color: var(--color-line);
+  text-underline-offset: 3px;
+}
+.about-changelog-more:hover { color: var(--color-fg); text-decoration-color: var(--color-dim); }
+.about-changelog .about-disclosure { margin-top: 14px; }
+.about-earlier-days { display: grid; margin: 10px 0 -6px; }
+.about-release-day + .about-release-day { border-top: 1px solid var(--color-line); }
+.about-release-day > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  margin-inline: -6px;
+  padding: 0 6px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  color: var(--color-muted);
+  list-style: none;
+  cursor: pointer;
+}
+.about-release-day > summary::-webkit-details-marker { display: none; }
+.about-release-day > summary:hover { color: var(--color-fg); background: var(--color-raised); }
+.about-release-date { font-weight: 500; }
+.about-release-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--color-dim);
+  font-variant-numeric: tabular-nums;
+}
+.about-release-day > summary svg { flex: none; }
+.about-release-day[open] > summary { color: var(--color-fg); }
+.about-release-day[open] > summary svg { transform: rotate(90deg); }
+.about-release-day .about-change-list { margin: 6px 0 12px; }
 .about-telemetry { color: var(--color-muted); line-height: 1.55; overflow-wrap: anywhere; }
 .about-telemetry h2 { color: var(--color-fg); margin-bottom: 12px; }
 .about-telemetry-toggle {
@@ -599,13 +650,6 @@
 .skill-details > .skill-version-text [data-changed] { box-shadow: none; }
 .skill-version-text ins { text-decoration: none; border-radius: 2px; background: rgb(126 212 179 / 16%); }
 .skill-version-text del { color: var(--color-bad); text-decoration-color: rgb(255 160 156 / 70%); opacity: .8; }
-.version-row {
-  padding: 10px 12px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-panel);
-}
-.version-row:hover { border-color: #555; }
 
 @media (max-width: 767px) {
   .skill-editor-toolbar > .preference-select.compact { max-width: 160px; }
@@ -652,21 +696,7 @@
 .preference-options .preference-more { margin-top: 4px; border-top: 1px solid var(--color-line); border-radius: 0 0 6px 6px; color: var(--color-muted); font-size: 12.5px; }
 .preference-options [data-active="true"] { background: var(--color-raised); }
 
-/* Each edit a version made, such as every cut of a dialogue pass, with its revisions. */
-.version-edits { display: grid; gap: 4px; font-size: 12.5px; }
-.version-edits-head { font-size: 11.5px; color: var(--color-dim); }
-.version-edits ol { display: grid; }
-.version-edits li { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 5px 0;
-  border-top: 1px solid var(--color-line); }
-.version-edit-time { font: 11px var(--font-mono); color: var(--color-dim); font-variant-numeric: tabular-nums; }
-.version-edit-label { color: var(--color-fg); overflow-wrap: anywhere; }
-.version-edit-label small { display: block; margin-top: 2px; font-size: 11.5px; color: var(--color-muted); }
-.version-edit-value { color: var(--color-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* The full history's entries keep one colour. A small mark before the words says which were approved, put back or went wrong. */
-.history-mark { display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; vertical-align: 0.14em; }
 .import-transcription-notice .simple-link { font-size: inherit; color: var(--color-fg); }
-/* A short sits under the video it was made from, set in from it. */
-.list .project-card.is-short { margin-left: 44px; }
 
 /* The files a new project will import, one row each, each with its own ×. */
 /* Names start on the label's and button's edge, and each × ends on the name field's: the hover fill reaches past both. */

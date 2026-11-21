@@ -1,4 +1,4 @@
-import { agentCapabilities, isAsideTask, SIDE_CHECK_KINDS, isLearningCheck, isProjectEditTask, PROJECT_EDIT_TASK_KINDS, isSkillEdit, planText, queueBlocker, type QueueChange, reviewItemPath, splitAgentTarget, TaskPlan, dialogueCommand, skillCommands, taskDialogueOperation, taskRunKind } from "@scarlet/shared";
+import { agentCapabilities, workspaceCapabilities, isAsideTask, SIDE_CHECK_KINDS, isLearningCheck, isProjectEditTask, PROJECT_EDIT_TASK_KINDS, isSkillEdit, planText, queueBlocker, type QueueChange, reviewItemPath, splitAgentTarget, TaskPlan, dialogueCommand, skillCommands, taskDialogueOperation, taskRunKind } from "@scarlet/shared";
 import { AgentId, type AgentHost, type CompleteTaskRequest, type Task, type TaskEvent, type TaskKind, type TaskPrompt, type User } from "@scarlet/shared";
 import { buildSystemPrompt } from "@scarlet/mcp/prompt";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ import { applyChoicesWhenDone, changeDiff, cutRevisionReference, passToRevise, r
 import { resolveTimeline } from "./timeline.js";
 import { runAttemptIds } from "./runAttempts.js";
 import { learningCheckContext, skillEditEnded, startLearningCheck } from "./learnings.js";
+import { recoveryInstruction } from "./taskRecovery.js";
 
 /** States a task never leaves. */
 export const FINISHED_TASK: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
@@ -25,6 +26,8 @@ const queueLogs = new WeakMap<Ctx, ReturnType<typeof throttledLog>>();
 /** Requests that can edit a project's video. */
 export const PROJECT_EDIT_KINDS = `(${PROJECT_EDIT_TASK_KINDS.map(kind => `'${kind}'`).join(",")})`;
 const SIDE_CHECKS = `(${SIDE_CHECK_KINDS.map(kind => `'${kind}'`).join(",")})`;
+/** What a pause of the project's editing holds back: its requests, and the reads of them for a rule, which run on Resume. */
+const HELD_WHILE_PAUSED = `(${[...PROJECT_EDIT_TASK_KINDS, "learning_check"].map(kind => `'${kind}'`).join(",")})`;
 
 /** The recording has a saved transcript. */
 export function hasTranscript(ctx: Ctx, mediaId: string): boolean {
@@ -118,6 +121,8 @@ export function createTask(
     resumesAfterProjectStop?: boolean;
     stagedCutRevision?: boolean;
     cutConflict?: Task["cutConflict"];
+    /** Words already read for a rule when the editor first sent them: a Retry or Resume of a request isn't read again. */
+    wordsRead?: boolean;
   },
 ): Task {
   // "api" names the engine's own jobs, such as transcription. No host claims an editor's request for it.
@@ -158,7 +163,7 @@ export function createTask(
     ` in ${task.projectId}${task.context.threadId !== task.id ? `, thread ${task.context.threadId}` : ""}${task.resumeRootId ? `, resuming ${task.resumeRootId}` : ""}`);
   // What the editor said is read for a standing rule now, beside the request, so a rule reaches Learnings in seconds
   // and whether or not the request finishes.
-  startLearningCheck(ctx, task);
+  if (!input.wordsRead) startLearningCheck(ctx, task);
   return task;
 }
 
@@ -262,15 +267,24 @@ export function isDialoguePass(task: Task) {
     taskDialogueOperation(task) === "first-cut";
 }
 
+/**
+ * How many times in all a pass goes back for its closing check before it stops and waits for the editor's Resume. A
+ * guard on what an unattended loop can cost, not an editorial threshold: a check that fixed one finding and made
+ * another went back again and again, each time in a fresh session that cost about 2M tokens on Codex.
+ */
+export const MOST_CLOSING_CHECKS = 4;
+
 /** A pass that ends with outstanding findings on the version that plays runs again, as the same request, to resolve them. */
 export function queueRepeatCheck(ctx: Ctx, task: Task, version: string, changeIds = task.changeIds) {
   const receipt = task.repeatAudit?.version === version ? task.repeatAudit : undefined;
-  const closed = recordWorkThrough(task, now());
+  const queuedAt = now();
+  const closed = recordWorkThrough(task, queuedAt);
   // A previously finished pass may predate the persisted clock. Its latest claim is still measurable.
   const workedMs = closed.workedMs ?? pausedWork(ctx, task) ?? (task.startedAt && task.finishedAt
     ? Math.max(0, Date.parse(task.finishedAt) - Date.parse(task.startedAt)) : undefined);
   const queued = saveTask(ctx, { ...closed, workedMs, changeIds, state: "queued", hostId: null, session: undefined, finishedAt: undefined, error: undefined,
-    repeatAudit: { ...receipt, version, noFindings: undefined, failed: undefined, returns: (receipt?.returns ?? 0) + 1 } });
+    repeatAudit: { ...receipt, version, noFindings: undefined, failed: undefined, returns: (receipt?.returns ?? 0) + 1,
+      totalReturns: (task.repeatAudit?.totalReturns ?? 0) + 1, queuedAt } });
   ctx.db.afterCommit(() => ctx.log(`[task] repeat_check task=${logId(task.id)} project=${logId(task.projectId)} outcome=queued attempt=${queued.repeatAudit!.returns}`));
   ctx.bus.taskQueued({ taskId: task.id, projectId: task.projectId });
   return queued;
@@ -339,9 +353,9 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
       const plays = timeline.tracks.some(t => !t.muted && t.clips.some(c => c.kind === "media" && c.enabled && c.volume > 0 && audible.has(c.mediaId)));
       const receipt = task.repeatAudit?.version === project.head ? task.repeatAudit : undefined;
       if (plays && (receipt?.remaining !== 0 || receipt.unavailable?.length)) {
-        if (receipt?.unavailable?.length || (receipt?.returns ?? 0) >= 2) {
+        if (receipt?.unavailable?.length || (receipt?.returns ?? 0) >= 2 || (task.repeatAudit?.totalReturns ?? 0) >= MOST_CLOSING_CHECKS) {
           body = { ...body, state: "failed", interrupted: true, error: receipt?.unavailable?.join(" ") ||
-            "The final audio check still has repeats, silences or divided sentences to resolve. Resume to finish checking the saved edit." };
+            "The final check still has repeats, silences, divided sentences or pictures to resolve. Resume to finish checking the saved edit." };
         } else {
           // The pass's closing words are kept for the editor while the check runs: the check's own are about the check.
           const reply = task.reply ?? (body.summary?.trim() || undefined);
@@ -387,6 +401,7 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
     ...(body.state === "failed" && body.interrupted ? { interrupted: true } : {}),
   });
   recordTaskFinished(ctx, saved);
+  dropWaitingLooks(ctx, saved);
   const ran = since(saved.startedAt, Date.parse(saved.finishedAt!));
   ctx.db.afterCommit(() => {
     ctx.log(`[task] ${saved.id} ${saved.state}${ran ? ` after ${ran}` : ""}${body.error ? `: ${clip(body.error, 400)}` : ""}` +
@@ -421,36 +436,71 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
   return saved;
 }
 
-export function cancelTask(ctx: Ctx, task: Task): Task {
+/** The side checks of one kind a request started that haven't finished. */
+function openChecks(ctx: Ctx, task: Task, kind: "learning_check" | "area_check"): Task[] {
+  if (!editsDialogue(task.kind)) return [];
+  return ctx.repos.tasks.select("project_id = ? AND kind = ? AND json_extract(json, '$.context.checksTaskId') = ?", [task.projectId, kind, task.id])
+    .filter(check => !FINISHED_TASK.has(check.state));
+}
+
+/**
+ * A request that has ended leaves no look at a frame waiting to start: none would serve it, and a look left waiting
+ * would hold back the next request's asks about the same recording. One already looking finishes, since what it finds
+ * is kept for the recording.
+ */
+export function dropWaitingLooks(ctx: Ctx, task: Task): void {
+  for (const check of openChecks(ctx, task, "area_check")) if (check.state === "queued") cancelTask(ctx, check);
+}
+
+/**
+ * `withdrawn`: the editor took the request's words back with ⌘Z, while it waited or ran. Stop this edit is not that:
+ * it ends a run, and what the editor said still stands.
+ */
+export function cancelTask(ctx: Ctx, task: Task, opts: { withdrawn?: boolean } = {}): Task {
   if (FINISHED_TASK.has(task.state)) return task;
   const finishedAt = now();
   const closed = recordWorkThrough(task, finishedAt);
   const saved = saveTask(ctx, { ...closed, workedMs: closed.workedMs ?? pausedWork(ctx, task), state: "cancelled", finishedAt });
   recordTaskFinished(ctx, saved);
   const ran = since(task.startedAt, Date.parse(saved.finishedAt!));
-  ctx.log(`[task] ${task.id} cancelled while ${task.state}${ran ? ` after ${ran}` : ""}`);
+  ctx.log(`[task] ${task.id} cancelled while ${task.state}${ran ? ` after ${ran}` : ""}${opts.withdrawn ? ", withdrawn" : ""}`);
   ctx.db.afterCommit(() => ctx.transcriptions.get(task.id)?.controller.abort());
   skillEditEnded(ctx, saved);
-  // A request taken back before it started is words withdrawn, as reworded ones are: a check still reading them stops.
-  if (task.state === "queued" && task.kind !== "learning_check") {
-    for (const check of ctx.repos.tasks.select("project_id = ? AND kind = 'learning_check' AND json_extract(json, '$.context.checksTaskId') = ?", [task.projectId, task.id])) {
-      if (!FINISHED_TASK.has(check.state)) cancelTask(ctx, check);
-    }
-  }
+  // Words taken back, as reworded ones are, teach nothing: the check reading them stops, whatever it is doing. That is
+  // a request taken back before it started, or one ⌘Z took back while it ran. A request stopped with Stop this edit
+  // keeps its check: a rule in what the editor said reaches Learnings whether or not the request finishes.
+  if (opts.withdrawn || task.state === "queued") for (const check of openChecks(ctx, task, "learning_check")) cancelTask(ctx, check);
+  // The frames a request asked to have looked at serve its own run alone, and that run is over: stopped, taken back or
+  // put back in line by a pause, where the attempt that resumes it asks again.
+  for (const check of openChecks(ctx, task, "area_check")) cancelTask(ctx, check);
   ctx.bus.taskQueued({ taskId: saved.id, projectId: saved.projectId });
   return saved;
 }
 
 /**
- * CLIs whose sessions Scarlet resumes after an answer or a quit. A Codex run keeps its thread in a private Codex home
- * beside its task folder, out of the user's own Codex thread list. Started afresh, a pass resumed after a quit spent
- * 120 more turns and 13.7M tokens finding its place again (2026-11-18).
+ * CLIs whose sessions Scarlet resumes after an answer, a quit or a pause of the project's editing. A Codex run keeps
+ * its thread in a private Codex home beside its task folder, out of the user's own Codex thread list. Started afresh, a
+ * pass resumed after a quit spent 120 more turns and 13.7M tokens finding its place again (2026-11-18).
  */
 export const RESUMABLE = new Set<string>(["claude", "codex"]);
 
 /** What a run hears when it carries on in its own CLI session after Scarlet closed on it. */
 const INTERRUPTED = "Scarlet closed while you were working on this request, and it is open again. Carry on from where you stopped. " +
   "What you saved is kept. Read the current project and change states first: the editor may have decided some of it since.";
+
+/** What a run hears when it carries on in its own CLI session after the editor paused editing on it and resumed. */
+const PAUSED = "The editor paused editing while you were working on this request, and has resumed it. Carry on from where you stopped. " +
+  "What you saved is kept. Read the current project and change states first: the editor may have decided some of it since.";
+
+/**
+ * What a host tells the model after refusing it a tool that isn't Scarlet's, with `{tool}` for the tool's name. Gemini's
+ * harness offers its own shell and file tools whatever it is launched with, so its hosts refuse them in the turn: all of
+ * them on a side check, and on a request one that reaches outside the task folder.
+ */
+const REFUSED_TOOL = "Scarlet refused {tool}: only Scarlet's own tools (the scarlet MCP server) run here, with no shell or file tools. " +
+  "Carry on with the request using Scarlet's tools.";
+const REFUSED_OUTSIDE = "Scarlet refused {tool}: it reaches outside your task folder. Keep your files in the task folder, " +
+  "and read the project's footage and the video through Scarlet's tools. Carry on.";
 
 /** Pair each `question` event with the `answer` that followed it. */
 export function pairQuestionsAndAnswers(events: Pick<TaskEvent, "type" | "text">[]): Array<{ question: string; answer: string }> {
@@ -477,15 +527,20 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   const c = task.context;
   const editSkill = isSkillEdit(task) ? ctx.repos.skills.get(c.skillId ?? "") : undefined;
   if (isSkillEdit(task) && !editSkill) throw notFound("the skill this request revises");
+  // A run that edits no video is told nothing of the video's timeline, the edit it's about or the editor's skills: a
+  // look at one frame, a read for a rule, a skill's revision. An edit's area checks each asked for a prompt, up to 20.
+  const aside = isAsideTask(task) || task.kind === "skill_from_change";
   const notes = c.noteIds?.length ? ctx.repos.notes.select("project_id = ? AND id IN (SELECT value FROM json_each(?))", [task.projectId, JSON.stringify(c.noteIds)]) : undefined;
   // A request about one staged cut names the pass as it stood when the editor sent it. A revision ahead of it in the
   // queue, or a later part of the pass, has replaced that pass since, so the agent is told about the pass that waits now
   // and the cut's index there.
-  const named = c.changeId ? ctx.repos.changes.get(c.changeId) : undefined;
+  const named = !aside && c.changeId ? ctx.repos.changes.get(c.changeId) : undefined;
   const now = named?.projectId === task.projectId && c.cutIndex !== undefined ? passToRevise(ctx, named, task.id, c.cutIndex) : undefined;
   const record = now?.change ?? named;
   let change: { change: NonNullable<typeof record>; diff?: ReturnType<typeof changeDiff> } | undefined;
-  if (record?.projectId === task.projectId) {
+  // A request about one staged cut isn't shown the whole pass's diff, so it isn't worked out.
+  if (record?.projectId === task.projectId && c.cutIndex !== undefined) change = { change: record };
+  else if (record?.projectId === task.projectId) {
     try {
       change = { change: record, diff: changeDiff(ctx, record) };
     } catch (err) {
@@ -495,48 +550,66 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   }
   const events = ctx.repos.taskEvents.list(task.id, "questionsAndAnswers");
   const last = events.at(-1);
-  const answered = last?.type === "answer";
+  // A pass's closing check is the same request run again. The answer it is told is one to its own question: one the pass
+  // was given before the check began is among the earlier questions and answers.
+  const checking = isDialoguePass(task) && !!task.repeatAudit?.returns;
+  const checkFrom = checking ? task.repeatAudit?.queuedAt : undefined;
+  const answered = last?.type === "answer" && (!checkFrom || last.at >= checkFrom);
   // A run interrupted before it finished carries on in the CLI session it was working in, when its host still has it.
   const interrupted = !last && !!task.resumeRootId;
   const resumeSession = !opts.fresh && (answered || interrupted) && task.session?.agent === task.agent && RESUMABLE.has(task.agent) ? task.session.id : undefined;
+  // A resumed attempt is told where its run stands as it starts, not as it stood when it was put back in line: the
+  // editor may have decided some of what it saved while it waited behind other requests or a pause. One that carries on
+  // in its own session is told it too, since the session never had it: the edits refused after its last save, the cuts
+  // a later part replaced while it was away. A fresh closing check is told the request instead.
+  const recap = !!task.resumeRootId && (resumeSession ? !answered : !checking);
+  const before = recap ? ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.retryTaskId') = ?", [task.projectId, task.id])[0] : undefined;
+  const instruction = before ? recoveryInstruction(ctx, before, task.resumeRootId, task.id) : task.instruction;
   // The run is launched with its harness's to-do tool, and asked to lay out its steps, when the harness has one and the
   // chat will show the plan. A dialogue pass shows the stages Scarlet measures and a request about one staged cut its
   // own two, and a skill edit changes no video: none is given the tool or asked, so each runs exactly as it did.
   const plans = task.kind !== "skill_from_change" && !isAsideTask(task) && !taskRunKind(task)
     && agentCapabilities(task.agent, (ctx.options.env ?? process.env).SCARLET_AGENT_CAPS).plan;
+  const told = { ...task, instruction };
   const systemPrompt = buildSystemPrompt({
-    project: { project, timeline: project.head ? resolveTimeline(ctx, project, "head") : null },
-    task: now ? { ...task, context: { ...c, changeId: now.change.id, cutIndex: now.index } } : task,
+    project: { project, timeline: !aside && project.head ? resolveTimeline(ctx, project, "head") : null },
+    task: now ? { ...told, context: { ...c, changeId: now.change.id, cutIndex: now.index } } : told,
     notes,
     change,
     replacedPass: now && named?.id,
     // A resumed session already holds the earlier questions and answers.
     qa: resumeSession ? undefined : pairQuestionsAndAnswers(events),
-    skills: assistantSkills(ctx.repos.skills.select("1=1", [], "name ASC"), c.skillIds, true),
+    skills: aside ? [] : assistantSkills(ctx.repos.skills.select("1=1", [], "name ASC"), c.skillIds, true),
     editSkill: editSkill ?? undefined,
     learningCheck: isLearningCheck(task) ? learningCheckContext(ctx, task) : undefined,
     areaCheck: task.kind === "area_check" ? task.context.areaCheck : undefined,
     checkIn: ctx.settings().checkIn,
     workDir: opts.workDir,
     timeLimitMinutes: opts.timeLimitMinutes,
-    capabilities: { ...agentCapabilities(task.agent), plan: plans },
+    // A request has its harness's own shell, file and web tools; a run that edits no video has Scarlet's alone.
+    capabilities: { ...(aside ? agentCapabilities(task.agent) : workspaceCapabilities(agentCapabilities(task.agent))), plan: plans },
     ...graphicsContext(ctx, project, task),
   });
-  // Whether the host launches the CLI with its own to-do tool on.
-  const plan = plans ? { plan: true } : {};
-  if (isDialoguePass(task) && task.repeatAudit?.returns) {
+  // Whether the host launches the CLI with its own to-do tool on, with its shell, file and web tools (every request:
+  // the editor's decision of 2026-11-21 that no rule in Scarlet's code picks which run gets them, so what to use them
+  // for is the model's call), and what it says when it refuses a tool.
+  const launch = { ...(plans && { plan: true }), ...(!aside && { workspace: true }), refusedTool: aside ? REFUSED_TOOL : REFUSED_OUTSIDE };
+  if (resumeSession) {
+    return { systemPrompt, instruction: answered ? `The editor answered: "${last!.text.trim()}"\nContinue the task with that answer.`
+      : `${task.resumesAfterProjectStop ? PAUSED : INTERRUPTED}\n\n${instruction.trim()}`, resumeSession, ...launch };
+  }
+  if (checking) {
     // The goal and what counts as done, not the steps: the tools say how they check and repair.
     const finish = "The dialogue pass has saved its editing work. What is left is the closing check on the current playback: " +
-      "no word the cuts clipped should play, and each repeat, silence and divided sentence the check lists is cut, kept " +
-      "with its reason, or staged for the editor when you doubt it, as the skill and the editor ask. " +
+      "no word the cuts clipped should play, each repeat, silence and divided sentence the check lists is cut, kept " +
+      "with its reason, or staged for the editor when you doubt it, and each picture it lists is changed or kept with its reason, " +
+      "as the skill and the editor ask. " +
       "The pass is done once dialogue_check_repeats on the current version has nothing outstanding. " +
       "Honor the editor’s scope, preferences, protected footage and decisions.";
-    return { systemPrompt, instruction: finish + "\nEditor’s request: " + firstMessage(task.instruction.trim()) +
-      (answered ? "\nThe editor answered: " + last!.text : ""), ...plan };
+    return { systemPrompt, instruction: finish + "\nEditor’s request: " + firstAsked(ctx, task).trim() +
+      (answered ? "\nThe editor answered: " + last!.text : ""), ...launch };
   }
-  return resumeSession
-    ? { systemPrompt, instruction: answered ? `The editor answered: "${last!.text.trim()}"\nContinue the task with that answer.` : INTERRUPTED, resumeSession, ...plan }
-    : { systemPrompt, instruction: firstMessage(task.instruction.trim()), ...plan };
+  return { systemPrompt, instruction: firstMessage(instruction.trim()), ...launch };
 }
 
 /**
@@ -562,6 +635,22 @@ function graphicsContext(ctx: Ctx, project: Project, task: Task) {
  */
 function firstMessage(instruction: string) {
   return instruction.startsWith("/") ? `The editor's request: ${instruction}` : instruction;
+}
+
+/**
+ * What a request asked as it was first sent: the editor's words, and for a follow-up the thread's earlier requests with
+ * them, which hold the scope and preferences they gave before. An attempt that resumed or retried it has Scarlet's
+ * account of the run as its own instruction, so the first attempt's is read.
+ */
+function firstAsked(ctx: Ctx, task: Task): string {
+  let first = (task.resumeRootId && ctx.repos.tasks.get(task.resumeRootId)) || task;
+  // A Retry starts a run of its own: the attempt it tried again holds the words as sent.
+  for (let hops = 0; hops < 10; hops++) {
+    const [earlier] = ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.retryTaskId') = ?", [task.projectId, first.id]);
+    if (!earlier) break;
+    first = earlier;
+  }
+  return first.instruction;
 }
 
 /**
@@ -715,14 +804,16 @@ function claimNext(ctx: Ctx, host: AgentHost, taskId?: string, freeAgents?: stri
     : "q.kind != 'transcribe' AND q.agent IN (SELECT value FROM json_each(?))";
   const filterArgs = taskId ? [taskId] : checkers ? [JSON.stringify(agents), JSON.stringify(checkers)] : [JSON.stringify(agents)];
   // Include only tasks this host can claim in the candidate scan. The shared queue still sees
-  // requests for other hosts and requests being reworded, since they can hold up later work.
+  // requests for other hosts and requests being reworded, since they can hold up later work. A look at a frame serves
+  // the run that asked for it, and starts only while that run is at work.
   const checkedAt = now();
   const rows = ctx.db.prepare(`SELECT q.id, q.project_id, q.kind, q.json, q.created_at, p.editing_paused,
     coalesce(json_extract(q.json, '$.rewordingUntil') > ?, 0) AS rewording FROM tasks q JOIN projects p ON p.id = q.project_id
     LEFT JOIN tasks root ON root.id = json_extract(q.json, '$.resumeRootId')
     LEFT JOIN tasks asker ON q.kind = 'area_check' AND asker.id = json_extract(q.json, '$.context.checksTaskId')
     WHERE p.deleted_at IS NULL AND q.state = 'queued' AND ${filter}
-    AND (p.editing_paused = 0 OR q.kind NOT IN ${PROJECT_EDIT_KINDS})
+    AND (p.editing_paused = 0 OR q.kind NOT IN ${HELD_WHILE_PAUSED})
+    AND (q.kind != 'area_check' OR asker.state IN ('claimed', 'running')) AND q.kind != 'broll_make'
     ORDER BY coalesce(asker.state IN ('claimed', 'running'), 0) DESC,
       coalesce(root.created_at, q.created_at), coalesce(root.rowid, q.rowid), q.rowid`)
     .iterate(checkedAt, ...filterArgs) as Iterable<{

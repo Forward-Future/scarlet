@@ -4,13 +4,65 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 21, 2026
+
+- Make shorts has been removed from the ⋯ menu: edit a short the same way you edit any other video.
+- Scarlet now has a shell, files and the web in every edit, whichever model you pick, so it can look things up and build what an edit needs as it works.
+- During a screen demo, your camera now stays in its corner, and Scarlet frames the screen around it instead of moving the camera around.
+- After a cut on your camera, your voice now comes straight in, a new topic or demo included, instead of a beat of quiet on your face after the cut.
+- Scarlet can now find or make B-roll for a moment with any model you pick: it searches the web, captures an article or a post as a picture, and builds the shot its own way before laying it in.
+- B-roll Scarlet lays over your video is called B-roll, and when it came from the web, a link icon on its card shows the page as Scarlet captured it, the part in your video, and its address.
+- Scarlet now sees when you look down at your screen while you talk to it, so your screen can be up there too.
+- Scarlet’s note on an edit’s card now reads as it would tell you in person, in everyday words, instead of its own terms for the footage.
+- An edit’s card now says exactly what it did on its first line: the words a cut took out, a caption’s words, the file laid over the picture, how far a zoom goes or how loud the sound now plays.
+- Before Scarlet finishes an edit, it checks every place the video flicks between your screen and your camera, or goes back to your camera while your screen still shows what you're talking about, and fixes it or says why it stays.
+- Scarlet keeps your screen recording up for as long as you're talking about it, instead of going back to your camera at the first chance.
+- When you read text off your screen aloud, Scarlet now knows your screen isn't showing and puts it up.
+- Every edit card now has the same two rows: the note on top, and below it Before/After and the transcript on the left with Revise, Keep and the × that rejects on the right, each showing its key.
+- A call’s card now has the same actions as an applied edit’s: Keep, Revise and the × that rejects it, in place of Approve and Skip.
+- X rejects the edit or call on screen.
+- Removed History from projects for now; Scarlet still keeps a full log of every change behind the scenes.
+- The model picker now sits right in the project header, and the duplicate Export row is gone from the ⋯ menu.
+- A screen demo Scarlet frames as the whole screen but its menu bar now stays up for the whole demo, instead of a few seconds at a time.
+- While Scarlet edits, the timeline keeps its pictures and sound as each new cut comes in, instead of going blank until the edit is done.
+
 ## November 20, 2026
 
+- Lines you said twice that Scarlet would have left in now come to you in For you, as many as Checking with you asks for, starting with the likeliest restarts.
+- After an update, Scarlet keeps what it already read of your recordings, so the first dialogue cut after an update starts sooner.
+- Words Scarlet puts back into a transcript beside a restart are no longer written twice or squeezed to nothing.
+- A pause Scarlet trims no longer takes a short word beside it, and a pause given by its times is checked for words as one named by its word is.
+- After a dialogue cut's closing check, Scarlet no longer flags a second batch of the same cuts for you to check.
+- Scarlet's last check for restarts now catches a line you start again on a longer word, like “so perfect, so perfectly realistic”.
+- Pause then Resume now picks an edit up where it left off, instead of starting it over.
+- A request you take back with ⌘Z no longer offers a rule in Learnings, and Scarlet doesn't read your words for rules while editing is paused.
+- Claude Code edits no longer fail on computers where its sandbox can't start.
+- Gemini edits now stop with a message to update agy when it's too old to take Scarlet's instructions, instead of editing without them.
+- Scarlet now knows what your camera inset covers on a screen demo, text or not, such as a chart's numbers or a usage meter, and keeps your camera off what you're talking about.
+- A rule Scarlet learned can be declined right from its line in the chat.
+- When you stumble on a word (“who who thinks of this”), Scarlet leans toward taking out the first saying of it, so the line runs on as you said it instead of jumping from the broken word into the next.
+- Learnings now offers a rule only when you state one yourself or ask for the same kind of fix a few times, not after a single note about one cut.
+- Scarlet holds the frame on a chart or table while you read through it, instead of nudging the zoom between rows.
+- Scarlet can now keep your screen up across a cut that waits for your call, so approving it no longer flashes the camera full screen for a moment between two stretches of screen.
+- While you watch paused, the picture stays the video as it plays, with a screen and your camera inset, when Scarlet saves another edit, instead of switching to the camera alone.
+- A demo Scarlet framed on screen now reads as an overlay, not a cut, and no longer adds cuts of its own to the list.
+- Your camera inset leaves clear room above your head, even when you sit up.
+- A cut waiting for your approval no longer draws a dotted line across the whole timeline: it shows as its dot, like any cut, and once opened its red band has a dashed edge until you approve it.
+- When Scarlet reworks the whole video in one go, every cut it made is listed, so you can open, revise or undo each one.
+- The cuts waiting for you now say what each one changes, such as “Cut the repeated start before ‘just explain’”, instead of what Scarlet did to check it.
+- Media no longer has Add from a link: add footage with Add files or by dropping it in.
+- Settings › About now keeps the What’s new list short up front with a toggle for the rest, and collapses earlier days by date.
+- A cut waiting for your approval is now drawn on the timeline over the footage it would take out, dashed until you approve it, so while you watch you can see that part is still in and waiting on you; its tag opens it.
+- When the cut that takes out a whole stumble can't be placed in a pause, Scarlet asks you to hear it instead of making a cleaner cut that leaves part of the stumble in.
 - A cut after you finish talking now comes right after your last word: a beat Scarlet keeps before a new demo or topic plays after the cut instead of as quiet after you stop.
 - An edit you play no longer starts over when Scarlet saves another edit of the same request meanwhile: it plays on, and the new edit comes in when you pause.
 - The model picker lists Standard speed once for Claude models instead of twice.
 - A skill Scarlet comes with that you edited and then set back to Scarlet's own text gets Scarlet's updates again.
 - When Scarlet puts your camera in the corner over a screen recording, it now frames you instead of shrinking the whole camera shot into the box, and follows your skill's size, shape, how much of you to show and rounded corners.
+- A cut now comes right where your last word's sound ends, about a tenth of a second of quiet in all, instead of holding on you silent or breathing in before it.
+- When a breath follows your last word, the cut now goes before the breath, even where Scarlet heard no pause around it.
+- When two words run together, Scarlet no longer cuts at the short stop inside a word, such as the “p” of “subscription”, which took the end of the word off.
+- When Scarlet fine-tunes a cut it already made, such as moving its edge a frame, the cut now stays one row in the list, playing as the video does now, instead of showing again as a second edit beside the old one.
 - An edit that frames a screen recording no longer waits behind itself: Scarlet looks at several of the recording's windows at once beside it, so those edits finish minutes sooner.
 - With Gemini, a step that needs Scarlet to measure something first now waits for it instead of giving up and trying again.
 - Rejecting an edit's look on footage that plays more than once now takes it off only the place you rejected, not every use of that footage.

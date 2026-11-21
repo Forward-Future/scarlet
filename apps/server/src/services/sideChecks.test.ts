@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { AgentHost as Host } from "@scarlet/agent";
 import { createProject } from "@scarlet/timeline";
@@ -94,6 +95,11 @@ async function runOnHost(maxParallel: number, checks: number) {
   const done = new Set<string>();
   const now = { requests: 0, checks: 0 }, most = { requests: 0, checks: 0, together: 0 };
   const checksDone = Promise.withResolvers<void>();
+  // The first checks wait until every check slot is full, or 8 s, so a slow start can't let one finish before the last begins.
+  const checkSlots = Math.min(checks, sideCheckSlots(maxParallel));
+  const checksFull = Promise.withResolvers<void>();
+  let fallback: ReturnType<typeof setTimeout> | undefined;
+  let settle: ReturnType<typeof setTimeout> | undefined;
   const client = new ScarletClient({ baseUrl: "http://127.0.0.1:4000", token: accessToken(ctx),
     fetch: (url, init) => workspace.app.fetch(new Request(url, init)) });
   const workRoot = await mkdtemp(join(tmpdir(), "scarlet-side-host-"));
@@ -108,11 +114,25 @@ async function runOnHost(maxParallel: number, checks: number) {
       most[pool] = Math.max(most[pool], now[pool]);
       most.together = Math.max(most.together, now.requests + now.checks);
       try {
-        if (id === asker.id) await checksDone.promise;
-        else await new Promise(resolve => setTimeout(resolve, pool === "checks" ? 60 : 20));
+        if (id === asker.id) {
+          await checksDone.promise;
+        } else if (pool === "checks") {
+          if (now.checks >= checkSlots) {
+            clearTimeout(fallback);
+            // Hold the full wave briefly so a pool past its limit shows up before any check exits.
+            settle ??= setTimeout(checksFull.resolve, 250);
+          } else {
+            fallback ??= setTimeout(checksFull.resolve, 8_000);
+          }
+          await checksFull.promise;
+          await delay(60, undefined, { signal: opts.signal }).catch(() => undefined);
+        } else {
+          await delay(20, undefined, { signal: opts.signal }).catch(() => undefined);
+        }
       } finally {
         now[pool]--;
       }
+      if (opts.signal?.aborted) return { ok: false, summary: "", aborted: true };
       done.add(id);
       if (asked.every(check => done.has(check.id))) checksDone.resolve();
       return { ok: true, summary: "" };
@@ -128,6 +148,10 @@ async function runOnHost(maxParallel: number, checks: number) {
     }
     return { most, ms: Date.now() - started };
   } finally {
+    clearTimeout(fallback);
+    clearTimeout(settle);
+    checksFull.resolve();
+    checksDone.resolve();
     await host.stop();
     await running;
     await rm(workRoot, { recursive: true, force: true });

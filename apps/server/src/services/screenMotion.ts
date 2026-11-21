@@ -5,6 +5,9 @@
  * moving over a button. The text on screen says what is there, not what moves. A pass framed a demo on the controls
  * while the cube it showed was still turning above them (2026-11-17). This measures the movement; what it means for
  * the framing is the model's call.
+ *
+ * The same frames say where the picture has anything in it at all (`detail`): a camera inset laid over a screen sat on
+ * the usage rings of a quota page, with nothing there that screen text reads (2026-11-20).
  */
 import { createHash } from "node:crypto";
 import { probeMedia, screenFrameSize } from "@scarlet/render";
@@ -13,7 +16,7 @@ import type { Ctx } from "../context.js";
 import { pictureGrid, pictureReader, r3, withFrames, type VideoMedia } from "./pictureReading.js";
 
 /** Bump when the reading changes: the sampling, the grid or how changes become areas. Kept readings are read again. */
-const MOTION_VERSION = 1;
+const MOTION_VERSION = 2;
 /** Seconds of a recording read and kept together. */
 const MOTION_WINDOW = 60;
 /** Frames a second compared: a pointer or a scroll moves between two of them. */
@@ -26,6 +29,37 @@ const COLS = 64, ROWS = 36;
 const CHANGED = 8;
 /** The areas kept for each second, largest first. */
 const MAX_AREAS = 4;
+/** A cell whose grey spans this many levels has something in it (a line of text, an edge, a picture); a flat background doesn't. */
+const DETAILED = 24;
+/** A second's detail is kept when this share of the cells differs from the detail kept last. */
+const DETAIL_CHANGED = 0.02;
+
+/** Where a recording's picture has something in it, from a source second until the next one kept. */
+export interface DetailFrame {
+  at: number;
+  /** The grid's cells, row by row, a bit each (1: something there), as base64. */
+  cells: string;
+}
+
+/** A window's reading: the seconds whose picture changed, and its detail wherever that changed. */
+interface MotionWindow { seconds: MotionSecond[]; detail: DetailFrame[] }
+
+/** Each cell of the grid whose grey spans `DETAILED` levels or more, a bit per cell. */
+export function detailCells(rgb: Buffer, width: number, height: number, cols = COLS, rows = ROWS): Uint8Array {
+  const lo = new Float32Array(cols * rows).fill(255), hi = new Float32Array(cols * rows);
+  for (let y = 0; y < height; y++) {
+    const row = Math.min(rows - 1, Math.floor(y * rows / height));
+    for (let x = 0; x < width; x++) {
+      const p = (y * width + x) * 3, cell = row * cols + Math.min(cols - 1, Math.floor(x * cols / width));
+      const grey = (rgb[p]! * 3 + rgb[p + 1]! * 6 + rgb[p + 2]!) / 10;
+      if (grey < lo[cell]!) lo[cell] = grey;
+      if (grey > hi[cell]!) hi[cell] = grey;
+    }
+  }
+  const bits = new Uint8Array(Math.ceil(cols * rows / 8));
+  for (let i = 0; i < cols * rows; i++) if (hi[i]! - lo[i]! >= DETAILED) bits[i >> 3]! |= 1 << (i & 7);
+  return bits;
+}
 
 /** A second of a recording and the areas of its picture that changed in it. */
 export interface MotionSecond {
@@ -67,12 +101,16 @@ function identity(media: MediaAsset) {
     MOTION_FPS, MOTION_SIDE, COLS, ROWS, CHANGED, MOTION_WINDOW])).digest("hex");
 }
 
-/** Compare one window's frames, a quarter second apart, and keep the seconds whose picture changed. */
-async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end }: { start: number; end: number }, signal: AbortSignal): Promise<MotionSecond[]> {
+const bitsDiffer = (a: Uint8Array, b: Uint8Array) => { let n = 0; for (let i = 0; i < a.length; i++) { let x = a[i]! ^ b[i]!; while (x) { n += x & 1; x >>= 1; } } return n; };
+
+/** Compare one window's frames, a quarter second apart, and keep the seconds whose picture changed, with the picture's detail once a second where it changed. */
+async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end }: { start: number; end: number }, signal: AbortSignal): Promise<MotionWindow> {
   const source = media.width && media.height ? { width: media.width, height: media.height } : await probeMedia(file);
   const { width, height } = screenFrameSize(source.width, source.height, MOTION_SIDE);
   const seconds = new Map<number, Uint8Array>();
   let last: Float32Array | undefined;
+  const detail: DetailFrame[] = [];
+  let detailKept: Uint8Array | undefined, detailSecond = -Infinity;
   await withFrames(ctx, media, file, "screen-motion", { start, end, fps: MOTION_FPS, width, height, signal }, (at, rgb) => {
     // Every pixel: a pointer-sized change has to register.
     const now = pictureGrid(rgb, width, height, COLS, ROWS, 1);
@@ -83,18 +121,29 @@ async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, en
       if (cells) seconds.set(second, cells);
     }
     last = now;
+    // Once a second, the first frame of it: kept when it differs from the detail kept last.
+    if (Math.floor(at + 1e-6) > detailSecond) {
+      detailSecond = Math.floor(at + 1e-6);
+      const cells = detailCells(rgb, width, height);
+      if (!detailKept || bitsDiffer(cells, detailKept) >= DETAIL_CHANGED * COLS * ROWS) {
+        detail.push({ at: r3(at), cells: Buffer.from(cells).toString("base64") });
+        detailKept = cells;
+      }
+    }
     return false;
   }, async () => undefined);
-  return [...seconds].sort((a, b) => a[0] - b[0]).map(([at, cells]) => ({ at, areas: changedAreas(cells) }));
+  return { seconds: [...seconds].sort((a, b) => a[0] - b[0]).map(([at, cells]) => ({ at, areas: changedAreas(cells) })), detail };
 }
 
-const reading = pictureReader<MotionSecond[]>({ name: "screen-motion", window: MOTION_WINDOW, identity, read: readWindow });
+const reading = pictureReader<MotionWindow>({ name: "screen-motion", window: MOTION_WINDOW, identity, read: readWindow });
 
 export interface ScreenMotionResult {
   mediaId: string;
   from: number; to: number;
   /** The seconds whose picture changed, in order. A second not listed held still. */
   seconds: MotionSecond[];
+  /** Where the picture has something in it (a 64 × 36 grid), from each `at` until the next; the one in force at `from` comes first. */
+  detail: DetailFrame[];
   /** Seconds of the range read so far, and whether the whole range has been. */
   readSeconds: number; done: boolean;
   /** Why reading stopped, when it did. */
@@ -108,6 +157,9 @@ export interface ScreenMotionResult {
 export async function screenMotion(ctx: Ctx, media: MediaAsset & { projectId: string }, range: { from?: number; to?: number },
   opts: { waitMs?: number; signal?: AbortSignal } = {}): Promise<ScreenMotionResult> {
   const read = await reading.read(ctx, media, range, opts);
-  const seconds = read.ready.flatMap(w => w.value).filter(s => s.at + 1 > read.from && s.at < read.to);
-  return { mediaId: media.id, from: read.from, to: read.to, seconds, readSeconds: read.readSeconds, done: read.done, ...(read.error && { error: read.error }) };
+  const seconds = read.ready.flatMap(w => w.value.seconds).filter(s => s.at + 1 > read.from && s.at < read.to);
+  const frames = read.ready.flatMap(w => w.value.detail);
+  const first = frames.findLastIndex(d => d.at <= read.from);
+  const detail = frames.slice(Math.max(0, first)).filter(d => d.at < read.to);
+  return { mediaId: media.id, from: read.from, to: read.to, seconds, detail, readSeconds: read.readSeconds, done: read.done, ...(read.error && { error: read.error }) };
 }

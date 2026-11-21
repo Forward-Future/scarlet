@@ -124,7 +124,8 @@ async function undoRevision(taskId: string, project: { changes: readonly Change[
     task = next;
   }
   const latest = lastAttempt(first, project.tasks) ?? first;
-  if (working.has(latest.state)) await api.cancelTask(latest.id);
+  // Taken back, the request's words are withdrawn: the check reading them for a rule stops too, which Stop doesn't do.
+  if (working.has(latest.state)) await api.cancelTask(latest.id, false, true);
   const made = project.changes.filter(c => c.taskId && attempts.has(c.taskId))
     .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
   // A revision of a pass or a suggestion made a new version of it. Once that went into the video it carries the whole

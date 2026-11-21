@@ -141,8 +141,8 @@ export function ProjectLayout() {
     },
   );
 
-  // A note's link and the history panel show the edit history, so they wait for it.
-  const needsHistory = query.has("note") || query.get("panel") === "history";
+  // A note's link shows the edit history, so it waits for it.
+  const needsHistory = query.has("note");
   const failed = trashedProject?.id === id || (status === "error" && !opened);
   const waiting = failed ? null : !opened ? "Opening project…" : needsHistory && reviewStatus === "loading" ? "Loading edit history…" : null;
   // Scarlet reopening its last project is still starting, so the startup screen stays up until the project can show

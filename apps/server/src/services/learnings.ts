@@ -46,8 +46,6 @@ const ONLY_A_SKILL = /^\/[\w-]+$/;
  */
 export function startLearningCheck(ctx: Ctx, task: Task): Task | undefined {
   if (!editsDialogue(task.kind) || task.createdBy.type !== "human" || task.resumeRootId || task.agent === "api") return;
-  // Make shorts words its request from the editor's choices in a form: there is nothing they said to read.
-  if (task.context.short) return;
   // The check is Scarlet's own. Whatever goes wrong starting it, the request it reads is already saved and runs.
   try {
     if (ONLY_A_SKILL.test(wordsOf(task)) || !enabledSkills(ctx).length) return;

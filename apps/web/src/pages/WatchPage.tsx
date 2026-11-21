@@ -345,6 +345,16 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     if (!cache) return null;
     return cache.renderId ? { id: cache.renderId, version: cacheVersion, fps: current.project.settings.fps } : undefined;
   }, [missingTimeline, timelineFailed, cacheVersion, cacheSource, cache, current.project.settings.fps]);
+  // A pass saves a new working cut every few seconds, and its timeline is read a moment after its head arrives. Until it
+  // is, the timeline's lanes keep the working cut they drew instead of being built again for a gap: on 2026-11-21 that
+  // gap rebuilt them as often as the saves did, and a busy engine never filled them.
+  const lastLanes = useRef<{ projectId: string; timeline: Timeline; strip: typeof previewStrip }>(undefined);
+  const heldLanes = cut && missingTimeline && !timelineFailed && lastLanes.current?.projectId === current.id ? lastLanes.current : undefined;
+  const laneTimeline = displayedTimeline ?? heldLanes?.timeline ?? null;
+  const laneStrip = heldLanes ? heldLanes.strip : previewStrip;
+  useLayoutEffect(() => {
+    if (cut && displayedTimeline) lastLanes.current = { projectId: current.id, timeline: displayedTimeline, strip: previewStrip };
+  }, [cut, displayedTimeline, previewStrip, current.id]);
   const readyUrl = joined ? joined.file ?? (IS_MOCK ? api.renderFileUrl(joined.version) : undefined)
     : cache?.url ?? (IS_MOCK && draftVersion && draft ? api.renderFileUrl(draftVersion) : undefined);
   const selection = joined ? `joined:${joined.version}` : source?.id ?? cacheVersion;
@@ -447,8 +457,8 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const frameAt = useCallback((t: number, exact?: boolean) => {
     const at = Math.min(t, lastFrame);
     return source ? scrubFrameUrl(source, null, current.media, at, exact)
-      : cutFrameUrl(current.project, displayedTimeline, at, exact);
-  }, [source, current.project, displayedTimeline, current.media, lastFrame]);
+      : cutFrameUrl(current.project, laneTimeline, at, exact);
+  }, [source, current.project, laneTimeline, current.media, lastFrame]);
   const beforeRender = useProjectStore(s => selectRender(s.current, pair?.before));
   const applied = change?.state === "approved" && (change.appliedVersion ?? change.toVersion) === shownCut.head;
   const missingBefore = !applied && !pair?.beforeRange && !beforeRender ? pair?.before : null;
@@ -806,9 +816,9 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
         </div>}
         {simple.above}
         <div>
-          <PlayerTimeline activeShortcuts={active} foot={simple.foot} duration={duration} pictureAspect={pictureAspect} previewStrip={previewStrip} hoverVideo={hoverVideo}
-            waveform={{ media: current.media, mediaPaused: current.project.mediaPaused, source, timeline: displayedTimeline, ...sameClockBefore && {
-              audioFrom: playingBefore ? sameClockBefore : undefined, scaleWith: playingBefore ? displayedTimeline : sameClockBefore } }} frameAt={frameAt} onSeek={seekFull} onSelectTime={selectTime} onScrubStart={scrubStart}
+          <PlayerTimeline activeShortcuts={active} foot={simple.foot} duration={duration} pictureAspect={pictureAspect} previewStrip={laneStrip} hoverVideo={hoverVideo}
+            waveform={{ media: current.media, mediaPaused: current.project.mediaPaused, source, timeline: laneTimeline, ...sameClockBefore && {
+              audioFrom: playingBefore ? sameClockBefore : undefined, scaleWith: playingBefore ? laneTimeline : sameClockBefore } }} frameAt={frameAt} onSeek={seekFull} onSelectTime={selectTime} onScrubStart={scrubStart}
             range={simple.onRange ? shownRange : undefined} onRange={simple.onRange ? markRange : undefined} fps={fps}
             typedTimes={simple.typedTimes} marks={simple.marks} fit={simple.fit} gaps={simple.gaps} skippedRanges={simple.skippedRanges} onGap={simple.onGap} onBand={simple.onBand}
             highlight={simple.focus ?? (selectedEdit ? editFocus(selectedEdit, duration) : undefined)} />

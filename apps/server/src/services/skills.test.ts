@@ -260,13 +260,6 @@ describe("the skills Scarlet comes with", () => {
     expect(createTask(app.ctx, { projectId: "prj_1", kind: "edit", agent: "codex", instruction: "/my-inline",
       context: { skillIds: [inline.id] }, createdBy: { type: "human", name: "Editor" } }).context.dialogueOperation).toBe("first-cut");
     expect(base.enabled && demo.enabled).toBe(true);
-    // Without the guide it builds on, the style still runs the pass on its own.
-    updateSkill(app.ctx, editor, publicGuide()!, { enabled: false });
-    expect(assistantSkills(app.ctx.repos.skills.select(), [style.id], true).map(s => s.name)).toEqual(["my-style"]);
-    // A skill that builds on nothing is an ordinary request.
-    const plain = createSkill(app.ctx, editor, { name: "plain", scope: "team", content: "---\nname: plain\ndescription: Plain.\n---\n\nFrame tight.\n" });
-    expect(createTask(app.ctx, { projectId: "prj_1", kind: "edit", agent: "codex", instruction: "/plain",
-      context: { skillIds: [plain.id] }, createdBy: { type: "human", name: "Editor" } }).context.dialogueOperation).toBe("none");
   });
 
   it("upgrades the untouched legacy dialogue guide in place, including its pins, history and disabled state", async () => {
@@ -556,7 +549,7 @@ describe("skills that the workflows replaced", () => {
   ].join("\n");
 
   it("ships the stock skills in skills/, and removes unedited copies of the rest on upgrade", async () => {
-    expect(app.ctx.repos.skills.select().map(skill => skill.name).sort()).toEqual(["add-captions", "b-roll", "dialogue-pass", "fit-length", "frame-screen", "make-shorts", "matt-talking-head", "motion-graphics", "punch-in", "speed-through-waits"]);
+    expect(app.ctx.repos.skills.select().map(skill => skill.name).sort()).toEqual(["add-captions", "b-roll", "dialogue-pass", "fit-length", "frame-screen", "matt-talking-head", "motion-graphics", "punch-in", "speed-through-waits"]);
     const stock = createSkill(app.ctx, null, { name: "smooth-audio-cuts", scope: "team", content: smoothing }, { source: "bundled" });
     const run = uses([stock.id]);
     app.ctx.repos.tasks.put({ ...run, state: "done" });
@@ -568,6 +561,48 @@ describe("skills that the workflows replaced", () => {
     const own = createSkill(app.ctx, editor, { name: "smooth-audio-cuts", scope: "team", content: smoothing + "Use six frames.\n" });
     retireMergedSkills(app.ctx);
     expect(named("smooth-audio-cuts")).toEqual(own);
+    // An unedited stock make-shorts skill leaves on upgrade too.
+    const makeShorts = [
+      "---",
+      "name: make-shorts",
+      "description: Choose the strongest self-contained moments of a long video and cut each into a short that works on its own, framed for its shape and captioned.",
+      "category: Story and pacing",
+      "---",
+      "",
+      "# Make shorts",
+      "",
+      "A short is a moment someone who never saw the long video stops scrolling for, follows and finishes. Choose moments a stranger understands from their first words, and that pay off before they end.",
+      "",
+      "## Choosing the moments",
+      "",
+      "Read the whole finished edit before choosing. The strongest moments usually have one of these: a claim stated plainly and backed up, a story with a turn, a surprising number or result, a disagreement, a mistake and its fix, a line people would quote. Prefer a moment with energy in the voice over a calmer one that says the same thing.",
+      "",
+      "A moment stands on its own when it needs nothing said before it. If it leans on \"as I said\", \"that\", \"this one\" or a name never introduced, start earlier or choose another. It ends on its payoff, not on the sentence that leads into the next topic.",
+      "",
+      "Choose moments far enough apart in the video that the shorts don't repeat each other. Fewer strong shorts beat filling the count with weak ones: when only two moments stand on their own, make two.",
+      "",
+      "Name each short with a few words a viewer would recognise it by, from what is said in it.",
+      "",
+      "## Cutting a moment",
+      "",
+      "Open on the strongest line you can without losing the sense: the hook comes first, the setup after it if it is needed at all. Inside the moment, take out what slows it: asides, repeated points, long pauses, a false start. Keep the speaker's rhythm; a short is tighter than the long video, not breathless.",
+      "",
+      "Stay under the length the editor asked for, and don't pad a moment to reach it.",
+      "",
+      "## Framing",
+      "",
+      "Fill the shape. Keep the speaker's face in the upper middle of the frame, with room above the head, and follow them if they move rather than letting them drift to an edge. When the video shows a screen, put the part being used or read where it can be read, with the speaker below it, and change the frame only when what matters changes.",
+      "",
+      "## Captions",
+      "",
+      "When the editor wants captions, caption every word that is spoken, in short lines a viewer reads at a glance, large and placed low enough to keep the face clear and high enough to stay clear of the app's buttons along the bottom. Follow the project's style guide when it has one.",
+      "",
+      "`timeline_transcript`, `frame_contact_sheet`, `timeline_propose`, `captions_generate` and `shorts_plan` cover what this needs.",
+      "",
+    ].join("\n");
+    createSkill(app.ctx, null, { name: "make-shorts", scope: "team", content: makeShorts }, { source: "bundled" });
+    retireMergedSkills(app.ctx);
+    expect(named("make-shorts")).toBeUndefined();
   });
 
   it("preserves an old workflow while the editor is revising it", () => {

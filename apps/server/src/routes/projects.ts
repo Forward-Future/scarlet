@@ -1,4 +1,4 @@
-import { badRequest, conflict, notFound } from "../errors.js";
+import { conflict, notFound } from "../errors.js";
 import { nameCutRowsByWords } from "../services/cutRowWords.js";
 import { cancelTask } from "../services/tasks.js";
 import { holdTranscriptions, resumeImportsInBackground } from "../services/ingest.js";
@@ -7,15 +7,13 @@ import { withActivity } from "../services/projectActivity.js";
 import { holdProjectEditing, resumeProjectEditing, resumeProjectTranscriptions } from "../services/taskRecovery.js";
 import { Hono } from "hono";
 import { z } from "zod/v3";
-import { EditReviewRequest, threadTimeline, type ThreadEdit, threadRevision, ThreadDisposition, CreateProjectRequest, MakeShortsRequest, ShortsPlanRequest, UpdateProjectRequest, type ProjectDetail } from "@scarlet/shared";
-import { makeShorts, planShorts } from "../services/shorts.js";
+import { EditReviewRequest, threadTimeline, type ThreadEdit, threadRevision, ThreadDisposition, CreateProjectRequest, UpdateProjectRequest, type ProjectDetail } from "@scarlet/shared";
 import { createProject, hasInitialTimeline } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { resolveTimeline } from "../services/timeline.js";
 import { jsonBody, requireProject, requireProjectHeader } from "./util.js";
 import { actorFor, logActivity, quote } from "../services/activity.js";
-import { requestAttempt } from "../services/taskAttempt.js";
 
 export function projectRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
@@ -39,20 +37,6 @@ export function projectRoutes(ctx: Ctx) {
     ctx.paths.ensureProject(project.id);
     ctx.bus.publish({ type: "project.updated", projectId: project.id, project });
     return c.json({ project }, 201);
-  });
-
-  // Make shorts: a new project for each short, made from this one's finished edit. The first starts working at once.
-  r.post("/projects/:id/shorts", async (c) => {
-    const body = await jsonBody(c, MakeShortsRequest);
-    const project = requireProjectHeader(ctx, c.req.param("id"));
-    if (body.agent === "api") throw badRequest("agent_unavailable", "Choose Claude, Codex or Gemini to make shorts.");
-    return c.json(await makeShorts(ctx, c.var.user, project.id, body, c.req.raw.signal), 201);
-  });
-
-  // The first short's run saves the moments it chose, and the other shorts start with theirs.
-  r.post("/tasks/:id/shorts-plan", async (c) => {
-    const body = await jsonBody(c, ShortsPlanRequest);
-    return c.json(planShorts(ctx, c.var.user, c.req.param("id"), body, requestAttempt(c.req.raw)));
   });
 
   r.post("/projects/:id/stop-editing", c => c.json(holdProjectEditing(ctx, c.req.param("id"))));

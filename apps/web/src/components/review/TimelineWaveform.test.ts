@@ -57,6 +57,12 @@ it("answers a window from one read already that holds it as finely, and reads ag
     expect(wide.peaks).toHaveLength(8192);
     await sourcePeaks("wave_take", 100, 110);
     expect(read).toHaveBeenCalledTimes(5);
+    // A new working cut's window, a little shorter than the whole read, asks for nothing either.
+    const cut = await sourcePeaks("wave_take", 2, 560);
+    expect(read).toHaveBeenCalledTimes(5);
+    expect(cut).toMatchObject({ mediaId: "wave_take" });
+    expect(cut.from).toBeLessThanOrEqual(2);
+    expect(cut.to).toBeGreaterThanOrEqual(560);
     // Back out to a window seen before reads nothing. The windows used last are the ones kept.
     for (let i = 0; i < 20; i++) await sourcePeaks("wave_take", 200 + i, 201 + i);
     read.mockClear();

@@ -40,6 +40,26 @@ export function boxInCorner(box: Box, corner: Corner): Box {
   return [left, top, left + width, top + height];
 }
 
+/** The corner of the video a box on it sits nearest. */
+export const cornerOf = (box: readonly number[]): Corner => `${(box[1]! + box[3]!) / 2 >= 0.5 ? "bottom" : "top"}-${(box[0]! + box[2]!) / 2 >= 0.5 ? "right" : "left"}`;
+
+const overlapArea = (a: readonly number[], b: readonly number[]) =>
+  Math.max(0, Math.min(a[2]!, b[2]!) - Math.max(a[0]!, b[0]!)) * Math.max(0, Math.min(a[3]!, b[3]!) - Math.max(a[1]!, b[1]!));
+
+/**
+ * Whether pictures over the video (`covers`, canvas fractions) sit on a real part of any line of text, with `frame` the
+ * area of the source that fills the video and each line's box in source fractions. A sentence whose end runs under the
+ * inset counts.
+ */
+export function coverOnText(frame: Box, covers: readonly Box[], lines: ReadonlyArray<{ box: readonly number[] }>): boolean {
+  const [fl, ft, fr, fb] = frame, fw = fr - fl, fh = fb - ft;
+  return lines.some(s => {
+    const onVideo = [(s.box[0]! - fl) / fw, (s.box[1]! - ft) / fh, (s.box[2]! - fl) / fw, (s.box[3]! - ft) / fh];
+    const seen = overlapArea(onVideo, [0, 0, 1, 1]);
+    return seen > 0 && covers.some(c => overlapArea(onVideo, c) >= 0.05 * seen);
+  });
+}
+
 export interface PlacedFrame {
   /** The area of the source picture that fills the canvas. */
   frame: Box;

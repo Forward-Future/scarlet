@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as mock from "@scarlet/mcp/mock";
 import { main, parseArgv } from "./cli.js";
-import * as host from "./host.js";
 import * as runners from "./runners/index.js";
 import { configPath, loadConfig, saveConfig } from "./config.js";
 
@@ -196,56 +195,97 @@ describe("scarlet-agent", { timeout: 30_000 }, () => {
   });
 
   describe.skipIf(process.platform === "win32")("run", () => {
-    async function engine(skillsStatus = 200) {
+    /** An engine that queues the request and hands it to whichever host claims it: this one, or `elsewhere`. */
+    async function engine(opts: { elsewhere?: boolean; heldFor?: number } = {}) {
       const state = mock.makeState();
-      state.skills = [
-        { id: "s1", name: "first-cut-dialogue", description: "First cut", content: "---\nname: first-cut-dialogue\n---\n# First cut\nDo it.", scope: "team", ownerId: null, projectId: null, agents: [], enabled: true, version: 1 },
-      ];
+      let task: Record<string, unknown> | undefined;
+      let held = opts.heldFor ?? 0;
+      let reads = 0;
       state.extra = (req, res) => {
-        if (req.path !== "/skills" || skillsStatus === 200) return false;
-        res.writeHead(skillsStatus, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: { code: "unavailable", message: "skills are being reindexed" } }));
-        return true;
+        const send = (status: number, body: unknown) => {
+          res.writeHead(status, { "content-type": "application/json" });
+          res.end(JSON.stringify(body));
+          return true;
+        };
+        const body = req.body as Record<string, unknown>;
+        if (req.method === "POST" && req.path === "/hosts/register") return send(200, { host: { id: "host_1", userId: "u1", name: body.name, platform: "test", agents: body.agents, online: true } });
+        if (req.method === "POST" && req.path === "/projects/prj_test/tasks") {
+          task = { id: "task_1", projectId: "prj_test", context: {}, createdBy: { type: "human", name: "Matt" }, hostId: null, changeIds: [], question: null, summary: null, ...body, state: "queued" };
+          return send(200, { task });
+        }
+        if (req.method === "POST" && req.path === "/hosts/host_1/claim") {
+          if (opts.elsewhere) {
+            task = { ...task, state: "running", hostId: "host_2" };
+            return send(409, { error: { code: "not_queued", message: "task is running" } });
+          }
+          if (held-- > 0) return send(200, { task: null });
+          task = { ...task, state: "claimed", hostId: "host_1", startedAt: new Date().toISOString() };
+          return send(200, { task });
+        }
+        if (req.method === "GET" && req.path === "/tasks/task_1") {
+          // The other host finishes on its own time.
+          if (opts.elsewhere && ++reads > 1) task = { ...task, state: "done", summary: "Cut two pauses elsewhere." };
+          return send(200, { task, events: [] });
+        }
+        if (req.method === "GET" && req.path === "/tasks/task_1/prompt") return send(200, { systemPrompt: `SYS from the engine ${req.query.get("workDir")}`, instruction: task!.instruction });
+        if (req.method === "POST" && req.path === "/tasks/task_1/complete") {
+          task = { ...task, state: body.state, summary: body.summary ?? null, ...(body.error ? { error: body.error } : {}) };
+          return send(200, { task });
+        }
+        return false;
       };
       const server = await mock.startMockServer(state);
       onTestFinished(() => server.close());
       const dir = await home();
       await saveConfig({ server: server.url, token: "agent-token" }, { SCARLET_HOME: dir });
       await pathWith(FAKE_CLAUDE);
-      return { server, dir };
+      return { server, dir, task: () => task };
     }
 
-    it("runs one instruction against a project in a private one-shot folder and prints what the agent did", async () => {
+    it("asks the engine for the request and runs it here with the engine's own prompt, as a host runs any request", async () => {
       const { server, dir } = await engine();
       const { out, err } = output();
       const launch = vi.spyOn(runners, "runAgent");
       await main(["run", "--project", "prj_test", "Make", "the first cut"]);
       expect(out()).toEqual(["[log] Claude Code session started; Scarlet MCP connected", "[result] Proposed chg_1.", "\nOK\nProposed chg_1."]);
-      expect(err()).toEqual([]);
+      // The host's own log goes to stderr; nothing in it went wrong.
+      expect(err().filter((line) => /could not|failed/.test(line))).toEqual([]);
       expect(process.exitCode).toBe(0);
-      expect(server.requests.map((r) => `${r.method} ${r.path}`)).toEqual(["GET /projects/prj_test", "GET /skills"]);
-      expect(Object.fromEntries(server.requests[1]!.query)).toEqual({ projectId: "prj_test", view: "prompt" });
-      const [oneshot] = await readdir(join(dir, "work"));
-      expect(oneshot).toMatch(/^oneshot-/);
-      const folder = join(dir, "work", oneshot!);
-      expect((await stat(folder)).mode & 0o777).toBe(0o700);
-      // The project's skills reach the prompt, and the MCP server is pointed at the project and the folder's artifacts.
+      const paths = server.requests.map((r) => `${r.method} ${r.path}`);
+      expect(paths.slice(0, 3)).toEqual(["POST /hosts/register", "POST /projects/prj_test/tasks", "POST /hosts/host_1/claim"]);
+      expect(paths).toContain("GET /tasks/task_1/prompt");
+      expect(paths).toContain("POST /tasks/task_1/complete");
+      // The host never builds a prompt of its own: no project or skills read for one.
+      expect(paths).not.toContain("GET /skills");
+      expect(paths).not.toContain("GET /projects/prj_test");
+      expect(server.requests[1]!.body).toEqual({ kind: "edit", agent: "claude", instruction: "Make the first cut" });
+      expect(server.requests[2]!.body).toEqual({ taskId: "task_1", agents: ["claude"] });
       const options = launch.mock.calls[0]![0];
-      expect(options.systemPrompt).toContain("first-cut-dialogue");
-      expect(options.mcp.env).toEqual({
-        SCARLET_SERVER: server.url, SCARLET_TOKEN: "agent-token", SCARLET_PROJECT: "prj_test", SCARLET_AGENT: "claude", SCARLET_WORKDIR: join(folder, "artifacts"),
-      });
-      expect(await readdir(folder)).toEqual(["artifacts"]);
+      expect(options.systemPrompt).toBe(`SYS from the engine ${options.mcp.env.SCARLET_WORKDIR}`);
+      expect(options.mcp.env).toMatchObject({ SCARLET_SERVER: server.url, SCARLET_TOKEN: "agent-token", SCARLET_PROJECT: "prj_test", SCARLET_TASK: "task_1", SCARLET_AGENT: "claude" });
+      // A task folder like any run's, left with only its artifacts.
+      const [folder] = await readdir(join(dir, "work", "tasks-v2"));
+      expect(options.cwd).toBe(join(dir, "work", "tasks-v2", folder!));
+      expect((await stat(options.cwd)).mode & 0o777).toBe(0o700);
+      expect(await readdir(options.cwd)).toEqual(["artifacts"]);
     });
 
-    it("still runs, and says so, when the project's skills can't be loaded", async () => {
-      await engine(503);
-      const { out, err } = output();
+    it("waits its turn behind the project's other requests", async () => {
+      const { server } = await engine({ heldFor: 1 });
+      const { out } = output();
+      await main(["run", "--project", "prj_test", "Make the first cut"]);
+      expect(server.requests.filter((r) => r.path === "/hosts/host_1/claim")).toHaveLength(2);
+      expect(out().at(-1)).toBe("\nOK\nProposed chg_1.");
+    });
+
+    it("follows a request another host took to its end", async () => {
+      await engine({ elsewhere: true });
+      const { out } = output();
       const launch = vi.spyOn(runners, "runAgent");
       await main(["run", "--project", "prj_test", "Make the first cut"]);
-      expect(err()).toEqual(["[scarlet-agent] could not load the project's skills; running without them: skills are being reindexed"]);
-      expect(out().at(-1)).toBe("\nOK\nProposed chg_1.");
-      expect(launch.mock.calls[0]![0].systemPrompt).not.toContain("first-cut-dialogue");
+      expect(launch).not.toHaveBeenCalled();
+      expect(out().at(-1)).toBe("\nOK\nCut two pauses elsewhere.");
+      expect(process.exitCode).toBe(0);
     });
 
     it("exits 1 with the agent's error when the run fails", async () => {
@@ -255,18 +295,8 @@ describe("scarlet-agent", { timeout: 30_000 }, () => {
       await main(["run", "--project", "prj_test", "--agent", "claude", "Make the first cut"]);
       expect(out().at(-1)).toBe("\nFAILED\nRate limited\nerror: Rate limited");
       expect(process.exitCode).toBe(1);
-      const [oneshot] = await readdir(join(dir, "work"));
-      expect(await readdir(join(dir, "work", oneshot!))).toEqual(["artifacts"]);
-    });
-
-    it("reports a cleanup failure alongside the completed run", async () => {
-      await engine();
-      const { out, err } = output();
-      vi.spyOn(host, "removeControlFiles").mockRejectedValueOnce(new Error("file is busy"));
-      await main(["run", "--project", "prj_test", "Make the first cut"]);
-      expect(process.exitCode).toBe(0);
-      expect(out().at(-1)).toBe("\nOK\nProposed chg_1.");
-      expect(err()).toEqual([expect.stringContaining("file is busy")]);
+      const [folder] = await readdir(join(dir, "work", "tasks-v2"));
+      expect(await readdir(join(dir, "work", "tasks-v2", folder!))).toEqual(["artifacts"]);
     });
   });
 });

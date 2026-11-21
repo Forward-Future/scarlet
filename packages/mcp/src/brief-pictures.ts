@@ -28,7 +28,7 @@ export const CUT_GRID = { cols: 64, rows: 36 } as const;
 export const CUT_SHOWN = 0.25;
 
 /** The area of its source a clip puts on screen at `local` seconds, as fractions of the source, or null when none is. */
-function sourceOnScreen(clip: MediaClip, local: number, source: { width: number; height: number }, canvas: { width: number; height: number }): Box | null {
+export function sourceOnScreen(clip: MediaClip, local: number, source: { width: number; height: number }, canvas: { width: number; height: number }): Box | null {
   const [l, t, r, b] = pictureBox(clip, local, source, canvas);
   const seen: Box = [Math.max(0, l), Math.max(0, t), Math.min(1, r), Math.min(1, b)];
   if (seen[2] <= seen[0] || seen[3] <= seen[1] || r <= l || b <= t) return null;

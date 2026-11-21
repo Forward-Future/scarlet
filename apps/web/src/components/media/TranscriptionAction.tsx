@@ -15,7 +15,7 @@ const unknownNotice = "Audio may be sent to OpenAI, depending on your transcript
 type TranscriptionFix = { label: string; to: string } | { label: string; turnOnLocal: true };
 
 export function useImportTranscription() {
-  // `local`: the notice only says transcription runs on this computer, which Media and Add from a link leave out.
+  // `local`: the notice only says transcription runs on this computer, which Media leaves out.
   // No notice until the settings answer: the OpenAI one would flash each time Media opens, also where audio stays here.
   const [policy, setPolicy] = useState<{ available?: boolean | null; notice: string; local?: boolean; fix?: TranscriptionFix }>({ notice: "" });
   const [revision, setRevision] = useState(0);

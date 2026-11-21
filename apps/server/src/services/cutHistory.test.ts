@@ -40,6 +40,8 @@ it("calls the whole video the video when a restore can't go ahead, and restores 
   expect(change.description).toBe(`Restore · ${first.version}`);
   expect(ctx.repos.versions.summaries(project.id, restored.head).map(v => v.version)).toEqual(expect.arrayContaining([first.version, second.version, restored.head]));
   expect(ctx.repos.versions.summaries(project.id, restored.head).find(v => v.isHead)).toMatchObject({ parent: second.version, duration: 60 });
+  const entry = ctx.repos.activity.select("project_id = ? AND type = 'version.restored'", [project.id])[0]!;
+  expect(entry.data).toMatchObject({ changeId: change.id, target: first.version, from: second.version, version: restored.head, branch, durationBefore: 40, durationAfter: 60 });
 });
 
 it("puts a rejected cut's footage back itself, and refuses a cut whose join it can't find", () => {
@@ -65,6 +67,11 @@ it("puts a rejected cut's footage back itself, and refuses a cut whose join it c
   expect(now.tracks.flatMap(t => t.clips).filter(c => c.kind === "media").map(c => [c.timelineIn, c.sourceIn, c.sourceOut]).sort((a, b) => a[0]! - b[0]!))
     .toEqual(expect.arrayContaining([[0, 0, 40], [40, 45, 60]]));
   expect(ctx.repos.versions.summaries(project.id, after.head).find(v => v.isHead)).toMatchObject({ parent: cut.version, duration: 55 });
+  const entry = ctx.repos.activity.select("project_id = ? AND type = 'change.undone'", [project.id])[0]!;
+  expect(entry.data).toMatchObject({
+    changeId: change.id, threadId: "thread", from: cut.version, version: after.head, branch, durationBefore: 53, durationAfter: 55,
+    rejected: [{ changeId: "chg_pass", spot: 0, label: "Trimmed the pause.", range: { start: 8.5, end: 11.5 } }],
+  });
 });
 
 it("takes a look edit off again itself, undoes a request whose every edit is rejected, and asks Scarlet for the rest", () => {

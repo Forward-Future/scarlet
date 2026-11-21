@@ -1,13 +1,13 @@
 import { sourceEnergyReader, transcriptSourceReader } from "../services/sourceEnergy.js";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { rm, stat } from "node:fs/promises";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { MultipartParseError, parseMultipartRequest } from "@remix-run/multipart-parser/future";
 import { fileInDirectoryAsync, hasIndexedAvc } from "@scarlet/render";
 import { Hono } from "hono";
 import { z } from "zod/v3";
-import { DialogueVoiceRoles, isPlayableMedia, MediaKind, Provenance } from "@scarlet/timeline";
+import { DialogueVoiceRoles, isPlayableMedia, MediaKind, Provenance, WebSource } from "@scarlet/timeline";
 import { flattenWords } from "@scarlet/shared";
 import { retakeGroups } from "@scarlet/mcp/media-profile";
 import type { AppEnv } from "../auth.js";
@@ -21,7 +21,7 @@ import { AnalysisCache } from "../services/analysisCache.js";
 import { transcriptReader } from "../services/transcriptReader.js";
 import { otherInputReader } from "../services/otherInput.js";
 import { sourceCacheStatuses, sourcePreviews } from "../services/sourcePreviews.js";
-import { pictureDecoder, pictureLane } from "../services/pictureWork.js";
+import { framePriority, pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
 import { getWaveform, ingestMedia, readWaveformCache, removeUnreadableMedia, settleAlignment, startTranscription, transcriptionHeld, writeHashedFile } from "../services/ingest.js";
 import { realignTranscript } from "../services/realign.js";
@@ -32,6 +32,35 @@ import { editorFirst } from "../services/editorFirst.js";
 const ImportRequest = z
   .object({ path: z.string().optional(), url: z.string().url().optional(), kind: MediaKind.optional(), name: z.string().optional(), importId: z.string().uuid().optional(), deferFormat: z.boolean().optional() })
   .refine((b) => !!b.path || !!b.url, { message: "provide `path` or `url`" });
+
+/** How large a captured page can be. A full-page capture of a long article is a few megabytes. */
+const CAPTURE_BYTES = 32 * 1024 * 1024;
+
+/** The kind of picture a capture is, from its first bytes: a PNG, JPEG or WebP, or none of them. */
+function pictureType(head: Buffer) {
+  if (head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "png";
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return "jpg";
+  if (head.subarray(0, 4).toString("latin1") === "RIFF" && head.subarray(8, 12).toString("latin1") === "WEBP") return "webp";
+}
+
+/** Keep the page a picture from the web was taken from, as captured, beside the project's media. Returns where, from the project's folder. */
+async function saveCapture(ctx: Ctx, projectId: string, part: AsyncIterable<Uint8Array>, signal: AbortSignal) {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for await (const chunk of part) {
+    size += chunk.length;
+    if (size > CAPTURE_BYTES) throw badRequest("bad_capture", "The captured page is too large.");
+    chunks.push(chunk);
+  }
+  const data = Buffer.concat(chunks);
+  const type = pictureType(data);
+  if (!type) throw badRequest("bad_capture", "A captured page is a PNG, JPEG or WebP picture.");
+  const folder = ctx.paths.sources(projectId);
+  await mkdir(folder, { recursive: true, mode: 0o700 });
+  const name = `${randomUUID()}.${type}`;
+  await writeFile(join(folder, name), data, { flag: "wx", signal });
+  return `sources/${name}`;
+}
 
 /** A transcript and a waveform are read from a file's sound. */
 function requireAudio(media: { name: string; kind: MediaKind; hasAudio?: boolean }) {
@@ -80,11 +109,14 @@ export function mediaRoutes(ctx: Ctx) {
     ctx.paths.ensureProject(project.id);
     const signal = AbortSignal.any([ctx.projectSignal(project.id), c.req.raw.signal]);
     const staged = join(ctx.paths.media(project.id), `.${randomUUID()}.part`);
+    // The page as captured, from the project's folder, until the file it belongs to is in the project.
+    let capture: string | undefined;
     try {
       let hash: string | undefined;
       let name: string | undefined;
       let kind: string | undefined;
       let provenance: Provenance | undefined;
+      let source: WebSource | undefined;
       for await (const part of parseMultipartRequest(c.req.raw, { maxFileSize: Infinity })) {
         if (part.name === "file" && part.isFile) {
           if (name) throw badRequest("duplicate_file", "Send one file per upload");
@@ -105,6 +137,24 @@ export function mediaRoutes(ctx: Ctx) {
           } catch {
             throw badRequest("bad_provenance", "Invalid media provenance");
           }
+        } else if (part.name === "source" && !part.isFile) {
+          // Where a picture or clip from the web came from. The page as captured, if any, comes as its own file.
+          if (source) throw badRequest("bad_source", "Send one source field per upload");
+          const chunks: Uint8Array[] = [];
+          let size = 0;
+          for await (const chunk of part) {
+            size += chunk.length;
+            if (size > 16384) throw badRequest("bad_source", "The source is too large");
+            chunks.push(chunk);
+          }
+          try {
+            source = WebSource.omit({ capture: true }).parse(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+          } catch {
+            throw badRequest("bad_source", "A source needs the web address of the page it came from.");
+          }
+        } else if (part.name === "capture" && part.isFile) {
+          if (capture) throw badRequest("bad_capture", "Send one captured page per upload");
+          capture = await saveCapture(ctx, project.id, part, signal);
         } else if (part.name === "kind" && !part.isFile) {
           kind = "";
           for await (const chunk of part) {
@@ -114,19 +164,25 @@ export function mediaRoutes(ctx: Ctx) {
         }
       }
       if (!name || !hash) throw badRequest("missing_file", "multipart field `file` is required");
+      if (capture && !source) throw badRequest("bad_capture", "A captured page comes with the address it was captured from.");
       const media = await ingestMedia(ctx, project, { type: "upload", path: staged, hash }, {
         checkAttempt: () => requireLocalPauseTarget(requireProjectEditAttempt(ctx, attempt, project.id)),
         name, transcription, deferFormat: c.req.query("deferFormat") === "true",
         kind: kind ? MediaKind.parse(kind) : undefined,
-        by: provenance ?? { by: "human", name: c.var.user.name, createdAt: new Date().toISOString() },
+        // Which run added it is the engine's to say, from the run's own attempt.
+        by: provenance ? { ...provenance, taskId: attempt?.taskId || undefined } : { by: "human", name: c.var.user.name, createdAt: new Date().toISOString() },
+        source: source && { ...source, ...(capture && { capture }) },
         uploadedBy: c.var.user.id,
       });
+      capture = undefined;
       return c.json({ media }, 201);
     } catch (error) {
       if (error instanceof MultipartParseError) throw badRequest("bad_upload", "Incomplete or invalid upload. Please try again.");
       throw error;
     } finally {
       await rm(staged, { force: true });
+      // A capture whose file didn't go into the project isn't kept.
+      if (capture) await rm(join(ctx.paths.project(project.id), capture), { force: true });
     }
   });
 
@@ -234,6 +290,15 @@ export function mediaRoutes(ctx: Ctx) {
   r.get("/media/:mediaId/file", (c) => {
     const media = requireMedia(ctx, c.req.param("mediaId"));
     return serveOriginal(c.req.raw, join(ctx.paths.media(media.projectId), media.path));
+  });
+
+  // The page a picture from the web was taken from, as captured, for the card of the edit that uses it.
+  r.get("/media/:mediaId/source-capture", async (c) => {
+    const media = requireMedia(ctx, c.req.param("mediaId"));
+    const capture = media.source?.capture;
+    const file = capture?.startsWith("sources/") && await fileInDirectoryAsync(ctx.paths.sources(media.projectId), capture.slice("sources/".length));
+    if (!file) throw notFound("captured page");
+    return serveFile(c.req.raw, file, { contentType: `image/${/\.png$/.test(file) ? "png" : /\.webp$/.test(file) ? "webp" : "jpeg"}` });
   });
 
   r.get("/media/:mediaId/proxy", (c) => {
@@ -394,8 +459,8 @@ export function mediaRoutes(ctx: Ctx) {
       return ctx.render.extractFrame(file, t, { width: w, signal, indexedMp4, decoder, area, grid });
     };
     try {
-      // Frames share the engine’s picture lane with contact sheets. The editor’s own requests go first.
-      const priority = c.req.query("priority") === "interactive";
+      // Frames share the engine’s picture lane with contact sheets. The editor’s own requests go first, then the timeline’s.
+      const priority = framePriority(c.req.query("priority"));
       const jpeg = await frames.get(key, signal => ctx.track(pictureLane(ctx).run(() => frame(signal), { priority, signal }), media.projectId), {
         priority, signal: c.req.raw.signal,
       });

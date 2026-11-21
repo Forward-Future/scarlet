@@ -27,6 +27,22 @@ function useCutPassage(timeline: Timeline, media: MediaAsset[], range: TimeRange
   return { ...parts, pending: loading && !transcripts.length, error, retry };
 }
 
+/** At most this many of a cut's words read in the line at the top of its card; more end in an ellipsis. */
+const LINE_WORDS = 10;
+
+/**
+ * The line at the top of a cut's card that says exactly what it takes out: its words, struck, or its length when it
+ * took out no words (a pause) or they haven't arrived.
+ */
+export function CutWordsLine({ timeline, media, range, length, verb }: {
+  timeline: Timeline; media: MediaAsset[]; range: TimeRange; length: string; verb: string;
+}) {
+  const { removed } = useCutPassage(timeline, media, range);
+  const shown = removed.slice(0, LINE_WORDS);
+  return <p className="edit-card-what">{verb}{" "}
+    {shown.length ? <del className="review-removed">“<Words items={shown} />{removed.length > shown.length && " …"}”</del> : length}</p>;
+}
+
 /** An edit card reads at least this many words either side of its cut, a whole sentence or more, and at most CONTEXT_MOST. */
 const CONTEXT_LEAST = 12;
 const CONTEXT_MOST = 32;

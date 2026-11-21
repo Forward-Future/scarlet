@@ -74,7 +74,7 @@
  *   GET    /projects/:id/tasks?state=                    → { tasks: Task[] }
  *   GET    /tasks/:taskId                                → { task: Task, events: TaskEvent[] }
  *   GET    /tasks/:taskId/prompt?workDir=&fresh=         → TaskPrompt (what the agent is told; hosts call this before each run)
- *   POST   /tasks/:taskId/cancel?queuedOnly=1            → { task: Task } (queuedOnly is optional)
+ *   POST   /tasks/:taskId/cancel?queuedOnly=1&withdrawn=1 → { task: Task } (both optional; withdrawn: the editor took the words back, so no rule is learned from them)
  *   POST   /tasks/:taskId/retry  RunChoice?              → { task: Task } (resume an interrupted request or retry a failure, on the model given)
  *   POST   /tasks/:taskId/answer    { text }             → { task: Task }     (human answers an agent question)
  *   GET    /projects/:id/usage?by=thread|task|agent|model|day → UsageResponse  (agent token usage, newest group first)
@@ -88,7 +88,7 @@
  *   POST   /tasks/:taskId/events    TaskEvent            → {}
  *   POST   /tasks/:taskId/question  { startedAt?, text, sessionId? } → { waiting: boolean } (once per claim; hosts add the CLI session that asked)
  *   POST   /tasks/:taskId/complete  CompleteTaskRequest  → { task: Task }
- *   POST   /tasks/:taskId/usage     RecordTaskUsageRequest → {}           (tokens one run reported; once per run)
+ *   POST   /tasks/:taskId/usage     RecordTaskUsageRequest → {}           (tokens one claim reported so far; startedAt names the claim)
  *   GET    /hosts                                       → { hosts: AgentHost[] }
  *
  *  Skills
@@ -203,8 +203,6 @@ export const ProjectSummary = z.object({
    * Nothing while Scarlet is idle. Old engines omit it.
    */
   activity: z.array(ProjectActivity).optional(),
-  /** The project this one was made from, as a short of it. */
-  source: Project.shape.source,
   updatedAt: z.string().datetime().optional(),
   createdAt: z.string().datetime().optional(),
 });
@@ -229,12 +227,7 @@ export const UpdateProjectRequest = z.object({
   archived: z.boolean().optional(),
   name: z.string().min(1).optional(),
   settings: ProjectSettings.partial().optional(),
-  /** False once the editor dismisses the line in a short's chat that says which project it was made from. */
-  sourceNotice: z.literal(false).optional(),
 });
-
-/** The shapes a short can take. */
-export const ShortAspect = z.enum(["9:16", "1:1", "4:5"]);
 
 
 // ---------------------------------------------------------------------------
@@ -720,6 +713,7 @@ export const TaskKind = z.enum([
   "skill_edit", // revise one skill as the editor described; not part of a project's conversation
   "learning_check", // read one request for a standing rule to offer; started with the request, beside it
   "area_check", // look at one frame of a recording and say what of it viewers may see; started when a save needs it
+  "broll_make", // retired 2026-11-21: a run beside a request that made one piece of B-roll. Every request has the shell and the web now. Kept so saved tasks still read.
   "transcribe", // server-side job, not dispatched to hosts
 ]);
 export type TaskKind = z.infer<typeof TaskKind>;
@@ -825,19 +819,6 @@ export const Task = z.object({
       pictureMarks: PictureMarks.optional(),
       /** What such a request asked of the agent, without the thread's history. Its name alone doesn't say which edit, so the thread's later requests are told this. */
       asked: z.string().optional(),
-      /**
-       * A request Make shorts started in one of the projects it made: which short this is, the project and version it
-       * was made from, and what the editor chose. The first short's run chooses every short's moment; the others are
-       * started with theirs, in timeline seconds on the copied edit.
-       */
-      short: z.object({
-        index: z.number().int().positive(), count: z.number().int().positive(),
-        sourceProjectId: Id, sourceName: z.string(), sourceVersion: Id,
-        aspect: ShortAspect, maxSeconds: z.number().positive(), captions: z.boolean(),
-        /** Every project Make shorts made for this request, in order, the first included. */
-        projectIds: z.array(Id),
-        moment: z.object({ start: Seconds, end: Seconds, title: z.string() }).optional(),
-      }).optional(),
     })
     .default({}),
   state: TaskState,
@@ -851,6 +832,13 @@ export const Task = z.object({
     /** Every audible passage in scope was checked and there were no repeats or joins to review. */
     noFindings: z.boolean().optional(),
     unavailable: z.array(z.string()).optional(), returns: z.number().int().nonnegative().default(0),
+    /**
+     * How many times the pass has gone back for its closing check, in all. `returns` starts again whenever a check gets
+     * somewhere; this doesn't, so a check that fixes one finding and makes another stops instead of running for ever.
+     */
+    totalReturns: z.number().int().nonnegative().optional(),
+    /** When the pass last went back for its closing check: an answer given before then was the pass's, not the check's. */
+    queuedAt: z.string().datetime().optional(),
     /** The pass had finished and the check it went back for couldn't run: why. The pass stands; Retry runs the check. */
     failed: z.string().optional(),
   }).optional(),
@@ -901,6 +889,11 @@ export const Task = z.object({
   startsBeforeCalls: z.boolean().optional(),
   /** The CLI session that asked the pending question; the host resumes it with the answer. */
   session: z.object({ agent: AgentId, id: z.string().min(1) }).optional(),
+  /**
+   * This attempt's CLI session carries on in the attempt that resumes it (`retryTaskId`), as after a quit or a pause of
+   * the project's editing. The host keeps the session's files when the run ends; a run the editor stopped has none.
+   */
+  sessionCarriesOn: z.boolean().optional(),
   /** Pending question from the agent, if waiting_for_user. */
   question: z.string().nullable().default(null),
   /** Where the editor can hear the updated passage while answering a question about a staged cut. */
@@ -984,9 +977,14 @@ export function isAreaCheck(task: Pick<Task, "kind">): boolean {
   return task.kind === "area_check";
 }
 
-/** A run that edits no video, so it stays out of the project's conversation and queue: a skill edit, a learning check or an area check. */
+/** A retired kind of run, which made one piece of B-roll beside a request. One saved earlier stays out of the conversation. */
+export function isBrollMake(task: Pick<Task, "kind">): boolean {
+  return task.kind === "broll_make";
+}
+
+/** A run that edits no video, so it stays out of the project's conversation and queue: a skill edit, a learning check, or an area check. */
 export function isAsideTask(task: Pick<Task, "kind">): boolean {
-  return isSkillEdit(task) || isLearningCheck(task) || isAreaCheck(task);
+  return isSkillEdit(task) || isLearningCheck(task) || isAreaCheck(task) || isBrollMake(task);
 }
 
 /**
@@ -1026,34 +1024,8 @@ export const CreateTaskRequest = z.object({
   serviceTier: AgentOptionId.optional(),
   instruction: z.string().min(1),
   voiceTranscript: z.string().optional(),
-  context: Task.shape.context.removeDefault().omit({ dialogueOperation: true, dialogueRange: true, short: true }).optional(),
+  context: Task.shape.context.removeDefault().omit({ dialogueOperation: true, dialogueRange: true }).optional(),
 });
-
-/** What the editor chose in Make shorts. Each short becomes a project of its own, made from this one's finished edit. */
-export const MakeShortsRequest = z.object({
-  /** Up to this many: the run that chooses the moments may find fewer that stand on their own. */
-  count: z.number().int().min(1).max(5),
-  aspect: ShortAspect,
-  /** Each short runs under this long. */
-  maxSeconds: z.number().int().min(10).max(600),
-  captions: z.boolean(),
-  agent: AgentId,
-  model: z.string().optional(),
-  effort: AgentEffort.optional(),
-  fast: z.boolean().optional(),
-  serviceTier: AgentOptionId.optional(),
-});
-export type MakeShortsRequest = z.infer<typeof MakeShortsRequest>;
-
-/** The moments the first short's run chose, in timeline seconds on the copied edit, one per short, in order. */
-export const ShortsPlanRequest = z.object({
-  moments: z.array(z.object({
-    start: Seconds, end: Seconds,
-    /** The short's name: what the editor sees in the library and the project's header. */
-    title: z.string().trim().min(1).max(80),
-  })).min(1).max(5),
-});
-export type ShortsPlanRequest = z.infer<typeof ShortsPlanRequest>;
 
 /**
  * New words for a request still waiting its turn, and the skills their /commands name, resolved as a send resolves
@@ -1216,6 +1188,18 @@ export const TaskPrompt = z.object({
   resumeSession: z.string().optional(),
   /** Launch the CLI with its own to-do tool on, so the plan it keeps reaches Scarlet (`plan` in capabilities.ts). */
   plan: z.boolean().optional(),
+  /**
+   * What the host tells the model after refusing it a tool that isn't Scarlet's, with `{tool}` standing for the tool's
+   * name. A host given none says it in its own words.
+   */
+  refusedTool: z.string().optional(),
+  /**
+   * Launch the CLI with its harness's own shell, file and web tools beside Scarlet's, the shell sandboxed to the task
+   * folder (`workspaceCapabilities` in capabilities.ts). Every request has them, and what to use them for is the
+   * model's call (the editor's decision, 2026-11-21: no rule in Scarlet's code picks which run gets them). A side check
+   * and a skill's revision, which edit no video, don't. Absent, the host offers Scarlet's tools only.
+   */
+  workspace: z.boolean().optional(),
 });
 export type TaskPrompt = z.infer<typeof TaskPrompt>;
 
@@ -1240,7 +1224,10 @@ export const AgentUsage = z.object({
 });
 export type AgentUsage = z.infer<typeof AgentUsage>;
 
-/** One run of a task. `startedAt` is the claim's start, so a repeated report replaces the first. */
+/**
+ * One run of a task, as a cumulative total. `startedAt` is the claim's start, which the engine requires: a report for
+ * the same claim replaces a smaller one, so a late snapshot can't undo the final total.
+ */
 export const RecordTaskUsageRequest = AgentUsage.extend({ startedAt: z.string().datetime().optional() });
 export type RecordTaskUsageRequest = z.input<typeof RecordTaskUsageRequest>;
 

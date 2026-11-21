@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeFaces, faceYaw, facesDiffer, FACE_SIDE, type Face } from "../transcribe/faceModel.js";
+import { blendshapeInput, decodeFaces, faceYaw, facesDiffer, lookDown, meshInput, FACE_SIDE, type Face } from "../transcribe/faceModel.js";
 import { faceSample, faceTracks, type FaceSample } from "./faces.js";
 
 /** YuNet's outputs with nothing found, and a way to place a face on one anchor. */
@@ -142,6 +142,42 @@ describe("face tracks", () => {
 
   it("keeps a frame's faces compactly", () => {
     expect(faceSample(1.23456, [{ box: [0.12345, 0.2, 0.3, 0.4], score: 0.9345, yaw: -12, eyes: [0.21156, 0.28] }]))
-      .toEqual({ at: 1.235, faces: [[0.123, 0.2, 0.3, 0.4, 0.93, -12, 0.212, 0.28]] });
+      .toEqual({ at: 1.235, faces: [[0.123, 0.2, 0.3, 0.4, 0.93, -12, 0.212, 0.28, null]] });
+    expect(faceSample(2, [{ box: [0.1, 0.2, 0.3, 0.4], score: 0.9, yaw: 0, eyes: [0.2, 0.28], down: 0.62 }]).faces[0]![8]).toBe(0.62);
+  });
+
+  it("says how far a span's eyes usually look down, and starts a span where they look down or back up for more than a frame", () => {
+    const looking = (down: (t: number) => number) => (t: number) => [{ ...at(0.4), down: down(t) }];
+    // At the lens to 6 s, then down at a laptop: one blink down at 3 s keeps the span.
+    const { spans } = faceTracks([{ start: 0, end: 12, samples: frames(0, 12, looking(t => t === 3 ? 0.7 : t < 6 ? 0.1 : 0.65)) }]);
+    expect(spans.map(s => [s.start, s.end, s.eyesDown])).toEqual([[0, 6, 0.1], [6, 12, 0.65]]);
+    // A face whose eyes weren't read has no eyesDown.
+    expect(faceTracks([{ start: 0, end: 4, samples: frames(0, 4, t => [at(0.4 + 0 * t)]) }]).spans[0]!.eyesDown).toBeUndefined();
+  });
+});
+
+describe("where the eyes look", () => {
+  it("draws the face's box with room round it, square, as the mesh takes it", () => {
+    // A 4 × 2 picture, red rising left to right; a face box on its middle two columns.
+    const rgb = new Uint8Array(4 * 2 * 3);
+    for (let x = 0; x < 4; x++) for (let y = 0; y < 2; y++) rgb[(y * 4 + x) * 3] = 60 * (x + 1);
+    const input = meshInput(rgb, 4, 2, [0.25, 0, 0.75, 1]);
+    expect(input).toHaveLength(256 * 256 * 3);
+    // 2 pixels wide grown to 3, from x 0.5 to 3.5: its left edge on column 0, its right on column 3, its top and bottom past the picture black.
+    expect(input[(128 * 256 + 2) * 3]).toBeCloseTo(60 / 255);
+    expect(input[(128 * 256 + 253) * 3]).toBeCloseTo(240 / 255);
+    expect(input[(2 * 256 + 128) * 3]).toBe(0);
+  });
+
+  it("hands the blendshape model its 146 points and reads how far both eyes look down", () => {
+    const mesh = Float32Array.from({ length: 478 * 3 }, (_, i) => i);
+    const points = blendshapeInput(mesh);
+    expect(points).toHaveLength(292);
+    // The first point is the mesh's 0, the last its 477.
+    expect([...points.slice(0, 2)]).toEqual([0, 1]);
+    expect([...points.slice(-2)]).toEqual([477 * 3, 477 * 3 + 1]);
+    const scores = new Float32Array(52);
+    scores[11] = 0.6; scores[12] = 0.71;
+    expect(lookDown(scores)).toBe(0.66);
   });
 });

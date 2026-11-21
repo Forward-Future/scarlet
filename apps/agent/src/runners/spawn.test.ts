@@ -1,20 +1,42 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, relative } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { repeatStop } from "../processTree.js";
-import { mcpEnv, nodeExecutable, quoteForCmd, resolveCli, resolveMcpCliPath, runnerSpec, spawnLines, spawnSpec, tailSummary, type SpawnLinesOptions } from "./spawn.js";
+import { killStoppedNow, repeatStop, stopOrphans, stillRuns } from "../processTree.js";
+import { ASLEEP_AFTER_MS, mcpEnv, nodeExecutable, quoteForCmd, resolveCli, resolveMcpCliPath, runnerSpec, spawnLines, spawnSpec, tailSummary, watchClock, type SpawnLinesOptions } from "./spawn.js";
 
-// The kill goes through as usual unless a test asks to lose the next one, as a process being forked at that moment would.
-const stops = vi.hoisted(() => ({ calls: 0, lose: 0 }));
+// The stop goes through as usual unless a test asks to lose the next one, as a process being forked at that moment would.
+const stops = vi.hoisted(() => ({ calls: 0, kills: 0, lose: 0 }));
 vi.mock("../processTree.js", async (real) => {
   const actual = await real<typeof import("../processTree.js")>();
-  return { ...actual, stopCliTree: (child: Parameters<typeof actual.stopCliTree>[0]) => {
+  return { ...actual, stopCliTree: (...args: Parameters<typeof actual.stopCliTree>) => {
     stops.calls++;
     if (stops.lose > 0) { stops.lose--; return; }
-    actual.stopCliTree(child);
+    actual.stopCliTree(...args);
+  }, killCliTree: (...args: Parameters<typeof actual.killCliTree>) => {
+    stops.kills++;
+    actual.killCliTree(...args);
   } };
 });
+
+/** Wait until `check` holds, or fail after `ms`. */
+async function until(check: () => boolean | Promise<boolean>, ms = 5000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error("timed out waiting");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 /** Run the rest of the test as if on another OS. Paths and the file system stay this machine's. */
 function onPlatform(platform: NodeJS.Platform) {
@@ -80,21 +102,76 @@ describe("spawnLines", { timeout: 20_000 }, () => {
     expect(outcome).toMatchObject({ aborted: true, timedOut: false, killed: true });
   });
 
-  it.skipIf(process.platform === "win32")("sends the kill again when the first one is missed, and none once the CLI is gone", async () => {
+  it.skipIf(process.platform === "win32")("kills the group when the first stop is missed, and sends nothing once the CLI is gone", async () => {
     stops.calls = 0;
+    stops.kills = 0;
     stops.lose = 1;
     const started = Date.now();
-    const { handle, done } = node("console.log('up');setTimeout(()=>{},30000)", { onLine: () => handle.kill() });
+    const { handle, done } = node("console.log('up');setTimeout(()=>{},30000)", { killAfterMs: 300, onLine: () => handle.kill() });
     expect(await done).toMatchObject({ killed: true, signal: "SIGKILL" });
     expect(Date.now() - started).toBeLessThan(10_000);
-    expect(stops.calls).toBe(2);
+    expect([stops.calls, stops.kills]).toEqual([1, 1]);
 
     stops.calls = 0;
-    const quick = node("console.log('done')");
+    stops.kills = 0;
+    const quick = node("console.log('done')", { killAfterMs: 100 });
     await quick.done;
     quick.handle.kill();
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    expect(stops.calls).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, 1300));
+    expect([stops.calls, stops.kills]).toEqual([0, 0]);
+  });
+
+  it.skipIf(process.platform === "win32")("asks a CLI to stop and lets it finish (Claude Code writes its session then), killing it only once its time is up", async () => {
+    const dir = await tempDir();
+    const polite = join(dir, "polite");
+    // A CLI that tidies up when asked to stop, as Claude Code does: SIGKILL would give it no chance.
+    const tidy = node(`process.on("SIGTERM",()=>{require("fs").writeFileSync(${JSON.stringify(polite)},"saved");process.exit(0)});console.log("up");setInterval(()=>{},1000)`,
+      { onLine: () => tidy.handle.kill() });
+    expect(await tidy.done).toMatchObject({ killed: true, code: 0, signal: null });
+    expect(await readFile(polite, "utf8")).toBe("saved");
+
+    // One that ignores the request is killed after its time to finish, with whatever it started.
+    const started = Date.now();
+    const deaf = node(`process.on("SIGTERM",()=>{});console.log("up");setInterval(()=>{},1000)`, { killAfterMs: 400, onLine: () => deaf.handle.kill() });
+    expect(await deaf.done).toMatchObject({ killed: true, signal: "SIGKILL" });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(400);
+  });
+
+  it.skipIf(process.platform === "win32")("at exit, kills the group of a CLI it has just asked to stop", async () => {
+    const dir = await tempDir();
+    const pids = join(dir, "pids");
+    // The CLI leaves at once when asked; the process it started ignores the request and holds on.
+    const script = `const c=require("child_process").spawn("sh",["-c","trap '' TERM; echo $$ > ${pids}; while :; do sleep 0.1; done"],{stdio:"ignore"});` +
+      `process.on("SIGTERM",()=>process.exit(0));console.log("up");setInterval(()=>{},1000)`;
+    const run = node(script, { killAfterMs: 60_000, onLine: () => void until(async () => !!(await readFile(pids, "utf8").catch(() => ""))).then(() => run.handle.kill()) });
+    await run.done;
+    const straggler = Number((await readFile(pids, "utf8")).trim());
+    onTestFinished(() => { try { process.kill(straggler, "SIGKILL"); } catch { /* gone */ } });
+    expect(alive(straggler)).toBe(true);
+    killStoppedNow();
+    await until(() => !alive(straggler));
+  });
+
+  it.skipIf(process.platform === "win32")("doesn't count time the computer slept toward a run's stall or time limit", async () => {
+    // The computer sleeps for an hour a moment into each run: both the watchdog's clock and the wall clock jump.
+    const sleepFor = (ms: number) => {
+      const [clock, wall] = [watchClock.now, Date.now];
+      const at = clock() + 300;
+      vi.spyOn(watchClock, "now").mockImplementation(() => clock() + (clock() >= at ? ms : 0));
+      vi.spyOn(Date, "now").mockImplementation(() => wall() + (clock() >= at ? ms : 0));
+      onTestFinished(() => { vi.restoreAllMocks(); });
+    };
+    sleepFor(60 * 60_000);
+    const quiet = await node("setTimeout(()=>{},2500)", { stallMs: 2000 }).done;
+    expect(quiet).toMatchObject({ code: 0, stalled: false, timedOut: false, killed: false });
+    vi.restoreAllMocks();
+    sleepFor(60 * 60_000);
+    const busy = await node("setInterval(()=>console.log('working'),100);setTimeout(()=>process.exit(0),2500)", { timeoutMs: 2000 }).done;
+    expect(busy).toMatchObject({ code: 0, timedOut: false, killed: false });
+    vi.restoreAllMocks();
+    // A clock a few seconds late is a busy machine, not sleep: it counts, and a quiet CLI still stalls.
+    sleepFor(ASLEEP_AFTER_MS / 6);
+    expect(await node("setTimeout(()=>{},5000)", { stallMs: 2000 }).done).toMatchObject({ stalled: true, timedOut: true, killed: true });
   });
 
   it("on Windows, sends the tree kill again only while the CLI lives, and after that stops waiting on its output", () => {
@@ -138,6 +215,58 @@ describe("spawnLines", { timeout: 20_000 }, () => {
     expect(outcome.stderr.length).toBeLessThanOrEqual(64_000);
     expect(outcome.stderr.endsWith("\nthe reason it failed")).toBe(true);
     expect(outcome.stderr).not.toContain("first line");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("CLIs an earlier launch left running", { timeout: 20_000 }, () => {
+  /** A process that stays up until stopped, as a CLI would. */
+  function idler() {
+    const child = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    onTestFinished(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } });
+    return child;
+  }
+  const stamp = async (pid: number) => (await new Promise<string>((resolve) => {
+    let out = "";
+    spawn("ps", ["-o", "lstart=", "-p", String(pid)]).stdout.on("data", (d) => (out += d)).on("end", () => resolve(out));
+  })).trim();
+
+  it("recognises a noted CLI only by its id, program and start time", async () => {
+    const child = idler();
+    await until(async () => !!(await stamp(child.pid!)));
+    const started = await stamp(child.pid!);
+    expect(await stillRuns(child.pid!, `/bin/sleep\n${started}`)).toBe(true);
+    // The id given to another program, or the same program started at another time, is someone else's process.
+    expect(await stillRuns(child.pid!, `/usr/bin/vim\n${started}`)).toBe(false);
+    expect(await stillRuns(child.pid!, "/bin/sleep\nMon Jan  1 00:00:00 2001")).toBe(false);
+    expect(await stillRuns(child.pid!, "/bin/sleep")).toBe(false);
+  });
+
+  it("stops a CLI a crashed host left, leaves one whose host is still open, and notes each CLI it starts until it ends", async () => {
+    const dir = join(await tempDir(), "agent-pids");
+    await mkdir(dir, { recursive: true });
+    const [orphan, kept] = [idler(), idler()];
+    await until(async () => !!(await stamp(orphan.pid!)) && !!(await stamp(kept.pid!)));
+    const gone = spawn("true");
+    await new Promise((resolve) => gone.on("close", resolve));
+    // The crashed host is gone; the other is this process, still open.
+    await writeFile(join(dir, String(orphan.pid)), `/bin/sleep\n${await stamp(orphan.pid!)}\n${gone.pid}\nnode\nMon Jan  1 00:00:00 2001`);
+    await writeFile(join(dir, String(kept.pid)), `/bin/sleep\n${await stamp(kept.pid!)}\n${process.pid}\n${process.execPath}\n${await stamp(process.pid)}`);
+    // A note whose process has ended, or whose id now belongs to another program, stops nothing and goes.
+    await writeFile(join(dir, "999999"), "/bin/sleep\nMon Jan  1 00:00:00 2001");
+    const logged: string[] = [];
+    await stopOrphans(dir, (msg) => logged.push(msg));
+    await until(() => !alive(orphan.pid!));
+    expect(alive(kept.pid!)).toBe(true);
+    expect((await readdir(dir)).sort()).toEqual([String(kept.pid)]);
+    expect(logged).toEqual([`stopping agent CLI ${orphan.pid} left running by an earlier launch (/bin/sleep)`]);
+
+    const run = node("console.log('up');setTimeout(()=>{},800)", {
+      onLine: () => void until(async () => (await readdir(dir)).includes(String(run.handle.child.pid))).then(() => noted.push("yes")),
+    });
+    const noted: string[] = [];
+    await run.done;
+    expect(noted).toEqual(["yes"]);
+    expect(await readdir(dir)).toEqual([String(kept.pid)]);
   });
 });
 

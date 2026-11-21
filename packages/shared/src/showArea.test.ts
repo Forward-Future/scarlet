@@ -74,4 +74,23 @@ describe("where each area holds", () => {
     expect(areas[0]!.holds).toEqual([[0, 7.5]]);
     expect(areas[1]!.holds).toEqual([[22.5, 27.5]]);
   });
+
+  it("holds a box with one edge to find until the picture changes at once", () => {
+    // The whole screen but its menu bar: the one line under the bar is on every frame, whatever app is up.
+    const screen: AreaBox = [0, 0.05, 1, 1];
+    const shots = Array.from({ length: 6 }, () => edgeBits(desktop(screen), W, H));
+    const at = (frame: number, a: AreaBox) => sideFits(shots[frame]!, a, W, H);
+    // Before the picture has been read, it holds on its own frame only.
+    expect(assignAreas(6, 27.5, [area(5, screen)], at).areas[0]!.holds).toEqual([[2.5, 7.5]]);
+    // A switch of app at 13 s ends it there, and a box given after the switch holds from it.
+    const changes = { read: [[0, 27.5]] as Array<[number, number]>, at: [13] };
+    const one = assignAreas(6, 27.5, [area(5, screen)], at, 5, changes);
+    expect(one.areas[0]!.holds).toEqual([[0, 13]]);
+    expect(one.unset).toEqual([[13, 27.5]]);
+    const two = assignAreas(6, 27.5, [area(5, screen), area(20, screen)], at, 5, changes);
+    expect(two.areas[1]!.holds).toEqual([[13, 27.5]]);
+    expect(two.unset).toEqual([]);
+    // It doesn't hold where the picture hasn't been read.
+    expect(assignAreas(6, 27.5, [area(5, screen)], at, 5, { read: [[0, 10]], at: [] }).areas[0]!.holds).toEqual([[0, 7.5]]);
+  });
 });

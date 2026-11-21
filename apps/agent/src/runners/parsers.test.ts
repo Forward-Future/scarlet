@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildClaudeCommand, claudeCanRunBare, claudeRunUsage, newClaudeState, parseClaudeLine } from "./claude.js";
 import { buildCodexCommand, newCodexState, parseCodexLine, tomlInlineTable, tomlString } from "./codex.js";
-import { acpMcpServer, buildGeminiCommand, isScarletMcpPermission, newGeminiState, parseGeminiLine, permissionOutcome } from "./gemini.js";
+import { acpMcpServer, buildGeminiCommand, isScarletMcpPermission, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./gemini.js";
 import { quoteForCmd, spawnLines, spawnSpec } from "./spawn.js";
-import { briefInput, isQuestionTool, prettyToolName, type RunnerEvent } from "./types.js";
+import { briefInput, isQuestionTool, prettyToolName, workspaceEnv, type RunnerEvent } from "./types.js";
 
 function feed<S>(lines: string[], st: S, parse: (l: string, s: S) => RunnerEvent[]): RunnerEvent[] {
   const out: RunnerEvent[] = [];
@@ -61,9 +61,12 @@ describe("claude stream-json parser", () => {
       st,
       parseClaudeLine,
     );
-    expect(evs).toEqual([{ type: "question", text: "Keep the cold open?", data: { tool: "mcp__scarlet__task_question", toolUseId: "q1" } }]);
+    // Nothing is said until the engine has the question; the run still holds it, should the CLI stop before then.
+    expect(evs).toEqual([]);
+    expect(st.question).toBe("Keep the cold open?");
     expect(st.shouldStop).toBe(false);
-    feed(['{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"q1","content":"Question posted"}]}}'], st, parseClaudeLine);
+    expect(feed(['{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"q1","content":"Question posted"}]}}'], st, parseClaudeLine))
+      .toEqual([{ type: "question", text: "Keep the cold open?", data: { tool: "mcp__scarlet__task_question", toolUseId: "q1" } }]);
     expect(st.question).toBe("Keep the cold open?");
     expect(st.questionPosted).toBe(true);
     expect(st.shouldStop).toBe(true);
@@ -127,6 +130,28 @@ describe("claude stream-json parser", () => {
     expect(evs).toEqual([{ type: "plan", text: "[x] Read the scene\n[>] Trim the pause\n[ ] Check the join",
       data: { steps: [{ text: "Read the scene", state: "done" }, { text: "Trim the pause", state: "in_progress" }, { text: "Check the join", state: "pending" }] } }]);
   });
+  it("gives a request's Claude Code its own shell, file and web tools, the shell sandboxed and the control files closed", () => {
+    const workspace = { binDir: "/w/.tools", readDirs: ["/Applications/Google Chrome.app"] };
+    const cmd = buildClaudeCommand({ instruction: "x", systemPrompt: "SYS", mcp, workspace }, "claude", "/w/.scarlet");
+    const after = (flag: string) => cmd.args[cmd.args.indexOf(flag) + 1];
+    expect(after("--tools")).toBe("Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch");
+    expect(after("--allowedTools")).toBe("mcp__scarlet__*,Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,WebFetch(domain:*)");
+    expect(after("--permission-mode")).toBe("dontAsk");
+    expect(JSON.parse(after("--settings"))).toEqual({
+      sandbox: { enabled: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true,
+        network: { allowedDomains: ["*"] },
+        filesystem: { denyRead: ["/w/.scarlet"], allowRead: ["/Applications/Google Chrome.app"] } },
+      permissions: { blockReadsOutsideWorkingDirectories: true, allow: ["WebFetch(domain:*)"], deny: ["Read(//w/.scarlet/**)", "Edit(//w/.scarlet/**)"] },
+    });
+    // With its plan asked for too, both.
+    const planned = buildClaudeCommand({ instruction: "x", systemPrompt: "SYS", mcp, workspace, plan: true }, "claude", "/w/.scarlet");
+    expect(planned.args[planned.args.indexOf("--tools") + 1]).toBe("Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,TaskCreate,TaskUpdate,TodoWrite");
+  });
+  it("runs a CLI without Scarlet's own variables, the workspace's launchers first on its PATH", () => {
+    const env = workspaceEnv({ PATH: "/usr/bin", SCARLET_TOKEN: "secret", scarlet_server: "http://x", HOME: "/h" }, { binDir: "/w/.tools", readDirs: [] });
+    expect(env).toEqual({ PATH: `/w/.tools${process.platform === "win32" ? ";" : ":"}/usr/bin`, HOME: "/h" });
+    expect(workspaceEnv({ PATH: "/usr/bin", SCARLET_TOKEN: "secret" }, undefined)).toEqual({ PATH: "/usr/bin" });
+  });
   it("builds the command line with files for mcp config and system prompt", () => {
     const cmd = buildClaudeCommand({ instruction: "Make the first cut", systemPrompt: "SYS", mcp, model: "opus" }, "claude", "/tmp/t");
     expect(cmd.args).toEqual([
@@ -155,9 +180,8 @@ describe("claude stream-json parser", () => {
     expect(long.stdin).toBe("line1\nline2");
     const tuned = buildClaudeCommand({ instruction: "x", systemPrompt: "SYS", mcp, model: "opus", effort: "max", fast: true }, "claude", "/tmp/t");
     expect(tuned.args.slice(-6, -1)).toEqual(["--model", "opus", "--effort", "max", "--settings"]);
-    expect(JSON.parse(tuned.args.at(-1)!)).toStrictEqual({ fastMode: true, sandbox: {
-      enabled: true, allowUnsandboxedCommands: false, ...(process.platform === "win32" ? {} : { failIfUnavailable: true }),
-    } });
+    // No shell tool runs here for the sandbox to wrap, so a machine that can't start it still runs the edit.
+    expect(JSON.parse(tuned.args.at(-1)!)).toStrictEqual({ fastMode: true, sandbox: { enabled: true, allowUnsandboxedCommands: false } });
   });
 });
 
@@ -197,6 +221,19 @@ describe("codex exec --json parser", () => {
     expect(st.question).toBe("Which take?");
     expect(st.questionPosted).toBe(true);
     expect(st.shouldStop).toBe(true);
+
+    // Held while it runs, should the CLI stop before its result; refused, it was never asked, and the run goes on.
+    const ask = (type: string, args: object, extra: object = {}) => JSON.stringify({ type, item: { id: "r", type: "mcp_tool_call", server: "scarlet", tool: "task_question", arguments: args, ...extra } });
+    const held = newCodexState();
+    expect(feed([ask("item.started", { text: "Which take?" })], held, parseCodexLine)).toEqual([]);
+    expect(held.question).toBe("Which take?");
+    feed([ask("item.completed", { text: "Which take?", options: "a" }, { status: "failed", error: { message: "options: Expected array" } })], held, parseCodexLine);
+    expect(held.question).toBeUndefined();
+    expect(held).toMatchObject({ questionPosted: false, shouldStop: false });
+    const empty = newCodexState();
+    expect(feed([ask("item.started", {}), ask("item.completed", {}, { status: "failed", error: { message: "text: Required" } })], empty, parseCodexLine).map((e) => e.type)).toEqual(["tool", "error"]);
+    expect(empty.question).toBeUndefined();
+    expect(empty.shouldStop).toBe(false);
 
     const st2 = newCodexState();
     const e2 = feed(['{"type":"turn.failed","error":{"message":"rate limited"}}', '{"type":"error","message":"boom"}'], st2, parseCodexLine);
@@ -239,6 +276,22 @@ describe("codex exec --json parser", () => {
     expect(evs[2]!.text).toBe("[x] Step 1\n[ ] Step 2\n[ ] Step 3");
     // A list Scarlet can't read is passed over.
     expect(parseCodexLine('{"type":"item.updated","item":{"id":"item_1","type":"todo_list"}}', st)).toEqual([]);
+  });
+  it("gives a request's Codex its shell, a look at pictures, the live web and reads of its programs' folders", () => {
+    const workspace = { binDir: "/w/.tools", readDirs: ["/Applications/Google Chrome.app", "/opt/ffmpeg/bin"] };
+    const cmd = buildCodexCommand({ instruction: "x", systemPrompt: "SYS", mcp, cwd: "/w", workspace }, "codex", "/w/.scarlet");
+    const disabled = cmd.args.flatMap((a, i) => cmd.args[i - 1] === "--disable" ? [a] : []);
+    expect(disabled).toEqual(["computer_use", "multi_agent", "plugins", "apps", "hooks"]);
+    expect(cmd.args).toContain('web_search="live"');
+    expect(cmd.args).toContain("permissions.scarlet.network.enabled=true");
+    expect(cmd.args).toContain(`permissions.scarlet.filesystem={":root"="deny",":minimal"="read",":workspace_roots"={"."="write"},"/Applications/Google Chrome.app"="read","/opt/ffmpeg/bin"="read"}`);
+    // The token stays out of the shell, which has the network now.
+    expect(cmd.args).toContain('shell_environment_policy.exclude=["SCARLET_*"]');
+    // A side check has none of it.
+    const side = buildCodexCommand({ instruction: "x", systemPrompt: "SYS", mcp, cwd: "/w" }, "codex", "/w/.scarlet");
+    expect(side.args.flatMap((a, i) => side.args[i - 1] === "--disable" ? [a] : [])).toEqual(["shell_tool", "view_image", ...disabled]);
+    expect(side.args).toContain('web_search="disabled"');
+    expect(side.args).toContain("permissions.scarlet.network.enabled=false");
   });
   it.skipIf(process.platform !== "darwin")("allows the resolved Codex executable without opening its installation directory", () => {
     const dir = mkdtempSync(join(tmpdir(), "scarlet-codex-"));
@@ -313,6 +366,20 @@ describe("gemini ACP parser", () => {
     expect(st.question).toBe("9:16 or 16:9?");
     expect(st.questionPosted).toBe(true);
     expect(st.shouldStop).toBe(true);
+    expect(st.lastMessage).toBe("Reading the transcript.");
+  });
+
+  it("trims flushed assistant messages and keeps the latest one as lastMessage", () => {
+    const st = newGeminiState();
+    const evs = feed([
+      upd({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "\n\nChecking the transitions.\n" } }),
+      upd({ sessionUpdate: "tool_call", toolCallId: "c1", name: "mcp__scarlet__timeline_get", rawInput: {} }),
+      upd({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "\n\nFraming the demo." } }),
+      upd({ sessionUpdate: "tool_call", toolCallId: "c2", name: "mcp__scarlet__timeline_propose", rawInput: {} }),
+    ], st, parseGeminiLine);
+    expect(evs.filter((e) => e.type === "log").map((e) => e.text)).toEqual(["Checking the transitions.", "Framing the demo."]);
+    expect(st.texts).toEqual(["Checking the transitions.", "Framing the demo."]);
+    expect(st.lastMessage).toBe("Framing the demo.");
   });
 
   it("maps ACP plan updates and failed tool calls", () => {
@@ -328,10 +395,32 @@ describe("gemini ACP parser", () => {
   });
 
   it("enforces Scarlet MCP-only permissions and builds the agy acp command", () => {
+    // A request's agent may use agy's own tools inside its folders; a path outside them, or one in the home, is refused.
+    const roots = ["/w", "/Applications/Google Chrome.app"];
+    expect(workspacePermission({ toolCall: { name: "mcp__scarlet__timeline_get" } }, roots)).toBe(true);
+    expect(workspacePermission({ toolCall: { name: "run_shell_command", rawInput: { command: "ffmpeg -version" } } }, roots)).toBe(true);
+    expect(workspacePermission({ toolCall: { name: "write_file", locations: [{ path: "/w/artifacts/page.html" }] } }, roots)).toBe(true);
+    expect(workspacePermission({ toolCall: { name: "web_fetch", rawInput: { url: "https://example.com/story" } } }, roots)).toBe(true);
+    expect(workspacePermission({ toolCall: { name: "read_file", rawInput: { absolute_path: "/Users/me/Library/Application Support/com.forwardfuture.scarlet/data/access-token" } } }, roots)).toBe(false);
+    expect(workspacePermission({ toolCall: { name: "read_file", locations: [{ path: "/w/../etc/passwd" }] } }, roots)).toBe(false);
+    expect(workspacePermission({ toolCall: { name: "read_file", rawInput: { path: "~/.ssh/id_rsa" } } }, roots)).toBe(false);
+    expect(workspacePermission({ toolCall: { name: "list_dir", rawInput: { paths: ["/w/artifacts", "/w2"] } } }, roots)).toBe(false);
     expect(isScarletMcpPermission({ toolCall: { name: "mcp__scarlet__timeline_get" } })).toBe(true);
     expect(isScarletMcpPermission({ toolCall: { _meta: { mcpServer: "scarlet" }, title: "read" } })).toBe(true);
     expect(isScarletMcpPermission({ toolCall: { name: "bash", title: "Run shell" } })).toBe(false);
     expect(isScarletMcpPermission({ toolCall: { name: "read_file", _meta: { mcpServer: "other" } } })).toBe(false);
+    // agy names Scarlet's tools `mcp_scarlet_<tool>`; its titles are the model's own words for the call.
+    expect(isScarletMcpPermission({ toolCall: { name: "mcp_scarlet_timeline_get", title: "Check the timeline" } })).toBe(true);
+    expect(isScarletMcpPermission({ toolCall: { toolName: "scarlet/dialogue_apply_cuts" } })).toBe(true);
+    expect(isScarletMcpPermission({ toolCall: { title: "scarlet.tool_help (read a tool)" } })).toBe(true);
+    // A path or file that starts like a Scarlet tool is not one.
+    for (const name of ["scarlet/notes.md", "scarlet.json", "scarlet/timeline_get.md", "scarlet:timeline_getx", "mcp_scarlet_rm", "scarlet/../etc"]) {
+      expect(isScarletMcpPermission({ toolCall: { name } })).toBe(false);
+      expect(isScarletMcpPermission({ toolCall: { title: name } })).toBe(false);
+    }
+    // A built-in tool stays refused whatever its title says.
+    expect(isScarletMcpPermission({ toolCall: { name: "run_command", title: "mcp_scarlet_timeline_get" } })).toBe(false);
+    expect(isScarletMcpPermission({ toolCall: { name: "write_to_file", title: "scarlet/notes.md" } })).toBe(false);
 
     const opts = [{ optionId: "a1", kind: "allow_once" }, { optionId: "r1", kind: "reject_once" }];
     expect(permissionOutcome({ options: opts }, true)).toEqual({ outcome: "selected", optionId: "a1" });
@@ -348,6 +437,14 @@ describe("gemini ACP parser", () => {
         { name: "SCARLET_TOKEN", value: 'a"b' },
       ],
     });
+  });
+
+  it("normalizes unnormalized workspace roots and ignores empty roots", () => {
+    expect(workspacePermission({ toolCall: { name: "write_file", locations: [{ path: "/w/artifacts/page.html" }] } }, ["/w/sub/.."])).toBe(true);
+    expect(workspacePermission({ toolCall: { name: "read_file", locations: [{ path: "/w/../etc/passwd" }] } }, ["/w/sub/.."])).toBe(false);
+    expect(workspacePermission({ toolCall: { name: "list_dir", rawInput: { paths: ["/w/artifacts", "/w2"] } } }, ["/w/sub/.."])).toBe(false);
+    expect(workspacePermission({ toolCall: { name: "read_file", locations: [{ path: process.cwd() }] } }, [""])).toBe(false);
+    expect(workspacePermission({ toolCall: { name: "read_file", locations: [{ path: "/etc/passwd" }] } }, ["", "   "])).toBe(false);
   });
 });
 
@@ -388,18 +485,38 @@ describe("less common lines", () => {
       '{"type":"stream_event","event":{"type":"content_block_delta"}}',
       '{"type":"system","subtype":"hook_started"}',
       '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q1","name":"scarlet__task_question","input":{}}]}}',
-      '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"q1","is_error":true,"content":"no engine"}]}}',
+      '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"q1","is_error":true,"content":"text: Required"}]}}',
     ], st, parseClaudeLine);
     expect(evs).toEqual([
       { type: "log", text: "Starting on the intro." },
       { type: "error", text: "Tool error: clip not found\n\ntry media_list", data: { toolUseId: "t1" } },
       { type: "error", text: 'Tool error: {"code":"E_RANGE"}', data: { toolUseId: "t2" } },
       { type: "error", text: "Tool error: ", data: { toolUseId: "t3" } },
-      { type: "question", text: "", data: { tool: "scarlet__task_question", toolUseId: "q1" } },
+      // A question with no words is a call Scarlet refuses, not a question for the editor.
+      { type: "tool", text: "scarlet.task_question", data: { tool: "scarlet__task_question", input: {}, toolUseId: "q1" } },
+      { type: "error", text: "Tool error: text: Required", data: { toolUseId: "q1" } },
     ]);
     expect(st.texts).toEqual(["Starting on the intro."]);
-    // The engine never took the question, but the CLI is still stopped: the host posts it itself.
-    expect(st).toMatchObject({ questionPosted: false, shouldStop: true, started: true });
+    // The model hears why and tries again: nothing is asked, and the run goes on.
+    expect(st.question).toBeUndefined();
+    expect(st).toMatchObject({ questionPosted: false, shouldStop: false, started: true });
+  });
+
+  it("claude: a question Scarlet refused isn't asked, and the run goes on until one is", () => {
+    const st = newClaudeState();
+    const ask = (id: string, input: unknown) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "mcp__scarlet__task_question", input }] } });
+    const answer = (id: string, isError: boolean, content: string) => JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: isError, content }] } });
+    // Refused for its options' shape: the editor never sees the call's arguments.
+    const evs = feed([ask("q1", { text: "Keep the intro?", options: "yes" }), answer("q1", true, "options: Expected array"), ask("q2", { text: "   " })], st, parseClaudeLine);
+    expect(evs.map((e) => e.type)).toEqual(["error", "tool"]);
+    expect([st.question, st.pendingQuestion]).toEqual([undefined, undefined]);
+    expect(st).toMatchObject({ questionPosted: false, shouldStop: false });
+    // A question is said once the engine has it, as the desktop host says it.
+    expect(feed([ask("q3", { text: "Keep the intro?" })], st, parseClaudeLine)).toEqual([]);
+    expect(feed([answer("q3", false, "Question posted")], st, parseClaudeLine)).toEqual([
+      { type: "question", text: "Keep the intro?", data: { tool: "mcp__scarlet__task_question", toolUseId: "q3" } },
+    ]);
+    expect(st).toMatchObject({ question: "Keep the intro?", questionPosted: true, shouldStop: true });
   });
 
   it("claude: counts each API message once, and prefers the result's own totals", () => {
@@ -498,10 +615,20 @@ describe("less common lines", () => {
       ["log", "Cutting the pause."],
       ["tool", "timeline_propose"],
       ["error", 'timeline_propose failed: {"error":"Invalid ops"}'],
-      ["question", "Keep intro?"],
+      // A question Scarlet refused was never asked: no question, and the run goes on.
+      ["error", 'scarlet.task_question failed: {"error":"offline"}'],
     ]);
     expect(st.texts).toEqual(["Cutting the pause."]);
-    expect(st).toMatchObject({ question: "Keep intro?", questionPosted: false, shouldStop: true, partial: "" });
+    expect(st.question).toBeUndefined();
+    expect(st).toMatchObject({ questionPosted: false, shouldStop: false, partial: "" });
+    // Words that arrive with an update are held until the engine has the question, then said.
+    const later = newGeminiState();
+    expect(feed([upd({ sessionUpdate: "tool_call", toolCallId: "q2", name: "mcp__scarlet__task_question" }),
+      upd({ sessionUpdate: "tool_call_update", toolCallId: "q2", status: "in_progress", rawInput: { text: "Keep intro?" } })], later, parseGeminiLine)).toEqual([]);
+    expect(later.question).toBe("Keep intro?");
+    expect(feed([upd({ sessionUpdate: "tool_call_update", toolCallId: "q2", status: "completed", rawOutput: "Question posted" })], later, parseGeminiLine).map((e) => [e.type, e.text]))
+      .toEqual([["question", "Keep intro?"]]);
+    expect(later).toMatchObject({ questionPosted: true, shouldStop: true });
   });
 
   it("shortens what it shows of a tool's input, and shows nothing for an empty one", () => {

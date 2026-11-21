@@ -180,7 +180,8 @@ it("stops editing across the project and continues interrupted requests ahead of
   expect((await (await api("GET", "/under-way")).json()).queued).toBe(0);
 
   expect(await claim(first.id)).toBeNull();
-  expect((await claim())?.id).toBe(learning.id);
+  // A read of a request for a rule is held with the requests: it runs on Resume.
+  expect(await claim(learning.id)).toBeNull();
   const skillFromChange = make("skill_from_change");
   expect((await claim())?.id).toBe(skillFromChange.id);
   const addedWhilePaused = make("note");

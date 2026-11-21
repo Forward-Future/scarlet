@@ -24,6 +24,13 @@ export const bundledWhisperModel: PinnedModel & { displayName: string } = {
   replaces: ["ggml-base.bin"],
 };
 
+/**
+ * The whisper.cpp revision the bundled `whisper-cli` is built from (apps/desktop/scripts/build-whisper.mjs). Readings
+ * saved by the bundled runtime are keyed on it: every update installs the executable again, with new file times and a
+ * new signature, and a key on the file's stat or bytes threw away every saved scan page on each update (2026-11-20).
+ */
+export const BUNDLED_WHISPER_CPP = "d1be6fde11ac6e0407606b4e42fe72d34add8037";
+
 /** Every CPU the scheduler can use must support the instructions in the optimized Linux whisper.cpp build. */
 export function supportsWhisperAvx2(cpuInfo: string): boolean {
   const cores = cpuInfo.trim().split(/\n\s*\n/);
