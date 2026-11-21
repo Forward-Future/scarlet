@@ -4,6 +4,10 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 21, 2026
+
+- When your camera would cover something on screen you're talking about, Scarlet moves the screen first, then your camera to another corner, and takes your camera off only for that stretch when nothing else works, rather than cutting the screen short.
+
 ## November 20, 2026
 
 - Lines you said twice that Scarlet would have left in now come to you in For you, as many as Checking with you asks for, starting with the likeliest restarts.
