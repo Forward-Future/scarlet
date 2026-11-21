@@ -278,7 +278,11 @@ export function buildSystemPrompt(ctx: PromptContext): string {
       if (c.dialogueRange) ctxLines.push(`- Local passage: ${c.dialogueRange.start}–${c.dialogueRange.end} s on ${c.dialogueRange.version}.`);
     }
     if (operation === "first-cut" && c.cutIndex === undefined && c.editIndex === undefined) {
-      ctxLines.push("- The editor chose a dialogue first cut. Check the resulting playback for repeats within the requested scope.");
+      // A pass is done when the model says so (docs/AI-AGENTS.md rule 5): nothing sends it back. What counts as done is said
+      // here, to the run that does the work. Told only to check for repeats, once the closing check that sent passes back
+      // was taken out, 3 of 20 Sol Medium passes finished with findings still listed and they left twice main's silences of
+      // 2 s or more, 10 to 5 (benchmarks/safety-only-sol-2026-11-21, 2026-11-21).
+      ctxLines.push("- The editor chose a dialogue first cut. It is done when dialogue_check_repeats on the current playback, within the requested scope, lists nothing you haven't settled: each repeat, silence, divided sentence and picture it lists is cut or changed, kept with your reason, or staged for the editor when you doubt it.");
       // A pass names no doubt of its own: asked how sure it was of each cut, one called all twelve certain, two of them
       // mistakes the editor had reported on that footage. It is not unsure of those cuts, so the question finds nothing.
       // Asked to order its cuts by how likely each is to be wrong, it leaves the plain false starts at the bottom: on
