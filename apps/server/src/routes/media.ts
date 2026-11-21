@@ -445,7 +445,7 @@ export function mediaRoutes(ctx: Ctx) {
         const minimumHeight = Math.ceil(w * media.height / media.width);
         const picture = await previewPictures(ctx.paths.media(media.projectId), { signal })(media, t, t + 1 / media.fps, minimumHeight);
         if (picture) {
-          try { return await ctx.render.extractFrame(picture.file, Math.max(0, t - picture.start), { width: w, signal, indexedMp4: true }); }
+          try { return await ctx.render.extractFrame(picture.file, Math.max(0, t - picture.start), { width: w, signal, indexedMp4: true, fps: media.fps }); }
           catch {
             signal.throwIfAborted();
             frameFallback(media.id, `[media] frame_fallback media=${logId(media.id)} project=${logId(media.projectId)} reason=cached_preview`);
@@ -456,7 +456,7 @@ export function mediaRoutes(ctx: Ctx) {
       const indexedMp4 = !!media.previewClock && hasIndexedAvc(media);
       // The original decodes on an NVIDIA GPU when there is one.
       const decoder = await pictureDecoder(ctx.settings().render.hwaccel) === "cuda" ? "cuda" as const : undefined;
-      return ctx.render.extractFrame(file, t, { width: w, signal, indexedMp4, decoder, area, grid });
+      return ctx.render.extractFrame(file, t, { width: w, signal, indexedMp4, decoder, area, grid, fps: media.fps });
     };
     try {
       // Frames share the engine’s picture lane with contact sheets. The editor’s own requests go first, then the timeline’s.

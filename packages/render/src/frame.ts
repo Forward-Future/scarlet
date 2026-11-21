@@ -15,6 +15,8 @@ export interface FrameOptions {
   quality?: number;
   /** The input is a previously probed MP4 camera stream or a prepared H.264 preview. */
   indexedMp4?: boolean;
+  /** The source's frame rate. The frame on screen is then looked for in the frame and a half before the time, else in the half second before it. */
+  fps?: number;
   /**
    * Decode and scale on an NVIDIA GPU, then bring back only the small frame. On a 4K recording a frame took 1.1-1.6 s
    * and 0.9 s of CPU this way, against 1.5-2.4 s and 7 s on the CPU. Falls back to the CPU when the driver can't,
@@ -62,7 +64,18 @@ export function percentGrid(area: [number, number, number, number], width: numbe
   return filters;
 }
 
-/** Decode the frame at `tSeconds` and return it as a JPEG. */
+/**
+ * A time written to the millisecond still finds the frame that starts up to half a millisecond after it. Below a
+ * quarter of a frame at 120 fps.
+ */
+const FRAME_START_SLACK = 0.0005;
+/** How far before the time a frame lasting longer than the first look is looked for, as a variable frame rate can hold one. */
+const LONG_FRAME_LOOKBACK = 2;
+
+/**
+ * Decode the frame on screen at `tSeconds`, the last one starting at or before it, and return it as a JPEG. A time
+ * inside the last frame gives the last frame, and a time before the first frame gives the first.
+ */
 export async function extractFrame(file: string, tSeconds: number, opts: FrameOptions = {}): Promise<Buffer> {
   // A grid without its percents can't be read, so that says why instead.
   if (opts.grid) await requireDrawtext("label the grid’s lines; the frame without grid needs no text", opts.ffmpegPath);
@@ -79,6 +92,7 @@ export async function extractFrame(file: string, tSeconds: number, opts: FrameOp
 }
 
 async function frameFrom(file: string, tSeconds: number, opts: FrameOptions): Promise<Buffer> {
+  const t = Math.max(0, tSeconds);
   const width = Math.max(2, Math.round(opts.width ?? 320));
   // An area or a grid is drawn on the CPU, where the picture is in memory.
   const gpu = opts.decoder === "cuda" && !opts.area && !opts.grid;
@@ -86,39 +100,44 @@ async function frameFrom(file: string, tSeconds: number, opts: FrameOptions): Pr
   const crop = opts.area ? `crop=iw*${area[2] - area[0]}:ih*${area[3] - area[1]}:iw*${area[0]}:ih*${area[1]},` : "";
   const height = opts.grid ? Math.max(2, Math.round(width * (area[3] - area[1]) * opts.grid.height / ((area[2] - area[0]) * opts.grid.width) / 2) * 2) : -2;
   const grid = opts.grid ? "," + percentGrid(area, width, height).join(",") : "";
-  const args = [
+  const picture = gpu ? `scale_cuda=${width}:-2:interp_algo=bicubic:format=yuv420p,hwdownload,format=yuv420p` : `${crop}scale=${width}:${height}${grid}`;
+  const input = [
     "-hide_banner",
     "-nostdin",
     "-loglevel",
     "error",
     ...(gpu ? ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] : []),
     ...(opts.indexedMp4 ? INDEXED_MP4_INPUT : []),
-    "-ss",
-    ffSeconds(Math.max(0, tSeconds)),
-    ...LOCAL_MEDIA_INPUT, "-i",
-    file,
-    "-map",
-    "0:v:0",
-    "-frames:v",
-    "1",
-    "-vf",
-    gpu ? `scale_cuda=${width}:-2:interp_algo=bicubic:format=yuv420p,hwdownload,format=yuv420p` : `${crop}scale=${width}:${height}${grid}`,
-    "-f",
-    "image2",
-    "-update",
-    "1",
-    "-c:v",
-    "mjpeg",
-    "-q:v",
-    String(opts.quality ?? 4),
-    "pipe:1",
   ];
-  return withStreamInfoFallback(args, opts.signal, async inputArgs => {
-    const { stdout } = await runCapture(resolveFfmpeg(opts.ffmpegPath), inputArgs, { signal: opts.signal });
+  /**
+   * A seek gives the first frame starting at or after where it lands, which for a time inside a frame is the next
+   * one. So decoding starts `lookback` seconds before the time, keeps the frames up to it and gives the last of them.
+   * `select` keeps them exactly; `trim`, which rounds to the stream's clock, only stops the decoding a little after.
+   * Without `lookback`, the first frame at or after the time: for a time before the video's first frame.
+   */
+  const decode = async (inputArgs: string[], lookback?: number) => {
+    const from = lookback === undefined ? t : Math.max(0, t - lookback);
+    const end = t - from + FRAME_START_SLACK;
+    const filter = lookback === undefined ? picture : `trim=end=${end + lookback * 0.4},select='lte(t,${end})',${picture},reverse`;
+    const { stdout } = await runCapture(resolveFfmpeg(opts.ffmpegPath), [
+      ...inputArgs, "-ss", ffSeconds(from), ...LOCAL_MEDIA_INPUT, "-i", file,
+      "-map", "0:v:0", "-frames:v", "1", "-vf", filter,
+      "-f", "image2", "-update", "1", "-c:v", "mjpeg", "-q:v", String(opts.quality ?? 4), "pipe:1",
+    ], { signal: opts.signal });
     if (stdout.length < 4 || stdout[0] !== 0xff || stdout[1] !== 0xd8) {
       throw new Error(`no frame decoded at ${tSeconds}s from ${file}`);
     }
     return stdout;
+  };
+  const near = opts.fps && opts.fps > 0 ? 1.5 / opts.fps : 0.5;
+  // Only a variable frame rate holds a frame longer than that. Before the second look, a time that near the start has nothing earlier to find.
+  const lookbacks = t > near && near < LONG_FRAME_LOOKBACK ? [near, LONG_FRAME_LOOKBACK] : [near];
+  return withStreamInfoFallback(input, opts.signal, async inputArgs => {
+    for (const lookback of lookbacks) {
+      try { return await decode(inputArgs, lookback); }
+      catch { opts.signal?.throwIfAborted(); } // Nothing up to the time: no frame has started yet, or past the end.
+    }
+    return decode(inputArgs);
   }, error => opts.onFallback?.(indexFallback(error)));
 }
 

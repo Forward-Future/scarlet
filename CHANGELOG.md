@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 21, 2026
 
+- When Scarlet looks at a moment in your footage, it now sees the picture that's actually on screen then, including in the very last frame, instead of the one just after it.
 - In an Advanced export, the OpenTimelineIO timeline now turns off hidden picture tracks and muted sound tracks, leaves out hidden or disabled captions, and brings both back as they were when you import it again.
 - In an Advanced export, a clip that plays faster or slower now keeps its length in the OTIO timeline, so the clips after it stay in place in Premiere and Resolve, and importing an OTIO timeline with a speed change keeps its timing.
 - In an Advanced export, two recordings whose names look the same but write an accent differently no longer overwrite each other; each clip links to its own file.
