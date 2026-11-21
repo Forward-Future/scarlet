@@ -108,6 +108,16 @@ describe("dialogue plan", () => {
     expect(inWords).toMatchObject({ outcome: "ready", decisions: [{ start: 1.3, end: 1.7, review: true }] });
   });
 
+  it("says what an applied retake's join plays, whether its words were named or given in seconds", async () => {
+    // “the video and tell it ‖ and give it as a reference”: a retake named by its words left the first try playing, and
+    // nothing showed the pass the join as heard (2026-11-21).
+    const { tl, sources } = fixture();
+    const named = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ ...refs.word })] }, sources);
+    expect(named.outcome).toBe("ready");
+    if (named.outcome === "ready") expect(named.gate.get(0)).toEqual(expect.objectContaining({ outcome: "cut", words: "first", plays: "… finish ‖ next …" }));
+    if (named.outcome === "ready") expect(named.gate.get(0)).not.toHaveProperty("removes");
+  });
+
   it("keeps short named words inside a removal when the only quiet is on their far sides", async () => {
     const { tl, sources } = fixture();
     const said = [

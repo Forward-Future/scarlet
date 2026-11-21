@@ -4242,7 +4242,7 @@ it("cuts by word reference: edges go in the measured gaps, and every gate decisi
     expect(saved).toMatchObject({ description: "Remove the first attempt", cuts: [{ start: 1.033, end: 3.567, review: false }] });
     expect(saved.cuts[0]).not.toHaveProperty("check");
     expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut",
-      range: [1.03, 3.57] }]);
+      range: [1.03, 3.57], plays: "… Hello everyone ‖ welcome back to the show. …" }]);
     // Without measured silence beside the words, the edge falls back to word timings and Scarlet stages the cut, saying why.
     mock.state.waveform = (mediaId, from, to, points) => ({ mediaId, from, to, peaks: Array(points).fill(.2), rms: Array(points).fill(.2),
       speechActivity: [{ start: from, end: to }] });
@@ -4671,7 +4671,8 @@ it("reads a transcript whose words are still being placed on the audio, and hold
     mock.state.transcripts = { m1: transcript };
     await new Promise(resolve => setTimeout(resolve, 1600));
     const applied = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Remove the first attempt", cuts: [cut] } }) as CallToolResult;
-    expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut", range: [1.03, 3.57] }]);
+    expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut", range: [1.03, 3.57],
+      plays: "… Hello everyone ‖ welcome back to the show. …" }]);
     expect(textOf(await editor.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 4, toWord: 4 } }) as CallToolResult)).toContain("#4 2.50-2.70 Um,");
   } finally {
     Object.assign(mock.state, original);

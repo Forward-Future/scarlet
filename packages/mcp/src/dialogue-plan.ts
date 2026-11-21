@@ -1037,14 +1037,18 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
     if (c.notes?.length) report.push({ cut: c.input, kind: c.kind, ...(c.words && { words: c.words }), asked: c.decision, outcome: d.review ? "review" : "cut",
       range: [r2(d.start), r2(d.end)], evidence: c.notes.join(" ") });
   });
-  // A retake placed by seconds and applied without a hold is reported with what it takes out and what its join plays.
-  // A word reference names its words; seconds don't, and a range meant for the first take can sit on the pause after
-  // it or on the retake itself.
+  // A retake applied without a hold is reported with what it takes out and what its join plays. Seconds don't name
+  // their words, and a range meant for the first take can sit on the pause after it or on the retake itself (2026-11-17).
+  // Named words don't say what is left either side: a pass took “and have AI update and have, and,” out of “the video
+  // and tell it and have AI update and have, and, and give it as a reference”, left the first try playing as
+  // “the video and tell it ‖ and give it”, and nothing showed it the join as heard (2026-11-21).
   await Promise.all(removals.map(async (c, i) => {
     const d = decisions[i]!;
-    if (d.review || c.kind !== "retake" || c.decision !== "cut" || c.words !== undefined) return;
+    if (d.review || c.kind !== "retake" || c.decision !== "cut") return;
     const heard = await cutReading(tl, project, d, mediaId => sources.words(mediaId, undefined, false));
-    if (heard.plays) report.push({ cut: c.input, kind: c.kind, asked: c.decision, outcome: "cut", range: [r2(d.start), r2(d.end)], removes: heard.removes ?? "", plays: heard.plays });
+    if (heard.plays) report.push({ cut: c.input, kind: c.kind, ...(c.words && { words: c.words }), asked: c.decision, outcome: "cut",
+      // Named words that are what the cut took out are said once.
+      range: [r2(d.start), r2(d.end)], ...((c.words === undefined || heard.removes !== c.words) && { removes: heard.removes ?? "" }), plays: heard.plays });
   }));
   // One line per submitted range: a later adjustment replaces an earlier one, keeping both reasons.
   const gate = new Map<number, GateLine>();
