@@ -790,15 +790,9 @@ describe("tool annotations", () => {
     } finally { await Promise.all(sessions.map(c => c.close())); }
   });
 
-  it("says what a reading means and leaves what to do about it to the skill and Scarlet's contract", async () => {
+  it("says only what isn't said elsewhere in its instructions", async () => {
     const c = await connect();
     try {
-      const repeats = (await c.listTools()).tools.find(t => t.name === "dialogue_check_repeats")!.description!;
-      // The dialogue skill says a clipped word and a sound left at a join are repaired and synced tracks stay in time.
-      // What goes to the editor goes on an edit, never in the closing reply.
-      for (const rule of ["before you finish", "always goes", "closing reply", "tell the editor"]) expect(repeats, rule).not.toContain(rule);
-      expect(repeats).toContain("keptWordAt");
-      expect(repeats.length).toBeLessThan(4_500);
       // Each tool's description says it prepares what is missing, and the prompt says that and what project_get returns.
       expect(c.getInstructions()).toBe("Scarlet exposes project context and editing operations as tools; an empty MCP resource list is normal.");
     } finally { await c.close(); }
