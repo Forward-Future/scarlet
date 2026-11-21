@@ -279,8 +279,9 @@ export function fromOtio(otio: unknown, project: Project, base: Timeline): Timel
       id: baseTrack && !tracks.some((t) => t.id === baseTrack.id) ? baseTrack.id : newId("trk"),
       kind,
       name: String(ot.name || baseTrack?.name || `${kind === "video" ? "V" : "A"}${counters[kind]}`),
-      muted: baseTrack?.muted ?? false,
-      hidden: baseTrack?.hidden ?? false,
+      // A track turned off in the file is a hidden picture track or a muted sound track; one turned on is shown or heard.
+      muted: kind === "audio" && typeof ot.enabled === "boolean" ? !ot.enabled : baseTrack?.muted ?? false,
+      hidden: kind === "video" && typeof ot.enabled === "boolean" ? !ot.enabled : baseTrack?.hidden ?? false,
       clips: [],
     };
     let cursor = 0;

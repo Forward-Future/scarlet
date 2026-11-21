@@ -201,6 +201,41 @@ describe("OTIO for a hand-off", () => {
       }
     }
   });
+  it("turns off a hidden picture track and a muted sound track, keeps a hidden picture's sound on, and reads both back", () => {
+    const project = project30();
+    const tl: Timeline = { ...emptyTimeline(project.id), version: "v1" };
+    tl.tracks[0]!.clips = [makeMediaClip("cam", 0, 10, 0, { id: "main" })];
+    const hidden = { ...makeTrack("video", "Hidden", "v2"), hidden: true, clips: [makeMediaClip("cam", 20, 24, 2, { id: "hid" })] };
+    const muted = { ...makeTrack("audio", "Muted", "a2"), muted: true, clips: [makeMediaClip("cam", 40, 44, 2, { id: "mut" })] };
+    tl.tracks.splice(1, 0, hidden);
+    tl.tracks.push(muted);
+    type OtioTrack = { name: string; kind: string; enabled: boolean };
+    const otio = toOtio(project, tl, { sources: new Map([["cam", source()]]) }) as { tracks: { children: OtioTrack[] } };
+    const state = Object.fromEntries(otio.tracks.children.map(t => [`${t.kind} ${t.name}`, t.enabled]));
+    expect(state).toMatchObject({ "Video V1": true, "Video Hidden": false, "Audio V1 sound": true, "Audio Hidden sound": true });
+    expect(state["Audio Muted"]).toBe(false);
+    const back = fromOtio(otio, project, { ...tl, tracks: tl.tracks.map(t => ({ ...t, hidden: false, muted: false })) });
+    const byId = new Map(back.tracks.map(t => [t.id, t]));
+    expect(byId.get("v2")).toMatchObject({ hidden: true, muted: false });
+    expect(byId.get("a2")).toMatchObject({ muted: true, hidden: false });
+    expect(byId.get(tl.tracks[0]!.id)).toMatchObject({ hidden: false, muted: false });
+  });
+
+  it("marks only the captions the editor sees, leaving out hidden caption tracks and disabled captions", () => {
+    const project = project30();
+    const tl = timelineFromKeepRanges(project.id, "cam", [{ start: 0, end: 2 }]);
+    const shown = makeTrack("caption", "Captions", "cap");
+    shown.clips = [
+      { id: "vis", kind: "caption", enabled: true, timelineIn: 0.4, timelineOut: 0.8, text: "Visible" },
+      { id: "off", kind: "caption", enabled: false, timelineIn: 1, timelineOut: 1.5, text: "Disabled" },
+    ];
+    const hiddenCaptions = { ...makeTrack("caption", "Hidden Captions", "cap2"), hidden: true };
+    hiddenCaptions.clips = [{ id: "hid", kind: "caption", enabled: true, timelineIn: 0.2, timelineOut: 0.6, text: "Hidden" }];
+    tl.tracks.push(shown, hiddenCaptions);
+    tl.markers = [{ id: "note", time: 1.8, kind: "note", text: "Editor note", resolved: false }];
+    const otio = toOtio(project, tl, { sources: new Map([["cam", source()]]) }) as { tracks: { markers: Array<{ name: string }> } };
+    expect(otio.tracks.markers.map(m => m.name)).toEqual(["Editor note", "Visible"]);
+  });
 });
 
 describe("what doesn't carry over", () => {
