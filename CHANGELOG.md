@@ -13,6 +13,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - When Scarlet puts your camera in the corner over a screen recording, it now frames you instead of shrinking the whole camera shot into the box, and follows your skill's size, shape, how much of you to show and rounded corners.
 - An edit that frames a screen recording no longer waits behind itself: Scarlet looks at several of the recording's windows at once beside it, so those edits finish minutes sooner.
 - With Gemini, a step that needs Scarlet to measure something first now waits for it instead of giving up and trying again.
+- A dialogue pass no longer removes a take you swapped in while it was working.
 
 ## November 19, 2026
 
