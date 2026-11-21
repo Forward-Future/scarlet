@@ -45,13 +45,13 @@ function audibleClips(timeline: Timeline): Map<string, Placed> {
   return clips;
 }
 
-/** The dialogue track a picture track's sound goes to: reused when it is there, so passes don't stack new tracks. */
+/** The unmuted dialogue track a picture track's sound goes to: reused when it is there, so passes don't stack new tracks. */
 function dialogueTrackId(timeline: Timeline, track: Track): { id: string; exists: boolean } {
   let id = `${track.id}_dialogue`;
   for (;;) {
     const found = timeline.tracks.find(t => t.id === id);
     if (!found) return { id, exists: false };
-    if (found.kind === "audio") return { id, exists: true };
+    if (found.kind === "audio" && !found.muted) return { id, exists: true };
     id += "_";
   }
 }

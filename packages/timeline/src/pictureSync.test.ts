@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyOps } from "./ops.js";
 import { emptyTimeline, makeMediaClip } from "./builders.js";
-import type { MediaAsset, MediaClip, Timeline } from "./schema.js";
+import type { Clip, MediaAsset, MediaClip, Timeline } from "./schema.js";
 import { pictureSyncOps } from "./pictureSync.js";
 
 const media: MediaAsset[] = [
@@ -26,6 +26,9 @@ const sync = (tl: Timeline, soundLeads: number) => {
 };
 const clip = (tl: Timeline, id: string) => tl.tracks.flatMap(t => t.clips).find(c => c.id === id) as MediaClip;
 const trackOf = (tl: Timeline, id: string) => tl.tracks.find(t => t.clips.some(c => c.id === id))!;
+const dialogue = (id: string, muted: boolean, clips: Clip[] = []) => ({
+  id, kind: "audio" as const, name: "V1 dialogue", muted, hidden: false, clips,
+});
 
 describe("pictureSyncOps", () => {
   it("keeps the sound where it was and plays the picture later in the recording", () => {
@@ -81,10 +84,47 @@ describe("pictureSyncOps", () => {
 
   it("puts sound on a free track when the dialogue track already has sound there", () => {
     const tl = edit();
-    tl.tracks.push({ id: "v1_dialogue", kind: "audio", name: "V1 dialogue", muted: false, hidden: false, clips: [makeMediaClip("screen", 0, 5, 2, { id: "busy" })] });
+    tl.tracks.push(dialogue("v1_dialogue", false, [makeMediaClip("screen", 0, 5, 2, { id: "busy" })]));
     const { timeline } = sync(tl, 0.65);
     expect(trackOf(timeline, "c1_audio").id).toBe("v1_dialogue_");
     expect(trackOf(timeline, "c2_audio").id).toBe("v1_dialogue");
+  });
+
+  it("skips a muted dialogue track, keeps it untouched, and allows a 0 reset to restore timing", () => {
+    const tl = edit();
+    const earlier = makeMediaClip("screen", 0, 8, 0, { id: "old_dialogue" });
+    tl.tracks.push(dialogue("v1_dialogue", true, [earlier]));
+
+    const { timeline, report } = sync(tl, 0.65);
+    expect(report.soundMoved).toEqual(["c1", "c2"]);
+    expect(timeline.tracks.filter(t => t.id.startsWith("v1_dialogue")).map(t => t.id)).toEqual(["v1_dialogue", "v1_dialogue_"]);
+    expect(timeline.tracks.find(t => t.id === "v1_dialogue")).toMatchObject({ muted: true, clips: [earlier] });
+    expect(trackOf(timeline, "c1_audio")).toMatchObject({ id: "v1_dialogue_", kind: "audio", muted: false });
+    expect(trackOf(timeline, "c2_audio")).toMatchObject({ id: "v1_dialogue_", kind: "audio", muted: false });
+
+    const reset = sync(timeline, 0);
+    expect(reset.report.pictureOnly).toEqual([]);
+    expect(clip(reset.timeline, "c1")).toMatchObject({ sourceIn: expect.closeTo(10, 9), sourceOut: expect.closeTo(20, 9) });
+    expect(clip(reset.timeline, "c2")).toMatchObject({ sourceIn: expect.closeTo(25, 9), sourceOut: expect.closeTo(40, 9) });
+  });
+
+  it("reuses an unmuted fallback dialogue track where free, falls through where occupied, and skips consecutive muted tracks", () => {
+    const tl = edit();
+    tl.tracks.push(
+      dialogue("v1_dialogue", true),
+      dialogue("v1_dialogue_", false, [makeMediaClip("screen", 0, 5, 2, { id: "busy" })]),
+    );
+    const { timeline } = sync(tl, 0.65);
+    expect(trackOf(timeline, "c1_audio")).toMatchObject({ id: "v1_dialogue__", muted: false });
+    expect(trackOf(timeline, "c2_audio")).toMatchObject({ id: "v1_dialogue_", muted: false });
+
+    const twoMuted = edit();
+    twoMuted.tracks.push(dialogue("v1_dialogue", true), dialogue("v1_dialogue_", true));
+    const syncedTwoMuted = sync(twoMuted, 0.65).timeline;
+    expect(trackOf(syncedTwoMuted, "c1_audio")).toMatchObject({ id: "v1_dialogue__", muted: false });
+    expect(trackOf(syncedTwoMuted, "c2_audio")).toMatchObject({ id: "v1_dialogue__", muted: false });
+    expect(syncedTwoMuted.tracks.find(t => t.id === "v1_dialogue")!.muted).toBe(true);
+    expect(syncedTwoMuted.tracks.find(t => t.id === "v1_dialogue_")!.muted).toBe(true);
   });
 
   it("refuses a recording with no picture in the edit or no sound of its own", () => {

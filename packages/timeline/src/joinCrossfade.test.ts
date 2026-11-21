@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { applyOps } from "./ops.js";
 import { emptyTimeline, makeMediaClip } from "./builders.js";
 import { clipEnd, timelineDuration } from "./time.js";
-import type { MediaAsset, Timeline } from "./schema.js";
+import type { Clip, MediaAsset, Timeline } from "./schema.js";
 import { audioCrossfadeOps, crossfadeJoins, replayJoinFades, rippleJoins } from "./joinCrossfade.js";
 
 const EPS = 1e-6;
@@ -40,6 +40,19 @@ function playedEdges(timeline: Timeline): number[] {
 
 const media: MediaAsset[] = [{ id: "m", kind: "video", name: "Interview", path: "interview", duration: 12, hasAudio: true }];
 const joins = [{ leftClipId: "a", rightClipId: "b" }, { leftClipId: "b", rightClipId: "c" }];
+const dialogue = (id: string, muted: boolean, clips: Clip[] = []) => ({
+  id, kind: "audio" as const, name: "V1 dialogue", muted, hidden: false, clips,
+});
+const expectedCutFades = [
+  { timelineIn: 0, sourceIn: 0, sourceOut: 1.04, audioFadeIn: 0, audioFadeOut: 0.08 },
+  { timelineIn: 0.96, sourceIn: 3.92, sourceOut: 6.08, audioFadeIn: 0.08, audioFadeOut: 0.08, speed: 2, volume: 0.7, effects: [{ type: "expander" }] },
+  { timelineIn: 1.96, sourceIn: 8.96, sourceOut: 10, audioFadeIn: 0.08, audioFadeOut: 0.2 },
+];
+const expectedRippledFades = [
+  { timelineIn: 0, sourceIn: 0, sourceOut: 2.04, audioFadeIn: 0, audioFadeOut: 0.08 },
+  { timelineIn: 1.96, sourceIn: 3.96, sourceOut: 7.04, audioFadeIn: 0.08, audioFadeOut: 0.08 },
+  { timelineIn: 4.96, sourceIn: 7.96, sourceOut: 12, audioFadeIn: 0.08, audioFadeOut: 0 },
+];
 
 function cut(kind: "video" | "audio") {
   const timeline = emptyTimeline("project");
@@ -57,11 +70,7 @@ describe("centered dialogue crossfades", () => {
     const { timeline, track } = cut(kind);
     const result = applyOps(timeline, audioCrossfadeOps(timeline, media, joins, 0.08));
     const sound = kind === "audio" ? result.tracks[1]! : result.tracks.at(-1)!;
-    expect(sound.clips).toMatchObject([
-      { timelineIn: 0, sourceIn: 0, sourceOut: 1.04, audioFadeIn: 0, audioFadeOut: 0.08 },
-      { timelineIn: 0.96, sourceIn: 3.92, sourceOut: 6.08, audioFadeIn: 0.08, audioFadeOut: 0.08, speed: 2, volume: 0.7, effects: [{ type: "expander" }] },
-      { timelineIn: 1.96, sourceIn: 8.96, sourceOut: 10, audioFadeIn: 0.08, audioFadeOut: 0.2 },
-    ]);
+    expect(sound.clips).toMatchObject(expectedCutFades);
     expect(timelineDuration(result)).toBeCloseTo(timelineDuration(timeline));
     if (kind === "video") expect(result.tracks[0]!.clips).toEqual(track.clips.map(c => ({ ...c, volume: 0 })));
   });
@@ -73,6 +82,31 @@ describe("centered dialogue crossfades", () => {
     const left = track.clips[0]!;
     if (left.kind === "media") left.audioFadeOut = 0.1;
     expect(() => audioCrossfadeOps(timeline, media, joins, 0.08)).toThrow(/already has a fade/);
+  });
+
+  it("skips a muted dialogue track and keeps it muted and untouched", () => {
+    const { timeline } = cut("video");
+    const earlier = makeMediaClip("m", 0, 2, 0, { id: "old_dialogue" });
+    timeline.tracks.push(dialogue("v1_dialogue", true, [earlier]));
+    const result = applyOps(timeline, audioCrossfadeOps(timeline, media, joins, 0.08));
+    const mutedTrack = result.tracks.find(t => t.id === "v1_dialogue")!;
+    const sound = result.tracks.find(t => t.id === "v1_dialogue_")!;
+    expect(mutedTrack).toMatchObject({ muted: true, clips: [earlier] });
+    expect(sound).toMatchObject({ kind: "audio", muted: false });
+    expect(sound.clips).toMatchObject(expectedCutFades);
+  });
+
+  it("refuses when the selected unmuted dialogue track is already occupied", () => {
+    const occupiedDirect = cut("video").timeline;
+    occupiedDirect.tracks.push(dialogue("v1_dialogue", false, [makeMediaClip("m", 0, 1, 0.5, { id: "busy" })]));
+    expect(() => audioCrossfadeOps(occupiedDirect, media, joins, 0.08)).toThrow(/already has sound/);
+
+    const occupiedAfterMuted = cut("video").timeline;
+    occupiedAfterMuted.tracks.push(
+      dialogue("v1_dialogue", true),
+      dialogue("v1_dialogue_", false, [makeMediaClip("m", 0, 1, 0.5, { id: "busy" })]),
+    );
+    expect(() => audioCrossfadeOps(occupiedAfterMuted, media, joins, 0.08)).toThrow(/already has sound/);
   });
 });
 
@@ -98,11 +132,7 @@ describe("the editor's crossfade on dialogue joins", () => {
     expect(fades.map(f => f.at)).toEqual([2, 5]);
     expect(timelineDuration(faded)).toBeCloseTo(timelineDuration(timeline));
     const sound = kind === "audio" ? faded.tracks.find(t => t.kind === "audio")! : faded.tracks.at(-1)!;
-    expect(sound.clips).toMatchObject([
-      { timelineIn: 0, sourceIn: 0, sourceOut: 2.04, audioFadeIn: 0, audioFadeOut: 0.08 },
-      { timelineIn: 1.96, sourceIn: 3.96, sourceOut: 7.04, audioFadeIn: 0.08, audioFadeOut: 0.08 },
-      { timelineIn: 4.96, sourceIn: 7.96, sourceOut: 12, audioFadeIn: 0.08, audioFadeOut: 0 },
-    ]);
+    expect(sound.clips).toMatchObject(expectedRippledFades);
     // The same fades replay onto the same cut exactly, as undoing an earlier edit does.
     expect(replayJoinFades(timeline, fades, 0.08)).toEqual(faded);
   });
@@ -157,5 +187,69 @@ describe("the editor's crossfade on dialogue joins", () => {
   it("does nothing when the editor turned it off", () => {
     const { timeline, joins } = rippled();
     expect(crossfadeJoins(timeline, media, joins, 0).timeline).toBe(timeline);
+  });
+
+  it("skips a muted dialogue track across multiple joins and replays deterministically", () => {
+    const { timeline, joins } = rippled("video");
+    const earlier = makeMediaClip("m", 0, 3, 0, { id: "old_dialogue" });
+    timeline.tracks.push(dialogue("v1_dialogue", true, [earlier]));
+    const { timeline: faded, fades, report } = crossfadeJoins(timeline, media, joins, 0.08);
+    expect(report).toEqual({ faded: [2, 5], plain: [] });
+    expect(faded.tracks.filter(t => t.id.startsWith("v1_dialogue")).map(t => t.id)).toEqual(["v1_dialogue", "v1_dialogue_"]);
+    expect(faded.tracks.find(t => t.id === "v1_dialogue")).toMatchObject({ muted: true, clips: [earlier] });
+    const sound = faded.tracks.find(t => t.id === "v1_dialogue_")!;
+    expect(sound.muted).toBe(false);
+    expect(sound.clips).toMatchObject(expectedRippledFades);
+    expect(replayJoinFades(timeline, fades, 0.08)).toEqual(faded);
+  });
+
+  it("reuses an existing unmuted fallback dialogue track and skips consecutive muted tracks", () => {
+    const { timeline: withUnmutedFallback, joins: joins1 } = rippled("video");
+    const kept = makeMediaClip("m", 0, 1, 10, { id: "later_sound" });
+    withUnmutedFallback.tracks.push(
+      dialogue("v1_dialogue", true),
+      dialogue("v1_dialogue_", false, [kept]),
+    );
+    const reused = crossfadeJoins(withUnmutedFallback, media, joins1, 0.08);
+    expect(reused.report).toEqual({ faded: [2, 5], plain: [] });
+    expect(reused.timeline.tracks.filter(t => t.id.startsWith("v1_dialogue")).map(t => t.id)).toEqual(["v1_dialogue", "v1_dialogue_"]);
+    const reusedTrack = reused.timeline.tracks.find(t => t.id === "v1_dialogue_")!;
+    expect(reusedTrack.clips).toMatchObject([...expectedRippledFades, kept]);
+    expect(replayJoinFades(withUnmutedFallback, reused.fades, 0.08)).toEqual(reused.timeline);
+
+    const { timeline: twoMuted, joins: joins2 } = rippled("video");
+    twoMuted.tracks.push(dialogue("v1_dialogue", true), dialogue("v1_dialogue_", true));
+    const skippedTwo = crossfadeJoins(twoMuted, media, joins2, 0.08);
+    expect(skippedTwo.report).toEqual({ faded: [2, 5], plain: [] });
+    expect(skippedTwo.timeline.tracks.filter(t => t.id.startsWith("v1_dialogue")).map(t => t.id)).toEqual([
+      "v1_dialogue",
+      "v1_dialogue_",
+      "v1_dialogue__",
+    ]);
+    const fallback = skippedTwo.timeline.tracks.find(t => t.id === "v1_dialogue__")!;
+    expect(fallback.muted).toBe(false);
+    expect(fallback.clips).toMatchObject(expectedRippledFades);
+    expect(replayJoinFades(twoMuted, skippedTwo.fades, 0.08)).toEqual(skippedTwo.timeline);
+  });
+
+  it("leaves joins plain when the selected unmuted dialogue track is already occupied", () => {
+    const { timeline: occupiedDirect, joins: joins1 } = rippled("video");
+    occupiedDirect.tracks.push(dialogue("v1_dialogue", false, [makeMediaClip("m", 0, 1, 0.5, { id: "busy" })]));
+    const direct = crossfadeJoins(occupiedDirect, media, joins1, 0.08);
+    expect(direct.report).toEqual({
+      faded: [5],
+      plain: [{ at: 2, reason: "the dialogue track already has sound there" }],
+    });
+
+    const { timeline: occupiedAfterMuted, joins: joins2 } = rippled("video");
+    occupiedAfterMuted.tracks.push(
+      dialogue("v1_dialogue", true),
+      dialogue("v1_dialogue_", false, [makeMediaClip("m", 0, 1, 0.5, { id: "busy" })]),
+    );
+    const afterMuted = crossfadeJoins(occupiedAfterMuted, media, joins2, 0.08);
+    expect(afterMuted.report).toEqual({
+      faded: [5],
+      plain: [{ at: 2, reason: "the dialogue track already has sound there" }],
+    });
   });
 });

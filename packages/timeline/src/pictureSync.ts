@@ -58,11 +58,11 @@ export function pictureSyncOps(timeline: Timeline, media: readonly MediaAsset[],
   const placed = new Map<string, Array<{ start: number; end: number }>>();
   const addedTracks = new Set<string>();
 
-  /** The audio track below a picture track that its sound goes to: its dialogue track, or the next free one after it. */
+  /** The unmuted audio track below a picture track that its sound goes to: its dialogue track, or the next free one after it. */
   const soundTrackFor = (track: Track, start: number, end: number) => {
     for (let id = `${track.id}_dialogue`; ; id += "_") {
       const found = timeline.tracks.find(t => t.id === id);
-      if (found && found.kind !== "audio") continue;
+      if (found && (found.kind !== "audio" || found.muted)) continue;
       const busy = [...(found?.clips ?? []).map(c => ({ start: c.timelineIn, end: clipEnd(c) })), ...(placed.get(id) ?? [])];
       if (busy.some(b => b.start < end - EPS && b.end > start + EPS)) continue;
       if (!found && !addedTracks.has(id)) {
