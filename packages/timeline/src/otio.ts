@@ -79,9 +79,10 @@ export function toOtio(project: Project, timeline: Timeline, opts: OtioExportOpt
     metadata: { scarlet: { id: m.id, kind: m.kind, author: m.author ?? null, noteId: m.noteId ?? null } },
   }));
   if (captionsAsMarkers) {
-    for (const t of timeline.tracks.filter((t) => t.kind === "caption")) {
+    // Only the captions the editor sees, as in the captions file: none from a hidden track or a disabled caption.
+    for (const t of timeline.tracks.filter((t) => t.kind === "caption" && !t.hidden)) {
       for (const c of t.clips) {
-        if (c.kind !== "caption") continue;
+        if (c.kind !== "caption" || c.enabled === false) continue;
         markers.push({
           OTIO_SCHEMA: "Marker.2",
           name: c.text,
@@ -178,6 +179,9 @@ function otioTrack(
     OTIO_SCHEMA: "Track.1",
     name: layer ? `${track.name} (layer ${layer + 1})` : track.name,
     kind,
+    // A hidden picture track shows nothing and a muted sound track plays nothing. A picture track's sound has a track
+    // of its own, so hiding the picture leaves its sound on.
+    enabled: kind === "Video" ? !track.hidden : !track.muted,
     children,
     source_range: null,
     effects: [],
