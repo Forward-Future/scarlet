@@ -946,16 +946,15 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
           const kept = trims.flatMap(({ c }) => c.keepRepeat ?? []).map(phrase);
           if (!repeatAtJoin || kept.includes(phrase(repeatAtJoin.words))) return [];
           const { before, after, words } = repeatAtJoin, cut = trims[0]!.c.input;
-          return [{ ...range, cut, repeat: repeatAtJoin, cuts: trims.map(({ c }) => c.input),
-            reason: `The pause trim plays “${words}” twice, at ${before.start}–${before.end} s before it and ${after.start}–${after.end} s after it: ` +
-              `the pause was the gap of a restart. Remove the first saying with the pause (mediaId with fromWord/toWord). If both belong, include “${words}” in keepRepeat on cut ${cut}.` }];
+          return [{ ...range, cut, repeat: repeatAtJoin, cuts: trims.map(({ c }) => c.input), refuse: false,
+            reason: `The pause trim plays “${words}” twice, at ${before.start}–${before.end} s before it and ${after.start}–${after.end} s after it.` }];
         }
         const playback = { preview, at: atAfter(range.start, played), partialOnly: forReview };
         const { repeatAtJoin, partialWordRepeat, pickupRepeats, unread } = await checkKeptWords(tl, project, range,
           dialogueJoinWords(tl, project, range, pages), read, previous, next, playback);
         if (unread.length) unreadJoinAudio.push({ cut: contributing[0]!.c.input, reasons: unread });
         const acknowledged = contributing.flatMap(({ c }) => c.keepRepeat ?? []).map(phrase);
-        const issues = [];
+        const issues: Array<{ cut: number; words: string; reason: string; hint?: string; refuse?: true } & Record<string, unknown>> = [];
         if (!forReview && repeatAtJoin && acknowledged.includes(phrase(repeatAtJoin.words))) kept.push(repeatAtJoin.before, repeatAtJoin.after);
         if (!forReview && repeatAtJoin && !acknowledged.includes(phrase(repeatAtJoin.words))) {
           const { before, after, words } = repeatAtJoin;
@@ -973,11 +972,11 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
           const target = side === "start" ? contributing[0]! : contributing.at(-1)!;
           // Only the cut responsible for this outside edge can repair it. A neighbor may have been staged explicitly.
           if (side === "start" ? target.d.start === join.start : target.d.end === join.end)
-            issues.push({ cut: target.c.input, partialWordRepeat, words: word,
+            issues.push({ cut: target.c.input, partialWordRepeat, words: word, refuse: true,
               reason: `The ${side === "start" ? "outgoing" : "incoming"} audio plays “${heard}” from a cut-off “${word}” beside another “${word}”.` });
         }
-        // A restart cut that runs past the restart takes words the sentence needs, and nothing at the join says them
-        // again. Only a tool that takes removals can say they go on purpose (dropWords).
+        // A restart cut that runs past the restart can take words the sentence needs, with nothing at the join saying
+        // them again. What the join plays is reported; dropWords leaves words meant to go out of the report.
         const said = forReview || req.repeatHint ? undefined : await wordsAtJoin(range, playback.at);
         const dropped = contributing.flatMap(({ c }) => c.dropWords ?? []).map(phrase);
         const joinPlays = said && `…${said.before.slice(-EDGE_WORDS_SHOWN).join(" ")} ‖ ${said.after.slice(0, EDGE_WORDS_SHOWN).join(" ")}…`;
@@ -990,17 +989,27 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
           if (side === "out" ? target.d.start !== join.start : target.d.end !== join.end) continue;
           const them = words.includes(" ") ? "them" : "it";
           issues.push({ cut: target.c.input, takenWords: { side, words }, words, joinPlays,
-            reason: `The join would play “${joinPlays}”: the cut takes “${words}” ${side === "out"
-              ? "from the end of what plays before it" : "from the start of the take it resumes with"}, and nothing either side of the join says ${them} again.`,
-            hint: `If the restart ${side === "out" ? "starts after" : "ends before"} “${words}”, move that edge of the removal off ${them}. If “${words}” should go, include it in dropWords on cut ${target.c.input}.` });
+            reason: `The join plays “${joinPlays}”: the cut takes “${words}” ${side === "out"
+              ? "from the end of what plays before it" : "from the start of the take it resumes with"}, and nothing either side of the join says ${them} again.` });
         }
-        return issues.map(({ cut, words, reason, hint, ...evidence }: { cut: number; words: string; reason: string; hint?: string } & Record<string, unknown>) =>
-          ({ ...range, cut, ...evidence, cuts: contributing.map(({ c }) => c.input),
-            reason: reason + " " + (hint ?? req.repeatHint ?? `Include one occurrence in the removal using word indices or new edges. If both belong, include “${words}” in keepRepeat on cut ${cut}.`) }));
+        return issues.map(({ cut, words, reason, hint, refuse, ...evidence }) =>
+          ({ ...range, cut, ...evidence, cuts: contributing.map(({ c }) => c.input), refuse: !!refuse,
+            reason: refuse ? reason + " " + (hint ?? req.repeatHint ?? `Include one occurrence in the removal using word indices or new edges. If both belong, include “${words}” in keepRepeat on cut ${cut}.`) : reason }));
       });
     }));
-    const disputedEdges = issuesByJoin.flat();
+    // A piece of a cut-off word is heard in the sound, which the model can't hear, so that cut is left out for its
+    // author to repair. What the words say a join plays (a phrase twice, a pickup, words a restart cut takes that
+    // nothing says again) the model reads as well as Scarlet does: refused, passes answered a doubled-word dispute by
+    // cutting the good word from the kept take in 3 of 3 tries (2026-11-19). Those cuts save as decided, and the
+    // finding goes back with them in the gate.
+    const found = issuesByJoin.flat();
+    const disputedEdges = found.filter(f => f.refuse).map(({ refuse: _refuse, ...f }) => f);
     if (disputedEdges.length) return { outcome: "needsRevision", disputedEdges };
+    for (const { refuse: _refuse, cut, cuts: _cuts, start: _start, end: _end, reason, ...evidence } of found) {
+      const i = removals.findIndex(c => c.input === cut), c = removals[i]!, d = decisions[i]!;
+      report.push({ cut, kind: c.kind, ...(c.words && { words: c.words }), asked: c.decision, outcome: d.review ? "review" : "cut",
+        range: [r2(d.start), r2(d.end)], ...evidence, evidence: `${reason} Saved as you decided.` });
+    }
   }
   // An applied cut whose edge sits right beside the sound it removes is reported to the agent: the picture can show a
   // word starting that the sound has not reached yet. It is evidence, not a flag. Whether the join needs the editor is

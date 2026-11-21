@@ -352,10 +352,13 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
       const audible = new Set(project.media.filter(carriesAudio).map(m => m.id));
       const plays = timeline.tracks.some(t => !t.muted && t.clips.some(c => c.kind === "media" && c.enabled && c.volume > 0 && audible.has(c.mediaId)));
       const receipt = task.repeatAudit?.version === project.head ? task.repeatAudit : undefined;
-      if (plays && (receipt?.remaining !== 0 || receipt.unavailable?.length)) {
-        if (receipt?.unavailable?.length || (receipt?.returns ?? 0) >= 2 || (task.repeatAudit?.totalReturns ?? 0) >= MOST_CLOSING_CHECKS) {
+      // The check's findings are evidence for the model, not a list it must empty: a pass that has read the check on the
+      // version that plays has had them, and what it made of them stands. Sent back until nothing was outstanding, passes
+      // kept 7-30 listed repeats each with a reason anyway, at about 2M tokens for each closing session (2026-11-20).
+      if (plays && (!receipt || receipt.unavailable?.length)) {
+        if (receipt?.unavailable?.length || (task.repeatAudit?.totalReturns ?? 0) >= MOST_CLOSING_CHECKS) {
           body = { ...body, state: "failed", interrupted: true, error: receipt?.unavailable?.join(" ") ||
-            "The final audio check still has repeats, silences or divided sentences to resolve. Resume to finish checking the saved edit." };
+            "The final audio check hasn't read the saved edit. Resume to finish checking it." };
         } else {
           // The pass's closing words are kept for the editor while the check runs: the check's own are about the check.
           const reply = task.reply ?? (body.summary?.trim() || undefined);
@@ -595,9 +598,9 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   if (checking) {
     // The goal and what counts as done, not the steps: the tools say how they check and repair.
     const finish = "The dialogue pass has saved its editing work. What is left is the closing check on the current playback: " +
-      "no word the cuts clipped should play, and each repeat, silence and divided sentence the check lists is cut, kept " +
-      "with its reason, or staged for the editor when you doubt it, as the skill and the editor ask. " +
-      "The pass is done once dialogue_check_repeats on the current version has nothing outstanding. " +
+      "read dialogue_check_repeats on the current version. What it lists is evidence: decide what each repeat, silence, " +
+      "divided sentence and clipped word needs, as the skill and the editor ask, and cut it, keep it or stage it for the " +
+      "editor when you doubt it. The pass is done once you have read the check on the version that plays and acted on what you decided. " +
       "Honor the editor’s scope, preferences, protected footage and decisions.";
     return { systemPrompt, instruction: finish + "\nEditor’s request: " + firstAsked(ctx, task).trim() +
       (answered ? "\nThe editor answered: " + last!.text : ""), ...launch };

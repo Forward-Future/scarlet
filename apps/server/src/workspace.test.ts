@@ -3639,14 +3639,13 @@ it.each(["a1", "alternate"])("requires an audio check of the version that plays,
   const found = await (await check(version)).json();
   expect(found.unavailable).toBeUndefined();
   expect(found).toMatchObject({ heard: 2, remaining: 2, repeats: [{ phrase: "go", atJoin: true }, { phrase: "very", atJoin: false }] });
-  expect((await finish()).state).toBe("queued");
-  await claim();
   const keep = [{ id: found.repeats[1].id, reason: "Spoken emphasis" }];
   expect(await (await check(version, keep)).json()).toMatchObject({ heard: 2, remaining: 1 });
   const repaired = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, description: "Keep the second go",
     ops: [{ op: "rippleDelete", start: .5, end: 1 }] }).change.toVersion;
   // Kept repeats are decisions about the version they were heard on, so a check that keeps needs that version.
   expect((await check(version, keep)).status).toBe(409);
+  // The version that plays now hasn't been checked, so the pass goes back to read it.
   expect((await finish()).state).toBe("queued");
   await claim();
   // A check that keeps nothing reads the edit as it is now and names the version it was given.
@@ -3692,7 +3691,7 @@ it("keeps a pass finished when its closing check can't run, and Retry runs the c
   expect(resumed.error).toBeUndefined();
 });
 
-it("holds a pass until each restart and long silence its edit still plays is cut or kept", async () => {
+it("lists each restart and long silence the edit still plays, and the pass finishes once it has read them", async () => {
   const { ctx } = workspace;
   const { host } = await (await api("POST", "/hosts/register", { name: "Host", platform: "test", agents: [{ id: "codex", installed: true }] })).json();
   const pass = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: { type: "human", name: "Editor" } });
@@ -3721,20 +3720,14 @@ it("holds a pass until each restart and long silence its edit still plays is cut
   const slower = await (await api("POST", projectsPath() + `/tasks/${pass.id}/repeat-audit`, { version, silencesFrom: 10 })).json();
   expect(slower).toMatchObject({ remaining: 1 });
   expect(slower.silences).toBeUndefined();
-  // The pass can't finish over them.
-  expect((await finish()).state).toBe("queued");
-  await claim();
-  // Kept with a reason, the silence is settled. Cut, the restart is gone.
+  // Kept with a reason, the silence is settled.
   expect(await (await check(version, [{ id: found.silences[0].id, reason: "The demo loads on screen." }])).json()).toMatchObject({ remaining: 1 });
-  const repaired = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, description: "Remove the abandoned attempt",
-    ops: [{ op: "rippleDelete", start: .9, end: 2.9 }] }).change.toVersion;
-  const after = await (await check(repaired)).json();
-  expect(after).toMatchObject({ remaining: 0, repeats: [] });
-  expect(after.silences).toBeUndefined();
-  expect(await finish()).toMatchObject({ state: "done", repeatAudit: { remaining: 0 } });
+  // What the check lists is evidence for the pass, not a list it must empty: having read it on the version that plays,
+  // the pass finishes with the restart still listed.
+  expect(await finish()).toMatchObject({ state: "done", repeatAudit: { version, remaining: 1 } });
 });
 
-it("holds a pass until each join that divides a sentence is repaired or kept with its reason", async () => {
+it("lists each join that divides a sentence, and the pass finishes once it has read them", async () => {
   const { ctx } = workspace;
   const { host } = await (await api("POST", "/hosts/register", { name: "Host", platform: "test", agents: [{ id: "codex", installed: true }] })).json();
   const pass = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: { type: "human", name: "Editor" } });
@@ -3761,12 +3754,13 @@ it("holds a pass until each join that divides a sentence is repaired or kept wit
     removed: 4, removedStart: "do not use tools.", split: ["out"], lastWord: 4, firstWord: 9 }] });
   // The join that took the aside out stands between two whole sentences, and is not listed. Nor is the soundless “I” before it.
   expect(found.fragments).toHaveLength(1);
-  expect((await finish()).state).toBe("queued");
-  await claim();
   await expect((await check(version, [{ id: "unknown", reason: "Reads whole." }])).json()).resolves.toMatchObject({ error: { code: "unknown_repeat" } });
   // Repaired: the stray word goes, and the join is between two whole sentences.
   const repaired = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, description: "Remove the stray word",
     ops: [{ op: "rippleDelete", start: 2.55, end: 2.95 }] }).change.toVersion;
+  // Finishing on a version it hasn't checked sends the pass back to read the one that plays.
+  expect((await finish()).state).toBe("queued");
+  await claim();
   const after = await (await check(repaired)).json();
   expect(after.remaining).toBe(0);
   expect(after.fragments).toBeUndefined();

@@ -49,6 +49,9 @@ function partialWordFixture() {
   return { tl, sources, scan };
 }
 
+/** The gate's line for one submitted cut, on a plan that saved. */
+const gateFor = (plan: Awaited<ReturnType<typeof planDialogueCuts>>, cut = 0) => plan.outcome === "ready" ? plan.gate.get(cut) : undefined;
+
 describe("dialogue plan", () => {
   it("refuses a pause trim where the scan read words the transcript doesn't have, though they never reach speaking level", async () => {
     // Said: “And it just feel, uh, let's see. It just feels like”. The transcript has “And it [3.8 s] just feels like”,
@@ -173,7 +176,7 @@ describe("dialogue plan", () => {
     expect(apart).toMatchObject({ outcome: "ready", decisions: [{ start: 2.27, end: 2.35 }] });
   });
 
-  it("returns a pause trim whose words either side are the same, the gap of a restart", async () => {
+  it("saves a pause trim whose words either side are the same, and reports the word it plays twice", async () => {
     const { tl, sources } = fixture();
     // “count every single”, 1.5 s, “single pastry”: the trim leaves a quarter second and plays “single” twice.
     const said = [{ text: "count", start: .5, end: .8 }, { text: "every", start: .8, end: 1.1 }, { text: "single", start: 1.1, end: 1.5 },
@@ -183,21 +186,25 @@ describe("dialogue plan", () => {
     sources.words = async () => said;
     const trim = (keepRepeat?: string) => planDialogueCuts({ tl, localPauses: false,
       cuts: [cut({ kind: "pause", mediaId: "mic", afterWord: 2, leave: .25, keepRepeat })] }, sources);
-    expect(await trim()).toMatchObject({ outcome: "needsRevision", disputedEdges: [{ cuts: [0], repeat: { words: "single" },
-      reason: expect.stringContaining("The pause trim plays “single” twice") }] });
-    expect(await trim("single")).toMatchObject({ outcome: "ready", decisions: [{ review: false }] });
+    const plan = await trim();
+    expect(plan).toMatchObject({ outcome: "ready", decisions: [{ review: false }] });
+    expect(gateFor(plan)).toMatchObject({ outcome: "cut", repeat: { words: "single" },
+      evidence: expect.stringContaining("The pause trim plays “single” twice") });
+    expect(gateFor(await trim("single"))?.evidence ?? "").not.toContain("twice");
   });
 
-  it("returns an edit that leaves a single word doubled immediately after the cut", async () => {
+  it("reports an edit that leaves a single word doubled immediately after the cut", async () => {
     const { tl, sources } = fixture();
     const heard = ["Okay.", "Take", "two.", "the", "the", "answer."].map((text, i) => ({ text, start: .5 * i, end: .5 * i + .15 }));
     const rms = Array.from({ length: 250 }, (_, i) => heard.some(w => w.start <= i / 50 && i / 50 < w.end) ? .1 : .0005);
     sources.pages = () => [{ ...page, edges: joinEvidence(heard, { from: 0, to: 5, rms, peaks: rms, speechActivity: heard }) }];
     const plan = (end: number, keepRepeat?: string) => planDialogueCuts({ tl, localPauses: false,
       cuts: [cut({ start: .3, end, kind: "coaching", keepRepeat })] }, sources);
-    expect(await plan(1.3)).toMatchObject({ outcome: "needsRevision", disputedEdges: [{ pickup: { words: "the", side: "end" } }] });
-    expect(await plan(1.8)).toMatchObject({ outcome: "ready" });
-    expect(await plan(1.3, "the")).toMatchObject({ outcome: "ready" });
+    const doubled = await plan(1.3);
+    expect(doubled).toMatchObject({ outcome: "ready", decisions: [{ review: false }] });
+    expect(gateFor(doubled)).toMatchObject({ pickup: { words: "the", side: "end" } });
+    expect(gateFor(await plan(1.8))?.pickup).toBeUndefined();
+    expect(gateFor(await plan(1.3, "the"))?.pickup).toBeUndefined();
   });
 
   it("checks the surviving audio before saving even if both existing transcripts omit the extra word", async () => {
@@ -211,11 +218,12 @@ describe("dialogue plan", () => {
     };
     const plan = (start: number, keepRepeat?: string) => planDialogueCuts({ tl, localPauses: false,
       cuts: [cut({ start, end: 3.2, keepRepeat })] }, sources);
-    expect(await plan(1.7)).toMatchObject({ outcome: "needsRevision", disputedEdges: [{ repeat: { words: "next",
-      before: { start: 1.48, end: 1.64 }, after: { start: 3.4, end: 3.86 } } }] });
+    const doubled = await plan(1.7);
+    expect(doubled).toMatchObject({ outcome: "ready" });
+    expect(gateFor(doubled)).toMatchObject({ repeat: { words: "next", before: { start: 1.48, end: 1.64 }, after: { start: 3.4, end: 3.86 } } });
     expect(windows).toEqual([[0, 1.7], [3.2, 5]]);
-    expect(await plan(1.45)).toMatchObject({ outcome: "ready" });
-    expect(await plan(1.7, "next")).toMatchObject({ outcome: "ready" });
+    expect(gateFor(await plan(1.45))?.repeat).toBeUndefined();
+    expect(gateFor(await plan(1.7, "next"))?.repeat).toBeUndefined();
   });
 
   it("uses the measured occurrence in its chosen clip when the transcript misses a saying", async () => {
@@ -450,7 +458,7 @@ describe("dialogue plan", () => {
     expect(reads).toBe(0);
   });
 
-  it("catches both copies of a pickup on the kept side of a production cut even when the transcript drops one", async () => {
+  it("reports both copies of a pickup on the kept side of a production cut even when the transcript drops one", async () => {
     const { tl, sources } = fixture();
     const tokens = ["Okay.", "Pack", "up.", "Let's", "go,", "let's", "go", "outside."];
     const scan = tokens.map((text, i) => ({ text, start: .5 * i, end: .5 * i + .15 }));
@@ -460,18 +468,19 @@ describe("dialogue plan", () => {
     const coaching = cut({ start: .3, end: 1.3, kind: "coaching" });
     const plan = (...cuts: DialogueCutInput[]) => planDialogueCuts({ tl, cuts, localPauses: false }, sources);
     const pickup = { words: "Let's go", side: "end", first: { start: 1.5, end: 2.15 }, second: { start: 2.5, end: 3.15 } };
-    expect(await plan(coaching)).toMatchObject({ outcome: "needsRevision", disputedEdges: [{ cut: 0, pickup }] });
-    expect(await plan({ ...coaching, end: 2.3 })).toMatchObject({ outcome: "ready", decisions: [{ review: false }] });
-    expect(await plan({ ...coaching, keepRepeat: ["Let's go"] })).toMatchObject({ outcome: "ready" });
-    expect(await plan(coaching, cut({ start: 1.45, end: 2.2, decision: "keep" }))).toMatchObject({ outcome: "ready" });
-    expect(await plan(coaching, cut({ start: 2.3, end: 3.3 }))).toMatchObject({ outcome: "ready" });
+    const found = await plan(coaching);
+    expect(found).toMatchObject({ outcome: "ready", decisions: [{ review: false }] });
+    expect(gateFor(found)).toMatchObject({ cut: 0, pickup });
+    expect(gateFor(await plan({ ...coaching, end: 2.3 }))?.pickup).toBeUndefined();
+    expect(gateFor(await plan({ ...coaching, keepRepeat: ["Let's go"] }))?.pickup).toBeUndefined();
+    expect(gateFor(await plan(coaching, cut({ start: 1.45, end: 2.2, decision: "keep" })))?.pickup).toBeUndefined();
+    expect(gateFor(await plan(coaching, cut({ start: 2.3, end: 3.3 })))?.pickup).toBeUndefined();
     // The same restart ending before an outgoing edge.
-    expect(await plan({ ...coaching, start: 3.3, end: 4.6 })).toMatchObject({ outcome: "needsRevision",
-      disputedEdges: [{ pickup: { ...pickup, side: "start" } }] });
-    expect(await plan({ ...coaching, decision: "review" })).toMatchObject({ outcome: "ready" });
+    expect(gateFor(await plan({ ...coaching, start: 3.3, end: 4.6 }))).toMatchObject({ pickup: { ...pickup, side: "start" } });
+    expect(gateFor(await plan({ ...coaching, decision: "review" }))?.pickup).toBeUndefined();
   });
 
-  it("returns a retake that would double its opening word to the agent, with both timings from the scan", async () => {
+  it("reports a retake that would double its opening word to the agent, with both timings from the scan", async () => {
     const { tl, sources } = fixture();
     const heard = [
       { start: .2, end: .6, text: "done." }, { start: .8, end: 1, text: "Next," },
@@ -485,16 +494,20 @@ describe("dialogue plan", () => {
     sources.words = async () => saved;
     const plan = (...cuts: DialogueCutInput[]) => planDialogueCuts({ tl, cuts, localPauses: false }, sources);
     const retake = cut({ start: 1.2, end: 3.3 });
-    const conflict = { outcome: "needsRevision", disputedEdges: [{ cut: 0, repeat: { words: "Next",
-      before: { start: .8, end: 1 }, after: { start: 3.5, end: 3.75 } } }] };
-    expect(await plan(retake)).toMatchObject(conflict);
-    expect(await plan({ ...retake, keepRepeat: "attempt" })).toMatchObject(conflict);
-    expect(await plan({ ...retake, keepRepeat: "next!" })).toMatchObject({ outcome: "ready", decisions: [{ review: false }] });
+    const doubled = { cut: 0, repeat: { words: "Next", before: { start: .8, end: 1 }, after: { start: 3.5, end: 3.75 } },
+      evidence: expect.stringContaining("Saved as you decided.") };
+    const asDecided = await plan(retake);
+    expect(asDecided).toMatchObject({ outcome: "ready", decisions: [{ review: false }] });
+    expect(gateFor(asDecided)).toMatchObject(doubled);
+    expect(gateFor(await plan({ ...retake, keepRepeat: "attempt" }))).toMatchObject(doubled);
+    expect(gateFor(await plan({ ...retake, keepRepeat: "next!" }))?.repeat).toBeUndefined();
     // A staged cut has not made this join.
-    expect(await plan({ ...retake, decision: "review" })).toMatchObject({ outcome: "ready" });
+    expect(gateFor(await plan({ ...retake, decision: "review" }))?.repeat).toBeUndefined();
     // Two touching cuts make one join; removing the first saying as well resolves it.
-    expect(await plan({ ...retake, end: 2.7 }, cut({ kind: "coaching", start: 2.7, end: 3.3 }))).toMatchObject(conflict);
-    expect(await plan(cut({ kind: "coaching", start: .7, end: 1.2 }), retake)).toMatchObject({ outcome: "ready" });
+    expect(gateFor(await plan({ ...retake, end: 2.7 }, cut({ kind: "coaching", start: 2.7, end: 3.3 })))).toMatchObject(doubled);
+    const both = await plan(cut({ kind: "coaching", start: .7, end: 1.2 }), retake);
+    expect(both).toMatchObject({ outcome: "ready" });
+    expect([gateFor(both, 0)?.repeat, gateFor(both, 1)?.repeat]).toEqual([undefined, undefined]);
   });
 
   it("narrows a retake whose edges fall on speech, stages it for review and reports the change", async () => {
@@ -1092,16 +1105,18 @@ describe("restart cuts that run past the restart", () => {
       planDialogueCuts({ tl, localPauses: false, cuts: [cut({ mediaId: "mic", fromWord, toWord, ...more })] }, sources);
   }
 
-  it("hands back a cut that takes the end of the kept phrase with the restart, with the join as it would play", async () => {
+  it("saves a cut that takes the end of the kept phrase with the restart, and reports the join as it plays", async () => {
     const plan = sentence();
-    expect(await plan(3, 7)).toMatchObject({ outcome: "needsRevision", disputedEdges: [{ cuts: [0],
-      takenWords: { side: "out", words: "beautiful." }, joinPlays: "…this is absolutely ‖ detail, the spatial awareness…" }] });
+    const taken = await plan(3, 7);
+    expect(taken).toMatchObject({ outcome: "ready", decisions: [{ review: false }] });
+    expect(gateFor(taken)).toMatchObject({ outcome: "cut", takenWords: { side: "out", words: "beautiful." },
+      joinPlays: "…this is absolutely ‖ detail, the spatial awareness…", evidence: expect.stringContaining("Saved as you decided.") });
   });
 
-  it("saves it once the model says the words go on purpose, and saves the restart alone", async () => {
+  it("leaves words the model says go on purpose out of the report, and the restart alone has none", async () => {
     const plan = sentence();
-    expect(await plan(3, 7, { dropWords: "beautiful" })).toMatchObject({ outcome: "ready" });
-    expect(await plan(4, 6)).toMatchObject({ outcome: "ready" });
+    expect(gateFor(await plan(3, 7, { dropWords: "beautiful" }))?.takenWords).toBeUndefined();
+    expect(gateFor(await plan(4, 6))?.takenWords).toBeUndefined();
   });
 
   it("leaves a cut the editor will review to them", async () => {

@@ -136,23 +136,38 @@ it("tells a follow-up pass's closing check the request as it was sent, with its 
   expect(again).not.toContain("Resume this interrupted request");
 });
 
-it("stops a pass's closing check after a few returns in all, even when each return gets somewhere", async () => {
+it("finishes a pass that has read its closing check on the version that plays, whatever the check still lists", async () => {
+  app.ctx.repos.projects.putMedia(project.id, { id: "cam", name: "Camera", kind: "video", path: "cam.mov", duration: 30 }, "ready");
+  const { version } = storeVersion(app.ctx, project.id, timelineFromKeepRanges(project.id, "cam", [{ start: 0, end: 20 }]), { parent: null });
+  app.ctx.repos.projects.update(project.id, { head: version });
+  const task = await dialoguePass();
+  const at = get(task.id);
+  // Never read on this version: it goes back once to read it.
+  expect((await api<{ task: Task }>("POST", `/tasks/${task.id}/complete`, { state: "done", ifStartedAt: at.startedAt })).body.task.state).toBe("queued");
+  await claim(task.id);
+  const again = get(task.id);
+  saveTask(app.ctx, { ...again, repeatAudit: { ...again.repeatAudit, version, remaining: 3 } });
+  const finished = (await api<{ task: Task }>("POST", `/tasks/${task.id}/complete`, { state: "done", ifStartedAt: again.startedAt })).body.task;
+  expect(finished).toMatchObject({ state: "done", repeatAudit: { version, remaining: 3 } });
+});
+
+it("stops a pass's closing check after a few returns in all, when each return leaves a version it hasn't read", async () => {
   app.ctx.repos.projects.putMedia(project.id, { id: "cam", name: "Camera", kind: "video", path: "cam.mov", duration: 30 }, "ready");
   const { version } = storeVersion(app.ctx, project.id, timelineFromKeepRanges(project.id, "cam", [{ start: 0, end: 20 }]), { parent: null });
   app.ctx.repos.projects.update(project.id, { head: version });
   const task = await dialoguePass();
   const states: string[] = [];
   for (let run = 0; run <= MOST_CLOSING_CHECKS; run++) {
-    // Each check fixed one finding and made another: the reading's own count starts again.
+    // Each check saved again after its reading, so the version that plays is one it hasn't read.
     const at = get(task.id);
-    saveTask(app.ctx, { ...at, repeatAudit: { ...at.repeatAudit, version, remaining: 1, returns: 0 } });
+    saveTask(app.ctx, { ...at, repeatAudit: { ...at.repeatAudit, version: "an earlier version", remaining: 1, returns: 0 } });
     const finished = (await api<{ task: Task }>("POST", `/tasks/${task.id}/complete`, { state: "done", ifStartedAt: at.startedAt })).body.task;
     states.push(finished.state);
     if (finished.state === "queued") await claim(task.id);
   }
   expect(states).toEqual([...Array(MOST_CLOSING_CHECKS).fill("queued"), "failed"]);
   expect(get(task.id)).toMatchObject({ interrupted: true, repeatAudit: { totalReturns: MOST_CLOSING_CHECKS } });
-  expect(get(task.id).error).toMatch(/^The final audio check still has/);
+  expect(get(task.id).error).toMatch(/^The final audio check hasn't read the saved edit/);
 });
 
 it("holds a request's read for a rule while editing is paused, and runs it on Resume", async () => {

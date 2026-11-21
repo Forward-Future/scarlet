@@ -393,23 +393,21 @@ describe("timeline_first_cut indexed keeps", () => {
     } finally { await editor.close(); }
   });
 
-  it("identifies both repeated takes at an indexed join and gives recovery steps supported by the keep list", async () => {
+  it("saves a keep list whose join plays both takes, and reports both with their times", async () => {
     mock.state.waveform = spokenWaveform;
     const editor = await connectEditor();
     try {
       const result = await editor.callTool({ name: "timeline_first_cut", arguments: {
-        intent: "requested", mediaId: "m1", description: "Join the opening lines.",
+        intent: "requested", mediaId: "m1", description: "Join the opening lines.", reason: "The opening lines run together.",
         keep: [{ fromWord: 0, toWord: 3 }, { fromWord: 5, toWord: 9 }],
       } }) as CallToolResult;
-      expect(result.isError).toBe(true);
       const message = textOf(result);
+      expect(result.isError, message).toBeFalsy();
       expect(message).toMatch(/welcome back/i);
       expect(message).toContain("1.1–1.8 s");
       expect(message).toContain("3.6–4.3 s");
-      expect(message).toMatch(/kept word indices/i);
-      expect(message).toMatch(/exact source seconds/i);
       expect(message).not.toContain("keepRepeat");
-      expect(mock.requests.some(r => r.method === "POST" && r.path === "/projects/prj_test/changes")).toBe(false);
+      expect(mock.requests.some(r => r.method === "POST" && r.path === "/projects/prj_test/changes")).toBe(true);
     } finally { await editor.close(); }
   });
 
@@ -3194,7 +3192,7 @@ it("measures the recording beside a staged cut's new edges with no scan read, an
 const dialogueSkill = { source: "bundled", id: "skl_dialogue", name: "first-cut-dialogue", description: "First cut", content: "# First cut", scope: "team" as const,
   ownerId: null, projectId: null, agents: [], enabled: true, version: 1 };
 
-it("checks each surviving side independently before preview and save, then accepts the repaired join", async () => {
+it("checks each surviving side independently, and saves a join that plays a word twice with what it plays", async () => {
   const original = { extra: mock.state.extra, waveform: mock.state.waveform, timeline: mock.state.timeline, transcripts: mock.state.transcripts };
   const editor = await connect();
   const tl = emptyTimeline(mock.state.project.id);
@@ -3226,10 +3224,10 @@ it("checks each surviving side independently before preview and save, then accep
   try {
     const repeat = { words: "now", before: { start: 1.6, end: 1.78 }, after: { start: 3.6, end: 3.78 } };
     expect(await call("dialogue_check_join", { start: 1.9, end: 3.5 })).toMatchObject({ repeatAtJoin: repeat });
-    expect(await plan(1.9)).toMatchObject({ needsRevision: true, disputedEdges: [{ repeat }] });
-    expect(saved).toBe(0);
-    await plan(1.5);
+    expect(await plan(1.9)).toMatchObject({ gate: { decisions: [{ outcome: "cut", repeat }] } });
     expect(saved).toBe(1);
+    expect((await plan(1.5)).gate.decisions.some((d: { repeat?: unknown }) => d.repeat)).toBe(false);
+    expect(saved).toBe(2);
   } finally { Object.assign(mock.state, original); await editor.close(); }
 });
 
@@ -3312,7 +3310,7 @@ it("skips the partial-word check quietly where no speech reading is cached, and 
   } finally { Object.assign(mock.state, original); await editor.close(); }
 });
 
-it("returns an opening trim that leaves two six-word deliveries, then saves the uninterrupted take", async () => {
+it("saves an opening trim that leaves two six-word deliveries, and reports both", async () => {
   const original = { extra: mock.state.extra, waveform: mock.state.waveform, timeline: mock.state.timeline, transcripts: mock.state.transcripts };
   const editor = await connect();
   const tl = emptyTimeline(mock.state.project.id);
@@ -3346,11 +3344,11 @@ it("returns an opening trim that leaves two six-word deliveries, then saves the 
     return JSON.parse(textOf(result));
   };
   try {
-    expect(await apply(3)).toMatchObject({ needsRevision: true, disputedEdges: [{ pickup: { words: phrase, side: "end",
-      first: { start: 3.2, end: 4.9 }, second: { start: 6.2, end: 7.9 } } }] });
-    expect(saves).toBe(0);
-    await apply(6);
+    expect(await apply(3)).toMatchObject({ gate: { decisions: [{ pickup: { words: phrase, side: "end",
+      first: { start: 3.2, end: 4.9 }, second: { start: 6.2, end: 7.9 } } }] } });
     expect(saves).toBe(1);
+    expect((await apply(6)).gate.decisions.some((d: { pickup?: unknown }) => d.pickup)).toBe(false);
+    expect(saves).toBe(2);
   } finally { Object.assign(mock.state, original); await editor.close(); }
 });
 
@@ -3423,19 +3421,19 @@ it("exposes cross-page attempts and lets the agent choose whether to check the n
     expect(checked.joins[0]).toMatchObject({ status: "unchanged", resumeAtOriginalEnd: "matches", repeatAtJoin: repeat });
     const saves = () => mock.requests.filter(r => r.path.endsWith("/dialogue-cuts")).length;
     const before = saves();
-    expect(JSON.parse(await apply([doubled]))).toMatchObject({ needsRevision: true, disputedEdges: [{ repeat }] });
-    expect(saves()).toBe(before);
-    await apply([{ ...doubled, keepRepeat: repeat.words }]);
+    expect(JSON.parse(await apply([doubled]))).toMatchObject({ gate: { decisions: [{ repeat }] } });
     expect(saves()).toBe(before + 1);
+    expect(JSON.parse(await apply([{ ...doubled, keepRepeat: repeat.words }])).gate.decisions.some((d: { repeat?: unknown }) => d.repeat)).toBe(false);
+    expect(saves()).toBe(before + 2);
     // Finishing a production cut before both takes leaves a restart wholly in the kept recording.
     const production = { start: 3.6, end: 5, kind: "coaching", decision: "cut", reason: "Remove the direction." };
     const pickup = { words: repeat.words, side: "end", first: { start: 5, end: 5.6 }, second: { start: 6, end: 6.6 } };
     expect(JSON.parse(await call("dialogue_check_join", { version: tl.version, start: production.start, end: production.end })))
       .toMatchObject({ pickupRepeats: [pickup] });
-    expect(JSON.parse(await apply([production], { only: undefined }))).toMatchObject({ needsRevision: true, disputedEdges: [{ pickup }] });
-    expect(saves()).toBe(before + 1);
-    await apply([{ ...production, keepRepeat: [repeat.words] }], { only: undefined });
-    expect(saves()).toBe(before + 2);
+    expect(JSON.parse(await apply([production], { only: undefined }))).toMatchObject({ gate: { decisions: [{ pickup }] } });
+    expect(saves()).toBe(before + 3);
+    expect(JSON.parse(await apply([{ ...production, keepRepeat: [repeat.words] }], { only: undefined })).gate.decisions.some((d: { pickup?: unknown }) => d.pickup)).toBe(false);
+    expect(saves()).toBe(before + 4);
   } finally { Object.assign(mock.state, original); await editor.close(); }
 });
 
