@@ -1,6 +1,5 @@
 import { useRef } from "react";
 import { COMPARE_KEY, useComparisonShortcut } from "../../lib/hotkeys";
-import { Icon } from "../ui/primitives";
 
 interface BeforeToggleProps {
   on: boolean;
@@ -10,7 +9,10 @@ interface BeforeToggleProps {
   flash?: boolean;
 }
 
-/** The current comparison owns both the button and its keyboard shortcut. */
+/**
+ * The current comparison owns both the button and its keyboard shortcut. It is one soft pill that reads Before and
+ * After, the side playing lit, with its key at the end; a press anywhere on it, or the key, switches sides.
+ */
 export function BeforeToggle({ on, toggle, shortcutActive, disabled, flash }: BeforeToggleProps) {
   const button = useRef<HTMLButtonElement>(null);
   useComparisonShortcut(shortcutActive && !disabled, toggle, button);
@@ -19,7 +21,7 @@ export function BeforeToggle({ on, toggle, shortcutActive, disabled, flash }: Be
     <button
       ref={button}
       type="button"
-      className={flash ? "edit-card-icon edit-card-before is-flash" : "edit-card-icon edit-card-before"}
+      className={flash ? "edit-card-before is-flash" : "edit-card-before"}
       data-log-control="toggle-before"
       aria-label="Before"
       aria-pressed={on}
@@ -32,7 +34,9 @@ export function BeforeToggle({ on, toggle, shortcutActive, disabled, flash }: Be
         toggle();
       }}
     >
-      <Icon name="compare" size={15} />
+      <span className={on ? "edit-card-side-word is-on" : "edit-card-side-word"} aria-hidden>Before</span>
+      <span className={on ? "edit-card-side-word" : "edit-card-side-word is-on"} aria-hidden>After</span>
+      <kbd aria-hidden>{COMPARE_KEY}</kbd>
     </button>
   );
 }

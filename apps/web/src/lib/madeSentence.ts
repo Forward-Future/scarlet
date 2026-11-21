@@ -9,7 +9,7 @@ export type SentencePart = string | { strong: string };
 /** What each kind of edit is called when the sentence counts it. A kind with no word of its own counts as an edit. */
 const NOUNS: Partial<Record<EditKind, [one: string, many: string]>> = {
   restore: ["passage put back", "passages put back"], audio: ["sound fix", "sound fixes"], zoom: ["zoom", "zooms"], reframe: ["reframe", "reframes"],
-  text: ["text edit", "text edits"], overlay: ["overlay", "overlays"], graphic: ["graphic", "graphics"], speed: ["speed change", "speed changes"],
+  text: ["text edit", "text edits"], broll: ["B-roll shot", "B-roll shots"], overlay: ["overlay", "overlays"], graphic: ["graphic", "graphics"], speed: ["speed change", "speed changes"],
   transition: ["transition", "transitions"],
 };
 

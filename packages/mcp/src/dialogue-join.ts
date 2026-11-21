@@ -149,8 +149,11 @@ const reach = .75, wordMargin = .02, quietMargin = .03;
  * to reach speaking level after the quiet ends: on a 105-cut pass the voice came in a median 0.12 s after the picture
  * cut, and 0.21 s after a tenth of them, where the model had asked for a longer pause. The editor heard the wait after
  * each cut (2026-11-16).
+ * The air after the word is its decay and no more. At 0.2 s, and the 0.18 s a skill asked for, the picture held on the
+ * editor silent, or breathing in, before each cut; he asked for the cut at the end of the word's sound, and chose about a
+ * tenth of a second of quiet in all at a cut, with a longer pause only where one earns it (2026-11-20).
  */
-export const AIR_AFTER_SPEECH = .20;
+export const AIR_AFTER_SPEECH = .05;
 export const AIR_BEFORE_SPEECH = .05;
 /**
  * The room tone a join leaves: `after` the last kept word and `before` speech resumes, in the recording's seconds. A
@@ -1243,12 +1246,37 @@ function extremeLevel(page: NonNullable<JoinPage["edges"]>, from: number, to: nu
  * the lowest level, not the lowest bucket itself. The lowest bucket is as often the last one before the next word
  * starts, and an edge there has that word's first sound inside the join's crossfade: of seven such edges on one
  * pass, six had speech within 20 ms.
+ *
+ * Given the kept word beside the edge (`beside`), the dip is the one beside that word, where its sound ends or before
+ * it starts, as a quiet run is (besideWord), not the lowest level further off. After “cube simulation.” the speech
+ * detector stayed on through the pause and a breath, so no quiet run was found; the lowest level was the room after
+ * the breath, and the cut held on the editor breathing for a third of a second. The room right after the word's sound
+ * was 3 frames long (2026-11-20). And a dip the kept word sounds past at speaking level is inside that word, not where
+ * it ends: the stop of the “p” in “subscription” sat 0.24 s before the word's end, under its loudest sound by 20 dB,
+ * and the cut there took “-tion” off (2026-11-20).
  */
-function dipBetween(page: NonNullable<JoinPage["edges"]>, from: number, to: number, boundary?: number) {
+function dipBetween(page: NonNullable<JoinPage["edges"]>, from: number, to: number, boundary?: number, beside?: { side: "start" | "end"; kept: Word }) {
   const levels = page.levels, low = extremeLevel(page, from, to, "lowest");
   const at = levels && low ? Math.floor((low.at - levels.from) / levels.step) : -1;
   if (!levels || !low) return low && { ...low, room: undefined, dip: false };
   const centre = (i: number) => levels.from + (i + .5) * levels.step;
+  const room = (first: number, last: number) => ({ start: levels.from + first * levels.step, end: levels.from + (last + 1) * levels.step });
+  if (beside) {
+    // Each stretch at room tone in the window, nearest the kept word first.
+    const stretches: Array<[number, number]> = [];
+    for (let i = Math.max(0, Math.ceil((from - levels.from) / levels.step - .5)); i < levels.db.length && centre(i) <= to; i++) {
+      if (levels.db[i]! > DIP_DBFS) continue;
+      const last = stretches.at(-1);
+      if (last && last[1] === i - 1) last[1] = i; else stretches.push([i, i]);
+    }
+    if (beside.side === "end") stretches.reverse();
+    for (const [first, last] of stretches) {
+      if (keptSoundsPast(page, room(first, last), beside.kept, beside.side)) continue;
+      let db = Infinity;
+      for (let i = first; i <= last; i++) db = Math.min(db, levels.db[i]!);
+      return { at: (centre(first) + centre(last)) / 2, db, dip: true, room: room(first, last) };
+    }
+  }
   const roomTone = low.db <= DIP_DBFS;
   // A trough above room tone is a dip only when its floor is inside the stretch searched: the lowest level at the
   // stretch's end is the wall of a trough beyond it, still in sound. On one pass that edge was saved 70 ms past the
@@ -1261,9 +1289,54 @@ function dipBetween(page: NonNullable<JoinPage["edges"]>, from: number, to: numb
   let first = at, last = at;
   while (first > 0 && centre(first - 1) >= from && levels.db[first - 1]! <= floor) first--;
   while (last + 1 < levels.db.length && centre(last + 1) <= to && levels.db[last + 1]! <= floor) last++;
-  const room = { start: levels.from + first * levels.step, end: levels.from + (last + 1) * levels.step };
+  if (beside && keptSoundsPast(page, room(first, last), beside.kept, beside.side)) return { ...low, room: undefined, dip: false };
   // At room tone the middle of the quiet; in a trough its floor, where the sound either side is furthest.
-  return { at: roomTone ? (centre(first) + centre(last)) / 2 : centre(at), db: low.db, dip: true, room };
+  return { at: roomTone ? (centre(first) + centre(last)) / 2 : centre(at), db: low.db, dip: true, room: room(first, last) };
+}
+
+/** A breath sits at least this far under the word before it. */
+const BREATH_UNDER_WORD_DB = 20;
+/**
+ * The room right after a kept word's sound, when what follows it up to the quiet run `run` is a breath: sound far under
+ * the word, in no word. A breath keeps the speech detector on and the level over the room, so the quiet run the edge
+ * would pad into starts after it, and the cut held on the editor breathing in. After “cube simulation.” the room came
+ * back for 80 ms, a breath ran 0.12 s at -50 dBFS, and the cut came 0.36 s after the word (2026-11-20).
+ */
+function roomBeforeBreath(page: NonNullable<JoinPage["edges"]>, kept: Word, run: TimeRange): TimeRange | undefined {
+  const levels = page.levels, loudest = extremeLevel(page, kept.start, kept.end, "highest");
+  if (!levels || !loudest || run.start <= kept.end) return;
+  const index = (t: number) => Math.floor((t - levels.from) / levels.step + 1e-6);
+  let first = -1, last = -1;
+  for (let i = Math.max(0, index(kept.end - keptSlack)); i < Math.min(levels.db.length, index(run.start)); i++) {
+    if (levels.db[i]! <= DIP_DBFS) { if (first < 0) first = i; last = i; } else if (first >= 0) break;
+  }
+  if (first < 0) return;
+  const quiet = { start: levels.from + first * levels.step, end: levels.from + (last + 1) * levels.step };
+  if (quiet.end - quiet.start < 2 * quietMargin || quiet.end >= run.start - 1e-6 || keptSoundsPast(page, quiet, kept, "start")) return;
+  if (page.words.some(w => w.start < run.start && w.end > quiet.end)) return;
+  for (let i = index(quiet.end); i < Math.min(levels.db.length, index(run.start)); i++) if (levels.db[i]! > loudest.db - BREATH_UNDER_WORD_DB) return;
+  return quiet;
+}
+
+/** Sound this close to a word's loudest, for this long, is the word still speaking. */
+const STILL_SPEAKING_DB = 15, STILL_SPEAKING_SECONDS = .06;
+/**
+ * Whether the kept word sounds on at speaking level between a dip and where the transcript ends it (`side` start), or
+ * before the dip from where it starts it (`side` end): then the dip is inside the word, such as the stop before a
+ * consonant, and an edge there cuts the word short.
+ */
+function keptSoundsPast(page: NonNullable<JoinPage["edges"]>, dip: TimeRange, kept: Word, side: "start" | "end") {
+  const levels = page.levels, loudest = extremeLevel(page, kept.start, kept.end, "highest");
+  if (!levels || !loudest) return false;
+  const from = side === "start" ? dip.end : kept.start, to = side === "start" ? kept.end : dip.start;
+  const most = Math.round(STILL_SPEAKING_SECONDS / levels.step);
+  let run = 0;
+  for (let i = Math.max(0, Math.floor((from - levels.from) / levels.step)); i < levels.db.length; i++) {
+    if (levels.from + (i + .5) * levels.step > to) break;
+    run = levels.db[i]! >= loudest.db - STILL_SPEAKING_DB ? run + 1 : 0;
+    if (run >= most) return true;
+  }
+  return false;
 }
 
 /**
@@ -1387,8 +1460,10 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
         room[side] = { start: run.start + quietMargin, end: onsetLimit(pageAt(run.end) ?? page, run.end) };
         return Math.max(run.start + quietMargin, run.end - air.before);
       }
-      room[side] = { start: run.start + quietMargin, end: run.end - quietMargin };
-      return padEdge(run, side, air);
+      // A breath after the kept word, with the quiet only after it: the edge goes in the room before the breath.
+      const quiet = (side === "start" && page && roomBeforeBreath(pageAt(run.start) ?? page, kept, run)) || run;
+      room[side] = { start: quiet.start + quietMargin, end: quiet.end - quietMargin };
+      return padEdge(quiet, side, air);
     }
     // No run of silence: the two words run together. The lowest level between them, reaching a little way into each
     // word's timing and no further into the kept one than a quiet run may.
@@ -1397,8 +1472,8 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
     // that window: of 31 word edges one pass had handed back in sound, 9 had a trough at -48 dBFS or lower between the
     // two words' sounds, some of them silence, outside it (2026-11-16). So the whole span between their loudest points
     // is searched too, at the deep bar only, since the stop before a final “s” is a shallower trough in the same span.
-    const near = page && bounds && dipBetween(page, Math.max(bounds.start, Math.min(lo, hi) - keptSlack), Math.min(bounds.end, Math.max(lo, hi) + keptSlack), (lo + hi) / 2);
-    const low = near?.dip ? near : (page && bounds && bounds.end > bounds.start && dipBetween(page, bounds.start, bounds.end)) || near;
+    const near = page && bounds && dipBetween(page, Math.max(bounds.start, Math.min(lo, hi) - keptSlack), Math.min(bounds.end, Math.max(lo, hi) + keptSlack), (lo + hi) / 2, { side, kept });
+    const low = near?.dip ? near : (page && bounds && bounds.end > bounds.start && dipBetween(page, bounds.start, bounds.end, undefined, { side, kept })) || near;
     if (low?.dip) {
       dips.push(`No pause between “${plain(side === "start" ? kept : removed)}” and “${plain(side === "start" ? removed : kept)}”: the ${side} is at the lowest level between them (${Math.round(low.db)} dBFS).`);
       room[side] = low.room;
@@ -1458,11 +1533,22 @@ export function pauseCutRange(before: Word, after: Word, pageAt: (t: number) => 
   const air = splitLeave(leave, pace, voiceIn);
   const problems: string[] = [];
   const long = (q: TimeRange) => q.end - q.start >= 2 * quietMargin;
-  const between = (page: JoinPage["edges"] | undefined) => (page ? gaps(page) : []).filter(q => long(q) && q.end > before.end - keptSlack && q.start < after.start + keptSlack);
-  // A long pause can run across two scan pages. Each edge reads the page that covers it.
-  const first = besideWord(between(pageAt(Math.min(before.end + .1, (before.end + after.start) / 2))), "start");
-  const last = besideWord(between(pageAt(Math.max(after.start - .1, (before.end + after.start) / 2))), "end");
   const inside = (run: TimeRange, t: number) => Math.min(Math.max(t, run.start + quietMargin), run.end - quietMargin);
+  // The edge a run gives must fall between the two words' loudest points, as a word range's must (betweenWords): a word
+  // timed a little late let the quiet after it pass for the pause before it, and the trim took the whole word out.
+  const loudest = (page: NonNullable<JoinPage["edges"]>, word: Word, fallback: number) => {
+    const peak = extremeLevel(page, word.start, word.end, "highest");
+    return peak && peak.db > dbfs(QUIET_RMS) ? peak.at : fallback;
+  };
+  const between = (page: JoinPage["edges"] | undefined, side: "start" | "end") => (page ? gaps(page) : []).filter(q => {
+    if (!long(q) || q.end <= before.end - keptSlack || q.start >= after.start + keptSlack) return false;
+    const at = side === "start" ? inside(q, before.end + air.after)
+      : air.before < quietMargin ? Math.max(q.start + quietMargin, q.end - air.before) : inside(q, after.start - air.before);
+    return loudest(page!, before, before.start) < at && at < loudest(page!, after, after.end);
+  });
+  // A long pause can run across two scan pages. Each edge reads the page that covers it.
+  const first = besideWord(between(pageAt(Math.min(before.end + .1, (before.end + after.start) / 2)), "start"), "start");
+  const last = besideWord(between(pageAt(Math.max(after.start - .1, (before.end + after.start) / 2)), "end"), "end");
   let start = before.end + air.after, end = after.start - air.before;
   // Asked to play its whole length or more, the pause has nothing to trim. With a breath or a click in the middle the
   // quiet runs either side would each pull an edge in, and the pause lost the sound between them.

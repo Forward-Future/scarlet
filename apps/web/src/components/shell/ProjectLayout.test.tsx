@@ -86,7 +86,7 @@ it("carries on with imports kept for the project when it opens, and again each t
   }
 });
 
-it("waits for the edit history only for a note's link or the history panel", async () => {
+it("waits for the edit history only for a note's link", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const { project } = await api.createProject({ name: "History wait" });
   const started = startup.done;
@@ -107,8 +107,8 @@ it("waits for the edit history only for a note's link or the history panel", asy
     return text;
   };
   expect(await show(`/p/${project.id}?note=note_1`)).toContain("Loading edit history…");
-  expect(await show(`/p/${project.id}?panel=history`)).toContain("Loading edit history…");
-  // Older links named a thread or item that nothing reads any more.
+  // Older links named a thread, item or history panel that nothing reads any more.
+  expect(await show(`/p/${project.id}?panel=history`)).toBe(`/p/${project.id}?panel=history`);
   expect(await show(`/p/${project.id}?thread=chg_1`)).toBe(`/p/${project.id}?thread=chg_1`);
   expect(await show(`/p/${project.id}`)).toBe(`/p/${project.id}`);
 });

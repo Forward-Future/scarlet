@@ -35,6 +35,16 @@ Every mistake the editor reports in a dialogue cut is an entry with a check, and
 run against all of them: [DIALOGUE.md](DIALOGUE.md) says how. `ledger.ts check` runs the free checks (unit tests, and
 replays of the model's real requests through today's code) and compares with the last recorded run.
 
+## The picture ledger
+
+The same, for mistakes in what the video shows: which recording is on screen, the screen's framing and what of it may
+be shown, the camera inset, punch-ins, flashes at cuts and sync. Run it with `--ledger picture`; it lives in
+`$SCARLET_EVAL_DATA/picture/` and follows the steps in [DIALOGUE.md](DIALOGUE.md). Its causes add `perception`: a
+reading of the picture (screen text, motion, cuts, faces, show areas) missing or wrong.
+
+A command check that runs vitest with `-t` fails when no test matched the filter, so a renamed or removed test can't
+pass unseen.
+
 ## The dialogue scorecard
 
 `scorecard.ts` turns manifest-eligible `dialogue-playable-v5` passes into **Watchability** (the craft mistakes an editor's ears confirmed, scored by

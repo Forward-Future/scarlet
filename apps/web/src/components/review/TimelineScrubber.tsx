@@ -11,6 +11,7 @@ import type { ScrubRelease } from "../../lib/player";
 import { TimelineWaveform, type WaveformMedia } from "./TimelineWaveform";
 import { ScrubPreview, type HoverVideo } from "../player/ScrubPreview";
 import { QueuedImg, useStillTurn } from "./QueuedImg";
+import { timelineFrameUrl } from "./thumbs";
 import { TimelineRuler } from "./TimelineRuler";
 import { timelinePosition, useTimelineZoom } from "./useTimelineZoom";
 import { FloatingScrubLoupe, type ScrubLens } from "./FloatingScrubLoupe";
@@ -54,10 +55,12 @@ const PICTURE_PATIENCE_MS = 3000;
 /** How long the stills a rebuilt lane held stay over the new ones: the new ones' left-to-right fade (workspace.css). */
 const HELD_FADE_MS = 600;
 
-interface HeldStills { subject: string; built: string; view: string; cells: Element[] }
+interface HeldStills { subject: string; built: string; view: string; cells: Element[]; pictured: boolean[] }
 /**
  * A new working cut builds the timeline again and every still on it is a new picture from the engine. The lane built in
- * its place keeps showing the old stills, of the same footage, until its own have landed, instead of going blank.
+ * its place keeps showing the old stills, of the same footage, until its own have landed, instead of going blank. It
+ * hands on whatever it shows, its own stills and the held ones in the slots its own haven't reached: a pass saves a new
+ * cut every few seconds, and on 2026-11-21 no lane finished before the next replaced it, so the timeline stayed empty.
  */
 interface Carry { subject: string; built: string; start: number; duration: number; held: RefObject<HeldStills | undefined> }
 const HeldStillsContext = createContext<Carry | null>(null);
@@ -103,7 +106,7 @@ const Filmstrip = memo(function Filmstrip({ start, duration, pictureAspect, fram
   const stills = useMemo(() => {
     if (!drawn) return [];
     const times = Array.from({ length: count }, (_, i) => start + duration * (i + 0.5) / count);
-    if (!cached) return times.map((time, i) => ({ key: String(i), src: frameAt(time, true), span: 1 }));
+    if (!cached) return times.map((time, i) => ({ key: String(i), src: timelineFrameUrl(frameAt(time, true)), span: 1 }));
     const sheets = filmstripBatches(times.map(t => Math.floor(t * cached.fps + 1e-7)), cached.fps);
     return sheets.map((group, i) => ({ key: `${cached.id}-${i}-${group}`, src: stripUrl(cached, group), span: group.length }));
   }, [drawn, cached, count, start, duration, frameAt]);
@@ -131,22 +134,40 @@ const Filmstrip = memo(function Filmstrip({ start, duration, pictureAspect, fram
   const hasPicture = wanted.some(src => settled.get(src));
   // A pending cache lookup or an expired patience timer can end the loading wave before any picture is available.
   // An empty or failed batch is terminal too: once known, it must not keep showing footage from an older cut.
-  const reveal = !waiting && (hasPicture || complete);
+  // Which slots show a picture of the lane's own, in order: a sheet fills several.
+  const ownPictured = useMemo(() => stills.flatMap(still => Array<boolean>(still.span).fill(!!still.src && settled.get(still.src) === true)),
+    [stills, settled]);
+  // Held stills that line up with the lane's slots go one by one as the lane's own cover them, and the rest once every
+  // still has settled. Ones that don't line up go together once the lane has a picture.
+  const aligned = !!held && held.cells.length === ownPictured.length;
+  const reveal = !waiting && (aligned ? complete : hasPicture || complete);
   useLayoutEffect(() => {
     const el = overlay.current;
-    if (el && held && held.cells[0]?.parentElement !== el) el.replaceChildren(...held.cells);
+    if (el && held && held.cells[0]?.parentElement !== el) {
+      for (const cell of held.cells) cell.removeAttribute("data-covered");
+      el.replaceChildren(...held.cells);
+    }
   }, [held]);
   useLayoutEffect(() => {
+    if (!held || !aligned) return;
+    Array.from(overlay.current?.children ?? []).forEach((cell, i) => cell.toggleAttribute("data-covered", !waiting && !!ownPictured[i]));
+  }, [held, aligned, waiting, ownPictured]);
+  useLayoutEffect(() => {
     if (!carry) return;
-    if (complete && hasPicture && !waiting) {
-      // The old lane unmounts before the new layout effects run. Move its already-decoded cells across intact:
-      // this preserves sheet cropping and avoids an extra round of requests for the previous cut.
-      const cells = Array.from(strip.current!.querySelectorAll(":scope > div:not(.filmstrip-wait, .filmstrip-held)"));
-      carry.held.current = { subject: carry.subject, built: carry.built, view, cells };
-    } else if (complete && !hasPicture || (carry.held.current?.built === carry.built && carry.held.current.view === view)) {
+    // The old lane unmounts before the new layout effects run. Move its already-decoded cells across intact:
+    // this preserves sheet cropping and avoids an extra round of requests for the previous cut.
+    const own = Array.from(strip.current!.querySelectorAll(":scope > div:not(.filmstrip-wait, .filmstrip-held)"));
+    // Until every still of its own has settled, a slot its own hasn't reached hands on the held still there.
+    const heldSlot = (i: number) => !complete && aligned && held!.cells.length === own.length && !!held!.pictured[i] && !ownPictured[i];
+    const cells = own.map((cell, i) => heldSlot(i) ? held!.cells[i]! : cell);
+    const pictured = own.map((_, i) => !!ownPictured[i] || heldSlot(i));
+    if (pictured.some(Boolean)) {
+      carry.held.current = { subject: carry.subject, built: carry.built, view, cells, pictured };
+    } else if (complete || (carry.held.current?.built === carry.built && carry.held.current.view === view)) {
+      // An empty or failed batch is terminal: once known, the next lane mustn't show footage from an older cut.
       carry.held.current = undefined;
     }
-  }, [carry, complete, hasPicture, waiting, view, stills]);
+  }, [carry, complete, view, held, aligned, ownPictured]);
   // Once the lane's own stills are shown, the held ones fade out over them, then go.
   useEffect(() => {
     if (!held || !reveal) return;

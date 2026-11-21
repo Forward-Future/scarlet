@@ -313,6 +313,8 @@
   transition: opacity .25s ease .28s;
 }
 .filmstrip-held[data-leaving] { opacity: 0; }
+.filmstrip-held > div { transition: opacity .25s ease .28s; }
+.filmstrip-held > [data-covered] { opacity: 0; }
 .timeline-filmstrip .filmstrip-held img { opacity: 1; transition: none; }
 .timeline-playhead-time {
   position: absolute; top: 1px; padding: 1px 4px; border-radius: 3px; background: #f4f1e9; color: #1a1918;
@@ -407,7 +409,6 @@
 .edit-card-icon[aria-expanded="true"], .edit-card-icon[aria-pressed="true"] { background: var(--color-raised); color: var(--color-fg); }
 .edit-card-icon:disabled { opacity: .35; cursor: default; }
 .edit-card-icon:focus-visible { outline-offset: -2px; }
-.edit-card-before[aria-pressed="true"], .edit-card-before[aria-pressed="true"]:enabled:hover { background: var(--color-hi); color: var(--color-bg); }
 .edit-card-before.is-flash { box-shadow: 0 0 0 2px rgba(244, 241, 233, .22); }
 @media (prefers-reduced-motion: no-preference) {
   .edit-card-before.is-flash { animation: before-toggle-flash 1.6s ease-out; }

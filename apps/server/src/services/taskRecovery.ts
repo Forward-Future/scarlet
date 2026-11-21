@@ -6,7 +6,7 @@ import { processIsAlive, type Ctx } from "../context.js";
 import { now } from "../db.js";
 import { conflict, notFound } from "../errors.js";
 import { logId } from "../logText.js";
-import { appendTaskEvent, cancelTask, createTask, FINISHED_TASK, hasTranscript, isDialoguePass, PROJECT_EDIT_KINDS, queueRepeatCheck, recordWorkThrough, RESUMABLE, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
+import { appendTaskEvent, cancelTask, createTask, dropWaitingLooks, FINISHED_TASK, hasTranscript, isDialoguePass, PROJECT_EDIT_KINDS, queueRepeatCheck, recordWorkThrough, RESUMABLE, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
 import { recordTaskFinished } from "../telemetry/events.js";
 import { prepareCutReview } from "./changes.js";
 import { skillEditEnded, startLearningCheck } from "./learnings.js";
@@ -32,6 +32,7 @@ const LOST_WORKER_ATTEMPTS = 3;
  */
 function reconcileTask(ctx: Ctx, task: Task, unstarted: boolean, quit: boolean, lastSeen?: string | null): Task {
   let saved = settleTask(ctx, task, unstarted, lastSeen);
+  if (FINISHED_TASK.has(saved.state)) dropWaitingLooks(ctx, saved);
   const attempts = runAttempts(task.projectId, runRoot(task));
   // Only the attempts that lost their worker count. A pass that came through three quits, or that the editor resumed
   // by hand, still carries on by itself the first time its worker goes missing.
@@ -43,7 +44,7 @@ function reconcileTask(ctx: Ctx, task: Task, unstarted: boolean, quit: boolean, 
   if (again && saved.state === "failed" && saved.interrupted && saved.kind !== "transcribe" && saved.kind !== "learning_check" && saved.kind !== "area_check") {
     try {
       // All of the next attempt or none of it: one left half made would run beside a run that still offers Resume.
-      ctx.db.savepoint(() => resumeTask(ctx, saved));
+      ctx.db.savepoint(() => resumeTask(ctx, saved, {}));
       carriesOn = true;
     } catch (err) {
       ctx.log(`[task] ${task.id} couldn’t resume by itself: ${(err as Error).message}`);
@@ -83,7 +84,7 @@ export function holdProjectEditing(ctx: Ctx, projectId: string) {
     const active = ctx.repos.tasks.select(`project_id = ? AND kind IN ${PROJECT_EDIT_KINDS} AND state IN ('claimed','running')`,
       [projectId], "created_at, rowid");
     const tasks = active.flatMap(task => {
-      const next = resumeTask(ctx, task, {}, true);
+      const next = resumeTask(ctx, task, { afterProjectStop: true });
       return [ctx.repos.tasks.get(task.id)!, next];
     });
     return { project, tasks };
@@ -100,12 +101,9 @@ export function resumeProjectEditing(ctx: Ctx, projectId: string) {
     if (!previous.editingPaused) return { project, tasks: [] };
     ctx.bus.publish({ type: "project.updated", projectId, project });
     const waiting = ctx.repos.tasks.select(`project_id = ? AND state = 'queued' AND kind IN ${PROJECT_EDIT_KINDS}`, [projectId]);
-    const held = waiting.filter(task => task.resumesAfterProjectStop && !task.startedAt);
-    const tasks = held.map(task => {
-      const [previousAttempt] = ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.retryTaskId') = ?", [projectId, task.id]);
-      // The editor may have made decisions while editing was stopped.
-      return saveTask(ctx, { ...task, instruction: recoveryInstruction(ctx, previousAttempt ?? task, task.resumeRootId) });
-    });
+    // The editor may have made decisions while editing was stopped. Each attempt put back in line is told where its run
+    // stands as it starts (`taskPrompt`), so it reads them.
+    const tasks = waiting.filter(task => task.resumesAfterProjectStop && !task.startedAt);
     if (waiting[0]) ctx.bus.taskQueued({ taskId: waiting[0].id, projectId });
     return { project, tasks };
   }, "immediate")();
@@ -317,9 +315,13 @@ function refusedSinceLastSave(ctx: Ctx, attempt: Task): string[] {
   return [...said].slice(-3);
 }
 
-function recoveryInstruction(ctx: Ctx, task: Task, rootId?: string): string {
+/**
+ * What an attempt that resumes or retries `task` is told of the run so far. `current`: the attempt being told, when it
+ * already exists, which isn't part of what came before it.
+ */
+export function recoveryInstruction(ctx: Ctx, task: Task, rootId?: string, current?: string): string {
   const run = rootId && runAttempts(task.projectId, rootId);
-  const attempts = run ? ctx.repos.tasks.select(run.where, run.params, "created_at, rowid") : [task];
+  const attempts = run ? ctx.repos.tasks.select(run.where, run.params, "created_at, rowid").filter(t => t.id !== current) : [task];
   const events = attempts.flatMap(t => ctx.repos.taskEvents.list(t.id, rootId ? "conversation" : "questionsAndAnswers"));
   const lines = [attempts[0]!.instruction];
   for (const ev of events) {
@@ -379,12 +381,16 @@ export function retryTask(ctx: Ctx, id: string, choice: RunChoice = {}): Task {
   return ctx.db.transaction(() => {
     const task = ctx.repos.tasks.get(id);
     if (!task) throw notFound("task");
-    return resumeTask(ctx, task, choice);
+    return resumeTask(ctx, task, { choice, byEditor: true });
   }, "immediate")();
 }
 
-/** Called with the write lock held. */
-function resumeTask(ctx: Ctx, task: Task, choice: RunChoice = {}, afterProjectStop = false): Task {
+/**
+ * Called with the write lock held. `afterProjectStop`: a pause of the project's editing put the run back in line.
+ * `byEditor`: the editor's own Retry or Resume, which gives a pass's closing check its full allowance again.
+ */
+function resumeTask(ctx: Ctx, task: Task, opts: { choice?: RunChoice; afterProjectStop?: boolean; byEditor?: boolean }): Task {
+  const { choice = {}, afterProjectStop = false, byEditor = false } = opts;
   const id = task.id;
   if (task.retryTaskId) return ctx.repos.tasks.get(task.retryTaskId)!;
   // The pass finished; only its closing check couldn't run. Retry runs that check again, as the same request, on the
@@ -395,7 +401,7 @@ function resumeTask(ctx: Ctx, task: Task, choice: RunChoice = {}, afterProjectSt
     const head = ctx.repos.projects.get(task.projectId)?.head;
     if (!head) throw conflict("not_retryable", "This request cannot be retried.");
     const run = choice.agent ? { agent: choice.agent, model: choice.model, effort: choice.effort, fast: choice.fast, serviceTier: choice.serviceTier } : {};
-    const queued = queueRepeatCheck(ctx, { ...task, ...run, repeatAudit: { ...task.repeatAudit!, returns: 0, failed: undefined } }, head);
+    const queued = queueRepeatCheck(ctx, { ...task, ...run, repeatAudit: { ...task.repeatAudit!, returns: 0, totalReturns: 0, failed: undefined } }, head);
     ctx.log(`[task] ${id} closing check retried`);
     return queued;
   }
@@ -406,13 +412,16 @@ function resumeTask(ctx: Ctx, task: Task, choice: RunChoice = {}, afterProjectSt
   const run = choice.agent ? { agent: choice.agent, model: choice.model, effort: choice.effort, fast: choice.fast, serviceTier: choice.serviceTier } : {};
   let retry = createTask(ctx, {
     ...task, ...run, state: "queued", instruction: recoveryInstruction(ctx, task, resumeRootId), resumeRootId,
-    resumesAfterProjectStop: afterProjectStop || undefined,
+    resumesAfterProjectStop: afterProjectStop || undefined, wordsRead: true,
     context: { ...task.context, threadId: task.context.threadId ?? id, message: task.context.message ?? task.instruction },
   });
+  // The pass's closing words, and how far its closing check has got, go on with the run however it stopped: a quit
+  // during the check lost the pass's words and started the check's count again. The editor's own Retry or Resume gives
+  // the check its full allowance again, as Retry of a check that couldn't run does.
+  const audit = task.repeatAudit && (byEditor ? { ...task.repeatAudit, returns: 0, totalReturns: 0, failed: undefined } : task.repeatAudit);
   // A request the editor started ahead of their calls was at work: it isn't put behind those calls again.
-  if (task.startsBeforeCalls || (afterProjectStop && (task.repeatAudit || task.reply))) {
-    retry = saveTask(ctx, { ...retry, startsBeforeCalls: task.startsBeforeCalls,
-      ...(afterProjectStop && { repeatAudit: task.repeatAudit, reply: task.reply }) });
+  if (task.startsBeforeCalls || audit || task.reply) {
+    retry = saveTask(ctx, { ...retry, startsBeforeCalls: task.startsBeforeCalls, repeatAudit: audit, reply: task.reply });
   }
   const proposal = task.kind === "revise" && task.context.changeId && ctx.repos.changes.get(task.context.changeId);
   // The revision begins again on the proposal it names while that one stands. A pass a later revision has replaced stays
@@ -422,15 +431,17 @@ function resumeTask(ctx: Ctx, task: Task, choice: RunChoice = {}, afterProjectSt
     const change = ctx.repos.changes.put({ ...beginRevision(proposal, retry), updatedAt: now() });
     ctx.bus.publish({ type: "change.updated", projectId: change.projectId, change });
   }
-  const prior = { ...task, retryTaskId: retry.id };
+  // A run its host cut short, or one a pause of the project's editing put back in line, kept its CLI session, so the
+  // next attempt on the same model carries on in it instead of starting cold: started afresh, a pass spent 120 more
+  // turns and 13.7M tokens finding its place again. On another model it starts a session of its own, and a run the
+  // editor stopped ends its session with it. The host keeps the session's files for the attempt that carries on.
+  const sameModel = retry.agent === task.agent && retry.model === task.model;
+  const carriesOn = action === "resume" && (afterProjectStop || !!task.interrupted) && !!task.session && RESUMABLE.has(task.agent) && sameModel;
+  const prior = { ...task, retryTaskId: retry.id, ...(carriesOn && { sessionCarriesOn: true }) };
   if (afterProjectStop) cancelTask(ctx, prior);
   else saveTask(ctx, prior);
-  ctx.log(`[task] ${id} ${action === "resume" ? "resumed" : "retried"} as ${retry.id}`);
-  // A run its host cut short kept its CLI session, so the next attempt on the same model carries on in it instead of
-  // starting cold. On another model it starts a session of its own.
-  const sameModel = retry.agent === task.agent && retry.model === task.model;
-  // Project Stop ends the run's session with it: it isn't one Scarlet closed on.
-  if (action === "resume" && !afterProjectStop && task.interrupted && task.session && RESUMABLE.has(task.agent) && sameModel) {
+  ctx.log(`[task] ${id} ${action === "resume" ? "resumed" : "retried"} as ${retry.id}${carriesOn ? " in its CLI session" : ""}`);
+  if (carriesOn) {
     const resumed = saveTask(ctx, { ...retry, session: task.session });
     // The session still holds the plan it was working to, and reports it again only when a step changes. Until then
     // the plan stands as it was left, so the editor sees it where it stopped (2026-11-09: a plan of four steps was
@@ -486,7 +497,7 @@ export function continueReadyRuns(ctx: Ctx, projectId?: string): Task[] {
     const task = ctx.repos.tasks.get(id);
     if (!task?.continueWhenReady || !taskNeedsTranscripts(task)) return;
     const pending = task.needsTranscripts!.filter(id => !hasTranscript(ctx, id));
-    if (!pending.length) return resumeTask(ctx, task);
+    if (!pending.length) return resumeTask(ctx, task, { byEditor: true });
     // A transcription cut short by a quit or a pause starts again when Scarlet or the project's media is back, so the run keeps waiting for it.
     const restarts = (id: string) => {
       const last = latestTranscription(ctx, task.projectId, id);

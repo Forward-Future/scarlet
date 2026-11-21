@@ -24,26 +24,10 @@ import { ConfirmDialog, EmptyState, ErrorState, Field, Icon, InlineError, Loadin
  * 16:9, which nearly every project is, and reads as its size: beside a length, "9:16" reads as a second time. Its
  * frame rate is in Project settings.
  */
-function projectFacts(p: ProjectSummary, shorts = 0): string[] {
+function projectFacts(p: ProjectSummary): string[] {
   const { width, height } = p.settings;
   return [p.duration ? clock(p.duration) : "", width * 9 === height * 16 ? "" : `${width}×${height}`,
-    // A short shares its video's footage, so where it came from says more than how many files it has.
-    p.source ? `From ${p.source.name}` : plural(p.mediaCount, "file"), shorts ? plural(shorts, "short") : ""].filter(Boolean);
-}
-
-/**
- * The library's order, with each short right under the video it was made from, in the order they were made. A short
- * whose video isn't listed here (archived, in the trash) is listed on its own.
- */
-export function withShorts(projects: ProjectSummary[]): Array<{ p: ProjectSummary; nested: boolean; shorts: number }> {
-  const listed = new Set(projects.map(p => p.id));
-  const under = new Map<string, ProjectSummary[]>();
-  for (const p of projects) if (p.source && listed.has(p.source.projectId)) under.set(p.source.projectId, [...under.get(p.source.projectId) ?? [], p]);
-  const made = (p: ProjectSummary) => p.createdAt ?? "";
-  return projects.filter(p => !(p.source && listed.has(p.source.projectId))).flatMap(p => {
-    const shorts = (under.get(p.id) ?? []).sort((a, b) => made(a).localeCompare(made(b)) || a.name.localeCompare(b.name));
-    return [{ p, nested: false, shorts: shorts.length }, ...shorts.map(short => ({ p: short, nested: true, shorts: 0 }))];
-  });
+    plural(p.mediaCount, "file")].filter(Boolean);
 }
 
 /** First video in the project, for a poster frame. */
@@ -153,8 +137,8 @@ function ProjectActions({ project }: { project: ProjectSummary }) {
   </>;
 }
 
-function ProjectCard({ p, notice, selected, selecting, onSelect, nested = false, shorts = 0 }: {
-  p: ProjectSummary; notice: string; selected: boolean; selecting: boolean; onSelect: (range: boolean) => void; nested?: boolean; shorts?: number;
+function ProjectCard({ p, notice, selected, selecting, onSelect }: {
+  p: ProjectSummary; notice: string; selected: boolean; selecting: boolean; onSelect: (range: boolean) => void;
 }) {
   const { items, start, startPaths, dismiss } = useUploader(p.id, p);
   const pending = useImportCount(p.id);
@@ -184,7 +168,7 @@ function ProjectCard({ p, notice, selected, selecting, onSelect, nested = false,
     </div>
     <div className="project-caption">
       <h2 title={p.name}>{p.name}</h2>
-      <p id={`project-meta-${p.id}`}>{projectFacts(p, shorts).map((fact, i) => <Fragment key={i}>{i > 0 && <span>·</span>}{fact}</Fragment>)}</p>
+      <p id={`project-meta-${p.id}`}>{projectFacts(p).map((fact, i) => <Fragment key={i}>{i > 0 && <span>·</span>}{fact}</Fragment>)}</p>
       <ProjectActivityLine p={p} />
     </div>
     {/* The count and the words of the project's chat: the calls, questions and suggestions that wait on the editor. */}
@@ -196,7 +180,7 @@ function ProjectCard({ p, notice, selected, selecting, onSelect, nested = false,
     <time className="project-date" dateTime={p.updatedAt} title={absTime(p.updatedAt)}>{relTime(p.updatedAt)}</time>
   </>;
   return (
-    <Dropzone onFiles={start} onPaths={startPaths} label={`Add files to ${p.name}`} notice={notice} className={`project-card${selected ? " is-selected" : ""}${nested ? " is-short" : ""}`}>
+    <Dropzone onFiles={start} onPaths={startPaths} label={`Add files to ${p.name}`} notice={notice} className={`project-card${selected ? " is-selected" : ""}`}>
       <div className="project-entry" {...flip}>
         <label className="project-selector" title={`Select ${p.name} · Shift-click to select a range`}>
           <input ref={checkbox} id={checkboxId} type="checkbox" aria-label={`Select ${p.name}`} checked={selected}
@@ -240,12 +224,10 @@ function ProjectCollection({ projects, view, archived, notice, selectionSlot, se
   function select(id: string, range: boolean) {
     if (busy) return;
     const next = new Set(selected);
-    // A range runs down the rows as they are listed, shorts under their video.
-    const shown = withShorts(projects).map(row => row.p);
-    const from = shown.findIndex(p => p.id === anchor.current);
+    const from = projects.findIndex(p => p.id === anchor.current);
     if (range && from >= 0) {
-      const to = shown.findIndex(p => p.id === id);
-      for (const p of shown.slice(Math.min(from, to), Math.max(from, to) + 1)) next.add(p.id);
+      const to = projects.findIndex(p => p.id === id);
+      for (const p of projects.slice(Math.min(from, to), Math.max(from, to) + 1)) next.add(p.id);
     } else {
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -329,8 +311,8 @@ function ProjectCollection({ projects, view, archived, notice, selectionSlot, se
           <span aria-hidden>Project</span><span /><span aria-hidden>Last edited</span>
           {selection}
         </div>}
-        {withShorts(projects).map(({ p, nested, shorts }) => <ProjectCard key={p.id} p={p} notice={notice} selected={selected.has(p.id)}
-          selecting={count > 0 || busy} onSelect={range => select(p.id, range)} nested={nested} shorts={shorts} />)}
+        {projects.map(p => <ProjectCard key={p.id} p={p} notice={notice} selected={selected.has(p.id)}
+          selecting={count > 0 || busy} onSelect={range => select(p.id, range)} />)}
       </div>
     </fieldset>
     {trashOpen && count > 0 && <ConfirmDialog open danger onClose={() => { if (!busy) setTrashOpen(false); }}
@@ -338,45 +320,6 @@ function ProjectCollection({ projects, view, archived, notice, selectionSlot, se
       body="Projects and their footage can be restored from Trash for 30 days."
       onConfirm={() => apply("trash")} />}
   </>;
-}
-
-export function ImportUrlModal({ projectId, open, notice, onClose }: { projectId: string; open: boolean; notice: string; onClose: () => void }) {
-  const [url, setUrl] = useState("");
-  const { startPaths } = useUploader(projectId);
-  // The link joins the project's queue like a dropped file, and the dialog goes at once: a download can take minutes.
-  // Media shows it being added once its turn comes, counts it in "File 1 of 2" while another is added first, and
-  // says there if it failed. As a file does, the first video added to a project that is still new gives it its format.
-  const run = () => {
-    const link = url.trim();
-    if (!link) return;
-    void startPaths([link]);
-    setUrl("");
-    onClose();
-  };
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Add from a link"
-      footer={
-        <>
-          <button className="btn-ghost" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" form="import-link" className="btn-primary" disabled={!url.trim()}>
-            Add
-          </button>
-        </>
-      }
-    >
-      {notice && <p className="text-muted text-[12px] mb-3">{notice}</p>}
-      <form id="import-link" onSubmit={e => { e.preventDefault(); run(); }}>
-        <Field label="Link or file path" htmlFor="import-url">
-          <input id="import-url" className="field" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://drive.google.com/file/d/…" autoFocus />
-        </Field>
-      </form>
-    </Modal>
-  );
 }
 
 function FirstEditGuide() {

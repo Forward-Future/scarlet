@@ -489,7 +489,6 @@ export function openDb(path: string): Db {
     media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE, at REAL NOT NULL, json TEXT NOT NULL, created_at TEXT NOT NULL,
     PRIMARY KEY (media_id, at)
   );`);
-  ensureProjectSource(db);
   ensureProjectRowRevision(db);
   ensureColumn(db, "projects", "editing_paused", "ALTER TABLE projects ADD COLUMN editing_paused INTEGER NOT NULL DEFAULT 0;");
   return db;
@@ -554,19 +553,13 @@ function ensureProjectFormat(db: Db): void {
 }
 
 // Order snapshots independently of Last edited. The trigger also sees writes by older engines sharing the library.
+// Libraries from builds that had Make shorts keep their `source` and `source_notice` columns (and existing trigger),
+// which nothing reads or writes now.
 function ensureProjectRowRevision(db: Db): void {
   ensureColumn(db, "projects", "row_revision", `ALTER TABLE projects ADD COLUMN row_revision INTEGER NOT NULL DEFAULT 0;
     CREATE TRIGGER project_row_changed AFTER UPDATE OF name, settings, head, archived, media_paused, branch,
-      style_guide, source, source_notice, completed_threads, updated_at, deleted_at ON projects
+      style_guide, completed_threads, updated_at, deleted_at ON projects
     BEGIN UPDATE projects SET row_revision = OLD.row_revision + 1 WHERE id = NEW.id; END;`);
-}
-
-/**
- * The project a short was made from, and whether the line in its chat that says so is still shown. Installed by name,
- * as the graphics columns are, so a checkout and a release sharing a library don't take each other's numbers.
- */
-export function ensureProjectSource(db: Db): void {
-  ensureColumn(db, "projects", "source", "ALTER TABLE projects ADD COLUMN source TEXT; ALTER TABLE projects ADD COLUMN source_notice INTEGER NOT NULL DEFAULT 0;");
 }
 
 /**
@@ -621,6 +614,9 @@ const LOOKUP_INDEXES = {
   changes_left_out_unread: `ON changes(created_at) WHERE state = 'approved' AND json_extract(json, '$.leftOut') IS NULL
     AND json_array_length(coalesce(json_extract(json, '$.ops'), '[]')) > 0
     AND json_array_length(coalesce(json_extract(json, '$.cutReasons'), '[]')) = 0`,
+  // Joins an earlier reading of the footage left out found, read again with the current one (LEFT_OUT_READING).
+  changes_left_out_reread: `ON changes(created_at) WHERE state = 'approved' AND json_array_length(json_extract(json, '$.leftOut.joins')) > 0
+    AND coalesce(json_extract(json, '$.leftOut.reading'), 1) < 2`,
   tasks_dialogue_unset: "ON tasks(created_at) WHERE kind IN ('edit','revise','note') AND json_type(json, '$.context.dialogueOperation') IS NULL",
 };
 

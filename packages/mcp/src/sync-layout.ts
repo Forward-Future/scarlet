@@ -12,7 +12,7 @@ export const InsetFraming = z.object({
  */
 export const InsetPresenter = z.object({
   show: z.enum(["head", "shoulders", "chest", "desk"]).optional()
-    .describe("How far down the presenter the inset reaches, from a small margin above their hair: head (to the chin), shoulders (the default), chest, or desk (as far as the camera shows, hands and desk in)"),
+    .describe("How far down the presenter the inset reaches, from clear room above their hair: head (to the chin), shoulders (the default), chest, or desk (as far as the camera shows, hands and desk in)"),
   aspect: z.number().finite().min(.5).max(3).optional().describe("The inset's width over its height, e.g. 1.5 for 1.5:1. Default: the video's shape"),
   size: z.number().finite().min(.4).max(2.5).optional().describe("The inset's size against the preset quarter-size inset: 1.2 is 20% larger in both dimensions. Default 1"),
   cornerRadius: z.number().min(0).max(.5).optional().describe("Rounds the inset's four corners, as a fraction of its shorter side (about 0.06 reads as rounded). Default square"),
@@ -55,11 +55,14 @@ export interface PresetInset {
 }
 
 /**
- * How far below the eyes each `show` reaches, and the margin above them that holds the hair, in face widths. Read off a
+ * How far below the eyes each `show` reaches, and the room above them that holds the hair, in face widths. Read off a
  * 4K talking head (2026-11-20): hair 0.8 of a face width above the eyes, chin 0.45 below, shoulders in by 1.1, mid-chest 1.6.
+ * A tenth of a face width over the hair left it touching the inset's top edge (2026-11-20), so the room above is a fifth.
  */
 const BELOW_EYES = { head: .6, shoulders: 1.1, chest: 1.6, desk: 2.6 } as const;
-const ABOVE_EYES = .9;
+const ABOVE_EYES = 1;
+/** The share of the footage the presenter's eyes may sit higher than the room above them is measured from. */
+const HIGHEST = .02;
 /** A crop this close to the whole picture isn't worth the camera's resolution. */
 const WHOLE = .97;
 
@@ -119,7 +122,7 @@ export function presetInset(project: Project, asset: Pick<MediaAsset, "width" | 
   const source = width / height;
   // A face's width in fractions of the picture's height: the unit the margins above and below the eyes are in.
   const face = at(s => s.box[2] - s.box[0], .5) * source;
-  const top = Math.max(0, at(s => s.eyes[1], .1) - ABOVE_EYES * face);
+  const top = Math.max(0, at(s => s.eyes[1], HIGHEST) - ABOVE_EYES * face);
   const need = Math.min(1, at(s => s.eyes[1], .9) + BELOW_EYES[want.show ?? "shoulders"] * face) - top;
   // The crop's width and height in fractions of the source picture, in the shape asked, wide enough for where the
   // presenter moves and never past the picture.

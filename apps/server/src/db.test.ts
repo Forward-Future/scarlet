@@ -323,9 +323,38 @@ it("finds what the start-up repairs and the export list look for without reading
     expect(queries.map(sql => (ctx.db.prepare("EXPLAIN QUERY PLAN " + sql).all() as { detail: string }[])[0]!.detail)).toEqual([
       "SEARCH changes USING INDEX changes_project_state (project_id=? AND state=?)",
       "SEARCH changes USING INDEX changes_state (state=?)",
+      "SCAN changes USING INDEX changes_left_out_reread",
       "SCAN changes USING INDEX changes_left_out_unread",
       "SCAN tasks USING INDEX tasks_dialogue_unset",
       "SCAN renders USING INDEX renders_export",
     ]);
   } finally { await ctx.close(); }
+});
+
+it("opens and updates a library from a build that still had Make shorts columns", () => {
+  const file = join(directory, "legacy-shorts.db");
+  const library = openDb(file);
+  // Simulate a library created when projects had source/source_notice columns and the trigger watching them.
+  library.exec(`DROP TRIGGER project_row_changed;
+    ALTER TABLE projects ADD COLUMN source TEXT;
+    ALTER TABLE projects ADD COLUMN source_notice INTEGER NOT NULL DEFAULT 0;
+    CREATE TRIGGER project_row_changed AFTER UPDATE OF name, settings, head, archived, media_paused, branch,
+      style_guide, source, source_notice, completed_threads, updated_at, deleted_at ON projects
+    BEGIN UPDATE projects SET row_revision = OLD.row_revision + 1 WHERE id = NEW.id; END;`);
+  const repos = createRepos(library);
+  const long = repos.projects.insert(createProject("Long video"));
+  const short = repos.projects.insert(createProject("Old short"));
+  library.prepare("UPDATE projects SET source = ?, source_notice = 1 WHERE id = ?")
+    .run(JSON.stringify({ projectId: long.id, name: long.name }), short.id);
+  library.close();
+
+  const reopened = openDb(file);
+  try {
+    const next = createRepos(reopened);
+    const loaded = next.projects.get(short.id)!;
+    expect(loaded.name).toBe("Old short");
+    const renamed = next.projects.update(short.id, { name: "Renamed short" });
+    expect(renamed.name).toBe("Renamed short");
+    expect(next.projects.summaries().map(p => p.id)).toEqual(expect.arrayContaining([long.id, short.id]));
+  } finally { reopened.close(); }
 });

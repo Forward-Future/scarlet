@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createProject, makeMediaClip, type MediaClip, type Project, type Timeline, type Transition } from "@scarlet/timeline";
-import { buildFilterGraph, renderFullCached, renderPlaybackSegment, runCapture, segmentKey } from "./index.js";
+import { buildFilterGraph, ffColor, renderFullCached, renderPlaybackSegment, runCapture, segmentKey, type GraphOptions } from "./index.js";
 import { planTransitions } from "./transitions.js";
 
 let dir: string;
@@ -19,8 +19,8 @@ const join = (transition?: Transition, blueIn = 1) => edit([
 ]);
 
 /** Every frame of the range as raw RGB, composited as a render composites it. */
-async function pictures(timeline: Timeline, range: { start: number; end: number }) {
-  const graph = await buildFilterGraph(project, timeline, range, { mediaRoot: dir, pictureOnly: true });
+async function pictures(timeline: Timeline, range: { start: number; end: number }, extra?: Partial<GraphOptions>) {
+  const graph = await buildFilterGraph(project, timeline, range, { mediaRoot: dir, pictureOnly: true, ...extra });
   try {
     const { stdout } = await runCapture("ffmpeg", ["-v", "error", ...graph.args, "-pix_fmt", "rgb24", "-f", "rawvideo", "-"]);
     return Array.from({ length: stdout.length / size }, (_, frame) => stdout.subarray(frame * size, (frame + 1) * size));
@@ -32,6 +32,8 @@ const at = (frame: Buffer, x: number, y = 32) => {
   return r! > 200 && b! < 60 ? "r" : b! > 200 && r! < 60 ? "b" : r! > 70 && b! > 70 ? "m" : r! < 30 && b! < 30 ? "." : "?";
 };
 const frameAt = async (timeline: Timeline, t: number) => (await pictures(timeline, { start: t, end: t + 1 / 30 }))[0]!;
+const fileFrame = async (file: string, time: number) =>
+  (await runCapture("ffmpeg", ["-v", "error", "-ss", String(time), "-i", file, "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"])).stdout;
 
 beforeAll(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), "scarlet-transitions-"));
@@ -107,8 +109,7 @@ describe("transitions", () => {
     const cache = path.join(dir, "dissolve-sections");
     const file = path.join(dir, "dissolve.mp4");
     const options = { mediaRoot: dir, hwaccel: "none" } as const;
-    const pictureAt = async (time: number) => at((await runCapture("ffmpeg", ["-v", "error", "-ss", String(time), "-i", file,
-      "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"])).stdout, 32);
+    const pictureAt = async (time: number) => at(await fileFrame(file, time), 32);
     const audio = async () => (await runCapture("ffmpeg", ["-v", "error", "-i", file, "-map", "0:a:0", "-f", "s16le", "-"])).stdout;
 
     const result = await renderFullCached(project, timeline, cache, file, { ...options, segmentSeconds: 2, quality: "delivery" });
@@ -161,5 +162,84 @@ describe("transitions", () => {
     expect(key(pushed, 3, 4)).toBe(key(plain, 3, 4));
     expect(key(pushed, 1, 2)).not.toBe(key(plain, 1, 2));
     expect(key(pushed, 2, 3)).not.toBe(key(plain, 2, 3));
+  });
+
+  it("keeps a section's sliced clips when a full transition plan is supplied", async () => {
+    const base = join({ type: "push", duration: 1, direction: "left" });
+    const excludedMedia = makeMediaClip("red", 0, 2, 2, { id: "excluded-media" });
+    const excludedColor = { id: "excluded-color", kind: "color" as const, color: "#00ff00", timelineIn: 2, timelineOut: 4, enabled: true, opacity: 1 };
+    const full: Timeline = {
+      ...base,
+      tracks: [
+        base.tracks[0]!,
+        { id: "overlay", kind: "video", name: "overlay", muted: false, hidden: false, clips: [excludedMedia, excludedColor] },
+      ],
+    };
+    const plan = planTransitions(full, new Map(project.media.map(m => [m.id, m])), 30);
+    // Keep only the [2, 4] clips from track 0 (dropping track 1 clips that remain on plan.timeline).
+    const sliced: Timeline = {
+      ...plan.timeline,
+      tracks: [
+        { ...plan.timeline.tracks[0]!, clips: plan.timeline.tracks[0]!.clips.filter(c => c.id === "red-clip~transition-out" || c.id === "blue-clip") },
+        { ...plan.timeline.tracks[1]!, clips: [] },
+      ],
+    };
+
+    const graph = await buildFilterGraph(project, sliced, { start: 2, end: 4 }, { mediaRoot: dir, pictureOnly: true, transitions: plan });
+    try {
+      expect(graph.inputs).toEqual([path.join(dir, "red.mp4"), path.join(dir, "blue.mp4")]);
+      expect(graph.graph).not.toContain(ffColor("#00ff00"));
+      expect(graph.graph.match(/overlay=/g)).toHaveLength(2);
+    } finally {
+      await graph.cleanup();
+    }
+
+    const frames = await pictures(sliced, { start: 2, end: 4 }, { transitions: plan });
+    // At t = 2 (frame 0 of [2, 4]), the push motion is halfway across the join.
+    expect([at(frames[0]!, 8), at(frames[0]!, 56)]).toEqual(["r", "b"]);
+    // After the push ends (t = 2.8, frame 24), only blue remains.
+    expect(at(frames[24]!, 32)).toBe("b");
+  });
+
+  it("keeps transition layers silent when a transition plan is supplied", async () => {
+    const plan = planTransitions(join({ type: "push", duration: 1, direction: "left" }), new Map(project.media.map(m => [m.id, m])), 30);
+    const layers = plan.timeline.tracks[0]!.clips
+      .filter((c): c is MediaClip => c.kind === "media" && plan.layers.has(c.id))
+      .map(c => ({ ...c, volume: 1 }));
+    const graph = await buildFilterGraph(project, edit(layers), { start: 1.5, end: 2.5 }, { mediaRoot: dir, transitions: plan });
+    try {
+      expect(graph.hasAudio).toBe(false);
+    } finally {
+      await graph.cleanup();
+    }
+  });
+
+  it("draws a section's transition the same through playback, cached preview and delivery renders", async () => {
+    // A clip in another section: each section's graph gets only its own clips, and the picture stays right.
+    const elsewhere = { id: "elsewhere", kind: "color" as const, color: "#00ff00", timelineIn: 0, timelineOut: 1, enabled: true, opacity: 1 };
+    const timeline = edit([
+      makeMediaClip("red", 1, 3, 0, { id: "red-clip" }),
+      makeMediaClip("blue", 1, 3, 2, { id: "blue-clip", transitionIn: { type: "dissolve", duration: 1, direction: "left" } }),
+      makeMediaClip("red", 1, 3, 4, { id: "red-clip-2" }),
+    ]);
+    timeline.tracks.push({ id: "overlay", kind: "video", name: "overlay", muted: false, hidden: false, clips: [elsewhere] });
+    const options = { mediaRoot: dir, hwaccel: "none" } as const;
+
+    const playbackFile = path.join(dir, "sliced-playback.mp4");
+    await renderPlaybackSegment(project, timeline, { start: 2, end: 4 }, path.join(dir, "sliced-playback-cache"), playbackFile, options);
+    expect(at(await fileFrame(playbackFile, 0), 32)).toBe("m");
+
+    const runFile = path.join(dir, "sliced-run.mp4");
+    const runResult = await renderFullCached(project, timeline, path.join(dir, "sliced-run-cache"), runFile, {
+      ...options, quality: "preview", segmentSeconds: 2, exportRange: { start: 2, end: 6 },
+    });
+    expect(runResult.segments.map(s => s.range)).toEqual([{ start: 2, end: 4 }, { start: 4, end: 6 }]);
+    expect(at(await fileFrame(runFile, 0), 32)).toBe("m");
+
+    const deliveryFile = path.join(dir, "sliced-delivery.mp4");
+    await renderFullCached(project, timeline, path.join(dir, "sliced-delivery-cache"), deliveryFile, {
+      ...options, quality: "delivery", segmentSeconds: 2, exportRange: { start: 2, end: 4 },
+    });
+    expect(at(await fileFrame(deliveryFile, 0), 32)).toBe("m");
   });
 });

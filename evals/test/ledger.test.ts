@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { againstBase, baseRow, judge, partAt, type BoardRow, type Entry } from "../src/ledger.ts";
+import { againstBase, baseRow, classProblem, judge, partAt, type BoardRow, type Entry } from "../src/ledger.ts";
+import { flagsOf } from "../src/leftovers.ts";
 import type { MediaEvidence } from "../src/metrics.ts";
 import type { ReplayResult } from "../src/replay.ts";
 
@@ -83,5 +84,51 @@ describe("the scoreboard", () => {
       "- new entries: c",
       "- whole pass c: applied 8→9, review 1→0, appliedEdges 16→18",
     ]);
+  });
+});
+
+describe("an entry's class", () => {
+  const entry = (extra: Partial<Entry>): Entry => ({ id: "x", reported: "2026-11-21", said: "it", cause: "model", status: "open", check: { kind: "none", why: "-" }, ...extra });
+
+  it("is required on a dialogue report from the day classes began, and says what's missing", () => {
+    expect(classProblem(entry({}), "dialogue")).toContain("name the kind of mistake");
+    expect(classProblem(entry({ reported: "2026-11-20" }), "dialogue")).toBeUndefined();
+    expect(classProblem(entry({}), "picture")).toBeUndefined();
+    expect(classProblem(entry({ class: { family: "restart", before: { count: 166, perTenMin: 11.6, at: "2026-11-21" } } }), "dialogue")).toBeUndefined();
+    expect(classProblem(entry({ class: { family: "restart" } as never }), "dialogue")).toContain("needs its count when reported");
+    expect(classProblem(entry({ class: { family: "none", noSweep: "" } }), "dialogue")).toContain("noSweep");
+    expect(classProblem(entry({ class: { family: "none", noSweep: "an editor note reads like any line" } }), "dialogue")).toBeUndefined();
+    expect(classProblem(entry({ class: { family: "pacing" } as never }), "dialogue")).toContain("not a family");
+  });
+});
+
+describe("the sweep of an edit", () => {
+  const M = "med_s";
+  // One word a second, 0.6 s long; "realistic." ends a sentence.
+  const said = "so perfect so perfectly realistic. everything looks good and the cube is solved now we start".split(" ");
+  const words = new Map([[M, said.map((text, i) => ({ text, start: i, end: i + 0.6, endsSentence: text.endsWith(".") }))]]);
+  const clip = (sourceIn: number, sourceOut: number, timelineIn: number) => ({ mediaId: M, sourceIn, sourceOut, timelineIn });
+
+  it("flags each kind of mistake where the edit plays it", () => {
+    // Plays 0-6.8 ("so perfect so perfectly realistic everything"), then 9.9-16.7 ("cube is solved now we start" from mid "the").
+    const { flags } = flagsOf([{ kind: "audio", clips: [clip(0, 6.8, 0), clip(9.9, 16.7, 6.8)] }], words);
+    const kinds = new Set(flags.map(f => f.family));
+    expect(flags.find(f => f.family === "restart")).toMatchObject({ cutOffOnly: true, at: 0 });
+    // 0.2 s after "everything" ends at 6.6: not late. The next piece starts 0.1 s before "cube".
+    expect(kinds.has("lateCut")).toBe(false);
+    expect(kinds.has("brokenSentence")).toBe(true);
+  });
+
+  it("flags a cut that starts late, a voice that comes in late, an edge inside a word and dead air", () => {
+    // "looks" ends 0.35 s before the first join; "cube" starts 0.35 s after it; the second join ends inside "solved";
+    // the last piece starts 2.65 s after the second piece ends, with no word between.
+    const { flags } = flagsOf([{ kind: "audio", clips: [clip(0, 6.95, 0), clip(9.65, 12.3, 6.95), clip(13.5, 15, 11.5)] }], words);
+    const at = (family: string) => flags.filter(f => f.family === family).map(f => f.at);
+    expect(at("lateCut")).toEqual([6.95]);
+    expect(at("lateVoice")).toEqual([6.95]);
+    expect(at("edgeInWord")).toEqual([]);
+    expect(at("deadAir")).toHaveLength(1);
+    // Touching pieces: the edge inside "solved" is a join.
+    expect(flagsOf([{ kind: "audio", clips: [clip(9.65, 12.3, 0), clip(13.5, 15, 2.65)] }], words).flags.filter(f => f.family === "edgeInWord").map(f => f.at)).toEqual([2.65]);
   });
 });

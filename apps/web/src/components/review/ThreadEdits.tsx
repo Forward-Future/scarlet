@@ -11,6 +11,7 @@ import { useProjectStore } from "../../stores/project";
 import { useShownCutStore } from "../../stores/shownCut";
 import { Dropdown, MenuItem } from "../shell/WorkspaceNavigation";
 import { Icon } from "../ui/primitives";
+import { useHotkeys } from "../../lib/hotkeys";
 import { useAgentAvailability } from "../agent/AgentChip";
 import type { AgentContext } from "../../stores/ui";
 
@@ -73,10 +74,16 @@ export function RejectEdit({ projectId, thread, target, edits, editsOn, onEngine
       setBusy(false);
     }
   }
+  // X rejects it, as it does a call: the same key on every card.
+  useHotkeys(event => {
+    if (busy || event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== "x") return;
+    event.preventDefault();
+    void reject();
+  });
   return <>
     {error && <span className="simple-error" role="alert">{error}</span>}
     <button type="button" className="edit-card-icon edit-card-reject" data-log-control="reject-edit" aria-label="Reject edit" aria-busy={busy || undefined}
-      title={busy ? "Rejecting…" : "Reject edit"} disabled={busy} onClick={e => { if (e.detail) e.currentTarget.blur(); void reject(); }}><Icon name="x" size={12} /></button>
+      aria-keyshortcuts="X" title={busy ? "Rejecting…" : "Reject edit (X)"} disabled={busy} onClick={e => { if (e.detail) e.currentTarget.blur(); void reject(); }}><Icon name="x" size={12} /></button>
   </>;
 }
 

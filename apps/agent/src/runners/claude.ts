@@ -2,7 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writePrivateFile } from "../private-files.js";
-import { briefInput, COMPACTED, DEFAULT_STALL_MS, isQuestionTool, planEvent, prettyToolName, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
+import { briefInput, COMPACTED, CONTROL_DIR, DEFAULT_STALL_MS, isQuestionTool, planEvent, prettyToolName, questionText, workspaceEnv, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
 import { earlyResult, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
 import { addUsage, claudeUsage, usageWithModel } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
@@ -13,6 +13,10 @@ import type { AgentUsage, PlanStep } from "@scarlet/shared";
  * TodoWrite, which takes the whole list. `--tools` takes the names a CLI knows and passes over the rest.
  */
 const CLAUDE_PLAN_TOOLS = ["TaskCreate", "TaskUpdate", "TodoWrite"];
+/** Claude Code's own tools a request's agent has beside Scarlet's: a shell, files and the web. */
+export const CLAUDE_WORKSPACE_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"];
+/** Allowed without asking. `WebFetch(domain:*)` also lets the shell's sandbox reach any web address. */
+const CLAUDE_WORKSPACE_ALLOWED = [...CLAUDE_WORKSPACE_TOOLS, "WebFetch(domain:*)"];
 const PLAN_READS = new Set(["TaskList", "TaskGet", "TodoRead"]);
 const STEP_STATE: Record<string, PlanStep["state"]> = { pending: "pending", in_progress: "in_progress", completed: "done" };
 
@@ -79,7 +83,7 @@ export interface ClaudeParseState {
   texts: string[];
   result?: string;
   resultIsError?: boolean;
-  pendingQuestion?: { id: string; text: string };
+  pendingQuestion?: { id: string; text: string; tool: string };
   question?: string;
   questionPosted: boolean;
   /** Set when the tool_result for the question arrived, or Scarlet's MCP server failed: the runner should stop the process. */
@@ -172,11 +176,12 @@ export function parseClaudeLine(line: string, st: ClaudeParseState): RunnerEvent
         const pretty = prettyToolName(b.name);
         if (planCall(st.plan, b.name, b.id, b.input)) {
           events.push(...planChange(st.plan));
-        } else if (isQuestionTool(b.name)) {
-          const text = String((b.input as { text?: unknown })?.text ?? briefInput(b.input));
-          st.pendingQuestion = { id: b.id, text };
+        } else if (isQuestionTool(b.name) && questionText(b.input)) {
+          // A call with no words to ask is no question: Scarlet refuses it, and the model hears why and tries again.
+          // Said once posted, as the desktop host says it, so nothing takes a question Scarlet refused for one asked.
+          const text = questionText(b.input)!;
+          st.pendingQuestion = { id: b.id, text, tool: b.name };
           st.question = text;
-          events.push({ type: "question", text, data: { tool: b.name, toolUseId: b.id } });
         } else {
           events.push({ type: "tool", text: `${pretty} ${briefInput(b.input)}`.trim(), data: { tool: b.name, input: b.input, toolUseId: b.id } });
         }
@@ -184,10 +189,14 @@ export function parseClaudeLine(line: string, st: ClaudeParseState): RunnerEvent
         const b = block as { tool_use_id: string; content?: unknown; is_error?: boolean };
         if (planResult(st.plan, b.tool_use_id, !!b.is_error, b.content, msg.tool_use_result)) {
           events.push(...planChange(st.plan));
-        } else if (st.pendingQuestion && b.tool_use_id === st.pendingQuestion.id) {
-          st.questionPosted = !b.is_error;
+        } else if (st.pendingQuestion && b.tool_use_id === st.pendingQuestion.id && !b.is_error) {
+          const { text, tool } = st.pendingQuestion;
+          st.questionPosted = true;
           st.shouldStop = true;
+          events.push({ type: "question", text, data: { tool, toolUseId: b.tool_use_id } });
         } else if (b.is_error) {
+          // A question Scarlet refused was never asked: the model hears why and carries on, so the run does too.
+          if (st.pendingQuestion && b.tool_use_id === st.pendingQuestion.id) st.pendingQuestion = st.question = undefined;
           events.push({ type: "error", text: `Tool error: ${briefInput(flattenToolResult(b.content), 400)}`, data: { toolUseId: b.tool_use_id } });
         }
       }
@@ -251,7 +260,7 @@ export function claudeCanRunBare(env: NodeJS.ProcessEnv): boolean {
 
 /** Build the exact command line (pure, for tests and for reporting). */
 export function buildClaudeCommand(
-  opts: Pick<RunAgentOptions, "model" | "effort" | "fast" | "serviceTier" | "systemPrompt" | "instruction" | "mcp" | "resumeSession" | "plan">,
+  opts: Pick<RunAgentOptions, "model" | "effort" | "fast" | "serviceTier" | "systemPrompt" | "instruction" | "mcp" | "resumeSession" | "plan" | "workspace">,
   bin: string,
   tmpDir: string,
   bare = false,
@@ -259,8 +268,21 @@ export function buildClaudeCommand(
   const mcpConfigPath = join(tmpDir, "mcp.json");
   const systemPath = join(tmpDir, "system.md");
   const mcpConfig = { mcpServers: { scarlet: { command: opts.mcp.command, args: opts.mcp.args, env: opts.mcp.env } } };
-  // Native Windows can lack Claude's shell sandbox. This MCP-only runner exposes no shell tools.
-  const sandbox = { enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: process.platform === "win32" ? undefined : true };
+  const ws = opts.workspace;
+  // A request's agent has Claude Code's own shell, file and web tools beside Scarlet's. Its shell runs in Claude Code's
+  // sandbox, writing only in the task folder; it reaches any web address (`WebFetch(domain:*)` opens the sandbox's
+  // proxy to every host), and reads nothing outside the task folder but the programs its links point at. The control
+  // files, which hold Scarlet's token, are closed to every tool. Where the sandbox can't start (native Windows, a Linux
+  // without bubblewrap) the run goes on without it, as before.
+  // A shell's `curl` was refused every host until the sandbox's own list named them all (2026-11-21).
+  const sandbox = ws
+    ? { enabled: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true,
+        network: { allowedDomains: ["*"] },
+        filesystem: { denyRead: [tmpDir], ...(ws.readDirs.length && { allowRead: ws.readDirs }) } }
+    : { enabled: true, allowUnsandboxedCommands: false };
+  const control = `//${tmpDir.replace(/\\/g, "/").replace(/^\/+/, "")}/**`;
+  const permissions = ws ? { blockReadsOutsideWorkingDirectories: true, allow: ["WebFetch(domain:*)"], deny: [`Read(${control})`, `Edit(${control})`] } : undefined;
+  const tools = [...(ws ? CLAUDE_WORKSPACE_TOOLS : []), ...(opts.plan ? CLAUDE_PLAN_TOOLS : [])];
   const args = [
     "-p",
     ...(bare ? ["--bare"] : []),
@@ -273,10 +295,11 @@ export function buildClaudeCommand(
     "--restricted",
     "--disable-slash-commands",
     "--tools",
-    // No built-in tools, or only Claude Code's own to-do list when the engine asks for the agent's plan.
-    opts.plan ? CLAUDE_PLAN_TOOLS.join(",") : "",
+    // A request's own shell, file and web tools, and Claude Code's to-do list when the engine asks for the agent's plan.
+    // A side check has neither.
+    tools.join(","),
     "--allowedTools",
-    "mcp__scarlet__*",
+    ["mcp__scarlet__*", ...(ws ? CLAUDE_WORKSPACE_ALLOWED : [])].join(","),
     "--append-system-prompt-file",
     systemPath,
     "--permission-mode",
@@ -286,7 +309,7 @@ export function buildClaudeCommand(
     ...(opts.model ? ["--model", opts.model] : []),
     ...(opts.effort ? ["--effort", opts.effort] : []),
     "--settings",
-    JSON.stringify({ sandbox, ...(opts.serviceTier ? { fastMode: opts.serviceTier === "fast" } : opts.fast ? { fastMode: true } : {}) }),
+    JSON.stringify({ sandbox, ...(permissions && { permissions }), ...(opts.serviceTier ? { fastMode: opts.serviceTier === "fast" } : opts.fast ? { fastMode: true } : {}) }),
   ];
   return {
     file: bin,
@@ -296,10 +319,20 @@ export function buildClaudeCommand(
   };
 }
 
+/** Scarlet's tools wait up to `toolWaitSeconds` (capabilities.ts) for evidence still being measured, under this deadline. */
+const TOOL_DEADLINE_MS = 300_000;
+
+/** Claude Code's MCP tool deadline: the user's own when it is longer, never shorter than the one Scarlet's waits assume. */
+export function mcpToolTimeout(user: string | undefined): string {
+  const theirs = Number(user);
+  return Number.isFinite(theirs) && theirs > TOOL_DEADLINE_MS ? String(Math.floor(theirs)) : String(TOOL_DEADLINE_MS);
+}
+
 export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> {
-  const env = { ...(opts.env ?? process.env) };
+  // Scarlet's own variables stay out of the run, so its shell never holds the token.
+  const env = workspaceEnv(opts.env ?? process.env, opts.workspace);
   const bin = await resolveCli("claude", opts.bin, env);
-  const tmpDir = join(opts.cwd, ".scarlet");
+  const tmpDir = join(opts.cwd, CONTROL_DIR);
   await mkdir(tmpDir, { recursive: true });
   const cmd = buildClaudeCommand(opts, bin, tmpDir, claudeCanRunBare(env));
   for (const [p, content] of Object.entries(cmd.files)) await writePrivateFile(p, content);
@@ -308,8 +341,8 @@ export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> 
   // Avoid nested-session refusal when the host itself runs under Claude Code.
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_ENTRYPOINT;
-  // Scarlet's tools wait up to `toolWaitSeconds` (capabilities.ts) for evidence still being measured.
-  env.MCP_TOOL_TIMEOUT ??= "300000";
+  env.MCP_TOOL_TIMEOUT = mcpToolTimeout(env.MCP_TOOL_TIMEOUT);
+  let sentUsage: string | undefined;
 
   const handle = spawnLines(cmd.file, cmd.args, {
     cwd: opts.cwd,
@@ -323,6 +356,13 @@ export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> 
         // A resume that finds no session falls back to a fresh run. Keep its error out of the task log.
         if (opts.resumeSession && !st.started && ev.type === "error") continue;
         opts.onEvent(ev);
+      }
+      // The run's tokens so far, each time they grow, as the other runners and the desktop host report them.
+      const usage = claudeRunUsage(st, opts.model);
+      const seen = usage && JSON.stringify(usage);
+      if (usage && seen !== sentUsage) {
+        sentUsage = seen;
+        opts.onUsage?.(usage);
       }
       if (st.shouldStop) {
         st.shouldStop = false;

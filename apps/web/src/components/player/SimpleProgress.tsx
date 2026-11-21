@@ -8,9 +8,10 @@ export interface ProgressFocus {
   bandLabel?: string;
   /**
    * Removed footage is hatched red (the default). `kept`: the footage stays in the edit (a sound fix, a zoom, a title), so After
-   * plays it and it’s only outlined. `added`: footage an edit put back.
+   * plays it and it’s only outlined. `added`: footage an edit put back. `proposed`: a call's cut, still in the video until
+   * the editor approves it, so it is drawn as removed footage with a dashed edge.
    */
-  tone?: "kept" | "added" | "check";
+  tone?: "kept" | "added" | "check" | "proposed";
   /** The editor rejected the edit a moment ago: its band fades where it is, and takes no press meanwhile. */
   leaving?: boolean;
 }

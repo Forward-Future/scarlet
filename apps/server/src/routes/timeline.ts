@@ -1,7 +1,7 @@
 import { z } from "zod/v3";
 import { recordHistoryEdit, rejectEdits } from "../services/cutHistory.js";
 import { Hono } from "hono";
-import { CaptionExportError, captionExportHttpStatus, captionExportRange, clipById, describeDiff, diffTimelines, newId, toCaptions, toOtio, type Change } from "@scarlet/timeline";
+import { CaptionExportError, captionExportHttpStatus, captionExportRange, clipById, describeDiff, diffTimelines, newId, timelineDuration, toCaptions, toOtio, type Change } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { requestAttempt, requireProjectEditAttempt } from "../services/taskAttempt.js";
@@ -59,7 +59,8 @@ export function timelineRoutes(ctx: Ctx) {
       const updated = ctx.repos.projects.get(project.id)!;
       ctx.bus.publish({ type: "project.updated", projectId: project.id, project: updated });
       logActivity(ctx, { projectId: project.id, actor: actorFor(c.var.user), type: "version.branch",
-        summary: `${body.from ? "Created" : "Switched to"} branch “${body.name}”`, data: { branch: body.name, version: ref.head } });
+        summary: `${body.from ? "Created" : "Switched to"} branch “${body.name}”`,
+        data: { branch: body.name, version: ref.head, fromBranch: project.branch, fromVersion: head, ...(body.from && { createdFrom: body.from }) } });
       return { project: updated };
     }, "immediate")());
   });
@@ -112,13 +113,21 @@ export function timelineRoutes(ctx: Ctx) {
     const updated = ctx.repos.projects.update(project.id, { head: target });
     ctx.bus.publish({ type: "change.updated", projectId: project.id, change });
     ctx.bus.publish({ type: "project.updated", projectId: project.id, project: updated });
+    const previous = ctx.repos.versions.get(project.id, head);
     const restored = ctx.repos.versions.get(project.id, target);
     logActivity(ctx, {
       projectId: project.id,
       actor: actorFor(user),
       type: "version.restored",
       summary: `${user.name} restored an earlier version of the edit${restored?.description ? `: ${quote(restored.description)}` : ""}`,
-      data: { version: target, from: head },
+      data: {
+        changeId: change.id,
+        branch: project.branch,
+        version: target,
+        from: head,
+        ...(previous && { durationBefore: timelineDuration(previous.timeline) }),
+        ...(restored && { durationAfter: timelineDuration(restored.timeline) }),
+      },
     });
     return c.json({ project: updated });
   }, "immediate")());
@@ -128,6 +137,13 @@ export function timelineRoutes(ctx: Ctx) {
     const project = requireProject(ctx, c.req.param("id"));
     const timeline = resolveTimeline(ctx, project, c.req.param("v"));
     const otio = toOtio(project, timeline, { mediaRoot: ctx.paths.media(project.id) });
+    logActivity(ctx, {
+      projectId: project.id,
+      actor: actorFor(c.var.user),
+      type: "export.completed",
+      summary: `${c.var.user.name} exported timeline (.otio)`,
+      data: { format: "otio", version: timeline.version, duration: timelineDuration(timeline) },
+    });
     const safeName = project.name.replace(/[^a-zA-Z0-9-_]+/g, "_");
     return new Response(JSON.stringify(otio, null, 2), {
       headers: {
@@ -146,13 +162,22 @@ export function timelineRoutes(ctx: Ctx) {
       const end = optionalNumberParam(c.req.query("end"), "end");
       // captionExportRange checks the range, so the engine and the demo refuse the same intervals the same way.
       const trackId = c.req.query("trackId") || undefined;
+      let range: ReturnType<typeof captionExportRange>;
       let body: string;
       try {
-        body = toCaptions(timeline, format, { trackId, range: captionExportRange(start, end) });
+        range = captionExportRange(start, end);
+        body = toCaptions(timeline, format, { trackId, range });
       } catch (err) {
         if (!(err instanceof CaptionExportError)) throw err;
         throw new HttpError(captionExportHttpStatus(err.code), err.code, err.message);
       }
+      logActivity(ctx, {
+        projectId: project.id,
+        actor: actorFor(c.var.user),
+        type: "export.completed",
+        summary: `${c.var.user.name} exported captions (.${format})`,
+        data: { format, version: timeline.version, duration: timelineDuration(timeline), ...(range && { range }), ...(trackId && { trackId }) },
+      });
       const safeName = project.name.replace(/[^a-zA-Z0-9-_]+/g, "_");
       const type = format === "vtt" ? "text/vtt; charset=utf-8" : "application/x-subrip; charset=utf-8";
       return new Response(body, {
@@ -168,7 +193,15 @@ export function timelineRoutes(ctx: Ctx) {
     const body = await jsonBody(c, z.object({ folder: z.string().min(1).max(4096) }));
     const project = requireProject(ctx, c.req.param("id"));
     const timeline = resolveTimeline(ctx, project, c.req.param("v"));
-    return c.json(await buildHandoff(ctx, project, timeline, body.folder, c.req.raw.signal));
+    const result = await buildHandoff(ctx, project, timeline, body.folder, c.req.raw.signal);
+    logActivity(ctx, {
+      projectId: project.id,
+      actor: actorFor(c.var.user),
+      type: "export.completed",
+      summary: `${c.var.user.name} exported a handoff folder`,
+      data: { format: "folder", version: timeline.version, duration: timelineDuration(timeline) },
+    });
+    return c.json(result);
   });
 
   return r;

@@ -64,6 +64,30 @@ describe("putBackWords", () => {
     expect(tidied[0]!.words.find(w => w.text === "Coca-Cola")!.start).toBe(at("coco").start);
   });
 
+  it("puts a take back once when its segment was split where two readings hand over", async () => {
+    // Split at a window's seam, both halves keep the segment's id.
+    const halves = [{ ...tidied[0]!, words: tidied[0]!.words.slice(0, 7) }, { ...tidied[0]!, words: tidied[0]!.words.slice(7) }];
+    const { segments, found } = await putBackWords(halves, page(coca.seconds, reading), coca.frames);
+    expect(found.map(f => f.words.map(w => w.text).join(" "))).toEqual(["coco the"]);
+    expect(text(segments)).toBe("so here is the logo the coco the Coca-Cola logo here and more words after it");
+  });
+
+  it("keeps the times it placed when a word beside them it couldn't place kept an old time over them", async () => {
+    // "so mm… you, when it goes": the transcript's one "When" was timed over the whole restart, and the cut-off first
+    // try has too little of the word for the aligner to place it there again.
+    const restart = speech(["so mm you when it goes into the next part"]);
+    const [so, mm, you, when] = restart.said;
+    const transcript = [segment([so!, word("When", mm!.start, when!.end), ...restart.said.slice(4)])];
+    const said = [so!, word("when", mm!.start, mm!.end), ...restart.said.slice(2)];
+    const { segments, found } = await putBackWords(transcript, page(restart.seconds, said), restart.frames);
+    expect(found.map(f => f.words.map(w => w.text).join(" "))).toEqual(["you when"]);
+    const words = segments.flatMap(s => s.words);
+    expect(words.slice(0, 5).map(w => w.text)).toEqual(["so", "When", "you", "when", "it"]);
+    for (const w of words.slice(2, 4)) expect(w.end - w.start).toBeGreaterThan(0.05);
+    expect(words[2]!.start).toBeCloseTo(you!.start, 1);
+    words.slice(1).forEach((w, k) => expect(w.start).toBeGreaterThanOrEqual(words[k]!.end - 1e-9));
+  });
+
   it("leaves out words the reading wrote over quiet, however many", async () => {
     const quiet = speech(["and so i am going to test it", 3, "with this new model now"]);
     const looped = [...quiet.said.slice(0, 8),

@@ -37,7 +37,10 @@ export function recordHistoryEdit(ctx: Ctx, user: User, projectId: string, targe
     ctx.bus.publish({ type: "change.updated", projectId, change });
     ctx.bus.publish({ type: "project.updated", projectId, project: updated });
     logActivity(ctx, { projectId, actor: author, type: action === "revert" ? "change.undone" : "version.restored",
-      summary: description, data: { changeId: id, target, from: head, version: saved.version, branch } });
+      summary: description, data: {
+        changeId: id, target, from: head, version: saved.version, branch,
+        durationBefore: timelineDuration(timeline), durationAfter: timelineDuration(saved), rangesCount: change.ranges.length,
+      } });
     return { project: updated, change };
   }, "immediate")();
 }
@@ -141,7 +144,12 @@ export function rejectEdits(ctx: Ctx, user: User, projectId: string, threadId: s
     ctx.bus.publish({ type: "change.updated", projectId, change });
     ctx.bus.publish({ type: "project.updated", projectId, project: updated });
     logActivity(ctx, { projectId, actor: author, type: "change.undone",
-      summary: description, data: { changeId: id, rejected: rejected.map(c => ({ changeId: c.changeId, spot: c.spot })), from: head, version: saved.version, branch } });
+      summary: description, data: {
+        changeId: id, threadId,
+        rejected: rejected.map(c => ({ changeId: c.changeId, spot: c.spot, label: c.label, range: c.range })),
+        from: head, version: saved.version, branch,
+        durationBefore: timelineDuration(timeline), durationAfter: timelineDuration(saved),
+      } });
     return { project: updated, change };
   }, "immediate")();
 }

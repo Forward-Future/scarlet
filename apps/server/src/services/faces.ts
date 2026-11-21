@@ -11,12 +11,12 @@ import { probeMedia, screenFrameSize } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { audioWorker } from "../transcribe/audioWorker.js";
-import { FACE_MODEL, FACE_SIDE, iou, type Face } from "../transcribe/faceModel.js";
-import { LocalWhisperModel } from "../transcribe/localModel.js";
+import { EYE_MODELS, FACE_MODEL, FACE_SIDE, iou, type Face } from "../transcribe/faceModel.js";
+import { LocalWhisperModel, type PinnedModel } from "../transcribe/localModel.js";
 import { pictureReader, r3, rememberLast, withFrames, type VideoMedia } from "./pictureReading.js";
 
-/** Bump when the reading changes: the model, the sampling or what a frame keeps. Kept readings are read again. 2: the eyes. */
-const FACES_VERSION = 2;
+/** Bump when the reading changes: the model, the sampling or what a frame keeps. Kept readings are read again. 2: the eyes. 3: where they look, up and down. */
+const FACES_VERSION = 3;
 /** Seconds of a video read and kept together. */
 const FACES_WINDOW = 60;
 /** Frames a second decoded. Half are looked at, and the rest where the faces moved between them. */
@@ -36,12 +36,21 @@ const NEAR = 3;
 const HOLD = 1.5;
 /** A face turned this far from where its span looks, in two frames running, starts another span. A presenter glancing at a screen beside the camera turns 20-30°. */
 const TURN = 45;
+/**
+ * Eyes that look this much further down or up than where the span looks, in two frames running, start another span. A
+ * presenter's eyes read about 0.1 at the lens and 0.5-0.8 on a laptop below it (2026-11-21).
+ */
+const GLANCE = 0.3;
 
-/** The faces in one frame looked at: its source second and each face as [left, top, right, bottom, score, yaw, eyes x, eyes y]. */
-export interface FaceSample { at: number; faces: Array<[number, number, number, number, number, number, number, number]> }
+/** The faces in one frame looked at: its source second and each face as [left, top, right, bottom, score, yaw, eyes x, eyes y, how far the eyes look down or null]. */
+export interface FaceSample { at: number; faces: Array<[number, number, number, number, number, number, number, number, number | null]> }
 
-/** One face over a stretch of time: source seconds, a box (fractions of the frame) that holds it throughout, where its eyes usually are, roughly where it looks and how sure the detector was. */
-export interface FaceSpan { track: number; start: number; end: number; box: [number, number, number, number]; eyes: [number, number]; yaw: number; confidence: number }
+/**
+ * One face over a stretch of time: source seconds, a box (fractions of the frame) that holds it throughout, where its eyes
+ * usually are, roughly where it looks, how far its eyes usually look down (0 level or up, 1 fully down; left out where they
+ * couldn't be read) and how sure the detector was.
+ */
+export interface FaceSpan { track: number; start: number; end: number; box: [number, number, number, number]; eyes: [number, number]; yaw: number; eyesDown?: number; confidence: number }
 
 /** A face followed through the video: when it is first and last seen, for how long, its usual box and eyes and how sure the detector usually was. */
 export interface FaceTrack { track: number; start: number; end: number; seconds: number; box: [number, number, number, number]; eyes: [number, number]; confidence: number }
@@ -51,12 +60,12 @@ const median = (values: readonly number[]) => {
   return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 };
 
-/** A frame's faces as kept: fractions to three places, scores to two and yaw to the degree. */
+/** A frame's faces as kept: fractions to three places, scores and where the eyes look to two and yaw to the degree. */
 export function faceSample(at: number, faces: readonly Face[]): FaceSample {
-  return { at: r3(at), faces: faces.map(f => [...f.box.map(r3), Math.round(f.score * 100) / 100, f.yaw, ...f.eyes.map(r3)] as FaceSample["faces"][number]) };
+  return { at: r3(at), faces: faces.map(f => [...f.box.map(r3), Math.round(f.score * 100) / 100, f.yaw, ...f.eyes.map(r3), f.down ?? null] as FaceSample["faces"][number]) };
 }
 
-interface Seen { at: number; next: number; box: [number, number, number, number]; score: number; yaw: number; eyes: [number, number] }
+interface Seen { at: number; next: number; box: [number, number, number, number]; score: number; yaw: number; eyes: [number, number]; down: number | null }
 
 /**
  * Tracks and spans from the windows read so far, in order. A face in one frame is the same as one in the frame before
@@ -75,7 +84,7 @@ export function faceTracks(windows: ReadonlyArray<{ start: number; end: number; 
     const joined = following && Math.abs(following.start - window.end) < 1e-6 && following.samples.length ? following.samples[0]!.at : window.end;
     window.samples.forEach((sample, s) => {
       const next = s + 1 < window.samples.length ? window.samples[s + 1]!.at : joined;
-      const faces = sample.faces.map(([x0, y0, x1, y1, score, yaw, ex, ey]): Seen => ({ at: sample.at, next, box: [x0, y0, x1, y1], score, yaw, eyes: [ex, ey] }));
+      const faces = sample.faces.map(([x0, y0, x1, y1, score, yaw, ex, ey, down]): Seen => ({ at: sample.at, next, box: [x0, y0, x1, y1], score, yaw, eyes: [ex, ey], down: down ?? null }));
       // Every pair a face and a track could make, best first: an overlap with a recent track, then with an old one, then
       // a recent track merely near. A presenter who walked off and back was otherwise taken for whoever stood up first.
       const pairs: Array<{ face: number; track: number; rank: number }> = [];
@@ -105,12 +114,14 @@ export function faceTracks(windows: ReadonlyArray<{ start: number; end: number; 
   const spans: FaceSpan[] = [], summary: FaceTrack[] = [];
   kept.forEach(({ seen }, i) => {
     const track = i + 1, own: FaceSpan[] = [];
-    let run: Seen[] = [], union = [0, 0, 0, 0], narrowest = 0, shortest = 0, looks = 0;
+    let run: Seen[] = [], union = [0, 0, 0, 0], narrowest = 0, shortest = 0, looks = 0, gaze: number | null = null;
     const close = () => {
       if (!run.length) return;
+      const downs = run.flatMap(s => s.down === null ? [] : [s.down]);
       own.push({ track, start: run[0]!.at, end: run.at(-1)!.next, box: union.map(r3) as FaceSpan["box"],
         eyes: [0, 1].map(i => r3(median(run.map(s => s.eyes[i]!)))) as FaceSpan["eyes"],
-        yaw: Math.round(median(run.map(s => s.yaw)) / 5) * 5, confidence: Math.round(median(run.map(s => s.score)) * 100) / 100 });
+        yaw: Math.round(median(run.map(s => s.yaw)) / 5) * 5, ...(downs.length && { eyesDown: Math.round(median(downs) * 100) / 100 }),
+        confidence: Math.round(median(run.map(s => s.score)) * 100) / 100 });
       run = [];
     };
     seen.forEach((face, k) => {
@@ -120,8 +131,10 @@ export function faceTracks(windows: ReadonlyArray<{ start: number; end: number; 
         const holds = w <= HOLD * Math.min(narrowest, x1 - x0) && h <= HOLD * Math.min(shortest, y1 - y0);
         const after = seen[k + 1];
         const turned = Math.abs(face.yaw - looks) >= TURN && (!after || Math.abs(after.yaw - looks) >= TURN);
+        const away = (s: Seen | undefined) => gaze !== null && s?.down != null && Math.abs(s.down - gaze) >= GLANCE;
+        const glanced = away(face) && (!after || after.down === null || away(after));
         // How long the face was missing counts from the first frame looked at without it.
-        if (face.at - run.at(-1)!.next > GAP || !holds || turned) close();
+        if (face.at - run.at(-1)!.next > GAP || !holds || turned || glanced) close();
       }
       if (!run.length) { union = [x0, y0, x1, y1]; narrowest = x1 - x0; shortest = y1 - y0; }
       else {
@@ -131,7 +144,11 @@ export function faceTracks(windows: ReadonlyArray<{ start: number; end: number; 
       }
       run.push(face);
       // Where the span looks: the middle of its first five frames.
-      if (run.length <= 5) looks = median(run.map(s => s.yaw));
+      if (run.length <= 5) {
+        looks = median(run.map(s => s.yaw));
+        const downs = run.flatMap(s => s.down === null ? [] : [s.down]);
+        gaze = downs.length ? median(downs) : null;
+      }
     });
     close();
     spans.push(...own);
@@ -151,15 +168,17 @@ export function faceTracks(windows: ReadonlyArray<{ start: number; end: number; 
 
 const models = new Map<string, LocalWhisperModel>();
 
-function modelFor(ctx: Ctx) {
-  let model = models.get(ctx.paths.root);
-  if (!model) models.set(ctx.paths.root, model = new LocalWhisperModel(join(ctx.paths.root, "models"), FACE_MODEL, ctx.log));
+/** One of the face models of this library, downloaded once. */
+function modelFor(ctx: Ctx, pinned: PinnedModel = FACE_MODEL) {
+  const key = `${ctx.paths.root}\0${pinned.name}`;
+  let model = models.get(key);
+  if (!model) models.set(key, model = new LocalWhisperModel(join(ctx.paths.root, "models"), pinned, ctx.log));
   return model;
 }
 
 function identity(media: MediaAsset) {
   return createHash("sha256").update(JSON.stringify([FACES_VERSION, media.hash ?? media.path, media.duration,
-    FACE_MODEL.sha256, FACES_FPS, FACES_WINDOW])).digest("hex");
+    FACE_MODEL.sha256, EYE_MODELS.mesh.sha256, EYE_MODELS.blendshapes.sha256, FACES_FPS, FACES_WINDOW])).digest("hex");
 }
 
 /**
@@ -169,9 +188,9 @@ function identity(media: MediaAsset) {
 async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end }: { start: number; end: number }, signal: AbortSignal): Promise<FaceSample[]> {
   const source = media.width && media.height ? { width: media.width, height: media.height } : await probeMedia(file);
   const { width, height } = screenFrameSize(source.width, source.height, FACE_SIDE);
-  const model = await modelFor(ctx).get(signal);
+  const [model, mesh, blendshapes] = await Promise.all([modelFor(ctx).get(signal), modelFor(ctx, EYE_MODELS.mesh).get(signal), modelFor(ctx, EYE_MODELS.blendshapes).get(signal)]);
   const batches = await withFrames(ctx, media, file, "faces", { start, end, fps: FACES_FPS, width, height, signal, batch: BATCH_FRAMES }, () => true, async (frames, times) => {
-    const found = await audioWorker.request<Array<Face[] | null>>({ kind: "faces", frames, width, height, model }, { signal });
+    const found = await audioWorker.request<Array<Face[] | null>>({ kind: "faces", frames, width, height, model, eyes: { mesh, blendshapes } }, { signal });
     return times.flatMap((at, i) => found[i] ? [faceSample(at, found[i]!)] : []);
   });
   return batches.flat();

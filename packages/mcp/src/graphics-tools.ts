@@ -19,9 +19,11 @@ interface GraphicsDeps {
   projectId: string;
   task?: Task;
   author: Author;
-  caps: Pick<AgentCapabilities, "files" | "images">;
+  caps: Pick<AgentCapabilities, "files" | "images" | "shell">;
   /** A file in the task artifact directory. */
   readArtifact(path: string): Promise<Buffer<ArrayBuffer>>;
+  /** Write a file there, and say where it went. */
+  writeArtifact(path: string, data: Buffer): Promise<string>;
   getProject(): Promise<{ project: Pick<ProjectDetail["project"], "settings"> }>;
 }
 
@@ -110,6 +112,30 @@ export function registerGraphics(deps: GraphicsDeps) {
     "Read a graphic Scarlet drew: its page as it was drawn, where the page is, the files kept beside it (linked by those relative paths), and its size, fps and duration. Revise it by changing the page and calling graphic_render with basedOn.",
     { mediaId: z.string().min(1) },
     async ({ mediaId }) => json(await client.graphic(deps.projectId, mediaId)),
+  );
+
+  // A run launched with its harness's own tools, as every request is, captures pages into its task folder.
+  if (deps.caps.shell) tool(
+    "web_capture",
+    "Open a page on the web in Scarlet's own headless Chrome and save its picture in the task artifact directory: the browser window (width × height in CSS pixels, default 1280 × 800) or, with fullPage, the whole page down to its end (up to 12,000 pixels). The page gets a moment after it loads for what it draws late. Use it for B-roll of an article, a post or a site: frame the picture any way you like (a page for graphic_render that links the file, ffmpeg, your own tools), then bring the result in with asset_add, with source { url, capture: this file, region: the part you used }, so the editor sees where it came from. Only public http and https pages. Returns the file's path and size, the page's title and address after any redirect, its headings with where each sits in the picture (fractions of it), and its words (the first 20,000 characters).",
+    {
+      url: z.string().describe("The page's web address"),
+      width: z.number().int().min(320).max(3840).optional().describe("Browser width in CSS pixels; default 1280"),
+      height: z.number().int().min(240).max(4000).optional().describe("Browser height in CSS pixels; default 800"),
+      fullPage: z.boolean().optional().describe("The whole page down to its end, not the window alone"),
+      path: z.string().optional().describe("Where to save it in the task artifact directory; default capture-<host>-<time>.png"),
+    },
+    async ({ url, width, height, fullPage, path }) => {
+      const shot = await deps.client.post<{ png: string; title: string; url: string; text: string; width: number; height: number;
+        headings: Array<{ text: string; box: { left: number; top: number; right: number; bottom: number } }> }>(
+        `/projects/${deps.projectId}/web-captures`, { url, width, height, fullPage });
+      let host = "page";
+      try { host = new URL(shot.url).hostname.replace(/^www\./, "").replace(/[^a-z0-9.-]/gi, "") || host; } catch { /* the default name */ }
+      const saved = await deps.writeArtifact(path ?? `capture-${host}-${Date.now()}.png`, Buffer.from(shot.png, "base64"));
+      return json({ path: saved, width: shot.width, height: shot.height, title: shot.title, url: shot.url,
+        headings: shot.headings.map(h => ({ text: h.text, box: { left: round3(h.box.left), top: round3(h.box.top), right: round3(h.box.right), bottom: round3(h.box.bottom) } })),
+        text: shot.text });
+    },
   );
 
   tool(

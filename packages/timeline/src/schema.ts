@@ -57,9 +57,31 @@ export const Provenance = z.object({
   prompt: z.string().optional(),
   /** Change that introduced the asset, if any. */
   changeId: Id.optional(),
+  /** The run that added it, set by the engine from the run's own attempt. */
+  taskId: Id.optional(),
   createdAt: z.string().datetime().optional(),
 });
 export type Provenance = z.infer<typeof Provenance>;
+
+/** The part of a picture in use, as fractions of its width and height. */
+export const FrameBox = z.object({
+  left: z.number().min(0).max(1), top: z.number().min(0).max(1), right: z.number().min(0).max(1), bottom: z.number().min(0).max(1),
+}).refine(b => b.right > b.left && b.bottom > b.top, "right and bottom must be past left and top");
+export type FrameBox = z.infer<typeof FrameBox>;
+
+/**
+ * Where a picture or clip from outside the project came from, such as an article or a post Scarlet framed as B-roll:
+ * the page's address, when it was captured, the page as captured and the part of it in the video.
+ */
+export const WebSource = z.object({
+  url: z.string().trim().max(2048).url().refine(u => /^https?:\/\//i.test(u), "a web address"),
+  capturedAt: z.string().datetime().optional(),
+  /** The page as captured, an image relative to the project's folder. */
+  capture: z.string().optional(),
+  /** The part of the capture in the video. */
+  region: FrameBox.optional(),
+});
+export type WebSource = z.infer<typeof WebSource>;
 
 /** One-based audio stream ordinals confirmed for this particular recording. */
 export const DialogueVoiceRoles = z.object({
@@ -104,6 +126,8 @@ export const MediaAsset = z.object({
     model: z.string().optional(),
   }).optional(),
   provenance: Provenance.optional(),
+  /** Where it came from on the web, shown on the card of the edit that uses it. */
+  source: WebSource.optional(),
   /** A graphic Scarlet drew from a web page: the page it keeps, so a later request can revise it. */
   graphic: z.object({
     /** The page, relative to the project's folder. Files it links to sit beside it. */
@@ -393,11 +417,6 @@ export const Project = z.object({
   /** Version id of the current (head) timeline. */
   head: Id.nullable().default(null),
   styleGuide: StyleGuide.optional(),
-  /**
-   * The project this one was made from, as a short of it: its id and name. `notice` is true until the editor dismisses
-   * the line in the chat that says so. `gone` when that project is in the trash or was deleted.
-   */
-  source: z.object({ projectId: Id, name: z.string(), notice: z.boolean().optional(), gone: z.boolean().optional() }).optional(),
   createdAt: z.string().datetime().optional(),
   updatedAt: z.string().datetime().optional(),
 });
@@ -654,9 +673,10 @@ export const Change = z.object({
   /**
    * The footage this change left out as it built `toVersion` from pieces of a recording, read once it was applied:
    * `version` plays `toVersion` with every such stretch back in, and each join is where one came out (`at`, on
-   * `toVersion`) and what (`removed`, on `version`). No joins when it was looked for and none was found.
+   * `toVersion`) and what (`removed`, on `version`). No joins when it was looked for and none was found. `reading` is
+   * the reading that found the joins (`LEFT_OUT_READING`): one found by an earlier reading is read again as Scarlet starts.
    */
-  leftOut: z.object({ version: Id.optional(), joins: z.array(z.object({ at: Seconds, removed: TimeRange })) }).optional(),
+  leftOut: z.object({ version: Id.optional(), joins: z.array(z.object({ at: Seconds, removed: TimeRange })), reading: z.number().int().optional() }).optional(),
   /** The same on `appliedVersion`, when the editor's calls or a moved edit applied other cuts than `toVersion` holds. */
   appliedJoinFades: JoinFades.optional(),
   /** Who approved/rejected and why, once decided. */

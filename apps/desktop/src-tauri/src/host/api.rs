@@ -39,6 +39,9 @@ pub struct CompletionAck {
     pub started_at: Option<String>,
     #[serde(default)]
     pub change_ids: Vec<String>,
+    /// The engine handed this attempt's CLI session to a later attempt (a pause): the session stays for it.
+    #[serde(default)]
+    pub session_carries_on: Option<bool>,
 }
 
 #[derive(Clone)]

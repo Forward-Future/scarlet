@@ -349,6 +349,38 @@ describe("timeline_framing", () => {
     } finally { await c.close(); }
   });
 
+  it("waits within one tool call's time across every measurement a save waits for", async () => {
+    // The engine takes each wait it is given in full: the recording's cuts, then its edges, then a look at a frame.
+    const waited: Array<[string, number]> = [];
+    const others = mock.state.extra!;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    mock.state.extra = (req, res) => {
+      const wait = Number(req.query.get("wait") ?? 0);
+      const answer = (body: object) => {
+        waited.push([req.path.split("/").slice(-2).join("/"), wait]);
+        vi.setSystemTime(Date.now() + wait * 1000);
+        return reply(res, body);
+      };
+      if (req.path.endsWith("/picture-cuts")) return answer({ from: 0, to: 120, readSeconds: 1, done: false, cuts: [] });
+      if (req.path.endsWith("/show-area")) return answer({ mediaId: "scr", step: 5, done: true, areas: [], unset: [[0, 120]] });
+      if (req.path.endsWith("/show-area/ask")) return answer({ mediaId: "scr", step: 5, done: true, areas: [], unset: [[0, 120]], asked: 1, answered: 1 });
+      return others(req, res);
+    };
+    const c = await connect({ taskId: "task-waits" });
+    try {
+      await ok(c, "timeline_get");
+      const refused = await call(c, "timeline_propose", { ops: [{ op: "updateClip", clipId: "s0", patch: { transform: { cropLeft: 0.1, cropTop: 0.1, cropRight: 0.2, cropBottom: 0.1 } } }],
+        intent: "requested", description: "Cropped the demo.", reason: "The window is the subject." });
+      expect(textOf(refused)).toContain("no area says what viewers may see");
+      expect(waited.map(([what]) => what)).toEqual(expect.arrayContaining(["scr/picture-cuts", "scr/show-area"]));
+      // Claude Code's calls wait 240 s at most: each wait has what the ones before it left.
+      expect(waited.reduce((sum, [, wait]) => sum + wait, 0)).toBeLessThanOrEqual(240);
+    } finally {
+      vi.useRealTimers();
+      await c.close();
+    }
+  });
+
   describe("with areas viewers may see on record", () => {
     // One window from 0 to 60 s of the screen recording: 10-80% across, 10-90% down. Nothing is set after that.
     const window = { at: 5, area: [0.1, 0.1, 0.8, 0.9], noLine: [], holds: [[0, 60]] };
@@ -375,7 +407,10 @@ describe("timeline_framing", () => {
         expect(result.areas).toEqual([{ at: 5, area: [10, 10, 80, 90], holds: [[0, 60]], heldSeconds: 60 }]);
         // The edit plays nothing of the recording past 30 s, so the unset stretch is not on picture.
         expect(result.unset).toEqual([{ from: 60, to: 120, onPicture: 0, look: 90 }]);
-        expect(textOf(await call(c, "screen_area", { mediaId: "scr", set: [{ at: 5, area: [10, 10, 12, 90] }] }))).toContain("at least 5 percent each way");
+        expect(textOf(await call(c, "screen_area", { mediaId: "scr", set: [{ at: 5, area: [10, 10, 12, 90] }] }))).toContain("set[0].area is [left, top, right, bottom] in percent, at least 5 percent each way");
+        // Every area too small is named in one refusal.
+        const several = textOf(await call(c, "screen_area", { mediaId: "scr", set: [{ at: 5, area: [10, 10, 12, 90] }, { at: 9, area: [10, 10, 80, 90] }, { at: 20, area: [10, 10, 80, 11] }] }));
+        expect(several).toContain("set[0].area and set[2].area are each [left, top, right, bottom] in percent");
       } finally { await c.close(); }
     });
 
@@ -704,7 +739,7 @@ describe("tool annotations", () => {
   // run the others in parallel without asking, so a new tool is placed here or among the reads on purpose.
   const writes = ["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_check_repeats", "dialogue_review_save",
     "dialogue_revise_cut", "edit_flag", "note_reply", "note_resolve", "render_request", "screen_area", "task_log", "task_question", "learning_suggest", "skill_save_from_change", "skill_save_edit", "asset_add", "export_otio",
-    "graphic_render", "style_guide_save", "shorts_plan"];
+    "graphic_render", "style_guide_save"];
   const every = EDITING_TOOL_GROUPS.flatMap(g => [...g.tools] as string[]);
 
   it("gives every tool an input schema a harness can convert: no array that lists an item per position", async () => {
@@ -725,13 +760,37 @@ describe("tool annotations", () => {
     } finally { await c.close(); }
   });
 
+  it.each(["claude", "codex", "gemini"])("lists every parameter %s's model is shown with its own type: no $ref, no untyped branch", async agent => {
+    // A run's session, which has the tools only a request has.
+    const task = Task.parse({ id: "typed-task", state: "running", projectId: "prj_test", kind: "edit", agent, instruction: "/first-cut-dialogue",
+      context: {}, createdBy: { type: "human", name: "Editor" } });
+    const c = await connect({ agent, taskId: task.id, task, author: { type: "agent", id: agent, name: agent } });
+    try {
+      const { tools } = await c.listTools();
+      expect(tools.map(t => t.name)).toEqual(expect.arrayContaining(["dialogue_check_join", "dialogue_apply_cuts", "timeline_propose", "captions_generate"]));
+      const untyped: string[] = [];
+      const walk = (node: unknown, path: string) => {
+        if (!node || typeof node !== "object") return;
+        if ("$ref" in node) untyped.push(`${path} is a $ref`);
+        for (const [key, value] of Object.entries(node)) {
+          if (key === "anyOf" && Array.isArray(value)) value.forEach((branch, i) => { if (!branch?.type) untyped.push(`${path}.anyOf[${i}] has no type`); });
+          walk(value, `${path}.${key}`);
+        }
+      };
+      for (const t of tools) walk(t.inputSchema, t.name);
+      expect(untyped).toEqual([]);
+    } finally { await c.close(); }
+  });
+
   it("marks exactly the tools that change something as writes, and nothing as destructive", () => {
     expect(every.filter(name => !toolAnnotations(name).readOnlyHint).sort()).toEqual([...writes].sort());
-    for (const name of every) {
+    for (const name of every.filter(n => n !== "web_capture")) {
       const a = toolAnnotations(name);
       // A read may be repeated; a write may not, and every edit stays reversible.
       expect(a).toMatchObject({ idempotentHint: a.readOnlyHint, destructiveHint: false, openWorldHint: false });
     }
+    // A page from the web changes nothing in the project, and reads the open web, which may say something else next time.
+    expect(toolAnnotations("web_capture")).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true });
     // A name Scarlet doesn't know is never taken for a read.
     expect(toolAnnotations("timeline_delete_everything").readOnlyHint).toBe(false);
   });
@@ -740,15 +799,13 @@ describe("tool annotations", () => {
     const task = Task.parse({ id: "skill-task", state: "running", projectId: "prj_test", kind: "skill_edit", agent: "codex", instruction: "Shorter pauses",
       context: { skillId: "skl_1" }, hostId: "host_a", createdBy: { type: "human", name: "Editor" } });
     const check = Task.parse({ ...task, id: "check-task", kind: "learning_check", context: { checksTaskId: "asked-task" } });
-    const shorts = Task.parse({ ...task, id: "shorts-task", kind: "edit", instruction: "Make up to 3 vertical shorts, each under 60 s.", context: { short: {
-      index: 1, count: 3, sourceProjectId: "prj_long", sourceName: "Long", sourceVersion: "v1", aspect: "9:16", maxSeconds: 60, captions: true, projectIds: ["prj_test", "prj_b", "prj_c"] } } });
+    const edit = Task.parse({ ...task, id: "edit-task", kind: "edit", instruction: "Add B-roll", context: {} });
     const sessions = [await hearing(), await connect({ agent: "codex", taskId: task.id, task }), await connect({ agent: "codex", taskId: check.id, task: check }),
-      await connect({ agent: "codex", taskId: shorts.id, task: shorts })];
+      await connect({ agent: "codex", taskId: edit.id, task: edit })];
     try {
       const tools = (await Promise.all(sessions.map(c => c.listTools()))).flatMap(l => l.tools);
       // The hearing session lists every editing tool; the skill request adds the tool that saves its revision, the
-      // check that reads a request the one that offers a rule, and the first short of Make shorts the one that saves
-      // every short's moment.
+      // check that reads a request the one that offers a rule, and the edit request the one that captures a page.
       expect([...new Set(tools.map(t => t.name))].sort()).toEqual(every.filter(name => name !== "skill_save_from_change").sort());
       for (const t of tools) expect(t.annotations, t.name).toEqual(toolAnnotations(t.name));
     } finally { await Promise.all(sessions.map(c => c.close())); }
@@ -1306,25 +1363,6 @@ describe("lip_sync and timeline_picture_sync", () => {
       expect(body.ops.find(o => o.op === "updateClip" && o.clipId === talk.id)!.patch).toMatchObject({ volume: 0, sourceIn: 10.65, sourceOut: 20.65, timelineIn: 0 });
       expect(textOf(await call(c, "timeline_picture_sync", { mediaId: "m2", soundLeads: 0.2 }))).toContain("only a video");
     } finally { await c.close(); }
-  });
-});
-
-describe("shorts_plan", () => {
-  const short = { index: 1, count: 2, sourceProjectId: "prj_long", sourceName: "Long", sourceVersion: "v1", aspect: "9:16" as const, maxSeconds: 60, captions: true, projectIds: ["prj_test", "prj_b"] };
-  const task = (index: number) => Task.parse({ id: `short-${index}`, state: "running", projectId: "prj_test", kind: "edit", agent: "claude", instruction: "Make up to 2 vertical shorts, each under 60 s.",
-    context: { short: { ...short, index } }, hostId: "host_a", createdBy: { type: "human", name: "Editor" } });
-
-  it("saves the first short's moments for its task, and is offered to no other run", async () => {
-    mock.state.extra = (req, res) => req.path === "/tasks/short-1/shorts-plan"
-      ? reply(res, { shorts: [{ projectId: "prj_test", name: "Agents fail" }, { projectId: "prj_b", name: "The wrong flight", taskId: "tsk_b" }], removed: [] }) : false;
-    const first = await connect({ taskId: "short-1", task: task(1) });
-    const second = await connect({ taskId: "short-2", task: task(2) });
-    try {
-      const moments = [{ start: 5, end: 40, title: "Agents fail" }, { start: 50, end: 80, title: "The wrong flight" }];
-      expect(JSON.parse(textOf(await ok(first, "shorts_plan", { moments })))).toMatchObject({ shorts: [{ name: "Agents fail" }, { taskId: "tsk_b" }] });
-      expect(sent("/tasks/short-1/shorts-plan")[0]!.body).toEqual({ moments });
-      expect((await second.listTools()).tools.map(t => t.name)).not.toContain("shorts_plan");
-    } finally { await Promise.all([first.close(), second.close()]); }
   });
 });
 

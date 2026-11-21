@@ -25,8 +25,13 @@ const CONTRACTED: Record<string, string> = {
  * A shorter phrase said twice inside a longer one's first attempt is found as well, so a match from a sentence
  * before doesn't hide the restart within it. Each saying is the second of at most one phrase, and a third saying
  * pairs with the second.
+ *
+ * With `cutOffWords`, a first attempt may stop on a word the next one says longer ("so perfect, so perfectly
+ * realistic", "we want, we wanted"): a word of three letters or more that the second saying's word starts with,
+ * when it is the last word before the second saying.
  */
-export function findRestarts(tokens: readonly string[], starts: readonly number[], ends: readonly number[]): Restart[] {
+export function findRestarts(tokens: readonly string[], starts: readonly number[], ends: readonly number[],
+  options: { cutOffWords?: boolean } = {}): Restart[] {
   const key = tokens.map(t => { const k = t.replace(/['’]/g, ""); return CONTRACTED[k] ?? k; });
   const found: Restart[] = [];
   const paired = new Set<number>();
@@ -39,6 +44,8 @@ export function findRestarts(tokens: readonly string[], starts: readonly number[
         if (!same(i, j) || paired.has(j)) continue;
         let length = 0;
         while (i + length < j && j + length < n && same(i + length, j + length)) length++;
+        if (options.cutOffWords && length && i + length + 1 === j && j + length < n && key[i + length]!.length >= 3 &&
+          key[j + length]!.length > key[i + length]!.length && key[j + length]!.startsWith(key[i + length]!)) length++;
         const between = j - (i + length);
         const distinct = new Set(key.slice(i, i + length)).size;
         if (between <= RESTART_WITHIN_WORDS && starts[j]! - ends[i + length - 1]! <= RESTART_WITHIN_SECONDS &&

@@ -16,6 +16,12 @@ import { clipEnd, timelineDuration } from "./time.js";
 
 const EPS = 1e-6;
 
+/**
+ * Which reading of left-out footage a change's joins come from. 2: a join the version before already had on any track
+ * is not the change's (2026-11-20). Joins an earlier reading found are read again.
+ */
+export const LEFT_OUT_READING = 2;
+
 export interface LeftOut {
   /** `after` with every stretch it left out played where it was left out. */
   original: Timeline;
@@ -44,7 +50,9 @@ function pairs(timeline: Timeline): Pair[] {
 
 /**
  * The footage `after` left out where its pieces join, as against `before`: a join `before` already had is not this
- * version's. Null when it left nothing out.
+ * version's, on any of its tracks. A screen and a camera inset laid over a camera already cut there follow its cut and
+ * leave nothing out: read as cuts, every demo framed on Matt's pass was called a Cut (2026-11-20). Null when it left
+ * nothing out.
  *
  * A join counts when every track that changes piece there skips the same stretch of its recording, as a screen and a
  * camera recorded together do. Tracks that skip different amounts, or step back in the recording, rearranged the
@@ -69,7 +77,7 @@ export function leftOutJoins(before: Timeline, after: Timeline, fps = 30): LeftO
   if (lead > frame / 2) found.push({ at: 0, gap: lead, tracks: new Set(head.map(h => h.index)) });
   for (const group of [...byTime.values()]) {
     const gap = group[0]!.gap;
-    if (gap <= frame / 2 || group.some(p => Math.abs(p.gap - gap) > frame) || group.every(p => known.has(pairKey(p.left, p.right)))) continue;
+    if (gap <= frame / 2 || group.some(p => Math.abs(p.gap - gap) > frame) || group.some(p => known.has(pairKey(p.left, p.right)))) continue;
     found.push({ at: group[0]!.right.timelineIn, gap, tracks: new Set(group.map(p => p.track)) });
   }
   if (!found.length) return null;

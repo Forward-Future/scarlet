@@ -12,6 +12,7 @@ import { pictureCuts } from "../services/pictureCuts.js";
 import { screenMotion } from "../services/screenMotion.js";
 import { screenText } from "../services/screenText.js";
 import { askAreas, editShowAreas, showArea, type ShowAreaEdit } from "../services/showArea.js";
+import { requestAttempt, requireActiveAttempt } from "../services/taskAttempt.js";
 import { optionalNumberParam, requireMedia } from "./util.js";
 
 function requireSourceRange(from: number | undefined, to: number | undefined) {
@@ -109,6 +110,8 @@ export function perceptionRoutes(ctx: Ctx) {
     if (!body || !listOf(body.set, item => typeof item?.at === "number" && Array.isArray(item.area)) || !listOf(body.remove, at => typeof at === "number")) {
       throw badRequest("bad_request", "Send set: [{ at, area }] and/or remove: [at].");
     }
+    // A run sets areas only while it is the run at work: a look stopped with the request that asked for it says nothing.
+    requireActiveAttempt(ctx, requestAttempt(c.req.raw), media.projectId);
     await editShowAreas(ctx, media, body);
     return c.json(await showArea(ctx, media, { waitMs: areaWait(c) }));
   });
@@ -121,6 +124,9 @@ export function perceptionRoutes(ctx: Ctx) {
     if (!body || !Array.isArray(body.seconds) || body.seconds.some(n => typeof n !== "number") || typeof body.taskId !== "string") {
       throw badRequest("bad_request", "Send seconds: [source second] and taskId.");
     }
+    // A run asks for looks for itself, while it is at work: one stopped or put back in line starts none.
+    const attempt = requestAttempt(c.req.raw);
+    if (attempt) requireActiveAttempt(ctx, attempt, media.projectId, body.taskId);
     const asked = await askAreas(ctx, media, { seconds: body.seconds as number[], taskId: body.taskId, waitMs: areaWait(c), again: body.again === true });
     return c.json({ ...asked, ...await showArea(ctx, media, { waitMs: 5000 }) });
   });

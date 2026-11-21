@@ -11,6 +11,15 @@ export function interactiveFrameUrl(src: string | undefined, width?: number) {
   return url.toString();
 }
 
+/** The timeline's stills go ahead of the agent's pictures, behind the editor's own (`PictureLane`). */
+export function timelineFrameUrl(src: string | undefined) {
+  if (!src || IS_MOCK) return src;
+  const url = new URL(src, window.location.href);
+  if (!url.pathname.endsWith("/frame")) return src;
+  url.searchParams.set("priority", "timeline");
+  return url.toString();
+}
+
 const clipIndexes = new WeakMap<Timeline, ReturnType<typeof indexClipsAt>>();
 const mediaIndexes = new WeakMap<readonly MediaAsset[], Map<string, MediaAsset>>();
 /** Scrubbing and the original waveform sample the same immutable media list many times. */
@@ -53,12 +62,6 @@ export function originalClipAt(timeline: Timeline, at: number, media: readonly M
   const hits = clipsAt(timeline, at);
   return visibleClip(hits, media) ?? hits.find(({ track, clip }) =>
       track.kind === "audio" && !track.muted && clip.enabled !== false && clip.kind === "media")?.clip;
-}
-
-/** A still from the source media under timeline time `t`, if the cut has video there. */
-export function thumbUrl(timeline: Timeline | null, t: number, width = 160): string | undefined {
-  const clip = visibleClipAt(timeline, t);
-  if (clip?.kind === "media") return api.frameUrl(clip.mediaId, timelineToSource(clip, t), width);
 }
 
 /** Hover previews share quarter-second stills. Filmstrip samples use the source frame at the selected time. */

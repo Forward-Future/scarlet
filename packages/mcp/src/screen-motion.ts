@@ -7,6 +7,50 @@ import { clipEnd, type MediaClip, type Timeline } from "@scarlet/timeline";
 /** A second of a recording, from `at`, and the areas that changed in it: [left, top, right, bottom, share of the frame]. */
 export interface MotionSecond { at: number; areas: Array<[number, number, number, number, number]> }
 
+/** Where a recording's picture has something in it (text, an edge, a picture), from source second `at` until the next: a 64 × 36 grid, a bit a cell row by row, in base64. */
+export interface DetailFrame { at: number; cells: string }
+export const DETAIL_COLS = 64, DETAIL_ROWS = 36;
+
+/** Whether a cell of a detail grid has something in it. */
+export const hasDetail = (cells: Uint8Array, i: number) => ((cells[i >> 3]! >> (i & 7)) & 1) === 1;
+
+/** The share of the cells in `box` (source fractions) that have something in them. */
+export function detailShare(cells: Uint8Array, box: readonly number[]): number {
+  const c0 = Math.max(0, Math.floor(box[0]! * DETAIL_COLS)), c1 = Math.min(DETAIL_COLS, Math.ceil(box[2]! * DETAIL_COLS));
+  const r0 = Math.max(0, Math.floor(box[1]! * DETAIL_ROWS)), r1 = Math.min(DETAIL_ROWS, Math.ceil(box[3]! * DETAIL_ROWS));
+  let all = 0, some = 0;
+  for (let r = r0; r < r1; r++) for (let c = c0; c < c1; c++) { all++; if (hasDetail(cells, r * DETAIL_COLS + c)) some++; }
+  return all ? some / all : 0;
+}
+
+/** The things in a picture, inside `within` (source fractions) by each cell's middle: cells with something in them that touch, each with its box in source fractions and its cells. */
+export function detailAreas(cells: Uint8Array, within: readonly number[] = [0, 0, 1, 1]): Array<{ box: [number, number, number, number]; cells: number[] }> {
+  const seen = new Uint8Array(DETAIL_COLS * DETAIL_ROWS), out: Array<{ box: [number, number, number, number]; cells: number[] }> = [];
+  for (let i = 0; i < seen.length; i++) {
+    const x = (i % DETAIL_COLS + 0.5) / DETAIL_COLS, y = (Math.floor(i / DETAIL_COLS) + 0.5) / DETAIL_ROWS;
+    if (x < within[0]! || x > within[2]! || y < within[1]! || y > within[3]!) seen[i] = 1;
+  }
+  for (let start = 0; start < seen.length; start++) {
+    if (seen[start] || !hasDetail(cells, start)) continue;
+    const members: number[] = [], stack = [start];
+    seen[start] = 1;
+    let l = DETAIL_COLS, t = DETAIL_ROWS, r = -1, b = -1;
+    while (stack.length) {
+      const cell = stack.pop()!, x = cell % DETAIL_COLS, y = Math.floor(cell / DETAIL_COLS);
+      members.push(cell);
+      l = Math.min(l, x); t = Math.min(t, y); r = Math.max(r, x); b = Math.max(b, y);
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy, n = ny * DETAIL_COLS + nx;
+        if (nx < 0 || ny < 0 || nx >= DETAIL_COLS || ny >= DETAIL_ROWS || seen[n] || !hasDetail(cells, n)) continue;
+        seen[n] = 1;
+        stack.push(n);
+      }
+    }
+    out.push({ box: [l / DETAIL_COLS, t / DETAIL_ROWS, (r + 1) / DETAIL_COLS, (b + 1) / DETAIL_ROWS], cells: members });
+  }
+  return out;
+}
+
 export interface MotionSpan {
   mediaId: string;
   /** Timeline seconds. */

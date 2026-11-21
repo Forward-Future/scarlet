@@ -3,6 +3,12 @@
  * eyes, the nose tip and the mouth's corners), through ONNX Runtime in the audio helper (audioWorker.ts), which keeps
  * it loaded between requests. Its input is 640 by 640: a frame shrunk so its longer side is 640 sits in the top left
  * and the rest is black, as OpenCV pads it. On a 4K talking head (M-series CPU, 2026-11-15) a frame took about 6 ms.
+ *
+ * Where a face's eyes look, up and down: MediaPipe's Face Landmarker (Google, Apache-2.0) as ONNX, its 478-point face
+ * mesh on the face's box and the blendshape model on 146 of those points, whose eyeLookDown scores say how far the eyes
+ * look down. A presenter reading a laptop below the camera drops their lids more than their head, which the detector's
+ * five points can't see (2026-11-21: nose-to-mouth ratios read the same at the lens and at the laptop; eyeLookDown read
+ * 0.03-0.2 at the lens and 0.45-0.8 at the laptop on every frame of a 4-minute check, at 640 as at 1920 wide).
  */
 import { readFile } from "node:fs/promises";
 import { loadRuntime, withInference, type Sessions } from "./uhm.js";
@@ -15,6 +21,28 @@ export const FACE_MODEL = {
   size: 232589, sha256: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
 } satisfies PinnedModel;
 
+const EYES_REPO = "https://huggingface.co/t9749/mediapipe-face-landmarker-onnx/resolve/5c3cc92b90fee044d05504404ed52983b3fd8eab";
+/** The face mesh and the blendshape model, pinned by revision, size and checksum. */
+export const EYE_MODELS = {
+  mesh: { name: "face-mesh-3cdfb2d9.onnx", url: `${EYES_REPO}/face_landmarks_detector.onnx`,
+    size: 4921016, sha256: "3cdfb2d9d9b3cfea1420e399e4a580b020083f91440ca68d3682bd0f2626a2e3" },
+  blendshapes: { name: "face-blendshapes-3f2e7be8.onnx", url: `${EYES_REPO}/face_blendshapes.onnx`,
+    size: 1883829, sha256: "3f2e7be8748d33766f8078f7165ab1da72aad0c90956ad56b0046eca96134715" },
+} satisfies Record<string, PinnedModel>;
+/** The mesh's input side, and how far past the detector's box it looks each way: the mesh wants the face with room round it. */
+const MESH_SIDE = 256, MESH_ROOM = 1.5;
+/** A face narrower than this, in pixels of the frame looked at, is too small for its eyes to be read. */
+const MIN_EYES_WIDTH = 32;
+/** The mesh points the blendshape model reads, in order (MediaPipe's face_blendshapes_graph.cc). */
+const BLENDSHAPE_POINTS = [0, 1, 4, 5, 6, 7, 8, 10, 13, 14, 17, 21, 33, 37, 39, 40, 46, 52, 53, 54, 55, 58, 61, 63, 65, 66, 67, 70, 78, 80,
+  81, 82, 84, 87, 88, 91, 93, 95, 103, 105, 107, 109, 127, 132, 133, 136, 144, 145, 146, 148, 149, 150, 152, 153, 154, 155, 157, 158, 159,
+  160, 161, 162, 163, 168, 172, 173, 176, 178, 181, 185, 191, 195, 197, 234, 246, 249, 251, 263, 267, 269, 270, 276, 282, 283, 284, 285,
+  288, 291, 293, 295, 296, 297, 300, 308, 310, 311, 312, 314, 317, 318, 321, 323, 324, 332, 334, 336, 338, 356, 361, 362, 365, 373, 374,
+  375, 377, 378, 379, 380, 381, 382, 384, 385, 386, 387, 388, 389, 390, 397, 398, 400, 402, 405, 409, 415, 454, 466, 468, 469, 470, 471,
+  472, 473, 474, 475, 476, 477];
+/** eyeLookDownLeft and eyeLookDownRight among the 52 blendshapes. */
+const LOOK_DOWN = [11, 12] as const;
+
 /** The detector's input side. */
 export const FACE_SIDE = 640;
 /** A face the detector is less sure of than this is left out. OpenCV's default; small faces score 0.6-0.7. */
@@ -26,9 +54,10 @@ const STRIDES = [8, 16, 32] as const;
 /**
  * A face in a frame: its box as fractions of the frame (left, top, right, bottom), how sure the detector was (0..1),
  * roughly where it looks (degrees from facing the camera, positive toward the frame's right) and the point midway
- * between its eyes, as fractions of the frame.
+ * between its eyes, as fractions of the frame; and, where its eyes were read, how far they look down (0 level or up, 1
+ * fully down).
  */
-export interface Face { box: [number, number, number, number]; score: number; yaw: number; eyes: [number, number] }
+export interface Face { box: [number, number, number, number]; score: number; yaw: number; eyes: [number, number]; down?: number }
 
 /** How much `a` and `b` overlap, as a share of both together. */
 export function iou(a: readonly number[], b: readonly number[]) {
@@ -86,11 +115,45 @@ export function facesDiffer(a: readonly Face[], b: readonly Face[]) {
 }
 
 /**
+ * A face's box from a packed RGB frame `width` by `height`, grown by MESH_ROOM into a square and drawn MESH_SIDE a side,
+ * RGB from 0 to 1, as the mesh takes it. Outside the frame is black.
+ */
+export function meshInput(rgb: Uint8Array, width: number, height: number, box: readonly number[]) {
+  const cx = (box[0]! + box[2]!) / 2 * width, cy = (box[1]! + box[3]!) / 2 * height;
+  const side = Math.max((box[2]! - box[0]!) * width, (box[3]! - box[1]!) * height) * MESH_ROOM;
+  const input = new Float32Array(MESH_SIDE * MESH_SIDE * 3), step = side / MESH_SIDE;
+  for (let y = 0; y < MESH_SIDE; y++) {
+    const sy = Math.floor(cy - side / 2 + (y + 0.5) * step);
+    if (sy < 0 || sy >= height) continue;
+    for (let x = 0; x < MESH_SIDE; x++) {
+      const sx = Math.floor(cx - side / 2 + (x + 0.5) * step);
+      if (sx < 0 || sx >= width) continue;
+      const p = (sy * width + sx) * 3, q = (y * MESH_SIDE + x) * 3;
+      input[q] = rgb[p]! / 255; input[q + 1] = rgb[p + 1]! / 255; input[q + 2] = rgb[p + 2]! / 255;
+    }
+  }
+  return input;
+}
+
+/** The blendshape model's input from the mesh's 478 points (x, y, z each, in its input's pixels). */
+export function blendshapeInput(mesh: ArrayLike<number>) {
+  const points = new Float32Array(BLENDSHAPE_POINTS.length * 2);
+  BLENDSHAPE_POINTS.forEach((p, i) => { points[i * 2] = mesh[p * 3]!; points[i * 2 + 1] = mesh[p * 3 + 1]!; });
+  return points;
+}
+
+/** How far the eyes look down, from the 52 blendshape scores: the mean of the two eyes' eyeLookDown, to two places. */
+export function lookDown(scores: ArrayLike<number>) {
+  return Math.round((scores[LOOK_DOWN[0]]! + scores[LOOK_DOWN[1]]!) / 2 * 100) / 100;
+}
+
+/**
  * Find the faces in every frame in `frames` (packed RGB, `width` by `height`, one after another, each side at most
  * 640). Every other frame is looked at; a frame between two is looked at too when their faces differ, so faces that
  * hold still cost half and faces that move are followed at the full rate. A frame not looked at is null.
  */
-export async function runFaceWorker(frames: string, width: number, height: number, model: string, sessions?: Sessions): Promise<Array<Face[] | null>> {
+export async function runFaceWorker(frames: string, width: number, height: number, model: string, sessions?: Sessions,
+  eyes?: { mesh: string; blendshapes: string }): Promise<Array<Face[] | null>> {
   if (width > FACE_SIDE || height > FACE_SIDE) throw new Error(`Frames for the face detector are at most ${FACE_SIDE} pixels a side.`);
   const ort = loadRuntime();
   const all = await readFile(frames);
@@ -105,10 +168,23 @@ export async function runFaceWorker(frames: string, width: number, height: numbe
       input[plane + q] = rgb[p + 1]!;
       input[2 * plane + q] = rgb[p]!;
     }
-    return withInference(ort, model, async session => {
+    const found = await withInference(ort, model, async session => {
       const result = await session.run({ [session.inputNames[0]!]: new ort.Tensor("float32", input, [1, 3, FACE_SIDE, FACE_SIDE]) });
       return decodeFaces(result, width, height);
     }, { sessions, gpu: false });
+    if (!eyes) return found;
+    for (const face of found) {
+      if ((face.box[2] - face.box[0]) * width < MIN_EYES_WIDTH) continue;
+      const mesh = await withInference(ort, eyes.mesh, async session => {
+        const out = await session.run({ [session.inputNames[0]!]: new ort.Tensor("float32", meshInput(rgb, width, height, face.box), [1, MESH_SIDE, MESH_SIDE, 3]) });
+        return out[session.outputNames[0]!]!.data as Float32Array;
+      }, { sessions, gpu: false });
+      face.down = await withInference(ort, eyes.blendshapes, async session => {
+        const out = await session.run({ [session.inputNames[0]!]: new ort.Tensor("float32", blendshapeInput(mesh), [1, BLENDSHAPE_POINTS.length, 2]) });
+        return lookDown(out[session.outputNames[0]!]!.data as Float32Array);
+      }, { sessions, gpu: false });
+    }
+    return found;
   };
   const out: Array<Face[] | null> = Array.from({ length: count }, () => null);
   for (let f = 0; f < count; f += 2) out[f] = await detect(f);

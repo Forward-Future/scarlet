@@ -108,7 +108,7 @@ fn support_path(value: &str) -> Option<String> {
             "review-cut" | "review-decisions" | "threads" | "disposition" | "edits" | "edit-reviews" | "edit-flags" | "activity" |
             "contact-sheet" | "source-audio" | "sound-picture" | "picture-activity" | "dialogue-scan" | "dialogue-detections" |
             "dialogue-acoustic-words" | "dialogue-cuts" | "dialogue-checkpoints" | "restore" | "trash" | "cleanup" | "under-way" |
-            "attachments" | "graphics" | "templates" | "documents" | "read" | "shorts" | "shorts-plan" | "style-guide" | "speech" |
+            "attachments" | "graphics" | "templates" | "documents" | "read" | "style-guide" | "speech" |
             "decline" | "skills" | "skill" | "skill-edit" | "from-change" | "local-model" | "tool-diagnostic" | "health" | "ws" |
             ":id" | ":projectId" | ":taskId" | ":changeId" | ":mediaId" | ":attachmentId" | ":noteId" | ":version" | ":v" |
             ":renderId" | ":owner" | ":hostId" | ":index" | ":threadId" | ":skillId" | ":templateId" | ":learningId" | ":a" | ":b") {

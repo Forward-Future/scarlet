@@ -207,7 +207,7 @@ export async function ingestMedia(
   ctx: Ctx,
   project: Pick<Project, "id">,
   source: IngestSource,
-  opts: { name?: string; kind?: MediaKind; deferFormat?: boolean; by?: MediaAsset["provenance"]; uploadedBy?: string; transcription: Awaited<ReturnType<typeof importTranscriptionPolicy>>; checkAttempt?: () => void },
+  opts: { name?: string; kind?: MediaKind; deferFormat?: boolean; by?: MediaAsset["provenance"]; source?: MediaAsset["source"]; uploadedBy?: string; transcription: Awaited<ReturnType<typeof importTranscriptionPolicy>>; checkAttempt?: () => void },
 ): Promise<MediaWithStatus> {
   const projectSignal = ctx.projectSignal(project.id);
   const clientSignal = source.type === "url" ? source.signal : undefined;
@@ -304,6 +304,7 @@ export async function ingestMedia(
       hasAudio: probe.hasAudio,
       hasAlpha: probe.hasAlpha,
       provenance: opts.by,
+      source: opts.source,
       uploadedBy: opts.uploadedBy,
       ...(opts.transcription.provider && !opts.transcription.signal.aborted && {
         transcriptionOnImport: opts.transcription.provider,

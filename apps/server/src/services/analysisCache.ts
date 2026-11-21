@@ -4,14 +4,16 @@ export class AnalysisCache<T> {
   private readonly entries = new Map<string, { value: T; bytes: number }>();
   private readonly pending = new Map<string, { result: Promise<T>; abort: AbortController; users: number }>();
   private readonly waiting: Array<{ key: string; priority: boolean; resume(): void }> = [];
+  // Any priority but the agent's queues ahead here; the picture lane tells the editor's from the timeline's.
   private bytes = 0;
   private active = 0;
 
   constructor(private readonly sizeOf: (value: T) => number,
     private readonly maxBytes = 16 * 1024 * 1024, private readonly workers = 2) {}
 
-  get(key: string, decode: (signal: AbortSignal) => Promise<T>, options: { signal?: AbortSignal; priority?: boolean } = {}): Promise<T> {
-    const { signal, priority = false } = options;
+  get(key: string, decode: (signal: AbortSignal) => Promise<T>, options: { signal?: AbortSignal; priority?: boolean | "timeline" } = {}): Promise<T> {
+    const { signal } = options;
+    const priority = !!options.priority;
     if (signal?.aborted) return Promise.reject(signal.reason);
     const hit = this.entries.get(key);
     if (hit) {

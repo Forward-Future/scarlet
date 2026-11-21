@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { LocalWhisperModel, bundledWhisperCli, bundledWhisperGpu, bundledWhisperModel, supportsWhisperAvx2 } from "./localModel.js";
+import { BUNDLED_WHISPER_CPP, LocalWhisperModel, bundledWhisperCli, bundledWhisperGpu, bundledWhisperModel, supportsWhisperAvx2 } from "./localModel.js";
 
 const bytes = Buffer.from("test model");
 const model = { name: "test.bin", url: "https://example.invalid/test.bin", size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -190,4 +192,9 @@ it("keeps a shared model download alive when one transcription is cancelled", as
   writer.close();
   expect(await readFile(await remaining)).toEqual(bytes);
   expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it("keys bundled Whisper readings on the revision the desktop build compiles", () => {
+  const script = readFileSync(fileURLToPath(new URL("../../../desktop/scripts/build-whisper.mjs", import.meta.url)), "utf8");
+  expect(/const revision = "([0-9a-f]{40})"/.exec(script)?.[1]).toBe(BUNDLED_WHISPER_CPP);
 });

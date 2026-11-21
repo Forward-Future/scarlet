@@ -11,9 +11,9 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { apiKeyVars, stripVars } from "../detect.js";
 import { privateDirectory, writePrivateFile } from "../private-files.js";
-import { briefInput, COMPACTED, DEFAULT_STALL_MS, isQuestionTool, planEvent, type CodexFallbackReason, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
+import { briefInput, COMPACTED, DEFAULT_STALL_MS, isQuestionTool, planEvent, questionText, workspaceEnv, type CodexFallbackReason, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
 import { earlyResult, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
-import { addUsage, codexUsage, usageWithModel } from "./usage.js";
+import { addUsage, codexUsage, tokenCount, usageWithModel } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
 
 export interface CodexParseState {
@@ -121,15 +121,19 @@ function parseCodexEvent(msg: Record<string, unknown>, st: CodexParseState): Run
           break;
         case "mcp_tool_call": {
           const name = `${item.server ?? "mcp"}.${item.tool ?? "?"}`;
-          if (isQuestionTool(item.tool)) {
-            const text = String((item.arguments as { text?: unknown })?.text ?? briefInput(item.arguments));
-            if (type === "item.started" || (!st.question && completed)) {
+          const text = isQuestionTool(item.tool) ? questionText(item.arguments) : undefined;
+          if (text !== undefined) {
+            // Held from the start, should the CLI stop before its result, and said once the engine has it.
+            if (!completed) st.question = text;
+            else if (item.status === "failed" || item.error) {
+              // A question Scarlet refused was never asked: the model hears why and carries on, so the run does too.
+              st.question = undefined;
+              events.push({ type: "error", text: `${name} failed: ${briefInput(item.error ?? item.result, 400)}` });
+            } else {
               st.question = text;
-              events.push({ type: "question", text, data: { tool: name, itemId: item.id } });
-            }
-            if (completed) {
-              st.questionPosted = item.status !== "failed" && !item.error;
+              st.questionPosted = true;
               st.shouldStop = true;
+              events.push({ type: "question", text, data: { tool: name, itemId: item.id } });
             }
           } else if (type === "item.started") {
             events.push({ type: "tool", text: `${name} ${briefInput(item.arguments)}`.trim(), data: { tool: name, input: item.arguments, itemId: item.id } });
@@ -214,7 +218,7 @@ export interface CodexCommand {
 }
 
 export function buildCodexCommand(
-  opts: Pick<RunAgentOptions, "model" | "effort" | "fast" | "serviceTier" | "systemPrompt" | "instruction" | "mcp" | "cwd" | "plan">,
+  opts: Pick<RunAgentOptions, "model" | "effort" | "fast" | "serviceTier" | "systemPrompt" | "instruction" | "mcp" | "cwd" | "plan" | "workspace">,
   bin: string,
   tmpDir: string,
 ): CodexCommand {
@@ -223,7 +227,9 @@ export function buildCodexCommand(
   return {
     file: executable ?? bin,
     args: ["exec", "--json", "--skip-git-repo-check", "--cd", opts.cwd, "--strict-config", "--ignore-user-config", "--ignore-rules", "--ephemeral",
-      ...codexConfig(opts, executable), "--output-last-message", lastMessagePath, ...(opts.model ? ["--model", opts.model] : []), ...codexModelConfig(opts), "-"],
+      // The task folder is the project: an AGENTS.md in a git repository around it (a work root inside a checkout)
+      // would otherwise load beside Scarlet's, as App Server is already told.
+      ...codexConfig(opts, executable), "-c", "project_root_markers=[]", "--output-last-message", lastMessagePath, ...(opts.model ? ["--model", opts.model] : []), ...codexModelConfig(opts), "-"],
     stdin: opts.instruction,
     files: { [join(opts.cwd, "AGENTS.md")]: opts.systemPrompt },
     lastMessagePath,
@@ -240,23 +246,32 @@ function codexExecutable(bin: string): string | undefined {
   return executable;
 }
 
-function codexConfig(opts: Pick<RunAgentOptions, "mcp" | "plan">, executable: string | undefined): string[] {
+/** Codex features a side check runs without. A request's agent keeps its shell and its look at pictures it made. */
+const CODEX_OFF = ["computer_use", "multi_agent", "plugins", "apps", "hooks"];
+
+function codexConfig(opts: Pick<RunAgentOptions, "mcp" | "plan" | "workspace">, executable: string | undefined): string[] {
   // Forward slashes keep the TOML readable and work for node on Windows.
   const toToml = (p: string) => p.replace(/\\/g, "/");
+  const ws = opts.workspace;
+  // The programs the shell's links point at: readable, never writable. Everything else outside the task folder stays closed.
+  const reads = [...(executable ? [executable] : []), ...(ws?.readDirs ?? [])].map((p) => `,${tomlString(toToml(p))}="read"`).join("");
   return [
     // The legacy Windows sandboxes cannot enforce this profile's denied root reads.
     ...(process.platform === "win32" ? ["-c", 'windows.sandbox="mxc"'] : []),
-    ...["shell_tool", "view_image", "computer_use", "multi_agent", "plugins", "apps", "hooks"].flatMap((feature) => ["--disable", feature]),
+    ...(ws ? CODEX_OFF : ["shell_tool", "view_image", ...CODEX_OFF]).flatMap((feature) => ["--disable", feature]),
     "-c", 'approval_policy="never"',
-    "-c", 'web_search="disabled"',
+    // A request's agent searches the live web; a side check has none.
+    "-c", `web_search=${ws ? '"live"' : '"disabled"'}`,
     // Codex otherwise reads only the first 32 KiB of AGENTS.md. The prompt lists every clip ahead of the task, the
     // editor's notes, their earlier answers and their skills, so on a long timeline those would be cut off.
     "-c", "project_doc_max_bytes=4194304",
     // Codex's own to-do tool, which it reports as `todo_list` items. A Codex without this key refuses it under --strict-config.
     ...(opts.plan ? ["-c", "tools.update_plan.enabled=true"] : []),
     "-c", 'default_permissions="scarlet"',
-    "-c", `permissions.scarlet.filesystem={":root"="deny",":minimal"="read",":workspace_roots"={"."="write"}${executable ? `,${tomlString(executable)}="read"` : ""}}`,
-    "-c", 'permissions.scarlet.network.enabled=false',
+    "-c", `permissions.scarlet.filesystem={":root"="deny",":minimal"="read",":workspace_roots"={"."="write"}${reads}}`,
+    // A request's shell reaches the web, for the pages and clips it brings in. Scarlet's token stays out of the shell
+    // (`shell_environment_policy` below), so the engine is no nearer than before.
+    "-c", `permissions.scarlet.network.enabled=${ws ? "true" : "false"}`,
     "-c", 'mcp_servers.scarlet.default_tools_approval_mode="approve"',
     "-c", "mcp_servers.scarlet.required=true",
     "-c", "mcp_servers.scarlet.startup_timeout_sec=60",
@@ -338,8 +353,33 @@ function serverItem(item: Record<string, unknown>): CodexItem {
   };
 }
 
-function serverUsage(value: unknown, model?: string): AgentUsage | undefined {
-  const total = object(object(value)?.total);
+const BREAKDOWN = ["inputTokens", "cachedInputTokens", "cacheWriteInputTokens", "outputTokens", "reasoningOutputTokens"] as const;
+type Breakdown = Record<typeof BREAKDOWN[number], number>;
+
+/** One of App Server's token counts (`total`, the thread's, or `last`, the latest model call's). */
+function breakdown(value: unknown): Breakdown | undefined {
+  const counts = object(value);
+  return counts && Object.fromEntries(BREAKDOWN.map(key => [key, tokenCount(counts[key])])) as Breakdown;
+}
+
+function minus(a: Breakdown, b: Breakdown | undefined): Breakdown {
+  return Object.fromEntries(BREAKDOWN.map(key => [key, Math.max(0, a[key] - (b?.[key] ?? 0))])) as Breakdown;
+}
+
+/**
+ * What a thread resumed in this run had counted before it: its total on the first update, less the call that update
+ * is about. The engine adds up each claim's report, so the earlier attempt's tokens must not count again here. Zero
+ * when Codex starts a resumed thread's count afresh.
+ */
+function resumedBaseline(value: unknown): Breakdown | undefined {
+  const total = breakdown(object(value)?.total);
+  return total && minus(total, breakdown(object(value)?.last));
+}
+
+/** The thread's tokens as App Server counts them, less what it had counted before this run. */
+function serverUsage(value: unknown, model?: string, baseline?: Breakdown): AgentUsage | undefined {
+  const all = breakdown(object(value)?.total);
+  const total = all && minus(all, baseline);
   return total && codexUsage({ input_tokens: total.inputTokens, cached_input_tokens: total.cachedInputTokens,
     cache_write_input_tokens: total.cacheWriteInputTokens, output_tokens: total.outputTokens, reasoning_output_tokens: total.reasoningOutputTokens }, model);
 }
@@ -364,7 +404,7 @@ function serverError(value: unknown) {
 
 async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin: string, home: string): Promise<RunAgentResult | undefined> {
   const executable = codexExecutable(bin);
-  const args = ["app-server", "--strict-config", ...codexConfig({ mcp: opts.mcp }, executable),
+  const args = ["app-server", "--strict-config", ...codexConfig({ mcp: opts.mcp, workspace: opts.workspace }, executable),
     "-c", "project_root_markers=[]", "-c", 'cli_auth_credentials_store="file"',
     "-c", `tools.update_plan.enabled=${!!opts.plan}`, "-c", "tools.experimental_request_user_input.enabled=false", "--disable", "goals",
     ...codexModelConfig({ effort: opts.effort })];
@@ -399,12 +439,14 @@ async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin
   };
 
   let compactionItems = false;
+  let baseline: Breakdown | undefined;
   const notify = (method: string, params: Record<string, unknown>) => {
     const eventTurn = string(params.turnId) ?? string(object(params.turn)?.id);
     if (completed || !eventTurn || eventTurn !== turnId) return;
     switch (method) {
       case "thread/tokenUsage/updated": {
-        const usage = serverUsage(params.tokenUsage, model);
+        if (opts.resumeSession) baseline ??= resumedBaseline(params.tokenUsage);
+        const usage = serverUsage(params.tokenUsage, model, baseline);
         if (!usage || JSON.stringify(usage) === JSON.stringify(state.usage)) break;
         state.usage = usage;
         opts.onUsage?.(usage);
@@ -546,7 +588,8 @@ async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin
 }
 
 export async function runCodex(opts: RunAgentOptions): Promise<RunAgentResult> {
-  const env = { ...(opts.env ?? process.env), ...opts.mcp.env };
+  // Scarlet's server reads its variables from Codex's; the shell never gets them (`shell_environment_policy`).
+  const env = { ...workspaceEnv(opts.env ?? process.env, opts.workspace), ...opts.mcp.env };
   const bin = await resolveCli("codex", opts.bin, env);
   await writePrivateFile(join(opts.cwd, "AGENTS.md"), opts.systemPrompt);
   const isolation = await isolatedCodexHome(opts.cwd, env).catch(() => ({ reason: "isolation_unavailable" as const }));

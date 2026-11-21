@@ -2,6 +2,9 @@ import { parseMultipartRequest } from "@remix-run/multipart-parser/future";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
+import { capturePage, findChrome } from "@scarlet/render";
 import { Hono } from "hono";
 import { z } from "zod/v3";
 import { GraphicRenderRequest, SaveStyleGuideRequest } from "@scarlet/shared";
@@ -13,6 +16,39 @@ import { requestAttempt, requireLocalPauseTarget, requireProjectEditAttempt } fr
 import { assetPath, findAttachment, mimeFor, graphicSource, MAX_ATTACHMENT_BYTES, MAX_DOCUMENT_PAGES, readDocument, removeStyleGuide, renderProjectGraphic,
   saveAttachment, saveStyleGuide } from "../services/graphics.js";
 import { jsonBody, multipartError, requireProject, requireProjectHeader } from "./util.js";
+
+const WebCaptureRequest = z.object({
+  url: z.string().trim().max(4096),
+  width: z.number().int().min(320).max(3840).optional(),
+  height: z.number().int().min(240).max(4000).optional(),
+  fullPage: z.boolean().optional(),
+});
+
+/** Whether an address is the machine itself, its local network or a link-local one, as text or as a resolved IP. */
+function privateAddress(ip: string): boolean {
+  if (isIP(ip) === 6) {
+    const v6 = ip.toLowerCase();
+    if (v6 === "::1" || v6 === "::" || v6.startsWith("fe80:") || v6.startsWith("fc") || v6.startsWith("fd")) return true;
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(v6);
+    return mapped ? privateAddress(mapped[1]!) : false;
+  }
+  const [a, b] = ip.split(".").map(Number) as [number, number];
+  return a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+}
+
+/** The address as Chrome should open it: http or https, on a host that resolves only to public addresses. */
+async function publicWebAddress(raw: string): Promise<string> {
+  let url: URL;
+  try { url = new URL(raw); } catch { throw badRequest("bad_url", "Give the page's full web address, starting with https://."); }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw badRequest("bad_url", "Only pages on the web (http or https) can be captured.");
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) throw badRequest("bad_url", "Only public pages on the web can be captured.");
+  const addresses = isIP(host) ? [host] : await lookup(host, { all: true }).then(all => all.map(a => a.address), () => {
+    throw badRequest("bad_url", `${host} doesn't resolve to an address.`);
+  });
+  if (addresses.some(privateAddress)) throw badRequest("bad_url", "Only public pages on the web can be captured.");
+  return url.href;
+}
 
 export function graphicRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
@@ -110,8 +146,28 @@ export function graphicRoutes(ctx: Ctx) {
     }
     if (!options) throw badRequest("missing_options", "multipart field `options` is required");
     const signal = AbortSignal.any([ctx.projectSignal(project.id), c.req.raw.signal]);
-    const result = await ctx.track(renderProjectGraphic(ctx, project, { options, html, assets }, c.var.user, check, signal), project.id);
+    const result = await ctx.track(renderProjectGraphic(ctx, project, { options, html, assets, taskId: attempt?.taskId || undefined }, c.var.user, check, signal), project.id);
     return c.json(result, result.media ? 201 : 200);
+  });
+
+  // -- pages from the web ----------------------------------------------------
+
+  // A page on the web drawn in Scarlet's own Chrome, outside the agent's sandbox, where Chrome can't start or reach the
+  // web. Only public web addresses: the browser is the engine's, so the engine's own address and the machine's network
+  // stay out of reach, and so does every file.
+  r.post("/projects/:id/web-captures", async (c) => {
+    const project = requireProjectHeader(ctx, c.req.param("id"));
+    const body = await jsonBody(c, WebCaptureRequest);
+    const url = await publicWebAddress(body.url);
+    const signal = AbortSignal.any([ctx.projectSignal(project.id), c.req.raw.signal]);
+    const shot = await ctx.track(capturePage({ url, width: body.width ?? 1280, height: body.height ?? 800, fullPage: body.fullPage,
+      chromePath: findChrome(undefined, ctx.options.env ?? process.env), signal }), project.id).catch((error: Error) => {
+      if (error.name === "AbortError") throw error;
+      throw new HttpError(502, "capture_failed", error.message);
+    });
+    // A redirect to the machine's own network leaves nothing behind.
+    await publicWebAddress(shot.url);
+    return c.json({ png: shot.png.toString("base64"), title: shot.title, url: shot.url, text: shot.text, width: shot.width, height: shot.height, headings: shot.headings });
   });
 
   r.get("/projects/:id/graphics/:mediaId", async (c) => {

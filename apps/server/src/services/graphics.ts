@@ -256,6 +256,8 @@ export function defaultCheckTimes(duration: number, fps: number) {
 }
 
 export interface GraphicInput {
+  /** The run that asked for it. */
+  taskId?: string;
   options: GraphicRenderRequest;
   html?: string;
   assets: Map<string, Buffer>;
@@ -322,7 +324,7 @@ export async function renderProjectGraphic(ctx: Ctx, project: Project, input: Gr
     const media = await ingestMedia(ctx, project, { type: "upload", path: movie, hash }, {
       name: `${name}.mov`.replace(/\.mov\.mov$/, ".mov"), kind: "graphic", checkAttempt,
       transcription: { provider: undefined, revision: 0, signal },
-      by: { by: "agent", name: o.provenance?.name ?? user?.name, model: o.provenance?.model, prompt: o.provenance?.prompt, createdAt: now() },
+      by: { by: "agent", name: o.provenance?.name ?? user?.name, model: o.provenance?.model, prompt: o.provenance?.prompt, taskId: input.taskId, createdAt: now() },
       uploadedBy: user?.id,
     });
     const graphic = { source };

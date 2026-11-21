@@ -6,7 +6,7 @@
  */
 import { dialogueCommand, AGENT_LABEL, beginRevision, buildThreads, restoredReviewState, threadRevision, threadTimeline, countReviewDecisions, fullRenderContext, taskNeedsTranscripts, taskRecoveryAction, splitAgentTarget, ScarletApiError, SkillSlug, isAsideTask, isProjectEditTask, isSkillEdit, ReviseLearningRequest, queueAdmission, sameRun } from "@scarlet/shared";
 import { appliedCutReview, appliedReviewChange, applyReviewRemovals, makeStagedCutMapper, contentHash, planCutReview, reviewedTimeline } from "@scarlet/timeline";
-import type { ApproveLearningRequest, EditSkillRequest, Learning, MakeShortsRequest, RunChoice, UsageGroupBy, UsageResponse, UsageTotals } from "@scarlet/shared";
+import type { ApproveLearningRequest, EditSkillRequest, Learning, RunChoice, UsageGroupBy, UsageResponse, UsageTotals } from "@scarlet/shared";
 import type {
   AgentHost,
   AgentId,
@@ -269,33 +269,12 @@ export class MockClient implements ScarletApi {
     return { completedThreads };
   }
 
-  /** As the engine does, without copying files: each short is a project on the long video's footage and finished edit. */
-  async makeShorts(id: string, body: MakeShortsRequest): Promise<{ projects: Project[]; task: Task }> {
-    this.requireAuth();
-    const source = this.projectById(id);
-    const dims = ASPECT_PRESETS[body.aspect]!;
-    const projects: Project[] = [];
-    for (let index = 1; index <= body.count; index++) {
-      const { project } = await this.createProject({ name: `Short ${index} of ${body.count}`, settings: { ...source.settings, ...dims, aspect: body.aspect } });
-      Object.assign(project, { head: source.head, media: source.media, source: { projectId: source.id, name: source.name, notice: true } });
-      this.db.media[project.id] = this.db.media[source.id] ?? [];
-      this.db.versions[project.id] = (this.db.versions[source.id] ?? []).filter(v => v.version === source.head);
-      Object.assign(this.db.summaries[project.id]!, { head: source.head, mediaCount: source.media.length, source: project.source });
-      projects.push(project);
-    }
-    const task = this.makeTask(projects[0]!.id, { kind: "edit", agent: body.agent, model: body.model, effort: body.effort, serviceTier: body.serviceTier,
-      instruction: `Make ${body.count === 1 ? "a vertical short" : `up to ${body.count} vertical shorts, each`} under ${body.maxSeconds} s${body.captions ? "" : ", without captions"}.`,
-      context: { short: { index: 1, count: body.count, sourceProjectId: source.id, sourceName: source.name, sourceVersion: source.head ?? "", aspect: body.aspect,
-        maxSeconds: body.maxSeconds, captions: body.captions, projectIds: projects.map(p => p.id) } } });
-    return this.latency({ projects, task }, 400);
-  }
   async updateProject(id: string, body: Record<string, unknown>): Promise<{ project: Project }> {
     this.requireAuth();
     const project = this.projectById(id);
     const s = this.summary(id);
     const expected = body.expectedFormat as Pick<Project, "head" | "settings"> | undefined;
     if (expected && (project.head !== expected.head || JSON.stringify(project.settings) !== JSON.stringify(expected.settings))) return { project };
-    if (body.sourceNotice === false && project.source) project.source = { ...project.source, notice: undefined };
     if (typeof body.mediaPaused === "boolean") project.mediaPaused = body.mediaPaused;
     if (typeof body.archived === "boolean") {
       project.archived = body.archived;

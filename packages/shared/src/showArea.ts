@@ -83,15 +83,35 @@ export interface HeldArea extends ShowArea {
   holds: Array<[number, number]>;
 }
 export interface ShowAreas { areas: HeldArea[]; unset: Array<[number, number]> }
+/** Where a recording's picture was read for changes, and the source seconds where it changes at once. */
+export interface PictureChanges { read: Array<[number, number]>; at: number[] }
+/** The share of the picture that must change at once to end a one-edge box's hold: a switch of app, not a scroll. */
+export const AREA_PICTURE_CHANGE = 0.25;
+
+/** The stretch around `at` in which the picture was read and doesn't change at once, if it was read there. */
+function steadyAround(changes: PictureChanges, at: number): [number, number] | undefined {
+  const read = changes.read.find(([from, to]) => at >= from - 1e-6 && at < to + 1e-6);
+  if (!read) return undefined;
+  let from = read[0], to = read[1];
+  for (const change of changes.at) {
+    if (change <= at && change > from) from = change;
+    if (change > at && change < to) to = change;
+  }
+  return [from, to];
+}
 
 /**
  * Which area holds on each frame. A frame goes to a box whose needed edges are all lines there, and of several the one
  * given nearest in time: two windows can share edges, and a browser behind an app keeps most of its own in view, so the
- * surest fit is often the wrong window (one page's box took 790 s of an app's time that way). A box with fewer than two
- * edges to find again holds only on its own frame, unless it is the whole picture, which holds wherever no other does.
+ * surest fit is often the wrong window (one page's box took 790 s of an app's time that way). A box with one edge to
+ * find again, such as the whole screen but its menu bar, can't tell one app from another by that line alone, which is on
+ * every frame: it holds for as long as its line is there and the picture doesn't change at once (`changes`, read from
+ * the recording), so a switch to another app ends it. Its demo otherwise played as 5 s pieces of screen between the
+ * camera, a box asked for each (2026-11-21). With no edges to find, or before the picture has been read, a box holds
+ * only on its own frame, unless it is the whole picture, which holds wherever no other does.
  */
 export function assignAreas(frames: number, duration: number, areas: readonly ShowArea[], fitsAt: (frame: number, area: AreaBox) => Record<AreaSide, number>,
-  step = SHOW_EDGE_STEP): ShowAreas {
+  step = SHOW_EDGE_STEP, changes?: PictureChanges): ShowAreas {
   const held: HeldArea[] = areas.map(a => ({ ...a, holds: [] }));
   const needs = areas.map(a => AREA_SIDES.filter((side, i) => !a.noLine.includes(side) && !onFrameEdge(side, a.area[i]!)));
   const unset: Array<[number, number]> = [];
@@ -100,27 +120,38 @@ export function assignAreas(frames: number, duration: number, areas: readonly Sh
     if (last && Math.abs(last[1] - from) < 1e-6) last[1] = to;
     else list.push([from, to]);
   };
+  const steady = areas.map((a, index) => needs[index]!.length === 1 && changes ? steadyAround(changes, a.at) : undefined);
   for (let i = 0; i < frames; i++) {
     // The last frame read stands for the rest of the recording: a clip from its final seconds had no area to be inside
     // and none it could be given, so every save that framed it was refused (2026-11-17).
-    const second = i * step, from = Math.max(0, second - step / 2), to = i === frames - 1 ? duration : Math.min(duration, second + step / 2);
-    if (to <= from) continue;
-    let best: { index: number; fit: number; near: number } | undefined, whole: number | undefined;
-    areas.forEach((a, index) => {
-      const near = Math.abs(a.at - second);
-      if (wholePicture(a.area)) { if (whole === undefined || near < Math.abs(areas[whole]!.at - second)) whole = index; return; }
-      if (needs[index]!.length < 2) { if (near <= step / 2 && !best) best = { index, fit: 0, near }; return; }
-      const fits = fitsAt(i, a.area), fit = Math.min(...needs[index]!.map(side => fits[side]));
-      if (fit < AREA_HOLDS_AT) return;
-      if (!best || near < best.near || (near === best.near && fit > best.fit)) best = { index, fit, near };
-    });
-    // A box holds on the frame it was given on, where the model looked, even when the edges read on this step's frame
-    // don't fit it: a window that moves a little within five seconds left its own second unset, and each save asked
-    // about the same frame again, four times (2026-11-18).
-    const own = best ? undefined : areas.findIndex(a => !wholePicture(a.area) && a.at >= from - 1e-6 && a.at < to + 1e-6);
-    const index = best?.index ?? (own !== undefined && own >= 0 ? own : whole);
-    if (index === undefined) push(unset, from, to);
-    else push(held[index]!.holds, from, to);
+    const second = i * step, start = Math.max(0, second - step / 2), end = i === frames - 1 ? duration : Math.min(duration, second + step / 2);
+    if (end <= start) continue;
+    // A step the picture changes in at once is two pictures: each part goes to its own area.
+    const cuts = (changes?.at ?? []).filter(at => at > start + 1e-6 && at < end - 1e-6);
+    const bounds = [start, ...cuts, end];
+    for (let part = 0; part + 1 < bounds.length; part++) {
+      const from = bounds[part]!, to = bounds[part + 1]!;
+      let best: { index: number; fit: number; near: number } | undefined, whole: number | undefined;
+      areas.forEach((a, index) => {
+        const near = Math.abs(a.at - second);
+        if (wholePicture(a.area)) { if (whole === undefined || near < Math.abs(areas[whole]!.at - second)) whole = index; return; }
+        const run = steady[index];
+        if (needs[index]!.length < 2 && !(run && from >= run[0] - 1e-6 && to <= run[1] + 1e-6)) {
+          if (near <= step / 2 && !best && bounds.length === 2) best = { index, fit: 0, near };
+          return;
+        }
+        const fits = fitsAt(i, a.area), fit = Math.min(...needs[index]!.map(side => fits[side]));
+        if (fit < AREA_HOLDS_AT) return;
+        if (!best || near < best.near || (near === best.near && fit > best.fit)) best = { index, fit, near };
+      });
+      // A box holds on the frame it was given on, where the model looked, even when the edges read on this step's frame
+      // don't fit it: a window that moves a little within five seconds left its own second unset, and each save asked
+      // about the same frame again, four times (2026-11-18).
+      const own = best ? undefined : areas.findIndex(a => !wholePicture(a.area) && a.at >= from - 1e-6 && a.at < to + 1e-6);
+      const index = best?.index ?? (own !== undefined && own >= 0 ? own : whole);
+      if (index === undefined) push(unset, from, to);
+      else push(held[index]!.holds, from, to);
+    }
   }
   return { areas: held, unset };
 }

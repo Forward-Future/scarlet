@@ -212,6 +212,37 @@ describe("reviewing one thread on the working interview timeline", () => {
     expect(flagged).toHaveLength(1);
   });
 
+  it("reads a later save made of steps that rolled a cut's join as that cut, on one track or on all", () => {
+    // A pass cut a false start, then listened back and saved again with steps that rolled the join 0.3 s on: its row
+    // “Extend end of ‘subscription.’” showed beside the cut, which stayed flagged and played its old clipped join (2026-11-20).
+    const keep = (version: string, media: string, ...ranges: Array<[number, number]>) =>
+      ({ ...timelineFromKeepRanges("project", media, ranges.map(([start, end]) => ({ start, end }))), version });
+    const camera = { base: keep("base", "camera", [0, 3468]), v1: keep("v1", "camera", [0, 99], [101, 3468]), v2: keep("v2", "camera", [0, 99.3], [101.3, 3468]) };
+    const all = ["base", "v1", "v2"].map((version, i, list) => ({ version, parent: list[i - 1] ?? null }));
+    const pass = { ...change, id: "batch", fromVersion: "base", toVersion: "v1", ops: [{ op: "rippleDelete" as const, start: 99, end: 101 }],
+      timelineEdits: [{ label: "Cut the false start", range: { start: 99, end: 99 }, check: "Tight outgoing edge" }] };
+    const roll = { ...change, id: "roll", fromVersion: "v1", toVersion: "v2", createdAt: "2026-01-02T00:00:00Z",
+      ops: [{ op: "updateClip" as const, clipId: camera.v1.tracks[0]!.clips[0]!.id, patch: { sourceOut: 99.3 } }],
+      leftOut: { version: "base", joins: [{ at: 99.3, removed: { start: 99.3, end: 101.3 } }] },
+      timelineEdits: [{ label: "Extend end of the word", range: { start: 99.3, end: 99.3 }, summary: "Let the word finish." }] };
+    const one = threadTimeline(thread([pass, roll]), camera.v2, all, v => camera[v as keyof typeof camera], 30);
+    expect(one.map(e => [e.changeId, e.label, e.kind, e.at, e.check, e.summary])).toEqual([["batch", "Cut the false start", "cut", 99.3, "Tight outgoing edge", "Let the word finish."]]);
+    expect(one[0]!.beforeCut!.removed.start).toBeCloseTo(99.3);
+    expect(one[0]!.beforeCut!.removed.end).toBeCloseTo(101.3);
+
+    // A screen recording above the camera kept its join where the cut put it, and the camera's rolled a frame earlier:
+    // the join named is the camera's, where the screen plays straight through, and the screen's says what the cut removes.
+    const frame = 1 / 30;
+    const both = (version: string, screen: Array<[number, number]>, cam: Array<[number, number]>) =>
+      ({ ...keep(version, "camera", ...cam), tracks: [{ ...keep(version, "screen", ...screen).tracks[0]!, id: "screen" }, ...keep(version, "camera", ...cam).tracks] });
+    const cut: Array<[number, number]> = [[0, 99], [101, 3468]];
+    const layered = { base: both("base", [[0, 3468]], [[0, 3468]]), v1: both("v1", cut, cut), v2: both("v2", cut, [[0, 99 - frame], [101 - frame, 3468]]) };
+    const nudge = { ...roll, leftOut: { version: "base", joins: [{ at: 99 - frame, removed: { start: 99 - frame, end: 101 - frame } }] },
+      timelineEdits: [{ label: "Clean the clipped b", range: { start: 98.97, end: 98.97 }, summary: "Rolled the join back a frame." }] };
+    const two = threadTimeline(thread([pass, nudge]), layered.v2, all, v => layered[v as keyof typeof layered], 30);
+    expect(two.map(e => [e.changeId, e.label, e.check])).toEqual([["batch", "Cut the false start", "Tight outgoing edge"]]);
+  });
+
   it("reads a later save that only moved a cut's join as that cut, revised", () => {
     const keep = (version: string, ...ranges: Array<[number, number]>) =>
       ({ ...timelineFromKeepRanges("project", "interview", ranges.map(([start, end]) => ({ start, end }))), version });
@@ -265,12 +296,51 @@ describe("reviewing one thread on the working interview timeline", () => {
     expect(alone[0]!.range.end).toBeCloseTo(99.2);
 
     // A save of the whole video that took footage out somewhere else, with a punch-in named on the cut's join, didn't
-    // move that join: the punch-in is an edit of its own, and the cut keeps its own sentence.
+    // move that join: the punch-in is an edit of its own, and the cut keeps its own sentence. What it took out
+    // elsewhere and named nothing for is a cut, by what it is.
     const elsewhere = keep("v2", [0, 99], [101, 200], [210, 3468]);
     const punch = save("punch", "v1", "v2", [{ label: "Punch in", range: { start: 99, end: 99 }, summary: "Punched in on the answer." }]);
     const named = { ...pass, timelineEdits: [{ label: "Remove the delivery aside", range: { start: 99, end: 99 }, summary: "Took out the aside." }] };
     const both = threadTimeline(thread([named, punch]), elsewhere, all.slice(0, 3), v => v === "v2" ? elsewhere : read(v), 30);
-    expect(both.map(e => [e.changeId, e.summary])).toEqual([["batch", "Took out the aside."], ["punch", "Punched in on the answer."]]);
+    expect(both.map(e => [e.changeId, e.label, e.summary])).toEqual([["batch", "Remove the delivery aside", "Took out the aside."],
+      ["punch", "Punch in", "Punched in on the answer."], ["punch", "Cut", undefined]]);
+  });
+
+  it("lists every stretch a save of the whole video took out, the ones Scarlet named no edit for as cuts", () => {
+    // A first pass rewrote the timeline to tighten the dialogue: it named one edit and took footage out in three places
+    // (2026-11-16: ten edits named for some two hundred joins, and the rest could not be opened).
+    const keep = (version: string, ...ranges: Array<[number, number]>) =>
+      ({ ...timelineFromKeepRanges("project", "interview", ranges.map(([start, end]) => ({ start, end }))), version });
+    const versions: Record<string, ReturnType<typeof keep>> = {
+      base: keep("base", [0, 3468]),
+      v1: keep("v1", [0, 99], [101, 200], [210, 300], [300.5, 3468]),
+      // A second save, naming nothing there, took 0.3 s more out before the first of those joins and cut a breath at 500.
+      v2: keep("v2", [0, 98.7], [101, 200], [210, 300], [300.5, 512.5], [513, 3468]),
+    };
+    const read = (version: string) => versions[version];
+    const all = ["base", "v1", "v2"].map((version, i, list) => ({ version, parent: list[i - 1] ?? null }));
+    const save = (id: string, fromVersion: string, toVersion: string, timelineEdits: NonNullable<Change["timelineEdits"]>) =>
+      ({ ...change, id, fromVersion, toVersion, createdAt: `2026-01-0${toVersion[1]}T00:00:00Z`, timelineEdits });
+    const pass = save("batch", "base", "v1", [{ label: "Tighten the watch demo", range: { start: 180, end: 205 }, summary: "Cut the wait for the page." }]);
+    const edits = threadTimeline(thread([pass]), versions.v1!, all, read, 30);
+    expect(edits.map(e => [e.label, e.kind, e.at, e.beforeCut?.removed])).toEqual([
+      ["Cut", "cut", 99, { start: 99, end: 101 }],
+      // The join inside the stretch Scarlet named is that edit's, and is counted once.
+      ["Tighten the watch demo", "cut", 198, { start: 200, end: 210 }],
+      ["Cut", "cut", 288, { start: 300, end: 300.5 }]]);
+    expect(edits.every(e => e.beforeCut?.version === "base")).toBe(true);
+    expect(new Set(edits.map(e => e.spot)).size).toBe(edits.length);
+    const out = edits.reduce((sum, e) => sum + (e.beforeCut!.removed.end - e.beforeCut!.removed.start), 0);
+    expect(out).toBeCloseTo(timelineDuration(versions.base!) - timelineDuration(versions.v1!));
+
+    // The second save's unnamed trim at the first join is that cut, moved; its new cut is a row of its own.
+    const tidy = save("tidy", "v1", "v2", [{ label: "Hold the result", range: { start: 700, end: 705 } }]);
+    const after = threadTimeline(thread([pass, tidy]), versions.v2!, all, read, 30);
+    expect(after.map(e => [e.changeId, e.label])).toEqual([["batch", "Cut"], ["batch", "Tighten the watch demo"],
+      ["batch", "Cut"], ["tidy", "Cut"], ["tidy", "Hold the result"]]);
+    expect(after.filter(e => e.label === "Cut").every(e => e.kind === "cut" && e.beforeCut)).toBe(true);
+    expect(after[0]!.beforeCut!.removed.start).toBeCloseTo(98.7);
+    expect(after[0]!.beforeCut!.removed.end).toBeCloseTo(101);
   });
 
   it("shows the footage a change left out as it built the video from the pieces to keep, each stretch a cut", () => {

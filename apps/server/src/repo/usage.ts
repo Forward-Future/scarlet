@@ -81,7 +81,10 @@ function toTotals(r: TotalsRow | undefined, prices?: PriceLookup): UsageTotals {
 export class UsageRepo {
   constructor(private readonly db: Db, private readonly prices?: PriceLookup) {}
 
-  /** Record one run. A repeated report for the same claim replaces the earlier one. */
+  /**
+   * Record one run. A repeated report for the same claim replaces the earlier one when its total is at least as large:
+   * reports are cumulative, so a snapshot that arrives after the final total is older, and is dropped.
+   */
   record(task: Task, usage: AgentUsage, runStartedAt?: string): void {
     this.db.prepare(`INSERT INTO task_usage (id, task_id, project_id, thread_id, agent, model, run_started_at,
         input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, at)
@@ -89,12 +92,19 @@ export class UsageRepo {
       ON CONFLICT (task_id, run_started_at) DO UPDATE SET model = coalesce(?, task_usage.model, excluded.model),
         input_tokens = excluded.input_tokens, output_tokens = excluded.output_tokens,
         cache_read_tokens = excluded.cache_read_tokens, cache_write_tokens = excluded.cache_write_tokens,
-        reasoning_tokens = excluded.reasoning_tokens, at = excluded.at`).run(
+        reasoning_tokens = excluded.reasoning_tokens, at = excluded.at
+      WHERE excluded.input_tokens + excluded.output_tokens + excluded.cache_read_tokens + excluded.cache_write_tokens
+        >= task_usage.input_tokens + task_usage.output_tokens + task_usage.cache_read_tokens + task_usage.cache_write_tokens`).run(
       newId("use"), task.id, task.projectId, task.context.threadId ?? task.id, task.agent,
       usage.model ?? task.model ?? null, runStartedAt ?? null,
       usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens, usage.reasoningTokens, now(),
       usage.model ?? null,
     );
+  }
+
+  /** Whether this claim of the task has reported tokens before. */
+  reported(taskId: string, runStartedAt: string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM task_usage WHERE task_id = ? AND run_started_at = ?").get(taskId, runStartedAt);
   }
 
   /** One task's totals across its runs. */

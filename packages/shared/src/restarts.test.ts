@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { findRestarts } from "./restarts.js";
 
-const said = (text: string, gaps: Record<number, number> = {}) => {
+const said = (text: string, gaps: Record<number, number> = {}, options?: Parameters<typeof findRestarts>[3]) => {
   const tokens = text.toLowerCase().replace(/[^a-z0-9' ]/g, "").split(/\s+/);
   let t = 0;
   const starts: number[] = [], ends: number[] = [];
   tokens.forEach((_, i) => { t += gaps[i] ?? 0; starts.push(t); t += .3; ends.push(t); });
-  return { tokens, found: findRestarts(tokens, starts, ends) };
+  return { tokens, found: findRestarts(tokens, starts, ends, options) };
 };
 const phrases = (r: ReturnType<typeof said>) => r.found.map(f => [r.tokens.slice(f.at, f.at + f.length).join(" "), r.tokens.slice(f.at + f.length, f.next).join(" ")]);
 
@@ -26,6 +26,20 @@ describe("restarts", () => {
     // Two words that match are ordinary speech, and so is a phrase that goes on to say something else.
     expect(said("the red the blue car").found).toEqual([]);
     expect(said("we went to the shop and we to the beach").found).toEqual([]);
+  });
+
+  it("finds a first try that stops on a word the next try says longer", () => {
+    // Neon review 2, 3:44: "Okay. So perfect. So perfectly realistic." was left in.
+    const cutOff = { cutOffWords: true };
+    expect(phrases(said("we have it right here okay so perfect so perfectly realistic everything looks really good", {}, cutOff)))
+      .toEqual([["so perfect", ""]]);
+    expect(phrases(said("and we want we wanted to see it", {}, cutOff))).toEqual([["we want", ""]]);
+    // Only the word the first try stops on, and only a word the next one goes on from: a shorter word that comes back
+    // longer later in the sentence is ordinary speech.
+    expect(said("so perfect for me so perfectly fine", {}, cutOff).found).toEqual([]);
+    expect(said("so perfectly so perfect", {}, cutOff).found).toEqual([]);
+    expect(said("the car the car", {}, cutOff).found).toEqual([{ at: 0, length: 2, next: 2 }]);
+    expect(said("a an apple a and", {}, cutOff).found).toEqual([]);
   });
 
   it("compares a contraction as the word it starts with", () => {

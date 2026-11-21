@@ -14,7 +14,8 @@ import { actorFor, agentName, logActivity, quote } from "../services/activity.js
 import { continueWhenReady, interruptTask, retryTask } from "../services/taskRecovery.js";
 import { requestAttempt, requireActiveAttempt } from "../services/taskAttempt.js";
 
-const diagnosticTools = new Set<string>(EDITING_TOOL_GROUPS.flatMap(group => [...group.tools]));
+// `tool_help` reads the rest of a tool's description to a harness given only each tool's first sentence (Gemini's).
+const diagnosticTools = new Set<string>([...EDITING_TOOL_GROUPS.flatMap(group => [...group.tools]), "tool_help"]);
 const ToolDiagnostic = z.object({
   tool: z.string().refine(name => diagnosticTools.has(name)),
   outcome: z.enum(["ok", "failed", "refused", "preparing", "degraded"]),
@@ -56,6 +57,7 @@ export function taskRoutes(ctx: Ctx) {
     if (body.kind === "skill_edit") throw badRequest("use_skill_edit", "Ask for a change to a skill with /skills/:skillId/edit");
     if (body.kind === "learning_check") throw badRequest("not_a_request", "Scarlet starts this check itself, with each request.");
     if (body.kind === "area_check") throw badRequest("not_a_request", "Scarlet starts this check itself, when a save needs it.");
+    if (body.kind === "broll_make") throw badRequest("not_a_request", "This kind of run is retired.");
     const { mediaId, version } = body.context ?? {};
     if (mediaId && !ctx.db.prepare("SELECT 1 FROM media WHERE id = ? AND project_id = ?").get(mediaId, project.id)) {
       throw badRequest("unknown_media", "The selected footage does not belong to this project.");
@@ -112,7 +114,7 @@ export function taskRoutes(ctx: Ctx) {
     const project = requireProjectHeader(ctx, c.req.param("id"));
     const state = c.req.query("state");
     // A skill edit and a learning check only borrow the project to run in. Neither is part of its conversation.
-    const tasks = ctx.repos.tasks.select("project_id = ? AND kind NOT IN ('skill_edit', 'learning_check', 'area_check')" + (state ? " AND state = ?" : ""),
+    const tasks = ctx.repos.tasks.select("project_id = ? AND kind NOT IN ('skill_edit', 'learning_check', 'area_check', 'broll_make')" + (state ? " AND state = ?" : ""),
       state ? [project.id, TaskState.parse(state)] : [project.id], "created_at DESC");
     const conversation = c.req.query("events") === "conversation"
       ? ctx.repos.taskEvents.conversations(tasks.filter(t => t.kind !== "transcribe").map(t => t.id)) : undefined;
@@ -145,13 +147,15 @@ export function taskRoutes(ctx: Ctx) {
     return c.json(taskPrompt(ctx, requireTask(c.req.param("taskId"), c.req.param("projectId")), { workDir, fresh: !!fresh, timeLimitMinutes: timeLimit }));
   });
 
+  // `withdrawn`: the editor took the request back with ⌘Z, and nothing is learned from its words. Stop this edit sends
+  // no such word: the request ends and what the editor said stands.
   r.post("/tasks/:taskId/cancel", (c) => {
     return c.json(ctx.db.transaction(() => {
       const task = requireTask(c.req.param("taskId"));
       if (c.req.query("queuedOnly") === "1" && !FINISHED_TASK.has(task.state) && (task.state !== "queued" || task.startedAt || (task.resumeRootId && !task.resumesAfterProjectStop))) {
         throw conflict("already_started", "Scarlet has already started on this request.");
       }
-      return { task: cancelTask(ctx, task) };
+      return { task: cancelTask(ctx, task, { withdrawn: c.req.query("withdrawn") === "1" }) };
     }, "immediate")());
   });
 
@@ -240,6 +244,12 @@ export function taskRoutes(ctx: Ctx) {
   r.on("POST", ["/tasks/:taskId/usage", "/projects/:projectId/tasks/:taskId/usage"], async (c) => {
     const { startedAt, ...usage } = await jsonBody(c, RecordTaskUsageRequest);
     const task = requireTask(c.req.param("taskId"), c.req.param("projectId"));
+    // A report is one claim's total so far, and the claim is how a later report replaces it. Without one, each snapshot
+    // of a run was counted beside the others as a run of its own.
+    if (!startedAt) throw badRequest("missing_claim", "Send startedAt, the start of the claim these tokens were used in.");
+    if (startedAt !== task.startedAt && !ctx.repos.usage.reported(task.id, startedAt)) {
+      throw conflict("unknown_claim", "These tokens name no claim of this task.");
+    }
     ctx.repos.usage.record(task, usage, startedAt);
     // A run reports its totals as it goes. Each report is logged, so the log shows how its context grew between the
     // tool results around it: a pass that read 53.7 million cached tokens left one total and no way to say on what (2026-11-16).

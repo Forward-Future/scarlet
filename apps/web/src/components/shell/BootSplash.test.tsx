@@ -211,8 +211,8 @@ it("leaves for a page other than the library as soon as the engine is up, and as
 it("stays as it is while the project Scarlet reopens is opening, and leaves a project opened later to its own line", async () => {
   const { becomes } = await engine("loading");
   const project = await reopened();
-  // Restart to update brings Scarlet back where it was. With History open, the page needs the project's edits too.
-  const router = await shell(`/p/${project.id}?panel=history`);
+  // Restart to update brings Scarlet back where it was. A note link needs the project's edits too.
+  const router = await shell(`/p/${project.id}?note=note_1`);
   expect(startupLine()).toMatch(starting);
   // The engine is up and the project is being read. That wait is the startup screen's too, with no spinner after it.
   await becomes("ready");

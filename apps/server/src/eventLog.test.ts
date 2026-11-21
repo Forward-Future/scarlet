@@ -60,6 +60,10 @@ it("logs a tool result for its claim after it ended, without writing a task even
   await scoped.post(path, { ...diagnostic, tool: "transcript_get", resultChars: 48210, resultMedia: 2 });
   expect(lines.filter(line => line.startsWith("[mcp]")).at(-1)).toBe(
     `[mcp] tool-finished task=${task.id} attempt=${startedAt} tool=transcript_get outcome=ok elapsedMs=18 evidenceMisses=0 resultChars=48210 resultMedia=2`);
+  // The tool a harness given only first sentences reads the rest of a description with is reported as the others are.
+  await scoped.post(path, { ...diagnostic, tool: "tool_help", resultChars: 3100 });
+  expect(lines.filter(line => line.startsWith("[mcp]")).at(-1)).toBe(
+    `[mcp] tool-finished task=${task.id} attempt=${startedAt} tool=tool_help outcome=ok elapsedMs=18 evidenceMisses=0 resultChars=3100`);
   await expect(scoped.post(path, { ...diagnostic, tool: "Private result" })).rejects.toMatchObject({ status: 400 });
   expect(lines.join("\n")).not.toContain("Private");
 });
@@ -81,7 +85,9 @@ it("logs a compaction a host reports, with the task, and keeps it out of the run
 it("logs each usage report a run makes, so the log shows its context growing between tool results", async () => {
   const { project } = await api.createProject({ name: "Usage" });
   const { task } = await api.createTask(project.id, { kind: "edit", agent: "codex", instruction: "Private request" });
-  await api.recordTaskUsage(task.id, { model: "halo-alpha", inputTokens: 1200, cacheReadTokens: 480000, outputTokens: 90 });
+  const startedAt = new Date().toISOString();
+  workspace.ctx.repos.tasks.put({ ...workspace.ctx.repos.tasks.get(task.id)!, startedAt });
+  await api.recordTaskUsage(task.id, { model: "halo-alpha", inputTokens: 1200, cacheReadTokens: 480000, outputTokens: 90, startedAt });
   expect(lines.filter(line => line.startsWith("[task] usage"))).toEqual([
     `[task] usage task=${task.id} model=halo-alpha input=1200 cacheRead=480000 cacheWrite=0 output=90 reasoning=0`]);
   expect(lines.join("\n")).not.toContain("Private");

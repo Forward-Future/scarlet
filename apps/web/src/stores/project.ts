@@ -83,7 +83,7 @@ interface ProjectState {
   applyEvent(ev: WsEvent): void;
 
   setThreadDone(threadId: string, done: boolean, revision: string): Promise<void>;
-  updateProject(body: { mediaPaused?: boolean; name?: string; archived?: boolean; sourceNotice?: false; settings?: Partial<Project["settings"]>; expectedFormat?: Pick<Project, "head" | "settings"> }, projectId?: string): Promise<void>;
+  updateProject(body: { mediaPaused?: boolean; name?: string; archived?: boolean; settings?: Partial<Project["settings"]>; expectedFormat?: Pick<Project, "head" | "settings"> }, projectId?: string): Promise<void>;
 
   approve(changeId: string, spots?: number[], restoredCuts?: number[]): Promise<ApproveResponse | undefined>;
   historyEdit(version: string, action: "revert" | "restore"): Promise<void>;

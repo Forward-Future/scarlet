@@ -507,6 +507,74 @@ export async function renderGraphicStill(opts: GraphicPageOptions & { time: numb
   });
 }
 
+export interface PageCaptureOptions {
+  /** A page on the web (http or https). */
+  url: string;
+  /** The browser window, in CSS pixels. */
+  width: number;
+  height: number;
+  /** The whole page down to its end, up to `maxHeight`, instead of the window alone. */
+  fullPage?: boolean;
+  maxHeight?: number;
+  chromePath?: string;
+  signal?: AbortSignal;
+}
+
+export interface PageCapture {
+  png: Buffer;
+  /** The page's title and address once it loaded, after any redirect. */
+  title: string;
+  url: string;
+  /** The page's words as a reader sees them, cut to the first 20,000 characters. */
+  text: string;
+  /** The picture's size, in pixels. */
+  width: number;
+  height: number;
+  /** The page's headings and the part of the picture each sits in, as fractions of it. */
+  headings: Array<{ text: string; box: { left: number; top: number; right: number; bottom: number } }>;
+}
+
+/** What a loaded page says of itself: its title, words, height and headings, measured in its own pixels. */
+const PAGE_FACTS = String.raw`(() => {
+  const height = Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0);
+  const headings = [...document.querySelectorAll("h1, h2, h3")].slice(0, 40).map(h => {
+    const r = h.getBoundingClientRect();
+    return { text: (h.innerText || "").trim().slice(0, 300), left: r.left + scrollX, top: r.top + scrollY, right: r.right + scrollX, bottom: r.bottom + scrollY };
+  }).filter(h => h.text && h.right > h.left && h.bottom > h.top);
+  return { title: document.title, url: location.href, text: (document.body ? document.body.innerText : "").slice(0, 20000), height, headings };
+})()`;
+
+/**
+ * Open a page on the web in headless Chrome and take its picture: the window, or the whole page down to its end. The
+ * page gets a moment after it loads for what it draws late (fonts, embeds), and keeps its own background.
+ */
+export async function capturePage(opts: PageCaptureOptions): Promise<PageCapture> {
+  const browser = await Browser.launch(findChrome(opts.chromePath), opts.signal);
+  const abort = () => void browser.close();
+  opts.signal?.addEventListener("abort", abort, { once: true });
+  try {
+    const page = await openPage(browser, opts.url, { width: opts.width, height: opts.height, scale: 1 }, opts.signal)
+      .catch((error: Error) => { throw error instanceof AbortError ? error : new Error(error.message.replace(/the graphic's page/gi, "the page")); });
+    await browser.send("Emulation.setDefaultBackgroundColorOverride", {}, page.sessionId);
+    await within(new Promise(resolve => setTimeout(resolve, 1500)), 5000, "", opts.signal);
+    const facts = await evaluate<{ title: string; url: string; text: string; height: number;
+      headings: Array<{ text: string; left: number; top: number; right: number; bottom: number }> }>(browser, page, PAGE_FACTS);
+    const height = opts.fullPage ? Math.max(opts.height, Math.min(Math.ceil(facts.height), opts.maxHeight ?? 12_000)) : opts.height;
+    const { data } = await browser.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: !!opts.fullPage,
+      clip: { x: 0, y: 0, width: opts.width, height, scale: 1 } }, page.sessionId) as { data: string };
+    const headings = facts.headings.filter(h => h.top < height).map(h => ({ text: h.text, box: {
+      left: Math.max(0, h.left / opts.width), top: Math.max(0, h.top / height), right: Math.min(1, h.right / opts.width), bottom: Math.min(1, h.bottom / height) } }));
+    opts.signal?.throwIfAborted();
+    return { png: Buffer.from(data, "base64"), title: facts.title, url: facts.url, text: facts.text, width: opts.width, height, headings };
+  } catch (error) {
+    if (opts.signal?.aborted) throw new AbortError();
+    throw error;
+  } finally {
+    opts.signal?.removeEventListener("abort", abort);
+    await browser.close();
+  }
+}
+
 /** Where the drawn part of each frame is, as fractions of the frame: the box around its pixels that aren't transparent. */
 export interface GraphicCoverage { time: number; box: { left: number; top: number; right: number; bottom: number } | null }
 

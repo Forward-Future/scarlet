@@ -22,17 +22,7 @@ interface ProjectRow {
   head: string | null;
   created_at: string;
   updated_at: string;
-  /** The project a short was made from: `{ projectId, name }` as it was named then. */
-  source?: string | null;
-  source_notice?: number;
-  /** That project's name now, and whether it is in the trash. Absent once it is deleted for good. */
-  source_name?: string | null;
-  source_deleted?: string | null;
 }
-
-/** A project's row with the name its source has now. */
-const WITH_SOURCE = `SELECT p.*, s.name AS source_name, s.deleted_at AS source_deleted FROM projects p
-  LEFT JOIN projects s ON s.id = json_extract(p.source, '$.projectId')`;
 
 interface MediaRow {
   id: string;
@@ -108,7 +98,7 @@ export class ProjectsRepo {
   }
 
   header(id: string) {
-    const row = this.db.prepare(`${WITH_SOURCE} WHERE p.id = ? AND p.deleted_at IS NULL`).get(id) as ProjectRow | undefined;
+    const row = this.db.prepare("SELECT * FROM projects WHERE id = ? AND deleted_at IS NULL").get(id) as ProjectRow | undefined;
     return row ? projectHeader(row) : null;
   }
 
@@ -142,11 +132,10 @@ export class ProjectsRepo {
     const ts = now();
     this.db
       .prepare(
-        `INSERT INTO projects (id, name, settings, head, archived, created_at, updated_at, format_set, source, source_notice)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO projects (id, name, settings, head, archived, created_at, updated_at, format_set)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(p.id, p.name, JSON.stringify(p.settings), p.head, Number(p.archived ?? false), p.createdAt ?? ts, p.updatedAt ?? ts, Number(formatSet),
-        p.source ? JSON.stringify({ projectId: p.source.projectId, name: p.source.name }) : null, Number(!!p.source?.notice));
+      .run(p.id, p.name, JSON.stringify(p.settings), p.head, Number(p.archived ?? false), p.createdAt ?? ts, p.updatedAt ?? ts, Number(formatSet));
     return this.get(p.id)!;
   }
 
@@ -165,7 +154,7 @@ export class ProjectsRepo {
    * Update name/settings/head (media is managed through the media methods). "Last edited" moves only when the video
    * does: a new head, or a setting that changes it. A new name, archiving and pausing its media leave it where it was.
    */
-  update(id: string, patch: { mediaPaused?: boolean; name?: string; archived?: boolean; settings?: Partial<ProjectSettings>; head?: string | null; sourceNotice?: false }): Project {
+  update(id: string, patch: { mediaPaused?: boolean; name?: string; archived?: boolean; settings?: Partial<ProjectSettings>; head?: string | null }): Project {
     const row = this.db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as ProjectRow | undefined;
     if (!row) throw new Error(`project ${id} not found`);
     const before = ProjectSettings.parse(JSON.parse(row.settings));
@@ -186,7 +175,6 @@ export class ProjectsRepo {
         Number(patch.settings !== undefined || !!patch.head), Number(edited), now(),
         id,
       );
-    if (patch.sourceNotice === false) this.db.prepare("UPDATE projects SET source_notice = 0 WHERE id = ?").run(id);
     return this.get(id)!;
   }
 
@@ -220,13 +208,13 @@ export class ProjectsRepo {
   }
 
   summaries(id?: string): ProjectSummary[] {
-    const rows = this.db.prepare(`SELECT p.*, src.name AS source_name, src.deleted_at AS source_deleted, poster.id AS poster_id, json_extract(poster.json, '$.duration') AS poster_duration,
+    const rows = this.db.prepare(`SELECT p.*, poster.id AS poster_id, json_extract(poster.json, '$.duration') AS poster_duration,
         (SELECT count(*) FROM media WHERE project_id = p.id) AS media_count,
         (SELECT duration FROM timeline_versions WHERE project_id = p.id AND version = p.head) AS head_duration,
         (EXISTS(SELECT 1 FROM changes WHERE project_id = p.id AND state = 'ready') OR EXISTS(SELECT 1 FROM tasks
           WHERE project_id = p.id AND kind != 'transcribe' AND state IN ('claimed','running','waiting_for_user','queued'))) AS may_wait,
         (SELECT count(*) FROM notes WHERE project_id = p.id AND state IN ('open','in_progress')) AS open_notes
-      FROM projects p LEFT JOIN projects src ON src.id = json_extract(p.source, '$.projectId')
+      FROM projects p
       LEFT JOIN media poster ON poster.rowid = (
         SELECT rowid FROM media WHERE project_id = p.id AND json_extract(json, '$.kind') = 'video' ORDER BY created_at, rowid LIMIT 1
       ) WHERE p.deleted_at IS NULL ${id === undefined ? "" : "AND p.id = ?"} ORDER BY p.updated_at DESC`)
@@ -307,9 +295,6 @@ export class ProjectsRepo {
 const Header = Project.omit({ media: true });
 function projectHeader(row: ProjectRow, styleGuide = true): Omit<Project, "media"> {
   // The list of projects leaves the guide out: pasted text can be long, and only an open project shows it.
-  const made = row.source ? JSON.parse(row.source) as { projectId: string; name: string } : undefined;
-  const source = made && { projectId: made.projectId, name: row.source_name ?? made.name,
-    ...(row.source_notice ? { notice: true } : {}), ...(!row.source_name || row.source_deleted ? { gone: true } : {}) };
-  return Header.parse({ ...(styleGuide && row.style_guide && { styleGuide: JSON.parse(row.style_guide) }), ...(source && { source }), id: row.id, completedThreads: JSON.parse(row.completed_threads), name: row.name, mediaPaused: !!row.media_paused, editingPaused: !!row.editing_paused, archived: Boolean(row.archived), branch: row.branch, settings: JSON.parse(row.settings), head: row.head,
+  return Header.parse({ ...(styleGuide && row.style_guide && { styleGuide: JSON.parse(row.style_guide) }), id: row.id, completedThreads: JSON.parse(row.completed_threads), name: row.name, mediaPaused: !!row.media_paused, editingPaused: !!row.editing_paused, archived: Boolean(row.archived), branch: row.branch, settings: JSON.parse(row.settings), head: row.head,
     createdAt: row.created_at, updatedAt: row.updated_at, rowRevision: row.row_revision });
 }

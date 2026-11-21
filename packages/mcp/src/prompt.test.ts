@@ -100,11 +100,15 @@ describe("the prompt for reading a request for a standing rule", () => {
     for (const absent of [check.said, "A project the task only borrows.", "Never cut laughter.\n", "# House style", SCARLET_INTRO, PLAN_STEPS]) expect(prompt).not.toContain(absent);
     // It reads the skill a rule goes into before offering it, so the editor sees what the rule would change, and a
     // rule the skill already has isn't offered.
-    expect(prompt).toContain("read the skill it belongs in, in full, with `skills_list`, then offer the rule with `learning_suggest`");
+    expect(prompt).toContain("read the skill it belongs in, in full, with `skills_list`, then offer it with `learning_suggest`");
     expect(prompt).toContain("beside what the skill says that it would change");
-    expect(prompt).toContain("or the skill or a rule listed below already says it, call nothing.");
-    // A correction the editor keeps making to one skill's cuts is a rule for that skill, though each was about one cut.
-    expect(prompt).toContain("When their earlier requests keep asking for the same kind of fix to what a skill made, that fix is how they want the skill to work.");
+    expect(prompt).toContain("a rule the skill or a rule listed below already says, in any wording");
+    // A rule is offered only when the editor said it as one, or when the same kind of fix keeps coming back: a single
+    // note about one join was offered as "play back each join and adjust it" (2026-11-20).
+    expect(prompt).toContain("It does in only two cases:\n- They said it as a rule themselves: their words are about every video or every time");
+    expect(prompt).toContain("- The same kind of fix keeps coming back: at least two of their earlier requests below asked for the same kind of change to what a skill made as this one does.");
+    expect(prompt).toContain("a note about this video, this moment or this cut that hasn’t come up before, however general it could be made");
+    expect(prompt).toContain("a rule that only tells the agent to do its work well (check, play back, adjust as needed) without saying what the editor wants");
     // A rule is the principle, never the case it came from.
     expect(prompt).toContain("write the principle behind what they said, not its instances: no words, names, times or moments from this video or the requests");
   });
@@ -129,9 +133,24 @@ describe("an editing prompt", () => {
     // The order is the model's. How far down it the editor is asked to look is theirs, and balanced when they haven't said.
     expect(pass()).toContain("order those cuts from the most likely to be wrong to the least");
     expect([pass(), pass("less"), pass("balanced"), pass("more")].map(asked)).toEqual(["about one in four", "about one in ten", "about one in four", "about half"]);
+    // The closing check after the pass, a fresh session, has no memory of the order and is not asked to flag a second share.
+    expect(buildSystemPrompt({ ...base, task: { kind: "edit" as const, instruction: "/dialogue-pass", agent: "claude",
+      context: { dialogueOperation: "first-cut" as const }, repeatAudit: { version: "v2", returns: 1 } } })).not.toContain("Before the pass is done");
     // A request about one cut or edit of the pass, a pause tightening and any other edit are not asked.
     for (const context of [{ dialogueOperation: "first-cut", cutIndex: 0, changeId: "chg_1" }, { dialogueOperation: "first-cut", editIndex: 2 }, { dialogueOperation: "local-pauses" }, {}])
       expect(buildSystemPrompt({ ...base, checkIn: "more", task: task(context) })).not.toContain("Before the pass is done");
+  });
+
+  it("has a dialogue pass stage the repeats it would keep that are likeliest restarts, as many as the editor's setting asks", () => {
+    const pass = (checkIn?: "less" | "balanced" | "more", closing = false) => buildSystemPrompt({ ...base, checkIn,
+      task: { kind: "edit" as const, instruction: "/dialogue-pass", agent: "claude", context: { dialogueOperation: "first-cut" as const },
+        ...(closing && { repeatAudit: { version: "v1", returns: 1 } }) } });
+    const staged = (prompt: string) => prompt.match(/- Order the repeats dialogue_check_repeats lists that you would keep.* Stage (.*) of them from the top with removeRepeat and decision review/)?.[1];
+    expect([pass(), pass("less"), pass("more")].map(staged)).toEqual(["about one in four", "about one in ten", "about half"]);
+    // A keep plays on unseen, so the closing check orders the repeats it keeps too.
+    expect(staged(pass("balanced", true))).toBe("about one in four");
+    for (const context of [{ dialogueOperation: "first-cut", cutIndex: 0, changeId: "chg_1" }, { dialogueOperation: "local-pauses" }, {}])
+      expect(buildSystemPrompt({ ...base, task: task(context) })).not.toContain("Order the repeats dialogue_check_repeats lists");
   });
 
   it("names where the editor was looking: a source passage in the source's own frames, or a place on the timeline", () => {
@@ -229,6 +248,14 @@ describe("an editing prompt", () => {
     }
   });
 
+  it("tells a request what its harness's own tools are for, and that B-roll and graphics are the editor's to ask for", () => {
+    const prompt = buildSystemPrompt({ ...base, workDir: "/work/task_1/artifacts", capabilities: { images: true, audio: false, files: true, shell: true, web: true, plan: false } });
+    expect(prompt).toContain("Your task artifact directory is: /work/task_1/artifacts\nBeside Scarlet's tools you have your harness's own: a shell, sandboxed to this task's folder, with ffmpeg and ffprobe on its PATH where this machine has them, file tools, and web search.");
+    expect(prompt).toContain("`web_capture` takes the picture of a page on the web, `graphic_render` draws a page you write, and `asset_add` brings a finished file into the project, with `source` for anything taken from the web.");
+    expect(prompt).toContain("B-roll and graphics are made when the editor asked for them, in their words or in a skill of theirs, never on your own initiative.");
+    // A run launched with Scarlet's tools only is told nothing of a shell.
+    expect(buildSystemPrompt({ ...base, workDir: "/work/task_1/artifacts", capabilities: { images: true, audio: false, files: false, plan: false } })).not.toContain("shell");
+  });
   it("mentions the artifact directory only to a harness that can write files there", () => {
     const withFiles = buildSystemPrompt({ ...base, workDir: "/work/task_1", capabilities: { images: true, audio: false, files: true } });
     expect(withFiles).toContain("Your task artifact directory is: /work/task_1");

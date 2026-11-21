@@ -121,7 +121,7 @@ it("crops the preset inset to the presenter's head and shoulders, in the canvas'
 });
 
 it("frames the inset as the editor's skill asks: 20% larger, 1.5:1, down to the desk, corners rounded", () => {
-  // matt-talking-head: “scale it up by 20% in both dimensions, then crop the sides … 1.5:1 … from a small margin above
+  // matt-talking-head: “scale it up by 20% in both dimensions, then crop the sides … 1.5:1 … from clear room above
   // my hair down to the desk in front of me … Round all four corners of the inset.”
   const { framing, whole } = presetInset(project4k(), camera, [{ spans: presenter() }], { show: "desk", aspect: 1.5, size: 1.2, cornerRadius: .06 });
   expect(whole).toBeUndefined();
@@ -138,6 +138,22 @@ it("frames the inset as the editor's skill asks: 20% larger, 1.5:1, down to the 
   const heightOnCanvas = .3, widthOnCanvas = .3 * 1.5 / (16 / 9);
   expect(.5 + framing.x + widthOnCanvas / 2).toBeCloseTo(.975, 3);
   expect(.5 + framing.y + heightOnCanvas / 2).toBeCloseTo(.975, 3);
+});
+
+it("leaves clear room above the hair at the presenter's highest, and keeps a camera's whole top when it has little", () => {
+  // Hair sits about 0.8 of a face width above the eyes. Over the hair at the presenter's highest, the crop leaves room.
+  const source = camera.width / camera.height;
+  const spans = presenter(), face = (.623 - .414) * source;
+  const highest = Math.min(...spans.map(s => s.eyes[1]));
+  const { framing } = presetInset(project4k(), camera, [{ spans }], { show: "desk", aspect: 1.5, size: 1.2 });
+  expect((highest - .8 * face) - framing.cropTop!).toBeGreaterThan(.15 * face);
+  // His camera in a review on 2026-11-20 had his hair about 4% of the picture from its top: no room to crop there.
+  const tight: FaceReading["spans"] = [
+    { track: 1, start: 160, end: 400, box: [.46, .106, .589, .405], eyes: [.524, .234], confidence: .93 },
+    { track: 1, start: 400, end: 405, box: [.46, .093, .589, .405], eyes: [.524, .207], confidence: .93 },
+    { track: 1, start: 405, end: 900, box: [.45, .12, .59, .42], eyes: [.52, .25], confidence: .93 },
+  ];
+  expect(presetInset(project4k(), camera, [{ spans: tight }], { show: "desk", aspect: 1.5, size: 1.2 }).framing.cropTop).toBe(0);
 });
 
 it("reaches further down for more of the presenter and stops at the chin for a head", () => {

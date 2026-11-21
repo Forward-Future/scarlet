@@ -57,12 +57,13 @@ function survivingFragments(before: MediaClip[], after: MediaClip[]): Fragment[]
   return fragments.sort((a, b) => a.start - b.start || a.end - b.end);
 }
 
-// Compare the actual stack a ripple removes, including hidden tracks and disabled clips. A clip split
-// by an earlier ripple can have a new ID while still carrying exactly the same frames and properties.
+// Compare the actual stack a ripple removes, including hidden tracks and disabled clips, except the pictures laid over
+// the recording. A clip split by an earlier ripple can have a new ID while still carrying exactly the same frames and properties.
 function passageReader(timeline: Timeline) {
   const layers = timeline.tracks.map(track => ({ track, clipsIn: intervalCandidates(track.clips, c => c.timelineIn, clipEnd) }));
-  return (start: number, end: number) => {
+  return (start: number, end: number, over: ReadonlySet<string>) => {
     const tracks = layers.flatMap(({ track, clipsIn }) => {
+      if (over.has(track.id)) return [];
       const clips = clipsIn(start, end).filter(c => c.timelineIn < end - EPS && clipEnd(c) > start + EPS).map(c => {
         const { id, label, ...shifted } = shiftClip(trimTail(trimHead(c, start), end), -start);
         // How a clip is framed, still or moving, isn't what it plays: a pass that punched in on footage a staged cut waits on left the
@@ -100,6 +101,16 @@ export function makeStagedCutMapper(from: Timeline, head: Timeline, fps: number)
   const originalMedia = from.tracks.flatMap(mediaClips);
   const current = bySource(head.tracks.flatMap(mediaClips));
   const originalPassage = passageReader(from), currentPassage = passageReader(head);
+  // A picture laid over the recording frames it, as a punch-in does: a cut still takes out the same footage under the
+  // screen or an inset. A framing save that laid the screen over a waiting call was refused as taking its footage, so the
+  // screen was left off there and the camera flashed full frame for under a second once the call went in (2026-11-20).
+  // The recording's picture is the lowest video track holding media there; over sound alone, every picture is laid over.
+  const videoTracks = [...new Set([...from.tracks, ...head.tracks].filter(t => t.kind === "video").map(t => t.id))];
+  const laidOver = (range: TimeRange): ReadonlySet<string> => {
+    const bottom = from.tracks.findIndex(t => t.kind === "video" && mediaClips(t).some(c => c.timelineIn < range.end - EPS && clipEnd(c) > range.start + EPS));
+    const below = new Set(bottom < 0 ? [] : from.tracks.slice(0, bottom + 1).filter(t => t.kind === "video").map(t => t.id));
+    return new Set(videoTracks.filter(id => !below.has(id)));
+  };
   const originalClipsIn = intervalCandidates(originalMedia, c => c.timelineIn, clipEnd);
   return range => {
     const conflict = (reason: string, bounds?: TimeRange): StagedCutMapping =>
@@ -141,12 +152,12 @@ export function makeStagedCutMapper(from: Timeline, head: Timeline, fps: number)
       return conflict("The passage has no unambiguous position on the current timeline.");
 
     const bounds = { start: Math.max(0, Math.min(start, duration)), end: Math.max(0, Math.min(end, duration)) };
-    const missing: TimeRange[] = [];
+    const missing: TimeRange[] = [], over = laidOver(range);
     let oldEdge = range.start, currentEdge = bounds.start;
     for (const part of inside) {
       if (part.start > oldEdge + EPS) missing.push({ start: oldEdge, end: part.start });
       const here = part.start + part.shift, there = part.end + part.shift;
-      if (!meet(currentEdge, here) || originalPassage(part.start, part.end) !== currentPassage(here, there))
+      if (!meet(currentEdge, here) || originalPassage(part.start, part.end, over) !== currentPassage(here, there, over))
         return conflict("Footage was inserted, replaced or changed inside the passage.", bounds);
       currentEdge = there;
       oldEdge = part.end;

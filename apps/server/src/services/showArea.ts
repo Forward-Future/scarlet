@@ -7,12 +7,13 @@ import { randomUUID } from "node:crypto";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileInDirectoryAsync } from "@scarlet/render";
-import { AREA_HOLDS_AT, AREA_SIDES, SHOW_EDGE_HEIGHT, SHOW_EDGE_STEP, SHOW_EDGE_VERSION, SHOW_EDGE_WIDTH, assignAreas, edgeBits, edgeBytes, sideFits,
+import { AREA_HOLDS_AT, AREA_PICTURE_CHANGE, AREA_SIDES, SHOW_EDGE_HEIGHT, SHOW_EDGE_STEP, SHOW_EDGE_VERSION, SHOW_EDGE_WIDTH, assignAreas, edgeBits, edgeBytes, sideFits,
   type AreaBox, type AreaSide, type HeldArea, type ShowArea } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { badRequest, notFound } from "../errors.js";
 import { areaAt, wholePicture } from "@scarlet/shared";
 import { FINISHED_TASK, createTask } from "./tasks.js";
+import { pictureChanges } from "./pictureCuts.js";
 import { rememberLast, withFrames, type VideoMedia } from "./pictureReading.js";
 
 export interface ShowAreaState {
@@ -77,13 +78,17 @@ export async function showArea(ctx: Ctx, media: VideoMedia, opts: { waitMs: numb
   const base = { mediaId: media.id, step: SHOW_EDGE_STEP };
   const run = edges(ctx, media);
   run.catch(() => {});
+  // Where the picture changes at once, so a box with one edge to find holds until a switch to another app. Read beside
+  // the edges; until it has been, such a box holds only on its own frame.
+  const changes = areas.length ? pictureChanges(ctx, media, AREA_PICTURE_CHANGE, opts.waitMs).catch(() => undefined) : Promise.resolve(undefined);
   const found = await Promise.race([run.catch(() => undefined), new Promise<undefined>(done => { setTimeout(() => done(undefined), opts.waitMs).unref(); })]);
   if (!found) {
     const error = failed.get(media.id);
     return { ...base, done: false, ...(error && !reading.has(media.id) && { error }), areas: areas.map(a => ({ ...a, holds: [] })), unset: [] };
   }
   const size = edgeBytes();
-  const assigned = assignAreas(found.frames, duration, areas, (frame, area) => sideFits(found.bits.subarray(frame * size, (frame + 1) * size), area));
+  const assigned = assignAreas(found.frames, duration, areas, (frame, area) => sideFits(found.bits.subarray(frame * size, (frame + 1) * size), area),
+    SHOW_EDGE_STEP, await changes);
   return { ...base, done: true, ...assigned };
 }
 

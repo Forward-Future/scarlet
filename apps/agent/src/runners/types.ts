@@ -17,6 +17,32 @@ export interface McpSpec {
 export type CodexFallbackReason = "api_key" | "project_config" | "home_unavailable" | "auth_unavailable" | "isolation_unavailable" |
   "initialize_failed" | "thread_start_failed" | "thread_resume_failed" | "thread_policy_mismatch" | "app_server_unavailable";
 
+/**
+ * What a request's agent works with beyond Scarlet's tools: its harness's shell (sandboxed to the task folder,
+ * writing only there and reaching the web), file tools and web search. The editor chose this for every model and every
+ * request (2026-11-21).
+ */
+export interface Workspace {
+  /** Links to ffmpeg, ffprobe and a headless Chrome, put first on the shell's PATH. Absent when the host has none. */
+  binDir?: string;
+  /** Folders outside the task folder the shell must read to run those programs. */
+  readDirs: string[];
+}
+
+/** The task folder's subfolder of CLI control files, which hold Scarlet's access token: never readable by the agent. */
+export const CONTROL_DIR = ".scarlet";
+
+/** A CLI's environment for a run: without Scarlet's own variables (the token among them), its links first on PATH. */
+export function workspaceEnv(env: NodeJS.ProcessEnv, workspace: Workspace | undefined, keep: readonly string[] = []): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) if (!/^SCARLET_/i.test(key) || keep.includes(key)) out[key] = value;
+  if (workspace?.binDir) {
+    const pathKey = Object.keys(out).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+    out[pathKey] = [workspace.binDir, out[pathKey]].filter(Boolean).join(process.platform === "win32" ? ";" : ":");
+  }
+  return out;
+}
+
 export interface RunAgentOptions {
   agent: AgentId;
   model?: string;
@@ -30,8 +56,15 @@ export interface RunAgentOptions {
   resumeSession?: string;
   /** Launch the CLI with its own to-do tool on. The engine decides (`plan` in the task's prompt). */
   plan?: boolean;
+  /** The engine's words for the turn after Scarlet refused a tool, `{tool}` standing for its name (`refusedTool`). */
+  refusedTool?: string;
   /** Per-task workspace. The agent may write temp files here. */
   cwd: string;
+  /**
+   * The harness's own shell, file and web tools, beside Scarlet's, for a request. Absent for a side check or a skill's
+   * edit, whose runs have Scarlet's tools only.
+   */
+  workspace?: Workspace;
   mcp: McpSpec;
   onEvent: (ev: RunnerEvent) => void;
   onCodexFallback?: (reason: CodexFallbackReason) => void;
@@ -84,6 +117,16 @@ export const DEFAULT_STALL_MS = 10 * 60 * 1000;
 /** Matches the Scarlet question tool however the CLI namespaces it (mcp__scarlet__task_question, scarlet__task_question, scarlet:task_question, task_question). */
 export function isQuestionTool(name: string | undefined): boolean {
   return name === "mcp_scarlet_task_question" || (!!name && /(^|__|\.|\/|:)task_question$/.test(name));
+}
+
+/**
+ * The words of a task_question call, when it has any. Only such a call is a question: one with no words is refused by
+ * Scarlet's MCP server, and the model hears why and tries again. Taken for a question, it put the call's raw input
+ * before the editor. The desktop host reads it the same way.
+ */
+export function questionText(input: unknown): string | undefined {
+  const text = input && typeof input === "object" ? (input as { text?: unknown }).text : undefined;
+  return typeof text === "string" && text.trim() ? text : undefined;
 }
 
 /** Strip the MCP namespace prefix for display: mcp__scarlet__timeline_get -> scarlet.timeline_get */

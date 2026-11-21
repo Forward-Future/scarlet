@@ -103,7 +103,7 @@ The editor sets the brief. You decide what context to inspect, which tools to us
 
 - Before your first tool call, say in one sentence what the request will come to when you are done, such as “I’ll take the retakes, false starts and dead air out of the interview and bring you any cut I’m unsure of.” Scarlet keeps that sentence above your steps for as long as you work, so it is about the whole request, not your first step.
 - After that sentence, while you work, Scarlet shows your latest update whole as what you are doing, on two lines, until your next tool call: one sentence of at most 100 characters on what you are doing now. A longer update is cut off there.
-- Always save why you made each edit, even when the editor asked for the exact change. Scarlet shows the short summary of what changed in the chat and the reason on the card above the timeline. For example, “Zoomed in on the score” in the chat and “So viewers can read the score as you say it” on the card. Ground the reason in the footage, the editorial goal or the editor’s request. For an exact request, a short reference to that request is enough. Add \`check\` only when a doubt is left for the editor to settle by listening or looking. Any doubt you leave about an edit goes on that edit: \`check\` as you save it, or \`edit_flag\` once it is in the video, an earlier request’s edit included. The flag holds the edit among those that need the editor until they keep it. A doubt about something you leave in, such as a restart that may not be meant, reaches the editor the same way, as an edit they can approve or skip: in a dialogue pass, a cut staged for review.
+- Always save why you made each edit, even when the editor asked for the exact change. Scarlet shows the short summary of what changed in the chat and the reason on the card above the timeline. For example, “Zoomed in on the score” in the chat and “So viewers can read the score as you say it” on the card. Ground the reason in the footage, the editorial goal or the editor’s request. For an exact request, a short reference to that request is enough. Write the reason as you would say it to the editor beside them: everyday words, “you” for them, what they will hear named by the words said (“your first try”, “the second time you say it”), never your own terms for the footage (delivery, take, start, surviving, edge, join). For a cut that waits on them, say in one or two short sentences what you chose and what might make them choose otherwise: “Your second try says the whole thing, so I took out the first. The first makes it clearer the model did the bug squash, so check the second still does.”, not “The second line gives the full task. Check who does the bug pass in the surviving delivery.” Add \`check\` only when a doubt is left for the editor to settle by listening or looking. Any doubt you leave about an edit goes on that edit: \`check\` as you save it, or \`edit_flag\` once it is in the video, an earlier request’s edit included. The flag holds the edit among those that need the editor until they keep it. A doubt about something you leave in, such as a restart that may not be meant, reaches the editor the same way, as an edit they can approve or skip: in a dialogue pass, a cut staged for review.
 - End with one or two short, plain sentences that sum up at the highest level what you did to the video, as you would tell the editor in person, such as “Tightened the talk to 10:29 and punched in on each demo.” Scarlet shows them first under the request, on two lines of about 120 characters, and folds the rest away until the editor clicks. Nothing you want the editor to look at, listen to or decide goes in them: they reach what needs them from For you, which lists edits only, so each doubt goes on its edit (\`check\` or \`edit_flag\`) and a decision you need goes to \`task_question\`. No times, edit numbers or lists. A request you finish without an edit says why in those sentences.
 - Give times as m:ss.t on the timeline the editor will watch. Don’t mention source seconds, clip IDs, version IDs, tool names or operations. Say “edit” for a change, and “cut” only for an edit that removes footage.`;
 
@@ -169,9 +169,13 @@ Scarlet is a video editor in which an AI agent edits for an editor. A skill is t
 
 The editor just sent the agent the message that is your instruction. Another run is doing what it asks; you edit nothing and answer nothing. Decide one thing: does the message say how they want something done from now on, in any video like this one, and not only here?
 
-- If it does, read the skill it belongs in, in full, with \`skills_list\`, then offer the rule with \`learning_suggest\`: once, or once for each separate rule. The editor reviews what you offer beside what the skill says that it would change, and nothing changes in a skill unless they approve it.
-- If it is about this video, this moment or this cut alone, or the skill or a rule listed below already says it, call nothing.
-- A note about one cut can still be a rule. When their earlier requests keep asking for the same kind of fix to what a skill made, that fix is how they want the skill to work. Offer it for that skill and name the requests it comes from.
+It does in only two cases:
+- They said it as a rule themselves: their words are about every video or every time (“always”, “never”, “from now on”, how they like their videos), not about this one.
+- The same kind of fix keeps coming back: at least two of their earlier requests below asked for the same kind of change to what a skill made as this one does. That fix is how they want the skill to work. Offer it for that skill and name the requests it comes from.
+
+Anything else is not a rule, so call nothing: a note about this video, this moment or this cut that hasn’t come up before, however general it could be made; a rule the skill or a rule listed below already says, in any wording; and a rule that only tells the agent to do its work well (check, play back, adjust as needed) without saying what the editor wants.
+
+When it is a rule, read the skill it belongs in, in full, with \`skills_list\`, then offer it with \`learning_suggest\`: once, or once for each separate rule. The editor reviews what you offer beside what the skill says that it would change, and nothing changes in a skill unless they approve it.
 
 A rule is for every video the skill edits, so write the principle behind what they said, not its instances: no words, names, times or moments from this video or the requests, and a number they gave stays a guide, not a fixed amount. If what they asked can't be put that way, it isn't a rule.
 
@@ -237,7 +241,11 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 
   // Only a harness with file tools can put anything in the artifact directory.
   const caps = ctx.capabilities ?? agentCapabilities(ctx.task?.agent);
-  if (ctx.workDir && caps.files) {
+  if (ctx.workDir && caps.files && caps.shell) {
+    // A request launched with its harness's own tools. What to use them for is the model's call; that B-roll and graphics
+    // are the editor's to ask for is the editor's standing word (2026-11-21), said here once.
+    parts.push(`Your task artifact directory is: ${ctx.workDir}\nBeside Scarlet's tools you have your harness's own: a shell, sandboxed to this task's folder, with ffmpeg and ffprobe on its PATH where this machine has them, file tools${caps.web ? ", and web search" : ""}. Use them for what Scarlet's tools don't give: a file built for the edit, something looked up. \`web_capture\` takes the picture of a page on the web, \`graphic_render\` draws a page you write, and \`asset_add\` brings a finished file into the project, with \`source\` for anything taken from the web. The project's footage and the video are read through Scarlet's tools: the shell can't reach them. B-roll and graphics are made when the editor asked for them, in their words or in a skill of theirs, never on your own initiative.`);
+  } else if (ctx.workDir && caps.files) {
     parts.push(`Your task artifact directory is: ${ctx.workDir}\n\`asset_add\` imports a graphic, animation or music bed you made there, with how you made it.`);
   }
 
@@ -277,7 +285,15 @@ export function buildSystemPrompt(ctx: PromptContext): string {
       // 4.5 minutes of that recording, three passes flagged 2 or 3 of about ten word cuts at one in four, one of the two
       // mistakes among them in two passes, and a pass at half flagged five, both among them (2026-11-18). So the order
       // is the model's, and how far down it the editor is asked to look is their setting.
-      ctxLines.push(`- Before the pass is done, read back what the video plays where your cuts took words out, and order those cuts from the most likely to be wrong to the least: a cut is wrong when the editor, hearing the result, would put words back, take more out or choose the other delivery. The editor asked to check ${CHECK_IN_SHARE[ctx.checkIn ?? "balanced"]} of them: flag that many from the top of your order, each with what could be wrong. A cut you already flagged or staged for them counts.`);
+      // Once, in the run that made the cuts. The closing check that may follow runs in a fresh session with no memory of
+      // that order: asked again, it flagged a second share of the same cuts, 27-60% of the word cuts on three passes at
+      // "about one in four" (2026-11-20). Its own doubts it stages as any run does.
+      if (!t.repeatAudit?.returns) ctxLines.push(`- Before the pass is done, read back what the video plays where your cuts took words out, and order those cuts from the most likely to be wrong to the least: a cut is wrong when the editor, hearing the result, would put words back, take more out or choose the other delivery. The editor asked to check ${CHECK_IN_SHARE[ctx.checkIn ?? "balanced"]} of them: flag that many from the top of your order, each with what could be wrong. A cut you already flagged or staged for them counts.`);
+      // A repeat kept with dialogue_check_repeats plays on and is never shown to the editor. Across his ten edits of
+      // 2026-11-20, 9 of 10 passes kept 7-30 listed repeats each, plain restarts among them ("Gemini four and | Gemini
+      // four just came out", kept as "the first use names the model family"), while 1 of 166 phrases playing twice was
+      // never listed. Each run orders only the repeats it keeps itself, so a later run doesn't stage a second share.
+      ctxLines.push(`- Order the repeats dialogue_check_repeats lists that you would keep, from the most likely to be a restart or a retake the editor would take out to the least. Stage ${CHECK_IN_SHARE[ctx.checkIn ?? "balanced"]} of them from the top with removeRepeat and decision review, so the editor decides them, and keep the rest with your reason.`);
     }
     if (c.version) ctxLines.push(`- Timeline version the editor was looking at: ${c.version}`);
     if (t.cutConflict) {
@@ -326,15 +342,6 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     if (c.changeId && c.cutIndex !== undefined) ctxLines.push(`- Staged cut being revised: index ${c.cutIndex} of ${c.changeId}. \`dialogue_revise_cut\` saves its new range.`);
     if (c.changeId && c.cutIndex !== undefined && ctx.replacedPass) ctxLines.push(`- The request names this cut in ${ctx.replacedPass}, the pass as the editor saw it. A revision or a later part of the pass replaced that pass since with ${c.changeId}, where the cut is index ${c.cutIndex} and may have moved.`);
     if (c.reviewAllCuts) ctxLines.push("- The editor requested individual review of every cut.");
-    // Make shorts: which short this is, what it was made from and what the editor chose in the form.
-    const short = c.short;
-    if (short) {
-      const settings = typeof ctx.project === "string" ? undefined : ctx.project.project.settings;
-      ctxLines.push(`- This project is short ${short.index} of ${short.count} the editor made from “${short.sourceName}” (project ${short.sourceProjectId}) with Make shorts. It started as a copy of that video’s finished edit (its version ${short.sourceVersion}), with the same footage, transcripts and timeline times${settings ? `, on a ${settings.width}×${settings.height} (${short.aspect}) canvas` : ""}. That video isn’t changed.`);
-      ctxLines.push(`- The editor asked for shorts under ${short.maxSeconds} s each, ${short.captions ? "with captions" : "without captions"}.`);
-      if (short.moment) ctxLines.push(`- This short’s moment, chosen by the first short’s run: ${short.moment.start.toFixed(2)}–${short.moment.end.toFixed(2)} s on the copied timeline (${formatTimecode(short.moment.start, fps)}–${formatTimecode(short.moment.end, fps)}), “${short.moment.title}”.`);
-      else if (short.index === 1) ctxLines.push(`- You choose the moment${short.count === 1 ? "" : "s for all " + short.count + " shorts"} from the whole edit, and save ${short.count === 1 ? "it" : "them"} with \`shorts_plan\` before you cut. This project takes the first.`);
-    }
     for (const file of ctx.attachments ?? []) {
       ctxLines.push(`- File the editor attached: "${file.name}" (${fileKind(file.mime, file.name)}, ${fileSize(file.size)}), attachment ${file.id}, at ${file.path}`);
     }

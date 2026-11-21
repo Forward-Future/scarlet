@@ -13,8 +13,15 @@ export interface AgentCapabilities {
   images: boolean;
   /** Audio content blocks (WAV) in MCP tool results reach the model. */
   audio: boolean;
-  /** The agent can write files in its task artifact directory (needed before `asset_add`). */
+  /** The agent can read and write files in its task artifact directory (needed before `asset_add`). */
   files: boolean;
+  /**
+   * The agent has a shell in its task folder, sandboxed by its harness: it writes only there, and has ffmpeg and ffprobe
+   * on its PATH where the host has them. What it builds with them is its own choice. Every request has one.
+   */
+  shell?: boolean;
+  /** The agent can search the web through its harness's own tools. Every request can. */
+  web?: boolean;
   /** Character target for paging long MCP text responses. Configurable per harness. */
   resultChars?: number;
   /**
@@ -44,8 +51,9 @@ export interface AgentCapabilities {
 export const DEFAULT_TOOL_WAIT_SECONDS = 45;
 
 /**
- * Seconds one tool call may wait for evidence still being measured: `margin` under the harness's tool deadline, to
- * leave time for the answer itself. 220 s for a harness Scarlet launched and 25 s for a client it didn't, at a margin of 20.
+ * Seconds one tool call may wait for evidence still being measured: `margin` under the harness's `toolWaitSeconds`, to
+ * leave time for the answer itself. At a margin of 20: 220 s on Claude Code and Codex, 100 s on Gemini and 25 s for a
+ * client Scarlet didn't launch.
  */
 export function toolWait(caps: Pick<AgentCapabilities, "toolWaitSeconds">, margin: number): number {
   return Math.max(5, Math.min(240, (caps.toolWaitSeconds ?? DEFAULT_TOOL_WAIT_SECONDS) - margin));
@@ -60,13 +68,15 @@ export const DEFAULT_RESULT_CHARS = 40_000;
 // 2026-11-10 the chat shows only what Scarlet is doing this moment, not a plan, so no run pays for one.
 // SCARLET_AGENT_CAPS='{"plan":true}' still turns Claude Code's on. Codex's has not been measured.
 const KNOWN: Record<string, AgentCapabilities> = {
-  // claude -p runs with --tools "" (no file tools); Claude models take images but not audio.
+  // What each harness delivers launched with Scarlet's tools only, as a side check is. A request is launched with its
+  // harness's own shell, file and web tools as well (`workspaceCapabilities`).
+  // claude -p then runs with --tools "" (no file tools); Claude models take images but not audio.
   // Plan: Claude Code 2.1.316 has TaskCreate and TaskUpdate (TodoWrite before it) only when --tools names them.
   claude: { images: true, audio: false, files: false, plan: false, toolPrefix: "mcp__scarlet__", toolWaitSeconds: 240 },
   // codex exec has a writable workspace; MCP audio blocks are not forwarded to the model.
   // Plan: Codex 0.166 has update_plan only with tools.update_plan.enabled, and reports it as `todo_list` items.
   codex: { images: true, audio: false, files: true, plan: false, toolWaitSeconds: 240 },
-  // agy acp runs with Scarlet's permission handler allowing only Scarlet MCP tools (no file tools); audio forwarding from MCP is unverified. Its runner reads no plan.
+  // agy acp then runs with Scarlet's permission handler allowing only Scarlet MCP tools (no file tools); audio forwarding from MCP is unverified. Its runner reads no plan.
   // Brief tools: agy 1.x keeps about 60 KB of MCP tool definitions a session and drops the largest past it, listing
   // nothing in their place. On 2026-11-19 it dropped seven of Scarlet's 50 (117 KB), timeline_propose and
   // dialogue_apply_cuts among them, so a Gemini pass couldn't save an edit; listed briefly (43 KB) all 51 stayed.
@@ -81,6 +91,15 @@ const KNOWN: Record<string, AgentCapabilities> = {
 // wrong measurement: every tool also answers in text.
 const UNKNOWN: AgentCapabilities = { images: true, audio: false, files: false, plan: false };
 
+/**
+ * What a run launched with its harness's own tools has (`workspace` on the task's prompt): files, a shell sandboxed to
+ * its task folder, and the web. Checked headless on each harness, 2026-11-21: Claude Code and Codex have all three;
+ * agy's terminal has no network and agy no page fetch, so a Gemini run reads the web by search and `web_capture`.
+ */
+export function workspaceCapabilities(caps: AgentCapabilities): AgentCapabilities {
+  return { ...caps, files: true, shell: true, web: true };
+}
+
 export function agentCapabilities(agent: string | undefined, override?: Partial<AgentCapabilities> | string): AgentCapabilities {
   const base = (agent && Object.hasOwn(KNOWN, agent) && KNOWN[agent]) || UNKNOWN;
   let extra: Partial<AgentCapabilities> = {};
@@ -88,8 +107,9 @@ export function agentCapabilities(agent: string | undefined, override?: Partial<
     try {
       const parsed = JSON.parse(override) as Record<string, unknown>;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
-      for (const key of ["images", "audio", "files", "plan"] as const) if (typeof parsed[key] === "boolean") extra[key] = parsed[key] as boolean;
+      for (const key of ["images", "audio", "files", "shell", "web", "plan", "briefTools"] as const) if (typeof parsed[key] === "boolean") extra[key] = parsed[key] as boolean;
       if (typeof parsed.resultChars === "number") extra.resultChars = parsed.resultChars;
+      if (typeof parsed.toolWaitSeconds === "number" && Number.isFinite(parsed.toolWaitSeconds) && parsed.toolWaitSeconds > 0) extra.toolWaitSeconds = parsed.toolWaitSeconds;
     } catch {
       extra = {};
       // The value is the user's own text, so it stays out of the log.

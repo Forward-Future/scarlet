@@ -3,7 +3,7 @@ import { focusAround, type ProgressFocus } from "../components/player/SimpleProg
 import { lengthLabel } from "./format";
 
 const WORDS: Partial<Record<EditKind, string>> = {
-  cut: "Cut", restore: "Added", audio: "Audio", zoom: "Zoom", reframe: "Reframe", text: "Text", overlay: "Overlay", graphic: "Graphic", speed: "Speed", transition: "Transition",
+  cut: "Cut", restore: "Added", audio: "Audio", zoom: "Zoom", reframe: "Reframe", text: "Text", broll: "B-roll", overlay: "Overlay", graphic: "Graphic", speed: "Speed", transition: "Transition",
 };
 
 /** One word for what an edit did, the same in the list, on the timeline and on the card. None for an assembly or a mix. */

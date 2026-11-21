@@ -1,8 +1,8 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { planPlaybackSegments, type Project, type Timeline } from "@scarlet/timeline";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { planPlaybackSegments, timelineDuration, type Project, type Timeline } from "@scarlet/timeline";
 import { errorMessage } from "../../lib/client";
 import { openCutStream, playbackLoader } from "../../lib/cutStream";
-import { interactiveFrameUrl, thumbUrl } from "../review/thumbs";
+import { cutFrameUrl, interactiveFrameUrl } from "../review/thumbs";
 import { player } from "../../lib/player";
 import { playbackLog } from "../../lib/playbackLog";
 import type { JoinClock } from "../../lib/joinClock";
@@ -26,10 +26,7 @@ export function CutStream({ project, timeline, version, onStart, draft = false, 
   const { ranges } = plan;
   const [status, setStatus] = useState<"idle" | "waiting" | "ready">("idle");
   const [preroll, setPreroll] = useState<AbortSignal>();
-  const poster = useMemo(() => {
-    const time = usePlayerStore.getState().time;
-    return interactiveFrameUrl(thumbUrl(timeline, joins ? joins.toMedia(time) : time, 960));
-  }, [timeline, version]); // eslint-disable-line react-hooks/exhaustive-deps
+  const poster = usePoster(project, timeline, version, joins);
   const [error, setError] = useState<string>();
 
   const session = useRef<ReturnType<typeof openCutStream>>(undefined);
@@ -118,4 +115,39 @@ export function CutStream({ project, timeline, version, onStart, draft = false, 
       </div>
     </div>}
   </>;
+}
+
+/** The picture a paused stream showed last, so the one put up next at the same moment shows it until its own is in. */
+let shownPoster: { project: string; time: number; url: string } | undefined;
+
+/**
+ * The picture a stream shows before it plays: the video at the playhead as it plays, with every layer, framing and
+ * caption, not the footage of the top clip alone. A screen with the camera inset over it read as the camera full
+ * frame, so the picture changed while the editor watched it paused, each time a pass saved (2026-11-20). A new
+ * version shows the last picture until its own is in, so a save doesn't flash the monitor black.
+ */
+function usePoster(project: Project, timeline: Timeline, version: string, joins?: JoinClock) {
+  const wanted = useMemo(() => {
+    const time = usePlayerStore.getState().time;
+    const at = joins ? joins.toMedia(time) : time;
+    const last = timelineDuration(timeline) - 1 / project.settings.fps;
+    // The version the stream plays, which the engine has whatever copy of its timeline this is.
+    const frame = last >= 0 ? cutFrameUrl(project, { ...timeline, version }, Math.max(0, Math.min(at, last)), true, true) : undefined;
+    return { time, url: interactiveFrameUrl(frame) };
+  }, [timeline, version]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [shown, setShown] = useState(() => shownPoster?.project === project.id && Math.abs(shownPoster.time - wanted.time) < 1e-3
+    ? shownPoster.url : wanted.url);
+  useEffect(() => {
+    const { url, time } = wanted;
+    if (!url) return setShown(undefined);
+    const picture = new Image();
+    picture.onload = () => {
+      shownPoster = { project: project.id, time, url };
+      setShown(url);
+    };
+    picture.onerror = () => setShown(url);
+    picture.src = url;
+    return () => { picture.onload = picture.onerror = null; };
+  }, [wanted, project.id]);
+  return shown;
 }

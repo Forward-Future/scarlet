@@ -45,7 +45,7 @@ export async function readArtifact(workDir: string, input: string): Promise<Buff
   }
 }
 
-export async function writeArtifact(workDir: string, output: string, data: string): Promise<string> {
+export async function writeArtifact(workDir: string, output: string, data: string | Uint8Array): Promise<string> {
   const path = await artifactPath(workDir, output, true);
   const existing = await lstat(path).catch((err: NodeJS.ErrnoException) => {
     if (err.code !== "ENOENT") throw err;

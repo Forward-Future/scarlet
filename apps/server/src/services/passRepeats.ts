@@ -32,6 +32,10 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
   const project = ctx.repos.projects.get(projectId);
   if (!project) throw notFound("project");
   const tl = resolveTimeline(ctx, project, request.version);
+  // What the picture does is read by Scarlet's MCP server on the version it names. Read on another, it would count
+  // findings this playback doesn't have.
+  if (request.pictures && request.pictures.version !== tl.version) throw conflict("cut_changed", "Read the current edit and check its audio again.");
+  const pictureFindings = request.pictures?.findings ?? [];
   const check = await ctx.track(auditDialogueAudio(ctx, project, tl, task, AbortSignal.any([signal, ctx.projectSignal(projectId)]), request.silencesFrom), projectId);
   return ctx.db.transaction(() => {
     const owner = current();
@@ -77,8 +81,9 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
         if (review) mapRanges(review.original.version, change.restoredCuts.flatMap(i => review.cuts[i]?.removed ?? []), protectedRanges);
       }
     }
-    if (request.keep.some(k => !check.repeats.some(r => r.id === k.id) && !check.silences.some(s => s.id === k.id) && !check.fragments.some(f => f.id === k.id)))
-      throw badRequest("unknown_repeat", "A kept id must match a repeat, a silence or a divided sentence found on this version.");
+    if (request.keep.some(k => !check.repeats.some(r => r.id === k.id) && !check.silences.some(s => s.id === k.id) && !check.fragments.some(f => f.id === k.id) &&
+        !pictureFindings.some(p => p.id === k.id)))
+      throw badRequest("unknown_repeat", "A kept id must match a repeat, a silence, a divided sentence or a picture found on this version.");
     if (request.keep.length) {
       const fresh = request.keep.filter(k => !kept.has(k.id));
       if (fresh.length) appendTaskEvent(ctx, owner, { type: "log", text: "", data: { kind: "repeat_kept", version: tl.version,
@@ -113,18 +118,24 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
     const fragments = check.fragments.filter(f => !kept.has(f.id) && !stagedRanges.some(r => r.start - frame <= f.at && f.at <= r.end + frame));
     const unavailable = check.unavailable.map(u => `Couldn’t check ${u.mediaId}: ${u.reason}`);
     const last = owner.repeatAudit;
-    const remaining = repeats.length + silences.length + fragments.length;
+    // A picture finding is settled once the pass keeps it with its reason, or changes the picture there.
+    const pictures = pictureFindings.filter(p => !kept.has(p.id));
+    const remaining = repeats.length + silences.length + fragments.length + pictures.length;
     const returns = last?.version === tl.version && (last.remaining === undefined || remaining >= last.remaining) ? last.returns : 0;
     // A join inside a range staged for review isn't played yet; the review reads it.
     const joins = check.joins.filter(j => !stagedRanges.some(r => r.start - frame <= j.at && j.at <= r.end + frame));
-    const noFindings = !check.repeats.length && !check.silences.length && !check.fragments.length && !joins.length && !unheardJoins.length && !unavailable.length;
-    saveTask(ctx, { ...owner, state: "running", repeatAudit: { version: tl.version, remaining, unavailable, returns, noFindings } });
+    const noFindings = !check.repeats.length && !check.silences.length && !check.fragments.length && !joins.length && !unheardJoins.length && !unavailable.length &&
+      !pictureFindings.length;
+    // How many times in all the pass went back for this check, and when it last did, go on whatever this reading finds.
+    saveTask(ctx, { ...owner, state: "running", repeatAudit: { version: tl.version, remaining, unavailable, returns, noFindings,
+      ...(last?.totalReturns !== undefined && { totalReturns: last.totalReturns }), ...(last?.queuedAt && { queuedAt: last.queuedAt }) } });
     return { version: tl.version, ...(named !== tl.version && { readInsteadOf: named }), heard: check.repeats.length, staged: staged.length, remaining,
       // One offset pages the repeats and the divided sentences together: a pass asked for the next pages of both at once.
       repeats: repeats.slice(request.offset, request.offset + 25),
       ...(request.offset + 25 < Math.max(repeats.length, fragments.length) && { nextOffset: request.offset + 25 }),
       ...(silences.length && { silences: silences.slice(0, 25) }),
       ...(fragments.length && { fragments: fragments.slice(request.offset, request.offset + 25) }),
+      ...(pictures.length && { pictures: pictures.slice(0, 25) }),
       ...(check.unavailable.length && { unavailable: check.unavailable }),
       ...(check.joins.length && { joins }), ...(unheardJoins.length && { unheardJoins }) };
   }, "immediate")();
