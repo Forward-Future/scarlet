@@ -209,8 +209,9 @@ function otioClip(clip: Clip, frames: number, rate: number, media: Map<string, M
     // OTIO plays children end to end. Counting each cut in camera frames lets rounding drift accumulate
     // against the audio. Keep genuine subframes when the footage clock or playback speed differs.
     const preserveSubframes = (asset?.fps ?? rate) !== rate || (clip.speed ?? 1) !== 1;
-    // The footage it plays is its timeline length at its speed.
-    sourceRange = framesRange(origin + clip.sourceIn, frames * (clip.speed ?? 1), rate, preserveSubframes);
+    // An OTIO item's length on its track is its range's duration, before any time warp: the timeline length. A
+    // LinearTimeWarp then plays that length times its scalar of footage from the range's start.
+    sourceRange = framesRange(origin + clip.sourceIn, frames, rate, preserveSubframes);
     if ((clip.speed ?? 1) !== 1) {
       effects.push({
         OTIO_SCHEMA: "LinearTimeWarp.1",
@@ -253,6 +254,8 @@ function otioClip(clip: Clip, frames: number, rate: number, media: Map<string, M
         volume: clip.kind === "media" ? clip.volume : null,
         audioFadeIn: clip.kind === "media" ? clip.audioFadeIn : 0,
         audioFadeOut: clip.kind === "media" ? clip.audioFadeOut : 0,
+        // Files from before this was written gave a retimed clip's range the footage's length instead.
+        ...(clip.kind === "media" && (clip.speed ?? 1) !== 1 ? { retimedLength: "timeline" } : {}),
       },
     },
   };

@@ -457,6 +457,36 @@ describe("fromOtio", () => {
     expect((fromOtio(otio, project, fast).tracks.find((t) => t.id === "v1")!.clips as MediaClip[])[1]!.speed).toBe(1);
   });
 
+  it("reads a standard OTIO retime: the item's length is its time on the track, and its time warp plays more footage", () => {
+    const { project, tl } = setup();
+    tl.tracks = [tl.tracks[0]!];
+    // Two seconds of footage at 2× from 0 s, then 3–4 s at normal speed from 1 s.
+    tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 2, 0, { id: "first", speed: 2 }), makeMediaClip("m1", 3, 4, 1, { id: "second" })];
+    const clips = (doc: Json) => (fromOtio(doc, project, tl).tracks[0]!.clips as MediaClip[]).map(c => [c.id, c.timelineIn, c.sourceIn, c.sourceOut, c.speed]);
+    const expected = [["first", 0, 0, 2, 2], ["second", 1, 3, 4, 1]];
+    // As written by another app, with none of Scarlet's metadata.
+    const frames = (value: number) => ({ OTIO_SCHEMA: "RationalTime.1", value, rate: 30 });
+    const media = { OTIO_SCHEMA: "ExternalReference.1", target_url: "file:///footage/interview.mp4",
+      available_range: { OTIO_SCHEMA: "TimeRange.1", start_time: frames(0), duration: frames(1800) } };
+    const item = (name: string, start: number, duration: number, speed?: number) => ({
+      OTIO_SCHEMA: "Clip.2", name, media_references: { DEFAULT_MEDIA: media }, active_media_reference_key: "DEFAULT_MEDIA",
+      source_range: { OTIO_SCHEMA: "TimeRange.1", start_time: frames(start), duration: frames(duration) },
+      effects: speed ? [{ OTIO_SCHEMA: "LinearTimeWarp.1", time_scalar: speed }] : [],
+    });
+    const standard = { OTIO_SCHEMA: "Timeline.1", tracks: { OTIO_SCHEMA: "Stack.1", children: [
+      { OTIO_SCHEMA: "Track.1", name: "V1", kind: "Video", children: [item("first", 0, 30, 2), item("second", 90, 30)] }] } };
+    expect(clips(standard)).toEqual(expected);
+    // Scarlet's own file, with its metadata and without, reads back as it was.
+    expect(clips(toOtio(project, tl) as Json)).toEqual(expected);
+    expect(clips(stripScarlet(toOtio(project, tl) as Json))).toEqual(expected);
+    // A Scarlet file from before gave the retimed item the footage's length, and still reads back as it was.
+    const older = toOtio(project, tl) as Json;
+    const first = older.tracks.children[0].children[0];
+    first.source_range.duration.value = 60;
+    delete first.metadata.scarlet.retimedLength;
+    expect(clips(older)).toEqual(expected);
+  });
+
   it("keeps the source frames of slow motion footage between project frame boundaries", () => {
     const { project, tl } = setup();
     project.media[0]!.fps = 120;
