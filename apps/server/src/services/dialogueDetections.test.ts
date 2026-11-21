@@ -594,13 +594,14 @@ it("scans for a request sent about a point and for a revision as it does for a w
 
 it("keeps pages the bundled Whisper read through an update that installs it again, and not a chosen one's", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scarlet-dialogue-update-"));
-  const bin = join(dir, "bin"), cli = join(bin, process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli");
+  onTestFinished(async () => { vi.restoreAllMocks(); await rm(dir, { recursive: true, force: true }); });
+  const dataDir = join(dir, "data"), bin = join(dir, "bin"), cli = join(bin, process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli");
   await mkdir(bin, { recursive: true });
   await writeFile(cli, "whisper build");
-  const app = createApp({ dataDir: dir, skillsSeedDir: dir, env: { SCARLET_BIN_DIR: bin }, log: () => {} });
+  const app = createApp({ dataDir, skillsSeedDir: join(dir, "empty-seed"), env: { SCARLET_BIN_DIR: bin }, log: () => {} });
+  onTestFinished(() => app.ctx.close());
   vi.spyOn(WhisperCppProvider.prototype, "transcribeWav").mockResolvedValue({ language: "en", segments: [] });
   vi.spyOn(UhmDetector.prototype, "detect").mockResolvedValue([]);
-  onTestFinished(async () => { await app.ctx.close(); vi.restoreAllMocks(); await rm(dir, { recursive: true, force: true }); });
   expect(app.ctx.whisperCli).toBe(cli);
   const project = app.ctx.repos.projects.insert(createProject("Update test"));
   app.ctx.paths.ensureProject(project.id);
