@@ -160,10 +160,14 @@ export interface JoinPace { after: number; before: number }
 export const DEFAULT_PACE: JoinPace = { after: AIR_AFTER_SPEECH, before: AIR_BEFORE_SPEECH };
 /**
  * The air either side of a join that plays `leave` seconds word to word. `voiceIn` of them, or the pace's `before`,
- * sit between the cut and the voice, and the rest plays before the cut. A pause shorter than twice that is halved.
+ * sit between the cut and the voice, and the rest plays before the cut. A pause shorter than twice the pace's `before`
+ * is halved. A `voiceIn` the model gives may take more than half, down to the pace's `after` left for the last word's
+ * release: halved, a 0.6 s beat asked for after the cut played 0.3 s of it after the last word instead, and on
+ * camera that quiet showed the speaker look away (2026-11-20).
  */
-export const splitLeave = (leave: number, pace: JoinPace = DEFAULT_PACE, voiceIn = pace.before): JoinPace => {
-  const before = Math.min(voiceIn, leave / 2);
+export const splitLeave = (leave: number, pace: JoinPace = DEFAULT_PACE, voiceIn?: number): JoinPace => {
+  const half = leave / 2;
+  const before = voiceIn === undefined ? Math.min(pace.before, half) : Math.min(voiceIn, leave - Math.min(pace.after, half));
   return { after: leave - before, before };
 };
 

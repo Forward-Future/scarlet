@@ -146,13 +146,15 @@ impl Api {
     }
 
     /// Long-poll claim: the server holds the request up to `wait` seconds; `agents` are the idle runtimes here.
-    pub async fn claim(&self, host_id: &str, wait: u64, agents: &[String]) -> Result<Option<Task>, ApiError> {
+    /// `agents`: runtimes with a free request slot. `check_agents`: runtimes with a free side-check slot, which the
+    /// engine hands side checks to instead (an engine from before ignores it and hands every kind to `agents`).
+    pub async fn claim(&self, host_id: &str, wait: u64, agents: &[String], check_agents: &[String]) -> Result<Option<Task>, ApiError> {
         #[derive(Deserialize)]
         struct R {
             task: Option<Task>,
         }
         let r: R = self
-            .request(reqwest::Method::POST, &format!("/hosts/{host_id}/claim?wait={wait}"), Some(json!({ "agents": agents, "desktopPid": std::process::id() })), Some(Duration::from_secs(wait + 20)))
+            .request(reqwest::Method::POST, &format!("/hosts/{host_id}/claim?wait={wait}"), Some(json!({ "agents": agents, "checkAgents": check_agents, "desktopPid": std::process::id() })), Some(Duration::from_secs(wait + 20)))
             .await?;
         Ok(r.task)
     }
@@ -373,11 +375,11 @@ mod tests {
             _ => (500, String::new()),
         }).await;
         let api = Api::new(&engine.url, None);
-        assert!(api.claim("host_1", 25, &["claude".to_string()]).await.unwrap().is_none());
-        let task = api.claim("host_1", 0, &["codex".to_string()]).await.unwrap().unwrap();
+        assert!(api.claim("host_1", 25, &["claude".to_string()], &["claude".to_string(), "codex".to_string()]).await.unwrap().is_none());
+        let task = api.claim("host_1", 0, &["codex".to_string()], &[]).await.unwrap().unwrap();
         assert_eq!((task.id.as_str(), task.agent.as_str(), task.kind.as_str()), ("tsk_1", "codex", "edit"));
         let asked = engine.bodies("POST /api/hosts/host_1/claim?wait=25");
-        assert_eq!(asked[0], json!({ "agents": ["claude"], "desktopPid": std::process::id() }));
+        assert_eq!(asked[0], json!({ "agents": ["claude"], "checkAgents": ["claude", "codex"], "desktopPid": std::process::id() }));
         // An engine from before cancellations were reported on the heartbeat reports none.
         assert!(api.heartbeat("host_1", &[], &["tsk_1".to_string()]).await.unwrap().is_empty());
         assert_eq!(api.heartbeat("host_2", &[], &[]).await.unwrap(), ["tsk_9"]);

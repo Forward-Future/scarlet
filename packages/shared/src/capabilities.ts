@@ -29,7 +29,8 @@ export interface AgentCapabilities {
   /**
    * How long one tool call may wait for evidence still being measured before it answers "still running" and costs the
    * model a turn. Scarlet's hosts launch Claude Code (MCP_TOOL_TIMEOUT) and Codex (tool_timeout_sec) with a 300 s tool
-   * deadline; a client Scarlet didn't launch keeps the common 60 s one, so it waits less.
+   * deadline; agy ends a tool call at 180 s whatever Scarlet asks; a client Scarlet didn't launch keeps the common 60 s
+   * one, so it waits less.
    */
   toolWaitSeconds?: number;
   /**
@@ -69,7 +70,9 @@ const KNOWN: Record<string, AgentCapabilities> = {
   // Brief tools: agy 1.x keeps about 60 KB of MCP tool definitions a session and drops the largest past it, listing
   // nothing in their place. On 2026-11-19 it dropped seven of Scarlet's 50 (117 KB), timeline_propose and
   // dialogue_apply_cuts among them, so a Gemini pass couldn't save an edit; listed briefly (43 KB) all 51 stayed.
-  gemini: { images: true, audio: false, files: false, plan: false, briefTools: true },
+  // Tool wait: agy 1.x ends a tool call at 180 s (two saves on 2026-11-20 failed at 181 s; a 94 s call answered). With
+  // no wait set, Gemini's calls waited 45 s less their margin, so a save that needed area checks gave up at once.
+  gemini: { images: true, audio: false, files: false, plan: false, briefTools: true, toolWaitSeconds: 120 },
 };
 
 // An agent Scarlet didn't launch is someone's own MCP client, such as Claude Code or Claude Desktop pointed at Scarlet,
