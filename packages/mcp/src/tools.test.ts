@@ -10,7 +10,7 @@ import { z } from "zod/v3";
 import { toolAnnotations } from "./annotations.js";
 import { syncRate } from "./audio-sync.js";
 import { relativeLinks } from "./graphics-tools.js";
-import { createScarletMcpServer, transcriptionNote, validateOps, type ScarletMcpContext } from "./server.js";
+import { ALWAYS_LOADED_TOOLS, createScarletMcpServer, transcriptionNote, validateOps, type ScarletMcpContext } from "./server.js";
 import { describeError, formatZodError } from "./tool-result.js";
 import { makeState, startMockServer, type MockServer, type RecordedRequest } from "./mock-server.js";
 
@@ -825,6 +825,23 @@ describe("tool annotations", () => {
       expect([...new Set(tools.map(t => t.name))].sort()).toEqual(every.filter(name => name !== "skill_save_from_change").sort());
       for (const t of tools) expect(t.annotations, t.name).toEqual(toolAnnotations(t.name));
     } finally { await Promise.all(sessions.map(c => c.close())); }
+  });
+
+  it("sends a few small tools whole from the start of a request and every tool of a side check, each under Claude Code's cut", async () => {
+    const base = { state: "running", projectId: "prj_test", agent: "claude", hostId: "host_a", createdBy: { type: "human", name: "Editor" } } as const;
+    const edit = Task.parse({ ...base, id: "edit-task", kind: "edit", instruction: "Cut the dialogue", context: {} });
+    const area = Task.parse({ ...base, id: "area-task", kind: "area_check", instruction: "What may viewers see", context: { checksTaskId: "edit-task" } });
+    const [request, check] = [await connect({ taskId: edit.id, task: edit }), await connect({ taskId: area.id, task: area })];
+    try {
+      const loaded = (tools: Awaited<ReturnType<Client["listTools"]>>["tools"]) => tools.filter(t => t._meta?.["anthropic/alwaysLoad"] === true);
+      const requestTools = (await request.listTools()).tools;
+      expect(loaded(requestTools).map(t => t.name).sort()).toEqual([...ALWAYS_LOADED_TOOLS].sort());
+      // The rest load when the model looks them up, so a tool search costs a turn only where it saves one.
+      expect(requestTools.length).toBeGreaterThan(20);
+      const checkTools = (await check.listTools()).tools;
+      expect(loaded(checkTools).map(t => t.name)).toEqual(checkTools.map(t => t.name));
+      for (const t of [...loaded(requestTools), ...checkTools]) expect(t.description!.length, t.name).toBeLessThanOrEqual(4096);
+    } finally { await Promise.all([request.close(), check.close()]); }
   });
 });
 

@@ -42,6 +42,10 @@ pub struct ClaudeState {
 pub const CLAUDE_PLAN_TOOLS: &str = "TaskCreate,TaskUpdate,TodoWrite";
 /// Claude Code's own tools a request's agent has beside Scarlet's: a shell, files and the web.
 pub const CLAUDE_WORKSPACE_TOOLS: [&str; 8] = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"];
+/// Claude Code's tool search: Scarlet's tools are listed by name and each one's definition loads, whole, when the model
+/// looks it up. Without it every definition is sent on every turn and a description is cut at 4,096 characters
+/// (`CLAUDE_TOOL_SEARCH` in the TypeScript runner says more).
+pub const CLAUDE_TOOL_SEARCH: &str = "ToolSearch";
 
 /// Why a run whose Scarlet MCP server failed has failed: Claude Code carries on without it and calls the run a success.
 const MCP_FAILED: &str = "Scarlet's MCP server failed to start, so Claude Code had no editing tools.";
@@ -391,13 +395,13 @@ pub fn can_run_bare(env: &std::collections::HashMap<String, String>) -> bool {
 pub fn build_claude_command(model: Option<&str>, effort: Option<&str>, service_tier: Option<&str>, system_prompt: &str, instruction: &str, resume_session: Option<&str>, bare: bool, plan: bool, workspace: Option<&Workspace>, mcp: &McpSpec, bin: &str, tmp_dir: &Path) -> RunnerCommand {
     let mcp_config_path = tmp_dir.join("mcp.json");
     let system_path = tmp_dir.join("system.md");
-    // A request's own shell, file and web tools, and Claude Code's to-do list when the engine asks for the agent's plan.
-    // A side check has neither.
-    let mut tools: Vec<&str> = Vec::new();
+    // Tool search, a request's own shell, file and web tools, and Claude Code's to-do list when the engine asks for the
+    // agent's plan. A side check has only tool search.
+    let mut tools: Vec<&str> = vec![CLAUDE_TOOL_SEARCH];
     if workspace.is_some() { tools.extend(CLAUDE_WORKSPACE_TOOLS); }
     if plan { tools.extend(CLAUDE_PLAN_TOOLS.split(',')); }
     let tools = tools.join(",");
-    let mut allowed = vec!["mcp__scarlet__*"];
+    let mut allowed = vec!["mcp__scarlet__*", CLAUDE_TOOL_SEARCH];
     if workspace.is_some() { allowed.extend(CLAUDE_WORKSPACE_TOOLS); allowed.push("WebFetch(domain:*)"); }
     let allowed = allowed.join(",");
     let mut args: Vec<String> = vec!["-p".into()];
@@ -672,8 +676,8 @@ mod tests {
         let cmd = build_claude_command(Some("opus"), None, None, "SYS", "Make the first cut", None, false, false, None, &mcp, "claude", Path::new("/tmp/t"));
         assert_eq!(cmd.args[0], "-p");
         assert_eq!(cmd.stdin.as_deref(), Some("Make the first cut"));
-        assert!(cmd.args.windows(2).any(|a| a == ["--tools", ""]));
-        assert!(cmd.args.windows(2).any(|a| a == ["--allowedTools", "mcp__scarlet__*"]));
+        assert!(cmd.args.windows(2).any(|a| a == ["--tools", "ToolSearch"]));
+        assert!(cmd.args.windows(2).any(|a| a == ["--allowedTools", "mcp__scarlet__*,ToolSearch"]));
         assert!(cmd.args.windows(2).any(|a| a == ["--permission-mode", "dontAsk"]));
         assert!(cmd.args.iter().any(|a| a == "--restricted"));
         let option = "--settings={}";
@@ -697,7 +701,7 @@ mod tests {
         assert!(!cmd.args.iter().any(|a| a == "--no-session-persistence"));
         // Asked for the agent's plan, the CLI gets its own to-do tools and still nothing else of its own.
         let planned = build_claude_command(None, None, None, "SYS", "line1\nline2", None, false, true, None, &mcp, "claude", Path::new("/tmp/t"));
-        assert!(planned.args.windows(2).any(|a| a == ["--tools", "TaskCreate,TaskUpdate,TodoWrite"]));
+        assert!(planned.args.windows(2).any(|a| a == ["--tools", "ToolSearch,TaskCreate,TaskUpdate,TodoWrite"]));
         assert_eq!(planned.args.len(), long.args.len());
         let resumed = build_claude_command(None, None, None, "SYS", "The editor answered", Some("s1"), true, false, None, &mcp, "claude", Path::new("/tmp/t"));
         assert_eq!(&resumed.args[..2], &["-p", "--bare"]);
@@ -976,8 +980,8 @@ mod tests {
         let ws = Workspace { bin_dir: Some("/w/.tools".into()), read_dirs: vec!["/Applications/Google Chrome.app".into()] };
         let cmd = build_claude_command(None, None, None, "SYS", "x", None, false, false, Some(&ws), &mcp, "claude", Path::new("/w/.scarlet"));
         let after = |flag: &str| cmd.args[cmd.args.iter().position(|a| a == flag).unwrap() + 1].clone();
-        assert_eq!(after("--tools"), "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch");
-        assert_eq!(after("--allowedTools"), "mcp__scarlet__*,Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,WebFetch(domain:*)");
+        assert_eq!(after("--tools"), "ToolSearch,Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch");
+        assert_eq!(after("--allowedTools"), "mcp__scarlet__*,ToolSearch,Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,WebFetch(domain:*)");
         let settings: Value = serde_json::from_str(&after("--settings")).unwrap();
         assert_eq!(settings, json!({
             "sandbox": { "enabled": true, "allowUnsandboxedCommands": false, "autoAllowBashIfSandboxed": true,
@@ -986,7 +990,7 @@ mod tests {
             "permissions": { "blockReadsOutsideWorkingDirectories": true, "allow": ["WebFetch(domain:*)"], "deny": ["Read(//w/.scarlet/**)", "Edit(//w/.scarlet/**)"] },
         }));
         let planned = build_claude_command(None, None, None, "SYS", "x", None, false, true, Some(&ws), &mcp, "claude", Path::new("/w/.scarlet"));
-        assert_eq!(planned.args[planned.args.iter().position(|a| a == "--tools").unwrap() + 1], "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,TaskCreate,TaskUpdate,TodoWrite");
+        assert_eq!(planned.args[planned.args.iter().position(|a| a == "--tools").unwrap() + 1], "ToolSearch,Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,TaskCreate,TaskUpdate,TodoWrite");
     }
 
 }

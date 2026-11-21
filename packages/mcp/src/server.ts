@@ -117,6 +117,16 @@ const SKILL_EDIT_TOOLS: ReadonlySet<string> = new Set(["task_log", "task_questio
 const LEARNING_CHECK_TOOLS: ReadonlySet<string> = new Set(["skills_list", "learning_suggest"]);
 /** An area check looks at one frame and says what of it viewers may see, and nothing else. */
 const AREA_CHECK_TOOLS: ReadonlySet<string> = new Set(["media_frame", "screen_area"]);
+/**
+ * A harness with tool search (Claude Code's `ToolSearch`) lists tools by name and loads a definition when the model
+ * looks it up; these are sent whole from the start of a request, as small tools nearly every request reads. A side
+ * check or a skill revision has only a few tools, so all of them are, and no turn goes on a search. Claude Code cuts an
+ * upfront description at 4,096 characters, so each of these stays under that (`tools.test.ts`).
+ */
+export const ALWAYS_LOADED_TOOLS: ReadonlySet<string> = new Set(["project_get", "timeline_get", "task_log", "task_question"]);
+const FEW_TOOL_TASKS: ReadonlySet<string> = new Set(["area_check", "learning_check", "skill_edit", "skill_from_change"]);
+/** Claude Code's `_meta` key for a tool it sends whole from the start instead of behind tool search. */
+const ALWAYS_LOAD = "anthropic/alwaysLoad";
 /** Times one timeline_at call maps; the rest of a longer list come back to ask for. */
 const TIMES_AT_ONCE = 50;
 const PASS_WIDE_TOOLS: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_review_save"]);
@@ -1346,7 +1356,8 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     if (ctx.task?.kind === "area_check" && !AREA_CHECK_TOOLS.has(name)) return;
     const inputSchema = unsharedShape(shape);
     toolParameters.set(name, z.object(inputSchema));
-    server.registerTool(name, { description, inputSchema, annotations: toolAnnotations(name) }, (async (args: z.infer<z.ZodObject<Shape>>) => {
+    const alwaysLoad = ALWAYS_LOADED_TOOLS.has(name) || FEW_TOOL_TASKS.has(ctx.task?.kind ?? "");
+    server.registerTool(name, { description, inputSchema, annotations: toolAnnotations(name), ...(alwaysLoad && { _meta: { [ALWAYS_LOAD]: true } }) }, (async (args: z.infer<z.ZodObject<Shape>>) => {
       const calls = running.get(name) ?? new Set<Promise<unknown>>();
       running.set(name, calls);
       let finish!: () => void;
