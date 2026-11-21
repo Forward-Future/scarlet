@@ -17,6 +17,14 @@ const CLAUDE_PLAN_TOOLS = ["TaskCreate", "TaskUpdate", "TodoWrite"];
 export const CLAUDE_WORKSPACE_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"];
 /** Allowed without asking. `WebFetch(domain:*)` also lets the shell's sandbox reach any web address. */
 const CLAUDE_WORKSPACE_ALLOWED = [...CLAUDE_WORKSPACE_TOOLS, "WebFetch(domain:*)"];
+/**
+ * Claude Code's tool search. With it, Scarlet's tools are listed by name and each one's definition loads when the model
+ * looks it up, whole up to 16,384 characters. Without it every definition is sent on every turn, about three quarters of
+ * a turn's tokens, and a description longer than 4,096 characters is cut there: Claude never read the end of
+ * `timeline_propose`'s, `dialogue_apply_cuts`'s or `dialogue_check_repeats`'s (claude 2.1.329, 2026-11-21). A tool
+ * marked `anthropic/alwaysLoad` (`ALWAYS_LOADED_TOOLS` in the MCP server) is sent whole from the start.
+ */
+export const CLAUDE_TOOL_SEARCH = "ToolSearch";
 const PLAN_READS = new Set(["TaskList", "TaskGet", "TodoRead"]);
 const STEP_STATE: Record<string, PlanStep["state"]> = { pending: "pending", in_progress: "in_progress", completed: "done" };
 
@@ -282,7 +290,7 @@ export function buildClaudeCommand(
     : { enabled: true, allowUnsandboxedCommands: false };
   const control = `//${tmpDir.replace(/\\/g, "/").replace(/^\/+/, "")}/**`;
   const permissions = ws ? { blockReadsOutsideWorkingDirectories: true, allow: ["WebFetch(domain:*)"], deny: [`Read(${control})`, `Edit(${control})`] } : undefined;
-  const tools = [...(ws ? CLAUDE_WORKSPACE_TOOLS : []), ...(opts.plan ? CLAUDE_PLAN_TOOLS : [])];
+  const tools = [CLAUDE_TOOL_SEARCH, ...(ws ? CLAUDE_WORKSPACE_TOOLS : []), ...(opts.plan ? CLAUDE_PLAN_TOOLS : [])];
   const args = [
     "-p",
     ...(bare ? ["--bare"] : []),
@@ -295,11 +303,11 @@ export function buildClaudeCommand(
     "--restricted",
     "--disable-slash-commands",
     "--tools",
-    // A request's own shell, file and web tools, and Claude Code's to-do list when the engine asks for the agent's plan.
-    // A side check has neither.
+    // Tool search, a request's own shell, file and web tools, and Claude Code's to-do list when the engine asks for the
+    // agent's plan. A side check has only tool search.
     tools.join(","),
     "--allowedTools",
-    ["mcp__scarlet__*", ...(ws ? CLAUDE_WORKSPACE_ALLOWED : [])].join(","),
+    ["mcp__scarlet__*", CLAUDE_TOOL_SEARCH, ...(ws ? CLAUDE_WORKSPACE_ALLOWED : [])].join(","),
     "--append-system-prompt-file",
     systemPath,
     "--permission-mode",

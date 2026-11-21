@@ -134,8 +134,8 @@ describe("claude stream-json parser", () => {
     const workspace = { binDir: "/w/.tools", readDirs: ["/Applications/Google Chrome.app"] };
     const cmd = buildClaudeCommand({ instruction: "x", systemPrompt: "SYS", mcp, workspace }, "claude", "/w/.scarlet");
     const after = (flag: string) => cmd.args[cmd.args.indexOf(flag) + 1];
-    expect(after("--tools")).toBe("Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch");
-    expect(after("--allowedTools")).toBe("mcp__scarlet__*,Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,WebFetch(domain:*)");
+    expect(after("--tools")).toBe("ToolSearch,Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch");
+    expect(after("--allowedTools")).toBe("mcp__scarlet__*,ToolSearch,Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,WebFetch(domain:*)");
     expect(after("--permission-mode")).toBe("dontAsk");
     expect(JSON.parse(after("--settings"))).toEqual({
       sandbox: { enabled: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true,
@@ -145,7 +145,7 @@ describe("claude stream-json parser", () => {
     });
     // With its plan asked for too, both.
     const planned = buildClaudeCommand({ instruction: "x", systemPrompt: "SYS", mcp, workspace, plan: true }, "claude", "/w/.scarlet");
-    expect(planned.args[planned.args.indexOf("--tools") + 1]).toBe("Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,TaskCreate,TaskUpdate,TodoWrite");
+    expect(planned.args[planned.args.indexOf("--tools") + 1]).toBe("ToolSearch,Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,TaskCreate,TaskUpdate,TodoWrite");
   });
   it("runs a CLI without Scarlet's own variables, the workspace's launchers first on its PATH", () => {
     const env = workspaceEnv({ PATH: "/usr/bin", SCARLET_TOKEN: "secret", scarlet_server: "http://x", HOME: "/h" }, { binDir: "/w/.tools", readDirs: [] });
@@ -156,7 +156,7 @@ describe("claude stream-json parser", () => {
     const cmd = buildClaudeCommand({ instruction: "Make the first cut", systemPrompt: "SYS", mcp, model: "opus" }, "claude", "/tmp/t");
     expect(cmd.args).toEqual([
       "-p", "--output-format", "stream-json", "--verbose", "--mcp-config", expect.stringMatching(/mcp\.json$/), "--strict-mcp-config",
-      "--restricted", "--disable-slash-commands", "--tools", "", "--allowedTools", "mcp__scarlet__*", "--append-system-prompt-file", expect.stringMatching(/system\.md$/), "--permission-mode", "dontAsk",
+      "--restricted", "--disable-slash-commands", "--tools", "ToolSearch", "--allowedTools", "mcp__scarlet__*,ToolSearch", "--append-system-prompt-file", expect.stringMatching(/system\.md$/), "--permission-mode", "dontAsk",
       "--model", "opus", "--settings", expect.any(String),
     ]);
     const resumed = buildClaudeCommand({ instruction: "The editor answered", systemPrompt: "SYS", mcp, resumeSession: "s1" }, "claude", "/tmp/t", true);
@@ -175,7 +175,7 @@ describe("claude stream-json parser", () => {
     expect(long.args[1]).toBe("--output-format");
     // Asked for the agent's plan, the CLI gets its own to-do tools and still nothing else of its own.
     const planned = buildClaudeCommand({ instruction: "x", systemPrompt: "SYS", mcp, plan: true }, "claude", "/tmp/t");
-    expect(planned.args[planned.args.indexOf("--tools") + 1]).toBe("TaskCreate,TaskUpdate,TodoWrite");
+    expect(planned.args[planned.args.indexOf("--tools") + 1]).toBe("ToolSearch,TaskCreate,TaskUpdate,TodoWrite");
     expect(planned.args.filter((a, i) => i !== planned.args.indexOf("--tools") + 1)).toEqual(long.args.filter((a, i) => i !== long.args.indexOf("--tools") + 1));
     expect(long.stdin).toBe("line1\nline2");
     const tuned = buildClaudeCommand({ instruction: "x", systemPrompt: "SYS", mcp, model: "opus", effort: "max", fast: true }, "claude", "/tmp/t");
