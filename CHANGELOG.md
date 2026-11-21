@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 21, 2026
 
+- In an Advanced export, two recordings whose names look the same but write an accent differently no longer overwrite each other; each clip links to its own file.
 - Make shorts has been removed from the ⋯ menu: edit a short the same way you edit any other video.
 - Scarlet now has a shell, files and the web in every edit, whichever model you pick, so it can look things up and build what an edit needs as it works.
 - During a screen demo, your camera now stays in its corner, and Scarlet frames the screen around it instead of moving the camera around.
