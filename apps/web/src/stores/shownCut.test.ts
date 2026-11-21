@@ -4,7 +4,7 @@ import { buildDb, PRJ } from "../lib/mock/fixtures";
 import { usePlayerStore } from "./player";
 import { useProjectStore, type ProjectData } from "./project";
 import { applyOps } from "@scarlet/timeline";
-import { SETTLE_MS, showingWorkingCut, useCaughtUpStore, useShownCutStore } from "./shownCut";
+import { SETTLE_MS, showingWorkingCut, takeUpLatest, useCaughtUpStore, useShownCutStore } from "./shownCut";
 
 const initialProject = useProjectStore.getState();
 const initialPlayer = usePlayerStore.getState();
@@ -53,6 +53,19 @@ it("holds the working cut a pass saves while the video plays, and takes up the l
   usePlayerStore.getState().setPlaying(false);
   vi.advanceTimersByTime(SETTLE_MS);
   expect(useShownCutStore.getState()).toMatchObject({ head: "v4", timeline: { version: "v4" } });
+});
+
+it("takes up the latest working cut while the video plays when asked to, as for the open edit's own revision", () => {
+  const { project } = open();
+  usePlayerStore.getState().setPlaying(true);
+  save("v2");
+  expect(useShownCutStore.getState().head).toBe(project.head);
+  takeUpLatest();
+  expect(useShownCutStore.getState()).toMatchObject({ head: "v2", timeline: { version: "v2" } });
+  expect(useCaughtUpStore.getState().waiting).toBe(false);
+  // Later saves hold again while it plays.
+  save("v3");
+  expect(useShownCutStore.getState().head).toBe("v2");
 });
 
 it("doesn't hold a working cut whose timeline is still being read", () => {
