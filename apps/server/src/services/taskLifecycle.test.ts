@@ -6,7 +6,7 @@ import { createProject, timelineFromKeepRanges, type Change, type Project } from
 import { ATTEMPT_HEADER, TASK_HEADER, type Task, type TaskPrompt } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
-import { createTask, followUpInstruction, MOST_CLOSING_CHECKS, queueRepeatCheck, saveTask } from "./tasks.js";
+import { createTask, saveTask } from "./tasks.js";
 import { storeVersion } from "./timeline.js";
 
 let dataDir: string;
@@ -56,103 +56,122 @@ const dialoguePass = (agent = "claude") => request("Cut the dialogue tight", age
 const look = (asker: Task, at: number) => createTask(app.ctx, { projectId: asker.projectId, kind: "area_check", agent: asker.agent,
   instruction: `What viewers may see at ${at} s`, context: { checksTaskId: asker.id, areaCheck: { mediaId: "screen", at } }, createdBy: scarlet });
 
-it("tells the closing check the answer to its own question, never the pass's, and every earlier answer when it starts afresh", async () => {
-  const task = await dialoguePass();
-  await api("POST", `/tasks/${task.id}/question`, { startedAt: task.startedAt, text: "Keep the cold open?" });
-  await api("POST", `/tasks/${task.id}/answer`, { text: "Yes, keep it" });
-  const resumed = (await claim(task.id))!;
-  // The pass finished with findings on the video as it plays, and went back for its closing check.
-  queueRepeatCheck(app.ctx, { ...resumed, reply: "Tightened the dialogue." }, "ver_played");
-  await claim(task.id);
-  const first = await prompt(task.id);
-  expect(first.instruction).toMatch(/^The dialogue pass has saved its editing work/);
-  expect(first.instruction).toContain("Editor’s request: Cut the dialogue tight");
-  // The pass's answer is with the earlier questions and answers, not told as the check's.
-  expect(first.instruction).not.toContain("The editor answered");
-  expect(first.systemPrompt).toContain("Keep the cold open?");
-
-  // The check asks a question of its own, from a session its host keeps.
-  const checking = get(task.id);
-  await api("POST", `/tasks/${task.id}/question`, { startedAt: checking.startedAt, text: "Cut the second restart?", sessionId: "check-session" });
-  await api("POST", `/tasks/${task.id}/answer`, { text: "Cut it" });
-  await claim(task.id);
-  // The session that asked carries on with the answer.
-  expect(await prompt(task.id)).toMatchObject({ resumeSession: "check-session", instruction: 'The editor answered: "Cut it"\nContinue the task with that answer.' });
-  // Started afresh, the check is told its goal and the answer, and reads both questions with their answers.
-  const fresh = await prompt(task.id, true);
-  expect(fresh.resumeSession).toBeUndefined();
-  expect(fresh.instruction).toMatch(/^The dialogue pass has saved its editing work[\s\S]*\nThe editor answered: Cut it$/);
-  expect(fresh.systemPrompt).toContain("# Earlier questions and answers");
-  for (const said of ["Keep the cold open?", "Yes, keep it", "Cut the second restart?", "Cut it"]) expect(fresh.systemPrompt).toContain(said);
-});
-
-it("carries a pass's closing words and its check's count on through a quit and a pause, and tells the check the editor's words", async () => {
-  const task = await dialoguePass();
-  queueRepeatCheck(app.ctx, { ...task, reply: "Tightened the dialogue." }, "ver_played");
-  // Quit during the check: the attempt that carries on is still the check, with the pass's words.
-  await quit((await claim(task.id))!);
-  const afterQuit = get(get(task.id).retryTaskId!);
-  expect(afterQuit).toMatchObject({ state: "queued", resumeRootId: task.id, reply: "Tightened the dialogue.",
-    repeatAudit: { version: "ver_played", returns: 1, totalReturns: 1 } });
-  // Paused during the check: the same, and it is told what the editor asked, not Scarlet's account of the run.
-  await claim(afterQuit.id);
-  expect((await api("POST", `/projects/${project.id}/stop-editing`)).status).toBe(200);
-  const afterPause = get(get(afterQuit.id).retryTaskId!);
-  expect(afterPause).toMatchObject({ reply: "Tightened the dialogue.", repeatAudit: { returns: 1, totalReturns: 1 } });
-  expect(afterPause.instruction).toContain("Resume this interrupted request.");
-  await api("POST", `/projects/${project.id}/resume-editing`);
-  await claim(afterPause.id);
-  const told = await prompt(afterPause.id);
-  expect(told.instruction).toMatch(/^The dialogue pass has saved its editing work/);
-  expect(told.instruction.split("\n").at(-1)).toBe("Editor’s request: Cut the dialogue tight");
-
-  // The cap stopped it. The editor's own Resume gives the check its full allowance, and keeps the pass's words.
-  saveTask(app.ctx, { ...get(afterPause.id), state: "failed", interrupted: true, finishedAt: new Date().toISOString(),
-    repeatAudit: { version: "ver_played", remaining: 2, returns: 2, totalReturns: MOST_CLOSING_CHECKS } });
-  const again = (await api<{ task: Task }>("POST", `/tasks/${afterPause.id}/retry`, {})).body.task;
-  expect(again).toMatchObject({ resumeRootId: task.id, reply: "Tightened the dialogue.", repeatAudit: { returns: 0, totalReturns: 0 } });
-});
-
-it("tells a follow-up pass's closing check the request as it was sent, with its thread's earlier requests, never Scarlet's recap", async () => {
-  const earlier = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Keep the pauses natural", createdBy: scarlet });
-  saveTask(app.ctx, { ...earlier, state: "done", summary: "Left the pauses as they are." });
-  // A follow-up is sent with the thread's earlier requests, as the request route builds it.
-  const words = "Cut the dialogue tight";
-  const sent = followUpInstruction(app.ctx, project.id, earlier.id, words);
-  const task = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: sent,
-    context: { threadId: earlier.id, message: words, dialogueOperation: "first-cut" }, createdBy: scarlet });
-  queueRepeatCheck(app.ctx, (await claim(task.id))!, "ver_played");
-  await claim(task.id);
-  const check = (await prompt(task.id)).instruction;
-  expect(check).toMatch(/^The dialogue pass has saved its editing work/);
-  expect(check).toContain(`Editor’s request: ${sent}`);
-  expect(check).toContain("- Asked: Keep the pauses natural\n  You replied: Left the pauses as they are.");
-  // Resumed after a quit, the check is still told the request as sent, not the account of the run.
-  await quit(get(task.id));
-  const resumed = get(get(task.id).retryTaskId!);
-  await claim(resumed.id);
-  const again = (await prompt(resumed.id, true)).instruction;
-  expect(again).toContain(`Editor’s request: ${sent}`);
-  expect(again).not.toContain("Resume this interrupted request");
-});
-
-it("stops a pass's closing check after a few returns in all, even when each return gets somewhere", async () => {
+/** A head that plays a recording's sound, as a pass's edit does. */
+function audibleHead() {
   app.ctx.repos.projects.putMedia(project.id, { id: "cam", name: "Camera", kind: "video", path: "cam.mov", duration: 30 }, "ready");
   const { version } = storeVersion(app.ctx, project.id, timelineFromKeepRanges(project.id, "cam", [{ start: 0, end: 20 }]), { parent: null });
   app.ctx.repos.projects.update(project.id, { head: version });
+  return version;
+}
+
+it("finishes a pass that says it is done as done, with what its repeat check left on record, and sends it back for nothing", async () => {
+  const version = audibleHead();
   const task = await dialoguePass();
-  const states: string[] = [];
-  for (let run = 0; run <= MOST_CLOSING_CHECKS; run++) {
-    // Each check fixed one finding and made another: the reading's own count starts again.
-    const at = get(task.id);
-    saveTask(app.ctx, { ...at, repeatAudit: { ...at.repeatAudit, version, remaining: 1, returns: 0 } });
-    const finished = (await api<{ task: Task }>("POST", `/tasks/${task.id}/complete`, { state: "done", ifStartedAt: at.startedAt })).body.task;
-    states.push(finished.state);
-    if (finished.state === "queued") await claim(task.id);
+  // The pass's last check of the video as it plays still lists two findings, and one recording it couldn't read.
+  const receipt = { version, remaining: 2, noFindings: false, unavailable: ["Couldn’t check cam: no transcript"], returns: 0 };
+  saveTask(app.ctx, { ...get(task.id), state: "running", repeatAudit: receipt });
+  const finished = (await api<{ task: Task }>("POST", `/tasks/${task.id}/complete`, { state: "done", summary: "Tightened the dialogue.", ifStartedAt: task.startedAt })).body.task;
+  expect(finished).toMatchObject({ state: "done", summary: "Tightened the dialogue.", repeatAudit: receipt });
+  expect(finished.error).toBeUndefined();
+  expect(finished.interrupted).toBeUndefined();
+  // Nothing was queued to check it again: no host is handed the request.
+  expect(await claim(task.id)).toBeNull();
+  expect(get(task.id).state).toBe("done");
+});
+
+it("resumes a stopped pass as an ordinary run, told the recap and never a closing check, and finishes it when it says done", async () => {
+  const version = audibleHead();
+  const task = await dialoguePass();
+  saveTask(app.ctx, { ...get(task.id), state: "running", reply: "Tightened the dialogue.", repeatAudit: { version, remaining: 1, returns: 0 } });
+  // Scarlet quit while the pass worked: the attempt that carries on keeps the pass's words and its receipt.
+  await quit(get(task.id));
+  const resumed = get(get(task.id).retryTaskId!);
+  expect(resumed).toMatchObject({ state: "queued", resumeRootId: task.id, reply: "Tightened the dialogue.", repeatAudit: { version, remaining: 1, returns: 0 } });
+  await claim(resumed.id);
+  const told = await prompt(resumed.id, true);
+  expect(told.instruction).toContain("Resume this interrupted request.");
+  expect(told.instruction).not.toMatch(/closing check|nothing outstanding/);
+  // Said done with the finding still listed, it is done.
+  const done = (await api<{ task: Task }>("POST", `/tasks/${resumed.id}/complete`, { state: "done", ifStartedAt: get(resumed.id).startedAt })).body.task;
+  expect(done).toMatchObject({ state: "done", repeatAudit: { version, remaining: 1 } });
+  expect(await claim(resumed.id)).toBeNull();
+
+  // The editor's own Resume of a pass an earlier engine stopped for findings outstanding is an ordinary run too: the
+  // marks of that engine's closing check stay behind, and what the check measured goes on.
+  const stopped = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Cut the dialogue tight",
+    context: { dialogueOperation: "first-cut" }, createdBy: editor });
+  saveTask(app.ctx, { ...get(stopped.id), state: "failed", interrupted: true, finishedAt: new Date().toISOString(), reply: "Tightened the dialogue.",
+    error: "The final audio check still has repeats, silences or divided sentences to resolve. Resume to finish checking the saved edit.",
+    repeatAudit: { version, remaining: 2, returns: 2, totalReturns: 4, queuedAt: new Date().toISOString() } });
+  const again = (await api<{ task: Task }>("POST", `/tasks/${stopped.id}/retry`, {})).body.task;
+  expect(again).toMatchObject({ state: "queued", resumeRootId: stopped.id, reply: "Tightened the dialogue.", repeatAudit: { version, remaining: 2, returns: 0 } });
+  expect(again.repeatAudit!.totalReturns).toBeUndefined();
+  expect(again.repeatAudit!.queuedAt).toBeUndefined();
+  await claim(again.id);
+  expect((await prompt(again.id)).instruction).toContain("Resume this interrupted request.");
+
+  // A finished pass whose closing check couldn't run under an earlier engine isn't sent back for it.
+  const checked = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Cut the dialogue tight",
+    context: { dialogueOperation: "first-cut" }, createdBy: editor });
+  saveTask(app.ctx, { ...get(checked.id), state: "done", finishedAt: new Date().toISOString(), reply: "Tightened the dialogue.",
+    repeatAudit: { version, returns: 1, failed: "unexpected status 401 Unauthorized" } });
+  expect((await api("POST", `/tasks/${checked.id}/retry`, {})).status).toBe(409);
+  expect(get(checked.id)).toMatchObject({ state: "done" });
+  expect(get(checked.id).retryTaskId).toBeUndefined();
+});
+
+it("finishes the closing checks an earlier engine left waiting when Scarlet starts, and lets one that asked the editor carry on", async () => {
+  const version = "ver_played";
+  const earlier = new Date(Date.now() - 60_000).toISOString();
+  // Each in a project of its own, so none waits in line behind another.
+  const passOfItsOwn = async () => {
+    const own = app.ctx.repos.projects.insert(createProject("Closing check"));
+    const task = createTask(app.ctx, { projectId: own.id, kind: "edit", agent: "claude", instruction: "Cut the dialogue tight",
+      context: { dialogueOperation: "first-cut" }, createdBy: editor });
+    return (await claim(task.id))!;
+  };
+  const sentBack = (over: Partial<Task> = {}) => (task: Task) => saveTask(app.ctx, { ...task, state: "queued", hostId: null, session: undefined, finishedAt: undefined,
+    reply: "Tightened the dialogue.", repeatAudit: { version, remaining: 2, returns: 1, totalReturns: 1, queuedAt: new Date().toISOString() }, ...over });
+  // Sent back after the pass said done, and not started.
+  const waiting = sentBack()(await passOfItsOwn());
+  // Sent back, then cut short by a quit while it checked: the attempt that carries on waits in line.
+  const cut = sentBack()(await passOfItsOwn());
+  await quit((await claim(cut.id))!);
+  const carried = get(get(cut.id).retryTaskId!);
+  expect(carried).toMatchObject({ state: "queued", repeatAudit: { returns: 1 } });
+  // Sent back, and the check asked the editor a question they have answered: it carries on with the answer.
+  const answered = sentBack()(await passOfItsOwn());
+  const asking = (await claim(answered.id))!;
+  await api("POST", `/tasks/${answered.id}/question`, { startedAt: asking.startedAt, text: "Cut the second restart?", sessionId: "check-session" });
+  await api("POST", `/tasks/${answered.id}/answer`, { text: "Cut it" });
+  // Sent back, and still asking.
+  const asked = sentBack()(await passOfItsOwn());
+  const asks = (await claim(asked.id))!;
+  await api("POST", `/tasks/${asked.id}/question`, { startedAt: asks.startedAt, text: "Keep the cold open?" });
+  // Finished, with a closing check that couldn't run.
+  const failed = await passOfItsOwn();
+  saveTask(app.ctx, { ...get(failed.id), state: "done", startedAt: earlier, finishedAt: new Date().toISOString(), reply: "Saved a tighter cut.",
+    repeatAudit: { version, remaining: 1, returns: 1, failed: "unexpected status 401 Unauthorized" } });
+  // Another request waiting its turn is no closing check.
+  const other = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Add a music bed", createdBy: editor });
+
+  // Scarlet starts again on the same library.
+  await app.ctx.close();
+  app = createApp({ dataDir, env: {}, log: () => {} });
+  for (const id of [waiting.id, carried.id]) {
+    expect(get(id)).toMatchObject({ state: "done", reply: "Tightened the dialogue.", repeatAudit: { version, remaining: 2, returns: 1 } });
+    expect(get(id).finishedAt).toBeDefined();
   }
-  expect(states).toEqual([...Array(MOST_CLOSING_CHECKS).fill("queued"), "failed"]);
-  expect(get(task.id)).toMatchObject({ interrupted: true, repeatAudit: { totalReturns: MOST_CLOSING_CHECKS } });
-  expect(get(task.id).error).toMatch(/^The final check still has/);
+  expect(get(answered.id)).toMatchObject({ state: "queued", session: { id: "check-session" } });
+  expect(get(asked.id)).toMatchObject({ state: "waiting_for_user", question: "Keep the cold open?" });
+  expect(get(failed.id)).toMatchObject({ state: "done", repeatAudit: { version, remaining: 1 } });
+  expect(get(failed.id).repeatAudit!.failed).toBeUndefined();
+  expect(get(other.id).state).toBe("queued");
+  // The answered check resumes its own session with the answer, as any answered run does.
+  hostId = (await api<{ host: { id: string } }>("POST", "/hosts/register", { name: "test", platform: "test",
+    agents: ["claude", "codex", "gemini"].map(id => ({ id, installed: true })) })).body.host.id;
+  await claim(answered.id);
+  expect(await prompt(answered.id)).toMatchObject({ resumeSession: "check-session", instruction: 'The editor answered: "Cut it"\nContinue the task with that answer.' });
 });
 
 it("holds a request's read for a rule while editing is paused, and runs it on Resume", async () => {

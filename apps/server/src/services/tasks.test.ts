@@ -7,7 +7,7 @@ import { ATTEMPT_HEADER, TASK_HEADER, queueOrder, queueWait, taskPlan, type Task
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { PLAN_STEPS } from "@scarlet/mcp/prompt";
-import { appendTaskEvent, createTask, pairQuestionsAndAnswers, queueRepeatCheck, saveTask } from "./tasks.js";
+import { appendTaskEvent, createTask, pairQuestionsAndAnswers, saveTask } from "./tasks.js";
 import { recoverTasks } from "./taskRecovery.js";
 import { runAttemptIds } from "./runAttempts.js";
 import { learningCheckContext } from "./learnings.js";
@@ -313,7 +313,7 @@ it("logs a run starting, asking and being answered, without what was asked or an
   expect(said()).toEqual([`[task] ${eager.id} claimed → waiting_for_user: asked the editor a question`]);
 });
 
-it("persists active time across questions, queue waits, and a repeat check", async () => {
+it("persists active time across questions and queue waits", async () => {
   const start = Date.parse("2026-11-05T10:00:00.000Z");
   const at = (seconds: number) => vi.setSystemTime(start + seconds * 1000);
   vi.useFakeTimers({ toFake: ["Date"], now: start });
@@ -331,17 +331,9 @@ it("persists active time across questions, queue waits, and a repeat check", asy
     at(150);
     const resumed = await claim();
     expect(resumed).toMatchObject({ state: "claimed", workedMs: 30_000, startedAt: new Date().toISOString() });
-    at(180);
-    queueRepeatCheck(app.ctx, resumed, "ver_checked");
-    expect(await read()).toMatchObject({ state: "queued", workedMs: 60_000 });
-    at(240);
-    const last = await claim();
-    at(285);
-    await api("POST", `/tasks/${task.id}/complete`, { state: "done", ifStartedAt: last.startedAt });
-    const finished = await read();
-    expect(finished).toMatchObject({ state: "done", workedMs: 105_000 });
-    at(350);
-    expect(queueRepeatCheck(app.ctx, finished, "ver_later")).toMatchObject({ state: "queued", workedMs: 105_000 });
+    at(225);
+    await api("POST", `/tasks/${task.id}/complete`, { state: "done", ifStartedAt: resumed.startedAt });
+    expect(await read()).toMatchObject({ state: "done", workedMs: 105_000 });
   } finally {
     vi.useRealTimers();
   }

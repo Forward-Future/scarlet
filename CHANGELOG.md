@@ -6,6 +6,9 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 21, 2026
 
+- A dialogue cut is done when Scarlet says it's done. It no longer starts itself over, up to four times, to recheck for repeats and the picture; what that check finds, the picture included, still goes to Scarlet as it works.
+- A restart that begins on the word the first take broke off on now follows your dialogue skill. By default it still comes to you to hear, and Scarlet no longer takes out words around it that weren't asked for.
+- Your dialogue skill can now keep the breath after the last word at a cut. By default the breath is still cut.
 - When Scarlet looks at a moment in your footage, it now sees the picture that's actually on screen then, including in the very last frame, instead of the one just after it.
 - In an Advanced export, the OpenTimelineIO timeline now turns off hidden picture tracks and muted sound tracks, leaves out hidden or disabled captions, and brings both back as they were when you import it again.
 - In an Advanced export, a clip that plays faster or slower now keeps its length in the OTIO timeline, so the clips after it stay in place in Premiere and Resolve, and importing an OTIO timeline with a speed change keeps its timing.

@@ -30,6 +30,7 @@ Models keep getting better at understanding footage and carrying out an edit, us
 
 - Give the agent the context and tools to take a brief all the way to a playable cut. As models improve, the same brief should need less supervision.
 - Don't cap the model. Avoid fixed pipelines, Scarlet-side heuristics that make editorial calls and prompt rules that permanently work around today's weaknesses.
+- Scarlet's code may notice anything and report it, and overrides the model only for safety. Taste lives in skills, how Scarlet works with the editor lives in settings, and a fix for one model's habit reports what it found instead of blocking. This holds for every feature. [The rule and its tests](AI-AGENTS.md)
 - Add an instruction only for an observed failure. After each model upgrade, run the evals and remove the rules the model no longer needs.
 
 ### 4. Keep the model, the harness and Scarlet separate

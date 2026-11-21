@@ -27,7 +27,7 @@ import { historyRoutes } from "./routes/history.js";
 import { evalExportRoutes } from "./routes/evalExport.js";
 import { scheduleTrashPurge } from "./services/trash.js";
 import { scanAheadOfPasses } from "./services/dialoguePrefetch.js";
-import { migrateDialogueOperations } from "./services/tasks.js";
+import { migrateDialogueOperations, settleClosingChecks } from "./services/tasks.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { continueReadyRuns, recoverTasks, wireContinueWhenReady } from "./services/taskRecovery.js";
 import { sweepLeftovers } from "./services/leftovers.js";
@@ -189,6 +189,13 @@ export function createApp(options: ServerOptions): ScarletApp {
   migrateDialogueSettings(ctx);
   retireMergedSkills(ctx);
   migrateDialogueOperations(ctx);
+  // After the runs a quit cut short are back in line, and after the dialogue operations they're read by are known. A
+  // repair of an earlier build's leftovers, so it never keeps Scarlet from starting.
+  try {
+    settleClosingChecks(ctx);
+  } catch (err) {
+    ctx.log(`[task] couldn’t finish the closing checks an earlier build left: ${(err as Error).message}`);
+  }
   if (seeded) ctx.log(`[skills] seeded ${seeded} skill(s) from ${options.skillsSeedDir ?? "the bundled set"}`);
   if (ctx.telemetry.active) {
     const { projectCount } = ctx.db.prepare("SELECT count(*) AS projectCount FROM projects WHERE deleted_at IS NULL").get() as { projectCount: number };

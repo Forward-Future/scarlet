@@ -607,11 +607,10 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       for (const r of reasons) {
         const call = assessmentOf(change, r);
         if (call && (isPublishedCall(call) || call.askOrder !== undefined)) protectedCuts.set(r, `${change.id}:${call.index}`);
-        // A cut staged because nothing Scarlet measures can settle its join is the editor's to hear from the moment it is
-        // staged, recommendation or none: a pass staged the right cut of a restart, then applied a cut of the take that
-        // replaced it over the same footage half a minute later, and the review ended with no cut on the line (2026-11-17).
-        // A keep recorded on it is the model's own decision that the passage stays, and frees the footage.
-        else if (r.unheard && call?.verdict !== "keep" && !editorChoice(change, r)) protectedCuts.set(r, `${change.id}:unheard:${r.start}`);
+        // A cut staged on a same-word join (`unheard`) was the editor's from the moment it was staged, and no later cut
+        // could take its place (2026-11-17). Since 2026-11-21 it is a staged cut like any other until the model asks the
+        // editor about it: the model decides, and the default is in the skill. A later cut over its footage takes it out
+        // of the review, and the save says so when part of it plays on (`droppedFromReview`).
         else if ((!call || call.provisional) && !editorChoice(change, r)) {
           const slot = inherited.find(span => covers(span, r));
           if (slot) protectedCuts.set(r, `${change.id}:pending:${slot.start}`);
@@ -640,7 +639,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     const heldCutsStay: NonNullable<DialogueCutsAdjustments["heldCutsStay"]> = [];
     const replacesHeld = candidates.filter(c => {
       if (c.review || !c.appliedAsPlaced || overruled.includes(c) || held.includes(c)) return false;
-      const staged = earlier.flatMap(change => change.cutReasons!.filter(r => r.held && !r.unheard && !editorChoice(change, r) &&
+      const staged = earlier.flatMap(change => change.cutReasons!.filter(r => r.held && !editorChoice(change, r) &&
         overlaps(outer(c), outer(r)) && (Math.abs(outer(c).start - outer(r).start) >= LEFT_OF_STAGED_CUT || Math.abs(outer(c).end - outer(r).end) >= LEFT_OF_STAGED_CUT)));
       for (const r of staged) heldCutsStay.push({ asked: c.asked, staged: { start: r.start, end: r.end },
         why: `This cut takes the place of the staged cut at ${r.start.toFixed(2)}–${r.end.toFixed(2)} s with other edges, and Scarlet couldn't place its join either, so it applied only as unsureJoins cut. Moving a held cut onto other words changes what the line says. The staged cut stays as you first placed it: cut it there with unsureJoins cut, record keep, or ask the editor.` });
@@ -1051,15 +1050,12 @@ export function reviseStagedCut(ctx: Ctx, user: User, named: Change, namedIndex:
     const autonomous = !scoped && (!!task || body.author?.type === "agent");
     if (autonomous && (was && (isPublishedCall(was) || was.askOrder !== undefined) || change.cutChoices?.some(c => c.index === index)))
       throw conflict("cut_with_editor", `${capitalized(editorsCut(change, index))} at ${old.start}–${old.end} s is with the editor. Only a revision they request can change this cut. ${CALL_WITH_EDITOR}`);
-    // A cut staged because nothing Scarlet measures can settle its join is the editor's to hear, where Scarlet placed it.
-    // A pass moved one onto the take that replaced the false start, where both edges were quiet, recorded it as a cut,
-    // and the broken take played with no call (2026-11-17). A keep is the model's own decision that the passage stays.
+    // A cut staged on a same-word join (`unheard`) couldn't be moved by the pass (`cut_unheard`, 2026-11-17). Since
+    // 2026-11-21 the pass moves it as any staged cut: the model decides, and the default is in the skill. The mark
+    // stays only on a cut left where Scarlet placed it, since a moved cut has another join.
     const unheard = !!change.cutReasons?.some(r => r.unheard && r.start < old.end - 1e-6 && r.end > old.start + 1e-6);
     const aFrame = 1 / project.settings.fps;
     const moves = Math.abs(range.start - old.start) > aFrame + 1e-6 || Math.abs(range.end - old.end) > aFrame + 1e-6;
-    if (autonomous && unheard && moves && !body.keep)
-      throw conflict("cut_unheard", `${capitalized(editorsCut(change, index))} at ${old.start}–${old.end} s waits for the editor to hear its join, so it stays where Scarlet placed it. `
-        + "Record ask on it with dialogue_review_save, with what to listen for, or keep if the passage belongs in the video as it was said.");
     const placement = placeRevision(ctx, project, change, review, index, body, range, task, scoped, named.fromVersion);
     if ("conflict" in placement) {
       const { reason, range } = placement.conflict;
@@ -2105,9 +2101,9 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
     appliedJoinFades,
     leftOut: appliedReview ? undefined : leftOutOf(ctx, project, change),
   });
-  // A finished pass whose calls the editor has just made stays finished. Its closing check ran before they decided, and
-  // each call played its join for them as they decided it. Checking the video again afterwards started the pass back
-  // up after the editor's last Approve and re-cut that join three times (2026-11-17).
+  // A finished pass whose calls the editor has just made stays finished: each call played its join for them as they
+  // decided it. Checking the video again afterwards once started the pass back up after the editor's last Approve and
+  // re-cut that join three times (2026-11-17), and since 2026-11-21 no repeat check sends a finished pass back at all.
   retireOtherVersions(ctx, saved);
   if (saved.intent === "alternative" && saved.taskId) {
     const alternatives = ctx.repos.changes.select(

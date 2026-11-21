@@ -88,9 +88,6 @@ it("returns a join it couldn't hear in a recording the aligner can't read, and d
   ctx.repos.settings.update({ transcription: { language: "es" } });
   const task = pass();
   const version = assemble(task, [["one", "voz", 0, 4, 0], ["two", "voz", 8.3, 15, 4]]);
-  // The pass ends, and the engine queues its own audio check of what plays.
-  expect((await complete(task, "Took out the middle.")).state).toBe("queued");
-  start(task);
   const found = await check(task, version);
   expect(found).toMatchObject({ version, heard: 0, remaining: 0, unheardJoins: [unheard("voz")] });
   expect(found.joins).toBeUndefined();
@@ -98,8 +95,9 @@ it("returns a join it couldn't hear in a recording the aligner can't read, and d
   expect(ctx.repos.tasks.get(task.id)?.repeatAudit).toMatchObject({ version, remaining: 0, noFindings: false });
   // Checking the same version again reports the same joins once.
   expect((await check(task, version)).unheardJoins).toEqual([unheard("voz")]);
-  // The pass still finishes, and the check's own words about those joins reach the editor.
-  expect(await complete(task, "Scarlet couldn't hear the join at 0:04.")).toMatchObject({ state: "done", summary: "Scarlet couldn't hear the join at 0:04." });
+  // The pass finishes when it says so, with its own words about those joins for the editor.
+  expect(await complete(task, "Scarlet couldn't hear the join at 0:04.")).toMatchObject({ state: "done", summary: "Scarlet couldn't hear the join at 0:04.",
+    repeatAudit: { version, noFindings: false } });
 });
 
 it("finds nothing unheard in a single uncut recording in a language the aligner can't read", async () => {
@@ -190,7 +188,7 @@ it("leaves a join inside a cut staged for review to the review", async () => {
   expect(ctx.repos.tasks.get(task.id)?.repeatAudit).toMatchObject({ noFindings: true });
 });
 
-it("still fails the pass when the scan of a recording in another language fails", async () => {
+it("finishes a pass whose check couldn't read a recording in another language, with what it couldn't read on record", async () => {
   const { ctx } = workspace;
   recording("voz");
   ctx.repos.settings.update({ transcription: { language: "es" } });
@@ -200,5 +198,8 @@ it("still fails the pass when the scan of a recording in another language fails"
   const found = await check(task, version);
   expect(found).toMatchObject({ unavailable: [{ mediaId: "voz", reason: "The scan couldn't run." }] });
   expect(found.unheardJoins).toBeUndefined();
-  expect(await complete(task, "Done.")).toMatchObject({ state: "failed", interrupted: true });
+  // What the check couldn't read is evidence for the model and the evals, not a reason to fail the pass (2026-11-21).
+  const done = await complete(task, "Done.");
+  expect(done).toMatchObject({ state: "done", repeatAudit: { version, noFindings: false, unavailable: [expect.stringContaining("The scan couldn't run.")] } });
+  expect(done.interrupted).toBeUndefined();
 });

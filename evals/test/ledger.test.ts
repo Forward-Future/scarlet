@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { againstBase, baseRow, classProblem, judge, partAt, type BoardRow, type Entry } from "../src/ledger.ts";
+import { againstBase, baseRow, classProblem, entryProblem, judge, partAt, type BoardRow, type Entry } from "../src/ledger.ts";
 import { flagsOf } from "../src/leftovers.ts";
 import type { MediaEvidence } from "../src/metrics.ts";
 import type { ReplayResult } from "../src/replay.ts";
@@ -99,6 +99,25 @@ describe("an entry's class", () => {
     expect(classProblem(entry({ class: { family: "none", noSweep: "" } }), "dialogue")).toContain("noSweep");
     expect(classProblem(entry({ class: { family: "none", noSweep: "an editor note reads like any line" } }), "dialogue")).toBeUndefined();
     expect(classProblem(entry({ class: { family: "pacing" } as never }), "dialogue")).toContain("not a family");
+  });
+});
+
+describe("an entry's check", () => {
+  const entry = (extra: Partial<Entry>): Entry => ({ id: "x", reported: "2026-11-21", said: "it", cause: "placement", status: "open", check: { kind: "none", why: "-" }, ...extra });
+  const replay = { kind: "replay" as const, case: "c", expect: [{ notApplied: { mediaId: "m", start: 0, end: 1 } }] };
+
+  it("checks a model's mistake with model passes, never by replaying its requests through Scarlet's code", () => {
+    expect(entryProblem(entry({ cause: "model", check: replay }))).toContain("checked by trials");
+    expect(entryProblem(entry({ cause: "model", check: { kind: "command", run: "true" } }))).toContain("checked by trials");
+    expect(entryProblem(entry({ cause: "model", check: { kind: "trials" } }))).toBeUndefined();
+    expect(entryProblem(entry({ cause: "placement", check: replay }))).toBeUndefined();
+  });
+
+  it("retires an entry only with a reason, and keeps a retired replay of a model's mistake as history", () => {
+    expect(entryProblem(entry({ status: "retired" }))).toContain("says why");
+    expect(entryProblem(entry({ status: "retired", retired: "rule taken out; Sol Medium passes without it" }))).toBeUndefined();
+    expect(entryProblem(entry({ cause: "model", check: replay, status: "retired", retired: "the block it checked is gone" }))).toBeUndefined();
+    expect(entryProblem(entry({ status: "closed" as never }))).toContain("fixed, open or retired");
   });
 });
 

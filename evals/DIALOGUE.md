@@ -46,7 +46,9 @@ Add an entry to `ledger.json` with the editor's words, the project, run and time
   command check for those.
 - **command** (free): a unit test with a synthetic fixture that reproduces the mechanism, run by name from the
   repository root (`cd packages/mcp && ../../node_modules/.bin/vitest run src/x.test.ts -t '…'`). Exit 0 passes.
-- **trials** (costs model tokens): only model passes can show it. Record what the last trials found in `last`.
+- **trials** (costs model tokens): only model passes can show it. Record what the last trials found in `last`. An
+  entry whose cause is `model` is checked this way (or `none`), never by replay or command: a replay sends that run's
+  own requests through today's code, so it can only pass by the code overriding the model. `ledger.ts` refuses it.
 - **none**: say why, and what would make it checkable.
 
 **Count the class, not only the spot.** A report is one instance of a kind of mistake. Before fixing, find how many
@@ -73,6 +75,11 @@ made the mistake doesn't check it.
 
 Fix the class of problem at the level the cause names, not the one spot. Follow `docs/AI-AGENTS.md`: the model decides,
 Scarlet measures and keeps edits safe, skills hold taste. Prefer removing a tuned rule to adding one.
+
+A `model` cause is never fixed by a block in code. Code may report what it measured, the skill may say what the editor
+wants, and the model decides; code refuses or overrides the model only for safety (`docs/AI-AGENTS.md` rule 5). A block
+fitted to one model's mistake caps every model after it, and its entry can only be checked against that old model's
+requests. Once a rule is gone, an entry it was the fix for is checked by trials, or retired (step 6).
 
 ## 4. Run the checks
 
@@ -178,7 +185,9 @@ Reading it:
   about 95 times in 100. On the five long-form recordings at two passes a side, the overall's ± for a difference is about
   2 points, and a factor's is 3–8. A difference marked "could be luck" is no result, and the recordings it went up or
   down on say whether one video carried it. A change ships on the scorecard when the overall rises by more than its ±
-  and no factor falls by more than its own. A recording with one pass gives no ±: run at least two.
+  and no factor falls by more than its own. A change that takes out a rule, a gate or an instruction ships when the
+  overall holds: it falls by no more than its ±, and no factor falls by more than its own. Code that is gone can't cap
+  a better model, so holding steady is the result it needs. A recording with one pass gives no ±: run at least two.
 - **The rules don't change under a comparison.** Both sides must be scored under the same rubric. When the rules
   change, bump `RUBRIC` in `score.ts`, extend `regrade.ts` to rebuild what changed, and regrade the saved runs the
   comparison needs, rather than running passes again.
@@ -204,4 +213,8 @@ Reading it:
 - After the change merges, run `ledger.ts check --record --label "<PR>"` on main, so the next thread compares against it.
 - Mark the entry `fixed` with the PR, and update `history.md`: the cause, what worked, what didn't and what's left open,
   with the class count before and after.
-- `ledger.ts board` shows the runs over time: the count of passing entries should only go up.
+- `ledger.ts board` shows the runs over time: no entry marked `fixed` should ever fail.
+- Retire an entry that no longer checks anything worth keeping: a replay or command check of a rule that was taken out
+  because current models pass without it, or a mistake that can't happen any more. Set `status` to `retired` and say
+  why in `retired`, with the trials or change that showed it. `check` skips a retired entry and `list` still shows it,
+  so the history stays. A retired entry counts as neither passing nor failing.

@@ -615,13 +615,15 @@ export interface SubmittedPlan {
   version: string; cuts: PlanCut[]; range?: Range; only?: string; crossfadeFrames?: number; at?: string;
   /** The room tone the model asked joins to leave, and what to do with a join Scarlet can't place cleanly. */
   pace?: { after: number; before: number }; unsureJoins?: "ask" | "cut";
+  /** Whether a word reference's cut starts before or after a breath after the last kept word. */
+  breath?: "cut" | "keep";
 }
 
 export function submittedPlans(events: readonly EventLike[]): SubmittedPlan[] {
   return events.filter(e => e.type === "tool" && toolName(String(e.data?.tool ?? "")) === "dialogue_apply_cuts").flatMap(e => {
     const input = e.data?.input as Partial<SubmittedPlan> | undefined;
     return input?.version && Array.isArray(input.cuts) ? [{ version: input.version, cuts: input.cuts, range: input.range, only: input.only, crossfadeFrames: input.crossfadeFrames, at: e.at,
-      ...(input.pace && { pace: input.pace }), ...(input.unsureJoins && { unsureJoins: input.unsureJoins }) }] : [];
+      ...(input.pace && { pace: input.pace }), ...(input.unsureJoins && { unsureJoins: input.unsureJoins }), ...(input.breath && { breath: input.breath }) }] : [];
   });
 }
 

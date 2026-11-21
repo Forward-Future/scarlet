@@ -3,7 +3,7 @@ import { JOIN_WORD_SECONDS, normalizeTranscriptToken } from "@scarlet/shared";
 import { audibleClipsByTrack, dbfs, isTag, round3 } from "./analysis.js";
 import { REPEAT_WITHIN } from "./dialogue-leftovers.js";
 import { partialRepeatAtJoin, type FragmentSide } from "./dialogue-fragment-repeat.js";
-import { QUIET_RMS, quietBuckets, quietRms } from "./gap-sound.js";
+import { QUIET_RMS, quietReading, quietRms, type HeldBreath } from "./gap-sound.js";
 import { MAX_CROSSFADE, timelineJoins, type JoinSide } from "./timeline-perception.js";
 
 type Word = Pick<TranscriptWord, "text" | "start" | "end">;
@@ -12,7 +12,9 @@ type JoinWord = Word & { timed?: TimeRange };
 interface Waveform { from: number; to: number; peaks: number[]; rms?: number[]; speechActivity?: TimeRange[] }
 /** Measured RMS level of the source in dBFS, one value per waveform bucket. */
 export interface AudioLevels { from: number; step: number; db: number[] }
-export interface JoinPage extends TimeRange { mediaId: string; audioStream?: number; edges?: { words: JoinWord[]; quiet: TimeRange[]; valleys: TimeRange[]; voice: TimeRange[]; levels?: AudioLevels } }
+export interface JoinPage extends TimeRange { mediaId: string; audioStream?: number; edges?: { words: JoinWord[]; quiet: TimeRange[]; valleys: TimeRange[]; voice: TimeRange[]; levels?: AudioLevels;
+  /** Breaths after a word that `quiet` holds as part of the pause (quietReading). */
+  breaths?: HeldBreath[] } }
 export interface JoinCheck extends TimeRange {
   /** `snapped` moved an edge a few frames onto measured silence and is safe to apply as proposed. */
   status: "unchanged" | "snapped" | "adjusted" | "partial" | "review";
@@ -26,7 +28,7 @@ export interface JoinCheck extends TimeRange {
   /** Both edges are where sameWordJoin puts them: inside the word said on either side of the cut. */
   sameWord?: string;
   /** Where this removal could switch takes inside the word said on either side of it, when its start has no quiet. */
-  sameWordJoin?: TimeRange & { word: string; reason: string; takesFirst?: true };
+  sameWordJoin?: TimeRange & { word: string; reason: string; takesFirst?: string };
 }
 
 export function dialogueAudioStream(source: object) {
@@ -47,7 +49,7 @@ export function joinEvidence(words: Word[], wf: Waveform): JoinPage["edges"] {
   const quiet: TimeRange[] = [], valleys: TimeRange[] = [];
   const quietBelow = quietRms(wf.rms, step);
   const spoken = words.filter(w => w.end > w.start && w.text.trim() && !isTag(w.text));
-  const still = quietBuckets(wf.rms, wf.peaks, wf.from, step, wf.speechActivity, quietBelow, spoken);
+  const { quiet: still, breaths } = quietReading(wf.rms, wf.peaks, wf.from, step, wf.speechActivity, quietBelow, spoken);
   for (let i = 0; i < wf.rms.length; i++) {
     const start = wf.from + i * step, end = wf.from + (i + 1) * step;
     if (still[i]) appendInterval(quiet, start, end);
@@ -58,7 +60,7 @@ export function joinEvidence(words: Word[], wf: Waveform): JoinPage["edges"] {
   }
   const db = wf.rms.map(dbfs), levels = { from: wf.from, step, db };
   return { voice: wf.speechActivity, valleys, words: onTheirSound(spoken, [...quiet, ...valleys.filter(v => v.end - v.start >= silentValley)], levels),
-    quiet, levels };
+    quiet, levels, ...(breaths.length && { breaths }) };
 }
 
 /**
@@ -785,6 +787,9 @@ const SAME_WORD_MATCH = .6;
 const SAME_WORD_SEARCH = .12;
 /** Levels under this are room tone to the match, so the depth of a silence doesn't decide it. */
 const SAME_WORD_FLOOR = -60;
+/** What a same-word join's measurement leaves open, and who settles it. */
+export const SAME_WORD_UNHEARD = "Nothing Scarlet measures says how the join plays: like any join it can't place cleanly, a cut there applies as placed with unsureJoins cut " +
+  "and otherwise waits in review, where cut, ask or keep is your call.";
 
 export interface SameWordJoin extends TimeRange {
   word: string;
@@ -794,8 +799,8 @@ export interface SameWordJoin extends TimeRange {
   /** Seconds from a sound in the first delivery to the same sound in the second, and how closely their levels match. */
   lag: number;
   match: number;
-  /** The range as given kept the first delivery, which would have played twice: this start takes it out. */
-  takesFirst?: true;
+  /** The words the range as given keeps and the take says again right after it, so they play twice: this start takes them out. */
+  takesFirst?: string;
 }
 
 /**
@@ -830,7 +835,8 @@ export function sameWordJoin(tl: Timeline, project: Pick<Project, "media" | "set
   const words = [...page.words].sort((a, b) => a.start - b.start), middle = (w: Word) => (w.start + w.end) / 2;
   // The word the take resumes on, and its first delivery: the first word the range removes, or, when the range starts
   // right after them, the words it keeps that the take then says again. Those would play twice, "a time where you ‖
-  // where you would", as a repeat found by its last word alone is given; the cut then takes them too.
+  // where you would", as a repeat found by its last word alone is given. This start would take them out too; whether
+  // the cut does is the model's to say, so it is only reported (`takesFirst`, 2026-11-21).
   const after = words.filter(w => middle(w) > tE), second = after[0], removed = words.find(w => middle(w) > tS), before = words.filter(w => middle(w) <= tS);
   const token = (w?: Word) => w && !isTag(w.text) ? normalizeTranscriptToken(w.text) : "";
   if (!second || !token(second)) return;
@@ -884,7 +890,8 @@ export function sameWordJoin(tl: Timeline, project: Pick<Project, "media" | "set
   const start = Math.round(sourceToTimeline(out, begins) * fps) / fps, source = timelineToSource(out, start), end = range.end;
   if (source >= middle(first) || source <= out.sourceIn || end - start < 2 / fps) return;
   const span = (clip: MediaClip, w: Word) => ({ start: round3(sourceToTimeline(clip, w.start)), end: round3(sourceToTimeline(clip, w.end)) });
-  return { start, end, word: plain(second), first: span(out, first), second: span(back, second), lag: round3(lag), match: Math.round(match * 100) / 100, ...(takesFirst && { takesFirst }) };
+  return { start, end, word: plain(second), first: span(out, first), second: span(back, second), lag: round3(lag), match: Math.round(match * 100) / 100,
+    ...(takesFirst && { takesFirst: before.slice(-repeated).map(plain).join(" ") }) };
 }
 
 export function checkDialogueJoin(tl: Timeline, project: Project, range: TimeRange, pages: JoinPage[], namedWords?: TimeRange, pace: JoinPace = DEFAULT_PACE, air?: JoinPace): JoinCheck {
@@ -924,17 +931,20 @@ export function dialogueJoinChecker(tl: Timeline, project: Project, pages: JoinP
     const same = sameWordJoin(tl, project, range, pages);
     if (!same) return judge(range, namedWords, air);
     const said = "“" + same.word + "”";
-    // Saved where Scarlet put it, the join is what it is: neither edge moves, and no kept word is cut.
+    // Saved where Scarlet put it, the join is what it is: neither edge moves, and no kept word is cut. Nothing measured
+    // says how it plays. Such a join used to be the editor's alone, whatever the pass asked; since 2026-11-21 it is held
+    // as any join Scarlet can't place cleanly is: the model decides, and the default is in the skill.
     if (Math.abs(same.start - range.start) < 2e-3) return { start: same.start, end: same.end, status: "review", sameWord: same.word,
       reason: `The cut starts as the first ${said} begins and the second ${said} follows it. The word before runs into the first with no pause, so its start was found by matching the two ` +
-        `${said}s on their sound. No kept word is cut as measured. Scarlet can't hear the join, and neither can you: the editor hears it.` };
+        `${said}s on their sound. No kept word is cut as measured. ${SAME_WORD_UNHEARD}` };
     const checked = judge(range, namedWords, air, true);
     // A removal with quiet at both edges needs no other way in.
     if (checked.status === "unchanged" || checked.status === "snapped") return checked;
-    return { ...checked, sameWordJoin: { start: same.start, end: same.end, word: same.word, ...(same.takesFirst && { takesFirst: true as const }),
+    const twice = same.takesFirst && "“" + same.takesFirst + "”";
+    return { ...checked, sameWordJoin: { start: same.start, end: same.end, word: same.word, ...(same.takesFirst && { takesFirst: same.takesFirst }),
       reason: `${said} is said again right after this removal, and the word before runs into the first one with no pause. Matched on their sound, the first ${said} begins at ` +
-        `${same.start.toFixed(3)} s: removing ${same.start.toFixed(3)}–${same.end.toFixed(3)} s ${same.takesFirst ? `also takes out the first ${said}, which this range leaves playing twice,` : "takes out the same words"} ` +
-        "and plays the word before whole. Scarlet can't hear the result, so a cut saved on those seconds is the editor's to hear, as a call." } };
+        `${same.start.toFixed(3)} s: removing ${same.start.toFixed(3)}–${same.end.toFixed(3)} s ${twice ? `also takes out the first ${twice}, which this range leaves playing twice,` : "takes out the same words"} ` +
+        `and plays the word before whole. ${SAME_WORD_UNHEARD}` } };
   };
 }
 
@@ -1127,6 +1137,8 @@ interface WordCut extends TimeRange {
   room: { start?: TimeRange; end?: TimeRange };
   /** Kept words beside the cut that sound somewhere other than their timing, and where the edge found them. */
   retimed: string[];
+  /** A breath measured after the last kept word, where the start looked for quiet or room tone, and where the start is beside it. */
+  breath?: string;
 }
 
 /** Sound counts as speech within this of the level speech sits at on the page, as gapSound counts it. */
@@ -1253,7 +1265,8 @@ function extremeLevel(page: NonNullable<JoinPage["edges"]>, from: number, to: nu
  * the breath, and the cut held on the editor breathing for a third of a second. The room right after the word's sound
  * was 3 frames long (2026-11-20). And a dip the kept word sounds past at speaking level is inside that word, not where
  * it ends: the stop of the “p” in “subscription” sat 0.24 s before the word's end, under its loudest sound by 20 dB,
- * and the cut there took “-tion” off (2026-11-20).
+ * and the cut there took “-tion” off (2026-11-20). Since 2026-11-21 a breath after that room is the model's to keep
+ * (`breath`, in wordCutRange); the default is the skill's, this room.
  */
 function dipBetween(page: NonNullable<JoinPage["edges"]>, from: number, to: number, boundary?: number, beside?: { side: "start" | "end"; kept: Word }) {
   const levels = page.levels, low = extremeLevel(page, from, to, "lowest");
@@ -1297,14 +1310,56 @@ function dipBetween(page: NonNullable<JoinPage["edges"]>, from: number, to: numb
 /** A breath sits at least this far under the word before it. */
 const BREATH_UNDER_WORD_DB = 20;
 /**
+ * What a cut that starts after a kept word does with a breath between the word and the quiet: `cut` starts it in the
+ * room right after the word, so the breath goes; `keep` starts it in the quiet after the breath, so the breath plays.
+ * Until 2026-11-21 Scarlet always cut it, a rule of taste the stock skill states too (“cut … before any breath”), so an
+ * editor who wanted the breath kept could not have it. The model decides; the default is the skill's.
+ */
+export type Breath = "cut" | "keep";
+/** A breath after a kept word, as measured: where it sounds, its loudest level, and how far that is under the word. */
+interface BreathAfterWord { breath: TimeRange; db: number; underWord?: number }
+
+/**
+ * Whether what lies between two stretches at room tone after a kept word is a breath: sound far under the word, in no
+ * word. The level reading of it, when it is.
+ */
+function breathBetween(page: NonNullable<JoinPage["edges"]>, kept: Word, before: TimeRange, after: TimeRange): BreathAfterWord | undefined {
+  const levels = page.levels, loudest = extremeLevel(page, kept.start, kept.end, "highest");
+  if (!levels || !loudest || after.start <= before.end + 1e-6) return;
+  if (page.words.some(w => w.start < after.start && w.end > before.end)) return;
+  const index = (t: number) => Math.floor((t - levels.from) / levels.step + 1e-6);
+  let db = -Infinity;
+  for (let i = index(before.end); i < Math.min(levels.db.length, index(after.start)); i++) {
+    if (levels.db[i]! > loudest.db - BREATH_UNDER_WORD_DB) return;
+    db = Math.max(db, levels.db[i]!);
+  }
+  // Shorter than a level bucket, it has no level of its own.
+  return { breath: { start: before.end, end: after.start }, db, ...(Number.isFinite(db) && { underWord: loudest.db - db }) };
+}
+
+/** The first stretch at room tone that starts after `from`, in buckets whose middle is before `until`. */
+function roomToneAfter(page: NonNullable<JoinPage["edges"]>, from: number, until: number): TimeRange | undefined {
+  const levels = page.levels;
+  if (!levels) return;
+  const centre = (i: number) => levels.from + (i + .5) * levels.step;
+  let first = -1, last = -1;
+  for (let i = Math.max(0, Math.ceil((from - levels.from) / levels.step - 1e-6)); i < levels.db.length && centre(i) <= until; i++) {
+    if (levels.db[i]! <= DIP_DBFS) { if (first < 0) first = i; last = i; } else if (first >= 0) break;
+  }
+  return first < 0 ? undefined : { start: levels.from + first * levels.step, end: levels.from + (last + 1) * levels.step };
+}
+
+/**
  * The room right after a kept word's sound, when what follows it up to the quiet run `run` is a breath: sound far under
  * the word, in no word. A breath keeps the speech detector on and the level over the room, so the quiet run the edge
  * would pad into starts after it, and the cut held on the editor breathing in. After “cube simulation.” the room came
  * back for 80 ms, a breath ran 0.12 s at -50 dBFS, and the cut came 0.36 s after the word (2026-11-20).
+ * Whether the cut starts in that room or after the breath is the model's call since 2026-11-21 (`breath`): this only
+ * measures, and wordCutRange places the edge as asked and says what was found.
  */
-function roomBeforeBreath(page: NonNullable<JoinPage["edges"]>, kept: Word, run: TimeRange): TimeRange | undefined {
-  const levels = page.levels, loudest = extremeLevel(page, kept.start, kept.end, "highest");
-  if (!levels || !loudest || run.start <= kept.end) return;
+function roomBeforeBreath(page: NonNullable<JoinPage["edges"]>, kept: Word, run: TimeRange): (BreathAfterWord & { room: TimeRange }) | undefined {
+  const levels = page.levels;
+  if (!levels || run.start <= kept.end) return;
   const index = (t: number) => Math.floor((t - levels.from) / levels.step + 1e-6);
   let first = -1, last = -1;
   for (let i = Math.max(0, index(kept.end - keptSlack)); i < Math.min(levels.db.length, index(run.start)); i++) {
@@ -1313,9 +1368,28 @@ function roomBeforeBreath(page: NonNullable<JoinPage["edges"]>, kept: Word, run:
   if (first < 0) return;
   const quiet = { start: levels.from + first * levels.step, end: levels.from + (last + 1) * levels.step };
   if (quiet.end - quiet.start < 2 * quietMargin || quiet.end >= run.start - 1e-6 || keptSoundsPast(page, quiet, kept, "start")) return;
-  if (page.words.some(w => w.start < run.start && w.end > quiet.end)) return;
-  for (let i = index(quiet.end); i < Math.min(levels.db.length, index(run.start)); i++) if (levels.db[i]! > loudest.db - BREATH_UNDER_WORD_DB) return;
-  return quiet;
+  const found = breathBetween(page, kept, quiet, run);
+  return found && { ...found, room: quiet };
+}
+
+/**
+ * A breath the quiet run `run` after a kept word holds from its start: the quiet after a word begins where the word's
+ * sound is back at room level, and what sounds after that, under speaking level and in no word, is part of the pause
+ * (quietReading). An edge padded from the run's start cut it, whatever the model asked, and nothing said it was there.
+ */
+function breathInRun(page: NonNullable<JoinPage["edges"]>, kept: Word, run: TimeRange): BreathAfterWord | undefined {
+  const held = page.breaths?.find(b => b.start >= run.start - 1e-6 && b.end <= run.end + 1e-6 && b.start >= kept.start);
+  if (!held) return;
+  const loudest = extremeLevel(page, kept.start, kept.end, "highest");
+  return { breath: { start: held.start, end: held.end }, db: held.db, ...(loudest && { underWord: loudest.db - held.db }) };
+}
+
+/** What a cut's start found after the kept word, and where the start is beside it. `unkept` says why a breath asked to play doesn't. */
+function breathNote(kept: Word, found: BreathAfterWord, at: number, breath: Breath, unkept?: string) {
+  const { start, end } = found.breath;
+  const where = at <= start + 1e-6 ? "before it" : at >= end - 1e-6 ? "after it, so it plays" : `${(at - start).toFixed(2)} s into it, so that much of it plays`;
+  const level = Number.isFinite(found.db) ? ` at up to ${Math.round(found.db)} dBFS${found.underWord === undefined ? "" : ` (${Math.round(found.underWord)} dB under the word)`}` : "";
+  return `A breath follows “${plain(kept)}”: ${(end - start).toFixed(2)} s${level}, in no word; the cut starts ${where}${unkept ? `, ${unkept}` : ""} (breath ${breath}).`;
 }
 
 /** Sound this close to a word's loudest, for this long, is the word still speaking. */
@@ -1407,11 +1481,12 @@ function betweenWords(page: NonNullable<JoinPage["edges"]>, kept: Word, removed:
 /** Two words the transcript times this close are said as one: their edge goes where it parts them. */
 const RUN_ON_GAP = .06;
 
-export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t: number) => JoinPage["edges"] | undefined, leave?: number, pace: JoinPace = DEFAULT_PACE, voiceIn?: number): WordCut {
+export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t: number) => JoinPage["edges"] | undefined, leave?: number, pace: JoinPace = DEFAULT_PACE, voiceIn?: number, breath: Breath = "cut"): WordCut {
   const first = words[from]!, last = words[to]!;
   // The pause the join should play, word to word, and how much of it follows the cut, in the recording's seconds.
   const air = leave === undefined ? { after: pace.after, before: voiceIn ?? pace.before } : splitLeave(leave, pace, voiceIn);
   const problems: string[] = [], dips: string[] = [], retimed: string[] = [];
+  let breathFound: string | undefined;
   // The kept word beside each edge, where the recording says it is.
   const heard = (kept: Word | undefined, neighbour: Word | undefined, side: "start" | "end") => {
     if (!kept) return kept;
@@ -1430,6 +1505,7 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
   const used: { start?: TimeRange; end?: TimeRange } = {}, room: WordCut["room"] = {};
   const edge = (kept: Word | undefined, removed: Word, side: "start" | "end", timed = false) => {
     room[side] = undefined;
+    if (side === "start") breathFound = undefined;
     if (!kept) return side === "start" ? 0 : Infinity;
     const lo = side === "start" ? kept.end : removed.end, hi = side === "start" ? removed.start : kept.start;
     const inGap = (page: JoinPage["edges"]) => {
@@ -1460,10 +1536,22 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
         room[side] = { start: run.start + quietMargin, end: onsetLimit(pageAt(run.end) ?? page, run.end) };
         return Math.max(run.start + quietMargin, run.end - air.before);
       }
-      // A breath after the kept word, with the quiet only after it: the edge goes in the room before the breath.
-      const quiet = (side === "start" && page && roomBeforeBreath(pageAt(run.start) ?? page, kept, run)) || run;
+      // A breath after the kept word: before the quiet, which then starts after it, or held in the quiet from its
+      // start. Until 2026-11-21 the edge always went before it, in the room right after the word; now the model
+      // decides (`breath`), the default is the skill's and the same as before, and the breath is reported either way.
+      const runPage = side === "start" && page ? pageAt(run.start) ?? page : undefined;
+      const outside = runPage && roomBeforeBreath(runPage, kept, run);
+      const inside = runPage && !outside ? breathInRun(runPage, kept, run) : undefined;
+      // Kept, the edge goes in the quiet after the breath, padded as any edge in quiet is: for a breath the run holds,
+      // the rest of the run, when that is long enough to place an edge in.
+      const afterInside = inside && { start: inside.breath.end, end: run.end };
+      const roomAfter = afterInside && afterInside.end - afterInside.start >= 2 * quietMargin ? afterInside : undefined;
+      const quiet = outside && breath === "cut" ? outside.room : roomAfter && breath === "keep" ? roomAfter : run;
       room[side] = { start: quiet.start + quietMargin, end: quiet.end - quietMargin };
-      return padEdge(quiet, side, air);
+      const at = padEdge(quiet, side, air);
+      const found = outside ?? inside;
+      if (found) breathFound = breathNote(kept, found, at, breath, inside && breath === "keep" && !roomAfter ? "since the quiet after it is too short to start a cut in" : undefined);
+      return at;
     }
     // No run of silence: the two words run together. The lowest level between them, reaching a little way into each
     // word's timing and no further into the kept one than a quiet run may.
@@ -1476,8 +1564,15 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
     const low = near?.dip ? near : (page && bounds && bounds.end > bounds.start && dipBetween(page, bounds.start, bounds.end, undefined, { side, kept })) || near;
     if (low?.dip) {
       dips.push(`No pause between “${plain(side === "start" ? kept : removed)}” and “${plain(side === "start" ? removed : kept)}”: the ${side} is at the lowest level between them (${Math.round(low.db)} dBFS).`);
-      room[side] = low.room;
-      return low.at;
+      // The room right after the kept word, then a breath up to the next room tone before the removed word's sound: the
+      // default is the skill's, this room; kept (`breath`), the start goes to the middle of the room after the breath,
+      // as it does in any stretch at room tone (2026-11-21).
+      const next = side === "start" && page && bounds && low.room && low.db <= DIP_DBFS ? roomToneAfter(page, low.room.end, bounds.end) : undefined;
+      const found = next && breathBetween(page!, kept, low.room!, next);
+      const at = found && breath === "keep" ? (next.start + next.end) / 2 : low.at;
+      room[side] = found && breath === "keep" ? next : low.room;
+      if (found) breathFound = breathNote(kept, found, at, breath);
+      return at;
     }
     const at = lo <= hi ? (lo + hi) / 2 : side === "start" ? removed.start : removed.end;
     // Spoken straight through, the words part where the transcript parts them: the published editor's cuts in running
@@ -1518,7 +1613,7 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
   // One edge between words that run together leaves the other in silence, where the ear resets. With both there, a
   // short word comes out of the middle of running speech: a doubled “the” cut that way took the kept “the” with it.
   if (dips.length === 2) problems.push(`No pause on either side of “${text}”: both edges sit between words that run together.`);
-  return { start, end, problems, dips, text, room, retimed };
+  return { start, end, problems, dips, text, room, retimed, ...(breathFound && { breath: breathFound }) };
 }
 
 /** The default padding either side of a join, together: what a join plays word to word when the model names no length. */

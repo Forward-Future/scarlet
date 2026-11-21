@@ -491,6 +491,94 @@ describe("native retake boundaries", () => {
     expect(cut.start).toBeLessThan(1.48);
   });
 
+  it("starts the cut before a breath after the kept word by default, after it when asked to keep it, and names the breath either way", () => {
+    // The breath of “cube simulation.” as above: the room 1.4–1.48 s, the breath at -50 dBFS to 1.6 s, the room again
+    // to “I” at 1.82 s. Whether the breath plays is the model's call, by its skill (2026-11-21).
+    const said = [{ start: 1, end: 1.4, text: "simulation." }, { start: 1.82, end: 2, text: "I" }, { start: 2, end: 2.3, text: "thought" }, { start: 3, end: 3.4, text: "test" }];
+    const sound = [[1, 1.4], [1.82, 2.3], [3, 3.4]];
+    const rms = Array.from({ length: 250 }, (_, i) => sound.some(([a, b]) => a! <= i/50 && i/50 < b!) ? .12 : i/50 >= 1.48 && i/50 < 1.6 ? .003 : i/50 >= 1.4 && i/50 < 1.82 ? .0008 : .0004);
+    const edges = joinEvidence(said, { from: 0, to: 5, peaks: rms, rms, speechActivity: [{ start: 1, end: 2.32 }, { start: 3, end: 3.42 }] })!;
+    const measured = "A breath follows “simulation”: 0.12 s at up to -50 dBFS (32 dB under the word), in no word; the cut starts ";
+    const cut = wordCutRange(said, 1, 2, () => edges);
+    expect(cut.start).toBeCloseTo(1.44);
+    expect(cut.room.start).toEqual({ start: expect.closeTo(1.43), end: expect.closeTo(1.45) });
+    expect(cut.breath).toBe(measured + "before it (breath cut).");
+    expect(wordCutRange(said, 1, 2, () => edges, undefined, undefined, undefined, "cut")).toEqual(cut);
+    // Kept, the start goes in the quiet after the breath, padded as any edge in quiet is; the end doesn't move.
+    const kept = wordCutRange(said, 1, 2, () => edges, undefined, undefined, undefined, "keep");
+    expect(kept.start).toBeCloseTo(1.6 + AIR_AFTER_SPEECH);
+    expect(kept.room.start).toEqual({ start: expect.closeTo(1.63), end: expect.closeTo(1.79) });
+    expect(kept.end).toBeCloseTo(cut.end);
+    expect(kept.breath).toBe(measured + "after it, so it plays (breath keep).");
+    expect([cut.problems, cut.dips, kept.problems, kept.dips]).toEqual([[], [], [], []]);
+    // With no breath there, nothing is said, and keeping one changes nothing.
+    const plain = wordCutRange(words, 1, 1, () => page.edges, undefined, undefined, undefined, "keep");
+    expect(plain).toEqual(wordCutRange(words, 1, 1, () => page.edges));
+    expect(plain).not.toHaveProperty("breath");
+  });
+
+  it("keeps a breath the quiet after the word holds when asked, and names it either way", () => {
+    // “yeah, it's okay”: the room 0.1 s after “okay”, then a breath 28 dB under the voice for 0.2 s with the detector
+    // still on, then the quiet up to “so”. The quiet starts where the room came back, breath and all (2026-11-18).
+    const said = [{ start: .6, end: 1, text: "it's" }, { start: 1, end: 1.4, text: "okay" }, { start: 2.4, end: 2.6, text: "so" }, { start: 3.2, end: 3.6, text: "next" }];
+    const sound = [[.6, 1.4], [2.4, 2.6], [3.2, 3.6]];
+    const reading = (breathEnd: number, next = 2.4) => {
+      const at = (t: number) => sound.some(([a, b]) => a! <= t && t < b! && (a !== 2.4 || t >= next)) || (t >= next && t < 2.6) ? .12 : t >= 1.5 && t < breathEnd ? .005 : .0004;
+      const rms = Array.from({ length: 250 }, (_, i) => at(i / 50));
+      return joinEvidence(said.map(w => w.text === "so" ? { ...w, start: next } : w), { from: 0, to: 5, peaks: rms, rms,
+        speechActivity: [{ start: .6, end: 1.72 }, { start: next, end: 2.62 }, { start: 3.2, end: 3.62 }] })!;
+    };
+    const edges = reading(1.7);
+    // What the quiet is stays as it was; the breath it holds is a measurement beside it.
+    expect(edges.quiet.find(q => q.start < 2 && q.end > 1.5)).toEqual({ start: expect.closeTo(1.4), end: expect.closeTo(2.4) });
+    expect(edges.breaths).toEqual([{ start: expect.closeTo(1.5), end: expect.closeTo(1.7), db: -46 }]);
+    const measured = "A breath follows “okay”: 0.20 s at up to -46 dBFS (28 dB under the word), in no word; the cut starts ";
+    // By default the start is padded from where the room came back, before the breath, as it always was.
+    const cut = wordCutRange(said, 2, 2, () => edges);
+    expect(cut.start).toBeCloseTo(1.4 + AIR_AFTER_SPEECH);
+    expect(cut.breath).toBe(measured + "before it (breath cut).");
+    // Kept, it is padded into the quiet after the breath, and the breath plays; the end doesn't move.
+    const kept = wordCutRange(said, 2, 2, () => edges, undefined, undefined, undefined, "keep");
+    expect(kept.start).toBeCloseTo(1.7 + AIR_AFTER_SPEECH);
+    expect(kept.room.start).toEqual({ start: expect.closeTo(1.73), end: expect.closeTo(2.37) });
+    expect(kept.end).toBeCloseTo(cut.end);
+    expect(kept.breath).toBe(measured + "after it, so it plays (breath keep).");
+    // A longer pause asked for puts the default start partway into the breath, and the note says how far.
+    const paused = wordCutRange(said, 2, 2, () => edges, .2);
+    expect(paused.start).toBeCloseTo(1.55);
+    expect(paused.breath).toBe(measured + "0.05 s into it, so that much of it plays (breath cut).");
+    expect(wordCutRange(said, 2, 2, () => edges, .2, undefined, undefined, "keep").start).toBeCloseTo(1.85);
+    // With too little quiet after the breath to start a cut in, the start stays before it, and the note says why.
+    const short = reading(1.7, 1.74);
+    const tight = said.map(w => w.text === "so" ? { ...w, start: 1.74 } : w);
+    const cramped = wordCutRange(tight, 2, 2, () => short, undefined, undefined, undefined, "keep");
+    expect(cramped.start).toBeCloseTo(wordCutRange(tight, 2, 2, () => short).start);
+    expect(cramped.start).toBeLessThan(1.5);
+    expect(cramped.breath).toBe(measured + "before it, since the quiet after it is too short to start a cut in (breath keep).");
+  });
+
+  it("keeps a breath between two stretches of room tone, with no quiet run, when asked, and names it either way", () => {
+    // “simulation.”, the room for three frames, a breath at -50 dBFS, the room again, and “I” at 1.66 s, the detector on
+    // throughout: no quiet run, and each room too short to be a pause. The start is in the room nearest the word.
+    const said = [{ start: 1, end: 1.4, text: "simulation." }, { start: 1.66, end: 1.8, text: "I" }, { start: 1.8, end: 2.1, text: "thought" }, { start: 3, end: 3.4, text: "test" }];
+    const sound = [[1, 1.4], [1.66, 2.1], [3, 3.4]];
+    const rms = Array.from({ length: 250 }, (_, i) => sound.some(([a, b]) => a! <= i/50 && i/50 < b!) ? .12 : i/50 >= 1.46 && i/50 < 1.58 ? .003 : i/50 >= 1.4 && i/50 < 1.66 ? .0008 : .0004);
+    const edges = joinEvidence(said, { from: 0, to: 5, peaks: rms, rms, speechActivity: [{ start: 1, end: 2.12 }, { start: 3, end: 3.42 }] })!;
+    const measured = "A breath follows “simulation”: 0.12 s at up to -50 dBFS (32 dB under the word), in no word; the cut starts ";
+    const cut = wordCutRange(said, 1, 2, () => edges);
+    expect(cut.dips).toEqual(["No pause between “simulation” and “I”: the start is at the lowest level between them (-62 dBFS)."]);
+    expect(cut.start).toBeCloseTo(1.43);
+    expect(cut.room.start).toEqual({ start: expect.closeTo(1.4), end: expect.closeTo(1.46) });
+    expect(cut.breath).toBe(measured + "before it (breath cut).");
+    // Kept, the start is in the middle of the room after the breath, as it is in any stretch at room tone.
+    const kept = wordCutRange(said, 1, 2, () => edges, undefined, undefined, undefined, "keep");
+    expect(kept.start).toBeCloseTo(1.62);
+    expect(kept.room.start).toEqual({ start: expect.closeTo(1.58), end: expect.closeTo(1.66) });
+    expect(kept.end).toBeCloseTo(cut.end);
+    expect(kept.breath).toBe(measured + "after it, so it plays (breath keep).");
+    expect([cut.problems, kept.problems]).toEqual([[], []]);
+  });
+
   it("doesn't take a stop inside the kept word, which sounds on after it, for where the words part", () => {
     // “subscription” runs into “I” with no pause. The stop before its last syllable falls to -52 dBFS at 1.2 s, and the
     // word sounds at full level for 0.36 s after it: an edge there takes off “-tion”.
@@ -650,15 +738,27 @@ describe("a restart that begins on the word the first take broke off after", () 
     // The second “where” sounds from 2.40 s and the two match 1.20 s apart, so the first begins at 1.20 s: the cut
     // starts on the frame nearest it, with no margin added.
     expect(held.sameWordJoin).toMatchObject({ start: expect.closeTo(36 / 30, 5), end: 2.34, word: "where" });
-    expect(held.sameWordJoin!.reason).toContain("the editor's to hear");
+    expect(held.sameWordJoin!.takesFirst).toBeUndefined();
+    // What was measured, and that unsureJoins and the model's review decide: not that the join is the editor's alone.
+    expect(held.sameWordJoin!.reason).toContain("Nothing Scarlet measures says how the join plays");
+    expect(held.sameWordJoin!.reason).toContain("applies as placed with unsureJoins cut and otherwise waits in review, where cut, ask or keep is your call");
   });
 
-  it("holds a cut saved there for the editor, with no word clipped", () => {
+  it("names the kept words a range leaves playing twice, which a cut from the matched start takes out", () => {
+    const { p, tl } = fixture();
+    // The range starts after the first “where” and ends before the second: “a time where ‖ where you would”.
+    const twice = checkDialogueJoin(tl, p, { start: 1.43, end: 2.37 }, [page()]);
+    expect(twice.sameWordJoin).toMatchObject({ start: expect.closeTo(36 / 30, 5), word: "where", takesFirst: "where" });
+    expect(twice.sameWordJoin!.reason).toContain("also takes out the first “where”, which this range leaves playing twice");
+  });
+
+  it("holds a cut saved there like any join Scarlet can't place cleanly, with no word clipped", () => {
     const { p, tl } = fixture();
     const placed = checkDialogueJoin(tl, p, { start: 36 / 30, end: 2.34 }, [page()]);
     expect(placed).toMatchObject({ status: "review", sameWord: "where", start: expect.closeTo(36 / 30, 5), end: 2.34 });
     expect(placed.inWord).toBeUndefined();
-    expect(placed.reason).toContain("the editor hears it");
+    expect(placed.reason).toContain("its start was found by matching the two “where”s on their sound. No kept word is cut as measured.");
+    expect(placed.reason).not.toContain("the editor hears it");
   });
 
   it("offers nothing when the take resumes on another word", () => {

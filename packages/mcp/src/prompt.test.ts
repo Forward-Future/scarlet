@@ -133,22 +133,19 @@ describe("an editing prompt", () => {
     // The order is the model's. How far down it the editor is asked to look is theirs, and balanced when they haven't said.
     expect(pass()).toContain("order those cuts from the most likely to be wrong to the least");
     expect([pass(), pass("less"), pass("balanced"), pass("more")].map(asked)).toEqual(["about one in four", "about one in ten", "about one in four", "about half"]);
-    // The closing check after the pass, a fresh session, has no memory of the order and is not asked to flag a second share.
+    // No run is a closing check the engine sent back (2026-11-21): one stored with that mark is asked as any pass is.
     expect(buildSystemPrompt({ ...base, task: { kind: "edit" as const, instruction: "/dialogue-pass", agent: "claude",
-      context: { dialogueOperation: "first-cut" as const }, repeatAudit: { version: "v2", returns: 1 } } })).not.toContain("Before the pass is done");
+      context: { dialogueOperation: "first-cut" as const }, repeatAudit: { version: "v2", returns: 1 } } })).toContain("Before the pass is done");
     // A request about one cut or edit of the pass, a pause tightening and any other edit are not asked.
     for (const context of [{ dialogueOperation: "first-cut", cutIndex: 0, changeId: "chg_1" }, { dialogueOperation: "first-cut", editIndex: 2 }, { dialogueOperation: "local-pauses" }, {}])
       expect(buildSystemPrompt({ ...base, checkIn: "more", task: task(context) })).not.toContain("Before the pass is done");
   });
 
   it("has a dialogue pass stage the repeats it would keep that are likeliest restarts, as many as the editor's setting asks", () => {
-    const pass = (checkIn?: "less" | "balanced" | "more", closing = false) => buildSystemPrompt({ ...base, checkIn,
-      task: { kind: "edit" as const, instruction: "/dialogue-pass", agent: "claude", context: { dialogueOperation: "first-cut" as const },
-        ...(closing && { repeatAudit: { version: "v1", returns: 1 } }) } });
+    const pass = (checkIn?: "less" | "balanced" | "more") => buildSystemPrompt({ ...base, checkIn,
+      task: { kind: "edit" as const, instruction: "/dialogue-pass", agent: "claude", context: { dialogueOperation: "first-cut" as const } } });
     const staged = (prompt: string) => prompt.match(/- Order the repeats dialogue_check_repeats lists that you would keep.* Stage (.*) of them from the top with removeRepeat and decision review/)?.[1];
-    expect([pass(), pass("less"), pass("more")].map(staged)).toEqual(["about one in four", "about one in ten", "about half"]);
-    // A keep plays on unseen, so the closing check orders the repeats it keeps too.
-    expect(staged(pass("balanced", true))).toBe("about one in four");
+    expect([pass(), pass("balanced"), pass("less"), pass("more")].map(staged)).toEqual(["about one in four", "about one in four", "about one in ten", "about half"]);
     for (const context of [{ dialogueOperation: "first-cut", cutIndex: 0, changeId: "chg_1" }, { dialogueOperation: "local-pauses" }, {}])
       expect(buildSystemPrompt({ ...base, task: task(context) })).not.toContain("Order the repeats dialogue_check_repeats lists");
   });
