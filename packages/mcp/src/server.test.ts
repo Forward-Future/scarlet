@@ -1456,6 +1456,42 @@ describe("timeline_at and captions_generate", () => {
     expect((await client.callTool({ name: "timeline_at", arguments: { sourceTime: 1 } })).isError).toBe(true);
   });
 
+  it("maps a list from one read of one version, each answer as its own call gives it", async () => {
+    const at = async (args: object) => JSON.parse(textOf(await client.callTool({ name: "timeline_at", arguments: args }) as CallToolResult));
+    const reads = () => mock.requests.filter(r => r.path === "/projects/prj_test/timeline").length;
+    // The last is past the end of the edit, a gap.
+    const times = [0.5, 2, 99];
+    let before = reads();
+    const list = await at({ times });
+    expect(reads() - before).toBe(1);
+    const singles = await Promise.all(times.map(time => at({ time })));
+    expect(singles[2].note).toBe("Nothing plays at that time (a gap).");
+    expect(JSON.stringify(list)).toBe(JSON.stringify({ version: singles[0].version, at: singles.map(({ version: _, ...one }) => one) }));
+    // 1.9–3.5 s of the source was cut: it has no placement.
+    const sourceTimes = [1.2, 2.5, 4.2];
+    before = reads();
+    const back = await at({ mediaId: "m1", sourceTimes });
+    expect(reads() - before).toBe(1);
+    const each = await Promise.all(sourceTimes.map(sourceTime => at({ mediaId: "m1", sourceTime })));
+    expect(each[1].placements).toEqual([]);
+    expect(JSON.stringify(back)).toBe(JSON.stringify({ version: each[0].version, mediaId: "m1", at: each.map(({ version: _, mediaId: __, ...one }) => one) }));
+    for (const args of [{ time: 1, times: [2] }, { times: [1], mediaId: "m1", sourceTimes: [1] }, { mediaId: "m1", sourceTime: 1, sourceTimes: [1] }, {}]) {
+      const wrong = await client.callTool({ name: "timeline_at", arguments: args }) as CallToolResult;
+      expect(wrong.isError).toBe(true);
+      expect(textOf(wrong)).toContain("Give exactly one of time, times, sourceTime, sourceTimes or sourceRange.");
+    }
+    const unplaced = await client.callTool({ name: "timeline_at", arguments: { sourceTimes: [1] } }) as CallToolResult;
+    expect(textOf(unplaced)).toContain("need the mediaId they belong to");
+    // A list longer than one call answers is answered in part, with the rest to ask for, not refused.
+    const many = Array.from({ length: 53 }, (_, i) => i / 10);
+    const part = await at({ times: many });
+    expect(part.at.map((a: { time: number }) => a.time)).toEqual(many.slice(0, 50));
+    expect(part.notAnswered).toEqual(many.slice(50));
+    expect(part.next).toBe(`Ask for notAnswered on version ${part.version}.`);
+    expect((await at({ mediaId: "m1", sourceTimes: many })).notAnswered).toEqual(many.slice(50));
+    expect(list.notAnswered).toBeUndefined();
+  });
+
   it("builds caption clips mapped through the cut, dropping cut words", async () => {
     const base = mock.state.timeline!.version;
     const reason = "The editor wants the dialogue to be readable with the sound off.";

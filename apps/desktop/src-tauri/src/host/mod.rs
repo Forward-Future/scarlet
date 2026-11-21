@@ -4,7 +4,9 @@
 //! with the idle runtimes, runs each task through the matching CLI runner,
 //! streams events to `POST /tasks/:id/events` and completes the task.
 //! Up to `max_parallel` tasks per runtime (claude/codex/gemini) at once, so
-//! several threads progress in parallel; a run is stopped when its CLI goes
+//! several threads progress in parallel, and side checks (area and learning
+//! checks) in slots of their own (`side_check_slots`), so a request never waits
+//! behind itself for its checks; a run is stopped when its CLI goes
 //! silent for `stall_minutes` (10), never for being slow unless `timeout_minutes` is set;
 //! running tasks are cancelled (completed as `cancelled`) on app exit.
 //! The engine builds the prompt (`GET /tasks/:id/prompt`); this host only runs it.
@@ -307,6 +309,8 @@ struct RunningTask {
     superseded: AtomicBool,
     /// The folder it works in. Every attempt at one run shares it.
     run_dir: PathBuf,
+    /// A side check, counted in the side-check slots rather than the request slots.
+    side_check: bool,
 }
 
 impl RunningTask {
@@ -319,8 +323,24 @@ impl RunningTask {
             seq: NEXT_RUN_SEQ.fetch_add(1, Ordering::SeqCst),
             superseded: AtomicBool::new(false),
             run_dir,
+            side_check: false,
         }
     }
+
+    fn side_check(mut self, yes: bool) -> Self {
+        self.side_check = yes;
+        self
+    }
+}
+
+/// A short check beside a request that saves nothing to the video (`isSideCheck` in packages/shared/src/api.ts).
+fn is_side_check(kind: &str) -> bool {
+    matches!(kind, "learning_check" | "area_check")
+}
+
+/// Side checks run at once per runtime beside `max_parallel` requests (`sideCheckSlots` in packages/shared/src/api.ts).
+fn side_check_slots(max_parallel: usize) -> usize {
+    (2 * max_parallel.max(1)).min(12)
 }
 
 type RunningTasks = StdMutex<HashMap<String, Arc<RunningTask>>>;
@@ -630,17 +650,26 @@ impl HostRuntime {
 
     // -- claim loop -----------------------------------------------------------
 
-    /// Runtimes with a free slot (fewer than `max_parallel` tasks running).
+    /// Runtimes with a free request slot (fewer than `max_parallel` requests running), and whether any is full.
     async fn idle_agents(&self) -> (Vec<String>, bool) {
+        self.free_slots(false, self.max_parallel).await
+    }
+
+    /// Runtimes with a free side-check slot, and whether any is full.
+    async fn check_agents(&self) -> (Vec<String>, bool) {
+        self.free_slots(true, side_check_slots(self.max_parallel)).await
+    }
+
+    async fn free_slots(&self, side_check: bool, limit: usize) -> (Vec<String>, bool) {
         let mut running: HashMap<String, usize> = HashMap::new();
-        for r in self.running.lock().unwrap().values() {
+        for r in self.running.lock().unwrap().values().filter(|r| r.side_check == side_check) {
             *running.entry(r.agent.clone()).or_default() += 1;
         }
         let agents = self.agents.read().await;
         let mut idle = Vec::new();
         let mut saturated = false;
         for agent in agents.iter().filter(|a| a.installed && a.logged_in != Some(false) && CLI_AGENTS.contains(&a.id.as_str())) {
-            if running.get(&agent.id).copied().unwrap_or(0) < self.max_parallel {
+            if running.get(&agent.id).copied().unwrap_or(0) < limit {
                 idle.push(agent.id.clone());
             } else {
                 saturated = true;
@@ -661,7 +690,9 @@ impl HostRuntime {
         const WAIT: u64 = 25;
         while !self.cancel.is_cancelled() {
             let (idle, saturated) = self.idle_agents().await;
-            if idle.is_empty() {
+            let (checks, checks_full) = self.check_agents().await;
+            let saturated = saturated || checks_full;
+            if idle.is_empty() && checks.is_empty() {
                 self.sleep_or_wake(Duration::from_secs(5)).await;
                 continue;
             }
@@ -672,7 +703,7 @@ impl HostRuntime {
             let claimed = tokio::select! {
                 _ = self.cancel.cancelled() => break,
                 // When a runtime is full, wait locally so its worker can wake us with fresh capacity.
-                r = self.api.claim(&host_id, if saturated { 0 } else { WAIT }, &idle) => r,
+                r = self.api.claim(&host_id, if saturated { 0 } else { WAIT }, &idle, &checks) => r,
             };
             match claimed {
                 Ok(Some(task)) => {
@@ -696,7 +727,8 @@ impl HostRuntime {
 
     fn launch(self: Arc<Self>, task: Task) {
         let cancel = self.cancel.child_token();
-        let run = Arc::new(RunningTask::new(task.project_id.clone(), task.agent.clone(), cancel.clone(), self.run_dir(&task)));
+        let run = Arc::new(RunningTask::new(task.project_id.clone(), task.agent.clone(), cancel.clone(), self.run_dir(&task))
+            .side_check(is_side_check(&task.kind)));
         if let Some(previous) = self.running.lock().unwrap().insert(task.id.clone(), run.clone()) {
             previous.superseded.store(true, Ordering::SeqCst);
             previous.cancel.cancel();
@@ -1945,6 +1977,38 @@ mod tests {
         let run = Arc::new(RunningTask::new("prj_1".into(), "claude".into(), CancellationToken::new(), PathBuf::new()));
         rt.running.lock().unwrap().insert("tsk_1".into(), run);
         assert_eq!(rt.idle_agents().await, (vec!["codex".to_string()], true));
+        // A full request slot leaves claude's side checks free: an edit's own checks never wait behind it.
+        assert_eq!(rt.check_agents().await, (vec!["claude".to_string(), "codex".to_string()], false));
+    }
+
+    #[tokio::test]
+    async fn side_checks_run_in_slots_of_their_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let (rt, _) = runtime("http://127.0.0.1:1", dir.path());
+        let ready = |id: &str| AgentAvailability { id: id.into(), installed: true, logged_in: Some(true), ..Default::default() };
+        *rt.agents.write().await = vec![ready("gemini")];
+        let check = || Arc::new(RunningTask::new("prj_1".into(), "gemini".into(), CancellationToken::new(), PathBuf::new()).side_check(true));
+        // One request slot and two check slots here (max_parallel 1). Checks never take the request's slot.
+        assert_eq!(side_check_slots(1), 2);
+        rt.running.lock().unwrap().insert("chk_1".into(), check());
+        assert_eq!(rt.idle_agents().await, (vec!["gemini".to_string()], false));
+        assert_eq!(rt.check_agents().await, (vec!["gemini".to_string()], false));
+        rt.running.lock().unwrap().insert("chk_2".into(), check());
+        assert_eq!(rt.idle_agents().await, (vec!["gemini".to_string()], false));
+        assert_eq!(rt.check_agents().await, (vec![], true));
+        // And a request doesn't take a check's slot.
+        let run = Arc::new(RunningTask::new("prj_1".into(), "gemini".into(), CancellationToken::new(), PathBuf::new()));
+        rt.running.lock().unwrap().insert("tsk_1".into(), run);
+        assert_eq!(rt.idle_agents().await, (vec![], true));
+        rt.running.lock().unwrap().remove("chk_1");
+        assert_eq!(rt.check_agents().await, (vec!["gemini".to_string()], false));
+    }
+
+    #[test]
+    fn side_check_kinds_and_slots_match_the_engine() {
+        assert!(is_side_check("area_check") && is_side_check("learning_check"));
+        assert!(!is_side_check("skill_edit") && !is_side_check("edit") && !is_side_check("revise"));
+        assert_eq!((side_check_slots(1), side_check_slots(3), side_check_slots(8)), (2, 6, 12));
     }
 
     /// The engine's `model-catalog` as a script, on a host that finds every assistant on its PATH: it prints the

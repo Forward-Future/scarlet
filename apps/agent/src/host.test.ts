@@ -285,6 +285,42 @@ describe("AgentHost", { timeout: 30_000 }, () => {
     expect(run.mcp.env).toMatchObject({ SCARLET_SERVER: srv.server.url, SCARLET_TOKEN: "agent-token", SCARLET_PROJECT: "prj_test", SCARLET_TASK: "task_1", SCARLET_AGENT: "claude", SCARLET_MODEL: "opus" });
   });
 
+  it("runs a request's side checks in slots of their own while the request holds its runtime's only slot", async ({ signal }) => {
+    const srv = await startServer();
+    const check: Task = { ...task, id: "check_1", kind: "area_check", instruction: "What viewers may see at 155 s", context: { checksTaskId: "task_1" } };
+    srv.queue.push(check);
+    const send = srv.server.state.extra;
+    srv.server.state.extra = (req, res) => {
+      if (req.method === "GET" && req.path === "/tasks/check_1") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ task: { ...check, state: "running" }, events: [] }));
+        return true;
+      }
+      return send!(req, res);
+    };
+    const release = Promise.withResolvers<void>();
+    const running = new Set<string>();
+    let most = 0;
+    const { host } = makeHost(srv, async (opts) => {
+      running.add(opts.mcp.env.SCARLET_TASK!);
+      most = Math.max(most, running.size);
+      srv.events.emit("running");
+      await release.promise;
+      running.delete(opts.mcp.env.SCARLET_TASK!);
+      return { ok: true, summary: "" };
+    }, undefined, { config: { server: srv.server.url, token: "agent-token", name: "test-host", maxParallel: 1 } });
+    await startHostAndWait(host, (async () => { while (running.size < 2) await once(srv.events, "running", { signal }); })());
+    // The edit took the one request slot; its check was claimed from a check slot, and ran beside it.
+    expect([...running].sort()).toEqual(["check_1", "task_1"]);
+    expect(srv.claims[0]).toMatchObject({ body: { agents: ["claude"], checkAgents: ["claude"] } });
+    expect(srv.claims[1]).toMatchObject({ body: { agents: [], checkAgents: ["claude"] } });
+    // Two check slots for one request slot: with one check running, the host still offers check slots and no request slot.
+    await vi.waitFor(() => expect(srv.claims.length).toBeGreaterThan(2));
+    expect(srv.claims.at(-1)).toMatchObject({ body: { agents: [], checkAgents: ["claude"] } });
+    release.resolve();
+    expect(most).toBe(2);
+  });
+
   it("posts usage during a claim and waits for that report before persisting the final total", async ({ signal }) => {
     const srv = await startServer();
     const startedAt = "2026-04-01T12:00:00.000Z";

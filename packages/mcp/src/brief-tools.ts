@@ -29,6 +29,9 @@ export function withoutDescriptions(schema: unknown): unknown {
 
 type ListTools = (request: { method: "tools/list"; params?: unknown }, extra: unknown) => Promise<{ tools: Tool[] }>;
 
+/** Tools one tool_help call reads in full; the rest of a longer list are named for another call. */
+const HELP_AT_ONCE = 8;
+
 /**
  * List every tool with its first sentence and the shape of its parameters, and add `tool_help`, which gives a tool's
  * whole description and parameters. Called once every tool is registered. For a harness that drops tools whose
@@ -45,16 +48,26 @@ export function listToolsBriefly(server: McpServer) {
 
   server.registerTool(TOOL_HELP, {
     description: "A Scarlet tool's full description and parameters. Read it before you first call a tool.",
-    inputSchema: { name: z.string().describe("The tool's name, such as transcript_get") },
+    inputSchema: { name: z.string().optional().describe("The tool's name, such as transcript_get"),
+      names: z.array(z.string()).min(1).optional().describe(`Several tools' names instead, read in one call; up to ${HELP_AT_ONCE} are read, the rest listed for another call`) },
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
-  }, async ({ name }, extra) => {
+  }, async ({ name, names }, extra) => {
+    const failed = (text: string) => ({ isError: true, content: [{ type: "text" as const, text }] });
+    if ((name === undefined) === (names === undefined)) return failed("Give either name, for one tool, or names, for several.");
     const tools = await everyTool(extra);
-    const bare = name.replace(/^(mcp__scarlet__|mcp_scarlet_|scarlet[._/:])/, "");
-    const tool = tools.find(t => t.name === bare);
-    if (!tool || tool.name === TOOL_HELP) {
-      return { isError: true, content: [{ type: "text" as const, text: `No Scarlet tool is named ${name}. Its tools: ${tools.filter(t => t.name !== TOOL_HELP).map(t => t.name).join(", ")}.` }] };
-    }
-    return { content: [{ type: "text" as const, text: `${tool.name}\n\n${tool.description ?? ""}\n\nParameters (JSON schema):\n${JSON.stringify(tool.inputSchema, null, 1)}` }] };
+    // Full descriptions run 3–5k characters each: a long list is read in part, with the rest named, rather than refused.
+    const listed = [...new Set(names ?? [name!])];
+    const later = listed.slice(HELP_AT_ONCE);
+    const asked = listed.slice(0, HELP_AT_ONCE).map(given => ({ given, tool: tools.find(t => t.name !== TOOL_HELP && t.name === given.replace(/^(mcp__scarlet__|mcp_scarlet_|scarlet[._/:])/, "")) }));
+    const unknown = asked.flatMap(a => a.tool ? [] : [a.given]);
+    // An unknown name doesn't cost the model the tools it named right.
+    const missing = unknown.length ? `No Scarlet tool is named ${unknown.length > 1 ? `${unknown.slice(0, -1).join(", ")} or ${unknown.at(-1)}` : unknown[0]}. ` +
+      `Its tools: ${tools.filter(t => t.name !== TOOL_HELP).map(t => t.name).join(", ")}.` : undefined;
+    const known = [...new Set(asked.flatMap(a => a.tool ? [a.tool] : []))];
+    if (!known.length && !later.length) return failed(missing!);
+    const whole = known.map(tool => `${tool.name}\n\n${tool.description ?? ""}\n\nParameters (JSON schema):\n${JSON.stringify(tool.inputSchema, null, 1)}`);
+    const rest = later.length ? `Not read in this call, to ask for next: ${later.join(", ")}.` : undefined;
+    return { content: [{ type: "text" as const, text: [...(missing ? [missing] : []), ...whole, ...(rest ? [rest] : [])].join("\n\n---\n\n") }] };
   });
 
   handlers.set("tools/list", async (request, extra) => {

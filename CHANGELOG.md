@@ -6,11 +6,14 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 20, 2026
 
-- Rejecting an edit's look on footage that plays more than once now takes it off only the place you rejected, not every use of that footage.
+- A cut after you finish talking now comes right after your last word: a beat Scarlet keeps before a new demo or topic plays after the cut instead of as quiet after you stop.
 - An edit you play no longer starts over when Scarlet saves another edit of the same request meanwhile: it plays on, and the new edit comes in when you pause.
 - The model picker lists Standard speed once for Claude models instead of twice.
 - A skill Scarlet comes with that you edited and then set back to Scarlet's own text gets Scarlet's updates again.
 - When Scarlet puts your camera in the corner over a screen recording, it now frames you instead of shrinking the whole camera shot into the box, and follows your skill's size, shape, how much of you to show and rounded corners.
+- An edit that frames a screen recording no longer waits behind itself: Scarlet looks at several of the recording's windows at once beside it, so those edits finish minutes sooner.
+- With Gemini, a step that needs Scarlet to measure something first now waits for it instead of giving up and trying again.
+- Rejecting an edit's look on footage that plays more than once now takes it off only the place you rejected, not every use of that footage.
 
 ## November 19, 2026
 

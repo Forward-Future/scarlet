@@ -10,7 +10,7 @@ import { basename, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
 import type { AgentAvailability, AgentId, AgentUsage, Task, TaskEvent } from "@scarlet/shared";
-import { ScarletClient, TaskState } from "@scarlet/shared";
+import { isSideCheck, ScarletClient, sideCheckSlots, TaskState } from "@scarlet/shared";
 import { privateDirectory } from "./private-files.js";
 import type { AgentConfig } from "./config.js";
 import { CLI_AGENTS, detect as detectAgents, runnerEnv } from "./detect.js";
@@ -77,6 +77,8 @@ export class AgentHost {
   private running = new Map<string, RunningTask>(); // taskId -> run
   /** Running task count per runtime; each may run up to maxParallel at once. */
   private busy = new Map<AgentId, number>();
+  /** Running side checks per runtime, in slots of their own (`sideCheckSlots`), so a request never waits for its own checks behind itself. */
+  private checking = new Map<AgentId, number>();
   private stopped = false;
   private stopController = new AbortController();
   private wakeResolve: (() => void) | null = null;
@@ -245,12 +247,14 @@ export class AgentHost {
 
   private async claimLoop(): Promise<void> {
     const limit = Math.min(8, Math.max(1, this.config.maxParallel ?? 3));
+    const checkLimit = sideCheckSlots(limit);
     while (!this.stopped) {
       const available = this.agents.filter(a => a.installed && a.loggedIn !== false && (CLI_AGENTS as string[]).includes(a.id));
       const idle = available.filter(a => (this.busy.get(a.id) ?? 0) < limit).map(a => a.id);
+      const checkIdle = available.filter(a => (this.checking.get(a.id) ?? 0) < checkLimit).map(a => a.id);
       // A long poll cannot gain another runtime when one of our workers finishes.
-      const wait = idle.length === available.length ? this.opts.claimWaitSeconds ?? 25 : 0;
-      if (!idle.length) {
+      const wait = idle.length === available.length && checkIdle.length === available.length ? this.opts.claimWaitSeconds ?? 25 : 0;
+      if (!idle.length && !checkIdle.length) {
         await this.sleep(5000);
         continue;
       }
@@ -261,7 +265,7 @@ export class AgentHost {
         const res = await this.client.request<{ task: Task | null }>(
           "POST",
           `/hosts/${this.config.hostId}/claim?wait=${wait}`,
-          { agents: idle },
+          { agents: idle, checkAgents: checkIdle },
           { signal: this.stopController.signal },
         );
         task = res?.task ?? null;
@@ -289,13 +293,15 @@ export class AgentHost {
     const controller = new AbortController();
     this.running.get(task.id)?.controller.abort("superseded");
     const agent = task.agent;
-    this.busy.set(agent, (this.busy.get(agent) ?? 0) + 1);
+    // A side check counts in its own slots, whichever pool the engine handed it from.
+    const slots = isSideCheck(task) ? this.checking : this.busy;
+    slots.set(agent, (slots.get(agent) ?? 0) + 1);
     const promise = this.runTask(task, controller.signal)
       .catch((err) => this.log(`task ${task.id} crashed: ${errMsg(err)}`))
       .finally(() => {
         if (this.running.get(task.id)?.controller === controller) this.running.delete(task.id);
         this.subscribeRunningProjects();
-        this.busy.set(agent, Math.max(0, (this.busy.get(agent) ?? 1) - 1));
+        slots.set(agent, Math.max(0, (slots.get(agent) ?? 1) - 1));
         this.wake();
       });
     this.running.set(task.id, { task, controller, promise });

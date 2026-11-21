@@ -231,6 +231,18 @@ describe("native retake boundaries", () => {
     expect(pause.start).toBeCloseTo(2.2 + .35);
     expect(pause.end).toBeCloseTo(3.4 - .05);
   });
+  it("plays a beat held before the voice after the cut, and keeps the cut tight after the last word", () => {
+    // neon 12:42 kept 0.6 s “before the next demo”, and 0.55 s of it played after “Blender”, where he looked down at
+    // his laptop (2026-11-20). A beat asked for after the cut plays there, however long.
+    const at = () => ({ ...page.edges!, valleys: [{ start: 2.5, end: 2.9 }] });
+    const pace = { after: .05, before: .05 };
+    // “first” sounds until 2.26 s, so the cut goes just inside the quiet after it.
+    const beat = pauseCutRange(words[1]!, words[2]!, at, .6, pace, .55);
+    expect(beat.start).toBeCloseTo(2.26 + .03);
+    expect(beat.end).toBeCloseTo(3.4 - .55);
+    const held = wordCutRange(words, 1, 1, at, .3, pace, .25);
+    expect([held.start, held.end]).toEqual([expect.closeTo(1.44 + .05), expect.closeTo(3.4 - .25)]);
+  });
   it("trims nothing from a pause asked to play at its full length, whatever sounds in the middle of it", () => {
     // A breath at 2.7–2.9 s splits the quiet between “first” and “next” in two. Each edge used to be pulled into the
     // quiet run beside its word, so a pause asked to stay 1.2 s long still lost the breath and the quiet around it.
@@ -495,6 +507,10 @@ describe("native retake boundaries", () => {
     // A pause shorter than twice the air before the voice is halved.
     expect(splitLeave(.06)).toEqual({ after: .03, before: .03 });
     expect(splitLeave(.4, undefined, .3)).toEqual({ after: .2, before: .2 });
+    // A voiceIn the model gives takes the rest of a longer pause once the last word has the pace's air after it.
+    expect(splitLeave(.6, { after: .05, before: .05 }, .55)).toEqual({ after: expect.closeTo(.05), before: expect.closeTo(.55) });
+    expect(splitLeave(.6, { after: .05, before: .05 }, .7)).toEqual({ after: expect.closeTo(.05), before: expect.closeTo(.55) });
+    expect(splitLeave(.065, { after: .05, before: .05 }, .065)).toEqual({ after: .0325, before: .0325 });
     // Without a kept neighbor the cut runs to the start or end of the material.
     expect(wordCutRange(words, 0, 0, at).start).toBe(0);
     expect(wordCutRange(words, 2, 2, at).end).toBe(Infinity);

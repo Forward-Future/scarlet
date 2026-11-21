@@ -1,4 +1,4 @@
-import { agentCapabilities, isAsideTask, isLearningCheck, isProjectEditTask, PROJECT_EDIT_TASK_KINDS, isSkillEdit, planText, queueBlocker, type QueueChange, reviewItemPath, splitAgentTarget, TaskPlan, dialogueCommand, skillCommands, taskDialogueOperation, taskRunKind } from "@scarlet/shared";
+import { agentCapabilities, isAsideTask, SIDE_CHECK_KINDS, isLearningCheck, isProjectEditTask, PROJECT_EDIT_TASK_KINDS, isSkillEdit, planText, queueBlocker, type QueueChange, reviewItemPath, splitAgentTarget, TaskPlan, dialogueCommand, skillCommands, taskDialogueOperation, taskRunKind } from "@scarlet/shared";
 import { AgentId, type AgentHost, type CompleteTaskRequest, type Task, type TaskEvent, type TaskKind, type TaskPrompt, type User } from "@scarlet/shared";
 import { buildSystemPrompt } from "@scarlet/mcp/prompt";
 import { join } from "node:path";
@@ -24,6 +24,7 @@ const queueLogs = new WeakMap<Ctx, ReturnType<typeof throttledLog>>();
 
 /** Requests that can edit a project's video. */
 export const PROJECT_EDIT_KINDS = `(${PROJECT_EDIT_TASK_KINDS.map(kind => `'${kind}'`).join(",")})`;
+const SIDE_CHECKS = `(${SIDE_CHECK_KINDS.map(kind => `'${kind}'`).join(",")})`;
 
 /** The recording has a saved transcript. */
 export function hasTranscript(ctx: Ctx, mediaId: string): boolean {
@@ -686,31 +687,45 @@ function hostCanRun(host: AgentHost, task: Task): boolean {
     && (!task.serviceTier || !!options?.speeds.some(o => o.id === task.serviceTier));
 }
 
-/** Claim the oldest queued task this host can run (or a specific one). Null when none. */
-export function claimTask(ctx: Ctx, host: AgentHost, taskId?: string, freeAgents?: string[], desktopPid?: number): Task | null {
-  return ctx.db.transaction(() => claimNext(ctx, host, taskId, freeAgents, desktopPid), "immediate")();
+/**
+ * Claim the oldest queued task this host can run (or a specific one). Null when none.
+ *
+ * `freeAgents` are the runtimes with a free request slot. A host that runs side checks in slots of their own also sends
+ * `checkAgents`, the runtimes with a free check slot: requests then go only to `freeAgents` and side checks only to
+ * `checkAgents`. A host that sends no `checkAgents` claims every kind from `freeAgents`, as before.
+ */
+export function claimTask(ctx: Ctx, host: AgentHost, taskId?: string, freeAgents?: string[], desktopPid?: number, checkAgents?: string[]): Task | null {
+  return ctx.db.transaction(() => claimNext(ctx, host, taskId, freeAgents, desktopPid, checkAgents), "immediate")();
 }
 
-function claimNext(ctx: Ctx, host: AgentHost, taskId?: string, freeAgents?: string[], desktopPid?: number): Task | null {
+function claimNext(ctx: Ctx, host: AgentHost, taskId?: string, freeAgents?: string[], desktopPid?: number, checkAgents?: string[]): Task | null {
   if (taskId) {
     const target = ctx.repos.tasks.get(taskId);
     if (!target) return null;
     if (target.state !== "queued") throw conflict("not_queued", `task is ${target.state}`);
     if (!hostCanRun(host, target)) throw conflict("agent_unavailable", `host has no usable "${target.agent}" agent`);
   }
-  const agents = host.agents.filter(a => a.installed && a.loggedIn !== false && (!freeAgents || freeAgents.includes(a.id)));
-  if (!taskId && !agents.length) return null;
-  const filter = taskId ? "q.id = ?" : "q.kind != 'transcribe' AND q.agent IN (SELECT value FROM json_each(?))";
+  const usable = (free?: string[]) => host.agents.filter(a => a.installed && a.loggedIn !== false && (!free || free.includes(a.id))).map(a => a.id);
+  const agents = usable(freeAgents);
+  const checkers = checkAgents && usable(checkAgents);
+  if (!taskId && !agents.length && !checkers?.length) return null;
+  const filter = taskId ? "q.id = ?" : checkers
+    ? `q.kind != 'transcribe' AND ((q.kind NOT IN ${SIDE_CHECKS} AND q.agent IN (SELECT value FROM json_each(?)))
+      OR (q.kind IN ${SIDE_CHECKS} AND q.agent IN (SELECT value FROM json_each(?))))`
+    : "q.kind != 'transcribe' AND q.agent IN (SELECT value FROM json_each(?))";
+  const filterArgs = taskId ? [taskId] : checkers ? [JSON.stringify(agents), JSON.stringify(checkers)] : [JSON.stringify(agents)];
   // Include only tasks this host can claim in the candidate scan. The shared queue still sees
   // requests for other hosts and requests being reworded, since they can hold up later work.
   const checkedAt = now();
   const rows = ctx.db.prepare(`SELECT q.id, q.project_id, q.kind, q.json, q.created_at, p.editing_paused,
     coalesce(json_extract(q.json, '$.rewordingUntil') > ?, 0) AS rewording FROM tasks q JOIN projects p ON p.id = q.project_id
     LEFT JOIN tasks root ON root.id = json_extract(q.json, '$.resumeRootId')
+    LEFT JOIN tasks asker ON q.kind = 'area_check' AND asker.id = json_extract(q.json, '$.context.checksTaskId')
     WHERE p.deleted_at IS NULL AND q.state = 'queued' AND ${filter}
     AND (p.editing_paused = 0 OR q.kind NOT IN ${PROJECT_EDIT_KINDS})
-    ORDER BY coalesce(root.created_at, q.created_at), coalesce(root.rowid, q.rowid), q.rowid`)
-    .iterate(checkedAt, taskId ?? JSON.stringify(agents.map(a => a.id))) as Iterable<{
+    ORDER BY coalesce(asker.state IN ('claimed', 'running'), 0) DESC,
+      coalesce(root.created_at, q.created_at), coalesce(root.rowid, q.rowid), q.rowid`)
+    .iterate(checkedAt, ...filterArgs) as Iterable<{
       id: string; project_id: string; kind: TaskKind; json: string; created_at: string; editing_paused: number; rewording: number;
     }>;
   // Only the columns the queue reads: an open pass's cut reasons are counted in SQL, never parsed, and an edit's

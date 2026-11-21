@@ -8,7 +8,7 @@ describe("agentCapabilities", () => {
     // No harness's to-do tool is on: the chat shows no plan. Gemini's runner reads none.
     expect(agentCapabilities("claude")).toEqual({ images: true, audio: false, files: false, plan: false, resultChars: 40_000, toolPrefix: "mcp__scarlet__", toolWaitSeconds: 240 });
     expect(agentCapabilities("codex")).toEqual({ images: true, audio: false, files: true, plan: false, resultChars: 40_000, toolWaitSeconds: 240 });
-    expect(agentCapabilities("gemini")).toEqual({ images: true, audio: false, files: false, plan: false, briefTools: true, resultChars: 40_000 });
+    expect(agentCapabilities("gemini")).toEqual({ images: true, audio: false, files: false, plan: false, briefTools: true, resultChars: 40_000, toolWaitSeconds: 120 });
     for (const agent of [undefined, "", "api", "toString", "Claude"]) expect(agentCapabilities(agent), String(agent)).toEqual({ images: true, audio: false, files: false, plan: false, resultChars: 40_000 });
   });
 
@@ -44,8 +44,10 @@ describe("toolWait", () => {
     // Claude Code and Codex are launched with a 300 s tool deadline, so one call can wait for a whole batch of pictures.
     expect(toolWait(agentCapabilities("claude"), 20)).toBe(220);
     expect(toolWait(agentCapabilities("codex"), 30)).toBe(210);
+    // agy ends a tool call at 180 s: Gemini waits a minute under it, as Claude Code and Codex do under their 300 s.
+    expect(toolWait(agentCapabilities("gemini"), 20)).toBe(100);
+    expect(toolWait(agentCapabilities("gemini"), 30)).toBe(90);
     // Unknown deadline: the common 60 s one, which leaves the 25 s a picture batch always waited.
-    expect(toolWait(agentCapabilities("gemini"), 20)).toBe(25);
     expect(toolWait(agentCapabilities(undefined), 20)).toBe(25);
     // Never under five seconds, never over the four minutes a launched harness allows.
     expect(toolWait({ toolWaitSeconds: 10 }, 20)).toBe(5);

@@ -989,6 +989,28 @@ export function isAsideTask(task: Pick<Task, "kind">): boolean {
   return isSkillEdit(task) || isLearningCheck(task) || isAreaCheck(task);
 }
 
+/**
+ * A short check that runs beside a request and saves nothing to the video: a learning check or an area check. A host
+ * runs these in slots of their own, so they never wait behind the requests they check. A running edit waits on its
+ * area checks, and sharing its slots left it holding one while its checks queued for the rest (20 checks on 2 slots
+ * took 12 minutes, 2026-11-20). A skill edit rewrites a skill and isn't one.
+ */
+export function isSideCheck(task: Pick<Task, "kind">): boolean {
+  return isLearningCheck(task) || isAreaCheck(task);
+}
+
+/** The kinds `isSideCheck` names, for the engine's claim query. */
+export const SIDE_CHECK_KINDS = ["learning_check", "area_check"] as const satisfies readonly TaskKind[];
+
+/**
+ * Side checks a host runs at once per runtime, beside its `maxParallel` requests: twice as many, up to 12. Each looks at
+ * one frame or reads one request, so it is short; a host set to run fewer requests (a smaller machine) runs fewer.
+ * The desktop host repeats this (`side_check_slots` in apps/desktop/src-tauri/src/host/mod.rs).
+ */
+export function sideCheckSlots(maxParallel: number): number {
+  return Math.min(12, 2 * Math.max(1, maxParallel));
+}
+
 export const TaskSkillDraft = z.object({
   description: z.string().trim().min(1).max(1024).regex(/^[^\r\n]+$/),
   instructions: z.string().trim().min(1).max(128 * 1024),

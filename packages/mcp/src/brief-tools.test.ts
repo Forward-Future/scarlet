@@ -52,6 +52,38 @@ describe("brief tools", () => {
     }
   });
 
+  it("gives several tools whole in one call, and names any it doesn't know without failing the rest", async () => {
+    const gemini = await connect("gemini");
+    try {
+      const help = async (args: object) => await gemini.callTool({ name: "tool_help", arguments: args }) as CallToolResult;
+      const textOf = (r: CallToolResult) => (r.content[0] as { text: string }).text;
+      const at = textOf(await help({ name: "timeline_at" })), cuts = textOf(await help({ name: "mcp_scarlet_dialogue_apply_cuts" }));
+      const unknown = await help({ name: "timeline_delete" });
+      expect(textOf(await help({ names: ["timeline_at"] }))).toBe(at);
+      const some = await help({ names: ["timeline_at", "timeline_delete", "scarlet.dialogue_apply_cuts", "timeline_at"] });
+      expect(some.isError).toBeFalsy();
+      expect(textOf(some)).toBe([textOf(unknown), at, cuts].join("\n\n---\n\n"));
+      const none = await help({ names: ["timeline_delete", "clip_move"] });
+      expect(none.isError).toBe(true);
+      expect(textOf(none)).toMatch(/^No Scarlet tool is named timeline_delete or clip_move\. Its tools: .*timeline_propose/);
+      // A long list is read in part, with the rest named for another call, not refused.
+      const tools = (await gemini.listTools()).tools.map(t => t.name).filter(n => n !== "tool_help");
+      const long = textOf(await help({ names: tools.slice(0, 10) }));
+      expect(long.split("\n\n---\n\n")).toHaveLength(9);
+      expect(long.endsWith(`Not read in this call, to ask for next: ${tools[8]}, ${tools[9]}.`)).toBe(true);
+      const unknownFirst = await help({ names: [...Array.from({ length: 8 }, (_, i) => `nothing_${i}`), "timeline_at"] });
+      expect(unknownFirst.isError).toBeFalsy();
+      expect(textOf(unknownFirst)).toMatch(/Not read in this call, to ask for next: timeline_at\.$/);
+      for (const args of [{}, { name: "timeline_at", names: ["timeline_at"] }]) {
+        const wrong = await help(args);
+        expect(wrong.isError).toBe(true);
+        expect(textOf(wrong)).toBe("Give either name, for one tool, or names, for several.");
+      }
+    } finally {
+      await gemini.close();
+    }
+  });
+
   it("keeps a description's first sentence and a parameter named description", () => {
     expect(briefDescription("Get the project: settings, e.g. fps. For clips use timeline_get.")).toBe(
       "Get the project: settings, e.g. fps. Before you first call it, read its full description and parameters with tool_help.");

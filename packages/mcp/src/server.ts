@@ -112,6 +112,8 @@ const SKILL_EDIT_TOOLS: ReadonlySet<string> = new Set(["task_log", "task_questio
 const LEARNING_CHECK_TOOLS: ReadonlySet<string> = new Set(["skills_list", "learning_suggest"]);
 /** An area check looks at one frame and says what of it viewers may see, and nothing else. */
 const AREA_CHECK_TOOLS: ReadonlySet<string> = new Set(["media_frame", "screen_area"]);
+/** Times one timeline_at call maps; the rest of a longer list come back to ask for. */
+const TIMES_AT_ONCE = 50;
 const PASS_WIDE_TOOLS: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_review_save"]);
 
 /** What to do about an edit another request's change kept off the video. Its own result says what met and where. */
@@ -398,6 +400,20 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     if (err instanceof MediaPreparing) throw err;
     return without(what, fallback)(err);
   };
+  /**
+   * Reads that don't depend on each other, run at once. What each went without is noted in the order they are given,
+   * as if they ran one after another, so the line a result ends with doesn't depend on which finished first.
+   */
+  async function together<T extends unknown[]>(...reads: { [K in keyof T]: () => Promise<T[K]> }): Promise<T> {
+    const notes = reads.map(() => new Map<string, string>());
+    const settled = await Promise.allSettled(reads.map((read, i) => unmeasured.run(notes[i]!, read)));
+    const missed = unmeasured.getStore();
+    settled.forEach((outcome, i) => {
+      for (const [what, why] of notes[i]!) missed?.set(what, why);
+      if (outcome.status === "rejected") throw outcome.reason;
+    });
+    return settled.map(outcome => (outcome as PromiseFulfilledResult<unknown>).value) as T;
+  }
 
   /**
    * The version this agent last looked at. Edits are proposed against it, so
@@ -2496,14 +2512,18 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       if (clipped.length) return json({ needsRevision: true, disputedEdges: clipped, next: "Both deliveries would be affected. Choose boundaries that preserve one complete occurrence." });
       plan.kept.push(...retainedRepeats.map(({ start, end }) => ({ start, end })));
       const all = plan.decisions;
-      // Stretches without words this part still plays and leaves undecided, found before the edit moves.
-      const undecided = only && only !== "pause" ? [] : await passedSilences(tl, plan.kept, all, range)
-        .catch(without("failed to find the silences this part keeps", []));
-      const left = await passedLeftovers(tl, plan.kept, all, range, pausesFrom)
-        .catch(without("failed to read what this part still plays", { pauses: [], repeats: [], gaps: [] }));
       await postEvent({ type: "log", text: "I’m applying the dialogue decisions to the timeline.", data: { kind: "editor_progress" } });
+      // Stretches without words, pauses and doubled words this part still plays and leaves undecided, read on the version
+      // it was planned on while the engine saves it: the save changes neither that version nor the transcripts.
+      const leftBehind = together(
+        async () => only && only !== "pause" ? [] : await passedSilences(tl, plan.kept, all, range)
+          .catch(without("failed to find the silences this part keeps", [])),
+        () => passedLeftovers(tl, plan.kept, all, range, pausesFrom)
+          .catch(without("failed to read what this part still plays", { pauses: [], repeats: [], gaps: [] })));
+      // A save that fails still waits for them, so its result says what they went without.
       const result = await client.submitDialogueCuts(ctx.projectId, { fromVersion: tl.version, description, cuts: all, range: scope, kept: plan.kept, crossfadeFrames,
-        taskId: ctx.taskId, author: ctx.author, noteIds });
+        taskId: ctx.taskId, author: ctx.author, noteIds }).finally(() => leftBehind);
+      const [undecided, left] = await leftBehind;
       const suggestion = result.changes.find(c => c.intent === "suggestion");
       if (result.changes.length) {
         stageWithoutAppliedCuts = suggestion && !result.changes.some(c => c.state === "approved") ? suggestion.id : undefined;
@@ -2532,58 +2552,67 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       const { head, ...reported } = result;
       const continueFrom = head ?? result.changes.find(c => c.intent !== "suggestion")?.toVersion ?? tl.version;
       const decided = [...all, ...plan.kept, ...(result.editorDecided ?? [])];
-      const quiet = localPauses || only === "pause" || only === "filler" ? [] : await keptQuietPhrases(tl, continueFrom, decided,
-        scope ?? { start: Math.min(...decided.map(d => d.start)), end: Math.max(...decided.map(d => d.end)) })
-        .catch(without("failed to place the quiet phrases the part still plays", []));
       // A stretch already listed as a kept silence is not listed again as a pause.
       const pauses = (only && only !== "pause" ? [] : left.pauses.filter(p => !undecided.some(u => u.mediaId === p.mediaId && u.source.start < p.source.end && u.source.end > p.source.start)))
         .filter(p => fresh("pause", p.mediaId, p.source.start, p.seconds));
       const repeats = (only && only !== "retake" && only !== "filler" ? [] : left.repeats).filter(r => fresh("repeat", r.mediaId, r.source));
-      // One read of the version the pass continues on places all three lists.
-      // Sound the part still plays between two words it keeps, beside its own cuts first: what is left of a take that came out.
-      const sounding = only && only !== "retake" && only !== "filler" ? [] : (await Promise.all([...new Set(left.gaps.map(g => g.mediaId))].map(async mediaId => {
-        const mine = left.gaps.filter(g => g.mediaId === mediaId);
-        const read = await gapSounds(mediaId, mine.map(g => g.source)).catch(withoutOnce(`failed to read the levels between the words ${mediaId} still plays`, [] as Array<GapSound | undefined>));
-        return mine.flatMap((g, i) => read[i]?.runs.length ? [{ mediaId, source: read[i]!.runs[0]!, seconds: read[i]!.seconds, after: g.after, before: g.before }] : []);
-      }))).flat().filter(s => fresh("sound", s.mediaId, s.source.start));
-      const { kept, keptPauses, repeatedWords, unexplainedSound } = await (async () => {
-        const kept = await placeSilences(undecided, continueFrom, tl);
-        const after = pauses.length || repeats.length || sounding.length ? await timelineAt(continueFrom, tl) : tl;
-        const placed = <T extends { mediaId: string }>(items: T[], source: (item: T) => number) => items.flatMap(item => {
-          const at = sourceToTimeline(after, item.mediaId, source(item)).find(p => p.audible)?.time;
-          return at === undefined ? [] : [{ at, item }];
+      // The lists read at once: each lists its own kind of thing once per pass (`listed`), and they share one read of the
+      // version the pass continues on (`timelineAt`).
+      const [quiet, { kept, keptPauses, repeatedWords, unexplainedSound }, [heardNotInTranscript, audioRecheck]] = await together(
+        async () => localPauses || only === "pause" || only === "filler" ? [] : await keptQuietPhrases(tl, continueFrom, decided,
+          scope ?? { start: Math.min(...decided.map(d => d.start)), end: Math.max(...decided.map(d => d.end)) })
+          .catch(without("failed to place the quiet phrases the part still plays", [])),
+        async () => {
+          // One read of the version the pass continues on places all three lists.
+          // Sound the part still plays between two words it keeps, beside its own cuts first: what is left of a take that came out.
+          const sounding = only && only !== "retake" && only !== "filler" ? [] : (await Promise.all([...new Set(left.gaps.map(g => g.mediaId))].map(async mediaId => {
+            const mine = left.gaps.filter(g => g.mediaId === mediaId);
+            const read = await gapSounds(mediaId, mine.map(g => g.source)).catch(withoutOnce(`failed to read the levels between the words ${mediaId} still plays`, [] as Array<GapSound | undefined>));
+            return mine.flatMap((g, i) => read[i]?.runs.length ? [{ mediaId, source: read[i]!.runs[0]!, seconds: read[i]!.seconds, after: g.after, before: g.before }] : []);
+          }))).flat().filter(s => fresh("sound", s.mediaId, s.source.start));
+          return await (async () => {
+            const kept = await placeSilences(undecided, continueFrom, tl);
+            const after = pauses.length || repeats.length || sounding.length ? await timelineAt(continueFrom, tl) : tl;
+            const placed = <T extends { mediaId: string }>(items: T[], source: (item: T) => number) => items.flatMap(item => {
+              const at = sourceToTimeline(after, item.mediaId, source(item)).find(p => p.audible)?.time;
+              return at === undefined ? [] : [{ at, item }];
+            });
+            return { kept,
+              // The longest thirty, in playback order.
+              keptPauses: placed(pauses, p => p.source.start).sort((a, b) => b.item.seconds - a.item.seconds).slice(0, 30).sort((a, b) => a.at - b.at)
+                .map(({ at, item: { source, ...p } }) => shown({ at, ...p }, "pause", p.mediaId, source.start, p.seconds)),
+              repeatedWords: placed(repeats, r => r.source).slice(0, 30).map(({ at, item: { source, atJoin, ...r } }) => shown({ at, ...r, ...(atJoin && { atJoin }) }, "repeat", r.mediaId, source)),
+              unexplainedSound: placed(sounding, s => s.source.start).sort((a, b) => b.item.seconds - a.item.seconds).slice(0, 30).sort((a, b) => a.at - b.at)
+                .map(({ at, item: { source, ...s } }) => shown({ at, ...s, sourceSeconds: [source.start, source.end] }, "sound", s.mediaId, source.start)),
+            };
+          })().catch(without(`failed to place the kept silences on ${continueFrom}`, { kept: [], keptPauses: [], repeatedWords: [], unexplainedSound: [] }));
+        },
+        async () => {
+          // Words the scan read in what this part still plays that the transcript has no word for. A false start the
+          // transcript tidied away has no index to cut it by and is in none of the lists above: a pass left “And it just
+          // feel, uh” playing before “It just feels like”, and “a conscious conscientious objector”, having cut by a
+          // transcript that read “And it just feels like” and “a conscientious objector” (2026-11-19).
+          const heard = only && only !== "retake" && only !== "filler" ? [] : await (async () => {
+            const after = await timelineAt(continueFrom, tl);
+            const part = scope ?? { start: Math.min(...decided.map(d => d.start)), end: Math.max(...decided.map(d => d.end)) };
+            // The part's stretch on the version it continues on: its applied cuts closed up that much of it.
+            const removed = result.changes.some(c => c.intent !== "suggestion" && c.state === "approved")
+              ? all.reduce((n, d) => d.review ? n : n + Math.max(0, Math.min(d.end, part.end) - Math.max(d.start, part.start)), 0) : 0;
+            const found = await perception.heardOnlyOn(after, { start: part.start, end: Math.max(part.start, part.end - removed) });
+            return found.filter(h => fresh("heard", h.mediaId, h.source.start)).slice(0, 30)
+              .map(h => shown({ at: h.start, seconds: Math.round((h.end - h.start) * 100) / 100, text: h.text, context: h.context,
+                mediaId: h.mediaId, sourceSeconds: [h.source.start, h.source.end] }, "heard", h.mediaId, h.source.start));
+          // An extra reading: a version or an engine that can't give it leaves the receipt as it was.
+          })().catch(() => []);
+          // The repeat check comes after those words: where it reads a language from the scan, it saves pages they'd read.
+          const recheck = checkedVersion === tl.version || ctx.task?.repeatAudit?.version === tl.version
+            ? await checkRepeats(continueFrom).catch((error: Error) => {
+              noteEvidenceMiss("repeat audit");
+              return { version: continueFrom, error: error.message, next: "The edit was saved. Retry dialogue_check_repeats on this version." };
+            })
+            : undefined;
+          return [heard, recheck] as const;
         });
-        return { kept,
-          // The longest thirty, in playback order.
-          keptPauses: placed(pauses, p => p.source.start).sort((a, b) => b.item.seconds - a.item.seconds).slice(0, 30).sort((a, b) => a.at - b.at)
-            .map(({ at, item: { source, ...p } }) => shown({ at, ...p }, "pause", p.mediaId, source.start, p.seconds)),
-          repeatedWords: placed(repeats, r => r.source).slice(0, 30).map(({ at, item: { source, atJoin, ...r } }) => shown({ at, ...r, ...(atJoin && { atJoin }) }, "repeat", r.mediaId, source)),
-          unexplainedSound: placed(sounding, s => s.source.start).sort((a, b) => b.item.seconds - a.item.seconds).slice(0, 30).sort((a, b) => a.at - b.at)
-            .map(({ at, item: { source, ...s } }) => shown({ at, ...s, sourceSeconds: [source.start, source.end] }, "sound", s.mediaId, source.start)),
-        };
-      })().catch(without(`failed to place the kept silences on ${continueFrom}`, { kept: [], keptPauses: [], repeatedWords: [], unexplainedSound: [] }));
-      // Words the scan read in what this part still plays that the transcript has no word for. A false start the
-      // transcript tidied away has no index to cut it by and is in none of the lists above: a pass left “And it just
-      // feel, uh” playing before “It just feels like”, and “a conscious conscientious objector”, having cut by a
-      // transcript that read “And it just feels like” and “a conscientious objector” (2026-11-19).
-      const heardNotInTranscript = only && only !== "retake" && only !== "filler" ? [] : await (async () => {
-        const after = await timelineAt(continueFrom, tl);
-        const part = scope ?? { start: Math.min(...decided.map(d => d.start)), end: Math.max(...decided.map(d => d.end)) };
-        // The part's stretch on the version it continues on: its applied cuts closed up that much of it.
-        const removed = result.changes.some(c => c.intent !== "suggestion" && c.state === "approved")
-          ? all.reduce((n, d) => d.review ? n : n + Math.max(0, Math.min(d.end, part.end) - Math.max(d.start, part.start)), 0) : 0;
-        const found = await perception.heardOnlyOn(after, { start: part.start, end: Math.max(part.start, part.end - removed) });
-        return found.filter(h => fresh("heard", h.mediaId, h.source.start)).slice(0, 30)
-          .map(h => shown({ at: h.start, seconds: Math.round((h.end - h.start) * 100) / 100, text: h.text, context: h.context,
-            mediaId: h.mediaId, sourceSeconds: [h.source.start, h.source.end] }, "heard", h.mediaId, h.source.start));
-      // An extra reading: a version or an engine that can't give it leaves the receipt as it was.
-      })().catch(() => []);
-      const audioRecheck = checkedVersion === tl.version || ctx.task?.repeatAudit?.version === tl.version
-        ? await checkRepeats(continueFrom).catch((error: Error) => {
-          noteEvidenceMiss("repeat audit");
-          return { version: continueFrom, error: error.message, next: "The edit was saved. Retry dialogue_check_repeats on this version." };
-        })
-        : undefined;
       return json({ ...reported, continueFrom, ...(audioRecheck && { audioRecheck }), gate: dialogueGate(plan),
         ...(plan.unreadJoinAudio && { unreadJoinAudio: plan.unreadJoinAudio }),
         ...(kept.length && { keptSilences: kept }), ...(keptPauses.length && { keptPauses }), ...(repeatedWords.length && { repeatedWords }),
@@ -3029,27 +3058,38 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   tool(
     "timeline_at",
-    "Map between timeline and source time so you never compute it by hand. With time (TIMELINE seconds): every clip under that instant with its track and, for media clips, the SOURCE second playing there. With mediaId and sourceTime: every timeline position where that source second plays (none if it was cut). With mediaId and sourceRange: the timeline ranges that play it, split by clip, and the source portions no longer in the edit.",
-    { time: z.number().min(0).optional().describe("Timeline time, seconds"), mediaId: z.string().optional(),
+    "Map between timeline and source time so you never compute it by hand. With time (TIMELINE seconds): every clip under that instant with its track and, for media clips, the SOURCE second playing there. With mediaId and sourceTime: every timeline position where that source second plays (none if it was cut). With mediaId and sourceRange: the timeline ranges that play it, split by clip, and the source portions no longer in the edit. times or sourceTimes map a list in one call on one version, each answer in `at`.",
+    { time: z.number().min(0).optional().describe("Timeline time, seconds"),
+      times: z.array(z.number().min(0)).min(1).optional().describe(`Timeline times, seconds; up to ${TIMES_AT_ONCE} are answered, the rest listed for another call`), mediaId: z.string().optional(),
       sourceTime: z.number().min(0).optional().describe("Source seconds in mediaId"),
+      sourceTimes: z.array(z.number().min(0)).min(1).optional().describe(`Source seconds in mediaId; up to ${TIMES_AT_ONCE} are answered, the rest listed for another call`),
       sourceRange: z.object({ start: z.number().min(0), end: z.number().min(0) }).optional().describe("Source seconds in mediaId"),
       version: z.string().optional() },
-    async ({ time, mediaId, sourceTime, sourceRange, version }) => {
-      const modes = [time !== undefined, sourceTime !== undefined, sourceRange !== undefined].filter(Boolean).length;
-      if (modes !== 1) throw new Error("Give exactly one of time, sourceTime or sourceRange.");
-      if ((sourceTime !== undefined || sourceRange) && !mediaId) throw new Error("sourceTime and sourceRange need the mediaId they belong to.");
+    async ({ time, times, mediaId, sourceTime, sourceTimes, sourceRange, version }) => {
+      const modes = [time, times, sourceTime, sourceTimes, sourceRange].filter(mode => mode !== undefined).length;
+      if (modes !== 1) throw new Error("Give exactly one of time, times, sourceTime, sourceTimes or sourceRange.");
+      if ((sourceTime !== undefined || sourceTimes || sourceRange) && !mediaId) throw new Error("sourceTime, sourceTimes and sourceRange need the mediaId they belong to.");
+      // One read answers a whole list, so every answer is on the same version.
       const tl = await getTimeline(version);
       if (sourceTime !== undefined) return json({ version: tl.version, mediaId, sourceTime, placements: sourceToTimeline(tl, mediaId!, sourceTime) });
+      // A long list is answered in part, with the rest to ask for, rather than refused.
+      const rest = (list: number[]) => list.length > TIMES_AT_ONCE ? { notAnswered: list.slice(TIMES_AT_ONCE), next: `Ask for notAnswered on version ${tl.version}.` } : {};
+      if (sourceTimes) return json({ version: tl.version, mediaId,
+        at: sourceTimes.slice(0, TIMES_AT_ONCE).map(s => ({ sourceTime: s, placements: sourceToTimeline(tl, mediaId!, s) })), ...rest(sourceTimes) });
       if (sourceRange) {
         if (sourceRange.end <= sourceRange.start) throw new Error("sourceRange.end must be greater than sourceRange.start.");
         return json({ version: tl.version, mediaId, sourceRange, ...sourceRangeToTimeline(tl, mediaId!, sourceRange.start, sourceRange.end) });
       }
-      const clips = clipsAt(tl, time!).map(({ track, clip }) => ({
-        trackId: track.id, trackKind: track.kind, clipId: clip.id, kind: clip.kind, ...(clip.label && { label: clip.label }), timelineIn: clip.timelineIn,
-        ...(clip.kind === "media" ? { mediaId: clip.mediaId, sourceIn: clip.sourceIn, sourceOut: clip.sourceOut, sourceTime: round3(timelineToSource(clip, time!)) } : {}),
-        ...(clip.kind === "caption" ? { text: clip.text } : {}),
-      }));
-      return json({ time, version: tl.version, clips, ...(!clips.length && { note: "Nothing plays at that time (a gap)." }) });
+      const under = (t: number) => {
+        const clips = clipsAt(tl, t).map(({ track, clip }) => ({
+          trackId: track.id, trackKind: track.kind, clipId: clip.id, kind: clip.kind, ...(clip.label && { label: clip.label }), timelineIn: clip.timelineIn,
+          ...(clip.kind === "media" ? { mediaId: clip.mediaId, sourceIn: clip.sourceIn, sourceOut: clip.sourceOut, sourceTime: round3(timelineToSource(clip, t)) } : {}),
+          ...(clip.kind === "caption" ? { text: clip.text } : {}),
+        }));
+        return { clips, ...(!clips.length && { note: "Nothing plays at that time (a gap)." }) };
+      };
+      if (times) return json({ version: tl.version, at: times.slice(0, TIMES_AT_ONCE).map(t => ({ time: t, ...under(t) })), ...rest(times) });
+      return json({ time, version: tl.version, ...under(time!) });
     },
   );
 

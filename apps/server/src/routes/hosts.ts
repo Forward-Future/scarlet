@@ -67,19 +67,21 @@ export function hostRoutes(ctx: Ctx) {
 
   r.post("/hosts/:hostId/claim", async (c) => {
     const host = requireHost(c.req.param("hostId"));
-    const body = await jsonBody(c, z.object({ taskId: z.string().optional(), agents: z.array(z.string()).optional(), desktopPid: z.number().int().positive().optional() }));
+    // `checkAgents`: runtimes with a free side-check slot, from a host that runs side checks in slots of their own.
+    const body = await jsonBody(c, z.object({ taskId: z.string().optional(), agents: z.array(z.string()).optional(),
+      checkAgents: z.array(z.string()).optional(), desktopPid: z.number().int().positive().optional() }));
     const desktopPid = body.desktopPid === ctx.options.desktopPid ? body.desktopPid : undefined;
     const fresh = ctx.repos.hosts.put({ ...host, lastSeenAt: now(), online: true });
     const waitSeconds = Math.min(60, Math.max(0, Number(c.req.query("wait") ?? 0) || 0));
     const deadline = Date.now() + waitSeconds * 1000;
     // A host that hung up can't receive a claim. Its task would sit claimed until recovery failed it.
     const signal = AbortSignal.any([c.req.raw.signal, ctx.shutdown]);
-    let task = claimTask(ctx, fresh, body.taskId, body.agents, desktopPid);
+    let task = claimTask(ctx, fresh, body.taskId, body.agents, desktopPid, body.checkAgents);
     while (!task && !body.taskId && Date.now() < deadline) {
       const remaining = deadline - Date.now();
       const fired = await waitFor(ctx.bus, "task.queued", Math.min(remaining, 25_000), undefined, signal);
       if (!fired || signal.aborted) break;
-      task = claimTask(ctx, fresh, undefined, body.agents, desktopPid);
+      task = claimTask(ctx, fresh, undefined, body.agents, desktopPid, body.checkAgents);
     }
     // A dialogue pass reads its recordings first. Start on them while the host starts the agent.
     // What it can't start, the pass's own calls start or report.
