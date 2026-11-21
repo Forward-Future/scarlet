@@ -5,7 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { EDITING_TOOL_GROUPS, ScarletApiError, ScarletClient, Task } from "@scarlet/shared";
-import { applyOps, emptyTimeline, makeMediaClip, OpError, timelineDuration, type MediaClip, type Note, type Timeline, type Transcript } from "@scarlet/timeline";
+import { applyOps, emptyTimeline, makeMediaClip, OpError, timelineDuration, type Change, type MediaClip, type Note, type Timeline, type Transcript } from "@scarlet/timeline";
 import { z } from "zod/v3";
 import { toolAnnotations } from "./annotations.js";
 import { syncRate } from "./audio-sync.js";
@@ -414,6 +414,26 @@ describe("timeline_framing", () => {
       } finally { await c.close(); }
     });
 
+    it("sends an area check no pictures of the stretches still unset unless it asks, and an agent setting areas four", async () => {
+      const task = Task.parse({ id: "look-once", state: "running", projectId: "prj_test", kind: "area_check", agent: "claude", instruction: "Look at the frame.",
+        context: { areaCheck: { mediaId: "scr", at: 5 } }, createdBy: { type: "agent", name: "Scarlet" } });
+      const sessions = [await connect({ taskId: task.id, task }), await connect()];
+      const frames = () => mock.requests.filter(r => r.path.endsWith("/media/scr/frame")).length;
+      try {
+        const [check, editor] = sessions;
+        const describe = async (c: Client) => (await c.listTools()).tools.find(t => t.name === "screen_area")!.description!;
+        expect(await describe(check!)).toContain("none come unless asked.");
+        expect(await describe(editor!)).toContain("`pictures` sets how many (default 4, 0 for none).");
+        const saved = await ok(check!, "screen_area", { mediaId: "scr", set: [{ at: 5, area: [10, 10, 80, 90] }] });
+        expect(saved.content.filter(part => part.type === "image")).toHaveLength(0);
+        expect(frames()).toBe(0);
+        const asked = await ok(check!, "screen_area", { mediaId: "scr", set: [{ at: 5, area: [10, 10, 80, 90] }], pictures: 1 });
+        expect(asked.content.filter(part => part.type === "image")).toHaveLength(1);
+        const shown = await ok(editor!, "screen_area", { mediaId: "scr", set: [{ at: 5, area: [10, 10, 80, 90] }] });
+        expect(shown.content.filter(part => part.type === "image")).toHaveLength(1);
+      } finally { await Promise.all(sessions.map(c => c.close())); }
+    });
+
     it("refuses a save that frames the recording past its area, and one that frames part of a picture with no area", async () => {
       const c = await connect();
       try {
@@ -757,6 +777,30 @@ describe("tool annotations", () => {
       };
       for (const t of tools) walk(t.inputSchema, t.name);
       expect(positional).toEqual([]);
+    } finally { await c.close(); }
+  });
+
+  it("offers the tools that work with files in the artifact directory only to a harness with file tools", async () => {
+    const sessions = [await connect(), await connect({ agent: "codex", author: { type: "agent", name: "codex" } })];
+    try {
+      const [claude, codex] = await Promise.all(sessions.map(async c => (await c.listTools()).tools.map(t => t.name)));
+      expect(claude).not.toContain("export_otio");
+      expect(claude).not.toContain("asset_add");
+      expect(codex).toEqual(expect.arrayContaining(["export_otio", "asset_add"]));
+    } finally { await Promise.all(sessions.map(c => c.close())); }
+  });
+
+  it("says what a reading means and leaves what to do about it to the skill and Scarlet's contract", async () => {
+    const c = await connect();
+    try {
+      const repeats = (await c.listTools()).tools.find(t => t.name === "dialogue_check_repeats")!.description!;
+      // The dialogue skill says a clipped word and a sound left at a join are repaired and synced tracks stay in time.
+      // What goes to the editor goes on an edit, never in the closing reply.
+      for (const rule of ["before you finish", "always goes", "closing reply", "tell the editor"]) expect(repeats, rule).not.toContain(rule);
+      expect(repeats).toContain("keptWordAt");
+      expect(repeats.length).toBeLessThan(4_500);
+      // Each tool's description says it prepares what is missing, and the prompt says that and what project_get returns.
+      expect(c.getInstructions()).toBe("Scarlet exposes project context and editing operations as tools; an empty MCP resource list is normal.");
     } finally { await c.close(); }
   });
 
@@ -1390,5 +1434,122 @@ describe("a graphic page's files", () => {
     const html = `<img src="a%b.png"><img src="logo%20dark.svg"><img src='logo%20dark.svg'><link href="https://fonts.example/x.css">
       <img src="/abs/pic.png"><style>@font-face { src: url("fonts/Brand.woff2") } .x { background: url(bg.jpg?v=2) }</style>`;
     expect(relativeLinks(html)).toEqual(["a%b.png", "logo dark.svg", "fonts/Brand.woff2", "bg.jpg"]);
+  });
+});
+
+describe("results too long for one read", () => {
+  // What Claude Code shows its model whole is about 50,000 characters; this harness holds 4,000.
+  const small = () => connect({ capabilities: { images: true, audio: false, files: false, plan: false, resultChars: 4_000 } });
+  /** Every page of a read, following the offset or second each one ends with. */
+  async function pages(c: Client, name: string, args: Record<string, unknown>, next: (text: string) => Record<string, unknown> | undefined) {
+    const all: string[] = [];
+    for (let more: Record<string, unknown> | undefined = {}; more && all.length < 100;) {
+      const read = textOf(await ok(c, name, { ...args, ...more }));
+      expect(read.length, `${name} page ${all.length}`).toBeLessThanOrEqual(4_000);
+      all.push(read);
+      more = next(read);
+    }
+    return all;
+  }
+
+  it("lists a long timeline's clips in pages by where they start", async () => {
+    const tl = emptyTimeline("prj_test");
+    tl.version = "long";
+    tl.tracks[0]!.clips = Array.from({ length: 400 }, (_, i) => makeMediaClip("m1", 0, 1, i, { id: `clip${i}` }));
+    tl.markers = [{ id: "mk", time: 250.5, kind: "todo", text: "needs b-roll" } as Timeline["markers"][number]];
+    mock.state.timeline = tl;
+    const c = await small();
+    try {
+      const read = await pages(c, "timeline_get", {}, text => {
+        const from = /Continue with from=([\d.]+)\.$/.exec(text)?.[1];
+        return from ? { from: Number(from) } : undefined;
+      });
+      expect(read.length).toBeGreaterThan(1);
+      // Every clip is listed once, on one page or the next, and the marker on the page of its time.
+      const listed = read.flatMap(page => [...page.matchAll(/\bclip(\d+)\b/g)].map(m => Number(m[1])));
+      expect(listed).toEqual(Array.from({ length: 400 }, (_, i) => i));
+      expect(read.filter(page => page.includes("needs b-roll"))).toHaveLength(1);
+    } finally { await c.close(); }
+  });
+
+  it("gives a long change's lists in pages, and long lists of changes and notes", async () => {
+    const change = { id: "chg_pass", projectId: "prj_test", fromVersion: "v1", toVersion: "v2", description: "Cut 300 pauses", author: { type: "agent", name: "claude" },
+      noteIds: [], state: "ready", renders: [], ranges: [{ start: 0, end: 600 }],
+      cutReasons: Array.from({ length: 300 }, (_, i) => ({ start: i * 2, end: i * 2 + 0.5, reason: `A long wait before line ${i}.` })) } as unknown as Change;
+    const original = { changes: mock.state.changes, notes: mock.state.notes };
+    mock.state.changes = [change, ...Array.from({ length: 300 }, (_, i) => ({ ...change, id: `chg_${i}`, cutReasons: undefined, description: `Edit number ${i} of the day` }) as Change)];
+    mock.state.notes = Array.from({ length: 300 }, (_, i) => ({ id: `n${i}`, projectId: "prj_test", version: "v1", time: i, clipIds: [], text: `Note number ${i}`, state: "open",
+      author: { type: "human", name: "Dana" }, createdAt: "2026-11-20T10:00:00.000Z" }) as unknown as Note);
+    const c = await small();
+    try {
+      const parts = (await pages(c, "change_get", { changeId: "chg_pass" }, text => {
+        const { nextOffset } = JSON.parse(text);
+        return nextOffset ? { offset: nextOffset } : undefined;
+      })).map(text => JSON.parse(text));
+      expect(parts.length).toBeGreaterThan(1);
+      expect(parts.flatMap(p => p.change.cutReasons).map((r: { reason: string }) => r.reason)).toEqual(change.cutReasons!.map(r => r.reason));
+      expect(parts[0].listed["change.cutReasons"]).toEqual([0, parts[0].change.cutReasons.length, 300]);
+      // A list shorter than a page is whole on the first.
+      expect(parts[0].change.ranges).toEqual([{ start: 0, end: 600 }]);
+      const offsetOf = (noun: string) => (text: string) => {
+        const offset = new RegExp(`Showing ${noun} \\d+–\\d+ of \\d+; continue with offset=(\\d+)\\.$`).exec(text)?.[1];
+        return offset ? { offset: Number(offset) } : undefined;
+      };
+      const changes = await pages(c, "change_list", {}, offsetOf("changes"));
+      expect(changes.flatMap(page => [...page.matchAll(/^chg_(\d+) /gm)].map(m => Number(m[1])))).toEqual(Array.from({ length: 300 }, (_, i) => i));
+      const notes = await pages(c, "notes_list", {}, offsetOf("notes"));
+      expect(notes.flatMap(page => [...page.matchAll(/^n(\d+) /gm)].map(m => Number(m[1])))).toEqual(Array.from({ length: 300 }, (_, i) => i));
+    } finally {
+      Object.assign(mock.state, original);
+      await c.close();
+    }
+  });
+
+  it("draws a long waveform reading with fewer buckets, then its silences up to a time it names", async () => {
+    // A second of speech and a second of quiet, for an hour: 1,800 silences.
+    mock.state.waveform = (mediaId, from, to, points) => ({ mediaId, from, to,
+      peaks: Array.from({ length: points }, (_, i) => Math.floor(from + (to - from) * (i + .5) / points) % 2 ? 0.001 : 0.7) });
+    mock.state.project.media = mock.state.project.media.map(m => m.id === "m1" ? { ...m, duration: 3600 } : m);
+    const c = await small();
+    try {
+      const first = JSON.parse(textOf(await ok(c, "waveform_get", { mediaId: "m1", from: 0, to: 3600, points: 4000, minSilence: 0.5 })));
+      expect(first.peaksDb.length).toBeLessThan(4000);
+      expect(first.silences.length).toBeGreaterThan(0);
+      expect(first.silences.at(-1).start).toBeLessThan(first.listedTo);
+      expect(first.next).toBe(`silences and speechActivity are listed up to ${first.listedTo} s: read from ${first.listedTo} for the rest.`);
+      const rest = JSON.parse(textOf(await ok(c, "waveform_get", { mediaId: "m1", from: first.listedTo, to: 3600, points: 4000, minSilence: 0.5 })));
+      expect(rest.silences[0].start).toBeGreaterThanOrEqual(first.listedTo);
+    } finally { await c.close(); }
+  });
+
+  it("reads a long attachment and a long graphic page in parts", async () => {
+    const text = Array.from({ length: 3000 }, (_, i) => `Line ${i} of the style guide says "keep it plain".`).join("\n");
+    const html = `<html><body>${Array.from({ length: 2000 }, (_, i) => `<p class="x">Para ${i}</p>`).join("\n")}</body></html>`;
+    mock.state.extra = (req, res) => {
+      if (req.path === "/projects/prj_test/documents/read") return reply(res, { name: "guide.txt", path: "/tmp/guide.txt", size: text.length, mime: "text/plain", text });
+      if (req.path === "/projects/prj_test/graphics/gfx") return reply(res, { html, path: "graphics/gfx/page.html", files: [], width: 1920, height: 1080, fps: 30, duration: 4 });
+      return false;
+    };
+    const c = await small();
+    try {
+      const read: string[] = [];
+      for (let offset: number | undefined = 0; offset !== undefined && read.length < 100;) {
+        const result = await ok(c, "attachment_read", { attachmentId: "att", offset });
+        const [about, body] = result.content.map(part => (part as { text: string }).text);
+        expect(about!.length + body!.length).toBeLessThanOrEqual(4_000);
+        expect(JSON.parse(about!).textChars).toBe(text.length);
+        read.push(body!);
+        offset = JSON.parse(about!).nextOffset;
+      }
+      expect(read.length).toBeGreaterThan(1);
+      expect(read.join("")).toBe(text);
+      const parts = (await pages(c, "graphic_get", { mediaId: "gfx" }, page => {
+        const { nextOffset } = JSON.parse(page);
+        return nextOffset ? { offset: nextOffset } : undefined;
+      })).map(page => JSON.parse(page));
+      expect(parts.length).toBeGreaterThan(1);
+      expect(parts.map(p => p.html).join("")).toBe(html);
+      expect(parts[0]).toMatchObject({ htmlChars: html.length, path: "graphics/gfx/page.html", fps: 30 });
+    } finally { await c.close(); }
   });
 });

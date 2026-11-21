@@ -16,7 +16,7 @@ import { assistantSkills } from "./skills.js";
 import { applyChoicesWhenDone, changeDiff, cutRevisionReference, passToRevise, retireStaleSaves } from "./changes.js";
 import { resolveTimeline } from "./timeline.js";
 import { runAttemptIds } from "./runAttempts.js";
-import { learningCheckContext, skillEditEnded, startLearningCheck } from "./learnings.js";
+import { learningCheckContext, skillEditEnded, skillsBehind, startLearningCheck } from "./learnings.js";
 import { recoveryInstruction } from "./taskRecovery.js";
 
 /** States a task never leaves. */
@@ -514,6 +514,21 @@ export function pairQuestionsAndAnswers(events: Pick<TaskEvent, "type" | "text">
 }
 
 /**
+ * The skills a run is given. A request about one cut or edit is also given, in full, the skills the run that made it
+ * had: a revision names none of its own unless the editor typed one, and was left to read the skill that cut it.
+ */
+function promptSkills(ctx: Ctx, task: Task) {
+  const all = ctx.repos.skills.select("1=1", [], "name ASC");
+  const { skillIds, changeId } = task.context;
+  const made = changeId ? skillsBehind(ctx, changeId) : [];
+  if (!made.length) return assistantSkills(all, skillIds, true);
+  // Skills the editor typed come with them, as a request's chosen skills alone are given.
+  if (skillIds?.length) return assistantSkills(all, [...new Set([...skillIds, ...made])], true);
+  const full = assistantSkills(all, made, true);
+  return [...full, ...assistantSkills(all, undefined, true).filter(skill => !full.some(f => f.id === skill.id))];
+}
+
+/**
  * What the agent is told. Every host fetches this, so there is one prompt.
  * After an answer, a host that still has the CLI session that asked continues
  * it with just the answer; otherwise the answers go in the system prompt.
@@ -535,8 +550,9 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   const now = named?.projectId === task.projectId && c.cutIndex !== undefined ? passToRevise(ctx, named, task.id, c.cutIndex) : undefined;
   const record = now?.change ?? named;
   let change: { change: NonNullable<typeof record>; diff?: ReturnType<typeof changeDiff> } | undefined;
-  // A request about one staged cut isn't shown the whole pass's diff, so it isn't worked out.
-  if (record?.projectId === task.projectId && c.cutIndex !== undefined) change = { change: record };
+  // A request about one staged cut, or one edit, is told where that one is: the whole change's diff isn't what it's
+  // about, and isn't printed.
+  if (record?.projectId === task.projectId && (c.cutIndex !== undefined || c.editIndex !== undefined)) change = { change: record };
   else if (record?.projectId === task.projectId) {
     try {
       change = { change: record, diff: changeDiff(ctx, record) };
@@ -576,7 +592,7 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     replacedPass: now && named?.id,
     // A resumed session already holds the earlier questions and answers.
     qa: resumeSession ? undefined : pairQuestionsAndAnswers(events),
-    skills: aside ? [] : assistantSkills(ctx.repos.skills.select("1=1", [], "name ASC"), c.skillIds, true),
+    skills: aside ? [] : promptSkills(ctx, task),
     editSkill: editSkill ?? undefined,
     learningCheck: isLearningCheck(task) ? learningCheckContext(ctx, task) : undefined,
     areaCheck: task.kind === "area_check" ? task.context.areaCheck : undefined,
@@ -646,6 +662,9 @@ function firstAsked(ctx: Ctx, task: Task): string {
   return first.instruction;
 }
 
+/** The most of a thread's earlier requests a follow-up is told, the latest ones. A long thread says how many came before. */
+const THREAD_REQUESTS = 20;
+
 /**
  * A follow-up in a thread that already has history: give the agent the gist of
  * what happened so far, keep what the person said in context.message. An earlier request the app worded for the
@@ -658,10 +677,26 @@ export function followUpInstruction(ctx: Ctx, projectId: string, threadId: strin
   const tasks = at < 0 ? thread : thread.slice(0, at);
   if (!tasks.length) return text;
   const [last] = ctx.repos.changes.select("project_id = ? AND json_extract(json, '$.threadId') = ?", [projectId, threadId], "created_at DESC, rowid DESC LIMIT 1");
-  const lines = ["This continues an earlier request in the same thread."];
+  // A Retry or Resume is the same request asked once: it is said once, with the latest reply any of its attempts gave.
+  const retried = new Map(tasks.flatMap(t => t.retryTaskId ? [[t.retryTaskId, t.id] as const] : []));
+  const requests: { asked: string; replied: string | null }[] = [];
+  const requestOf = new Map<string, (typeof requests)[number]>();
   for (const t of tasks) {
-    lines.push(`- Asked: ${t.context.asked ?? t.context.message ?? t.instruction}`);
-    if (t.summary) lines.push(`  You replied: ${t.summary}`);
+    const earlier = retried.get(t.id);
+    let request = earlier ? requestOf.get(earlier) : undefined;
+    if (!request) requests.push(request = { asked: t.context.asked ?? t.context.message ?? t.instruction, replied: null });
+    if (t.summary) request.replied = t.summary;
+    requestOf.set(t.id, request);
+  }
+  const listed = requests.slice(-THREAD_REQUESTS);
+  const lines = ["This continues an earlier request in the same thread."];
+  if (listed.length < requests.length) {
+    const left = requests.length - listed.length;
+    lines.push(`(${left} earlier request${left === 1 ? "" : "s"} in this thread ${left === 1 ? "isn't" : "aren't"} listed.)`);
+  }
+  for (const request of listed) {
+    lines.push(`- Asked: ${request.asked}`);
+    if (request.replied) lines.push(`  You replied: ${request.replied}`);
   }
   if (last) lines.push(`Latest change: "${last.description}" (${last.state}).`);
   lines.push("", `Now: ${text}`);

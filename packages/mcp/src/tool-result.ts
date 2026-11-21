@@ -112,3 +112,71 @@ function formatIssues(issues: ReadonlyArray<{ path: ReadonlyArray<string | numbe
     .map((i) => `- ${i.path.length ? i.path.join(".") : "(root)"}: ${i.message}`)
     .join("\n");
 }
+
+/**
+ * Lines too many for one result, from `offset`, as many as fit `budget` characters (one at least), and the line that
+ * says where the next page starts. `noun` names what a line is, as "changes".
+ */
+export function pageOfLines(lines: readonly string[], offset: number, budget: number, noun: string): string {
+  const shown: string[] = [];
+  let size = 0;
+  for (const line of lines.slice(offset)) {
+    if (shown.length && size + line.length + 1 > budget) break;
+    shown.push(line);
+    size += line.length + 1;
+  }
+  const end = offset + shown.length;
+  const more = end < lines.length || offset > 0 ? [`Showing ${noun} ${Math.min(offset + 1, lines.length)}–${end} of ${lines.length}${end < lines.length ? `; continue with offset=${end}` : ""}.`] : [];
+  return [...shown, ...more].join("\n");
+}
+
+/**
+ * A value too long for one result, with each of its lists cut to the same run of items: from `offset`, as many as fit
+ * `budget` characters as JSON (one at least). `listed` gives each list not shown whole by its path, as [first, end,
+ * total], and `nextOffset` is where the next page starts. A list inside a list's items stays whole with its item.
+ */
+export function pageOfLists<T extends object>(value: T, offset: number, budget: number): T & { listed?: Record<string, [number, number, number]>; nextOffset?: number } {
+  if (offset === 0 && JSON.stringify(value).length <= budget) return value;
+  let longest = 0;
+  const cut = (item: unknown, count: number, path: string, listed: Record<string, [number, number, number]>): unknown => {
+    if (Array.isArray(item)) {
+      longest = Math.max(longest, item.length);
+      if (offset === 0 && item.length <= count) return item;
+      const from = Math.min(offset, item.length), end = Math.min(item.length, offset + count);
+      listed[path] = [from, end, item.length];
+      return item.slice(from, end);
+    }
+    if (!item || typeof item !== "object") return item;
+    return Object.fromEntries(Object.entries(item).map(([key, field]) => [key, cut(field, count, path ? `${path}.${key}` : key, listed)]));
+  };
+  const page = (count: number) => {
+    const listed: Record<string, [number, number, number]> = {};
+    const items = cut(value, count, "", listed) as T;
+    const more = Object.values(listed).some(([, end, total]) => end < total);
+    return { ...items, ...(Object.keys(listed).length && { listed }), ...(more && { nextOffset: offset + count }) };
+  };
+  page(1);
+  // The most items each list can give that still fit.
+  let fits = 1, over = Math.max(2, longest + 1);
+  while (over - fits > 1) {
+    const mid = Math.floor((fits + over) / 2);
+    if (JSON.stringify(page(mid)).length <= budget) fits = mid;
+    else over = mid;
+  }
+  return page(fits);
+}
+
+/**
+ * A value whose text field `key` is too long for one result, with that text from `offset`, as much as fits `budget`
+ * characters as JSON (one at least). `<key>Chars` is the text's whole length and `nextOffset` where the rest starts.
+ */
+export function pageOfText<T extends Record<string, unknown>>(value: T, key: string, offset: number, budget: number): T {
+  const whole = value[key];
+  if (typeof whole !== "string" || (offset === 0 && JSON.stringify(value).length <= budget)) return value;
+  let room = Math.max(1, budget - JSON.stringify({ ...value, [key]: "" }).length - 60);
+  let part = whole.slice(offset, offset + room);
+  // Quotes and line breaks take two characters each in JSON.
+  for (let size = JSON.stringify(part).length; size > room + 2 && part.length > 1; size = JSON.stringify(part).length) part = part.slice(0, Math.max(1, Math.floor(part.length * room / size)));
+  const end = Math.min(whole.length, offset + part.length);
+  return { ...value, [key]: part, [`${key}Chars`]: whole.length, ...(end < whole.length && { nextOffset: end }) };
+}

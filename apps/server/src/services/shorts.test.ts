@@ -87,7 +87,7 @@ it("makes a project for each short from the long video's finished edit, and star
   expect(task).toMatchObject({ projectId: projects[0]!.id, instruction: "Make up to 3 vertical shorts, each under 60 s.",
     context: { short: { index: 1, count: 3, sourceProjectId: long.id, sourceName: "Weekly interview", sourceVersion: long.head, projectIds: projects.map(p => p.id) } } });
   expect(ctx.repos.tasks.select("1=1").map(t => t.projectId)).toEqual([projects[0]!.id]);
-  expect(taskPrompt(ctx, ctx.repos.tasks.get(task.id)!).systemPrompt).toContain("save them with `shorts_plan` before you cut. This project takes the first.");
+  expect(taskPrompt(ctx, ctx.repos.tasks.get(task.id)!).systemPrompt).toContain("You choose the moments for all 3 shorts from the whole edit. This project takes the first.");
 });
 
 it("names the shorts for the moments the first run chose, starts the others with theirs, and trashes a short left without one", async () => {

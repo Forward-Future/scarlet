@@ -65,9 +65,9 @@ const KNOWN_RULES = 30;
 
 /**
  * The skills that made the change a request is about. A revision names none of its own, but a correction to a cut is a
- * correction to the skill that cut it, so the rule belongs there.
+ * correction to the skill that cut it, so a rule belongs there, and the revision is given that skill to work to.
  */
-function skillsBehind(ctx: Ctx, changeId: string | undefined): string[] {
+export function skillsBehind(ctx: Ctx, changeId: string | undefined): string[] {
   const change = changeId ? ctx.repos.changes.get(changeId) : null;
   let maker = change?.taskId ? ctx.repos.tasks.get(change.taskId) : null;
   // A pass resumed or continued keeps the skills of the request that started it.

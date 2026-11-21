@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod/v3";
 
 /** The tool a harness that lists tools briefly reads a tool's whole description from. */
@@ -29,7 +29,7 @@ export function withoutDescriptions(schema: unknown): unknown {
 
 type ListTools = (request: { method: "tools/list"; params?: unknown }, extra: unknown) => Promise<{ tools: Tool[] }>;
 
-/** Tools one tool_help call reads in full; the rest of a longer list are named for another call. */
+/** Most tools one tool_help call reads in full; the rest of a longer list, and any past the result's size, are named for another call. */
 const HELP_AT_ONCE = 8;
 
 /**
@@ -38,7 +38,12 @@ const HELP_AT_ONCE = 8;
  * definitions don't fit its budget (`AgentCapabilities.briefTools`): each tool is listed, and the model reads what a
  * tool does before it calls it.
  */
-export function listToolsBriefly(server: McpServer) {
+export function listToolsBriefly(server: McpServer, opts: {
+  /** Characters one result may hold (`AgentCapabilities.resultChars`). */
+  resultChars: number;
+  /** Logs a call and its refusal, as every other tool's are. */
+  report(name: string, began: number, result: CallToolResult): Promise<void>;
+}) {
   // The SDK lists registered tools from this handler. Wrapping it keeps its conversion of each tool's input schema.
   const handlers = (server.server as unknown as { _requestHandlers?: Map<string, ListTools> })._requestHandlers;
   const listed = handlers?.get("tools/list");
@@ -49,9 +54,16 @@ export function listToolsBriefly(server: McpServer) {
   server.registerTool(TOOL_HELP, {
     description: "A Scarlet tool's full description and parameters. Read it before you first call a tool.",
     inputSchema: { name: z.string().optional().describe("The tool's name, such as transcript_get"),
-      names: z.array(z.string()).min(1).optional().describe(`Several tools' names instead, read in one call; up to ${HELP_AT_ONCE} are read, the rest listed for another call`) },
+      names: z.array(z.string()).min(1).optional().describe(`Several tools' names instead, read in one call; up to ${HELP_AT_ONCE} that fit one result are read, the rest listed for another call`) },
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
   }, async ({ name, names }, extra) => {
+    const began = performance.now();
+    const result = await help(name, names, extra);
+    await opts.report(TOOL_HELP, began, result);
+    return result;
+  });
+
+  async function help(name: string | undefined, names: string[] | undefined, extra: unknown): Promise<CallToolResult> {
     const failed = (text: string) => ({ isError: true, content: [{ type: "text" as const, text }] });
     if ((name === undefined) === (names === undefined)) return failed("Give either name, for one tool, or names, for several.");
     const tools = await everyTool(extra);
@@ -65,10 +77,21 @@ export function listToolsBriefly(server: McpServer) {
       `Its tools: ${tools.filter(t => t.name !== TOOL_HELP).map(t => t.name).join(", ")}.` : undefined;
     const known = [...new Set(asked.flatMap(a => a.tool ? [a.tool] : []))];
     if (!known.length && !later.length) return failed(missing!);
-    const whole = known.map(tool => `${tool.name}\n\n${tool.description ?? ""}\n\nParameters (JSON schema):\n${JSON.stringify(tool.inputSchema, null, 1)}`);
+    // As many as fit one result, the first always: past the harness's limit a result is put where the model can't read it.
+    const whole: string[] = [];
+    let size = missing?.length ?? 0;
+    for (const tool of known) {
+      const read = `${tool.name}\n\n${tool.description ?? ""}\n\nParameters (JSON schema):\n${JSON.stringify(tool.inputSchema)}`;
+      if (whole.length && size + read.length > opts.resultChars) {
+        later.unshift(...known.slice(whole.length).map(t => asked.find(a => a.tool === t)!.given));
+        break;
+      }
+      whole.push(read);
+      size += read.length;
+    }
     const rest = later.length ? `Not read in this call, to ask for next: ${later.join(", ")}.` : undefined;
     return { content: [{ type: "text" as const, text: [...(missing ? [missing] : []), ...whole, ...(rest ? [rest] : [])].join("\n\n---\n\n") }] };
-  });
+  }
 
   handlers.set("tools/list", async (request, extra) => {
     const tools = await everyTool(extra);

@@ -5,10 +5,10 @@
  */
 import { basename, dirname, join } from "node:path";
 import { z } from "zod/v3";
-import type { AgentCapabilities, ProjectDetail, ScarletClient, ScarletToolName, Task } from "@scarlet/shared";
+import { DEFAULT_RESULT_CHARS, type AgentCapabilities, type ProjectDetail, type ScarletClient, type ScarletToolName, type Task } from "@scarlet/shared";
 import type { Author } from "@scarlet/timeline";
 import { round3 } from "./analysis.js";
-import { errorText, json, type ToolResult } from "./tool-result.js";
+import { errorText, json, pageOfText, type ToolResult } from "./tool-result.js";
 
 type ToolRegistrar = <Shape extends z.ZodRawShape>(name: ScarletToolName, description: string, shape: Shape,
   handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>) => void;
@@ -19,7 +19,7 @@ interface GraphicsDeps {
   projectId: string;
   task?: Task;
   author: Author;
-  caps: Pick<AgentCapabilities, "files" | "images">;
+  caps: Pick<AgentCapabilities, "files" | "images" | "resultChars">;
   /** A file in the task artifact directory. */
   readArtifact(path: string): Promise<Buffer<ArrayBuffer>>;
   getProject(): Promise<{ project: Pick<ProjectDetail["project"], "settings"> }>;
@@ -107,9 +107,9 @@ export function registerGraphics(deps: GraphicsDeps) {
 
   tool(
     "graphic_get",
-    "Read a graphic Scarlet drew: its page as it was drawn, where the page is, the files kept beside it (linked by those relative paths), and its size, fps and duration. Revise it by changing the page and calling graphic_render with basedOn.",
-    { mediaId: z.string().min(1) },
-    async ({ mediaId }) => json(await client.graphic(deps.projectId, mediaId)),
+    "Read a graphic Scarlet drew: its page as it was drawn, where the page is, the files kept beside it (linked by those relative paths), and its size, fps and duration. Revise it by changing the page and calling graphic_render with basedOn. A page too long for one result comes in parts: htmlChars is its whole length and nextOffset where the next part starts.",
+    { mediaId: z.string().min(1), offset: z.number().int().nonnegative().default(0).describe("Character of the page to read from, from a nextOffset") },
+    async ({ mediaId, offset }) => json(pageOfText(await client.graphic(deps.projectId, mediaId), "html", offset, deps.caps.resultChars ?? DEFAULT_RESULT_CHARS)),
   );
 
   tool(
@@ -135,18 +135,23 @@ export function registerGraphics(deps: GraphicsDeps) {
 
   tool(
     "attachment_read",
-    `Read a file the editor attached to a request in this project, by its attachment id, or with styleGuide the project's style guide, when the prompt has a Style guide section (a project without one has nothing to read). Text comes back as text; ${deps.caps.images ? "a picture comes back as the picture, and a PDF as pictures of its pages (pages, up to 8 a call; default the first 6) with pageCount when the file says it" : "a picture or a PDF comes back as its name, size and path only"}. A font file comes back as its path, for an @font-face rule.`,
+    `Read a file the editor attached to a request in this project, by its attachment id, or with styleGuide the project's style guide, when the prompt has a Style guide section (a project without one has nothing to read). Text comes back as text; ${deps.caps.images ? "a picture comes back as the picture, and a PDF as pictures of its pages (pages, up to 8 a call; default the first 6) with pageCount when the file says it" : "a picture or a PDF comes back as its name, size and path only"}. A font file comes back as its path, for an @font-face rule. Text too long for one result comes in parts: textChars is its whole length and nextOffset where the next part starts.`,
     {
       attachmentId: z.string().optional(),
       styleGuide: z.boolean().optional(),
       pages: z.array(z.number().int().positive()).max(8).optional().describe("PDF pages to read, from 1"),
+      offset: z.number().int().nonnegative().default(0).describe("Character of the text to read from, from a nextOffset"),
     },
-    async ({ attachmentId, styleGuide, pages }) => {
+    async ({ attachmentId, styleGuide, pages, offset }) => {
       if (!attachmentId === !styleGuide) return errorText("Name an attachment or the style guide.");
       const doc = await client.readDocument(deps.projectId,
         { attachmentId, styleGuide, ...(deps.caps.images && pages && { pages }), ...(!deps.caps.images && { pages: [] }) });
-      const { text: body, pages: shots, image, ...about } = doc;
-      const content: ToolResult["content"] = [{ type: "text", text: JSON.stringify({ ...about, ...(shots && deps.caps.images && { pagesShown: shots.map(p => p.page) }) }) }];
+      const { text: whole, pages: shots, image, ...about } = doc;
+      // Text past what one result holds comes in parts, read on by offset.
+      const room = Math.max(1_000, (deps.caps.resultChars ?? DEFAULT_RESULT_CHARS) - JSON.stringify(about).length - 200);
+      const body = whole === undefined || (offset === 0 && whole.length <= room) ? whole : whole.slice(offset, offset + room);
+      const parted = body !== undefined && body !== whole ? { textChars: whole!.length, ...(offset + body.length < whole!.length && { nextOffset: offset + body.length }) } : {};
+      const content: ToolResult["content"] = [{ type: "text", text: JSON.stringify({ ...about, ...parted, ...(shots && deps.caps.images && { pagesShown: shots.map(p => p.page) }) }) }];
       if (body !== undefined) content.push({ type: "text", text: body });
       if (deps.caps.images && image) content.push({ type: "image", mimeType: image.mime, data: image.data });
       if (deps.caps.images) for (const shot of shots ?? []) content.push({ type: "image", mimeType: "image/jpeg", data: shot.jpeg });

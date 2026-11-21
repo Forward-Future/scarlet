@@ -14,8 +14,9 @@ const change = {
 describe("cutRevisionReference", () => {
   it("names the cut, why it was proposed and how it was assessed", () => {
     const text = cutRevisionReference(change, { cutIndex: 3, time: 600, end: 604.5, clipIds: [] });
-    expect(text).toContain("cut index 3 of change chg_pass, removing 600.00–604.50 s");
-    expect(text).toContain("Leave the other cuts as they are.");
+    expect(text).toMatch(/^\n\nThis feedback is about one staged cut only\. Leave the other cuts as they are\.\n/);
+    // Which cut and where are the prompt's to say, from the pass as it stands when the run starts.
+    expect(text).not.toMatch(/cut index|600\.00/);
     expect(text).toContain(`Why this cut was proposed: "Earlier image-input take with a stumble."`);
     expect(text).toContain(`Review note on this cut (ask): "The corrected image-input take belongs here. Check that the sponsor name finishes first."`);
   });
@@ -27,13 +28,12 @@ describe("cutRevisionReference", () => {
 
   it("still names the cut when it has no assessment", () => {
     const text = cutRevisionReference({ ...change, cutAssessments: undefined, cutReasons: undefined }, { cutIndex: 1, time: 10, end: 12, clipIds: [] });
-    expect(text).toBe("\n\nThis feedback is about one staged cut only: cut index 1 of change chg_pass, removing 10.00–12.00 s. Leave the other cuts as they are.");
+    expect(text).toBe("\n\nThis feedback is about one staged cut only. Leave the other cuts as they are.");
   });
 
-  it("names the cut by its own range when the request points at words chosen in its passage", () => {
+  it("finds the cut's reason by its own range when the request points at words chosen in its passage", () => {
     // Words chosen in the transcript of the working cut, inside the cut that has no assessment yet.
     const text = cutRevisionReference({ ...change, cutAssessments: undefined }, { cutIndex: 0, time: 601.2, end: 602.8, clipIds: [] });
-    expect(text).toContain("cut index 0 of change chg_pass, removing 600.00–604.50 s");
     expect(text).toContain(`Why this cut was proposed: "Earlier image-input take with a stumble."`);
   });
 });

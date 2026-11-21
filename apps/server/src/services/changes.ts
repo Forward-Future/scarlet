@@ -2249,7 +2249,10 @@ function onPositionClock(position: ReviseRequest["position"]) {
   return marked && !marked.mediaId && !position.mediaId && (marked.version ?? position.version) === position.version ? marked : undefined;
 }
 
-/** Name the one staged cut a revision is about, with why it was proposed and how it was assessed. */
+/**
+ * Say that a revision is about one staged cut, with why it was proposed and how it was assessed. Which cut it is, and
+ * where, the prompt says from the pass as it is when the run starts: a revision ahead of it in the queue can move it.
+ */
 export function cutRevisionReference(change: Change, position: ReviseRequest["position"]): string {
   const index = position?.cutIndex;
   if (index === undefined) return "";
@@ -2257,12 +2260,9 @@ export function cutRevisionReference(change: Change, position: ReviseRequest["po
   const staged = mergeRanges((change.cutReasons ?? []).map(({ start, end }) => ({ start, end })));
   const start = assessment?.start ?? staged[index]?.start ?? position?.time;
   const end = assessment?.end ?? staged[index]?.end ?? position?.end;
-  const edit = change.cutEdits?.find(e => e.index === index);
-  const span = edit ? `, at ${edit.range.start.toFixed(2)}–${edit.range.end.toFixed(2)} s on version ${edit.version}`
-    : start !== undefined && end !== undefined ? `, removing ${start.toFixed(2)}–${end.toFixed(2)} s` : "";
   const proposed = start !== undefined && end !== undefined
     ? change.cutReasons?.find(r => r.start < end + 0.01 && r.end > start - 0.01) : undefined;
-  const lines = [`This feedback is about one staged cut only: cut index ${index} of change ${change.id}${span}. Leave the other cuts as they are.`];
+  const lines = ["This feedback is about one staged cut only. Leave the other cuts as they are."];
   const marked = markedPart(position, start, end);
   if (marked) lines.push(marked);
   const summary = assessment?.summary ?? proposed?.summary;

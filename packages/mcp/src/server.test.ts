@@ -160,8 +160,9 @@ describe("tools/list", () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     // Claude's harness does not deliver audio, so nothing offers WAV, and has no file tools, so nothing imports from the
-    // artifact directory. Only the check that reads a request offers a rule, and only the first short of a batch plans them.
-    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => n !== "source_audio" && n !== "learning_suggest" && n !== "asset_add" && n !== "shorts_plan").sort());
+    // artifact directory or writes a file there. Only the check that reads a request offers a rule, and only the first
+    // short of a batch plans them.
+    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => !["source_audio", "learning_suggest", "asset_add", "export_otio", "shorts_plan"].includes(n)).sort());
     for (const t of tools) expect(Object.keys(t.inputSchema.properties ?? {})).not.toContain("includeAudio");
     expect(JSON.stringify(tools)).not.toMatch(/\bWAV\b|can (hear|play)|accepts audio|consume audio/);
     for (const t of tools) expect(t.description?.length ?? 0).toBeGreaterThan(20);
@@ -1891,6 +1892,7 @@ describe("buildSystemPrompt", () => {
       .not.toContain("Time limit");
     expect(prompt).toContain("# You are editing a video in Scarlet");
     expect(prompt).toContain("Too long a pause at 1:17");
+    expect(prompt).toContain('"Too long a pause here"');
     expect(prompt).toContain("1:17.00");
     expect(prompt).toContain("Clip ids under the playhead: c1");
     expect(prompt).toContain("Note n1 [open] by Matt");

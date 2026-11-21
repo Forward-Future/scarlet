@@ -394,12 +394,12 @@ describe("scarlet server", () => {
     expect(revised.json.task.agent).toBe("claude");
     expect(revised.json.task.model).toBe("opus");
     expect(revised.json.task.context.changeId).toBe(r.json.change.id);
-    // The same note sent as a new request, as it is while the pass still runs, names its cut the same way. The edit's
-    // number in the editor's list is kept with the request.
+    // The same note sent as a new request, as it is while the pass still runs, says it is about one cut the same way.
+    // The edit's number in the editor's list is kept with the request.
     const asked = await api<{ task: Task }>("POST", `/projects/${project.id}/tasks`, {
       body: { agent: "gemini", instruction: "Keep it at 4 seconds instead", context: { changeId: r.json.change.id, cutIndex: 0, time: 1.75, end: 2.25, clipIds: [], editNumber: 3 } } });
     expect(asked.status).toBe(201);
-    expect(asked.json.task.instruction).toContain(`Keep it at 4 seconds instead\n\nThis feedback is about one staged cut only: cut index 0 of change ${r.json.change.id}, removing 1.75–2.25 s.`);
+    expect(asked.json.task.instruction).toContain("Keep it at 4 seconds instead\n\nThis feedback is about one staged cut only. Leave the other cuts as they are.");
     expect(asked.json.task.context.editNumber).toBe(3);
     // It was only asked to read its wording: taken out again, it is nobody's to claim.
     expect((await api("POST", `/tasks/${asked.json.task.id}/cancel`, { body: {} })).status).toBe(200);

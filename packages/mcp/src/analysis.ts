@@ -192,7 +192,8 @@ function describeClip(clip: Clip, fps = 30): string {
  * clips near `near` (or none): the prompt is read again on every turn of a run, and a finished video's 300 clips cost
  * a revision of one cut about a third of its tokens (2026-11-18). The tools read the rest when a request needs it.
  */
-export function summarizeTimeline(timeline: Timeline, fps = 30, brief?: { most: number; near?: TimeRange }): string {
+/** `starting` lists only the clips and markers from its `from` second to before its `until`: a page of a long summary. */
+export function summarizeTimeline(timeline: Timeline, fps = 30, brief?: { most: number; near?: TimeRange }, starting?: { from: number; until: number }): string {
   const lines: string[] = [];
   lines.push(
     `Timeline "${timeline.name}" version ${timeline.version} — duration ${formatTimecode(timelineDuration(timeline), fps)} (${timelineDuration(timeline).toFixed(2)} s), ${timeline.tracks.length} tracks, ${timeline.markers.length} markers`,
@@ -200,7 +201,8 @@ export function summarizeTimeline(timeline: Timeline, fps = 30, brief?: { most: 
   const total = timeline.tracks.reduce((n, t) => n + t.clips.length, 0);
   const short = brief && total > brief.most ? brief : undefined;
   const pad = 15;
-  const shown = (c: Clip) => !short || (!!short.near && c.timelineIn < short.near.end + pad && clipEnd(c) > short.near.start - pad);
+  const onPage = (t: number) => !starting || (t >= starting.from && t < starting.until);
+  const shown = (c: Clip) => onPage(c.timelineIn) && (!short || (!!short.near && c.timelineIn < short.near.end + pad && clipEnd(c) > short.near.start - pad));
   for (const t of timeline.tracks) {
     const flags = [t.muted ? "muted" : "", t.hidden ? "hidden" : ""].filter(Boolean).join(", ");
     const span = short && t.clips.length ? `, ${formatTimecode(Math.min(...t.clips.map(c => c.timelineIn)), fps)}–${formatTimecode(Math.max(...t.clips.map(clipEnd)), fps)}` : "";
@@ -212,9 +214,10 @@ export function summarizeTimeline(timeline: Timeline, fps = 30, brief?: { most: 
       ? `Listed: the clips within ${pad} s of ${formatTimecode(short.near.start, fps)}–${formatTimecode(short.near.end, fps)}, of ${total}. \`timeline_get\` lists every clip and \`timeline_at\` reads what plays at a time.`
       : `The ${total} clips aren't listed here: \`timeline_get\` lists every clip and \`timeline_at\` reads what plays at a time.`);
   }
-  if (timeline.markers.length) {
+  const markers = timeline.markers.filter(m => onPage(m.time));
+  if (markers.length) {
     lines.push("Markers:");
-    for (const m of timeline.markers) {
+    for (const m of markers) {
       lines.push(`  ${m.id} @${formatTimecode(m.time, fps)} [${m.kind}] ${truncate(m.text, 80)}${m.resolved ? " (resolved)" : ""}`);
     }
   }

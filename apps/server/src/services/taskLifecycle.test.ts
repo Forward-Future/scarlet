@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createProject, timelineFromKeepRanges, type Change, type Project } from "@scarlet/timeline";
 import { ATTEMPT_HEADER, TASK_HEADER, type Task, type TaskPrompt } from "@scarlet/shared";
+import { stripFrontmatter } from "@scarlet/mcp/prompt";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { createTask, followUpInstruction, MOST_CLOSING_CHECKS, queueRepeatCheck, saveTask } from "./tasks.js";
@@ -306,6 +307,50 @@ it("carries a paused run on in its CLI session on the same model, and a run the 
   expect(get(get(gemini.id).retryTaskId!).session).toBeUndefined();
 });
 
+it("tells a follow-up each earlier request of its thread once, and only the latest of a long thread", () => {
+  const ask = (instruction: string, threadId?: string, extra: Partial<Task> = {}) => {
+    const task = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction, context: { threadId, message: instruction }, createdBy: scarlet });
+    return saveTask(app.ctx, { ...task, ...extra });
+  };
+  const first = ask("Tighten the intro", undefined, { state: "failed", summary: null });
+  // Retried, then resumed: one request, with the reply its last attempt gave.
+  const retried = ask("Tighten the intro", first.id, { state: "failed" });
+  saveTask(app.ctx, { ...first, retryTaskId: retried.id });
+  const resumed = ask("Tighten the intro", first.id, { state: "done", resumeRootId: retried.id, summary: "Took out 4 s." });
+  saveTask(app.ctx, { ...get(retried.id), retryTaskId: resumed.id });
+  const short = followUpInstruction(app.ctx, project.id, first.id, "Now the outro");
+  expect(short).toBe("This continues an earlier request in the same thread.\n- Asked: Tighten the intro\n  You replied: Took out 4 s.\n\nNow: Now the outro");
+
+  for (let i = 1; i <= 24; i++) ask(`Request ${i}`, first.id, { state: "done", summary: `Done ${i}.` });
+  const long = followUpInstruction(app.ctx, project.id, first.id, "Now the outro").split("\n");
+  expect(long[1]).toBe("(5 earlier requests in this thread aren't listed.)");
+  expect(long.filter(line => line.startsWith("- Asked:"))).toHaveLength(20);
+  expect(long[2]).toBe("- Asked: Request 5");
+  expect(long.at(-1)).toBe("Now: Now the outro");
+});
+
+it("gives a request about one cut the skills of the run that made it, in full, beside the editor's others", async () => {
+  const all = app.ctx.repos.skills.select("1=1", [], "name ASC").filter(s => s.enabled);
+  const general = await prompt((await request("Add captions")).id);
+  // A workflow is one line in a prompt until a request uses it.
+  const workflow = all.find(s => general.systemPrompt.includes(`using skills_list with skillId "${s.id}"`))!;
+  expect(workflow).toBeDefined();
+  const pass = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: `/${workflow.name}`, context: { skillIds: [workflow.id] }, createdBy: editor });
+  const ts = new Date().toISOString();
+  app.ctx.repos.changes.put({ id: "chg_pass", projectId: project.id, fromVersion: "ver_a", toVersion: "ver_b", description: "Dialogue pass",
+    author: { type: "agent", name: "Claude" }, noteIds: [], timelineEdits: [], ranges: [], state: "approved", renders: [], taskId: pass.id,
+    createdAt: ts, updatedAt: ts } as unknown as Change);
+  saveTask(app.ctx, { ...get(pass.id), state: "done" });
+  const revision = createTask(app.ctx, { projectId: project.id, kind: "revise", agent: "claude", instruction: "Take a little more off",
+    context: { changeId: "chg_pass", cutIndex: 0, time: 12, message: "Take a little more off" }, createdBy: editor });
+  const told = (await prompt(revision.id)).systemPrompt;
+  expect(told).toContain(stripFrontmatter(workflow.content).trim().slice(0, 200));
+  expect(told).not.toContain(`using skills_list with skillId "${workflow.id}"`);
+  // The editor's other skills are there as before.
+  const other = all.find(s => s.id !== workflow.id && general.systemPrompt.includes(`## ${s.name}\n`))!;
+  expect(told).toContain(`## ${other.name}\n`);
+});
+
 it("tells a look at a frame nothing of the video's timeline or skills, and a request about one staged cut no whole diff", async () => {
   const { version } = storeVersion(app.ctx, project.id, timelineFromKeepRanges(project.id, "cam", [{ start: 0, end: 20 }]), { parent: null });
   app.ctx.repos.projects.update(project.id, { head: version });
@@ -318,7 +363,7 @@ it("tells a look at a frame nothing of the video's timeline or skills, and a req
   expect(versions).not.toHaveBeenCalled();
   expect(skills).not.toHaveBeenCalled();
 
-  // A staged cut's revision isn't shown the pass's whole diff, so it is never laid out for it.
+  // A staged cut's revision is told the cut's range; the pass's whole diff is never laid out for it.
   const ts = new Date().toISOString();
   app.ctx.repos.changes.put({ id: "chg_staged", projectId: project.id, fromVersion: "ver_gone", toVersion: "ver_gone_too", description: "Dialogue pass",
     author: { type: "agent", name: "Claude" }, noteIds: [], timelineEdits: [], ranges: [], state: "ready", renders: [], createdAt: ts, updatedAt: ts } as unknown as Change);

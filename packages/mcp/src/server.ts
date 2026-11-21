@@ -94,7 +94,7 @@ import {
 } from "./analysis.js";
 import { toolAnnotations } from "./annotations.js";
 import { transitionOps } from "./transition.js";
-import { MediaPreparing, describeError, errorResult, errorText, formatZodError, json, noteEvidenceMiss, notePreparing, noteUnmeasured, text, toolDiagnostics, toolRefusal, unavailable, unmeasured, unmeasuredLine, type ToolResult } from "./tool-result.js";
+import { MediaPreparing, describeError, errorResult, errorText, formatZodError, json, noteEvidenceMiss, notePreparing, noteUnmeasured, pageOfLines, pageOfLists, text, toolDiagnostics, toolRefusal, unavailable, unmeasured, unmeasuredLine, type ToolResult } from "./tool-result.js";
 import { keptEditsNote } from "./editor-kept.js";
 import { registerPerception } from "./perception-tools.js";
 import { registerGraphics } from "./graphics-tools.js";
@@ -390,7 +390,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
         ? "Scarlet exposes the tools for reading the editor’s skills and offering a rule for one; an empty MCP resource list is normal."
         : ctx.task?.kind === "area_check"
         ? "Scarlet exposes the tools for looking at one frame of a recording and saving what of it viewers may see; an empty MCP resource list is normal."
-        : "Scarlet exposes project context and editing operations as tools; an empty MCP resource list is normal. project_get returns the current edit and the editor’s selection. Transcript and waveform tools prepare missing data on demand.",
+        : "Scarlet exposes project context and editing operations as tools; an empty MCP resource list is normal.",
     },
   );
   let diagnosticSessionClosed = false;
@@ -1294,8 +1294,10 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>,
   ) {
     if (name === "source_audio" && !caps.audio) return;
-    // Only a harness with file tools can put anything in the artifact directory for asset_add to import.
-    if (name === "asset_add" && !caps.files) return;
+    // Only a harness with file tools can put anything in the artifact directory for asset_add to import, or open the
+    // file export_otio writes there: the app never shows the editor that directory, and their hand-off to another
+    // editing app is the Export sheet's.
+    if ((name === "asset_add" || name === "export_otio") && !caps.files) return;
     if (authoring && !SKILL_FROM_CHANGE_TOOLS.has(name)) return;
     if (!caps.images && IMAGE_TOOLS.has(name)) return;
     // A request to revise a skill edits no video. It gets the tools for talking to the editor and for the skill.
@@ -1551,13 +1553,18 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   // Only the run that looks at one frame gives an area. A pass given the same power answered for a whole recording at
   // once, from scripts and small frames: 230 areas in ten calls, one inside the editor's box of eleven (2026-11-16).
   const givesAreas = !ctx.taskId || ctx.task?.kind === "area_check";
+  // An area check saves one box it read off a full-size frame, and an edit can start twenty: pictures of the stretches
+  // still unset are only for an agent setting areas itself.
+  const unsetPictures = ctx.task?.kind === "area_check" ? 0 : 4;
   tool(
     "screen_area",
     "What of a recording's picture viewers may see. A screen recording usually holds more than the window being presented: the desktop, a taskbar, a recording app, a call beside it. An area is a box given on the frame at a SOURCE second, as [left, top, right, bottom] in percent of the picture: everything outside it stays out of the video. Scarlet finds the straight edges under the box on that frame and holds the area for every stretch of the recording where those edges are still in place, so one area serves a window for as long as it stays where it is, and comes back when the window does. The result lists each area with the source seconds it holds for (`holds`) and any side with no line under it on its frame (`noLine`: that side is not needed for the area to hold), and `unset`: the stretches no area holds for, with the seconds of each the current edit plays (`onPicture`) and a second to look at (`look`)." +
       (givesAreas
         ? " `set` gives an area for the frame at `at`; one given again at the same second replaces the one there, and `remove` takes areas out by their `at`. A side given within a percent of a line in the picture is put on that line. The whole picture, [0, 0, 100, 100], is an area like any other, for a recording where all of it may show."
         : " Areas come from a look at one full-size frame at a time, which Scarlet starts itself: where an edit frames part of a picture that has no area yet, it has that frame looked at before it checks the save, so a save can take longer the first time a recording is framed. `ask` has the frames at those source seconds looked at now, for a stretch you are about to frame or an area that is wrong for its footage (a frame is given to the area looked at nearest to it in time); it waits for the answers. A recording whose area is the whole picture, as a camera's is, needs no ask: all of it may show.") +
-      (caps.images && givesAreas ? " With the result come pictures of the first few unset stretches the edit plays, at `look`, with percent lines drawn over them. `pictures` sets how many (default 4, 0 for none)." : "") +
+      (caps.images && givesAreas ? (unsetPictures
+        ? ` With the result come pictures of the first few unset stretches the edit plays, at \`look\`, with percent lines drawn over them. \`pictures\` sets how many (default ${unsetPictures}, 0 for none).`
+        : " `pictures` asks for that many pictures of the first few unset stretches the edit plays, at `look`, with percent lines drawn over them; none come unless asked.") : "") +
       " Every save is checked against these: an edit that frames footage past its area is not saved, and its refusal names each place. timeline_framing keeps its frames inside the area on record when no `within` is given. A recording is read once for its edges; until that is done the result says so and `holds` are empty: call again.",
     {
       mediaId: z.string().describe("Media asset id"),
@@ -1571,7 +1578,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     },
     async ({ mediaId, ...rest }) => {
       const { set, remove, ask } = rest as { set?: Array<{ at: number; area: number[] }>; remove?: number[]; ask?: number[] };
-      const pictures = caps.images && givesAreas ? (rest as { pictures?: number }).pictures ?? 4 : 0;
+      const pictures = caps.images && givesAreas ? (rest as { pictures?: number }).pictures ?? unsetPictures : 0;
       const { project } = await getProject();
       const asset = project.media.find(m => m.id === mediaId);
       if (!asset) throw new Error(`Media ${mediaId} is not in this project. Use project_get for media ids.`);
@@ -1861,17 +1868,39 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     }
     const peaks = wf.peaks.map(p => round3(p));
     const silences = detectSilences(peaks, wf.from, wf.to, { threshold, minDuration: minSilence });
-    return (buckets: number) => {
+    /** The reading at `buckets`, with silences and voice activity listed up to `until` seconds. */
+    const read = (buckets: number, until = Infinity) => {
       const shown = downsample(peaks, buckets);
+      const before = <T extends { start: number }>(list: T[] | undefined) => until < Infinity ? list?.filter(x => x.start < until) : list;
+      // Shown rounded down, so a read from there starts no later than the first one left out.
+      const listedTo = Math.floor(until * 1000) / 1000;
       return { mediaId, from: wf.from, to: wf.to, bucketSeconds: round3((wf.to - wf.from) / Math.max(1, shown.length)),
-        peaksDb: shown.map(dbfs), sparkline: sparkline(peaks, 100), silences, speechActivity: wf.speechActivity, dialogue };
+        peaksDb: shown.map(dbfs), sparkline: sparkline(peaks, 100), silences: before(silences), speechActivity: before(wf.speechActivity), dialogue,
+        ...(until < Infinity && { listedTo, next: `silences and speechActivity are listed up to ${listedTo} s: read from ${listedTo} for the rest.` }) };
+    };
+    /**
+     * The reading drawn within `budget` characters: with fewer buckets, and if that isn't enough, with its silences and
+     * voice activity up to a time, which it names. A long range read whole went past what a harness can show the model.
+     */
+    return (buckets: number, budget = Infinity) => {
+      const size = (n: number, until?: number) => JSON.stringify(read(n, until)).length;
+      for (let n = size(buckets); n > budget && buckets > 10; n = size(buckets)) buckets = Math.max(10, Math.floor(buckets * budget / n * .9));
+      if (size(buckets) <= budget) return read(buckets);
+      const starts = [...new Set([...silences, ...wf.speechActivity ?? []].map(x => x.start))].filter(t => t > wf.from).sort((a, b) => a - b);
+      let fits = 0, over = starts.length;
+      while (over - fits > 1) {
+        const mid = Math.floor((fits + over) / 2);
+        if (size(buckets, starts[mid]) <= budget) fits = mid;
+        else over = mid;
+      }
+      return read(buckets, starts[fits] ?? wf.from);
     };
   }
 
   tool(
     "waveform_get",
     "Audio levels for a range of a media asset in source seconds; missing waveforms are prepared automatically. Returns peak level per bucket in dBFS (evenly spaced over from..to), a sparkline, and silences: runs below thresholdDb lasting at least minSilence seconds. With suggestCuts (a window up to 60 s) it also returns the removable interiors of pauses between timed words and the air left either side. " +
-      "To read the same range on several recordings, such as two microphones, list them as mediaIds instead of mediaId: the result's `reads` has one reading per recording in that order, and one that couldn't be read carries its own `error` (or `preparing`). A list too long to return whole comes back with fewer buckets on each recording (bucketSeconds).",
+      "To read the same range on several recordings, such as two microphones, list them as mediaIds instead of mediaId: the result's `reads` has one reading per recording in that order, and one that couldn't be read carries its own `error` (or `preparing`). A reading too long for one result comes back with fewer buckets (bucketSeconds), and if that isn't enough with silences and speechActivity up to `listedTo` seconds: read on from there.",
     {
       mediaId: z.string().optional(),
       mediaIds: RecordingList.optional().describe("Several recordings to read over the same range in one call, instead of mediaId"),
@@ -1889,15 +1918,11 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
       // all failed and were all sent again (2026-11-16).
       const points = Math.min(askedPoints, WAVEFORM_MAX_POINTS);
       const capped = askedPoints > points ? { pointsCapped: { asked: askedPoints, returned: points } } : {};
-      if (!several) return json({ ...capped, ...(await readWaveform(mediaId!, from, to, { points, ...opts }))(points) });
+      const budget = (caps.resultChars ?? DEFAULT_RESULT_CHARS) - 200;
+      if (!several) return json({ ...capped, ...(await readWaveform(mediaId!, from, to, { points, ...opts }))(points, budget) });
       const reads = await eachRecording(several, id => readWaveform(id, from, to, { points, ...opts }));
-      const budget = caps.resultChars ?? DEFAULT_RESULT_CHARS;
-      // The buckets are what grows with a list: fewer of them on each recording until the whole list fits.
-      for (let buckets = points; ; ) {
-        const body = JSON.stringify({ ...capped, reads: reads.map(r => "read" in r ? r.read(buckets) : r) });
-        if (body.length <= budget || buckets <= 10) return text(body);
-        buckets = Math.max(10, Math.floor(buckets * budget / body.length * .9));
-      }
+      // Each recording has its share of the result, drawn with fewer buckets first.
+      return json({ ...capped, reads: reads.map(r => "read" in r ? r.read(points, Math.floor(budget / several.length)) : r) });
     },
   );
 
@@ -2327,7 +2352,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     }) };
   }
   tool("dialogue_check_repeats",
-    "Check what the audible dialogue plays across the current timeline, including kept takes and joins. Give its version. A check that keeps nothing reads the edit as it is now, and when that is not the version you gave, `readInsteadOf` names yours: use the returned `version` for removeRepeat. A check that keeps repeats needs the version they were heard on. The independent speech reading returns repeated phrases, both occurrences in timeline seconds, and their surrounding words. Use dialogue_apply_cuts with removeRepeat to remove either measured occurrence listed under removable. The save checks playback again. Keep an intentional repeat by passing its measured id and a short editorial reason: it plays on, and the editor is not shown it. To leave one to the editor, stage the occurrence with removeRepeat and decision review, which settles it here. Kept decisions belong to this pass. offset pages through the outstanding pairs and the joins in \`fragments\`, 25 at a time, and nextOffset is set while either has more. A pair marked \`restart\` is a phrase the transcript plays again after other words, within ${RESTART_WITHIN_SECONDS} s: \`first\` is the whole first attempt, the phrase and what followed it (\`between\`), up to where the phrase starts again, so removing \`first\` takes out the abandoned attempt and keeps the one that replaced it. A restart, a retake left beside its replacement and a deliberate parallel all read this way: which it is takes the sentence, and that call is yours. \`silences\` lists each stretch of silencesFrom seconds or more (${SILENCE_LEFT_SECONDS} s when omitted; how long a silence may play is the skill's pace) the edit still plays without a word, in timeline seconds, with the words either side and where it starts in the recording. Cut or shorten one as any pause, or keep it by its id with what the viewer sees or hears through it. \`fragments\` lists each join that took words out of a sentence and that dialogue_apply_cuts did not place: one made by timeline_propose, as a ripple or a saved timeline, or by timeline_first_cut. \`before\` and \`after\` are the words the edit plays either side of it at \`at\` (timeline seconds), \`removedStart\` and \`removedEnd\` the first and last of the \`removed\` words it took out between \`out\` and \`in\` in the recording, and \`split\` the side whose sentence the transcript says was divided (out = the words before began one, in = the words after finish one). Read each as the viewer hears it. A join that reads as a whole thought is kept by its id, with the sentence as it now reads. One that leaves a stray word, a sentence without its end, or a clause without the words it depends on is repaired: remove the leftover words (mediaId with fromWord/toWord, counted from \`lastWord\` or \`firstWord\`, the transcript indices of the last word played before the join and the first after it), or put back the words the sentence needs. Restarts, silences and these joins count in \`remaining\` with the repeats. The same reading hears each played join, letter by letter from the sound rather than the transcript: `joins` lists one whose edge cuts through a kept word (issue clipped: heard is what plays, expected the transcript's word) or plays a sound outside the kept words (issue fragment: a leftover of a removed take, a sigh, a breath, with keptWord, the first or last kept word, which plays whole, and keptWordAt where it starts or ends), with the side (out = before the join, in = after) and where it starts in the recording. A clipped word needs the edge moved out to take it in whole before you finish: the editor hears it. A fragment is moved past, toward keptWordAt, or kept, as the skill says of breaths and sounds at a join; a leftover of a removed take always goes. `unheardJoins` counts, per recording, the joins with a side in a language this reading can't hear letter by letter, between from and to in timeline seconds, so it checked nothing there: measure them with timeline_join_audit from/to. \`sync\` checks recordings of the same event that play together (a camera over a screen capture, a separate mic): \`outOfLine\` lists stretches in timeline seconds placed at another offset than the rest, with differsBy in seconds, and \`heard\` compares their sound at a few spots spread through the edit (late = seconds the secondary sounds after the reference; a frame or more is visible on lips and clicks). A stretch out of line on purpose, such as a cutaway to another moment of the screen, stays; put any other back in line before you finish. When a stretch stays out of line or the sound is a frame or more off, tell the editor in your closing reply, with \`summary\` and why.",
+    "Check what the audible dialogue plays across the current timeline, including kept takes and joins. Give its version. A check that keeps nothing reads the edit as it is now, and when that is not the version you gave, `readInsteadOf` names yours: use the returned `version` for removeRepeat. A check that keeps repeats needs the version they were heard on. The independent speech reading returns repeated phrases, both occurrences in timeline seconds, and their surrounding words. Use dialogue_apply_cuts with removeRepeat to remove either measured occurrence listed under removable. The save checks playback again. Keep an intentional repeat by passing its measured id and a short editorial reason: it plays on, and the editor is not shown it. To leave one to the editor, stage the occurrence with removeRepeat and decision review, which settles it here. Kept decisions belong to this pass. offset pages through the outstanding pairs and the joins in \`fragments\`, 25 at a time, and nextOffset is set while either has more. A pair marked \`restart\` is a phrase the transcript plays again after other words, within ${RESTART_WITHIN_SECONDS} s: \`first\` is the whole first attempt, the phrase and what followed it (\`between\`), up to where the phrase starts again, so removing \`first\` takes out the abandoned attempt and keeps the one that replaced it. A restart, a retake left beside its replacement and a deliberate parallel all read this way: which it is takes the sentence, and that call is yours. \`silences\` lists each stretch of silencesFrom seconds or more (${SILENCE_LEFT_SECONDS} s when omitted; how long a silence may play is the skill's pace) the edit still plays without a word, in timeline seconds, with the words either side and where it starts in the recording. Cut or shorten one as any pause, or keep it by its id with what the viewer sees or hears through it. \`fragments\` lists each join that took words out of a sentence and that dialogue_apply_cuts did not place: one made by timeline_propose, as a ripple or a saved timeline, or by timeline_first_cut. \`before\` and \`after\` are the words the edit plays either side of it at \`at\` (timeline seconds), \`removedStart\` and \`removedEnd\` the first and last of the \`removed\` words it took out between \`out\` and \`in\` in the recording, and \`split\` the side whose sentence the transcript says was divided (out = the words before began one, in = the words after finish one). Keep one by its id, with the sentence as it now reads, or repair it: remove the leftover words (mediaId with fromWord/toWord, counted from \`lastWord\` or \`firstWord\`, the transcript indices of the last word played before the join and the first after it), or put back the words the sentence needs. Restarts, silences and these joins count in \`remaining\` with the repeats. The same reading hears each played join, letter by letter from the sound rather than the transcript: `joins` lists one whose edge cuts through a kept word (issue clipped: heard is what plays, expected the transcript's word) or plays a sound outside the kept words (issue fragment: a leftover of a removed take, a sigh, a breath, with keptWord, the first or last kept word, which plays whole, and keptWordAt where it starts or ends), with the side (out = before the join, in = after) and where it starts in the recording. Moving the edge out takes a clipped word in whole, and moving it past a fragment, toward keptWordAt, takes the fragment out. `unheardJoins` counts, per recording, the joins with a side in a language this reading can't hear letter by letter, between from and to in timeline seconds, so it checked nothing there: measure them with timeline_join_audit from/to. \`sync\` checks recordings of the same event that play together (a camera over a screen capture, a separate mic): \`outOfLine\` lists stretches in timeline seconds placed at another offset than the rest, with differsBy in seconds, and \`heard\` compares their sound at a few spots spread through the edit (late = seconds the secondary sounds after the reference; a frame or more is visible on lips and clicks). \`outOfLine\` includes a stretch placed out of line on purpose, such as a cutaway to another moment of the screen. \`summary\` says in a line what was checked and how it came out.",
     { version: z.string(), keep: z.array(z.object({ id: z.string(), reason: z.string().trim().min(1).max(300) })).max(100).optional(), offset: z.number().int().nonnegative().optional(),
       silencesFrom: z.number().finite().min(0.3).max(30).optional().describe(`List in silences, and count in remaining, each wordless stretch at least this many seconds long. From the pace the skill asks for; ${SILENCE_LEFT_SECONDS} s when omitted.`) },
     async ({ version, keep, offset, silencesFrom }) => json(await checkRepeats(version, keep, offset, silencesFrom)));
@@ -3118,17 +3143,33 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   tool(
     "timeline_get",
-    (authoring ? "Read the timeline version approved for the requested skill." : "Read a timeline version (default head).") + " summary: per track, each clip with id, label, timeline in–out (timecode), source range, speed, volume and fades, plus markers. full: the complete Timeline JSON with every clip property (transforms, effects, caption styles). Clip ids are what ops reference. A media clip lasts (sourceOut - sourceIn) / speed on the timeline.",
-    { version: z.string().optional().describe(authoring ? "Defaults to the approved version" : "Version id; default head"), format: z.enum(["summary", "full"]).default("summary") },
-    async ({ version, format }) => {
+    (authoring ? "Read the timeline version approved for the requested skill." : "Read a timeline version (default head).") + " summary: per track, each clip with id, label, timeline in–out (timecode), source range, speed, volume and fades, plus markers. A summary too long for one result lists the clips that start up to a time, and its last line says the from to read on with. full: the complete Timeline JSON with every clip property (transforms, effects, caption styles). Clip ids are what ops reference. A media clip lasts (sourceOut - sourceIn) / speed on the timeline.",
+    { version: z.string().optional().describe(authoring ? "Defaults to the approved version" : "Version id; default head"), format: z.enum(["summary", "full"]).default("summary"),
+      from: z.number().min(0).optional().describe("Summary: list only the clips and markers that start at this timeline second or later") },
+    async ({ version, format, from = 0 }) => {
       if (authoring) {
         if (!authoring.changeId || (version && version !== authoring.version)) throw new Error("This skill reads only the approved timeline version.");
         await readApprovedExample(authoring.changeId);
       }
       const tl = await getTimeline(authoring?.version ?? version);
       if (format === "full") return json(tl);
-      const project = await getHeader();
-      return text(summarizeTimeline(tl, project.project.settings.fps));
+      const fps = (await getHeader()).project.settings.fps;
+      const budget = caps.resultChars ?? DEFAULT_RESULT_CHARS;
+      const summary = (until: number) => summarizeTimeline(tl, fps, undefined, from || until < Infinity ? { from, until } : undefined);
+      const whole = summary(Infinity);
+      if (whole.length <= budget) return text(whole);
+      // A page ends before a clip's start, so every clip starting on it is listed and the next page begins there.
+      const starts = [...new Set([...tl.tracks.flatMap(t => t.clips.map(c => c.timelineIn)), ...tl.markers.map(m => m.time)].filter(t => t >= from))].sort((a, b) => a - b);
+      const total = tl.tracks.reduce((n, t) => n + t.clips.length, 0);
+      const page = (k: number) => k >= starts.length ? whole
+        : `${summary(starts[k]!)}\nListed the clips and markers that start from ${from} s to before ${starts[k]} s, of ${total} clips. Continue with from=${starts[k]}.`;
+      let fits = 1, over = starts.length + 1;
+      while (over - fits > 1) {
+        const mid = Math.floor((fits + over) / 2);
+        if (page(mid).length <= budget) fits = mid;
+        else over = mid;
+      }
+      return text(page(fits));
     },
   );
 
@@ -3813,9 +3854,11 @@ ${OPS_DOC}`,
 
   tool(
     "change_get",
-    authoring ? "Read the approved change and the diff of the edits the editor kept." : "Get a change by id: description, state (proposed|rendering|ready|approved|rejected|revising|failed), author, from/to versions, affected ranges, review notes on its cuts, and the diff in plain lines. Use when revising a change the editor sent back; timeline_join_audit measures its joins.",
-    { changeId: z.string() },
-    async ({ changeId }) => {
+    (authoring ? "Read the approved change and the diff of the edits the editor kept." : "Get a change by id: description, state (proposed|rendering|ready|approved|rejected|revising|failed), author, from/to versions, affected ranges, review notes on its cuts, and the diff in plain lines. Use when revising a change the editor sent back; timeline_join_audit measures its joins.") +
+      " A change too long for one result gives the same run of items of each of its lists (cuts, edits, ops, diff lines): `listed` names each list it cut short as [first, end, total], and nextOffset reads on.",
+    { changeId: z.string(), offset: z.number().int().nonnegative().default(0).describe("First item of each list, from a nextOffset") },
+    async ({ changeId, offset }) => {
+      const budget = caps.resultChars ?? DEFAULT_RESULT_CHARS;
       if (authoring) {
         const change = await readApprovedExample(changeId);
         const approved = change.appliedVersion ?? change.toVersion;
@@ -3823,35 +3866,36 @@ ${OPS_DOC}`,
         // A partial acceptance can leave the proposal's title and its diff describing edits the editor skipped.
         const partial = change.approvedSpots !== undefined || !!change.restoredCuts?.length;
         const { description: diff } = await client.diff(ctx.projectId, before, approved, "id");
-        return json({ change: { id: change.id, description: partial ? undefined : change.description, state: change.state,
-          appliedVersion: approved, approvedSpots: change.approvedSpots }, diff });
+        return json(pageOfLists({ change: { id: change.id, description: partial ? undefined : change.description, state: change.state,
+          appliedVersion: approved, approvedSpots: change.approvedSpots }, diff }, offset, budget));
       }
       const { change, diff } = await client.change(changeId);
-      return json({ change, diff: describeDiff(diff, undefined, clipById) });
+      return json(pageOfLists({ change, diff: describeDiff(diff, undefined, clipById) }, offset, budget));
     },
   );
 
   tool(
     "change_list",
-    "List changes of the project, optionally filtered by state (proposed, rendering, ready, approved, rejected, revising, failed).",
-    { state: z.string().optional() },
-    async ({ state }) => {
+    "List changes of the project, optionally filtered by state (proposed, rendering, ready, approved, rejected, revising, failed). A list too long for one result ends with the offset to read on from.",
+    { state: z.string().optional(), offset: z.number().int().nonnegative().default(0).describe("First change to list, from the line a long list ends with") },
+    async ({ state, offset }) => {
       const { changes } = await client.changes(ctx.projectId, state);
       const lines = changes.map((c: Change) => `${c.id} [${c.state}${c.intent ? ` ${c.intent}` : ""}] ${c.fromVersion}→${c.toVersion} ${c.author.name}: ${c.description}`);
-      return text(`${changes.length} change(s)${state ? ` in state ${state}` : ""}:\n${lines.join("\n")}`);
+      const head = `${changes.length} change(s)${state ? ` in state ${state}` : ""}:`;
+      return text(`${head}\n${pageOfLines(lines, offset, (caps.resultChars ?? DEFAULT_RESULT_CHARS) - head.length - 100, "changes")}`);
     },
   );
 
   tool(
     "notes_list",
-    "List review notes (editor feedback pinned to a timeline time and clip ids). Filter by state: open, in_progress, resolved, dismissed. Each note has time/end (timeline seconds), clipIds, text, author, assignedTo and optionally the changeId it is about.",
-    { state: z.string().optional().describe("Default: all states") },
-    async ({ state }) => {
+    "List review notes (editor feedback pinned to a timeline time and clip ids). Filter by state: open, in_progress, resolved, dismissed. Each note has time/end (timeline seconds), clipIds, text, author, assignedTo and optionally the changeId it is about. A list too long for one result ends with the offset to read on from.",
+    { state: z.string().optional().describe("Default: all states"), offset: z.number().int().nonnegative().default(0).describe("First note to list, from the line a long list ends with") },
+    async ({ state, offset }) => {
       const { notes } = await client.notes(ctx.projectId, state);
       const lines = notes.map(
         (n) => `${n.id} [${n.state}] @${n.time.toFixed(2)}${n.end !== undefined ? `–${n.end.toFixed(2)}` : ""} s on ${n.version}${n.clipIds.length ? ` clips ${n.clipIds.join(",")}` : ""}${n.changeId ? ` about ${n.changeId}` : ""}${n.assignedTo ? ` for ${n.assignedTo}` : ""} by ${n.author.name}: ${n.text}${(n.replies ?? []).map(r => ` | reply from ${r.author.name}: ${r.text}`).join("")}`,
       );
-      return text(`${notes.length} note(s):\n${lines.join("\n")}`);
+      return text(`${notes.length} note(s):\n${pageOfLines(lines, offset, (caps.resultChars ?? DEFAULT_RESULT_CHARS) - 200, "notes")}`);
     },
   );
 
@@ -4074,7 +4118,8 @@ ${OPS_DOC}`,
     const parameters = toolParameters.get(name);
     if (parameters && !(await parameters.safeParseAsync(args ?? {})).success) await reportResult(name, "failed", began, 0, result);
   });
-  if (caps.briefTools) listToolsBriefly(server);
+  if (caps.briefTools) listToolsBriefly(server, { resultChars: caps.resultChars ?? DEFAULT_RESULT_CHARS,
+    report: (name, began, result) => reportResult(name, result.isError ? "failed" : "ok", began, 0, result) });
   return server;
 }
 

@@ -5,8 +5,8 @@
  * and includes the applicable skills verbatim.
  */
 import { CHECK_IN_SHARE, taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, skillExtends, type AgentCapabilities, type CheckIn, type PictureMark, type Skill, type Task } from "@scarlet/shared";
-import type { Change, Note, Project, Timeline, TimelineDiff } from "@scarlet/timeline";
-import { clipById, describeDiff, formatTimecode } from "@scarlet/timeline";
+import type { Change, Note, Project, Timeline, TimelineDiff, TimeRange } from "@scarlet/timeline";
+import { clipById, describeDiff, formatTimecode, mergeRanges } from "@scarlet/timeline";
 import { summarizeProject } from "./analysis.js";
 
 /** What a learning check is shown about the request it reads. */
@@ -86,22 +86,21 @@ The editor sets the brief. You decide what context to inspect, which tools to us
 ## Project context
 
 - The project summary, task, selected position or range, and supplied feedback are below. \`project_get\` returns current state and the recorded edit context. \`timeline_get\` shows clip placement, tracks, transforms, effects, markers and version. \`skills_list\` provides the enabled skill library.
-- \`transcript_get\`, \`transcript_search\`, \`dialogue_scan\`, \`media_profile\`, waveform data, and the available picture and audio inspection tools give different views of the footage. Source times refer to the recording. Timeline times refer to a version of the edit. \`timeline_at\` maps between them. Requesting missing transcript or waveform data starts or joins preparation. Transcript word times are approximate. Waveform silences, dialogue scan pauses and \`dialogue_check_join\` measure the recorded audio.
+- \`transcript_get\`, \`transcript_search\`, \`dialogue_scan\`, \`media_profile\`, waveform data, and the available picture and audio inspection tools give different views of the footage. Source times refer to the recording. Timeline times refer to a version of the edit. \`timeline_at\` maps between them. Requesting missing transcript or waveform data starts or joins preparation. Waveform silences, dialogue scan pauses and \`dialogue_check_join\` measure the recorded audio.
 - \`timeline_transcript\`, \`timeline_join_audit\` and \`timeline_diff\` show what a version plays, measure how each join sounds and compare versions, so you can check an edit from measurements.
 - \`notes_list\`, \`change_list\`, and \`change_get\` give feedback, change states and affected versions. \`change_review_cut\` compares a saved edit.
 
 ## Editing and communicating
 
-- \`timeline_propose\` accepts typed operations or a replacement timeline. Specialized tools can assemble chosen source ranges, submit cut/keep/review decisions, crossfade specified joins, and build editable captions. Preserve the editor’s selected scope, protected material, and intended sync.
+- Specialized tools can assemble chosen source ranges, submit cut/keep/review decisions, crossfade specified joins, and build editable captions. Preserve the editor’s selected scope, protected material, and intended sync.
 - Save as you go. The editor reviews saved parts while you keep working, and a run stops at its time limit with only saved edits kept.
-- Use requested intent for authorized edits, suggestion for optional or preview-only changes, and alternative for competing options. Check the returned state when reporting what applied. When Scarlet adjusts a submitted edit, such as moving an edge onto measured silence, the result lists each adjustment with its evidence. An edit can name its individual ranges in \`timelineEdits\`. A revision can link to its prior change and spot with \`replaces\` and to feedback with \`noteIds\`.
-- \`task_log\` can show the current activity, a finding, or both. Attach a saved change ID and spot to the exact phrase the editor can select to see the change. \`task_question\` hands a decision to the editor and pauses the task; the answer comes back as your next message.
-- Scarlet renders project media. \`render_request\` supports a short range or an explicitly requested full delivery.
+- Use requested intent for authorized edits, suggestion for optional or preview-only changes, and alternative for competing options. Check the returned state when reporting what applied. When Scarlet adjusts a submitted edit, such as moving an edge onto measured silence, the result lists each adjustment with its evidence. An edit can name its individual ranges in \`timelineEdits\`. A revision can link to its prior change and spot with \`replaces\`.
+- \`task_log\` can show the current activity, a finding, or both. Attach a saved change ID and spot to the exact phrase the editor can select to see the change.
 - A motion graphic is an HTML/CSS page Scarlet draws into a video with alpha (\`graphic_render\`). It goes over the picture on a track of its own with \`timeline_propose\`, as an edit like any other. A project has one style guide, saved with \`style_guide_save\` when the editor gives you one.
 
 ## Writing for the editor
 
-- Before your first tool call, say in one sentence what the request will come to when you are done, such as “I’ll take the retakes, false starts and dead air out of the interview and bring you any cut I’m unsure of.” Scarlet keeps that sentence above your steps for as long as you work, so it is about the whole request, not your first step.
+- Before your first tool call, say in one sentence what the request will come to when you are done, such as “I’ll take the retakes, false starts and dead air out of the interview and bring you any cut I’m unsure of.” Scarlet shows that sentence under the editor’s request for as long as you work, so it is about the whole request, not your first step.
 - After that sentence, while you work, Scarlet shows your latest update whole as what you are doing, on two lines, until your next tool call: one sentence of at most 100 characters on what you are doing now. A longer update is cut off there.
 - Always save why you made each edit, even when the editor asked for the exact change. Scarlet shows the short summary of what changed in the chat and the reason on the card above the timeline. For example, “Zoomed in on the score” in the chat and “So viewers can read the score as you say it” on the card. Ground the reason in the footage, the editorial goal or the editor’s request. For an exact request, a short reference to that request is enough. Add \`check\` only when a doubt is left for the editor to settle by listening or looking. Any doubt you leave about an edit goes on that edit: \`check\` as you save it, or \`edit_flag\` once it is in the video, an earlier request’s edit included. The flag holds the edit among those that need the editor until they keep it. A doubt about something you leave in, such as a restart that may not be meant, reaches the editor the same way, as an edit they can approve or skip: in a dialogue pass, a cut staged for review.
 - End with one or two short, plain sentences that sum up at the highest level what you did to the video, as you would tell the editor in person, such as “Tightened the talk to 10:29 and punched in on each demo.” Scarlet shows them first under the request, on two lines of about 120 characters, and folds the rest away until the editor clicks. Nothing you want the editor to look at, listen to or decide goes in them: they reach what needs them from For you, which lists edits only, so each doubt goes on its edit (\`check\` or \`edit_flag\`) and a decision you need goes to \`task_question\`. No times, edit numbers or lists. A request you finish without an edit says why in those sentences.
@@ -141,11 +140,6 @@ End with one or two plain sentences telling the editor what you changed${learnin
 }
 
 /**
- * The prompt for reading one request for a standing rule. The run sees the editor's words, what they were about, what
- * they asked before, their skills and the rules Scarlet already has, and decides one thing. It is shown no footage:
- * the rule is in what the editor said.
- */
-/**
  * One frame, one question. A pass asked to find the window while it framed a whole video answered in bulk from small
  * pictures and took a browser's edge for the app's; asked this about one full-size frame, the same model boxed the
  * window to a fifth of a percent (2026-11-16).
@@ -153,13 +147,18 @@ End with one or two plain sentences telling the editor what you changed${learnin
 function buildAreaCheckPrompt(check: { mediaId: string; at: number }, prefix: string): string {
   return [
     "# You are looking at one frame of a screen recording for Scarlet, a video editor",
-    `Look at the frame of recording \`${check.mediaId}\` at ${check.at} s: call \`${prefix}media_frame\` with \`t\` ${check.at} and \`width\` 1920. Call it yourself and look at the picture it returns.`,
+    `Look yourself at the frame of recording \`${check.mediaId}\` at ${check.at} s, 1920 pixels wide.`,
     "The recording was made for a video. The presenter is showing viewers one application window. Other things are on screen too: the desktop, a taskbar or dock, a recording app, a video call, other windows behind it, and bars or controls that float over it.",
     "Decide the box that holds only the window being presented, so that nothing else shows when the video is cropped to it. For a web browser, that is the page, without its tabs and toolbars. Where the window runs off the picture, the box ends at the picture's edge. When the whole picture is what viewers should see (a camera, a full-screen app), the box is the whole picture.",
-    `Save it with \`${prefix}screen_area\`: one area in \`set\`, at ${check.at}, for \`${check.mediaId}\`, as [left, top, right, bottom] in percent of the picture to one decimal place, with \`pictures\` 0. Then stop: no other frames, no edits, no reply beyond a few words naming the window.`,
+    `Save that box with \`${prefix}screen_area\` as the one area of \`${check.mediaId}\` at ${check.at} s. Then stop: no other frames, no edits, no reply beyond a few words naming the window.`,
   ].join("\n\n");
 }
 
+/**
+ * The prompt for reading one request for a standing rule. The run sees the editor's words, what they were about, what
+ * they asked before, their skills and the rules Scarlet already has, and decides one thing. It is shown no footage:
+ * the rule is in what the editor said.
+ */
 function buildLearningCheckPrompt(check: LearningCheckContext): string {
   const list = (lines: string[]) => lines.map(l => `- ${l}`).join("\n");
   return [
@@ -187,7 +186,7 @@ End with one short line: the rule you offered, or “No rule.”`,
 }
 
 /** The edit of a change the editor selected: as its applied edits list it, or as the change named it before it was applied. */
-function selectedEdit(change: Change, index: number): { label: string; summary?: string; reason?: string; check?: string } | undefined {
+function selectedEdit(change: Change, index: number): { label: string; range: TimeRange; beforeCut?: { version: string; removed: TimeRange }; summary?: string; reason?: string; check?: string } | undefined {
   const edit = changeEdits(change).find(edit => edit.spot === index) ?? namedTimelineEdits(change)?.[index];
   // A later request may have raised a doubt about it once it was in the video: that is the check the editor saw last.
   const flag = change.flags?.findLast(f => f.spot === index);
@@ -195,14 +194,23 @@ function selectedEdit(change: Change, index: number): { label: string; summary?:
 }
 
 /**
- * Said only to a run launched with its harness's to-do tool (`capabilities.plan`), which the engine does when the chat
- * will show the plan. Given the tool and no word about it, the agent made no plan in six real requests, two of them in
- * several parts (2026-11-08). With this, it listed its steps before its first call on the project in each of eleven,
- * and kept the list as written in nine. It asks for the agent's own steps and sets none.
+ * Said only to a run launched with its harness's to-do tool (`capabilities.plan`), which the engine does only where
+ * `SCARLET_AGENT_CAPS` turns plans on: the chat hasn't shown plans since 2026-11-10. Given the tool and no word about
+ * it, the agent made no plan in six real requests, two of them in several parts (2026-11-08). With this, it listed its
+ * steps before its first call on the project in each of eleven, and kept the list as written in nine. It asks for the
+ * agent's own steps and sets none.
  */
 export const PLAN_STEPS = `# Your steps
 
-Right after the sentence on what the request will come to, and before your first Scarlet tool call, lay out the steps you will take with your to-do tool, one short line each. Mark each step as you start it and as you finish it. Scarlet shows the editor that list while you work, so keep it as you first wrote it unless the work truly changes.`;
+Right after the sentence on what the request will come to, and before your first Scarlet tool call, lay out the steps you will take with your to-do tool, one short line each. Mark each step as you start it and as you finish it. Scarlet records that list and gives it back to you if the run has to start again, so keep it as you first wrote it unless the work truly changes.`;
+
+/** A staged cut of a pass, numbered as its review numbers them, on the pass's fromVersion: as assessed, or as staged. */
+function stagedCut(change: Change, index: number): TimeRange | undefined {
+  const assessed = change.cutAssessments?.find(a => a.index === index);
+  return assessed ? { start: assessed.start, end: assessed.end } : mergeRanges((change.cutReasons ?? []).map(({ start, end }) => ({ start, end })))[index];
+}
+
+const span = (r: TimeRange) => `${r.start.toFixed(2)}–${r.end.toFixed(2)} s`;
 
 /** How many clips a prompt lists one by one before it lists only those near the request's position. */
 const PROMPT_CLIPS = 40;
@@ -244,6 +252,11 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   if (caps.toolPrefix) {
     parts.push(`This harness prefixes Scarlet’s tool names with \`${caps.toolPrefix}\`. For example, call \`${caps.toolPrefix}project_get\` when a skill names \`project_get\`.`);
   }
+
+  // The one edit a request is about, when it names one of the change at hand.
+  const asked = ctx.task?.context;
+  const chosen = asked?.changeId && asked.editIndex !== undefined && ctx.change?.change.id === asked.changeId
+    ? selectedEdit(ctx.change.change, asked.editIndex) : undefined;
 
   // Project summary. A long timeline lists only the clips near where the request points, if it points anywhere.
   const summary = typeof ctx.project === "string" ? ctx.project : summarizeProject(ctx.project.project, ctx.project.timeline, { most: PROMPT_CLIPS, near: requestRange(ctx.task) });
@@ -307,23 +320,24 @@ export function buildSystemPrompt(ctx: PromptContext): string {
       ctxLines.push(`- Where the editor stopped the video as they wrote this: ${stopped.mediaId ? "source" : "timeline"} ${stopped.time.toFixed(2)} s (${formatTimecode(stopped.time, fps)})${stopped.version ? ` on version ${stopped.version}` : ""}`);
     }
     if (c.clipIds?.length) ctxLines.push(`- Clip ids under the playhead: ${c.clipIds.join(", ")}`);
-    if (c.noteIds?.length) ctxLines.push(`- Note ids to address: ${c.noteIds.join(", ")} (pass them as noteIds when proposing)`);
+    // The notes listed below carry their ids. One that isn't there still says which note the request answers.
+    const unlisted = c.noteIds?.filter(id => !ctx.notes?.some(n => n.id === id)) ?? [];
+    if (unlisted.length) ctxLines.push(`- Note ids to address: ${unlisted.join(", ")}`);
     if (c.changeId) ctxLines.push(`- Change being revised: ${c.changeId}`);
     if (c.changeId && c.editIndex !== undefined) {
       // The editor sees what changed in the chat and why on the card, along with any review check.
-      const about = ctx.change?.change.id === c.changeId ? selectedEdit(ctx.change.change, c.editIndex) : undefined;
       const listed = c.editNumber !== undefined ? ` (edit ${c.editNumber} in the editor's list)` : "";
-      ctxLines.push(`- Selected edit index: ${c.editIndex}${listed}${about ? `, "${about.label.trim()}"` : ""}`);
-      if (about?.summary?.trim()) ctxLines.push(`- What you told the editor this edit did: "${about.summary.trim()}"`);
-      if (about?.reason?.trim()) ctxLines.push(`- Why you made this edit: "${about.reason.trim()}"`);
-      if (about?.check?.trim()) ctxLines.push(`- What you asked the editor to check on this edit: "${about.check.trim()}"`);
+      ctxLines.push(`- Selected edit index: ${c.editIndex}${listed}${chosen ? `, "${chosen.label.trim()}"` : ""}`);
+      if (chosen?.summary?.trim()) ctxLines.push(`- What you told the editor this edit did: "${chosen.summary.trim()}"`);
+      if (chosen?.reason?.trim()) ctxLines.push(`- Why you made this edit: "${chosen.reason.trim()}"`);
+      if (chosen?.check?.trim()) ctxLines.push(`- What you asked the editor to check on this edit: "${chosen.check.trim()}"`);
     }
     // The editor looked at a moment of the list, where edits that overlap play as one change, and wrote about all of it.
     if (c.momentEdits?.length) {
       const others = c.momentEdits.map(e => `edit index ${e.spot} of ${e.changeId}${e.label?.trim() ? ` ("${e.label.trim()}")` : ""}`).join("; ");
       ctxLines.push(`- The editor's words are about the whole moment this edit is in, which plays as one change and also has: ${others}. Which of them the words mean is for you to work out.`);
     }
-    if (c.changeId && c.cutIndex !== undefined) ctxLines.push(`- Staged cut being revised: index ${c.cutIndex} of ${c.changeId}. \`dialogue_revise_cut\` saves its new range.`);
+    if (c.changeId && c.cutIndex !== undefined) ctxLines.push(`- Staged cut being revised: index ${c.cutIndex} of ${c.changeId}.`);
     if (c.changeId && c.cutIndex !== undefined && ctx.replacedPass) ctxLines.push(`- The request names this cut in ${ctx.replacedPass}, the pass as the editor saw it. A revision or a later part of the pass replaced that pass since with ${c.changeId}, where the cut is index ${c.cutIndex} and may have moved.`);
     if (c.reviewAllCuts) ctxLines.push("- The editor requested individual review of every cut.");
     // Make shorts: which short this is, what it was made from and what the editor chose in the form.
@@ -333,7 +347,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
       ctxLines.push(`- This project is short ${short.index} of ${short.count} the editor made from “${short.sourceName}” (project ${short.sourceProjectId}) with Make shorts. It started as a copy of that video’s finished edit (its version ${short.sourceVersion}), with the same footage, transcripts and timeline times${settings ? `, on a ${settings.width}×${settings.height} (${short.aspect}) canvas` : ""}. That video isn’t changed.`);
       ctxLines.push(`- The editor asked for shorts under ${short.maxSeconds} s each, ${short.captions ? "with captions" : "without captions"}.`);
       if (short.moment) ctxLines.push(`- This short’s moment, chosen by the first short’s run: ${short.moment.start.toFixed(2)}–${short.moment.end.toFixed(2)} s on the copied timeline (${formatTimecode(short.moment.start, fps)}–${formatTimecode(short.moment.end, fps)}), “${short.moment.title}”.`);
-      else if (short.index === 1) ctxLines.push(`- You choose the moment${short.count === 1 ? "" : "s for all " + short.count + " shorts"} from the whole edit, and save ${short.count === 1 ? "it" : "them"} with \`shorts_plan\` before you cut. This project takes the first.`);
+      else if (short.index === 1) ctxLines.push(`- You choose the moment${short.count === 1 ? "" : "s for all " + short.count + " shorts"} from the whole edit. This project takes the first.`);
     }
     for (const file of ctx.attachments ?? []) {
       ctxLines.push(`- File the editor attached: "${file.name}" (${fileKind(file.mime, file.name)}, ${fileSize(file.size)}), attachment ${file.id}, at ${file.path}`);
@@ -377,16 +391,19 @@ export function buildSystemPrompt(ctx: PromptContext): string {
       `Description: ${change.description}`,
       ...(change.reason?.trim() && ctx.task?.context?.editIndex === undefined ? [`Reason: ${change.reason.trim()}`] : []),
       `From version ${change.fromVersion} to ${change.toVersion}`,
-      `Affected ranges: ${change.ranges.map((r) => `${r.start.toFixed(2)}–${r.end.toFixed(2)} s`).join(", ") || "none"}`,
     ];
-    // A request about one staged cut has that cut's range above: the whole pass's diff is not what it is about.
-    if (desc.length && ctx.task?.context?.cutIndex === undefined) lines.push("Diff:", ...desc.map((d) => `- ${d}`));
-    lines.push(
-      "",
-      ctx.task?.context?.cutIndex !== undefined
-        ? "The feedback is about one staged cut of this pending pass."
-        : "Revise it by proposing a NEW change against the current head that addresses the feedback (the original stays in history). Reference the note ids.",
-    );
+    // A request about one staged cut or one edit is told where that one is. The whole change's ranges and diff, a
+    // pass's hundred cuts, are not what it is about.
+    if (asked?.cutIndex !== undefined) {
+      const cut = stagedCut(change, asked.cutIndex);
+      if (cut) lines.push(`Range of this cut: ${span(cut)} on version ${change.fromVersion}`);
+    } else if (asked?.editIndex !== undefined) {
+      if (chosen) lines.push(`Range of this edit: ${span(chosen.range)}${chosen.beforeCut ? `, removing ${span(chosen.beforeCut.removed)} of version ${chosen.beforeCut.version}` : ""}`);
+    } else {
+      lines.push(`Affected ranges: ${change.ranges.map(span).join(", ") || "none"}`);
+      if (desc.length) lines.push("Diff:", ...desc.map((d) => `- ${d}`));
+    }
+    if (asked?.cutIndex === undefined) lines.push("", "Revise it by proposing a NEW change against the current head that addresses the feedback (the original stays in history).");
     parts.push(`# Change being revised\n\n${lines.join("\n")}`);
   }
 
@@ -400,12 +417,38 @@ export function buildSystemPrompt(ctx: PromptContext): string {
       // A guide the skill calls by name is in the prompt whether or not this request needs it, such as one the skill
       // keeps for when the editor asks: the skill's own words say when each applies.
       const layered = !named ? "" : `\n\nThis builds on ${named}, above${/(?:^|[\s(])\/[a-z0-9]/im.test(stripFrontmatter(s.content)) ? ", and calls each as /name where it applies, with what it changes beside the call" : ""}. Where ${bases.length > 1 ? "it and one of them" : "the two"} differ, follow this one.`;
-      return `## ${s.name}\n\n${s.description}${layered}\n\n${stripFrontmatter(s.content).trim()}`;
+      return `## ${s.name}\n\n${s.description}${layered}\n\n${nestHeadings(stripFrontmatter(s.content).trim(), 2)}`;
     });
     parts.push(`# Your skills\n\nThe editor’s request and selected skills give the brief. Consult other enabled guides through skills_list as needed. Preserve the editor’s stated preferences and protected moments.\n\n${blocks.join("\n\n---\n\n")}`);
   }
 
   return parts.join("\n\n");
+}
+
+/**
+ * A skill's own Markdown headings moved down to nest under the heading it is embedded at (`## name`, level 2), so its
+ * `# Title` doesn't stand beside the prompt's own sections. Fenced code is left as written.
+ */
+function nestHeadings(md: string, under: number): string {
+  const heading = /^( {0,3})(#{1,6})(?=[ \t\r]|$)/;
+  const lines = md.split("\n");
+  let fence: string | undefined;
+  const levels = lines.map(line => {
+    const marks = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      if (marks && marks[0] === fence[0] && marks.length >= fence.length && /^ {0,3}[`~]+\s*$/.test(line)) fence = undefined;
+      return 0;
+    }
+    if (marks) {
+      fence = marks;
+      return 0;
+    }
+    return heading.exec(line)?.[2]!.length ?? 0;
+  });
+  const top = Math.min(...levels.filter(Boolean));
+  const shift = Number.isFinite(top) ? Math.max(0, under + 1 - top) : 0;
+  if (!shift) return md;
+  return lines.map((line, i) => levels[i] ? line.replace(heading, (_, indent: string) => indent + "#".repeat(Math.min(6, levels[i]! + shift))) : line).join("\n");
 }
 
 /** Remove the YAML frontmatter block from a SKILL.md so it reads as prose. */
