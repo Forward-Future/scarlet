@@ -219,8 +219,9 @@ describe("otio", () => {
     const [card, gap, fast, , orphan] = video!.children;
     expect(card!.media_references.DEFAULT_MEDIA).toMatchObject({ OTIO_SCHEMA: "GeneratorReference.1", generator_kind: "SolidColor", parameters: { color: "white" } });
     expect(gap!.source_range.duration).toMatchObject({ value: 60, rate: 30 });
-    // Source times are in the project's frames, though the recording is 25 fps: 4 s and 4 s at 30.
-    expect(fast).toMatchObject({ name: "Fast take", source_range: { start_time: { value: 120, rate: 30 }, duration: { value: 120, rate: 30 } },
+    // Source times are in the project's frames, though the recording is 25 fps: from 4 s in, for the 2 s the take lasts
+    // on the timeline. Its time warp plays 4 s of footage in them.
+    expect(fast).toMatchObject({ name: "Fast take", source_range: { start_time: { value: 120, rate: 30 }, duration: { value: 60, rate: 30 } },
       effects: [{ OTIO_SCHEMA: "LinearTimeWarp.1", time_scalar: 2 }] });
     expect(fast!.media_references.DEFAULT_MEDIA).toMatchObject({ target_url: "a.mp4", metadata: { scarlet: { mediaId: "m1", hash: "abc" } } });
     // Footage the project no longer lists is still written, by its id, with no path.
@@ -229,6 +230,28 @@ describe("otio", () => {
     expect(url("/Users/editor/media/")).toBe("file:///Users/editor/media/a.mp4");
     expect(url("D:\\footage\\")).toBe("file:///D:/footage/a.mp4");
     expect(url("media")).toBe("media/a.mp4");
+  });
+
+  it("gives a retimed clip its length on the timeline, so the clips after it keep their place", () => {
+    type Item = { source_range: { start_time: { value: number }; duration: { value: number } }; effects: Array<{ time_scalar: number }> };
+    type Doc = { tracks: { children: Array<{ kind: string; children: Item[] }> } };
+    const project = createProject("Retimed", { fps: 30 });
+    project.media.push({ id: "m1", kind: "video", name: "a.mp4", path: "a.mp4", duration: 6, fps: 30, hasAudio: true });
+    const tl = emptyTimeline(project.id);
+    tl.tracks = [tl.tracks[0]!];
+    // Two seconds of footage at 2× from 0 s, then 3–4 s at normal speed from 1 s.
+    tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 2, 0, { id: "first", speed: 2 }), makeMediaClip("m1", 3, 4, 1, { id: "second" })];
+    const tracks = (toOtio(project, tl) as Doc).tracks.children;
+    // The picture and its sound.
+    expect(tracks.map(t => t.kind)).toEqual(["Video", "Audio"]);
+    for (const track of tracks) {
+      const [first, second] = track.children;
+      expect(first!.source_range).toMatchObject({ start_time: { value: 0 }, duration: { value: 30 } });
+      expect(first!.effects).toMatchObject([{ time_scalar: 2 }]);
+      expect(second!.source_range).toMatchObject({ start_time: { value: 90 }, duration: { value: 30 } });
+      // OTIO plays a track's items end to end: the second starts at 1 s, and the track ends at 2 s.
+      expect(track.children.map(c => c.source_range.duration.value)).toEqual([30, 30]);
+    }
   });
 
   it("writes footage at the project's frame rate in frames of that rate: each clip's source start and length, each gap's length", () => {
@@ -253,7 +276,7 @@ describe("otio", () => {
     expect(video!.children.map(c => numbers(c.source_range))).toEqual([
       [0, 25, 25, 25], // the card: 1 s
       [0, 50, 25, 25], // a gap of 2 s
-      [100, 100, 25, 25], // the fast take: 4 s of footage from 4 s in
+      [100, 50, 25, 25], // the fast take: from 4 s in, 2 s on the timeline playing 4 s of footage at 2×
       [250, 60, 25, 25], // 2.4 s from 10 s in, joined to the take before
       [0, 40, 25, 25], // a gap of 1.6 s, the disabled clip's second included
       [0, 50, 25, 25], // 2 s of footage the project no longer lists

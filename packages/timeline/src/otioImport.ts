@@ -301,12 +301,18 @@ export function fromOtio(otio: unknown, project: Project, base: Timeline): Timel
       if (schema !== "Clip") continue;
       const at = cursor;
       const speed = speedOf(item);
-      cursor += sr.duration / speed;
+      const sc = obj(obj(item.metadata).scarlet);
+      // OTIO counts an item's length on its track before its time warp, so a retimed clip takes its range's duration
+      // and plays that times its speed of footage. Scarlet files from before `retimedLength` wrote the footage's length,
+      // and a clip with no range plays all of its footage.
+      const rangeIsFootage = speed !== 1 && (item.source_range == null || (typeof sc.clipId === "string" && sc.retimedLength !== "timeline"));
+      const length = rangeIsFootage ? sr.duration / speed : sr.duration;
+      const footage = rangeIsFootage ? sr.duration : sr.duration * speed;
+      cursor += length;
       if (!Number.isFinite(speed) || !Number.isFinite(cursor) || cursor > MAX_TIMELINE_SECONDS) throw new OtioImportError("A Scarlet timeline can be up to 24 hours long and needs a finite playback speed.");
       if (item.enabled === false) continue;
       const ref = mediaRef(item);
       const name = String(item.name ?? "");
-      const sc = obj(obj(item.metadata).scarlet);
       const scarletId = typeof sc.clipId === "string" ? sc.clipId : undefined;
       const refSchema = schemaOf(ref);
       if (refSchema === "GeneratorReference") {
@@ -330,8 +336,8 @@ export function fromOtio(otio: unknown, project: Project, base: Timeline): Timel
       // different rates, so a clip on the first frame may come out a rounding error before it.
       const fromStart = item.source_range == null ? 0 : sr.start - seconds(obj(ref.available_range).start_time);
       const sourceIn = Math.abs(fromStart) < 1e-6 ? 0 : fromStart;
-      if (!(sourceIn >= 0 && Number.isFinite(sourceIn + sr.duration))) throw unusable();
-      const sourceOut = sourceIn + sr.duration;
+      if (!(sourceIn >= 0 && Number.isFinite(sourceIn + footage))) throw unusable();
+      const sourceOut = sourceIn + footage;
       const match = matchBase(sources, used, preferredIds, { name, scarletId, mediaId: asset.id, sourceIn, sourceOut });
       if (match) used.add(match.id);
       const id = importedId(match);
