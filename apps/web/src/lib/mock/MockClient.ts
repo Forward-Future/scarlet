@@ -1277,6 +1277,16 @@ export class MockClient implements ScarletApi {
     void this.runTask(task, { description: task.context.message ?? task.instruction, noteIds: task.context.noteIds, supersedes: proposal,
       previewOnly: this.chatLayouts && task.resumeRootId === "task_running" });
   }
+  /** A note to the request Scarlet is on, kept on its latest attempt. One that has finished takes none. */
+  async addTaskNote(taskId: string, text: string): Promise<{ task: Task }> {
+    this.requireAuth();
+    let task = this.db.tasks.find((t) => t.id === taskId);
+    if (!task) throw notFound("Task");
+    for (let hops = 0; task.retryTaskId && hops < 50; hops++) task = this.db.tasks.find(t => t.id === task!.retryTaskId) ?? task;
+    if (["done", "failed", "cancelled"].includes(task.state)) throw new ScarletApiError(409, "task_finished", "Scarlet has finished this request, so the note goes as a request of its own.");
+    this.updateTask(task, { notes: [...task.notes ?? [], { id: `tnt_${Date.now().toString(36)}`, text: text.trim(), at: now() }] });
+    return { task: { ...task } };
+  }
   async answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice): Promise<{ task: Task }> {
     this.requireAuth();
     const task = this.db.tasks.find((t) => t.id === taskId);
