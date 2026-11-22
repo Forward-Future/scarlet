@@ -130,13 +130,24 @@ async function importInto(engine: Engine, name: string, files: StoredFile[]): Pr
   return { projectId: project.id, media };
 }
 
-/** Wait until no transcription is queued or running in these projects, then say which files have a transcript. */
+/**
+ * Wait until every file is read and has its transcript, or its transcription ended without one. A large file is read
+ * before its transcription is queued, so an empty queue alone doesn't mean it's done.
+ */
 async function waitForTranscripts(engine: Engine, projects: Array<{ projectId: string; media: ImportedMedia[] }>, timeoutMs: number) {
   const started = Date.now();
   for (;;) {
-    const pending = (await Promise.all(projects.map(p => engine.tasks(p.projectId))))
-      .flat().filter(t => t.kind === "transcribe" && ["queued", "claimed", "running"].includes(t.state));
-    if (!pending.length) break;
+    let waiting = false;
+    for (const p of projects) {
+      const [listed, tasks] = await Promise.all([engine.media(p.projectId), engine.tasks(p.projectId)]);
+      const transcribing = tasks.filter(t => t.kind === "transcribe" && ["queued", "claimed", "running"].includes(t.state));
+      for (const m of p.media) {
+        const status = listed.find(l => l.id === m.id)?.status;
+        if (status === "failed") continue;
+        if (status === "ingesting" || transcribing.length || !(await engine.transcript(m.id)) && !tasks.some(t => t.kind === "transcribe" && ["done", "failed", "cancelled", "canceled"].includes(t.state) && (t.context as { mediaId?: string } | undefined)?.mediaId === m.id)) waiting = true;
+      }
+    }
+    if (!waiting) break;
     if (Date.now() - started > timeoutMs) throw new Error("Transcription is still running: start it again with --keep and wait, or raise --timeout-min.");
     await new Promise(r => setTimeout(r, 15_000));
   }
