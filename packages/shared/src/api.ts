@@ -668,6 +668,31 @@ export const ModelOptions = z.object({
 export type ModelOptions = z.infer<typeof ModelOptions>;
 export type AgentEffort = z.infer<typeof AgentEffort>;
 
+export const QuotaBucket = z.object({
+  id: z.string(),
+  /** Short human label for the bucket (e.g. "5-hour", "Weekly", "Gemini · 5h"). */
+  label: z.string(),
+  /** Window identifier when known (e.g. "5h", "weekly"). */
+  window: z.string().optional(),
+  /** Percentage of quota remaining, 0..100. */
+  remainingPercent: z.number().min(0).max(100),
+  /** ISO-8601 timestamp when this bucket resets, if reported. */
+  resetsAt: z.string().optional(),
+});
+export type QuotaBucket = z.infer<typeof QuotaBucket>;
+
+export const SubscriptionQuota = z.object({
+  /** Subscription plan/tier label when reported by the CLI (e.g. "Max", "Pro", "Google AI Ultra"). */
+  plan: z.string().optional(),
+  /** Remaining quota buckets for this subscription provider. */
+  buckets: z.array(QuotaBucket),
+  /** True when the provider reports unlimited credits instead of metered buckets. */
+  unlimited: z.boolean().optional(),
+  /** ISO-8601 timestamp when this snapshot was read. */
+  fetchedAt: z.string(),
+});
+export type SubscriptionQuota = z.infer<typeof SubscriptionQuota>;
+
 export const AgentAvailability = z.object({
   id: AgentId,
   installed: z.boolean(),
@@ -683,6 +708,8 @@ export const AgentAvailability = z.object({
   /** Provider display names keyed by the model ID passed to the CLI. */
   modelLabels: z.record(z.string()).optional(),
   modelOptions: z.record(ModelOptions).optional(),
+  /** Live subscription quota remaining. Omitted when using API-key auth or unavailable. */
+  quota: SubscriptionQuota.optional(),
 });
 export type AgentAvailability = z.infer<typeof AgentAvailability>;
 
@@ -1499,6 +1526,7 @@ export const WsEvent = z.discriminatedUnion("type", [
   /** The task's token totals across its runs, after a run reported usage. */
   z.object({ type: z.literal("task.usage"), projectId: Id, taskId: Id, usage: UsageTotals }),
   z.object({ type: z.literal("host.updated"), host: AgentHost }),
+  z.object({ type: z.literal("host.quota_refresh"), force: z.boolean().optional() }),
   z.object({ type: z.literal("skill.updated"), skill: Skill }),
   z.object({ type: z.literal("learning.updated"), projectId: Id, learning: Learning }),
   z.object({ type: z.literal("activity.added"), projectId: Id.nullable(), entry: ActivityEntry }),

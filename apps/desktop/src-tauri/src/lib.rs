@@ -112,6 +112,7 @@ pub fn run() {
             commands::engine_status,
             commands::host_status,
             commands::host_refresh_agents,
+            commands::host_refresh_quota,
             commands::agent_install,
             crisper::install_crisper_model,
             commands::agent_login_start,

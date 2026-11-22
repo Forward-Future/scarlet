@@ -6361,7 +6361,7 @@ it("opens the model selector from the header button, keeps it in the window, and
     const selector = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Model selector"]')!;
     // Right-aligned to the header button, clamped inside the window and opening below the header.
     expect([selector.style.left, selector.style.top]).toEqual(["18px", "49px"]);
-    expect(focused()).toBe("Search models");
+    expect(focused()).toBe("Model selector");
     await key("ArrowDown");
     expect(focused()).toBe("Claude Code · Opus 5.5");
     await key("ArrowDown");

@@ -9,11 +9,13 @@ import { homedir, platform, release } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
-import type { AgentAvailability, AgentId, AgentUsage, CreateTaskRequest, Task, TaskEvent } from "@scarlet/shared";
+import type { AgentAvailability, AgentId, AgentUsage, CreateTaskRequest, SubscriptionQuota, Task, TaskEvent } from "@scarlet/shared";
 import { isSideCheck, ScarletClient, sideCheckSlots, TaskState } from "@scarlet/shared";
 import { privateDirectory } from "./private-files.js";
 import type { AgentConfig } from "./config.js";
-import { CLI_AGENTS, detect as detectAgents, runnerEnv } from "./detect.js";
+import { CLI_AGENTS, cliBinary, detect as detectAgents, findOnPath, runnerEnv } from "./detect.js";
+import type { CliAgent } from "./modelCatalog.js";
+import { isQuotaEligible, probeSubscriptionQuota } from "./quota.js";
 import { killStoppedNow, stopOrphans } from "./processTree.js";
 import { runAgent as defaultRunAgent } from "./runners/index.js";
 import { codexHomeDir } from "./runners/codex.js";
@@ -22,6 +24,8 @@ import { mcpEnv, nodeExecutable, resolveMcpCliPath } from "./runners/spawn.js";
 import { DEFAULT_STALL_MS, type McpSpec, type RunAgentFn, type RunAgentResult, type RunnerEvent, type Workspace } from "./runners/types.js";
 import { workspaceTools } from "./workspaceTools.js";
 
+const QUOTA_TTL_MS = 60_000;
+
 export interface HostOptions {
   client: ScarletClient;
   config: AgentConfig;
@@ -29,6 +33,7 @@ export interface HostOptions {
   saveConfig?: (cfg: AgentConfig) => Promise<void>;
   runner?: RunAgentFn;
   detect?: () => Promise<AgentAvailability[]>;
+  probeQuota?: (agent: CliAgent, file: string, env: NodeJS.ProcessEnv) => Promise<SubscriptionQuota | undefined>;
   /** Where per-task workspaces live. */
   workRoot: string;
   /** Path to packages/mcp/dist/cli.js (resolved automatically when omitted). */
@@ -95,6 +100,8 @@ export class AgentHost {
   private readonly subscriptions = new Set<string>();
   private wsTimer: NodeJS.Timeout | null = null;
   private loopPromise: Promise<void> | null = null;
+  private quotaRefreshPromise: Promise<void> | null = null;
+  private lastQuotaAt = 0;
 
   constructor(opts: HostOptions) {
     this.opts = opts;
@@ -123,6 +130,7 @@ export class AgentHost {
     ]);
     this.agents = agents;
     await this.register();
+    void this.refreshQuotas();
     this.heartbeatTimer = setInterval(() => void this.heartbeat(), this.opts.heartbeatMs ?? 30_000);
     if (this.opts.ws !== false) this.connectWs();
     this.loopPromise = this.claimLoop();
@@ -212,6 +220,76 @@ export class AgentHost {
     }
   }
 
+  /** Refresh subscription quota in the background without blocking task claims or picker opens. */
+  async refreshQuotas(opts: { force?: boolean; agents?: readonly AgentId[] } = {}): Promise<void> {
+    if (this.stopped) return;
+    // Skip real CLI probing when tests supply a mocked `detect` without an explicit `probeQuota`.
+    if (this.opts.detect && !this.opts.probeQuota) return;
+    const force = Boolean(opts.force);
+    if (!force && this.lastQuotaAt > 0 && Date.now() - this.lastQuotaAt < QUOTA_TTL_MS) return;
+    if (this.quotaRefreshPromise) {
+      if (!force) return this.quotaRefreshPromise;
+      await this.quotaRefreshPromise.catch(() => undefined);
+      if (this.stopped) return;
+    }
+    const probe = this.opts.probeQuota ?? probeSubscriptionQuota;
+    const env = this.opts.env ?? process.env;
+    const only = opts.agents ? new Set(opts.agents) : null;
+    const run = (async () => {
+      const targets = this.agents.filter((a) => isQuotaEligible(a) && (!only || only.has(a.id)));
+      if (!targets.length) return;
+      const results = await Promise.all(targets.map(async (agent) => {
+        const file = this.opts.probeQuota ? cliBinary(agent.id) : await findOnPath(cliBinary(agent.id), env);
+        if (!file) return null;
+        try {
+          const quota = await probe(agent.id as CliAgent, file, runnerEnv(agent.id, this.agents, env));
+          return quota ? { id: agent.id, quota } : null;
+        } catch {
+          return null;
+        }
+      }));
+      if (this.stopped) return;
+      let changed = false;
+      const next = this.agents.map((agent) => {
+        if (agent.auth === "api_key" && agent.quota) {
+          changed = true;
+          const { quota: _drop, ...rest } = agent;
+          return rest;
+        }
+        const hit = results.find((r) => r?.id === agent.id);
+        if (!hit) return agent;
+        const plan = hit.quota.plan ?? agent.plan;
+        const quota: SubscriptionQuota = { ...hit.quota, ...(plan ? { plan } : {}) };
+        changed = true;
+        return { ...agent, ...(plan && !agent.plan ? { plan } : {}), quota };
+      });
+      this.lastQuotaAt = Date.now();
+      if (changed) {
+        this.agents = next;
+        await this.heartbeat();
+      }
+    })().finally(() => {
+      if (this.quotaRefreshPromise === run) this.quotaRefreshPromise = null;
+    });
+    this.quotaRefreshPromise = run;
+    return run;
+  }
+
+  private applyLiveQuota(agentId: AgentId, quota: SubscriptionQuota): void {
+    if (this.stopped) return;
+    const idx = this.agents.findIndex((a) => a.id === agentId);
+    if (idx < 0 || !isQuotaEligible(this.agents[idx]!)) return;
+    const current = this.agents[idx]!;
+    const plan = quota.plan ?? current.plan;
+    const updated: AgentAvailability = {
+      ...current,
+      ...(plan && !current.plan ? { plan } : {}),
+      quota: { ...quota, ...(plan ? { plan } : {}) },
+    };
+    this.agents = this.agents.map((a, i) => (i === idx ? updated : a));
+    void this.heartbeat();
+  }
+
   // -- websocket wake-ups ---------------------------------------------------
 
   private connectWs(): void {
@@ -232,7 +310,11 @@ export class AgentHost {
     });
     ws.on("message", (data) => {
       try {
-        const ev = JSON.parse(data.toString()) as { type?: string; task?: Task };
+        const ev = JSON.parse(data.toString()) as { type?: string; task?: Task; force?: boolean };
+        if (ev.type === "host.quota_refresh") {
+          void this.refreshQuotas({ force: Boolean(ev.force) });
+          return;
+        }
         if (ev.type !== "task.updated" || !ev.task) return;
         if (ev.task.state === "cancelled") this.running.get(ev.task.id)?.controller.abort("server-cancelled");
         if (ev.task.state === "queued") this.wake();
@@ -458,6 +540,9 @@ export class AgentHost {
           await rm(codexHomeDir(cwd), { recursive: true, force: true }).catch((err) => this.log(`could not remove the Codex home: ${errMsg(err)}`));
         }
       }
+      if (!this.stopped && state !== "cancelled") {
+        void this.refreshQuotas({ force: true, agents: [task.agent] });
+      }
     };
 
     if (signal.aborted) return complete("cancelled", undefined, "host shutting down");
@@ -527,6 +612,7 @@ export class AgentHost {
         pendingUsage = addUsage(priorUsage, snapshot);
         flushUsage();
       },
+      onQuota: quota => this.applyLiveQuota(task.agent, quota),
       onCodexFallback: reason => this.log(`[host] codex-fallback ${identity} reason=${reason}`),
       onEvent: (ev: RunnerEvent) => {
         this.opts.onRunnerEvent?.(task, ev);

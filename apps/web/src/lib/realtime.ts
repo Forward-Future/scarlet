@@ -63,6 +63,8 @@ export function dispatchWsEvent(ev: WsEvent) {
     case "host.updated":
       useHostsStore.getState().apply(ev.host);
       return;
+    case "host.quota_refresh":
+      return;
     case "skill.updated":
       useSkillsStore.getState().apply(ev.skill);
       return;

@@ -372,6 +372,11 @@ pub fn now_iso() -> String {
     format!("{y:04}-{mo:02}-{da:02}T{h:02}:{mi:02}:{s:02}.{millis:03}Z")
 }
 
+pub fn iso_from_unix_secs(secs: i64) -> String {
+    let (y, mo, da, h, mi, s) = civil_from_unix(secs);
+    format!("{y:04}-{mo:02}-{da:02}T{h:02}:{mi:02}:{s:02}.000Z")
+}
+
 /// Elapsed time for log lines: "850ms", "12s", "45m 2s", "1h 3m".
 pub fn human_duration(d: std::time::Duration) -> String {
     let secs = d.as_secs();

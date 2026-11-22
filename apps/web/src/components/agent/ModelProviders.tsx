@@ -5,14 +5,14 @@ import openaiLogo from "../../assets/providers/openai.svg";
 import { AGENT_LABEL } from "../../stores/hosts";
 import { Icon } from "../ui/primitives";
 
-export type ModelScope = AgentId | "favorites";
+export type ModelScope = AgentId | "favorites" | "all";
 
 const logos = { claude: claudeLogo, codex: openaiLogo, gemini: geminiLogo };
 
 export function ModelProviders<T extends ModelScope>({ providers, active, onChange, compact = false }: {
   providers: T[]; active?: T; onChange: (value: T) => void; compact?: boolean;
 }) {
-  const labels = { ...AGENT_LABEL, favorites: "Favorites" };
+  const labels = { ...AGENT_LABEL, favorites: "Favorites", all: "All" };
   return (
     <div aria-label="Providers" role="group" className={compact
       ? "flex shrink-0 flex-col items-center gap-1 border-r border-line bg-bg/50 p-1.5"
@@ -30,8 +30,9 @@ export function ModelProviders<T extends ModelScope>({ providers, active, onChan
   );
 }
 
-function ProviderIcon({ id }: { id: ModelScope }) {
-  if (id === "favorites") return <Icon name="star" size={16} />;
-  if (id === "api") return <span aria-hidden className="font-mono font-semibold">{"{}"}</span>;
-  return <img src={logos[id]} alt="" className="size-4 shrink-0" />;
+export function ProviderIcon({ id, size = 16 }: { id: ModelScope; size?: number }) {
+  if (id === "all") return null;
+  if (id === "favorites") return <Icon name="star" size={size} />;
+  if (id === "api") return <span aria-hidden className="font-mono font-semibold text-[11px] leading-none">{"{}"}</span>;
+  return <img src={logos[id]} alt="" width={size} height={size} style={{ width: size, height: size }} className="shrink-0" />;
 }

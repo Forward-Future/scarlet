@@ -32,6 +32,11 @@ pub async fn host_refresh_agents(state: State<'_, AppState>) -> Result<HostStatu
 }
 
 #[tauri::command]
+pub async fn host_refresh_quota(state: State<'_, AppState>, force: Option<bool>) -> Result<HostStatus, String> {
+    Ok(state.host.refresh_quota(force.unwrap_or(false)).await)
+}
+
+#[tauri::command]
 pub async fn agent_install(state: State<'_, AppState>, agent: String) -> Result<crate::host::install::InstallResult, String> {
     let result = crate::host::install::install(&agent, &state.paths.home).await?;
     if matches!(result, crate::host::install::InstallResult::Installed) {

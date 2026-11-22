@@ -1,4 +1,4 @@
-import { planText, type AgentEffort, type AgentId, type AgentUsage, type PlanStep } from "@scarlet/shared";
+import { planText, type AgentEffort, type AgentId, type AgentUsage, type PlanStep, type SubscriptionQuota } from "@scarlet/shared";
 
 export type RunnerEventType = "log" | "tool" | "question" | "plan" | "result" | "error";
 
@@ -70,6 +70,8 @@ export interface RunAgentOptions {
   onCodexFallback?: (reason: CodexFallbackReason) => void;
   /** Cumulative tokens observed so far in this CLI invocation. */
   onUsage?: (usage: AgentUsage) => void;
+  /** Live subscription quota update emitted by the CLI during a run (e.g. Codex `account/rateLimits/updated`). */
+  onQuota?: (quota: SubscriptionQuota) => void;
   signal?: AbortSignal;
   /** Optional cap on the whole run. None by default: a working agent takes as long as it needs. */
   timeoutMs?: number;
