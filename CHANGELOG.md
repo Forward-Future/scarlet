@@ -7,6 +7,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 21, 2026
 
 - Playback and other edits no longer stall in a long project when Scarlet flags a specific edit for you to check.
+- A spot Scarlet marks for you to check right after B-roll no longer says B-roll on its card when it changed nothing.
 - A new project takes the best format among all the videos you start it with, such as the camera's 16:9 over a screen recording's shape, once every one of them is in.
 - Keeping an edit and moving to the next cut now plays that cut, instead of sometimes starting the video from 0:00 and leaving the cut out of view on the timeline.
 - An open edit's band on the timeline always says what it is, such as "2 edits" for a moment, where some showed no name.

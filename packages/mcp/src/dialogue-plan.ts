@@ -947,8 +947,11 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
     };
     // Existing doubled-word checks apply to the version that will actually be kept. A requested cut that
     // placement sends to review can still leave a partial repeat in its preview; return that to its author too.
+    // A phrase that preview plays twice is reported on the held cut, not refused: the model settles a held cut
+    // (AI-AGENTS rules 5 and 6). One pass left “in which it ‖ which it is about” held, and it reached the editor
+    // unchecked (2026-11-21).
     const jobs = [{ joins: applied, preview: appliedPreview, forReview: false }];
-    if (read && speechCuts.some(({ d }) => d.review))
+    if (speechCuts.some(({ d }) => d.review))
       jobs.push({ joins: mergeRanges(decisions, 1e-9), preview: stagedPreview, forReview: true });
     const issuesByJoin = await Promise.all(jobs.flatMap(({ joins, preview, forReview }) => {
       const played = joins.map(align);
@@ -975,6 +978,14 @@ export async function planDialogueCuts(req: DialoguePlanRequest, sources: Dialog
         const acknowledged = contributing.flatMap(({ c }) => c.keepRepeat ?? []).map(phrase);
         const issues = [];
         if (!forReview && repeatAtJoin && acknowledged.includes(phrase(repeatAtJoin.words))) kept.push(repeatAtJoin.before, repeatAtJoin.after);
+        if (forReview && repeatAtJoin && !acknowledged.includes(phrase(repeatAtJoin.words))) {
+          const { before, after, words } = repeatAtJoin;
+          const evidence = `As staged, the join plays “${words}” twice, at ${before.start}–${before.end} s before the cut and ${after.start}–${after.end} s after it.`;
+          for (const { c, d } of contributing) {
+            d.held = [d.held, evidence].filter(Boolean).join(" ");
+            report.push({ cut: c.input, kind: c.kind, ...(c.words && { words: c.words }), asked: c.decision, outcome: "review", range: [r2(d.start), r2(d.end)], evidence });
+          }
+        }
         if (!forReview && repeatAtJoin && !acknowledged.includes(phrase(repeatAtJoin.words))) {
           const { before, after, words } = repeatAtJoin;
           issues.push({ cut: contributing[0]!.c.input, repeat: repeatAtJoin, words, reason: `The join plays “${words}” twice, at ${before.start}–${before.end} s before the cut and ${after.start}–${after.end} s after it.` });
