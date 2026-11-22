@@ -4,9 +4,19 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 22, 2026
+
+- A voice request aimed at a moment on the timeline now carries any attached files or marked frame with it instead of leaving them in the message box.
+- Skipping a second ahead with Shift+→ while watching a pass's edits no longer marks a skipped cut or edit as kept.
+- Timeline thumbnails stay cached while a recording prepares instead of redrawing on every progress update.
+- After your computer wakes from sleep on Windows, Scarlet sends one background check-in instead of catching up on every missed one.
+- Playback and other edits no longer stall in a long project when Scarlet flags a specific edit for you to check.
+- Keeping an edit, or marking a to-do Done, now reaches Scarlet even when its summary or note is long, so Scarlet won't ask about it again.
+- Switching to a cut that takes a moment to render now shows a dimmed still of the target moment with a subtle loading sheen, progress, and a quick option to press `\` for Before instead of leaving the player black.
+- Items in For you now stay in place after you keep, finish, or reject them—dimmed and labeled Kept, Done, or Rejected—so you can see what you've already handled.
+
 ## November 21, 2026
 
-- Playback and other edits no longer stall in a long project when Scarlet flags a specific edit for you to check.
 - A first cut no longer leaves a lone word or a quick reaction, like “Wow.”, stuck between two cuts where it plays as a stutter: Scarlet takes it out with the cuts beside it or lets the speech run on.
 - Scarlet now knows when your screen recording stood completely still while you went on talking, as a stalled capture leaves it, so it can tell you instead of only asking whether to show the screen.
 - Every item in For you and See all now ends on a word that says what it is, and a spot where Scarlet left the video as it was for you to check says Check.

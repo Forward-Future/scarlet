@@ -179,13 +179,25 @@ export function taskRoutes(ctx: Ctx) {
   });
 
   r.post("/tasks/:taskId/answer", async (c) => {
-    const body = await jsonBody(c, z.object({ text: z.string().min(1), skillIds: z.array(z.string().min(1)).optional() }));
-    // The answer, the requeue and its activity entry land together, after the state check.
+    const body = await jsonBody(c, RunChoice.extend({ text: z.string().min(1), skillIds: z.array(z.string().min(1)).optional() }));
+    // The answer, any model switch, the requeue and its activity entry land together, after the state check.
     const updated = ctx.db.transaction(() => {
       const task = requireTask(c.req.param("taskId"));
-      if (body.skillIds?.length) task.context.skillIds = [...new Set([...(task.context.skillIds ?? []), ...body.skillIds])];
-      const { task: updated } = appendTaskEvent(ctx, task, { type: "answer", text: body.text });
-      logActivity(ctx, { projectId: task.projectId, actor: actorFor(c.var.user), type: "question.answered", summary: `${c.var.user.name} answered ${agentName(task.agent)}: ${quote(body.text, 120)}`, data: { taskId: task.id, threadId: task.context.threadId, question: task.question } });
+      const switched = body.agent !== undefined && (body.agent !== task.agent || body.model !== task.model);
+      const tuned = body.agent !== undefined && (switched || body.effort !== task.effort || body.fast !== task.fast || body.serviceTier !== task.serviceTier);
+      const prepared: Task = tuned ? {
+        ...task,
+        agent: body.agent!,
+        model: body.model,
+        effort: body.effort,
+        fast: body.fast,
+        serviceTier: body.serviceTier,
+        ...(switched && { session: undefined }),
+      } : { ...task };
+      if (body.skillIds?.length) prepared.context = { ...prepared.context, skillIds: [...new Set([...(prepared.context.skillIds ?? []), ...body.skillIds])] };
+      const { task: updated } = appendTaskEvent(ctx, prepared, { type: "answer", text: body.text });
+      if (switched) ctx.log(`[task] ${task.id} switched ${task.agent}/${task.model ?? "default"} → ${updated.agent}/${updated.model ?? "default"} on answer`);
+      logActivity(ctx, { projectId: task.projectId, actor: actorFor(c.var.user), type: "question.answered", summary: `${c.var.user.name} answered ${agentName(updated.agent)}: ${quote(body.text, 120)}`, data: { taskId: task.id, threadId: task.context.threadId, question: task.question } });
       return updated;
     }, "immediate")();
     return c.json({ task: updated });
@@ -217,8 +229,13 @@ export function taskRoutes(ctx: Ctx) {
     ctx.db.transaction(() => {
       const task = requireTask(c.req.param("taskId"), c.req.param("projectId"));
       requireActiveAttempt(ctx, requestAttempt(c.req.raw) ?? { taskId: task.id, startedAt }, task.projectId, task.id);
-      // The harness compacted the run's context: said in the log, never in the chat.
-      if (body.type === "log" && body.data?.kind === "compaction") return void ctx.log(compactionLine(task, body.data));
+      // Live compaction notices drive the 1-line status while only a finished compaction is written to the engine log.
+      // None of them enter the conversation view.
+      if (body.type === "log" && body.data?.kind === "compaction") {
+        if (typeof body.data.active !== "boolean") ctx.log(compactionLine(task, body.data));
+        appendTaskEvent(ctx, task, body);
+        return;
+      }
       appendTaskEvent(ctx, task, body);
     }, "immediate")();
     return c.json({});
