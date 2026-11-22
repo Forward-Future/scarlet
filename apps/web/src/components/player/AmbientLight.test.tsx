@@ -182,3 +182,49 @@ it("holds the glow still while the picture plays with motion reduced, and sets i
   expect(fades).toBeGreaterThan(0);
   await act(async () => root.unmount());
 });
+
+it("keeps ambient light alive from a loaded [data-ambient-source] still while no video frame is decoded", async () => {
+  const sources: unknown[] = [];
+  const context = {
+    globalAlpha: 1,
+    globalCompositeOperation: "source-over",
+    clearRect: vi.fn(),
+    fillRect() {},
+    drawImage(source: unknown) {
+      if (source instanceof HTMLVideoElement || source instanceof HTMLImageElement) sources.push(source);
+    },
+  };
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
+  const stage = document.createElement("section"), monitor = document.createElement("div");
+  Object.defineProperty(stage, "clientWidth", { value: 1000 });
+  Object.defineProperty(stage, "clientHeight", { value: 800 });
+  stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 800, right: 1000, bottom: 800, x: 0, y: 0, toJSON() {} });
+  const still = document.createElement("img");
+  still.src = "/frames/lead-in.jpg";
+  still.dataset.ambientSource = "true";
+  Object.defineProperty(still, "complete", { value: true });
+  Object.defineProperty(still, "naturalWidth", { value: 1920 });
+  Object.defineProperty(still, "naturalHeight", { value: 1080 });
+  still.getClientRects = () => [{}] as unknown as DOMRectList;
+  still.getBoundingClientRect = () => ({ left: 20, top: 16, width: 960, height: 540, right: 980, bottom: 556, x: 20, y: 16, toJSON() {} });
+  monitor.append(still);
+  document.body.append(stage);
+  stage.append(monitor);
+
+  const stageRef = createRef<HTMLElement>(), monitorRef = createRef<HTMLDivElement>();
+  (stageRef as { current: HTMLElement | null }).current = stage;
+  (monitorRef as { current: HTMLDivElement | null }).current = monitor;
+  const host = document.createElement("div");
+  stage.prepend(host);
+  const root = createRoot(host);
+  await act(async () => root.render(<AmbientLight stage={stageRef} monitor={monitorRef} />));
+  const canvas = host.querySelector("canvas")!;
+  expect(canvas.dataset.lit).toBe("true");
+  expect(sources).toContain(still);
+
+  // Removing the fallback still with no decoded video turns the glow back off.
+  still.remove();
+  await act(async () => { vi.advanceTimersByTime(120); });
+  expect(canvas.dataset.lit).toBe("false");
+  await act(async () => root.unmount());
+});

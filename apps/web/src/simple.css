@@ -746,7 +746,8 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .simple-pass-list.is-moment, .req .simple-pass-list.is-moment { max-height: none; overflow: visible; margin: 0 0 2px 46px; padding-left: 4px; border-top: 0; border-left: 1px solid var(--color-line); }
 .req .simple-pass-list.has-hours .simple-pass-list.is-moment { margin-left: 60px; }
 .simple-pass-list.is-moment > li > button { grid-template-columns: minmax(0, 1fr) auto; }
-.simple-pass-list > li > button.is-decided .simple-pass-label, .simple-pass-list > li > button.is-decided .simple-pass-time { color: var(--color-dim); }
+.simple-pass-list > li > button.is-decided :is(.simple-pass-label, .simple-pass-time, .simple-pass-value),
+.simple-edit.is-decided :is(.simple-edit-title, .simple-edit-value) { color: var(--color-dim); }
 .simple-pass-tick { display: inline-block; margin-right: 6px; vertical-align: -1px; color: var(--color-muted); }
 .simple-pass-tick svg { display: inline; }
 /* An edit the editor rejected: a × where a kept one has its tick, its words dim, and "Rejected" where it said how much
@@ -757,7 +758,10 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .edit-badge.is-rejected { border-color: var(--color-line); color: var(--color-dim); }
 /* "Need you" is the short list: a call's number, Scarlet's note, and a word once it's settled or sent back. */
 .simple-pass-list.is-short > li > button { grid-template-columns: minmax(18px, max-content) minmax(0, 1fr) auto; align-items: center; }
-.simple-pass-list > li > button:is(.is-decided, :disabled) .edit-badge { border-color: var(--color-line); color: var(--color-dim); }
+.simple-pass-list > li > button:is(.is-decided, .is-rejected, :disabled) .edit-badge,
+.simple-edit.is-decided .edit-badge { border-color: var(--color-line); color: var(--color-dim); }
+.simple-pass-list > li > button.is-decided .edit-badge.is-kept,
+.simple-edit.is-decided .edit-badge.is-kept { background: rgba(255, 255, 255, .06); border-color: var(--color-line); color: var(--color-dim); }
 .req .simple-edits { margin: 0 0 6px; padding-top: 0; border-top: 0; }
 .simple-action.is-menu { margin: 0; gap: 6px; font-size: 12px; color: var(--color-dim); }
 

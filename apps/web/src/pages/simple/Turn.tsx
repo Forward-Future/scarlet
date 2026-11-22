@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import type { Change } from "@scarlet/timeline";
 import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task } from "@scarlet/shared";
-import { useAgentAvailability } from "../../components/agent/AgentChip";
+import { runChoiceDiffers, useAgentAvailability } from "../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../components/review/RunBundle";
 import { editGroups, useReviewed, useRevising, useThreadEdits } from "../../components/review/ThreadEdits";
 import { Icon } from "../../components/ui/primitives";
@@ -140,7 +140,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   const waitingPass = openPass(thread, allTasks);
   const pendingPass = !!waitingPass;
   const passTasks = useMemo(() => new Set([...firstCuts.keys()]), [firstCuts]);
-  const summed = passTasks.size > 0 || pendingPass;
+  const hasDecidedCalls = thread.changes.some(c => c.state === "approved" && !!c.cutChoices?.length);
+  const summed = passTasks.size > 0 || pendingPass || hasDecidedCalls;
   const { entries } = useMemo(() => threadConversation(thread, notesStillAsked(notes, allTasks), events, firstCuts), [thread, notes, allTasks, events, firstCuts]);
   // Why a press on one of this thread's requests failed (Stop, Resume, Retry), and which request. The line is that
   // request's own: it reads at the end of its block and goes where the block goes, above the message box too.
@@ -178,7 +179,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   const owner = runs.find(run => run.attempts.some(t => passTasks.has(t.id)))
     ?? (pendingPass ? runs.find(run => !aboutOne(run) && run.attempts.some(t => t.id === waitingPass?.taskId)) ?? runs.find(run => !aboutOne(run)) : undefined)
     ?? runs[0];
-  const hasRows = summed ? listed.length > 0 || actions.pass?.threadId === thread.id : listed.length > 0;
+  const hasForYouRejected = rejected.some(e => !!e.wasCheck || passListed.current.has(editKey(e)) || e.previous.some(p => passListed.current.has(editKey(p))));
+  const hasRows = summed ? listed.length > 0 || hasForYouRejected || actions.pass?.threadId === thread.id || hasDecidedCalls : listed.length > 0 || hasForYouRejected;
   // With no line for the pass (it was thrown away), its list is closed: a pass staged again starts folded. A pass that
   // went in leaves the thread's edits, and the list of those still waiting on the editor stays open: their place in
   // the chat must not go with the calls (2026-11-16).
@@ -390,7 +392,9 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // A request that edits the video has its controls at the band's right for as long as Scarlet has it: Pause, which
     // holds all editing in the project, then Resume once it is paused, which picks the paused work up first; and Stop,
     // which ends just this one, paused or not. Each is an icon alone, named the moment the pointer rests on it.
-    const hold = editingPaused ? () => attempt(run.root, resumeEditing(projectId)) : () => attempt(run.root, stopEditing(projectId));
+    const hold = editingPaused
+      ? () => attempt(run.root, effective && runChoiceDiffers(task, effective) ? resumeEditing(projectId, effective) : resumeEditing(projectId))
+      : () => attempt(run.root, stopEditing(projectId));
     const editActions = editsProject && stop ?
       <div className="unit-actions">
         <TipButton className="unit-pause-edit" tip={editingPaused ? "Resume editing" : "Pause editing"}

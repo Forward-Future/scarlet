@@ -1153,25 +1153,64 @@ describe("dialogue_apply_cuts's receipt of what a saved part still plays", () =>
     };
     const read = [["And", .5, .7], ["it", .7, .8], ["just", .95, 1.3], ["feel,", 1.4, 1.75], ["uh.", 1.75, 2.3], ["It", 5.2, 5.3], ["just", 5.3, 5.6],
       ["feels", 5.6, 5.9], ["like", 5.9, 6.1], ["this.", 6.1, 6.4]].map(([text, start, end]) => ({ text: text as string, start: start as number, end: end as number }));
-    // When each request reached the engine and when it was answered. The save, the media list and the scan's words are slow.
+    // When each request reached the engine and when it was answered. Hold overlapping responses until their peer
+    // arrives (2 s fallback so sequential regressions still fail cleanly).
     const seen: Array<{ path: string; version: string | null; kind?: unknown; start: number; end: number }> = [];
     let saved = false;
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const pending = new Set<() => void>();
+    const schedule = (fn: () => void, ms: number) => {
+      const t = setTimeout(() => { timers.delete(t); fn(); }, ms);
+      timers.add(t);
+      return t;
+    };
+    const replyLater = (span: { end: number }, res: Parameters<NonNullable<MockServer["state"]["extra"]>>[1], body: unknown, ms: number) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        pending.delete(finish);
+        clearTimeout(timer);
+        timers.delete(timer);
+        span.end = performance.now();
+        if (!res.writableEnded) reply(res, body);
+      };
+      const timer = schedule(finish, ms);
+      pending.add(finish);
+      return finish;
+    };
+    const gate = () => {
+      let arrived = false;
+      const waiting: Array<() => void> = [];
+      return {
+        arrive: () => { arrived = true; for (const release of waiting.splice(0)) schedule(release, 10); },
+        hold: (span: { end: number }, res: Parameters<NonNullable<MockServer["state"]["extra"]>>[1], body: unknown) => {
+          const finish = replyLater(span, res, body, arrived ? 10 : 2_000);
+          if (!arrived) waiting.push(finish);
+          return true;
+        },
+      };
+    };
+    const micArrived = gate(), mediaArrived = gate(), auditArrived = gate();
     mock.state.extra = (req, res) => {
       const span = { path: req.path, version: req.query.get("version"), kind: (req.body as { data?: { kind?: unknown } } | undefined)?.data?.kind,
         start: performance.now(), end: performance.now() };
       seen.push(span);
-      const later = (ms: number, body: unknown) => {
-        setTimeout(() => { span.end = performance.now(); reply(res, body); }, ms);
-        return true;
-      };
       if (req.path.endsWith("/dialogue-cuts")) {
         saved = true;
-        return later(100, { changes: [{ id: "chg_1", intent: "requested", state: "approved", fromVersion: "tidied", toVersion: "applied", description: "Tightened" }], head: "applied" });
+        return micArrived.hold(span, res, { changes: [{ id: "chg_1", intent: "requested", state: "approved", fromVersion: "tidied", toVersion: "applied", description: "Tightened" }], head: "applied" });
       }
+      if (req.path.endsWith("/media/m2/transcript")) { micArrived.arrive(); return false; }
       if (req.path === "/projects/prj_test/timeline" && req.query.get("version") === "applied") return reply(res, { timeline: applied });
-      if (req.path.endsWith("/dialogue-verbatim")) return later(60, { words: read, covered: [{ start: 0, end: 12 }] });
-      if (req.path === "/projects/prj_test/media" && saved) return later(200, { media: mock.state.project.media });
-      if (req.path.endsWith("/repeat-audit")) return reply(res, { version: "applied", heard: 9, remaining: 0, repeats: [], staged: 0 });
+      if (req.path.endsWith("/dialogue-verbatim")) { replyLater(span, res, { words: read, covered: [{ start: 0, end: 12 }] }, 20); return true; }
+      if (req.path === "/projects/prj_test/media" && saved) {
+        mediaArrived.arrive();
+        return auditArrived.hold(span, res, { media: mock.state.project.media });
+      }
+      if (req.path.endsWith("/repeat-audit")) {
+        auditArrived.arrive();
+        return mediaArrived.hold(span, res, { version: "applied", heard: 9, remaining: 0, repeats: [], staged: 0 });
+      }
       return false;
     };
     const task = Task.parse({ id: "tsk_receipt", projectId: "prj_test", kind: "edit", state: "running", agent: "claude", instruction: "Tighten the dialogue",
@@ -1203,11 +1242,17 @@ describe("dialogue_apply_cuts's receipt of what a saved part still plays", () =>
       const media = at("/projects/prj_test/media").at(-1)!, scanWords = at("/dialogue-verbatim")[0]!, audit = at("/repeat-audit")[0]!;
       expect(scanWords.start).toBeLessThan(media.end);
       expect(audit.start).toBeLessThan(media.end);
+      expect(media.start).toBeLessThan(audit.end);
       // The repeat check starts once the scan's words are read: in a language it reads from the scan, it can save pages they'd read.
       expect(audit.start).toBeGreaterThanOrEqual(scanWords.end);
       // The lists share one read of the version the pass continues on; the sync check reads it as it always has.
       expect(seen.filter(s => s.path === "/projects/prj_test/timeline" && s.version === "applied")).toHaveLength(2);
-    } finally { await c.close(); }
+    } finally {
+      for (const t of timers) clearTimeout(t);
+      timers.clear();
+      for (const finish of [...pending]) finish();
+      await c.close();
+    }
   });
 
   it("names what the lists went without in the order they are read, whichever fails first", async () => {

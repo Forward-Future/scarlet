@@ -117,6 +117,10 @@ export function nextPlanEvent(steps: PlanStep[], previous: string | undefined): 
   return { serialized, event: planEvent(steps) };
 }
 
+/** The harness started compacting the run's context: drives the live status line only, not the log or chat. */
+export const COMPACTING = { type: "log", text: "Compacting context", data: { kind: "compaction", active: true } } as const satisfies RunnerEvent;
+/** Compaction finished or aborted before a boundary event arrived: clears the live status line. */
+export const COMPACTION_ENDED = { type: "log", text: "Compacting context", data: { kind: "compaction", active: false } } as const satisfies RunnerEvent;
 /** The harness compacted the run's context. The engine logs it, with the task, and keeps it out of the chat. */
 export const COMPACTED = { type: "log", text: "Context compacted", data: { kind: "compaction" } } as const satisfies RunnerEvent;
 

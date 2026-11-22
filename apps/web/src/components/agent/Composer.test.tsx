@@ -1157,7 +1157,24 @@ it("answers Scarlet's question with a stretch marked on the ruler beside it, sti
   expect(container.querySelector(".composer-tag-name")?.textContent).toBe("Answer");
   await type("Yes, this part");
   await submit();
-  expect(useProjectStore.getState().answerTask).toHaveBeenCalledWith(asking.question!.id, expect.stringMatching(/^At 0:42.*0:51 — Yes, this part$/), undefined);
+  // The picker holds a different model than the asking task (Claude vs Codex), so the answer hands off silently to the picked model.
+  expect(useProjectStore.getState().answerTask).toHaveBeenCalledWith(
+    asking.question!.id,
+    expect.stringMatching(/^At 0:42.*0:51 — Yes, this part$/),
+    undefined,
+    expect.objectContaining({ agent: "claude" }),
+  );
+  // When the picker matches the asking task's model, no model switch is sent so the existing session continues.
+  const sameModel = { ...asking, question: { ...asking.question!, agent: "claude" as const, model: "opus" } };
+  await act(async () => useUiStore.getState().setAgent({ agent: "claude", model: "opus" }));
+  await show({ thread: sameModel, targetTag: "Answer" });
+  await type("Keep the purple");
+  await submit();
+  expect(useProjectStore.getState().answerTask).toHaveBeenLastCalledWith(
+    asking.question!.id,
+    "Keep the purple",
+    undefined,
+  );
 });
 
 it("keeps the target's × from taking the box elsewhere while a spoken message is in it", async () => {

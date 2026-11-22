@@ -26,12 +26,14 @@ export function CutStream({ project, timeline, version, onStart, draft = false, 
   const { ranges } = plan;
   const [status, setStatus] = useState<"idle" | "waiting" | "ready">("idle");
   const [preroll, setPreroll] = useState<AbortSignal>();
+  const [prerollProgress, setPrerollProgress] = useState<{ done: number; total: number }>();
   const poster = usePoster(project, timeline, version, joins);
   const [error, setError] = useState<string>();
 
   const session = useRef<ReturnType<typeof openCutStream>>(undefined);
   useLayoutEffect(() => {
     setStatus("idle");
+    setPrerollProgress(undefined);
     setError(undefined);
     return () => {
       // The transport lets go of the video first. Closing the stream stops it, and the transport would take a video
@@ -48,6 +50,7 @@ export function CutStream({ project, timeline, version, onStart, draft = false, 
     const failed = (reason: unknown) => {
       session.current = undefined;
       setStatus("idle");
+      setPrerollProgress(undefined);
       setError(errorMessage(reason));
     };
     const prepare = (start: number) => {
@@ -83,9 +86,16 @@ export function CutStream({ project, timeline, version, onStart, draft = false, 
       bufferThrough(start, end, signal) {
         if (!session.current) return;
         setPreroll(signal);
+        setPrerollProgress(undefined);
         // The first fragment may already have fired canplay while the other side of the join is still rendering.
-        return session.current.bufferThrough(start, end, signal).finally(() => {
-          setPreroll(current => current === signal ? undefined : current);
+        return session.current.bufferThrough(start, end, signal, (done, total) => {
+          setPrerollProgress(prev => prev && prev.done === done && prev.total === total ? prev : { done, total });
+        }).finally(() => {
+          setPreroll(current => {
+            if (current !== signal) return current;
+            setPrerollProgress(undefined);
+            return undefined;
+          });
         });
       },
       seek(time) { session.current?.seek(time); },
@@ -102,11 +112,15 @@ export function CutStream({ project, timeline, version, onStart, draft = false, 
   }, [project.id, ranges, plan.error, version, onStart, draft, parkedAt]);
   useLayoutEffect(() => player.setJoins(video.current, joins), [joins, project.id, ranges, version, onStart, draft, parkedAt]);
 
-  // A section on its way is marked on the video. The monitor's play button shows the wait, in place of its icon.
+  // A section on its way is marked on the video. The monitor's play button and load overlay read it from here.
   const waiting = (status === "waiting" || !!preroll) && !error;
+  const waitProgress = waiting && preroll && prerollProgress && prerollProgress.total > 0
+    ? `${prerollProgress.done}/${prerollProgress.total}` : undefined;
   return <>
     <FramedVideo ref={video} aria-label={draft || proposed ? "Proposed draft" : "The current edit"}
-      poster={poster} playsInline preload="auto" data-waiting={waiting || undefined} onClick={() => player.toggle()} onPlaying={() => setStatus("ready")}
+      poster={poster} playsInline preload="auto" data-waiting={waiting || undefined}
+      data-wait-stage={waiting ? "rendering" : undefined} data-wait-progress={waitProgress}
+      onClick={() => player.toggle()} onPlaying={() => setStatus("ready")}
       onWaiting={() => setStatus("waiting")} onCanPlay={() => setStatus("ready")} onSeeked={e => { if (e.currentTarget.readyState >= 2) setStatus("ready"); }} onLoadedData={() => setStatus("ready")} />
     {plan.error && <p role="alert" className="absolute inset-0 grid place-items-center bg-black/75 p-6 text-center">{plan.error}</p>}
     {!plan.error && status !== "ready" && !waiting && (error || draft) && <div className="absolute inset-0 grid place-items-center bg-black/75 p-6 text-center">

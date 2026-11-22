@@ -2,7 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writePrivateFile } from "../private-files.js";
-import { briefInput, COMPACTED, CONTROL_DIR, DEFAULT_STALL_MS, isQuestionTool, nextPlanEvent, prettyToolName, questionText, workspaceEnv, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
+import { briefInput, COMPACTED, COMPACTING, COMPACTION_ENDED, CONTROL_DIR, DEFAULT_STALL_MS, isQuestionTool, nextPlanEvent, prettyToolName, questionText, workspaceEnv, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
 import { earlyResult, exitError, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
 import { addUsage, claudeUsage, createUsageReporter, usageWithModel } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
@@ -108,6 +108,8 @@ export interface ClaudeParseState {
   messageUsage: Record<string, AgentUsage>;
   /** The agent's own plan, when the CLI was launched with its to-do tools. */
   plan: ClaudePlanState;
+  /** Whether Claude Code is currently compacting the session's context. */
+  compacting?: boolean;
 }
 
 export function newClaudeState(): ClaudeParseState {
@@ -147,8 +149,19 @@ export function parseClaudeLine(line: string, st: ClaudeParseState): RunnerEvent
       if (scarlet && scarlet.status !== "connected") {
         events.push({ type: "error", text: `Scarlet MCP server status: ${scarlet.status}` });
       }
+    } else if (msg.subtype === "status") {
+      if (msg.status === "compacting") {
+        if (!st.compacting) {
+          st.compacting = true;
+          events.push(COMPACTING);
+        }
+      } else if (st.compacting) {
+        st.compacting = false;
+        events.push(COMPACTION_ENDED);
+      }
     } else if (msg.subtype === "compact_boundary") {
       // Claude Code compacted the session's context. The engine logs it and keeps it out of the chat.
+      st.compacting = false;
       const meta = (msg.compact_metadata ?? {}) as { trigger?: unknown; pre_tokens?: unknown; post_tokens?: unknown };
       events.push({ ...COMPACTED, data: { ...COMPACTED.data, ...(typeof meta.trigger === "string" && { trigger: meta.trigger }),
         ...(typeof meta.pre_tokens === "number" && { preTokens: meta.pre_tokens }), ...(typeof meta.post_tokens === "number" && { postTokens: meta.post_tokens }) } });

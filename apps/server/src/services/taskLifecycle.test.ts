@@ -6,7 +6,7 @@ import { createProject, timelineFromKeepRanges, type Change, type Project } from
 import { ATTEMPT_HEADER, TASK_HEADER, type Task, type TaskPrompt } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
-import { createTask, saveTask } from "./tasks.js";
+import { appendTaskEvent, createTask, saveTask } from "./tasks.js";
 import { storeVersion } from "./timeline.js";
 
 let dataDir: string;
@@ -367,4 +367,88 @@ it("launches every request with its harness's own tools, a dialogue pass include
   expect([aside.workspace, aside.refusedTool]).toEqual([undefined,
     "Scarlet refused {tool}: only Scarlet's own tools (the scarlet MCP server) run here, with no shell or file tools. Carry on with the request using Scarlet's tools."]);
   expect(aside.systemPrompt).not.toContain("sandboxed");
+});
+
+it("hands off silently when switching models on an answer or on resume-editing, and carries thread Q&A and changes into follow-ups", async () => {
+  // 1. Switch model when answering a question: clears old CLI session and gives the new model the structured work recap + Q&A.
+  const asking = await request("Tighten the opening and clean up repeats");
+  saveTask(app.ctx, { ...get(asking.id), session: { agent: "claude", id: "sess-claude" } });
+  const ts = new Date().toISOString();
+  app.ctx.repos.changes.put({
+    id: "chg_part1", projectId: project.id, taskId: asking.id, threadId: asking.id,
+    fromVersion: "ver_0", toVersion: "ver_1", description: "Trimmed opening false start",
+    author: { type: "agent", name: "Claude" }, noteIds: [], timelineEdits: [], ranges: [], state: "ready", renders: [], createdAt: ts, updatedAt: ts,
+  } as unknown as Change);
+  appendTaskEvent(app.ctx, get(asking.id), { type: "log", text: "Dialogue scan · cam.mp4", data: { kind: "editor_progress", scanPage: { mediaId: "cam", from: 0, to: 120, end: 300 } } });
+  appendTaskEvent(app.ctx, get(asking.id), { type: "log", text: "Trimmed the opening false start.", data: { kind: "editor_progress" } });
+  appendTaskEvent(app.ctx, get(asking.id), { type: "question", text: "Should I keep the sigh at 1:12?" });
+
+  const answered = (await api<{ task: Task }>("POST", `/tasks/${asking.id}/answer`, {
+    text: "Cut the sigh too.", agent: "codex", model: "gpt-5.4", effort: "high",
+  })).body.task;
+  expect(answered).toMatchObject({ agent: "codex", model: "gpt-5.4", effort: "high", state: "queued" });
+  expect(answered.session).toBeUndefined();
+
+  const handoff = await prompt(asking.id);
+  expect(handoff.resumeSession).toBeUndefined();
+  expect(handoff.instruction).toContain("Continue this request after the editor’s answer.");
+  expect(handoff.instruction).toContain("Trimmed the opening false start.");
+  expect(handoff.instruction).toContain("Scanned source seconds on cam: 0–120");
+  expect(handoff.instruction).toContain("Saved change chg_part1 [ready]");
+  expect(handoff.systemPrompt).toContain("Should I keep the sigh at 1:12?");
+  expect(handoff.systemPrompt).toContain("Cut the sigh too.");
+  await api("POST", `/tasks/${asking.id}/cancel`);
+
+  // Same-model answer (even with effort change) keeps the CLI session intact.
+  const sameModel = await request("Clean up pauses");
+  saveTask(app.ctx, { ...get(sameModel.id), model: "opus", session: { agent: "claude", id: "sess-keep" } });
+  appendTaskEvent(app.ctx, get(sameModel.id), { type: "question", text: "Tight or natural?" });
+  const kept = (await api<{ task: Task }>("POST", `/tasks/${sameModel.id}/answer`, {
+    text: "Natural.", agent: "claude", model: "opus", effort: "high",
+  })).body.task;
+  expect(kept.session).toEqual({ agent: "claude", id: "sess-keep" });
+  expect(kept.effort).toBe("high");
+  expect((await prompt(sameModel.id)).resumeSession).toBe("sess-keep");
+  await api("POST", `/tasks/${sameModel.id}/cancel`);
+
+  // 2. Switch model when resuming paused project editing: updates paused task, clears old session + prior sessionCarriesOn.
+  const running = await request("Color match B-cam");
+  saveTask(app.ctx, { ...get(running.id), model: "opus", session: { agent: "claude", id: "sess-paused" } });
+  await api("POST", `/projects/${project.id}/stop-editing`);
+  const pausedId = get(running.id).retryTaskId!;
+  expect(get(running.id).sessionCarriesOn).toBe(true);
+  expect(get(pausedId).session).toEqual({ agent: "claude", id: "sess-paused" });
+
+  const resumed = (await api<{ tasks: Task[] }>("POST", `/projects/${project.id}/resume-editing`, { agent: "codex", model: "gpt-5.4" })).body.tasks;
+  expect(resumed[0]).toMatchObject({ id: pausedId, agent: "codex", model: "gpt-5.4" });
+  expect(resumed[0]!.session).toBeUndefined();
+  expect(get(running.id).sessionCarriesOn).toBeUndefined();
+  expect((await prompt(pausedId)).resumeSession).toBeUndefined();
+  await api("POST", `/tasks/${pausedId}/cancel`);
+
+  // 3. Thread follow-up carries prior Q&A decisions, distinct editorial reply, and multiple recent changes across models.
+  const first = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", model: "opus", instruction: "Remove dead air", createdBy: scarlet });
+  appendTaskEvent(app.ctx, get(first.id), { type: "question", text: "Keep music bed?" });
+  appendTaskEvent(app.ctx, get(first.id), { type: "answer", text: "Yes, keep music bed." });
+  saveTask(app.ctx, { ...get(first.id), state: "done", summary: "Removed 4 pauses.", reply: "Left breath pauses around the punchline intact.", finishedAt: ts });
+  app.ctx.repos.changes.put({
+    id: "chg_f1", projectId: project.id, taskId: first.id, threadId: first.id,
+    fromVersion: "ver_0", toVersion: "ver_1", description: "Cut opening dead air",
+    author: { type: "agent", name: "Claude" }, noteIds: [], timelineEdits: [], ranges: [], state: "approved", renders: [], createdAt: "2026-11-22T00:00:01Z", updatedAt: ts,
+  } as unknown as Change);
+  app.ctx.repos.changes.put({
+    id: "chg_f2", projectId: project.id, taskId: first.id, threadId: first.id,
+    fromVersion: "ver_1", toVersion: "ver_2", description: "Cut mid-roll dead air",
+    author: { type: "agent", name: "Claude" }, noteIds: [], timelineEdits: [], ranges: [], state: "ready", renders: [], createdAt: "2026-11-22T00:00:02Z", updatedAt: ts,
+  } as unknown as Change);
+
+  const followUp = (await api<{ task: Task }>("POST", `/projects/${project.id}/tasks`, {
+    kind: "edit", agent: "codex", model: "gpt-5.4", instruction: "Now tighten the outro too", context: { threadId: first.id },
+  })).body.task;
+  expect(followUp.instruction).toContain("Asked editor: Keep music bed?");
+  expect(followUp.instruction).toContain("Editor answered: Yes, keep music bed.");
+  expect(followUp.instruction).toContain("You replied: Removed 4 pauses.");
+  expect(followUp.instruction).toContain("Editorial note: Left breath pauses around the punchline intact.");
+  expect(followUp.instruction).toContain('Earlier change: "Cut opening dead air" (approved).');
+  expect(followUp.instruction).toContain('Latest change: "Cut mid-roll dead air" (ready).');
 });
