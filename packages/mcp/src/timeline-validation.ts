@@ -2,7 +2,7 @@ import { z } from "zod/v3";
 import {
   clipDuration,
   clipEnd,
-  ProposeOp,
+  ProposedOp,
   type LouderDoubledSound,
   type MediaClip,
   type Timeline,
@@ -83,6 +83,7 @@ export const OPS_DOC = `Op types (all times are seconds; timeline times are posi
 - splitClip: {"op":"splitClip","clipId":"clip_x","at":30.0,"newClipId":"clip_y"} — split at a timeline time into two clips.
 - rippleDelete: {"op":"rippleDelete","start":30.0,"end":31.2} — remove a timeline range from every track (or "trackIds") and close the gap; clips spanning the range are trimmed/split. All tracks stay in sync. Several run in order, each in the times of the edit the ones before it leave as you gave them. Each goes inward onto whole frames (one that runs to the end of the edit keeps its end), and a later one first moves by what earlier ones left in, so it removes the footage you meant: onWholeFrames lists each that changed, with what was removed and movedBy. To remove dialogue, dialogue_apply_cuts places each edge in the recording's measured quiet and reports what it moved.
 - rippleInsertGap: {"op":"rippleInsertGap","at":30.0,"duration":2.0} — push everything after the given time later.
+- splitJoin: {"op":"splitJoin","leftClipId":"clip_a","rightClipId":"clip_b","leads":0.25} — a J cut: the sound at the join of two video clips starts that many seconds before the picture cut ("trails": an L cut, carrying on past it; 0: back on the cut). Picture and runtime stay; the sound moves to the dialogue track. The result's \`Split joins\` says when each voice comes in and goes out (voiceIn, voiceOut) and the words now heard or no longer heard.
 - addTrack: {"op":"addTrack","track":{"id":"v2","kind":"video","name":"B-roll","clips":[]}} — kinds: video | audio | caption.
 - removeTrack: {"op":"removeTrack","trackId":"v2"}
 - updateTrack: {"op":"updateTrack","trackId":"a1","patch":{"muted":true}}
@@ -100,9 +101,9 @@ Clip fields:
 - A later video track composites on top of an earlier one. A caption clip can carry a title or label.`;
 
 /** Validate a list of ops and return readable errors instead of throwing. */
-export function validateOps(ops: unknown): { ok: true; ops: ProposeOp[] } | { ok: false; error: string } {
+export function validateOps(ops: unknown): { ok: true; ops: ProposedOp[] } | { ok: false; error: string } {
   if (!Array.isArray(ops)) return { ok: false, error: "ops must be an array of op objects" };
-  const parsed = z.array(ProposeOp).safeParse(ops);
+  const parsed = z.array(ProposedOp).safeParse(ops);
   if (parsed.success) return { ok: true, ops: parsed.data };
   const lines = parsed.error.issues.slice(0, 20).map((i) => {
     const idx = typeof i.path[0] === "number" ? i.path[0] : undefined;

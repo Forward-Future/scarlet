@@ -21,6 +21,9 @@ import {
   introducedDoubledSound,
   newId,
   pictureSyncOps,
+  expandSplitJoins,
+  type SplitJoinPlaced,
+  type ProposedOp,
   timelineDuration,
   timelineFromKeepRanges,
   timelineToSource,
@@ -62,6 +65,7 @@ import { sourceRangeToTimeline, sourceToTimeline, timelineWords } from "./timeli
 import { expandDips, type DipReport } from "./music-dips.js";
 import { DOUBLED_SOUND, doubledSoundText, OPS_DOC, validateOps } from "./timeline-validation.js";
 import { errorText, formatZodError, json, noteUnmeasured, text, type ToolRegistrar, type ToolResult } from "./tool-result.js";
+import { splitJoinEvidence } from "./split-join.js";
 import { transitionOps } from "./transition.js";
 
 /** Times one timeline_at call maps; the rest of a longer list come back to ask for. */
@@ -215,6 +219,7 @@ ${OPS_DOC}`,
       const body: ProposeChangeRequest = { description, reason, noteIds, intent, autoApprove: !taskId && autoApprove === true ? true : undefined, timelineEdits, skipRender,
         ...(withdraws?.length && { withdraws }) };
       const frameChanges: FrameAdjustment[] = [];
+      let splitJoins: SplitJoinPlaced[] = [];
       const inset = typeof pictureLayout === "object" ? pictureLayout : undefined;
       let insetNote: string | undefined;
       let dips: DipReport[] = [];
@@ -237,10 +242,10 @@ ${OPS_DOC}`,
         if (!checked.ops.length) throw new Error("ops is empty");
         const expanded = await expandDips(checked.ops, before ?? emptyTimeline(projectId), speechOn);
         dips = expanded.dips;
-        const v = { ops: expanded.ops };
+        const v: { ops: ProposedOp[] } = { ops: expanded.ops };
         if (before && (range || (selectedRange(task?.context) && v.ops.every(o => o.op === "rippleDelete" && !o.trackIds)))) {
           body.range = cutScope(before, await cutAnchor(before), range);
-          const aligned = boundedRippleOps(v.ops, body.range, (await getHeader()).project.settings.fps, timelineDuration(before));
+          const aligned = boundedRippleOps(v.ops as TimelineOp[], body.range, (await getHeader()).project.settings.fps, timelineDuration(before));
           const drift = rippleDrift();
           for (const [i, op] of aligned.entries()) {
             const asked = v.ops[i]!;
@@ -251,10 +256,21 @@ ${OPS_DOC}`,
               frameChanges.push({ asked: [asked.start, asked.end], removed: [op.start, op.end], ...(movedBy && { movedBy }) });
           }
           v.ops = aligned;
-        } else v.ops = await ripplesOnFrames(v.ops, before, frameChanges);
-        body.ops = v.ops;
+        } else v.ops = await ripplesOnFrames(v.ops as TimelineOp[], before, frameChanges);
+        // A splitJoin step becomes the clip ops that move the sound, worked out where it falls among the others.
+        if (v.ops.some(o => o.op === "splitJoin")) {
+          if (!before) throw new Error("A splitJoin needs a timeline with the join on it.");
+          const { project } = await getProject();
+          ({ ops: v.ops, joins: splitJoins } = expandSplitJoins(before, project.media, project.settings.fps, v.ops));
+          if (!timelineEdits?.length && splitJoins.length === ops.length) body.timelineEdits = splitJoins.map(j => ({
+            label: `${j.shift < 0 ? "J cut" : j.shift > 0 ? "L cut" : "Sound back on the cut"} at ${Math.floor(j.at / 60)}:${String(Math.floor(j.at % 60)).padStart(2, "0")}`,
+            range: { start: Math.min(j.at, j.at + j.shift), end: Math.max(j.at, j.at + j.shift) },
+            ...(reason && { reason }),
+          }));
+        }
+        body.ops = v.ops as TimelineOp[];
         // Dry-run against the pinned base before deriving the picture from the synchronized clips.
-        const placed = applyOps(before ?? emptyTimeline(projectId), v.ops);
+        const placed = applyOps(before ?? emptyTimeline(projectId), body.ops);
         await refuseDoubledSound(placed);
         // Dialogue removed here skips the edge placement and checks of dialogue_apply_cuts. Three removals on one pass
         // came this way, and an edge inside a sounding word is the clipped word the editor sends back. Each all-track
@@ -264,7 +280,7 @@ ${OPS_DOC}`,
           let on = before;
           // Every refused edge is named at once: named one at a time, a pass made six calls to learn of six edges (2026-11-15).
           const split: string[] = [];
-          for (const [i, op] of v.ops.entries()) {
+          for (const [i, op] of body.ops.entries()) {
             if (op.op === "rippleDelete" && !op.trackIds && op.end > op.start) {
               // Only a measured word split refuses the edit. A recording with nothing to measure goes ahead as asked; one
               // still being prepared is measured when the model calls again.
@@ -279,7 +295,7 @@ ${OPS_DOC}`,
             ". Nothing was saved. Remove dialogue with dialogue_apply_cuts, where a word reference puts each edge in the recording's silence, or move the edge onto quiet (dialogue_check_join measures it).");
         }
         await refuseEdgesInSound(before, placed);
-        if (inset) body.ops = [...v.ops, ...syncPictureOps((await getProject()).project, placed, await insetLayout(placed))];
+        if (inset) body.ops = [...body.ops, ...syncPictureOps((await getProject()).project, placed, await insetLayout(placed))];
       } else {
         const parsed = WritableTimeline.safeParse({ ...timeline, projectId, version: (timeline as { version?: string })?.version ?? "draft" });
         if (!parsed.success) {
@@ -292,7 +308,14 @@ ${OPS_DOC}`,
       }
       const result = await propose(body, before, frameChanges);
       const notes = [insetNote, dips.length ? `musicDips: ${JSON.stringify(dips)}` : undefined].filter((n): n is string => !!n);
-      return notes.length ? { ...result, content: [...result.content, ...notes.map(n => ({ type: "text" as const, text: n }))] } : result;
+      // Each split join as it will play: when each voice comes in and goes out, and the words it brings in or drops.
+      if (splitJoins.length && !result.isError) {
+        const said = new Map<string, TranscriptWord[] | null>();
+        for (const mediaId of new Set(splitJoins.flatMap(j => [j.left.mediaId, j.right.mediaId])))
+          said.set(mediaId, await transcriptWords(mediaId, false).catch(() => null));
+        notes.push(`Split joins: ${JSON.stringify(splitJoinEvidence(applyOps(before!, body.ops!), splitJoins, id => said.get(id)))}`);
+      }
+      return notes.length ? { ...result, content: [...result.content, ...notes.map(text => ({ type: "text" as const, text }))] } : result;
     },
   );
 

@@ -74,6 +74,20 @@ describe("editDetail", () => {
       .toBe("Muted Music");
   });
 
+  it("says how far a split edit's sound leads or trails its picture, and nothing of the copy and the silenced picture", () => {
+    const ops = [
+      { op: "addTrack", track: { id: "trk_v1_dialogue", kind: "audio", name: "Main dialogue", clips: [] } },
+      { op: "addClip", trackId: "trk_v1_dialogue", clip: { id: "c_a", kind: "media", mediaId: "med_main", timelineIn: 0, sourceIn: 0, sourceOut: 11.76, speed: 1, volume: 1 } },
+      { op: "updateClip", clipId: "clp_main", patch: { volume: 0 } },
+      { op: "addClip", trackId: "trk_v1_dialogue", clip: { id: "c_b", kind: "media", mediaId: "med_main", timelineIn: 11.76, sourceIn: 30, sourceOut: 40, speed: 1, volume: 1, splitEdit: { leads: 0.24 } } },
+    ];
+    expect(editDetail(change(ops), { kind: "split", range: { start: 11.76, end: 12 } }, { timeline, media, fps: 25 })).toBe("Sound leads by 6 frames");
+    expect(editDetail(change([{ op: "updateClip", clipId: "clp_music", patch: { sourceOut: 14.4, splitEdit: { trails: 0.4 } } }]),
+      { kind: "split", range: { start: 14, end: 14.4 } }, { timeline, media })).toBe("Sound carries 0.4 s past the cut");
+    expect(editDetail(change([{ op: "updateClip", clipId: "clp_music", patch: { sourceOut: 14, splitEdit: null } }]),
+      { kind: "split", range: { start: 14, end: 14 } }, { timeline, media })).toBe("Sound cuts with the picture");
+  });
+
   it("names a transition and a speed", () => {
     expect(editDetail(change([{ op: "updateClip", clipId: "clp_main", patch: { transitionIn: { type: "push", duration: 0.4, direction: "right" } } }]),
       { kind: "transition", range: at }, { timeline, media })).toBe("Push right, 0.4 s");

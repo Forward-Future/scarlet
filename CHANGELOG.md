@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- Scarlet can make J and L cuts, letting the next voice start just before its shot or a line carry on over the next one, and the edit's card says how far the sound leads or trails.
 - Scarlet can dip music under speech and let it swell back up in the pauses, with a new Music under speech skill for how deep and how fast.
 - Scarlet can clean the room and background noise out of a voice, when you ask for it or a skill of yours says to.
 - Tell Scarlet how a name or word is spelled and it corrects it everywhere in your transcripts at once, so captions, search and later edits use the right spelling, even if a recording is transcribed again.

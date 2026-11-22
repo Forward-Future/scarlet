@@ -1,10 +1,10 @@
-import { clipRange, type Change, type Clip, type MediaAsset, type Timeline, type TimeRange, type Transition } from "@scarlet/timeline";
+import { clipRange, splitEditWords, type Change, type Clip, type MediaAsset, type Timeline, type TimeRange, type Transition } from "@scarlet/timeline";
 import type { EditKind } from "@scarlet/shared";
 
 type Op = Record<string, unknown>;
 
 /** Kinds whose card says exactly what they did, read from the change's own steps. A cut's words are read elsewhere. */
-const DETAILED = new Set<EditKind>(["overlay", "graphic", "text", "zoom", "reframe", "audio", "dip", "voice", "speed", "transition"]);
+const DETAILED = new Set<EditKind>(["overlay", "graphic", "text", "zoom", "reframe", "audio", "dip", "voice", "speed", "transition", "split"]);
 /** A step this far either side of an edit still lands on it: Scarlet's times and a clip's edge differ by rounding. */
 const SLACK = 0.5;
 /** A quote longer than this is cut short. */
@@ -60,11 +60,12 @@ const transitionWords = (t: Partial<Transition>) => {
 
 /**
  * One plain line that says exactly what an edit did, from the steps of the change that made it: the words a caption
- * reads, the file laid over the picture, how far a zoom goes, how loud the sound now plays. None when the steps say
- * nothing a line can name, or the edit is a cut, whose words are read from its transcript.
+ * reads, the file laid over the picture, how far a zoom goes, how loud the sound now plays, how far a join's sound
+ * leads or trails its picture. None when the steps say nothing a line can name, or the edit is a cut, whose words are
+ * read from its transcript. `fps` lets a split edit under a second read in frames.
  */
 export function editDetail(change: Pick<Change, "ops"> | undefined, edit: { kind?: EditKind; range: TimeRange },
-  { timeline, before, media }: { timeline?: Timeline | null; before?: Timeline | null; media: readonly Pick<MediaAsset, "id" | "name">[] }): string | undefined {
+  { timeline, before, media, fps }: { timeline?: Timeline | null; before?: Timeline | null; media: readonly Pick<MediaAsset, "id" | "name">[]; fps?: number }): string | undefined {
   if (!change?.ops?.length || !edit.kind || !DETAILED.has(edit.kind)) return;
   const ops = change.ops as Op[];
   const clips = new Map<string, Clip>();
@@ -146,6 +147,21 @@ export function editDetail(change: Pick<Change, "ops"> | undefined, edit: { kind
     return [];
   };
 
+  if (edit.kind === "split") {
+    // A split edit says only how far each join's sound moved: the copy it handed to a dialogue track and the silenced
+    // picture are how it did it, not what it did. A sound whose split was taken off says so only when nothing moved.
+    let straight = false;
+    const lines = [...new Set(ops.flatMap(op => {
+      const clip = op.op === "addClip" ? op.clip as Clip | undefined : op.op === "updateClip" && typeof op.clipId === "string" ? clips.get(op.clipId) : undefined;
+      const record = op.op === "addClip" ? (clip as { splitEdit?: unknown } | undefined)?.splitEdit
+        : op.op === "updateClip" && op.patch && typeof op.patch === "object" ? (op.patch as { splitEdit?: unknown }).splitEdit : undefined;
+      if (record === undefined || !near(rangeOf(clip))) return [];
+      if (record === null) { straight = true; return []; }
+      return typeof record === "object" ? splitEditWords(record as { leads?: number; trails?: number }, fps) : [];
+    }))];
+    if (!lines.length) return straight ? "Sound cuts with the picture" : undefined;
+    return lines.length > 2 ? `${lines.slice(0, 2).join(" · ")} · ${lines.length - 2} more` : lines.join(" · ");
+  }
   const lines = [...new Set(ops.flatMap(said).filter((line): line is string => !!line))];
   if (!lines.length) return;
   // Two say most edits whole. A change of many steps (a run of captions) names its first two and counts the rest.

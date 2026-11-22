@@ -85,9 +85,10 @@ export async function expandDips(steps: ProposeOp[], before: Timeline, speechOn:
       const placed = dipStep(on, step, await speechOn(on, own));
       op = placed.op;
       dips.push(placed.report);
-    } else op = step;
+    } else op = step as TimelineOp;
     ops.push(op);
-    on = applyOps(on, [op]);
+    // A splitJoin step is expanded later, where it falls among the others; it moves no clip in time.
+    if (step.op !== "splitJoin") on = applyOps(on, [op]);
   }
   return { ops, dips };
 }

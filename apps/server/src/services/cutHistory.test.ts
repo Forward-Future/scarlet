@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { applyOps, createProject, makeMediaClip, timelineFromKeepRanges, type Project } from "@scarlet/timeline";
+import { applyOps, createProject, emptyTimeline, makeMediaClip, splitJoinOps, timelineFromKeepRanges, type MediaClip, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
 import { localUser } from "../auth.js";
 import { recordHistoryEdit, rejectEdits } from "./cutHistory.js";
@@ -103,6 +103,30 @@ it("takes a look edit off again itself, undoes a request whose every edit is rej
   expect(() => reject([answer])).toThrow("This edit can’t be put back as it was.");
   // The other comes off the same way.
   expect(scales(reject([close]).project.head!)).toEqual([undefined, undefined, undefined]);
+});
+
+it("puts one split edit's sound back on its picture cut itself, and keeps the other", () => {
+  const { ctx } = app;
+  const user = localUser(ctx);
+  for (const id of ["host", "guest"]) ctx.repos.projects.putMedia(project.id, { id, name: `${id}.mov`, kind: "video", path: `${id}.mov`, hasAudio: true, duration: 60 }, "ready");
+  const talk = emptyTimeline(project.id);
+  talk.tracks[0]!.clips = [makeMediaClip("host", 2, 12, 0, { id: "ask" }), makeMediaClip("guest", 10, 20, 10, { id: "answer" }), makeMediaClip("host", 30, 40, 20, { id: "react" })];
+  const first = storeVersion(ctx, project.id, talk, { parent: null });
+  const { ops } = splitJoinOps(first, ctx.repos.projects.get(project.id)!.media, 25, [{ at: 10, shift: -0.24 }, { at: 20, shift: 0.5 }]);
+  const split = storeVersion(ctx, project.id, applyOps(first, ops), { parent: first.version, changeId: "chg_split" });
+  ctx.repos.changes.put({ id: "chg_split", projectId: project.id, description: "Split edits", author: { type: "agent", id: "codex", name: "codex" }, state: "approved", noteIds: [], renders: [], ranges: [],
+    fromVersion: first.version, toVersion: split.version, appliedOnto: first.version, appliedVersion: split.version, ops,
+    timelineEdits: [{ label: "J cut at 0:10", range: { start: 9.76, end: 10 } }, { label: "L cut at 0:20", range: { start: 20, end: 20.5 } }],
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  ctx.repos.projects.update(project.id, { head: split.version });
+  const { project: after } = rejectEdits(ctx, user, project.id, "thread", [{ changeId: "chg_split", spot: 1, label: "L cut at 0:20", range: { start: 20, end: 20.5 } }],
+    split.version, ctx.repos.projects.get(project.id)!.branch ?? "main");
+  const tl = ctx.repos.versions.get(project.id, after.head!)!.timeline;
+  const clip = (id: string) => tl.tracks.flatMap(t => t.clips).find(c => c.id === id) as MediaClip;
+  // The reaction plays its own sound again; the answer's sound still leads into its picture and ends on the cut.
+  expect(clip("react").volume).toBe(1);
+  const answer = tl.tracks.find(t => t.kind === "audio" && t.clips.some(c => c.kind === "media" && c.mediaId === "guest"))!.clips.find(c => c.kind === "media" && c.mediaId === "guest") as MediaClip;
+  expect(answer).toMatchObject({ timelineIn: 9.76, sourceOut: 20, splitEdit: { leads: 0.24 } });
 });
 
 it("takes one music dip back with no model, after a later cut split the music it was on, and leaves the other", () => {
