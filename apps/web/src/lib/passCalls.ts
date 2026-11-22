@@ -1,5 +1,6 @@
-import { requestText, type Task, type ThreadEdit } from "@scarlet/shared";
+import { matchesEdit, requestText, type Task, type ThreadEdit } from "@scarlet/shared";
 import { canStartCutReview, isPublishedCall, makeTimeMap, rebaseOp, RebaseConflict, reviewCutSummaries, reviewReasons, type Change, type CutAssessment, type CutReview, type TimeMap, type TimeRange, type Timeline } from "@scarlet/timeline";
+import { editKey } from "./keptEdits";
 import { requestRoots, stagingTask } from "./requestRuns";
 import { runIsActive } from "./taskRun";
 import { isRecheck, stagedCuts, type Thread } from "./threads";
@@ -99,6 +100,89 @@ export function callGoesTo<C>(rows: readonly (readonly ThreadEdit[])[], still: (
     ...calls.map(c => ({ at: c.at, after: c.after, next: { call: c.call } })),
   ].sort((a, b) => a.at - b.at);
   return (items.find(n => n.at > from || (n.at === from && n.after)) ?? items[0])?.next;
+}
+
+export type PassForYouItem<C, E extends Omit<ThreadEdit, "at"> = ThreadEdit> =
+  | { kind: "call"; call: C; at: number; num?: number; waiting: boolean }
+  | { kind: "edit"; edit: E; at: number; num?: number; waiting: boolean };
+
+/**
+ * The waiting pass's "For you" items in the exact top-to-bottom order `PassSummary` displays them:
+ * by stable publication number (`num`) when any call carries `askOrder`, else by timeline position (`at`).
+ * Pre-sorting by `at` matches `PassSummary` on any ties.
+ */
+export function passForYouOrder<C, E extends Omit<ThreadEdit, "at">>(
+  calls: readonly { call: C; at: number; num?: number; waiting: boolean }[],
+  edits: readonly { edit: E; at: number; num?: number; waiting: boolean }[],
+  byNumber: boolean,
+): PassForYouItem<C, E>[] {
+  const items: PassForYouItem<C, E>[] = [
+    ...edits.map(e => ({ kind: "edit" as const, ...e })),
+    ...calls.map(c => ({ kind: "call" as const, ...c })),
+  ].sort((a, b) => a.at - b.at);
+  if (byNumber) items.sort((a, b) => (a.num ?? Infinity) - (b.num ?? Infinity));
+  return items;
+}
+
+/**
+ * Where Keep / Approve / Skip goes from item `current` in a waiting pass's "For you" list:
+ * the next waiting item after `current` in list order, wrapping to earlier items if none follow.
+ */
+export function nextWaitingInForYou<C, E extends Omit<ThreadEdit, "at">>(
+  items: readonly PassForYouItem<C, E>[],
+  current: number,
+): { call: C } | { edit: E } | undefined {
+  if (current < 0) return undefined;
+  const next = items.slice(current + 1).find(item => item.waiting)
+    ?? items.slice(0, current).find(item => item.waiting);
+  return next ? (next.kind === "call" ? { call: next.call } : { edit: next.edit }) : undefined;
+}
+
+/**
+ * Calls the editor decided before a dialogue pass applied: approved cuts linked to their applied edit keys,
+ * and skipped calls (or approved keep proposals) that produced no applied edit.
+ */
+export function decidedPassCalls(
+  thread: Pick<Thread, "changes"> | undefined,
+  edits: readonly Omit<ThreadEdit, "at">[],
+  rejected: readonly Omit<ThreadEdit, "at">[] = [],
+) {
+  const decidedCallEditKeys = new Set<string>();
+  const decidedCallRows: { key: string; at: number; label: string; approved: boolean }[] = [];
+  if (!thread) return { decidedCallEditKeys, decidedCallRows };
+  for (const change of thread.changes) {
+    if (change.state !== "approved" || !change.cutChoices?.length) continue;
+    const joins = change.appliedReview?.joins;
+    const hasReviewIndex = !!joins?.some(j => j.reviewIndex !== undefined);
+    for (const choice of change.cutChoices) {
+      const assessment = change.cutAssessments?.find(a => a.index === choice.index);
+      const approved = choice.choice === (assessment?.proposes === "keep" ? "keep" : "cut");
+      let matched: Omit<ThreadEdit, "at"> | undefined;
+      if (joins?.length && hasReviewIndex) {
+        const spot = joins.findIndex(j => j.reviewIndex === choice.index);
+        if (spot >= 0) {
+          matched = edits.find(e => matchesEdit(e, { changeId: change.id, spot }))
+            ?? rejected.find(e => matchesEdit(e, { changeId: change.id, spot }));
+        }
+      }
+      if (!matched && choice.choice === "cut" && choice.start !== undefined) {
+        matched = edits.find(e => e.changeId === change.id && Math.abs(e.range.start - choice.start!) < 0.05)
+          ?? rejected.find(e => e.changeId === change.id && Math.abs(e.range.start - choice.start!) < 0.05);
+      }
+      if (matched) {
+        decidedCallEditKeys.add(editKey(matched));
+        continue;
+      }
+      const cutReason = change.cutReasons?.[choice.index];
+      decidedCallRows.push({
+        key: `choice/${change.id}/${choice.index}`,
+        at: assessment?.start ?? choice.start ?? cutReason?.start ?? 0,
+        label: assessment?.summary || assessment?.reason || cutReason?.summary || cutReason?.reason || "Cut",
+        approved,
+      });
+    }
+  }
+  return { decidedCallEditKeys, decidedCallRows };
 }
 
 /** The timelines of the versions a pass's cuts are carried across, as far as the window has them, and the frame rate to read them at. */

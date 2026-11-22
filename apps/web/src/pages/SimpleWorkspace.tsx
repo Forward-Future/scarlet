@@ -48,8 +48,8 @@ import { composeClocks, verifiedJoinClock, type JoinClock } from "../lib/joinClo
 import { buildThreads, firstCutDeliveries, isRedo, revisionTarget, stagedCuts, type Thread } from "../lib/threads";
 import { runIsActive } from "../lib/taskRun";
 import { lastAttempt, laterAttempts, notesStillAsked, redoWords, requestRoots, stagingTask, takenFromQueue, waitingToStart } from "../lib/requestRuns";
-import { callGoesTo, callNow, callRevisions, carriedCall, carryingVersions, cutOnWorkingCut, isOpenPass, keepGoesTo, noRevisions, openPass, passRevision, reviewCalls, revisedCall, revisedFrom, revisionCut, savedChoices,
-  type Call, type CutChoice } from "../lib/passCalls";
+import { callGoesTo, callNow, callRevisions, carriedCall, carryingVersions, cutOnWorkingCut, decidedPassCalls, isOpenPass, keepGoesTo, nextWaitingInForYou, noRevisions, openPass, passForYouOrder, passRevision, reviewCalls, revisedCall, revisedFrom, revisionCut, savedChoices,
+  type Call, type CutChoice, type PassForYouItem } from "../lib/passCalls";
 import { canPreviewMedia } from "../lib/upload";
 import { showingWorkingCut, useShownCut } from "../stores/shownCut";
 import { useProjectStore } from "../stores/project";
@@ -1049,7 +1049,6 @@ export function SimpleWorkspace() {
   const waitingCalls = allCalls.filter(waiting);
   const remainingCalls = listening ? waitingCalls.filter(a => a.index !== listening.index) : [];
   const currentIndex = listening ? allCalls.findIndex(a => a.index === listening.index) : -1;
-  const nextCallAfterDecision = listening ? allCalls.slice(currentIndex + 1).find(waiting) ?? remainingCalls[0] : undefined;
   // A call's number is the order it reached the editor in: a later ask, or the cuts the pass hands over
   // when it ends, never renumber the calls the editor has seen. A request about that cut, its card, its line in the
   // list and its dot on the timeline all say "Cut 2".
@@ -1557,48 +1556,123 @@ export function SimpleWorkspace() {
   const openOnItsOwn = (edit: ThreadEdit) => !!openMoment?.edits.includes(edit);
   const shownRow = reviewingEdit ? editsByRow.findIndex(row => row.includes(reviewingEdit)) : -1;
   const waitingEdit = (e: ThreadEdit) => !!e.check && !reviewed(e) && !revisingEdit(e);
+  const seeAll = !!focusThread && lists[focusThread.id] === "all";
+  const passSeeAll = !!passThread && lists[passThread.id] === "all";
+  const passEditList = passThread?.id === focusThread?.id && threadTimeline.edits.length > 0 ? threadTimeline.edits : passEdits;
+  const passByNumber = allCalls.some(c => c.askOrder !== undefined);
+  const passEditNum = (e: Omit<ThreadEdit, "at">) => passEditNo.get(editKey(e))?.n
+    ?? e.previous.map(p => passEditNo.get(editKey(p))?.n).find(n => n !== undefined);
+  // The waiting pass's For you list in the exact order PassSummary shows it: calls and flagged edits together,
+  // sorted by publication number when asks are numbered, else by timeline position.
+  const passForYouItems = pass && passThread ? passForYouOrder(
+    allCalls.map(call => ({ call, at: listedAt.get(call.index) ?? call.start, num: callNo.get(call.index), waiting: waiting(call) })),
+    passEditList.filter(e => !!e.check).map(edit => ({
+      edit, at: (edit as ThreadEdit).at ?? edit.range.start, num: passEditNum(edit), waiting: !passReviewed(edit) && !passRevising(edit),
+    })),
+    passByNumber,
+  ) : [];
+  const steppableInPassForYou = (item: PassForYouItem<Call, ThreadEdit>) => item.kind === "call" || !passRevising(item.edit);
+  const inPassForYou = !!pass && passThread?.id === focusThread?.id && !seeAll;
+  const { decidedCallEditKeys } = useMemo(
+    () => decidedPassCalls(pass && passThread?.id === focusThread?.id ? undefined : focusThread, threadEdits, threadTimeline.rejected),
+    [pass, passThread?.id, focusThread, threadEdits, threadTimeline.rejected],
+  );
+  const isFocusForYouEdit = (e: ThreadEdit) => !!e.check || !!e.wasCheck || decidedCallEditKeys.has(editKey(e));
   // A flagged edit not yet kept says its place among the ones still to check, as a call does.
   const flaggedRows = useMemo(() => editsByRow.filter(row => row.some(waitingEdit)), [editsByRow, reviewed, revisingEdit]); // eslint-disable-line react-hooks/exhaustive-deps
-  const editPlace = reviewingEdit && waitingEdit(reviewingEdit) ? flaggedRows.indexOf(editsByRow[shownRow]!) : -1;
+  const waitingPassForYouEdits = inPassForYou ? passForYouItems.filter((item): item is Extract<PassForYouItem<Call, ThreadEdit>, { kind: "edit" }> => item.kind === "edit" && item.waiting) : [];
+  const editPlace = reviewingEdit && waitingEdit(reviewingEdit)
+    ? (inPassForYou ? waitingPassForYouEdits.findIndex(item => matchesEdit(item.edit, reviewingEdit)) : flaggedRows.indexOf(editsByRow[shownRow]!))
+    : -1;
   const shownPassNo = reviewingEdit ? passEditNo.get(editKey(reviewingEdit))?.name : undefined;
-  // When the timeline is on another request, use the flags the pass's own review list shows.
-  const passFlagged = !pass || !passThread ? [] : passThread.id === focusThread?.id ? flaggedEdits
-    : passEdits.filter(e => !!e.check && !passReviewed(e) && !passRevising(e));
   const closeEdit = () => { player.pause(); threadTimeline.clear(); };
-  function editBeside(delta: number) {
-    // From an edit that leads with its place among the ones still to check ("1 of 3"), ↑ and ↓ step to the others of
-    // those: the next of every edit would be one of a pass's hundreds of settled cuts, and the count would go. One of
-    // them sent back for revision has no card to say so and steps the same way, to the ones that still wait. While
-    // the chat lists every edit of the request, and from any other edit, they step through them all. The arrows go by
-    // the list the chat shows, however it came to be open, which is why a flagged edit opened from the timeline opens
-    // the list of the ones that wait and not every edit.
-    const every = !!focusThread && lists[focusThread.id] === "all";
-    const among = !!reviewingEdit?.check && !reviewed(reviewingEdit) && !every;
-    // A row stands for its first place that waits, else its first, as in the list.
-    const beside = delta > 0 ? editsByRow.slice(shownRow + 1) : editsByRow.slice(0, Math.max(0, shownRow)).reverse();
+  function editBeside(delta: number): { edit: ThreadEdit } | { call: Call } | undefined {
+    if (!reviewingEdit) return undefined;
+    // On a waiting pass's For you list, ↑ and ↓ follow the list's exact order, stepping seamlessly between
+    // flagged edits and calls (skipping revising edits, which have no card).
+    if (inPassForYou && (reviewingEdit.check || reviewingEdit.wasCheck)) {
+      const at = passForYouItems.findIndex(item => item.kind === "edit" && matchesEdit(item.edit, reviewingEdit));
+      if (at >= 0) {
+        const next = delta > 0
+          ? passForYouItems.slice(at + 1).find(steppableInPassForYou)
+          : passForYouItems.slice(0, at).findLast(steppableInPassForYou);
+        return next ? (next.kind === "call" ? { call: next.call } : { edit: next.edit }) : undefined;
+      }
+      // A rejected For you edit is no longer live: step to the item after or before its position in For you.
+      const was = reviewingEdit.at ?? reviewingEdit.range.start;
+      const wasNum = passEditNum(reviewingEdit);
+      const cmp = (other: PassForYouItem<Call, ThreadEdit>) =>
+        passByNumber ? ((other.num ?? Infinity) - (wasNum ?? Infinity) || other.at - was) : (other.at - was);
+      const next = delta > 0
+        ? passForYouItems.find(other => steppableInPassForYou(other) && cmp(other) >= 0)
+        : passForYouItems.findLast(other => steppableInPassForYou(other) && cmp(other) < 0);
+      return next ? (next.kind === "call" ? { call: next.call } : { edit: next.edit }) : undefined;
+    }
+    // On For you (non-pass thread or applied pass), ↑ and ↓ stay among the For you rows (waiting or kept,
+    // skipping revising and unflagged edits), including when stepping from a kept or rejected For you edit.
+    // While the chat lists every edit of the request, and from any unflagged edit, they step through them all.
+    const among = !seeAll && isFocusForYouEdit(reviewingEdit);
+    const forYouRow = (row: ThreadEdit[]) => row.some(e => isFocusForYouEdit(e) && !revisingEdit(e));
+    const pickForYou = (row: ThreadEdit[] | undefined) => row && { edit: row.find(waitingEdit) ?? row.find(e => isFocusForYouEdit(e) && !revisingEdit(e)) ?? row[0]! };
     // A rejected edit is no row of the list, just rejected or open again from its row: from it they step to the edit
     // after or before where it was.
-    if (reviewingEdit && shownRow < 0) {
+    if (shownRow < 0) {
       const was = reviewingEdit.at ?? reviewingEdit.range.start, timeOf = (other: ThreadEdit[]) => other[0]!.at ?? other[0]!.range.start;
       // An edit at the very place it was, as the rest of its moment can be, is the one after it.
-      return (delta > 0 ? editsByRow.find(other => timeOf(other) >= was) : editsByRow.findLast(other => timeOf(other) < was))?.[0];
+      const row = delta > 0
+        ? editsByRow.find(other => (!among || forYouRow(other)) && timeOf(other) >= was)
+        : editsByRow.findLast(other => (!among || forYouRow(other)) && timeOf(other) < was);
+      return among ? pickForYou(row) : row && { edit: row[0]! };
     }
-    const row = among ? beside.find(other => other.some(waitingEdit)) : editsByRow[shownRow + delta];
-    return row && (row.find(waitingEdit) ?? row[0]);
+    if (among) {
+      const beside = delta > 0 ? editsByRow.slice(shownRow + 1) : editsByRow.slice(0, Math.max(0, shownRow)).reverse();
+      return pickForYou(beside.find(forYouRow));
+    }
+    const row = editsByRow[shownRow + delta];
+    return row && { edit: row.find(waitingEdit) ?? row[0]! };
   }
   function stepEdit(delta: number) {
     const next = editBeside(delta);
     if (!next) return;
-    // ↑ and ↓ reach the log as a bare key: this says which edit they went to.
-    appLog("action", "step", { to: "edit", edit: threadEdits.indexOf(next) + 1, of: threadEdits.length, change: next.changeId });
-    actions.playEdit(next, openOnItsOwn(next));
+    if ("call" in next && pass) {
+      appLog("action", "step", { to: "call", call: callNo.get(next.call.index), of: allCalls.length, change: pass.id, cut: next.call.index });
+      actions.listen(pass, next.call);
+      return;
+    }
+    if ("edit" in next) {
+      // ↑ and ↓ reach the log as a bare key: this says which edit they went to.
+      appLog("action", "step", { to: "edit", edit: threadEdits.indexOf(next.edit) + 1, of: threadEdits.length, change: next.edit.changeId });
+      actions.playEdit(next.edit, openOnItsOwn(next.edit));
+    }
+  }
+  function callBeside(delta: number): { call: Call } | { edit: ThreadEdit } | undefined {
+    if (!pass || !passThread) return undefined;
+    if (!passSeeAll) {
+      if (!passForYouItems.length) return undefined;
+      const at = openCall ? passForYouItems.findIndex(item => item.kind === "call" && item.call.index === openCall.index) : -1;
+      let next: PassForYouItem<Call, ThreadEdit> | undefined;
+      if (at < 0) {
+        // From nothing, start on the first item still waiting in For you with ↓, the last with ↑.
+        const waitingItems = passForYouItems.filter(item => item.waiting);
+        const fallbackItems = passForYouItems.filter(item => item.kind === "call" ? !sentBack(item.call.index) : !passRevising(item.edit));
+        const allSteppable = passForYouItems.filter(steppableInPassForYou);
+        next = delta > 0 ? (waitingItems[0] ?? fallbackItems[0] ?? allSteppable[0]) : (waitingItems.at(-1) ?? fallbackItems.at(-1) ?? allSteppable.at(-1));
+      } else {
+        next = delta > 0
+          ? passForYouItems.slice(at + 1).find(steppableInPassForYou)
+          : passForYouItems.slice(0, at).findLast(steppableInPassForYou);
+      }
+      return next ? (next.kind === "call" ? { call: next.call } : { edit: next.edit }) : undefined;
+    }
+    if (!allCalls.length) return undefined;
+    const at = openCall ? allCalls.indexOf(openCall) : -1;
+    const call = at < 0 ? (delta > 0 ? waitingCalls[0] ?? asks[0] ?? allCalls[0] : waitingCalls.at(-1) ?? asks.at(-1) ?? allCalls.at(-1)) : allCalls[at + delta];
+    return call ? { call } : undefined;
   }
   // On See all (and from any unflagged edit), Keep goes to the next row of the list that hasn't been kept: an
   // unflagged edit, a flagged one that still waits or a call that does, going past the ones that have and wrapping to
-  // earlier ones. On For you, Keep wraps through the flagged rows that still wait, then reaches the request’s first
-  // waiting call. The card closes once nothing is left.
-  const seeAll = !!focusThread && lists[focusThread.id] === "all";
-  const passSeeAll = !!passThread && lists[passThread.id] === "all";
+  // earlier ones. On For you, Keep advances to the next waiting item in For you list order (call or flagged edit),
+  // wrapping to earlier items, and closes the card once nothing is left.
   const unkeptEdit = (e: ThreadEdit) => !e.check && !reviewed(e) && !revisingEdit(e);
   const rowAfterKeep = (still: (e: ThreadEdit) => boolean) => editsByRow.slice(shownRow + 1).find(row => row.some(still))
     ?? editsByRow.slice(0, Math.max(0, shownRow)).find(row => row.some(still));
@@ -1607,17 +1681,22 @@ export function SimpleWorkspace() {
     ? keepGoesTo(editsByRow, shownRow, e => unkeptEdit(e) || waitingEdit(e),
       callsToKeepTo.map(call => ({ call, at: listedAt.get(call.index) ?? call.start })))
     : undefined;
-  const nextRowAfterKeep = !reviewingEdit || seeAll || !reviewingEdit.check ? undefined : rowAfterKeep(waitingEdit);
+  const currentEditInForYou = reviewingEdit && inPassForYou && reviewingEdit.check
+    ? passForYouItems.findIndex(item => item.kind === "edit" && matchesEdit(item.edit, reviewingEdit))
+    : -1;
+  const afterPassForYouKeep = currentEditInForYou >= 0 ? nextWaitingInForYou(passForYouItems, currentEditInForYou) : undefined;
+  const nextRowAfterKeep = !reviewingEdit || seeAll || !reviewingEdit.check || currentEditInForYou >= 0 ? undefined : rowAfterKeep(waitingEdit);
   // Keep reaches a moment as ↑ ↓ do: whole, at the edit it is named for, however much of it is kept already. The
   // first of its edits still to keep would open alone and unfold the moment.
   const momentLead = (edit: ThreadEdit) => threadTimeline.moments ? editsByRow.find(row => row.includes(edit))?.[0] ?? edit : edit;
   const nextEditAfterKeep = afterListKeep && "edit" in afterListKeep ? momentLead(afterListKeep.edit)
+    : afterPassForYouKeep && "edit" in afterPassForYouKeep ? afterPassForYouKeep.edit
     : nextRowAfterKeep && (nextRowAfterKeep.find(waitingEdit) ?? nextRowAfterKeep[0]);
   const nextCallAfterKeep = afterListKeep ? "call" in afterListKeep ? afterListKeep.call : undefined
+    : currentEditInForYou >= 0 ? (afterPassForYouKeep && "call" in afterPassForYouKeep ? afterPassForYouKeep.call : undefined)
     : !nextEditAfterKeep && !seeAll && reviewingEdit?.check && passThread?.id === focusThread?.id ? waitingCalls[0] : undefined;
   // On See all, approving or skipping a call moves on to the next item in the full list (edit or call), regardless of
-  // whether it is a For you item. On For you, it moves to the next waiting call, then the first flagged edit.
-  const passEditList = passThread?.id === focusThread?.id && threadTimeline.edits.length > 0 ? threadTimeline.edits : passEdits;
+  // whether it is a For you item. On For you, it moves to the next waiting item in For you list order (call or edit).
   const passEditRows = useMemo(() => passThread?.id === focusThread?.id && threadTimeline.edits.length > 0 && threadTimeline.moments
     ? threadTimeline.moments.map(m => m.edits) : listMoments(passEdits).map(m => m.edits),
   [passThread?.id, focusThread?.id, threadTimeline.edits.length, threadTimeline.moments, passEdits]);
@@ -1626,13 +1705,15 @@ export function SimpleWorkspace() {
       remainingCalls.map(call => ({ call, at: listedAt.get(call.index) ?? call.start, after: allCalls.indexOf(call) > currentIndex })),
       listedAt.get(listening.index) ?? listening.cut.start)
     : undefined;
+  const currentCallInForYou = listening && pass && !passSeeAll
+    ? passForYouItems.findIndex(item => item.kind === "call" && item.call.index === listening.index)
+    : -1;
   const nextAfterCallDecision: { call: Call } | { edit: ThreadEdit } | undefined = !listening ? undefined
     : passSeeAll
       ? afterSeeAllCall && "edit" in afterSeeAllCall
         ? { edit: passEditRows.find(row => row.includes(afterSeeAllCall.edit))?.[0] ?? afterSeeAllCall.edit }
         : afterSeeAllCall
-      : nextCallAfterDecision ? { call: nextCallAfterDecision }
-      : passFlagged[0] ? { edit: passFlagged[0] } : undefined;
+      : nextWaitingInForYou(passForYouItems, currentCallInForYou);
   const onCall = !!openCall && !openCallBack && !reviewingEdit;
   const upcomingCall = onCall ? (nextAfterCallDecision && "call" in nextAfterCallDecision ? nextAfterCallDecision.call : undefined) : nextCallAfterKeep;
   const upcomingEdit = onCall ? (nextAfterCallDecision && "edit" in nextAfterCallDecision ? nextAfterCallDecision.edit : undefined)
@@ -1649,11 +1730,14 @@ export function SimpleWorkspace() {
     });
     return () => { clearTimeout(timer); unsubscribe(); };
   }, [hoveredRow]);
-  const waitingOrder = waitingCalls.map(c => c.index).join(",");
-  const flaggedOrder = passFlagged.map(editKey).join(",");
+  const forYouOrder = passForYouItems.map(item => `${item.kind}:${item.kind === "call" ? item.call.index : editKey(item.edit)}:${item.waiting ? 1 : 0}`).join(",");
   // Where ↑ goes from the open edit or call, so going back isn't cold either.
-  const previousEdit = reviewingEdit ? editBeside(-1) : undefined;
-  const previousCall = onCall ? allCalls[allCalls.indexOf(openCall!) - 1] : undefined;
+  const prevFromEdit = reviewingEdit ? editBeside(-1) : undefined;
+  const prevFromCall = onCall ? callBeside(-1) : undefined;
+  const previousEdit = reviewingEdit ? (prevFromEdit && "edit" in prevFromEdit ? prevFromEdit.edit : undefined)
+    : prevFromCall && "edit" in prevFromCall ? prevFromCall.edit : undefined;
+  const previousCall = onCall ? (prevFromCall && "call" in prevFromCall ? prevFromCall.call : undefined)
+    : prevFromEdit && "call" in prevFromEdit ? prevFromEdit.call : undefined;
   const reviewQueue = useMemo(() => {
     if (!activeReview || !timeline || head !== timeline.version) return [];
     const queue = new Map<string, CutToPrepare>();
@@ -1709,15 +1793,18 @@ export function SimpleWorkspace() {
     if (upcomingEdit) addEdit(upcomingEdit, onCall ? passThread : focusThread, onCall ? passEditList : threadEdits);
     // After the next one, the one before: the editor steps back less often than on.
     if (previousCall && !sentBack(previousCall.index)) addCall(previousCall);
-    if (previousEdit && !revisingEdit(previousEdit)) addEdit(previousEdit, focusThread, threadEdits);
-    waitingCalls.forEach(addCall);
-    if (passThread?.id !== focusThread?.id) passFlagged.forEach(edit => addEdit(edit, passThread, passEdits));
-    flaggedEdits.forEach(edit => addEdit(edit, focusThread, threadEdits));
+    if (previousEdit && !(onCall ? passRevising : revisingEdit)(previousEdit)) addEdit(previousEdit, onCall ? passThread : focusThread, onCall ? passEditList : threadEdits);
+    for (const item of passForYouItems) {
+      if (!item.waiting) continue;
+      if (item.kind === "call") addCall(item.call);
+      else addEdit(item.edit, passThread, passEditList);
+    }
+    if (passThread?.id !== focusThread?.id) flaggedEdits.forEach(edit => addEdit(edit, focusThread, threadEdits));
     // Among settled cuts warm the first visible row, then the one reached by Keep or the arrow keys.
     const visible = !openCall && (listShown || onLatest) && (reviewingEdit ? nextEditAfterKeep : threadEdits.find(e => !!e.beforeCut && !revisingEdit(e)));
     if (visible) addEdit(visible, focusThread, threadEdits);
     return [...queue.values()];
-  }, [activeReview, timeline, head, pass, review, liveReview, returningCall, placed, waitingOrder, flaggedOrder, openCall?.index, openCallBack, conflict, onCall, reviewingEdit, upcomingCall, upcomingEdit,
+  }, [activeReview, timeline, head, pass, review, liveReview, returningCall, placed, forYouOrder, openCall?.index, openCallBack, conflict, onCall, reviewingEdit, upcomingCall, upcomingEdit,
     flaggedEdits, threadEdits, passEditList, passEdits, passThread, focusThread, toWorkingCut, placing, priorityRow, listShown, onLatest, nextEditAfterKeep, previousEdit, previousCall,
     beforeTimeline, afterTimeline, appliedSide, madeBy, callTimeline, needsSingleCut, single.preview, listening?.side, versionAfter, savedAfter.timeline, !!preparedCall]); // eslint-disable-line react-hooks/exhaustive-deps
   const openVersion = versionBefore ?? head;
@@ -1780,22 +1867,24 @@ export function SimpleWorkspace() {
   useWatchedMomentAutoKeep(watching, watchedMoments, current.id, focusThread?.id, head);
   useEditCardShortcuts(workspaceActive && !!reviewingEdit, stepEdit, closeEdit);
 
-  // ↑ and ↓ step through the cuts that need a call, one at a time.
+  // ↑ and ↓ step through the pass's For you items (calls and flagged edits), one at a time.
   const stopListening = () => { player.pause(); setListening(undefined); };
   function stepCut(delta: number) {
-    if (!allCalls.length) return;
-    // From nothing, it starts on a call still waiting on the editor, as For you does: the first with ↓, the last
-    // with ↑. With none waiting, on one they can decide again. From a call, it goes to the one beside it in the list.
-    const at = openCall ? allCalls.indexOf(openCall) : -1;
-    const next = at < 0 ? (delta > 0 ? waitingCalls[0] ?? asks[0] ?? allCalls[0] : waitingCalls.at(-1) ?? asks.at(-1) ?? allCalls.at(-1)) : allCalls[at + delta];
-    if (next && pass) appLog("action", "step", { to: "call", call: callNo.get(next.index), of: allCalls.length, change: pass.id, cut: next.index });
-    if (next && pass) actions.listen(pass, next);
+    const next = callBeside(delta);
+    if (!next || !pass || !passThread) return;
+    if ("call" in next) {
+      appLog("action", "step", { to: "call", call: callNo.get(next.call.index), of: allCalls.length, change: pass.id, cut: next.call.index });
+      actions.listen(pass, next.call);
+      return;
+    }
+    appLog("action", "step", { to: "edit", edit: passEditList.indexOf(next.edit) + 1, of: passEditList.length, change: next.edit.changeId });
+    actions.openEdit(passThread, next.edit);
   }
   // The suggestion on the card is the one being applied: it stays up until that lands.
   const applyingShown = !!suggestion && deciding === suggestion.id;
   // Capture phase, so ↑ and ↓ step between cuts while a pass waits for a call. ← and → pass through to the player.
   const reviewKeysOn = workspaceActive && !!(passThread || suggestionThread) && !reviewingEdit;
-  useCallCardShortcuts(reviewKeysOn, !!pass, { stepCut, stopListening, closeReview, listening: !!listening, suggestion: !!suggestion, applying: applyingShown, calls: allCalls.length > 0 });
+  useCallCardShortcuts(reviewKeysOn, !!pass, { stepCut, stopListening, closeReview, listening: !!listening, suggestion: !!suggestion, applying: applyingShown, calls: passForYouItems.length > 0 });
 
   // Esc closes the Transcript beside the player. A cut, an edit or a suggestion that's open takes Esc first.
   const escClosesTranscript = workspaceActive && transcript && !reviewingEdit && !(reviewKeysOn && (!!listening || !!suggestion));
@@ -1866,7 +1955,7 @@ export function SimpleWorkspace() {
   useEffect(() => { if (leavingEdit && !leavingNow) setLeavingEdit(undefined); }, [leavingEdit, leavingNow]);
   // A cut plays on the version before it. The ones ↑ and ↓ lead to from here are read ahead, so the timeline goes from
   // this cut to that one in one move, with no moment on the video in between.
-  const besideVersions = leavingNow ? [editBeside(1), editBeside(-1)].flatMap(e => e?.beforeCut ? [e.beforeCut.version] : []).join(" ") : "";
+  const besideVersions = leavingNow ? [editBeside(1), editBeside(-1)].flatMap(t => t && "edit" in t && t.edit.beforeCut ? [t.edit.beforeCut.version] : []).join(" ") : "";
   useEffect(() => {
     for (const version of besideVersions.split(" ").filter(Boolean)) void readTimeline(current.id, version).catch(() => {});
   }, [current.id, besideVersions]);
