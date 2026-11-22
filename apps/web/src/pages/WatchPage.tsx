@@ -20,13 +20,14 @@ import { editTargetAt, markedRangeOf, useUiStore, type AgentContext, type Marked
 import { Icon } from "../components/ui/primitives";
 import { CachedVideo } from "../components/player/CachedVideo";
 import { MonitorPlayback, PlayerTime } from "../components/player/MonitorPlayback";
+import { MonitorLoadOverlay } from "../components/player/MonitorLoadOverlay";
 import { usePictureWait } from "../components/player/usePictureWait";
 import { useCutAudio } from "../components/player/useCutAudio";
 import { usePlaybackCache } from "../components/player/usePlaybackCache";
 import { CutStream } from "../components/player/CutStream";
 import { Player } from "../components/player/Player";
 import { AmbientLight } from "../components/player/AmbientLight";
-import { cutFrameUrl, scrubFrameUrl } from "../components/review/thumbs";
+import { cutFrameUrl, interactiveFrameUrl, scrubFrameUrl } from "../components/review/thumbs";
 import { EditBeforePreview, useEditBefore, type BeforePlayback } from "../components/review/EditBeforePreview";
 import { useApprovalComparison } from "../components/review/SideBySideComparison";
 import { PlayerTimeline, type TimelineDot, type TimelineGap } from "../components/review/TimelineScrubber";
@@ -582,6 +583,20 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     } else setExpanded(true);
   }
   const view = draftVersion ? "Proposed edit" : source ? "Source preview" : hasCut ? "Working edit" : "Footage";
+  const resolveLeadIn = useCallback(() => {
+    const rawTime = openingJoin && reviewCut ? reviewCut.start : usePlayerStore.getState().time;
+    const targetTime = Math.max(0, Math.min(rawTime, lastFrame));
+    const fastTimeline = pairTimeline ?? laneTimeline;
+    const fast = source
+      ? scrubFrameUrl(source, null, current.media, targetTime, true)
+      : scrubFrameUrl(undefined, fastTimeline, current.media, targetTime, true);
+    const activeJoined = reviewCut?.side === "after" ? editedSide?.joined : !reviewCut ? joined : undefined;
+    const sharpTimeline = activeJoined?.timeline ?? displayedTimeline ?? laneTimeline;
+    const sharpTime = activeJoined ? activeJoined.clock.toMedia(targetTime) : targetTime;
+    const sharp = source ? undefined : interactiveFrameUrl(cutFrameUrl(current.project, sharpTimeline, sharpTime, true, true));
+    return { fast, sharp };
+  }, [openingJoin, reviewCut, lastFrame, pairTimeline, laneTimeline, source, current.media, current.project, editedSide?.joined, joined, displayedTimeline]);
+  const transitionKey = `${reviewCut?.key ?? selection ?? ""}:${reviewCut?.side ?? ""}`;
 
   return (
     <section ref={stage} className="cut-preview" aria-label={view} data-expanded={expanded || undefined}>
@@ -621,6 +636,15 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
             active={active} rejectedOriginal={rejectedOriginal} onRejectOriginal={rejectOriginal} onMedia={onMedia} />)}
           {atSelectedFrame && selectedTime !== undefined && selectedFrameUrl &&
             <SelectedCutFrame key={JSON.stringify([fullVideoUrl, selectedFrameUrl])} time={selectedTime} url={selectedFrameUrl} fps={fps} />}
+          <MonitorLoadOverlay
+            monitor={monitor}
+            pictureWaiting={loading}
+            openingJoin={!!openingJoin}
+            disabled={!!cutLoadError || !!draftFailed || !!playingBefore || !!framing || !(source || cut || change || draftVersion)}
+            transitionKey={transitionKey}
+            resolveLeadIn={resolveLeadIn}
+            canWatchBefore={reviewCut?.side === "after"}
+          />
           {simple.label && <div className="simple-on-video" role="status">{simple.label}</div>}
           {!playingBefore && !framing && <PictureMarks projectId={current.id} version={source ? undefined : rangeVersion} mediaId={source?.id} fps={fps} />}
           {/* The edits saved while the video played come in as it stops, with a word that they did. */}

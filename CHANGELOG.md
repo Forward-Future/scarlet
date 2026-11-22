@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- Switching to a cut that takes a moment to render now shows a dimmed still of the target moment with a subtle loading sheen, progress, and a quick option to press `\` for Before instead of leaving the player black.
 - Items in For you now stay in place after you keep, finish, or reject them—dimmed and labeled Kept, Done, or Rejected—so you can see what you've already handled.
 
 ## November 21, 2026
