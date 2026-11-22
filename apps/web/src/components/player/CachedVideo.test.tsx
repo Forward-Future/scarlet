@@ -27,7 +27,7 @@ afterEach(async () => {
 });
 
 const show = (props: Partial<ComponentProps<typeof CachedVideo>> = {}) =>
-  act(async () => root.render(<CachedVideo url="/renders/r1/file" label="The current edit" hidden={false} active autoPlay={false} {...props} />));
+  act(async () => root.render(<CachedVideo url="/renders/r1/file" label="The video" hidden={false} active autoPlay={false} {...props} />));
 const video = () => container.querySelector("video")!;
 /** The file's length is known: the element reports it and says so. */
 const opens = (duration: number) => act(async () => {
@@ -151,7 +151,7 @@ it("is the player's video while it is on the page, and toggles on a click", asyn
   const attach = vi.spyOn(player, "attach"), detach = vi.spyOn(player, "detach"), toggle = vi.spyOn(player, "toggle").mockImplementation(() => {});
   await show();
   expect(attach.mock.calls[0]?.[0]).toBe(video());
-  expect(video().getAttribute("aria-label")).toBe("The current edit");
+  expect(video().getAttribute("aria-label")).toBe("The video");
   await act(async () => video().click());
   expect(toggle).toHaveBeenCalledTimes(1);
   await act(async () => container.querySelector<HTMLElement>(".video-surface")!.click());

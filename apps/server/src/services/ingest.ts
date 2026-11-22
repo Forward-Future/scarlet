@@ -25,18 +25,6 @@ import { cancelTask } from "./tasks.js";
 import { recoverImportTranscriptions, startImportTranscription } from "./transcription.js";
 import { olderWaveforms, waveformBase } from "./waveforms.js";
 
-export {
-  holdTranscriptions,
-  latestTranscription,
-  settleAlignment,
-  startTranscription,
-  transcribeForDialogue,
-  transcribeMedia,
-  transcriptionHeld,
-  transcriptionProgress,
-} from "./transcription.js";
-export { getWaveform, readWaveformCache } from "./waveforms.js";
-
 const GiB = 1024 ** 3;
 const URL_IMPORT_BYTES = 64 * GiB;
 const DOWNLOAD_RESERVE = GiB;

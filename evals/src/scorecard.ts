@@ -119,7 +119,7 @@ export function rateScore(count: number, keptSeconds: number, halfLifePer10Min: 
  * the factors that need it have no figure.
  */
 export function factors(score: Score, at: OperatingPoint = "recommended"): Factors {
-  const { cut: point, detail, seconds, pacing: left, sharedJoins: shared, edges: measured, moments = [] } = score.playable[at];
+  const { cut: point, detail, seconds, pacing: left, sharedJoins: shared, moments = [] } = score.playable[at];
   const ref = score.pacing.reference;
   const noReference = none("no published video for this recording");
   const noDetail = ref ? none("the case's words aren't here to read the cut by") : noReference;

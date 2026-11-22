@@ -16,7 +16,7 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { cli, isMain, main } from "./args.ts";

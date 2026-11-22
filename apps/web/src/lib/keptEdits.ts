@@ -137,8 +137,19 @@ function sendKeeps(projectId: string, threadId: string, edits: KeepEditsRequest[
   for (const edit of edits) unkept.delete(`${projectId}/${threadId}/${edit.changeId}/${edit.spot}${edit.recheck ? `@${edit.recheck}` : ""}`);
   toEngine(() => api.keepEdits(projectId, { threadId, ...(version && { version }), edits }), error => {
     appLog("review", "keep-send-failed", { project: projectId, thread: threadId, count: edits.length, name: errorName(error) }, { level: "warn" });
+    // A Keep that didn't reach the engine (it was restarting, or reconnecting) is sent on by the hook at the thread's
+    // next update. A few times only: one the engine keeps refusing isn't asked for at every update.
+    for (const edit of edits) {
+      const key = `${projectId}/${threadId}/${edit.changeId}/${edit.spot}${edit.recheck ? `@${edit.recheck}` : ""}`;
+      const tries = (failedSends.get(key) ?? 0) + 1;
+      failedSends.set(key, tries);
+      if (tries < SEND_TRIES) sent.delete(key);
+    }
   });
 }
+/** How many times a Keep is sent before this session leaves it as the engine has it. */
+const SEND_TRIES = 3;
+const failedSends = new Map<string, number>();
 
 /** What a Keep the engine recorded on a change reads as here (`reviewKey`). */
 function engineKeys(thread: Thread | undefined): ReadonlySet<string> {

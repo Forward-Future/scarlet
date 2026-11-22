@@ -32,9 +32,6 @@ import { restoreUnreplacedProposal } from "./revisionState.js";
 import { runAttemptIds } from "./runAttempts.js";
 import { aboutStagedCut, followUpInstruction, RESUMABLE } from "./taskPrompts.js";
 
-export { aboutStagedCut, followUpInstruction, pairQuestionsAndAnswers, RESUMABLE, taskPrompt } from "./taskPrompts.js";
-export { claimTask } from "./taskQueue.js";
-
 /** States a task never leaves. */
 export const FINISHED_TASK: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
 

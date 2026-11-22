@@ -1,7 +1,8 @@
 import { conflict, notFound } from "../errors.js";
 import { nameCutRowsByWords } from "../services/cutRowWords.js";
 import { cancelTask } from "../services/tasks.js";
-import { holdTranscriptions, resumeImportsInBackground } from "../services/ingest.js";
+import { resumeImportsInBackground } from "../services/ingest.js";
+import { holdTranscriptions } from "../services/transcription.js";
 import { recoverSourcePreviews } from "../services/sourcePreviews.js";
 import { withActivity } from "../services/projectActivity.js";
 import { holdProjectEditing, resumeProjectEditing, resumeProjectTranscriptions } from "../services/taskRecovery.js";
