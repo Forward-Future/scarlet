@@ -1342,6 +1342,23 @@ describe("transcript tools", () => {
       expect(first).toContain("“Kept the cube solve animation” (chg_round4, edit 2)");
     } finally { await editor.close(); mock.state.extra = before; }
   });
+  it("music_beats returns the engine's reading in source seconds, with the levels only when asked", async () => {
+    const before = mock.state.extra;
+    const reading = { mediaId: "m2", from: 0, to: 20, tempo: { bpm: 120, confidence: 0.8, alternatives: [60, 240] }, beatSeconds: 0.5, beats: [0.25, 0.75],
+      meter: { beatsPerBar: 4, confidence: 0.9 }, downbeats: [0.25], sections: [{ start: 0, end: 20, levelDb: -12, changeDb: 0 }], levels: { stepSeconds: 0.5, db: [-12, -12] } };
+    mock.state.extra = (req, res) => {
+      if (!req.path.endsWith("/media/m2/music-beats")) return before?.(req, res) ?? false;
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ...reading, from: Number(req.query.get("from") ?? 0) }));
+      return true;
+    };
+    try {
+      const { levels, ...rest } = reading;
+      expect(firstJson(await client.callTool({ name: "music_beats", arguments: { mediaId: "m2" } }) as CallToolResult)).toEqual(rest);
+      expect(firstJson(await client.callTool({ name: "music_beats", arguments: { mediaId: "m2", from: 4, levels: true } }) as CallToolResult))
+        .toEqual({ ...reading, from: 4, levels });
+      expect(mock.requests.filter(r => r.path.endsWith("/music-beats")).at(-1)!.query.get("from")).toBe("4");
+    } finally { mock.state.extra = before; }
+  });
   it("transcript_search finds phrases with context", async () => {
     const r = (await client.callTool({ name: "transcript_search", arguments: { mediaId: "m1", query: "WELCOME back" } })) as CallToolResult;
     const t = textOf(r);

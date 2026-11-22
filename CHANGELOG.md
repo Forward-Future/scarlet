@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- Scarlet can now find the beat, the bars and where the energy builds and drops in a music track, so you can ask it to cut to the music.
 - A voice request aimed at a moment on the timeline now carries any attached files or marked frame with it instead of leaving them in the message box.
 - Skipping a second ahead with Shift+→ while watching a pass's edits no longer marks a skipped cut or edit as kept.
 - Timeline thumbnails stay cached while a recording prepares instead of redrawing on every progress update.

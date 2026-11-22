@@ -107,6 +107,35 @@ it("refuses a range that isn't one, and a source with no sound", async () => {
   expect((await loudness("", "voice", "prj_other")).status).toBe(404);
 });
 
+it("reads the beats of a click track made by FFmpeg, bars and all, and keeps the reading", async () => {
+  const { ctx } = workspace;
+  // 20 s at 120 BPM in four, from 0.25 s: a low kick on each bar's first beat, a high tick on the others, as AAC in an
+  // .m4a, the kind of file a music bed comes as.
+  const beat = "mod(t-0.25\\,0.5)", bar = "mod(t-0.25\\,2)";
+  const kick = `0.8*sin(2*PI*60*${bar})*exp(-${bar}/0.08)*lt(${bar}\\,0.3)`;
+  const tick = `0.4*sin(2*PI*2000*${beat})*exp(-${beat}/0.01)*lt(${beat}\\,0.1)*gte(${bar}\\,0.4)`;
+  await ffmpeg(["-f", "lavfi", "-i", `aevalsrc=gte(t\\,0.25)*(${kick}+${tick}):d=20:s=44100`, "-c:a", "aac", "-b:a", "192k", "-y",
+    join(ctx.paths.media(projectId), "bed.m4a")]);
+  ctx.repos.projects.putMedia(projectId, { id: "bed", name: "Bed", path: "bed.m4a", kind: "audio", duration: 20 }, "ready");
+  const read = async (query = "") => {
+    const res = await workspace.app.request(`/api/projects/${projectId}/media/bed/music-beats${query}`, { headers: { Authorization: `Bearer ${accessToken(workspace.ctx)}` } });
+    return { status: res.status, body: await res.json() as Record<string, any> };
+  };
+  const { status, body } = await read();
+  expect(status).toBe(200);
+  expect(body).toMatchObject({ mediaId: "bed", from: 0, tempo: { bpm: expect.closeTo(120, 0) }, meter: { beatsPerBar: 4 } });
+  const truth = Array.from({ length: 39 }, (_, k) => 0.25 + k * 0.5);
+  const off = (found: number[], times: number[]) => Math.max(...times.map(t => Math.min(...found.map(f => Math.abs(f - t)))));
+  // AAC starts its sound a little late and smears a click: still within a frame at 30 fps.
+  expect(off(body.beats, truth.slice(1, -1))).toBeLessThan(1 / 30);
+  expect(off(body.downbeats, truth.filter((_, k) => k % 4 === 0).slice(1, -1))).toBeLessThan(1 / 30);
+  // A stretch is read on its own; out of range and too long are refused.
+  expect((await read("?from=4&to=14")).body).toMatchObject({ from: 4, to: expect.closeTo(14, 1) });
+  expect((await read("?from=30")).status).toBe(400);
+  expect((await read("", )).body).toEqual(body);
+  expect((await workspace.app.request(`/api/projects/${projectId}/media/screen/music-beats`, { headers: { Authorization: `Bearer ${accessToken(workspace.ctx)}` } })).status).toBe(400);
+});
+
 it("answers a reading of the picture for what went wrong: the caller's mistake, a recording not ready, or the engine's fault", async () => {
   const { ctx } = workspace;
   const { writeFileSync } = await import("node:fs");

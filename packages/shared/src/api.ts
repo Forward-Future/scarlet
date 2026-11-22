@@ -246,6 +246,34 @@ export const WaveformResponse = z.object({
 });
 export type WaveformResponse = z.infer<typeof WaveformResponse>;
 
+/** A stretch of music where the level holds (`GET /projects/:id/media/:mediaId/music-beats`). */
+export interface MusicSection {
+  start: number;
+  end: number;
+  /** Mean level over the section, dBFS. */
+  levelDb: number;
+  /** How the level moves through the section: its fitted change from start to end, dB. */
+  changeDb: number;
+  /** The level just after the section starts against just before it, dB: a step up or down at its start. */
+  jumpDb?: number;
+}
+
+/** A music file's beats, bars, tempo and level sections, measured from its sound. Source seconds. */
+export interface MusicReading {
+  mediaId?: string;
+  from: number;
+  to: number;
+  tempo: { bpm: number; confidence: number; alternatives: number[] } | { unclear: string };
+  /** Seconds between beats at that tempo. */
+  beatSeconds?: number;
+  beats: number[];
+  meter?: { beatsPerBar: number; confidence: number } | { unclear: string };
+  downbeats?: number[];
+  sections: MusicSection[];
+  /** The level every `stepSeconds`, dBFS, from `from`. */
+  levels: { stepSeconds: number; db: number[] };
+}
+
 /** One file of the folder an editor takes to another app: its text, or a copy of a file in Scarlet's library. */
 export type HandoffFile = { path: string; text: string } | { path: string; source: string; size: number };
 

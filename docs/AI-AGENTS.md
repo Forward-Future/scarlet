@@ -201,6 +201,7 @@ The layers improve independently. Models and harnesses change every few months, 
 | How many of a pass's cuts the editor is asked to check | `packages/shared/src/checkIn.ts`, the first-cut `## Context` line in `packages/mcp/src/prompt.ts`, `taskPrompt` in `apps/server/src/services/tasks.ts`, `apps/web/src/components/shell/CheckInSettings.tsx` |
 | Dialogue editing choices and audio joins | `skills/dialogue-pass/SKILL.md`, `apps/server/src/services/changes.ts`, `packages/timeline/src/joinCrossfade.ts` |
 | Word alignment | `apps/server/src/transcribe/wordAlign.ts`, `ctcAlign.ts`, `emissions.ts` |
+| Music: beats, bars, tempo and where the level builds and drops | `apps/server/src/services/musicBeats.ts`, `/music-beats` in `apps/server/src/routes/perception.ts`, `music_beats` in `packages/mcp/src/perception-tools.ts` |
 | Local audio models: turns, helper process, shared decode | `apps/server/src/services/audioWork.ts`, `transcribe/audioWorker.ts`, `services/recordingAudio.ts` |
 | Skills: delivery, seeding, merge | `skills/*/SKILL.md`, `apps/server/src/services/skills.ts` |
 | Changing a skill with a prompt | `apps/server/src/routes/skills.ts` (`/skills/:skillId/edit`), `buildSkillEditPrompt` in `packages/mcp/src/prompt.ts`, `apps/web/src/pages/SkillEditorPage.tsx` |
