@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createProject, emptyTimeline, makeMediaClip, type MediaAsset } from "@scarlet/timeline";
-import { AIR_AFTER_SPEECH, AIR_BEFORE_SPEECH, checkDialogueJoin, clipEdgeSound, edgeOnFrame, quietFrameNote, soundBesideEdge, splitLeave, joinAudio, joinEvidence, padEdge, pauseCutRange, wordCutRange, type JoinPage } from "./dialogue-join.js";
+import { AIR_AFTER_SPEECH, AIR_BEFORE_SPEECH, checkDialogueJoin, checkResumeQuote, clipEdgeSound, edgeOnFrame, quietFrameNote, soundBesideEdge, splitLeave, joinAudio, joinEvidence, padEdge, pauseCutRange, wordCutRange, type JoinPage } from "./dialogue-join.js";
 
 // The stock guide states the pace a join leaves, and a pass that reads it sends that pace with its cuts. When the
 // default moved to 0.20 s and 0.05 s the guide still said 0.15 s and 0.1 s, the wait before the voice the change took out.
@@ -817,5 +817,52 @@ describe("a clip edge in sound", () => {
     const start = edge(2.6, "in")!;
     expect(start.wholeAt).toBeLessThanOrEqual(2.28);
     expect(edge(start.wholeAt!, "in")).toBeUndefined();
+  });
+});
+
+describe("stretched scan words across a room-tone dip", () => {
+  // Scan omits an abandoned syllable ("con" at 1.62-1.84) and stretches "and" backward across the 60 ms
+  // room-tone dip (-60 dBFS at 1.84-1.90) while speechActivity bridges both.
+  const scanWords = [
+    { start: .4, end: .7, text: "seen" },
+    { start: 1.4, end: 1.6, text: "those," },
+    { start: 1.66, end: 2.06, text: "and" },
+    { start: 2.06, end: 2.24, text: "this" },
+  ];
+  const loud: Array<[number, number]> = [[.4, .7], [1.4, 1.6], [1.62, 1.84], [1.90, 2.24]];
+  const rms = Array.from({ length: 250 }, (_, i) => loud.some(([a, b]) => i / 50 >= a - 1e-9 && i / 50 < b - 1e-9) ? .035 : .001);
+  const stretched: JoinPage = {
+    mediaId: "mic", start: 0, end: 5,
+    edges: joinEvidence(scanWords, { from: 0, to: 5, peaks: rms, rms, speechActivity: [{ start: .38, end: .72 }, { start: 1.38, end: 2.26 }] }),
+  };
+
+  it("matches checkResumeQuote at the dip, rejects mid-sound, and ignores silent trailing removed words", () => {
+    const { p, tl } = fixture();
+    // At the -60 dBFS dip (1.87 s), "and" still sounds at speaking level after 1.87 s -> matches.
+    expect(checkResumeQuote(tl, p, 1.87, [stretched], "and this")).toBe("matches");
+    // Inside speaking-level sound of "and" (1.96 s, no dip) -> still rejected as different.
+    expect(checkResumeQuote(tl, p, 1.96, [stretched], "and this")).toBe("different");
+    // A removed word whose timing merely trails silently into room tone past the edge is NOT included.
+    const trailing = [
+      { start: .4, end: .7, text: "seen" },
+      { start: 1.4, end: 1.90, text: "con" },
+      { start: 1.90, end: 2.06, text: "and" },
+      { start: 2.06, end: 2.24, text: "this" },
+    ];
+    const trailingPage: JoinPage = {
+      mediaId: "mic", start: 0, end: 5,
+      edges: joinEvidence(trailing, { from: 0, to: 5, peaks: rms, rms, speechActivity: [{ start: .38, end: .72 }, { start: 1.38, end: 2.26 }] }),
+    };
+    expect(checkResumeQuote(tl, p, 1.85, [trailingPage], "and this")).toBe("matches");
+    expect(checkResumeQuote(tl, p, 1.85, [trailingPage], "con and")).toBe("different");
+  });
+
+  it("omits transcriptSplitsWord in joinAudio at room tone while reporting it in sounding speech", () => {
+    const { p, tl } = fixture();
+    const [, atDip] = joinAudio(tl, p, { start: 1.0, end: 1.87 }, [stretched]);
+    expect(atDip).toBeDefined();
+    expect(atDip!.transcriptSplitsWord).toBeUndefined();
+    const [, inSound] = joinAudio(tl, p, { start: 1.0, end: 1.96 }, [stretched]);
+    expect(inSound).toMatchObject({ sound: "sound", transcriptSplitsWord: "and" });
   });
 });

@@ -5,7 +5,7 @@
 import { applyReviewRemovals, clipDuration, crossfadeJoins, sourceToTimeline, timelineToSource, type MediaAsset, type Project, type TimeRange, type Timeline } from "@scarlet/timeline";
 import { JOIN_WORD_SECONDS, normalizeTranscriptToken } from "@scarlet/shared";
 import { audibleClipsByTrack, isTag, round3 } from "./analysis.js";
-import { dialogueAudioStream, pageAt, plain, wordMargin, type JoinPage, type Word } from "./dialogue-acoustics.js";
+import { SPEECH_DBFS, atQuietOrDip, dialogueAudioStream, extremeLevel, pageAt, plain, wordMargin, type JoinPage, type Word } from "./dialogue-acoustics.js";
 import { partialRepeatAtJoin, type FragmentSide } from "./dialogue-fragment-repeat.js";
 import { REPEAT_WITHIN } from "./dialogue-leftovers.js";
 import { MAX_CROSSFADE, timelineJoins, type JoinSide } from "./timeline-perception.js";
@@ -226,7 +226,16 @@ export function checkResumeQuote(tl: Timeline, project: Project, end: number, pa
     const t = timelineToSource(clip, end);
     const page = pageAt(pages, clip.mediaId, dialogueAudioStream(clip) ?? streams.get(clip.mediaId), t);
     if (!page) return "unverified";
-    const words = page.words.filter(w => w.start >= t - wordMargin && w.end > t && w.end <= clip.sourceOut);
+    const resumingAtDip = atQuietOrDip(page, t);
+    const words = page.words.filter(w => {
+      if (w.end <= t || w.end > clip.sourceOut) return false;
+      if (w.start >= t - wordMargin) return true;
+      // A scan page can omit an abandoned syllable and stretch the resuming word backward across a
+      // measured dip or quiet point. When the edge sits at that dip and the word still sounds at
+      // speaking level after it, that word is what resumes there (2026-11-22).
+      return resumingAtDip && w.end > t + wordMargin &&
+        (extremeLevel(page, t, w.end, "highest")?.db ?? -Infinity) > SPEECH_DBFS;
+    });
     if (!words.length) return "unverified";
     const heard = words.slice(0, expected.length).flatMap(w => tokens(w.text));
     if (heard.some((word, i) => i < expected.length && expected[i] !== word)) return "different";

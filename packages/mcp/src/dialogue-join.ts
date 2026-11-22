@@ -17,6 +17,7 @@ import {
   TROUGH_DBFS,
   TROUGH_DEPTH_DB,
   TROUGH_SEARCH,
+  atRoomTone,
   dialogueAudioStream,
   edgeOnFrame,
   gaps,
@@ -474,7 +475,9 @@ export function joinAudio(tl: Timeline, project: Project, range: TimeRange, page
       const confirmed = (q: TimeRange) => q.end - q.start >= 2 * quietMargin;
       const before = gaps(page).filter(q => confirmed(q) && q.start + quietMargin <= t).at(-1);
       const after = gaps(page).find(q => confirmed(q) && q.end - quietMargin >= t);
-      const split = page.words.find(w => inWord(w, t));
+      // Measured quiet or room tone under the edge means the word is not sounding there (e.g. a scan timing
+      // stretched across a dip over an omitted syllable), matching clipEdgeSound's soundUnderEdge.
+      const split = atRoomTone(page, t) ? undefined : page.words.find(w => inWord(w, t));
       out.push({ edge, mediaId: clip.mediaId, at: round3(t), sound: soundAt(page, t), ...(levels && { levels }),
         ...(before && { quietBefore: round3(Math.min(t, before.end - quietMargin)) }),
         ...(after && { quietAfter: round3(Math.max(t, after.start + quietMargin)) }),

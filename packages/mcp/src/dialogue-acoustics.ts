@@ -401,6 +401,24 @@ export function isDip(levels: AudioLevels, i: number, bar = TROUGH_DBFS) {
   return db <= DIP_DBFS || db <= bar && troughDepth(levels, i) >= TROUGH_DEPTH_DB;
 }
 
+/** Whether `t` sits in measured quiet/valley or at room tone (`<= DIP_DBFS`), where no word is sounding. */
+export function atRoomTone(page: NonNullable<JoinPage["edges"]>, t: number): boolean {
+  if (soundAt(page, t) !== "sound") return true;
+  const levels = page.levels;
+  if (!levels) return false;
+  const i = Math.floor((t - levels.from) / levels.step);
+  return i >= 0 && i < levels.db.length && levels.db[i]! <= DIP_DBFS;
+}
+
+/** Whether `t` sits in measured quiet/valley or at a dip (room tone or deep trough) between words. */
+export function atQuietOrDip(page: NonNullable<JoinPage["edges"]>, t: number): boolean {
+  if (soundAt(page, t) !== "sound") return true;
+  const levels = page.levels;
+  if (!levels) return false;
+  const i = Math.floor((t - levels.from) / levels.step);
+  return i >= 0 && i < levels.db.length && isDip(levels, i);
+}
+
 /** A level and its frame centre, read from the same buckets that locate silence. */
 export function extremeLevel(page: NonNullable<JoinPage["edges"]>, from: number, to: number, kind: "lowest" | "highest") {
   const levels = page.levels;

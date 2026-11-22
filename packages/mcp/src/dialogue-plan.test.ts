@@ -1210,4 +1210,41 @@ describe("restart cuts that run past the restart", () => {
     const plan = sentence();
     expect(await plan(3, 7, { decision: "review" })).toMatchObject({ outcome: "ready" });
   });
+
+  it("accepts a word-addressed cut with resumeWith when the scan stretches the resuming word across a room-tone dip", async () => {
+    const { tl, sources } = fixture();
+    // Stored transcript has an abandoned syllable "con" before the retake "and this", separated by a 60 ms
+    // room-tone dip (-60 dBFS) bridged by speechActivity. The scan omits "con" and stretches "and" backward across it.
+    const transcript = [
+      { text: "seen", start: .4, end: .7 },
+      { text: "those", start: 1.4, end: 1.6 },
+      { text: "con", start: 1.62, end: 1.84 },
+      { text: "and", start: 1.90, end: 2.06 },
+      { text: "this", start: 2.06, end: 2.24 },
+    ];
+    const scanWords = [
+      { text: "seen", start: .4, end: .7 },
+      { text: "those,", start: 1.4, end: 1.6 },
+      { text: "and", start: 1.66, end: 2.06 },
+      { text: "this", start: 2.06, end: 2.24 },
+    ];
+    const loud: Array<[number, number]> = [[.4, .7], [1.4, 1.6], [1.62, 1.84], [1.90, 2.24]];
+    const rms = Array.from({ length: 250 }, (_, i) => loud.some(([a, b]) => i / 50 >= a - 1e-9 && i / 50 < b - 1e-9) ? .035 : .001);
+    const scanned: JoinPage = {
+      mediaId: "mic", start: 0, end: 5,
+      edges: joinEvidence(scanWords, { from: 0, to: 5, rms, peaks: rms, speechActivity: [{ start: .38, end: .72 }, { start: 1.38, end: 2.26 }] }),
+    };
+    sources.pages = () => [scanned];
+    sources.evidence.scans = [scanned];
+    sources.words = async () => transcript;
+    const plan = await planDialogueCuts({
+      tl, localPauses: false,
+      cuts: [cut({ mediaId: "mic", fromWord: 1, toWord: 2, resumeWith: "and this" })],
+    }, sources);
+    expect(plan.outcome).toBe("ready");
+    if (plan.outcome !== "ready") return;
+    expect(plan.decisions[0]).toMatchObject({ review: false });
+    expect(plan.decisions[0]!.end).toBeGreaterThanOrEqual(1.84);
+    expect(plan.decisions[0]!.end).toBeLessThanOrEqual(1.90);
+  });
 });
