@@ -1,5 +1,4 @@
-import { setTimeout as delay } from "node:timers/promises";
-import { json, notePreparing, text, unmeasured, type ToolResult } from "./tool-result.js";
+import { json, notePreparing, raceTimeout, text, unmeasured, type ToolResult } from "./tool-result.js";
 
 type JoinReading = Record<string, unknown>;
 type Run = (publish: (index: number, reading: JoinReading, inspected?: () => void) => void) => Promise<ToolResult | void>;
@@ -87,10 +86,9 @@ export class JoinChecks {
       const finish = () => { entry.finished = Date.now(); };
       void done.then(finish, finish);
     }
-    const timer = new AbortController();
     const pending = Symbol("still measuring");
     try {
-      const result = await Promise.race([job.done, delay(waitMs, pending, { signal: timer.signal, ref: false })]);
+      const result = await raceTimeout(job.done, waitMs, pending);
       for (const [what, why] of job.missed) unmeasured.getStore()?.set(what, why);
       if (typeof result === "symbol") {
         notePreparing();
@@ -105,6 +103,6 @@ export class JoinChecks {
     } catch (err) {
       if (this.jobs.get(key) === job) this.jobs.delete(key);
       throw err;
-    } finally { timer.abort(); }
+    }
   }
 }

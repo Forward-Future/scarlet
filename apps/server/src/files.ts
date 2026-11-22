@@ -90,11 +90,14 @@ export function originalPlaybackType(path: string, kind: string, videoCodec?: st
 }
 
 /** Original uploads are untrusted even after a successful media probe. */
-export function serveOriginal(req: Request, path: string): Response {
-  const type = contentTypeFor(path);
+export function serveOriginal(req: Request, path: string, opts: { contentType?: string; cacheControl?: string } = {}): Response {
+  const type = opts.contentType ?? contentTypeFor(path);
   const passive = type.startsWith("audio/") || type.startsWith("video/") ||
     ["image/jpeg", "image/png", "image/gif", "image/webp", "image/x-icon"].includes(type);
-  const response = serveFile(req, path, { contentType: passive ? type : "application/octet-stream" });
+  const response = serveFile(req, path, {
+    contentType: passive ? type : "application/octet-stream",
+    cacheControl: opts.cacheControl,
+  });
   response.headers.set("Content-Security-Policy", "sandbox; default-src 'none'");
   response.headers.set("X-Content-Type-Options", "nosniff");
   if (!passive) response.headers.set("Content-Disposition", "attachment");

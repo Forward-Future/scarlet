@@ -4,7 +4,7 @@ import { captionExportHasCues, captionTracks, handoffLosses, NO_CAPTION_TRACK, N
 import { errorMessage, IS_MOCK } from "../../lib/client";
 import { desktop } from "../../lib/desktop";
 import { exportCounting, exportFailureSeen, exportFile, PICTURE_DONE, useExports, type ExportFile } from "../../lib/exportJobs";
-import { clock, fmtBytes, pct, playbackClock } from "../../lib/format";
+import { clock, fileBaseName, fmtBytes, pct, playbackClock } from "../../lib/format";
 import { useProjectStore, type ProjectData } from "../../stores/project";
 import { ActivityProgress, Field, Icon, InlineError, Modal } from "../ui/primitives";
 import { PreferenceSelect } from "../ui/PreferenceSelect";
@@ -184,7 +184,7 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
     </div>}
     {exported && <p className="mt-3 flex items-center gap-2 text-xs" role="status">
       {exportedCurrentEdit && <Icon name="check" />}
-      <span className="truncate" title={exported.path} data-log-private>{exported.path.split(/[\\/]/).pop()}</span>
+      <span className="truncate" title={exported.path} data-log-private>{fileBaseName(exported.path)}</span>
       {!exportedCurrentEdit && <span className="shrink-0 text-muted">· Earlier edit</span>}
       <button className="btn-quiet shrink-0" data-log-control="reveal-export" onClick={() => { setRevealError(""); void desktop.revealPath(exported.path).catch(e => setRevealError(errorMessage(e))); }}>Show in folder</button>
     </p>}

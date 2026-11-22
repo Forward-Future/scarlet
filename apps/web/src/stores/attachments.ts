@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { TaskAttachment } from "@scarlet/shared";
 import { api, errorMessage } from "../lib/client";
+import { fileBaseName } from "../lib/format";
 
 /** A file dropped or pasted on the message box, on its way into the project or there, waiting for the next message. */
 export interface PendingAttachment {
@@ -29,7 +30,6 @@ interface AttachmentsState {
 
 const uploads = new Map<string, Promise<void>>();
 let next = 0;
-const baseName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() || path;
 
 export const useAttachmentsStore = create<AttachmentsState>((set, get) => {
   const patch = (projectId: string, key: string, change: Partial<PendingAttachment>) => set(state => ({
@@ -41,7 +41,7 @@ export const useAttachmentsStore = create<AttachmentsState>((set, get) => {
       const room = MAX_ATTACHMENTS - (get().byProject[projectId]?.length ?? 0);
       const taken = files.slice(0, Math.max(0, room));
       if (!taken.length) return;
-      const rows = taken.map(file => ({ file, row: { key: `att-${++next}`, name: "path" in file ? baseName(file.path) : file.name || "Pasted file", state: "adding" as const } }));
+      const rows = taken.map(file => ({ file, row: { key: `att-${++next}`, name: "path" in file ? fileBaseName(file.path) : file.name || "Pasted file", state: "adding" as const } }));
       set(state => ({ byProject: { ...state.byProject, [projectId]: [...state.byProject[projectId] ?? [], ...rows.map(r => r.row)] } }));
       for (const { file, row } of rows) {
         const upload = ("path" in file ? api.uploadAttachment(projectId, { path: file.path }) : api.uploadAttachment(projectId, file, file.name || undefined))

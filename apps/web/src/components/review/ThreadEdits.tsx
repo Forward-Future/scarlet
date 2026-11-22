@@ -4,14 +4,15 @@ import { isRejectRequest, matchesEdit, threadEditList, threadRevision, isThreadD
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
 import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
-import { removedSeconds } from "../../lib/format";
+import { editRemovedLabel } from "../../lib/format";
 import { editRowWord } from "../../lib/editKind";
 import { editKey, keepEdits, reviewKey, useKeptEdits } from "../../lib/keptEdits";
+import { isActiveTask, isWorkingTask } from "../../lib/taskRun";
 import { useProjectStore } from "../../stores/project";
 import { useShownCutStore } from "../../stores/shownCut";
 import { Dropdown, MenuItem } from "../shell/WorkspaceNavigation";
 import { Icon } from "../ui/primitives";
-import { useHotkeys } from "../../lib/hotkeys";
+import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
 import { useAgentAvailability } from "../agent/AgentChip";
 import type { AgentContext } from "../../stores/ui";
 
@@ -83,7 +84,7 @@ export function RejectEdit({ projectId, thread, target, edits, editsOn, onEngine
   return <>
     {error && <span className="simple-error" role="alert">{error}</span>}
     <button type="button" className="edit-card-icon edit-card-reject" data-log-control="reject-edit" aria-label="Reject edit" aria-busy={busy || undefined}
-      aria-keyshortcuts="X" title={busy ? "Rejecting…" : "Reject edit (X)"} disabled={busy} onClick={e => { if (e.detail) e.currentTarget.blur(); void reject(); }}><Icon name="x" size={12} /></button>
+      aria-keyshortcuts="X" title={busy ? "Rejecting…" : "Reject edit (X)"} disabled={busy} onClick={e => { blurOnPointerClick(e); void reject(); }}><Icon name="x" size={12} /></button>
   </>;
 }
 
@@ -167,7 +168,7 @@ const noEdits: ListedEdit[] = [];
 /** Whether the request on its way for an edit is the editor's rejection of it, so its row says Rejecting… and not Revising…. */
 export function useRejecting(thread: Thread | undefined) {
   return useMemo(() => {
-    const pending = (thread?.tasks ?? []).flatMap(t => PENDING_TASK.has(t.state) && isRejectRequest(t) && t.context.changeId && t.context.editIndex !== undefined
+    const pending = (thread?.tasks ?? []).flatMap(t => isActiveTask(t.state) && isRejectRequest(t) && t.context.changeId && t.context.editIndex !== undefined
       ? [{ changeId: t.context.changeId, spot: t.context.editIndex }] : []);
     return (edit: ListedEdit) => pending.some(ref => matchesEdit(edit as ThreadEdit, ref));
   }, [thread]);
@@ -190,8 +191,6 @@ export function useReviewed(projectId: string, thread: Thread | undefined) {
   }, [kept, thread]);
 }
 
-const PENDING_TASK = new Set(["queued", "claimed", "running", "waiting_for_user"]);
-
 /**
  * Whether a request about an edit is queued or running: the editor asked Scarlet to revise or undo it, so the edit
  * no longer waits for them. Once the request finishes, its new version carries its own flag; if it fails, the edit
@@ -200,12 +199,12 @@ const PENDING_TASK = new Set(["queued", "claimed", "running", "waiting_for_user"
  */
 export function useRevising(thread: Thread | undefined) {
   return useMemo(() => {
-    const pending = (thread?.tasks ?? []).flatMap(t => PENDING_TASK.has(t.state) && t.context.changeId && t.context.editIndex !== undefined
+    const pending = (thread?.tasks ?? []).flatMap(t => isActiveTask(t.state) && t.context.changeId && t.context.editIndex !== undefined
       ? [{ changeId: t.context.changeId, spot: t.context.editIndex, state: t.state }] : []);
     return (edit: ListedEdit) => {
       let first: (typeof pending)[number] | undefined;
       for (const ref of pending) if (matchesEdit(edit, ref)) {
-        if (ref.state === "claimed" || ref.state === "running") return ref.state;
+        if (isWorkingTask(ref.state)) return ref.state;
         first ??= ref;
       }
       return first?.state;
@@ -228,10 +227,6 @@ export function editGroups<T extends ListedEdit>(edits: readonly T[]): { label: 
     groups.push({ label: edit.label, members: [{ edit, i }] });
   });
   return groups;
-}
-
-function removedLabel(edit: ListedEdit) {
-  return edit.beforeCut ? removedSeconds(edit.beforeCut.removed.end - edit.beforeCut.removed.start) : undefined;
 }
 
 /**
@@ -278,7 +273,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
     const on = !!showing && (matchesEdit(showing, e) || matchesEdit(e as ThreadEdit, showing));
     return <li key={editKey(e)}><button type="button" className={on ? "simple-edit is-rejected is-on" : "simple-edit is-rejected"} aria-current={on || undefined}
       data-log-control="open-edit" data-log-label="Rejected edit" aria-label={`${e.label}, rejected`}
-      onClick={event => { if (event.detail) event.currentTarget.blur(); onPlay(e); }}>
+      onClick={event => { blurOnPointerClick(event); onPlay(e); }}>
       <span className="edit-badge is-rejected" aria-hidden="true"><Icon name="x" size={9} /></span>
       <span className="simple-edit-title">{e.label}</span>
       <span className="simple-edit-value">Rejected</span>
@@ -293,10 +288,10 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       // the editor had kept the edit: the edit they kept is on its way out (2026-11-10).
       const revisingNow = revising(edit), isRevising = !!revisingNow;
       // Scarlet is on that revision now, so the row's word moves. One waiting its turn sits still.
-      const busy = revisingNow === "claimed" || revisingNow === "running";
+      const busy = !!revisingNow && isWorkingTask(revisingNow);
       const version = edit.previous.length ? edit.previous.length + 1 : 0;
       // A cut says how much came out; any other edit says what it did, or in how many places.
-      const value = places > 1 ? `${places} places` : removedLabel(edit) ?? editRowWord(edit);
+      const value = places > 1 ? `${places} places` : editRemovedLabel(edit) ?? editRowWord(edit);
       const check = places > 1 ? needs > 0 : !!edit.check && !isRevising;
       const title = (edit.reason && edit.summary) || edit.label;
       // One that came back revised with no reason from Scarlet says so on its row until it is kept: its card has no
@@ -305,7 +300,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       return <Fragment key={editKey(edit)}><li><button type="button" ref={on ? opened : undefined} aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
         // Clicked, the row lets go of the focus (WebView2 leaves it there), or Space would press the row again and start
         // the edit over, instead of playing the video.
-        className={on ? "simple-edit is-on" : "simple-edit"} onClick={e => { if (e.detail) e.currentTarget.blur(); onPlay(edit); }}
+        className={on ? "simple-edit is-on" : "simple-edit"} onClick={e => { blurOnPointerClick(e); onPlay(edit); }}
         onPointerEnter={() => onHover?.(edit)} onPointerLeave={() => onHover?.()}
         // Why an edit asks for a look is on its card, in Scarlet's sentence. Its row keeps to the amber number and says
         // the reason on hover, as a pass's row does.

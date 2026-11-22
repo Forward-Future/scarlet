@@ -14,6 +14,7 @@
  * likes.
  */
 import { clipEnd, type MediaClip, type Timeline } from "@scarlet/timeline";
+import { round2 } from "./analysis.js";
 import type { BriefPicture } from "./brief-pictures.js";
 import type { FramedStretch } from "./framing-report.js";
 
@@ -40,7 +41,7 @@ export type PictureFinding = {
 /** A word heard on the version: which recording and transcript index it is, where it plays. */
 interface HeardWord { mediaId: string; index: number; start: number; end: number }
 
-const r2 = (n: number) => Math.round(n * 100) / 100;
+const r2 = round2;
 
 /**
  * The picture findings on a version: its brief pictures, and the time beside its stretches of a recording laid over

@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { fileInDirectory } from "@scarlet/render";
 import { carriesAudio, clipEnd, mergeRanges, sourceToTimeline, timelineToSource, type MediaClip, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
 import { adjacentRepeatCandidates, closesSentence, cutAnchorOn, findRestarts, flattenWords, joinFragment, joinsPlacedByCuts, normalizeTranscriptToken, sameJoin,
-  SILENCE_LEFT_SECONDS, versionJoins, type JoinEdges, type JoinFragment, type JoinHearing, type SaidWord, type SilenceLeft, type Task } from "@scarlet/shared";
+  SHORT_PIECE_SECONDS, SILENCE_LEFT_SECONDS, versionJoins, type JoinEdges, type JoinFragment, type JoinHearing, type SaidWord, type ShortPiece, type SilenceLeft,
+  type Task } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { acousticWordReader } from "../transcribe/acousticWords.js";
 import { EmissionFile } from "../transcribe/emissions.js";
@@ -195,6 +196,42 @@ function silencesLeft(spoken: Heard[], from: number): SilenceLeft[] {
 }
 
 /**
+ * Stretches of one recording the edit plays for under `under` seconds between two cuts in it: on one track, the
+ * footage before and after it is the same recording, with some of it taken out at each end. Two cuts made apart, a
+ * trimmed wait and a retake, leave one, and nothing a pass reads shows it: it reads the recording, not the edit.
+ * `scope` holds the clips the check reads.
+ */
+export function piecesLeft(current: readonly Placement[], scope: ReadonlySet<string>, spoken: readonly Heard[], under: number): ShortPiece[] {
+  const found: ShortPiece[] = [];
+  const said = (clips: readonly MediaClip[]) => spoken.filter(w => clips.some(c => c.id === w.clip)).sort((a, b) => a.start - b.start).map(w => w.said);
+  for (const track of new Set(current.map(p => p.track))) {
+    const clips = current.filter(p => p.track === track).map(p => p.clip).sort((a, b) => a.timelineIn - b.timelineIn);
+    // Runs of clips that play one stretch of a recording on: split clips with nothing taken out between them are one piece.
+    const runs: MediaClip[][] = [];
+    for (const clip of clips) {
+      const run = runs.at(-1), last = run?.at(-1);
+      if (run && last && last.mediaId === clip.mediaId && (last.speed ?? 1) === (clip.speed ?? 1) &&
+          Math.abs(clip.timelineIn - clipEnd(last)) < 1e-3 && Math.abs(clip.sourceIn - last.sourceOut) < 1e-3) run.push(clip);
+      else runs.push([clip]);
+    }
+    // Where the run before ends straight into this one, in the same recording, with some of it taken out between.
+    const cutBetween = (a: MediaClip[] | undefined, b: MediaClip[] | undefined) => !!a && !!b && a.at(-1)!.mediaId === b[0]!.mediaId &&
+      b[0]!.timelineIn <= clipEnd(a.at(-1)!) + 1e-3 && Math.abs(b[0]!.sourceIn - a.at(-1)!.sourceOut) >= 1e-3;
+    runs.forEach((run, i) => {
+      const before = runs[i - 1], after = runs[i + 1];
+      const from = run[0]!.timelineIn, to = clipEnd(run.at(-1)!);
+      if (to - from >= under - 1e-6 || !run.some(c => scope.has(c.id)) || !cutBetween(before, run) || !cutBetween(run, after)) return;
+      const mediaId = run[0]!.mediaId, source = { start: round(run[0]!.sourceIn), end: round(run.at(-1)!.sourceOut) };
+      const id = createHash("sha256").update(JSON.stringify(["piece", mediaId, source.start, source.end])).digest("hex").slice(0, 20);
+      found.push({ id, from: round(from), to: round(to), seconds: round(to - from), mediaId, source, plays: said(run).join(" "),
+        before: said(before!).slice(-6).join(" "), after: said(after!).slice(0, 6).join(" "),
+        cutBefore: round(run[0]!.sourceIn - before!.at(-1)!.sourceOut), cutAfter: round(after![0]!.sourceIn - run.at(-1)!.sourceOut) });
+    });
+  }
+  return found.sort((a, b) => a.from - b.from);
+}
+
+/**
  * The joins that took words out of a sentence, each with what the edit plays either side of it (joinFragment), but for
  * the ones the dialogue cut tool placed. Read from the transcript and the pieces alone, so it needs no audio: a
  * recording whose sound can't be read is still listed.
@@ -280,7 +317,8 @@ function clipById(tl: Timeline, id: string) {
 }
 
 /** Read each audible source separately so two live microphones never form a spurious repeated word together. */
-export async function auditDialogueAudio(ctx: Ctx, project: Project, tl: Timeline, task: Task, signal: AbortSignal, silencesFrom = SILENCE_LEFT_SECONDS) {
+export async function auditDialogueAudio(ctx: Ctx, project: Project, tl: Timeline, task: Task, signal: AbortSignal, silencesFrom = SILENCE_LEFT_SECONDS,
+  piecesUnder = SHORT_PIECE_SECONDS) {
   const scope = task.context;
   const current = placements(project, tl);
   const base = scope.version && scope.version !== tl.version && scope.time !== undefined && scope.end !== undefined
@@ -398,6 +436,7 @@ export async function auditDialogueAudio(ctx: Ctx, project: Project, tl: Timelin
   }
   repeats.sort((a, b) => a.first.start - b.first.start);
   const silences = silencesLeft(spokenLanes.flat().sort(byTime), silencesFrom);
+  const shortPieces = piecesLeft(current, new Set(parts.map(p => p.clip.id)), spokenLanes.flat(), piecesUnder);
   // Reused footage can play the same pair in two places. A keep applies only to the placement the editor considered.
   const ids = new Set<string>(), reused = new Set<string>();
   for (const r of repeats) {
@@ -420,5 +459,5 @@ export async function auditDialogueAudio(ctx: Ctx, project: Project, tl: Timelin
       entry.at.add(at);
     }
   }
-  return { version: tl.version, repeats, silences, fragments: dividedSentences(ctx, project, parts, cutToolJoins(ctx, project, tl)), unavailable, joins, unheardJoins: [...unheard.values()] };
+  return { version: tl.version, repeats, silences, shortPieces, fragments: dividedSentences(ctx, project, parts, cutToolJoins(ctx, project, tl)), unavailable, joins, unheardJoins: [...unheard.values()] };
 }

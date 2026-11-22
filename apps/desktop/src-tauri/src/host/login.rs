@@ -56,9 +56,8 @@ pub fn login_command(agent: &str) -> Option<(&'static str, &'static [&'static st
 
 /// First http(s) URL in a line of CLI output.
 pub fn extract_url(line: &str) -> Option<String> {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = RE.get_or_init(|| regex::Regex::new(r#"https?://[^\s"'<>]+"#).unwrap());
-    re.find(line).map(|m| m.as_str().trim_end_matches(['.', ')', ',']).to_string())
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r#"https?://[^\s"'<>]+"#).unwrap());
+    RE.find(line).map(|m| m.as_str().trim_end_matches(['.', ')', ',']).to_string())
 }
 
 /// The local callback server Codex announces is not the sign-in page.

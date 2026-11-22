@@ -4,9 +4,14 @@ import { pct } from "./format";
 
 type Progress = NonNullable<Task["progress"]>;
 
+/** Whether a task is a queued or active transcription job. */
+export function isRunningTranscriptionTask(task: Task): boolean {
+  return task.kind === "transcribe" && (task.state === "queued" || task.state === "claimed" || task.state === "running");
+}
+
 /** The transcription running for a media asset, if any. */
 export function runningTranscription(tasks: readonly Task[], mediaId: string): Task | undefined {
-  return tasks.findLast(t => t.kind === "transcribe" && t.context.mediaId === mediaId && ["queued", "claimed", "running"].includes(t.state));
+  return tasks.findLast(t => t.context.mediaId === mediaId && isRunningTranscriptionTask(t));
 }
 
 /**

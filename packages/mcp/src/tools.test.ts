@@ -760,6 +760,20 @@ describe("tool annotations", () => {
     } finally { await c.close(); }
   });
 
+  it("shows every tool's numbers filled in: no description or parameter reads a placeholder", async () => {
+    // dialogue_check_repeats was written as a plain string, so its model read "within ${RESTART_WITHIN_SECONDS} s" and
+    // "(${SILENCE_LEFT_SECONDS} s when omitted)" until 2026-11-21.
+    const task = Task.parse({ id: "number-task", state: "running", projectId: "prj_test", kind: "edit", agent: "codex", instruction: "/first-cut-dialogue",
+      context: {}, createdBy: { type: "human", name: "Editor" } });
+    const c = await connect({ agent: "codex", taskId: task.id, task, capabilities: { images: true, audio: true, files: true }, author: { type: "agent", name: "codex" } });
+    try {
+      const { tools } = await c.listTools();
+      expect(tools.map(t => t.name)).toContain("dialogue_check_repeats");
+      expect(tools.filter(t => JSON.stringify([t.description, t.inputSchema]).includes("${")).map(t => t.name)).toEqual([]);
+      expect(tools.find(t => t.name === "dialogue_check_repeats")!.description).toContain("within 12 s");
+    } finally { await c.close(); }
+  });
+
   it.each(["claude", "codex", "gemini"])("lists every parameter %s's model is shown with its own type: no $ref, no untyped branch", async agent => {
     // A run's session, which has the tools only a request has.
     const task = Task.parse({ id: "typed-task", state: "running", projectId: "prj_test", kind: "edit", agent, instruction: "/first-cut-dialogue",
@@ -1172,7 +1186,7 @@ describe("dialogue_apply_cuts's receipt of what a saved part still plays", () =>
         audioRecheck: { version: "applied", heard: 9, remaining: 0, repeats: [], staged: 0, sync: { pairs: [{ reference: "m1", secondary: "m2", offset: 0, togetherSeconds: 2,
           outOfLine: [], heard: [], unheard: 0 }], summary: "talk.mp4 and mic.wav: placed in line throughout; not compared by sound, as one has none." } },
         gate: { unchangedCuts: 1, decisions: [] },
-        keptSilences: [{ at: 1.5, seconds: 3.8, after: "it", before: "just" }],
+        keptSilences: [{ at: 1.5, seconds: 3.8, after: "it", before: "just", afterWord: 1 }],
         keptPauses: [{ at: 0.75, mediaId: "m1", seconds: 0.35, after: "And", before: "it", afterWord: 0 }, { at: 6.4, mediaId: "m1", seconds: 1, after: "this.", before: "so" },
           { at: 7.9, mediaId: "m1", seconds: 0.4, after: "so", before: "quiet", afterWord: 7 }, { at: 8.9, mediaId: "m1", seconds: 0.5, after: "words", before: "done.", afterWord: 9 }],
         repeatedWords: [{ at: 7.4, mediaId: "m1", text: "so so", fromWord: 6, toWord: 6, pause: 0.1 }],

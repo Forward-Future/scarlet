@@ -216,11 +216,12 @@ fn prompt_path(task_id: &str, work_dir: &str, fresh: bool, time_limit: Option<Du
 }
 
 pub fn urlencode(s: &str) -> String {
-    let mut out = String::new();
+    use std::fmt::Write;
+    let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-            _ => out.push_str(&format!("%{b:02X}")),
+            _ => { let _ = write!(out, "%{b:02X}"); }
         }
     }
     out

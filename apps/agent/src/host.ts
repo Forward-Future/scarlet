@@ -4,9 +4,9 @@
  * CLI runner, streams events back and completes them.
  */
 import { createHash } from "node:crypto";
-import { lstat, open, readdir, realpath, rm, stat } from "node:fs/promises";
-import { homedir, platform, release } from "node:os";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { realpath, rm } from "node:fs/promises";
+import { platform, release } from "node:os";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
 import type { AgentAvailability, AgentId, AgentUsage, CreateTaskRequest, SubscriptionQuota, Task, TaskEvent } from "@scarlet/shared";
@@ -20,9 +20,12 @@ import { killStoppedNow, stopOrphans } from "./processTree.js";
 import { runAgent as defaultRunAgent } from "./runners/index.js";
 import { codexHomeDir } from "./runners/codex.js";
 import { addUsage } from "./runners/usage.js";
-import { mcpEnv, nodeExecutable, resolveMcpCliPath } from "./runners/spawn.js";
+import { errMsg, mcpEnv, nodeExecutable, resolveMcpCliPath } from "./runners/spawn.js";
 import { DEFAULT_STALL_MS, type McpSpec, type RunAgentFn, type RunAgentResult, type RunnerEvent, type Workspace } from "./runners/types.js";
+import { claudeConfigDir, pruneTaskDirs, removeClaudeSessions, removeControlFiles, removeTokenFiles } from "./taskDirs.js";
 import { workspaceTools } from "./workspaceTools.js";
+
+export { claudeConfigDir, claudeProjectDir, claudeProjectDirs, pruneTaskDirs, removeClaudeSessions, removeControlFiles, removeTokenFiles } from "./taskDirs.js";
 
 const QUOTA_TTL_MS = 60_000;
 
@@ -78,9 +81,6 @@ interface Prepared {
   mcp: McpSpec;
 }
 
-/** Finished task folders keep their artifacts this long. */
-const TASK_DIR_DAYS = 14;
-
 export class AgentHost {
   private readonly client: ScarletClient;
   private config: AgentConfig;
@@ -123,7 +123,7 @@ export class AgentHost {
     this.stopped = false;
     this.stopController = new AbortController();
     const [agents] = await Promise.all([
-      (this.opts.detect ?? (() => detectAgents({ models: this.config.models, log: this.log })))(),
+      this.detectAgents(),
       // An old folder's Claude sessions go with it, wherever Claude Code keeps its files.
       pruneTaskDirs(this.opts.workRoot, undefined, claudeConfigDir(this.opts.env ?? process.env)).catch((err) => this.log(`could not prune old task folders: ${errMsg(err)}`)),
       this.stopOrphans(),
@@ -165,7 +165,7 @@ export class AgentHost {
    * task as it ended, or as it waits for the editor's answer.
    */
   async runOne(projectId: string, request: CreateTaskRequest, signal: AbortSignal = new AbortController().signal, pollMs = 2000): Promise<Task> {
-    this.agents = await (this.opts.detect ?? (() => detectAgents({ models: this.config.models, log: this.log })))();
+    this.agents = await this.detectAgents();
     await this.register();
     const { task } = await this.client.createTask(projectId, request);
     this.log(`asked the engine for task ${task.id}`);
@@ -197,6 +197,10 @@ export class AgentHost {
   }
 
   // -- registration & heartbeat ---------------------------------------------
+
+  private detectAgents(): Promise<AgentAvailability[]> {
+    return this.opts.detect ? this.opts.detect() : detectAgents({ models: this.config.models, log: this.log });
+  }
 
   private async register(): Promise<void> {
     const name = this.config.name ?? "scarlet-agent";
@@ -445,11 +449,8 @@ export class AgentHost {
 
   // -- running one task -----------------------------------------------------
 
-  async runTask(task: Task, signal: AbortSignal): Promise<void> {
-    this.log(`task ${task.id} (${task.kind}, ${task.agent}${task.model ? `/${task.model}` : ""})`);
-    const started = performance.now();
-    const identity = `task=${task.id} attempt=${task.startedAt ?? "unknown"}`;
-    // One request at a time, so the engine gets the events in the order the CLI wrote them.
+  /** Forward events in stream order and bound how long completion waits for a stuck engine. */
+  private createEventForwarder(task: Task, signal: AbortSignal) {
     let posting: Promise<void> = Promise.resolve();
     const post = (ev: TaskEvent): Promise<void> => {
       const at = new Date().toISOString();
@@ -462,8 +463,7 @@ export class AgentHost {
         }
       }));
     };
-    // Completion waits for the forwarded events, but not for an engine that has stopped answering.
-    const flushEvents = async () => {
+    const flush = async () => {
       const limit = this.opts.eventFlushMs ?? 30_000;
       const timer = new AbortController();
       const late = await Promise.race([posting.then(() => false), delay(limit, true, { signal: timer.signal }).catch(() => false)]);
@@ -472,6 +472,74 @@ export class AgentHost {
       this.log(`task ${task.id}: events still posting after ${humanDuration(limit)}; finishing without waiting for them`);
       posting = Promise.resolve(); // What follows is not queued behind a request that hangs.
     };
+    return { post, flush };
+  }
+
+  /**
+   * The engine replaces repeated usage reports for the same claim. Serialize live writes (throttled every 2s)
+   * and wait for any in-flight report before persisting the final total so slower requests cannot overwrite it.
+   */
+  private createLiveUsageReporter(task: Task, signal: AbortSignal) {
+    const startedAt = task.startedAt;
+    let closed = false;
+    let pending: AgentUsage | undefined;
+    let inFlight: Promise<unknown> | undefined;
+    let nextAt = 0;
+    let timer: NodeJS.Timeout | undefined;
+    const flush = () => {
+      clearTimeout(timer);
+      if (closed || signal.aborted || !pending || inFlight) return;
+      const wait = nextAt - Date.now();
+      if (wait > 0) {
+        timer = setTimeout(flush, wait).unref();
+        return;
+      }
+      const body = { ...pending, startedAt };
+      pending = undefined;
+      inFlight = this.client.recordTaskUsage(task.id, body, AbortSignal.timeout(5000))
+        .catch(err => this.log(`task ${task.id}: live usage report failed: ${errMsg(err)}`)).finally(() => {
+        inFlight = undefined;
+        nextAt = Date.now() + 2000;
+        flush();
+      });
+    };
+    return {
+      update: (snapshot: AgentUsage, priorUsage?: AgentUsage) => {
+        if (!startedAt || closed) return;
+        pending = addUsage(priorUsage, snapshot);
+        flush();
+      },
+      recordFinal: async (usage: AgentUsage | undefined) => {
+        closed = true;
+        clearTimeout(timer);
+        await inFlight;
+        if (usage) await this.client.recordTaskUsage(task.id, { ...usage, startedAt: task.startedAt }).catch(err => this.log(`usage report failed: ${errMsg(err)}`));
+      },
+    };
+  }
+
+  /** Clean up control files and CLI sessions for a completed task attempt unless handed on to a resume. */
+  private async cleanupTaskWorkspace(task: Task, cwd: string, signal: AbortSignal, landed: boolean, interrupted: boolean): Promise<void> {
+    if (this.sharedWithAnotherAttempt(task, signal)) {
+      this.log(`task ${task.id}: left its folder to another attempt at the same run`);
+      return;
+    }
+    // Resolve before the folder can go: Claude Code names its project folder after the real path.
+    const real = task.agent === "claude" ? await realpath(cwd).catch(() => undefined) : undefined;
+    await removeControlFiles(cwd).catch((err) => this.log(`could not clean task folder: ${errMsg(err)}`));
+    if (real && landed && !interrupted) {
+      await removeClaudeSessions(real, claudeConfigDir(this.opts.env ?? process.env)).catch((err) => this.log(`could not remove Claude sessions: ${errMsg(err)}`));
+    }
+    if (task.agent === "codex" && landed && !interrupted) {
+      await rm(codexHomeDir(cwd), { recursive: true, force: true }).catch((err) => this.log(`could not remove the Codex home: ${errMsg(err)}`));
+    }
+  }
+
+  async runTask(task: Task, signal: AbortSignal): Promise<void> {
+    this.log(`task ${task.id} (${task.kind}, ${task.agent}${task.model ? `/${task.model}` : ""})`);
+    const started = performance.now();
+    const identity = `task=${task.id} attempt=${task.startedAt ?? "unknown"}`;
+    const events = this.createEventForwarder(task, signal);
     let cwd: string | undefined;
     // `stopped`: the host stopped the run before it finished. The editor can resume it from what it saved.
     const complete = async (state: "done" | "failed" | "cancelled", summary?: string, error?: string, stopped = false) => {
@@ -490,15 +558,13 @@ export class AgentHost {
         // calls it interrupted and runs the finished request a second time. A copy does no harm: the engine ignores
         // the completion of an attempt it has already ended.
         landed = false;
-        // The engine answers with the changes it holds for the task, for the line below.
         let savedState: TaskState | undefined;
         let superseded = false;
         let changes = 0;
-        for (let attempt = 0; attempt < 3 && !landed; attempt++) {
-          // One try while the host stops: stopping doesn't wait on an engine that may already be gone. No further
-          // try either once the engine cancels the task or hands it out again: it has ended this attempt itself.
-          if (attempt && signal.aborted) break;
-          try {
+        // One try while the host stops or once the engine cancels/supersedes the task.
+        await retryBackoff(3, signal, {
+          stopOnAbortAfterFirst: true,
+          run: async () => {
             const saved = (await this.client.completeTask(task.id, body))?.task;
             carriesOn = sessionCarriesOn(saved);
             const parsed = TaskState.safeParse(saved?.state);
@@ -506,39 +572,17 @@ export class AgentHost {
             superseded = !!task.startedAt && !!saved?.startedAt && saved.startedAt !== task.startedAt;
             changes = saved?.changeIds?.length ?? 0;
             landed = true;
-          } catch (err) {
-            this.log(`complete failed for task ${task.id}: ${errMsg(err)}`);
-            if (attempt < 2) await delay(250 * (attempt + 1), undefined, { signal }).catch(() => undefined);
-          }
-        }
+          },
+          onError: (err) => this.log(`complete failed for task ${task.id}: ${errMsg(err)}`),
+        });
         const outcome = !landed ? "undelivered" : superseded ? "superseded" : !savedState ? "unconfirmed" : savedState === state ? "accepted" : "changed";
         // A failed run's reason stays in the local log: the engine may never have received it.
         const reason = state === "failed" ? ` reason=${JSON.stringify((error ?? "no reason given").slice(0, 300))}` : "";
         this.log(`[host] completion ${identity} requested=${state} state=${savedState ?? "unknown"} outcome=${outcome} elapsedMs=${Math.round(performance.now() - started)} changes=${changes}${reason}`);
       }
       if (cwd) {
-        // An attempt the editor stopped can still be winding down when the attempt that resumes it is at work in
-        // the folder they share. While another attempt is there, the folder and its CLI session are left to it,
-        // to clean when it ends.
-        if (this.sharedWithAnotherAttempt(task, signal)) {
-          this.log(`task ${task.id}: left its folder to another attempt at the same run`);
-          return;
-        }
-        // Resolve before the folder can go: Claude Code names its project folder after the real path.
-        const real = task.agent === "claude" ? await realpath(cwd).catch(() => undefined) : undefined;
-        await removeControlFiles(cwd).catch((err) => this.log(`could not clean task folder: ${errMsg(err)}`));
-        // A run the host cut short keeps its CLI session: the attempt that resumes it carries on there.
-        // So does one whose completion never landed: the engine takes it for interrupted and resumes it.
-        // The folder's prune removes it if nothing ever does.
-        // So does one the engine handed on to the attempt that resumes it.
         const interrupted = (state === "cancelled" && this.stopped) || stopped || carriesOn;
-        if (real && landed && !interrupted) {
-          await removeClaudeSessions(real, claudeConfigDir(this.opts.env ?? process.env)).catch((err) => this.log(`could not remove Claude sessions: ${errMsg(err)}`));
-        }
-        // A Codex run keeps its thread in a home beside the folder, on the same terms.
-        if (task.agent === "codex" && landed && !interrupted) {
-          await rm(codexHomeDir(cwd), { recursive: true, force: true }).catch((err) => this.log(`could not remove the Codex home: ${errMsg(err)}`));
-        }
+        await this.cleanupTaskWorkspace(task, cwd, signal, landed, interrupted);
       }
       if (!this.stopped && state !== "cancelled") {
         void this.refreshQuotas({ force: true, agents: [task.agent] });
@@ -552,7 +596,7 @@ export class AgentHost {
       prepared = await this.prepare(task);
       cwd = prepared.cwd;
     } catch (err) {
-      await post({ type: "error", text: `Could not prepare task: ${errMsg(err)}` });
+      await events.post({ type: "error", text: `Could not prepare task: ${errMsg(err)}` });
       return complete("failed", undefined, errMsg(err));
     }
 
@@ -560,32 +604,7 @@ export class AgentHost {
     const runner = this.opts.runner ?? defaultRunAgent;
     const timeoutMs = this.runTimeoutMs;
     const stallMs = this.opts.stallMs ?? (this.config.stallMinutes ?? DEFAULT_STALL_MS / 60_000) * 60_000;
-    // The engine replaces repeated usage reports for the same claim. Serialize writes and wait for the
-    // in-flight report before persisting the final total so slower requests cannot overwrite it.
-    const startedAt = task.startedAt;
-    let usageClosed = false;
-    let pendingUsage: AgentUsage | undefined;
-    let postedUsage: Promise<void> | undefined;
-    let nextUsageAt = 0;
-    let usageTimer: NodeJS.Timeout | undefined;
-    const flushUsage = () => {
-      clearTimeout(usageTimer);
-      if (usageClosed || signal.aborted || !pendingUsage || postedUsage) return;
-      const wait = nextUsageAt - Date.now();
-      if (wait > 0) {
-        usageTimer = setTimeout(flushUsage, wait).unref();
-        return;
-      }
-      const body = { ...pendingUsage, startedAt };
-      pendingUsage = undefined;
-      postedUsage = this.client.withResource("tasks", task.id, path => this.client.request<void>(
-        "POST", path + "/usage", body, { signal: AbortSignal.timeout(5000) },
-      )).catch(err => this.log(`task ${task.id}: live usage report failed: ${errMsg(err)}`)).finally(() => {
-        postedUsage = undefined;
-        nextUsageAt = Date.now() + 2000;
-        flushUsage();
-      });
-    };
+    const liveUsage = this.createLiveUsageReporter(task, signal);
     let questionSeen: string | undefined;
     // A runner that returns says whether its run ended on a question. Only one that threw leaves the question it saw.
     let runnerThrew = false;
@@ -607,11 +626,7 @@ export class AgentHost {
       timeoutMs,
       stallMs,
       env: runnerEnv(task.agent, this.agents, this.opts.env ?? process.env),
-      onUsage: snapshot => {
-        if (!startedAt || usageClosed) return;
-        pendingUsage = addUsage(priorUsage, snapshot);
-        flushUsage();
-      },
+      onUsage: snapshot => liveUsage.update(snapshot, priorUsage),
       onQuota: quota => this.applyLiveQuota(task.agent, quota),
       onCodexFallback: reason => this.log(`[host] codex-fallback ${identity} reason=${reason}`),
       onEvent: (ev: RunnerEvent) => {
@@ -621,20 +636,13 @@ export class AgentHost {
           return; // Confirm delivery with the engine when the runner stops.
         }
         if (ev.type === "result") return; // summary goes in complete()
-        void post({ type: ev.type, text: ev.text, data: ev.data });
+        void events.post({ type: ev.type, text: ev.text, data: ev.data });
       },
     }).catch((err): RunAgentResult => {
       runnerThrew = true;
       return { ok: false, summary: "", error: errMsg(err) };
     });
 
-    // Record tokens for every outcome, including a cancel or a pause for a question.
-    const recordUsage = async (usage: AgentUsage | undefined) => {
-      usageClosed = true;
-      clearTimeout(usageTimer);
-      await postedUsage;
-      if (usage) await this.client.recordTaskUsage(task.id, { ...usage, startedAt: task.startedAt }).catch(err => this.log(`usage report failed: ${errMsg(err)}`));
-    };
     let result = await run(prepared);
     // One report per claim replaces the last, so a failed resume's tokens go with the fresh run's.
     let usage = result.usage;
@@ -644,38 +652,36 @@ export class AgentHost {
       try {
         result = await run(await this.prepare(task, true), usage);
       } catch (err) {
-        await flushEvents();
-        await recordUsage(usage);
-        await post({ type: "error", text: `Could not prepare task: ${errMsg(err)}` });
+        await events.flush();
+        await liveUsage.recordFinal(usage);
+        await events.post({ type: "error", text: `Could not prepare task: ${errMsg(err)}` });
         return complete("failed", undefined, errMsg(err));
       }
       usage = addUsage(usage, result.usage);
     }
-    await flushEvents();
-    await recordUsage(usage);
+    await events.flush();
+    await liveUsage.recordFinal(usage);
 
     if (signal.aborted || result.aborted) return complete("cancelled", result.summary || undefined, "cancelled");
 
     const question = result.question ?? (runnerThrew ? questionSeen : undefined);
     if (question) {
       // The CLI can stop before MCP posts, or lose the reply after the engine commits.
-      for (let attempt = 0; attempt < 3 && !signal.aborted; attempt++) {
-        try {
+      let deliveryError: unknown;
+      const delivered = await retryBackoff(3, signal, {
+        run: async () => {
           const { waiting } = await this.client.postTaskQuestion(task.id, task.startedAt, question, signal, { sessionId: result.sessionId ?? null });
           this.log(`[host] question ${identity} outcome=${waiting ? "waiting" : "not_waiting"}`);
           // The answer may be days away. The run that carries on writes the token file again.
           if (!this.sharedWithAnotherAttempt(task, signal)) await removeTokenFiles(prepared.cwd).catch((err) => this.log(`could not clean task folder: ${errMsg(err)}`));
-          return;
-        } catch (err) {
-          if (signal.aborted) break;
-          if (attempt === 2) {
-            const error = `Could not deliver the editor question: ${errMsg(err)}`;
-            this.log(`[host] question ${identity} outcome=undelivered`);
-            this.log(`task ${task.id}: ${error}`);
-            return complete("failed", undefined, error);
-          }
-          await delay(250 * (attempt + 1), undefined, { signal }).catch(() => undefined);
-        }
+        },
+        onError: (err) => { deliveryError = err; },
+      });
+      if (!delivered && !signal.aborted) {
+        const error = `Could not deliver the editor question: ${errMsg(deliveryError)}`;
+        this.log(`[host] question ${identity} outcome=undelivered`);
+        this.log(`task ${task.id}: ${error}`);
+        return complete("failed", undefined, error);
       }
       return; // On shutdown, the engine recovers any claim still without a durable question.
     }
@@ -683,7 +689,7 @@ export class AgentHost {
     // Say why the host stopped it: a bare "timed out" reads like a stalled tool or network call.
     const error = result.stalled ? stalledReason(stallMs)
       : result.timedOut && timeoutMs !== undefined ? timedOutReason(timeoutMs) : result.error ?? "agent failed";
-    await post({ type: "error", text: error });
+    await events.post({ type: "error", text: error });
     return complete("failed", result.summary || undefined, error, !!result.timedOut);
   }
 
@@ -748,144 +754,24 @@ function sessionCarriesOn(task: unknown): boolean {
   return (task as { sessionCarriesOn?: unknown } | undefined)?.sessionCarriesOn === true;
 }
 
-/** The files of a run's folder that hold the engine token: Claude Code's MCP config. */
-export async function removeTokenFiles(dir: string): Promise<void> {
-  await rm(join(dir, ".scarlet", "mcp.json"), { force: true });
-}
-
-/** A finished task keeps only its artifacts. The CLI control files include the engine token. */
-export async function removeControlFiles(dir: string): Promise<void> {
-  const entries = await readdir(dir).catch(() => [] as string[]);
-  await Promise.all(entries.filter((name) => name !== "artifacts").map((name) => rm(join(dir, name), { recursive: true, force: true })));
-  if (!entries.includes("artifacts")) await rm(dir, { recursive: true, force: true });
-}
-
-/** Where Claude Code keeps its files: CLAUDE_CONFIG_DIR when set, else ~/.claude. Undefined for a relative setting, read from each run's own folder. */
-export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env, home = homedir()): string | undefined {
-  const set = env.CLAUDE_CONFIG_DIR;
-  if (!set) return join(home, ".claude");
-  return isAbsolute(set) ? set : undefined;
-}
-
-/** Claude Code names a cwd's project folder after its real path, every character other than a letter or digit as "-". */
-function claudeProjectName(realCwd: string): string | undefined {
-  const name = realCwd.replace(/[^a-zA-Z0-9]/g, "-");
-  return /[a-zA-Z0-9]/.test(name) ? name : undefined;
-}
-
-/** Claude Code cuts a project folder's name at this many characters and adds a hash of the path to it. */
-const CLAUDE_NAME_MAX = 200;
-
-/**
- * Claude Code keeps a cwd's sessions in <its folder>/projects/<project name>. A name over 200 characters is cut there
- * and ends in a hash Scarlet can't reproduce: those are found by `claudeProjectDirs`.
- */
-export function claudeProjectDir(realCwd: string, claudeDir = claudeConfigDir()): string | undefined {
-  const name = claudeProjectName(realCwd);
-  return !claudeDir || !name || name.length > CLAUDE_NAME_MAX ? undefined : join(claudeDir, "projects", name);
-}
-
-/**
- * The project folders holding a cwd's Claude sessions. A long path's folder is `<first 200 characters>-<hash>`, and
- * other task folders can share those characters, so one counts only where a session in it was run in this cwd.
- */
-export async function claudeProjectDirs(realCwd: string, claudeDir = claudeConfigDir()): Promise<string[]> {
-  const name = claudeProjectName(realCwd);
-  if (!claudeDir || !name) return [];
-  const isDir = async (dir: string) => (await lstat(dir).catch(() => undefined))?.isDirectory() === true;
-  if (name.length <= CLAUDE_NAME_MAX) {
-    const dir = join(claudeDir, "projects", name);
-    return (await isDir(dir)) ? [dir] : [];
-  }
-  const prefix = `${name.slice(0, CLAUDE_NAME_MAX)}-`;
-  const found: string[] = [];
-  for (const entry of await readdir(join(claudeDir, "projects")).catch(() => [] as string[])) {
-    if (!entry.startsWith(prefix) || !/^[0-9a-zA-Z]+$/.test(entry.slice(prefix.length))) continue;
-    const dir = join(claudeDir, "projects", entry);
-    if (await isDir(dir) && await sessionsRanIn(dir, realCwd)) found.push(dir);
-  }
-  return found;
-}
-
-/** Whether a session in this project folder records the cwd it ran in as this one. Each message line names it. */
-async function sessionsRanIn(dir: string, realCwd: string): Promise<boolean> {
-  for (const name of (await readdir(dir).catch(() => [] as string[])).filter((n) => n.endsWith(".jsonl")).slice(0, 5)) {
-    const file = await open(join(dir, name), "r").catch(() => undefined);
-    if (!file) continue;
+/** Run `run` up to `attempts` times with 250ms linear backoff, respecting `signal`. Returns true on success. */
+async function retryBackoff(
+  attempts: number,
+  signal: AbortSignal,
+  opts: { run: () => Promise<void>; onError?: (err: unknown) => void; stopOnAbortAfterFirst?: boolean },
+): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (signal.aborted && (!opts.stopOnAbortAfterFirst || attempt > 0)) return false;
     try {
-      const { buffer, bytesRead } = await file.read({ buffer: Buffer.alloc(64 * 1024), position: 0 });
-      for (const line of buffer.subarray(0, bytesRead).toString("utf8").split("\n")) {
-        let cwd: unknown;
-        try {
-          cwd = (JSON.parse(line) as { cwd?: unknown }).cwd;
-        } catch {
-          continue;
-        }
-        if (typeof cwd === "string") return cwd === realCwd;
-      }
-    } finally {
-      await file.close();
+      await opts.run();
+      return true;
+    } catch (err) {
+      if (signal.aborted && !opts.stopOnAbortAfterFirst) return false;
+      opts.onError?.(err);
+      if (attempt < attempts - 1) await delay(250 * (attempt + 1), undefined, { signal }).catch(() => undefined);
     }
   }
   return false;
-}
-
-/** A folder whose Claude sessions are Scarlet's to remove: a task folder, or a one-shot folder an older `scarlet-agent run` made. */
-function scarletRunFolder(realCwd: string): boolean {
-  return basename(dirname(realCwd)) === "tasks-v2" || basename(realCwd).startsWith("oneshot-");
-}
-
-/**
- * Delete the Claude sessions of one finished Scarlet task: only the project folder named after its task folder,
- * and the to-do list of each session in it.
- */
-export async function removeClaudeSessions(realCwd: string, claudeDir = claudeConfigDir()): Promise<void> {
-  if (!claudeDir || !scarletRunFolder(realCwd)) return;
-  for (const dir of await claudeProjectDirs(realCwd, claudeDir)) {
-    // Claude Code keeps a session's to-do list apart from it, in <its folder>/tasks/<session id>, and a session
-    // is `<session id>.jsonl` here. Only a name of hex digits and dashes is read as an id: "...jsonl" would
-    // name the folder itself. A list that can't be removed is left.
-    for (const name of await readdir(dir).catch(() => [] as string[])) {
-      const id = /^([0-9a-fA-F-]+)\.jsonl$/.exec(name)?.[1];
-      const list = id && join(claudeDir, "tasks", id);
-      if (list && (await lstat(list).catch(() => undefined))?.isDirectory()) await rm(list, { recursive: true, force: true }).catch(() => undefined);
-    }
-    await rm(dir, { recursive: true, force: true });
-  }
-}
-
-/** Last use of a task folder: the folder, its artifacts folder or a file directly in it. */
-async function lastUsed(dir: string): Promise<number | undefined> {
-  const info = await stat(dir).catch(() => undefined);
-  if (!info?.isDirectory()) return undefined;
-  const artifacts = join(dir, "artifacts");
-  const files = await readdir(artifacts).catch(() => [] as string[]);
-  const times = await Promise.all([artifacts, ...files.map((f) => join(artifacts, f))].map((p) => stat(p).then((s) => s.mtimeMs, () => 0)));
-  return Math.max(info.mtimeMs, ...times);
-}
-
-/** Remove task folders unused for TASK_DIR_DAYS, including artifacts. Given where Claude Code keeps its files, a task folder's Claude sessions go with it. */
-export async function pruneTaskDirs(workRoot: string, now = Date.now(), claudeDir?: string): Promise<void> {
-  const cutoff = now - TASK_DIR_DAYS * 86_400_000;
-  const dirs = [
-    ...(await readdir(join(workRoot, "tasks-v2")).catch(() => [] as string[])).map((name) => join(workRoot, "tasks-v2", name)),
-    ...(await readdir(workRoot).catch(() => [] as string[])).filter((name) => name.startsWith("oneshot-")).map((name) => join(workRoot, name)),
-  ];
-  await Promise.all(dirs.map(async (dir) => {
-    const used = await lastUsed(dir);
-    if (used === undefined || used >= cutoff) return;
-    // A run that never finished left its Claude sessions behind. Resolve before the folder goes: its real path names them.
-    const real = claudeDir === undefined ? undefined : await realpath(dir).catch(() => undefined);
-    try {
-      if (real) await removeClaudeSessions(real, claudeDir);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  }));
-}
-
-function errMsg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /** Elapsed time for log lines: "850ms", "12s", "45m 2s", "1h 3m". Matches the desktop host. */

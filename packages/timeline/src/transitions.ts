@@ -9,6 +9,7 @@
  * A transition can only use footage the sources have, so with less than half its length either side it runs shorter
  * there, and with almost none it stays a straight cut. `joins` says what each join got, for the tool to report.
  */
+import { firstIndexBy } from "./intervals.js";
 import { clipEnd, JOIN_SLACK, meets } from "./time.js";
 import type { Clip, ColorClip, MediaClip, Timeline, Transition, TransitionDirection, TransitionType } from "./schema.js";
 
@@ -93,8 +94,7 @@ export function planTransitions(timeline: Timeline, media: ReadonlyMap<string, T
     // The clip a transition moves from is the picture that ends at its join, wherever it is stored: footage or a colour.
     const pictures = clips.map((c, i) => ({ c, i, end: clipEnd(c) })).filter(p => p.c.kind !== "caption").sort((a, b) => a.end - b.end);
     const endingAt = (at: number, clip: Clip) => {
-      let lo = 0, hi = pictures.length;
-      while (lo < hi) { const mid = (lo + hi) >> 1; if (pictures[mid]!.end < at - JOIN_SLACK) lo = mid + 1; else hi = mid; }
+      const lo = firstIndexBy(pictures, p => p.end >= at - JOIN_SLACK);
       let found: { c: Clip; i: number } | undefined;
       for (let k = lo; k < pictures.length && meets(pictures[k]!.end, at); k++) {
         const p = pictures[k]!;

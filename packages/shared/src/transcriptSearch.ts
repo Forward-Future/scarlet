@@ -49,6 +49,20 @@ export function searchTranscript(words: TranscriptWord[], query: string, context
   return indexTranscriptWords(words)(query, contextWords);
 }
 
+function buildTranscriptMatch(words: TranscriptWord[], startIndex: number, length: number, contextWords: number): TranscriptMatch {
+  const slice = words.slice(startIndex, startIndex + length);
+  const before = words.slice(Math.max(0, startIndex - contextWords), startIndex).map((w) => w.text);
+  const after = words.slice(startIndex + length, startIndex + length + contextWords).map((w) => w.text);
+  return {
+    start: slice[0]!.start,
+    end: slice.at(-1)!.end,
+    text: slice.map((w) => w.text).join(" "),
+    speaker: slice[0]!.speaker,
+    context: [...before, "[", ...slice.map((w) => w.text), "]", ...after].join(" "),
+    wordIndex: startIndex,
+  };
+}
+
 function findPhrase(words: TranscriptWord[], norm: string[], query: string, contextWords: number): TranscriptMatch[] {
   const q = query
     .split(/\s+/)
@@ -65,17 +79,7 @@ function findPhrase(words: TranscriptWord[], norm: string[], query: string, cont
       }
     }
     if (!ok) continue;
-    const slice = words.slice(i, i + q.length);
-    const before = words.slice(Math.max(0, i - contextWords), i).map((w) => w.text);
-    const after = words.slice(i + q.length, i + q.length + contextWords).map((w) => w.text);
-    out.push({
-      start: slice[0]!.start,
-      end: slice[slice.length - 1]!.end,
-      text: slice.map((w) => w.text).join(" "),
-      speaker: slice[0]!.speaker,
-      context: [...before, "[", ...slice.map((w) => w.text), "]", ...after].join(" "),
-      wordIndex: i,
-    });
+    out.push(buildTranscriptMatch(words, i, q.length, contextWords));
   }
   return out;
 }
@@ -209,11 +213,7 @@ export function fuzzySearchTranscript(words: TranscriptWord[], query: string,
     for (let k = f.i; k < f.i + f.n; k++) if (taken[k]) { free = false; break; }
     if (!free) continue;
     for (let k = f.i; k < f.i + f.n; k++) taken[k] = true;
-    const slice = words.slice(f.i, f.i + f.n);
-    const before = words.slice(Math.max(0, f.i - contextWords), f.i).map(w => w.text);
-    const after = words.slice(f.i + f.n, f.i + f.n + contextWords).map(w => w.text);
-    out.push({ start: slice[0]!.start, end: slice.at(-1)!.end, text: slice.map(w => w.text).join(" "), speaker: slice[0]!.speaker,
-      context: [...before, "[", ...slice.map(w => w.text), "]", ...after].join(" "), wordIndex: f.i, score: Math.round(f.score * 100) / 100 });
+    out.push({ ...buildTranscriptMatch(words, f.i, f.n, contextWords), score: Math.round(f.score * 100) / 100 });
   }
   return out;
 }

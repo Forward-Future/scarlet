@@ -79,6 +79,18 @@ export function requireProjectHeader(ctx: Ctx, projectId: string): Omit<Project,
   return project;
 }
 
+/** Load a row by id (and optional project ownership), throwing 404 with `<label> <id>` when missing. */
+export function requireScoped<T extends object>(
+  repo: { get(id: string): T | null | undefined },
+  label: string,
+  id: string,
+  projectId?: string,
+): T {
+  const row = repo.get(id);
+  if (!row || (projectId !== undefined && (row as { projectId?: string | null }).projectId !== projectId)) throw notFound(`${label} ${id}`);
+  return row;
+}
+
 export function numberParam(value: string | undefined, name: string, fallback?: number): number {
   if (value === undefined || value === "") {
     if (fallback !== undefined) return fallback;

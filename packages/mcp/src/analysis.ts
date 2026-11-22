@@ -250,8 +250,28 @@ export function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 
+export function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 export function round3(n: number): number {
   return Math.round(n * 1000) / 1000;
+}
+
+export function round4(n: number): number {
+  return Math.round(n * 1e4) / 1e4;
+}
+
+/** Format a 0..1 fraction as a percentage rounded to one decimal place (0..100). */
+export function pct1(n: number): number {
+  return Math.round(n * 1000) / 10;
+}
+
+/** Append `[start, end]` to sorted contiguous intervals, merging when adjacent within `epsilon`. */
+export function appendInterval(runs: TimeRange[], start: number, end: number, epsilon = 1e-6): void {
+  const previous = runs.at(-1);
+  if (previous && Math.abs(previous.end - start) < epsilon) previous.end = end;
+  else runs.push({ start, end });
 }
 
 /** A transcript word that is a bracketed tag, such as [BLANK_AUDIO], and not something said. */

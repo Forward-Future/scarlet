@@ -33,7 +33,7 @@ export interface SpawnLinesOptions {
   onStderr?: (chunk: string) => void;
 }
 
-interface SpawnOutcome {
+export interface SpawnOutcome {
   code: number | null;
   signal: NodeJS.Signals | null;
   /** Stopped by `timeoutMs` or `stallMs`. */
@@ -192,7 +192,7 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
     try {
       opts.onLine(line);
     } catch (err) {
-      addStderr(`line handler failed: ${err instanceof Error ? err.message : String(err)}\n`);
+      addStderr(`line handler failed: ${errMsg(err)}\n`);
     }
   };
   let buf = "";
@@ -212,7 +212,7 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
 
   // Noted for the next launch, which stops a CLI this one left running when it crashed. In the background: `ps` is slow
   // beside a CLI that reads its prompt at once.
-  const noting = child.pid ? noteCli(child.pid, spec.file).catch((err) => addStderr(`could not note the CLI for the next launch: ${err instanceof Error ? err.message : String(err)}\n`)) : undefined;
+  const noting = child.pid ? noteCli(child.pid, spec.file).catch((err) => addStderr(`could not note the CLI for the next launch: ${errMsg(err)}\n`)) : undefined;
   const done = new Promise<SpawnOutcome>((resolve) => {
     const finish = (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
@@ -281,6 +281,15 @@ export function mcpEnv(vars: Record<string, string | undefined>): Record<string,
   return out;
 }
 
+/** Narrow an unknown value to a plain JSON object (excluding null and arrays). */
+export function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+export function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** The one JSON object a CLI wrote on a line of its stream. Undefined for anything else: a warning, null, a number, a list. */
 export function jsonLine(line: string): Record<string, unknown> | undefined {
   let msg: unknown;
@@ -289,7 +298,12 @@ export function jsonLine(line: string): Record<string, unknown> | undefined {
   } catch {
     return undefined;
   }
-  return msg && typeof msg === "object" && !Array.isArray(msg) ? msg as Record<string, unknown> : undefined;
+  return asRecord(msg);
+}
+
+/** Standard error message when a CLI exits with a non-zero status code and no structured error. */
+export function exitError(cli: string, outcome: Pick<SpawnOutcome, "code" | "stderr">): string {
+  return `${cli} exited with code ${outcome.code}${outcome.stderr ? `: ${outcome.stderr.trim().slice(-800)}` : ""}`;
 }
 
 /**

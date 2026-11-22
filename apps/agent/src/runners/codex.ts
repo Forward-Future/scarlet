@@ -9,12 +9,12 @@ import { lstat, mkdir, readFile, realpath, rm, stat, symlink } from "node:fs/pro
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { apiKeyVars, stripVars } from "../detect.js";
+import { hasApiKey, stripVars } from "../detect.js";
 import { parseCodexQuota } from "../quota.js";
 import { privateDirectory, writePrivateFile } from "../private-files.js";
-import { briefInput, COMPACTED, DEFAULT_STALL_MS, isQuestionTool, planEvent, questionText, workspaceEnv, type CodexFallbackReason, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
-import { earlyResult, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
-import { addUsage, codexUsage, tokenCount, usageWithModel } from "./usage.js";
+import { briefInput, COMPACTED, DEFAULT_STALL_MS, isQuestionTool, nextPlanEvent, questionText, workspaceEnv, type CodexFallbackReason, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
+import { asRecord, earlyResult, exitError, jsonLine, resolveCli, spawnLines, tailSummary, type SpawnOutcome } from "./spawn.js";
+import { addUsage, codexUsage, createUsageReporter, tokenCount, usageWithModel } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
 
 export interface CodexParseState {
@@ -79,8 +79,6 @@ export function parseCodexLine(line: string, st: CodexParseState): RunnerEvent[]
   return msg ? parseCodexEvent(msg, st) : [{ type: "log", text: line }];
 }
 
-const object = (value: unknown): Record<string, unknown> | undefined =>
-  value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 const string = (value: unknown) => typeof value === "string" ? value : undefined;
 const SERVER_STOP_GRACE_MS = 2000;
 
@@ -152,10 +150,10 @@ function parseCodexEvent(msg: Record<string, unknown>, st: CodexParseState): Run
         case "todo_list": {
           // The whole plan each time: when the model first makes it, on every update, and once more as the turn ends.
           const steps = codexPlan(item.items);
-          const plan = JSON.stringify(steps);
-          if (steps && plan !== st.plan) {
-            st.plan = plan;
-            events.push(planEvent(steps));
+          const next = steps && nextPlanEvent(steps, st.plan);
+          if (next) {
+            st.plan = next.serialized;
+            events.push(next.event);
           }
           break;
         }
@@ -299,8 +297,7 @@ function codexModelConfig(opts: Pick<RunAgentOptions, "effort" | "serviceTier" |
 async function isolatedCodexHome(cwd: string, env: NodeJS.ProcessEnv): Promise<{ home: string } | { reason: CodexFallbackReason }> {
   // App Server cannot skip the user's config, rules or MCP servers. Share only
   // file-backed login, with a symlink so Codex can still refresh that login.
-  const keyNames = apiKeyVars("codex");
-  if (Object.entries(env).some(([name, value]) => value && keyNames.includes(name.toUpperCase()))) return { reason: "api_key" };
+  if (hasApiKey("codex", env)) return { reason: "api_key" };
   const projectConfig = await lstat(join(cwd, ".codex")).catch((err: NodeJS.ErrnoException) => {
     if (err.code !== "ENOENT") throw err;
   });
@@ -359,7 +356,7 @@ type Breakdown = Record<typeof BREAKDOWN[number], number>;
 
 /** One of App Server's token counts (`total`, the thread's, or `last`, the latest model call's). */
 function breakdown(value: unknown): Breakdown | undefined {
-  const counts = object(value);
+  const counts = asRecord(value);
   return counts && Object.fromEntries(BREAKDOWN.map(key => [key, tokenCount(counts[key])])) as Breakdown;
 }
 
@@ -373,13 +370,13 @@ function minus(a: Breakdown, b: Breakdown | undefined): Breakdown {
  * when Codex starts a resumed thread's count afresh.
  */
 function resumedBaseline(value: unknown): Breakdown | undefined {
-  const total = breakdown(object(value)?.total);
-  return total && minus(total, breakdown(object(value)?.last));
+  const total = breakdown(asRecord(value)?.total);
+  return total && minus(total, breakdown(asRecord(value)?.last));
 }
 
 /** The thread's tokens as App Server counts them, less what it had counted before this run. */
 function serverUsage(value: unknown, model?: string, baseline?: Breakdown): AgentUsage | undefined {
-  const all = breakdown(object(value)?.total);
+  const all = breakdown(asRecord(value)?.total);
   const total = all && minus(all, baseline);
   return total && codexUsage({ input_tokens: total.inputTokens, cached_input_tokens: total.cachedInputTokens,
     cache_write_input_tokens: total.cacheWriteInputTokens, output_tokens: total.outputTokens, reasoning_output_tokens: total.reasoningOutputTokens }, model);
@@ -388,7 +385,7 @@ function serverUsage(value: unknown, model?: string, baseline?: Breakdown): Agen
 function serverPlan(value: unknown): PlanStep[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.flatMap((entry): PlanStep[] => {
-    const step = object(entry);
+    const step = asRecord(entry);
     const text = string(step?.step)?.trim();
     const status = step?.status;
     if (!text) return [];
@@ -397,7 +394,7 @@ function serverPlan(value: unknown): PlanStep[] | undefined {
 }
 
 function serverError(value: unknown) {
-  const error = object(value);
+  const error = asRecord(value);
   const message = string(error?.message);
   const detail = string(error?.additionalDetails);
   return message && detail ? `${message} (${detail})` : message;
@@ -441,16 +438,17 @@ async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin
 
   let compactionItems = false;
   let baseline: Breakdown | undefined;
+  const reportUsage = createUsageReporter(opts.onUsage, opts.model);
   const notify = (method: string, params: Record<string, unknown>) => {
-    const eventTurn = string(params.turnId) ?? string(object(params.turn)?.id);
+    const eventTurn = string(params.turnId) ?? string(asRecord(params.turn)?.id);
     if (completed || !eventTurn || eventTurn !== turnId) return;
     switch (method) {
       case "thread/tokenUsage/updated": {
         if (opts.resumeSession) baseline ??= resumedBaseline(params.tokenUsage);
         const usage = serverUsage(params.tokenUsage, model, baseline);
-        if (!usage || JSON.stringify(usage) === JSON.stringify(state.usage)) break;
+        if (!usage) break;
         state.usage = usage;
-        opts.onUsage?.(usage);
+        reportUsage(usage);
         break;
       }
       // Codex compacted the thread's context. Newer versions report it as an item too, and that one counts.
@@ -459,7 +457,7 @@ async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin
         break;
       case "item/started":
       case "item/completed": {
-        const item = object(params.item);
+        const item = asRecord(params.item);
         if (!item) break;
         if (item.type === "contextCompaction") {
           compactionItems = true;
@@ -482,10 +480,10 @@ async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin
       }
       case "turn/plan/updated": {
         const steps = serverPlan(params.plan);
-        const plan = JSON.stringify(steps);
-        if (opts.plan && steps && plan !== state.plan) {
-          state.plan = plan;
-          opts.onEvent(planEvent(steps));
+        const next = opts.plan && steps ? nextPlanEvent(steps, state.plan) : undefined;
+        if (next) {
+          state.plan = next.serialized;
+          opts.onEvent(next.event);
         }
         break;
       }
@@ -498,7 +496,7 @@ async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin
         break;
       }
       case "turn/completed": {
-        const turn = object(params.turn);
+        const turn = asRecord(params.turn);
         if (!turn || turnId !== turn.id) break;
         if (turn.status === "completed") {
           state.lastMessage = finalMessage ?? state.lastMessage ?? planText;
@@ -528,7 +526,7 @@ async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin
           send({ id, error: { code: -32601, message: "This request is unavailable in Scarlet" } });
           return;
         }
-        const params = object(message.params);
+        const params = asRecord(message.params);
         if (method === "account/rateLimits/updated" && params) {
           const quota = parseCodexQuota(params);
           if (quota) opts.onQuota?.(quota);
@@ -541,7 +539,7 @@ async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin
         return;
       }
       if (id !== pending) return;
-      const result = object(message.result);
+      const result = asRecord(message.result);
       if (id === 1) {
         if (!result) {
           startupFailure = "initialize_failed";
@@ -554,11 +552,11 @@ async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin
           ? { id: 2, method: "thread/resume", params: { threadId: opts.resumeSession, model, serviceTier } }
           : { id: 2, method: "thread/start", params: { ephemeral: false, model, serviceTier } });
       } else if (id === 2) {
-        const thread = object(result?.thread);
+        const thread = asRecord(result?.thread);
         threadId = string(thread?.id);
         const profile = result?.activePermissionProfile;
         const approval = result?.approvalPolicy;
-        if (!threadId || thread?.ephemeral !== false || object(profile)?.id !== "scarlet" || approval !== "never" || (opts.resumeSession && threadId !== opts.resumeSession)) {
+        if (!threadId || thread?.ephemeral !== false || asRecord(profile)?.id !== "scarlet" || approval !== "never" || (opts.resumeSession && threadId !== opts.resumeSession)) {
           startupFailure = opts.resumeSession ? "thread_resume_failed" : threadId ? "thread_policy_mismatch" : "thread_start_failed";
           return complete();
         }
@@ -569,7 +567,7 @@ async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin
         pending = 3;
         send({ id: 3, method: "turn/start", params: { threadId, input: [{ type: "text", text: opts.instruction, text_elements: [] }] } });
       } else if (id === 3) {
-        turnId = string(object(result?.turn)?.id);
+        turnId = string(asRecord(result?.turn)?.id);
         if (!turnId) {
           emit({ type: "error", message: serverError(message.error) ?? "Codex could not start the turn" });
           return complete();
@@ -639,7 +637,7 @@ export async function runCodex(opts: RunAgentOptions): Promise<RunAgentResult> {
   return codexResult(st, outcome, last, opts.model, outcome.code === 0 || st.turnCompleted);
 }
 
-function codexResult(st: CodexParseState, outcome: Awaited<ReturnType<typeof spawnLines>["done"]>, last: string | undefined, model: string | undefined, completed: boolean, sessionId?: string): RunAgentResult {
+function codexResult(st: CodexParseState, outcome: SpawnOutcome, last: string | undefined, model: string | undefined, completed: boolean, sessionId?: string): RunAgentResult {
   const usage = usageWithModel(st.usage, model);
   // A question carries the thread with it, so the answer resumes it.
   const early = earlyResult(st, outcome, { usage, ...(sessionId && { sessionId }) });
@@ -649,7 +647,7 @@ function codexResult(st: CodexParseState, outcome: Awaited<ReturnType<typeof spa
   return {
     ok,
     summary: last ?? tailSummary(st.texts),
-    error: ok ? undefined : st.failed ?? st.retryNotice ?? `codex exited with code ${outcome.code}${outcome.stderr ? `: ${outcome.stderr.trim().slice(-800)}` : ""}`,
+    error: ok ? undefined : st.failed ?? st.retryNotice ?? exitError("codex", outcome),
     exitCode: outcome.code,
     usage,
     ...(sessionId && { sessionId }),

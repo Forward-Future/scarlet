@@ -9,16 +9,12 @@ import { assistantSkills, createSkill, deleteSkill, latestSkillEdit, reviseSkill
 import { createTask, FINISHED_TASK, saveTask } from "../services/tasks.js";
 import { approveLearning, declineLearning, openLearnings, requireApprovedLearningEdit, reviseLearning, suggestLearning } from "../services/learnings.js";
 import { actorFor, agentName, logActivity, quote } from "../services/activity.js";
-import { jsonBody, requireProjectHeader } from "./util.js";
+import { jsonBody, requireProjectHeader, requireScoped } from "./util.js";
 
 export function skillRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
 
-  function requireSkill(skillId: string): Skill {
-    const skill = ctx.repos.skills.get(skillId);
-    if (!skill) throw notFound(`skill ${skillId}`);
-    return skill;
-  }
+  const requireSkill = (skillId: string): Skill => requireScoped(ctx.repos.skills, "skill", skillId);
 
   r.get("/skills", (c) => {
     const projectId = c.req.query("projectId");
@@ -119,9 +115,7 @@ export function skillRoutes(ctx: Ctx) {
   // Learnings: rules an agent picked up from the editor's requests. Nothing changes until the editor approves one.
   function requireLearning(projectId: string, learningId: string): Learning {
     requireProjectHeader(ctx, projectId);
-    const learning = ctx.repos.learnings.get(learningId);
-    if (!learning || learning.projectId !== projectId) throw notFound(`learning ${learningId}`);
-    return learning;
+    return requireScoped(ctx.repos.learnings, "learning", learningId, projectId);
   }
 
   r.get("/projects/:id/learnings", (c) => {
