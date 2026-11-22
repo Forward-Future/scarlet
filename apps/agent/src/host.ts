@@ -167,6 +167,17 @@ export class AgentHost {
   async runOne(projectId: string, request: CreateTaskRequest, signal: AbortSignal = new AbortController().signal, pollMs = 2000): Promise<Task> {
     this.agents = await this.detectAgents();
     await this.register();
+    // The engine counts a host without heartbeats as gone, and hands its run on: a tool call longer than that
+    // would leave this run's saves refused. `start` beats for its own runs; this one beats until it returns.
+    const beating = setInterval(() => void this.heartbeat(), this.opts.heartbeatMs ?? 30_000);
+    try {
+      return await this.followOne(projectId, request, signal, pollMs);
+    } finally {
+      clearInterval(beating);
+    }
+  }
+
+  private async followOne(projectId: string, request: CreateTaskRequest, signal: AbortSignal, pollMs: number): Promise<Task> {
     const { task } = await this.client.createTask(projectId, request);
     this.log(`asked the engine for task ${task.id}`);
     for (;;) {

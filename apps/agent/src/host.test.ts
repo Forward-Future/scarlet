@@ -78,6 +78,7 @@ async function startServer(questionFailures = 0): Promise<Srv> {
       return send(200, { host: { id: "host_1", userId: "u1", name: (req.body as { name: string }).name, platform: "test", agents: (req.body as { agents: unknown }).agents, online: true } });
     }
     if (req.method === "POST" && /^\/hosts\/host_1\/heartbeat$/.test(req.path)) return failed("heartbeat") || send(200, {});
+    if (req.method === "POST" && req.path === "/projects/prj_test/tasks") return send(201, { task: { ...task, state: "queued" } });
     if (req.method === "POST" && /^\/hosts\/host_1\/claim$/.test(req.path)) {
       srv.claims.push({ query: Object.fromEntries(req.query), body: req.body });
       srv.events.emit("claim");
@@ -1171,4 +1172,21 @@ describe("removeClaudeSessions", () => {
     await removeClaudeSessions(oneshot, claude);
     expect(await readdir(join(claude, "projects"))).toEqual([]);
   });
+});
+
+it("keeps the engine hearing from a request it runs on its own, through a long tool call, and stops when it ends", async () => {
+  const srv = await startServer();
+  srv.taskState = "done";
+  const beats = () => srv.server.requests.filter((r) => r.path === "/hosts/host_1/heartbeat").length;
+  // The run holds as a long tool call would, until the engine has heard from the host a few times.
+  const { host } = makeHost(srv, async () => {
+    await vi.waitFor(() => expect(beats()).toBeGreaterThanOrEqual(3), { timeout: 2_000, interval: 10 });
+    return { ok: true, summary: "Done" };
+  }, undefined, { heartbeatMs: 20 });
+  const ended = await host.runOne("prj_test", { kind: "edit", agent: "claude", instruction: task.instruction });
+  expect(ended.state).toBe("done");
+  expect(srv.completes).toEqual([expect.objectContaining({ state: "done" })]);
+  const after = beats();
+  await delay(100);
+  expect(beats()).toBe(after);
 });
