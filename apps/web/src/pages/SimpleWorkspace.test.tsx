@@ -10728,6 +10728,29 @@ const oneAppliedCut = () => {
       beforeCut: { version: "v_before", removed: { start: 10, end: 12.4 } }, previous: [] },
   ] });
 };
+it("says what each cut took out on one line, however many cuts the editor steps through", async () => {
+  flagged();
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockResolvedValue({ version: data.project.head!, edits: [
+    { changeId: "chg_approved_2", spot: 0, label: "First cut", range: { start: 8, end: 12 }, at: 10,
+      beforeCut: { version: "v_before", removed: { start: 10, end: 12.4 } }, previous: [] },
+    { changeId: "chg_approved_2", spot: 1, label: "Second cut", range: { start: 20, end: 24 }, at: 22,
+      beforeCut: { version: "v_before", removed: { start: 22, end: 23 } }, previous: [] },
+    { changeId: "chg_approved_2", spot: 2, label: "Third cut", range: { start: 30, end: 34 }, at: 32,
+      beforeCut: { version: "v_before", removed: { start: 32, end: 33 } }, previous: [] },
+  ] });
+  vi.spyOn(api, "timeline").mockResolvedValue({ timeline: { ...data.timeline!, version: "v_before" } } as never);
+  await show();
+  await click(turnFor("chg_approved_2").querySelector(".simple-edit")!);
+  await act(async () => {});
+  // The line and the note under it were keyed alike, so each step left the last cut's line behind (2026-11-21).
+  for (const key of ["ArrowDown", "ArrowDown", "ArrowUp"]) {
+    await press(key);
+    await act(async () => {});
+    expect(editPanel()!.querySelectorAll(".edit-card-what")).toHaveLength(1);
+  }
+});
+
 const cutRow = () => turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-edits .simple-edit")!;
 
 it("opens a cut unlit with its words folded when it is opened again, after Before and its transcript were left on, and starts it over unlit when its open row is pressed again", async () => {
