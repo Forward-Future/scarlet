@@ -11,6 +11,7 @@ const toolActivity: Record<string, string> = {
   audio_sync: "Checking whether the sound lines up",
   transcript_get: "Reading transcript",
   transcript_search: "Searching transcript",
+  transcript_fix: "Correcting the transcript",
   dialogue_scan: "Scanning dialogue",
   dialogue_check_join: "Checking how the cut sounds",
   dialogue_review_inspect: "Checking a suggested cut",

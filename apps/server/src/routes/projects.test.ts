@@ -7,7 +7,8 @@ import { ATTEMPT_HEADER, TASK_HEADER, type ProjectSummary, type Task } from "@sc
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { OpenAIProvider } from "../transcribe/openai.js";
-import { appendTaskEvent, createTask, saveTask, taskPrompt } from "../services/tasks.js";
+import { appendTaskEvent, createTask, saveTask } from "../services/tasks.js";
+import { taskPrompt } from "../services/taskPrompts.js";
 import { storeVersion } from "../services/timeline.js";
 import { sourcePreviews } from "../services/sourcePreviews.js";
 import { recoverTasks } from "../services/taskRecovery.js";

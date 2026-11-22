@@ -95,6 +95,7 @@ const toolSteps: Record<string, StepSpec> = {
     return typeof query === "string" && query.length <= 40 ? `the transcript for “${query}”` : n > 1 ? `the transcript ${n} times` : "the transcript";
   } },
   music_beats: { group: "music", verb: "Found", doing: "Finding", detail: () => "the beat of the music", once: true },
+  transcript_fix: { group: "transcript-fix", verb: "Corrected", doing: "Correcting", detail: () => "the transcript" },
   media_profile: sound, waveform_get: sound, sound_picture: sound, source_audio: sound,
   audio_sync: { group: "sync", verb: "Lined up", doing: "Lining up", detail: () => "the sound", once: true },
   media_frame: picture, frame_contact_sheet: picture, frame_contact_sheet_batch: picture, screen_area: picture,

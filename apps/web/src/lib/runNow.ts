@@ -112,6 +112,10 @@ function toolWords(name: string, raw: unknown, callNumber?: CallNumber): string 
       const query = field(input, "query");
       return typeof query === "string" && query.trim() ? `Searching the transcript for “${query.trim().slice(0, 40)}”` : "Searching the transcript";
     }
+    case "transcript_fix": {
+      const replace = field(input, "replace");
+      return typeof replace === "string" && replace.trim() ? `Writing “${replace.trim().slice(0, 40)}” in the transcript` : "Correcting the transcript";
+    }
     case "media_frame": return `Looking at the picture${span(input, "t")}`;
     case "screen_text": {
       const query = field(input, "query");

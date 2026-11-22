@@ -4,11 +4,12 @@ import { z } from "zod/v3";
 import { CompleteTaskRequest, CreateTaskRequest, EDITING_TOOL_GROUPS, queueWaits, RecordTaskUsageRequest, RepeatAuditRequest, RewordTaskRequest, RunChoice, TaskEvent, TaskState, UsageGroupBy, type Task } from "@scarlet/shared";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
-import { badRequest, conflict, notFound } from "../errors.js";
+import { badRequest, conflict } from "../errors.js";
 import { waitFor } from "../events.js";
-import { aboutStagedCut, appendTaskEvent, cancelTask, completeTask, createTask, FINISHED_TASK, followUpInstruction, holdForRewording, PROJECT_EDIT_KINDS, rewordTask, saveTask, startBeforeCalls, taskPrompt } from "../services/tasks.js";
+import { appendTaskEvent, cancelTask, completeTask, createTask, FINISHED_TASK, holdForRewording, PROJECT_EDIT_KINDS, rewordTask, saveTask, startBeforeCalls } from "../services/tasks.js";
+import { aboutStagedCut, followUpInstruction, taskPrompt } from "../services/taskPrompts.js";
 import { readPassRepeats } from "../services/passRepeats.js";
-import { callSentBack } from "../services/changes.js";
+import { callSentBack, prepareNextDecision } from "../services/changes.js";
 import { jsonBody, requireProjectHeader, requireScoped } from "./util.js";
 import { actorFor, agentName, logActivity, quote } from "../services/activity.js";
 import { continueWhenReady, interruptTask, retryTask } from "../services/taskRecovery.js";
@@ -93,7 +94,11 @@ export function taskRoutes(ctx: Ctx) {
         createdBy: actorFor(user),
       });
       // A pass set to apply when Scarlet finishes waits for a call the editor sends back, instead of applying over it.
-      if (changeId && cutIndex !== undefined) callSentBack(ctx, task);
+      if (changeId && cutIndex !== undefined) {
+        const pass = callSentBack(ctx, task);
+        // The editor moves on to the next call while Scarlet revises this one: it plays at once too.
+        prepareNextDecision(ctx, pass.changeId, pass.index);
+      }
       logActivity(ctx, {
         projectId: project.id,
         actor: actorFor(user),

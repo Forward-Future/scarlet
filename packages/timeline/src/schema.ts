@@ -113,6 +113,18 @@ export const MediaAsset = z.object({
   height: z.number().int().positive().optional(),
   hasAudio: z.boolean().optional(),
   hasAlpha: z.boolean().optional(),
+  /**
+   * The colour a moving picture's file declares: an HDR transfer, which every picture Scarlet makes from it tone-maps
+   * to SDR, a camera Log curve it names, and its colour tags when they aren't BT.709. `{}` for ordinary SDR. Absent on
+   * a file imported before Scarlet read colour, until it is read.
+   */
+  color: z.object({
+    hdr: z.enum(["hlg", "pq"]).optional(),
+    log: z.string().optional(),
+    primaries: z.string().optional(),
+    transfer: z.string().optional(),
+    bitDepth: z.number().int().positive().optional(),
+  }).optional(),
   /** Automatic transcription permitted at import, retained across interrupted preparation. */
   transcriptionOnImport: z.enum(["openai", "whispercpp"]).optional(),
   /** Provider revision when imported. An older import without it needs a new transcription request. */
@@ -451,6 +463,19 @@ export const TranscriptSegment = z.object({
 });
 export type TranscriptSegment = z.infer<typeof TranscriptSegment>;
 
+/**
+ * A spelling the editor corrected across a transcript: the words that read `find` read `replace`, with their times.
+ * Kept on the transcript so a transcription made again, or its words placed again, reads the same.
+ * `from`/`to`: the source seconds the fix was limited to.
+ */
+export const TranscriptWordFix = z.object({
+  find: z.string().min(1),
+  replace: z.string().min(1),
+  from: Seconds.optional(),
+  to: Seconds.optional(),
+});
+export type TranscriptWordFix = z.infer<typeof TranscriptWordFix>;
+
 export const LocalTranscriptionModel = z.enum(["crisperwhisper", "whispercpp", "custom"]);
 export type LocalTranscriptionModel = z.infer<typeof LocalTranscriptionModel>;
 
@@ -473,6 +498,8 @@ export const Transcript = z.object({
   /** Model or adapter recorded when these words were transcribed, retained on speaker revisions. */
   modelLabel: z.string().optional(),
   segments: z.array(TranscriptSegment).default([]),
+  /** Spellings the editor corrected, in the order made. A new transcription of the recording applies them again. */
+  wordFixes: z.array(TranscriptWordFix).optional(),
   createdAt: z.string().datetime().optional(),
 });
 export type Transcript = z.infer<typeof Transcript>;

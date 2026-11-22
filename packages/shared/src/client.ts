@@ -446,6 +446,12 @@ export class ScarletClient {
   musicBeats(projectId: string, mediaId: string, range: { from?: number; to?: number } = {}) {
     return this.get<MusicReading>(withQuery(`/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}/music-beats`, range));
   }
+  /** Correct a word or phrase in the project's transcripts (all of them, or `mediaIds`), keeping word times. */
+  fixTranscriptWords(projectId: string, body: { find: string; replace: string; mediaIds?: string[]; from?: number; to?: number }) {
+    return this.post<{ recordings: Array<{ mediaId: string; name: string; count: number; wordsAdded: number;
+      places: Array<{ index: number; start: number; end: number; before: string; after: string }> } | { mediaId: string; name: string; skipped: string }> }>(
+      `/projects/${encodeURIComponent(projectId)}/transcripts/fix`, body);
+  }
   /** Repeated lines in one recording with a take inside from–to (source seconds). */
   retakes(projectId: string, mediaId: string, from: number, to: number) {
     return this.get<{ mediaId: string; groups: RetakeGroup[] }>(

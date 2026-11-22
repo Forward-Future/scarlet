@@ -4,8 +4,8 @@
 export const EDITING_TOOL_GROUPS = [
   { title: "Timeline editing", description: "Read the timeline, trim dialogue, frame the picture and propose changes.",
     tools: ["project_get", "timeline_get", "timeline_at", "timeline_diff", "timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync"] },
-  { title: "Speech and waveform", description: "Find a line, measure pauses and loudness, find the beat of a music track, and check the words and sound at each cut.",
-    tools: ["transcript_get", "transcript_search", "timeline_transcript", "timeline_join_audit", "waveform_get", "sound_picture", "media_profile", "music_beats", "audio_sync", "dialogue_scan", "dialogue_check_join", "dialogue_check_repeats", "dialogue_apply_cuts", "dialogue_review_inspect", "dialogue_review_save", "dialogue_revise_cut"] },
+  { title: "Speech and waveform", description: "Find a line, correct how a name is written, measure pauses and loudness, find the beat of a music track, and check the words and sound at each cut.",
+    tools: ["transcript_get", "transcript_search", "transcript_fix", "timeline_transcript", "timeline_join_audit", "waveform_get", "sound_picture", "media_profile", "music_beats", "audio_sync", "dialogue_scan", "dialogue_check_join", "dialogue_check_repeats", "dialogue_apply_cuts", "dialogue_review_inspect", "dialogue_review_save", "dialogue_revise_cut"] },
   { title: "Screen text", description: "Read and search the words shown on screen in a recording, find where the speaker reads them aloud, and see where the picture changes.",
     tools: ["screen_text", "screen_reading", "screen_motion"] },
   { title: "Faces", description: "Find where the people are in the frame and where they look over time, and check that their lips keep time with the sound.",

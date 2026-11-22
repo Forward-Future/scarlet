@@ -34,6 +34,8 @@ export interface ProbeResult {
   height?: number;
   hasAudio: boolean;
   hasAlpha?: boolean;
+  /** A moving picture's declared colour (`MediaAsset.color`). The fallback adapter doesn't read it. */
+  color?: MediaAsset["color"];
   kind: MediaKind;
 }
 
@@ -77,6 +79,8 @@ export interface RenderAdapter {
   extractWaveformFull(path: string, duration: number, pointsPerSecond: number, onProgress?: (fraction: number) => void, signal?: AbortSignal): Promise<BinaryWaveformCache | WaveformData>;
   waveformFromCache(cache: WaveformCache, from: number, to: number, points: number): WaveformData;
   extractFrame(path: string, t: number, opts: { width: number; signal?: AbortSignal; indexedMp4?: boolean; decoder?: "cuda"; fps?: number;
+    /** The file's HDR transfer: the frame is tone-mapped to SDR. The fallback adapter leaves it as decoded. */
+    hdr?: "hlg" | "pq";
     /** Only this area of the picture, as fractions of it, and labelled percent lines over it. */
     area?: [number, number, number, number]; grid?: { width: number; height: number } }): Promise<Buffer>;
   makeProxy(input: string, output: string, opts: { height: number; checkpointDir?: string; range?: TimeRange; hwaccel?: RenderOptions["hwaccel"]; signal?: AbortSignal; onProgress?: (p: number) => void; onFallback?: (stage: "decode" | "encode") => void }): Promise<void>;
