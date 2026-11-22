@@ -322,7 +322,11 @@ export function MonitorLoadOverlay({
     };
   }, [needsLeadIn, leaving, transitionKey]);
 
-  const showHeld = !disabled && (openingJoin || active || leaving) && !stillLoaded && !!heldCanvas.current && !hasDecodedVideo(monitor.current);
+  const chromeVisible = active || leaving;
+  // The outgoing frame holds until the lead-in still is on screen. A still that loads within the first 180ms isn't
+  // shown yet, so letting go of the frame then would leave the monitor black until it is.
+  const showHeld = !disabled && (openingJoin || active || leaving) && !(chromeVisible && stillLoaded) && !!heldCanvas.current
+    && !hasDecodedVideo(monitor.current);
 
   useLayoutEffect(() => {
     const host = heldHost.current;
@@ -345,7 +349,6 @@ export function MonitorLoadOverlay({
 
   const display = active ? { stage: liveStage, progress: liveProgress, extended, showHint: liveShowHint } : lastSnapshot.current;
   const { label, meta } = waitCopy(display.stage, display.progress);
-  const chromeVisible = active || leaving;
   const determinate = display.stage === "rendering" && !!display.progress && display.progress.total > 1;
   const percent = determinate
     ? Math.min(100, Math.round(((display.progress!.done + 0.18) / display.progress!.total) * 100))

@@ -227,7 +227,7 @@ export async function withFrames<T>(ctx: Ctx, media: VideoMedia, file: string, n
     handed.push(used);
   };
   try {
-    await pictureLane(ctx).run(() => screenFrames(file, { start, end }, { fps, width, height, decoder, signal,
+    await pictureLane(ctx).run(() => screenFrames(file, { start, end }, { fps, width, height, decoder, hdr: media.color?.hdr, signal,
       onFallback: reason => ctx.log(`[${name}] ${media.id}: ${reason}`) }, (i, rgb) => {
       const at = start + i / fps;
       if (!keep(at, rgb)) return;

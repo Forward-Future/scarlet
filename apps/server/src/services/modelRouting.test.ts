@@ -5,7 +5,8 @@ import { expect, it } from "vitest";
 import { createProject } from "@scarlet/timeline";
 import type { AgentHost } from "@scarlet/shared";
 import { createApp } from "../app.js";
-import { claimTask, createTask } from "./tasks.js";
+import { createTask } from "./tasks.js";
+import { claimTask } from "./taskQueue.js";
 
 it("claims tuned tasks only on hosts that advertise that model and both options", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "scarlet-routing-"));

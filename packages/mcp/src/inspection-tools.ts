@@ -16,7 +16,7 @@ import {
   type TaskEvent,
 } from "@scarlet/shared";
 import { timelineDuration, type MediaClip, type TimeRange } from "@scarlet/timeline";
-import { pct1 } from "./analysis.js";
+import { colorEvidence, pct1 } from "./analysis.js";
 import { createAudioOption, percentBox } from "./mcp-schema.js";
 import type { MediaSession } from "./media-session.js";
 import { eachRecording, RecordingList, recordingsAsked, requireMediaAsset, type SessionErrorHelpers } from "./media-state.js";
@@ -67,7 +67,7 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
 
   tool(
     "project_get",
-    "Get the project: settings (fps, width x height, aspect), every media asset (id, name, kind, duration s, fps, size, hasAudio, hasTranscript, provenance of generated assets, and for a graphic Scarlet drew the page it was drawn from, relative to the project's folder), the head version, the edit's duration, and a per-track summary. For an assigned task, editContext contains the editor’s recorded selection, change or cut index, and note IDs when supplied. Media ids are what transcript, waveform and clip tools take as mediaId. For clip-level detail use timeline_get.",
+    "Get the project: settings (fps, width x height, aspect), every media asset (id, name, kind, duration s, fps, size, hasAudio, hasTranscript, provenance of generated assets, for a graphic Scarlet drew the page it was drawn from, relative to the project's folder, and color when the file declares HDR, which Scarlet already tone-maps to SDR, a camera Log curve, which stays flat as shot until a look is applied with the lut effect, or other colour tags), the head version, the edit's duration, and a per-track summary. For an assigned task, editContext contains the editor’s recorded selection, change or cut index, and note IDs when supplied. Media ids are what transcript, waveform and clip tools take as mediaId. For clip-level detail use timeline_get.",
     {},
     async () => {
       const asked = nextBaseAsk();
@@ -75,6 +75,7 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
       const media = detail.project.media.map((m) => ({
         id: m.id, name: m.name, kind: m.kind, duration: m.duration, fps: m.fps, width: m.width, height: m.height,
         hasAudio: m.hasAudio, hasTranscript: Boolean(m.transcriptId), ...(m.provenance && { provenance: m.provenance }), ...(m.graphic && { graphic: m.graphic }),
+        ...(colorEvidence(m.color) && { color: colorEvidence(m.color) }),
       }));
       const tl = detail.timeline;
       moveBase(tl, asked);

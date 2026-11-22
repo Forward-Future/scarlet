@@ -62,7 +62,7 @@ export function independentCutSpots(base: Timeline, ops: TimelineOp[], differenc
     for (const clip of track.clips) {
       if (clip.kind !== "media" || clip.mediaId !== first.mediaId || clip.sourceOut <= clip.sourceIn || clip.sourceIn < previousSourceOut ||
           Math.abs(clip.timelineIn - end) > REBASE_EPS || !clip.enabled || clip.speed !== 1 ||
-          clip.effects.length || clip.keyframes?.length || clip.audioFadeIn || clip.audioFadeOut ||
+          clip.effects.length || clip.keyframes?.length || clip.volumeKeyframes?.length || clip.audioFadeIn || clip.audioFadeOut ||
           clip.videoFadeIn || clip.videoFadeOut || clip.transitionIn) return;
       end = clipEnd(clip);
       previousSourceOut = clip.sourceOut;
@@ -167,7 +167,7 @@ export type ApplyPlan =
 const propertyGroups = new Map<string, string>([
   ["text", "caption"], ["words", "caption"], ["style", "style"],
   ["transform", "transform"], ["keyframes", "transform"], ["color", "color"],
-  ["volume", "volume"], ["audioFadeIn", "audioFadeIn"], ["audioFadeOut", "audioFadeOut"],
+  ["volume", "volume"], ["volumeKeyframes", "volume"], ["audioFadeIn", "audioFadeIn"], ["audioFadeOut", "audioFadeOut"],
   ["opacity", "opacity"], ["videoFadeIn", "videoFadeIn"], ["videoFadeOut", "videoFadeOut"], ["transitionIn", "transitionIn"],
 ]);
 

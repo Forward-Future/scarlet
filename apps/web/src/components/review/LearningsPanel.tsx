@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Learning } from "@scarlet/shared";
+import type { Learning, LearningDecision } from "@scarlet/shared";
 import { errorMessage } from "../../lib/client";
+import { clock } from "../../lib/format";
 import { useProjectStore } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
 import { useAgentAvailability } from "../agent/AgentChip";
@@ -24,15 +25,18 @@ function quoted(passages: string[]): string {
 }
 
 /**
- * Learnings: rules Scarlet picked up from what the editor asked for, each waiting for their call. A rule reads as it
- * would in the skill, with the words it came from under it, and what the skill already says that it would replace.
+ * Learnings: rules Scarlet picked up from what the editor asked for or decided, each waiting for their call. A rule
+ * reads as it would in the skill, with the words it came from under it, or one line on the decisions it came from that
+ * unfolds into them, each time opening its cut or edit; then what the skill already says that it would replace.
  * The editor picks the skill, Revise lets them reword the rule in place, then Approve has Scarlet revise that skill
  * around it and × declines it. Nothing is saved without Approve. The list opens under the header from the menu and
  * closes on Esc or a press outside it.
  */
-export function LearningsPanel({ onClose, focus }: { onClose(): void;
+export function LearningsPanel({ onClose, focus, onOpenDecision }: { onClose(): void;
   /** The rule to bring into view as the list opens: Review on the line under the request it came from opened it. */
-  focus?: string }) {
+  focus?: string;
+  /** Opens a decision a rule came from on the timeline: its cut or edit, or its time. */
+  onOpenDecision?(decision: LearningDecision): void }) {
   const learnings = useProjectStore(s => s.current?.learnings);
   const list = openLearnings(learnings);
   const panel = useRef<HTMLDivElement>(null);
@@ -78,13 +82,41 @@ export function LearningsPanel({ onClose, focus }: { onClose(): void;
     <h2 className="learn-title">Learnings</h2>
     {list.length > 0 && skillsError !== null && <p className="learn-problem" role="alert">Couldn’t load skills.{skillsError && ` ${skillsError}`}{" "}
       <button type="button" className="simple-link" onClick={() => void loadSkills()}>Retry</button></p>}
-    {list.length ? <ol className="learn-list">{list.map(l => <LearningRow key={l.id} learning={l} rewording={rewording} focused={l.id === focus} />)}</ol>
+    {list.length ? <ol className="learn-list">{list.map(l => <LearningRow key={l.id} learning={l} rewording={rewording} focused={l.id === focus} onOpenDecision={onOpenDecision} />)}</ol>
       : <div className="learn-empty"><p>Nothing to learn yet.</p>
         <p>When something you ask for reads like a rule, it waits here for you to approve.</p></div>}
   </div>;
 }
 
-function LearningRow({ learning, rewording, focused }: { learning: Learning; rewording: { current: (() => void) | null }; focused?: boolean }) {
+const DECIDED = { kept: "Kept", rejected: "Rejected", revised: "Revised" } as const;
+
+/**
+ * Where "You said:" goes for a rule learned from what the editor decided: one line in the check's words ("From 4 cuts
+ * you rejected") that unfolds into those decisions, each its time, its summary and what the editor did, and folds
+ * again. A time in this video is a link that opens its cut or edit on the timeline; one from another video is plain.
+ */
+function LearnedFrom({ learning, onOpen }: { learning: Learning; onOpen?(decision: LearningDecision): void }) {
+  const [open, setOpen] = useState(false);
+  const from = learning.learnedFrom!;
+  const summary = `From ${from.decisions.length} ${from.what}`;
+  return <>
+    <button type="button" className="learn-from" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+      {summary}<Icon name="chevron" size={10} />
+    </button>
+    {open && <ol className="learn-decisions" aria-label={summary}>{from.decisions.map(d => {
+      const here = d.projectId === learning.projectId && !!onOpen;
+      const at = d.time !== undefined ? clock(d.time) : "";
+      return <li key={d.id} className="learn-decision">
+        {at && (here ? <button type="button" className="learn-decision-time" title={`Open ${d.label} at ${at}`} onClick={() => onOpen!(d)}>{at}</button>
+          : <span className="learn-decision-time" title={d.projectId === learning.projectId ? undefined : "In another video"}>{at}</span>)}
+        <span className="learn-decision-what">{d.label}{d.note && ` (“${d.note}”)`} · {DECIDED[d.decision]}</span>
+      </li>;
+    })}</ol>}
+  </>;
+}
+
+function LearningRow({ learning, rewording, focused, onOpenDecision }: { learning: Learning; rewording: { current: (() => void) | null }; focused?: boolean;
+  onOpenDecision?(decision: LearningDecision): void }) {
   const skills = useSkillsStore(s => s.skills);
   const [skillId, setSkillId] = useState(learning.skillId);
   const [busy, setBusy] = useState(false);
@@ -182,7 +214,8 @@ function LearningRow({ learning, rewording, focused }: { learning: Learning; rew
       }}
       onBlur={() => finish(true)} />
       : <p className="learn-rule">{rewritten ?? learning.rule}</p>}
-    <p className="learn-said" title={learning.said}>You said: “{learning.said}”</p>
+    {learning.learnedFrom?.decisions.length ? <LearnedFrom learning={learning} onOpen={onOpenDecision} />
+      : <p className="learn-said" title={learning.said}>You said: “{learning.said}”</p>}
     {replaces && <p className="learn-replaces" title={`Replaces ${replaces}`}><span className="learn-replaces-label">Replaces</span> {replaces}</p>}
     {problem && !saving && <p className="learn-problem" role={error ? "alert" : undefined}>{error ? problem : `Not saved. ${problem}`}</p>}
     <div className="learn-actions">

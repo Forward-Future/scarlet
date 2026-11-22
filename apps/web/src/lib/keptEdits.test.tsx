@@ -109,3 +109,18 @@ it("takes a Keep back (⌘Z) here and on the engine, whose record no longer coun
   expect(readKept("prj", "undo", recorded).has("first/2")).toBe(true);
   await vi.waitFor(() => expect(sent).toEqual(["keep", "unkeep", "keep"]));
 });
+
+it("sends a Keep that didn't reach the engine again at the thread's next update, a few times at most", async () => {
+  const send = vi.mocked(api.keepEdits).mockRejectedValue(new Error("offline"));
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  keepEdits("prj", "resend", [{ changeId: "chg", spot: 4 }]);
+  await settle();
+  expect(send).toHaveBeenCalledTimes(1);
+  // The list that shows it sends it on, bare, while the engine still has no record of it.
+  for (const calls of [2, 3, 3]) {
+    readKept("prj", "resend");
+    await settle();
+    expect(send).toHaveBeenCalledTimes(calls);
+  }
+  expect(send.mock.calls[1]![1]).toEqual({ threadId: "resend", edits: [{ changeId: "chg", spot: 4 }] });
+});

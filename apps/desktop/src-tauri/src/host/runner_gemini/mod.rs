@@ -237,18 +237,19 @@ impl AcpSession {
             ));
             return true;
         }
+        // The words are the engine's (`refusedTool`): a host writes nothing the model reads.
+        let Some(text) = self.refused_tool.as_deref().filter(|words| !words.trim().is_empty()).map(|words| words.replace("{tool}", &names)) else {
+            self.fail_session(format!(
+                "Gemini stopped after Scarlet refused {names}, and this engine gave no words to carry on with. Update Scarlet's engine."
+            ));
+            return true;
+        };
         self.carry_ons += 1;
         (self.on_event)(RunnerEvent::with(
             "log",
             format!("Scarlet refused {names}: only Scarlet's tools run here. Gemini carries on."),
             json!({ "kind": "tool_refused", "harnessTool": names }),
         ));
-        let text = match self.refused_tool.as_deref().filter(|words| !words.trim().is_empty()) {
-            Some(words) => words.replace("{tool}", &names),
-            None => format!(
-                "Scarlet refused {names}: only Scarlet's own tools (the scarlet MCP server) run here, with no shell or file tools. Carry on with the request using Scarlet's tools."
-            ),
-        };
         self.send_turn(text);
         true
     }
@@ -460,7 +461,9 @@ impl AcpSession {
                 self.st.sync_usage();
                 self.emit_usage();
                 let stop_reason = non_empty_str(result.get("stopReason")).unwrap_or("end_turn");
-                if stop_reason == "cancelled" && self.st.question.is_some() {
+                // A turn Scarlet cancelled itself (a question to stop on, a stall, a time limit, Stop this edit) ended
+                // as asked: the host says why the run stopped, so it isn't reported as an error of Gemini's first.
+                if stop_reason == "cancelled" && (self.st.question.is_some() || self.cancel_sent) {
                     self.stop_session();
                     return true;
                 }

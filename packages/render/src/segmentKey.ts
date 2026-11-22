@@ -8,6 +8,7 @@ import { sha256, SOURCE_PREVIEW_SECONDS, stableStringify } from "@scarlet/timeli
 import type { Clip, MediaAsset, Project, Timeline, TimeRange, Track, TransitionPlan } from "@scarlet/timeline";
 import { fileInDirectory } from "./assetPath.js";
 import { effectKind } from "./effects.js";
+import { TONE_MAP_REVISION } from "./hdr.js";
 import { fnum } from "./exec.js";
 import { clipPlacement, fillsFrames, holdsFrame, holdsSample, proxyHeightForClip, videoClockStart } from "./graph.js";
 import { isMovingAsset, isStillAsset } from "./probe.js";
@@ -69,6 +70,8 @@ function mediaFingerprint(asset: MediaAsset | undefined, format: SegmentKeyOptio
     hasAudio: format.pictureOnly ? undefined : asset.hasAudio,
     sourceAlpha: format.pictureOnly || format.allowProxy ? asset.hasAlpha : undefined,
     proxyGeometry: format.allowProxy ? [asset.width, asset.height, asset.fps, asset.previewClock] : undefined,
+    // An HDR source's picture is tone-mapped to SDR. Absent for every other source, so their keys stay as they were.
+    sdr: asset.color?.hdr ? TONE_MAP_REVISION : undefined,
   };
 }
 
@@ -107,7 +110,7 @@ function segmentClip(clip: Clip, range: TimeRange, media: Map<string, MediaAsset
   }
   const { sourceIn, sourceOut: _out, ...input } = rest;
   const videoStart = videoClockStart(rest, p.local0);
-  const audioStart = rest.audioFadeIn || rest.audioFadeOut ? p.local0 : 0;
+  const audioStart = rest.audioFadeIn || rest.audioFadeOut || rest.volumeKeyframes?.length ? p.local0 : 0;
   const fadeStart = (duration: number) => {
     const start = Math.max(0, p.clipDur - duration);
     return duration > 0 && start <= p.local0 + p.vis + 1 / settings.fps ? fnum(start) : undefined;
@@ -168,7 +171,7 @@ export function deliveryPicture(project: Project, timeline: Timeline): Timeline 
       const clips = track.clips
         .filter(clip => clip.enabled !== false && (clip.kind !== "media" || !audioAssets.has(clip.mediaId)))
         .map(clip => clip.kind !== "media" ? clip : {
-          ...clip, volume: 0, audioFadeIn: 0, audioFadeOut: 0,
+          ...clip, volume: 0, volumeKeyframes: undefined, audioFadeIn: 0, audioFadeOut: 0,
           effects: clip.effects.filter(effect => effectKind(effect.type) !== "audio"),
         });
       return { ...track, muted: false, clips };

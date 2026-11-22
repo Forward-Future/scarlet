@@ -7,7 +7,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import type { Change, Note, Project, Timeline, Transcript } from "@scarlet/timeline";
 import { applyOps, createProject, timelineDuration, type TimelineOp } from "@scarlet/timeline";
-import { countReviewDecisions, type ProjectDetail, type Skill, type TaskEvent, type WaveformResponse } from "@scarlet/shared";
+import { applyWordFix, countReviewDecisions, type ProjectDetail, type Skill, type TaskEvent, type WaveformResponse } from "@scarlet/shared";
 
 export interface RecordedRequest {
   method: string;
@@ -151,6 +151,17 @@ export async function startMockServer(state: MockState = makeState()): Promise<M
           (s) => (from === null || s.end >= Number(from)) && (to === null || s.start <= Number(to)),
         );
         return send(res, 200, { ...t, segments });
+      }
+      if (rec.method === "POST" && (mm = m(/^\/projects\/[^/]+\/transcripts\/fix$/))) {
+        const b = body as { find: string; replace: string; mediaIds?: string[]; from?: number; to?: number };
+        const recordings = state.project.media.filter(media => b.mediaIds ? b.mediaIds.includes(media.id) : state.transcripts[media.id]).map(media => {
+          const t = state.transcripts[media.id];
+          if (!t) return { mediaId: media.id, name: media.name, skipped: "It has no transcript yet." };
+          const fixed = applyWordFix(t, b);
+          state.transcripts[media.id] = fixed.transcript;
+          return { mediaId: media.id, name: media.name, count: fixed.places.length, wordsAdded: fixed.wordsAdded, places: fixed.places };
+        });
+        return send(res, 200, { recordings });
       }
       if (rec.method === "GET" && (mm = m(/^\/media\/([^/]+)\/waveform$/))) {
         const q = url.searchParams;

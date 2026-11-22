@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { DEFAULT_PREVIEW_HEIGHT } from "@scarlet/timeline";
 import { FfmpegError, LOCAL_MEDIA_INPUT, even, failureReason, runFfmpeg, threadedAvcPreview } from "./exec.js";
 import { probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
+import { toneMapFilters } from "./hdr.js";
 import { PROXY_AUDIO_BITRATE, resolveEncoding, softwareEncoder, type HwAccel, type VideoEncoder } from "./encoder.js";
 
 export interface ProxyOptions {
@@ -62,9 +63,11 @@ function proxySize(probe: ProbeResult, height: number) {
   return { width: even((probe.width * h) / probe.height), height: h };
 }
 
-function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, opts: ProxyOptions, hardwareDecode: boolean): { input: string[]; output: string[] } {
+function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, opts: ProxyOptions, hardwareDecode: boolean, toneMap: string[]): { input: string[]; output: string[] } {
   const encoder = encoding.name;
   const scale = `w=-2:h='2*trunc(min(${height},ih)/2)'`;
+  // An HDR picture is made small first and then tone-mapped to SDR, so the tone-mapping works on the preview's pixels.
+  const picture = [`scale=${scale}`, ...toneMap].join(",");
   // Every half second is a keyframe so a seek decodes at most 15 pictures.
   const keyframes = ["-force_key_frames", "expr:gte(t,n_forced*0.5)"];
   // Older FFmpeg MP4 defaults duplicate the first picture to fill an audio lead.
@@ -73,7 +76,7 @@ function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, o
   if (probe.videoTimeBase) clock.push("-enc_time_base:v", probe.videoTimeBase);
   if (encoder === "libx264") {
     return { input: [], output: [
-      "-vf", `scale=${scale}`, "-c:v", "libx264", "-preset", opts.range ? "ultrafast" : "veryfast",
+      "-vf", picture, "-c:v", "libx264", "-preset", opts.range ? "ultrafast" : "veryfast",
       "-crf", "28", ...keyframes, ...clock, "-pix_fmt", "yuv420p", "-profile:v", "high",
     ] };
   }
@@ -85,14 +88,14 @@ function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, o
     // A forced I-frame is a seek point only when it is also an IDR frame.
     ...(encoder === "h264_nvenc" ? ["-forced-idr", "1"] : encoder === "h264_qsv" ? ["-forced_idr", "1"] : []), "-profile:v", "high"];
   // Keep 4K pictures on the GPU from decode to encode; only the small proxy is written out.
-  if (hardwareDecode && encoder === "h264_nvenc" && nativeCodec && upright && !probe.hasAlpha) {
+  if (hardwareDecode && encoder === "h264_nvenc" && nativeCodec && upright && !probe.hasAlpha && !toneMap.length) {
     return { input: ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
       output: ["-vf", `scale_cuda=${scale}:format=yuv420p:interp_algo=bicubic`, ...encode] };
   }
   const threaded = opts.hwaccel === "auto" && threadedAvcPreview && probe.videoCodec === "h264";
   return {
     input: hardwareDecode && encoder === "h264_videotoolbox" && nativeCodec && !threaded ? ["-hwaccel", "videotoolbox"] : [],
-    output: ["-vf", `scale=${scale}`, ...encode, "-pix_fmt", "yuv420p"],
+    output: ["-vf", picture, ...encode, "-pix_fmt", "yuv420p"],
   };
 }
 
@@ -110,7 +113,8 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
       "preview", reason => warnings.push(reason))
     : softwareEncoder("preview");
   const encoder = encoding.name;
-  const video = hasVideo ? videoArgs(probe, height, encoding, opts, hardwareDecode) : undefined;
+  const video = hasVideo
+    ? videoArgs(probe, height, encoding, opts, hardwareDecode, await toneMapFilters(probe.color?.hdr, opts.ffmpegPath)) : undefined;
 
   async function retry(error: unknown): Promise<ProxyResult> {
     if (encoder === "libx264" || !(error instanceof FfmpegError) || opts.signal?.aborted) throw error;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Change, makeMediaClip, makeTrack, timelineFromKeepRanges, type Timeline } from "@scarlet/timeline";
+import { applyOps, Change, emptyTimeline, makeMediaClip, makeTrack, splitJoinOps, timelineFromKeepRanges, type Timeline } from "@scarlet/timeline";
 import { classifyEdits, editKinds } from "./editKind.js";
 
 const base = timelineFromKeepRanges("project", "interview", [{ start: 0, end: 120 }]);
@@ -25,6 +25,22 @@ describe("telling what an applied edit did", () => {
     expect(editKinds(tone, [one], { before: base })).toEqual(["audio"]);
     expect(editKinds(change([{ op: "rippleDelete", start: 10, end: 12 }, { op: "updateClip", clipId: shot.id, patch: { audioFadeIn: 0.1 } }]), [one]))
       .toEqual(["cut"]);
+  });
+
+  it("names a level that moves over a clip a dip, and voice cleanup a voice cleanup, on the camera's own sound too", () => {
+    const dip = [{ time: 0, db: 0, ease: "easeInOut" }, { time: 0.3, db: -18, ease: "linear" }];
+    expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { volumeKeyframes: dip } }]), [one], { before: base })).toEqual(["dip"]);
+    // A music bed added already dipped, or added and then dipped, is a dip.
+    const bed = makeMediaClip("music", 0, 60, 0, { id: "bed" });
+    expect(editKinds(change([{ op: "addTrack", track: makeTrack("audio", "Music", "music") }, { op: "addClip", trackId: "music", clip: bed },
+      { op: "updateClip", clipId: "bed", patch: { volumeKeyframes: dip } }]), [one], { before: base })).toEqual(["dip"]);
+    const cleanup = [{ type: "voiceCleanup", params: {}, enabled: true }];
+    expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { effects: cleanup } }]), [one], { before: base })).toEqual(["voice"]);
+    // Another effect only the sound has is a sound edit wherever the clip is; one on the picture is still an overlay.
+    expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { effects: [{ type: "eq", params: { highpass: 80 }, enabled: true }] } }]), [one],
+      { before: base })).toEqual(["audio"]);
+    expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { effects: [{ type: "blur", params: {}, enabled: true }] } }]), [one],
+      { before: base })).toEqual(["overlay"]);
   });
 
   it("names a scale-up a zoom and a move or inset a reframe", () => {
@@ -82,6 +98,19 @@ describe("telling what an applied edit did", () => {
   it("names a transition put on a join a transition, at its join", () => {
     const pushed = after(t => { (t.tracks[0]!.clips[0] as { transitionIn?: unknown }).transitionIn = { type: "push", duration: 0.4, direction: "left" }; });
     expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { transitionIn: { type: "push", duration: 0.4, direction: "left" } } }]), [one], { before: base, after: pushed })).toEqual(["transition"]);
+  });
+
+  it("names a J or L cut a split edit, at its join, though it hands sound to a dialogue track and silences pictures", () => {
+    const talk = emptyTimeline("project");
+    talk.tracks[0]!.clips = [makeMediaClip("host", 0, 10, 0, { id: "ask" }), makeMediaClip("guest", 5, 15, 10, { id: "answer" }),
+      makeMediaClip("host", 30, 40, 20, { id: "react" })];
+    const files = [{ id: "host", kind: "video" as const, hasAudio: true, duration: 60 }, { id: "guest", kind: "video" as const, hasAudio: true, duration: 60 }];
+    const { ops } = splitJoinOps(talk, files, 25, [{ at: 10, shift: -0.24 }, { at: 20, shift: 0.5 }]);
+    const made = applyOps(talk, ops);
+    expect(editKinds(change(ops), [{ start: 9.76, end: 10 }, { start: 20, end: 20.5 }], { before: talk, after: made })).toEqual(["split", "split"]);
+    // Set back on its picture cut, it is still a split edit: the step says what moved.
+    const straight = splitJoinOps(made, files, 25, [{ at: 10, shift: 0 }]).ops;
+    expect(editKinds(change(straight), [{ start: 10, end: 10 }], { before: made, after: applyOps(made, straight) })).toEqual(["split"]);
   });
 
   it("calls footage placed on the main picture track an assembly, and a removed clip that shortens the cut a cut", () => {

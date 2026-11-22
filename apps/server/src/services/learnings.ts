@@ -1,4 +1,5 @@
-import { isLearningCheck, isSkillEdit, sameRun, type ApproveLearningRequest, type Learning, type ReviseLearningRequest, type RunChoice, type Skill, type SuggestLearningRequest, type TaskSkillDraft, type Task, type User } from "@scarlet/shared";
+import { isLearningCheck, isSkillEdit, namedTimelineEdits, sameRun, type ApproveLearningRequest, type Learning, type LearningDecision, type ReviseLearningRequest, type RunChoice, type Skill, type SuggestLearningRequest, type TaskSkillDraft, type Task, type User } from "@scarlet/shared";
+import type { Change } from "@scarlet/timeline";
 import { stripFrontmatter, type LearningCheckContext } from "@scarlet/mcp/prompt";
 import { clock, newId } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
@@ -10,9 +11,11 @@ import { latestSkillEdit } from "./skills.js";
 import { createTask, editsDialogue, FINISHED_TASK } from "./tasks.js";
 
 /**
- * Learnings: standing rules Scarlet picked up from the editor's requests. Every request is read for one as it is
- * sent, by a learning check: a short run beside the request that sees what they said and their skills, and offers a
- * rule, with what the skill already says that it would change, or does nothing. Each rule waits for the editor, who
+ * Learnings: standing rules Scarlet picked up from the editor's requests and decisions. Every request is read for one
+ * as it is sent, by a learning check: a short run beside the request that sees what they said, what they decided lately
+ * on the cuts and edits Scarlet made, and their skills, and offers a rule, with what the skill already says that it
+ * would change, or does nothing. The editor finishing what a request left them to decide starts one too, when they
+ * decided something no check has read. A rule from their decisions cites them, and the editor sees them under it. Each rule waits for the editor, who
  * approves or declines it. Approving one has an agent revise the skill around it, as a skill edit, on the model the
  * editor has chosen when they approve it; a skill's edits run one at a time, so a second approval for the same skill
  * starts when the first has saved.
@@ -60,6 +63,92 @@ export function startLearningCheck(ctx: Ctx, task: Task): Task | undefined {
 
 const RECENT_REQUESTS = 12;
 const KNOWN_RULES = 30;
+/** How many of the editor's latest decisions a check reads, and how far back a cited one is looked for. */
+const RECENT_DECISIONS = 40;
+const CITABLE_DECISIONS = 200;
+/** How many changes of each kind are read for decisions, newest first. */
+const DECISION_CHANGES = 40;
+
+/** A decision as a check reads it: what it was about, what Scarlet measured, which skills made it and when it was made. */
+interface Decided extends LearningDecision { at: string; details: string[]; changeId?: string }
+
+const seconds = (s: number) => `${s < 10 ? s.toFixed(2) : s.toFixed(1)} s`;
+const LIVE_PROJECT = "project_id IN (SELECT id FROM projects WHERE deleted_at IS NULL)";
+
+/** What Scarlet said of an edit it made: why, and what it asked the editor to check. */
+function editDetails(edit: { reason?: string; check?: string } | undefined): string[] {
+  return [edit?.reason && `Scarlet’s reason: “${clip(edit.reason, 200)}”`, edit?.check && `it asked the editor to check: “${clip(edit.check, 120)}”`]
+    .filter((d): d is string => !!d);
+}
+
+/**
+ * The editor's decisions on cuts and edits Scarlet made, in every project, newest first: the edits they kept and the
+ * ones they rejected, their calls on a pass's cuts once it went in, and the revisions they asked of one. Each has an id
+ * a rule cites it by, and what Scarlet measured and said of it, so a check can tell a pattern from a coincidence.
+ */
+function recentDecisions(ctx: Ctx, limit: number): Decided[] {
+  const out: Decided[] = [];
+  const recent = (where: string) => ctx.repos.changes.select(`${LIVE_PROJECT} AND ${where}`, [],
+    `json_extract(json, '$.updatedAt') DESC, rowid DESC LIMIT ${DECISION_CHANGES}`);
+  const named = new Map<string, Change["timelineEdits"]>();
+  const edits = (change: Change) => {
+    if (!named.has(change.id)) named.set(change.id, namedTimelineEdits(change));
+    return named.get(change.id);
+  };
+  for (const change of recent("json_extract(json, '$.kept') IS NOT NULL")) {
+    for (const k of change.kept ?? []) {
+      const edit = edits(change)?.[k.spot];
+      out.push({ id: `kept:${change.id}:${k.spot}`, decision: "kept", label: k.label ?? edit?.label ?? change.description, projectId: change.projectId,
+        threadId: k.threadId, ref: { changeId: change.id, spot: k.spot }, time: k.place?.range.start ?? edit?.range.start, at: k.at, changeId: change.id,
+        details: editDetails({ reason: edit?.reason, check: k.check ?? edit?.check }) });
+    }
+  }
+  for (const rejection of recent("json_extract(json, '$.rejects') = 1")) {
+    for (const edit of rejection.timelineEdits ?? []) {
+      if (!edit.replaces) continue;
+      const made = ctx.repos.changes.get(edit.replaces.changeId);
+      const was = made && edits(made)?.[edit.replaces.spot];
+      out.push({ id: `rejected:${edit.replaces.changeId}:${edit.replaces.spot}`, decision: "rejected", label: was?.label ?? edit.label,
+        projectId: rejection.projectId, threadId: rejection.threadId ?? made?.threadId, ref: edit.replaces, time: edit.range.start,
+        at: rejection.createdAt ?? rejection.updatedAt ?? "", changeId: edit.replaces.changeId, details: editDetails(was || undefined) });
+    }
+  }
+  for (const pass of recent("state = 'approved' AND json_extract(json, '$.cutChoices') IS NOT NULL")) {
+    for (const choice of pass.cutChoices ?? []) {
+      const assessed = pass.cutAssessments?.find(a => a.index === choice.index);
+      const staged = pass.cutReasons?.find(r => r.start < choice.end && r.end > choice.start);
+      const joined = choice.choice === "cut" ? pass.appliedReview?.joins.findIndex(j => j.reviewIndex === choice.index) ?? -1 : -1;
+      out.push({ id: `call:${pass.id}:${choice.index}`, decision: choice.choice === "cut" ? "kept" : "rejected",
+        label: assessed?.summary ?? staged?.summary ?? `Cut ${seconds(choice.end - choice.start)}`, projectId: pass.projectId, threadId: pass.threadId,
+        ...(joined >= 0 && { ref: { changeId: pass.id, spot: joined } }), time: joined >= 0 ? pass.appliedReview!.joins[joined]!.at : choice.start,
+        at: pass.updatedAt ?? pass.createdAt ?? "", changeId: pass.id,
+        details: [`a call on a ${staged?.kind ? `${staged.kind} ` : ""}cut of ${seconds(choice.end - choice.start)}`,
+          ...editDetails({ reason: assessed?.reason ?? staged?.reason, check: staged?.check }),
+          ...(staged?.held ? [`what Scarlet measured at its edges: “${clip(staged.held, 200)}”`] : [])] });
+    }
+  }
+  const revisions = ctx.repos.tasks.select(`${LIVE_PROJECT} AND kind = 'revise' AND json_extract(json, '$.createdBy.type') = 'human' AND json_extract(json, '$.resumeRootId') IS NULL
+    AND json_extract(json, '$.context.changeId') IS NOT NULL`, [], `created_at DESC, rowid DESC LIMIT ${DECISION_CHANGES}`);
+  for (const task of revisions) {
+    const c = task.context;
+    const spot = c.editIndex ?? c.cutIndex;
+    const made = ctx.repos.changes.get(c.changeId!);
+    const edit = made && spot !== undefined ? edits(made)?.[spot] : undefined;
+    out.push({ id: `revised:${task.id}`, decision: "revised", label: edit?.label ?? made?.description ?? "an edit", projectId: task.projectId,
+      threadId: c.threadId, ...(spot !== undefined && c.editIndex !== undefined && { ref: { changeId: c.changeId!, spot } }), time: c.time,
+      note: clip(wordsOf(task), 300), at: task.createdAt ?? "", changeId: c.changeId, details: editDetails(edit) });
+  }
+  const seen = new Set<string>();
+  return out.sort((a, b) => b.at.localeCompare(a.at)).filter(d => !seen.has(d.id) && !!seen.add(d.id)).slice(0, limit);
+}
+
+/** The rule already offered from each decision, by the decision's id. */
+function rulesFromDecisions(ctx: Ctx): Map<string, string> {
+  const rules = new Map<string, string>();
+  for (const l of ctx.repos.learnings.select("json_extract(json, '$.learnedFrom') IS NOT NULL", [], "created_at ASC, rowid ASC"))
+    for (const d of l.learnedFrom?.decisions ?? []) rules.set(d.id, l.rule);
+  return rules;
+}
 
 /**
  * The skills that made the change a request is about. A revision names none of its own, but a correction to a cut is a
@@ -106,10 +195,17 @@ export function learningCheckContext(ctx: Ctx, check: Task): LearningCheckContex
       return { said: clip(wordsOf(t), 400), ...(kind && { about: `${kind === "cut" ? "a cut" : "an edit"} ${makers.length ? makers.join(", ") : "Scarlet"} made` }),
         ...(t.projectId !== asked.projectId && { elsewhere: true }) };
     });
-  const rules = ctx.repos.learnings.select("state != 'declined'", [], `created_at DESC, rowid DESC LIMIT ${KNOWN_RULES}`).reverse()
-    .map(l => ({ rule: l.rule, skill: named(l.skillId), state: l.state === "saved" ? "saved" as const : "offered" as const }));
+  // A rule the editor declined is listed too, so it isn't offered again in other words.
+  const rules = ctx.repos.learnings.select("1=1", [], `created_at DESC, rowid DESC LIMIT ${KNOWN_RULES}`).reverse()
+    .map(l => ({ rule: l.rule, skill: named(l.skillId), state: l.state === "saved" ? "saved" as const : l.state === "declined" ? "declined" as const : "offered" as const }));
+  const offered = rulesFromDecisions(ctx);
+  const decided = recentDecisions(ctx, RECENT_DECISIONS).reverse().map(d => {
+    const madeBy = d.changeId ? skillsBehind(ctx, d.changeId).map(named) : [];
+    return { id: d.id, decision: d.decision, label: clip(d.label, 180), ...(d.details.length && { details: d.details }), ...(d.note && { note: d.note }),
+      ...(madeBy.length && { madeBy }), ...(d.projectId !== asked.projectId && { elsewhere: true }), ...(offered.has(d.id) && { ruleFrom: offered.get(d.id) }) };
+  });
   return {
-    said: wordsOf(asked), about, earlier, rules,
+    said: wordsOf(asked), about, earlier, rules, ...(decided.length && { decided }), ...(check.context.readsDecisions && { readsDecisions: true }),
     usedSkills: (c.skillIds ?? []).map(named),
     skills: skills.map(s => ({ id: s.id, name: s.name, description: s.description })),
   };
@@ -203,15 +299,103 @@ export function suggestLearning(ctx: Ctx, from: Task, body: SuggestLearningReque
   const skill = skills.find(s => s.id === body.skill) ?? skills.find(s => s.name === body.skill);
   if (!skill) throw notFound(`a skill named "${body.skill}". Use skills_list to find the editor's skills`);
   const replaces = quotedFrom(skill, body.replaces);
+  // The editor's decline stands: the same rule isn't put to them again for the same skill.
+  const rule = plain(body.rule);
+  if (ctx.repos.learnings.select("state = 'declined' AND json_extract(json, '$.skillId') = ?", [skill.id]).some(l => plain(l.rule) === rule))
+    throw conflict("declined", `The editor declined this rule for ${skill.name}. Don’t offer it again.`);
   const same = ctx.repos.learnings.select("project_id = ? AND json_extract(json, '$.taskId') = ?", [task.projectId, task.id])
     .find(l => l.rule.toLowerCase() === body.rule.toLowerCase());
   if (same) return { learning: same, skill: ctx.repos.skills.get(same.skillId) ?? skill };
+  const learnedFrom = body.from && citedDecisions(ctx, body.from);
   const learning = save(ctx, {
     id: newId("lrn"), projectId: task.projectId, rule: body.rule, said: wordsOf(task), taskId: task.id, skillId: skill.id,
-    ...(replaces && { replaces }), state: "suggested", createdAt: now(),
+    ...(learnedFrom && { learnedFrom }), ...(replaces && { replaces }), state: "suggested", createdAt: now(),
   });
-  ctx.log(`[learning] ${learning.id} suggested by ${from.id} from ${task.id} for ${skill.id}${replaces ? `, replacing ${replaces.length} passage${replaces.length === 1 ? "" : "s"}` : ""}`);
+  ctx.log(`[learning] ${learning.id} suggested by ${from.id} from ${task.id} for ${skill.id}${replaces ? `, replacing ${replaces.length} passage${replaces.length === 1 ? "" : "s"}` : ""}` +
+    `${learnedFrom ? `, from ${learnedFrom.decisions.length} decision${learnedFrom.decisions.length === 1 ? "" : "s"}` : ""}`);
   return { learning, skill };
+}
+
+/**
+ * The decisions a rule cites, as they are now, so the editor can open each one under the rule. Each must be one of the
+ * editor's decisions a check is shown; one that isn't is sent back to be cited as listed.
+ */
+function citedDecisions(ctx: Ctx, from: NonNullable<SuggestLearningRequest["from"]>): NonNullable<Learning["learnedFrom"]> {
+  const known = new Map(recentDecisions(ctx, CITABLE_DECISIONS).map(d => [d.id, d]));
+  const decisions: LearningDecision[] = [];
+  for (const id of new Set(from.decisions)) {
+    const found = known.get(id);
+    if (!found) throw badRequest("unknown_decision", `“${clip(id, 100)}” isn’t one of the editor’s decisions. Cite each by its id as your prompt lists it, or leave from out.`);
+    const { at: _at, details: _details, changeId: _changeId, ...decision } = found;
+    decisions.push(decision);
+  }
+  return { what: from.what, decisions: decisions.sort((a, b) => (a.time ?? 0) - (b.time ?? 0)) };
+}
+
+/**
+ * The editor finished deciding what a request left them: a pass's calls went in, or they kept or rejected the last of
+ * what it flagged. Called as a decision is recorded, so a check reads their decisions for a rule, on the model of the
+ * request's latest run. It isn't started while the project's editing is paused, nor while a check that hasn't begun is
+ * waiting, since that one reads them as it begins. Whatever goes wrong, the decision stands.
+ */
+export function startDecisionCheck(ctx: Ctx, projectId: string, threadId: string | undefined): Task | undefined {
+  if (!threadId) return;
+  try {
+    const project = ctx.repos.projects.header(projectId);
+    if (!project || project.editingPaused || !enabledSkills(ctx).length) return;
+    const asked = ctx.repos.tasks.get(threadId);
+    if (!asked || asked.projectId !== projectId || !editsDialogue(asked.kind) || asked.createdBy.type !== "human") return;
+    const latest = ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.context.threadId') = ? AND json_extract(json, '$.createdBy.type') = 'human'",
+      [projectId, threadId], "created_at DESC, rowid DESC LIMIT 1")[0] ?? asked;
+    if (latest.agent === "api" || threadWaitsOnEditor(ctx, projectId, threadId)) return;
+    if (ctx.repos.tasks.count("kind = 'learning_check' AND state = 'queued'")) return;
+    const check = createTask(ctx, {
+      projectId, kind: "learning_check", agent: latest.agent, model: latest.model, fast: latest.fast,
+      instruction: "Read the editor’s decisions for a standing rule.", context: { checksTaskId: asked.id, readsDecisions: true }, createdBy: latest.createdBy,
+    });
+    ctx.log(`[learning] ${check.id} reads the decisions on ${asked.id}`);
+    return check;
+  } catch (err) {
+    ctx.log(`[learning] the decisions on ${threadId} weren’t read for a rule: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * Whether a request still waits on the editor, or on Scarlet: a run of it is still at work or waits on them, a pass or
+ * suggestion of it waits, or an edit it flagged is neither kept nor rejected nor revised since. When in doubt it waits,
+ * so a check starts once their deciding is done.
+ */
+function threadWaitsOnEditor(ctx: Ctx, projectId: string, threadId: string): boolean {
+  if (ctx.repos.tasks.count(`project_id = ? AND json_extract(json, '$.context.threadId') = ? AND kind IN ('edit', 'note', 'revise')
+    AND state NOT IN (${[...FINISHED_TASK].map(s => `'${s}'`).join(",")})`, [projectId, threadId])) return true;
+  const changes = ctx.repos.changes.select("project_id = ? AND json_extract(json, '$.threadId') = ?", [projectId, threadId]);
+  if (changes.some(c => c.state === "ready" || c.state === "revising")) return true;
+  const key = (changeId: string, spot: number) => `${changeId}:${spot}`;
+  // Rejected or revised since: a later edit of the request replaces it.
+  const replaced = new Set(changes
+    .flatMap(c => (c.timelineEdits ?? []).flatMap(e => e.replaces ? [key(e.replaces.changeId, e.replaces.spot)] : [])));
+  const keptHere = (change: Change, spot: number, after = "") => (change.kept ?? []).some(k => k.threadId === threadId && k.spot === spot && k.at >= after);
+  for (const change of changes) {
+    if (change.state !== "approved" || change.rejects) continue;
+    if (change.appliedReview) {
+      // A pass's applied cuts are named by where they joined: those it asked the editor to check against those settled.
+      const settled = new Set([...(change.kept ?? []).filter(k => k.threadId === threadId).map(k => k.spot),
+        ...change.appliedReview.joins.flatMap((_, spot) => replaced.has(key(change.id, spot)) ? [spot] : [])]);
+      if ((change.cutReasons ?? []).filter(r => r.check).length > settled.size) return true;
+      continue;
+    }
+    for (const [spot, edit] of (namedTimelineEdits(change) ?? []).entries())
+      if (edit.check && !keptHere(change, spot) && !replaced.has(key(change.id, spot))) return true;
+  }
+  // Doubts this request raised about edits other requests made.
+  const flagged = ctx.repos.changes.select("project_id = ? AND json_extract(json, '$.flags') IS NOT NULL", [projectId]);
+  for (const change of flagged) {
+    for (const flag of change.flags ?? []) {
+      if (ctx.repos.tasks.get(flag.taskId)?.context.threadId !== threadId) continue;
+      if (!keptHere(change, flag.spot, flag.at) && !replaced.has(key(change.id, flag.spot))) return true;
+    }
+  }
+  return false;
 }
 
 /** Only a rule that waits on the editor can be reworded, declined or approved. */

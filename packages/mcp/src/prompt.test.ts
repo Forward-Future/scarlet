@@ -105,18 +105,47 @@ describe("the prompt for reading a request for a standing rule", () => {
     expect(prompt).toContain("a rule the skill or a rule listed below already says, in any wording");
     // A rule is offered only when the editor said it as one, or when the same kind of fix keeps coming back: a single
     // note about one join was offered as "play back each join and adjust it" (2026-11-20).
-    expect(prompt).toContain("It does in only two cases:\n- They said it as a rule themselves: their words are about every video or every time");
+    expect(prompt).toContain("It does in only these cases:\n- They said it as a rule themselves: their words are about every video or every time");
     expect(prompt).toContain("- The same kind of fix keeps coming back: at least two of their earlier requests below asked for the same kind of change to what a skill made as this one does.");
     expect(prompt).toContain("a note about this video, this moment or this cut that hasn’t come up before, however general it could be made");
     expect(prompt).toContain("a rule that only tells the agent to do its work well (check, play back, adjust as needed) without saying what the editor wants");
     // A rule is the principle, never the case it came from.
-    expect(prompt).toContain("write the principle behind what they said, not its instances: no words, names, times or moments from this video or the requests");
+    expect(prompt).toContain("write the principle behind what they said or decided, not its instances: no words, names, times or moments from this video or the requests");
+  });
+
+  it("shows the editor's recent decisions with ids to cite, and the rules they declined", () => {
+    const prompt = buildSystemPrompt({ project: "", skills: [], learningCheck: { ...check,
+      decided: [
+        { id: "rejected:chg_a:2", decision: "rejected", label: "Pause cut to 0.2 s", details: ["a pause cut, 0.62 s long", "Scarlet’s reason: “Long gap.”"], madeBy: ["dialogue-pass"] },
+        { id: "kept:chg_b:0", decision: "kept", label: "Laugh kept", elsewhere: true, ruleFrom: "Keep a laugh in." },
+        { id: "revised:tsk_r", decision: "revised", label: "Cut at 1:12", note: "Too tight." },
+      ],
+      rules: [{ rule: "Never cut a laugh.", skill: "house-style", state: "declined" }] } });
+    expect(prompt).toContain("# What they decided lately\n\nOn cuts and edits Scarlet made, oldest first, each with the id to cite it by:\n" +
+      "- `rejected:chg_a:2` Rejected: Pause cut to 0.2 s; a pause cut, 0.62 s long; Scarlet’s reason: “Long gap.”; made with dialogue-pass\n" +
+      "- `kept:chg_b:0` Kept: Laugh kept; in another video; already behind the rule “Keep a laugh in.”\n" +
+      "- `revised:tsk_r` Revised: Cut at 1:12, saying “Too tight.”");
+    // A pattern in what they decided is a rule, cited by its decisions; the model decides whether there is one.
+    expect(prompt).toContain("- Their decisions keep pointing the same way: they kept, rejected or revised the same kind of cut or edit a skill made");
+    expect(prompt).toContain("with the decisions it comes from in `from`");
+    // A rule they declined isn't offered again, in any wording.
+    expect(prompt).toContain("- “Never cut a laugh.” (declined by the editor for house-style)");
+    expect(prompt).toContain("a rule the editor declined, in any wording");
+  });
+
+  it("reads the decisions on a request whose review the editor just finished, quoting what they asked", () => {
+    const prompt = buildSystemPrompt({ project: "", skills: [], learningCheck: { ...check, readsDecisions: true,
+      decided: [{ id: "kept:chg_b:0", decision: "kept", label: "Laugh kept" }] } });
+    expect(prompt).toContain("The editor just finished deciding the cuts and edits Scarlet left for them in the request below.");
+    expect(prompt).toContain(`# The request\n\nThey asked: “${check.said}”`);
+    expect(prompt).not.toContain("The editor just sent the agent the message");
   });
 
   it("says when the request is the project's first, and leaves out the rules when Scarlet has none", () => {
     const prompt = buildSystemPrompt({ project: "", skills: [], learningCheck: check });
     expect(prompt).toContain("# The request\n\nIt is the first thing they asked.\n\n# The editor’s skills");
     expect(prompt).not.toContain("# Rules Scarlet already has");
+    expect(prompt).not.toContain("# What they decided lately");
   });
 });
 

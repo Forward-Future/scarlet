@@ -5,7 +5,7 @@ import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { measuredLoudness } from "../render/loudness.js";
 import { sharedDialogueDetector } from "./dialogueDetections.js";
-import { transcribeForDialogue } from "./ingest.js";
+import { transcribeForDialogue } from "./transcription.js";
 import { editsDialogue } from "./tasks.js";
 import { resolveTimeline } from "./timeline.js";
 

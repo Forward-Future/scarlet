@@ -336,17 +336,22 @@
   position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; border-radius: inherit;
   mix-blend-mode: screen; opacity: 0; transition: opacity .55s ease;
 }
-.timeline-editing-wash[data-active] { opacity: 1; }
+.timeline-editing-wash[data-active] {
+  opacity: 1;
+  box-shadow: inset 0 0 0 1px rgba(244, 241, 233, .14);
+}
 .timeline-editing-wash::after {
-  content: ""; position: absolute; inset: -12% 0; width: 68%;
-  background: radial-gradient(ellipse 50% 80% at 50% 50%,
-    rgba(244, 241, 233, .14) 0%,
-    rgba(225, 217, 197, .055) 42%,
-    transparent 74%);
+  content: ""; position: absolute; inset: 0; width: 52%;
+  background:
+    radial-gradient(ellipse 48% 3px at 50% 0%, rgba(255, 253, 248, .55) 0%, transparent 100%),
+    radial-gradient(ellipse 50% 100% at 50% 50%,
+      rgba(244, 241, 233, .28) 0%,
+      rgba(228, 222, 206, .13) 42%,
+      transparent 76%);
 }
 @media (prefers-reduced-motion: no-preference) {
   .timeline-editing-wash::after {
-    animation: timeline-editing-drift 5.2s ease-in-out var(--edit-phase, 0s) infinite alternate;
+    animation: timeline-editing-drift 3.6s ease-in-out var(--edit-phase, 0s) infinite alternate;
     animation-play-state: paused;
   }
   .timeline-editing-wash[data-active]::after { animation-play-state: running; }
@@ -354,12 +359,12 @@
 @media (prefers-reduced-motion: reduce) {
   .timeline-editing-wash { transition: opacity .2s ease; }
   .timeline-editing-wash::after { display: none; }
-  .timeline-editing-wash[data-active] { box-shadow: inset 0 0 0 1px rgba(244, 241, 233, .22); }
+  .timeline-editing-wash[data-active] { box-shadow: inset 0 0 0 1px rgba(244, 241, 233, .34); }
 }
 @keyframes timeline-editing-drift {
-  0%   { transform: translateX(-18%); opacity: .74; }
+  0%   { transform: translateX(-23%); opacity: .82; }
   50%  { opacity: 1; }
-  100% { transform: translateX(65%); opacity: .74; }
+  100% { transform: translateX(115%); opacity: .82; }
 }
 .timeline-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 22px; margin-top: 6px; }
 .timeline-clock { color: var(--color-fg); font: 12px/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -554,8 +559,8 @@
   padding: 2px 4px 2px 6px; border: 1px solid var(--color-line); border-bottom: 0; border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); }
 .composer-aim-line + .composer-box { border-top-left-radius: 0; border-top-right-radius: 0; }
 .composer-aim-line > .composer-aim { align-self: center; max-width: 100%; min-height: 24px; margin-top: 0; }
-/* After a call's tag: where its cut is and where the playhead is now. "at 2:47 · Playhead 2:57". */
-.composer-aim-when { flex: none; margin-left: 8px; font-size: 12px; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* After a call's tag: where its cut is and where the playhead is now. "at 2:47.200 · Playhead 2:57.400". */
+.composer-aim-when { flex: 0 1 auto; min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .composer-file { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 30px; padding: 0 4px 0 6px; border-radius: 6px; }
 .composer-file:hover, .composer-file:focus-within { background: var(--color-raised); color: var(--color-fg); }
 .composer-file-icon { flex: none; display: inline-grid; place-items: center; width: 16px; color: var(--color-dim); }

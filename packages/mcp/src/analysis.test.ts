@@ -3,6 +3,8 @@ import type { Transcript } from "@scarlet/timeline";
 import { makeMediaClip } from "@scarlet/timeline";
 import { flattenWords, searchTranscript } from "@scarlet/shared";
 import {
+  colorEvidence,
+  summarizeProject,
   captionWordMapper,
   dedupeWords,
   detectSilences,
@@ -177,5 +179,29 @@ describe("dialogueCutSuggestions", () => {
     expect(guarded.candidates).toEqual([]);
     const untimed = { ...transcript, segments: transcript.segments.map(s => ({ ...s, words: [] })) };
     expect(dialogueCutSuggestions(untimed, wf, { minSilence: 0.25, threshold: 0.05 }).candidates).toEqual([]);
+  });
+});
+
+describe("colorEvidence", () => {
+  it("tells the model what a file declares about its colour, and nothing for ordinary SDR", () => {
+    expect(colorEvidence(undefined)).toBeUndefined();
+    expect(colorEvidence({})).toBeUndefined();
+    expect(colorEvidence({ bitDepth: 10 })).toBeUndefined();
+    expect(colorEvidence({ hdr: "hlg", primaries: "bt2020", transfer: "arib-std-b67" })).toBe("HDR HLG, shown, read and exported tone-mapped to SDR BT.709");
+    expect(colorEvidence({ log: "Apple Log", primaries: "bt2020" })).toBe("camera Log (Apple Log), flat and low in contrast as shot, no look applied");
+    expect(colorEvidence({ primaries: "bt2020" })).toBe("colour tagged primaries bt2020");
+  });
+
+  it("is in the project summary beside the media it is about", () => {
+    const project = {
+      id: "prj", name: "Shoot", head: null, settings: { width: 1920, height: 1080, aspect: "16:9", fps: 30, sampleRate: 48000 },
+      media: [
+        { id: "phone", kind: "video", name: "Phone.mov", path: "phone.mov", duration: 4, fps: 30, width: 1920, height: 1080, color: { hdr: "pq" } },
+        { id: "cam", kind: "video", name: "Cam.mp4", path: "cam.mp4", duration: 4, fps: 30, width: 1920, height: 1080, color: {} },
+      ],
+    } as unknown as Parameters<typeof summarizeProject>[0];
+    const lines = summarizeProject(project, null).split("\n");
+    expect(lines.find(line => line.includes("phone"))).toContain("HDR PQ, shown, read and exported tone-mapped to SDR BT.709");
+    expect(lines.find(line => line.includes("Cam.mp4"))).not.toMatch(/HDR|Log|colour/);
   });
 });

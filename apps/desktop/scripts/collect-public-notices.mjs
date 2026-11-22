@@ -179,6 +179,8 @@ async function main() {
   cpSync(standardLibraryNotice, join(dest, "rust-standard-library.html"));
   cpSync(join(sources, "whisper-audio-dependencies.txt"), join(dest, "whisper-audio-dependencies.txt"));
   cpSync(join(sources, "sherpa-dependencies.txt"), join(dest, "sherpa-dependencies.txt"));
+  // The speech model voice cleanup runs is part of the engine itself, so its notice ships beside the engine's.
+  cpSync(join(sources, "rnnoise-models.txt"), join(dest, "rnnoise-models.txt"));
   cpSync(join(sources, "onnxruntime-1.28.2-third-party.txt"), join(dest, "speaker-onnxruntime-1.28.2-third-party.txt"));
   // Chrome for Testing's headless shell carries its own credits for Chromium and every library it links.
   const chrome = join(tauri, "binaries/chrome-headless-shell/LICENSE.headless_shell");

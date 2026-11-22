@@ -260,6 +260,17 @@ describe("codex exec --json parser", () => {
     const empty = newCodexState();
     expect(feed([ask("item.started", {}), ask("item.completed", {}, { status: "failed", error: { message: "text: Required" } })], empty, parseCodexLine).map((e) => e.type)).toEqual(["tool", "error"]);
     expect(empty.question).toBeUndefined();
+    // The MCP server's own refusal comes as a completed call whose result is an error, as the desktop host reads it.
+    const refused = newCodexState();
+    expect(feed([ask("item.started", { text: "Which take?" }), ask("item.completed", { text: "Which take?" }, { status: "completed", result: { isError: true, content: [{ type: "text", text: "Answer the last one first" }] } })], refused, parseCodexLine).map((e) => e.type)).toEqual(["error"]);
+    expect(refused).toMatchObject({ questionPosted: false, shouldStop: false });
+    expect(refused.question).toBeUndefined();
+    // The question is the call that asked it: a second call Scarlet refuses doesn't clear the one still held.
+    const two = newCodexState();
+    const other = JSON.stringify({ type: "item.completed", item: { id: "s", type: "mcp_tool_call", server: "scarlet", tool: "task_question", arguments: { text: "And the music?" }, status: "failed", error: { message: "one at a time" } } });
+    expect(feed([ask("item.started", { text: "Which take?" }), other], two, parseCodexLine).map((e) => e.type)).toEqual(["error"]);
+    expect(two.question).toBe("Which take?");
+    expect(feed([ask("item.completed", { text: "Which take?" }, { status: "completed" })], two, parseCodexLine)).toEqual([{ type: "question", text: "Which take?", data: { tool: "scarlet.task_question", itemId: "r" } }]);
     expect(empty.shouldStop).toBe(false);
 
     const st2 = newCodexState();
@@ -657,6 +668,14 @@ describe("less common lines", () => {
     expect(feed([upd({ sessionUpdate: "tool_call_update", toolCallId: "q2", status: "completed", rawOutput: "Question posted" })], later, parseGeminiLine).map((e) => [e.type, e.text]))
       .toEqual([["question", "Keep intro?"]]);
     expect(later).toMatchObject({ questionPosted: true, shouldStop: true });
+    // The question is the call that asked it: a second call Scarlet refuses doesn't clear the one still held.
+    const two = newGeminiState();
+    expect(feed([upd({ sessionUpdate: "tool_call", toolCallId: "q3", name: "mcp__scarlet__task_question", rawInput: { text: "Keep intro?" } }),
+      upd({ sessionUpdate: "tool_call", toolCallId: "q4", name: "mcp__scarlet__task_question", rawInput: { text: "And the music?" } }),
+      upd({ sessionUpdate: "tool_call_update", toolCallId: "q4", status: "failed", rawOutput: { error: "one at a time" } })], two, parseGeminiLine).map((e) => e.type)).toEqual(["error"]);
+    expect(two.question).toBe("Keep intro?");
+    expect(feed([upd({ sessionUpdate: "tool_call_update", toolCallId: "q3", status: "completed", rawOutput: "Question posted" })], two, parseGeminiLine).map((e) => [e.type, e.text]))
+      .toEqual([["question", "Keep intro?"]]);
   });
 
   it("shortens what it shows of a tool's input, and shows nothing for an empty one", () => {

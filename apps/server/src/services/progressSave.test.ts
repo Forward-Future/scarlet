@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { Ctx } from "../context.js";
 import type { Task } from "@scarlet/shared";
-import { transcriptionProgress } from "./ingest.js";
+import { transcriptionProgress } from "./transcription.js";
 import { quietProgress } from "./progressSave.js";
 
 it("logs a progress figure that couldn't be saved and carries on, since the job itself is fine", () => {

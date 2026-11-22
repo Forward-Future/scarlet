@@ -1,6 +1,6 @@
 import type { PictureMarks, TaskAttachment } from "@scarlet/shared";
 import { api } from "../../lib/client";
-import { clock } from "../../lib/format";
+import { clock, playbackClock } from "../../lib/format";
 import { markedFramePicture } from "../../lib/markedFrame";
 import { rememberMarkedFrame } from "../../lib/markedFramePictures";
 import type { PendingAttachment } from "../../stores/attachments";
@@ -9,10 +9,10 @@ import { usePlayerStore } from "../../stores/player";
 import { MarksDrawing } from "../player/PictureMarks";
 import { Icon } from "../ui/primitives";
 
-/** Where the playhead is, in whole seconds as the clock under the timeline reads, so it redraws once a second. */
+/** Where the playhead is, to the millisecond as the timeline's playhead reads. */
 export function PlayheadClock() {
-  const second = usePlayerStore(s => Math.floor(s.time + 1e-6));
-  return <span className="composer-playhead">Playhead {clock(second)}</span>;
+  const ms = usePlayerStore(s => Math.max(0, Math.round(s.time * 1000)));
+  return <span className="composer-playhead">Playhead {playbackClock(ms / 1000)}</span>;
 }
 
 export const NO_FILES: PendingAttachment[] = [];

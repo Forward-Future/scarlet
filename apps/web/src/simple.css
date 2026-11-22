@@ -301,6 +301,21 @@
 .learn-revise:hover { background: none; }
 .learn-said { margin: 2px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--color-dim); overflow-wrap: anywhere;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+/* The decisions a rule came from: one dim line that unfolds into a row for each, its time a link to its cut or edit. */
+.learn-from { display: inline-flex; align-items: center; gap: 5px; margin: 2px 0 0; padding: 0; border: 0; background: none; font: inherit;
+  font-size: 12.5px; line-height: 1.45; color: var(--color-dim); cursor: pointer; text-align: left; }
+.learn-from:hover, .learn-from:focus-visible { color: var(--color-muted); }
+.learn-from svg { flex: none; transform: rotate(0deg); }
+.learn-from[aria-expanded="true"] svg { transform: rotate(90deg); }
+.learn-decisions { margin: 1px 0 0; padding: 0; list-style: none; }
+.learn-decision { display: flex; align-items: baseline; gap: 9px; font-size: 12.5px; line-height: 1.45; color: var(--color-dim); }
+.learn-decision-time { flex: none; min-width: 2.6em; padding: 0; border: 0; background: none; font: inherit; color: var(--color-muted);
+  font-variant-numeric: tabular-nums; }
+button.learn-decision-time { cursor: pointer; text-decoration: underline; text-decoration-color: var(--color-dim);
+  text-underline-offset: 3px; }
+button.learn-decision-time:hover { color: var(--color-fg); }
+button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2px solid var(--color-muted); outline-offset: 2px; border-radius: 3px; }
+.learn-decision-what { min-width: 0; overflow-wrap: anywhere; }
 .learn-replaces { margin: 2px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--color-muted); overflow-wrap: anywhere;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
 .learn-replaces-label { color: var(--color-warn); }
@@ -687,6 +702,10 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .said { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 /* The one sentence Scarlet said before it began reads on up to three lines, and folds the same way past them. */
 .req-lead .said { -webkit-line-clamp: 3; }
+/* A note the editor added while Scarlet worked, under that sentence: a rule at its left, a small Note tag, their words. */
+.req-notes { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 0 0 6px; }
+.req-note { margin: 0; padding-left: 10px; border-left: 2px solid var(--color-line); font-size: 13px; line-height: 1.5; color: var(--color-fg); overflow-wrap: anywhere; }
+.req-note-tag { display: inline-block; margin-right: 8px; padding: 0 6px; border: 1px solid var(--color-line); border-radius: 4px; font-size: 11.5px; line-height: 1.45; color: var(--color-muted); vertical-align: 1px; }
 .said.is-open { display: block; }
 .said.is-clipped, .said.is-open { cursor: pointer; }
 .req-say.is-note { font-size: 12.5px; color: var(--color-dim); }
@@ -713,13 +732,12 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .req .run-wait .simple-link { margin-left: 6px; }
 /* What the request made, as its rows. */
 .req .simple-pass { margin: 0; border: 0; border-radius: 0; background: none; }
-/* What doesn't fit on the line goes to the next, as words do: while a scheduled pass still runs, "See 2 edits so far",
-   "Goes in when Scarlet finishes" can be wider than a narrow chat, and none may run over another. */
+/* What doesn't fit on the line goes to the next, as words do, so items in a narrow chat never run over one another. */
 .req .simple-pass-line { flex-wrap: wrap; align-items: baseline; gap: 0 12px; min-height: 26px; padding: 0; }
 /* While Scarlet still works, the line under its steps ("See 5 edits so far") stands clear of the step above it and
    of the message box below. */
 .req .simple-pass:not(:has(.simple-made)) > .simple-pass-line { margin: 12px 0 10px; }
-/* With nothing to open, schedule or report, the row isn't there. */
+/* With nothing to open or report, the row isn't there. */
 .req .simple-pass-line:not(:has(button, .simple-pass-ok, .run-tokens, .simple-action)) { display: none; }
 /* What the request changed: one sentence in the chat's own type, its figures in bold, and after it on the same line
    the link to the result. A long sentence wraps and the link follows its last word. */

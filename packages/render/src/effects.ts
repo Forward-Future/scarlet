@@ -6,6 +6,7 @@
 import { fileInDirectory } from "./assetPath.js";
 import type { Effect } from "@scarlet/timeline";
 import { fnum } from "./exec.js";
+import { voiceModelFile } from "./voiceModel.js";
 
 export type EffectKind = "video" | "audio";
 
@@ -21,12 +22,27 @@ export type EffectBuilder = (params: Record<string, unknown>, ctx: EffectContext
 interface Registered {
   kind: EffectKind;
   build: EffectBuilder;
+  /** Seconds the filter plays its sound late by. */
+  delay?: number;
 }
 
 const registry = new Map<string, Registered>();
 
-export function registerEffect(type: string, kind: EffectKind, build: EffectBuilder): void {
-  registry.set(type, { kind, build });
+export function registerEffect(type: string, kind: EffectKind, build: EffectBuilder, delay?: number): void {
+  registry.set(type, { kind, build, delay });
+}
+
+/**
+ * Seconds a clip's enabled audio effects play its sound late by, together. The graph reads that much more footage and
+ * drops it from the front, so the sound stays where the picture has it.
+ */
+export function audioEffectDelay(effects: Effect[] | undefined): number {
+  let delay = 0;
+  for (const e of effects ?? []) {
+    const reg = e.enabled === false ? undefined : registry.get(e.type);
+    if (reg?.kind === "audio") delay += reg.delay ?? 0;
+  }
+  return delay;
 }
 
 export function effectKind(type: string): EffectKind | undefined {
@@ -133,6 +149,16 @@ registerEffect("denoise", "audio", (p) => {
   const nf = clamp(pick(p, ["noiseFloor", "nf"], -25), -80, -20);
   return `afftdn=nr=${fnum(nr)}:nf=${fnum(nf)}`;
 });
+
+/**
+ * voiceCleanup { mix (0–1, default 1) }: the voice separated from the noise and the room by a speech model (FFmpeg's
+ * arnndn with a bundled RNNoise model). mix is how much of the cleaned sound plays, the rest the sound as recorded.
+ * The model hears in 480-sample frames at 48 kHz and plays each one a frame late: 10 ms.
+ */
+registerEffect("voiceCleanup", "audio", (p) => {
+  const mix = clamp(pick(p, ["mix", "amount"], 1), 0, 1);
+  return `arnndn=m=${escapeFilterPath(voiceModelFile())}${mix < 1 ? `:mix=${fnum(mix)}` : ""}`;
+}, 480 / 48000);
 
 /** Downward expansion below threshold. rangeDb caps attenuation to retain room tone. */
 registerEffect("expander", "audio", (p) => {

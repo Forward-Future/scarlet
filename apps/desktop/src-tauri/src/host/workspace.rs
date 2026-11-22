@@ -29,15 +29,25 @@ pub fn remove_token_file(dir: &Path) -> std::io::Result<()> {
 /// A finished task keeps only its artifacts. The CLI control files include the engine token.
 pub fn remove_control_files(dir: &Path) -> std::io::Result<()> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Ok(()) };
+    // The token goes first, and one entry that won't go doesn't keep the rest: the first error is returned at the end.
+    let mut failed = remove_token_file(dir).err();
     let mut artifacts = false;
     for entry in entries.flatten() {
         if entry.file_name() == "artifacts" {
             artifacts = true;
-        } else if entry.file_type()?.is_dir() {
-            std::fs::remove_dir_all(entry.path())?;
-        } else {
-            std::fs::remove_file(entry.path())?;
+            continue;
         }
+        let removed = match entry.file_type() {
+            Ok(kind) if kind.is_dir() => std::fs::remove_dir_all(entry.path()),
+            Ok(_) => std::fs::remove_file(entry.path()),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = removed {
+            failed.get_or_insert(e);
+        }
+    }
+    if let Some(e) = failed {
+        return Err(e);
     }
     if !artifacts {
         std::fs::remove_dir(dir)?;
