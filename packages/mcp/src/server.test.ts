@@ -3625,8 +3625,9 @@ it("lists a silence the pauses miss with what its picture does, and reports it w
     const left = await apply([{ ...pause, start: 1.4, end: 2.5, decision: "cut" }]);
     expect(left.keptSilences).toContainEqual(expect.objectContaining({ after: "note.", before: "You" }));
     // Cut to the result, staged for the editor or kept on purpose, it is decided and not reported.
+    // (The 1.4 s before “You” early on, a second or more, is listed now that the part leaves it in.)
     for (const decision of ["cut", "review"]) {
-      expect((await apply([{ ...pause, start: end + .3, end: 11.95, decision }])).keptSilences).toBeUndefined();
+      expect((await apply([{ ...pause, start: end + .3, end: 11.95, decision }])).keptSilences ?? []).not.toContainEqual(expect.objectContaining({ after: "note." }));
     }
     expect((await apply([{ ...pause, start: 1.4, end: 2.5, decision: "cut" }, { ...pause, start: end + .3, end: 11.95, decision: "keep" }])).keptSilences).toBeUndefined();
   } finally {

@@ -5,7 +5,7 @@
  * stayed in the cut. An editor cutting by ear and waveform sees it at once. Scarlet measures; the model decides.
  */
 import type { TimeRange, TranscriptWord } from "@scarlet/timeline";
-import { dbfs, isTag } from "./analysis.js";
+import { dbfs, isTag, round2 } from "./analysis.js";
 
 export interface GapLevels { from: number; to: number; rms: number[] }
 export interface GapSound { seconds: number; runs: TimeRange[] }
@@ -235,7 +235,7 @@ export function gapSound(levels: GapLevels, gap: TimeRange, speechDb = speakingL
   const runs: TimeRange[] = [];
   let open: number | undefined;
   const close = (at: number) => {
-    if (open !== undefined && at - open >= MIN_RUN - 1e-6) runs.push({ start: Math.round(open * 100) / 100, end: Math.round(at * 100) / 100 });
+    if (open !== undefined && at - open >= MIN_RUN - 1e-6) runs.push({ start: round2(open), end: round2(at) });
     open = undefined;
   };
   for (let i = Math.max(0, Math.floor((start - levels.from) / step)); i < levels.rms.length; i++) {
@@ -250,7 +250,7 @@ export function gapSound(levels: GapLevels, gap: TimeRange, speechDb = speakingL
     else close(from);
   }
   close(end);
-  return { seconds: Math.round(runs.reduce((sum, r) => sum + r.end - r.start, 0) * 100) / 100, runs };
+  return { seconds: round2(runs.reduce((sum, r) => sum + r.end - r.start, 0)), runs };
 }
 
 /** One clause for the model: how much of a gap is sound, and where. */

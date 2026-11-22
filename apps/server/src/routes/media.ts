@@ -12,7 +12,8 @@ import { flattenWords } from "@scarlet/shared";
 import { retakeGroups } from "@scarlet/mcp/media-profile";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
-import { requestAttempt, requireLocalPauseTarget, requireProjectEditAttempt } from "../services/taskAttempt.js";
+import { now } from "../db.js";
+import { requestAttempt, requireProjectEditAttempt, requireProjectLocalPauseTarget } from "../services/taskAttempt.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { logId, throttledLog } from "../logText.js";
 import { serveFile, serveOriginal } from "../files.js";
@@ -81,7 +82,7 @@ export function mediaRoutes(ctx: Ctx) {
   r.put("/media/:mediaId/voice-roles", async c => {
     const source = requireMedia(ctx, c.req.param("mediaId"));
     const attempt = requestAttempt(c.req.raw);
-    requireLocalPauseTarget(requireProjectEditAttempt(ctx, attempt, source.projectId));
+    requireProjectLocalPauseTarget(ctx, attempt, source.projectId);
     const { roles, from, to } = await jsonBody(c, z.object({ roles: DialogueVoiceRoles, from: z.number().finite().nonnegative(), to: z.number().finite().positive() }));
     if (to <= from || to - from > 60 || to > (source.duration ?? 0)) throw badRequest("voice_reference", "Choose a reference of up to one minute with both voices.");
     const file = await fileInDirectoryAsync(ctx.paths.media(source.projectId), source.path);
@@ -92,7 +93,7 @@ export function mediaRoutes(ctx: Ctx) {
     const { mix } = await ctx.track(sourceEnergyReader(ctx).energy(file, from, to, signal), source.projectId);
     if (mix === undefined || mix === roles.me - 1 || mix === roles.other - 1) throw badRequest("voice_inputs", "Could not verify two isolated inputs and their mix in this reference.");
     const media = ctx.db.transaction(() => {
-      requireLocalPauseTarget(requireProjectEditAttempt(ctx, attempt, source.projectId));
+      requireProjectLocalPauseTarget(ctx, attempt, source.projectId);
       const current = requireMedia(ctx, source.id);
       const saved = ctx.repos.projects.putMedia(current.projectId, { ...current, voiceRoles: roles }, current.status, current.error);
       ctx.bus.publish({ type: "media.updated", projectId: current.projectId, media: saved });
@@ -104,7 +105,7 @@ export function mediaRoutes(ctx: Ctx) {
   r.post("/projects/:id/media", async (c) => {
     const project = requireProjectHeader(ctx, c.req.param("id"));
     const attempt = requestAttempt(c.req.raw);
-    requireLocalPauseTarget(requireProjectEditAttempt(ctx, attempt, project.id));
+    requireProjectLocalPauseTarget(ctx, attempt, project.id);
     const transcription = await importTranscriptionPolicy(ctx);
     ctx.paths.ensureProject(project.id);
     const signal = AbortSignal.any([ctx.projectSignal(project.id), c.req.raw.signal]);
@@ -166,11 +167,11 @@ export function mediaRoutes(ctx: Ctx) {
       if (!name || !hash) throw badRequest("missing_file", "multipart field `file` is required");
       if (capture && !source) throw badRequest("bad_capture", "A captured page comes with the address it was captured from.");
       const media = await ingestMedia(ctx, project, { type: "upload", path: staged, hash }, {
-        checkAttempt: () => requireLocalPauseTarget(requireProjectEditAttempt(ctx, attempt, project.id)),
+        checkAttempt: () => requireProjectLocalPauseTarget(ctx, attempt, project.id),
         name, transcription, deferFormat: c.req.query("deferFormat") === "true",
         kind: kind ? MediaKind.parse(kind) : undefined,
         // Which run added it is the engine's to say, from the run's own attempt.
-        by: provenance ? { ...provenance, taskId: attempt?.taskId || undefined } : { by: "human", name: c.var.user.name, createdAt: new Date().toISOString() },
+        by: provenance ? { ...provenance, taskId: attempt?.taskId || undefined } : { by: "human", name: c.var.user.name, createdAt: now() },
         source: source && { ...source, ...(capture && { capture }) },
         uploadedBy: c.var.user.id,
       });
@@ -198,7 +199,7 @@ export function mediaRoutes(ctx: Ctx) {
   r.post("/projects/:id/media/import", async (c) => {
     const project = requireProjectHeader(ctx, c.req.param("id"));
     const attempt = requestAttempt(c.req.raw);
-    requireLocalPauseTarget(requireProjectEditAttempt(ctx, attempt, project.id));
+    requireProjectLocalPauseTarget(ctx, attempt, project.id);
     const transcription = await importTranscriptionPolicy(ctx);
     const body = await jsonBody(c, ImportRequest);
     // A renderer can reopen while its original HTTP request is still copying, or just after it saved the asset.
@@ -219,9 +220,9 @@ export function mediaRoutes(ctx: Ctx) {
     const source = body.path ? ({ type: "path", path: body.path, importId } as const) : ({ type: "url", url: body.url!, importId, signal: c.req.raw.signal } as const);
     const importing = ingestMedia(ctx, project, source, {
       name: body.name, transcription, deferFormat: body.deferFormat,
-      checkAttempt: () => requireLocalPauseTarget(requireProjectEditAttempt(ctx, attempt, project.id)),
+      checkAttempt: () => requireProjectLocalPauseTarget(ctx, attempt, project.id),
       kind: body.kind,
-      by: { by: "human", name: c.var.user.name, createdAt: new Date().toISOString() },
+      by: { by: "human", name: c.var.user.name, createdAt: now() },
       uploadedBy: c.var.user.id,
     });
     if (importId) imports.set(key, importing);
@@ -243,7 +244,7 @@ export function mediaRoutes(ctx: Ctx) {
    */
   r.delete("/projects/:id/media/:mediaId", async (c) => {
     const project = requireProjectHeader(ctx, c.req.param("id"));
-    requireLocalPauseTarget(requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), project.id));
+    requireProjectLocalPauseTarget(ctx, requestAttempt(c.req.raw), project.id);
     await removeUnreadableMedia(ctx, project.id, c.req.param("mediaId"), c.var.user);
     return c.json({});
   });

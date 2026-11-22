@@ -7,7 +7,7 @@
 import { adjacentRepeatCandidates, normalizeTranscriptToken } from "@scarlet/shared";
 import type { TimeRange, TranscriptWord } from "@scarlet/timeline";
 import type { TimelineWord } from "./timeline-perception.js";
-import { isTag } from "./analysis.js";
+import { isTag, round2, round3 } from "./analysis.js";
 
 /**
  * Under this, word to word, a gap is the rhythm of speech and not a pause, so it is never listed. Which pauses are worth
@@ -94,7 +94,7 @@ export function partLeftovers(words: readonly TimelineWord[], cuts: readonly Tim
     // Untouched, and still one stretch of the recording: across a join an earlier part made, the pause is the join's.
     const whole = out < 1e-6 && left.mediaId === right.mediaId && right.index === left.index + 1 &&
       Math.abs((right.start - left.end) - (b.start - a.end)) < .01;
-    pauses.push({ mediaId: left.mediaId, source: { start: a.end, end: b.start }, seconds: Math.round(seconds * 1000) / 1000,
+    pauses.push({ mediaId: left.mediaId, source: { start: a.end, end: b.start }, seconds: round3(seconds),
       after: left.text, before: right.text, ...(whole && { afterWord: left.index }) });
   }
   // Compare attempts on the clock the audience hears, including a long removal between the two.
@@ -123,7 +123,7 @@ export function partLeftovers(words: readonly TimelineWord[], cuts: readonly Tim
     const last = heard[i + found - 1]!, next = heard[i + found]!;
     repeats.push({ mediaId: first.mediaId, source: at.start, text: heard.slice(i, i + 2 * found).map(w => w.text).join(" "),
       fromWord: first.index, toWord: first.index + found - 1, atJoin: cutIn(first.start, heard[i + 2 * found - 1]!.end) > 1e-6,
-      pause: Math.round(Math.max(0, next.start - last.end - cutIn(last.end, next.start)) * 100) / 100 });
+      pause: round2(Math.max(0, next.start - last.end - cutIn(last.end, next.start))) });
     i += found;
   }
   return { pauses, repeats, gaps };

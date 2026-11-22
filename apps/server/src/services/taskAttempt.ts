@@ -37,3 +37,15 @@ export function requireLocalPauseTarget(task: Task | undefined, noteId?: string)
   if (task && taskDialogueOperation(task) === "local-pauses" && !(noteId && task.context.noteIds?.includes(noteId)))
     throw badRequest("local_pauses", "This request only tightens local pauses.");
 }
+
+/** Combined guard for routes that both forbid skill/area tasks and restrict local-pause tasks. */
+export function requireProjectLocalPauseTarget(
+  ctx: Ctx,
+  attempt: TaskAttempt | undefined,
+  projectId: string,
+  noteId?: string,
+) {
+  const task = requireProjectEditAttempt(ctx, attempt, projectId);
+  requireLocalPauseTarget(task, noteId);
+  return task;
+}

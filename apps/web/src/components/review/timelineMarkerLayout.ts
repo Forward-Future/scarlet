@@ -1,0 +1,222 @@
+/**
+ * Footage the timeline shows that the playing side doesn't have: another cut in the same pass took it out.
+ * A skipped gap greys out, names its edit on hover, and hands a click to `onGap`. Otherwise it's only outlined.
+ */
+export interface TimelineGap {
+  start: number;
+  end: number;
+  /** On the gap: "Cut at 2:05". */
+  label: string;
+  /** On a gap too narrow at this zoom for `label`: "2:05". */
+  shortLabel?: string;
+  /** The hover note's heading: which cut, and how long. */
+  title: string;
+  summary?: string;
+  skipped: boolean;
+}
+
+/** A gap's tag is 10.5 px text with 6 px of padding each side, 3 px in from the gap's edges. */
+const gapLabelWidth = (label: string) => label.length * 6 + 18;
+
+/** A short label is narrower per letter than the estimate above allows for, and must not be dropped while it still fits. */
+const shortLabelWidth = (label: string) => label.length * 5 + 18;
+
+/**
+ * The gap's label if it fits the gap's width in pixels, else its short one, else none: a label cut off mid-word reads as
+ * a mistake, and hovering the gap still names its edit. Before the track is measured, the full label.
+ */
+export function gapLabel(gap: Pick<TimelineGap, "label" | "shortLabel">, px: number) {
+  if (!(px > 0) || px >= gapLabelWidth(gap.label) || !gap.shortLabel) return gap.label;
+  return px >= shortLabelWidth(gap.shortLabel) ? gap.shortLabel : "";
+}
+
+/**
+ * The open edit's label on its band, the same way: whole if it fits, else the amount after its "·", else none. A short
+ * cut's band is a few dozen pixels wide, and "Rem…" on it says nothing; the card over the timeline says what it is.
+ */
+export function bandLabel(label: string, px: number) {
+  if (!(px > 0) || px >= gapLabelWidth(label)) return label;
+  const amount = label.includes(" · ") ? label.slice(label.lastIndexOf(" · ") + 3) : "";
+  return amount && px >= shortLabelWidth(amount) ? amount : "";
+}
+
+export interface TimelineDot {
+  time: number;
+  /** "Edit 3 of 5 · 0:42" */
+  title: string;
+  summary?: string;
+  /** Where it runs and for how long, or how much came out. */
+  detail?: string;
+  /** The request or change the edit came from. */
+  context?: string;
+  /** An applied edit's number, as in the chat. Numbered dots show it, filled once kept and amber while it asks for a look. */
+  n?: number;
+  /**
+   * Whose numbers the dot's are. Dots of different groups never share a marker: a call's number and an edit's are
+   * counted apart, and one pill can't say both. Edits have none.
+   */
+  group?: string;
+  state?: "kept" | "check";
+  /** What the hover note calls it while it waits on the editor, as "Cut 23 needs you". Only such a dot has a note. */
+  need?: string;
+  /** The edit or call that's open. Its marker is lit, at the start of its band while that is on the timeline. */
+  current?: boolean;
+  /** The applied edit the dot stands for ("changeId/spot"), so it isn't drawn a second time under the dot. */
+  edit?: string;
+  /** Opens the edit. A press on its marker does this instead of starting a scrub. */
+  open?(): void;
+  /** The edit was applied a moment ago: its marker arrives with a moment, a cut's red closing up into it first. */
+  landed?: "cut" | "edit";
+  /** When it was applied (ms, as Date.now()). A marker drawn again mid-moment picks the moment up where it is. */
+  landedAt?: number;
+  /** The editor rejected the edit a moment ago: its marker shrinks away where it is. */
+  leaving?: boolean;
+}
+
+/** A marker shows its edit's number. Edits that share a marker show their run of numbers ("12–13"), or the lowest and a plus when they skip. */
+function dotLabel(dots: readonly { n?: number }[], numbered: number, first: number, last: number) {
+  const count = dots.length;
+  if (!numbered) return undefined;
+  // Places of one edit made in several places share its one number.
+  if (count === 1 || (first === last && dots.every(d => d.n !== undefined))) return String(first);
+  return numbered === count && last - first === count - 1 ? `${first}–${last}` : `${first}+`;
+}
+
+/** A numbered marker is a 17 px circle, which holds two digits. A longer label is a pill sized to its text (about
+ *  6.6 px a character) with room either side. A plain dot is 8 px. */
+const markWidth = (label?: string) => !label ? 8 : label.length <= 2 ? 17 : Math.round(label.length * 6.6 + 11);
+export const MARK_GAP = 3;
+/** How finely the zoom slider moves. */
+export const ZOOM_STEPS = 1000;
+/** A move of the playhead this far, in seconds or as a share of what the timeline shows, is a jump it glides through. */
+export const GLIDE_FROM_SECONDS = 0.75;
+export const GLIDE_FROM_SHARE = 0.03;
+/** How long a glide takes, in ms: the same as the playhead's transition in workspace.css. */
+export const GLIDE_MS = 260;
+/** How far from a marker, in pixels, hovering the strip still picks it. */
+const MARK_SNAP = 24;
+/** A pill's run reaches at most this many pixels along the track, so a dense pass reads as several runs ("1–14",
+ *  "15–27") that each zoom to a stretch worth seeing, not as one pill for all of it. */
+const RUN_REACH = 104;
+/** How long an edit's arrival plays, in ms: a cut's red closing (.26 s) and then the marker's ring (.7 s). */
+export const LANDING_PLAYS = 1000;
+
+export interface MarkLayout {
+  /** Names the marker: its group and its first edit's time. */
+  key: string;
+  /** The first edit's time. */
+  time: number;
+  /** Every time the marker stands for. */
+  times: number[];
+  dots: TimelineDot[];
+  at: number;
+  label?: string;
+  width: number;
+}
+
+export function isPill({ dots }: MarkLayout) {
+  const first = dots[0]!;
+  return dots.some(dot => (dot.n ?? dot.time) !== (first.n ?? first.time));
+}
+
+/** Each edit draws as its numbered circle. Circles that would touch at this zoom share one pill with their run of
+ *  numbers, so there are never more markers than fit and none hides another. A run reaches at most RUN_REACH: the next
+ *  edit starts a run of its own, moved along just clear of the one before if it would touch it. The open edit keeps its
+ *  own circle the same way. Only circles of one
+ *  group share: a call's and an edit's each keep their own. Before the track is measured, nothing is shared.
+ *  `groupSpan` is the stretch the runs are worked out for, which a zoom on its way gives so its pills don't change on
+ *  the way there; positions are always for `span`. */
+export function layoutMarks(marks: TimelineDot[], from: number, span: number, width: number, groupSpan = span) {
+  if (span <= 0) return [];
+  // Dots of different groups at one time are different markers, so they're gathered apart from the start.
+  const byTime = new Map<string, TimelineDot[]>();
+  for (const mark of marks) {
+    if (!(mark.time >= from && mark.time <= from + span)) continue;
+    const key = `${mark.group ?? ""}@${mark.time}`;
+    const dots = byTime.get(key);
+    if (dots) dots.push(mark); else byTime.set(key, [mark]);
+  }
+  const position = (time: number) => (time - from) / span * 100;
+  // How far apart two times are, in pixels, at the zoom the runs are for.
+  const px = (a: number, b: number) => groupSpan > 0 ? (b - a) / groupSpan * width : 0;
+  const marker = (key: string, time: number, dots: TimelineDot[]) => {
+    const numbers = new Set<number>();
+    let first = Infinity, last = -Infinity;
+    for (const { n } of dots) if (n !== undefined) {
+      numbers.add(n); first = Math.min(first, n); last = Math.max(last, n);
+    }
+    const label = dotLabel(dots, numbers.size, first, last);
+    const layout: MarkLayout = { key, time, times: [time], dots, at: position(time), label, width: markWidth(label) };
+    return { layout, numbers, first, last };
+  };
+  // The distance between two markers' centres, in pixels at the zoom the runs are for, counting a run moved along.
+  const centreGap = (a: MarkLayout, b: MarkLayout) => px(mid(a), mid(b)) + (shift.get(b) ?? 0) - (shift.get(a) ?? 0);
+  const mid = (m: MarkLayout) => (m.times[0]! + m.times.at(-1)!) / 2;
+  const shift = new Map<MarkLayout, number>();
+  const circles = new Map<string, ReturnType<typeof marker>[]>();
+  for (const [key, dots] of [...byTime].sort((a, b) => a[1][0]!.time - b[1][0]!.time)) {
+    const time = dots[0]!.time;
+    let next = marker(key, time, dots);
+    const row = circles.get(dots[0]!.group ?? "") ?? [];
+    circles.set(dots[0]!.group ?? "", row);
+    // A marker joins the run before it when its first edit's circle would touch that run's last, or the two markers
+    // would touch, as long as the run doesn't reach too far.
+    const crowded = (a: MarkLayout, b: MarkLayout) => px(a.times.at(-1)!, b.times[0]!) < markWidth("1") + MARK_GAP
+      || centreGap(a, b) < a.width / 2 + b.width / 2 + MARK_GAP;
+    for (let before = row.at(-1); width > 0 && before && crowded(before.layout, next.layout); before = row.at(-1)) {
+      // A run that would reach too far stays apart, moved along just clear of the one before if it would touch it. So
+      // does the edit that's open: its own number is lit at the start of its band, in no pill.
+      const open = (m: MarkLayout) => m.dots.some(dot => dot.current);
+      if (px(before.layout.times[0]!, next.layout.times.at(-1)!) > RUN_REACH || open(before.layout) || open(next.layout)) {
+        const clear = before.layout.width / 2 + next.layout.width / 2 + MARK_GAP;
+        if (centreGap(before.layout, next.layout) < clear) shift.set(next.layout, (shift.get(before.layout) ?? 0) - px(mid(before.layout), mid(next.layout)) + clear);
+        break;
+      }
+      // Sharing widens the pill and moves it, so it can reach the marker before it too.
+      row.pop();
+      const group = before.layout;
+      for (const t of next.layout.times) group.times.push(t);
+      for (const dot of next.layout.dots) group.dots.push(dot);
+      for (const n of next.numbers) before.numbers.add(n);
+      before.first = Math.min(before.first, next.first);
+      before.last = Math.max(before.last, next.last);
+      group.label = dotLabel(group.dots, before.numbers.size, before.first, before.last);
+      group.width = markWidth(group.label);
+      // Its middle has moved: whether it still needs moving along is worked out again against the run before it.
+      shift.delete(next.layout);
+      shift.delete(group);
+      next = before;
+    }
+    row.push(next);
+  }
+  // A marker sits at the middle of its run, moved along if it had to be, and never past the track's ends.
+  const half = (m: MarkLayout) => width > 0 ? m.width / 2 / width * 100 : 0;
+  return [...circles.values()].flatMap(row => row.map(({ layout }) => {
+    const at = position(mid(layout)) + (width > 0 ? (shift.get(layout) ?? 0) / width * 100 : 0);
+    return { ...layout, at: layout.times.length > 1 || shift.has(layout) ? Math.max(half(layout), Math.min(100 - half(layout), at)) : at };
+  })).sort((a, b) => a.at - b.at);
+}
+
+/** A hit prefers the visible marker: the open edit, then a pill drawn over another group's circle. */
+export function nearestMark(layout: MarkLayout[], percent: number, width: number) {
+  let nearest: MarkLayout | undefined, visible: MarkLayout | undefined;
+  let distance = Infinity, visibleDistance = Infinity, visiblePriority = -1;
+  for (const mark of layout) {
+    const delta = Math.abs(mark.at - percent);
+    if (delta < distance) { nearest = mark; distance = delta; }
+    if (delta * width / 100 > mark.width / 2) continue;
+    const priority = mark.dots.some(dot => dot.current) ? 2 : isPill(mark) ? 1 : 0;
+    if (priority > visiblePriority || (priority === visiblePriority && delta <= visibleDistance)) {
+      visible = mark;
+      visibleDistance = delta;
+      visiblePriority = priority;
+    }
+  }
+  return visible ?? (nearest && distance * width / 100 <= Math.max(MARK_SNAP, nearest.width / 2) ? nearest : undefined);
+}
+
+export function dotState(dots: TimelineDot[]) {
+  if (dots.some(d => d.state === "check")) return "check";
+  const numbered = dots.filter(d => d.n !== undefined);
+  return numbered.length && numbered.every(d => d.state === "kept") ? "kept" : undefined;
+}

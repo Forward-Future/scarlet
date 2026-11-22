@@ -212,7 +212,7 @@ export function toFcpxml(project: Project, timeline: Timeline, sources: Map<stri
       for (const adjustment of pictureAdjustments(clip, localStart, duration, source)) node.add(adjustment);
     }
     if (clip.kind === "media" && source.hasAudio && !layer.muted && node.attrs.srcEnable !== "video") {
-      const volume = soundAdjustment(clip);
+      const volume = soundAdjustment(clip, rate);
       if (volume) node.add(volume);
     }
     return { node, localStart };
@@ -276,32 +276,6 @@ export function toFcpxml(project: Project, timeline: Timeline, sources: Map<stri
     return out;
   }
 
-  function soundAdjustment(clip: MediaClip): Node | undefined {
-    if (clip.volume === 1 && !clip.audioFadeIn && !clip.audioFadeOut) return;
-    const volume = el("adjust-volume", { amount: decibels(clip.volume) });
-    if (clip.audioFadeIn || clip.audioFadeOut) {
-      const param = volume.add(el("param", { name: "amount" }));
-      if (clip.audioFadeIn) param.add(el("fadeIn", { type: "linear", duration: fmt(sec(clip.audioFadeIn)) }));
-      if (clip.audioFadeOut) param.add(el("fadeOut", { type: "linear", duration: fmt(sec(clip.audioFadeOut)) }));
-    }
-    return volume;
-  }
-
-  function captionNode(clip: CaptionClip, lane: number | undefined, offset: Q, duration: Q): Node {
-    const node = el("caption", { lane, offset: fmt(offset), name: clip.text.slice(0, 60), duration: fmt(duration),
-      enabled: clip.enabled === false ? 0 : undefined, role: "SRT?captionFormat=SRT.en" });
-    const text = el("text");
-    text.text = clip.text;
-    node.add(text);
-    return node;
-  }
-
-  function markerNode(marker: Marker, start: Q, duration: Q): Node {
-    if (marker.kind === "chapter") return el("chapter-marker", { start: fmt(start), duration: fmt(duration), value: marker.text || "Chapter" });
-    return el("marker", { start: fmt(start), duration: fmt(duration), value: marker.text || "Marker",
-      completed: marker.kind === "todo" ? (marker.resolved ? 1 : 0) : undefined });
-  }
-
   const dropFrame = isDropFrameRate(rate);
   const sequence = el("sequence", {
     format: sequenceFormat, duration: fmt(frames(totalFrames, rate)), tcStart: "0s", tcFormat: dropFrame ? "DF" : "NDF",
@@ -312,6 +286,32 @@ export function toFcpxml(project: Project, timeline: Timeline, sources: Map<stri
     el("library", {}, [el("event", { name: project.name }, [el("project", { name: `${project.name} — ${timeline.name}` }, [sequence])])]),
   ]);
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE fcpxml>\n\n${doc.render()}\n`;
+}
+
+function soundAdjustment(clip: MediaClip, rate: ExactRate): Node | undefined {
+  if (clip.volume === 1 && !clip.audioFadeIn && !clip.audioFadeOut) return;
+  const volume = el("adjust-volume", { amount: decibels(clip.volume) });
+  if (clip.audioFadeIn || clip.audioFadeOut) {
+    const param = volume.add(el("param", { name: "amount" }));
+    if (clip.audioFadeIn) param.add(el("fadeIn", { type: "linear", duration: fmt(secondsQ(clip.audioFadeIn, rate)) }));
+    if (clip.audioFadeOut) param.add(el("fadeOut", { type: "linear", duration: fmt(secondsQ(clip.audioFadeOut, rate)) }));
+  }
+  return volume;
+}
+
+function captionNode(clip: CaptionClip, lane: number | undefined, offset: Q, duration: Q): Node {
+  const node = el("caption", { lane, offset: fmt(offset), name: clip.text.slice(0, 60), duration: fmt(duration),
+    enabled: clip.enabled === false ? 0 : undefined, role: "SRT?captionFormat=SRT.en" });
+  const text = el("text");
+  text.text = clip.text;
+  node.add(text);
+  return node;
+}
+
+function markerNode(marker: Marker, start: Q, duration: Q): Node {
+  if (marker.kind === "chapter") return el("chapter-marker", { start: fmt(start), duration: fmt(duration), value: marker.text || "Chapter" });
+  return el("marker", { start: fmt(start), duration: fmt(duration), value: marker.text || "Marker",
+    completed: marker.kind === "todo" ? (marker.resolved ? 1 : 0) : undefined });
 }
 
 /** Scarlet's easing as Final Cut's keyframe interpolation. A hold has no equivalent and moves evenly. */

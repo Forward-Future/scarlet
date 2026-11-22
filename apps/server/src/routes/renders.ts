@@ -18,7 +18,7 @@ import { ensureProjectHead } from "../services/timeline.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 import { framePriority, pictureDecoder, pictureLane, type PicturePriority } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
-import { jsonBody, numberParam, requireProject, requireProjectHeader } from "./util.js";
+import { jsonBody, numberParam, requireProject, requireProjectHeader, requireScoped } from "./util.js";
 import { measuredLoudness, type Loudness } from "../render/loudness.js";
 import { editorFirst } from "../services/editorFirst.js";
 
@@ -192,11 +192,7 @@ export function renderRoutes(ctx: Ctx) {
     }, sameFormat ? `"${key}"` : undefined);
   });
 
-  function requireRender(renderId: string, projectId?: string) {
-    const render = ctx.repos.renders.get(renderId);
-    if (!render || (projectId !== undefined && render.projectId !== projectId)) throw notFound(`render ${renderId}`);
-    return render;
-  }
+  const requireRender = (renderId: string, projectId?: string) => requireScoped(ctx.repos.renders, "render", renderId, projectId);
   async function playbackFile(request: Request, render: Render) {
     const file = await waitForPlayback(ctx, render, AbortSignal.any([request.signal, ctx.shutdown]));
     if (!file) return new Response(null, { status: ctx.shutdown.aborted ? 503 : 499 });

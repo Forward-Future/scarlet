@@ -16,7 +16,7 @@ import { makeMediaClip } from "./builders.js";
 import { newId } from "./ids.js";
 import { firstIndex, intervalCandidates } from "./intervals.js";
 import { makeTimeMap, type TimeMap } from "./rebase.js";
-import { clipEnd, MAX_TIMELINE_SECONDS, timelinePlanningIssue } from "./time.js";
+import { clipEnd, MAX_TIMELINE_SECONDS, mergeRanges, timelinePlanningIssue } from "./time.js";
 
 type Json = Record<string, unknown>;
 
@@ -201,13 +201,7 @@ function captionRangeMap(base: Timeline, draft: Timeline, fps: number, map: Time
       left = right;
     }
     // Adjacent pieces of a ripple trim still make one caption. Keep disjoint pieces separate.
-    const groups: TimeRange[] = [];
-    for (const span of spans.sort((a, b) => a.start - b.start)) {
-      const last = groups.at(-1);
-      if (last && span.start <= last.end + 1e-6) last.end = Math.max(last.end, span.end);
-      else groups.push(span);
-    }
-    return groups;
+    return mergeRanges(spans, 1e-6);
   };
 }
 
@@ -236,17 +230,9 @@ function retimeCaption(clip: CaptionClip, ranges: ReturnType<typeof captionRange
   return clips;
 }
 
-/**
- * Build a Scarlet timeline from an OTIO document, using `base` (the version
- * that was exported) for clip looks, track ids and captions.
- */
-export function fromOtio(otio: unknown, project: Project, base: Timeline): Timeline {
-  const root = obj(otio);
-  if (schemaOf(root) !== "Timeline") throw new OtioImportError("This isn't an OpenTimelineIO timeline (.otio). In Resolve use File → Export → Timeline… and pick OpenTimelineIO.");
-  const stack = obj(root.tracks);
-  const otioTracks = list(stack.children, "tracks").map(obj).filter((t) => schemaOf(t) === "Track");
+/** Parse OTIO tracks into Scarlet tracks, inheriting looks and IDs from `base`. */
+function importOtioTracks(otioTracks: Json[], project: Project, base: Timeline): { tracks: Track[]; independentAudio: Set<string> } {
   const missing = new Set<string>();
-
   const findMedia = matchProjectMedia(project);
   const { sources, colorsById, colorsByName } = indexBaseClips(base);
   const used = new Set<string>();
@@ -373,11 +359,13 @@ export function fromOtio(otio: unknown, project: Project, base: Timeline): Timel
   if (missing.size) {
     throw new OtioImportError(`The timeline uses footage Scarlet doesn't have: ${[...missing].join(", ")}. Add those files under Media first, then import again.`, [...missing]);
   }
+  return { tracks, independentAudio };
+}
 
-  // Resolve exports each video clip's sound as a linked clip on an audio
-  // track. In Scarlet a video clip carries its own sound, so drop those twins.
+/** Drop audio-track clips that duplicate the linked sound already carried by an audible video clip. */
+function stripLinkedAudioTwins(tracks: Track[], base: Timeline, independentAudio: ReadonlySet<string>, fps: number): Track[] {
   const videoClips = tracks.filter((t) => t.kind === "video" && !t.muted).flatMap((t) => t.clips.filter((c): c is MediaClip => c.kind === "media" && c.volume > 0));
-  const halfFrame = 0.5 / project.settings.fps;
+  const halfFrame = 0.5 / fps;
   const pictureStarts = intervalCandidates(videoClips, v => v.timelineIn, v => v.timelineIn);
   for (const t of tracks) {
     if (t.kind !== "audio") continue;
@@ -388,31 +376,45 @@ export function fromOtio(otio: unknown, project: Project, base: Timeline): Timel
         Math.abs(v.sourceOut - c.sourceOut) < halfFrame);
     });
   }
-  const audioTracks = tracks.filter((t) => t.kind !== "audio" || t.clips.length || base.tracks.some((b) => b.id === t.id));
+  return tracks.filter((t) => t.kind !== "audio" || t.clips.length || base.tracks.some((b) => b.id === t.id));
+}
 
-  // Captions and markers ride along from the exported version, re-timed through the footage.
-  const draft = TimelineSchema.parse({ ...base, version: "draft", parent: base.version, tracks: audioTracks, markers: [] });
-  const issue = timelinePlanningIssue(draft);
-  if (issue) throw new OtioImportError(issue);
+/** Re-time captions and markers from `base` onto `draft` through surviving footage. */
+function retimeCaptionsAndMarkers(base: Timeline, draft: Timeline, audioTracks: Track[], fps: number): Timeline {
   const captions = base.tracks.filter(t => t.kind === "caption");
   if (!captions.length && !base.markers.length) return draft;
-  const map = makeTimeMap(base, draft, project.settings.fps);
+  const map = makeTimeMap(base, draft, fps);
   let captionRange: ReturnType<typeof captionRangeMap> | undefined;
   // Shorter than a frame of this project can't show. Mapping can leave an exact frame a few ulps short.
-  const frame = 1 / project.settings.fps - 1e-6;
-  const captionTracks: Track[] = captions
-    .map((t) => ({
-      ...t,
-      clips: t.clips.flatMap(c => {
-        if (c.kind !== "caption") return [];
-        captionRange ??= captionRangeMap(base, draft, project.settings.fps, map);
-        return retimeCaption(c, captionRange, frame);
-      }),
-    }));
+  const frame = 1 / fps - 1e-6;
+  const captionTracks: Track[] = captions.map((t) => ({
+    ...t,
+    clips: t.clips.flatMap(c => {
+      if (c.kind !== "caption") return [];
+      captionRange ??= captionRangeMap(base, draft, fps, map);
+      return retimeCaption(c, captionRange, frame);
+    }),
+  }));
   const markers = base.markers.flatMap((m) => {
     const time = map(m.time);
     return time === null ? [] : [{ ...m, time, end: m.end !== undefined ? (map(m.end) ?? undefined) : undefined }];
   });
-
   return TimelineSchema.parse({ ...draft, tracks: [...audioTracks, ...captionTracks], markers });
+}
+
+/**
+ * Build a Scarlet timeline from an OTIO document, using `base` (the version
+ * that was exported) for clip looks, track ids and captions.
+ */
+export function fromOtio(otio: unknown, project: Project, base: Timeline): Timeline {
+  const root = obj(otio);
+  if (schemaOf(root) !== "Timeline") throw new OtioImportError("This isn't an OpenTimelineIO timeline (.otio). In Resolve use File → Export → Timeline… and pick OpenTimelineIO.");
+  const stack = obj(root.tracks);
+  const otioTracks = list(stack.children, "tracks").map(obj).filter((t) => schemaOf(t) === "Track");
+  const { tracks, independentAudio } = importOtioTracks(otioTracks, project, base);
+  const audioTracks = stripLinkedAudioTwins(tracks, base, independentAudio, project.settings.fps);
+  const draft = TimelineSchema.parse({ ...base, version: "draft", parent: base.version, tracks: audioTracks, markers: [] });
+  const issue = timelinePlanningIssue(draft);
+  if (issue) throw new OtioImportError(issue);
+  return retimeCaptionsAndMarkers(base, draft, audioTracks, project.settings.fps);
 }

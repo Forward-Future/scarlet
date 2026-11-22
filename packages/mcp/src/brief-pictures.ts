@@ -1,4 +1,5 @@
-import { applyOps, clipEnd, type MediaAsset, type MediaClip, type Timeline, type TimelineOp } from "@scarlet/timeline";
+import { applyOps, clipEnd, sourceToTimeline, type MediaAsset, type MediaClip, type Timeline, type TimelineOp } from "@scarlet/timeline";
+import { round3 } from "./analysis.js";
 import { pictureBox, type Box } from "./framing.js";
 
 /** Pictures on screen for less than this between two others are reported. How long one should hold is the skill's call. */
@@ -55,7 +56,6 @@ export function cutShareOf(cut: Pick<RecordingCut, "cells">, area: Box): number 
 
 type Layer = { clip: MediaClip; order: number; source: { width: number; height: number } };
 type Shown = { clip: MediaClip; box: Box };
-const r3 = (n: number) => Math.round(n * 1000) / 1000;
 const near = (a: number, b: number, by: number) => Math.abs(a - b) <= by;
 
 /**
@@ -113,21 +113,20 @@ export function briefPictures(timeline: Timeline, media: readonly MediaAsset[], 
   const changes: { at: number; before: Shown[]; after: Shown[]; cut?: Cut }[] = [];
   for (const [first, last] of edges) {
     const before = picture(first - 1e-5), after = picture(last + 1e-5);
-    if (!same(before, after)) changes.push({ at: r3(first), before, after });
+    if (!same(before, after)) changes.push({ at: round3(first), before, after });
   }
   // A cut in a recording, inside a clip that shows it, changes the picture there unless it falls on a clip edge.
   if (cuts?.size) for (const { clip, source } of layers) {
-    const speed = clip.speed ?? 1;
     for (const cut of cuts.get(clip.mediaId) ?? []) {
       if (cut.at <= clip.sourceIn + 1e-3 || cut.at >= clip.sourceOut - 1e-3) continue;
-      const at = clip.timelineIn + (cut.at - clip.sourceIn) / speed;
+      const at = sourceToTimeline(clip, cut.at);
       if (edges.some(([first, last]) => at >= first - 1e-3 && at <= last + 1e-3)) continue;
       const shown = picture(at);
       if (!shown.some(s => s.clip === clip)) continue;
       const area = sourceOnScreen(clip, at - clip.timelineIn, source, canvas);
       const share = area ? cutShareOf(cut, area) : 0;
       if (share < CUT_SHOWN) continue;
-      changes.push({ at: r3(at), before: shown, after: shown, cut: { at: r3(at), clip: clip.id, source: r3(cut.at), changed: Math.round(share * 100) } });
+      changes.push({ at: round3(at), before: shown, after: shown, cut: { at: round3(at), clip: clip.id, source: round3(cut.at), changed: Math.round(share * 100) } });
     }
   }
   changes.sort((a, b) => a.at - b.at);
@@ -139,7 +138,7 @@ export function briefPictures(timeline: Timeline, media: readonly MediaAsset[], 
     const a = changes[i]!, b = changes[i + 1]!;
     if (b.at - a.at >= min - 1e-6 || blended(a) || blended(b)) continue;
     const inRecording = [a.cut, b.cut].filter((c): c is Cut => !!c);
-    found.push({ from: a.at, to: b.at, seconds: r3(b.at - a.at), shows: a.after.map(s => s.clip.id),
+    found.push({ from: a.at, to: b.at, seconds: round3(b.at - a.at), shows: a.after.map(s => s.clip.id),
       before: a.before.map(s => s.clip.id), after: b.after.map(s => s.clip.id), ...(inRecording.length && { recordingCuts: inRecording }) });
   }
   return found;
@@ -182,6 +181,37 @@ export interface MetCut { from: number; to: number; seconds: number; clips: stri
  * and the sound stays as it was. `stable` names the clips an op can reach on the engine (those already in the video and
  * those the edit names by id). A flash that can't be closed that way stays in briefPictures for the run.
  */
+/** Try moving `moving` silent clip edges to `to`, returning the resulting timeline and ops if valid and non-overlapping. */
+function tryMoveClipEdges(
+  tl: Timeline,
+  moving: ReadonlyArray<{ clip: MediaClip; side: "start" | "end" }>,
+  to: number,
+  assets: ReadonlyMap<string, MediaAsset>,
+  stable: (clipId: string) => boolean,
+): { next: Timeline; patches: TimelineOp[] } | undefined {
+  const patches: TimelineOp[] = [];
+  for (const { clip, side } of moving) {
+    const asset = assets.get(clip.mediaId), speed = clip.speed ?? 1;
+    if (!stable(clip.id) || (clip.volume > 0 && asset?.hasAudio !== false)) return undefined;
+    const delta = to - (side === "start" ? clip.timelineIn : clipEnd(clip));
+    const sourceIn = side === "start" ? clip.sourceIn + delta * speed : clip.sourceIn;
+    const sourceOut = side === "end" ? clip.sourceOut + delta * speed : clip.sourceOut;
+    // The recording has to have the footage the moved edge shows.
+    if (sourceIn < 0 || sourceOut <= sourceIn || (asset?.duration && sourceOut > asset.duration + 1e-6)) return undefined;
+    const patch = side === "start"
+      ? { timelineIn: to, sourceIn, ...(clip.keyframes?.length && { keyframes: clip.keyframes.map(k => ({ ...k, time: k.time - delta })) }) }
+      : { sourceOut };
+    patches.push({ op: "updateClip", clipId: clip.id, patch } as TimelineOp);
+  }
+  if (!patches.length) return undefined;
+  let next: Timeline;
+  try { next = applyOps(tl, patches); } catch { return undefined; }
+  const moved = new Set(moving.map(e => e.clip.id));
+  const overlaps = next.tracks.some(track => track.clips.some((c, i) => i > 0 && (moved.has(c.id) || moved.has(track.clips[i - 1]!.id)) &&
+    c.timelineIn < clipEnd(track.clips[i - 1]!) - 1e-6));
+  return overlaps ? undefined : { next, patches };
+}
+
 export function flashesOntoCuts(before: Timeline | null, after: Timeline, media: readonly MediaAsset[], canvas: { width: number; height: number },
   stable: (clipId: string) => boolean): { ops: TimelineOp[]; met: MetCut[] } {
   const assets = new Map(media.map(m => [m.id, m]));
@@ -199,30 +229,11 @@ export function flashesOntoCuts(before: Timeline | null, after: Timeline, media:
       : atFrom.some(e => e.order === bottom) && atTo.length && atTo.every(e => e.order !== bottom) ? [atTo, atFrom] : [[], []];
     const to = cut.find(e => e.order === bottom)?.at;
     if (!moving.length || to === undefined) continue;
-    const patches: TimelineOp[] = [];
-    for (const { clip, side } of moving) {
-      const asset = assets.get(clip.mediaId), speed = clip.speed ?? 1;
-      if (!stable(clip.id) || (clip.volume > 0 && asset?.hasAudio !== false)) { patches.length = 0; break; }
-      const delta = to - (side === "start" ? clip.timelineIn : clipEnd(clip));
-      const sourceIn = side === "start" ? clip.sourceIn + delta * speed : clip.sourceIn;
-      const sourceOut = side === "end" ? clip.sourceOut + delta * speed : clip.sourceOut;
-      // The recording has to have the footage the moved edge shows.
-      if (sourceIn < 0 || sourceOut <= sourceIn || (asset?.duration && sourceOut > asset.duration + 1e-6)) { patches.length = 0; break; }
-      const patch = side === "start"
-        ? { timelineIn: to, sourceIn, ...(clip.keyframes?.length && { keyframes: clip.keyframes.map(k => ({ ...k, time: k.time - delta })) }) }
-        : { sourceOut };
-      patches.push({ op: "updateClip", clipId: clip.id, patch } as TimelineOp);
-    }
-    if (!patches.length) continue;
-    let next: Timeline;
-    try { next = applyOps(tl, patches); } catch { continue; }
     // Kept only if no moved clip now overlaps another on its track and the flash is gone. Audio joins overlap on purpose.
-    const moved = new Set(moving.map(e => e.clip.id));
-    const overlaps = next.tracks.some(track => track.clips.some((c, i) => i > 0 && (moved.has(c.id) || moved.has(track.clips[i - 1]!.id)) &&
-      c.timelineIn < clipEnd(track.clips[i - 1]!) - 1e-6));
-    if (overlaps || briefPictures(next, media, canvas, FLASH_SECONDS + 1e-3).some(f => near(f.from, flash.from, 0.002) || near(f.to, flash.to, 0.002))) continue;
-    tl = next;
-    ops.push(...patches);
+    const moved = tryMoveClipEdges(tl, moving, to, assets, stable);
+    if (!moved || briefPictures(moved.next, media, canvas, FLASH_SECONDS + 1e-3).some(f => near(f.from, flash.from, 0.002) || near(f.to, flash.to, 0.002))) continue;
+    tl = moved.next;
+    ops.push(...moved.patches);
     met.push({ from: flash.from, to: flash.to, seconds: flash.seconds, clips: moving.map(e => e.clip.id) });
   }
   return { ops, met };
@@ -289,31 +300,14 @@ export function edgesOntoRecordingCuts(before: Timeline | null, after: Timeline,
       // Only a tail: an insert that would lose as much as it keeps is mostly brief pictures, and what to show there is the run's call.
       const kept = holder.end === "end" ? to - holder.clip.timelineIn : clipEnd(holder.clip) - to;
       if (Math.abs(edge - to) >= kept) continue;
-      const patches: TimelineOp[] = [];
-      for (const { clip, end } of moving) {
-        const asset = assets.get(clip.mediaId), speed = clip.speed ?? 1;
-        if (!stable(clip.id) || (clip.volume > 0 && asset?.hasAudio !== false)) { patches.length = 0; break; }
-        const delta = to - (end === "start" ? clip.timelineIn : clipEnd(clip));
-        const sourceIn = end === "start" ? clip.sourceIn + delta * speed : clip.sourceIn;
-        const sourceOut = end === "end" ? clip.sourceOut + delta * speed : clip.sourceOut;
-        if (sourceIn < 0 || sourceOut <= sourceIn || (asset?.duration && sourceOut > asset.duration + 1e-6)) { patches.length = 0; break; }
-        patches.push({ op: "updateClip", clipId: clip.id, patch: end === "start"
-          ? { timelineIn: to, sourceIn, ...(clip.keyframes?.length && { keyframes: clip.keyframes.map(k => ({ ...k, time: k.time - delta })) }) }
-          : { sourceOut } } as TimelineOp);
-      }
-      if (!patches.length) continue;
-      let next: Timeline;
-      try { next = applyOps(tl, patches); } catch { continue; }
-      const moved = new Set(moving.map(e => e.clip.id));
-      const overlaps = next.tracks.some(track => track.clips.some((c, i) => i > 0 && (moved.has(c.id) || moved.has(track.clips[i - 1]!.id)) &&
-        c.timelineIn < clipEnd(track.clips[i - 1]!) - 1e-6));
-      if (overlaps || !fillsFrame(next, media, canvas, (edge + to) / 2) ||
-        briefPictures(next, media, canvas, BRIEF_PICTURE_SECONDS, cuts).some(f => near(f.from, to, 0.002) || near(f.to, to, 0.002))) continue;
-      tl = next;
-      ops.push(...patches);
+      const moved = tryMoveClipEdges(tl, moving.map(({ clip, end }) => ({ clip, side: end })), to, assets, stable);
+      if (!moved || !fillsFrame(moved.next, media, canvas, (edge + to) / 2) ||
+        briefPictures(moved.next, media, canvas, BRIEF_PICTURE_SECONDS, cuts).some(f => near(f.from, to, 0.002) || near(f.to, to, 0.002))) continue;
+      tl = moved.next;
+      ops.push(...moved.patches);
       done.push(edge);
       const cut = flashes.flatMap(f => f.recordingCuts!).find(c => near(c.at, to, 0.002))!;
-      met.push({ from: r3(edge), to: r3(to), seconds: r3(Math.abs(edge - to)), clips: moving.map(e => e.clip.id), source: cut.source });
+      met.push({ from: round3(edge), to: round3(to), seconds: round3(Math.abs(edge - to)), clips: moving.map(e => e.clip.id), source: cut.source });
       break;
     }
   }

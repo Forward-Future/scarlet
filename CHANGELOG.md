@@ -7,6 +7,9 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 21, 2026
 
 - Timeline thumbnails stay cached while a recording prepares instead of redrawing on every progress update.
+- A first cut no longer leaves a lone word or a quick reaction, like “Wow.”, stuck between two cuts where it plays as a stutter: Scarlet takes it out with the cuts beside it or lets the speech run on.
+- Scarlet now knows when your screen recording stood completely still while you went on talking, as a stalled capture leaves it, so it can tell you instead of only asking whether to show the screen.
+- Every item in For you and See all now ends on a word that says what it is, and a spot where Scarlet left the video as it was for you to check says Check.
 - A spot Scarlet marks for you to check right after B-roll no longer says B-roll on its card when it changed nothing.
 - A new project takes the best format among all the videos you start it with, such as the camera's 16:9 over a screen recording's shape, once every one of them is in.
 - Keeping an edit and moving to the next cut now plays that cut, instead of sometimes starting the video from 0:00 and leaving the cut out of view on the timeline.

@@ -5,13 +5,10 @@
  */
 import { basename, dirname, join } from "node:path";
 import { z } from "zod/v3";
-import type { AgentCapabilities, ProjectDetail, ScarletClient, ScarletToolName, Task } from "@scarlet/shared";
+import type { AgentCapabilities, ScarletClient, Task } from "@scarlet/shared";
 import type { Author } from "@scarlet/timeline";
 import { round3 } from "./analysis.js";
-import { errorText, json, type ToolResult } from "./tool-result.js";
-
-type ToolRegistrar = <Shape extends z.ZodRawShape>(name: ScarletToolName, description: string, shape: Shape,
-  handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>) => void;
+import { errorText, json, type ToolRegistrar, type ToolResult } from "./tool-result.js";
 
 interface GraphicsDeps {
   tool: ToolRegistrar;
@@ -24,7 +21,6 @@ interface GraphicsDeps {
   readArtifact(path: string): Promise<Buffer<ArrayBuffer>>;
   /** Write a file there, and say where it went. */
   writeArtifact(path: string, data: Buffer): Promise<string>;
-  getProject(): Promise<{ project: Pick<ProjectDetail["project"], "settings"> }>;
 }
 
 /**

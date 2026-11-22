@@ -78,13 +78,18 @@ describe("keptSilences", () => {
   const words = timelineWords(tl, new Map([["cam", [word("note.", 109.6, 110), word("You", 118.2, 118.4), word("have", 118.4, 118.6),
     word("it.", 121, 121.3), word("Next", 124.4, 124.7), word("up.", 126.2, 126.5)]]]));
 
-  it("lists each silence of two seconds or more that no decision covers, with its source", () => {
-    // The second silence is cut, the third is too short.
-    expect(keptSilences(tl, words, [{ start: 21.5, end: 24.2 }])).toEqual([{ mediaId: "cam", source: { start: 110, end: 118.2 },
-      start: 10, end: 18.2, seconds: 8.2, after: "note.", before: "You" }, { mediaId: "cam", source: { start: 118.6, end: 121 }, start: 18.6, end: 21, seconds: 2.4, after: "have", before: "it." }]);
+  it("lists each silence the length the check lists or more that no decision covers, with its source and the word an untouched one follows", () => {
+    // The third silence is cut, the last is too short at two seconds.
+    expect(keptSilences(tl, words, [{ start: 21.5, end: 24.2 }], 2)).toEqual([{ mediaId: "cam", source: { start: 110, end: 118.2 },
+      start: 10, end: 18.2, seconds: 8.2, after: "note.", before: "You", afterWord: 0 },
+      { mediaId: "cam", source: { start: 118.6, end: 121 }, start: 18.6, end: 21, seconds: 2.4, after: "have", before: "it.", afterWord: 2 }]);
+    // By default the stock skill's dead air, about a second, as the check lists silences: the 1.5 s before “up.” too.
+    expect(keptSilences(tl, words, [{ start: 21.5, end: 24.2 }]).map(k => k.before)).toEqual(["You", "it.", "up."]);
   });
 
-  it("drops a silence a decision trims below two seconds, and one that is kept or staged on purpose", () => {
-    expect(keptSilences(tl, words, [{ start: 10.4, end: 17.8 }, { start: 18.6, end: 21 }, { start: 21.3, end: 24.4 }])).toEqual([]);
+  it("drops a silence a decision trims below the length, one that is kept or staged on purpose, and names no word for a trimmed one", () => {
+    expect(keptSilences(tl, words, [{ start: 10.4, end: 17.8 }, { start: 18.6, end: 21 }, { start: 21.3, end: 24.4 }, { start: 24.7, end: 26.2 }])).toEqual([]);
+    expect(keptSilences(tl, words, [{ start: 10.4, end: 12 }], 2)[0]).toMatchObject({ start: 12, end: 18.2 });
+    expect(keptSilences(tl, words, [{ start: 10.4, end: 12 }], 2)[0]).not.toHaveProperty("afterWord");
   });
 });

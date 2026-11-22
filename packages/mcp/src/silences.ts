@@ -5,14 +5,12 @@
  * beside it. Scarlet reports; the model decides.
  */
 import { clipDuration, rangesOverlap, timelineToSource, type MediaAsset, type MediaClip, type TimeRange, type Timeline, type Transcript, type TranscriptWord } from "@scarlet/timeline";
-import type { PictureActivityWindow } from "@scarlet/shared";
+import { SILENCE_LEFT_SECONDS, type PictureActivityWindow } from "@scarlet/shared";
 import { audibleMediaClips, dbfs, isTag, remainingPauseRanges, round3 } from "./analysis.js";
 import type { TimelineWord } from "./timeline-perception.js";
 
 /** The scan lists a stretch without words from this length. */
 const SILENCE_SECONDS = 1.5;
-/** A saved part reports a stretch without words it still plays from this length. */
-const KEPT_SILENCE_SECONDS = 2;
 
 export interface Silence extends TimeRange {
   seconds: number;
@@ -104,14 +102,17 @@ export function pictureReading(w: PictureActivityWindow, shift: number) {
     ...(w.changedFrames > 0 && { typicalAreaPct: pct(w.typicalArea), largestAreaPct: pct(w.largestArea), largestAt: at(w.largestAt), lastChangeAt: at(w.lastChangeAt) }) };
 }
 
-interface KeptSilence { mediaId: string; source: TimeRange; start: number; end: number; seconds: number; after: string; before: string }
+interface KeptSilence { mediaId: string; source: TimeRange; start: number; end: number; seconds: number; after: string; before: string;
+  /** The word it follows, where it is the whole pause between two neighbouring words: `afterWord` in dialogue_apply_cuts trims it. */
+  afterWord?: number }
 
 /**
- * Stretches without words that a saved part still plays and no decision covers. `words` are the version's words in
- * playback order inside the part's range; `decided` are its cut, review and keep ranges, all in timeline seconds.
+ * Stretches without words that a saved part still plays and no decision covers, from `min` seconds: the closing check's
+ * silences, by default the stock skill's dead air. It was a fixed 2 s after the skill and the check moved to a second
+ * (2026-11-21). `words` are the version's words in playback order inside the part's range; `decided` are its cut,
+ * review and keep ranges, all in timeline seconds.
  */
-export function keptSilences(tl: Timeline, words: TimelineWord[], decided: TimeRange[]): KeptSilence[] {
-  const min = KEPT_SILENCE_SECONDS;
+export function keptSilences(tl: Timeline, words: TimelineWord[], decided: TimeRange[], min = SILENCE_LEFT_SECONDS): KeptSilence[] {
   const clips = audibleMediaClips(tl);
   const out: KeptSilence[] = [];
   // A transcript can mark blank audio as a bracketed word. It is not speech.
@@ -120,13 +121,15 @@ export function keptSilences(tl: Timeline, words: TimelineWord[], decided: TimeR
   for (const right of heard.slice(1)) {
     const gap = { start: left!.end, end: right.start };
     if (gap.end - gap.start >= min) {
+      const touched = decided.some(d => rangesOverlap(d, gap));
       for (const piece of remainingPauseRanges(gap, decided.filter(d => rangesOverlap(d, gap)))) {
         if (piece.end - piece.start < min) continue;
         // One recording carries the stretch: the same clip plays at both ends.
         const clip = clips.find(c => c.timelineIn <= piece.start + 1e-6 && c.timelineIn + clipDuration(c) >= piece.end - 1e-6);
         if (!clip) continue;
         out.push({ mediaId: clip.mediaId, source: { start: round3(timelineToSource(clip, piece.start)), end: round3(timelineToSource(clip, piece.end)) },
-          start: round3(piece.start), end: round3(piece.end), seconds: round3(piece.end - piece.start), after: left!.text, before: right.text });
+          start: round3(piece.start), end: round3(piece.end), seconds: round3(piece.end - piece.start), after: left!.text, before: right.text,
+          ...(!touched && left!.mediaId === right.mediaId && right.index === left!.index + 1 && clip.mediaId === left!.mediaId && { afterWord: left!.index }) });
       }
     }
     if (right.end >= left!.end) left = right;

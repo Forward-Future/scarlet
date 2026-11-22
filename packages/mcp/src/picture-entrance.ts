@@ -1,4 +1,5 @@
 import { clipEnd, indexClipsAt, planTransitions, sourceToTimeline, type MediaClip, type Timeline } from "@scarlet/timeline";
+import { isTag } from "./analysis.js";
 import type { TimelineJoin } from "./timeline-perception.js";
 
 type SpokenWord = { text: string; start: number; end: number };
@@ -59,7 +60,7 @@ export function pictureEntranceReader(timeline: Timeline, media: readonly Media[
       Math.min(clipEnd(audio), clipEnd(video)) > Math.max(audio.timelineIn, video.timelineIn) &&
       Math.abs(sourceAt(video, t) - sourceAt(audio, t)) < .001;
   }
-  const spoken = (w: SpokenWord) => w.end > w.start && /[\p{L}\p{N}]/u.test(w.text) && !/^\s*\[.*\]\s*$/.test(w.text);
+  const spoken = (w: SpokenWord) => w.end > w.start && /[\p{L}\p{N}]/u.test(w.text) && !isTag(w.text);
   return (side: Side, inWords?: readonly SpokenWord[] | null, outWords?: readonly SpokenWord[] | null,
           settledThrough = Infinity): PictureEntrance => {
     const a = clips.get(side.out.clipId), b = clips.get(side.in.clipId);

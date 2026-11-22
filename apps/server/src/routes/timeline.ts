@@ -1,7 +1,7 @@
 import { z } from "zod/v3";
-import { recordHistoryEdit, rejectEdits } from "../services/cutHistory.js";
+import { checkoutVersion, recordHistoryEdit, rejectEdits } from "../services/cutHistory.js";
 import { Hono } from "hono";
-import { CaptionExportError, captionExportHttpStatus, captionExportRange, clipById, describeDiff, diffTimelines, newId, timelineDuration, toCaptions, toOtio, type Change } from "@scarlet/timeline";
+import { CaptionExportError, captionExportHttpStatus, captionExportRange, clipById, describeDiff, diffTimelines, timelineDuration, toCaptions, toOtio } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { requestAttempt, requireProjectEditAttempt } from "../services/taskAttempt.js";
@@ -9,7 +9,7 @@ import { now } from "../db.js";
 import { conflict, HttpError, notFound } from "../errors.js";
 import { ensureProjectHead, resolveTimeline } from "../services/timeline.js";
 import { jsonBody, optionalNumberParam, requireProject, requireProjectHeader } from "./util.js";
-import { actorFor, logActivity, quote } from "../services/activity.js";
+import { actorFor, logActivity } from "../services/activity.js";
 import { applyChoicesWhenDone } from "../services/changes.js";
 import { buildHandoff } from "../services/handoff.js";
 
@@ -88,49 +88,9 @@ export function timelineRoutes(ctx: Ctx) {
     return c.json({ diff, description: describeDiff(diff, undefined, c.req.query("clipNames") === "id" ? clipById : undefined) });
   });
 
-  r.post("/projects/:id/versions/:v/checkout", (c) => ctx.db.transaction(() => {
-    const project = ensureProjectHead(ctx, c.req.param("id"));
-    const { head } = project;
-    const target = c.req.param("v");
-    if (!ctx.repos.versions.exists(project.id, target)) throw notFound(`version ${target}`);
-    if (target === head) throw conflict("already_head", "that version is already the head");
-    const user = c.var.user;
-    const change: Change = {
-      id: newId("chg"),
-      projectId: project.id,
-      fromVersion: head,
-      toVersion: target,
-      description: `Checked out version ${target}`,
-      author: actorFor(user),
-      noteIds: [],
-      ranges: [],
-      state: "approved",
-      renders: [],
-      createdAt: now(),
-      updatedAt: now(),
-    };
-    ctx.repos.changes.put(change);
-    const updated = ctx.repos.projects.update(project.id, { head: target });
-    ctx.bus.publish({ type: "change.updated", projectId: project.id, change });
-    ctx.bus.publish({ type: "project.updated", projectId: project.id, project: updated });
-    const previous = ctx.repos.versions.get(project.id, head);
-    const restored = ctx.repos.versions.get(project.id, target);
-    logActivity(ctx, {
-      projectId: project.id,
-      actor: actorFor(user),
-      type: "version.restored",
-      summary: `${user.name} restored an earlier version of the edit${restored?.description ? `: ${quote(restored.description)}` : ""}`,
-      data: {
-        changeId: change.id,
-        branch: project.branch,
-        version: target,
-        from: head,
-        ...(previous && { durationBefore: timelineDuration(previous.timeline) }),
-        ...(restored && { durationAfter: timelineDuration(restored.timeline) }),
-      },
-    });
-    return c.json({ project: updated });
-  }, "immediate")());
+  r.post("/projects/:id/versions/:v/checkout", (c) =>
+    c.json(checkoutVersion(ctx, c.var.user, c.req.param("id"), c.req.param("v"))),
+  );
 
   r.get("/projects/:id/versions/:v/export.otio", (c) => {
     requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), c.req.param("id"));

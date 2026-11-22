@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod/v3";
+import { errorText } from "./tool-result.js";
 
 /** The tool a harness that lists tools briefly reads a tool's whole description from. */
 export const TOOL_HELP = "tool_help";
@@ -52,8 +53,7 @@ export function listToolsBriefly(server: McpServer) {
       names: z.array(z.string()).min(1).optional().describe(`Several tools' names instead, read in one call; up to ${HELP_AT_ONCE} are read, the rest listed for another call`) },
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
   }, async ({ name, names }, extra) => {
-    const failed = (text: string) => ({ isError: true, content: [{ type: "text" as const, text }] });
-    if ((name === undefined) === (names === undefined)) return failed("Give either name, for one tool, or names, for several.");
+    if ((name === undefined) === (names === undefined)) return errorText("Give either name, for one tool, or names, for several.");
     const tools = await everyTool(extra);
     // Full descriptions run 3–5k characters each: a long list is read in part, with the rest named, rather than refused.
     const listed = [...new Set(names ?? [name!])];
@@ -64,7 +64,7 @@ export function listToolsBriefly(server: McpServer) {
     const missing = unknown.length ? `No Scarlet tool is named ${unknown.length > 1 ? `${unknown.slice(0, -1).join(", ")} or ${unknown.at(-1)}` : unknown[0]}. ` +
       `Its tools: ${tools.filter(t => t.name !== TOOL_HELP).map(t => t.name).join(", ")}.` : undefined;
     const known = [...new Set(asked.flatMap(a => a.tool ? [a.tool] : []))];
-    if (!known.length && !later.length) return failed(missing!);
+    if (!known.length && !later.length) return errorText(missing!);
     const whole = known.map(tool => `${tool.name}\n\n${tool.description ?? ""}\n\nParameters (JSON schema):\n${JSON.stringify(tool.inputSchema, null, 1)}`);
     const rest = later.length ? `Not read in this call, to ask for next: ${later.join(", ")}.` : undefined;
     return { content: [{ type: "text" as const, text: [...(missing ? [missing] : []), ...whole, ...(rest ? [rest] : [])].join("\n\n---\n\n") }] };

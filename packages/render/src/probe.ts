@@ -6,7 +6,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { MediaAsset, MediaKind } from "@scarlet/timeline";
-import { LOCAL_MEDIA_INPUT, resolveFfprobe, runCapture } from "./exec.js";
+import { LOCAL_MEDIA_INPUT, failureReason, resolveFfprobe, runCapture } from "./exec.js";
 
 export interface ProbeResult {
   previewClock?: { frameRate: string; startPts: number; videoStart?: number };
@@ -131,6 +131,28 @@ export function matchesCanvasFormat(probe: ProbeResult): boolean {
 export async function isStoredAsShown(file: string, opts: { ffprobePath?: string; signal?: AbortSignal } = {}) {
   try { return storedAsShown(await probeMedia(file, opts)); }
   catch { opts.signal?.throwIfAborted(); return false; }
+}
+
+/**
+ * Try decoding with an optional GPU decoder, skipping CUDA when frames need rotation (`storedAsShown`),
+ * and fall back to CPU decoding on driver/stream failure.
+ */
+export async function withDecoderFallback<D extends "cuda" | "videotoolbox", T>(
+  file: string,
+  opts: { decoder?: D; signal?: AbortSignal; onFallback?: (reason: string) => void },
+  noun: "frame" | "window",
+  run: (decoder: D | undefined) => Promise<T>,
+  canFallback: () => boolean = () => true,
+): Promise<T> {
+  if (opts.decoder && (opts.decoder !== "cuda" || await isStoredAsShown(file, { signal: opts.signal }))) {
+    try { return await run(opts.decoder); }
+    catch (error) { // A driver can list a decoder it cannot run for this stream.
+      opts.signal?.throwIfAborted();
+      if (!canFallback()) throw error;
+      opts.onFallback?.(`${opts.decoder} could not decode this ${noun} (${failureReason(error)}); decoded it on the CPU.`);
+    }
+  }
+  return run(undefined);
 }
 
 // Import, proxy chunks and render inspection often probe the same MP4. Keep
@@ -262,6 +284,16 @@ export function detectMediaKind(probe: ProbeResult, filename = probe.path): Medi
 /** True when a path's extension says "still image" (used when no probe is at hand). */
 export function isImagePath(file: string): boolean {
   return IMAGE_EXTS.has(path.extname(file).toLowerCase());
+}
+
+/** True when an asset represents a single still picture (an image or a still-image graphic). */
+export function isStillAsset(asset: Pick<MediaAsset, "kind" | "path">, file = asset.path): boolean {
+  return asset.kind === "image" || (asset.kind === "graphic" && isImagePath(file));
+}
+
+/** True when an asset represents a moving picture (a video or a motion graphic). */
+export function isMovingAsset(asset: Pick<MediaAsset, "kind" | "path">, file = asset.path): boolean {
+  return asset.kind === "video" || (asset.kind === "graphic" && !isImagePath(file));
 }
 
 /** The media-asset fields the schema stores, taken from a probe. */

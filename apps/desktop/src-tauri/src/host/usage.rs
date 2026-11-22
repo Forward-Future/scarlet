@@ -20,8 +20,10 @@ pub struct AgentUsage {
     pub reasoning_tokens: u64,
 }
 
-impl AgentUsage {
-    pub fn add(self, other: AgentUsage) -> AgentUsage {
+impl std::ops::Add for AgentUsage {
+    type Output = AgentUsage;
+
+    fn add(self, other: AgentUsage) -> AgentUsage {
         AgentUsage {
             model: self.model.or(other.model),
             input_tokens: self.input_tokens.saturating_add(other.input_tokens).min(MAX_SAFE_INTEGER),
@@ -31,7 +33,9 @@ impl AgentUsage {
             reasoning_tokens: self.reasoning_tokens.saturating_add(other.reasoning_tokens).min(MAX_SAFE_INTEGER),
         }
     }
+}
 
+impl AgentUsage {
     /// What is left of this count once `earlier` is taken off, each kind of token on its own and never under zero.
     pub fn less(self, earlier: &AgentUsage) -> AgentUsage {
         AgentUsage {
@@ -55,7 +59,7 @@ impl AgentUsage {
 
 pub fn add_usage(a: Option<AgentUsage>, b: Option<AgentUsage>) -> Option<AgentUsage> {
     match (a, b) {
-        (Some(a), Some(b)) => Some(a.add(b)),
+        (Some(a), Some(b)) => Some(a + b),
         (a, b) => a.or(b),
     }
 }

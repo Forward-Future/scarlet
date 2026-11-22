@@ -11,8 +11,8 @@ import { GraphicRenderRequest, SaveStyleGuideRequest } from "@scarlet/shared";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest, HttpError, notFound } from "../errors.js";
-import { serveFile } from "../files.js";
-import { requestAttempt, requireLocalPauseTarget, requireProjectEditAttempt } from "../services/taskAttempt.js";
+import { serveOriginal } from "../files.js";
+import { requestAttempt, requireProjectEditAttempt, requireProjectLocalPauseTarget } from "../services/taskAttempt.js";
 import { assetPath, findAttachment, mimeFor, graphicSource, MAX_ATTACHMENT_BYTES, MAX_DOCUMENT_PAGES, readDocument, removeStyleGuide, renderProjectGraphic,
   saveAttachment, saveStyleGuide } from "../services/graphics.js";
 import { jsonBody, multipartError, requireProject, requireProjectHeader } from "./util.js";
@@ -86,14 +86,10 @@ export function graphicRoutes(ctx: Ctx) {
     const project = requireProjectHeader(ctx, c.req.param("id"));
     const found = await findAttachment(ctx, project.id, c.req.param("attachmentId"));
     if (!found) throw notFound("attachment");
-    const type = found.attachment.mime ?? "application/octet-stream";
-    const passive = type.startsWith("audio/") || type.startsWith("video/") ||
-      ["image/jpeg", "image/png", "image/gif", "image/webp", "image/x-icon"].includes(type);
-    const response = serveFile(c.req.raw, found.path, { contentType: passive ? type : "application/octet-stream", cacheControl: "private, no-cache" });
-    response.headers.set("Content-Security-Policy", "sandbox; default-src 'none'");
-    response.headers.set("X-Content-Type-Options", "nosniff");
-    if (!passive) response.headers.set("Content-Disposition", "attachment");
-    return response;
+    return serveOriginal(c.req.raw, found.path, {
+      contentType: found.attachment.mime ?? "application/octet-stream",
+      cacheControl: "private, no-cache",
+    });
   });
 
   r.post("/projects/:id/documents/read", async (c) => {
@@ -124,7 +120,7 @@ export function graphicRoutes(ctx: Ctx) {
   r.post("/projects/:id/graphics", async (c) => {
     const project = requireProject(ctx, c.req.param("id"));
     const attempt = requestAttempt(c.req.raw);
-    const check = () => requireLocalPauseTarget(requireProjectEditAttempt(ctx, attempt, project.id));
+    const check = () => requireProjectLocalPauseTarget(ctx, attempt, project.id);
     check();
     let options: GraphicRenderRequest | undefined;
     let html: string | undefined;
