@@ -691,7 +691,7 @@ export function buildDb(chatLayouts = false): MockDb {
     { id: "lrn_pause", projectId: PRJ, rule: "Bring every pause between sentences down to about a quarter second.", said: "Tighten the pause before “three things”. A quarter second between sentences, always.",
       taskId: "task_done", skillId: dialogueSkill.id, state: "suggested", createdAt: minutesAgo(11),
       // What the sample's dialogue skill says that the rule would change, as a check quotes it.
-      replaces: ["As a guide, not a rule, about a second with nothing happening in it plays as dead air."] },
+      replaces: ["A pause of about a second or more with nothing happening in it plays as dead air: bring it down to the beat unless it earns its length."] },
     { id: "lrn_laugh", projectId: PRJ, rule: "Keep a laugh in. Cut only the dead air after it.", said: "Don’t cut the laugh.",
       taskId: "task_done", skillId: dialogueSkill.id, state: "suggested", createdAt: minutesAgo(10) },
   ];

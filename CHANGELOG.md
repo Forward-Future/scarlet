@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 21, 2026
 
+- Scarlet now trims a pause of about a second or more inside your lines, as an editor would, unless it earns its length, and checks for any left before it finishes.
 - Scarlet keeps one framing on a screen demo through a jump cut instead of zooming in or out a few percent for no reason.
 - An edit's card no longer keeps the words of the cuts you stepped through before it.
 - Edits run with Claude use far fewer tokens and finish sooner, and Claude now reads every tool's instructions in full.
