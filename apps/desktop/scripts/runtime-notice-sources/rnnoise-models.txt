@@ -1,0 +1,57 @@
+RNNoise model "beguiling-drafter" (bd.rnnn, 2018-08-30), used by Scarlet's voice cleanup
+https://github.com/GregorR/rnnoise-models/tree/3eee541a283fd3b8f81b85b1748e3b9ccbefa04d/beguiling-drafter-2018-08-30
+SHA-256 of bd.rnnn: ae3f7411e1e6a884f839a4a145c394408398f09854dbc1216ee02faafc98a17b
+
+From the repository's README:
+
+This repository contains the tools and information used to create the various
+neural network models in rnnoise-nu. With the exception of the tools/ directory
+and this file, none of this work is creative and thus none of it is subject to
+copyright.
+
+The model's training notes (info.txt), which name the recordings and sounds it was trained on:
+
+SUITE: beguiling-drafter-2018-08-30
+
+INTENT:
+
+Voice in a reasonable recording environment. Fans, AC, computers, etc.
+
+
+SIGNAL:
+
+voice
+    hamlet-002-act-1-scene-1.1626
+        http://etc.usf.edu/lit2go/94/hamlet/1626/
+    human_rights_un_chi_nf.mp3
+        https://librivox.org/universal-declaration-of-human-rights-by-united-nations-volume-02/
+    human_rights_un_cze_msed.mp3
+        https://librivox.org/universal-declaration-of-human-rights-by-united-nations-volume-02/
+    huntingofthesnark_01_carrol_128kb
+        https://librivox.org/the-hunting-of-the-snark-by-lewis-carroll-3/
+    teacupclub_01_armstrong_128kb
+        https://librivox.org/the-teacup-club-by-eliza-armstrong/
+    warletters_01_allan_128kb.mp3
+        https://librivox.org/war-letters-from-a-young-queenslander-by-robert-marshall-allen/
+    TSPspeech
+        http://www-mmsp.ece.mcgill.ca/Documents/Data/
+
+sounds
+    cough
+        https://freesound.org/ sounds: 205012 222644 252240 323532 342587 343880 343885 343986 369295 391284 401334 407839 419781 425777 87412
+    laugh
+        https://freesound.org/ sounds: 167578 189278 263775 319346 343934 344043 344064 367680 381275 383237 393353 401214 433921 73123
+
+
+./chopper voice/hamlet-002-act-1-scene-1.1626.raw voice/human_rights_un_chi_nf.raw sounds/cough.raw voice/human_rights_un_cze_msed.raw voice/huntingofthesnark_01_carrol_128kb.raw sounds/laugh.raw voice/teacupclub_01_armstrong_128kb.raw voice/warletters_01_allan_128kb.raw voice/TSPspeech.raw
+
+
+NOISE:
+
+rnnoise_contributions (only "other" and "none" samples)
+    https://people.xiph.org/~jm/demo/rnnoise/rnnoise_contributions.tar.gz
+
+
+COUNT: 13212874 (x87)
+
+NOTE: All files processed into correct raws through ffmpeg: ffmpeg -i in -f s16le -ac 1 -ar 48000 out.raw

@@ -190,7 +190,7 @@ function flushStreams(st: GeminiParseState, events: RunnerEvent[]) {
 }
 
 /** Every tool Scarlet's MCP server can offer, the session-specific ones included. */
-const SCARLET_TOOLS = new Set<string>([...SCARLET_TOOL_NAMES, "tool_help", "skill_save_edit", "skill_save_from_change"]);
+const SCARLET_TOOLS = new Set<string>([...SCARLET_TOOL_NAMES, "tool_help", "tool_call", "skill_save_edit", "skill_save_from_change"]);
 /** How a harness names a Scarlet tool: agy offers them to the model as `mcp_scarlet_<tool>` (its `mcp_%s_%s`). */
 const SCARLET_PREFIX = /^(?:mcp__scarlet__|mcp_scarlet_|scarlet__|scarlet\.|scarlet\/|scarlet:)([a-z0-9_]+)(.?)/;
 
@@ -199,6 +199,19 @@ function namesScarletTool(candidate: unknown): boolean {
   if (typeof candidate !== "string") return false;
   const m = SCARLET_PREFIX.exec(candidate.trim().toLowerCase());
   return !!m && SCARLET_TOOLS.has(m[1]!) && !/[a-z0-9_.\-/\\]/.test(m[2]!);
+}
+
+/**
+ * A call through `tool_call`, which the MCP server offers a Gemini run for the tools it doesn't list on their own, as the
+ * call it makes: the tool it names, with that tool's arguments, so the run's history says what Scarlet did. A question
+ * stays as it is: the server refuses one asked through `tool_call`, so it was never asked.
+ */
+export function throughToolCall(rawName: string, input: unknown): { rawName: string; input: unknown } {
+  if (prettyToolName(rawName) !== "scarlet.tool_call") return { rawName, input };
+  const call = asRecord(input);
+  const name = asString(call?.name)?.trim().toLowerCase().replace(/^(?:mcp__scarlet__|mcp_scarlet_|scarlet__|scarlet[./:])/, "");
+  if (!name || !/^[a-z0-9_]+$/.test(name) || isQuestionTool(name)) return { rawName, input };
+  return { rawName: `scarlet.${name}`, input: call!.arguments ?? {} };
 }
 
 /**
@@ -324,11 +337,10 @@ export function parseGeminiAcpUpdate(rawUpdate: unknown, st: GeminiParseState): 
     }
     case "tool_call": {
       flushStreams(st, events);
-      const rawName = extractToolName(update);
+      const { rawName, input } = throughToolCall(extractToolName(update), update.rawInput ?? update.parameters ?? update.input ?? update.arguments);
       const name = prettyToolName(rawName);
       const id = asString(update.toolCallId) ?? asString(update.id);
       if (id) st.toolNames.set(id, rawName);
-      const input = update.rawInput ?? update.parameters ?? update.input ?? update.arguments;
       if (isQuestionTool(rawName)) {
         // A question with no words is an ordinary call, which Scarlet refuses.
         if (input !== undefined && !questionText(input)) events.push({ type: "tool", text: `${name} ${briefInput(input)}`.trim(), data: { tool: name, input, ...(id ? { toolId: id } : {}) } });

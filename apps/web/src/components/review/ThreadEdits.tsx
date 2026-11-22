@@ -194,22 +194,33 @@ export function useReviewed(projectId: string, thread: Thread | undefined) {
 /**
  * Whether a request about an edit is queued or running: the editor asked Scarlet to revise or undo it, so the edit
  * no longer waits for them. Once the request finishes, its new version carries its own flag; if it fails, the edit
- * needs a look again. It answers with where that request stands, so a row can tell Scarlet at work from a request
+ * needs a look again. It answers with that request's id and state, so a row can tell Scarlet at work from a request
  * still waiting its turn: the one Scarlet is on, when there are several.
  */
 export function useRevising(thread: Thread | undefined) {
   return useMemo(() => {
     const pending = (thread?.tasks ?? []).flatMap(t => isActiveTask(t.state) && t.context.changeId && t.context.editIndex !== undefined
-      ? [{ changeId: t.context.changeId, spot: t.context.editIndex, state: t.state }] : []);
+      ? [{ id: t.id, changeId: t.context.changeId, spot: t.context.editIndex, state: t.state }] : []);
     return (edit: ListedEdit) => {
       let first: (typeof pending)[number] | undefined;
       for (const ref of pending) if (matchesEdit(edit, ref)) {
-        if (isWorkingTask(ref.state)) return ref.state;
+        if (isWorkingTask(ref.state)) return { id: ref.id, state: ref.state };
         first ??= ref;
       }
-      return first?.state;
+      return first ? { id: first.id, state: first.state } : undefined;
     };
   }, [thread]);
+}
+
+/**
+ * The word on a row whose edit or cut has a request with Scarlet: "Revising…" or "Rejecting…" once Scarlet has
+ * started on it, "Up next" while it is next in line in the queue, and "Queued" while it waits behind other work
+ * or while editing is paused.
+ */
+export function revisionWord(run: { id: string; state: Task["state"] } | undefined, { rejecting = false, nextQueuedId }: { rejecting?: boolean; nextQueuedId?: string } = {}) {
+  if (!run) return undefined;
+  if (run.state === "queued") return nextQueuedId && run.id === nextQueuedId ? "Up next" : "Queued";
+  return rejecting ? "Rejecting…" : "Revising…";
 }
 
 /**
@@ -238,13 +249,15 @@ export function editGroups<T extends ListedEdit>(edits: readonly T[]): { label: 
  * left the chat. With `only`, the list is just the edits it picks, such as the ones that need the editor, each with
  * the number it has in the whole list.
  */
-export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent }: {
+export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId }: {
   projectId: string; thread: Thread; edits: ListedEdit[]; showing?: ThreadEdit;
   /** Edits the editor rejected, which are out of the video: each keeps a row where it was, with a × and "Rejected". */
   rejected?: ListedEdit[];
   onPlay(ref: EditRef): void; onHover?(ref?: EditRef): void; under?(edit: ListedEdit): ReactNode[]; only?(edit: ListedEdit): boolean;
   /** What the requests about an edit took, for the hover of the word its row ends on: their time and, when those show, tokens. */
   spent?(edit: ListedEdit): string | undefined;
+  /** The queued request Scarlet will take up next, so its edit's row says "Up next" instead of "Queued". */
+  nextQueuedId?: string;
 }) {
   const reviewed = useReviewed(projectId, thread);
   const revising = useRevising(thread);
@@ -289,7 +302,8 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       // the editor had kept the edit: the edit they kept is on its way out (2026-11-10).
       const revisingNow = revising(edit), isRevising = !!revisingNow;
       // Scarlet is on that revision now, so the row's word moves. One waiting its turn sits still.
-      const busy = !!revisingNow && isWorkingTask(revisingNow);
+      const busy = !!revisingNow && isWorkingTask(revisingNow.state);
+      const statusWord = revisionWord(revisingNow, { rejecting: rejecting(edit), nextQueuedId });
       const version = edit.previous.length ? edit.previous.length + 1 : 0;
       const decided = isKept && !isRevising;
       // In For you, a handled edit says how it was decided (Kept, or Done for a marker). Otherwise a cut says how much
@@ -309,12 +323,12 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
         // Why an edit asks for a look is on its card, in Scarlet's sentence. Its row keeps to the amber number and says
         // the reason on hover, as a pass's row does.
         title={revised || edit.reason ? undefined : edit.check}
-        aria-label={`Edit ${n}: ${title}${places > 1 ? `, ${places} places` : ""}${isRevising ? ", revising" : isKept ? (edit.marker ? ", done" : ", kept") : check ? ", check" : ""}`}>
+        aria-label={`Edit ${n}: ${title}${places > 1 ? `, ${places} places` : ""}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : isKept ? (edit.marker ? ", done" : ", kept") : check ? ", check" : ""}`}>
         <EditBadge n={n} kept={isKept} check={check} />
         <span className="simple-edit-title">{title}{version > 0 && places === 1 && <EditVersion n={version} hover={took} />}</span>
         {/* What the row ends on says on hover what the requests about this edit took: their time and tokens, nothing else. */}
         {value && <span className="simple-edit-value" title={took}>{value}</span>}
-        {isRevising ? <span className={busy ? "simple-edit-check is-kept working-text" : "simple-edit-check is-kept"} title={took}>{rejecting(edit) ? "Rejecting…" : "Revising…"}</span>
+        {statusWord ? <span className={busy ? "simple-edit-check is-kept working-text" : "simple-edit-check is-kept"} title={took}>{statusWord}</span>
           : revised && <span className="simple-edit-check" title={took}>{edit.check}</span>}
       </button>{nested}</li>{goneAfter(edit.range.start, rows[at + 1]?.edit.range.start ?? Infinity)}</Fragment>;
     })}

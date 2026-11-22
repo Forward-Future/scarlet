@@ -1,4 +1,5 @@
 import { z } from "zod/v3";
+import { startDecisionCheck } from "../services/learnings.js";
 import { checkoutVersion, recordHistoryEdit, rejectEdits } from "../services/cutHistory.js";
 import { Hono } from "hono";
 import { CaptionExportError, captionExportHttpStatus, captionExportRange, clipById, describeDiff, diffTimelines, timelineDuration, toCaptions, toOtio } from "@scarlet/timeline";
@@ -77,7 +78,10 @@ export function timelineRoutes(ctx: Ctx) {
     const body = await jsonBody(c, z.object({ expectedHead: z.string(), branch: z.string(), threadId: z.string(),
       edits: z.array(z.object({ changeId: z.string(), spot: z.number().int().nonnegative(), label: z.string().trim().min(1), range, revised: z.boolean().optional(),
         at: z.number().nonnegative().optional(), before: z.object({ version: z.string(), removed: range.refine(r => r.end > r.start) }).optional() })).min(1).max(32) }));
-    return c.json(rejectEdits(ctx, c.var.user, c.req.param("id"), body.threadId, body.edits, body.expectedHead, body.branch));
+    const rejected = rejectEdits(ctx, c.var.user, c.req.param("id"), body.threadId, body.edits, body.expectedHead, body.branch);
+    // The last Reject of what the request left the editor has its decisions read for a rule.
+    startDecisionCheck(ctx, rejected.project.id, body.threadId);
+    return c.json(rejected);
   });
 
   r.get("/projects/:id/versions/:a/diff/:b", (c) => {

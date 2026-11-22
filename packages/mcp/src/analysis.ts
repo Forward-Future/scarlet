@@ -179,7 +179,10 @@ function describeClip(clip: Clip, fps = 30): string {
     const speed = clip.speed && clip.speed !== 1 ? ` x${clip.speed}` : "";
     const vol = clip.volume === 0 ? " muted" : "";
     const fades = clip.audioFadeIn || clip.audioFadeOut ? ` fades ${round3(clip.audioFadeIn ?? 0)}/${round3(clip.audioFadeOut ?? 0)}` : "";
-    return `${clip.id}${label} ${range} <- ${clip.mediaId} ${clip.sourceIn.toFixed(2)}–${clip.sourceOut.toFixed(2)}${speed}${vol}${fades}${off}`;
+    // A level that moves, and a voice cleaned, are said in a word: format full gives the keys and the effect.
+    const level = clip.volumeKeyframes?.length ? ` level keys ${clip.volumeKeyframes.length}` : "";
+    const voice = clip.effects?.some(e => e.type === "voiceCleanup" && e.enabled !== false) ? " voice cleanup" : "";
+    return `${clip.id}${label} ${range} <- ${clip.mediaId} ${clip.sourceIn.toFixed(2)}–${clip.sourceOut.toFixed(2)}${speed}${vol}${fades}${level}${voice}${off}`;
   }
   if (clip.kind === "caption") {
     return `${clip.id} ${range} caption "${truncate(clip.text, 60)}"${off}`;

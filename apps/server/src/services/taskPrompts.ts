@@ -10,6 +10,7 @@ import { mimeFor, styleGuidePath } from "./graphics.js";
 import { learningCheckContext } from "./learnings.js";
 import { assistantSkills } from "./skills.js";
 import { answerHandoffInstruction, recoveryInstruction } from "./taskRecap.js";
+import { editorNotesText, markNotesHeard } from "./taskNotes.js";
 import { resolveTimeline } from "./timeline.js";
 
 /**
@@ -56,7 +57,7 @@ export function pairQuestionsAndAnswers(events: Pick<TaskEvent, "type" | "text">
  * After an answer, a host that still has the CLI session that asked continues
  * it with just the answer; otherwise the answers go in the system prompt.
  */
-export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh?: boolean; timeLimitMinutes?: number } = {}): TaskPrompt {
+export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh?: boolean; timeLimitMinutes?: number; hearNotes?: boolean } = {}): TaskPrompt {
   const project = ctx.repos.projects.get(task.projectId);
   if (!project) throw notFound("project");
   const c = task.context;
@@ -95,9 +96,18 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   // a later part replaced while it was away.
   const recap = !!task.resumeRootId && !(resumeSession && answered);
   const before = recap ? ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.retryTaskId') = ?", [task.projectId, task.id])[0] : undefined;
-  const instruction = answered && !resumeSession
+  // The editor's notes to this request. A session that carries on has heard those it was handed; a fresh one has heard
+  // none of them, so it is told every one. Either way they follow the instruction, in the editor's words.
+  const editorNotes = (task.notes ?? []).filter(n => !resumeSession || !n.heardAt);
+  const noted = editorNotesText(editorNotes);
+  const asked = answered && !resumeSession
     ? answerHandoffInstruction(ctx, task)
     : before ? recoveryInstruction(ctx, before, task.resumeRootId, task.id) : task.instruction;
+  const instruction = noted && !resumeSession ? `${asked}\n\n${noted}` : asked;
+  if (opts.hearNotes && editorNotes.some(n => !n.heardAt)) {
+    const ids = new Set(editorNotes.map(n => n.id));
+    ctx.db.transaction(() => { const saved = ctx.repos.tasks.get(task.id); if (saved) markNotesHeard(ctx, saved, ids); }, "immediate")();
+  }
   // The run is launched with its harness's to-do tool, and asked to lay out its steps, when the harness has one and the
   // chat will show the plan. A dialogue pass shows the stages Scarlet measures and a request about one staged cut its
   // own two, and a skill edit changes no video: none is given the tool or asked, so each runs exactly as it did.
@@ -128,8 +138,9 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   // for is the model's call), and what it says when it refuses a tool.
   const launch = { ...(plans && { plan: true }), ...(!aside && { workspace: true }), refusedTool: aside ? REFUSED_TOOL : REFUSED_OUTSIDE };
   if (resumeSession) {
-    return { systemPrompt, instruction: answered ? `The editor answered: "${last!.text.trim()}"\nContinue the task with that answer.`
-      : `${task.resumesAfterProjectStop ? PAUSED : INTERRUPTED}\n\n${instruction.trim()}`, resumeSession, ...launch };
+    const said = answered ? `The editor answered: "${last!.text.trim()}"\nContinue the task with that answer.`
+      : `${task.resumesAfterProjectStop ? PAUSED : INTERRUPTED}\n\n${instruction.trim()}`;
+    return { systemPrompt, instruction: noted ? `${said}\n\n${noted}` : said, resumeSession, ...launch };
   }
   return { systemPrompt, instruction: firstMessage(instruction.trim()), ...launch };
 }

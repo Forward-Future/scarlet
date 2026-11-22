@@ -24,10 +24,17 @@ import { MarkedFrameOnRequest } from "./SourceProvenance";
 import { callRowKey, isWorking, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
 
 /**
- * A rule Scarlet picked up from this request, under what the request did: the skill it is for and the rule in quotes,
+ * A rule Scarlet picked up from this request, under what the request did: what the editor decided that it came from, if
+ * it came from their decisions, the skill it is for and the rule in quotes,
  * then Review, which opens Learnings at it, and Decline, which turns the rule down from here. The line goes once the
  * editor decides, here or in Learnings.
  */
+/** "Learned for dialogue-pass: ", or what it was learned from first: "Learned from 4 cuts you rejected, for dialogue-pass: ". */
+function learnedLead(learning: Learning, skill: string | undefined): string {
+  const from = learning.learnedFrom?.decisions.length ? `from ${learning.learnedFrom.decisions.length} ${learning.learnedFrom.what}` : "";
+  return from ? `Learned ${from}${skill ? `, for ${skill}` : ""}: ` : skill ? `Learned for ${skill}: ` : "Learned: ";
+}
+
 function LearnedLine({ learning, onReview }: { learning: Learning; onReview?(id: string): void }) {
   const skill = useSkillsStore(s => s.skills.find(k => k.id === learning.skillId)?.name);
   // The line names the skill, so the library is read once if nothing has read it yet. A read that failed isn't asked
@@ -45,7 +52,7 @@ function LearnedLine({ learning, onReview }: { learning: Learning; onReview?(id:
   };
   return <p className="simple-learned">
     <Icon name="bulb" size={13} />
-    <span>{skill ? `Learned for ${skill}: ` : "Learned: "}<span className="simple-learned-rule">“{learning.rule}”</span>
+    <span>{learnedLead(learning, skill)}<span className="simple-learned-rule">“{learning.rule}”</span>
       {onReview && <> <button type="button" className="simple-learned-review" onClick={() => onReview(learning.id)}
         title="Approve or revise it in Learnings">Review</button></>}
       {" "}<button type="button" className="simple-learned-decline" disabled={declining} onClick={decline}
@@ -412,6 +419,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
         summary={target?.note} listedAbove={inside && !!nested.get(run.root)?.startsWith("call/")} showing={showingIt} onOpen={proposing ? undefined : open}
         // Scarlet's own requests have no heading. Their menu stays with the active run's row.
         actions={request ? undefined : editActions} onStop={request || editsProject ? undefined : stop} paused={paused}
+        // While Scarlet works on a request that edits the video, a note can go to it without waiting for it to end.
+        onNote={actions.addNote && editsProject && isWorking(task.state) ? () => actions.addNote!(task.id) : undefined}
         // Only the thread's last run can be finished, and not while another request in it is under way.
         {...(task === thread.tasks.at(-1) && !thread.active && !thread.question && {
           onResume: () => attempt(run.root, retryTask(task.id)),

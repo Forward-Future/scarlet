@@ -96,7 +96,7 @@ export function pictureSyncOps(timeline: Timeline, media: readonly MediaAsset[],
       continue;
     }
     let sourceIn = clip.sourceIn + by, sourceOut = clip.sourceOut + by, timelineIn = clip.timelineIn;
-    let keyframes = clip.keyframes;
+    let keyframes = clip.keyframes, volumeKeyframes = clip.volumeKeyframes;
     if (sourceIn < 0) {
       // The recording's picture starts too late for the clip's first frames: the clip starts later.
       const lost = -sourceIn / clip.speed;
@@ -104,13 +104,15 @@ export function pictureSyncOps(timeline: Timeline, media: readonly MediaAsset[],
       timelineIn += lost;
       sourceIn = 0;
       keyframes = keyframes?.map(k => ({ ...k, time: k.time - lost }));
+      volumeKeyframes = volumeKeyframes?.map(k => ({ ...k, time: k.time - lost }));
     }
     if (sourceOut > duration) {
       report.shortened.push({ clipId: clip.id, seconds: (sourceOut - duration) / clip.speed, at: clipEnd(clip) });
       sourceOut = duration;
     }
     if (!(sourceOut - sourceIn > EPS)) throw new Error(`Clip ${clip.id} would have no picture left once moved ${by.toFixed(3)} s.`);
-    ops.push({ op: "updateClip", clipId: clip.id, patch: { ...silent, sourceIn, sourceOut, timelineIn, ...(keyframes && { keyframes }) } });
+    ops.push({ op: "updateClip", clipId: clip.id, patch: { ...silent, sourceIn, sourceOut, timelineIn, ...(keyframes && { keyframes }),
+      ...(volumeKeyframes && timelineIn !== clip.timelineIn && { volumeKeyframes }) } });
     report.moved.push({ clipId: clip.id, by });
   }
   return { ops, report };

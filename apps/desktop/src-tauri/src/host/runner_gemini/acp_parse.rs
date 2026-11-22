@@ -105,12 +105,12 @@ pub(super) fn flush_streams(st: &mut GeminiState, events: &mut Vec<RunnerEvent>)
 }
 
 /// Every tool Scarlet's MCP server offers: the tools of `EDITING_TOOL_GROUPS` in packages/shared/src/editingTools.ts,
-/// and `tool_help`, which the server adds for Gemini. A test keeps this list the same as that file's.
+/// and `tool_help` and `tool_call`, which the server adds for Gemini. A test keeps this list the same as that file's.
 pub const SCARLET_TOOLS: &[&str] = &[
     "project_get", "timeline_get", "timeline_at", "timeline_diff", "timeline_propose", "timeline_first_cut",
     "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync",
     "transcript_get", "transcript_search", "timeline_transcript", "timeline_join_audit", "waveform_get", "sound_picture",
-    "media_profile", "audio_sync", "dialogue_scan", "dialogue_check_join", "dialogue_check_repeats", "dialogue_apply_cuts",
+    "transcript_fix", "media_profile", "music_beats", "audio_sync", "dialogue_scan", "dialogue_check_join", "dialogue_check_repeats", "dialogue_apply_cuts",
     "dialogue_review_inspect", "dialogue_review_save", "dialogue_revise_cut",
     "screen_text", "screen_reading", "screen_motion",
     "faces", "lip_sync",
@@ -121,7 +121,7 @@ pub const SCARLET_TOOLS: &[&str] = &[
     "change_review_cut", "source_audio",
     "captions_generate",
     "asset_add", "export_otio",
-    "tool_help",
+    "tool_help", "tool_call",
 ];
 
 /// The ways a harness names a tool of the `scarlet` MCP server.
@@ -243,6 +243,29 @@ fn first<'a>(obj: &'a Value, keys: &[&str]) -> Option<&'a Value> {
     keys.iter().find_map(|k| obj.get(*k)).filter(|v| !v.is_null())
 }
 
+/// A call through `tool_call`, which the MCP server offers a Gemini run for the tools it doesn't list on their own, as
+/// the call it makes: the tool it names, with that tool's arguments, so the run's history says what Scarlet did. A
+/// question stays as it is: the server refuses one asked through `tool_call`, so it was never asked.
+pub(super) fn through_tool_call(raw_name: String, input: Option<&Value>) -> (String, Option<Value>) {
+    if pretty_tool_name(&raw_name) != "scarlet.tool_call" {
+        return (raw_name, input.cloned());
+    }
+    let named = input.and_then(|i| i.get("name")).and_then(Value::as_str).map(|n| n.trim().to_ascii_lowercase());
+    let tool = named.map(|n| {
+        ["mcp__scarlet__", "mcp_scarlet_", "scarlet__", "scarlet.", "scarlet/", "scarlet:"]
+            .iter()
+            .find_map(|prefix| n.strip_prefix(prefix).map(str::to_string))
+            .unwrap_or(n)
+    });
+    match tool {
+        Some(tool) if !tool.is_empty() && tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !is_question_tool(Some(&tool)) => {
+            let args = input.and_then(|i| i.get("arguments")).cloned().unwrap_or_else(|| json!({}));
+            (format!("scarlet.{tool}"), Some(args))
+        }
+        _ => (raw_name, input.cloned()),
+    }
+}
+
 pub(super) fn extract_tool_name(update: &Value) -> String {
     non_empty_str(update.get("name"))
         .or_else(|| non_empty_str(update.get("toolName")))
@@ -333,7 +356,8 @@ pub fn parse_gemini_acp_update(update: &Value, st: &mut GeminiState) -> Vec<Runn
         }
         "tool_call" => {
             flush_streams(st, &mut events);
-            let raw_name = extract_tool_name(update);
+            let (raw_name, input) = through_tool_call(extract_tool_name(update), first(update, &["rawInput", "parameters", "input", "arguments"]));
+            let input = input.as_ref();
             let name = pretty_tool_name(&raw_name);
             let id = non_empty_str(update.get("toolCallId"))
                 .or_else(|| non_empty_str(update.get("id")))
@@ -341,7 +365,6 @@ pub fn parse_gemini_acp_update(update: &Value, st: &mut GeminiState) -> Vec<Runn
             if let Some(ref call_id) = id {
                 st.tool_names.insert(call_id.clone(), raw_name.clone());
             }
-            let input = first(update, &["rawInput", "parameters", "input", "arguments"]);
             let status = update.get("status").and_then(Value::as_str);
             if is_question_tool(Some(&raw_name)) {
                 st.pending_question_id = id.clone();

@@ -77,6 +77,7 @@
  *   POST   /tasks/:taskId/cancel?queuedOnly=1&withdrawn=1 → { task: Task } (both optional; withdrawn: the editor took the words back, so no rule is learned from them)
  *   POST   /tasks/:taskId/retry  RunChoice?              → { task: Task } (resume an interrupted request or retry a failure, on the model given)
  *   POST   /tasks/:taskId/answer    { text }             → { task: Task }     (human answers an agent question)
+ *   POST   /tasks/:taskId/notes     { text }             → { task: Task }     (the editor adds a note to a running request; 409 task_finished once it ended)
  *   GET    /projects/:id/usage?by=thread|task|agent|model|day → UsageResponse  (agent token usage, newest group first)
  *   GET    /usage?by=project|thread|task|agent|model|day    → UsageResponse  (all projects, including trashed ones not yet removed)
  *   GET    /under-way                                    → { edits, queued, exports }  (what quitting would stop, in every project)
@@ -800,6 +801,18 @@ export const TaskAttachment = z.object({
 });
 export type TaskAttachment = z.infer<typeof TaskAttachment>;
 
+/**
+ * A note the editor added to a request while Scarlet worked on it, in their words. The run hears it at the top of its
+ * next Scarlet tool result, or with its instruction when it picks up again (`heardAt` once it has).
+ */
+export const TaskNote = z.object({
+  id: Id,
+  text: z.string().trim().min(1).max(4000),
+  at: z.string().datetime(),
+  heardAt: z.string().datetime().optional(),
+});
+export type TaskNote = z.infer<typeof TaskNote>;
+
 export const Task = z.object({
   id: Id,
   projectId: Id,
@@ -846,6 +859,8 @@ export const Task = z.object({
       learningId: Id.optional(),
       /** The request a learning_check task reads. A rule it offers is that request's. */
       checksTaskId: Id.optional(),
+      /** A learning_check started as the editor finished deciding what that request left them, to read their decisions. */
+      readsDecisions: z.literal(true).optional(),
       /** The frame an area_check task looks at: a recording and a source second. */
       areaCheck: z.object({ mediaId: Id, at: Seconds }).optional(),
       time: Seconds.optional(),
@@ -956,6 +971,8 @@ export const Task = z.object({
   sessionCarriesOn: z.boolean().optional(),
   /** Pending question from the agent, if waiting_for_user. */
   question: z.string().nullable().default(null),
+  /** Notes the editor added while the request ran, oldest first. A resumed attempt carries them on. */
+  notes: z.array(TaskNote).max(50).optional(),
   /** Where the editor can hear the updated passage while answering a question about a staged cut. */
   cutConflict: z.object({ version: Id, range: TimeRange.optional(), changeId: Id.optional(), index: z.number().int().nonnegative().optional(),
     answered: z.literal(true).optional(), retried: z.literal(true).optional(),
@@ -1122,6 +1139,24 @@ export type LearningState = z.infer<typeof LearningState>;
 export const LearningRule = z.string().trim().min(1).max(280).regex(/^[^\r\n]+$/);
 /** What a skill already says that a rule would change, quoted from it. */
 export const LearningReplaces = z.array(z.string().trim().min(1).max(600)).max(6);
+/**
+ * One of the editor's decisions a rule was learned from, as it was when the rule was offered: Keep or Reject on a cut
+ * or edit Scarlet made (a call of a pass included), or a revision they asked of one. `id` is the one the check cited.
+ * `ref` and `threadId` open the cut or edit it was about, where it is still listed; `time` is where it was then.
+ */
+export const LearningDecision = z.object({
+  id: z.string().min(1).max(200),
+  decision: z.enum(["kept", "rejected", "revised"]),
+  /** The cut or edit's short summary. */
+  label: z.string(),
+  projectId: Id,
+  threadId: Id.optional(),
+  ref: z.object({ changeId: Id, spot: z.number().int().nonnegative() }).optional(),
+  time: z.number().nonnegative().optional(),
+  /** What the editor said with a revision. */
+  note: z.string().optional(),
+});
+export type LearningDecision = z.infer<typeof LearningDecision>;
 export const Learning = z.object({
   id: Id,
   projectId: Id,
@@ -1131,6 +1166,11 @@ export const Learning = z.object({
   said: z.string(),
   /** The request it came from. */
   taskId: Id,
+  /**
+   * When the rule came from what the editor decided rather than what they said: the decisions, and what they were in
+   * the check's words as they read after their count ("cuts you rejected").
+   */
+  learnedFrom: z.object({ what: z.string().min(1), decisions: z.array(LearningDecision).min(1) }).optional(),
   /** The skill it would go into: the agent's pick, or the editor's once they chose another. */
   skillId: Id,
   /**
@@ -1159,7 +1199,12 @@ export type Learning = z.infer<typeof Learning>;
  * A rule an agent offers from the request it is working on, the skill it belongs in, by id or exact name, and what
  * that skill already says that the rule would change.
  */
-export const SuggestLearningRequest = z.object({ rule: LearningRule, skill: z.string().trim().min(1).max(200), replaces: LearningReplaces.optional() });
+export const LearningFrom = z.object({
+  decisions: z.array(z.string().trim().min(1).max(200)).min(1).max(40),
+  what: z.string().trim().min(1).max(60).regex(/^[^\r\n]+$/),
+});
+export const SuggestLearningRequest = z.object({ rule: LearningRule, skill: z.string().trim().min(1).max(200), replaces: LearningReplaces.optional(),
+  from: LearningFrom.optional() });
 export type SuggestLearningRequest = z.infer<typeof SuggestLearningRequest>;
 /** The editor's approval, with the skill they chose when it isn't the suggested one, and the model chosen now. */
 export const ApproveLearningRequest = RunChoice.extend({ skillId: Id.optional() });
