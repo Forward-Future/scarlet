@@ -334,6 +334,7 @@ function importOtioTracks(otioTracks: Json[], project: Project, base: Timeline):
             label: match.label,
             transform: match.transform,
             keyframes: match.keyframes?.map(k => ({ ...k, time: (match.sourceIn - sourceIn + k.time * match.speed) / speed })),
+            volumeKeyframes: match.volumeKeyframes?.map(k => ({ ...k, time: (match.sourceIn - sourceIn + k.time * match.speed) / speed })),
             opacity: match.opacity,
             volume: match.volume,
             audioFadeIn: match.audioFadeIn,

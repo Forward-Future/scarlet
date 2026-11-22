@@ -58,7 +58,8 @@ import { EDGES_IN_SOUND, type MediaSession, type SoundingEdge } from "./media-se
 import { requireMediaAsset, type SessionErrorHelpers } from "./media-state.js";
 import type { FrameAdjustment, ProposePipeline } from "./propose-pipeline.js";
 import { InsetFraming, InsetPresenter, syncPictureOps } from "./sync-layout.js";
-import { sourceRangeToTimeline, sourceToTimeline } from "./timeline-perception.js";
+import { sourceRangeToTimeline, sourceToTimeline, timelineWords } from "./timeline-perception.js";
+import { expandDips, type DipReport } from "./music-dips.js";
 import { DOUBLED_SOUND, doubledSoundText, OPS_DOC, validateOps } from "./timeline-validation.js";
 import { errorText, formatZodError, json, noteUnmeasured, text, type ToolRegistrar, type ToolResult } from "./tool-result.js";
 import { transitionOps } from "./transition.js";
@@ -147,6 +148,18 @@ export function registerTimelineTools(deps: TimelineToolsDeps) {
     },
   );
 
+  /** Where someone speaks on a timeline: the transcribed words of every recording but `except`, as the edit plays them. */
+  const speechOn = async (on: Timeline, except: ReadonlySet<string>) => {
+    const { project } = await getProject();
+    const transcripts = new Map<string, TranscriptWord[]>();
+    for (const id of new Set(on.tracks.flatMap(t => t.clips.flatMap(c => c.kind === "media" && !except.has(c.mediaId) ? [c.mediaId] : [])))) {
+      if (!project.media.some(m => m.id === id && carriesAudio(m))) continue;
+      const words = await transcriptWords(id, false).catch(() => null);
+      if (words?.length) transcripts.set(id, words);
+    }
+    return timelineWords(on, transcripts).filter(w => w.end > w.start).map(w => ({ start: w.start, end: w.end }));
+  };
+
   tool(
     "timeline_propose",
     `Propose an edit to the timeline. Provide EITHER \`ops\` (a list of operations on the named base version) OR \`timeline\` (a full replacement timeline). Scarlet validates it, stores a new version, makes short before/after previews available when the editor opens the change. Directly requested edits apply automatically, onto the current video when it moved since the base version. An edit that meets footage changed since then is not applied: the result's \`notApplied\` says where, and the current version to make it on. Suggestions and alternatives wait for review. Write \`description\` for the editor in one short, plain sentence about what changed (e.g. "Cut the false start at 1:17 and the 1.4 s pause after it"). Pass \`noteIds\` when the change answers review notes. Every audible clip edge the edit makes is measured on its recording, whichever op makes it: one inside a sounding word, or through a sound it would leave a piece of, refuses the edit and gives the quiet second beside it. Audible clips that play the same moment of one recording in sync add up in the mix: an edit that plays a moment louder that way than its base version played it is refused with the clips, the stretch that got louder and both levels. Make the change it names, which turns down the copy the edit added or changed, and another when that one alone can't, over that stretch alone, or pass \`layeredSound\` when the editor asked to hear it layered. Returns the change id, state, affected timeline ranges, the new version id and a diff.
@@ -204,6 +217,7 @@ ${OPS_DOC}`,
       const frameChanges: FrameAdjustment[] = [];
       const inset = typeof pictureLayout === "object" ? pictureLayout : undefined;
       let insetNote: string | undefined;
+      let dips: DipReport[] = [];
       /** The inset as given, or the preset on the presenter where no framing was. Roles are checked before faces are read. */
       const insetLayout = async (placed: Timeline): Promise<NonNullable<typeof inset>> => {
         if (inset?.presenter && inset.framing) throw new Error("Give pictureLayout presenter or framing, not both.");
@@ -218,9 +232,12 @@ ${OPS_DOC}`,
         return { ...inset, framing: preset.framing };
       };
       if (ops) {
-        const v = validateOps(ops);
-        if (!v.ok) return errorText(v.error);
-        if (!v.ops.length) throw new Error("ops is empty");
+        const checked = validateOps(ops);
+        if (!checked.ok) return errorText(checked.error);
+        if (!checked.ops.length) throw new Error("ops is empty");
+        const expanded = await expandDips(checked.ops, before ?? emptyTimeline(projectId), speechOn);
+        dips = expanded.dips;
+        const v = { ops: expanded.ops };
         if (before && (range || (selectedRange(task?.context) && v.ops.every(o => o.op === "rippleDelete" && !o.trackIds)))) {
           body.range = cutScope(before, await cutAnchor(before), range);
           const aligned = boundedRippleOps(v.ops, body.range, (await getHeader()).project.settings.fps, timelineDuration(before));
@@ -274,7 +291,8 @@ ${OPS_DOC}`,
         if (inset) body.timeline = applyOps(parsed.data, syncPictureOps((await getProject()).project, parsed.data, await insetLayout(parsed.data)));
       }
       const result = await propose(body, before, frameChanges);
-      return insetNote ? { ...result, content: [...result.content, { type: "text" as const, text: insetNote }] } : result;
+      const notes = [insetNote, dips.length ? `musicDips: ${JSON.stringify(dips)}` : undefined].filter((n): n is string => !!n);
+      return notes.length ? { ...result, content: [...result.content, ...notes.map(n => ({ type: "text" as const, text: n }))] } : result;
     },
   );
 

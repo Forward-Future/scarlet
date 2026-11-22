@@ -1169,6 +1169,9 @@ export function SimpleWorkspace() {
   // The applied edit on screen, so Revise is about it and not a proposal still waiting.
   // An edit another request made is open here when this request flagged it (`Thread.flagged`).
   const shownChange = shownEdit && focusChanges.find(c => belongsTo(shownEdit, c));
+  // The card names voice cleanup only where its edit put it on or changed it, read against the version the edit was made on.
+  const shownCleanup = !!shownChange?.ops?.some(o => o.op === "updateClip" && JSON.stringify(o.patch).includes("voiceCleanup"));
+  const shownChangeBefore = useReviewTimeline(current.id, shownCleanup ? shownChange!.fromVersion : undefined, timeline).timeline;
   // Keep (K) records that the edit was reviewed and moves on to the next flagged edit that hasn't been; Revise (R) changes this one.
   const reviewingEdit = shownEdit && shownChange && focusThread ? shownEdit : undefined;
   const threadEdits = threadTimeline.edits;
@@ -1911,7 +1914,7 @@ export function SimpleWorkspace() {
   const editDid = !reviewingEdit || threadTimeline.selectedMoment || shownMarker ? undefined
     : beforeCut ? cutBefore.timeline && <CutWordsLine key={`what ${editKey(reviewingEdit)}`} timeline={cutBefore.timeline} media={media}
       range={beforeCut.removed} length={lengthLabel(removedLength)} verb="Took out" />
-    : (detail => detail && <p className="edit-card-what">{detail}</p>)(editDetail(shownChange, reviewingEdit, { timeline, media }));
+    : (detail => detail && <p className="edit-card-what">{detail}</p>)(editDetail(shownChange, reviewingEdit, { timeline, before: shownChangeBefore, media }));
   // The transcript stays folded away. Its icon on the card opens it for this edit only.
   const scriptKey = reviewingEdit && beforeCut ? editKey(reviewingEdit) : undefined;
   const scriptOpen = !!scriptKey && scriptFor === scriptKey;

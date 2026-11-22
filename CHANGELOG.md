@@ -6,6 +6,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- Scarlet can dip music under speech and let it swell back up in the pauses, with a new Music under speech skill for how deep and how fast.
+- Scarlet can clean the room and background noise out of a voice, when you ask for it or a skill of yours says to.
 - Tell Scarlet how a name or word is spelled and it corrects it everywhere in your transcripts at once, so captions, search and later edits use the right spelling, even if a recording is transcribed again.
 - On a recording made in a noisy room, Scarlet trims pauses and places cuts on the quiet between words again instead of mistaking the room's noise for speech.
 - HDR video from an iPhone or other HDR camera now looks right in playback, thumbnails and exports instead of washed out, and Scarlet knows when footage was shot in a camera Log profile.

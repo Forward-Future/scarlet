@@ -18,6 +18,12 @@ it("counts what isn't a cut by what it did, after the cuts", () => {
   expect(say([cut(0, 60), cut(100, 171), { label: "Assemble the call" }])).toBe("Took out 2:11 in 2 cuts, and made 1 other edit.");
 });
 
+it("counts a music dip and a voice cleanup by what they did", () => {
+  expect(say([cut(0, 60), cut(100, 171), { label: "Dip the music under speech", kind: "dip" }])).toBe("Took out 2:11 in 2 cuts, and made 1 music dip.");
+  expect(say([cut(0, 60), { label: "Clean the voice", kind: "voice" }, { label: "Dip the bed", kind: "dip" }, { label: "Dip the outro", kind: "dip" }]))
+    .toBe("Took out 1:00 in 1 cut, and made 1 voice cleanup and 2 music dips.");
+});
+
 it("names a few edits that aren't cuts, and counts many by kind", () => {
   expect(say([{ label: "music bed", kind: "audio" }, { label: "captions", kind: "text" }, { label: "wrap" }])).toBe("Made 3 edits: music bed, captions, wrap.");
   const frames = ["Frame the watch", "Frame the prompt", "Frame the card", "Frame the chart"].map(label => ({ label, kind: "reframe" as const }));

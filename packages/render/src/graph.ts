@@ -28,7 +28,7 @@ import type {
   TransitionPlan,
 } from "@scarlet/timeline";
 import { INDEXED_MP4_INPUT, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, even, ffmpegMajor, fnum, requireDrawtext } from "./exec.js";
-import { effectFilters } from "./effects.js";
+import { audioEffectDelay, effectFilters } from "./effects.js";
 import { canZscale, toneMapChain, type HdrTransfer } from "./hdr.js";
 import type { FontOptions } from "./fonts.js";
 import { buildCaptionDrawtexts, wrapText } from "./graphCaptions.js";
@@ -295,10 +295,13 @@ async function writeFilterGraph(
     const speed = clip.speed ?? 1;
     // Keep a delayed microphone on the input seek clock. Fill its leading
     // silence before trimming, changing speed or mixing it with other clips.
-    const chain: string[] = [SOURCE_AUDIO_CLOCK, `atrim=start=${fnum(skip)}:duration=${fnum(p.vis * speed)}`, "asetpts=PTS-STARTPTS"];
+    // An effect that plays the sound late reads that much more of it, and the late start is dropped after it.
+    const late = audioEffectDelay(clip.effects);
+    const chain: string[] = [SOURCE_AUDIO_CLOCK, `atrim=start=${fnum(skip)}:duration=${fnum((p.vis + late) * speed)}`, "asetpts=PTS-STARTPTS"];
     for (const f of atempoFactors(speed)) chain.push(`atempo=${fnum(f)}`);
     chain.push(...effectFilters(clip.effects, "audio", effectCtx));
-    if (clip.volume !== 1) chain.push(`volume=${fnum(clip.volume)}`);
+    if (late) chain.push(`atrim=start=${fnum(late)}`, "asetpts=PTS-STARTPTS");
+    chain.push(...levelFilters(clip, p.local0));
     if (clip.audioFadeIn > 0 || clip.audioFadeOut > 0) {
       if (p.local0 > 0) chain.push(`asetpts=PTS+${fnum(p.local0)}/TB`);
       if (clip.audioFadeIn > 0) chain.push(`afade=t=in:st=0:d=${fnum(clip.audioFadeIn)}`);
@@ -489,4 +492,19 @@ async function writeFilterGraph(
     range: { start: R0, end: R1 },
     cleanup,
   };
+}
+
+/**
+ * The clip's level: its volume, and where its volume keyframes move it, the level they give each moment of the clip.
+ * `local0` is where in the clip the placement starts, the clip's own second at the filter's t = 0. The level is worked
+ * out every 256 samples, so a dip moves smoothly rather than in steps a frame of audio long.
+ */
+export function levelFilters(clip: Pick<MediaClip, "volume" | "volumeKeyframes">, local0: number): string[] {
+  const keys = [...clip.volumeKeyframes ?? []].sort((a, b) => a.time - b.time);
+  if (!keys.length || keys.every(k => k.db === keys[0]!.db)) {
+    const gain = clip.volume * Math.pow(10, (keys[0]?.db ?? 0) / 20);
+    return gain !== 1 ? [`volume=${fnum(gain)}`] : [];
+  }
+  const db = keyframeExpr(keys.map(k => ({ time: k.time, value: k.db, ease: k.ease })), local0 ? `(t+${fnum(local0)})` : "t");
+  return ["asetnsamples=n=256:p=0", `volume='${clip.volume !== 1 ? `${fnum(clip.volume)}*` : ""}pow(10,(${db})/20)':eval=frame`];
 }

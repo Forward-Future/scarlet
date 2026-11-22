@@ -6,9 +6,10 @@
  */
 import { exactRate, isDropFrameRate, sourceStartQ, type ExactRate, type HandoffSource } from "./handoff.js";
 import { trackLayers } from "./otio.js";
-import { add, div, fraction, frames, mul, q, secondsQ, snapQ, sub, type Q } from "./rational.js";
+import { add, div, fraction, frames, mul, q, seconds, secondsQ, snapQ, sub, type Q } from "./rational.js";
 import type { CaptionClip, Clip, ColorClip, Marker, MediaClip, Project, Timeline, TransformKeyframe } from "./schema.js";
 import { clipEnd } from "./time.js";
+import { levelLines } from "./volume.js";
 
 // ---------------------------------------------------------------------------
 // Rational seconds
@@ -212,7 +213,7 @@ export function toFcpxml(project: Project, timeline: Timeline, sources: Map<stri
       for (const adjustment of pictureAdjustments(clip, localStart, duration, source)) node.add(adjustment);
     }
     if (clip.kind === "media" && source.hasAudio && !layer.muted && node.attrs.srcEnable !== "video") {
-      const volume = soundAdjustment(clip, rate);
+      const volume = soundAdjustment(clip, rate, localStart, duration);
       if (volume) node.add(volume);
     }
     return { node, localStart };
@@ -288,13 +289,25 @@ export function toFcpxml(project: Project, timeline: Timeline, sources: Map<stri
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE fcpxml>\n\n${doc.render()}\n`;
 }
 
-function soundAdjustment(clip: MediaClip, rate: ExactRate): Node | undefined {
-  if (clip.volume === 1 && !clip.audioFadeIn && !clip.audioFadeOut) return;
-  const volume = el("adjust-volume", { amount: decibels(clip.volume) });
-  if (clip.audioFadeIn || clip.audioFadeOut) {
+/**
+ * The clip's level: its volume, its fades, and where its volume keyframes move it, as keyframes in the clip's own time
+ * from `localStart`. Final Cut draws a level between keys in straight lines, so an eased move goes as a few of them.
+ */
+function soundAdjustment(clip: MediaClip, rate: ExactRate, localStart: Q, duration: Q): Node | undefined {
+  const lines = levelLines(clip.volumeKeyframes, 0, seconds(duration), 1 / (rate.num / rate.den));
+  if (clip.volume === 1 && !clip.audioFadeIn && !clip.audioFadeOut && !lines.length) return;
+  const volume = el("adjust-volume", { amount: decibels(clip.volume * Math.pow(10, (lines[0]?.db ?? 0) / 20)) });
+  if (clip.audioFadeIn || clip.audioFadeOut || lines.length) {
     const param = volume.add(el("param", { name: "amount" }));
     if (clip.audioFadeIn) param.add(el("fadeIn", { type: "linear", duration: fmt(secondsQ(clip.audioFadeIn, rate)) }));
     if (clip.audioFadeOut) param.add(el("fadeOut", { type: "linear", duration: fmt(secondsQ(clip.audioFadeOut, rate)) }));
+    if (lines.length) {
+      // Two points that land on one frame are one key: the later, as Scarlet plays it from that frame.
+      const keys = new Map<string, number>();
+      for (const point of lines) keys.set(fmt(add(localStart, secondsQ(point.time, rate))), point.db);
+      param.add(el("keyframeAnimation", {}, [...keys].map(([time, db]) => el("keyframe", {
+        time, value: decibels(clip.volume * Math.pow(10, db / 20)) }))));
+    }
   }
   return volume;
 }

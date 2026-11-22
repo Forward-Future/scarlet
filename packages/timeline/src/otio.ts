@@ -256,6 +256,7 @@ function otioClip(clip: Clip, frames: number, rate: number, media: Map<string, M
         transform: transform ?? null,
         opacity: clip.kind !== "caption" ? clip.opacity : 1,
         volume: clip.kind === "media" ? clip.volume : null,
+        ...(clip.kind === "media" && clip.volumeKeyframes?.length ? { volumeKeyframes: clip.volumeKeyframes } : {}),
         audioFadeIn: clip.kind === "media" ? clip.audioFadeIn : 0,
         audioFadeOut: clip.kind === "media" ? clip.audioFadeOut : 0,
         // Files from before this was written gave a retimed clip's range the footage's length instead.

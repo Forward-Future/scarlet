@@ -97,7 +97,7 @@ jobs:
             test -s "$executable" && test -x "$executable"
           done
           for license in scarlet.txt uhm.txt uhm-model-license.txt runtime/node.txt runtime/rust.txt runtime/javascript.txt \
-              runtime/rust-standard-library.html runtime/whisper-audio-dependencies.txt runtime/sherpa-dependencies.txt \
+              runtime/rust-standard-library.html runtime/whisper-audio-dependencies.txt runtime/sherpa-dependencies.txt runtime/rnnoise-models.txt \
               runtime/speaker-onnxruntime-1.28.2-third-party.txt runtime/chrome-headless-shell.txt; do
             test -s "$resources/licenses/$license"
           done

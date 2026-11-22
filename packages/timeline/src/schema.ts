@@ -200,6 +200,18 @@ export const TransformKeyframe = z.object({
 });
 export type TransformKeyframe = z.infer<typeof TransformKeyframe>;
 
+/**
+ * A clip's level at `time` (seconds from the clip's start, as a transform keyframe's): `db` on top of its `volume`.
+ * Before the first the level is the first's, after the last the last's; between two it moves in dB as the earlier's
+ * ease says.
+ */
+export const VolumeKeyframe = z.object({
+  time: z.number().finite(),
+  db: z.number().min(-96).max(24),
+  ease: TransformKeyframe.shape.ease,
+});
+export type VolumeKeyframe = z.infer<typeof VolumeKeyframe>;
+
 export const Effect = z.object({
   type: z.string(), // e.g. "blur", "lut", "eq", "compressor", "denoise"
   params: z.record(z.unknown()).default({}),
@@ -253,6 +265,8 @@ export const MediaClip = ClipBase.extend({
   opacity: z.number().min(0).max(1).default(1),
   /** Linear gain multiplier for the clip's audio. 0 = mute. */
   volume: z.number().min(0).default(1),
+  /** The level moving over the clip, such as music dipping under speech. */
+  volumeKeyframes: z.array(VolumeKeyframe).optional(),
   /** Audio fade durations in seconds. */
   audioFadeIn: Seconds.default(0),
   audioFadeOut: Seconds.default(0),
