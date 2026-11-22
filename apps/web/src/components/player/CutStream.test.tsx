@@ -114,8 +114,11 @@ it.each([false, true])("marks the joined audition as loading through its last re
   await act(async () => player.prepare());
   const session = opened[0]!.session;
   let finish!: () => void;
-  vi.spyOn(session, "bufferThrough").mockImplementation((_start, _end, signal) => new Promise<void>((resolve, reject) => {
+  let reportProgress!: (done: number, total: number) => void;
+  vi.spyOn(session, "bufferThrough").mockImplementation((_start, _end, signal, onProgress) => new Promise<void>((resolve, reject) => {
     finish = resolve;
+    reportProgress = (done, total) => onProgress?.(done, total);
+    onProgress?.(0, 2);
     signal.addEventListener("abort", () => reject(signal.reason), { once: true });
   }));
   let release!: () => void;
@@ -126,8 +129,14 @@ it.each([false, true])("marks the joined audition as loading through its last re
       video().dispatchEvent(new Event("canplay"));
     });
     expect(waiting()).toBe(true);
+    expect(video().dataset.waitStage).toBe("rendering");
+    expect(video().dataset.waitProgress).toBe("0/2");
+    await act(async () => { reportProgress(1, 2); });
+    expect(video().dataset.waitProgress).toBe("1/2");
     await act(async () => { if (cancel) player.toggle(); else finish(); });
     expect(waiting()).toBe(false);
+    expect(video().dataset.waitStage).toBeUndefined();
+    expect(video().dataset.waitProgress).toBeUndefined();
     expect(video().play).toHaveBeenCalledTimes(cancel ? 0 : 1);
   } finally { await act(async () => release?.()); }
 });

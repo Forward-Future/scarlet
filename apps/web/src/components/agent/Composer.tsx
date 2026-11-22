@@ -19,7 +19,7 @@ import { useProjectStore } from "../../stores/project";
 import { commandSkillIds, enabledSkills, useSkillsStore } from "../../stores/skills";
 import { editTargetAt, markedRangeOf, pointOf, playheadPoints, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
 import { Icon, Spinner, InlineError } from "../ui/primitives";
-import { AgentChip, useAgentAvailability } from "./AgentChip";
+import { AgentChip, runChoiceDiffers, useAgentAvailability } from "./AgentChip";
 import { SkillCommandInput } from "./SkillCommandInput";
 import { MicButton } from "./MicButton";
 import { ComposerAim, type AimItem } from "./ComposerAim";
@@ -193,7 +193,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     if (question) {
       const answer = anchor?.editNumber ? `${[`Edit ${anchor.editNumber}`, anchor.label].filter(Boolean).join(" · ")} — ${text}`
         : anchor ? `At ${anchor.markedRange ? clockRange(anchor.time, anchor.end ?? anchor.time) : clock(anchor.time)}${sourceName ? ` in ${sourceName}` : ""} — ${text}` : text;
-      await answerTask(question.id, answer, skillIds);
+      if (effective && runChoiceDiffers(question, effective)) await answerTask(question.id, answer, skillIds, effective);
+      else await answerTask(question.id, answer, skillIds);
       return false;
     }
     if (!effective) throw new Error(unavailableReason);

@@ -388,3 +388,32 @@ it("evicts old fragments by total bytes and retries failed idle work on demand",
 it("says the video is empty when there is nothing to play", () => {
   expect(() => openCutStream(document.createElement("video"), [], 0, async () => new ArrayBuffer(0), () => {})).toThrow("This video is empty.");
 });
+
+it("reports preroll section progress as sections append", async () => {
+  const fixture = mediaFixture();
+  const { video } = fixture;
+  const ranges = Array.from({ length: 4 }, (_, i) => ({ start: i * 4, end: (i + 1) * 4 }));
+  const resolvers = new Map<number, (bytes: ArrayBuffer) => void>();
+  const stream = openCutStream(video, ranges, 1, range => new Promise<ArrayBuffer>(resolve => {
+    resolvers.set(range.start, resolve);
+  }), vi.fn());
+  const progress: [number, number][] = [];
+  const abort = new AbortController();
+  const waiting = stream.bufferThrough(1, 7, abort.signal, (done, total) => progress.push([done, total]));
+  try {
+    expect(progress).toEqual([[0, 2]]);
+    fixture.media.dispatchEvent(new Event("sourceopen"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(progress).toEqual([[0, 2]]);
+    resolvers.get(0)!(new ArrayBuffer(1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(progress).toEqual([[0, 2], [1, 2]]);
+    resolvers.get(4)!(new ArrayBuffer(1));
+    await vi.advanceTimersByTimeAsync(0);
+    await waiting;
+    expect(progress).toEqual([[0, 2], [1, 2], [2, 2]]);
+  } finally {
+    abort.abort();
+    stream.dispose();
+  }
+});

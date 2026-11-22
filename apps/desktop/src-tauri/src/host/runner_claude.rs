@@ -34,6 +34,8 @@ pub struct ClaudeState {
     pub message_usage: BTreeMap<String, AgentUsage>,
     /// The agent's own plan, when the CLI was launched with its to-do tools.
     pub plan: ClaudePlan,
+    /// Whether Claude Code is currently compacting the session's context.
+    pub compacting: bool,
 }
 
 /// Claude Code's own to-do tools, which Scarlet reads the agent's plan from and never calls. TaskCreate adds one step
@@ -214,8 +216,19 @@ pub fn parse_claude_line(line: &str, st: &mut ClaudeState) -> Vec<RunnerEvent> {
                     events.push(RunnerEvent::new("error", format!("Scarlet MCP server status: {s}")));
                 }
             }
+        } else if msg.get("subtype").and_then(Value::as_str) == Some("status") {
+            if msg.get("status").and_then(Value::as_str) == Some("compacting") {
+                if !st.compacting {
+                    st.compacting = true;
+                    events.push(RunnerEvent::with("log", "Compacting context", json!({"kind":"compaction","active":true})));
+                }
+            } else if st.compacting {
+                st.compacting = false;
+                events.push(RunnerEvent::with("log", "Compacting context", json!({"kind":"compaction","active":false})));
+            }
         } else if msg.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
             // Claude Code compacted the session's context. The engine logs it and keeps it out of the chat.
+            st.compacting = false;
             events.push(compaction_event(msg.get("compact_metadata")));
         }
         return events;
@@ -547,11 +560,29 @@ mod tests {
     #[test]
     fn reports_a_compaction_once_it_happens() {
         let mut st = ClaudeState::default();
-        let evs = feed(&[r#"{"type":"system","subtype":"compact_boundary","session_id":"s1","compact_metadata":{"trigger":"auto","pre_tokens":161204,"post_tokens":18210}}"#], &mut st);
-        assert_eq!(evs.len(), 1);
-        assert_eq!((evs[0].kind.as_str(), evs[0].text.as_str()), ("log", "Context compacted"));
-        assert_eq!(evs[0].data, Some(json!({"kind":"compaction","trigger":"auto","preTokens":161204,"postTokens":18210})));
+        let evs = feed(&[
+            r#"{"type":"system","subtype":"status","status":"compacting","session_id":"s1"}"#,
+            r#"{"type":"system","subtype":"status","status":"compacting","session_id":"s1"}"#,
+            r#"{"type":"system","subtype":"compact_boundary","session_id":"s1","compact_metadata":{"trigger":"auto","pre_tokens":161204,"post_tokens":18210}}"#,
+            r#"{"type":"system","subtype":"status","status":null,"session_id":"s1"}"#,
+        ], &mut st);
+        assert_eq!(evs.len(), 2);
+        assert_eq!((evs[0].kind.as_str(), evs[0].text.as_str()), ("log", "Compacting context"));
+        assert_eq!(evs[0].data, Some(json!({"kind":"compaction","active":true})));
+        assert_eq!((evs[1].kind.as_str(), evs[1].text.as_str()), ("log", "Context compacted"));
+        assert_eq!(evs[1].data, Some(json!({"kind":"compaction","trigger":"auto","preTokens":161204,"postTokens":18210})));
+        assert!(!st.compacting);
         assert!(!st.started);
+
+        // Status returning to null without a boundary (e.g. aborted compaction) still clears the live indicator.
+        let cleared = feed(&[
+            r#"{"type":"system","subtype":"status","status":"compacting","session_id":"s1"}"#,
+            r#"{"type":"system","subtype":"status","status":null,"session_id":"s1"}"#,
+        ], &mut st);
+        assert_eq!(cleared.len(), 2);
+        assert_eq!(cleared[0].data, Some(json!({"kind":"compaction","active":true})));
+        assert_eq!(cleared[1].data, Some(json!({"kind":"compaction","active":false})));
+        assert!(!st.compacting);
     }
 
     #[test]

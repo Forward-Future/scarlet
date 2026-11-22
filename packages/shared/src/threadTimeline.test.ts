@@ -436,15 +436,18 @@ describe("listing a thread's edits in the chat", () => {
         replaces: { changeId: batch.id, spot: 1 } }] };
     // The engine's own put-back says it is a rejection; one Scarlet made is known by the request the × sent.
     const rows = (changes: Change[], tasks: Thread["tasks"] = []) => threadTimeline({ ...thread(changes), tasks }, head, links, () => earlier, 30)
-      .map(edit => [edit.label, edit.summary, edit.check, edit.rejected]);
-    const rejected = [["Hold the scorecard", "Held the scorecard.", undefined, undefined], ["Mute the false start", "Muted the false start.", undefined, true]];
+      .map(edit => [edit.label, edit.summary, edit.check, edit.rejected, edit.wasCheck]);
+    const rejected = [["Hold the scorecard", "Held the scorecard.", undefined, undefined, undefined], ["Mute the false start", "Muted the false start.", undefined, true, true]];
     // The engine names its put-back as the row read when the editor rejected it, and the row keeps those words.
     const engine = { ...back, rejects: true, timelineEdits: [{ ...back.timelineEdits[0]!, label: "Mute the false start after “score”" }] };
-    expect(rows([batch, Change.parse(engine)])).toEqual([rejected[0], ["Mute the false start after “score”", "Muted the false start.", undefined, true]]);
+    expect(rows([batch, Change.parse(engine)])).toEqual([rejected[0], ["Mute the false start after “score”", "Muted the false start.", undefined, true, true]]);
     const asked = { id: "task_reject", instruction: "The editor rejected edit 2.", context: { message: "Reject edit" } } as Thread["tasks"][number];
     expect(rows([batch, Change.parse({ ...back, taskId: asked.id })], [asked])).toEqual(rejected);
+    // Rejecting an unflagged edit leaves wasCheck unset so it stays in See all only.
+    const unflagged = { ...back, rejects: true, timelineEdits: [{ ...back.timelineEdits[0]!, label: "Hold the scorecard", replaces: { changeId: batch.id, spot: 0 } }] };
+    expect(rows([batch, Change.parse(unflagged)])[0]).toEqual(["Hold the scorecard", "Held the scorecard.", undefined, true, undefined]);
     // The same change from a revision the editor typed is a revision: theirs to check again.
-    expect(rows([batch, Change.parse(back)])[1]).toEqual(["Restored the false start", undefined, "Revised", undefined]);
+    expect(rows([batch, Change.parse(back)])[1]).toEqual(["Restored the false start", undefined, "Revised", undefined, undefined]);
   });
 
   it("numbers edits in timeline order, folds a revision into the edit it replaces, and keeps the reason to check", () => {

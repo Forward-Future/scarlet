@@ -9,7 +9,7 @@ import { changeDiff, cutRevisionReference, passToRevise } from "./changes.js";
 import { mimeFor, styleGuidePath } from "./graphics.js";
 import { learningCheckContext } from "./learnings.js";
 import { assistantSkills } from "./skills.js";
-import { recoveryInstruction } from "./taskRecap.js";
+import { answerHandoffInstruction, recoveryInstruction } from "./taskRecap.js";
 import { resolveTimeline } from "./timeline.js";
 
 /**
@@ -95,7 +95,9 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   // a later part replaced while it was away.
   const recap = !!task.resumeRootId && !(resumeSession && answered);
   const before = recap ? ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.retryTaskId') = ?", [task.projectId, task.id])[0] : undefined;
-  const instruction = before ? recoveryInstruction(ctx, before, task.resumeRootId, task.id) : task.instruction;
+  const instruction = answered && !resumeSession
+    ? answerHandoffInstruction(ctx, task)
+    : before ? recoveryInstruction(ctx, before, task.resumeRootId, task.id) : task.instruction;
   // The run is launched with its harness's to-do tool, and asked to lay out its steps, when the harness has one and the
   // chat will show the plan. A dialogue pass shows the stages Scarlet measures and a request about one staged cut its
   // own two, and a skill edit changes no video: none is given the tool or asked, so each runs exactly as it did.
@@ -168,13 +170,40 @@ export function followUpInstruction(ctx: Ctx, projectId: string, threadId: strin
   const at = before ? thread.findIndex(t => t.id === before) : -1;
   const tasks = at < 0 ? thread : thread.slice(0, at);
   if (!tasks.length) return text;
-  const [last] = ctx.repos.changes.select("project_id = ? AND json_extract(json, '$.threadId') = ?", [projectId, threadId], "created_at DESC, rowid DESC LIMIT 1");
+  const recentChanges = ctx.repos.changes
+    .select("project_id = ? AND json_extract(json, '$.threadId') = ?", [projectId, threadId], "created_at DESC, rowid DESC LIMIT 5")
+    .reverse();
   const lines = ["This continues an earlier request in the same thread."];
+  // Carry recent Q&A decisions from earlier turns in the thread so a follow-up (including on another model) honors them.
+  const qaByTask = new Map<string, Array<{ question: string; answer: string }>>();
+  let qaTotal = 0;
+  for (let i = tasks.length - 1; i >= 0 && qaTotal < 6; i--) {
+    const t = tasks[i]!;
+    const pairs = pairQuestionsAndAnswers(ctx.repos.taskEvents.list(t.id, "questionsAndAnswers"));
+    if (!pairs.length) continue;
+    const kept = pairs.slice(-(6 - qaTotal));
+    qaByTask.set(t.id, kept);
+    qaTotal += kept.length;
+  }
   for (const t of tasks) {
     lines.push(`- Asked: ${t.context.asked ?? t.context.message ?? t.instruction}`);
-    if (t.summary) lines.push(`  You replied: ${t.summary}`);
+    for (const { question, answer } of qaByTask.get(t.id) ?? []) {
+      lines.push(`  Asked editor: ${question}`);
+      lines.push(`  Editor answered: ${answer}`);
+    }
+    const summary = t.summary?.trim();
+    const reply = t.reply?.trim();
+    if (summary) lines.push(`  You replied: ${summary}`);
+    else if (reply) lines.push(`  You replied: ${reply}`);
+    if (summary && reply && reply !== summary) lines.push(`  Editorial note: ${reply}`);
   }
-  if (last) lines.push(`Latest change: "${last.description}" (${last.state}).`);
+  if (recentChanges.length) {
+    for (const change of recentChanges.slice(0, -1)) {
+      lines.push(`Earlier change: "${change.description}" (${change.state}).`);
+    }
+    const last = recentChanges.at(-1)!;
+    lines.push(`Latest change: "${last.description}" (${last.state}).`);
+  }
   lines.push("", `Now: ${text}`);
   return lines.join("\n");
 }
