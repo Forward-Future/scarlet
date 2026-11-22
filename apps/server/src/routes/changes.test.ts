@@ -128,3 +128,45 @@ it("rejects unchanged content while accepting a rename on the same footage", asy
   const renamed = await api("POST", path, { timeline: { ...timeline, name: "Interview" }, description: "Rename" });
   expect((await renamed.json()).timeline.name).toBe("Interview");
 });
+
+it("records kept edits whose summary exceeds 180 characters or whose marker note exceeds 120", async () => {
+  const { ctx } = workspace;
+  const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/dialogue-pass", createdBy: { type: "human", name: "Editor" } });
+  const startedAt = new Date().toISOString();
+  ctx.repos.tasks.put({ ...task, state: "running", startedAt });
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "Mic", path: "mic.wav", kind: "audio", duration: 20, hasAudio: true }, "ready");
+  const base = proposeChange(ctx, localUser(ctx), project.id, { autoApprove: true, description: "Assemble",
+    ops: [{ op: "addClip", trackId: "a1", clip: { id: "raw", kind: "media", mediaId: "mic", timelineIn: 0, sourceIn: 0, sourceOut: 20 } }] }).change.toVersion;
+  const attempt = { [TASK_HEADER]: task.id, [ATTEMPT_HEADER]: startedAt };
+  const longSummary = "Cut the aside quoting the speaker's note to the editor: " + "a".repeat(180);
+  const longTodo = "Add the benchmark chart screenshot and highlight the bottom rows: " + "b".repeat(100);
+  const cuts = await api("POST", `/projects/${project.id}/dialogue-cuts`, { taskId: task.id, fromVersion: base, description: "Pass",
+    cuts: [
+      { start: 2, end: 3, review: false, kind: "coaching", reason: "Aside to editor.", summary: longSummary, check: "Confirm the join stays clean." },
+      { start: 6, end: 7, review: false, kind: "pause", reason: "Long pause.", summary: "Shortened the pause." },
+    ] }, attempt);
+  expect(cuts.status, await cuts.clone().text()).toBe(201);
+  const todo = await api("POST", `/projects/${project.id}/changes?summary=true`, { taskId: task.id, intent: "requested",
+    description: "Mark chart spot", skipRender: true,
+    ops: [{ op: "addMarker", marker: { id: "m1", time: 10, kind: "todo", text: longTodo } }],
+    timelineEdits: [{ label: "Add chart", range: { start: 10, end: 10 } }] }, attempt);
+  expect(todo.status, await todo.clone().text()).toBe(201);
+
+  const listed = await api("GET", `/projects/${project.id}/threads/${task.id}/edits`);
+  expect(listed.status).toBe(200);
+  const { version, edits } = await listed.json() as { version: string; edits: Array<{ changeId: string; spot: number; label: string; check?: string; range: { start: number; end: number } }> };
+  expect(edits).toHaveLength(3);
+
+  const kept = await api("POST", `/projects/${project.id}/kept-edits`, {
+    threadId: task.id,
+    version,
+    edits: edits.map(({ changeId, spot, label, check, range }) => ({ changeId, spot, label, ...(check && { check }), range })),
+  });
+  expect(kept.status, await kept.clone().text()).toBe(204);
+
+  const heard = await (await api("GET", `/projects/${project.id}/kept-edits?thread=${task.id}`)).json() as { kept: Array<{ label: string; check?: string }> };
+  expect(heard.kept).toHaveLength(3);
+  expect(heard.kept[0]).toMatchObject({ label: longSummary.slice(0, 180), check: "Confirm the join stays clean." });
+  expect(heard.kept[1]).toMatchObject({ label: "Shortened the pause." });
+  expect(heard.kept[2]).toMatchObject({ label: "Add chart", check: longTodo.slice(0, 120) });
+});
