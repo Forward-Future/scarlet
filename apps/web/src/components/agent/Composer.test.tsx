@@ -1664,6 +1664,91 @@ it("sends a message about a moment that carries files as a request about that mo
   }));
 });
 
+it("carries attached files and marked frames on a dictated request about a moment, while plain voice notes still keep their recording", async () => {
+  let micProps!: ComponentProps<typeof mic.MicButton>;
+  vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
+  const createVoiceNote = vi.fn().mockResolvedValue({ note: db.notes[0], task: db.tasks[0] });
+  useProjectStore.setState({ createVoiceNote });
+  const upload = vi.spyOn(api, "uploadAttachment").mockResolvedValue({ attachment: { id: "att_logo", name: "logo.png", size: 3 } });
+  vi.spyOn(api, "speechToText")
+    .mockResolvedValueOnce({ text: "Put this logo in the corner here" })
+    .mockResolvedValueOnce({ text: "Use the slide that is uploading" })
+    .mockResolvedValueOnce({ text: "Blur the marked area here" });
+  const recording = { blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/webm" };
+
+  // Attached file + timeline moment: routes through speech -> createTask with attachments and clears the file.
+  await show();
+  await selectPoint({ time: 11, clipIds: [] });
+  await act(async () => dropTargets.get(container.querySelector(".composer-dock")!)!.drop(["/Users/me/logo.png"]));
+  await act(async () => { micProps.onStart?.(); await micProps.onResult(recording); });
+  expect(createVoiceNote).not.toHaveBeenCalled();
+  expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
+    instruction: "Put this logo in the corner here",
+    voiceTranscript: "Put this logo in the corner here",
+    context: expect.objectContaining({ time: 11, attachments: [{ id: "att_logo", name: "logo.png", size: 3 }] }),
+  }));
+  expect(container.querySelector(".composer-files")).toBeNull();
+
+  // An attachment still uploading when dictation finishes waits to settle and rides on the request.
+  let finishUpload!: (res: { attachment: { id: string; name: string; size: number } }) => void;
+  upload.mockImplementationOnce(() => new Promise(resolve => { finishUpload = resolve; }));
+  await selectPoint({ time: 12, clipIds: [] });
+  await act(async () => { dropTargets.get(container.querySelector(".composer-dock")!)!.drop(["/Users/me/slide.png"]); });
+  let pendingVoice!: Promise<void>;
+  await act(async () => {
+    micProps.onStart?.();
+    pendingVoice = Promise.resolve(micProps.onResult(recording));
+  });
+  expect(createVoiceNote).not.toHaveBeenCalled();
+  await act(async () => {
+    finishUpload({ attachment: { id: "att_slide", name: "slide.png", size: 5 } });
+    await pendingVoice;
+  });
+  expect(useProjectStore.getState().createTask).toHaveBeenLastCalledWith(PRJ, expect.objectContaining({
+    instruction: "Use the slide that is uploading",
+    voiceTranscript: "Use the slide that is uploading",
+    context: expect.objectContaining({ time: 12, attachments: [{ id: "att_slide", name: "slide.png", size: 5 }] }),
+  }));
+  expect(container.querySelector(".composer-files")).toBeNull();
+
+  // Marked frame + timeline moment: routes through speech -> createTask with marked frame attachment & pictureMarks and clears marks.
+  const picture = new Blob(["png"], { type: "image/png" });
+  vi.spyOn(markedFrame, "markedFramePicture").mockResolvedValue(picture);
+  upload.mockResolvedValueOnce({ attachment: { id: "att_frame", name: "Marked frame 0.07.png", size: 3, mime: "image/png" } });
+  const point = { kind: "point" as const, box: { x: 0.5, y: 0.5, w: 0, h: 0 } };
+  await act(async () => {
+    usePictureMarksStore.setState({ marking: null, byProject: { [PRJ]: { time: 7, version: project.head!, picture: "frame://7", marks: [point] } } });
+  });
+  await selectPoint({ time: 7, clipIds: [] });
+  await act(async () => { micProps.onStart?.(); await micProps.onResult(recording); });
+  expect(createVoiceNote).not.toHaveBeenCalled();
+  expect(useProjectStore.getState().createTask).toHaveBeenLastCalledWith(PRJ, expect.objectContaining({
+    instruction: "Blur the marked area here",
+    voiceTranscript: "Blur the marked area here",
+    context: expect.objectContaining({
+      time: 7,
+      attachments: [{ id: "att_frame", name: "Marked frame 0.07.png", size: 3, mime: "image/png" }],
+      pictureMarks: { attachmentId: "att_frame", time: 7, version: project.head, marks: [point] },
+    }),
+  }));
+  expect(usePictureMarksStore.getState().byProject[PRJ]).toBeUndefined();
+  expect(container.querySelector(".composer-files")).toBeNull();
+
+  // Plain voice note at a moment with no files or marks still calls createVoiceNote to keep its recording.
+  await selectPoint({ time: 15, clipIds: [] });
+  await act(async () => { micProps.onStart?.(); await micProps.onResult(recording); });
+  expect(createVoiceNote).toHaveBeenCalledTimes(1);
+  expect(createVoiceNote).toHaveBeenCalledWith(PRJ, recording.blob, expect.objectContaining({ time: 15 }));
+
+  // Only a failed attachment in the box still leaves a voice note on createVoiceNote so its recording is kept.
+  upload.mockRejectedValueOnce(new Error("Too large"));
+  await act(async () => dropTargets.get(container.querySelector(".composer-dock")!)!.drop(["/Users/me/huge.mov"]));
+  await selectPoint({ time: 18, clipIds: [] });
+  await act(async () => { micProps.onStart?.(); await micProps.onResult(recording); });
+  expect(createVoiceNote).toHaveBeenCalledTimes(2);
+  expect(createVoiceNote).toHaveBeenLastCalledWith(PRJ, recording.blob, expect.objectContaining({ time: 18 }));
+});
+
 it("marks timestamps as the editor types and sends the first one with the original words", async () => {
   const seek = vi.fn();
   const messageClock = { version: project.head!, duration: 150, timeline: current.timeline, seek };
