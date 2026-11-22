@@ -396,7 +396,7 @@ export const player = {
     }
     playbackLog("transport seek", { to: clamped, media: clock ? media : undefined, asked: t === clamped ? undefined : t, playing: isPlaying(),
       scrub: !!st.scrubGesture || undefined, ready: video?.readyState }, "transport seek");
-    st.setTime(clamped);
+    st.setTime(clamped, true);
     // Keyboard steps and edit links are committed positions. Only a moving
     // pointer needs the decoder's debounce before preparing a missing frame.
     if (previewFrame && !st.scrubGesture) stream?.finishSeek?.();

@@ -241,7 +241,7 @@ export function useWatchedMomentAutoKeep(
     return usePlayerStore.subscribe((now, was) => {
       if (!now.playing) { from = undefined; return; }
       if (!was.playing) from = Math.min(was.time, now.time);
-      else if (now.time < was.time - 0.05 || now.time - was.time > 1.5) from = now.time;
+      else if (now.seeks !== was.seeks || now.time < was.time - 0.05 || now.time - was.time > 1.5) from = now.time;
       else from ??= was.time;
       const start = from;
       const seen = watchKeep.current.watchedMoments.filter(m => !done.has(m.key) && start <= m.start + 0.05 && now.time >= m.end - 0.05);
