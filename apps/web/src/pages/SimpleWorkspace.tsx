@@ -3218,7 +3218,7 @@ export function SimpleWorkspace() {
   // set (a caption's words, the file laid over the picture, how far a zoom goes). A moment holds several edits, and a
   // spot marked for the editor changed nothing, so neither has one.
   const editDid = !reviewingEdit || threadTimeline.selectedMoment || shownMarker ? undefined
-    : beforeCut ? cutBefore.timeline && <CutWordsLine key={editKey(reviewingEdit)} timeline={cutBefore.timeline} media={media}
+    : beforeCut ? cutBefore.timeline && <CutWordsLine key={`what ${editKey(reviewingEdit)}`} timeline={cutBefore.timeline} media={media}
       range={beforeCut.removed} length={lengthLabel(removedLength)} verb="Took out" />
     : (detail => detail && <p className="edit-card-what">{detail}</p>)(editDetail(shownChange, reviewingEdit, { timeline, media }));
   // The transcript stays folded away. Its icon on the card opens it for this edit only.
@@ -3404,7 +3404,7 @@ export function SimpleWorkspace() {
         title={`v${callHistory.length}: ${callHistory.at(-1)!.reason ?? "Scarlet’s earlier version."}${callHistory.at(-1)!.note ? `\nYou: “${callHistory.at(-1)!.note}”` : ""}`} />}
       {/* What Keep would take out, struck, over Scarlet's reason. A revision that leaves the footage in has no such line. */}
       {callWords && !conflict && approves(openCall) === "cut" ? <div className="edit-card-text">
-        <CutWordsLine key={callKey} timeline={callWords.timeline} media={media} range={callWords.range} length={callLength!} verb="Takes out" />
+        <CutWordsLine key={`what ${callKey}`} timeline={callWords.timeline} media={media} range={callWords.range} length={callLength!} verb="Takes out" />
         <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} /></div>
         : <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} />}
     </div>

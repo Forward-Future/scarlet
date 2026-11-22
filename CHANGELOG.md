@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 21, 2026
 
+- An edit's card no longer keeps the words of the cuts you stepped through before it.
 - Edits run with Claude use far fewer tokens and finish sooner, and Claude now reads every tool's instructions in full.
 - A dialogue cut is done when Scarlet says it's done. It no longer starts itself over, up to four times, to recheck for repeats and the picture; what that check finds, the picture included, still goes to Scarlet as it works.
 - A restart that begins on the word the first take broke off on now follows your dialogue skill. By default it still comes to you to hear, and Scarlet no longer takes out words around it that weren't asked for.
