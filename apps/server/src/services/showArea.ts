@@ -4,7 +4,7 @@
  * few seconds, and kept beside the waveform; a box added later is placed against them in milliseconds.
  */
 import { randomUUID } from "node:crypto";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileInDirectoryAsync } from "@scarlet/render";
 import { AREA_HOLDS_AT, AREA_PICTURE_CHANGE, AREA_SIDES, SHOW_EDGE_HEIGHT, SHOW_EDGE_STEP, SHOW_EDGE_VERSION, SHOW_EDGE_WIDTH, assignAreas, edgeBits, edgeBytes, sideFits,
@@ -12,9 +12,10 @@ import { AREA_HOLDS_AT, AREA_PICTURE_CHANGE, AREA_SIDES, SHOW_EDGE_HEIGHT, SHOW_
 import type { Ctx } from "../context.js";
 import { badRequest, notFound } from "../errors.js";
 import { areaAt, wholePicture } from "@scarlet/shared";
+import { atomicWriteFile, errorMessage, rememberLast } from "../util.js";
 import { FINISHED_TASK, createTask } from "./tasks.js";
 import { pictureChanges } from "./pictureCuts.js";
-import { rememberLast, withFrames, type VideoMedia } from "./pictureReading.js";
+import { withFrames, type VideoMedia } from "./pictureReading.js";
 
 export interface ShowAreaState {
   mediaId: string;
@@ -55,14 +56,13 @@ function edges(ctx: Ctx, media: VideoMedia): Promise<Edges> {
       await withFrames(ctx, media, file, "show-edges", { start: 0, end: media.duration ?? 0, fps: 1 / SHOW_EDGE_STEP, width: SHOW_EDGE_WIDTH, height: SHOW_EDGE_HEIGHT,
         signal: ctx.projectSignal(media.projectId) }, (_at, rgb) => { parts.push(edgeBits(rgb)); return false; }, async () => undefined);
       if (!parts.length) throw new Error("no frames could be read");
-      const bits = Buffer.concat(parts), tmp = `${path}.${randomUUID()}`;
-      await writeFile(tmp, bits);
-      await rename(tmp, path).catch(async error => { await rm(tmp, { force: true }); throw error; });
+      const bits = Buffer.concat(parts);
+      await atomicWriteFile(path, bits, `${path}.${randomUUID()}`);
       ctx.log(`[show-area] ${media.id}: read ${parts.length} frames' edges in ${((Date.now() - started) / 1000).toFixed(1)} s`);
       return { frames: parts.length, bits };
     })();
     reading.set(media.id, run);
-    run.then(found => { failed.delete(media.id); rememberLast(kept, media.id, found, 3); }, error => failed.set(media.id, error instanceof Error ? error.message : String(error)))
+    run.then(found => { failed.delete(media.id); rememberLast(kept, media.id, found, 3); }, error => failed.set(media.id, errorMessage(error)))
       .finally(() => reading.delete(media.id));
   }
   return run;

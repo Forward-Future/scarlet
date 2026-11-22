@@ -3,8 +3,52 @@ import { diffTimelines, HistoryConflict, makeTimeMap, newId, planRevert, putBack
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { conflict, notFound } from "../errors.js";
-import { actorFor, logActivity } from "./activity.js";
+import { actorFor, logActivity, quote } from "./activity.js";
 import { ensureProjectHead, resolveTimeline, storeVersion } from "./timeline.js";
+
+export function checkoutVersion(ctx: Ctx, user: User, projectId: string, target: string) {
+  return ctx.db.transaction(() => {
+    const project = ensureProjectHead(ctx, projectId);
+    const { head } = project;
+    if (!ctx.repos.versions.exists(project.id, target)) throw notFound(`version ${target}`);
+    if (target === head) throw conflict("already_head", "that version is already the head");
+    const change: Change = {
+      id: newId("chg"),
+      projectId: project.id,
+      fromVersion: head,
+      toVersion: target,
+      description: `Checked out version ${target}`,
+      author: actorFor(user),
+      noteIds: [],
+      ranges: [],
+      state: "approved",
+      renders: [],
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    ctx.repos.changes.put(change);
+    const updated = ctx.repos.projects.update(project.id, { head: target });
+    ctx.bus.publish({ type: "change.updated", projectId: project.id, change });
+    ctx.bus.publish({ type: "project.updated", projectId: project.id, project: updated });
+    const previous = ctx.repos.versions.get(project.id, head);
+    const restored = ctx.repos.versions.get(project.id, target);
+    logActivity(ctx, {
+      projectId: project.id,
+      actor: actorFor(user),
+      type: "version.restored",
+      summary: `${user.name} restored an earlier version of the edit${restored?.description ? `: ${quote(restored.description)}` : ""}`,
+      data: {
+        changeId: change.id,
+        branch: project.branch,
+        version: target,
+        from: head,
+        ...(previous && { durationBefore: timelineDuration(previous.timeline) }),
+        ...(restored && { durationAfter: timelineDuration(restored.timeline) }),
+      },
+    });
+    return { project: updated };
+  }, "immediate")();
+}
 
 export function recordHistoryEdit(ctx: Ctx, user: User, projectId: string, target: string,
   action: "revert" | "restore", expectedHead: string, branch: string) {

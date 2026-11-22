@@ -111,6 +111,20 @@ class TasksRepo extends JsonStore<Task> {
     return { ...task, createdAt: task.createdAt ?? row.created_at, queueSequence: row.rowid };
   }
 
+  /** Running transcription tasks for a project, optionally narrowed to one recording. */
+  runningTranscriptions(projectId: string, mediaId?: string): Task[] {
+    if (mediaId === undefined) return this.select("project_id = ? AND kind = 'transcribe' AND state = 'running'", [projectId]);
+    return this.select("project_id = ? AND kind = 'transcribe' AND state = 'running' AND json_extract(json, '$.context.mediaId') = ?", [projectId, mediaId]);
+  }
+
+  /** Whether a transcription for `mediaId` is currently queued, claimed, or running. */
+  hasActiveTranscription(projectId: string, mediaId: string): boolean {
+    return this.count(
+      "project_id = ? AND kind = 'transcribe' AND state IN ('queued','claimed','running') AND json_extract(json, '$.context.mediaId') = ?",
+      [projectId, mediaId],
+    ) > 0;
+  }
+
   /** Pending requests and the older rows needed to find their place or the branch that made a proposal. */
   queue(projectId: string, reviewMakers: readonly string[]): QueueTask[] {
     const rows = this.database.prepare(`WITH pending AS (

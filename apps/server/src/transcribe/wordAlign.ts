@@ -8,6 +8,7 @@ import { humanDuration } from "../logText.js";
 import { extractWav } from "../render/ffmpeg.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 import { audioLane, type AudioLane, type AudioWork } from "../services/audioWork.js";
+import { readWavDataLayout } from "../util.js";
 import {
   alignGroup, applyTimings, alignmentGroups, CTC_LETTERS, SPANISH_CTC_LETTERS, FRAME_SAMPLES, framesFor, groupLabels, logSoftmax, MIN_SCORE,
   planChunks, round, SAMPLE_RATE, stitchChunks, unplacedGaps, type AlignWord, type Emissions, type SoundIn, type WordTiming,
@@ -333,32 +334,21 @@ export function pcmWavHeader(dataBytes: number): Buffer {
 export async function openWav(path: string) {
   const handle = await open(path, "r");
   try {
-    const head = Buffer.alloc(64 * 1024);
-    const { bytesRead } = await handle.read(head, 0, head.length, 0);
-    const size = (await handle.stat()).size;
-    let format: Buffer | undefined;
-    for (let at = 12; at + 8 <= bytesRead;) {
-      const id = head.toString("ascii", at, at + 4), bytes = head.readUInt32LE(at + 4), start = at + 8;
-      if (id === "fmt ") format = head.subarray(start, start + 16);
-      if (id === "data") {
-        if (!format || format.readUInt16LE(0) !== 1 || format.readUInt16LE(2) !== 1 || format.readUInt32LE(4) !== SAMPLE_RATE || format.readUInt16LE(14) !== 16) break;
-        const samples = Math.floor(Math.min(bytes, size - start) / 2);
-        return {
-          samples,
-          async read(from: number, to: number) {
-            from = Math.max(0, from); to = Math.min(samples, to);
-            const pcm = Buffer.alloc(Math.max(0, to - from) * 2);
-            if (pcm.length) await handle.read(pcm, 0, pcm.length, start + from * 2);
-            const out = new Float32Array(pcm.length / 2);
-            for (let i = 0; i < out.length; i++) out[i] = pcm.readInt16LE(i * 2) / 32768;
-            return out;
-          },
-          close: () => handle.close(),
-        };
-      }
-      at = start + bytes + bytes % 2;
-    }
-    throw new Error("Word alignment requires 16 kHz mono PCM audio.");
+    const layout = await readWavDataLayout(handle, { requireSampleRate: SAMPLE_RATE });
+    if (!layout) throw new Error("Word alignment requires 16 kHz mono PCM audio.");
+    const { data: start, samples } = layout;
+    return {
+      samples,
+      async read(from: number, to: number) {
+        from = Math.max(0, from); to = Math.min(samples, to);
+        const pcm = Buffer.alloc(Math.max(0, to - from) * 2);
+        if (pcm.length) await handle.read(pcm, 0, pcm.length, start + from * 2);
+        const out = new Float32Array(pcm.length / 2);
+        for (let i = 0; i < out.length; i++) out[i] = pcm.readInt16LE(i * 2) / 32768;
+        return out;
+      },
+      close: () => handle.close(),
+    };
   } catch (error) {
     await handle.close();
     throw error;

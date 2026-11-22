@@ -8,13 +8,14 @@ import { Author, newId, Note } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
-import { badRequest, HttpError, notFound } from "../errors.js";
+import { badRequest, HttpError } from "../errors.js";
 import { actorFor } from "../services/activity.js";
 import { createNote } from "../services/notes.js";
-import { requestAttempt, requireLocalPauseTarget, requireProjectEditAttempt } from "../services/taskAttempt.js";
+import { requestAttempt, requireProjectLocalPauseTarget } from "../services/taskAttempt.js";
 import { notify } from "../services/notify.js";
 import { getTranscriptionProvider, spokenText } from "../transcribe/index.js";
-import { formFile, formString, jsonBody, multipartError, numberParam, requireProjectHeader } from "./util.js";
+import { errorMessage } from "../util.js";
+import { formFile, formString, jsonBody, multipartError, numberParam, requireProjectHeader, requireScoped } from "./util.js";
 
 const NO_SPEECH = "Didn’t catch any words. Try again, or type it.";
 const NOT_CONFIGURED = "To use voice, select and configure OpenAI or local whisper.cpp transcription in Settings.";
@@ -56,11 +57,7 @@ function voiceAudio(form: Record<string, string | File>) {
 export function noteRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
 
-  function requireNote(noteId: string, projectId?: string) {
-    const note = ctx.repos.notes.get(noteId);
-    if (!note || (projectId !== undefined && note.projectId !== projectId)) throw notFound(`note ${noteId}`);
-    return note;
-  }
+  const requireNote = (noteId: string, projectId?: string) => requireScoped(ctx.repos.notes, "note", noteId, projectId);
 
   r.post("/projects/:id/notes", async (c) => {
     const body = await jsonBody(c, CreateNoteRequest);
@@ -105,10 +102,11 @@ export function noteRoutes(ctx: Ctx) {
         voiceTranscript = spokenText(result.segments);
         if (voiceTranscript) text = voiceTranscript;
       } catch (e) {
-        ctx.log(`[voice-note] transcription failed: ${(e as Error).message}`);
-        text = `[voice note — transcription failed: ${(e as Error).message}]`;
+        const msg = errorMessage(e);
+        ctx.log(`[voice-note] transcription failed: ${msg}`);
+        text = `[voice note — transcription failed: ${msg}]`;
         // The provider says what went wrong in a sentence of its own.
-        unheard = badRequest("transcription_failed", (e as Error).message);
+        unheard = badRequest("transcription_failed", msg);
       }
       // A silent recording would send the agent a request with nothing in it.
       if (voiceTranscript === "") {
@@ -166,7 +164,7 @@ export function noteRoutes(ctx: Ctx) {
     const body = await jsonBody(c, UpdateNoteRequest);
     const saved = ctx.db.transaction(() => {
       const note = requireNote(c.req.param("noteId"), c.req.param("projectId"));
-      requireLocalPauseTarget(requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), note.projectId), note.id);
+      requireProjectLocalPauseTarget(ctx, requestAttempt(c.req.raw), note.projectId, note.id);
       return ctx.repos.notes.put({ ...note, ...body, updatedAt: now() });
     }, "immediate")();
     ctx.bus.publish({ type: "note.updated", projectId: saved.projectId, note: saved });
@@ -182,7 +180,7 @@ export function noteRoutes(ctx: Ctx) {
     const who = author.name;
     const saved = ctx.db.transaction(() => {
       const note = requireNote(c.req.param("noteId"), c.req.param("projectId"));
-      requireLocalPauseTarget(requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), note.projectId), note.id);
+      requireProjectLocalPauseTarget(ctx, requestAttempt(c.req.raw), note.projectId, note.id);
       return ctx.repos.notes.put({ ...note, replies: [...(note.replies ?? []), { text: body.text, author, createdAt: now() }], updatedAt: now() });
     }, "immediate")();
     ctx.bus.publish({ type: "note.updated", projectId: saved.projectId, note: saved });

@@ -9,7 +9,7 @@ import { waitFor } from "../events.js";
 import { notFound } from "../errors.js";
 import { claimTask } from "../services/tasks.js";
 import { prefetchDialoguePass } from "../services/dialoguePrefetch.js";
-import { jsonBody } from "./util.js";
+import { jsonBody, requireScoped } from "./util.js";
 
 const ONLINE_WINDOW_MS = 90_000;
 
@@ -21,11 +21,7 @@ export function hostRoutes(ctx: Ctx) {
     return { ...h, online: Date.now() - seen < ONLINE_WINDOW_MS };
   }
 
-  function requireHost(hostId: string) {
-    const host = ctx.repos.hosts.get(hostId);
-    if (!host) throw notFound(`host ${hostId}`);
-    return host;
-  }
+  const requireHost = (hostId: string) => requireScoped(ctx.repos.hosts, "host", hostId);
 
   function save(host: AgentHost): AgentHost {
     const saved = ctx.repos.hosts.put(host);
