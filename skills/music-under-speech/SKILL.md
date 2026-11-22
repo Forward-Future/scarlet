@@ -17,4 +17,4 @@ Music that plays at one level either buries the words or sounds thin where nobod
 
 After it's placed, listen at the first word after each swell and at the end of each long dip.
 
-`timeline_duck` places the dips from the speech the transcript has, and `timeline_transcript` shows where the speech is.
+A `duckUnderSpeech` step in `timeline_propose` places the dips from the speech the transcript has, and `timeline_transcript` shows where the speech is.

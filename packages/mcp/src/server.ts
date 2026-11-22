@@ -75,7 +75,7 @@ export const ALWAYS_LOADED_TOOLS: ReadonlySet<string> = new Set(["project_get", 
 const FEW_TOOL_TASKS: ReadonlySet<string> = new Set(["area_check", "learning_check", "skill_edit", "skill_from_change"]);
 /** Claude Code's `_meta` key for a tool it sends whole from the start instead of behind tool search. */
 const ALWAYS_LOAD = "anthropic/alwaysLoad";
-const PASS_WIDE_TOOLS: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_duck", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_review_save"]);
+const PASS_WIDE_TOOLS: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_review_save"]);
 
 /** When the tool call under way has to have answered by, in ms since the epoch: its harness's tool wait from when it began. */
 const callDeadline = new AsyncLocalStorage<number>();
@@ -269,7 +269,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
         let outcome: ToolOutcome;
         let result: ToolResult;
         try {
-          if (["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_duck", "timeline_framing", "timeline_picture_sync", "captions_generate", "asset_add", "dialogue_check_repeats"].includes(name) && await localPausesMode())
+          if (["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_framing", "timeline_picture_sync", "captions_generate", "asset_add", "dialogue_check_repeats"].includes(name) && await localPausesMode())
             throw new Error("This request only tightens local pauses. Save classified pauses with dialogue_apply_cuts.");
           if (PASS_WIDE_TOOLS.has(name)) {
             const selected = await revision.useStagedCut();

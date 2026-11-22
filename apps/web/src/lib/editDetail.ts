@@ -42,9 +42,11 @@ const levelWords = (keys: unknown, volume: number) => {
   if (!runs) return;
   return `${down ? "down" : "up"} to ${decibels(base + (down ? low : high))}${runs > 1 ? ` in ${runs} places` : ""}`;
 };
+const cleanupOf = (effects: unknown) => Array.isArray(effects)
+  ? (effects as { type?: unknown; enabled?: unknown; params?: { mix?: unknown } }[]).find(e => e?.type === "voiceCleanup" && e.enabled !== false)
+  : undefined;
 const voiceWords = (effects: unknown) => {
-  const cleanup = Array.isArray(effects) ? (effects as { type?: unknown; enabled?: unknown; params?: { mix?: unknown } }[])
-    .find(e => e?.type === "voiceCleanup" && e.enabled !== false) : undefined;
+  const cleanup = cleanupOf(effects);
   if (!cleanup) return;
   const mix = cleanup.params?.mix;
   return typeof mix === "number" && mix < 1 ? `at ${percent(Math.max(0, mix))}` : "";
@@ -62,7 +64,7 @@ const transitionWords = (t: Partial<Transition>) => {
  * nothing a line can name, or the edit is a cut, whose words are read from its transcript.
  */
 export function editDetail(change: Pick<Change, "ops"> | undefined, edit: { kind?: EditKind; range: TimeRange },
-  { timeline, media }: { timeline?: Timeline | null; media: readonly Pick<MediaAsset, "id" | "name">[] }): string | undefined {
+  { timeline, before, media }: { timeline?: Timeline | null; before?: Timeline | null; media: readonly Pick<MediaAsset, "id" | "name">[] }): string | undefined {
   if (!change?.ops?.length || !edit.kind || !DETAILED.has(edit.kind)) return;
   const ops = change.ops as Op[];
   const clips = new Map<string, Clip>();
@@ -116,7 +118,12 @@ export function editDetail(change: Pick<Change, "ops"> | undefined, edit: { kind
         const moves = levelWords(patch.volumeKeyframes, volume);
         lines.push(moves ? `${name ?? "Sound"} ${moves}` : `${name ? `${name} back` : "Sound back"} to a steady level`);
       }
-      if ("effects" in patch) {
+      // Voice cleanup is named only where this edit put it on or changed it, read against the version the edit was made
+      // on: an edit to another effect of a clip already cleaned didn't. Until that version is read, only a voice edit did.
+      const was = before?.tracks.flatMap(t => t.clips).find(c => c.id === op.clipId);
+      const cleanupChanged = before ? JSON.stringify(cleanupOf(patch.effects)) !== JSON.stringify(cleanupOf(was?.kind === "media" ? was.effects : undefined))
+        : edit.kind === "voice";
+      if ("effects" in patch && cleanupChanged) {
         const cleaned = voiceWords(patch.effects);
         if (cleaned !== undefined) lines.push(`Voice cleanup${name ? ` on ${name}` : ""}${cleaned ? ` ${cleaned}` : ""}`);
       }

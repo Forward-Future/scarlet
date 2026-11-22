@@ -551,7 +551,7 @@ describe("timeline_crossfade_audio", () => {
   });
 });
 
-describe("timeline_duck", () => {
+describe("timeline_propose: duckUnderSpeech", () => {
   let talk: MediaClip, music: MediaClip;
   beforeEach(() => {
     // The talk's words run 0.2–1.8 s with short gaps, over a music bed on A1.
@@ -563,38 +563,48 @@ describe("timeline_duck", () => {
     tl.tracks[1]!.clips = [music];
     mock.state.timeline = tl;
   });
-  const proposed = () => sent("/projects/prj_test/changes").map(r => r.body as { ops: Array<{ op: string; clipId: string; patch: Record<string, unknown> }>;
-    description: string; timelineEdits?: Array<{ label: string; range: { start: number; end: number } }> });
+  const proposed = () => sent("/projects/prj_test/changes").map(r => r.body as { ops: Array<{ op: string; clipId: string; patch: Record<string, unknown> }> });
+  const dips = (result: Awaited<ReturnType<typeof ok>>) => JSON.parse(textOf(result).split("\n").find(l => l.startsWith("musicDips: "))!.slice(11));
 
-  it("dips the named clip under the transcribed speech of the others, as the skill's defaults shape it", async () => {
+  it("saves the dips as the clip's volume keyframes, shaped as the skill's defaults, under the transcribed speech of the others", async () => {
     const c = await connect();
     try {
-      const result = await ok(c, "timeline_duck", { intent: "requested", clipIds: [music.id], reason: "The music covers the words." });
-      const [body] = proposed();
-      expect(body!.ops).toEqual([{ op: "updateClip", clipId: music.id, patch: { volumeKeyframes: [
+      const result = await ok(c, "timeline_propose", { intent: "requested", description: "Dip the music under speech", reason: "The music covers the words.",
+        ops: [{ op: "duckUnderSpeech", clipId: music.id }] });
+      // The stored change holds only timeline ops: put-back, the card and export read volumeKeyframes as before.
+      expect(proposed()[0]!.ops).toEqual([{ op: "updateClip", clipId: music.id, patch: { volumeKeyframes: [
         { time: expect.closeTo(-0.1, 9), db: 0, ease: "easeInOut" }, { time: 0.2, db: -18, ease: "linear" },
         { time: 1.8, db: -18, ease: "easeInOut" }, { time: expect.closeTo(2.6, 9), db: 0, ease: "linear" }] } }]);
-      // One edit, over the music it changed.
-      expect(body!.timelineEdits).toEqual([expect.objectContaining({ label: "Dip the music under speech", range: { start: 0, end: 6 } })]);
-      const report = JSON.parse(textOf(result).split("\n").at(-1)!);
-      expect(report).toMatchObject({ shape: { depth: -18, down: 0.3, up: 0.8, swellIn: 2 }, under: "speech",
-        clips: [{ clipId: music.id, dips: [{ start: 0.2, end: 1.8, depth: -18 }] }] });
-      expect(report.clips[0].speechNotUnder).toBeUndefined();
+      expect(dips(result)).toEqual([{ clipId: music.id, under: "speech", depthDb: -18, dips: [{ start: 0.2, end: 1.8 }] }]);
     } finally { await c.close(); }
   });
 
-  it("takes the stretches, depth and fades asked for, says which speech still plays over the music at its level, and refuses what can't be", async () => {
+  it("takes the ranges, depth and fades asked for, says which speech still plays over the music at its level, and refuses what can't be", async () => {
     const c = await connect();
     try {
-      const result = await ok(c, "timeline_duck", { intent: "requested", mediaId: "m2", stretches: [[1, 1.8]], depth: -24, down: 0.5, up: 1,
-        reason: "The editor asked for a deeper dip under the answer." });
-      expect(JSON.parse(textOf(result).split("\n").at(-1)!)).toMatchObject({ under: "stretches", shape: { depth: -24, down: 0.5, up: 1 },
-        clips: [{ dips: [{ start: 1, end: 1.8, depth: -24 }], speechNotUnder: [{ start: 0.2, end: 1 }] }] });
-      expect(proposed()[0]!.ops[0]!.patch.volumeKeyframes).toHaveLength(4);
-      expect(textOf(await call(c, "timeline_duck", { intent: "requested", mediaId: "m2", stretches: [[2, 1]], reason: "r" }))).toContain("Each stretch must be [start, end]");
-      expect(textOf(await call(c, "timeline_duck", { intent: "requested", mediaId: "m2", depth: 6, reason: "r" }))).toContain("depth must be between -60 and 0.");
-      expect(textOf(await call(c, "timeline_duck", { intent: "requested", reason: "r" }))).toContain("Give clipIds or mediaId.");
-      expect(textOf(await call(c, "timeline_duck", { intent: "requested", clipIds: ["nope"], reason: "r" }))).toContain("No media clip nope");
+      const result = await ok(c, "timeline_propose", { intent: "requested", description: "Deeper under the answer", reason: "The editor asked.",
+        ops: [{ op: "duckUnderSpeech", clipId: music.id, ranges: [[1, 1.8]], depthDb: -24, fadeDown: 0.5, fadeUp: 1 }] });
+      expect(dips(result)).toEqual([{ clipId: music.id, under: "ranges", depthDb: -24, dips: [{ start: 1, end: 1.8 }], speechNotUnder: [{ start: 0.2, end: 1 }] }]);
+      expect(proposed()[0]!.ops[0]!.patch.volumeKeyframes).toEqual([
+        { time: 0.5, db: 0, ease: "easeInOut" }, { time: 1, db: -24, ease: "linear" }, { time: 1.8, db: -24, ease: "easeInOut" }, { time: 2.8, db: 0, ease: "linear" }]);
+      const refused = async (op: Record<string, unknown>) => textOf(await call(c, "timeline_propose", { intent: "requested", description: "d", reason: "r",
+        ops: [{ op: "duckUnderSpeech", clipId: music.id, ...op }] }));
+      expect(await refused({ ranges: [[2, 1]] })).toContain("each range must be [start, end]");
+      expect(await refused({ depthDb: 6 })).toContain("depthDb");
+      expect(await refused({ clipId: "nope" })).toContain("no media clip nope");
+      expect(proposed()).toHaveLength(1);
+    } finally { await c.close(); }
+  });
+
+  it("dips music added by an earlier step of the same proposal", async () => {
+    mock.state.timeline!.tracks[1]!.clips = [];
+    const c = await connect();
+    try {
+      const bed = makeMediaClip("m2", 0, 4, 0);
+      await ok(c, "timeline_propose", { intent: "requested", description: "Add a bed under the talk", reason: "r",
+        ops: [{ op: "addClip", trackId: mock.state.timeline!.tracks[1]!.id, clip: bed }, { op: "duckUnderSpeech", clipId: bed.id, fadeDown: 0, fadeUp: 0 }] });
+      expect(proposed()[0]!.ops.map(o => o.op)).toEqual(["addClip", "updateClip"]);
+      expect(proposed()[0]!.ops[1]!.patch.volumeKeyframes).toHaveLength(4);
     } finally { await c.close(); }
   });
 });
@@ -785,7 +795,7 @@ describe("review notes", () => {
 describe("tool annotations", () => {
   // Every tool that saves an edit, a recommendation, a file or a message to the editor. A harness may retry or
   // run the others in parallel without asking, so a new tool is placed here or among the reads on purpose.
-  const writes = ["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_duck", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_check_repeats", "dialogue_review_save",
+  const writes = ["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_check_repeats", "dialogue_review_save",
     "dialogue_revise_cut", "edit_flag", "note_reply", "note_resolve", "render_request", "screen_area", "task_log", "task_question", "learning_suggest", "skill_save_from_change", "skill_save_edit", "asset_add", "export_otio",
     "graphic_render", "style_guide_save"];
   const every = EDITING_TOOL_GROUPS.flatMap(g => [...g.tools] as string[]);

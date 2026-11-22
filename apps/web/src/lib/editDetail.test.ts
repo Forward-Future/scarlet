@@ -51,6 +51,22 @@ describe("editDetail", () => {
     expect(clean({ mix: 0.6 })).toBe("Voice cleanup on Interview at 60%");
   });
 
+  it("names voice cleanup only where the edit put it on or changed it, read against the version it was made on", () => {
+    const cleanup = (mix: number) => ({ type: "voiceCleanup", params: { mix }, enabled: true });
+    const eq = { type: "eq", params: { highpass: 80 }, enabled: true };
+    const on = (effects: unknown[]) => ({ ...timeline, version: "v1", tracks: timeline.tracks.map(t => ({ ...t,
+      clips: t.clips.map(c => c.id === "clp_main" ? { ...c, effects } : c) })) }) as unknown as Timeline;
+    const said = (effects: unknown[], before: Timeline | undefined, kind: "audio" | "voice" = "audio") =>
+      editDetail(change([{ op: "updateClip", clipId: "clp_main", patch: { effects } }]), { kind, range: at }, { timeline, before, media });
+    // An EQ added to a clip already cleaned says nothing of the cleanup, with or without the earlier version read.
+    expect(said([cleanup(1), eq], on([cleanup(1)]))).toBeUndefined();
+    expect(said([cleanup(1), eq], undefined)).toBeUndefined();
+    // Put on, or turned down, it is named.
+    expect(said([cleanup(1), eq], on([eq]))).toBe("Voice cleanup on Interview");
+    expect(said([cleanup(0.5)], on([cleanup(1)]))).toBe("Voice cleanup on Interview at 50%");
+    expect(said([cleanup(1)], undefined, "voice")).toBe("Voice cleanup on Interview");
+  });
+
   it("gives a level in decibels and names the clip it is on", () => {
     expect(editDetail(change([{ op: "updateClip", clipId: "clp_music", patch: { volume: 0.5 } }]), { kind: "audio", range: at }, { timeline, media }))
       .toBe("Warm bed −6 dB");

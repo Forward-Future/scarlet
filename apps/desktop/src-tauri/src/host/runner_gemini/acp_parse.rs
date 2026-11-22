@@ -108,7 +108,7 @@ pub(super) fn flush_streams(st: &mut GeminiState, events: &mut Vec<RunnerEvent>)
 /// and `tool_help`, which the server adds for Gemini. A test keeps this list the same as that file's.
 pub const SCARLET_TOOLS: &[&str] = &[
     "project_get", "timeline_get", "timeline_at", "timeline_diff", "timeline_propose", "timeline_first_cut",
-    "timeline_crossfade_audio", "timeline_transition", "timeline_duck", "timeline_framing", "timeline_picture_sync",
+    "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync",
     "transcript_get", "transcript_search", "timeline_transcript", "timeline_join_audit", "waveform_get", "sound_picture",
     "media_profile", "audio_sync", "dialogue_scan", "dialogue_check_join", "dialogue_check_repeats", "dialogue_apply_cuts",
     "dialogue_review_inspect", "dialogue_review_save", "dialogue_revise_cut",
