@@ -76,7 +76,7 @@ export const Player = memo(function Player({ source, autoPlaySource, cut, hidden
           poster={source?.kind === "video" ? interactiveFrameUrl(api.frameUrl(source.id, 0, 960)) : undefined}
           playsInline preload={hidden ? "none" : original ? "auto" : "metadata"}
           autoPlay={!!source && autoPlaySource && source.id !== rejectedOriginal && active && !hidden}
-          aria-label={source ? source.name : "The current edit"}
+          aria-label={source ? source.name : "The video"}
           onPlay={source ? undefined : () => setPlayingCutFile(src)}
           onPause={source ? undefined : () => setPlayingCutFile(undefined)}
           onEnded={source ? undefined : () => setPlayingCutFile(undefined)}

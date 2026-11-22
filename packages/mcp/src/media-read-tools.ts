@@ -3,6 +3,7 @@ import {
   DEFAULT_RESULT_CHARS,
   fuzzySearchTranscript,
   indexTranscriptWords,
+  normalizeTranscriptToken,
   ScarletApiError,
   type AgentCapabilities,
   type ScarletClient,
@@ -244,6 +245,46 @@ export function registerMediaReadTools(deps: MediaReadToolsDeps) {
       if (!matches.length) return text(`No ${match} matches for "${query}" in ${mediaId} (${wordCount} words searched).`);
       const lines = matches.map((m) => `#${m.wordIndex} [${m.start.toFixed(2)}-${m.end.toFixed(2)}]${"score" in m ? ` ${m.score}` : ""}${m.speaker ? ` ${m.speaker}:` : ""} ${m.context}`);
       return text(`${matches.length} ${match} match(es) for "${query}" in ${mediaId}:\n${lines.join("\n")}`);
+    },
+  );
+
+  tool(
+    "transcript_fix",
+    "Correct how a word or phrase is written in the project's transcripts, keeping word times: in every recording, or in mediaIds; from/to (source seconds, with one mediaId) limit it to a stretch. " +
+      "`find` is matched as transcript_search's exact search reads words, case and punctuation aside, and a possessive 's after it stays; `replace` is written as given, keeping each word's punctuation and a capital at the start of a sentence. " +
+      "Where replace has as many words as find, each word keeps its time; otherwise the new words share the old ones' time and every word index after them moves, so read again before naming those words. " +
+      "The fix stays with each transcript: a transcription made again, or its words placed again, reads the same, and transcript reads, searches, captions_generate and screen_reading use it from now on. " +
+      "Captions already on the timeline keep their text (the result counts those that still read `find`), and dialogue_scan pages are their own reading of the sound. " +
+      "Returns each recording's count of places, and each place's word index before the fix, source seconds and its words before and after.",
+    {
+      find: z.string().trim().min(1).max(200).describe("The words as the transcript has them, e.g. \"Scarlett\" or \"new ra\""),
+      replace: z.string().trim().min(1).max(200).describe("How they should read, e.g. \"Scarlet\" or \"Neura\""),
+      mediaIds: RecordingList.optional().describe("Only these recordings. Default: every recording in the project"),
+      from: z.number().min(0).optional().describe("Start of the stretch to fix, source seconds of the one recording in mediaIds"),
+      to: z.number().min(0).optional().describe("End of the stretch to fix, source seconds of the one recording in mediaIds"),
+    },
+    async ({ find, replace, mediaIds, from, to }) => {
+      const { recordings } = await client.fixTranscriptWords(projectId, { find, replace, mediaIds, from, to });
+      // The words this session read are the ones before the fix: read them again, so word references name the fixed words.
+      const changed = recordings.filter(r => "count" in r && r.count > 0);
+      await Promise.all(changed.map(async r => {
+        const words = await cacheTranscriptWords(r.mediaId, await getTranscript(r.mediaId, { granularity: "word" }, false));
+        showWords(r.mediaId, words);
+      }));
+      const wanted = find.split(/\s+/).map(normalizeTranscriptToken).filter(Boolean).join(" ");
+      const timeline = await session.headTimelineOrNull().catch(() => null);
+      const captions = (timeline?.tracks ?? []).flatMap(t => t.clips).filter(c => c.kind === "caption" &&
+        ` ${c.text.split(/\s+/).map(normalizeTranscriptToken).filter(Boolean).join(" ")} `.includes(` ${wanted} `)).length;
+      const total = changed.reduce((n, r) => n + ("count" in r ? r.count : 0), 0);
+      return json({
+        find, replace, places: total,
+        recordings: recordings.filter(r => !("count" in r) || r.count > 0).map(r => "count" in r
+          ? { mediaId: r.mediaId, name: r.name, count: r.count, ...(r.wordsAdded && { wordsAdded: r.wordsAdded }),
+            places: r.places.map(p => ({ index: p.index, start: round3(p.start), end: round3(p.end), before: p.before, after: p.after })) }
+          : r),
+        ...(!total && { note: `No transcript reads "${find}"${mediaIds ? " in those recordings" : ""}${from !== undefined || to !== undefined ? " in that stretch" : ""}. transcript_search with match "fuzzy" finds how it was transcribed.` }),
+        ...(captions && { captionsStillReading: captions }),
+      });
     },
   );
 

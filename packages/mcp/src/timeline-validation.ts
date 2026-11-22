@@ -29,12 +29,13 @@ export function newClipEdges(before: Timeline | null, next: Timeline, media: Rea
     for (const [side, source] of [["in", clip.sourceIn], ["out", clip.sourceOut]] as const) {
       const key = `${clip.mediaId}/${stream ?? ""}/${side}/${source.toFixed(3)}`;
       if (seen.has(key)) continue;
-      seen.add(key);
       if (source < .05 || (length !== undefined && source > length - .05)) continue;
       if (old.some(c => c.mediaId === clip.mediaId && Math.abs((side === "in" ? c.sourceIn : c.sourceOut) - source) < 1e-3)) continue;
       if (clips.some(c => c !== clip && c.mediaId === clip.mediaId && dialogueAudioStream(c) === stream && (side === "out"
         ? Math.abs(c.sourceIn - source) < 1e-3 && Math.abs(c.timelineIn - ends) < 1e-3
         : Math.abs(c.sourceOut - source) < 1e-3 && Math.abs(c.timelineIn + clipDuration(c) - clip.timelineIn) < 1e-3))) continue;
+      // Counted once it is a cut: where this clip plays straight on, another clip may still cut at the same second.
+      seen.add(key);
       edges.push({ clipId: clip.id, mediaId: clip.mediaId, ...(stream !== undefined && { stream }), side, source });
     }
   }

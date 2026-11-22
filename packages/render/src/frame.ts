@@ -5,6 +5,7 @@ import { FILMSTRIP_SEEK_BATCH, sparseFilmstrip, type Project, type Timeline, typ
 import { buildFilterGraph, type GraphOptions } from "./graph.js";
 import { FFMPEG_BASE_ARGS, INDEXED_MP4_INPUT, LOCAL_MEDIA_INPUT, failureReason, ffSeconds, requireDrawtext, resolveFfmpeg, runCapture, withStreamInfoFallback } from "./exec.js";
 import { withDecoderFallback } from "./probe.js";
+import { toneMapFilters, type HdrTransfer } from "./hdr.js";
 import { drawtextFontArg } from "./fonts.js";
 
 export interface FrameOptions {
@@ -22,6 +23,8 @@ export interface FrameOptions {
    * and uses the CPU from the start for a file whose frames need turning (`storedAsShown`).
    */
   decoder?: "cuda";
+  /** The file's HDR transfer (`MediaAsset.color.hdr`): the frame is tone-mapped to SDR, as every picture made from it is. */
+  hdr?: HdrTransfer;
   /** Hears why the frame came the slower way: the GPU could not decode it, or the movie's index could not be used. */
   onFallback?: (reason: string) => void;
   /** Only this area of the picture, as fractions of it: left, top, right, bottom. */
@@ -86,12 +89,14 @@ async function frameFrom(file: string, tSeconds: number, opts: FrameOptions): Pr
   const t = Math.max(0, tSeconds);
   const width = Math.max(2, Math.round(opts.width ?? 320));
   // An area or a grid is drawn on the CPU, where the picture is in memory.
-  const gpu = opts.decoder === "cuda" && !opts.area && !opts.grid;
+  // So is an HDR picture's tone-mapping, which has no GPU filter in the bundled builds.
+  const gpu = opts.decoder === "cuda" && !opts.area && !opts.grid && !opts.hdr;
+  const toneMap = (await toneMapFilters(opts.hdr, opts.ffmpegPath)).map(f => "," + f).join("");
   const area = opts.area ?? [0, 0, 1, 1];
   const crop = opts.area ? `crop=iw*${area[2] - area[0]}:ih*${area[3] - area[1]}:iw*${area[0]}:ih*${area[1]},` : "";
   const height = opts.grid ? Math.max(2, Math.round(width * (area[3] - area[1]) * opts.grid.height / ((area[2] - area[0]) * opts.grid.width) / 2) * 2) : -2;
   const grid = opts.grid ? "," + percentGrid(area, width, height).join(",") : "";
-  const picture = gpu ? `scale_cuda=${width}:-2:interp_algo=bicubic:format=yuv420p,hwdownload,format=yuv420p` : `${crop}scale=${width}:${height}${grid}`;
+  const picture = gpu ? `scale_cuda=${width}:-2:interp_algo=bicubic:format=yuv420p,hwdownload,format=yuv420p` : `${crop}scale=${width}:${height}${toneMap}${grid}`;
   const input = [
     ...FFMPEG_BASE_ARGS,
     ...(gpu ? ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] : []),

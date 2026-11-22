@@ -6,6 +6,7 @@ import { fileInDirectory } from "@scarlet/render";
 import { decodeImportFilename, importLinkFilename, type User } from "@scarlet/shared";
 import { hasInitialTimeline, newId, ProjectSettings, videoFormat, type MediaAsset, type MediaKind, type Project } from "@scarlet/timeline";
 import { engineIsAlive, type Ctx } from "../context.js";
+import { readMissingColors } from "./mediaColor.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { logId } from "../logText.js";
 import type { MediaWithStatus } from "../repo/projects.js";
@@ -23,18 +24,6 @@ import { cloneOrSteadyCopy } from "./steadyCopy.js";
 import { cancelTask } from "./tasks.js";
 import { recoverImportTranscriptions, startImportTranscription } from "./transcription.js";
 import { olderWaveforms, waveformBase } from "./waveforms.js";
-
-export {
-  holdTranscriptions,
-  latestTranscription,
-  settleAlignment,
-  startTranscription,
-  transcribeForDialogue,
-  transcribeMedia,
-  transcriptionHeld,
-  transcriptionProgress,
-} from "./transcription.js";
-export { getWaveform, readWaveformCache } from "./waveforms.js";
 
 const GiB = 1024 ** 3;
 const URL_IMPORT_BYTES = 64 * GiB;
@@ -92,6 +81,9 @@ export function resumeImportsInBackground(ctx: Ctx, projectId?: string): void {
   }));
   void ctx.track(recoverImportTranscriptions(ctx, projectId).catch(error => {
     if (!ctx.shutdown.aborted) ctx.log(`[ingest] starting transcriptions left unbegun stopped part-way: ${errorMessage(error)}`);
+  }));
+  void ctx.track(readMissingColors(ctx, projectId).catch(error => {
+    if (!ctx.shutdown.aborted) ctx.log(`[ingest] reading the colour of earlier imports stopped part-way: ${errorMessage(error)}`);
   }));
 }
 
@@ -280,6 +272,7 @@ export async function ingestMedia(
       height: probe.height,
       hasAudio: probe.hasAudio,
       hasAlpha: probe.hasAlpha,
+      color: probe.color,
       provenance: opts.by,
       source: opts.source,
       uploadedBy: opts.uploadedBy,

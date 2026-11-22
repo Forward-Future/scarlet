@@ -70,7 +70,7 @@ export function listToolsBriefly(server: McpServer) {
     return { content: [{ type: "text" as const, text: [...(missing ? [missing] : []), ...whole, ...(rest ? [rest] : [])].join("\n\n---\n\n") }] };
   });
 
-  handlers.set("tools/list", async (request, extra) => {
+  handlers.set("tools/list", async (_request, extra) => {
     const tools = await everyTool(extra);
     return { tools: tools.map(tool => tool.name === TOOL_HELP ? tool : {
       ...tool,

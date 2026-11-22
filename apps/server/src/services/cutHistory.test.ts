@@ -149,3 +149,23 @@ it("undoes a request whose only edit is rejected, whatever it changed", () => {
   expect(change).toMatchObject({ rejects: true, description: "Rejected · Title" });
   expect(ctx.repos.versions.get(project.id, after.head!)!.timeline.markers).toEqual([]);
 });
+
+it("keeps the cuts a built video left out when its one named edit is rejected", () => {
+  const { ctx } = app;
+  const user = localUser(ctx);
+  ctx.repos.projects.putMedia(project.id, { id: "camera", name: "interview.mov", kind: "video", path: "camera.mov" }, "ready");
+  const first = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 60 }]), { parent: null });
+  // The change built the video from two pieces, which left 20-30 s out, and named one edit besides: a title's marker.
+  const built = timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 20 }, { start: 30, end: 60 }]);
+  const ops = [{ op: "addMarker" as const, marker: { id: "mark", time: 5, text: "Title here" } }];
+  const marked = storeVersion(ctx, project.id, applyOps(built, ops), { parent: first.version, changeId: "chg_built" });
+  ctx.repos.changes.put({ id: "chg_built", projectId: project.id, description: "Built the video", author: { type: "agent", id: "codex", name: "codex" }, state: "approved", noteIds: [], renders: [], ranges: [],
+    fromVersion: first.version, toVersion: marked.version, appliedOnto: first.version, appliedVersion: marked.version, ops,
+    timelineEdits: [{ label: "Title", range: { start: 5, end: 5 } }], leftOut: { version: first.version, joins: [{ at: 20, removed: { start: 20, end: 30 } }] },
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  ctx.repos.projects.update(project.id, { head: marked.version });
+  // The title isn't every edit of the change: taking the change out would put the cut's footage back unasked.
+  expect(() => rejectEdits(ctx, user, project.id, "thread", [{ changeId: "chg_built", spot: 0, label: "Title", range: { start: 5, end: 5 } }],
+    marked.version, ctx.repos.projects.get(project.id)!.branch ?? "main")).toThrow("This edit can’t be put back as it was.");
+  expect(ctx.repos.projects.get(project.id)!.head).toBe(marked.version);
+});

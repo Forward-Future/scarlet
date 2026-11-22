@@ -8,6 +8,7 @@ import { sha256, SOURCE_PREVIEW_SECONDS, stableStringify } from "@scarlet/timeli
 import type { Clip, MediaAsset, Project, Timeline, TimeRange, Track, TransitionPlan } from "@scarlet/timeline";
 import { fileInDirectory } from "./assetPath.js";
 import { effectKind } from "./effects.js";
+import { TONE_MAP_REVISION } from "./hdr.js";
 import { fnum } from "./exec.js";
 import { clipPlacement, fillsFrames, holdsFrame, holdsSample, proxyHeightForClip, videoClockStart } from "./graph.js";
 import { isMovingAsset, isStillAsset } from "./probe.js";
@@ -69,6 +70,8 @@ function mediaFingerprint(asset: MediaAsset | undefined, format: SegmentKeyOptio
     hasAudio: format.pictureOnly ? undefined : asset.hasAudio,
     sourceAlpha: format.pictureOnly || format.allowProxy ? asset.hasAlpha : undefined,
     proxyGeometry: format.allowProxy ? [asset.width, asset.height, asset.fps, asset.previewClock] : undefined,
+    // An HDR source's picture is tone-mapped to SDR. Absent for every other source, so their keys stay as they were.
+    sdr: asset.color?.hdr ? TONE_MAP_REVISION : undefined,
   };
 }
 

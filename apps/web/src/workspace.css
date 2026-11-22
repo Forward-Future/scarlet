@@ -336,17 +336,22 @@
   position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; border-radius: inherit;
   mix-blend-mode: screen; opacity: 0; transition: opacity .55s ease;
 }
-.timeline-editing-wash[data-active] { opacity: 1; }
+.timeline-editing-wash[data-active] {
+  opacity: 1;
+  box-shadow: inset 0 0 0 1px rgba(244, 241, 233, .14);
+}
 .timeline-editing-wash::after {
-  content: ""; position: absolute; inset: -12% 0; width: 68%;
-  background: radial-gradient(ellipse 50% 80% at 50% 50%,
-    rgba(244, 241, 233, .14) 0%,
-    rgba(225, 217, 197, .055) 42%,
-    transparent 74%);
+  content: ""; position: absolute; inset: 0; width: 52%;
+  background:
+    radial-gradient(ellipse 48% 3px at 50% 0%, rgba(255, 253, 248, .55) 0%, transparent 100%),
+    radial-gradient(ellipse 50% 100% at 50% 50%,
+      rgba(244, 241, 233, .28) 0%,
+      rgba(228, 222, 206, .13) 42%,
+      transparent 76%);
 }
 @media (prefers-reduced-motion: no-preference) {
   .timeline-editing-wash::after {
-    animation: timeline-editing-drift 5.2s ease-in-out var(--edit-phase, 0s) infinite alternate;
+    animation: timeline-editing-drift 3.6s ease-in-out var(--edit-phase, 0s) infinite alternate;
     animation-play-state: paused;
   }
   .timeline-editing-wash[data-active]::after { animation-play-state: running; }
@@ -354,12 +359,12 @@
 @media (prefers-reduced-motion: reduce) {
   .timeline-editing-wash { transition: opacity .2s ease; }
   .timeline-editing-wash::after { display: none; }
-  .timeline-editing-wash[data-active] { box-shadow: inset 0 0 0 1px rgba(244, 241, 233, .22); }
+  .timeline-editing-wash[data-active] { box-shadow: inset 0 0 0 1px rgba(244, 241, 233, .34); }
 }
 @keyframes timeline-editing-drift {
-  0%   { transform: translateX(-18%); opacity: .74; }
+  0%   { transform: translateX(-23%); opacity: .82; }
   50%  { opacity: 1; }
-  100% { transform: translateX(65%); opacity: .74; }
+  100% { transform: translateX(115%); opacity: .82; }
 }
 .timeline-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 22px; margin-top: 6px; }
 .timeline-clock { color: var(--color-fg); font: 12px/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }

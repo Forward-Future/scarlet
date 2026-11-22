@@ -469,6 +469,13 @@ export const player = {
           el.currentTime = Math.max(0, Number.isFinite(el.duration) ? Math.min(want, el.duration) : want);
         void el.play().catch(refused);
       }, { once: true, signal: controller.signal });
+      // A file that failed to load never knows its length: the wait would hold the transport on Playing over a still
+      // picture, Play would do nothing, and new working cuts would be held back as they are during playback.
+      el.addEventListener("error", () => {
+        if (controller.signal.aborted || pendingPlay !== controller) return;
+        pendingPlay = undefined;
+        usePlayerStore.getState().setPlaying(false);
+      }, { once: true, signal: controller.signal });
       return;
     }
     void el.play().catch(refused);

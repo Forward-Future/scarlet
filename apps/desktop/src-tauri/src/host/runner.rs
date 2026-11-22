@@ -143,7 +143,6 @@ pub(super) fn stderr_tail(stderr: &str) -> String {
     }
 }
 
-/// Dispatch on `opts.agent`.
 /// A CLI's environment for a run: without Scarlet's own variables (the token among them), the workspace's launchers
 /// first on its PATH. Codex reads its MCP server's variables from its own, and adds them back itself.
 pub fn workspace_env(env: &HashMap<String, String>, workspace: Option<&super::types::Workspace>) -> HashMap<String, String> {
@@ -160,6 +159,7 @@ pub fn workspace_env(env: &HashMap<String, String>, workspace: Option<&super::ty
     out
 }
 
+/// Dispatch on `opts.agent`.
 pub async fn run_agent(mut opts: RunOptions) -> RunResult {
     // Scarlet's own variables stay out of every CLI, so its shell never holds the token.
     opts.env = workspace_env(&opts.env, opts.workspace.as_ref());
@@ -235,7 +235,8 @@ pub(crate) mod testing {
             env: crate::util::env_map(),
             task: None,
             plan: false,
-            refused_tool: None,
+            // The engine always gives these words; a host writes none of its own.
+            refused_tool: Some("Scarlet refused {tool}. Carry on.".into()),
             workspace: None,
         };
         (opts, events)

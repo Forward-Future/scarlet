@@ -21,6 +21,8 @@ export interface CodexParseState {
   texts: string[];
   lastMessage?: string;
   question?: string;
+  /** The call that asked `question`. */
+  questionItem?: string;
   questionPosted: boolean;
   shouldStop: boolean;
   failed?: string;
@@ -122,17 +124,24 @@ function parseCodexEvent(msg: Record<string, unknown>, st: CodexParseState): Run
           const name = `${item.server ?? "mcp"}.${item.tool ?? "?"}`;
           const text = isQuestionTool(item.tool) ? questionText(item.arguments) : undefined;
           if (text !== undefined) {
-            // Held from the start, should the CLI stop before its result, and said once the engine has it.
-            if (!completed) st.question = text;
-            else if (item.status === "failed" || item.error) {
-              // A question Scarlet refused was never asked: the model hears why and carries on, so the run does too.
-              st.question = undefined;
-              events.push({ type: "error", text: `${name} failed: ${briefInput(item.error ?? item.result, 400)}` });
-            } else {
+            // Held from the start, should the CLI stop before its result, and said once the engine has it. The
+            // question is the call that asked it: a later call can't take its place, or clear it when it is refused.
+            if (st.question === undefined || st.questionItem === item.id) {
               st.question = text;
-              st.questionPosted = true;
-              st.shouldStop = true;
-              events.push({ type: "question", text, data: { tool: name, itemId: item.id } });
+              st.questionItem = item.id;
+            }
+            if (completed) {
+              const refused = item.status === "failed" || Boolean(item.error) || asRecord(item.result)?.isError === true;
+              const asked = st.questionItem === item.id;
+              if (asked && !refused) {
+                st.questionPosted = true;
+                st.shouldStop = true;
+                events.push({ type: "question", text: st.question, data: { tool: name, itemId: item.id } });
+              } else {
+                // A question Scarlet refused was never asked: the model hears why and carries on, so the run does too.
+                if (asked) st.question = st.questionItem = undefined;
+                if (refused) events.push({ type: "error", text: `${name} failed: ${briefInput(item.error ?? item.result, 400)}` });
+              }
             }
           } else if (type === "item.started") {
             events.push({ type: "tool", text: `${name} ${briefInput(item.arguments)}`.trim(), data: { tool: name, input: item.arguments, itemId: item.id } });

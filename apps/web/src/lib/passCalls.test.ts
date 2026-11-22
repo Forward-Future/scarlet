@@ -100,3 +100,28 @@ it("maps approved pass calls to their applied edit keys and keeps skipped calls 
   expect([...decidedCallEditKeys]).toEqual(["chg_pass/0"]);
   expect(decidedCallRows).toEqual([{ key: "choice/chg_pass/1", at: 10, label: "Aside", approved: false }]);
 });
+
+it("links each approved call to its applied edit when the pass's joins carry no review index", () => {
+  // As a pass applied onto the version it was made on records them: each join lands earlier by the footage cut before it.
+  const cut = (spot: number, at: number) => ({ ...edit(spot, at, `cut ${spot + 1}`), changeId: "chg_pass", range: { start: at, end: at }, check: undefined });
+  const thread = {
+    changes: [{
+      id: "chg_pass",
+      state: "approved",
+      cutChoices: [
+        { index: 0, choice: "cut" as const, start: 5, end: 6 },
+        { index: 1, choice: "cut" as const, start: 10, end: 11 },
+        { index: 2, choice: "keep" as const, start: 20, end: 21 },
+      ],
+      cutAssessments: [
+        { index: 0, start: 5, end: 6, verdict: "ask" as const, reason: "Retake.", summary: "Retake" },
+        { index: 1, start: 10, end: 11, verdict: "ask" as const, reason: "Restart.", summary: "Restart" },
+        { index: 2, start: 20, end: 21, verdict: "ask" as const, reason: "Aside.", summary: "Aside" },
+      ],
+      appliedReview: { joins: [{ at: 5, removed: { start: 5, end: 6 } }, { at: 9, removed: { start: 10, end: 11 } }] },
+    }],
+  } as Parameters<typeof decidedPassCalls>[0];
+  const { decidedCallEditKeys, decidedCallRows } = decidedPassCalls(thread, [cut(0, 5), cut(1, 9)]);
+  expect([...decidedCallEditKeys]).toEqual(["chg_pass/0", "chg_pass/1"]);
+  expect(decidedCallRows).toEqual([{ key: "choice/chg_pass/2", at: 20, label: "Aside", approved: false }]);
+});

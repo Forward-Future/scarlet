@@ -12,6 +12,7 @@ export * from "./cutScope.js";
 export * from "./threadTimeline.js";
 export * from "./revisionState.js";
 export * from "./transcriptSearch.js";
+export * from "./transcriptFix.js";
 export * from "./adjacentRepeats.js";
 export * from "./restarts.js";
 export * from "./joinFragments.js";
