@@ -1,5 +1,5 @@
-import { callNumbers, type AgentId, type Task, type User } from "@scarlet/shared";
-import type { Author, Change, Project, Timeline } from "@scarlet/timeline";
+import { callNumbers, requestText, type AgentId, type Task, type User } from "@scarlet/shared";
+import { historyLineage, type Author, type Change, type Project, type Timeline } from "@scarlet/timeline";
 import type { Ctx } from "../../context.js";
 import { now } from "../../db.js";
 import { parseAssignTo } from "../tasks.js";
@@ -42,6 +42,33 @@ export function saveChange(ctx: Ctx, change: Change): Change {
 /** Close a change that another one has taken the place of. */
 export function putAway(ctx: Ctx, change: Change, rejectReason: string, replacedBy: string): Change {
   return saveChange(ctx, { ...change, state: "rejected", rejectedFrom: change.state, rejectReason, replacedBy });
+}
+
+/** Said with the editor's words for what changed the footage a save met (`editorAskedSince`). */
+export const EDITOR_ASKED_MEANWHILE = "The editor asked for these changes meanwhile, and what they did stands: keep it, and make your edit around it only where it still fits:";
+
+/**
+ * What the editor asked for that went onto the video after `fromVersion`, oldest first: their words for each request
+ * about one cut or edit, and each change they made themselves (an edit they rejected). A request about one edit can
+ * run beside a pass, so a save that meets footage changed since it read the video is told which of those changes were
+ * the editor's: those are their decisions, not another run's to make again.
+ */
+export function editorAskedSince(ctx: Ctx, projectId: string, fromVersion: string | undefined, head: string): string[] {
+  if (!fromVersion || fromVersion === head) return [];
+  const links = ctx.repos.versions.links(projectId);
+  if (!historyLineage(links, head).lineage.has(fromVersion)) return [];
+  const byVersion = new Map(links.map(link => [link.version, link]));
+  const asked: string[] = [];
+  for (let at = byVersion.get(head); at && at.version !== fromVersion; at = at.parent ? byVersion.get(at.parent) : undefined) {
+    const change = at.changeId ? ctx.repos.changes.get(at.changeId) : undefined;
+    if (!change) continue;
+    const task = change.taskId ? ctx.repos.tasks.get(change.taskId) : undefined;
+    const words = task ? task.createdBy.type === "human" && (task.context.editIndex !== undefined || task.context.cutIndex !== undefined)
+      ? requestText(task) : undefined
+      : change.author.type === "human" ? change.description : undefined;
+    if (words && !asked.includes(words)) asked.push(words);
+  }
+  return asked.reverse();
 }
 
 /** The thread a task belongs to (its own id when it started one). */

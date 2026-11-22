@@ -50,6 +50,8 @@ import { json, noteUnmeasured, type ToolResult } from "./tool-result.js";
 
 /** What to do about an edit another request's change kept off the video. Its own result says what met and where. */
 const NOT_APPLIED_NEXT = "Nothing was applied. Another request changed this footage after fromVersion. Read that passage on currentVersion and make the edit again there.";
+/** Said when the editor asked for what changed it: a request about one edit runs beside the request that made it. */
+const EDITOR_ASKED_NEXT = "The editor asked for the changes in `editorAsked` meanwhile, and what they did stands: keep it, and make your edit around it only where it still fits.";
 
 /**
  * Seconds a save waits for the cuts of a recording it shows that aren't read yet. A recording is read once and kept:
@@ -329,7 +331,7 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
       duration: duration ?? (timeline ? timelineDuration(timeline) : undefined),
       diff: lines,
       ...(onWholeFrames.length && { onWholeFrames }),
-      ...(notApplied && { notApplied: { ...notApplied, next: NOT_APPLIED_NEXT } }),
+      ...(notApplied && { notApplied: { ...notApplied, next: notApplied.editorAsked?.length ? `${NOT_APPLIED_NEXT} ${EDITOR_ASKED_NEXT}` : NOT_APPLIED_NEXT } }),
       ...(unframed.length && { unframedBeside: unframed, next: UNFRAMED_NEXT }),
       ...(bare.length && { backgroundShows: bare, backgroundNext: BACKGROUND_NEXT }),
       ...(brief.length && { briefPictures: brief.slice(0, 20), briefNext: BRIEF_PICTURES_NEXT }),

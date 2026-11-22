@@ -627,27 +627,24 @@ it("starts requests about different cuts or edits together, and every other requ
   expect(whileFirst.wait(other.id)).toBeUndefined();
   expect(whileFirst.order[0]).toBe(other.id);
   expect(await claim()).toBe(other.id);
+  // A request about the whole video works beside the revisions of applied edits, and a revision asked after it starts
+  // beside it too. Only the second request about the first edit waits.
+  expect(whileFirst.wait(whole.id)).toBeUndefined();
+  expect(await claim()).toBe(whole.id);
+  expect(await claim()).toBe(late.id);
   expect(await claim()).toBeNull();
   // A question about one edit holds only what is about that edit.
   expect((await api<{ waiting: boolean }>("POST", `/tasks/${other.id}/question`,
     { text: "Above the lower third?", startedAt: app.ctx.repos.tasks.get(other.id)!.startedAt })).body.waiting).toBe(true);
   await finish(first.id);
   expect(await claim()).toBe(same.id);
-  // A request about the whole video runs alone: it waits for both, and the revision asked after it waits for it.
   expect(await claim()).toBeNull();
-  await finish(same.id);
-  expect((await readQueue()).wait(whole.id)).toMatchObject({ kind: "question", task: { id: other.id } });
-  expect(await claim()).toBeNull();
-  await api("POST", `/tasks/${other.id}/answer`, { text: "Yes" });
-  const answered = await readQueue();
-  expect(answered.wait(other.id)).toBeUndefined();
-  expect(answered.wait(whole.id)).toEqual({ kind: "ahead", count: 1 });
-  expect(await claim()).toBe(other.id);
-  await finish(other.id);
-  expect(await claim()).toBe(whole.id);
+  // A second request about the whole video waits for the first.
+  const music = await send("Add a music bed");
+  expect((await readQueue()).wait(music.id)).toMatchObject({ kind: "run", task: { id: whole.id } });
   expect(await claim()).toBeNull();
   await finish(whole.id);
-  expect(await claim()).toBe(late.id);
+  expect(await claim()).toBe(music.id);
 });
 
 it("keeps a legacy queued request's original place after it asks a question", async () => {

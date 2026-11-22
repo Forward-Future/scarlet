@@ -590,12 +590,12 @@ describe("scarlet server", () => {
     const claim1 = await api<{ task: Task | null }>("POST", `/hosts/${host.id}/claim`, { token: agentToken, body: {} });
     expect(claim1.json.task?.kind).toBe("revise");
     expect(claim1.json.task?.state).toBe("claimed");
-    // One request at a time in a project: the note waits until the revision finishes.
-    expect((await api<{ task: Task | null }>("POST", `/hosts/${host.id}/claim`, { token: agentToken, body: {} })).json.task).toBeNull();
-    await api("POST", `/tasks/${claim1.json.task!.id}/complete`, { token: agentToken, body: { state: "done", summary: "Revised" } });
+    // The revision is about one cut of its change and saves into that change, so the note, a request of another thread
+    // about the video, starts beside it.
     const claim2 = await api<{ task: Task | null }>("POST", `/hosts/${host.id}/claim`, { token: agentToken, body: {} });
     expect(claim2.json.task?.id).toBe(noteTask.id);
     expect(claim2.json.task?.hostId).toBe(host.id);
+    await api("POST", `/tasks/${claim1.json.task!.id}/complete`, { token: agentToken, body: { state: "done", summary: "Revised" } });
     const claim3 = await api<{ task: Task | null }>("POST", `/hosts/${host.id}/claim?wait=1`, { token: agentToken, body: {} });
     expect(claim3.json.task).toBeNull();
 

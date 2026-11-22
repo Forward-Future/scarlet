@@ -442,7 +442,7 @@ export class AgentHost {
   // -- claim loop -----------------------------------------------------------
 
   private async claimLoop(): Promise<void> {
-    const limit = Math.min(8, Math.max(1, this.config.maxParallel ?? 3));
+    const limit = Math.min(8, Math.max(1, this.config.maxParallel ?? 4));
     const checkLimit = sideCheckSlots(limit);
     while (!this.stopped) {
       const available = this.agents.filter(a => a.installed && a.loggedIn !== false && (CLI_AGENTS as string[]).includes(a.id));

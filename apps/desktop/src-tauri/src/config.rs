@@ -97,7 +97,7 @@ pub struct AppConfig {
     pub timeout_minutes: Option<u64>,
     /// Stop a run whose agent has written nothing for this many minutes (default 10). 0 never stops one for silence.
     pub stall_minutes: Option<u64>,
-    /// Tasks each agent runtime may run at once (default 3, max 8).
+    /// Tasks each agent runtime may run at once (default 4, max 8): a request about the whole video and three revisions beside it.
     #[serde(default)]
     pub max_parallel: Option<usize>,
 }

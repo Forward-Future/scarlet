@@ -23,7 +23,7 @@ import { errorMessage, round3 } from "../../util.js";
 import { currentCutRanges, placeRevision } from "../stagedCutRecovery.js";
 import { editsDialogue, FINISHED_TASK, saveTask } from "../tasks.js";
 import { resolveTimeline, storeVersion } from "../timeline.js";
-import { CALL_WITH_EDITOR, capitalized, CARRIED, editorsCut, LEFT_OF_STAGED_CUT, putAway, REVISED, saveChange } from "./common.js";
+import { CALL_WITH_EDITOR, capitalized, CARRIED, EDITOR_ASKED_MEANWHILE, editorAskedSince, editorsCut, LEFT_OF_STAGED_CUT, putAway, REVISED, saveChange } from "./common.js";
 import { prepareCutReview } from "./cutReview.js";
 import { cutCrossfade, fadeJoins, joinCrossfadeReport } from "./joinCrossfades.js";
 import { persistProposal } from "./propose.js";
@@ -222,7 +222,9 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       if (!toHead) return r;
       const start = toHead(r.start, "right"), end = toHead(r.end, "left");
       if (start === null || end === null || Math.abs(end - start - (r.end - r.start)) > 1 / fps) {
-        throw conflict("cut_changed", `The edit changed around ${r.start.toFixed(1)} s while this part was decided. Reread the current timeline and map that passage again.`);
+        const asked = editorAskedSince(ctx, projectId, fromVersion, head);
+        throw conflict("cut_changed", `The edit changed around ${r.start.toFixed(1)} s while this part was decided. Reread the current timeline and map that passage again.` +
+          (asked.length ? ` ${EDITOR_ASKED_MEANWHILE} ${asked.map(words => JSON.stringify(words)).join(", ")}.` : ""));
       }
       return { start, end };
     };
