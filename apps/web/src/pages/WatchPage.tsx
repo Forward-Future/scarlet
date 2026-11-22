@@ -130,7 +130,9 @@ interface PreviewProps {
      */
     heard?: { current: string | undefined };
     /** Set while Scarlet opens again, at launch, what was open at the last quit: that passage is shown and not played. */
-    quiet?: { current: boolean } };
+    quiet?: { current: boolean };
+    /** Scarlet is actively editing the video shown here. */
+    editing?: boolean };
   /**
    * Play this rendered version instead, through `clock`, while everything on screen stays on the version shown.
    * Its joins are inside the rendered media, so a cut sounds exactly as it will. `file` is its saved preview, when
@@ -679,7 +681,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
         </div>}
         {simple.above}
         <div>
-          <PlayerTimeline activeShortcuts={active} foot={simple.foot} duration={duration} pictureAspect={pictureAspect} previewStrip={laneStrip} hoverVideo={hoverVideo}
+          <PlayerTimeline activeShortcuts={active} foot={simple.foot} editing={simple.editing} duration={duration} pictureAspect={pictureAspect} previewStrip={laneStrip} hoverVideo={hoverVideo}
             waveform={{ media: current.media, mediaPaused: current.project.mediaPaused, source, timeline: laneTimeline, ...sameClockBefore && {
               audioFrom: playingBefore ? sameClockBefore : undefined, scaleWith: playingBefore ? laneTimeline : sameClockBefore } }} frameAt={frameAt} onSeek={seekFull} onSelectTime={selectTime} onScrubStart={scrubStart}
             range={simple.onRange ? shownRange : undefined} onRange={simple.onRange ? markRange : undefined} fps={fps}

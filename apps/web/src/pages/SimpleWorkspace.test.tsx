@@ -12402,3 +12402,26 @@ it("keeps a dialogue pass's decided calls in For you after the pass applies", as
   await click(seeAll(pass)!);
   expect(passRows().map(r => r.querySelector(".simple-pass-words")?.textContent)).toEqual([STAGED[0]!.reason, STAGED[2]!.reason]);
 });
+
+it("drifts the timeline wash only while Scarlet is actively editing the video shown, not when paused, waiting, or previewing a Media clip", async () => {
+  await show();
+  const active = () => !!container.querySelector(".timeline-editing-wash[data-active]");
+  // The fixture starts with task_running active, so the wash is on.
+  expect(active()).toBe(true);
+  // Pausing editing turns it off, resuming brings it back.
+  await event(d => ({ ...d, project: { ...d.project, editingPaused: true } }));
+  expect(active()).toBe(false);
+  await event(d => ({ ...d, project: { ...d.project, editingPaused: false } }));
+  expect(active()).toBe(true);
+  // Previewing a raw source clip from Media is not the edited cut, so the wash stays off while it is open.
+  await click(mediaButton());
+  await act(async () => { await vi.dynamicImportSettled(); });
+  await click(await vi.waitFor(() => { const b = container.querySelector<HTMLButtonElement>('button[aria-label^="Preview source"]'); if (!b) throw new Error("no Media row yet"); return b; }));
+  expect(active()).toBe(false);
+  await click(buttonIn(container, "Back to the video")!);
+  expect(active()).toBe(true);
+  // Finishing the running edit leaves task_waiting (waiting_for_user) and task_done (done): neither drifts the wash.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_running"
+    ? { ...t, state: "done" as const, finishedAt: new Date().toISOString() } : t) }));
+  expect(active()).toBe(false);
+});
