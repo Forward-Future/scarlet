@@ -732,13 +732,12 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .req .run-wait .simple-link { margin-left: 6px; }
 /* What the request made, as its rows. */
 .req .simple-pass { margin: 0; border: 0; border-radius: 0; background: none; }
-/* What doesn't fit on the line goes to the next, as words do: while a scheduled pass still runs, "See 2 edits so far",
-   "Goes in when Scarlet finishes" can be wider than a narrow chat, and none may run over another. */
+/* What doesn't fit on the line goes to the next, as words do, so items in a narrow chat never run over one another. */
 .req .simple-pass-line { flex-wrap: wrap; align-items: baseline; gap: 0 12px; min-height: 26px; padding: 0; }
 /* While Scarlet still works, the line under its steps ("See 5 edits so far") stands clear of the step above it and
    of the message box below. */
 .req .simple-pass:not(:has(.simple-made)) > .simple-pass-line { margin: 12px 0 10px; }
-/* With nothing to open, schedule or report, the row isn't there. */
+/* With nothing to open or report, the row isn't there. */
 .req .simple-pass-line:not(:has(button, .simple-pass-ok, .run-tokens, .simple-action)) { display: none; }
 /* What the request changed: one sentence in the chat's own type, its figures in bold, and after it on the same line
    the link to the result. A long sentence wraps and the link follows its last word. */

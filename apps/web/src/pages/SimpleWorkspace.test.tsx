@@ -3223,22 +3223,20 @@ it("holds back the cuts a running pass hasn't checked, and applies the calls it 
   expect(save).toHaveBeenLastCalledWith("chg_ready", expect.objectContaining({
     choices: [{ index: 0, choice: "cut" }, { index: 1, choice: "cut" }], applyWhenDone: true }));
   expect(container.querySelector('[aria-label="Call"]')).toBeNull();
-  // It says so, with no guess at how long that will be: the chat carries no time. It is a status, not a button: there
-  // is nothing to press and no way to hold the pass back.
-  expect(passCard().querySelector(".simple-pass-ok")?.textContent).toBe("Goes in when Scarlet finishes");
+  // Nothing extra is shown in the chat for a scheduled pass: no status line, no button to press or hold it back.
+  expect(passCard().querySelector(".simple-pass-ok")).toBeNull();
   expect(passCard().querySelector(".simple-pass-line")?.querySelectorAll("button").length).toBe(0);
   // Going back to change that call keeps the schedule: the pass still goes in when Scarlet finishes, with the new call.
   await click(passRows().find(r => r.textContent?.includes("Breath before the price."))!);
   await press("x");
   expect(save).toHaveBeenLastCalledWith("chg_ready", expect.objectContaining({
     choices: [{ index: 0, choice: "cut" }, { index: 1, choice: "keep" }], applyWhenDone: true }));
-  expect(passCard().textContent).toContain("Goes in when Scarlet finishes");
-  // Scarlet then asks about another cut. The engine takes the schedule back, and the line follows it: the pass waits
-  // for the editor again instead of going on saying it applies by itself.
+  expect(passCard().querySelector(".simple-pass-ok")).toBeNull();
+  // Scarlet then asks about another cut. The engine takes the schedule back, and the pass waits for the editor again.
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, applyWhenDone: undefined, cutAssessments: [...c.cutAssessments!,
     { index: 2, start: 598, end: 602.5, verdict: "ask" as const, reason: "The corrected image-input take belongs here." }] } : c) }));
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
-  expect(passCard().textContent).not.toContain("Goes in when Scarlet finishes");
+  expect(passCard().querySelector(".simple-pass-ok")).toBeNull();
 });
 
 it("doesn't send a pass's old schedule along with a call once its run has stopped", async () => {
@@ -9934,7 +9932,7 @@ it("opens the edits so far and keeps the selected cut open when a running pass s
   expect([link(), reviewModes(pass())]).toEqual([null, [["See both", "false"]]]);
 });
 
-it("wraps the line of a pass scheduled while Scarlet still works, so its link and its status never run over each other", async () => {
+it("shows no scheduled status line on a pass scheduled while Scarlet still works", async () => {
   flagged();
   // The pass has applied a part and is still at work. It asked about one cut, and the editor's call on it scheduled the
   // pass to apply when Scarlet finishes.
@@ -9957,11 +9955,10 @@ it("wraps the line of a pass scheduled while Scarlet still works, so its link an
     await act(async () => {});
     const pass = container.querySelector<HTMLElement>('[aria-label="Dialogue pass"]')!;
     const line = pass.querySelector<HTMLElement>(".simple-pass-line")!;
-    // The decided call stays in For you with its tabs above it, and the scheduled status sits on its own wrapping line
-    // below with no link to take it back.
+    // The decided call stays in For you with its tabs above it, and nothing extra renders on the line below.
     expect(reviewModes(pass)).toEqual([["For you", "true"], ["See all", "false"]]);
-    expect([...line.children].map(part => part.textContent)).toEqual(["Goes in when Scarlet finishes", ""]);
-    expect(styled(line, "flex-wrap")).toEqual(["wrap"]);
+    expect([...line.children].map(part => part.textContent)).toEqual([""]);
+    expect(pass.querySelector(".simple-pass-ok")).toBeNull();
   });
 });
 
