@@ -63,6 +63,29 @@ fn a_question_the_mcp_server_refused_or_with_no_words_is_no_question() {
     }
 }
 
+/// A call through tool_call reads as the call it makes, in the run's history and in its failures; a question asked
+/// through it, which the MCP server refuses, stays a tool_call and never becomes the editor's question.
+#[test]
+fn a_call_through_tool_call_reads_as_the_tool_it_calls() {
+    let update = |u: Value| json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"g1","update":u}}).to_string();
+    let mut st = GeminiState::default();
+    let evs = feed(
+        &[
+            &update(json!({"sessionUpdate":"tool_call","toolCallId":"c1","name":"mcp_scarlet_tool_call","rawInput":{"name":"mcp_scarlet_transcript_get","arguments":{"mediaId":"m1"}}})),
+            &update(json!({"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"failed","rawOutput":"no such media"})),
+            &update(json!({"sessionUpdate":"tool_call","toolCallId":"c2","name":"mcp_scarlet_tool_call","rawInput":{"name":"task_question","arguments":{"text":"Which take?"}}})),
+            &update(json!({"sessionUpdate":"tool_call_update","toolCallId":"c2","status":"completed","rawOutput":{"isError":true}})),
+        ],
+        &mut st,
+    );
+    assert_eq!(evs[0], RunnerEvent::with("tool", r#"scarlet.transcript_get {"mediaId":"m1"}"#, json!({"tool":"scarlet.transcript_get","input":{"mediaId":"m1"},"toolId":"c1"})));
+    assert!(evs[1].text.starts_with("scarlet.transcript_get failed: "), "{:?}", evs[1]);
+    assert_eq!(evs[2].kind, "tool");
+    assert_eq!(evs[2].data.as_ref().unwrap()["tool"], "scarlet.tool_call");
+    assert_eq!(evs.len(), 3);
+    assert!(st.question.is_none() && !st.should_stop && !st.question_posted);
+}
+
 #[test]
 fn maps_plan_updates_and_tool_failures() {
     let mut st = GeminiState::default();
@@ -96,6 +119,7 @@ fn allows_only_scarlet_mcp_permissions() {
         json!({ "title": "scarlet/timeline_propose (2 ops)" }),
         json!({ "title": "  Scarlet.Frame_Contact_Sheet_Batch  " }),
         json!({ "name": "scarlet__tool_help" }),
+        json!({ "name": "mcp_scarlet_tool_call" }),
         json!({ "name": "mcp__scarlet__skill_save_edit" }),
         json!({ "name": " ", "title": "scarlet:task_question" }),
     ] {
@@ -139,8 +163,9 @@ fn knows_every_tool_scarlet_offers_and_no_other() {
         .flat_map(|group| names.captures_iter(group.get(1).unwrap().as_str()).map(|n| n.get(1).unwrap().as_str()).collect::<Vec<_>>())
         .collect();
     assert!(listed.len() > 40, "read {} tools from editingTools.ts", listed.len());
-    // The MCP server adds tool_help, which gives Gemini a tool's whole description.
-    listed.push("tool_help");
+    // The MCP server adds tool_help, which gives Gemini a tool's whole description, and tool_call, which calls a tool
+    // it lists only by name.
+    listed.extend(["tool_help", "tool_call"]);
     listed.sort_unstable();
     let mut ours = SCARLET_TOOLS.to_vec();
     ours.sort_unstable();

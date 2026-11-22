@@ -14,6 +14,7 @@ import * as dialogueJoin from "./dialogue-join.js";
 import { describeError, toolRefusal } from "./tool-result.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { makeState, startMockServer, type MockServer } from "./mock-server.js";
+import { reachableTools } from "./reachable-tools.testkit.js";
 
 const transcript: Transcript = {
   id: "t1",
@@ -223,7 +224,7 @@ describe("tools/list", () => {
     for (const agent of ["claude", "codex", "gemini"]) for (const context of [{}, { dialogueOperation: "first-cut" as const }]) {
       const c = await connect(edit.id, undefined, Task.parse({ ...edit, agent, context }), undefined, agent);
       try {
-        const tools = (await c.listTools()).tools;
+        const tools = await reachableTools(c);
         const names = tools.map(t => t.name);
         expect([names.includes("web_capture"), names.includes("asset_add"), names.includes("timeline_propose"), names.includes("broll_make")], agent).toEqual([true, true, true, false]);
         expect(Object.keys(tools.find(t => t.name === "asset_add")!.inputSchema.properties ?? {}), agent).toEqual(["path", "kind", "provenance", "source"]);

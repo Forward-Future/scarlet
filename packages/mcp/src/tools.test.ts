@@ -13,6 +13,7 @@ import { relativeLinks } from "./graphics-tools.js";
 import { ALWAYS_LOADED_TOOLS, createScarletMcpServer, transcriptionNote, validateOps, type ScarletMcpContext } from "./server.js";
 import { describeError, formatZodError } from "./tool-result.js";
 import { makeState, startMockServer, type MockServer, type RecordedRequest } from "./mock-server.js";
+import { reachableTools } from "./reachable-tools.testkit.js";
 
 const transcript: Transcript = { id: "t1", mediaId: "m1", segments: [{ id: "s1", start: 0, end: 6, text: "Hello everyone welcome back.", words: [
   { text: "Hello", start: 0.2, end: 0.5 }, { text: "everyone", start: 0.6, end: 1.0 }, { text: "welcome", start: 1.1, end: 1.4 }, { text: "back.", start: 1.5, end: 1.8 }] }] };
@@ -838,7 +839,7 @@ describe("tool annotations", () => {
       context: {}, createdBy: { type: "human", name: "Editor" } });
     const c = await connect({ agent, taskId: task.id, task, author: { type: "agent", id: agent, name: agent } });
     try {
-      const { tools } = await c.listTools();
+      const tools = [...(await c.listTools()).tools, ...await reachableTools(c)];
       expect(tools.map(t => t.name)).toEqual(expect.arrayContaining(["dialogue_check_join", "dialogue_apply_cuts", "timeline_propose", "captions_generate"]));
       const untyped: string[] = [];
       const walk = (node: unknown, path: string) => {
