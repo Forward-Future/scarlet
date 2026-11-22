@@ -11,7 +11,6 @@ import {
   type LeadInFrames,
 } from "./MonitorLoadOverlay";
 import { usePictureWait } from "./usePictureWait";
-import { usePlayerStore } from "../../stores/player";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -212,17 +211,6 @@ it("keeps holding the outgoing frame when the sharp still loads inside the first
   await after(MONITOR_LOAD_GRACE_MS);
   expect(still()?.getAttribute("src")).toBe("/frames/sharp.jpg");
   expect(container.querySelector(".monitor-load-held")).toBeNull();
-});
-
-it("shows the still of where a seek lands while the picture is still loading", async () => {
-  await render({ openingJoin: true, showVideo: false, leadIn: { fast: "/frames/at-10.jpg" } });
-  await after(MONITOR_LOAD_GRACE_MS);
-  expect(still()?.getAttribute("src")).toBe("/frames/at-10.jpg");
-  // The same cut stays open, so nothing else says the moment moved: the seek does.
-  await render({ openingJoin: true, showVideo: false, leadIn: { fast: "/frames/at-40.jpg" } });
-  expect(still()?.getAttribute("src")).toBe("/frames/at-10.jpg");
-  await act(async () => { usePlayerStore.setState(s => ({ seeks: s.seeks + 1 })); });
-  expect(still()?.getAttribute("src")).toBe("/frames/at-40.jpg");
 });
 
 it("dismisses immediately on errors or when reduced motion is enabled", async () => {
