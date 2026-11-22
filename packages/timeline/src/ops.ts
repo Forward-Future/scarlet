@@ -142,9 +142,27 @@ export const SplitJoinOp = z.object({
 });
 export type SplitJoinOp = z.infer<typeof SplitJoinOp>;
 
+/**
+ * Dip a clip, such as music, under speech. It reads the transcript, so it is a step of a proposal only: Scarlet turns it
+ * into the clip's `volumeKeyframes` (an updateClip) before the edit is checked and saved. Unset fields are the stock
+ * skill music-under-speech's.
+ */
+export const DuckUnderSpeechOp = z.object({
+  op: z.literal("duckUnderSpeech"),
+  clipId: Id,
+  depthDb: z.number().min(-60).max(0).optional(),
+  fadeDown: z.number().min(0).max(5).optional(),
+  fadeUp: z.number().min(0).max(10).optional(),
+  minGap: z.number().min(0).max(30).optional(),
+  /** [start, end] timeline seconds to dip under instead of the transcribed speech. */
+  ranges: z.array(z.array(Seconds).length(2)).optional(),
+});
+export type DuckUnderSpeechOp = z.infer<typeof DuckUnderSpeechOp>;
 /** What an edit may be proposed as: the stored ops, and the steps Scarlet expands into them. */
-export const ProposedOp = z.discriminatedUnion("op", [...TimelineOp.options, SplitJoinOp]);
+export const ProposedOp = z.discriminatedUnion("op", [...TimelineOp.options, SplitJoinOp, DuckUnderSpeechOp]);
 export type ProposedOp = z.infer<typeof ProposedOp>;
+export const ProposeOp = ProposedOp;
+export type ProposeOp = ProposedOp;
 
 export class OpError extends Error {
   constructor(
@@ -433,6 +451,7 @@ export function trimHead<T extends Clip>(clip: T, at: number): T {
   if (clip.kind === "media") {
     return withoutSplitAt({ ...clip, timelineIn: at, sourceIn: clip.sourceIn + delta * (clip.speed ?? 1),
       ...(clip.keyframes?.length && { keyframes: clip.keyframes.map(key => ({ ...key, time: key.time - delta })) }),
+      ...(clip.volumeKeyframes?.length && { volumeKeyframes: clip.volumeKeyframes.map(key => ({ ...key, time: key.time - delta })) }),
     }, "leads") as T;
   }
   if (clip.kind === "caption") return trimCaption(clip, at, clip.timelineOut) as T;

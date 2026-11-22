@@ -6,6 +6,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- Scarlet can dip music under speech and let it swell back up in the pauses, with a new Music under speech skill for how deep and how fast.
+- Scarlet can clean the room and background noise out of a voice, when you ask for it or a skill of yours says to.
 - Scarlet can make J and L cuts, letting the next voice start just before its shot or a line carry on over the next one, and the edit's card says how far the sound leads or trails.
 - A cut you approved on a dialogue pass is listed once after the pass goes in, not again as an extra row you can't open.
 - Opening a cut no longer flashes black for a moment when its still is already loaded.

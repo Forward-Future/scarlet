@@ -138,7 +138,7 @@ export interface HandoffLoss { at?: number; what: string }
 const EFFECT_NAMES: Record<string, string> = {
   blur: "Blur", brightness: "Brightness", contrast: "Contrast", saturation: "Saturation", color: "Color adjustment",
   sharpen: "Sharpen", lut: "LUT", denoise: "Noise reduction", expander: "Expander", eq: "EQ", compressor: "Compressor",
-  limiter: "Limiter", loudnorm: "Loudness",
+  limiter: "Limiter", loudnorm: "Loudness", voiceCleanup: "Voice cleanup",
 };
 
 function clipName(clip: MediaClip, media: Map<string, MediaAsset>) {

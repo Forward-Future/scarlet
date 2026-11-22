@@ -36,6 +36,8 @@ function audioMixPlan(project: Project, timeline: Timeline, range: TimeRange, ca
       seek: fnum(clip.sourceIn + p.local0 * clip.speed), visible: fnum(p.vis), delay: Math.round(p.pos * sampleRate),
       effects: clip.effects.filter(effect => effectKind(effect.type) !== "video"),
       fades: clip.audioFadeIn || clip.audioFadeOut ? [clip.audioFadeIn, clip.audioFadeOut, p.local0, p.clipDur] : undefined,
+      // The level a keyframe gives is timed from the clip's start, so the section's place in the clip goes with it.
+      levels: clip.volumeKeyframes?.length ? [clip.volumeKeyframes, fnum(p.local0)] : undefined,
     }];
   }));
   const samples = sampleCount(range.start, range.end, sampleRate);

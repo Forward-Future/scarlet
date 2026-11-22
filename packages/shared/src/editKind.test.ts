@@ -27,6 +27,22 @@ describe("telling what an applied edit did", () => {
       .toEqual(["cut"]);
   });
 
+  it("names a level that moves over a clip a dip, and voice cleanup a voice cleanup, on the camera's own sound too", () => {
+    const dip = [{ time: 0, db: 0, ease: "easeInOut" }, { time: 0.3, db: -18, ease: "linear" }];
+    expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { volumeKeyframes: dip } }]), [one], { before: base })).toEqual(["dip"]);
+    // A music bed added already dipped, or added and then dipped, is a dip.
+    const bed = makeMediaClip("music", 0, 60, 0, { id: "bed" });
+    expect(editKinds(change([{ op: "addTrack", track: makeTrack("audio", "Music", "music") }, { op: "addClip", trackId: "music", clip: bed },
+      { op: "updateClip", clipId: "bed", patch: { volumeKeyframes: dip } }]), [one], { before: base })).toEqual(["dip"]);
+    const cleanup = [{ type: "voiceCleanup", params: {}, enabled: true }];
+    expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { effects: cleanup } }]), [one], { before: base })).toEqual(["voice"]);
+    // Another effect only the sound has is a sound edit wherever the clip is; one on the picture is still an overlay.
+    expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { effects: [{ type: "eq", params: { highpass: 80 }, enabled: true }] } }]), [one],
+      { before: base })).toEqual(["audio"]);
+    expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { effects: [{ type: "blur", params: {}, enabled: true }] } }]), [one],
+      { before: base })).toEqual(["overlay"]);
+  });
+
   it("names a scale-up a zoom and a move or inset a reframe", () => {
     expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { keyframes: [
       { time: 0, transform: { scale: 1 } }, { time: 1, transform: { scale: 1.3 } }] } }]), [one], { before: base })).toEqual(["zoom"]);
