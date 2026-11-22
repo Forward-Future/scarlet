@@ -118,6 +118,34 @@ async fn a_heartbeat_that_gets_through_clears_the_error_a_failed_call_left() {
     assert_eq!(rt.status().error, None);
 }
 
+#[tokio::test]
+async fn a_delayed_heartbeat_loop_sends_one_catch_up_heartbeat_not_a_burst() {
+    let every = Duration::from_millis(150);
+    let times = Arc::new(StdMutex::new(Vec::<std::time::Instant>::new()));
+    let record = times.clone();
+    let slow = AtomicBool::new(true);
+    let engine = api::fake::engine(move |route, _| {
+        if route == "POST /api/hosts/host_1/heartbeat" {
+            record.lock().unwrap().push(std::time::Instant::now());
+            // Hold the first heartbeat across four missed ticks, the way a wake after sleep finds the interval far behind.
+            if slow.swap(false, Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(650));
+            }
+        }
+        (200, r#"{"cancelled":[]}"#.into())
+    }).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, _) = runtime(&engine.url, dir.path());
+    let looping = tokio::spawn(rt.clone().heartbeat_loop(every));
+    until("three heartbeats", || times.lock().unwrap().len() >= 3).await;
+    rt.cancel.cancel();
+    tokio::time::timeout(Duration::from_secs(10), looping).await.expect("the loop did not stop").unwrap();
+    let times = times.lock().unwrap();
+    // After the stalled call returns, one catch-up heartbeat runs and the next waits a full interval.
+    let gap = times[2].duration_since(times[1]);
+    assert!(gap >= Duration::from_millis(100), "missed ticks burst back to back: gap between 2nd and 3rd heartbeat was {gap:?}");
+}
+
 fn task(id: &str) -> Task {
     serde_json::from_value(json!({ "id": id, "projectId": "prj_1", "agent": "claude", "instruction": "Cut the pauses", "startedAt": "2026-11-08T10:00:00.000Z" })).unwrap()
 }

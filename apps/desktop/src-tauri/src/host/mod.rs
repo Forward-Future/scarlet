@@ -60,6 +60,9 @@ use workspace::TASKS_DIR;
 /// How long cached subscription quota stays fresh before a non-forced refresh re-probes.
 const QUOTA_TTL: Duration = Duration::from_secs(60);
 
+/// How often the host sends a heartbeat to the engine.
+const HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
+
 /// Subscriptions only: omit quota when a provider is signed in via API key or not signed in.
 fn is_quota_eligible(agent: &AgentAvailability) -> bool {
     CLI_AGENTS.contains(&agent.id.as_str())
@@ -432,8 +435,11 @@ impl HostRuntime {
         }
     }
 
-    async fn heartbeat_loop(self: Arc<Self>) {
-        let mut tick = tokio::time::interval(Duration::from_secs(30));
+    async fn heartbeat_loop(self: Arc<Self>, every: Duration) {
+        let mut tick = tokio::time::interval(every);
+        // After sleep (where Windows' monotonic clock keeps counting) or a stalled call, send one wake heartbeat
+        // and resume the cadence instead of bursting every missed tick back to back.
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         tick.tick().await;
         loop {
             tokio::select! {
@@ -713,7 +719,7 @@ impl HostRuntime {
         }
         self.emit_status();
         tauri::async_runtime::spawn(self.clone().deliver_loop());
-        tauri::async_runtime::spawn(self.clone().heartbeat_loop());
+        tauri::async_runtime::spawn(self.clone().heartbeat_loop(HEARTBEAT_EVERY));
         tauri::async_runtime::spawn(self.clone().ws_loop());
         tauri::async_runtime::spawn(self.clone().catalog_loop(&CATALOG_RETRY_WAITS));
         {
