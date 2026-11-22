@@ -52,6 +52,16 @@ jobs:
           version=$(node apps/desktop/scripts/release-version.mjs for-commit)
           node apps/desktop/scripts/release-version.mjs set "$version"
 
+      # Both whisper-cli builds come from pinned sources, and build-whisper.mjs keeps a build only if its receipt
+      # names the script's current recipe. So a build restored here is used as is, and a changed recipe builds again.
+      - name: Restore whisper-cli built by this recipe
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            apps/desktop/src-tauri/binaries/whisper-cli-${{ env.TARGET }}*
+            apps/desktop/src-tauri/binaries/whisper-cpu
+          key: whisper-cli-${{ env.TARGET }}-ubuntu-24.04-${{ hashFiles('apps/desktop/scripts/build-whisper.mjs') }}
+
       - name: Build packages and engine sidecar
         run: |
           pnpm install --frozen-lockfile
