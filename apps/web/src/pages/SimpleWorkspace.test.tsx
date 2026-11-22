@@ -6808,6 +6808,61 @@ it("marks the menu while a rule waits in Learnings, and lists each with its skil
   expect(container.querySelector('[role="dialog"][aria-label="Learnings"]')).toBeNull();
 });
 
+it("shows a rule learned from the editor's decisions as one line that unfolds into them, each time opening its edit", async () => {
+  useSkillsStore.setState({ skills: [skillNamed("skl_dialogue", "dialogue-pass")], status: "ready", error: null });
+  appliedEdits();
+  const thread = threadWith("chg_approved_2").id;
+  const decided = (spot: number, label: string, time: number, decision: "kept" | "rejected" = "rejected") =>
+    ({ id: `${decision}:chg_approved_2:${spot}`, decision, label, projectId: PRJ, threadId: thread, ref: { changeId: "chg_approved_2", spot }, time });
+  data = { ...data, learnings: [
+    learning("lrn_from", { rule: "Leave a pause between sentences under about a second.", replaces: ["Bring every pause down to a quarter second."],
+      learnedFrom: { what: "cuts you rejected", decisions: [decided(1, "captions", 72), decided(2, "wrap", 220),
+        // One from another video says its time, but there's nothing here to open.
+        { id: "rejected:chg_elsewhere:0", decision: "rejected", label: "Pause cut to 0.2 s", projectId: "prj_other", time: 302 }] } }),
+    learning("lrn_said", { rule: "Keep a laugh in.", said: "Don’t cut the laugh." }),
+  ] };
+  useProjectStore.setState({ current: data });
+  await show();
+  // The chat's line says what it was learned from before the skill it is for.
+  const lines = [...container.querySelectorAll<HTMLElement>(".simple-learned")].map(l => l.textContent);
+  expect(lines).toEqual(["Learned from 3 cuts you rejected, for dialogue-pass: “Leave a pause between sentences under about a second.” Review Decline",
+    "Learned for dialogue-pass: “Keep a laugh in.” Review Decline"]);
+  await openMenu();
+  await click(menuRow("Learnings"));
+  const panel = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Learnings"]')!;
+  const [fromDecisions, fromWords] = [...panel.querySelectorAll<HTMLElement>(".learn-item")];
+  // Where "You said:" goes, one folded line in the check's words, with a chevron.
+  expect(fromDecisions!.querySelector(".learn-said")).toBeNull();
+  const toggle = fromDecisions!.querySelector<HTMLButtonElement>("button.learn-from")!;
+  expect([toggle.textContent, toggle.getAttribute("aria-expanded"), !!toggle.querySelector("svg")]).toEqual(["From 3 cuts you rejected", "false", true]);
+  expect(fromDecisions!.querySelector(".learn-decisions")).toBeNull();
+  expect(fromWords!.querySelector(".learn-said")?.textContent).toBe("You said: “Don’t cut the laugh.”");
+  expect(fromWords!.querySelector(".learn-from")).toBeNull();
+  // Everything else on the rule is as it was: Replaces, then Save to, Revise, Approve and ×.
+  expect(fromDecisions!.querySelector(".learn-from ~ .learn-replaces")?.textContent).toBe("Replaces “Bring every pause down to a quarter second.”");
+  expect([...fromDecisions!.querySelectorAll(".learn-actions button:not([role=combobox])")].map(b => b.textContent || b.getAttribute("aria-label")))
+    .toEqual(["Revise", "Approve", "Decline"]);
+  // Pressed, it unfolds one row per decision: its time, its summary and what the editor did.
+  await click(toggle);
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  const rows = () => [...fromDecisions!.querySelectorAll<HTMLElement>(".learn-decisions > .learn-decision")];
+  expect(rows().map(r => [r.querySelector(".learn-decision-time")?.textContent, r.querySelector(".learn-decision-what")?.textContent]))
+    .toEqual([["1:12", "captions · Rejected"], ["3:40", "wrap · Rejected"], ["5:02", "Pause cut to 0.2 s · Rejected"]]);
+  expect(fromDecisions!.querySelector(".learn-decisions + .learn-replaces")).not.toBeNull();
+  // A time in this video is a link; one in another video is plain, and says where it is on hover.
+  expect(rows().map(r => r.querySelector(".learn-decision-time")!.tagName)).toEqual(["BUTTON", "BUTTON", "SPAN"]);
+  expect(rows()[2]!.querySelector(".learn-decision-time")!.getAttribute("title")).toBe("In another video");
+  // A time pressed opens that edit on the timeline, its card on top of it, and the list stays open.
+  await click(rows()[1]!.querySelector("button.learn-decision-time")!);
+  await act(async () => {});
+  expect(editPanel()).not.toBeNull();
+  expect(openTitle()).toBe("wrap");
+  expect(container.querySelector('[role="dialog"][aria-label="Learnings"]')).not.toBeNull();
+  // Pressed again, the line folds.
+  await click(toggle);
+  expect([toggle.getAttribute("aria-expanded"), fromDecisions!.querySelector(".learn-decisions")]).toEqual(["false", null]);
+});
+
 it("opens Learnings at a rule from Review on its line in the chat, and takes the line away once the rule is decided", async () => {
   useSkillsStore.setState({ skills: [skillNamed("skl_dialogue", "dialogue-pass")], status: "ready", error: null });
   data = { ...data, learnings: [learning("lrn_a"), learning("lrn_b", { rule: "Keep a laugh in.", said: "Don’t cut the laugh." })] };

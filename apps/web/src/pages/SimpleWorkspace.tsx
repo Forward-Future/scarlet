@@ -6,7 +6,7 @@ import { ChatRail } from "../components/shell/ChatRail";
 import { ConnectionStatus } from "../components/shell/StatusIndicators";
 import { Dropdown, MenuItem } from "../components/shell/WorkspaceNavigation";
 import { appliedReviewChange, mapStagedCut, makeTimeMap, timelineDuration, type Change, type CutAssessment, type TimeRange, type Timeline } from "@scarlet/timeline";
-import { isAsideTask, fullRenderContext, isProjectEditTask, matchesEdit, queueOrder, queueWaits, requestText, threadEditList, type EditRef, type Task, type ThreadEdit } from "@scarlet/shared";
+import { isAsideTask, fullRenderContext, isProjectEditTask, matchesEdit, queueOrder, queueWaits, requestText, threadEditList, type EditRef, type LearningDecision, type Task, type ThreadEdit } from "@scarlet/shared";
 import { editGroups, useReviewed, useRevising, useThreadEdits } from "../components/review/ThreadEdits";
 import { QueueTray, useRewordingHold, type QueuedRequest } from "../components/chat/QueueTray";
 import { recordEditReview } from "../lib/editReviews";
@@ -971,6 +971,14 @@ export function SimpleWorkspace() {
     reloadFailedMarkers(thread);
     if (thread.id !== focus?.threadId) wentSince.current = newest;
     setFocus({ threadId: thread.id, changeId: ref.changeId, spot: ref.spot, ...single && { single } });
+  }
+  /** A decision a rule in Learnings came from, pressed there: its cut or edit opens on the timeline, or the player goes to where it was. */
+  function openDecision(decision: LearningDecision) {
+    const thread = decision.threadId ? threads.find(t => t.id === decision.threadId) : undefined;
+    if (thread && decision.ref) return openEdit(thread, decision.ref);
+    if (decision.time === undefined) return;
+    stopShowing();
+    player.seek(decision.time, true);
   }
   function listOpen(threadId: string, open: boolean, moved?: boolean) {
     setOpenList(current => open ? threadId : current === threadId ? undefined : current);
@@ -2535,7 +2543,7 @@ export function SimpleWorkspace() {
               </Dropdown>
             </div>
           </header>
-          {panel === "learnings" && <LearningsPanel focus={learnFocus} onClose={() => { setPanel(null); setLearnFocus(undefined); }} />}
+          {panel === "learnings" && <LearningsPanel focus={learnFocus} onOpenDecision={openDecision} onClose={() => { setPanel(null); setLearnFocus(undefined); }} />}
           {/* A pause of caching isn't said here: the editor chose it, and the menu's Resume caching row says it. */}
           {(importFailed || menuError) && <div className="simple-banner" role="status">
             <span>{menuError || "Some files need attention."}</span>

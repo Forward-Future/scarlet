@@ -8,6 +8,7 @@ import { badRequest } from "../errors.js";
 import { approveChange, changeDiff, flagEdit, keepEdits, keptEdits, unkeepEdits, saveCutAssessments, saveCutChoices, prepareCutReview, proposeChange, scheduleSpotCheck, submitDialogueCuts, rejectChange, reopenChange, reviseChange, reviseStagedCut, unapproveChange, withSpotCapability } from "../services/changes.js";
 import { jsonBody, requireProjectHeader, requireScoped, TIMELINE_JSON_BYTES } from "./util.js";
 import { requestAttempt, requireProjectEditAttempt } from "../services/taskAttempt.js";
+import { startDecisionCheck } from "../services/learnings.js";
 
 export function changeRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
@@ -53,7 +54,10 @@ export function changeRoutes(ctx: Ctx) {
   r.post("/projects/:id/kept-edits", async c => {
     const body = await jsonBody(c, KeepEditsRequest);
     const project = requireProjectHeader(ctx, c.req.param("id"));
-    ctx.db.transaction(() => keepEdits(ctx, project.id, body), "immediate")();
+    ctx.db.transaction(() => {
+      // The last Keep of what the request left the editor has its decisions read for a rule.
+      if (keepEdits(ctx, project.id, body).added) startDecisionCheck(ctx, project.id, body.threadId);
+    }, "immediate")();
     return c.body(null, 204);
   });
 

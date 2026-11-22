@@ -269,12 +269,13 @@ export function registerExportAndTaskTools(deps: ExportAndTaskToolsDeps) {
 
   tool(
     "learning_suggest",
-    "Offer the editor a standing rule for one of their skills. It goes on a list they review when they choose, with what they said; nothing in the skill changes unless they approve it. Give the rule as one plain sentence that would read well in the skill, and the skill it belongs in, by id or exact name. In replaces, quote each passage of that skill the rule contradicts or overrides, word for word and one stretch of text each; the editor sees them beside the rule before deciding, and approving it replaces them. Leave replaces out when nothing in the skill says otherwise.",
+    "Offer the editor a standing rule for one of their skills. It goes on a list they review when they choose, with what they said; nothing in the skill changes unless they approve it. Give the rule as one plain sentence that would read well in the skill, and the skill it belongs in, by id or exact name. In replaces, quote each passage of that skill the rule contradicts or overrides, word for word and one stretch of text each; the editor sees them beside the rule before deciding, and approving it replaces them. Leave replaces out when nothing in the skill says otherwise. When the rule comes from what the editor decided, give from: the ids of the decisions it comes from, as your prompt lists them, and what they were in a few words as they read after their count (\"cuts you rejected\", \"laughs you kept\"); the editor sees those decisions in place of words they said.",
     SuggestLearningRequest.shape,
-    async ({ rule, skill, replaces }) => {
+    async ({ rule, skill, replaces, from }) => {
       if (!taskId) return text("Not running as a Scarlet task, so there is no list to add this to.");
-      const { learning, skill: saved } = await client.suggestLearning(projectId, taskId, { rule, skill, ...(replaces?.length && { replaces }) });
-      return json({ learningId: learning.id, skill: saved.name, state: learning.state, ...(learning.replaces && { replaces: learning.replaces.length }) });
+      const { learning, skill: saved } = await client.suggestLearning(projectId, taskId, { rule, skill, ...(replaces?.length && { replaces }), ...(from && { from }) });
+      return json({ learningId: learning.id, skill: saved.name, state: learning.state, ...(learning.replaces && { replaces: learning.replaces.length }),
+        ...(learning.learnedFrom && { from: learning.learnedFrom.decisions.length }) });
     },
   );
 

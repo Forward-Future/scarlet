@@ -831,6 +831,8 @@ export const Task = z.object({
       learningId: Id.optional(),
       /** The request a learning_check task reads. A rule it offers is that request's. */
       checksTaskId: Id.optional(),
+      /** A learning_check started as the editor finished deciding what that request left them, to read their decisions. */
+      readsDecisions: z.literal(true).optional(),
       /** The frame an area_check task looks at: a recording and a source second. */
       areaCheck: z.object({ mediaId: Id, at: Seconds }).optional(),
       time: Seconds.optional(),
@@ -1109,6 +1111,24 @@ export type LearningState = z.infer<typeof LearningState>;
 export const LearningRule = z.string().trim().min(1).max(280).regex(/^[^\r\n]+$/);
 /** What a skill already says that a rule would change, quoted from it. */
 export const LearningReplaces = z.array(z.string().trim().min(1).max(600)).max(6);
+/**
+ * One of the editor's decisions a rule was learned from, as it was when the rule was offered: Keep or Reject on a cut
+ * or edit Scarlet made (a call of a pass included), or a revision they asked of one. `id` is the one the check cited.
+ * `ref` and `threadId` open the cut or edit it was about, where it is still listed; `time` is where it was then.
+ */
+export const LearningDecision = z.object({
+  id: z.string().min(1).max(200),
+  decision: z.enum(["kept", "rejected", "revised"]),
+  /** The cut or edit's short summary. */
+  label: z.string(),
+  projectId: Id,
+  threadId: Id.optional(),
+  ref: z.object({ changeId: Id, spot: z.number().int().nonnegative() }).optional(),
+  time: z.number().nonnegative().optional(),
+  /** What the editor said with a revision. */
+  note: z.string().optional(),
+});
+export type LearningDecision = z.infer<typeof LearningDecision>;
 export const Learning = z.object({
   id: Id,
   projectId: Id,
@@ -1118,6 +1138,11 @@ export const Learning = z.object({
   said: z.string(),
   /** The request it came from. */
   taskId: Id,
+  /**
+   * When the rule came from what the editor decided rather than what they said: the decisions, and what they were in
+   * the check's words as they read after their count ("cuts you rejected").
+   */
+  learnedFrom: z.object({ what: z.string().min(1), decisions: z.array(LearningDecision).min(1) }).optional(),
   /** The skill it would go into: the agent's pick, or the editor's once they chose another. */
   skillId: Id,
   /**
@@ -1146,7 +1171,12 @@ export type Learning = z.infer<typeof Learning>;
  * A rule an agent offers from the request it is working on, the skill it belongs in, by id or exact name, and what
  * that skill already says that the rule would change.
  */
-export const SuggestLearningRequest = z.object({ rule: LearningRule, skill: z.string().trim().min(1).max(200), replaces: LearningReplaces.optional() });
+export const LearningFrom = z.object({
+  decisions: z.array(z.string().trim().min(1).max(200)).min(1).max(40),
+  what: z.string().trim().min(1).max(60).regex(/^[^\r\n]+$/),
+});
+export const SuggestLearningRequest = z.object({ rule: LearningRule, skill: z.string().trim().min(1).max(200), replaces: LearningReplaces.optional(),
+  from: LearningFrom.optional() });
 export type SuggestLearningRequest = z.infer<typeof SuggestLearningRequest>;
 /** The editor's approval, with the skill they chose when it isn't the suggested one, and the model chosen now. */
 export const ApproveLearningRequest = RunChoice.extend({ skillId: Id.optional() });

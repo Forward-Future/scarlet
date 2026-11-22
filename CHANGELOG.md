@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- Scarlet can now learn a rule from what you keep and reject, not only from what you say: Learnings shows which cuts it came from, and each one opens on the timeline.
 - While Scarlet works on a request, Add a note beside what it's doing lets you tell it something without waiting for it to finish: it reads your note on its next step.
 - Scarlet can make J and L cuts, letting the next voice start just before its shot or a line carry on over the next one, and the edit's card says how far the sound leads or trails.
 - Scarlet can dip music under speech and let it swell back up in the pauses, with a new Music under speech skill for how deep and how fast.
