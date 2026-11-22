@@ -5,7 +5,7 @@
  * evidence for the model: whether a shift is worth correcting is its call.
  */
 import type { TimeRange } from "@scarlet/timeline";
-import { LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, ffSeconds, resolveFfmpeg, runCapture } from "./exec.js";
+import { FFMPEG_QUIET_ARGS, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, ffSeconds, resolveFfmpeg, runCapture } from "./exec.js";
 
 /** The mouth's area of the frame: [left, top, right, bottom] as fractions. */
 export type CropBox = readonly [number, number, number, number];
@@ -83,7 +83,7 @@ export async function mouthMotion(file: string, range: TimeRange, opts: {
   const h = even(Math.min(height - top, (Math.min(1, box[3]) - Math.max(0, box[1])) * height));
   // The mouth is a few hundred pixels: decoded frames come back to memory either way, so CUDA doesn't keep them.
   const hardware = opts.decoder ? ["-hwaccel", opts.decoder] : [];
-  const { stdout } = await runCapture(resolveFfmpeg(), ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", ...hardware,
+  const { stdout } = await runCapture(resolveFfmpeg(), [...FFMPEG_QUIET_ARGS, "-loglevel", "error", ...hardware,
     "-ss", ffSeconds(range.start), "-t", String(range.end - range.start), ...LOCAL_MEDIA_INPUT, "-i", file,
     "-map", "0:v:0", "-an", "-vf", `fps=${fps},crop=${w}:${h}:${left}:${top},scale=${MOUTH_W}:${MOUTH_H}:flags=area,format=gray`,
     "-f", "rawvideo", "-"], { signal: opts.signal, maxStderr: 64 * 1024 });
@@ -99,7 +99,7 @@ export async function mouthMotion(file: string, range: TimeRange, opts: {
 
 /** The sound's loudness over each frame of `range` at `fps`, as the log of its RMS level. */
 export async function frameLoudness(file: string, range: TimeRange, opts: { fps: number; frames: number; stream?: number; signal?: AbortSignal }): Promise<Float32Array> {
-  const { stdout } = await runCapture(resolveFfmpeg(), ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "error",
+  const { stdout } = await runCapture(resolveFfmpeg(), [...FFMPEG_QUIET_ARGS, "-loglevel", "error",
     "-ss", ffSeconds(range.start), "-t", String(range.end - range.start), ...LOCAL_MEDIA_INPUT, "-i", file,
     "-map", `0:a:${opts.stream ?? 0}`, "-vn", "-af", SOURCE_AUDIO_CLOCK, "-ac", "1", "-ar", String(SOUND_RATE), "-f", "s16le", "-"],
     { signal: opts.signal, maxStderr: 64 * 1024 });

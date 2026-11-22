@@ -4,16 +4,15 @@ import { randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { TimeRange } from "@scarlet/timeline";
-import { escapeFilterPath } from "./effects.js";
-import { LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, failureReason, ffSeconds, hasDrawtext, resolveFfmpeg, runCapture } from "./exec.js";
-import { resolveFontFile } from "./fonts.js";
-import { isStoredAsShown } from "./probe.js";
+import { FFMPEG_QUIET_ARGS, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, even, failureReason, ffSeconds, hasDrawtext, resolveFfmpeg, runCapture } from "./exec.js";
+import { drawtextFontArg } from "./fonts.js";
+import { withDecoderFallback } from "./probe.js";
 import { waveformFromPcm } from "./waveform.js";
 
 function input(file: string, range: TimeRange, decoder?: SheetOptions["decoder"]) {
   // CUDA frames stay on the GPU until `shrinkFirst` scales them. VideoToolbox frames come back to memory.
   const hardware = decoder === "cuda" ? ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] : decoder ? ["-hwaccel", decoder] : [];
-  return ["-hide_banner", "-nostdin", "-nostats", ...hardware, "-ss", ffSeconds(range.start),
+  return [...FFMPEG_QUIET_ARGS, ...hardware, "-ss", ffSeconds(range.start),
     "-t", String(range.end - range.start), ...LOCAL_MEDIA_INPUT, "-i", file];
 }
 
@@ -77,8 +76,7 @@ export const UNLABELLED_SHEET = "The pictures have no time labels because this c
 function tileSheet(count: number, labels: boolean) {
   const columns = Math.min(3, count);
   const rows = Math.ceil(count / columns);
-  const font = resolveFontFile("Arial");
-  const labelFont = font ? `fontfile=${escapeFilterPath(font.file)}` : "font=sans";
+  const labelFont = drawtextFontArg();
   return [sheetScale, "pad=320:204:(ow-iw)/2:(180-ih)/2", "setsar=1",
     ...labels ? [`drawtext=${labelFont}:text='%{pts\\:flt} s':fontsize=16:fontcolor=white:x=6:y=183`] : [],
     `tile=${columns}x${rows}:nb_frames=${count}:padding=2:color=black`].join(",");
@@ -110,19 +108,10 @@ interface SheetOptions {
   onFallback?: (reason: string) => void;
 }
 
-const cpuFallback = (decoder: string, error: unknown) => `${decoder} could not decode this window (${failureReason(error)}); decoded it on the CPU.`;
-
 export async function contactSheet(file: string, range: TimeRange, opts: SheetOptions) {
   // CUDA frames stay on the GPU, where a clip stored sideways is not turned, so that clip decodes on the CPU.
   // VideoToolbox frames come back to memory and are turned as usual.
-  if (opts.decoder && (opts.decoder !== "cuda" || await isStoredAsShown(file, { signal: opts.signal }))) {
-    try { return await sheetFrom(file, range, opts); }
-    catch (error) { // A driver can list a decoder it cannot run for this stream.
-      opts.signal?.throwIfAborted();
-      opts.onFallback?.(cpuFallback(opts.decoder, error));
-    }
-  }
-  return sheetFrom(file, range, { ...opts, decoder: undefined });
+  return withDecoderFallback(file, opts, "window", decoder => sheetFrom(file, range, { ...opts, decoder }));
 }
 
 async function sheetFrom(file: string, range: TimeRange, opts: SheetOptions) {
@@ -168,7 +157,7 @@ async function readSheet(file: string, range: TimeRange, opts: SheetOptions, ret
   const labels = await hasDrawtext(bin);
   const graph = selectedSheet(duration, times, origin, labels);
   const selectedInput = pictures
-    ? ["-hide_banner", "-nostdin", "-nostats", "-copyts", "-color_range", "pc", "-f", "nut", "-i", "pipe:0"] : args;
+    ? [...FFMPEG_QUIET_ARGS, "-copyts", "-color_range", "pc", "-f", "nut", "-i", "pipe:0"] : args;
   const { stdout, stderr } = await runCapture(bin, [...selectedInput, "-map", "0:v:0", "-an", "-vf", pictures ? graph : shrinkFirst(opts.decoder, sheetSize, graph),
     "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "4", "-f", "image2pipe", "-"], { ...optsIO, stdin: pictures });
   return { ...sheetResult(stdout, stderr, times.length), changedFrames: changes?.length, ...!labels && { note: UNLABELLED_SHEET } };
@@ -215,14 +204,7 @@ interface ActivityOptions {
 
 /** Measure a window's frame-to-frame changes without drawing a sheet. It reads the same 192x108 grey frames an activity sheet does. */
 export async function pictureActivity(file: string, range: TimeRange, opts: ActivityOptions): Promise<PictureActivity> {
-  if (opts.decoder && (opts.decoder !== "cuda" || await isStoredAsShown(file, { signal: opts.signal }))) {
-    try { return await activityFrom(file, range, opts); }
-    catch (error) { // A driver can list a decoder it cannot run for this stream.
-      opts.signal?.throwIfAborted();
-      opts.onFallback?.(cpuFallback(opts.decoder, error));
-    }
-  }
-  return activityFrom(file, range, { ...opts, decoder: undefined });
+  return withDecoderFallback(file, opts, "window", decoder => activityFrom(file, range, { ...opts, decoder }));
 }
 
 async function activityFrom(file: string, range: TimeRange, opts: ActivityOptions): Promise<PictureActivity> {
@@ -366,8 +348,7 @@ function wavFromPcm(stdout: Buffer) {
 /** The size a screen frame is read at: the recording's own, shrunk so its longer side is at most `maxSide`, in even pixels. */
 export function screenFrameSize(width: number, height: number, maxSide = 1920) {
   const scale = Math.min(1, maxSide / Math.max(width, height));
-  const even = (n: number) => Math.max(2, 2 * Math.round(n * scale / 2));
-  return { width: even(width), height: even(height) };
+  return { width: even(width * scale), height: even(height * scale) };
 }
 
 export interface ScreenFrameOptions {
@@ -386,17 +367,15 @@ export interface ScreenFrameOptions {
  * decodes in a quarter of the memory.
  */
 export async function screenFrames(file: string, range: TimeRange, opts: ScreenFrameOptions, onFrame: (index: number, rgb: Buffer) => void): Promise<number> {
-  if (opts.decoder && (opts.decoder !== "cuda" || await isStoredAsShown(file, { signal: opts.signal }))) {
-    let delivered = 0;
-    try { return await framesFrom(file, range, opts, (i, rgb) => { delivered = i + 1; onFrame(i, rgb); }); }
-    catch (error) {
-      opts.signal?.throwIfAborted();
-      // Frames already handed over stay handed over: the CPU picks up where the GPU stopped.
-      if (delivered) throw error;
-      opts.onFallback?.(cpuFallback(opts.decoder, error));
-    }
-  }
-  return framesFrom(file, range, { ...opts, decoder: undefined }, onFrame);
+  let delivered = 0;
+  return withDecoderFallback(
+    file,
+    opts,
+    "window",
+    decoder => framesFrom(file, range, { ...opts, decoder }, decoder ? (i, rgb) => { delivered = i + 1; onFrame(i, rgb); } : onFrame),
+    // Frames already handed over stay handed over: only fall back before the first frame is emitted.
+    () => delivered === 0,
+  );
 }
 
 async function framesFrom(file: string, range: TimeRange, opts: ScreenFrameOptions, onFrame: (index: number, rgb: Buffer) => void) {

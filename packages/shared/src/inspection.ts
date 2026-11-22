@@ -166,7 +166,7 @@ export const DialogueWindowRequest = DialogueRangeRequest
     keptSide: z.object({ audioStream: z.number().int().nonnegative().optional(),
       /** Read only prepared character emissions. Never fall back to transcription. */
       cachedOnly: z.literal(true).optional() }).optional() }))
-  .refine(v => !v.keptSide || v.to <= v.from + JOIN_WORD_SECONDS + 1e-6, `A kept-side reading covers up to ${JOIN_WORD_SECONDS} seconds`)
+  .refine(v => !v.keptSide || v.to <= v.from + JOIN_WORD_SECONDS + WINDOW_SLACK, `A kept-side reading covers up to ${JOIN_WORD_SECONDS} seconds`)
   .refine(v => v.to <= v.from + 60, "Choose up to sixty source seconds");
 export const SourceAudioRequest = z.object(SourceAudioOptions)
   .refine(v => v.to > v.from && v.to - v.from <= 8 + WINDOW_SLACK, "Choose a source audio window up to eight seconds");

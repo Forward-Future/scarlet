@@ -85,6 +85,18 @@ function audioExt(audio: Blob): string {
 const query = (q: Record<string, unknown>) =>
   new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString();
 
+const withQuery = (path: string, q: Record<string, unknown>) => {
+  const qs = query(q);
+  return qs ? `${path}${path.includes("?") ? "&" : "?"}${qs}` : path;
+};
+
+const appendFields = (fd: FormData, fields: Record<string, string | undefined>) => {
+  for (const [k, v] of Object.entries(fields)) if (v !== undefined) fd.append(k, v);
+};
+
+const isMissingRouteError = (err: unknown, predicate: (message: string) => boolean): boolean =>
+  err instanceof ScarletApiError && err.status === 404 && err.code === "not_found" && predicate(err.message);
+
 /** Route IDs are single opaque segments. URL parsers normalize even encoded dot segments. */
 export function apiPathId(id: string): string {
   if (!id || id === "." || id === ".." || /[/\\?#%\u0000-\u001f\u007f]/.test(id)) {
@@ -170,8 +182,8 @@ export class ScarletClient {
     } catch (err) {
       // Standalone MCP can connect to an older engine. Only its explicit missing-route
       // response permits the legacy route, after checking the project's own listing.
-      if (!(err instanceof ScarletApiError && err.status === 404 && err.code === "not_found" &&
-          ["GET", "POST", "PATCH"].some(method => err.message.startsWith(`no route for ${method} /api${project}${path}`)))) throw err;
+      if (!isMissingRouteError(err, message =>
+          ["GET", "POST", "PATCH"].some(method => message.startsWith(`no route for ${method} /api${project}${path}`)))) throw err;
     }
     const listed = await this.get<Record<string, { id: string }[]>>(`${project}/${collection}`);
     if (!listed[collection]?.some(row => row.id === id)) {
@@ -189,9 +201,9 @@ export class ScarletClient {
   }
 
   /** Absolute URL for a media/render file, with the token as a query param for <video src>. */
-  fileUrl(path: string): string {
+  fileUrl(path: string, params?: Record<string, unknown>): string {
     const t = this.token;
-    return `${this.url(path)}${t ? `?token=${encodeURIComponent(t)}` : ""}`;
+    return withQuery(`${this.url(path)}${t ? `?token=${encodeURIComponent(t)}` : ""}`, params ?? {});
   }
 
   wsUrl(): string {
@@ -313,8 +325,7 @@ export class ScarletClient {
     } catch (error) {
       // Clients connected to an older engine can still read each list through its original route. The engine
       // may name the path decoded or behind a prefix, so only the method and the route's last segment are matched.
-      if (error instanceof ScarletApiError && error.status === 404 && error.code === "not_found" &&
-          error.message.startsWith("no route for POST ") && error.message.endsWith("/thread-edits")) return single();
+      if (isMissingRouteError(error, message => message.startsWith("no route for POST ") && message.endsWith("/thread-edits"))) return single();
       throw error;
     }
   }
@@ -385,8 +396,7 @@ export class ScarletClient {
   uploadMedia(projectId: string, file: Blob, name: string, kind?: string, provenance?: Record<string, unknown>) {
     const fd = new FormData();
     fd.append("file", file, name);
-    if (kind) fd.append("kind", kind);
-    if (provenance) fd.append("provenance", JSON.stringify(provenance));
+    appendFields(fd, { kind, provenance: provenance ? JSON.stringify(provenance) : undefined });
     return this.post<{ media: MediaAsset }>(`/projects/${projectId}/media`, fd);
   }
   importMedia(projectId: string, body: { path?: string; url?: string; kind?: string; importId?: string; deferFormat?: boolean }, signal?: AbortSignal) {
@@ -397,7 +407,9 @@ export class ScarletClient {
     return this.delete<Record<string, never>>(`/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}`);
   }
   waveform(mediaId: string, from: number, to: number, points = 1000, cachedOnly = false, speechActivity = false) {
-    return this.withResource("media", mediaId, path => this.get<WaveformResponse>(`${path}/waveform?from=${from}&to=${to}&points=${points}${cachedOnly ? "&cachedOnly=1" : ""}${speechActivity ? "&speechActivity=1" : ""}`));
+    return this.withResource("media", mediaId, path => this.get<WaveformResponse>(withQuery(`${path}/waveform`, {
+      from, to, points, cachedOnly: cachedOnly ? "1" : undefined, speechActivity: speechActivity ? "1" : undefined,
+    })));
   }
   /** Prepared peaks for full-recording matching. An older engine returns its usual JSON waveform. */
   waveformPeaks(mediaId: string, from: number, to: number, points: number) {
@@ -417,13 +429,9 @@ export class ScarletClient {
   }
 
   transcript(mediaId: string, opts: { from?: number; to?: number; granularity?: "word" | "segment"; audioSources?: boolean } = {}) {
-    const q = new URLSearchParams();
-    if (opts.from !== undefined) q.set("from", String(opts.from));
-    if (opts.to !== undefined) q.set("to", String(opts.to));
-    if (opts.granularity) q.set("granularity", opts.granularity);
-    if (opts.audioSources) q.set("audioSources", "1");
-    const qs = q.toString();
-    return this.withResource("media", mediaId, path => this.get<Transcript>(`${path}/transcript${qs ? `?${qs}` : ""}`));
+    return this.withResource("media", mediaId, path => this.get<Transcript>(withQuery(`${path}/transcript`, {
+      from: opts.from, to: opts.to, granularity: opts.granularity, audioSources: opts.audioSources ? "1" : undefined,
+    })));
   }
   searchTranscript(mediaId: string, phrase: string, contextWords: number, knownWordSnapshot?: string) {
     const query = new URLSearchParams({ search: phrase, contextWords: String(contextWords) });
@@ -447,8 +455,7 @@ export class ScarletClient {
     );
   }
   frameUrl(mediaId: string, t: number, w = 640) {
-    const frame = this.fileUrl(`/media/${encodeURIComponent(mediaId)}/frame`);
-    return `${frame}${frame.includes("?") ? "&" : "?"}t=${t}&w=${w}${this.previewFrames ? "&preview=1" : ""}`;
+    return this.fileUrl(`/media/${encodeURIComponent(mediaId)}/frame`, { t, w, preview: this.previewFrames ? "1" : undefined });
   }
 
   // Timeline / versions
@@ -496,9 +503,7 @@ export class ScarletClient {
     return this.captionUrl(projectId, version, "vtt", opts);
   }
   private captionUrl(projectId: string, version: string, format: "srt" | "vtt", opts?: { trackId?: string; start?: number; end?: number }) {
-    const url = this.fileUrl(`/projects/${projectId}/versions/${version}/export.${format}`);
-    const params = query({ trackId: opts?.trackId, start: opts?.start, end: opts?.end });
-    return params ? `${url}${url.includes("?") ? "&" : "?"}${params}` : url;
+    return this.fileUrl(`/projects/${projectId}/versions/${version}/export.${format}`, { trackId: opts?.trackId, start: opts?.start, end: opts?.end });
   }
 
   // Changes
@@ -558,7 +563,7 @@ export class ScarletClient {
     }>(`/projects/${projectId}/changes?summary=true`, body);
   }
   changes(projectId: string, state?: string) {
-    return this.get<{ changes: Change[] }>(`/projects/${projectId}/changes${state ? `?state=${encodeURIComponent(state)}` : ""}`);
+    return this.get<{ changes: Change[] }>(withQuery(`/projects/${projectId}/changes`, { state: state || undefined }));
   }
   changeRecord(changeId: string) {
     return this.withResource("changes", changeId, path => this.get<{ change: Change }>(`${path}?view=record`));
@@ -613,14 +618,16 @@ export class ScarletClient {
   ) {
     const fd = new FormData();
     fd.append("audio", audio, `note${audioExt(audio)}`);
-    fd.append("time", String(fields.time));
-    if (fields.end !== undefined) fd.append("end", String(fields.end));
-    if (fields.version) fd.append("version", fields.version);
-    if (fields.clipIds) fd.append("clipIds", JSON.stringify(fields.clipIds));
-    if (fields.assignTo) fd.append("assignTo", fields.assignTo);
-    if (fields.effort) fd.append("effort", fields.effort);
-    if (fields.serviceTier) fd.append("serviceTier", fields.serviceTier);
-    if (fields.changeId) fd.append("changeId", fields.changeId);
+    appendFields(fd, {
+      time: String(fields.time),
+      end: fields.end !== undefined ? String(fields.end) : undefined,
+      version: fields.version || undefined,
+      clipIds: fields.clipIds ? JSON.stringify(fields.clipIds) : undefined,
+      assignTo: fields.assignTo || undefined,
+      effort: fields.effort || undefined,
+      serviceTier: fields.serviceTier || undefined,
+      changeId: fields.changeId || undefined,
+    });
     return this.post<{ note: Note; task?: Task }>(`/projects/${projectId}/notes/voice`, fd);
   }
   /** Transcribe a short voice clip (push-to-talk) to text. */
@@ -630,7 +637,7 @@ export class ScarletClient {
     return this.post<{ text: string }>("/speech", fd);
   }
   notes(projectId: string, state?: string) {
-    return this.get<{ notes: Note[] }>(`/projects/${projectId}/notes${state ? `?state=${encodeURIComponent(state)}` : ""}`);
+    return this.get<{ notes: Note[] }>(withQuery(`/projects/${projectId}/notes`, { state: state || undefined }));
   }
   updateNote(noteId: string, body: UpdateNoteRequest) {
     return this.withResource("notes", noteId, path => this.patch<{ note: Note }>(path, body));
@@ -655,15 +662,10 @@ export class ScarletClient {
     return this.withResource("renders", renderId, path => this.get<{ render: Render; fileInfo?: RenderFileInfo }>(`${path}${inspectFile ? "?inspectFile=true" : ""}`));
   }
   renders(projectId: string, q: { kind?: string; version?: string; currentDelivery?: boolean } = {}) {
-    const qs = query(q);
-    return this.get<{ renders: Render[]; currentDeliveryKey?: string | null; fullRenderKeys?: FullRenderKeys }>(`/projects/${projectId}/renders${qs ? `?${qs}` : ""}`);
+    return this.get<{ renders: Render[]; currentDeliveryKey?: string | null; fullRenderKeys?: FullRenderKeys }>(withQuery(`/projects/${projectId}/renders`, q));
   }
   renderFileUrl(renderId: string, waitForPlayback = false) {
-    const file = this.fileUrl(`/renders/${renderId}/file`);
-    if (!waitForPlayback) return file;
-    const url = new URL(file);
-    url.searchParams.set("wait", "1");
-    return url.toString();
+    return this.fileUrl(`/renders/${renderId}/file`, waitForPlayback ? { wait: "1" } : undefined);
   }
   mediaFileUrl(mediaId: string, proxy = false) {
     return this.fileUrl(`/media/${mediaId}/${proxy ? "proxy" : "file"}`);
@@ -677,11 +679,7 @@ export class ScarletClient {
     return this.get<{ caches: SourceCacheStatus[] }>(`/projects/${encodeURIComponent(projectId)}/playback-caches`);
   }
   sourceCacheUrl(mediaId: string, fileKey?: string) {
-    const file = this.fileUrl(`/media/${encodeURIComponent(mediaId)}/playback-cache/file`);
-    if (!fileKey) return file;
-    const url = new URL(file);
-    url.searchParams.set("fileKey", fileKey);
-    return url.toString();
+    return this.fileUrl(`/media/${encodeURIComponent(mediaId)}/playback-cache/file`, fileKey ? { fileKey } : undefined);
   }
   sourcePreviewUrl(mediaId: string, index: number) {
     return this.fileUrl(`/media/${mediaId}/preview/${index}`);
@@ -693,8 +691,7 @@ export class ScarletClient {
   }
   tasks(projectId: string, state?: string, events?: "conversation") {
     // Not URLSearchParams.size: a WebView older than Safari 17 has none, and the whole query was dropped there.
-    const qs = query({ state: state || undefined, events });
-    return this.get<{ tasks: Task[]; conversation?: Record<string, TaskEvent[]> }>(`/projects/${projectId}/tasks${qs ? "?" + qs : ""}`);
+    return this.get<{ tasks: Task[]; conversation?: Record<string, TaskEvent[]> }>(withQuery(`/projects/${projectId}/tasks`, { state: state || undefined, events }));
   }
   task(taskId: string, events: "all" | "conversation" | "none" = "all") {
     return this.withResource("tasks", taskId, path => this.get<{ task: Task; events: TaskEvent[]; checksTaskAttempts?: true }>(path + (events === "all" ? "" : "?events=" + events)));
@@ -707,8 +704,7 @@ export class ScarletClient {
    * the check reading them for a rule stops too, even once the request is under way. Stop this edit keeps it.
    */
   cancelTask(taskId: string, queuedOnly = false, withdrawn = false) {
-    const qs = query({ queuedOnly: queuedOnly ? "1" : undefined, withdrawn: withdrawn ? "1" : undefined });
-    return this.post<{ task: Task }>(`/tasks/${apiPathId(taskId)}/cancel${qs ? "?" + qs : ""}`);
+    return this.post<{ task: Task }>(withQuery(`/tasks/${apiPathId(taskId)}/cancel`, { queuedOnly: queuedOnly ? "1" : undefined, withdrawn: withdrawn ? "1" : undefined }));
   }
   /** Retry or resume a run, on the model the editor has picked now when one is given. */
   retryTask(taskId: string, body: RunChoice = {}) {
@@ -755,14 +751,15 @@ export class ScarletClient {
    * `timeLimitMinutes` is the cap the host puts on this run, so the prompt can say so. The engine takes a whole number from 1 to 1440.
    */
   taskPrompt(taskId: string, opts: { workDir?: string; fresh?: boolean; timeLimitMinutes?: number } = {}) {
-    const q = new URLSearchParams({ ...(opts.workDir && { workDir: opts.workDir }), ...(opts.fresh && { fresh: "1" }), ...(opts.timeLimitMinutes && { timeLimit: String(opts.timeLimitMinutes) }) }).toString();
-    return this.withResource("tasks", taskId, path => this.get<TaskPrompt>(`${path}/prompt${q ? `?${q}` : ""}`));
+    return this.withResource("tasks", taskId, path => this.get<TaskPrompt>(withQuery(`${path}/prompt`, {
+      workDir: opts.workDir || undefined, fresh: opts.fresh ? "1" : undefined, timeLimit: opts.timeLimitMinutes || undefined,
+    })));
   }
   completeTask(taskId: string, body: CompleteTaskRequest) {
     return this.post<{ task: Task }>(`/tasks/${taskId}/complete`, body);
   }
-  recordTaskUsage(taskId: string, body: RecordTaskUsageRequest) {
-    return this.withResource("tasks", taskId, path => this.post<Record<string, never>>(path + "/usage", body));
+  recordTaskUsage(taskId: string, body: RecordTaskUsageRequest, signal?: AbortSignal) {
+    return this.withResource("tasks", taskId, path => this.request<Record<string, never>>("POST", path + "/usage", body, { signal }));
   }
   projectUsage(projectId: string, by: Exclude<UsageGroupBy, "project"> = "thread") {
     return this.get<UsageResponse>(`/projects/${apiPathId(projectId)}/usage?by=${by}`);
@@ -807,8 +804,7 @@ export class ScarletClient {
 
   // Skills
   skills(q: { projectId?: string; taskId?: string; view?: "prompt" | "assistant" } = {}) {
-    const qs = query(q);
-    return this.get<{ skills: Skill[] }>(`/skills${qs ? `?${qs}` : ""}`);
+    return this.get<{ skills: Skill[] }>(withQuery("/skills", q));
   }
   createSkill(body: UpsertSkillRequest) {
     return this.post<{ skill: Skill }>("/skills", body);
@@ -856,12 +852,10 @@ export class ScarletClient {
 
   // Activity, trash, DaVinci
   activity(projectId: string, q: { before?: string; beforeId?: string; limit?: number; type?: string } = {}) {
-    const qs = query(q);
-    return this.get<{ activity: ActivityEntry[] }>(`/projects/${projectId}/activity${qs ? `?${qs}` : ""}`);
+    return this.get<{ activity: ActivityEntry[] }>(withQuery(`/projects/${projectId}/activity`, q));
   }
   serverActivity(q: { before?: string; limit?: number } = {}) {
-    const qs = query(q);
-    return this.get<{ activity: ActivityEntry[] }>(`/activity${qs ? `?${qs}` : ""}`);
+    return this.get<{ activity: ActivityEntry[] }>(withQuery("/activity", q));
   }
   trash() {
     return this.get<{ projects: TrashedProject[] }>("/trash");

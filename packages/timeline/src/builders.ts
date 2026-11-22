@@ -84,6 +84,29 @@ export function makeMediaClip(
   };
 }
 
+/** Build a detached audio copy of a media clip for a dialogue audio track. */
+export function detachedAudioClip(
+  clip: MediaClip,
+  id: string,
+  overrides: Partial<Pick<MediaClip, "sourceIn" | "sourceOut" | "timelineIn" | "audioFadeIn" | "audioFadeOut">> = {},
+): MediaClip {
+  return makeMediaClip(
+    clip.mediaId,
+    overrides.sourceIn ?? clip.sourceIn,
+    overrides.sourceOut ?? clip.sourceOut,
+    overrides.timelineIn ?? clip.timelineIn,
+    {
+      id,
+      label: clip.label,
+      speed: clip.speed,
+      effects: clip.effects,
+      volume: clip.volume,
+      audioFadeIn: overrides.audioFadeIn ?? clip.audioFadeIn,
+      audioFadeOut: overrides.audioFadeOut ?? clip.audioFadeOut,
+    },
+  );
+}
+
 /** A second recording of the same event, laid above the first where the two overlap. */
 export interface SyncedLayer {
   mediaId: string;
