@@ -55,6 +55,9 @@ const TASK_DIR_DAYS: u64 = 14;
 /// How long cached subscription quota stays fresh before a non-forced refresh re-probes.
 const QUOTA_TTL: Duration = Duration::from_secs(60);
 
+/// How often the host sends a heartbeat to the engine.
+const HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
+
 /// How long the host waits before each new try at a model list it could not read at launch: 30 seconds after it
 /// registers, then 1, 2 and 5 minutes on.
 const CATALOG_RETRY_WAITS: [Duration; 4] = [Duration::from_secs(30), Duration::from_secs(60), Duration::from_secs(120), Duration::from_secs(300)];
@@ -707,8 +710,11 @@ impl HostRuntime {
         }
     }
 
-    async fn heartbeat_loop(self: Arc<Self>) {
-        let mut tick = tokio::time::interval(Duration::from_secs(30));
+    async fn heartbeat_loop(self: Arc<Self>, every: Duration) {
+        let mut tick = tokio::time::interval(every);
+        // After sleep (where Windows' monotonic clock keeps counting) or a stalled call, send one wake heartbeat
+        // and resume the cadence instead of bursting every missed tick back to back.
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         tick.tick().await;
         loop {
             tokio::select! {
@@ -1308,7 +1314,7 @@ impl HostRuntime {
         }
         self.emit_status();
         tauri::async_runtime::spawn(self.clone().deliver_loop());
-        tauri::async_runtime::spawn(self.clone().heartbeat_loop());
+        tauri::async_runtime::spawn(self.clone().heartbeat_loop(HEARTBEAT_EVERY));
         tauri::async_runtime::spawn(self.clone().ws_loop());
         tauri::async_runtime::spawn(self.clone().catalog_loop(&CATALOG_RETRY_WAITS));
         {
@@ -1753,6 +1759,34 @@ mod tests {
         rt.set_error(Some("claim failed: connection refused".into()));
         rt.heartbeat().await;
         assert_eq!(rt.status().error, None);
+    }
+
+    #[tokio::test]
+    async fn a_delayed_heartbeat_loop_sends_one_catch_up_heartbeat_not_a_burst() {
+        let every = Duration::from_millis(150);
+        let times = Arc::new(StdMutex::new(Vec::<std::time::Instant>::new()));
+        let record = times.clone();
+        let slow = AtomicBool::new(true);
+        let engine = api::fake::engine(move |route, _| {
+            if route == "POST /api/hosts/host_1/heartbeat" {
+                record.lock().unwrap().push(std::time::Instant::now());
+                // Hold the first heartbeat across four missed ticks, the way a wake after sleep finds the interval far behind.
+                if slow.swap(false, Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(650));
+                }
+            }
+            (200, r#"{"cancelled":[]}"#.into())
+        }).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (rt, _) = runtime(&engine.url, dir.path());
+        let looping = tokio::spawn(rt.clone().heartbeat_loop(every));
+        until("three heartbeats", || times.lock().unwrap().len() >= 3).await;
+        rt.cancel.cancel();
+        tokio::time::timeout(Duration::from_secs(10), looping).await.expect("the loop did not stop").unwrap();
+        let times = times.lock().unwrap();
+        // After the stalled call returns, one catch-up heartbeat runs and the next waits a full interval.
+        let gap = times[2].duration_since(times[1]);
+        assert!(gap >= Duration::from_millis(100), "missed ticks burst back to back: gap between 2nd and 3rd heartbeat was {gap:?}");
     }
 
     fn task(id: &str) -> Task {
