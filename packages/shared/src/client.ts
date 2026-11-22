@@ -341,8 +341,8 @@ export class ScarletClient {
   stopEditing(id: string) {
     return this.post<{ project: Project; tasks: Task[] }>(`/projects/${apiPathId(id)}/stop-editing`);
   }
-  resumeEditing(id: string) {
-    return this.post<{ project: Project; tasks: Task[] }>(`/projects/${apiPathId(id)}/resume-editing`);
+  resumeEditing(id: string, body?: RunChoice) {
+    return this.post<{ project: Project; tasks: Task[] }>(`/projects/${apiPathId(id)}/resume-editing`, body);
   }
   deleteProject(id: string) {
     return this.delete<Record<string, never>>(`/projects/${id}`);
@@ -714,8 +714,8 @@ export class ScarletClient {
   continueWhenReady(taskId: string, on: boolean) {
     return this.post<{ task: Task; resumed?: Task }>(`/tasks/${taskId}/continue-when-ready`, { on });
   }
-  answerTask(taskId: string, text: string, skillIds?: string[]) {
-    return this.post<{ task: Task }>(`/tasks/${taskId}/answer`, { text, skillIds });
+  answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice) {
+    return this.post<{ task: Task }>(`/tasks/${taskId}/answer`, { ...runWith, text, skillIds });
   }
   /** Keep a queued request from starting while the editor changes its words, or let it go. Renew it to keep holding. */
   holdForRewording(taskId: string, on: boolean) {

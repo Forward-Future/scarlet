@@ -46,6 +46,15 @@ describe("working row activity", () => {
       .toBe("Reconnecting to the model");
   });
 
+  it("shows active compaction and hides completed compaction notices", () => {
+    expect(taskActivityLabel({ type: "log", text: "Compacting context", data: { kind: "compaction", active: true } }))
+      .toBe("Compacting context");
+    expect(taskActivityLabel({ type: "log", text: "Compacting context", data: { kind: "compaction", active: false } }))
+      .toBeUndefined();
+    expect(taskActivityLabel({ type: "log", text: "Context compacted", data: { kind: "compaction" } }))
+      .toBeUndefined();
+  });
+
   it("keeps the current activity through a recoverable scan error", () => {
     expect(latest([reading, { type: "tool", text: "scarlet.dialogue_scan" },
       { type: "error", text: "scarlet.dialogue_scan failed" }])).toBe("Scanning dialogue");

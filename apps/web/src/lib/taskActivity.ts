@@ -161,6 +161,7 @@ export function taskActivityLabel(event: TaskEvent, waits: ReadonlySet<string> =
       if (event.data?.kind === "init") return "Getting started";
       if (event.data?.kind === "reasoning") return "Planning next step";
       if (event.data?.kind === "connection") return "Reconnecting to the model";
+      if (event.data?.kind === "compaction") return event.data.active === true ? "Compacting context" : undefined;
       if (event.data?.kind === "media_wait") {
         const label = typeof event.data.wait === "string" ? waitLabels[event.data.wait] : undefined;
         return label && !event.data.done ? `Waiting for ${label}` : undefined;

@@ -260,13 +260,14 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   // look, else the first.
   const rows = editGroups(edits).filter(({ members }) => !only || members.some(m => only(m.edit))).map(({ members }) => {
     const waiting = (m: { edit: ListedEdit }) => !!m.edit.check && !reviewed(m.edit) && !revising(m.edit);
-    const shown = members.find(m => m.i === open) ?? members.find(waiting) ?? members[0]!;
+    const relevant = only ? members.filter(m => only(m.edit)) : members;
+    const shown = members.find(m => m.i === open) ?? members.find(waiting) ?? relevant[0] ?? members[0]!;
     // An edit made in several places keeps its first number, so the list reads 1, 2, 5 and doesn't renumber as places are kept.
-    return { ...shown, n: members[0]!.i + 1, places: members.length, needs: members.filter(waiting).length, allKept: members.every(m => reviewed(m.edit)),
+    return { ...shown, n: members[0]!.i + 1, places: members.length, needs: members.filter(waiting).length, allKept: relevant.every(m => reviewed(m.edit)),
       nested: under ? members.flatMap(m => under(m.edit)) : [], took: spent ? members.flatMap(m => spent(m.edit) ?? [])[0] : undefined };
   });
-  // In the list of every edit, a rejected one keeps its place in the video's order, after the edits before it.
-  const gone = only ? [] : [...rejected].sort((a, b) => a.range.start - b.range.start);
+  // A rejected edit keeps its place in the video's order, in See all and (when it was flagged) in For you.
+  const gone = (only ? rejected.filter(only) : [...rejected]).sort((a, b) => a.range.start - b.range.start);
   // A press shows it again: where it was on the timeline, with its note, over the video as it plays without it.
   const goneAfter = (from: number, to: number) => gone.filter(e => e.range.start >= from && e.range.start < to).map(e => {
     // Lit for the edit it was, too, while that one is still on its card, leaving.
@@ -290,8 +291,11 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       // Scarlet is on that revision now, so the row's word moves. One waiting its turn sits still.
       const busy = !!revisingNow && isWorkingTask(revisingNow);
       const version = edit.previous.length ? edit.previous.length + 1 : 0;
-      // A cut says how much came out; any other edit says what it did, or in how many places.
-      const value = places > 1 ? `${places} places` : editRemovedLabel(edit) ?? editRowWord(edit);
+      const decided = isKept && !isRevising;
+      // In For you, a handled edit says how it was decided (Kept, or Done for a marker). Otherwise a cut says how much
+      // came out, and any other edit says what it did, or in how many places.
+      const value = only && decided ? (edit.marker ? "Done" : "Kept")
+        : places > 1 ? `${places} places` : editRemovedLabel(edit) ?? editRowWord(edit);
       const check = places > 1 ? needs > 0 : !!edit.check && !isRevising;
       const title = (edit.reason && edit.summary) || edit.label;
       // One that came back revised with no reason from Scarlet says so on its row until it is kept: its card has no
@@ -300,12 +304,12 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       return <Fragment key={editKey(edit)}><li><button type="button" ref={on ? opened : undefined} aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
         // Clicked, the row lets go of the focus (WebView2 leaves it there), or Space would press the row again and start
         // the edit over, instead of playing the video.
-        className={on ? "simple-edit is-on" : "simple-edit"} onClick={e => { blurOnPointerClick(e); onPlay(edit); }}
+        className={["simple-edit", on && "is-on", !on && only && decided && "is-decided"].filter(Boolean).join(" ")} onClick={e => { blurOnPointerClick(e); onPlay(edit); }}
         onPointerEnter={() => onHover?.(edit)} onPointerLeave={() => onHover?.()}
         // Why an edit asks for a look is on its card, in Scarlet's sentence. Its row keeps to the amber number and says
         // the reason on hover, as a pass's row does.
         title={revised || edit.reason ? undefined : edit.check}
-        aria-label={`Edit ${n}: ${title}${places > 1 ? `, ${places} places` : ""}${isRevising ? ", revising" : isKept ? ", kept" : check ? ", check" : ""}`}>
+        aria-label={`Edit ${n}: ${title}${places > 1 ? `, ${places} places` : ""}${isRevising ? ", revising" : isKept ? (edit.marker ? ", done" : ", kept") : check ? ", check" : ""}`}>
         <EditBadge n={n} kept={isKept} check={check} />
         <span className="simple-edit-title">{title}{version > 0 && places === 1 && <EditVersion n={version} hover={took} />}</span>
         {/* What the row ends on says on hover what the requests about this edit took: their time and tokens, nothing else. */}
