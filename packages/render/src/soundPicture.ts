@@ -6,9 +6,8 @@
  * at before it is made.
  */
 import type { TimeRange } from "@scarlet/timeline";
-import { escapeFilterPath } from "./effects.js";
-import { LOCAL_MEDIA_INPUT, ffSeconds, requireDrawtext, resolveFfmpeg, runCapture } from "./exec.js";
-import { resolveFontFile } from "./fonts.js";
+import { FFMPEG_QUIET_ARGS, LOCAL_MEDIA_INPUT, ffSeconds, requireDrawtext, resolveFfmpeg, runCapture } from "./exec.js";
+import { drawtextFontArg } from "./fonts.js";
 
 export interface SoundPictureWord { text: string; start: number; end: number }
 export interface SoundPictureOptions {
@@ -54,8 +53,7 @@ export function soundPictureGraph(opts: SoundPictureOptions): { graph: string; l
   const pieces = opts.remove?.length ? keptPieces(range, opts.remove) : [];
   const cut = pieces.length > 0 && pieces.reduce((sum, p) => sum + p.end - p.start, 0) < seconds - 1e-3;
   const pps = W / seconds, x = (t: number) => Math.round((t - range.start) * pps);
-  const font = resolveFontFile("Arial");
-  const face = font ? `fontfile=${escapeFilterPath(font.file)}` : "font=sans";
+  const face = drawtextFontArg();
   const text = (s: string, px: number, y: number, size = 14, color = "0xe8e8e8") =>
     `drawtext=${face}:expansion=none:text='${plain(s)}':fontsize=${size}:fontcolor=${color}:x=${Math.max(2, px)}:y=${y}`;
   const box = (px: number, y: number, w: number, h: number, color: string) => `drawbox=x=${px}:y=${y}:w=${Math.max(1, w)}:h=${h}:color=${color}:t=fill`;
@@ -131,7 +129,7 @@ export function soundPictureGraph(opts: SoundPictureOptions): { graph: string; l
 export async function soundPicture(file: string, opts: SoundPictureOptions): Promise<{ jpeg: Buffer; layout: SoundPictureLayout }> {
   await requireDrawtext("write the times and words on a sound picture");
   const { graph, layout } = soundPictureGraph(opts);
-  const { stdout } = await runCapture(resolveFfmpeg(), ["-hide_banner", "-nostdin", "-nostats", "-ss", ffSeconds(opts.range.start),
+  const { stdout } = await runCapture(resolveFfmpeg(), [...FFMPEG_QUIET_ARGS, "-ss", ffSeconds(opts.range.start),
     "-t", String(opts.range.end - opts.range.start), ...LOCAL_MEDIA_INPUT, "-i", file, "-filter_complex", graph, "-map", "[out]",
     "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "3", "-f", "image2pipe", "-"], { signal: opts.signal, maxStdout: 4 * 1024 * 1024 });
   return { jpeg: stdout, layout };

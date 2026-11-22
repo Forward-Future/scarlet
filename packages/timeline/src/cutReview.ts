@@ -2,7 +2,7 @@ import { stableStringify } from "./ids.js";
 import { intervalCandidates } from "./intervals.js";
 import { applyOps } from "./ops.js";
 import type { Change, MediaAsset, MediaClip, Timeline, TimeRange } from "./schema.js";
-import { clock, mergeRanges, snapToFrame, timelineDuration, withHandles } from "./time.js";
+import { clock, isGlobalRippleDelete, mergeRanges, snapToFrame, timelineDuration, uniqueId, withHandles } from "./time.js";
 
 /** Both coordinates are immutable: at is on the proposal, removed is on the original. */
 export interface ReviewCut {
@@ -123,7 +123,7 @@ export function planCutReview(base: Timeline, proposed: Timeline, media: MediaAs
     // Each ripple operation is expressed in the cut left by the previous operation.
     let keep: TimeRange[] = [{ start: 0, end: duration }];
     for (const op of ops) {
-      if (op.op !== "rippleDelete" || op.trackIds !== undefined || typeof op.start !== "number" || typeof op.end !== "number") return null;
+      if (!isGlobalRippleDelete(op)) return null;
       const { start, end } = op;
       let cursor = 0;
       const remaining: TimeRange[] = [];
@@ -259,9 +259,7 @@ export function applyReviewRemovals(original: Timeline, ranges: readonly TimeRan
   const originalIds = new Set(original.tracks.flatMap(t => t.clips.map(c => c.id)));
   for (const track of result.tracks) for (const [i, clip] of track.clips.entries()) {
     if (!originalIds.has(clip.id)) {
-      let id = "review_" + reviewId + "_" + track.id + "_" + i;
-      while (originalIds.has(id)) id += "_";
-      clip.id = id;
+      clip.id = uniqueId("review_" + reviewId + "_" + track.id + "_" + i, originalIds);
     }
   }
   return result;

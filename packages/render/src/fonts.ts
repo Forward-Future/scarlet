@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileInDirectory } from "./assetPath.js";
+import { escapeFilterPath } from "./effects.js";
 
 export interface FontOptions {
   /** Use this font file for every caption, skipping family lookup. */
@@ -131,4 +132,10 @@ export function resolveFontFile(family: string, opts: FontOptions = {}): Resolve
   if (exact) return { file: exact, exact: true };
   const fallback = lookup(dirs, FALLBACKS);
   return fallback ? { file: fallback, exact: false } : undefined;
+}
+
+/** Font argument for FFmpeg's `drawtext` filter (`fontfile=...` or fallback `font=sans`). */
+export function drawtextFontArg(family = "Arial", opts?: FontOptions): string {
+  const font = resolveFontFile(family, opts);
+  return font ? `fontfile=${escapeFilterPath(font.file)}` : "font=sans";
 }

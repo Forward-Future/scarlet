@@ -8,7 +8,7 @@
  * whenever the decode changes so cached waveforms are rebuilt.
  */
 import { endianness } from "node:os";
-import { LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, ffSeconds, resolveFfmpeg, runCapture } from "./exec.js";
+import { FFMPEG_BASE_ARGS, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, ffSeconds, resolveFfmpeg, runCapture } from "./exec.js";
 
 const DECODE_RATE = 16000;
 const nativeS16le = endianness() === "LE";
@@ -45,7 +45,7 @@ export interface WaveformCache {
 }
 
 function pcmArgs(file: string, opts: { from?: number; to?: number; channel?: number }): string[] {
-  const args = ["-hide_banner", "-nostdin", "-loglevel", "error"];
+  const args: string[] = [...FFMPEG_BASE_ARGS];
   if (opts.from !== undefined) args.push("-ss", ffSeconds(opts.from));
   if (opts.to !== undefined) args.push("-t", String(Math.max(0, opts.to - (opts.from ?? 0))));
   args.push(...LOCAL_MEDIA_INPUT, "-i", file, "-vn", "-map", "0:a:0");

@@ -6,13 +6,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DEFAULT_PREVIEW_HEIGHT, snapToFrame } from "@scarlet/timeline";
 import type { Project, ProjectSettings, Timeline, TimeRange } from "@scarlet/timeline";
-import { FfmpegError, failureReason, fnum, runFfmpeg, threadedAvcPreview, withStreamInfoFallback } from "./exec.js";
+import { FfmpegError, even, failureReason, fnum, runFfmpeg, sampleCount, threadedAvcPreview, withStreamInfoFallback } from "./exec.js";
 import type { FontOptions } from "./fonts.js";
 import { buildFilterGraph, type GraphOptions } from "./graph.js";
 import { directDevice, encodeDirectPicture } from "./directPicture.js";
 import type { ProbeResult } from "./probe.js";
 
-import { hardwareEncoderFailure, withRenderEncoder, type VideoEncoder, type HwAccel, type RenderQuality } from "./encoder.js";
+import { COMPRESSED_AUDIO_BITRATE, PROGRAM_AUDIO_BITRATE, hardwareEncoderFailure, withRenderEncoder, type VideoEncoder, type HwAccel, type RenderQuality } from "./encoder.js";
 export { bestEncoder, encoderArgs, resolveVideoEncoder, type HwAccel, type RenderQuality } from "./encoder.js";
 
 /** High-core Apple silicon decodes AVC previews and single-frame seeks faster in software. */
@@ -65,7 +65,7 @@ export interface RenderOptions extends FontOptions {
 function splitLines(splits: NonNullable<RenderOptions["splits"]>, range: TimeRange, fps: number, sampleRate: number, audio: boolean): string {
   const n = splits.length;
   const frame = (t: number) => Math.round((t - range.start) * fps);
-  const sample = (t: number) => Math.round(t * sampleRate) - Math.round(range.start * sampleRate);
+  const sample = (t: number) => sampleCount(range.start, t, sampleRate);
   const lines = [`[vout]split=${n}${splits.map((_, k) => `[sv_in${k}]`).join("")}`];
   splits.forEach((s, k) => lines.push(`[sv_in${k}]trim=start_frame=${frame(s.range.start)}:end_frame=${frame(s.range.end)},setpts=PTS-STARTPTS[sv${k}]`));
   if (audio) {
@@ -94,7 +94,7 @@ export interface RenderResult {
 export function outputSize(settings: ProjectSettings, quality: RenderQuality, height?: number, exportHeight?: number) {
   const h = Math.min(exportHeight ?? (quality === "delivery" ? settings.height : height ?? DEFAULT_PREVIEW_HEIGHT), settings.height);
   const w = Math.round((settings.width * h) / settings.height);
-  return { width: Math.max(2, 2 * Math.round(w / 2)), height: Math.max(2, 2 * Math.round(h / 2)) };
+  return { width: even(w), height: even(h) };
 }
 
 /** Snap a range to frame boundaries, keeping at least one frame. */
@@ -170,7 +170,7 @@ export async function renderRange(
     "-pix_fmt", pixelFormat,
     "-r", fnum(settings.fps),
     ...(opts.pictureOnly ? [] : [
-      "-c:a", "aac", "-b:a", quality === "delivery" ? "192k" : "128k",
+      "-c:a", "aac", "-b:a", quality === "delivery" ? PROGRAM_AUDIO_BITRATE : COMPRESSED_AUDIO_BITRATE,
       "-ar", String(settings.sampleRate), "-ac", String(settings.audioChannels),
     ]),
     ...(opts.cacheIntermediate ? [] : ["-movflags", "+faststart"]),

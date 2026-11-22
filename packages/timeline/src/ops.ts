@@ -5,13 +5,13 @@
 import { z } from "zod/v3";
 import { duplicateClipId, WritableTimeline, Clip, Marker, Track, Timeline, Seconds, Id, CaptionStyle, RenderColor } from "./schema.js";
 import type { CaptionClip } from "./schema.js";
-import { clipEnd } from "./time.js";
+import { newId } from "./ids.js";
+import { clipEnd, findClipLocation } from "./time.js";
 
 /** Two times this close are the same instant: far under a sample, far over floating-point error. */
 const MEET = 1e-9;
 /** A piece of a clip shorter than this is never wanted: a time this near a clip's edge means the edge. */
 const SLIVER = 0.001;
-import { newId } from "./ids.js";
 
 export const AddClipOp = z.object({
   op: z.literal("addClip"),
@@ -138,14 +138,6 @@ export class OpError extends Error {
   }
 }
 
-function findClip(tl: Timeline, clipId: string): { track: Track; index: number; clip: Clip } | null {
-  for (const track of tl.tracks) {
-    const index = track.clips.findIndex((c) => c.id === clipId);
-    if (index >= 0) return { track, index, clip: track.clips[index]! };
-  }
-  return null;
-}
-
 function sortClips(track: Track) {
   track.clips.sort((a, b) => a.timelineIn - b.timelineIn);
 }
@@ -180,7 +172,7 @@ function applyToDraft(tl: Timeline, op: TimelineOp): Timeline {
     case "addClip": {
       const track = tl.tracks.find((t) => t.id === op.trackId);
       if (!track) throw new OpError(`track ${op.trackId} not found`, op);
-      if (findClip(tl, op.clip.id)) throw new OpError(`clip ${op.clip.id} already exists`, op);
+      if (findClipLocation(tl, op.clip.id)) throw new OpError(`clip ${op.clip.id} already exists`, op);
       if (!clipFitsTrack(op.clip, track)) {
         throw new OpError(`clip kind ${op.clip.kind} cannot go on ${track.kind} track`, op);
       }
@@ -189,13 +181,13 @@ function applyToDraft(tl: Timeline, op: TimelineOp): Timeline {
       return tl;
     }
     case "removeClip": {
-      const found = findClip(tl, op.clipId);
+      const found = findClipLocation(tl, op.clipId);
       if (!found) throw new OpError(`clip ${op.clipId} not found`, op);
       found.track.clips.splice(found.index, 1);
       return tl;
     }
     case "updateClip": {
-      const found = findClip(tl, op.clipId);
+      const found = findClipLocation(tl, op.clipId);
       if (!found) throw new OpError(`clip ${op.clipId} not found`, op);
       const patch = { ...op.patch };
       delete patch.id;
@@ -209,7 +201,7 @@ function applyToDraft(tl: Timeline, op: TimelineOp): Timeline {
       return tl;
     }
     case "moveClip": {
-      const found = findClip(tl, op.clipId);
+      const found = findClipLocation(tl, op.clipId);
       if (!found) throw new OpError(`clip ${op.clipId} not found`, op);
       const clip = shiftClip(found.clip, op.timelineIn - found.clip.timelineIn);
       found.track.clips.splice(found.index, 1);
@@ -223,7 +215,7 @@ function applyToDraft(tl: Timeline, op: TimelineOp): Timeline {
       return tl;
     }
     case "splitClip": {
-      const found = findClip(tl, op.clipId);
+      const found = findClipLocation(tl, op.clipId);
       if (!found) throw new OpError(`clip ${op.clipId} not found`, op);
       const { clip } = found;
       const end = clipEnd(clip);
@@ -231,7 +223,7 @@ function applyToDraft(tl: Timeline, op: TimelineOp): Timeline {
         throw new OpError(`split point ${op.at} outside clip [${clip.timelineIn}, ${end})`, op);
       }
       const rightId = op.newClipId ?? newId("clip");
-      if (findClip(tl, rightId)) throw new OpError(`clip ${rightId} already exists`, op);
+      if (findClipLocation(tl, rightId)) throw new OpError(`clip ${rightId} already exists`, op);
       const [left, right] = splitClip(clip, op.at, rightId);
       found.track.clips.splice(found.index, 1, left, right);
       sortClips(found.track);
