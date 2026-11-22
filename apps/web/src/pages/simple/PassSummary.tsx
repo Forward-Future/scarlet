@@ -351,7 +351,6 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     <div className="simple-pass-line req-row">
       {!made && seeEvery}
       {/* The pass goes in once its calls are decided and Scarlet finishes checking. Only a failed apply offers Retry. */}
-      {pass?.scheduled && <span className="simple-pass-ok">Goes in when Scarlet finishes</span>}
       {waiting && pass.deciding && <span className="simple-pass-ok">Applying…</span>}
       {waiting && !pass.deciding && !!pass.error && <button type="button" className="simple-link" onClick={pass.apply}>Retry</button>}
       <span className="req-right">{aside}</span>
