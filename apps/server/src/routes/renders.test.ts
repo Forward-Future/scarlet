@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { spawnStats } from "@scarlet/render";
 import { createProject, planPlaybackSegments, timelineFromKeepRanges, type Project } from "@scarlet/timeline";
 import type { Render, RenderFileInfo } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
@@ -245,4 +246,84 @@ it("keeps a cut's cached stills across the transition renderer's revision unless
   // The key a still had before transitions were drawn.
   expect(frameKey(parts, false)).toBe(createHash("sha256").update(JSON.stringify(parts)).digest("hex"));
   expect(frameKey(parts, true)).not.toBe(frameKey(parts, false));
+});
+
+function makeSolidClip(file: string, color: string, duration = 2) {
+  execFileSync(FFMPEG, [
+    "-hide_banner", "-loglevel", "error", "-y",
+    "-f", "lavfi", "-i", `color=c=${color}:size=160x90:rate=25:duration=${duration}`,
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", file,
+  ]);
+}
+
+it("keeps cached timeline stills across preparation progress ticks while still invalidating on any other media, setting, or file change", async () => {
+  const { ctx } = workspace;
+  const mediaDir = ctx.paths.media(project.id);
+  mkdirSync(mediaDir, { recursive: true });
+  makeSolidClip(join(mediaDir, "camera.mp4"), "red");
+  makeSolidClip(join(mediaDir, "alt.mp4"), "blue");
+  ctx.repos.projects.update(project.id, { settings: { width: 160, height: 90, fps: 25 } });
+  const camera = {
+    id: "camera", kind: "video" as const, name: "Camera", path: "camera.mp4",
+    duration: 2, fps: 25, width: 160, height: 90, hasAudio: false, hasAlpha: false,
+    preparation: { stage: "fingerprint" as const, fraction: 0 },
+  };
+  const second = {
+    id: "second", kind: "video" as const, name: "Second", path: "alt.mp4",
+    duration: 2, fps: 25, width: 160, height: 90, hasAudio: false, hasAlpha: false,
+    preparation: { stage: "fingerprint" as const, fraction: 0 },
+  };
+  ctx.repos.projects.putMedia(project.id, camera, "ingesting");
+  ctx.repos.projects.putMedia(project.id, second, "ingesting");
+  const shortVersion = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 2 }]), { parent: null }).version;
+  const auth = { Authorization: `Bearer ${accessToken(ctx)}` };
+  const fetchStill = (format: string, ifNoneMatch?: string) =>
+    workspace.app.request(`/api/projects/${project.id}/versions/${shortVersion}/frame?frame=10&format=${format}`, {
+      headers: { ...auth, ...(ifNoneMatch ? { "If-None-Match": ifNoneMatch } : {}) },
+    });
+
+  const warm = await fetchStill("160x90@25");
+  expect(warm.status).toBe(200);
+  let etag = warm.headers.get("ETag")!;
+  expect(etag).toBeTruthy();
+  const spawnsAfterWarm = spawnStats.ffmpeg;
+
+  // Preparation progress ticks on either recording must keep the same key and ETag with zero decodes.
+  const progressTicks: Array<() => void> = [
+    () => ctx.repos.projects.putMedia(project.id, { ...camera, preparation: { stage: "fingerprint", fraction: 0.5, remainingSeconds: 3 } }, "ingesting"),
+    () => ctx.repos.projects.putMedia(project.id, { ...camera, preparation: { stage: "preview", fraction: 0.8, remainingSeconds: 1 } }, "ingesting"),
+    () => ctx.repos.projects.putMedia(project.id, { ...second, preparation: { stage: "fingerprint", fraction: 0.4, remainingSeconds: 4 } }, "ingesting"),
+    () => ctx.repos.projects.putMedia(project.id, { ...second, preparation: { stage: "waveform", fraction: 1 } }, "ingesting"),
+    () => ctx.repos.projects.putMedia(project.id, { ...second, preparation: undefined }, "ingesting"),
+  ];
+  for (const tick of progressTicks) {
+    tick();
+    const conditional = await fetchStill("160x90@25", etag);
+    expect(conditional.status).toBe(304);
+    expect(conditional.headers.get("ETag")).toBe(etag);
+    const unconditional = await fetchStill("160x90@25");
+    expect(unconditional.status).toBe(200);
+    expect(unconditional.headers.get("ETag")).toBe(etag);
+  }
+  expect(spawnStats.ffmpeg).toBe(spawnsAfterWarm);
+
+  // Any non-preparation media change, project setting change, or source file edit must still invalidate the key.
+  const invalidatingChanges: Array<{ format: string; apply: () => void }> = [
+    { format: "160x90@25", apply: () => ctx.repos.projects.putMedia(project.id, { ...second, preparation: undefined, hash: "b".repeat(64), fingerprintStamp: { size: 123, mtimeMs: 456, ctimeMs: 789 } }, "ready") },
+    { format: "160x90@25", apply: () => ctx.repos.projects.putMedia(project.id, { ...camera, preparation: undefined, hash: "a".repeat(64) }, "ready") },
+    { format: "160x90@25", apply: () => ctx.repos.projects.putMedia(project.id, { ...camera, preparation: undefined, hash: "a".repeat(64), transcriptId: "trs_1" }, "ready") },
+    { format: "160x90@25", apply: () => ctx.repos.projects.putMedia(project.id, { ...camera, preparation: undefined, hash: "a".repeat(64), transcriptId: "trs_1", voiceRoles: { me: 1, other: 2 } }, "ready") },
+    { format: "160x90@25", apply: () => ctx.repos.projects.putMedia(project.id, { ...camera, preparation: undefined, hash: "a".repeat(64), transcriptId: "trs_1", voiceRoles: { me: 1, other: 2 }, path: "alt.mp4" }, "ready") },
+    { format: "320x180@25", apply: () => ctx.repos.projects.update(project.id, { settings: { width: 320, height: 180, fps: 25 } }) },
+    { format: "320x180@25", apply: () => makeSolidClip(join(mediaDir, "alt.mp4"), "green", 3) },
+  ];
+  for (const { format, apply } of invalidatingChanges) {
+    apply();
+    const res = await fetchStill(format, etag);
+    expect(res.status).toBe(200);
+    const nextEtag = res.headers.get("ETag")!;
+    expect(nextEtag).toBeTruthy();
+    expect(nextEtag).not.toBe(etag);
+    etag = nextEtag;
+  }
 });
