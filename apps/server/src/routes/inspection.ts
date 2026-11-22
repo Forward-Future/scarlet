@@ -117,7 +117,7 @@ export function inspectionRoutes(ctx: Ctx) {
       const picture = input.media && !options.review ? await sourcePicture(project, input.media, local, options.mode) : undefined;
       const copy = picture && await stat(picture.file).catch(() => undefined);
       const key = JSON.stringify([project.id, plan.id, file, info.size, info.ctimeMs, info.mtimeMs, picture?.file, picture?.start, copy?.mtimeMs,
-        origin, local, plan.focus, fps, options]);
+        origin, local, plan.focus, fps, options, input.media?.color?.hdr]);
       const analysis = await cache.get(key, () => ctx.track((async () => {
         const sheetOptions = { ...options, focus: plan.focus, fps, sourceWidth: input.sourceWidth, signal };
         // Decodes take turns in the engine's picture lane.
@@ -133,7 +133,8 @@ export function inspectionRoutes(ctx: Ctx) {
         // An original recording is full size, so it decodes on the GPU when there is one. Preview copies and rendered
         // segments are small enough for the CPU.
         const decoder = fromCopy || !input.media ? undefined : await pictureDecoder(ctx.settings().render.hwaccel);
-        return fromCopy || lane.run(() => contactSheet(file, local, { ...sheetOptions, origin, decoder }), { signal });
+        // An HDR original's pictures are tone-mapped to SDR, as its preview copy's already are.
+        return fromCopy || lane.run(() => contactSheet(file, local, { ...sheetOptions, origin, decoder, hdr: input.media?.color?.hdr }), { signal });
       })(), project.id));
       return { ...plan, range: { start: origin + local.start, end: origin + local.end }, ...analysis };
     }));

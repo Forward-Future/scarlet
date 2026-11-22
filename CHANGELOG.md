@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- HDR video from an iPhone or other HDR camera now looks right in playback, thumbnails and exports instead of washed out, and Scarlet knows when footage was shot in a camera Log profile.
 - A voice request aimed at a moment on the timeline now carries any attached files or marked frame with it instead of leaving them in the message box.
 - Skipping a second ahead with Shift+→ while watching a pass's edits no longer marks a skipped cut or edit as kept.
 - Timeline thumbnails stay cached while a recording prepares instead of redrawing on every progress update.
