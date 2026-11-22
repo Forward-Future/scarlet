@@ -65,6 +65,12 @@ export interface ShownBeside {
   showing?: string[];
   /** Nothing in the frame's area of the recording changes over it. */
   unchanged?: true;
+  /**
+   * Nothing anywhere in the recording's picture changes over it, the pointer included: a page left still, or a capture
+   * that stopped while the speaker went on (2026-11-21: a screen recording held one frame for 93 s while the presenter
+   * worked a demo it never caught, and the pass asked only whether to show the demo).
+   */
+  stillEverywhere?: true;
   /** The words heard over it. */
   said?: string;
   /** Passages of the recording's text read aloud over it, word for word, while it is off picture. */
@@ -81,6 +87,8 @@ export interface BesideEvidence {
   lines: ReadonlyMap<string, readonly ScreenLine[]>;
   /** Each recording's seconds whose picture changed, in source seconds (screen_motion). */
   seconds: ReadonlyMap<string, readonly MotionSecond[]>;
+  /** The recordings whose picture's changes are read through over the time asked: only there does no change mean a still picture. */
+  motionRead?: ReadonlySet<string>;
   /** Where each recording's picture has something in it, in source seconds (screen_motion's detail). */
   detail?: ReadonlyMap<string, readonly DetailFrame[]>;
   /** Each recording's cuts, in source seconds (`/picture-cuts`): what it shows ends at one that changes enough of the frame. */
@@ -342,6 +350,7 @@ export function framingReport(before: Timeline | null, after: Timeline, media: r
       .sort((a, b) => b.text.length - a.text.length || a.box[1] - b.box[1] || a.box[0] - b.box[0]);
     const changes = (evidence.seconds.get(mediaId) ?? []).filter(s => s.areas.some(a => a[4] >= SMALL && area(meet(a.slice(0, 4) as Box, frame)) > 0));
     const cuts = (evidence.cuts?.get(mediaId) ?? []).filter(c => cutShareOf(c, frame) >= CUT_SHOWN);
+    const anyChange = (evidence.seconds.get(mediaId) ?? []).filter(s => s.areas.length);
     let last: { t: number; source: number; unchanged: boolean } | undefined;
     for (const { t, source } of walk.steps) {
       const [lo, hi] = side === "after" ? [edge, source] : [source, edge];
@@ -356,6 +365,8 @@ export function framingReport(before: Timeline | null, after: Timeline, media: r
     if (b - a < 1) return undefined;
     // The lines there for at least half of it: a post's text can go a moment before the page does, its window's labels not.
     const reach = last.source, half = Math.abs(reach - edge) / 2;
+    const [from, to] = side === "after" ? [edge, reach] : [reach, edge];
+    const stillEverywhere = last.unchanged && !!evidence.motionRead?.has(mediaId) && !anyChange.some(s => s.at + 1 > from && s.at < to);
     const showing = [...new Set(lines.filter(l => (side === "after" ? Math.min(l.end, reach) - edge : edge - Math.max(l.start, reach)) >= half).map(l => l.text))].slice(0, 3);
     const heard = evidence.words.filter(w => w.start >= a - 0.05 && w.end <= b + 0.05);
     const said = heard.map(w => w.text.trim()).filter(Boolean).join(" ");
@@ -385,6 +396,7 @@ export function framingReport(before: Timeline | null, after: Timeline, media: r
       look = { mediaId: walk.clock.mediaId, at: r2(middle.clockSource), area: pct([left, top, left + width, top + height]) };
     }
     return { from: r2(a), to: r2(b), ...(showing.length && { showing }), ...(last.unchanged && { unchanged: true as const }),
+      ...(stillEverywhere && { stillEverywhere: true as const }),
       ...(said && { said: said.length > 200 ? `${said.slice(0, 197)}…` : said }), ...(reads.length && { reads: reads.slice(0, 5) }),
       ...(eyesDown !== undefined && { eyesDown }), ...(look && { look }) };
   }
@@ -484,4 +496,4 @@ export function moveSize(from: number[], to: number[]): { zoom?: number; shift?:
   return { zoom: Math.round((fw / tw - 1) * 1000) / 10, shift: Math.round(Math.max(dx, dy) * 1000) / 10 };
 }
 
-export const FRAMING_REPORT_NEXT = "hiddenUnderCover names the holds, in timeline seconds, where a picture over the recording hides something on it, and readOffPicture the passages, in timeline seconds, where the speaker reads aloud text the recording shows while it is off picture (each stretch's shownAfter and shownBefore reads). framed lists each stretch this edit framed, put on picture over another, moved the edges of or moved a picture over (a camera inset): where the frame holds and where it moves, as the area of the source picture that fills the video ([left, top, right, bottom] in percent, empty where the picture doesn't fill it), with each hold's underCover, the lines of the recording's text (screen_text) in the frame that a picture over it sits on, and cornersClearOfText, the corners where that picture would sit on none, coverHides, the things in the recording the frame shows (text, lines, pictures: anything that isn't flat background) that the picture over it hides, with each one's box and the percent of it hidden, and detailInCorners, how much of that picture would sit on such things in each corner, in percent (timeline_framing places a frame clear of it, or moves it); readsHidden, the passages the speaker reads aloud there (screen_reading) whose lines the frame leaves out (outsideFrame) or a picture over it covers (underCover), in percent of those lines; actionHidden, the areas where the picture keeps changing (screen_motion) that it leaves out or covers, in percent of each area; and shownAfter and shownBefore, the video just after the stretch ends or just before it starts, with the recording off picture, while the recording still shows what the frame showed at that edge, up to a cut in the recording: lines of its text still there (showing, longest first), or nothing in the frame changed (unchanged), with the words heard over it (said), the passages of its text read aloud word for word (reads) and how far the speaker's eyes look down meanwhile (eyesDown: 0 level or up, 1 fully down; at a laptop below the camera they read about 0.5 or more, at the lens about 0.1), with where to see their face midway (look: the recording, its source second and the area in percent, for media_frame). A move marked onCut starts on a cut in the picture; each move's zoom says how much larger the picture gets, in percent (negative when it gets smaller), and shift how far the frame's centre goes, in percent of the frame it leaves. frame_contact_sheet on the new version shows any of it as it plays.";
+export const FRAMING_REPORT_NEXT = "hiddenUnderCover names the holds, in timeline seconds, where a picture over the recording hides something on it, and readOffPicture the passages, in timeline seconds, where the speaker reads aloud text the recording shows while it is off picture (each stretch's shownAfter and shownBefore reads). framed lists each stretch this edit framed, put on picture over another, moved the edges of or moved a picture over (a camera inset): where the frame holds and where it moves, as the area of the source picture that fills the video ([left, top, right, bottom] in percent, empty where the picture doesn't fill it), with each hold's underCover, the lines of the recording's text (screen_text) in the frame that a picture over it sits on, and cornersClearOfText, the corners where that picture would sit on none, coverHides, the things in the recording the frame shows (text, lines, pictures: anything that isn't flat background) that the picture over it hides, with each one's box and the percent of it hidden, and detailInCorners, how much of that picture would sit on such things in each corner, in percent (timeline_framing places a frame clear of it, or moves it); readsHidden, the passages the speaker reads aloud there (screen_reading) whose lines the frame leaves out (outsideFrame) or a picture over it covers (underCover), in percent of those lines; actionHidden, the areas where the picture keeps changing (screen_motion) that it leaves out or covers, in percent of each area; and shownAfter and shownBefore, the video just after the stretch ends or just before it starts, with the recording off picture, while the recording still shows what the frame showed at that edge, up to a cut in the recording: lines of its text still there (showing, longest first), or nothing in the frame changed (unchanged), and stillEverywhere when nothing anywhere in the recording's picture changes, the pointer included, as a page left still or a capture that stopped leaves it, with the words heard over it (said), the passages of its text read aloud word for word (reads) and how far the speaker's eyes look down meanwhile (eyesDown: 0 level or up, 1 fully down; at a laptop below the camera they read about 0.5 or more, at the lens about 0.1), with where to see their face midway (look: the recording, its source second and the area in percent, for media_frame). A move marked onCut starts on a cut in the picture; each move's zoom says how much larger the picture gets, in percent (negative when it gets smaller), and shift how far the frame's centre goes, in percent of the frame it leaves. frame_contact_sheet on the new version shows any of it as it plays.";

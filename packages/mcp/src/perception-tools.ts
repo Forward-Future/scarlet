@@ -158,6 +158,7 @@ export function registerPerception(deps: PerceptionDeps) {
       evidence: {
         lines: new Map(text.reads.map(({ id, read }) => [id, read.spans])),
         seconds: new Map(motion.reads.map(({ id, read }) => [id, read.seconds])),
+        motionRead: new Set(motion.reads.filter(({ read }) => read.done).map(({ id }) => id)),
         detail: new Map(motion.reads.map(({ id, read }) => [id, read.detail ?? []])),
         cuts: new Map(cuts.reads.map(({ id, read }) => [id, read.cuts])),
         words: transcripts.size ? timelineWords(tl, transcripts, range) : [],
