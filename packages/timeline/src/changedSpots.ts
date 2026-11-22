@@ -75,9 +75,9 @@ function indexedLayers(timeline: Timeline) {
         const { id, timelineIn, sourceIn, sourceOut, label, audioFadeIn, audioFadeOut, videoFadeIn, videoFadeOut, transitionIn, ...rest } = c;
         // Splitting a clip shifts its local keyframe times while retaining the
         // same animation at each source frame.
-        key = stableStringify(rest.keyframes?.length ? { ...rest, keyframes: rest.keyframes.map(k => ({
-          ...k, time: roundedTime(sourceIn + k.time * c.speed),
-        })) } : rest);
+        const onSource = <K extends { time: number }>(keys: K[]) => keys.map(k => ({ ...k, time: roundedTime(sourceIn + k.time * c.speed) }));
+        key = stableStringify({ ...rest, ...(rest.keyframes?.length && { keyframes: onSource(rest.keyframes) }),
+          ...(rest.volumeKeyframes?.length && { volumeKeyframes: onSource(rest.volumeKeyframes) }) });
       } else if (c.kind === "caption") {
         key = `${track.id}|c|${c.text}|${captionStyle}|${stableStringify(c.style ?? {})}`;
       } else {

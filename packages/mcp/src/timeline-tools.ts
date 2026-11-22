@@ -14,9 +14,12 @@ import {
   applyOps,
   audioCrossfadeOps,
   CaptionStyle,
+  EditReason,
   captionsFromWords,
   carriesAudio,
+  clipEnd,
   clipsAt,
+  dipKeyframes,
   emptyTimeline,
   introducedDoubledSound,
   newId,
@@ -58,7 +61,7 @@ import { EDGES_IN_SOUND, type MediaSession, type SoundingEdge } from "./media-se
 import { requireMediaAsset, type SessionErrorHelpers } from "./media-state.js";
 import type { FrameAdjustment, ProposePipeline } from "./propose-pipeline.js";
 import { InsetFraming, InsetPresenter, syncPictureOps } from "./sync-layout.js";
-import { sourceRangeToTimeline, sourceToTimeline } from "./timeline-perception.js";
+import { sourceRangeToTimeline, sourceToTimeline, timelineWords } from "./timeline-perception.js";
 import { DOUBLED_SOUND, doubledSoundText, OPS_DOC, validateOps } from "./timeline-validation.js";
 import { errorText, formatZodError, json, noteUnmeasured, text, type ToolRegistrar, type ToolResult } from "./tool-result.js";
 import { transitionOps } from "./transition.js";
@@ -343,6 +346,92 @@ ${OPS_DOC}`,
       const { ops, report } = transitionOps(before, project.media, project.settings.fps, joins, style);
       const result = await propose({ intent, ops, description, reason, noteIds }, before);
       return { ...result, content: [...result.content, { type: "text" as const, text: `Joins:\n${report.join("\n")}` }] };
+    },
+  );
+
+  tool(
+    "timeline_duck",
+    "Dip clips, such as music, under speech. Volume keyframes do it: each dip goes down over `down` seconds to reach `depth` dB under the clip's own level as its stretch starts, holds, and comes back up over `up` seconds once it ends, easing in and out. Give the stretches as [start, end] timeline seconds (`stretches`), or leave them out to dip under the speech transcribed on every other audible clip: words closer than `swellIn` seconds share a dip, and the level comes back up in longer pauses. Stretches closer than `down` + `up` share one dip, since the level couldn't come back up between them. The dips take the place of the clips' earlier volume keyframes inside `within` ([start, end] timeline seconds), or of all of them without it. Name the clips by `clipIds`, or every clip of a recording by `mediaId`. The result lists each dip as placed, the pauses where the level comes back up (`swells`), and the transcribed speech still playing over the clips at their full level (`speechNotUnder`). One proposal.",
+    {
+      intent: intentInput,
+      clipIds: z.array(z.string()).optional().describe("The clips to dip"),
+      mediaId: z.string().optional().describe("Dip every clip of this recording instead"),
+      stretches: z.array(z.array(z.number())).optional()
+        .describe("Timeline seconds to dip under. Leave out to dip under the transcribed speech"),
+      depth: z.number().optional().describe("dB under the clip's own level while a stretch plays, -60 to 0. Your skill says which; -18 when omitted"),
+      down: z.number().optional().describe("Seconds the level takes to go down before a stretch. Your skill says which; 0.3 when omitted"),
+      up: z.number().optional().describe("Seconds the level takes to come back up after a stretch. Your skill says which; 0.8 when omitted"),
+      swellIn: z.number().optional().describe("With speech: the shortest pause the level comes back up in. Your skill says which; 2 when omitted"),
+      within: z.array(z.number()).optional()
+        .describe("Only place dips here, keeping the clips' volume keyframes outside it"),
+      description: z.string().optional().describe("One short sentence for the chat about what the editor will hear"),
+      reason: EditReason.describe("Why, for the edit's card: the footage cue or the editor's request"),
+    },
+    async ({ intent, clipIds: named, mediaId, stretches: pairs, depth, down, up, swellIn, within: span_, description: said, reason }) => {
+      const clipIds = named?.length ? named : undefined, description = said?.trim() || "Dip the music under speech";
+      if (!clipIds === !mediaId) throw new Error("Give clipIds or mediaId.");
+      const range = (pair: number[], name: string) => {
+        if (pair.length !== 2 || !(pair[0]! >= 0 && pair[1]! >= pair[0]! && Number.isFinite(pair[1]))) throw new Error(`${name} must be [start, end] in timeline seconds.`);
+        return { start: pair[0]!, end: pair[1]! };
+      };
+      const stretches = pairs?.map(p => range(p, "Each stretch")), within = span_ && range(span_, "within");
+      const finite = (v: number | undefined, lo: number, hi: number, name: string) => {
+        if (v !== undefined && !(Number.isFinite(v) && v >= lo && v <= hi)) throw new Error(`${name} must be between ${lo} and ${hi}.`);
+      };
+      finite(depth, -60, 0, "depth"); finite(down, 0, 5, "down"); finite(up, 0, 10, "up"); finite(swellIn, 0, 30, "swellIn");
+      const [{ project }, before] = await Promise.all([getProject(), baseTimeline()]);
+      const shape = { depth: depth ?? -18, down: down ?? 0.3, up: up ?? 0.8 };
+      const gap = swellIn ?? 2;
+      const placed = before.tracks.flatMap(track => track.clips.flatMap(clip => clip.kind === "media" &&
+        (clipIds ? clipIds.includes(clip.id) : clip.mediaId === mediaId) ? [{ clip, track }] : []));
+      const missing = clipIds?.filter(id => !placed.some(p => p.clip.id === id)) ?? [];
+      if (missing.length) throw new Error(`No media clip ${missing.join(", ")} on version ${before.version}.`);
+      if (!placed.length) throw new Error(`No clip of ${mediaId} on version ${before.version}.`);
+      // The speech is every other recording's transcribed words, as the edit plays them: a song's own lyrics aren't it.
+      const ducked = new Set(placed.map(p => p.clip.kind === "media" ? p.clip.mediaId : ""));
+      const transcripts = new Map<string, TranscriptWord[]>();
+      for (const id of new Set(before.tracks.flatMap(t => t.clips.flatMap(c => c.kind === "media" && !ducked.has(c.mediaId) ? [c.mediaId] : [])))) {
+        if (!project.media.some(m => m.id === id && carriesAudio(m))) continue;
+        const words = await transcriptWords(id, false).catch(() => null);
+        if (words?.length) transcripts.set(id, words);
+      }
+      const spoken = timelineWords(before, transcripts).filter(w => w.end > w.start);
+      if (!stretches && !spoken.length) throw new Error("No transcribed speech plays on the other clips: give the stretches to dip under.");
+      const inside = (s: { start: number; end: number }) => !within || (s.end > within.start && s.start < within.end);
+      const speech = spoken.reduce<{ start: number; end: number }[]>((runs, w) => {
+        const last = runs.at(-1);
+        if (last && w.start - last.end < gap) last.end = Math.max(last.end, w.end);
+        else runs.push({ start: w.start, end: w.end });
+        return runs;
+      }, []);
+      const under = (stretches ?? speech).filter(s => s.end > s.start && inside(s))
+        .map(s => within ? { start: Math.max(s.start, within.start), end: Math.min(s.end, within.end) } : s);
+      const ops: TimelineOp[] = [];
+      const report = placed.map(({ clip }) => {
+        if (clip.kind !== "media") throw new Error(`${clip.id} is not a media clip.`);
+        const { keys, dips } = dipKeyframes(clip, under, shape, within);
+        ops.push({ op: "updateClip", clipId: clip.id, patch: { volumeKeyframes: keys } });
+        const start = clip.timelineIn, end = clipEnd(clip);
+        const swells = dips.slice(1).map((d, i) => ({ start: round3(dips[i]!.end), end: round3(d.start) }));
+        // Speech over the clip that plays with no dip under it: evidence for the model, which decides what to do.
+        const open = speech.filter(s => s.end > start && s.start < end && inside(s)).flatMap(s => {
+          let parts = [{ start: Math.max(s.start, start), end: Math.min(s.end, end) }];
+          for (const d of dips) parts = parts.flatMap(p => d.end <= p.start || d.start >= p.end ? [p]
+            : [{ start: p.start, end: d.start }, { start: d.end, end: p.end }].filter(q => q.end - q.start > 0.05));
+          return parts;
+        });
+        return { clipId: clip.id, from: round3(start), to: round3(end), keyframes: keys.length,
+          dips: dips.map(d => ({ start: round3(d.start), end: round3(d.end), depth: d.depth })),
+          ...(swells.length && { swells: swells.slice(0, 40), ...(swells.length > 40 && { moreSwells: swells.length - 40 }) }),
+          ...(open.length && { speechNotUnder: open.slice(0, 20).map(s => ({ start: round3(s.start), end: round3(s.end) })),
+            ...(open.length > 20 && { moreSpeechNotUnder: open.length - 20 }) }) };
+      });
+      const summary = { shape: { ...shape, ...(!stretches && { swellIn: gap }) }, under: stretches ? "stretches" : "speech", clips: report };
+      const span = { start: Math.min(...placed.map(p => p.clip.timelineIn)), end: Math.max(...placed.map(p => clipEnd(p.clip))) };
+      // One edit, over the clips it dips: Reject takes the dips back off them alone.
+      const result = await propose({ intent, ops, description, reason,
+        timelineEdits: [{ label: description, range: span, reason }] }, before);
+      return { ...result, content: [...result.content, { type: "text" as const, text: JSON.stringify(summary) }] };
     },
   );
 

@@ -35,7 +35,7 @@ function requireExternalMediaTools(names, description) {
 }
 
 const runtimeNotices = ["node.txt", "javascript.txt", "rust.txt", "rust-standard-library.html", "whisper-audio-dependencies.txt",
-  "sherpa-dependencies.txt", "speaker-onnxruntime-1.28.2-third-party.txt", "chrome-headless-shell.txt"];
+  "sherpa-dependencies.txt", "rnnoise-models.txt", "speaker-onnxruntime-1.28.2-third-party.txt", "chrome-headless-shell.txt"];
 // Motion graphics render in the bundled headless browser, with its own copy of its notices beside it.
 const chromeFiles = ["chrome-headless-shell.exe", "LICENSE.headless_shell", "icudtl.dat"];
 

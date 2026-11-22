@@ -413,6 +413,7 @@ export function trimHead<T extends Clip>(clip: T, at: number): T {
   if (clip.kind === "media") {
     return { ...clip, timelineIn: at, sourceIn: clip.sourceIn + delta * (clip.speed ?? 1),
       ...(clip.keyframes?.length && { keyframes: clip.keyframes.map(key => ({ ...key, time: key.time - delta })) }),
+      ...(clip.volumeKeyframes?.length && { volumeKeyframes: clip.volumeKeyframes.map(key => ({ ...key, time: key.time - delta })) }),
     } as T;
   }
   if (clip.kind === "caption") return trimCaption(clip, at, clip.timelineOut) as T;

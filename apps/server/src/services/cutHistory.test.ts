@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { applyOps, createProject, timelineFromKeepRanges, type Project } from "@scarlet/timeline";
+import { applyOps, createProject, makeMediaClip, timelineFromKeepRanges, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
 import { localUser } from "../auth.js";
 import { recordHistoryEdit, rejectEdits } from "./cutHistory.js";
@@ -103,6 +103,34 @@ it("takes a look edit off again itself, undoes a request whose every edit is rej
   expect(() => reject([answer])).toThrow("This edit can’t be put back as it was.");
   // The other comes off the same way.
   expect(scales(reject([close]).project.head!)).toEqual([undefined, undefined, undefined]);
+});
+
+it("takes one music dip back with no model, after a later cut split the music it was on, and leaves the other", () => {
+  const { ctx } = app;
+  const user = localUser(ctx);
+  ctx.repos.projects.putMedia(project.id, { id: "camera", name: "interview.mov", kind: "video", path: "camera.mov" }, "ready");
+  ctx.repos.projects.putMedia(project.id, { id: "music", name: "bed.wav", kind: "audio", path: "bed.wav" }, "ready");
+  const start = timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 60 }]);
+  start.tracks.push({ id: "music", kind: "audio", name: "Music", muted: false, hidden: false, clips: [
+    makeMediaClip("music", 0, 20, 0, { id: "intro" }), makeMediaClip("music", 100, 120, 40, { id: "outro" })] });
+  const first = storeVersion(ctx, project.id, start, { parent: null });
+  const dip = [{ time: 2, db: 0, ease: "easeInOut" as const }, { time: 2.3, db: -18, ease: "linear" as const },
+    { time: 9, db: -18, ease: "easeInOut" as const }, { time: 9.8, db: 0, ease: "linear" as const }];
+  const ops = [{ op: "updateClip" as const, clipId: "intro", patch: { volumeKeyframes: dip } }, { op: "updateClip" as const, clipId: "outro", patch: { volumeKeyframes: dip } }];
+  const dipped = storeVersion(ctx, project.id, applyOps(first, ops), { parent: first.version, changeId: "chg_dip" });
+  const base = { projectId: project.id, author: { type: "agent" as const, id: "codex", name: "codex" }, state: "approved" as const, noteIds: [], renders: [], ranges: [],
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  ctx.repos.changes.put({ ...base, id: "chg_dip", description: "Dipped the music under speech", fromVersion: first.version, toVersion: dipped.version,
+    appliedOnto: first.version, appliedVersion: dipped.version, ops,
+    timelineEdits: [{ label: "Dip the intro music", range: { start: 0, end: 20 } }, { label: "Dip the outro music", range: { start: 40, end: 60 } }] });
+  // A later cut takes 5–6 s out of every track, through the intro's music.
+  const cut = storeVersion(ctx, project.id, applyOps(dipped, [{ op: "rippleDelete", start: 5, end: 6 }]), { parent: dipped.version });
+  ctx.repos.projects.update(project.id, { head: cut.version });
+  const branch = ctx.repos.projects.get(project.id)!.branch ?? "main";
+  const result = rejectEdits(ctx, user, project.id, "thread", [{ changeId: "chg_dip", spot: 0, label: "Dip the intro music", range: { start: 0, end: 19 } }],
+    cut.version, branch);
+  const music = ctx.repos.versions.get(project.id, result.project.head!)!.timeline.tracks.find(t => t.id === "music")!.clips;
+  expect(music.map(c => [c.id === "outro" ? "outro" : "intro", c.kind === "media" && c.volumeKeyframes?.length])).toEqual([["intro", undefined], ["intro", undefined], ["outro", 4]]);
 });
 
 it("undoes a request whose only edit is rejected, whatever it changed", () => {

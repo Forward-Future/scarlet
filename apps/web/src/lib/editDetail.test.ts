@@ -33,6 +33,24 @@ describe("editDetail", () => {
       { kind: "zoom", range: at }, { timeline, media })).toBe("Zooms 100% → 125%");
   });
 
+  it("says how far a music dip goes and in how many places, from its keyframes and the clip's own level", () => {
+    const dips = (n: number, db: number) => Array.from({ length: n }, (_, i) => [
+      { time: i * 10, db: 0, ease: "easeInOut" }, { time: i * 10 + 0.3, db, ease: "linear" },
+      { time: i * 10 + 4, db, ease: "easeInOut" }, { time: i * 10 + 4.8, db: 0, ease: "linear" }]).flat();
+    const dip = (patch: Record<string, unknown>) => editDetail(change([{ op: "updateClip", clipId: "clp_music", patch }]), { kind: "dip", range: at }, { timeline, media });
+    expect(dip({ volumeKeyframes: dips(4, -18) })).toBe("Warm bed down to −18 dB in 4 places");
+    // With the clip's own level set too, both are said, and the dip's depth counts from where the level now sits.
+    expect(dip({ volumeKeyframes: dips(1, -12), volume: 0.5 })).toBe("Warm bed −6 dB · Warm bed down to −18 dB");
+    expect(dip({ volumeKeyframes: [] })).toBe("Warm bed back to a steady level");
+  });
+
+  it("names a voice cleanup and the clip it is on, and how much of it plays", () => {
+    const clean = (params: Record<string, unknown>) => editDetail(change([{ op: "updateClip", clipId: "clp_main",
+      patch: { effects: [{ type: "voiceCleanup", params, enabled: true }] } }]), { kind: "voice", range: at }, { timeline, media });
+    expect(clean({})).toBe("Voice cleanup on Interview");
+    expect(clean({ mix: 0.6 })).toBe("Voice cleanup on Interview at 60%");
+  });
+
   it("gives a level in decibels and names the clip it is on", () => {
     expect(editDetail(change([{ op: "updateClip", clipId: "clp_music", patch: { volume: 0.5 } }]), { kind: "audio", range: at }, { timeline, media }))
       .toBe("Warm bed −6 dB");

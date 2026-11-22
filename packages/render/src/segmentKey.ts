@@ -107,7 +107,7 @@ function segmentClip(clip: Clip, range: TimeRange, media: Map<string, MediaAsset
   }
   const { sourceIn, sourceOut: _out, ...input } = rest;
   const videoStart = videoClockStart(rest, p.local0);
-  const audioStart = rest.audioFadeIn || rest.audioFadeOut ? p.local0 : 0;
+  const audioStart = rest.audioFadeIn || rest.audioFadeOut || rest.volumeKeyframes?.length ? p.local0 : 0;
   const fadeStart = (duration: number) => {
     const start = Math.max(0, p.clipDur - duration);
     return duration > 0 && start <= p.local0 + p.vis + 1 / settings.fps ? fnum(start) : undefined;
@@ -168,7 +168,7 @@ export function deliveryPicture(project: Project, timeline: Timeline): Timeline 
       const clips = track.clips
         .filter(clip => clip.enabled !== false && (clip.kind !== "media" || !audioAssets.has(clip.mediaId)))
         .map(clip => clip.kind !== "media" ? clip : {
-          ...clip, volume: 0, audioFadeIn: 0, audioFadeOut: 0,
+          ...clip, volume: 0, volumeKeyframes: undefined, audioFadeIn: 0, audioFadeOut: 0,
           effects: clip.effects.filter(effect => effectKind(effect.type) !== "audio"),
         });
       return { ...track, muted: false, clips };

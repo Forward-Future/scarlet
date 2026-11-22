@@ -6,6 +6,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- Scarlet can dip music under speech and let it swell back up in the pauses, with a new Music under speech skill for how deep and how fast.
+- Scarlet can clean the room and background noise out of a voice, when you ask for it or a skill of yours says to.
 - Telling who is speaking works again on a new install: the speaker model downloads instead of failing every time.
 - A voice request aimed at a moment on the timeline now carries any attached files or marked frame with it instead of leaving them in the message box.
 - Skipping a second ahead with Shift+→ while watching a pass's edits no longer marks a skipped cut or edit as kept.
