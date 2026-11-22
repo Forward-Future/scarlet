@@ -234,8 +234,10 @@ async function runTrial(engine: Engine, loaded: LoadedCase, config: AgentConfig,
     const transcripts = trialTranscripts(before, after, completed.events);
     writeJson(join(dir, "transcripts.json"), transcripts);
     const evaluation = await evaluateTask(engine, task.id, { loaded });
+    // The cut the trial left, so its picture can be scored later (pictureScorecard.ts) once the trial's library is gone.
+    const applied = await engine.timeline(projectId, evaluation.score.versions.applied);
+    writeJson(join(dir, "applied-timeline.json"), applied);
     if (grading) {
-      const applied = await engine.timeline(projectId, evaluation.score.versions.applied);
       await reportEntrances(loaded, applied, dir, evaluation.score.headline);
       reportPublishedWords(grading, loaded, applied, dir, evaluation.score.headline);
     }
