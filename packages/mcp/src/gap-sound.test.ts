@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeGapSound, gapSound, quietPhrases, speakingLevel, type GapLevels } from "./gap-sound.js";
+import { describeGapSound, gapSound, quietPhrases, quietRms, roomRms, speakingLevel, type GapLevels } from "./gap-sound.js";
 
 /** Ten seconds at 50 levels a second: speech at .1, room tone at .001, and whatever `at` says in between. */
 function levels(at: (t: number) => number | undefined): GapLevels {
@@ -35,6 +35,39 @@ describe("what sounds between two words", () => {
     expect(gapSound(hiss, { start: 2.9, end: 4.6 })).toEqual({ seconds: 0, runs: [] });
     // Levels that do not reach the gap say nothing either way.
     expect(gapSound(hiss, { start: 9.5, end: 10.5 })).toBeUndefined();
+  });
+});
+
+describe("a voice over a noisy room", () => {
+  /** A soft speaker (speech at .018, -35 dBFS) over noise at `noise`, which swings a few dB as noise does; `at` as in levels. */
+  const room = (noise: number, at: (t: number) => number | undefined = () => undefined) => {
+    const spoken = levels(t => at(t) ?? (t < 2.9 || t >= 4.6 ? .018 : undefined));
+    return { ...spoken, rms: spoken.rms.map((v, i) => v === .001 ? noise * (1 + .15 * Math.sin(i * 1.7)) : v) };
+  };
+
+  it("doesn't take the noise in a pause for sound no word explains, and still finds a word said there", () => {
+    // Pink noise 10 dB under the voice, at -42 dBFS: every pause of a pass read as holding sound, and none was trimmed (2026-11-22).
+    const cafe = room(.008);
+    expect(gapSound(cafe, { start: 2.9, end: 4.6 })).toEqual({ seconds: 0, runs: [] });
+    const missed = room(.008, t => t >= 3.4 && t < 3.8 ? .018 : undefined);
+    expect(gapSound(missed, { start: 2.9, end: 4.6 })!.runs).toEqual([{ start: 3.4, end: 3.8 }]);
+  });
+
+  it("keeps quiet under the level that counts as speech, so a word's soft end over the noise isn't quiet", () => {
+    // Noise at -54 dBFS under a voice at -35: QUIET_RMS (-40 dBFS) alone let a word's end at -42 read as quiet.
+    const noisy = room(.002);
+    expect(20 * Math.log10(roomRms(noisy.rms, .02))).toBeCloseTo(-55.3, 0);
+    expect(quietRms(noisy.rms, .02)).toBeLessThan(10 ** (-42 / 20));
+    expect(quietRms(noisy.rms, .02)).toBeGreaterThan(noisy.rms.filter((_, i) => i >= 150 && i < 225).reduce((a, b) => Math.max(a, b)));
+  });
+
+  it("reads a quiet studio as it did", () => {
+    // Room tone at -60 dBFS, far under speech at -20: quiet is 20 dB over the room, and sound is 12 dB under the voice.
+    const studio = levels(() => undefined);
+    expect(quietRms(studio.rms, .02)).toBeCloseTo(.01, 6);
+    const hushed = { ...studio, rms: studio.rms.map(v => v === .001 ? .0002 : v) };
+    expect(quietRms(hushed.rms, .02)).toBeCloseTo(.002, 6);
+    expect(gapSound(levels(t => t >= 3.1 && t < 3.5 ? .026 : undefined), { start: 2.9, end: 4.6 })!.runs).toEqual([{ start: 3.1, end: 3.5 }]);
   });
 });
 
