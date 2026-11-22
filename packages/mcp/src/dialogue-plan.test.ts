@@ -576,6 +576,29 @@ describe("dialogue plan", () => {
     expect(await plan(cut({ kind: "coaching", start: .7, end: 1.2 }), retake)).toMatchObject({ outcome: "ready" });
   });
 
+  it("reports on a cut held for the editor that its join would play a phrase twice", async () => {
+    // Said: “in which it is a fraction, in which it is about a half”, in running speech. The pass named “is … in”, so
+    // the call it left held played “in which it ‖ which it is about”, and reached the editor unchecked (ant crash,
+    // 2026-11-21). The model settles a held cut, so this is evidence for it, not a refusal.
+    const { tl, sources } = fixture();
+    const said = ["in", "which", "it", "is", "a", "fraction", "in", "which", "it", "is", "about", "half"]
+      .map((text, i) => ({ text, start: .2 + .3 * i, end: .2 + .3 * i + .28 }));
+    const rms = Array<number>(250).fill(.2);
+    sources.pages = () => [{ ...page, edges: joinEvidence(said, { from: 0, to: 5, rms, peaks: rms, speechActivity: [{ start: 0, end: 5 }] }) }];
+    sources.words = async () => said;
+    const plan = (...cuts: DialogueCutInput[]) => planDialogueCuts({ tl, cuts, localPauses: false }, sources);
+    const wrong = cut({ mediaId: "mic", fromWord: 3, toWord: 6 });
+    const twice = "As staged, the join plays “which it” twice";
+    const planned = await plan(wrong);
+    expect(planned).toMatchObject({ outcome: "ready", decisions: [{ review: true, held: expect.stringContaining(twice) }] });
+    if (planned.outcome !== "ready") throw new Error(planned.outcome);
+    expect(dialogueGate(planned).decisions).toEqual([expect.objectContaining({ cut: 0, outcome: "review", evidence: expect.stringContaining(twice) })]);
+    // Said on purpose, it isn't reported.
+    expect(await plan({ ...wrong, keepRepeat: "which it" })).toMatchObject({ outcome: "ready", decisions: [{ review: true, held: expect.not.stringContaining(twice) }] });
+    // The whole first try: the join plays the line once.
+    expect(await plan(cut({ mediaId: "mic", fromWord: 0, toWord: 5 }))).toMatchObject({ outcome: "ready" });
+  });
+
   it("narrows a retake whose edges fall on speech, stages it for review and reports the change", async () => {
     const { tl, sources, measured } = fixture();
     const plan = await planDialogueCuts({ tl, localPauses: false, cuts: [

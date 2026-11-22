@@ -288,7 +288,11 @@ export function classifyEdits(change: Change, ranges: TimeRange[], clocks: Clock
       // took the demo's overlay too and read as neither (2026-11-17).
       const here = range.end - range.start > TOUCH ? near.filter(f => f.range.end - f.range.start <= TOUCH
         || Math.min(f.range.end, range.end) - Math.max(f.range.start, range.start) > TOUCH) : near;
-      const own = here.length ? here : near;
+      // With nothing of its own, an edit takes what only touches it, unless another edit it names runs over that
+      // stretch: then it is that edit's. A one-second spot left just after a demo laid over the picture took the
+      // demo's B-roll and its card said B-roll, when the spot changed nothing (ant crash, 2026-11-21).
+      const overlaps = (a: TimeRange, b: TimeRange) => Math.min(a.end, b.end) - Math.max(a.start, b.start) > TOUCH;
+      const own = here.length ? here : near.filter(f => !ranges.some(other => other !== range && overlaps(other, f.range)));
       return own.length ? verdict(own) : unplaced;
     });
   }

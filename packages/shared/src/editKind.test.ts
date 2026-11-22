@@ -115,6 +115,17 @@ describe("telling what an applied edit did", () => {
       .toEqual(["zoom", "overlay", "zoom"]);
   });
 
+  it("doesn't give a spot that changed nothing the kind of a stretch another edit owns, just before it", () => {
+    // ant crash, 2026-11-21: a spot asking whether to show the bowling clip began a third of a second after the Blender
+    // demo laid over the picture ended, and its card said B-roll.
+    const media = [{ id: "screen", kind: "video" as const }];
+    const demo = makeMediaClip("screen", 0, 22.27, 15.6, { id: "demo" });
+    const laid = after(t => { t.tracks.push({ ...upper, clips: [demo] }); });
+    const pass = change([{ op: "addClip", trackId: "v2", clip: demo }]);
+    expect(editKinds(pass, [{ start: 15.6, end: 37.87 }, { start: 38.22, end: 39.22 }], { before: base, after: laid, media }))
+      .toEqual(["broll", "other"]);
+  });
+
   it("doesn't call an edit a cut because another edit of the same change cut", () => {
     // Two pop-ups cut out and one covered by holding a frame, which only trims clips: the cover took nothing out.
     const pass = change([
