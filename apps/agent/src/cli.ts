@@ -24,6 +24,7 @@ import { apiKeyVars, cmdShellArgs, detect, findOnPath, formatAvailability, needs
 import { privateDirectory } from "./private-files.js";
 import { AgentHost } from "./host.js";
 import { killStoppedNow } from "./processTree.js";
+import { errMsg } from "./runners/spawn.js";
 
 interface Parsed {
   command: string;
@@ -225,7 +226,7 @@ const isMain = (() => {
 
 if (isMain) {
   main().catch((err) => {
-    console.error(`[scarlet-agent] ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`[scarlet-agent] ${errMsg(err)}`);
     process.exit(1);
   });
 }
