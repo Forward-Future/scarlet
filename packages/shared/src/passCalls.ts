@@ -30,7 +30,7 @@ export function callNumbers(pass: Pick<Change, "cutAssessments" | "cutChoices">,
  * the revision's own request, so the run is found back through the passes each revision replaced, and then at its
  * latest attempt.
  */
-function passRunOver(pass: Change, changes: readonly Change[], tasks: readonly Task[]): boolean {
+export function passRunOver(pass: Change, changes: readonly Change[], tasks: readonly Task[]): boolean {
   let run = tasks.find(t => t.id === pass.taskId);
   for (let hops = 0; run?.context.cutIndex !== undefined && run.context.changeId && hops < 50; hops++) {
     const replaced = changes.find(c => c.id === run!.context.changeId);
@@ -52,7 +52,7 @@ function passRunOver(pass: Change, changes: readonly Change[], tasks: readonly T
  * its range, as the chat follows it, so the request is counted against the same call there. Undefined when the request
  * isn't about a cut of this pass, or its cut is no longer in it.
  */
-function cutInPass(pass: Change, { changeId, cutIndex }: Task["context"], changes: readonly Change[], tasks: readonly Task[]): number | undefined {
+export function cutInPass(pass: Change, { changeId, cutIndex }: Task["context"], changes: readonly Change[], tasks: readonly Task[]): number | undefined {
   if (!changeId || cutIndex === undefined) return undefined;
   if (changeId === pass.id) return cutIndex;
   const same = (a: TimeRange, b: TimeRange) => Math.abs(a.start - b.start) < 0.05 && Math.abs(a.end - b.end) < 0.05;

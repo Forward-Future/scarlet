@@ -158,6 +158,30 @@ Labels derived from the editor's approve and skip decisions give a separate agre
 - The submitted plan by kind and decision.
 - The share of edged cuts whose edges were checked with `dialogue_check_join`.
 
+## Scarlet in use
+
+`inUse.ts` reads how Scarlet's work fares with the editor from their own library, with no model and no engine. Run it
+any time; it works everything out again from the whole history.
+
+```sh
+node_modules/.bin/tsx evals/src/inUse.ts                # your library; add --since 2026-11-18, --project <name>, --json
+```
+
+- **For you.** Of the calls and flagged edits Scarlet sent the editor, how many they revised or rejected (**worth your
+  look**) and how many they kept as they were. Of every edit they changed, how many Scarlet had sent them first; the
+  rest it missed. A call a pass applied is counted once, as the call. An edit flagged only because the editor had it
+  revised isn't Scarlet's doubt and doesn't count as sent.
+- **Revisions.** Of each revision the editor asked for, of a call or an edit, whether they kept what came back, sent it
+  back again or rejected it.
+- **Speed and tokens.** Medians per request kind (first cut, revision, rejection, edit) and per model for first cuts:
+  time from the request to its first save with an edit in it, to done, the time Scarlet worked, and the tokens of the
+  request's runs and the checks it started. A first cut's tokens are also given per minute of footage.
+- **By week**, once there is more than one, so a change shows as a trend.
+
+Deleting a project deletes its history from the library, so each run of the editor's own library saves what it read to
+`<eval data>/in-use/history.json` and keeps reporting a project that has gone. `--db <copy> --save` adds a copy of a
+library taken before its projects were deleted.
+
 ## Known moments, and how far trials agree
 
 Two trials of one configuration never make the same cut, so one rerun can't show whether a change fixed anything.
