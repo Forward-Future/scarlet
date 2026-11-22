@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 21, 2026
 
+- A first cut no longer leaves a lone word or a quick reaction, like “Wow.”, stuck between two cuts where it plays as a stutter: Scarlet takes it out with the cuts beside it or lets the speech run on.
 - Scarlet now knows when your screen recording stood completely still while you went on talking, as a stalled capture leaves it, so it can tell you instead of only asking whether to show the screen.
 - Every item in For you and See all now ends on a word that says what it is, and a spot where Scarlet left the video as it was for you to check says Check.
 - A spot Scarlet marks for you to check right after B-roll no longer says B-roll on its card when it changed nothing.

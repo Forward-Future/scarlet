@@ -40,6 +40,22 @@ export interface SilenceLeft { id: string; start: number; end: number; seconds: 
  * published editor's pauses of a second or more and asked about none of them (benchmarks/safety-only-sol-2026-11-21).
  */
 export const SILENCE_LEFT_SECONDS = 1;
+/**
+ * A stretch of one recording the edit plays for a moment between two cuts in it, such as a lone "Wow." between two
+ * trimmed waits or a word left between a retake and a pause. Timeline seconds. `cutBefore` and `cutAfter` are the
+ * seconds of the recording each of the two cuts takes out, and `plays`, `before` and `after` the words played in it and
+ * either side of it.
+ */
+export interface ShortPiece { id: string; from: number; to: number; seconds: number; mediaId: string;
+  /** Where it plays in the recording. */
+  source: TimeRange; plays: string; before: string; after: string; cutBefore: number; cutAfter: number }
+/**
+ * A piece between two cuts shorter than this is listed by the check when it isn't given a length. How short a piece
+ * plays as a stutter is the skill's pace, so the default is the stock dialogue-pass skill's, about a second. Passes left
+ * about twice the published editor's pieces under a second, and nothing they read showed them one: each comes from two
+ * cuts made apart, and the pass reads the recording, not the edit it leaves (benchmarks/dead-air-sol-2026-11-21).
+ */
+export const SHORT_PIECE_SECONDS = 1;
 /** A join whose sound, read letter by letter, doesn't match the words the transcript says it plays. */
 export interface JoinHearing { at: number; mediaId: string; side: "out" | "in"; issue: "clipped" | "fragment"; heard: string;
   /** A clipped word: the transcript's word the cut goes through. */
@@ -64,6 +80,8 @@ export interface RepeatAuditResult {
   repeats: RepeatEvidence[];
   /** Wordless stretches still playing that the pass has neither cut nor kept. They count in `remaining`. */
   silences?: SilenceLeft[];
+  /** Pieces between two cuts shorter than the length asked, that the pass has neither changed nor kept. They count in `remaining`. */
+  shortPieces?: ShortPiece[];
   /**
    * Joins that divide a sentence and that the pass has neither repaired nor kept, 25 from `offset`: a stray word, a
    * sentence cut off, or a join that reads whole. They count in `remaining`.
@@ -97,6 +115,7 @@ export const RepeatAuditRequest = z.object({
   keep: z.array(z.object({ id: z.string().min(1), reason: z.string().trim().min(1).max(300) })).max(100).default([]),
   offset: z.number().int().nonnegative().default(0),
   silencesFrom: z.number().finite().min(0.3).max(30).default(SILENCE_LEFT_SECONDS),
+  piecesUnder: z.number().finite().min(0.1).max(10).default(SHORT_PIECE_SECONDS),
   /** What the picture does on `version`, read beside the dialogue: the check counts what isn't kept. */
   pictures: z.object({ version: z.string().min(1), findings: z.array(PictureCheckFinding).max(500) }).optional(),
 });
