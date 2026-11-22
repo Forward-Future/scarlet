@@ -7,11 +7,12 @@
 import { closeSync, fstatSync, openSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
+import { hasApiKey } from "../detect.js";
 import {
   briefInput,
   DEFAULT_STALL_MS,
   isQuestionTool,
-  planEvent,
+  nextPlanEvent,
   prettyToolName,
   questionText,
   type McpSpec,
@@ -20,17 +21,10 @@ import {
   type RunnerEvent,
   workspaceEnv,
 } from "./types.js";
-import { earlyResult, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
-import { addUsage, geminiTranscriptStepUsage, geminiUsage, usageWithModel } from "./usage.js";
+import { findAcpEffortOption, findAcpModelOption, isAcpAuthError, type AcpConfigOption } from "./acp.js";
+import { asRecord, earlyResult, exitError, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
+import { addUsage, createUsageReporter, geminiTranscriptStepUsage, geminiUsage, usageWithModel } from "./usage.js";
 import { SCARLET_TOOL_NAMES, type AgentUsage, type PlanStep } from "@scarlet/shared";
-
-interface AcpConfigOption {
-  id?: string;
-  configId?: string;
-  category?: string;
-  currentValue?: string;
-  options?: unknown[];
-}
 
 export interface GeminiParseState {
   texts: string[];
@@ -145,10 +139,6 @@ export function newGeminiState(): GeminiParseState {
     shouldStop: false,
     completed: false,
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 function asString(value: unknown): string | undefined {
@@ -374,10 +364,10 @@ export function parseGeminiAcpUpdate(rawUpdate: unknown, st: GeminiParseState): 
         const state: PlanStep["state"] = status === "completed" ? "done" : status === "in_progress" ? "in_progress" : "pending";
         steps.push({ text, state });
       }
-      const key = JSON.stringify(steps);
-      if (key !== st.plan) {
-        st.plan = key;
-        events.push(planEvent(steps));
+      const next = nextPlanEvent(steps, st.plan);
+      if (next) {
+        st.plan = next.serialized;
+        events.push(next.event);
       }
       break;
     }
@@ -457,10 +447,6 @@ const STOP_GRACE_MS = 2000;
 /** How many times a run carries on after agy ended Gemini's turn on a tool Scarlet refused. */
 export const MAX_CARRY_ONS = 4;
 
-function findConfigOption(configs: AcpConfigOption[], category: string, ids: string[]): AcpConfigOption | undefined {
-  return configs.find((c) => c.category === category || ids.includes(c.id ?? c.configId ?? ""));
-}
-
 function configOptionId(opt: AcpConfigOption): string | undefined {
   return opt.id ?? opt.configId;
 }
@@ -495,21 +481,14 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
   let cancelSent = false;
   let configOptions: AcpConfigOption[] = [];
   let hasLegacyModels = false;
-  let sentUsage: AgentUsage | undefined;
   const transcript = new TranscriptUsageTailer();
   // Tools Scarlet refused during the turn under way. agy ends Gemini's turn on a refusal.
   let refused: string[] = [];
   let carryOns = 0;
-  const hasApiKey = Boolean(env.GEMINI_API_KEY || env.GOOGLE_API_KEY);
+  const hasGeminiKey = hasApiKey("gemini", env);
   const resuming = Boolean(opts.resumeSession);
-
-  const reportUsage = () => {
-    if (!opts.onUsage || !st.usage) return;
-    const now = usageWithModel(st.usage, opts.model);
-    if (!now || JSON.stringify(now) === JSON.stringify(sentUsage)) return;
-    sentUsage = now;
-    opts.onUsage(now);
-  };
+  const sendUsage = createUsageReporter(opts.onUsage, opts.model);
+  const reportUsage = () => sendUsage(st.usage);
 
   const pollTranscriptUsage = () => {
     const live = transcript.poll(st.model ?? opts.model);
@@ -593,7 +572,7 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
 
   const maybeSetEffortThenPrompt = () => {
     if (opts.effort) {
-      const thoughtOpt = findConfigOption(configOptions, "thought_level", ["thought_level", "reasoning_effort", "thinking_level"]);
+      const thoughtOpt = findAcpEffortOption(configOptions);
       const configId = thoughtOpt ? configOptionId(thoughtOpt) : undefined;
       if (configId) {
         step = "set_effort";
@@ -658,7 +637,7 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
       if (err) {
         const detail = asString(err.message) ?? briefInput(err, 400) ?? "unknown error";
         const code = typeof err.code === "number" ? err.code : undefined;
-        if (step === "session_open" && !triedApiKeyAuth && hasApiKey && (code === -32000 || /auth/i.test(detail))) {
+        if (step === "session_open" && !triedApiKeyAuth && hasGeminiKey && isAcpAuthError(code, detail)) {
           triedApiKeyAuth = true;
           step = "authenticate";
           sendRequest("authenticate", { methodId: "gemini-api-key" });
@@ -699,7 +678,7 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
           configOptions = parseConfigOptions(result);
           const legacyModels = asRecord(result.models);
           hasLegacyModels = Boolean(legacyModels);
-          const modelOpt = findConfigOption(configOptions, "model", ["model"]);
+          const modelOpt = findAcpModelOption(configOptions);
           st.model = opts.model ?? asString(modelOpt?.currentValue) ?? asString(legacyModels?.currentModelId);
           opts.onEvent({
             type: "log",
@@ -797,9 +776,7 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
   return {
     ok,
     summary: st.lastMessage ?? tailSummary(st.texts),
-    error: ok
-      ? undefined
-      : st.failed ?? `agy exited with code ${outcome.code}${outcome.stderr ? `: ${outcome.stderr.trim().slice(-800)}` : ""}`,
+    error: ok ? undefined : st.failed ?? exitError("agy", outcome),
     exitCode: outcome.code,
     sessionId: st.sessionId,
     usage,

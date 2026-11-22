@@ -63,15 +63,7 @@ pub async fn install(agent: &str, home: &Path) -> Result<InstallResult, String> 
     // Run in Scarlet's own directory. The renderer cannot supply a package, registry or command line.
     let install_env = install_env(env, &prefix);
     let args = ["install", "--global", "--registry=https://registry.npmjs.org", "--no-fund", "--no-audit", package].map(String::from);
-    let options = SpawnLinesOptions {
-        cwd: prefix,
-        env: install_env,
-        stdin: None,
-        cancel: CancellationToken::new(),
-        timeout: Some(Duration::from_secs(300)),
-        stall: None,
-        task: None,
-    };
+    let options = install_spawn_options(prefix, install_env, None);
     let outcome = spawn_lines(&npm, &args, options, Box::new(|_| false)).await.map_err(|e| {
         log::warn!("cannot install {agent}: npm did not start: {e:#}");
         "Could not start npm. Check your Node.js installation and try again.".to_string()
@@ -133,28 +125,12 @@ async fn install_antigravity_cli(home: &Path, env: HashMap<String, String>) -> R
             &script_path,
         ]
         .map(String::from);
-        let options = SpawnLinesOptions {
-            cwd: home.to_path_buf(),
-            env: restricted_env,
-            stdin: None,
-            cancel: CancellationToken::new(),
-            timeout: Some(Duration::from_secs(300)),
-            stall: None,
-            task: None,
-        };
+        let options = install_spawn_options(home.to_path_buf(), restricted_env, None);
         spawn_lines("powershell.exe", &args, options, Box::new(|_| false)).await
     } else {
         let shell = find_on_path("bash", &restricted_env).unwrap_or_else(|| "/bin/sh".into());
         let args = ["-s".to_string()];
-        let options = SpawnLinesOptions {
-            cwd: home.to_path_buf(),
-            env: restricted_env,
-            stdin: Some(script),
-            cancel: CancellationToken::new(),
-            timeout: Some(Duration::from_secs(300)),
-            stall: None,
-            task: None,
-        };
+        let options = install_spawn_options(home.to_path_buf(), restricted_env, Some(script));
         spawn_lines(&shell, &args, options, Box::new(|_| false)).await
     }
     .map_err(|e| {
@@ -175,33 +151,31 @@ async fn install_antigravity_cli(home: &Path, env: HashMap<String, String>) -> R
     Ok(InstallResult::Installed)
 }
 
+fn install_spawn_options(cwd: std::path::PathBuf, env: HashMap<String, String>, stdin: Option<String>) -> SpawnLinesOptions {
+    SpawnLinesOptions {
+        cwd,
+        env,
+        stdin,
+        cancel: CancellationToken::new(),
+        timeout: Some(Duration::from_secs(300)),
+        stall: None,
+        task: None,
+    }
+}
+
 /// What npm / installers run with: Scarlet's own prefix and the few variables an install needs. Nothing else the app
 /// inherited reaches it, so no token or registry setting from the environment does.
 fn install_env(env: HashMap<String, String>, prefix: &Path) -> HashMap<String, String> {
-    let mut install_env: HashMap<_, _> = env.into_iter().filter(|(k, _)| matches!(
-        k.to_ascii_uppercase().as_str(),
-        "PATH" | "HOME" | "USERPROFILE" | "SYSTEMROOT" | "COMSPEC" | "PATHEXT" | "TEMP" | "TMP" | "TMPDIR"
-        | "APPDATA" | "LOCALAPPDATA" | "HTTP_PROXY" | "HTTPS_PROXY" | "NO_PROXY" | "NODE_EXTRA_CA_CERTS"
-    )).collect();
+    const ALLOWED: &[&str] = &[
+        "PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "COMSPEC", "PATHEXT", "TEMP", "TMP", "TMPDIR",
+        "APPDATA", "LOCALAPPDATA", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS",
+    ];
+    let mut install_env = crate::util::env_filter_allowlist(env, ALLOWED);
     install_env.insert("npm_config_prefix".into(), prefix.to_string_lossy().into_owned());
     install_env
 }
 
-/// What to tell the editor when an npm install did not finish.
-fn failure_reason(outcome: &super::spawn::SpawnOutcome) -> &'static str {
-    if outcome.timed_out {
-        "Installation timed out. Check your connection and try again."
-    } else if outcome.stderr.contains("ENOSPC") {
-        "Free some disk space and try installing again."
-    } else if outcome.stderr.contains("EACCES") || outcome.stderr.contains("EPERM") {
-        "Scarlet could not write the assistant files. Check your folder permissions and try again."
-    } else {
-        "Installation did not finish. Check your connection and Node.js installation, then try again."
-    }
-}
-
-/// What to tell the editor when the Antigravity CLI install did not finish.
-fn gemini_failure_reason(outcome: &super::spawn::SpawnOutcome) -> &'static str {
+fn install_failure_reason(outcome: &super::spawn::SpawnOutcome, fallback: &'static str) -> &'static str {
     if outcome.timed_out {
         "Installation timed out. Check your connection and try again."
     } else if outcome.stderr.contains("No space left") || outcome.stderr.contains("ENOSPC") {
@@ -209,8 +183,18 @@ fn gemini_failure_reason(outcome: &super::spawn::SpawnOutcome) -> &'static str {
     } else if outcome.stderr.contains("Permission denied") || outcome.stderr.contains("EACCES") || outcome.stderr.contains("EPERM") {
         "Scarlet could not write the assistant files. Check your folder permissions and try again."
     } else {
-        "Installation did not finish. Check your connection and try again."
+        fallback
     }
+}
+
+/// What to tell the editor when an npm install did not finish.
+fn failure_reason(outcome: &super::spawn::SpawnOutcome) -> &'static str {
+    install_failure_reason(outcome, "Installation did not finish. Check your connection and Node.js installation, then try again.")
+}
+
+/// What to tell the editor when the Antigravity CLI install did not finish.
+fn gemini_failure_reason(outcome: &super::spawn::SpawnOutcome) -> &'static str {
+    install_failure_reason(outcome, "Installation did not finish. Check your connection and try again.")
 }
 
 #[cfg(test)]

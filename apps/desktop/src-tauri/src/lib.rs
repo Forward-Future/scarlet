@@ -7,6 +7,7 @@ pub mod engine;
 pub mod host;
 pub mod util;
 mod crisper;
+mod export;
 #[cfg(windows)]
 mod find_shortcut;
 mod updates;

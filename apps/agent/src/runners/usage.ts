@@ -4,10 +4,9 @@
  * way for every agent. Mirrors apps/desktop/src-tauri/src/host/usage.rs.
  */
 import type { AgentUsage } from "@scarlet/shared";
+import { asRecord } from "./spawn.js";
 
 type Raw = Record<string, unknown> | undefined;
-
-const record = (v: unknown): Raw => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
 
 /** A finite, nonnegative whole count, else 0. */
 export function tokenCount(v: unknown): number {
@@ -39,9 +38,26 @@ export function usageWithModel(usage: AgentUsage | undefined, model: string | un
   return usage && !usage.model && model ? { ...usage, model } : usage;
 }
 
+/** Forward cumulative usage snapshots only when the serialized count changes. */
+export function createUsageReporter(
+  onUsage: ((usage: AgentUsage) => void) | undefined,
+  model: string | undefined,
+): (usage: AgentUsage | undefined) => void {
+  let lastSerialized: string | undefined;
+  return (usage) => {
+    if (!onUsage || !usage) return;
+    const labeled = usageWithModel(usage, model);
+    if (!labeled) return;
+    const serialized = JSON.stringify(labeled);
+    if (serialized === lastSerialized) return;
+    lastSerialized = serialized;
+    onUsage(labeled);
+  };
+}
+
 /** Claude Code `usage` (result or per-message): input already excludes the cache. */
 export function claudeUsage(raw: unknown, model?: string): AgentUsage | undefined {
-  const u = record(raw);
+  const u = asRecord(raw);
   if (!has(u, "input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")) return undefined;
   return {
     ...emptyUsage(model),
@@ -54,7 +70,7 @@ export function claudeUsage(raw: unknown, model?: string): AgentUsage | undefine
 
 /** Codex `turn.completed.usage`: input includes cached input; output includes reasoning. */
 export function codexUsage(raw: unknown, model?: string): AgentUsage | undefined {
-  const u = record(raw);
+  const u = asRecord(raw);
   if (!has(u, "input_tokens", "output_tokens", "cached_input_tokens", "cache_write_input_tokens")) return undefined;
   const cached = tokenCount(u!.cached_input_tokens);
   const written = tokenCount(u!.cache_write_input_tokens);
@@ -75,7 +91,7 @@ export function codexUsage(raw: unknown, model?: string): AgentUsage | undefined
  * subtract cache counts so `inputTokens` stays uncached.
  */
 export function geminiUsage(raw: unknown, model?: string): AgentUsage | undefined {
-  const s = record(raw);
+  const s = asRecord(raw);
   if (has(s, "inputTokens", "outputTokens", "cachedReadTokens", "cachedWriteTokens", "thoughtTokens")) {
     const rawInput = tokenCount(s!.inputTokens);
     const output = tokenCount(s!.outputTokens);
@@ -116,7 +132,7 @@ export function geminiUsage(raw: unknown, model?: string): AgentUsage | undefine
 
 /** One `PLANNER_RESPONSE` step from `agy`'s `transcript.jsonl`: `input_tokens` already excludes cache reads. */
 export function geminiTranscriptStepUsage(raw: unknown, model?: string): AgentUsage | undefined {
-  const s = record(raw);
+  const s = asRecord(raw);
   if (s?.type !== "PLANNER_RESPONSE") return undefined;
   if (!has(s, "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "thought_tokens", "reasoning_tokens")) return undefined;
   const usage: AgentUsage = {

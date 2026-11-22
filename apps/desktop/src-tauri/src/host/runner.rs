@@ -2,14 +2,14 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use super::spawn::SpawnOutcome;
+use super::spawn::{resolve_cli, SpawnLinesOptions, SpawnOutcome};
 use super::types::{tail_summary, McpSpec, RunResult, RunnerEvent};
 
 pub type EventSink = Arc<dyn Fn(RunnerEvent) + Send + Sync>;
@@ -53,6 +53,37 @@ pub struct RunOptions {
     pub task: Option<String>,
 }
 
+impl RunOptions {
+    /// Resolve `opts.bin` if overridden, otherwise locate `default_cli` on `opts.env` PATH.
+    pub fn resolve_bin(&self, default_cli: &str) -> Result<String> {
+        match &self.bin {
+            Some(bin) => Ok(bin.clone()),
+            None => resolve_cli(default_cli, &self.env),
+        }
+    }
+
+    /// Build `SpawnLinesOptions` mirroring this run's workspace, env, limits and task metadata.
+    pub fn spawn_options(&self, stdin: Option<String>) -> SpawnLinesOptions {
+        SpawnLinesOptions {
+            cwd: self.cwd.clone(),
+            env: self.env.clone(),
+            stdin,
+            cancel: self.cancel.clone(),
+            timeout: self.timeout,
+            stall: self.stall,
+            task: self.task.clone(),
+        }
+    }
+}
+
+/// Parse one line of JSONL as a JSON object. Non-JSON or non-object lines return `None`.
+pub fn parse_json_object(line: &str) -> Option<Value> {
+    match serde_json::from_str(line) {
+        Ok(v @ Value::Object(_)) => Some(v),
+        _ => None,
+    }
+}
+
 /// Sends the run's count to `sink` when it differs from the one sent last.
 pub fn report_usage(sink: &Option<UsageSink>, last: &mut Option<super::usage::AgentUsage>, now: Option<super::usage::AgentUsage>) {
     if let (Some(sink), Some(now)) = (sink, now) {
@@ -77,9 +108,7 @@ pub async fn write_files(files: &BTreeMap<PathBuf, String>) -> Result<()> {
         tokio::fs::create_dir_all(parent).await?;
         // The task directory has a private ACL on Windows. On Unix tempfile
         // creates the new inode with 0600 even if an older config was public.
-        let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-        tmp.write_all(content.as_bytes())?;
-        tmp.persist(p)?;
+        crate::util::write_file_atomic(p, content.as_bytes(), false)?;
     }
     Ok(())
 }
@@ -154,6 +183,18 @@ pub async fn run_agent(mut opts: RunOptions) -> RunResult {
 pub(crate) mod testing {
     use super::*;
     use std::sync::Mutex;
+
+    /// Sample Windows-style `McpSpec` used by command-building unit tests across all three runners.
+    pub fn sample_mcp() -> McpSpec {
+        let mut env = BTreeMap::new();
+        env.insert("SCARLET_SERVER".to_string(), "http://localhost:4000".to_string());
+        env.insert("SCARLET_TOKEN".to_string(), "a\"b".to_string());
+        McpSpec {
+            command: "C:\\Program Files\\nodejs\\node.exe".into(),
+            args: vec!["C:\\scarlet\\packages\\mcp\\dist\\cli.js".into()],
+            env,
+        }
+    }
 
     /// A shell script that takes its prompt on stdin, prints `lines` and then runs `then` ("exit 1", "sleep 30").
     #[cfg(unix)]
