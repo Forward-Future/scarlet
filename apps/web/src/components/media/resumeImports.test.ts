@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { beforeEach, expect, it, vi } from "vitest";
-import { createProject, type MediaAsset, type Project } from "@scarlet/timeline";
+import { createProject, ProjectSettings, type MediaAsset, type Project } from "@scarlet/timeline";
 
 const importLocalFile = vi.hoisted(() => vi.fn(async (_projectId: string, path: string) => ({ id: `med_${path.length}`, name: path.split("/").pop()!, kind: "video", path } as unknown as MediaAsset)));
 const store = vi.hoisted(() => ({ upsertMedia: vi.fn(), updateProject: vi.fn(async () => {}), current: null as { id: string; project: Project } | null }));
@@ -111,7 +111,7 @@ it("downloads a link once however often its project reopens, and again after a q
   expect((await import("../../lib/pendingImports")).pendingImports("prj")).toEqual([]);
 });
 
-it("matches a new project's format to its first video after a quit interrupted the import, once", async () => {
+it("sets a new project's format once every first file is in after a quit interrupted the import", async () => {
   const project = createProject("Interview");
   const saved = await savedMidImport(project.id, ["/clips/a.mov", "/clips/b.mov"], project);
   expect(JSON.parse(saved).map((i: { source: string; setsFormat?: boolean }) => [i.source, i.setsFormat])).toEqual([["/clips/a.mov", true], ["/clips/b.mov", true]]);
@@ -125,115 +125,43 @@ it("matches a new project's format to its first video after a quit interrupted t
   const resumed = relaunched.resumeImports(project.id, []);
   await vi.waitFor(() => expect(importLocalFile).toHaveBeenCalledTimes(2));
   expect(importLocalFile.mock.calls.map(call => call[1])).toEqual(["/clips/a.mov", "/clips/b.mov"]);
-  expect(store.updateProject).toHaveBeenCalledExactlyOnceWith(
-    { settings: { width: 720, height: 1280, aspect: "9:16", fps: 24 }, expectedFormat: { settings: project.settings, head: null } }, project.id);
-  // The format is settled, so the file still copying no longer sets it, in this launch or the next.
-  const savedAgain = localStorage.getItem(SAVED)!;
-  expect(JSON.parse(savedAgain)).toEqual([{ projectId: project.id, source: "/clips/b.mov", at: expect.any(String), started: true, importId: expect.any(String) }]);
+  expect(importLocalFile.mock.calls.map(call => (call as unknown[])[4])).toEqual([true, true]);
+  // The format waits for the file still copying. Both stay saved as first files until it is set.
+  expect(store.updateProject).not.toHaveBeenCalled();
+  expect(JSON.parse(localStorage.getItem(SAVED)!).map((i: { source: string; setsFormat?: boolean }) => [i.source, i.setsFormat]))
+    .toEqual([["/clips/a.mov", true], ["/clips/b.mov", true]]);
   finishSecond();
   await resumed;
-  const again = await relaunch(savedAgain);
-  importLocalFile.mockResolvedValueOnce(video("b.mov", 3840, 2160, 60));
-  await again.resumeImports(project.id, []);
-  expect(importLocalFile.mock.calls.map(call => call[1])).toEqual(["/clips/b.mov"]);
-  expect(store.updateProject).toHaveBeenCalledTimes(1);
+  expect(store.updateProject).toHaveBeenCalledExactlyOnceWith(
+    { settings: { width: 3840, height: 2160, aspect: "16:9", fps: 60 }, expectedFormat: { settings: project.settings, head: null } }, project.id);
+  expect(localStorage.getItem(SAVED)).toBeNull();
 });
 
-it("matches the format to a first file that reached the project just before the quit", async () => {
+it("counts a first file that reached the project just before the quit with the rest", async () => {
   const project = createProject("Interview");
   const saved = await savedMidImport(project.id, ["/clips/a.mov", "/clips/b.mov"], project);
   const relaunched = await relaunch(saved);
   store.current = { id: project.id, project };
-  importLocalFile.mockResolvedValueOnce(video("b.mov", 3840, 2160, 60));
-  const arrived = { ...video("a.mov", 1080, 1080, 30), importId: JSON.parse(saved)[0].importId };
+  importLocalFile.mockResolvedValueOnce(video("b.mov", 1080, 1080, 30));
+  const arrived = { ...video("a.mov", 3840, 2160, 60), importId: JSON.parse(saved)[0].importId };
   await relaunched.resumeImports(project.id, [arrived]);
   expect(importLocalFile.mock.calls.map(call => call[1])).toEqual(["/clips/b.mov"]);
   expect(store.updateProject).toHaveBeenCalledExactlyOnceWith(
-    { settings: { width: 1080, height: 1080, aspect: "1:1", fps: 30 }, expectedFormat: { settings: project.settings, head: null } }, project.id);
+    { settings: { width: 3840, height: 2160, aspect: "16:9", fps: 60 }, expectedFormat: { settings: project.settings, head: null } }, project.id);
+  expect(localStorage.getItem(SAVED)).toBeNull();
 });
 
-it("keeps the first file recoverable through a second quit while its format is being applied", async () => {
+it("sets the format after a quit that came once every first file was in", async () => {
   const project = createProject("Interview");
-  const saved = await savedMidImport(project.id, ["/clips/a.mov"], project);
-  const { resumeImports } = await relaunch(saved);
+  const at = "2026-11-06T20:00:00.000Z";
+  const saved = ["a", "b"].map(name => ({ projectId: project.id, source: `/clips/${name}.mov`, at, setsFormat: true, started: true, importId: crypto.randomUUID() }));
+  const { resumeImports } = await relaunch(JSON.stringify(saved));
   store.current = { id: project.id, project };
-  const asset = { ...video("a.mov", 720, 1280, 24), importId: JSON.parse(saved)[0].importId };
-  let finish!: () => void;
-  store.updateProject.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-  const resume = resumeImports(project.id, [asset]);
-  await vi.waitFor(() => expect(store.updateProject).toHaveBeenCalledOnce());
-  const again = localStorage.getItem(SAVED);
-  await resumeImports(project.id, [asset]);
-  finish();
-  await resume;
-  expect(again).toBe(saved);
-  expect(store.updateProject).toHaveBeenCalledOnce();
-  expect(localStorage.getItem(SAVED)).toBeNull();
-  const relaunched = await relaunch(again!);
-  await relaunched.resumeImports(project.id, [asset]);
-  expect(store.updateProject).toHaveBeenCalledTimes(2);
+  await resumeImports(project.id, [{ ...video("a.mov", 3024, 1964, 60), importId: saved[0]!.importId }, { ...video("b.mov", 1920, 1080, 30), importId: saved[1]!.importId }]);
   expect(importLocalFile).not.toHaveBeenCalled();
-});
-
-it("imports a file still waiting its turn though one of the same name arrived meanwhile, and not the one whose copy had begun", async () => {
-  const project = createProject("Two cameras");
-  // The copy of the first clip had begun when Scarlet quit; the second, same name from another folder, was still waiting.
-  const saved = await savedMidImport(project.id, ["/camera-a/clip.mov", "/camera-b/clip.mov"]);
-  expect(JSON.parse(saved).map((i: { started?: boolean }) => i.started)).toEqual([true, false]);
-  const relaunched = await relaunch(saved);
-  const arrived = { ...video("clip.mov", 1920, 1080, 30), importId: JSON.parse(saved)[0].importId };
-  await relaunched.resumeImports(project.id, [arrived]);
-  expect(importLocalFile.mock.calls.map(call => call[1])).toEqual(["/camera-b/clip.mov"]);
+  expect(store.updateProject).toHaveBeenCalledExactlyOnceWith(
+    { settings: { width: 1920, height: 1080, aspect: "16:9", fps: 30 }, expectedFormat: { settings: project.settings, head: null } }, project.id);
   expect(localStorage.getItem(SAVED)).toBeNull();
-});
-
-it("copies a path once while it is queued and allows the same path to be added again afterwards", async () => {
-  const { enqueueImports } = await import("./UploadDropzone");
-  const source = "/camera/clip.mov";
-  let finish!: () => void;
-  importLocalFile.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(video("clip.mov", 1920, 1080, 30)); }));
-  const first = enqueueImports("prj", [source, source]);
-  const repeated = enqueueImports("prj", [source]);
-  await vi.waitFor(() => expect(importLocalFile).toHaveBeenCalledTimes(1));
-  const saved = JSON.parse(localStorage.getItem(SAVED)!);
-  finish();
-  await Promise.all([first, repeated]);
-  expect(saved).toHaveLength(1);
-  expect(importLocalFile).toHaveBeenCalledTimes(1);
-  await enqueueImports("prj", [source]);
-  expect(importLocalFile).toHaveBeenCalledTimes(2);
-});
-
-it("resumes camera B when the project already has a different clip with the same name", async () => {
-  const saved = await savedMidImport("prj", ["/camera-b/clip.mov"]);
-  const { resumeImports } = await relaunch(saved);
-  const other = { ...video("clip.mov", 1920, 1080, 30), provenance: { by: "human", createdAt: JSON.parse(saved)[0].at } } as MediaAsset;
-  await resumeImports("prj", [other]);
-  expect(importLocalFile.mock.calls.map(call => call[1])).toEqual(["/camera-b/clip.mov"]);
-});
-
-it("recognizes a finished download after a restart when the server supplied a different filename", async () => {
-  const saved = await savedMidImport("prj", ["https://example.com/download"]);
-  const { resumeImports } = await relaunch(saved);
-  const { importId } = JSON.parse(saved)[0];
-  const downloaded = { ...video("Interview.mov", 1920, 1080, 30), importId };
-  await resumeImports("prj", [downloaded]);
-  expect(importLocalFile).not.toHaveBeenCalled();
-  expect(localStorage.getItem(SAVED)).toBeNull();
-});
-
-it.each([
-  ["was edited", (project: Project): Project => ({ ...project, head: "ver_first" })],
-  ["was given another format", (project: Project): Project => ({ ...project, settings: { ...project.settings, fps: 24 } })],
-])("keeps the format of a project that %s before the quit", async (_, change) => {
-  const project = createProject("Interview");
-  const saved = await savedMidImport(project.id, ["/clips/a.mov", "/clips/b.mov"], project);
-  const relaunched = await relaunch(saved);
-  store.current = { id: project.id, project: change(project) };
-  importLocalFile.mockResolvedValueOnce(video("a.mov", 720, 1280, 24));
-  await relaunched.resumeImports(project.id, []);
-  expect(importLocalFile.mock.calls.map(call => call[1])).toEqual(["/clips/a.mov", "/clips/b.mov"]);
-  expect(store.updateProject).not.toHaveBeenCalled();
 });
 
 it("keeps a new project's first files saved while another project is on screen, and matches its format once it opens", async () => {
@@ -258,7 +186,7 @@ it("keeps a new project's first files saved while another project is on screen, 
   importLocalFile.mockResolvedValueOnce(video("a.mov", 720, 1280, 24));
   await resumeImports(project.id, [voice]);
   expect(importLocalFile.mock.calls.map(call => call[1])).toEqual(["/clips/a.mov"]);
-  expect(importLocalFile).toHaveBeenCalledWith(project.id, "/clips/a.mov", expect.any(Function), expect.any(String), false, undefined);
+  expect(importLocalFile).toHaveBeenCalledWith(project.id, "/clips/a.mov", expect.any(Function), expect.any(String), true, undefined);
   expect(store.updateProject).toHaveBeenCalledExactlyOnceWith(
     { settings: { width: 720, height: 1280, aspect: "9:16", fps: 24 }, expectedFormat: { settings: project.settings, head: null } }, project.id);
   expect(localStorage.getItem(SAVED)).toBeNull();

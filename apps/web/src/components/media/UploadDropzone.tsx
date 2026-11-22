@@ -5,7 +5,7 @@ import type { MediaAsset } from "@scarlet/timeline";
 import { appLog } from "../../lib/appLog";
 import { dropTargets, fileDropZone } from "../../lib/dropTargets";
 import { api, engineUnavailable, errorMessage, IS_DESKTOP } from "../../lib/client";
-import { canResumeFirstClip, matchAddedClip, resumeFirstClip } from "../../lib/firstClipFormat";
+import { canResumeFirstClip, matchAddedClip, resumeFirstClip, type FormatMatch } from "../../lib/firstClipFormat";
 import { fmtBytes } from "../../lib/format";
 import { addPendingImports, isLink, markImportStarted, pendingImports, projectsWithPendingImports, removePendingImport, retryInterruptedImport, type PendingImport } from "../../lib/pendingImports";
 import { importLocalFile, uploadMedia } from "../../lib/upload";
@@ -83,10 +83,13 @@ function dismiss(projectId: string, id: number) {
 
 /**
  * Each project's queue outlives its screen. Read one original at a time in selection order. `matchFormat` comes
- * with a new project's first files, which are remembered as such so a quit doesn't lose the match.
+ * with a new project's first files, which are remembered as such so a quit doesn't lose the match. The format
+ * waits for all of them: a file stays saved after it arrives until the format is set, and one kept for another try
+ * after the engine went away holds the format until a resume brings it in.
  */
-export function enqueueImports(projectId: string, sources: ImportSource[], matchFormat?: (media: MediaAsset) => Promise<void>) {
+export function enqueueImports(projectId: string, sources: ImportSource[], matchFormat?: FormatMatch) {
   if (!sources.length) return Promise.resolve();
+  const arrived: string[] = [], retrying: string[] = [];
   sources = sources.filter(source => {
     if (typeof source !== "string") return true;
     const key = queueKey(projectId, source);
@@ -113,8 +116,8 @@ export function enqueueImports(projectId: string, sources: ImportSource[], match
       try {
         if (keepPending) continue;
         let media: MediaAsset;
-        // Check when this file gets its turn: earlier files may have finished without yielding any video.
-        const deferFormat = !matchFormat && pendingImports(projectId).some(i => i.setsFormat);
+        // The engine leaves the format to the batch's match, or to another batch's still waiting.
+        const deferFormat = !!matchFormat || pendingImports(projectId).some(i => i.setsFormat);
         if (typeof source === "string") {
           const current: LocalImport = { projectId, name, path: source, position: 1, total: 1 };
           if (download) current.cancelDownload = () => {
@@ -133,7 +136,8 @@ export function enqueueImports(projectId: string, sources: ImportSource[], match
           media = await upload.promise;
         }
         useProjectStore.getState().upsertMedia(projectId, media);
-        await matchFormat?.(media);
+        matchFormat?.add(media);
+        if (matchFormat && typeof source === "string") arrived.push(source);
         if (typeof source !== "string") {
           patch({ state: "done", progress: 1 });
           window.setTimeout(() => dismiss(projectId, id), 6000);
@@ -150,11 +154,21 @@ export function enqueueImports(projectId: string, sources: ImportSource[], match
           { id, name, progress: 0, state: "error", error: errorMessage(error) }] }));
       } finally {
         if (typeof source === "string") {
-          if (!keepPending) removePendingImport(projectId, source);
+          if (keepPending) retrying.push(source);
+          // A first file that arrived stays saved until the format is set, so a quit before then still sets it.
+          else if (!arrived.includes(source)) removePendingImport(projectId, source);
           queued.delete(queueKey(projectId, source));
         }
         update(projectId, state => ({ pending: state.pending - 1, ended: state.pending > 1 ? state.ended + 1 : 0, localImport: null }));
       }
+    }
+    if (!matchFormat || retrying.length) return;
+    try {
+      await matchFormat.settle();
+    } catch (error) {
+      update(projectId, state => ({ items: [...state.items, { id: seq++, name: "Project format", progress: 0, state: "error", error: errorMessage(error) }] }));
+    } finally {
+      for (const source of arrived) removePendingImport(projectId, source);
     }
   }).finally(() => {
     if (queues.get(projectId) === job) queues.delete(projectId);
@@ -193,7 +207,7 @@ export function resumeImports(projectId: string, media: readonly MediaAsset[]) {
   };
   const matchFormat = waiting.some(i => i.setsFormat) ? resumeFirstClip(projectId) : undefined;
   const jobs: Promise<void>[] = [];
-  const first: string[] = [], later: string[] = [];
+  const first: string[] = [], later: string[] = [], arrivedFirst: string[] = [];
   let legacy = 0;
   for (const entry of waiting) {
     const asset = added(entry);
@@ -201,13 +215,11 @@ export function resumeImports(projectId: string, media: readonly MediaAsset[]) {
     if (!asset) {
       (entry.setsFormat ? first : later).push(entry.source);
     } else if (entry.setsFormat && matchFormat) {
-      // A second quit can interrupt this last step even when the file itself has arrived.
-      const key = queueKey(projectId, entry.source);
-      queued.add(key);
-      jobs.push(matchFormat(asset).finally(() => {
-        removePendingImport(projectId, entry.source);
-        queued.delete(key);
-      }));
+      // It is in the project and counts with the rest. It stays saved until the format is set: a second quit can
+      // interrupt that last step even when the file itself has arrived.
+      matchFormat.add(asset);
+      queued.add(queueKey(projectId, entry.source));
+      arrivedFirst.push(entry.source);
     } else {
       removePendingImport(projectId, entry.source);
     }
@@ -215,7 +227,14 @@ export function resumeImports(projectId: string, media: readonly MediaAsset[]) {
   // Only a project's first files set its format. They were chosen before anything added later, so the saved order holds.
   if (waiting.length) appLog("import", "resume", { project: projectId, count: waiting.length, first: first.length,
     replay: first.length + later.length, matched: waiting.length - first.length - later.length, legacy });
-  jobs.push(enqueueImports(projectId, first, matchFormat), enqueueImports(projectId, later));
+  // With every first file already in, the format is set now; otherwise once the rest arrive.
+  const firstJob = first.length || !matchFormat ? enqueueImports(projectId, first, matchFormat) : matchFormat.settle();
+  jobs.push(firstJob.finally(() => {
+    for (const source of arrivedFirst) {
+      removePendingImport(projectId, source);
+      queued.delete(queueKey(projectId, source));
+    }
+  }), enqueueImports(projectId, later));
   return Promise.all(jobs).then(() => undefined);
 }
 

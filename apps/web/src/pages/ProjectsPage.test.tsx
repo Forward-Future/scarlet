@@ -212,7 +212,7 @@ it("creates a named project from a drop, handles a bad file, and matches the fir
   }
 });
 
-it("remembers a new project's chosen files as the ones that set its format, until the first video has", async () => {
+it("remembers a new project's chosen files as the ones that set its format, until every one of them is in", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const previous = useProjectStore.getState();
   const db = buildDb();
@@ -251,13 +251,15 @@ it("remembers a new project's chosen files as the ones that set its format, unti
       finish[0]!();
       await vi.waitFor(() => expect(finish).toHaveLength(2));
     });
-    expect(format).toHaveBeenCalledExactlyOnceWith(PRJ, { settings: { width: 720, height: 1280, fps: 24, aspect: "9:16" }, expectedFormat: { settings: project.settings, head: project.head } });
-    expect(saved()).toEqual([["/clips/take-two.mov", false]]);
+    // The format waits for every chosen file, and the one that arrived stays saved until it is set.
+    expect(format).not.toHaveBeenCalled();
+    expect(imports.mock.calls.map(call => call[1].deferFormat)).toEqual([true, true]);
+    expect(saved()).toEqual([["/clips/take-one.mov", true], ["/clips/take-two.mov", true]]);
     await act(async () => {
       finish[1]!();
       await vi.waitFor(() => expect(saved()).toEqual([]));
     });
-    expect(format).toHaveBeenCalledTimes(1);
+    expect(format).toHaveBeenCalledExactlyOnceWith(PRJ, { settings: { width: 720, height: 1280, fps: 24, aspect: "9:16" }, expectedFormat: { settings: project.settings, head: project.head } });
   } finally {
     await act(() => root.unmount());
     container.remove();
