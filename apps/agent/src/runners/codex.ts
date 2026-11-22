@@ -12,7 +12,7 @@ import { join, resolve } from "node:path";
 import { hasApiKey, stripVars } from "../detect.js";
 import { parseCodexQuota } from "../quota.js";
 import { privateDirectory, writePrivateFile } from "../private-files.js";
-import { briefInput, COMPACTED, DEFAULT_STALL_MS, isQuestionTool, nextPlanEvent, questionText, workspaceEnv, type CodexFallbackReason, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
+import { briefInput, COMPACTED, COMPACTING, DEFAULT_STALL_MS, isQuestionTool, nextPlanEvent, questionText, workspaceEnv, type CodexFallbackReason, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
 import { asRecord, earlyResult, exitError, jsonLine, resolveCli, spawnLines, tailSummary, type SpawnOutcome } from "./spawn.js";
 import { addUsage, codexUsage, createUsageReporter, tokenCount, usageWithModel } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
@@ -146,6 +146,11 @@ function parseCodexEvent(msg: Record<string, unknown>, st: CodexParseState): Run
           break;
         case "web_search":
           if (type === "item.started") events.push({ type: "tool", text: `web search ${briefInput(item.query, 120)}`, data: { tool: "web_search" } });
+          break;
+        case "contextCompaction":
+        case "context_compaction":
+          if (type === "item.started") events.push(COMPACTING);
+          else if (completed) events.push(COMPACTED);
           break;
         case "todo_list": {
           // The whole plan each time: when the model first makes it, on every update, and once more as the turn ends.
@@ -461,7 +466,8 @@ async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin
         if (!item) break;
         if (item.type === "contextCompaction") {
           compactionItems = true;
-          if (method === "item/completed") opts.onEvent(COMPACTED);
+          if (method === "item/started") opts.onEvent(COMPACTING);
+          else if (method === "item/completed") opts.onEvent(COMPACTED);
           break;
         }
         if (method === "item/completed") {

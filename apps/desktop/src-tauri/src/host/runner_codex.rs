@@ -216,7 +216,9 @@ fn codex_events(kind: &str, msg: &Value, st: &mut CodexState) -> Vec<RunnerEvent
                 }
                 "contextCompaction" | "context_compaction" => {
                     st.compaction_items = true;
-                    if completed {
+                    if started {
+                        events.push(RunnerEvent::with("log", "Compacting context", json!({"kind":"compaction","active":true})));
+                    } else if completed {
                         events.push(RunnerEvent::with("log", "Context compacted", json!({"kind":"compaction"})));
                     }
                 }
@@ -787,18 +789,19 @@ mod tests {
 
     #[test]
     fn reports_a_compaction_once_whichever_way_codex_says_it() {
+        let compacting = RunnerEvent::with("log", "Compacting context", json!({"kind":"compaction","active":true}));
         let compacted = RunnerEvent::with("log", "Context compacted", json!({"kind":"compaction"}));
         let notice = json!({"threadId":"t1","turnId":"u1"});
         // An App Server that reports it only as `thread/compacted`.
         let mut st = CodexState::default();
         assert_eq!(app_server_events("thread/compacted", &notice, &mut st), vec![compacted.clone()]);
-        // One that reports it as an item too: the item counts, the older notice after it doesn't.
+        // One that reports it as an item too: start drives the live status line, completion logs once, and the older notice after it doesn't duplicate.
         let mut st = CodexState::default();
         let item = json!({"item":{"id":"c1","type":"contextCompaction"}});
         let mut evs = app_server_events("item/started", &item, &mut st);
         evs.extend(app_server_events("item/completed", &item, &mut st));
         evs.extend(app_server_events("thread/compacted", &notice, &mut st));
-        assert_eq!(evs, vec![compacted]);
+        assert_eq!(evs, vec![compacting, compacted]);
     }
 
     #[test]

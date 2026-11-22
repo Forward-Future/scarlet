@@ -68,17 +68,21 @@ it("logs a tool result for its claim after it ended, without writing a task even
   expect(lines.join("\n")).not.toContain("Private");
 });
 
-it("logs a compaction a host reports, with the task, and keeps it out of the run's events", async () => {
+it("logs a completed compaction, carries live compaction notices in task events, and keeps them out of conversation", async () => {
   const { project } = await api.createProject({ name: "Compaction" });
   const { host } = await api.registerHost({ name: "test desktop", platform: "test", agents: [{ id: "claude", installed: true }] });
   const { task } = await api.createTask(project.id, { kind: "edit", agent: "claude", instruction: "Private request" });
   const { task: claimed } = await api.post<{ task: { startedAt: string } }>(`/hosts/${host.id}/claim`, { taskId: task.id, agents: ["claude"] });
+  await api.postTaskEvent(task.id, { type: "log", text: "Compacting context", data: { kind: "compaction", active: true } }, claimed.startedAt);
   await api.postTaskEvent(task.id, { type: "log", text: "Context compacted", data: { kind: "compaction", trigger: "auto", preTokens: 161204, postTokens: 18210 } }, claimed.startedAt);
+  await api.postTaskEvent(task.id, { type: "log", text: "Compacting context", data: { kind: "compaction", active: true } }, claimed.startedAt);
+  await api.postTaskEvent(task.id, { type: "log", text: "Compacting context", data: { kind: "compaction", active: false } }, claimed.startedAt);
   await api.postTaskEvent(task.id, { type: "log", text: "Context compacted", data: { kind: "compaction" } }, claimed.startedAt);
   expect(lines.filter(line => line.startsWith("[task] compacted"))).toEqual([
     `[task] compacted task=${task.id} agent=claude trigger=auto tokensBefore=161204 tokensAfter=18210`,
     `[task] compacted task=${task.id} agent=claude`]);
-  expect(workspace.ctx.repos.taskEvents.list(task.id).some(e => e.data?.kind === "compaction")).toBe(false);
+  expect(workspace.ctx.repos.taskEvents.list(task.id, "all").some(e => e.data?.kind === "compaction" && e.data?.active === true)).toBe(true);
+  expect(workspace.ctx.repos.taskEvents.list(task.id, "conversation").some(e => e.data?.kind === "compaction")).toBe(false);
   expect(lines.join("\n")).not.toContain("Private");
 });
 

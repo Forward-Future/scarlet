@@ -98,7 +98,7 @@ export function holdProjectEditing(ctx: Ctx, projectId: string) {
 }
 
 /** Release the queue under the same lock as claims. */
-export function resumeProjectEditing(ctx: Ctx, projectId: string) {
+export function resumeProjectEditing(ctx: Ctx, projectId: string, choice: RunChoice = {}) {
   return ctx.db.transaction(() => {
     const previous = ctx.repos.projects.header(projectId);
     if (!previous) throw notFound("project");
@@ -107,9 +107,28 @@ export function resumeProjectEditing(ctx: Ctx, projectId: string) {
     if (!previous.editingPaused) return { project, tasks: [] };
     ctx.bus.publish({ type: "project.updated", projectId, project });
     const waiting = ctx.repos.tasks.select(`project_id = ? AND state = 'queued' AND kind IN ${PROJECT_EDIT_KINDS}`, [projectId]);
-    // The editor may have made decisions while editing was stopped. Each attempt put back in line is told where its run
-    // stands as it starts (`taskPrompt`), so it reads them.
-    const tasks = waiting.filter(task => task.resumesAfterProjectStop && !task.startedAt);
+    // The editor may have made decisions while editing was stopped, or switched models before clicking Resume.
+    // Each attempt put back in line is told where its run stands as it starts (`taskPrompt`), so it reads them.
+    const tasks = waiting
+      .filter(task => task.resumesAfterProjectStop && !task.startedAt)
+      .map(task => {
+        if (!choice.agent) return task;
+        const switched = choice.agent !== task.agent || choice.model !== task.model;
+        const tuned = switched || choice.effort !== task.effort || choice.fast !== task.fast || choice.serviceTier !== task.serviceTier;
+        if (!tuned) return task;
+        const updated = saveTask(ctx, {
+          ...task,
+          ...runChoiceOverride(choice),
+          ...(switched && { session: undefined }),
+        });
+        if (switched) {
+          // The prior attempt's CLI session belonged to the old model and won't be resumed.
+          const prior = ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.retryTaskId') = ?", [projectId, task.id])[0];
+          if (prior?.sessionCarriesOn) saveTask(ctx, { ...prior, sessionCarriesOn: undefined });
+          ctx.log(`[task] ${task.id} switched ${task.agent}/${task.model ?? "default"} → ${updated.agent}/${updated.model ?? "default"} on resume`);
+        }
+        return updated;
+      });
     if (waiting[0]) ctx.bus.taskQueued({ taskId: waiting[0].id, projectId });
     return { project, tasks };
   }, "immediate")();

@@ -20,6 +20,7 @@ export function runNow(events: readonly TaskEvent[], aim?: string, callNumber?: 
   const waits = pendingMediaWaits(events);
   // Waits that ended after the moment the walk back has reached: a wait that began before them is over.
   const ended = new Set<string>();
+  let compactionEnded = false;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]!;
     switch (event.type) {
@@ -45,6 +46,11 @@ export function runNow(events: readonly TaskEvent[], aim?: string, callNumber?: 
         if (kind === "init") return STARTING;
         if (kind === "reasoning") return "Thinking";
         if (kind === "connection") return "Reconnecting to the model";
+        if (kind === "compaction") {
+          if (event.data?.active === true && !compactionEnded) return "Compacting context";
+          compactionEnded = true;
+          continue;
+        }
         if (kind === "media_wait") {
           const key = `${event.data?.wait}/${event.data?.mediaId}`;
           if (event.data?.done) ended.add(key);
