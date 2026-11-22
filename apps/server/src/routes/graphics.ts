@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 import { capturePage, findChrome } from "@scarlet/render";
 import { Hono } from "hono";
 import { z } from "zod/v3";
@@ -24,16 +24,18 @@ const WebCaptureRequest = z.object({
   fullPage: z.boolean().optional(),
 });
 
-/** Whether an address is the machine itself, its local network or a link-local one, as text or as a resolved IP. */
+/** The machine itself, its local network and link-local addresses. */
+const PRIVATE = new BlockList();
+for (const [net, bits] of [["127.0.0.0", 8], ["10.0.0.0", 8], ["0.0.0.0", 8], ["172.16.0.0", 12], ["192.168.0.0", 16], ["169.254.0.0", 16], ["100.64.0.0", 10]] as const) PRIVATE.addSubnet(net, bits, "ipv4");
+for (const [net, bits] of [["::1", 128], ["::", 128], ["fe80::", 10], ["fc00::", 7]] as const) PRIVATE.addSubnet(net, bits, "ipv6");
+
+/**
+ * Whether an address is the machine itself, its local network or a link-local one, as text or as a resolved IP. An
+ * IPv4 address written as IPv6 is read as the IPv4 one, in either spelling: a URL turns `::ffff:127.0.0.1` into
+ * `::ffff:7f00:1`.
+ */
 function privateAddress(ip: string): boolean {
-  if (isIP(ip) === 6) {
-    const v6 = ip.toLowerCase();
-    if (v6 === "::1" || v6 === "::" || v6.startsWith("fe80:") || v6.startsWith("fc") || v6.startsWith("fd")) return true;
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(v6);
-    return mapped ? privateAddress(mapped[1]!) : false;
-  }
-  const [a, b] = ip.split(".").map(Number) as [number, number];
-  return a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+  return PRIVATE.check(ip, isIP(ip) === 6 ? "ipv6" : "ipv4");
 }
 
 /** The address as Chrome should open it: http or https, on a host that resolves only to public addresses. */

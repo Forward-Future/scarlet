@@ -78,6 +78,7 @@ async function startServer(questionFailures = 0): Promise<Srv> {
       return send(200, { host: { id: "host_1", userId: "u1", name: (req.body as { name: string }).name, platform: "test", agents: (req.body as { agents: unknown }).agents, online: true } });
     }
     if (req.method === "POST" && /^\/hosts\/host_1\/heartbeat$/.test(req.path)) return failed("heartbeat") || send(200, {});
+    if (req.method === "POST" && req.path === "/projects/prj_test/tasks") return send(201, { task: { ...task, state: "queued" } });
     if (req.method === "POST" && /^\/hosts\/host_1\/claim$/.test(req.path)) {
       srv.claims.push({ query: Object.fromEntries(req.query), body: req.body });
       srv.events.emit("claim");
@@ -201,6 +202,50 @@ it("records the engine's resulting state and a question that no longer pauses th
   expect(lines).toContain(`[host] question task=${task.id} attempt=${startedAt} outcome=not_waiting`);
   expect(requests.filter(path => path.endsWith("/complete"))).toHaveLength(2);
   expect(lines.join("\n")).not.toContain("Private");
+});
+
+it("names a run started with runOne in its heartbeats, and stops it when a heartbeat's reply says it was cancelled", async () => {
+  const beats: string[][] = [];
+  let state: Task["state"] = "queued";
+  let cancel = false;
+  const client = new ScarletClient({
+    baseUrl: "https://fixture.test",
+    fetch: async (input, init) => {
+      const { pathname } = new URL(String(input));
+      if (pathname.endsWith("/hosts/register")) return Response.json({ host: { id: "host_1", userId: "u1", name: "one", platform: "test", agents: [], online: true } });
+      if (pathname.endsWith("/heartbeat")) {
+        beats.push((JSON.parse(String(init?.body)) as { running: string[] }).running);
+        if (cancel) state = "cancelled";
+        return Response.json({ cancelled: cancel ? [task.id] : [] });
+      }
+      if (pathname.endsWith("/claim")) return Response.json({ task: { ...task, state: state = "claimed" } });
+      if (pathname.endsWith("/prompt")) return Response.json({ systemPrompt: "SYS", instruction: "Edit this" });
+      if (pathname.endsWith("/complete")) return Response.json({ task: { ...task, state: state = "done" } });
+      return Response.json({ task: { ...task, state }, events: [] });
+    },
+  });
+  const host = (runner: RunAgentFn) => new AgentHost({
+    client, config: { server: "https://fixture.test", token: "fixture" }, workRoot, mcpCliPath: "fixture-mcp", runner,
+    detect: async () => [{ id: "claude", installed: true, loggedIn: true, version: "2.1.0", models: ["opus"] }],
+    heartbeatMs: 10, log: () => undefined,
+  });
+  // The engine fails a claimed run that no heartbeat names for 90 s as a lost worker.
+  const ended = await host(async () => {
+    await vi.waitFor(() => expect(beats.length).toBeGreaterThanOrEqual(2));
+    return { ok: true, summary: "" };
+  }).runOne(task.projectId, { kind: "edit", agent: "claude", instruction: task.instruction }, undefined, 5);
+  expect(ended.state).toBe("done");
+  expect(beats.slice(0, 2)).toEqual([[task.id], [task.id]]);
+
+  state = "queued";
+  cancel = true;
+  let aborted: unknown;
+  await host(async (opts) => {
+    await new Promise<void>((resolve) => opts.signal?.addEventListener("abort", () => resolve(), { once: true }));
+    aborted = opts.signal?.reason;
+    return { ok: false, summary: "", error: "stopped" };
+  }).runOne(task.projectId, { kind: "edit", agent: "claude", instruction: task.instruction }, undefined, 5);
+  expect(aborted).toBe("server-cancelled");
 });
 
 async function startHostAndWait(host: AgentHost, ready: Promise<unknown>) {
@@ -1171,4 +1216,21 @@ describe("removeClaudeSessions", () => {
     await removeClaudeSessions(oneshot, claude);
     expect(await readdir(join(claude, "projects"))).toEqual([]);
   });
+});
+
+it("keeps the engine hearing from a request it runs on its own, through a long tool call, and stops when it ends", async () => {
+  const srv = await startServer();
+  srv.taskState = "done";
+  const beats = () => srv.server.requests.filter((r) => r.path === "/hosts/host_1/heartbeat").length;
+  // The run holds as a long tool call would, until the engine has heard from the host a few times.
+  const { host } = makeHost(srv, async () => {
+    await vi.waitFor(() => expect(beats()).toBeGreaterThanOrEqual(3), { timeout: 2_000, interval: 10 });
+    return { ok: true, summary: "Done" };
+  }, undefined, { heartbeatMs: 20 });
+  const ended = await host.runOne("prj_test", { kind: "edit", agent: "claude", instruction: task.instruction });
+  expect(ended.state).toBe("done");
+  expect(srv.completes).toEqual([expect.objectContaining({ state: "done" })]);
+  const after = beats();
+  await delay(100);
+  expect(beats()).toBe(after);
 });

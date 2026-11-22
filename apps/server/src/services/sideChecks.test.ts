@@ -9,7 +9,8 @@ import { isSideCheck, ScarletClient, sideCheckSlots, type AgentHost, type Task }
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import type { Ctx } from "../context.js";
-import { claimTask, createTask } from "./tasks.js";
+import { createTask } from "./tasks.js";
+import { claimTask } from "./taskQueue.js";
 
 let dataDir: string;
 let workspace: ScarletApp;

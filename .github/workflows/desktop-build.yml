@@ -174,6 +174,16 @@ jobs:
             '
           fi
 
+      # The app is stripped, so a Mac crash report names only offsets in scarlet-desktop. Line tables go to a .dSYM
+      # beside the binary instead (the app itself is unchanged), kept with this run below, so a crash report from this
+      # build can be read: `atos -o scarlet-desktop.dSYM -arch arm64 -l <load address> <addresses>`.
+      - name: Write the Mac app's debug symbols apart from it
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo "CARGO_PROFILE_RELEASE_DEBUG=line-tables-only" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed" >> "$GITHUB_ENV"
+
       - name: Build installers
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # action-v0.6.2
         with:
@@ -315,4 +325,15 @@ jobs:
           name: ${{ inputs.early_access && format('scarlet-early-access-{0}', inputs.version) || 'scarlet-desktop' }}-${{ matrix.triple }}
           path: ${{ runner.temp }}/scarlet-installers/
           if-no-files-found: error
+          overwrite: true
+
+      # Named apart from scarlet-desktop-*, which the publish job gathers into the release.
+      - name: Keep the Mac app's debug symbols with this run
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: debug-symbols-${{ inputs.version }}-${{ matrix.triple }}
+          path: apps/desktop/src-tauri/target/${{ matrix.triple }}/release/scarlet-desktop.dSYM*
+          if-no-files-found: warn
+          retention-days: 90
           overwrite: true

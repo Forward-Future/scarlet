@@ -36,6 +36,20 @@ const FLOOR_BUCKET = .02;
  */
 export function quietRms(rms: ArrayLike<number>, step = FLOOR_BUCKET): number {
   if (!rms.length) return QUIET_RMS;
+  const room = roomRms(rms, step);
+  // Never as loud as sound at speaking level (soundFloor): over a noisy room the fixed QUIET_RMS sat 5 dB under a soft
+  // speaker's voice, and the soft ends of words, over the noise, read as quiet a cut could end in (2026-11-22).
+  const speech = 10 ** (soundFloor(typicalLevel(Array.from(rms)), dbfs(room)) / 20);
+  return Math.min(QUIET_RMS, room * 10 ** (QUIET_ABOVE_FLOOR_DB / 20), speech);
+}
+
+/**
+ * The level of the room these levels were recorded in, as RMS (0..1): the quietest fiftieth of 20 ms buckets, whatever
+ * the levels' own bucket length (`step`). A minute of dense speech still has a second of pauses, and a tenth of it is
+ * already words' tails. In a quiet studio it is room tone; in a café or outdoors it is the noise the voice sits over.
+ */
+export function roomRms(rms: ArrayLike<number>, step = FLOOR_BUCKET): number {
+  if (!rms.length) return LOWEST_FLOOR_RMS;
   const k = Math.max(1, Math.round(FLOOR_BUCKET / step));
   const merged = new Float64Array(Math.ceil(rms.length / k));
   for (let i = 0; i < merged.length; i++) {
@@ -44,9 +58,7 @@ export function quietRms(rms: ArrayLike<number>, step = FLOOR_BUCKET): number {
     merged[i] = Math.sqrt(power / n);
   }
   const sorted = merged.sort();
-  // The quietest fiftieth: a minute of dense speech still has a second of pauses, and a tenth of it is already words' tails.
-  const floor = Math.max(LOWEST_FLOOR_RMS, sorted[Math.floor(sorted.length * 0.02)]!);
-  return Math.min(QUIET_RMS, floor * 10 ** (QUIET_ABOVE_FLOOR_DB / 20));
+  return Math.max(LOWEST_FLOOR_RMS, sorted[Math.floor(sorted.length * 0.02)]!);
 }
 
 /** A sound this quiet and this brief, with room tone either side, is a lip tick, not a word: it does not end a silence. */
@@ -146,6 +158,17 @@ export const GAP_SECONDS = 0.4;
 const BELOW_SPEECH_DB = 12;
 /** In a stretch with little speech the 85th percentile is room tone. Nothing quieter than this counts as sound. */
 const QUIETEST_SOUND_DBFS = -45;
+
+/**
+ * The level from which sound counts as at speaking level, in dBFS: within BELOW_SPEECH_DB of the level speech sits at
+ * (`speechDb`), and nearer that level than the room's (`roomDb`, roomRms). In a quiet studio the room is far under the
+ * voice and the first holds. Over a noisy room the noise itself is within a few dB of a quiet speaker: with pink noise
+ * 10 dB under a recording that spoke at -35 dBFS, the noise read as sound no word explains in 99 of a pass's 107 pause
+ * trims, and none of them was saved (2026-11-22).
+ */
+export function soundFloor(speechDb: number, roomDb: number): number {
+  return Math.max(speechDb - BELOW_SPEECH_DB, QUIETEST_SOUND_DBFS, (speechDb + roomDb) / 2);
+}
 const MIN_RUN = 0.1;
 /** A word's sound runs a little past its timing either way. */
 const WORD_EDGE = 0.05;
@@ -227,11 +250,11 @@ export function quietPhrases(words: readonly TranscriptWord[], levels: GapLevels
  * edge. A stretch that does not end on words, such as a range being removed, is read whole with `edge` 0. Undefined
  * when the levels do not cover the gap.
  */
-export function gapSound(levels: GapLevels, gap: TimeRange, speechDb = speakingLevel(levels), edge = WORD_EDGE): GapSound | undefined {
+export function gapSound(levels: GapLevels, gap: TimeRange, speechDb = speakingLevel(levels), edge = WORD_EDGE, roomDb?: number): GapSound | undefined {
   const step = (levels.to - levels.from) / levels.rms.length;
   const start = gap.start + edge, end = gap.end - edge;
   if (!levels.rms.length || step <= 0 || gap.start < levels.from - 1e-6 || gap.end > levels.to + 1e-6) return undefined;
-  const floor = Math.max(speechDb - BELOW_SPEECH_DB, QUIETEST_SOUND_DBFS);
+  const floor = soundFloor(speechDb, roomDb ?? dbfs(roomRms(levels.rms, step)));
   const runs: TimeRange[] = [];
   let open: number | undefined;
   const close = (at: number) => {

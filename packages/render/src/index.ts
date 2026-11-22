@@ -1,6 +1,7 @@
 export { fileInDirectory, fileInDirectoryAsync } from "./assetPath.js";
 export * from "./exec.js";
 export * from "./probe.js";
+export * from "./hdr.js";
 export * from "./waveform.js";
 export * from "./frame.js";
 export * from "./proxy.js";

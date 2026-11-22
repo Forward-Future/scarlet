@@ -29,6 +29,7 @@ import type {
 } from "@scarlet/timeline";
 import { INDEXED_MP4_INPUT, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, even, ffmpegMajor, fnum, requireDrawtext } from "./exec.js";
 import { effectFilters } from "./effects.js";
+import { canZscale, toneMapChain, type HdrTransfer } from "./hdr.js";
 import type { FontOptions } from "./fonts.js";
 import { buildCaptionDrawtexts, wrapText } from "./graphCaptions.js";
 import { adjacentPictureReads, collectCanvasCovers, directExportPicture, hasIndexedClock } from "./graphOptimize.js";
@@ -228,7 +229,7 @@ async function writeFilterGraph(
     stack = out;
   };
 
-  const videoForMedia = (clip: MediaClip, idx: number, still: boolean, p: Placement, cudaScale: boolean, sharedStart?: number, held = false, filled = false) => {
+  const videoForMedia = (clip: MediaClip, idx: number, still: boolean, p: Placement, cudaScale: boolean, sharedStart?: number, held = false, filled = false, toneMap: string[] = []) => {
     const speed = clip.speed ?? 1;
     const moves = motionsOf(clip.id);
     const tf = resolveTransform(clip, warn);
@@ -246,6 +247,8 @@ async function writeFilterGraph(
     // A still's clock ticks once a frame and setpts drops the fraction, so 0.033333 s would land a frame early.
     const offset = (seconds: number) => still ? `${seconds < 0 ? "-" : "+"}round(${fnum(Math.abs(seconds))}/TB)` : signed(seconds, "/TB");
     chain.push(`setpts=(PTS-STARTPTS)${div}${localStart > 0 ? offset(localStart) : ""}`);
+    // An HDR picture becomes SDR before anything else is done to it, so effects, looks and the canvas see what a normal screen shows.
+    chain.push(...toneMap);
     chain.push(...effectFilters(clip.effects, "video", effectCtx));
     chain.push(...transformChain(tf, W, H));
     if (clip.videoFadeIn > 0) chain.push(`fade=t=in:st=0:d=${fnum(clip.videoFadeIn)}:alpha=1`);
@@ -321,6 +324,10 @@ async function writeFilterGraph(
     const probe = await verifiedProbe(asset);
     return !!probe && storedAsShown(probe);
   };
+  // The HDR transfer of a moving picture: from its import, or read from the file for one imported before colour was.
+  const hdrOf = async (asset: MediaAsset) => asset.color ? asset.color.hdr : (await verifiedProbe(asset))?.color?.hdr;
+  let zscale: Promise<boolean> | undefined;
+  const toneMapFor = async (hdr: HdrTransfer | undefined) => hdr ? toneMapChain(hdr, await (zscale ??= canZscale(opts.ffmpegPath))) : [];
   const covers = opts.audioOnly
     ? []
     : await collectCanvasCovers(timeline, range, media, W, H, fps, motionsOf, verifiedProbe);
@@ -371,10 +378,11 @@ async function writeFilterGraph(
       const codec = /\bcodecs="(avc1|hvc1)[.,"]/i.exec(asset.originalPlaybackType ?? "")?.[1]?.toLowerCase();
       const accelerate = opts.decoder && wantVideo && asset.kind === "video" && codec &&
         (opts.decoder !== "videotoolbox-hevc" || codec === "hvc1");
+      const hdr = wantVideo && !still ? await hdrOf(asset) : undefined;
       // The last test reads the file: these frames stay on the GPU, where a clip stored sideways is not turned.
       const cudaScale = !!accelerate && opts.decoder === "cuda" && asset.hasAlpha === false &&
         !!asset.width && !!asset.height && asset.height > H && asset.width * H === asset.height * W &&
-        !clip.transform && !clip.keyframes?.length && !clip.effects.length && await assetStoredAsShown(asset);
+        !clip.transform && !clip.keyframes?.length && !clip.effects.length && !hdr && await assetStoredAsShown(asset);
       // FFmpeg's packet scan can discover AAC priming that is absent from the
       // movie index. Preserve it whenever the graph reads sound.
       // A clip a transition moves reads its own picture: the shared read assumes plain cuts.
@@ -412,8 +420,9 @@ async function writeFilterGraph(
           : open(proxy?.file ?? file, Math.max(0, pictureSeek - (proxy?.start ?? 0)), !proxy, visible.vis * speed);
         const firstLayer = stack === "[base]";
         // A single frame already seeks to the picture shown at its time.
+        // A preview copy of an HDR file is SDR already.
         videoForMedia(clip, idx, still, visible, cudaScale && !proxy, shared ? pictureSeek - shared.start / fps : undefined, held,
-          !opts.singleFrame && fillsFrames(clip, asset, fps));
+          !opts.singleFrame && fillsFrames(clip, asset, fps), proxy ? [] : await toneMapFor(hdr));
         if (opts.directPicture && opts.pictureOnly && !opts.pictureFilter && !opts.singleFrame && firstLayer && !shared && !proxy && !still && !motionsOf(clip.id).length &&
             directExportPicture(clip, visible, asset, await verifiedProbe(asset), W, H, fps, D)) {
           directPicture = { file, start: pictureSeek, frames: Math.round(D * fps) };
