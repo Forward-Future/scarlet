@@ -7432,6 +7432,38 @@ it("shades and steps over what a later batch of the pass took out, since the vid
   expect(player.mediaTime(13)).toBeCloseTo(9.6, 6);
 });
 
+it("opens a cut on the version before an earlier batch's cut beside it, so that cut shows as a gap too", async () => {
+  // The pass's first batch took out 14–16 s; its next batch took out 8.5–9.5 s, a few seconds before it.
+  const first = { op: "rippleDelete" as const, start: 14, end: 16 };
+  const next = { op: "rippleDelete" as const, start: 8.5, end: 9.5 };
+  const before = { ...data.timeline!, version: "v_before" };
+  const batch = { ...applyOps(before, [first]), version: "v_batch" };
+  const working = { ...applyOps(batch, [next]), version: data.project.head! };
+  const approved = data.changes.find(c => c.id === "chg_approved_2")!;
+  data = { ...data, timeline: working, changes: [...data.changes.map(c => c.id === "chg_approved_2"
+    ? { ...c, threadId: "thr_batches", ops: [first], fromVersion: "v_before", toVersion: batch.version, appliedVersion: batch.version,
+      timelineEdits: undefined, approvedSpots: undefined, appliedReview: undefined, cutReasons: [{ ...first, reason: "Drop the retake" }] } : c),
+  // The pass's next batch, saved a minute later in the same request.
+  { ...approved, id: "chg_approved_2b", threadId: "thr_batches", ops: [next], fromVersion: batch.version, toVersion: working.version, appliedVersion: working.version,
+    createdAt: new Date(Date.parse(approved.createdAt!) + 60_000).toISOString(),
+    timelineEdits: undefined, approvedSpots: undefined, appliedReview: undefined, cutReasons: [{ ...next, reason: "Drop the long pause" }] }] };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockResolvedValue({ version: working.version, edits: [
+    { changeId: "chg_approved_2b", spot: 0, label: "Drop the long pause", range: { start: 8.5, end: 8.5 }, at: 8.5,
+      beforeCut: { version: "v_batch", removed: { start: 8.5, end: 9.5 } }, previous: [] },
+    { changeId: "chg_approved_2", spot: 0, label: "Drop the retake", range: { start: 13, end: 13 }, at: 13,
+      beforeCut: { version: "v_before", removed: { start: 14, end: 16 } }, previous: [] },
+  ] });
+  vi.spyOn(api, "timeline").mockImplementation(async (_, version) => ({ timeline: version === "v_before" ? before : version === "v_batch" ? batch : working }));
+  await show();
+  const row = [...turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit")].find(r => r.textContent?.includes("Drop the long pause"))!;
+  await click(row);
+  await act(async () => {});
+  // Its own version no longer has the first batch's footage: the earlier one does, so both cuts are on the timeline.
+  const gaps = [...container.querySelectorAll<HTMLElement>(".simple-timeline-gap")];
+  expect(gaps.map(g => g.querySelector(".simple-timeline-gap-label")?.textContent)).toEqual(["Cut at 0:13"]);
+});
+
 it("waits for the latest version with captions when opening an older cut, and retries when that version fails to load", async () => {
   const cut = { op: "rippleDelete" as const, start: 10, end: 12.4 };
   const before = { ...data.timeline!, version: "v_before" };
