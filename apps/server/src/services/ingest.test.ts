@@ -7,7 +7,8 @@ import { createProject } from "@scarlet/timeline";
 import { createApp } from "../app.js";
 import { WhisperCppProvider } from "../transcribe/whispercpp.js";
 import { audioLane } from "./audioWork.js";
-import { getWaveform, readWaveformCache, transcribeMedia } from "./ingest.js";
+import { transcribeMedia } from "./transcription.js";
+import { getWaveform, readWaveformCache } from "./waveforms.js";
 
 it("keeps both microphone waveforms warm and reads replacements and legacy JSON", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scarlet-mic-waveforms-"));

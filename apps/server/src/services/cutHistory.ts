@@ -125,7 +125,10 @@ export function rejectEdits(ctx: Ctx, user: User, projectId: string, threadId: s
       if (!change || change.projectId !== projectId || change.state !== "approved" || !version || edits.some(e => e.revised)) throw unclear();
       const named = change.timelineEdits;
       const spots = new Set(edits.map(e => e.spot));
-      if (named?.length && named.length === spots.size && [...spots].every(spot => spot < named.length) && rejected.length === edits.length) {
+      // The footage a built video left out is the change's too, a cut of its own on each row after the named edits:
+      // while those stand, the named edits aren't every edit, and taking the change out would put their footage back.
+      const everyEdit = named?.length && named.length === spots.size && [...spots].every(spot => spot < named.length) && !change.leftOut?.joins.length;
+      if (everyEdit && rejected.length === edits.length) {
         // Every edit the change made is rejected and nothing else is: the change comes out, with what was made on it kept.
         try {
           result = planRevert(ctx.repos.versions.links(projectId), head, version, fps, id => resolveTimeline(ctx, project, id), id => ctx.repos.changes.get(id));

@@ -23,10 +23,11 @@ import { inFullScreen, KEPT_TIMELINES, LANDING_SETTLES, LANDING_SHOWS, stepOf, t
  * a call stays open. Any other version wanted is asked for.
  */
 export function useCarryingFootage(projectId: string, working: Timeline | null | undefined, wanted: readonly string[], fps: number): Footage {
-  const kept = useRef<{ projectId: string; timelines: Map<string, Timeline>; asked: Set<string> }>(undefined);
-  if (kept.current?.projectId !== projectId) kept.current = { projectId, timelines: new Map(), asked: new Set() };
+  const kept = useRef<{ projectId: string; timelines: Map<string, Timeline>; asked: Set<string>; failed: Map<string, number> }>(undefined);
+  if (kept.current?.projectId !== projectId) kept.current = { projectId, timelines: new Map(), asked: new Set(), failed: new Map() };
   const store = kept.current;
   const [fetched, setFetched] = useState(0);
+  const [retry, setRetry] = useState(0);
   const remember = (timeline: Timeline) => {
     const { timelines } = store;
     timelines.delete(timeline.version);
@@ -46,9 +47,16 @@ export function useCarryingFootage(projectId: string, working: Timeline | null |
         if (kept.current !== store) return;
         remember(timeline);
         setFetched(n => n + 1);
-      }, () => { store.asked.delete(version); });
+      }, () => {
+        store.asked.delete(version);
+        // Asked again shortly, a few times: the engine may be restarting, and nothing else asks until the pass saves
+        // another part, while a call open on that version waits for its footage.
+        const tries = (store.failed.get(version) ?? 0) + 1;
+        store.failed.set(version, tries);
+        if (tries < 4) setTimeout(() => { if (kept.current === store) setRetry(n => n + 1); }, 1500 * tries);
+      });
     }
-  }, [projectId, key]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId, key, retry]); // eslint-disable-line react-hooks/exhaustive-deps
   return useMemo(() => ({ at: version => store.timelines.get(version), fps }), [store, working, fetched, fps]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 

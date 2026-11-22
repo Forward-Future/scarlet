@@ -9,7 +9,7 @@ import type { Ctx } from "../context.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { prepareCutReview } from "../services/changes.js";
 import { sharedDialogueDetector } from "../services/dialogueDetections.js";
-import { transcribeForDialogue } from "../services/ingest.js";
+import { transcribeForDialogue } from "../services/transcription.js";
 import { inspectionPictures } from "../services/inspectionPictures.js";
 import { pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";

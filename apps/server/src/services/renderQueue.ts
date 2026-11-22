@@ -455,19 +455,25 @@ export class RenderQueue {
           .catch((e) => this.ctx.log(`[render] ${id} crashed: ${errorMessage(e)}`))
           .finally(() => {
             editorWaits?.();
-            // Release durable work only after the cancelled encoder has closed its file.
-            if (this.ctx.shutdown.aborted) this.releaseWorker(id);
-            else if (ac.signal.reason === yieldCacheWorker) {
-              const queued = this.update(id, r => r.state === "running" ? { state: "queued", progress: 0 } : undefined);
-              if (queued) {
-                this.ctx.log(`[render] requeued render=${logId(id)} project=${logId(projectId)} reason=higher_priority`);
-                this.ctx.bus.publish({ type: "render.updated", projectId: queued.projectId, render: queued });
-                this.queue.push({ id, projectId, key, playback: queued.kind === "playback" && this.owners.has(id) });
+            try {
+              // Release durable work only after the cancelled encoder has closed its file.
+              if (this.ctx.shutdown.aborted) this.releaseWorker(id);
+              else if (ac.signal.reason === yieldCacheWorker) {
+                const queued = this.update(id, r => r.state === "running" ? { state: "queued", progress: 0 } : undefined);
+                if (queued) {
+                  this.ctx.log(`[render] requeued render=${logId(id)} project=${logId(projectId)} reason=higher_priority`);
+                  this.ctx.bus.publish({ type: "render.updated", projectId: queued.projectId, render: queued });
+                  this.queue.push({ id, projectId, key, playback: queued.kind === "playback" && this.owners.has(id) });
+                }
               }
+            } catch (e) {
+              this.ctx.log(`[render] ${id} couldn’t be released: ${errorMessage(e)}`);
+            } finally {
+              // Whatever the database said, the slot is free: held, nothing in this lane would render until a restart.
+              this.running.delete(id);
+              this.activeKeys.delete(key);
+              this.pump();
             }
-            this.running.delete(id);
-            this.activeKeys.delete(key);
-            this.pump();
           }),
         projectId,
       );
