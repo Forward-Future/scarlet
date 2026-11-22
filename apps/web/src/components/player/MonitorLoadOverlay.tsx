@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { COMPARE_KEY } from "../../lib/hotkeys";
+import { usePlayerStore } from "../../stores/player";
 import { wavePhase } from "../review/laneLoading";
 
 /** Matches `usePictureWait`'s blink threshold so instant cached switches show nothing extra. */
@@ -142,6 +143,10 @@ export function MonitorLoadOverlay({
   const lastSnapshot = useRef<DisplaySnapshot>({ stage: "loading", extended: false, showHint: false });
   const resolveLeadInRef = useRef(resolveLeadIn);
   resolveLeadInRef.current = resolveLeadIn;
+  // A seek while the picture still loads moves the moment the still should show. During a drag only the quick
+  // still follows it; the sharp one is fetched once the drag lets go.
+  const seeks = usePlayerStore(s => s.seeks);
+  const scrubbing = usePlayerStore(s => !!s.scrubGesture);
 
   // Record when a wait episode begins so heavy CPU stalls still hit the exact 1.5s / 2.5s thresholds.
   if (disabled) {
@@ -307,7 +312,7 @@ export function MonitorLoadOverlay({
       setStillLoaded(false);
       return initial;
     });
-    if (!sharp || sharp === initial) return;
+    if (!sharp || sharp === initial || scrubbing) return;
     let cancelled = false;
     const img = new Image();
     img.onload = () => {
@@ -320,9 +325,13 @@ export function MonitorLoadOverlay({
       cancelled = true;
       img.onload = null;
     };
-  }, [needsLeadIn, leaving, transitionKey]);
+  }, [needsLeadIn, leaving, transitionKey, seeks, scrubbing]);
 
-  const showHeld = !disabled && (openingJoin || active || leaving) && !stillLoaded && !!heldCanvas.current && !hasDecodedVideo(monitor.current);
+  const chromeVisible = active || leaving;
+  // The outgoing frame holds until the lead-in still is on screen. A still that loads within the first 180ms isn't
+  // shown yet, so letting go of the frame then would leave the monitor black until it is.
+  const showHeld = !disabled && (openingJoin || active || leaving) && !(chromeVisible && stillLoaded) && !!heldCanvas.current
+    && !hasDecodedVideo(monitor.current);
 
   useLayoutEffect(() => {
     const host = heldHost.current;
@@ -345,7 +354,6 @@ export function MonitorLoadOverlay({
 
   const display = active ? { stage: liveStage, progress: liveProgress, extended, showHint: liveShowHint } : lastSnapshot.current;
   const { label, meta } = waitCopy(display.stage, display.progress);
-  const chromeVisible = active || leaving;
   const determinate = display.stage === "rendering" && !!display.progress && display.progress.total > 1;
   const percent = determinate
     ? Math.min(100, Math.round(((display.progress!.done + 0.18) / display.progress!.total) * 100))

@@ -11,6 +11,7 @@ import {
   type LeadInFrames,
 } from "./MonitorLoadOverlay";
 import { usePictureWait } from "./usePictureWait";
+import { usePlayerStore } from "../../stores/player";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -183,6 +184,45 @@ it("upgrades the lead-in still from fast scrub frame to sharp composite frame an
   expect(sharpLoader).toBeDefined();
   await act(async () => { sharpLoader!.onload?.(new Event("load")); });
   expect(still()?.getAttribute("src")).toBe("/frames/sharp.jpg");
+});
+
+it("keeps holding the outgoing frame when the sharp still loads inside the first 180ms, until the still shows", async () => {
+  const preloads: HTMLImageElement[] = [];
+  const NativeImage = window.Image;
+  vi.stubGlobal("Image", class extends NativeImage {
+    constructor() {
+      super();
+      preloads.push(this);
+    }
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+  await render({ openingJoin: false, showVideo: true, transitionKey: "cut-1:after" });
+  const video = container.querySelector<HTMLVideoElement>("#active")!;
+  Object.defineProperty(video, "readyState", { configurable: true, value: 4 });
+  Object.defineProperty(video, "videoWidth", { configurable: true, value: 1920 });
+  Object.defineProperty(video, "videoHeight", { configurable: true, value: 1080 });
+  await act(async () => { video.dispatchEvent(new Event("pause")); });
+
+  await render({ openingJoin: true, showVideo: false, transitionKey: "cut-2:after" });
+  // A cached sharp still is ready at once, before the lead-in may show: the held frame stays on screen meanwhile.
+  await act(async () => { preloads.find(img => img.src.includes("/frames/sharp.jpg"))!.onload?.(new Event("load")); });
+  expect(container.querySelector(".monitor-load-held canvas")).not.toBeNull();
+  expect(still()).toBeNull();
+  // Past 180ms the still shows, and only then lets the held frame go.
+  await after(MONITOR_LOAD_GRACE_MS);
+  expect(still()?.getAttribute("src")).toBe("/frames/sharp.jpg");
+  expect(container.querySelector(".monitor-load-held")).toBeNull();
+});
+
+it("shows the still of where a seek lands while the picture is still loading", async () => {
+  await render({ openingJoin: true, showVideo: false, leadIn: { fast: "/frames/at-10.jpg" } });
+  await after(MONITOR_LOAD_GRACE_MS);
+  expect(still()?.getAttribute("src")).toBe("/frames/at-10.jpg");
+  // The same cut stays open, so nothing else says the moment moved: the seek does.
+  await render({ openingJoin: true, showVideo: false, leadIn: { fast: "/frames/at-40.jpg" } });
+  expect(still()?.getAttribute("src")).toBe("/frames/at-10.jpg");
+  await act(async () => { usePlayerStore.setState(s => ({ seeks: s.seeks + 1 })); });
+  expect(still()?.getAttribute("src")).toBe("/frames/at-40.jpg");
 });
 
 it("dismisses immediately on errors or when reduced motion is enabled", async () => {

@@ -22,6 +22,15 @@ export function runChoiceDiffers(task: Pick<Task, "agent" | "model" | "effort" |
   return choice.agent !== task.agent || choice.model !== task.model || choice.effort !== task.effort || tier !== taskTier;
 }
 
+/**
+ * The model choice Resume editing sends: the one picked now when any paused request would run on something else.
+ * Resume picks up every paused request in the project, so each is compared, not only the one whose band was pressed.
+ */
+export function resumeRunChoice(tasks: readonly Pick<Task, "state" | "resumesAfterProjectStop" | "startedAt" | "agent" | "model" | "effort" | "fast" | "serviceTier">[],
+  choice: RunChoice | null | undefined): RunChoice | undefined {
+  return choice && tasks.some(t => t.state === "queued" && t.resumesAfterProjectStop && !t.startedAt && runChoiceDiffers(t, choice)) ? choice : undefined;
+}
+
 const LOW_QUOTA_THRESHOLD = 20;
 const QUOTA_STALE_MS = 60_000;
 
