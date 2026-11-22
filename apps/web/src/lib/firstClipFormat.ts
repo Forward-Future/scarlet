@@ -5,27 +5,53 @@ import { clearSetsFormat, pendingImports } from "./pendingImports";
 
 type Snapshot = Pick<Project, "id" | "settings" | "head">;
 
-function matcher(project: Snapshot, quiet: boolean) {
-  let matched = false;
-  return async (media: MediaAsset) => {
-    const format = !matched && videoFormat(media);
-    if (!format) return;
-    matched = true;
-    try {
-      await useProjectStore.getState().updateProject({ settings: format, expectedFormat: { settings: project.settings, head: project.head } }, project.id);
-    } catch (error) {
-      if (!quiet) throw new Error(`Couldn’t match the first clip’s format: ${errorMessage(error)}`);
-    } finally {
-      // The first video has had its turn, so a file still waiting never sets the format at a later launch.
-      clearSetsFormat(project.id);
-    }
+type Format = NonNullable<ReturnType<typeof videoFormat>>;
+
+/** Shapes a video is published in, best first. A shape that is none of them, such as a laptop screen's, comes last. */
+const SHAPES = ["16:9", "9:16", "1:1", "4:5"];
+const rank = (format: Format) => {
+  const at = SHAPES.indexOf(format.aspect!);
+  return at < 0 ? SHAPES.length : at;
+};
+
+/** Whether one video's format is better than another's: a better shape, or the same shape at a larger size. */
+const better = (current: Format, other: Format) =>
+  rank(other) < rank(current) || (rank(other) === rank(current) && other.width! * other.height! > current.width! * current.height!);
+
+/** A new project's format, chosen from every video of its first files once they are all in. */
+export interface FormatMatch {
+  /** A file of the batch that reached the project. */
+  add(media: MediaAsset): void;
+  /** Every file of the batch is in: give the project the best format among their videos. */
+  settle(): Promise<void>;
+}
+
+function matcher(project: Snapshot, quiet: boolean): FormatMatch {
+  let best: Format | undefined;
+  const add = (media: MediaAsset) => {
+    const format = videoFormat(media);
+    if (format && (!best || better(best, format))) best = format;
+  };
+  return {
+    add,
+    async settle() {
+      try {
+        if (best) await useProjectStore.getState().updateProject({ settings: best, expectedFormat: { settings: project.settings, head: project.head } }, project.id);
+      } catch (error) {
+        if (!quiet) throw new Error(`Couldn’t set the project’s format from its videos: ${errorMessage(error)}`);
+      } finally {
+        // The first files have had their say, so a file still waiting never sets the format at a later launch.
+        clearSetsFormat(project.id);
+      }
+    },
   };
 }
 
 /**
- * A new project takes the format of the first video among its first files. Run the result on each file as it
- * arrives. The engine sets the format only while the project is still as `project` shows it, so an edit or a
- * format the editor chose in the meantime stands.
+ * A new project takes the best format among the videos of its first files, set once every one of them is in, so
+ * the order they arrive in doesn't matter: 16:9, then 9:16, 1:1 and 4:5, before any other shape (a screen
+ * recording's own), and the larger size of the same shape. The engine sets it only while the project is still as
+ * `project` shows it, so an edit or a format the editor chose in the meantime stands.
  */
 export const matchFirstClip = (project: Snapshot) => matcher(project, false);
 
@@ -36,9 +62,9 @@ function isNew(project: Snapshot) {
 }
 
 /**
- * Files added to a project after it was created empty give it their first video's format the same way, from its
- * screen or its card. That holds while the project is still new and has no video yet. When files already setting
- * its format are waiting, the first video is among them, so later files leave the match to them.
+ * Files added to a project after it was created empty give it the best format among their videos the same way,
+ * from its screen or its card. That holds while the project is still new and has no video yet. When files already setting
+ * its format are waiting, the match is theirs, so later files leave it to them.
  */
 export function matchAddedClip(project: Snapshot, hasVideo: boolean) {
   if (hasVideo || !isNew(project) || pendingImports(project.id).some(i => i.setsFormat)) return;
@@ -47,8 +73,9 @@ export function matchAddedClip(project: Snapshot, hasVideo: boolean) {
 
 /**
  * The same match for first files a quit interrupted. The project as it was created isn't kept, so the one on
- * screen has to show it is still new. Otherwise its format stands and the waiting files stop setting it. A resumed
- * file imported fine, so a match that fails stays quiet.
+ * screen has to show it is still new. Otherwise its format stands and the waiting files stop setting it. First
+ * files that arrived before the quit are added to it as the ones still to come are. A resumed file imported fine,
+ * so a match that fails stays quiet.
  */
 export function resumeFirstClip(projectId: string) {
   const current = useProjectStore.getState().current;
