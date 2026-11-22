@@ -8,6 +8,7 @@ import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { measuredLoudness } from "../render/loudness.js";
 import { faces } from "../services/faces.js";
 import { lipSync } from "../services/lipSync.js";
+import { musicBeats } from "../services/musicBeats.js";
 import { pictureCuts } from "../services/pictureCuts.js";
 import { screenMotion } from "../services/screenMotion.js";
 import { screenText } from "../services/screenText.js";
@@ -70,6 +71,14 @@ export function perceptionRoutes(ctx: Ctx) {
 
   // The text on screen in a range of a video, read once and kept. A range not read yet is read now: the answer waits up
   // to `wait` seconds (default 30) and says how much it has read, and the reading carries on for the next ask.
+  // Beats, bars, tempo and level sections of music, read from its sound.
+  r.get("/projects/:projectId/media/:mediaId/music-beats", async c => {
+    const media = requireMedia(ctx, c.req.param("mediaId"), c.req.param("projectId"));
+    const from = optionalNumberParam(c.req.query("from"), "from"), to = optionalNumberParam(c.req.query("to"), "to");
+    requireSourceRange(from, to);
+    return c.json({ mediaId: media.id, ...(await ctx.track(musicBeats(ctx, media, { from, to }, c.req.raw.signal), media.projectId)) });
+  });
+
   r.get("/projects/:projectId/media/:mediaId/screen-text", readPicture("screen text", (media, range, opts, c) =>
     screenText(ctx, media, range, { ...opts, query: c.req.query("q") || undefined })));
 

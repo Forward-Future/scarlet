@@ -12,6 +12,7 @@ import type { AcousticWordsRequest, DialogueRangeRequest, DialogueScanRequest, D
 import type { Author, Change, CutAssessment, CutReview, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript, TranscriptWord } from "@scarlet/timeline";
 import type {
   ActivityEntry,
+  MusicReading,
   KeepEditsRequest,
   UnkeepEditsRequest,
   KeptEdit,
@@ -441,6 +442,10 @@ export class ScarletClient {
     // A very long phrase can also be searched locally without exceeding a URL limit.
     if (query.toString().length > 4096) return this.transcript(mediaId);
     return this.withResource("media", mediaId, path => this.get<TranscriptSearchResult | Transcript>(`${path}/transcript?${query}`));
+  }
+  /** A music file's beats, bars, tempo and level sections, measured from its sound. Source seconds. */
+  musicBeats(projectId: string, mediaId: string, range: { from?: number; to?: number } = {}) {
+    return this.get<MusicReading>(withQuery(`/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}/music-beats`, range));
   }
   /** Correct a word or phrase in the project's transcripts (all of them, or `mediaIds`), keeping word times. */
   fixTranscriptWords(projectId: string, body: { find: string; replace: string; mediaIds?: string[]; from?: number; to?: number }) {

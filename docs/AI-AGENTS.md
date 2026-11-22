@@ -202,6 +202,7 @@ The layers improve independently. Models and harnesses change every few months, 
 | How many of a pass's cuts the editor is asked to check | `packages/shared/src/checkIn.ts`, the first-cut `## Context` line in `packages/mcp/src/prompt.ts`, `taskPrompt` in `apps/server/src/services/taskPrompts.ts`, `apps/web/src/components/shell/CheckInSettings.tsx` |
 | Dialogue editing choices and audio joins | `skills/dialogue-pass/SKILL.md`, `apps/server/src/services/changes.ts`, `packages/timeline/src/joinCrossfade.ts` |
 | Word alignment | `apps/server/src/transcribe/wordAlign.ts`, `ctcAlign.ts`, `emissions.ts` |
+| Music: beats, bars, tempo and where the level builds and drops | `apps/server/src/services/musicBeats.ts`, `/music-beats` in `apps/server/src/routes/perception.ts`, `music_beats` in `packages/mcp/src/perception-tools.ts` |
 | Spellings the editor corrects in the transcripts, kept through a transcription made again | `applyWordFix` in `packages/shared/src/transcriptFix.ts`, `apps/server/src/services/transcriptFix.ts`, `wordFixes` on `Transcript`, `editorWordFixes` in `services/transcription.ts`, `transcript_fix` in `packages/mcp/src/media-read-tools.ts` |
 | Local audio models: turns, helper process, shared decode | `apps/server/src/services/audioWork.ts`, `transcribe/audioWorker.ts`, `services/recordingAudio.ts` |
 | Skills: delivery, seeding, merge | `skills/*/SKILL.md`, `apps/server/src/services/skills.ts` |

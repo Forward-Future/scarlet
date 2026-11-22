@@ -110,7 +110,7 @@ pub const SCARLET_TOOLS: &[&str] = &[
     "project_get", "timeline_get", "timeline_at", "timeline_diff", "timeline_propose", "timeline_first_cut",
     "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync",
     "transcript_get", "transcript_search", "timeline_transcript", "timeline_join_audit", "waveform_get", "sound_picture",
-    "transcript_fix", "media_profile", "audio_sync", "dialogue_scan", "dialogue_check_join", "dialogue_check_repeats", "dialogue_apply_cuts",
+    "transcript_fix", "media_profile", "music_beats", "audio_sync", "dialogue_scan", "dialogue_check_join", "dialogue_check_repeats", "dialogue_apply_cuts",
     "dialogue_review_inspect", "dialogue_review_save", "dialogue_revise_cut",
     "screen_text", "screen_reading", "screen_motion",
     "faces", "lip_sync",

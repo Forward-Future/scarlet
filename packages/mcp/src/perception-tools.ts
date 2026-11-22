@@ -352,6 +352,25 @@ export function registerPerception(deps: PerceptionDeps) {
             : "none yet; transcript_get prepares it" }) });
     });
 
+  tool("music_beats",
+    "The beats, bars, tempo and level sections of music, measured from its sound, in SOURCE seconds of the file (timeline_at maps them to the edit). " +
+      "tempo: bpm, with confidence 0..1 for how clearly the onsets repeat at that period, and alternatives at half and double, which the same music also fits; or unclear, saying why, when nothing repeats steadily. " +
+      "beats: each beat's time, about beatSeconds apart; they follow the music where it drifts, and sit where each beat's sound starts, to about a hundredth of a second, a little later on a soft attack. " +
+      "meter: beats per bar when one beat of each group hits harder in the low end, and downbeats, the first beat of each bar; or unclear when no beat stands out. " +
+      "sections: stretches where the level holds, each with levelDb (mean dBFS), changeDb (how far it rises or falls through the section) and jumpDb (the step at its start against just before it), starting on the downbeat nearest the change: " +
+      "a build reads as a section that rises, a drop as a step up after one, a breakdown as a step down. With levels, the level every stepSeconds as well. " +
+      "Up to 20 minutes a call; from/to narrow it. A reading is kept, so asking again is instant.",
+    { mediaId: z.string(), from: z.number().min(0).optional().describe("Start, source seconds"), to: z.number().min(0).optional().describe("End, source seconds"),
+      levels: z.boolean().default(false).describe("Also return the level every half second (every second past ten minutes)") },
+    async ({ mediaId, from, to, levels }) => {
+      const { project } = await deps.getProject();
+      const asset = requireMediaAsset(project, mediaId);
+      if (asset.kind !== "audio" && !asset.hasAudio) throw new Error(`Media ${mediaId} has no sound to read beats from.`);
+      if (from !== undefined && to !== undefined && to <= from) throw new Error("`to` must be after `from`.");
+      const { levels: steps, mediaId: _id, ...reading } = await client.musicBeats(deps.projectId, mediaId, { from, to });
+      return json({ mediaId, ...reading, ...(levels && { levels: steps }) });
+    });
+
   tool("screen_text",
     "The words shown on screen in a video, read from its picture: one line per line of text, `start-end` in SOURCE seconds while it stays on screen, its box as percent of the frame from the left and from the top, and the words. Frames are looked at once a second and read again only when the picture changes, so text shown for under a second can be missed; the words are read by a text recognizer and can be misspelt, but the box and the times are where it is. With `query`, only lines holding those words (case, punctuation and spacing ignored), across the whole video unless from/to narrow it. A video is read once and kept: a range not read yet is read now, and the answer says how much was read when it returns; call again for the rest. timeline_at maps source seconds to the edit. Lines are listed in time order, 200 at a time; `offset` pages on." +
       (deps.seesFrames ? " The reading says where; the picture says what it looks like: media_frame at a line's start second shows that frame, and frame_contact_sheet the window around it, so a search leads to the one or two frames worth looking at." : ""),

@@ -101,6 +101,7 @@ function toolWords(name: string, raw: unknown, callNumber?: CallNumber): string 
     case "notes_list": return "Reading your notes";
     case "audio_sync": return "Lining up the recordings";
     case "media_profile": return "Measuring the sound";
+    case "music_beats": return `Finding the beat of the music${span(input, "from", "to")}`;
     case "source_audio": return "Checking the original sound";
     case "dialogue_scan": {
       const from = num(field(input, "from"));
