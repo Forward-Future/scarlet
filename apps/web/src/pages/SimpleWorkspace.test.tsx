@@ -5684,6 +5684,31 @@ it("keeps a moment the video plays through while the pass's list is open, and ne
   expect(listRows()[0]!.className).toBe("");
 });
 
+it("does not keep an unflagged cut skipped with Shift+ArrowRight while playing", async () => {
+  const later = appliedPass(false);
+  (later.lists[later.earlier] as object[]).splice(0, Infinity,
+    { changeId: "chg_approved_2", spot: 0, label: "First pause", range: { start: 2.5, end: 5.5 }, at: 4, beforeCut: { version: "ver_1", removed: { start: 4, end: 5 } }, previous: [], kind: "cut" },
+    { changeId: "chg_approved_2", spot: 1, label: "Second pause", range: { start: 7.5, end: 10.5 }, at: 9, beforeCut: { version: "ver_1", removed: { start: 10, end: 11 } }, previous: [], kind: "cut" },
+    { changeId: "chg_approved_2", spot: 2, label: "Third pause", range: { start: 12.5, end: 15.5 }, at: 14, beforeCut: { version: "ver_1", removed: { start: 16, end: 17 } }, previous: [], kind: "cut" });
+  await show();
+  await act(async () => {});
+  await click(passToggle());
+  await act(async () => {});
+  expect(listRows().map(rowText)).toEqual(["First pause", "Second pause", "Third pause"]);
+  const plays = (time: number, playing = true) => act(async () => { usePlayerStore.setState({ time, playing, duration: 17 }); });
+  // Play up to 3.4 s, then skip 1 s ahead across the 4 s cut with Shift+ArrowRight.
+  await plays(2.5, false);
+  for (let t = 2.5; t <= 3.4; t += 0.3) await plays(t);
+  await skipKey("ArrowRight", true);
+  expect(usePlayerStore.getState().time).toBeCloseTo(4.4, 2);
+  await plays(4.8);
+  expect(listRows()[0]!.className).toBe("");
+  // Playing straight through the next cut without skipping still keeps it.
+  for (let t = 8.4; t <= 9.6; t += 0.3) await plays(t);
+  await act(async () => {});
+  expect(listRows().map(row => [rowText(row), row.className])).toEqual([["First pause", ""], ["Second pause", "is-decided"], ["Third pause", ""]]);
+});
+
 it("says on a pass's row when its cut is being revised, kept or not, and that it came back revised until it is kept", async () => {
   const later = appliedPass(true);
   const thread = threadWith("chg_approved_2");
