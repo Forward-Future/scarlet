@@ -4,6 +4,10 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 22, 2026
+
+- Items in For you now stay in place after you keep, finish, or reject them—dimmed and labeled Kept, Done, or Rejected—so you can see what you've already handled.
+
 ## November 21, 2026
 
 - A first cut no longer leaves a lone word or a quick reaction, like “Wow.”, stuck between two cuts where it plays as a stutter: Scarlet takes it out with the cuts beside it or lets the speech run on.

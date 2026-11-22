@@ -468,7 +468,7 @@ export function SimpleWorkspace() {
   // cut is on the version before it: each is a grey gap there, After steps over it as the video runs now, and a click
   // in one plays it in Before from that point. That version is the one before the earliest of the cuts joined there,
   // so it holds all of them. A call on another version, or one Scarlet is checking again, stays as it is.
-  const { listed: listedPassEdits, located: locatedPassEdits } = useThreadEdits(current.id, passThread);
+  const { listed: listedPassEdits, rejected: rejectedPassEdits, located: locatedPassEdits } = useThreadEdits(current.id, passThread);
   const callOnHead = !!listening && !!pass && listening.changeId === pass.id && !conflict && !versionBefore && !!heard && !!callDuration
     && !!timeline && timeline.version === head && callTimeline === timeline;
   const callBaseVersion = useMemo(() => {
@@ -1034,7 +1034,7 @@ export function SimpleWorkspace() {
   // numbers: each says the same number in the list, on the timeline and on its card, and is named as what it is,
   // "Cut 6", or "Edit 6" for one that took no footage out.
   const passRoot = pass ? (stagingTask(pass, changes, tasks) ?? tasks.find(t => t.id === pass.taskId)) : undefined;
-  const { callNo, passEditNo } = usePassCallNumbers(current.id, pass, passThread, passRoot, allCalls, passEdits);
+  const { callNo, passEditNo } = usePassCallNumbers(current.id, pass, passThread, passRoot, allCalls, passEdits, passThread ? rejectedPassEdits : noEdits);
   // A call says its place among the calls ("Cut 2 of 5") while its number is one of theirs. A call that arrived after
   // the edits were numbered has a number past them, and says the number alone.
   const ofCalls = (n?: number) => n !== undefined && n <= allCalls.length ? ` of ${allCalls.length}` : "";
