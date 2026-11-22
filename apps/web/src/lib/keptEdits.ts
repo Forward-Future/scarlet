@@ -2,6 +2,9 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import type { EditRef, KeepEditsRequest, Thread, ThreadEdit } from "@scarlet/shared";
 import { appLog, errorName } from "./appLog";
 import { api } from "./client";
+import { editKey } from "./editMoments";
+
+export { editKey };
 
 /**
  * Applied edits the editor has reviewed and kept, per thread. Keep only records the review: the edit is
@@ -17,7 +20,6 @@ const listeners = new Set<() => void>();
  */
 const cache = new Map<string, { raw: string | null; value: ReadonlySet<string>; sessionOnly?: boolean }>();
 
-export const editKey = (ref: EditRef) => `${ref.changeId}/${ref.spot}`;
 /**
  * What a Keep records. An edit that a later save gave a new reason to look is kept under that save's edit, and a doubt
  * a later request raised about an edit already in the video (`recheck`, when it was raised) is a new one, so a Keep

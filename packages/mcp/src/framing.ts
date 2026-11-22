@@ -8,6 +8,7 @@
  * across the cuts that split a demo into clips.
  */
 import { applyOps, clipEnd, newId, Transform, type MediaAsset, type MediaClip, type Timeline, type TimelineOp, type TransformKeyframe } from "@scarlet/timeline";
+import { round4 } from "./analysis.js";
 
 /** A box in a picture as fractions of its width and height: left, top, right, bottom. */
 export type Box = [number, number, number, number];
@@ -72,10 +73,17 @@ export interface PlacedFrame {
 }
 
 const w = (b: Box) => b[2] - b[0], h = (b: Box) => b[3] - b[1];
-const area = (b: Box) => Math.max(0, w(b)) * Math.max(0, h(b));
+export const boxArea = (b: Box) => Math.max(0, w(b)) * Math.max(0, h(b));
+const area = boxArea;
 const clamp = (n: number, lo: number, hi: number) => Math.min(Math.max(n, lo), hi);
-const meet = (a: Box, b: Box): Box => [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])];
-const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
+export const boxMeet = (a: Box, b: Box): Box => [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])];
+const meet = boxMeet;
+const r4 = round4;
+/** Whether a clip carries any explicit transform or keyframe framing. */
+export const isClipFramed = (clip: MediaClip) => !!clip.transform || !!clip.keyframes?.length;
+/** Normalized signature of a clip's transform and keyframes for equality checks across saved versions. */
+export const clipFramingKey = (clip: MediaClip) =>
+  JSON.stringify([Transform.parse(clip.transform ?? {}), (clip.keyframes ?? []).map(k => [k.time, k.transform, k.ease ?? "linear"])]);
 const WHOLE: Box = [0, 0, 1, 1];
 /** A cover this much of the canvas hides the recording under it: there is nothing to keep clear. */
 const COVERS_ALL = 0.9;

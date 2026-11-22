@@ -1,4 +1,5 @@
 import type { Clip, MediaAsset, MediaClip, Project, Timeline, TimeRange, Track } from "./schema.js";
+import { firstIndexBy } from "./intervals.js";
 
 export function clipDuration(clip: Clip): number {
   if (clip.kind === "media") {
@@ -73,6 +74,37 @@ export function snapToFrame(seconds: number, fps: number): number {
 export function timelineToSource(clip: MediaClip, t: number): number {
   const rel = Math.max(0, t - clip.timelineIn);
   return clip.sourceIn + rel * (clip.speed ?? 1);
+}
+
+/** Map a timeline time to a media clip's source time without clamping at `timelineIn`. */
+export function sourceAt(clip: MediaClip, t: number): number {
+  return clip.sourceIn + (t - clip.timelineIn) * (clip.speed ?? 1);
+}
+
+/** Locate a clip by id across all tracks, returning its track, clip index, and clip. */
+export function findClipLocation(tl: Timeline, clipId: string): { track: Track; index: number; clip: Clip } | null {
+  for (const track of tl.tracks) {
+    const index = track.clips.findIndex((c) => c.id === clipId);
+    if (index >= 0) return { track, index, clip: track.clips[index]! };
+  }
+  return null;
+}
+
+/** Find a clip by id across all tracks. */
+export function findClip(tl: Timeline, clipId: string): Clip | undefined {
+  return findClipLocation(tl, clipId)?.clip;
+}
+
+/** Derive an unused id starting from `base` by appending `_` until not in `existing`. */
+export function uniqueId(base: string, existing: ReadonlySet<string>): string {
+  let id = base;
+  while (existing.has(id)) id += "_";
+  return id;
+}
+
+/** True when `op` is a timeline-wide rippleDelete (all tracks, numeric start and end). */
+export function isGlobalRippleDelete(op: Record<string, unknown>): op is { op: "rippleDelete"; start: number; end: number; trackIds?: undefined } {
+  return op.op === "rippleDelete" && op.trackIds === undefined && typeof op.start === "number" && typeof op.end === "number";
 }
 
 /** Map a source time to where a media clip plays it on the timeline. Times outside the clip are not clamped. */
@@ -268,12 +300,7 @@ export function planPlaybackSegments(project: Pick<Project, "settings">, timelin
  */
 export function spanningSections(sections: readonly TimeRange[], range: TimeRange): TimeRange | undefined {
   const eps = 1e-6;
-  let lo = 0, hi = sections.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
-    if (sections[mid]!.end > range.start + eps) hi = mid;
-    else lo = mid + 1;
-  }
+  const lo = firstIndexBy(sections, s => s.end > range.start + eps);
   const first = sections[lo];
   if (!first || first.start > range.start + eps) return;
   let last = lo;

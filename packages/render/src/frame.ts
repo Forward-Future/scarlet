@@ -3,10 +3,9 @@
  */
 import { FILMSTRIP_SEEK_BATCH, sparseFilmstrip, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
 import { buildFilterGraph, type GraphOptions } from "./graph.js";
-import { INDEXED_MP4_INPUT, LOCAL_MEDIA_INPUT, failureReason, ffSeconds, requireDrawtext, resolveFfmpeg, runCapture, withStreamInfoFallback } from "./exec.js";
-import { isStoredAsShown } from "./probe.js";
-import { resolveFontFile } from "./fonts.js";
-import { escapeFilterPath } from "./effects.js";
+import { FFMPEG_BASE_ARGS, INDEXED_MP4_INPUT, LOCAL_MEDIA_INPUT, failureReason, ffSeconds, requireDrawtext, resolveFfmpeg, runCapture, withStreamInfoFallback } from "./exec.js";
+import { withDecoderFallback } from "./probe.js";
+import { drawtextFontArg } from "./fonts.js";
 
 export interface FrameOptions {
   /** Output width in pixels; height follows the source aspect (default 320). */
@@ -41,8 +40,7 @@ export interface FrameOptions {
 export function percentGrid(area: [number, number, number, number], width: number, height: number): string[] {
   const [left, top, right, bottom] = area.map(n => n * 100) as [number, number, number, number];
   const step = [10, 5, 2, 1, 0.5].find(s => (right - left) / s >= 4) ?? 0.5;
-  const font = resolveFontFile("Arial");
-  const face = font ? `fontfile=${escapeFilterPath(font.file)}` : "font=sans";
+  const face = drawtextFontArg();
   const size = Math.max(11, Math.round(width / 90));
   const label = (n: number) => String(Math.round(n * 10) / 10);
   const filters: string[] = [];
@@ -81,14 +79,7 @@ export async function extractFrame(file: string, tSeconds: number, opts: FrameOp
   if (opts.grid) await requireDrawtext("label the grid’s lines; the frame without grid needs no text", opts.ffmpegPath);
   // The GPU path keeps frames on the GPU, where a clip stored sideways or a photo with a turn is not turned,
   // so that file decodes on the CPU.
-  if (opts.decoder && await isStoredAsShown(file, { signal: opts.signal })) {
-    try { return await frameFrom(file, tSeconds, opts); }
-    catch (error) { // A driver can list a decoder it cannot run for this stream.
-      opts.signal?.throwIfAborted();
-      opts.onFallback?.(`${opts.decoder} could not decode this frame (${failureReason(error)}); decoded it on the CPU.`);
-    }
-  }
-  return frameFrom(file, tSeconds, { ...opts, decoder: undefined });
+  return withDecoderFallback(file, opts, "frame", decoder => frameFrom(file, tSeconds, { ...opts, decoder }));
 }
 
 async function frameFrom(file: string, tSeconds: number, opts: FrameOptions): Promise<Buffer> {
@@ -102,10 +93,7 @@ async function frameFrom(file: string, tSeconds: number, opts: FrameOptions): Pr
   const grid = opts.grid ? "," + percentGrid(area, width, height).join(",") : "";
   const picture = gpu ? `scale_cuda=${width}:-2:interp_algo=bicubic:format=yuv420p,hwdownload,format=yuv420p` : `${crop}scale=${width}:${height}${grid}`;
   const input = [
-    "-hide_banner",
-    "-nostdin",
-    "-loglevel",
-    "error",
+    ...FFMPEG_BASE_ARGS,
     ...(gpu ? ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] : []),
     ...(opts.indexedMp4 ? INDEXED_MP4_INPUT : []),
   ];
@@ -148,7 +136,7 @@ const indexFallback = (error: unknown) => `The movie's index could not be used (
 export async function extractFilmstrip(file: string, frames: number[], fps: number, signal?: AbortSignal, layout: "16:9" | "source-aspect" = "16:9") {
   // Decode from one frame before the first sample; fps normalizes any PTS gaps
   // at segment joins to the frame displayed by the finished video.
-  const args = ["-hide_banner", "-nostdin", "-loglevel", "error"];
+  const args: string[] = [...FFMPEG_BASE_ARGS];
   const seek = frames.length <= FILMSTRIP_SEEK_BATCH && sparseFilmstrip(frames, fps);
   const groups = seek ? frames.map(frame => [frame]) : [frames];
   const padding = layout === "16:9" ? ",pad=160:90:(ow-iw)/2:(oh-ih)/2" : "";
@@ -181,7 +169,7 @@ export async function renderTimelineFrame(project: Project, timeline: Timeline, 
   try {
     return await withStreamInfoFallback(graph.args, signal, async inputArgs => {
       const { stdout } = await runCapture(resolveFfmpeg(), [
-        "-hide_banner", "-nostdin", "-loglevel", "error", ...inputArgs,
+        ...FFMPEG_BASE_ARGS, ...inputArgs,
         "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "4", "-f", "image2pipe", "pipe:1",
       ], { signal });
       if (!stdout.length) throw new Error(`No timeline frame at ${range.start}s`);

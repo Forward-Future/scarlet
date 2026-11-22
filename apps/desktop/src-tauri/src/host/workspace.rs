@@ -1,10 +1,158 @@
+//! Per-task workspace cleanup, token-file removal, Claude Code session cleanup,
+//! and aged task directory pruning.
 //! The programs a request's shell is given (workspaceTools.ts in apps/agent): ffmpeg and ffprobe,
 //! as launchers in the task folder put first on its PATH.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use serde_json::Value;
 
 use super::types::Workspace;
+
+/// The folder under the work folder that holds one folder for each run.
+pub(super) const TASKS_DIR: &str = "tasks-v2";
+
+/// Finished task folders keep their artifacts this long.
+const TASK_DIR_DAYS: u64 = 14;
+
+/// Remove the control file in a run's folder that holds the engine token, if the run left one: Claude Code's MCP
+/// config. Codex and agy take the token in their environment and session instead.
+pub fn remove_token_file(dir: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(dir.join(".scarlet").join("mcp.json")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+/// A finished task keeps only its artifacts. The CLI control files include the engine token.
+pub fn remove_control_files(dir: &Path) -> std::io::Result<()> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Ok(()) };
+    let mut artifacts = false;
+    for entry in entries.flatten() {
+        if entry.file_name() == "artifacts" {
+            artifacts = true;
+        } else if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    if !artifacts {
+        std::fs::remove_dir(dir)?;
+    }
+    Ok(())
+}
+
+/// Where Claude Code keeps its sessions and their to-do lists: CLAUDE_CONFIG_DIR when it is set, else ~/.claude.
+/// A relative CLAUDE_CONFIG_DIR is read from each CLI's own folder, which Scarlet can't speak for, so it is left alone.
+pub fn claude_config_dir(env: &HashMap<String, String>, home: &Path) -> Option<PathBuf> {
+    match crate::util::env_get(env, "CLAUDE_CONFIG_DIR") {
+        None => Some(home.join(".claude")),
+        Some(dir) => Some(PathBuf::from(dir)).filter(|dir| dir.is_absolute()),
+    }
+}
+
+/// Claude Code keeps a cwd's sessions in <its folder>/projects/<real cwd with every character other than a letter or
+/// digit as "-">. A name over 200 characters keeps its first 200 and ends in a hash of the path Scarlet can't
+/// reproduce, so that folder is found by its first 200 characters and by its sessions, which name the cwd.
+pub fn claude_project_dir(real_cwd: &Path, claude_dir: &Path) -> Option<PathBuf> {
+    let name: String = real_cwd.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    if !name.chars().any(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let projects = claude_dir.join("projects");
+    if name.len() <= 200 {
+        return Some(projects.join(name));
+    }
+    let prefix = format!("{}-", &name[..200]);
+    // Another folder that long can share those 200 characters: only the one whose sessions name this cwd is its.
+    std::fs::read_dir(&projects).ok()?.flatten().map(|entry| entry.path()).find(|dir| {
+        let hashed = dir.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix(&prefix))
+            .is_some_and(|hash| !hash.is_empty() && hash.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+        hashed && sessions_name_cwd(dir, real_cwd)
+    })
+}
+
+/// Whether a Claude project folder's sessions were held in `real_cwd`: each session's messages carry their `cwd`,
+/// within its first lines.
+fn sessions_name_cwd(dir: &Path, real_cwd: &Path) -> bool {
+    use std::io::BufRead;
+    let cwd = real_cwd.to_string_lossy();
+    std::fs::read_dir(dir).into_iter().flatten().flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|e| e == "jsonl"))
+        .filter_map(|entry| std::fs::File::open(entry.path()).ok())
+        .any(|file| {
+            std::io::BufReader::new(file).lines().take(20).map_while(Result::ok)
+                .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+                .find_map(|message| message.get("cwd").and_then(Value::as_str).map(|said| said == cwd))
+                .unwrap_or(false)
+        })
+}
+
+/// Delete the Claude sessions of one finished Scarlet task: only the project folder named after its task folder,
+/// and the to-do list of each session in it. `claude_dir` is where Claude Code keeps them (`claude_config_dir`).
+pub fn remove_claude_sessions(real_cwd: &Path, claude_dir: &Path) -> std::io::Result<()> {
+    if !real_cwd.parent().and_then(Path::file_name).is_some_and(|n| n == TASKS_DIR) {
+        return Ok(());
+    }
+    let Some(dir) = claude_project_dir(real_cwd, claude_dir) else { return Ok(()) };
+    match std::fs::symlink_metadata(&dir) {
+        Ok(m) if m.is_dir() => {
+            // Claude Code keeps a session's to-do list apart from it, in <its folder>/tasks/<session id>, and a session
+            // is `<session id>.jsonl` here. Only a name of hex digits and dashes is read as an id: "...jsonl" would
+            // name its folder itself. A list that can't be removed is left.
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let name = entry.file_name();
+                let Some(id) = name.to_str().and_then(|n| n.strip_suffix(".jsonl")) else { continue };
+                if id.is_empty() || !id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+                    continue;
+                }
+                let list = claude_dir.join("tasks").join(id);
+                if std::fs::symlink_metadata(&list).is_ok_and(|m| m.is_dir()) {
+                    let _ = std::fs::remove_dir_all(&list);
+                }
+            }
+            std::fs::remove_dir_all(&dir)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The path Claude Code sees as its cwd. Windows canonical paths carry a `\\?\` prefix Claude never shows.
+pub(super) fn real_path(dir: &Path) -> Option<PathBuf> {
+    if cfg!(windows) { Some(dir.to_path_buf()) } else { std::fs::canonicalize(dir).ok() }
+}
+
+/// Last use of a task folder: the folder, its artifacts folder or a file directly in it.
+fn last_used(dir: &Path) -> Option<std::time::SystemTime> {
+    let meta = std::fs::metadata(dir).ok().filter(|m| m.is_dir())?;
+    let artifacts = dir.join("artifacts");
+    let files = std::fs::read_dir(&artifacts).into_iter().flatten().flatten().map(|e| e.path());
+    std::iter::once(artifacts.clone()).chain(files).filter_map(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok()).chain(meta.modified().ok()).max()
+}
+
+/// Remove task folders unused for `TASK_DIR_DAYS`, including artifacts, and the Claude sessions they left in
+/// `claude_dir` (`claude_config_dir`).
+pub fn prune_task_dirs(tasks_root: &Path, now: std::time::SystemTime, claude_dir: Option<&Path>) {
+    let Ok(entries) = std::fs::read_dir(tasks_root) else { return };
+    let max_age = Duration::from_secs(TASK_DIR_DAYS * 86_400);
+    for entry in entries.flatten() {
+        let old = last_used(&entry.path()).and_then(|t| now.duration_since(t).ok()).is_some_and(|age| age > max_age);
+        if old {
+            // A run that never finished left its Claude sessions behind. They go with its folder.
+            if let (Some(claude_dir), Some(real)) = (claude_dir, real_path(&entry.path())) {
+                if let Err(e) = remove_claude_sessions(&real, claude_dir) {
+                    log::warn!("could not remove Claude sessions of {}: {e}", entry.path().display());
+                }
+            }
+            if let Err(e) = std::fs::remove_dir_all(entry.path()) {
+                log::warn!("could not prune task folder {}: {e}", entry.path().display());
+            }
+        }
+    }
+}
 
 /// Where a request's shell finds its programs, in the task folder.
 pub const TOOLS_DIR: &str = ".tools";

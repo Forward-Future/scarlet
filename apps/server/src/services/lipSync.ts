@@ -5,13 +5,14 @@
  * for the model, never a verdict: whether and how far to shift the sound is its call.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { curvePeak, fileInDirectory, lipSyncStretch, type CropBox, type LipSyncReading } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
+import { atomicWriteFile, rememberLast } from "../util.js";
 import { faceSamples, type FaceSample } from "./faces.js";
-import { r3, rememberLast } from "./pictureReading.js";
+import { r3 } from "./pictureReading.js";
 import { pictureDecoder, pictureLane } from "./pictureWork.js";
 
 /** Bump when the measurement changes. Kept stretches are measured again. */
@@ -130,12 +131,7 @@ export async function lipSync(ctx: Ctx, media: VideoMedia, range: { from?: numbe
     } catch { /* Not measured yet. */ }
     return { identity: identity(media), stretches: {} };
   })(), MAX_KEPT);
-  const save = async () => {
-    const temp = `${path}.${randomUUID()}.tmp`;
-    await mkdir(ctx.paths.waveforms(media.projectId), { recursive: true });
-    await writeFile(temp, JSON.stringify(kept));
-    await rename(temp, path);
-  };
+  const save = () => atomicWriteFile(path, JSON.stringify(kept), `${path}.${randomUUID()}.tmp`);
 
   const measure = (stretch: { from: number; to: number }) => {
     const key = `${stretch.from}-${stretch.to}`;

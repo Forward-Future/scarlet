@@ -1,55 +1,26 @@
 import { WindowActions } from "../components/shell/WorkspaceNavigation";
 import { PreferenceSelect } from "../components/ui/PreferenceSelect";
-import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useBlocker, useNavigate, useParams } from "react-router-dom";
 import type { Skill, SkillVersion, Task } from "@scarlet/shared";
 import { AgentChip, useAgentAvailability } from "../components/agent/AgentChip";
 import { api, errorMessage } from "../lib/client";
 import { clockTime, dayName } from "../lib/format";
-import { diffLines, type DiffLine } from "../lib/textDiff";
+import { isActiveTask } from "../lib/taskRun";
+import { diffLines } from "../lib/textDiff";
+import { useBeforeUnloadGuard, useEscapeToLeave } from "../lib/uiHooks";
 import { useAuthStore } from "../stores/auth";
 import { composeSkill, slugify, splitFrontmatter, type SplitSkill } from "../lib/frontmatter";
 import { useSkillsStore } from "../stores/skills";
-import { useUiStore } from "../stores/ui";
 import { ConfirmDialog, ErrorState, Icon, InlineError, Loading, Modal, Spinner, Toggle } from "../components/ui/primitives";
 import { Said } from "../components/review/RunBundle";
 import { SkillCommandInput } from "../components/agent/SkillCommandInput";
 import { MarkedKeywords, SkillInstructions } from "../components/agent/SkillInstructions";
-import { markSkillMatches, normalizeSkillLines, revealSkillMatch, useSkillFind, type SkillFindState } from "../components/agent/SkillFind";
+import { normalizeSkillLines, revealSkillMatch, useSkillFind } from "../components/agent/SkillFind";
+import { pageOf, readDraft, readKept, writeDraft, type Draft } from "./skills/skillDrafts";
+import { changedIn, ChangedText, LATEST_VERSIONS, savedBy } from "./skills/SkillVersionDiff";
 // The conversation beside the skill is built from the pieces of a project's chat, and the page's plain text links are the chat's.
 import "../simple.css";
-
-const FINISHED = ["done", "failed", "cancelled"];
-
-/** Unsaved edits as they are kept on this computer, with the version of the skill they were made on. */
-interface Draft { name?: string; description?: string; body: string; enabled?: boolean; version?: number }
-const isDraft = (draft: unknown): draft is Draft => !!draft && typeof (draft as Draft).body === "string";
-function stored(key: string): unknown {
-  try {
-    return JSON.parse(localStorage.getItem(key) ?? "null");
-  } catch {
-    return null;
-  }
-}
-function readDraft(key: string): Draft | null {
-  const draft = stored(key);
-  return isDraft(draft) ? draft : null;
-}
-/** The sets of edits that wait beside the page, the latest first. */
-function readKept(key: string): Draft[] {
-  const all = stored(key);
-  return Array.isArray(all) ? all.filter(isDraft) : [];
-}
-function writeDraft(key: string, kept: Draft | Draft[] | null) {
-  try {
-    if (!kept || (Array.isArray(kept) && !kept.length)) localStorage.removeItem(key);
-    else localStorage.setItem(key, JSON.stringify(kept));
-  } catch { /* Storage is optional. */ }
-}
-
-/** Compare what the page holds using the textarea's line endings. */
-const pageOf = (name: string, description: string, body: string, enabled: boolean, original?: SplitSkill) =>
-  JSON.stringify([name, enabled, normalizeSkillLines(composeSkill({ name: slugify(name) || name, description }, body, original))]);
 
 export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => void } = {}) {
   const { skillId } = useParams();
@@ -98,7 +69,7 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
   const [sending, setSending] = useState(false);
   const [askErr, setAskErr] = useState<string | null>(null);
   const { effective, unavailableReason } = useAgentAvailability();
-  const working = !!edit && !FINISHED.includes(edit.state);
+  const working = !!edit && isActiveTask(edit.state);
   const question = edit?.state === "waiting_for_user" ? edit.question : null;
   // The message box takes a new request only while the page shows the skill as saved, which is what Scarlet revises:
   // the skill to edit, or its newest version with what it changed marked. It takes none while Scarlet has one. An
@@ -178,33 +149,16 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
     button.focus();
     if (document.activeElement !== button) delete button.dataset.escFocus;
   };
-  useEffect(() => {
-    const leave = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-      if (useUiStore.getState().shortcutsOpen || document.querySelector('dialog[open], [role="menu"], [data-shortcut-overlay]')) return;
-      const target = e.target instanceof HTMLElement ? e.target : null;
-      if (target?.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")) {
-        target.blur();
-        return;
-      }
-      e.preventDefault();
-      if (unsaved) land(saveButton.current);
-      else if (typed) land(sendButton.current);
-      else navigate("/settings/skills");
-    };
-    window.addEventListener("keydown", leave);
-    return () => window.removeEventListener("keydown", leave);
-  }, [navigate, unsaved, typed]);
+  useEscapeToLeave(() => {
+    if (unsaved) land(saveButton.current);
+    else if (typed) land(sendButton.current);
+    else navigate("/settings/skills");
+  }, 'dialog[open], [role="menu"], [data-shortcut-overlay]');
 
   const leavingAfterSave = useRef(false);
   const blocker = useBlocker(({ currentLocation, nextLocation }) =>
     unsaved && !leavingAfterSave.current && (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search));
-  useEffect(() => {
-    if (!unsaved) return;
-    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [unsaved]);
+  useBeforeUnloadGuard(unsaved);
 
   const show = (res: { skill: Skill; versions: SkillVersion[]; edits?: Task[] }) => {
     setLoaded(res);
@@ -315,7 +269,7 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
     const timer = window.setInterval(() => {
       void api.task(editId, "conversation").then(async ({ task }) => {
         if (gone) return;
-        if (!FINISHED.includes(task.state)) return setEdit(task);
+        if (isActiveTask(task.state)) return setEdit(task);
         await showFinished(task);
         window.clearInterval(timer);
       }).catch(() => { /* The next ask tries again. */ });
@@ -457,7 +411,7 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
                 with where the request stands at its right, then Scarlet's lines under the band. */}
             <div className="simple-chat" ref={thread}>
               {edits.map(e => {
-                const asking = e.state === "waiting_for_user", active = !FINISHED.includes(e.state);
+                const asking = e.state === "waiting_for_user", active = isActiveTask(e.state);
                 // A dot while Scarlet asks, a word once it stopped early, nothing once it's done. Stop follows while Scarlet has the request.
                 const standing = asking ? <span className="unit-dot" aria-hidden /> : e.state === "cancelled" ? <span className="unit-word">Stopped</span>
                   : e.state === "failed" ? <span className="unit-word">Couldn’t finish</span> : null;
@@ -577,42 +531,4 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
       />
     </div>
   );
-}
-
-/** How many versions the history lists before "Show N older versions". */
-const LATEST_VERSIONS = 8;
-
-/** Who saved a version: "You", a teammate by name, or Scarlet, with what asked it to when Scarlet wrote it. */
-function savedBy(v: SkillVersion, me?: string): string {
-  if (!v.author) return "";
-  if (v.author.type === "human") return v.author.id === me ? "You" : v.author.name;
-  return v.from === "request" ? "Scarlet, from your request" : v.from === "learning" ? "Scarlet, from Learnings" : "Scarlet";
-}
-
-/** The line over a picked version: whose change it is, and when. */
-function changedIn(v: SkillVersion, me?: string): string {
-  const who = savedBy(v, me);
-  const [name, from] = who.startsWith("Scarlet, ") ? ["Scarlet", who.slice("Scarlet, ".length)] : [who === "You" ? "you" : who, ""];
-  const when = v.createdAt ? ` · ${dayName(v.createdAt)}, ${clockTime(v.createdAt)}` : "";
-  if (v.version === 1) return `v1, the first version${when}`;
-  return `What ${name || "was"} changed in v${v.version}${from ? `, ${from}` : ""}${when}`;
-}
-
-/** Text with what changed marked in it: a bar beside each changed line, taken-out words struck, added ones tinted. */
-function ChangedText({ lines, find }: { lines: DiffLine[]; find?: SkillFindState }) {
-  let offset = 0;
-  return <>{lines.map((line, i) => {
-    const pieces = line.pieces.map((piece, k) => {
-      if (piece.kind === "del") return <del key={k}>{piece.text}</del>;
-      const marked = markSkillMatches(piece.text, offset, find);
-      offset += piece.text.length;
-      return piece.kind === "add" ? <ins key={k}>{marked}</ins> : <Fragment key={k}>{marked}</Fragment>;
-    });
-    if (line.pieces.some(piece => piece.kind !== "del")) offset++;
-    return <div key={i} data-changed={line.changed ? "" : undefined}>
-      {pieces}
-      {/* An empty line keeps its height. */}
-      {!line.pieces.some(piece => piece.text) && "\u200b"}
-    </div>;
-  })}</>;
 }

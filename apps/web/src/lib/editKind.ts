@@ -13,10 +13,11 @@ export function editKindWord(edit: Pick<ThreadEdit, "kind">): string | undefined
 
 /**
  * The word at the end of an edit's row in a list, so every row has one: what it did, "To do" for a marker left for the
- * editor, or "Edit" for an assembly or a mix of several things.
+ * editor, "Check" for a spot Scarlet changed nothing at and asks the editor to check, or "Edit" for an assembly or a mix
+ * of several things.
  */
-export function editRowWord(edit: Pick<ThreadEdit, "kind" | "marker">): string {
-  return editKindWord(edit) ?? (edit.marker ? "To do" : "Edit");
+export function editRowWord(edit: Pick<ThreadEdit, "kind" | "marker" | "onlyCheck">): string {
+  return editKindWord(edit) ?? (edit.marker ? "To do" : edit.onlyCheck ? "Check" : "Edit");
 }
 
 /** The card shows why Scarlet made the edit and what to check. */

@@ -62,3 +62,16 @@ export async function writeArtifact(workDir: string, output: string, data: strin
     await rm(temp, { force: true });
   }
 }
+
+export function guessKind(name: string): "video" | "audio" | "image" | "graphic" {
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  if (["mp4", "mov", "mkv", "webm", "avi", "m4v", "mxf"].includes(ext)) return "video";
+  if (["wav", "mp3", "aac", "m4a", "flac", "ogg", "aif", "aiff"].includes(ext)) return "audio";
+  if (["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"].includes(ext)) return "image";
+  if (["svg", "json", "lottie"].includes(ext)) return "graphic";
+  return "video";
+}
+
+export function sanitize(s: string): string {
+  return s.replace(/[^a-zA-Z0-9._-]+/g, "_");
+}

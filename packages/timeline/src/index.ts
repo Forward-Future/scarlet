@@ -1,7 +1,7 @@
 export * from "./color.js";
 export * from "./schema.js";
 export * from "./time.js";
-export { firstIndex, intervalCandidates } from "./intervals.js";
+export { firstIndex, firstIndexBy, intervalCandidates } from "./intervals.js";
 export * from "./ids.js";
 export * from "./ops.js";
 export * from "./transitions.js";

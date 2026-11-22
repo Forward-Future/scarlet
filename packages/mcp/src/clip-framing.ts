@@ -1,5 +1,6 @@
 import { clipEnd, Transform as TransformSchema, type MediaAsset, type MediaClip, type Timeline, type Transform, type TransformKeyframe } from "@scarlet/timeline";
-import { pictureBox, type Box } from "./framing.js";
+import { round2, round3 } from "./analysis.js";
+import { clipFramingKey, isClipFramed, pictureBox, type Box } from "./framing.js";
 
 /** A clip an edit added that plays its recording full frame, beside a clip of the same recording that is framed. */
 export interface UnframedClip {
@@ -10,8 +11,6 @@ export interface UnframedClip {
   /** The framed clip beside it on the same track, and its framing. */
   beside: { clipId: string; transform?: Transform; keyframes?: TransformKeyframe[] };
 }
-
-const framed = (clip: MediaClip) => !!clip.transform || !!clip.keyframes?.length;
 
 /**
  * Footage an edit puts back or copies arrives as new clips, which play their recording full frame unless the edit
@@ -28,10 +27,10 @@ export function unframedBeside(before: Timeline | null, after: Timeline): Unfram
     const clips = track.clips.filter((c): c is MediaClip => c.kind === "media" && c.enabled !== false)
       .sort((a, b) => a.timelineIn - b.timelineIn);
     clips.forEach((clip, i) => {
-      if (existing.has(clip.id) || framed(clip)) return;
-      const near = [clips[i - 1], clips[i + 1]].find(c => c && c.mediaId === clip.mediaId && framed(c));
+      if (existing.has(clip.id) || isClipFramed(clip)) return;
+      const near = [clips[i - 1], clips[i + 1]].find(c => c && c.mediaId === clip.mediaId && isClipFramed(c));
       if (!near) return;
-      found.push({ clipId: clip.id, trackId: track.id, at: Math.round(clip.timelineIn * 1000) / 1000,
+      found.push({ clipId: clip.id, trackId: track.id, at: round3(clip.timelineIn),
         beside: { clipId: near.id, ...(near.transform && { transform: near.transform }), ...(near.keyframes?.length && { keyframes: near.keyframes }) } });
     });
   }
@@ -76,23 +75,21 @@ export function backgroundShows(before: Timeline | null, after: Timeline, media:
     .map(track => track.clips.filter((c): c is MediaClip => c.kind === "media" && opaque(c)).sort((a, b) => a.timelineIn - b.timelineIn));
   const layers = tracks.flat();
   const size = (clip: MediaClip) => ({ width: assets.get(clip.mediaId)!.width || canvas.width, height: assets.get(clip.mediaId)!.height || canvas.height });
-  // A saved clip carries its transform's defaults and one read back may not: the framing is what is compared.
-  const framing = (clip: MediaClip) => JSON.stringify([TransformSchema.parse(clip.transform ?? {}), (clip.keyframes ?? []).map(k => [k.time, k.transform, k.ease ?? "linear"])]);
   const found: BackgroundShown[] = [];
   for (const clips of tracks) {
     let last: BackgroundShown | undefined;
     for (const clip of clips) {
       const old = was.get(clip.id);
-      if (!framed(clip) || (old?.kind === "media" && framing(old) === framing(clip))) continue;
+      if (!isClipFramed(clip) || (old?.kind === "media" && clipFramingKey(old) === clipFramingKey(clip))) continue;
       const at = clip.timelineIn + Math.min(0.05, (clipEnd(clip) - clip.timelineIn) / 2);
       const playing = layers.filter(l => l.timelineIn <= at && at < clipEnd(l));
       if (playing.some(l => l.transform?.rotation)) continue;
       const boxes = playing.map(l => pictureBox(l, at - l.timelineIn, size(l), canvas))
         .map(([l, t, r, b]): Box => [Math.max(0, l), Math.max(0, t), Math.min(1, r), Math.min(1, b)]).filter(b => b[2] > b[0] && b[3] > b[1]);
-      const share = Math.round((1 - covered(boxes)) * 100) / 100;
+      const share = round2(1 - covered(boxes));
       if (share < 0.02) continue;
-      if (last && last.share === share && Math.abs(last.to - clip.timelineIn) < 0.05) { last.to = Math.round(clipEnd(clip) * 1000) / 1000; last.clips++; }
-      else found.push(last = { from: Math.round(clip.timelineIn * 1000) / 1000, to: Math.round(clipEnd(clip) * 1000) / 1000, clipId: clip.id, clips: 1, share });
+      if (last && last.share === share && Math.abs(last.to - clip.timelineIn) < 0.05) { last.to = round3(clipEnd(clip)); last.clips++; }
+      else found.push(last = { from: round3(clip.timelineIn), to: round3(clipEnd(clip)), clipId: clip.id, clips: 1, share });
     }
   }
   found.sort((a, b) => a.from - b.from);
@@ -160,7 +157,7 @@ export function insetsToLook(before: Timeline | null, after: Timeline, media: re
     return {
       mediaId: sorted[0]!.mediaId, trackId, clips: sorted.length,
       crop: [t.cropLeft, t.cropTop, 1 - t.cropRight, 1 - t.cropBottom],
-      at: [...new Set(picks.map(c => Math.round((c.sourceIn + (c.sourceOut - c.sourceIn) / 2) * 1000) / 1000))],
+      at: [...new Set(picks.map(c => round3(c.sourceIn + (c.sourceOut - c.sourceIn) / 2)))],
     };
   });
 }

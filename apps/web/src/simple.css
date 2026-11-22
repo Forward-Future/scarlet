@@ -258,11 +258,14 @@
 .media-hover { display: flex; align-self: stretch; align-items: center; }
 .media-hover-card { display: none; position: absolute; z-index: 30; top: 100%; right: 8px; padding-top: 6px; }
 .media-hover:not([data-dismissed]):is(:hover, :focus-within) .media-hover-card { display: block; }
-.media-hover-card > .card { width: min(19rem, calc(100vw - 16px)); display: flex; flex-direction: column; gap: 7px; padding: 9px 11px; font-size: 12px; box-shadow: 0 3px 12px rgb(0 0 0 / 30%); }
-.media-hover-card strong { font-weight: 600; }
-.media-hover-card .simple-link { align-self: flex-start; }
-.media-hover-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; }
-.media-hover-row progress { grid-column: 1 / -1; width: 100%; }
+.media-hover-card > .card { width: max-content; min-width: 15.5rem; max-width: min(19rem, calc(100vw - 16px)); display: flex; flex-direction: column; gap: 9px; padding: 10px 12px; font-size: 12px; line-height: 1.35; box-shadow: 0 3px 12px rgb(0 0 0 / 30%); }
+.media-hover-job { display: flex; flex-direction: column; gap: 5px; }
+.media-hover-row, .media-hover-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.media-hover-row strong { font-weight: 600; }
+.media-hover-foot { font-size: 11.5px; }
+.media-hover-card .btn-quiet { flex: none; padding: 3px 6px; margin: -3px -6px -3px 0; font-size: 12px; border-radius: 6px; }
+.media-hover-card .activity-progress { margin-top: 0; }
+.media-hover-card > .card > .media-hover-row + .activity-progress { margin-top: -4px; }
 .progress-line { position: absolute; left: 8px; right: 8px; bottom: 1px; height: 2px; border-radius: 1px; overflow: hidden;
   background: var(--color-line); pointer-events: none; }
 .progress-line > span { display: block; height: 100%; border-radius: 1px; background: var(--color-muted); transition: width 1s linear; }

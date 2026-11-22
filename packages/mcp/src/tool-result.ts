@@ -3,12 +3,30 @@
  * says what a result was answered without.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod/v3";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { ScarletApiError } from "@scarlet/shared";
+import { ScarletApiError, type ScarletToolName } from "@scarlet/shared";
 import { OpError } from "@scarlet/timeline";
 
 export type ToolResult = CallToolResult;
+
+export type ToolRegistrar = <Shape extends z.ZodRawShape>(
+  name: ScarletToolName,
+  description: string,
+  shape: Shape,
+  handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>,
+) => void;
+
+/** Race `work` against a non-ref'd timeout, aborting the timer as soon as either settles. */
+export async function raceTimeout<T, F>(work: Promise<T>, ms: number, fallback: F): Promise<T | F> {
+  const timer = new AbortController();
+  try {
+    return await Promise.race([work, delay(ms, fallback, { signal: timer.signal, ref: false })]);
+  } finally {
+    timer.abort();
+  }
+}
 
 export class MediaPreparing extends Error {}
 

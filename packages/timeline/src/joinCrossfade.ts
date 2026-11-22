@@ -1,7 +1,7 @@
-import { makeMediaClip, makeTrack } from "./builders.js";
+import { detachedAudioClip, makeTrack } from "./builders.js";
 import { applyOps, type TimelineOp } from "./ops.js";
 import type { MediaAsset, MediaClip, Timeline, Track } from "./schema.js";
-import { clipDuration, clipEnd } from "./time.js";
+import { clipDuration, clipEnd, isGlobalRippleDelete, uniqueId } from "./time.js";
 
 /**
  * Centered audio-only crossfades at dialogue joins. Each side of a join reaches half the overlap into its real source
@@ -114,12 +114,9 @@ function crossfadePlanner(timeline: Timeline, assets: Map<string, MediaAsset> | 
           added.add(target.id);
           ops.push({ op: "addTrack", track: makeTrack("audio", `${track.name} dialogue`, target.id) });
         }
-        let id = `${clip.id}_audio`;
-        while (ids.has(id)) id += "_";
+        const id = uniqueId(`${clip.id}_audio`, ids);
         ids.add(id);
-        const copy = makeMediaClip(clip.mediaId, patch.sourceIn, patch.sourceOut, patch.timelineIn, {
-          id, label: clip.label, speed: clip.speed, effects: clip.effects, volume: clip.volume, audioFadeIn, audioFadeOut,
-        });
+        const copy = detachedAudioClip(clip, id, patch);
         ops.push({ op: "addClip", trackId: target.id, clip: copy }, { op: "updateClip", clipId: clip.id, patch: { volume: 0 } });
       }
       return ops;
@@ -213,7 +210,7 @@ export function replayJoinFades(timeline: Timeline, fades: readonly JoinFade[], 
 export function rippleJoins(ops: ReadonlyArray<Record<string, unknown>>): number[] {
   let joins: number[] = [];
   for (const op of ops) {
-    if (op.op !== "rippleDelete" || op.trackIds !== undefined || typeof op.start !== "number" || typeof op.end !== "number") continue;
+    if (!isGlobalRippleDelete(op)) continue;
     const { start, end } = op;
     joins = joins.map(j => j >= end ? j - (end - start) : j > start ? start : j);
     joins.push(start);

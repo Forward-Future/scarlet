@@ -231,6 +231,37 @@ pub fn plan_event(steps: &[PlanStep]) -> RunnerEvent {
     RunnerEvent::with("plan", text, serde_json::json!({ "steps": list }))
 }
 
+/// Emit a `plan` event when `steps` differs from the last sent plan.
+/// When `suppress_initial_empty` is true, an initial empty plan is not emitted.
+pub fn record_plan(last: &mut Option<Vec<PlanStep>>, steps: Vec<PlanStep>, suppress_initial_empty: bool) -> Option<RunnerEvent> {
+    let unchanged = match last.as_ref() {
+        Some(sent) => sent == &steps,
+        None => suppress_initial_empty && steps.is_empty(),
+    };
+    if unchanged {
+        return None;
+    }
+    let event = plan_event(&steps);
+    *last = Some(steps);
+    Some(event)
+}
+
+/// Extract a non-empty string slice from an optional JSON value.
+pub fn non_empty_str(v: Option<&Value>) -> Option<&str> {
+    v.and_then(Value::as_str).filter(|s| !s.is_empty())
+}
+
+/// Extract a trimmed, non-empty string from an optional JSON value.
+pub fn trimmed_str(v: Option<&Value>) -> Option<String> {
+    v.and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+/// Drop `null` entries from a JSON object map before attaching it to an event.
+pub fn prune_nulls(mut m: serde_json::Map<String, Value>) -> Value {
+    m.retain(|_, v| !v.is_null());
+    Value::Object(m)
+}
+
 /// How to launch the Scarlet MCP stdio server for one task.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct McpSpec {
@@ -294,9 +325,8 @@ pub fn question_words(input: Option<&Value>) -> Option<String> {
 
 /// Strip the MCP namespace prefix for display: mcp__scarlet__timeline_get -> scarlet.timeline_get
 pub fn pretty_tool_name(name: &str) -> String {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = RE.get_or_init(|| regex::Regex::new(r"^mcp__([^_]+(?:_[^_]+)*?)__(.+)$").unwrap());
-    if let Some(m) = re.captures(name) {
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^mcp__([^_]+(?:_[^_]+)*?)__(.+)$").unwrap());
+    if let Some(m) = RE.captures(name) {
         return format!("{}.{}", &m[1], &m[2]);
     }
     if let Some(rest) = name.strip_prefix("mcp_scarlet_") {

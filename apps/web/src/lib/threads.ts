@@ -1,5 +1,5 @@
 import { closingCheckFailed, taskDialogueOperation, matchesEdit, noteThread, DialogueScanPage, requestText, taskRecoveryAction, taskWasStopped, type Task, type TaskEvent, type Thread, type ThreadEdit } from "@scarlet/shared";
-import { clock } from "./format";
+import { clock, parseTimestamp } from "./format";
 import { cutSummary, dialogueReceipt, mergeRanges, rangesOverlap, reviewReasons, type TimeRange, type Author, type Change, type Note } from "@scarlet/timeline";
 import { appliedEditSummary } from "../components/review/cutReviewDetails";
 import { editConfirmation, taskChatText } from "./taskActivity";
@@ -55,7 +55,6 @@ const RECHECK_WORDS = "The footage here changed after you approved it. Recheckin
 const REDO_WAITS = "The video changed while this suggestion was waiting. I’ll redo it on the video as it is now.";
 const REDOING = "The video changed while this suggestion was waiting. I’m redoing it on the video as it is now.";
 const legacyInterruption = "The agent was interrupted after saving its proposed changes. You can review them here.";
-const ts = (x?: string) => Date.parse(x ?? "") || 0;
 
 function taskForChange(tasks: Task[], change: Change) {
   return tasks.find(t => t.id === change.taskId) ?? tasks.find(t => t.changeIds.includes(change.id));
@@ -74,7 +73,7 @@ export function firstCutDeliveries(thread: Thread): Map<string, FirstCutDelivery
     // The engine can save the applied cuts and an optional draft within the same millisecond.
     const order = new Map(attempts.flatMap(t => t.changeIds).map((id, index) => [id, index]));
     const changes = thread.changes.filter(c => taskForChange(attempts, c)).sort((a, b) =>
-      ts(a.createdAt) - ts(b.createdAt) || (order.get(a.id) ?? -1) - (order.get(b.id) ?? -1));
+      parseTimestamp(a.createdAt) - parseTimestamp(b.createdAt) || (order.get(a.id) ?? -1) - (order.get(b.id) ?? -1));
     const change = changes.findLast(c => c.state === "approved" || c.state === "ready");
     const lastChange = changes.at(-1);
     const preparing = runIsActive(task) ||
@@ -286,7 +285,7 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
         : c.state === "failed" ? "I couldn’t prepare the preview for this edit."
         : dialogueReceipt(c) ?? finalSummary ?? description ?? "I prepared a version for you to review.";
       const at = c.state === "approved" ? c.updatedAt ?? c.createdAt
-        : finalReply && ts(task.finishedAt) > ts(c.createdAt) ? task.finishedAt : c.createdAt;
+        : finalReply && parseTimestamp(task.finishedAt) > parseTimestamp(c.createdAt) ? task.finishedAt : c.createdAt;
       out.push({ kind: "change", taskId: task?.id, at: at ?? "", change: c, text });
       const completion = editConfirmation(summary, request, "full");
       if (task && completion && completion !== text && c.state === "approved" && finalSummary) {
@@ -326,6 +325,6 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
         author: reply.author ?? { type: "agent", id: asked?.agent, name: asked?.agent ?? "Scarlet", model: asked?.model } });
     }
   }
-  out.sort((a, b) => ts(a.at) - ts(b.at));
+  out.sort((a, b) => parseTimestamp(a.at) - parseTimestamp(b.at));
   return { entries: out };
 }

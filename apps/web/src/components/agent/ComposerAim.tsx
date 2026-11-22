@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { isComposing } from "../../lib/hotkeys";
+import { usePopoverDismiss } from "../../lib/uiHooks";
 import { useUiStore } from "../../stores/ui";
 import { Icon } from "../ui/primitives";
 
@@ -30,27 +30,7 @@ export function ComposerAim({ items, disabled, disabledReason }: {
     return () => setLit(false);
   }, [hovered, focused, open, setLit]);
 
-  useEffect(() => {
-    if (!open) return;
-    const dismissOutside = (event: Event) => {
-      if (!group.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const dismissOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || isComposing(event)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      setOpen(false);
-      trigger.current?.focus({ preventScroll: true });
-    };
-    document.addEventListener("pointerdown", dismissOutside, true);
-    document.addEventListener("focusin", dismissOutside);
-    document.addEventListener("keydown", dismissOnEscape, true);
-    return () => {
-      document.removeEventListener("pointerdown", dismissOutside, true);
-      document.removeEventListener("focusin", dismissOutside);
-      document.removeEventListener("keydown", dismissOnEscape, true);
-    };
-  }, [open]);
+  usePopoverDismiss(open, group, trigger, () => setOpen(false));
 
   const showLabel = `Show ${additional.map(item => item.name).join(" and ")}`;
   const clear = (item: AimItem) => <button type="button" className="composer-aim-clear" disabled={disabled}

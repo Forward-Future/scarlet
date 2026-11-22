@@ -2,9 +2,9 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writePrivateFile } from "../private-files.js";
-import { briefInput, COMPACTED, CONTROL_DIR, DEFAULT_STALL_MS, isQuestionTool, planEvent, prettyToolName, questionText, workspaceEnv, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
-import { earlyResult, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
-import { addUsage, claudeUsage, usageWithModel } from "./usage.js";
+import { briefInput, COMPACTED, CONTROL_DIR, DEFAULT_STALL_MS, isQuestionTool, nextPlanEvent, prettyToolName, questionText, workspaceEnv, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
+import { earlyResult, exitError, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
+import { addUsage, claudeUsage, createUsageReporter, usageWithModel } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
 
 /**
@@ -81,10 +81,10 @@ function planResult(plan: ClaudePlanState, id: string, failed: boolean, content:
 function planChange(plan: ClaudePlanState): RunnerEvent[] {
   if (Object.values(plan.calls).some(call => "create" in call)) return [];
   const steps = plan.steps.map(({ text, state }) => ({ text, state }));
-  const now = JSON.stringify(steps);
-  if (now === (plan.sent ?? "[]")) return [];
-  plan.sent = now;
-  return [planEvent(steps)];
+  const next = nextPlanEvent(steps, plan.sent ?? "[]");
+  if (!next) return [];
+  plan.sent = next.serialized;
+  return [next.event];
 }
 
 export interface ClaudeParseState {
@@ -350,7 +350,7 @@ export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> 
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_ENTRYPOINT;
   env.MCP_TOOL_TIMEOUT = mcpToolTimeout(env.MCP_TOOL_TIMEOUT);
-  let sentUsage: string | undefined;
+  const reportUsage = createUsageReporter(opts.onUsage, opts.model);
 
   const handle = spawnLines(cmd.file, cmd.args, {
     cwd: opts.cwd,
@@ -366,12 +366,7 @@ export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> 
         opts.onEvent(ev);
       }
       // The run's tokens so far, each time they grow, as the other runners and the desktop host report them.
-      const usage = claudeRunUsage(st, opts.model);
-      const seen = usage && JSON.stringify(usage);
-      if (usage && seen !== sentUsage) {
-        sentUsage = seen;
-        opts.onUsage?.(usage);
-      }
+      reportUsage(claudeRunUsage(st, opts.model));
       if (st.shouldStop) {
         st.shouldStop = false;
         // The question is posted, or there are no tools; stop the agent instead of letting it ramble.
@@ -388,7 +383,7 @@ export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> 
   return {
     ok,
     summary: st.result || tailSummary(st.texts),
-    error: ok ? undefined : mcpFailed ? MCP_FAILED : st.resultIsError ? st.result : `claude exited with code ${outcome.code}${outcome.stderr ? `: ${outcome.stderr.trim().slice(-800)}` : ""}`,
+    error: ok ? undefined : mcpFailed ? MCP_FAILED : st.resultIsError ? st.result : exitError("claude", outcome),
     exitCode: outcome.code,
     resumeFailed: !ok && !!opts.resumeSession && !st.started || undefined,
     ...session,

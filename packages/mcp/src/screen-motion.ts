@@ -2,7 +2,8 @@
  * Where a recording's picture changes on a version of the edit: the engine's second-by-second reading of the recording
  * (`/screen-motion`), carried through the clips that play it and run together where the same area keeps changing.
  */
-import { clipEnd, type MediaClip, type Timeline } from "@scarlet/timeline";
+import { clipEnd, sourceToTimeline, type MediaClip, type Timeline } from "@scarlet/timeline";
+import { round2, round3 } from "./analysis.js";
 
 /** A second of a recording, from `at`, and the areas that changed in it: [left, top, right, bottom, share of the frame]. */
 export interface MotionSecond { at: number; areas: Array<[number, number, number, number, number]> }
@@ -71,7 +72,7 @@ const overlap = (a: Box, b: Box) => {
   if (w <= 0 || h <= 0) return 0;
   return w * h / Math.min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]));
 };
-const r2 = (n: number) => Math.round(n * 100) / 100, r3 = (n: number) => Math.round(n * 1000) / 1000;
+const r2 = round2, r3 = round3;
 
 /**
  * The spans of change on a version, for each recording in `seconds` whose picture plays. Seconds in a row whose largest
@@ -83,12 +84,11 @@ export function motionSpans(tl: Timeline, seconds: ReadonlyMap<string, readonly 
     .sort((a, b) => a.timelineIn - b.timelineIn);
   const spans: MotionSpan[] = [];
   for (const clip of clips) {
-    const speed = clip.speed ?? 1;
     let open: MotionSpan | undefined;
     for (const second of seconds.get(clip.mediaId)!) {
       if (second.at + 1 <= clip.sourceIn || second.at >= clip.sourceOut) continue;
-      const from = Math.max(clip.timelineIn, clip.timelineIn + (second.at - clip.sourceIn) / speed);
-      const to = Math.min(clipEnd(clip), clip.timelineIn + (second.at + 1 - clip.sourceIn) / speed);
+      const from = Math.max(clip.timelineIn, sourceToTimeline(clip, second.at));
+      const to = Math.min(clipEnd(clip), sourceToTimeline(clip, second.at + 1));
       if (range && (to < range.start || from > range.end)) continue;
       if (!second.areas.length) continue;
       const big = second.areas.filter(a => a[4] >= SMALL), small = second.areas.filter(a => a[4] < SMALL);

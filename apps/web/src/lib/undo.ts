@@ -2,9 +2,10 @@ import { create } from "zustand";
 import type { EditRef, Task } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
 import { appLog, errorName } from "./appLog";
-import { api } from "./client";
+import { api, errorMessage } from "./client";
 import { unkeepEdits, type KeptRef } from "./keptEdits";
 import { lastAttempt } from "./requestRuns";
+import { isActiveTask } from "./taskRun";
 
 /**
  * What ⌘Z takes back, newest last: the editor's Keeps and the revisions they sent, in this window's session. Each
@@ -80,8 +81,6 @@ export function undoWords(step: UndoStep) {
 
 const stepWord = (step: UndoStep) => step.kind === "keep" ? step.word : step.word ?? "revision";
 
-const working = new Set<Task["state"]>(["queued", "claimed", "running", "waiting_for_user"]);
-
 /**
  * Take back the newest step in this project. A Keep is taken back here and on the engine, and the edit waits on the
  * editor again. A revision still waiting or under way is stopped; one that landed is taken out again: an applied
@@ -125,7 +124,7 @@ async function undoRevision(taskId: string, project: { changes: readonly Change[
   }
   const latest = lastAttempt(first, project.tasks) ?? first;
   // Taken back, the request's words are withdrawn: the check reading them for a rule stops too, which Stop doesn't do.
-  if (working.has(latest.state)) await api.cancelTask(latest.id, false, true);
+  if (isActiveTask(latest.state)) await api.cancelTask(latest.id, false, true);
   const made = project.changes.filter(c => c.taskId && attempts.has(c.taskId))
     .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
   // A revision of a pass or a suggestion made a new version of it. Once that went into the video it carries the whole
@@ -144,6 +143,6 @@ async function undoRevision(taskId: string, project: { changes: readonly Change[
 }
 
 function reason(error: unknown) {
-  const text = error instanceof Error ? error.message : String(error);
+  const text = errorMessage(error);
   return text.charAt(0).toLowerCase() + text.slice(1);
 }

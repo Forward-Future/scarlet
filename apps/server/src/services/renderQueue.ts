@@ -1,117 +1,41 @@
 import { mkdirSync, rmSync, statSync } from "node:fs";
-import { quietProgress } from "./progressSave.js";
-import { createHash } from "node:crypto";
-import { basename, join } from "node:path";
-import { DELIVERY_AUDIO_REVISION, lutFileStamps, MissingFilterError, missingTextFilterMessage, NO_DRAWTEXT, PROXY_CLOCK_REVISION, RENDER_REVISION, segmentKey, snapRange,
-  usesRevisedProxyClock } from "@scarlet/render";
-import type { Render, RenderKind } from "@scarlet/shared";
-import { clipEnd, intervalCandidates, newId, planPlaybackSegments, planTransitions, sha256, spanningSections, stableStringify, timelineDuration, type Clip, type Project, type Timeline, type TimeRange, type TransitionJoin } from "@scarlet/timeline";
-import { engineIsAlive, type Ctx } from "../context.js";
-import { conflict, HttpError } from "../errors.js";
+import { join } from "node:path";
+import type { Render } from "@scarlet/shared";
+import { newId, spanningSections, stableStringify, timelineDuration, type Project, type TimeRange } from "@scarlet/timeline";
+import type { Ctx } from "../context.js";
 import { now } from "../db.js";
+import { conflict } from "../errors.js";
 import { clip, logId } from "../logText.js";
 import type { RenderEncoding } from "../render/adapter.js";
 import { recordRenderFinished } from "../telemetry/events.js";
-import { prepareSourceProxies } from "./sourcePreviews.js";
-import { resolveTimeline } from "./timeline.js";
-import { editorFirst } from "./editorFirst.js";
+import { errorMessage } from "../util.js";
 import { logActivity } from "./activity.js";
+import { editorFirst } from "./editorFirst.js";
+import { quietProgress } from "./progressSave.js";
+import {
+  assemblyRevision,
+  computeRenderContentKey,
+  isVideoExport,
+  playbackCoverage,
+  renderFailure,
+  renderKeyFor,
+  renderOutputFormat,
+  renderVersionSections,
+  resolveRenderVersion,
+  sameQueuedSource,
+  windowRenderVersion,
+  workerAlive,
+  workerPid,
+  type RenderFormat,
+  type RenderInput,
+  type RenderVersion,
+} from "./renderKeys.js";
+import { prepareSourceProxies } from "./sourcePreviews.js";
 
-export interface RenderInput {
-  projectId: string;
-  version: string;
-  kind: RenderKind;
-  range: TimeRange | null;
-  quality: "preview" | "delivery";
-  /** A viewer may need this playback fragment next. Its bytes are identical to an opened fragment. */
-  speculative?: boolean;
-  changeId?: string;
-  exportOptions?: Render["exportOptions"];
-}
-
-interface RenderVersion {
-  timeline: Timeline;
-  duration: number;
-  sourceIds: Set<string>;
-  hasLut: boolean;
-  fullKeys: Map<string, string>;
-  clipsIn?: Array<(start: number, end: number) => Clip[]>;
-  /** Where each clip is: its track, and its place there, which is its stacking order. */
-  clipsById?: Map<string, { track: number; index: number; clip: Clip }>;
-  hasTransitions: boolean;
-  /**
-   * The version's transition joins, indexed by time. Planned once: the version never changes, and only its sources'
-   * lengths and the frame rate, named by `key`, could change the plan.
-   */
-  joins?: { key: string; overlapping: (start: number, end: number) => TransitionJoin[] };
-  windows: Map<string, { timeline: Timeline; sourceIds: Set<string> }>;
-  /** The version's playback sections at a frame rate. Empty when the timeline is past the planning limits. */
-  sections?: { fps: number; ranges: TimeRange[] };
-}
-
-/**
- * What a playback section reads: the section as asked and the frame-snapped range its cache key names. Older queued
- * sections can have a saved format or endpoints that aren't on a frame, so neither is assumed to hold the other.
- */
-function playbackCoverage(range: TimeRange, fps: number): TimeRange {
-  const snapped = snapRange(range, fps);
-  return { start: Math.min(snapped.start, range.start), end: Math.max(snapped.end, range.end) };
-}
-
-function workerAlive(ctx: Ctx, pid?: number): boolean {
-  return !!pid && engineIsAlive(ctx, pid);
-}
-
-/** The engine working on a pending render. A released export keeps its demand mark for the next engine to adopt. */
-function workerPid(render: Pick<Render, "queuePid" | "demandPid" | "export">): number | undefined {
-  return render.export ? render.queuePid : render.queuePid ?? render.demandPid;
-}
-
-/**
- * Why a render failed, in words the editor can act on. ffmpeg's own output, and the filter graph the renderer adds to
- * it, names files by their place in Scarlet's library and means nothing to the editor: that stays in the log. The
- * queue's own reasons, such as a source that changed while the render waited, are sentences already.
- * `sources`: the files the render read, by the names the editor gave them.
- */
-function renderFailure(error: unknown, sources: ReadonlyArray<{ name: string; file: string }>, what: string): string {
-  if (error instanceof HttpError || error instanceof MissingFilterError) return error.message;
-  const said = `${error instanceof Error ? error.message : String(error)}\n${(error as { stderr?: unknown } | undefined)?.stderr ?? ""}`;
-  // The renderer checks for drawtext before it draws captions. Anything else that asks for it says so here.
-  if (NO_DRAWTEXT.test(said)) return missingTextFilterMessage("draw the video’s captions");
-  if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOSPC" || /no space left on device/i.test(said))
-    return "There isn’t enough free disk space to render this: free some space, then try again.";
-  // Every source is Scarlet's own copy in the project's files. Only the one ffmpeg names is the one it couldn't use.
-  const named = sources.find(source => said.includes(source.file) || said.includes(basename(source.file)));
-  const present = (file: string) => { try { return !!statSync(file, { throwIfNoEntry: false })?.size; } catch { return false; } };
-  if (named && !present(named.file)) return `Scarlet can’t find “${named.name}” in this project’s files: export the logs from Settings → Advanced to report it.`;
-  if (named && /invalid data|moov atom not found|error opening input|permission denied/i.test(said))
-    return `Scarlet can’t read “${named.name}” in this project’s files: export the logs from Settings → Advanced to report it.`;
-  return `Scarlet couldn’t render ${what}: try once more, or export the logs from Settings → Advanced to report it.`;
-}
-
-type RenderFormat = { height: number; hwaccel: NonNullable<Render["hwaccel"]> };
-
-function isVideoExport(input: Pick<Render, "kind" | "quality">): boolean {
-  return input.kind === "export" || (input.kind === "full" && input.quality === "delivery");
-}
+export type { RenderInput } from "./renderKeys.js";
 
 const yieldCacheWorker = Symbol("yield cache worker");
 enum Priority { Playback, Requested, Preparation, FullCache }
-// An assembly can expire independently of its encoded picture sections.
-function assemblyRevision(input: Pick<Render, "kind" | "quality">): string {
-  if (isVideoExport(input)) return `-mix${DELIVERY_AUDIO_REVISION}`;
-  return input.kind === "full" ? "-pts1" : "";
-}
-
-// Old assemblies can be rebuilt against the same sources after a delivery mix or proxy clock upgrade.
-function sameQueuedSource(previousKey: string, currentKey: string | undefined, assembly: string): boolean {
-  if (!currentKey) return false;
-  if (currentKey === previousKey) return true;
-  const priorAssembly = assembly.startsWith("-mix") ? previousKey.replace(/-mix3(?=-clock\d+$|$)/, "") : previousKey;
-  const priorSourceKey = priorAssembly.replace(/-clock2$/, "");
-  return [currentKey, currentKey.replace(assembly, "")].some(key =>
-    key === priorAssembly || key === priorSourceKey + `-clock${PROXY_CLOCK_REVISION}`);
-}
 
 /**
  * In-process render queue. Concurrency comes from settings.render.concurrency.
@@ -152,6 +76,15 @@ export class RenderQueue {
     });
   }
 
+  private assertQueuedSourceUnchanged(render: Render, project: Project, currentKey = this.contentKeyOf(render, project), assembly = assemblyRevision(render)): void {
+    const previousKey = render.previewContentKey;
+    if (!previousKey) return;
+    if (!sameQueuedSource(previousKey, currentKey, assembly) &&
+        !sameQueuedSource(previousKey, this.contentKeyOf(render, project, true), assembly)) {
+      throw conflict("render_source_changed", "A source changed after this render was queued. Request a new render.");
+    }
+  }
+
   /**
    * Replay persisted jobs only after change-render completion listeners are installed.
    * `inherited`: an engine that was killed had the process id this one was then given, so the renders under it are that engine's.
@@ -180,7 +113,7 @@ export class RenderQueue {
             try {
               rmSync(join(this.ctx.paths.renders(render.projectId), `${render.id}.mp4`), { force: true });
             } catch (error) {
-              this.ctx.log(`[render] ${render.id} couldn’t remove the file its engine left unfinished: ${(error as Error).message}`);
+              this.ctx.log(`[render] ${render.id} couldn’t remove the file its engine left unfinished: ${errorMessage(error)}`);
             }
           }
           continue;
@@ -197,18 +130,12 @@ export class RenderQueue {
             const saved = { ...this.ctx.repos.projects.get(render.projectId)!, settings: render.projectSettings };
             const input: RenderInput = { ...render, quality: render.quality ?? "preview" };
             const mode = render.previewContentKey?.startsWith("local-v1-") ? "local" : undefined;
-            if (render.previewContentKey) {
-              const originalKey = this.contentKeyOf(render, saved);
-              if (!sameQueuedSource(render.previewContentKey, originalKey, assemblyRevision(render)) &&
-                  !sameQueuedSource(render.previewContentKey, this.contentKeyOf(render, saved, true), assemblyRevision(render))) {
-                throw conflict("render_source_changed", "A source changed after this render was queued. Request a new render.");
-              }
-            }
-            const format = this.outputFormat(saved, input, render.height);
+            this.assertQueuedSourceUnchanged(render, saved);
+            const format = renderOutputFormat(this.ctx, saved, input, render.height);
             render = { ...render, ...format, key: this.keyFor(saved, input, format),
               previewContentKey: this.renderContentKey(saved, input, format, mode) };
           } catch (error) {
-            this.finish(render.id, { state: "failed", error: (error as Error).message, finishedAt: now() });
+            this.finish(render.id, { state: "failed", error: errorMessage(error), finishedAt: now() });
             continue;
           }
         }
@@ -224,70 +151,12 @@ export class RenderQueue {
     this.pump();
   }
 
-  private outputHeight(projectHeight: number, input: RenderInput): number {
-    if (input.kind === "export") return Math.min(projectHeight, input.exportOptions?.height ?? projectHeight);
-    return input.quality === "delivery" ? projectHeight : Math.min(this.ctx.settings().render.previewHeight, projectHeight);
-  }
-
-  private outputFormat(project: Pick<Project, "settings">, input: RenderInput,
-    height = this.outputHeight(project.settings.height, input)): RenderFormat {
-    // The editor's choice holds for exports too: "none" encodes in software, a named device uses that one.
-    return { height, hwaccel: this.ctx.settings().render.hwaccel };
-  }
-
-  keyFor(project: Pick<Project, "settings">, input: RenderInput, format = this.outputFormat(project, input)): string {
-    const key = sha256(
-      stableStringify({
-        renderer: RENDER_REVISION,
-        ...(input.kind === "full" && input.quality === "delivery" ? { programAudio: 1 } : {}),
-        ...(input.kind === "export" ? { exportOptions: input.exportOptions } : {}),
-        version: input.version,
-        range: input.range,
-        kind: input.kind,
-        quality: input.quality,
-        projectId: input.projectId,
-        settings: { project: project.settings, ...format },
-      }),
-    );
-    return key + assemblyRevision(input);
+  keyFor(project: Pick<Project, "settings">, input: RenderInput, format?: RenderFormat): string {
+    return renderKeyFor(this.ctx, project, input, format);
   }
 
   private version(project: Pick<Project, "id" | "head">, version: string): RenderVersion {
-    const key = JSON.stringify([project.id, version === "head" ? project.head : version]);
-    const previous = this.versions.get(key);
-    if (previous) {
-      this.versions.delete(key);
-      this.versions.set(key, previous);
-      return previous;
-    }
-    const timeline = resolveTimeline(this.ctx, project, version);
-    const sourceIds = new Set<string>();
-    let hasLut = false;
-    let hasTransitions = false;
-    for (const track of timeline.tracks) for (const clip of track.clips) {
-      if (clip.kind !== "media" || clip.enabled === false) continue;
-      sourceIds.add(clip.mediaId);
-      if (clip.effects.some(effect => effect.enabled && effect.type === "lut")) hasLut = true;
-      if (track.kind === "video" && !track.hidden && clip.transitionIn) hasTransitions = true;
-    }
-    const entry: RenderVersion = { timeline, duration: timelineDuration(timeline), sourceIds, hasLut, hasTransitions, fullKeys: new Map(), windows: new Map() };
-    // A proposal can enqueue a new version within its own database transaction.
-    // Reviewing a cut plays the working cut, the call's version and the one before it in turn: keep all of them planned.
-    this.ctx.db.afterCommit(() => {
-      this.versions.set(key, entry);
-      if (this.versions.size > 4) this.versions.delete(this.versions.keys().next().value!);
-    });
-    return entry;
-  }
-
-  private sections(entry: RenderVersion, project: Pick<Project, "settings">): TimeRange[] {
-    const fps = project.settings.fps;
-    if (entry.sections?.fps !== fps) {
-      let ranges: TimeRange[] = [];
-      try { ranges = planPlaybackSegments(project, entry.timeline); } catch { /* Too long to plan: no file is assembled from sections. */ }
-      entry.sections = { fps, ranges };
-    }
-    return entry.sections.ranges;
+    return resolveRenderVersion(this.ctx, this.versions, project, version);
   }
 
   /**
@@ -295,53 +164,7 @@ export class RenderQueue {
    * preview and the cut player cache, so a window beside one already played encodes only the sections around its join.
    */
   sectionWindow(project: Pick<Project, "id" | "settings">, version: string, range: TimeRange): TimeRange {
-    return spanningSections(this.sections(this.version({ id: project.id, head: null }, version), project), range) ?? range;
-  }
-
-  /** The clips a transition joins inside `range`, both sides of each join, wherever those clips start or end. */
-  private transitionClips(entry: RenderVersion, range: TimeRange, project?: Project) {
-    const clips = new Set<string>();
-    if (!project || !entry.hasTransitions) return clips;
-    const sources = project.media.filter(asset => entry.sourceIds.has(asset.id)).map(asset => [asset.id, asset.kind, asset.duration ?? null]);
-    const key = stableStringify([project.settings.fps, sources]);
-    if (entry.joins?.key !== key) {
-      const { joins } = planTransitions(entry.timeline, new Map(project.media.map(asset => [asset.id, asset])), project.settings.fps);
-      entry.joins = { key, overlapping: intervalCandidates(joins, join => join.start, join => join.end) };
-    }
-    for (const join of entry.joins.overlapping(range.start, range.end)) {
-      if (join.start >= range.end || join.end <= range.start || join.start === join.end) continue;
-      clips.add(join.clipId);
-      if (join.outgoingClipId) clips.add(join.outgoingClipId);
-    }
-    return clips;
-  }
-
-  private window(entry: RenderVersion, range: TimeRange, project?: Project) {
-    const transitionClips = this.transitionClips(entry, range, project);
-    const key = JSON.stringify([range, [...transitionClips]]);
-    const cached = entry.windows.get(key);
-    if (cached) return cached;
-    const clipsIn = entry.clipsIn ??= entry.timeline.tracks.map(track => intervalCandidates(track.clips, clip => clip.timelineIn, clipEnd));
-    const sourceIds = new Set<string>();
-    const tracks = entry.timeline.tracks.map((track, i) => {
-      let candidates = clipsIn[i]!(range.start, range.end);
-      if (transitionClips.size) {
-        // A join's clips can lie outside the window: the picture before it has ended, or the next one hasn't begun.
-        const where = entry.clipsById ??= new Map(entry.timeline.tracks.flatMap((t, track) => t.clips.map((clip, index) => [clip.id, { track, index, clip }] as const)));
-        const extra = [...transitionClips].map(id => where.get(id)).filter(found => found?.track === i && !candidates.includes(found.clip));
-        if (extra.length) candidates = [...candidates, ...extra.map(found => found!.clip)].sort((a, b) => where.get(a.id)!.index - where.get(b.id)!.index);
-      }
-      const clips = candidates.filter(clip => {
-        if (clip.enabled === false || (!transitionClips.has(clip.id) && (clip.timelineIn >= range.end || clipEnd(clip) <= range.start))) return false;
-        if (clip.kind === "media") sourceIds.add(clip.mediaId);
-        return true;
-      });
-      return { ...track, clips };
-    });
-    const part = { timeline: { ...entry.timeline, tracks }, sourceIds };
-    entry.windows.set(key, part);
-    if (entry.windows.size > 4) entry.windows.delete(entry.windows.keys().next().value!);
-    return part;
+    return spanningSections(renderVersionSections(this.version({ id: project.id, head: null }, version), project), range) ?? range;
   }
 
   private projectFor(input: Pick<RenderInput, "projectId" | "kind" | "range" | "version"> & { projectSettings?: Project["settings"] }) {
@@ -350,62 +173,12 @@ export class RenderQueue {
     if (!header) return null;
     const entry = this.version(header, input.version);
     if (entry.hasTransitions) return this.ctx.repos.projects.get(input.projectId);
-    const { sourceIds } = this.window(entry, playbackCoverage(input.range, (input.projectSettings ?? header.settings).fps));
+    const { sourceIds } = windowRenderVersion(entry, playbackCoverage(input.range, (input.projectSettings ?? header.settings).fps));
     return { ...header, media: this.ctx.repos.projects.assets(header.id, sourceIds) };
   }
 
-  private renderContentKey(project: Project, input: RenderInput, output: Pick<Render, "height" | "hwaccel"> = this.outputFormat(project, input), mode?: "local" | "export", legacyTransitions = false): string | undefined {
-    if (input.kind === "export") {
-      const source = this.renderContentKey(project, { ...input, kind: "full", range: null },
-        output, "export", legacyTransitions);
-      return source && "export-v1-" + sha256(stableStringify([source, input.version, input.range, input.exportOptions])) + assemblyRevision(input);
-    }
-    const full = input.kind === "full" && input.range === null;
-    if (!full && ((input.kind !== "segment" && input.kind !== "playback") || input.quality !== "preview" || !input.range)) return undefined;
-    const entry = this.version(project, input.version);
-    const range = full ? { start: 0, end: entry.duration } : snapRange(input.range!, project.settings.fps);
-    if (range.end <= range.start) return undefined;
-    const settings = this.ctx.settings().render;
-    const format = { quality: input.quality, height: output?.height ?? this.outputHeight(project.settings.height, input),
-      encoder: output?.hwaccel ?? settings.hwaccel };
-    const { timeline, sourceIds } = full ? entry : this.window(entry, range, legacyTransitions ? undefined : project);
-    const root = this.ctx.paths.media(project.id);
-    const assets = project.media.filter(asset => sourceIds.has(asset.id)).sort((a,b) => a.id.localeCompare(b.id));
-    const luts = entry.hasLut ? lutFileStamps(timeline, root) : [];
-    let local = mode !== undefined || !!luts.length || sourceIds.size !== assets.length;
-    const files = assets.map(asset => {
-      let file;
-      try { file = statSync(join(root, asset.path), { throwIfNoEntry: false }); } catch { /* Record unavailable inputs. */ }
-      const stamp = asset.fingerprintStamp;
-      if (!asset.hash || !file?.isFile() || (stamp && (file.size !== stamp.size || file.ctimeMs !== stamp.ctimeMs || file.mtimeMs !== stamp.mtimeMs))) local = true;
-      return [asset.id, asset.hash ?? null, asset.path, file?.size, file?.mtimeMs, file?.ctimeMs];
-    });
-    const pictureInputs = assets.map(a => [a.width, a.height, a.fps, a.hasAlpha, a.previewClock, a.originalPlaybackType]);
-    const originals = { ...project, media: assets.map(asset => ({ ...asset, hash: asset.id })) };
-    const stamps = files.map(([id, _hash, ...file]) => [id, ...file]);
-    const clockSuffix = () => mode !== "export" && input.quality === "preview" &&
-      usesRevisedProxyClock(originals, timeline, range, format.height) ? `-clock${PROXY_CLOCK_REVISION}` : "";
-    if (full) {
-      // The source files and their mutable catalog rows need checking on every use. The
-      // immutable version's track serialization and digest can be reused after that check.
-      const signature = createHash("sha256").update(stableStringify([mode, project.settings, format, files, assets, luts, legacyTransitions])).digest("hex");
-      const previous = entry.fullKeys.get(signature);
-      if (previous) return previous;
-      const content = segmentKey(local ? originals : project, timeline, range, format, undefined, legacyTransitions);
-      const material: unknown[] = ["full-program-v1", project.id, input.quality, content, local ? stamps : files, timeline.tracks];
-      material.push(pictureInputs);
-      if (local) material.push(input.version, luts);
-      const prefix = local ? "local-v1-" : "full-v1-";
-      const assembly = mode === "export" ? "" : assemblyRevision(input);
-      const key = prefix + createHash("sha256").update(stableStringify(material)).digest("hex") + assembly + clockSuffix();
-      entry.fullKeys.set(signature, key);
-      if (entry.fullKeys.size > 4) entry.fullKeys.delete(entry.fullKeys.keys().next().value!);
-      return key;
-    }
-    // Playback of a newly imported recording can overlap its background hash. The source
-    // path and physical stamp identify its bytes both before and after that hash arrives.
-    const content = segmentKey(originals, timeline, range, format, undefined, legacyTransitions);
-    return "range-v2-" + sha256(stableStringify([input.kind, input.projectId, input.range, content, stamps, luts, pictureInputs])) + clockSuffix();
+  private renderContentKey(project: Project, input: RenderInput, output?: Pick<Render, "height" | "hwaccel">, mode?: "local" | "export", legacyTransitions = false): string | undefined {
+    return computeRenderContentKey(this.ctx, this.versions, project, input, output, mode, legacyTransitions);
   }
 
   inspectionKey(project: Project, version: string) {
@@ -464,7 +237,7 @@ export class RenderQueue {
     const project = this.projectFor(input);
     if (!project) throw new Error(`project ${input.projectId} not found`);
     if (project.mediaPaused && input.kind === "full" && input.quality === "preview") throw conflict("media_paused", "Resume caching to cache this edit.");
-    const format = this.outputFormat(project, input);
+    const format = renderOutputFormat(this.ctx, project, input);
     const key = this.keyFor(project, input, format);
     const previewContentKey = this.renderContentKey(project, input, format);
     const kept = owner && save ? { ...save, owner } : undefined;
@@ -679,7 +452,7 @@ export class RenderQueue {
       const editorWaits = priority === Priority.Playback ? editorFirst.hold() : undefined;
       this.ctx.track(
         editorFirst.run(() => this.backgroundCaches.has(id), () => this.run(id, AbortSignal.any([ac.signal, this.ctx.shutdown])))
-          .catch((e) => this.ctx.log(`[render] ${id} crashed: ${(e as Error).message}`))
+          .catch((e) => this.ctx.log(`[render] ${id} crashed: ${errorMessage(e)}`))
           .finally(() => {
             editorWaits?.();
             // Release durable work only after the cancelled encoder has closed its file.
@@ -724,9 +497,8 @@ export class RenderQueue {
       if (oldRange || oldFull || previousKey) {
         const assembly = assemblyRevision(render);
         const currentKey = this.contentKeyOf(render, project);
-        if (previousKey && !(oldRange && currentKey) && !sameQueuedSource(previousKey, currentKey, assembly) &&
-            !sameQueuedSource(previousKey, this.contentKeyOf(render, project, true), assembly)) {
-          throw conflict("render_source_changed", "A source changed after this render was queued. Request a new render.");
+        if (previousKey && !(oldRange && currentKey)) {
+          this.assertQueuedSourceUnchanged(render, project, currentKey, assembly);
         }
         const upgradeAssembly = assembly && !render.key.endsWith(assembly);
         if (upgradeAssembly || currentKey !== previousKey) {
@@ -745,7 +517,7 @@ export class RenderQueue {
       }
       const entry = this.version(project, render.version);
       // The window holds what is rendered, the section as asked, and the frame-snapped range its cache key names.
-      const scope = render.kind === "playback" && render.range ? this.window(entry, playbackCoverage(render.range, project.settings.fps), project) : entry;
+      const scope = render.kind === "playback" && render.range ? windowRenderVersion(entry, playbackCoverage(render.range, project.settings.fps), project) : entry;
       const { timeline } = scope;
       read = scope.sourceIds;
       // Later preview sections of this cut read small proxies instead of the originals.
@@ -783,13 +555,13 @@ export class RenderQueue {
       } else {
         const range = render.range ?? { start: 0, end: timelineDuration(timeline) };
         const sections = render.kind === "segment" && (render.quality ?? "preview") === "preview" && render.range
-          ? spanningSections(this.sections(entry, project), range) : undefined;
+          ? spanningSections(renderVersionSections(entry, project), range) : undefined;
         // A preview window on whole sections is assembled from the section cache: only what isn't cached is encoded.
         const assembled = sections && Math.abs(sections.start - range.start) < 1e-6 && Math.abs(sections.end - range.end) < 1e-6 &&
           await this.ctx.render.renderFullCached(project, timeline, this.ctx.paths.segments(project.id), output,
             { ...opts, exportRange: sections, concurrency: 1 }).then(() => true, (error: unknown) => {
             if (signal.aborted) throw error;
-            this.ctx.log(`[render] ${id} couldn’t assemble its window from sections, rendering it whole: ${clip(error instanceof Error ? error.message : String(error), 300)}`);
+            this.ctx.log(`[render] ${id} couldn’t assemble its window from sections, rendering it whole: ${clip(errorMessage(error), 300)}`);
             rmSync(output, { force: true });
             return false;
           });
@@ -814,7 +586,7 @@ export class RenderQueue {
       }
     } catch (e) {
       if (signal.aborted) return;
-      const message = e instanceof Error ? e.message : String(e);
+      const message = errorMessage(e);
       this.ctx.log(`[render] ${id} failed: ${message}`);
       const media = project ? this.ctx.paths.media(project.id) : "";
       const sources = (project?.media ?? []).filter(asset => read.has(asset.id))

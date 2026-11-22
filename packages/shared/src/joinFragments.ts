@@ -1,3 +1,5 @@
+import { firstIndexBy } from "@scarlet/timeline";
+
 /** A transcript word as a join reads it: where it sounds in its recording, and whether the transcript ends a sentence on it. */
 export interface SaidWord { text: string; start: number; end: number;
   /** The transcript closes a sentence here: the word ends in a full stop, question or exclamation mark, or is the last of its segment. */
@@ -54,12 +56,8 @@ export function joinFragment(words: readonly SaidWord[], out: number, inn: numbe
   if (!(inn > out)) return undefined;
   const middle = (w: SaidWord) => (w.start + w.end) / 2;
   // `words` are in the order they sound, by their middles. The first one the join removes, and the first one played after it.
-  let lo = 0, hi = words.length;
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (middle(words[mid]!) < out) lo = mid + 1; else hi = mid; }
-  const firstRemoved = lo;
-  hi = words.length;
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (middle(words[mid]!) < inn) lo = mid + 1; else hi = mid; }
-  const firstKept = lo;
+  const firstRemoved = firstIndexBy(words, w => middle(w) >= out);
+  const firstKept = firstRemoved + firstIndexBy(words.slice(firstRemoved), w => middle(w) >= inn);
   if (firstKept === firstRemoved) return undefined;
   const lastKept = firstRemoved - 1;
   const played = (i: number) => i >= 0 && i < words.length && middle(words[i]!) >= from && middle(words[i]!) < to;

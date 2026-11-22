@@ -48,6 +48,16 @@ export function absTime(iso?: string): string {
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
 }
 
+/** Parse an ISO timestamp to epoch ms, returning 0 when absent or invalid. */
+export function parseTimestamp(iso?: string | null): number {
+  return Date.parse(iso ?? "") || 0;
+}
+
+/** Last path segment across POSIX and Windows separators, falling back to the input string. */
+export function fileBaseName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path;
+}
+
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   const first = parts[0];
@@ -143,6 +153,11 @@ export function lengthLabel(seconds: number): string {
 /** How much a cut took out: "−0.4 s", "−12 s", "−3:41". */
 export function removedSeconds(seconds: number): string {
   return `−${lengthLabel(seconds)}`;
+}
+
+/** How much a cut edit took out, or undefined when the edit removed no footage. */
+export function editRemovedLabel(edit: { beforeCut?: { removed: { start: number; end: number } } }): string | undefined {
+  return edit.beforeCut ? removedSeconds(edit.beforeCut.removed.end - edit.beforeCut.removed.start) : undefined;
 }
 
 /** Playback position with millisecond precision. Round once so carries reach the clock. */

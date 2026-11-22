@@ -1,5 +1,5 @@
 import type { MediaAsset, MediaClip, Timeline, TimeRange } from "./schema.js";
-import { clipEnd, sourceToTimeline, timelineToSource } from "./time.js";
+import { carriesAudio, clipEnd, findClipLocation, sourceToTimeline, timelineToSource } from "./time.js";
 
 /** Two audible clips playing the same moment of the same recording at once, which the mix sums. */
 export interface DoubledSound {
@@ -53,7 +53,7 @@ function heardClips(timeline: Timeline, media: ReadonlyMap<string, Audio>): Map<
     for (const clip of track.clips) {
       if (clip.kind !== "media" || clip.enabled === false || !(clip.volume > 0)) continue;
       const asset = media.get(clip.mediaId);
-      if (!asset || (asset.kind !== "video" && asset.kind !== "audio") || asset.hasAudio === false) continue;
+      if (!asset || !carriesAudio(asset)) continue;
       const heard = byMedia.get(clip.mediaId) ?? [];
       const start = clip.timelineIn, end = clipEnd(clip);
       heard.push({ clip, start, end, source: { start: timelineToSource(clip, start), end: timelineToSource(clip, end) } });
@@ -132,13 +132,9 @@ interface Stretch { start: number; end: number; before: number; after: number; c
 
 /** Whether `next` has `clip` as `before` had it: same place, same piece of the same recording, same volume. */
 function unchanged(before: Timeline | null, next: Timeline, clip: MediaClip): boolean {
-  const where = (tl: Timeline) => {
-    for (const track of tl.tracks) for (const c of track.clips) if (c.id === clip.id) return { track: track.id, c };
-    return undefined;
-  };
-  const was = before && where(before), now = where(next);
-  if (!was || !now || was.track !== now.track || was.c.kind !== "media") return false;
-  const c = was.c;
+  const was = before && findClipLocation(before, clip.id), now = findClipLocation(next, clip.id);
+  if (!was || !now || was.track.id !== now.track.id || was.clip.kind !== "media") return false;
+  const c = was.clip;
   return c.mediaId === clip.mediaId && c.sourceIn === clip.sourceIn && c.sourceOut === clip.sourceOut &&
     c.timelineIn === clip.timelineIn && (c.speed ?? 1) === (clip.speed ?? 1) && c.volume === clip.volume &&
     (c.enabled !== false) === (clip.enabled !== false);

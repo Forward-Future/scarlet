@@ -3,6 +3,7 @@ import { desktop } from "../lib/desktop";
 import type { User } from "@scarlet/shared";
 import { api, connectDesktopEngine, errorMessage, IS_MOCK, serverUrl } from "../lib/client";
 import { appLog } from "../lib/appLog";
+import { resumeAllImports } from "../components/media/importQueue";
 
 /** The native shell supplies the local engine address and its session token. */
 type Status = "idle" | "loading" | "ready" | "offline";
@@ -53,7 +54,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       void import("../lib/exportJobs").then(jobs => jobs.resumeExports())
         .catch(error => appLog("error", "resume-exports", { error: errorMessage(error) }, { level: "warn" }));
       // And the imports, in every project that has files still to copy.
-      void import("../components/media/UploadDropzone").then(imports => imports.resumeAllImports())
+      void resumeAllImports()
         .catch(error => appLog("error", "resume-imports", { error: errorMessage(error) }, { level: "warn" }));
     } catch (err) {
       if (current !== attempt) return;

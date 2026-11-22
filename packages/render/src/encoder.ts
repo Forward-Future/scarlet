@@ -1,4 +1,9 @@
-import { FfmpegError, failureReason, ffmpegEncoders, fnum, resolveFfmpeg, runCapture } from "./exec.js";
+import { FFMPEG_BASE_ARGS, FfmpegError, failureReason, ffmpegEncoders, fnum, resolveFfmpeg, runCapture } from "./exec.js";
+
+export const PROGRAM_AUDIO_BITRATE = "192k";
+export const BEST_AUDIO_BITRATE = "320k";
+export const COMPRESSED_AUDIO_BITRATE = "128k";
+export const PROXY_AUDIO_BITRATE = "96k";
 
 export type RenderQuality = "preview" | "delivery";
 export type HwAccel = "none" | "auto" | "nvenc" | "qsv" | "amf" | "videotoolbox";
@@ -33,7 +38,7 @@ function probeEncoder(name: string, format: VideoFormat, quality: RenderQuality,
   let promise = encoderProbe.get(key);
   if (!promise) {
     const test = async (args: string[], cacheKey: string) => {
-      await runCapture(bin, ["-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i",
+      await runCapture(bin, [...FFMPEG_BASE_ARGS, "-f", "lavfi", "-i",
         `color=c=black:s=${dimensions}:r=${fnum(format.fps)}`, "-frames:v", "1",
         "-c:v", name, ...args, "-pix_fmt", pixelFormat, "-f", "null", "-"]);
       return { name, args, cacheKey, pixelFormat };

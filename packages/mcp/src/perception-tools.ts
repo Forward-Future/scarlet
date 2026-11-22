@@ -3,20 +3,17 @@
  * playback order, a deterministic audit of each join, version diffs and a per-media profile.
  */
 import { z } from "zod/v3";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { ScarletApiError, type ProjectDetail, type ScarletClient, type ScarletToolName, type WaveformResponse } from "@scarlet/shared";
+import { ScarletApiError, type ProjectDetail, type ScarletClient, type WaveformResponse } from "@scarlet/shared";
 import { timelineDuration, type Project, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
 import { auditJoin, formatTimelineTranscript, heardOnlyVerbatim, joinTook, newJoins, timelineJoins, timelineWords, type HeardOnly, type JoinAudit, type TimelineJoin, type TimelineWord } from "./timeline-perception.js";
 import { pictureEntranceReader } from "./picture-entrance.js";
 import { levelProfile, pauseStats, retakeGroups } from "./media-profile.js";
-import { json, noteEvidenceMiss, text } from "./tool-result.js";
-import { OTHER_INPUT } from "./analysis.js";
+import { json, noteEvidenceMiss, text, type ToolRegistrar } from "./tool-result.js";
+import { requireMediaAsset } from "./media-state.js";
+import { OTHER_INPUT, pct1 } from "./analysis.js";
 import { screenReadings, type ScreenLine } from "./screen-reading.js";
 import { motionSpans, type DetailFrame, type MotionSecond } from "./screen-motion.js";
 import type { RecordingCut } from "./brief-pictures.js";
-
-type ToolRegistrar = <Shape extends z.ZodRawShape>(name: ScarletToolName, description: string, shape: Shape,
-  handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<CallToolResult>) => void;
 
 interface PerceptionDeps {
   tool: ToolRegistrar;
@@ -161,6 +158,7 @@ export function registerPerception(deps: PerceptionDeps) {
       evidence: {
         lines: new Map(text.reads.map(({ id, read }) => [id, read.spans])),
         seconds: new Map(motion.reads.map(({ id, read }) => [id, read.seconds])),
+        motionRead: new Set(motion.reads.filter(({ read }) => read.done).map(({ id }) => id)),
         detail: new Map(motion.reads.map(({ id, read }) => [id, read.detail ?? []])),
         cuts: new Map(cuts.reads.map(({ id, read }) => [id, read.cuts])),
         words: transcripts.size ? timelineWords(tl, transcripts, range) : [],
@@ -323,8 +321,7 @@ export function registerPerception(deps: PerceptionDeps) {
     { mediaId: z.string(), from: z.number().min(0).optional(), to: z.number().min(0).optional() },
     async ({ mediaId, from, to }) => {
       const { project } = await deps.getProject();
-      const asset = project.media.find(m => m.id === mediaId);
-      if (!asset) throw new Error(`Media ${mediaId} is not in this project. Use project_get for media ids.`);
+      const asset = requireMediaAsset(project, mediaId);
       if (asset.kind !== "audio" && !asset.hasAudio) throw new Error(`Media ${mediaId} has no audio to profile.`);
       if (!asset.duration) throw new Error(`Media ${mediaId} has no duration yet; it may still be importing. Retry after project_get shows it.`);
       const lo = from ?? 0, hi = Math.min(to ?? asset.duration, asset.duration);
@@ -363,8 +360,7 @@ export function registerPerception(deps: PerceptionDeps) {
       offset: z.number().int().min(0).default(0) },
     async ({ mediaId, from, to, query, offset }) => {
       const { project } = await deps.getProject();
-      const asset = project.media.find(m => m.id === mediaId);
-      if (!asset) throw new Error(`Media ${mediaId} is not in this project. Use project_get for media ids.`);
+      const asset = requireMediaAsset(project, mediaId);
       if (asset.kind !== "video") throw new Error(`Media ${mediaId} is ${asset.kind}: only a video has a picture to read.`);
       const qs = new URLSearchParams({ ...(from !== undefined && { from: String(from) }), ...(to !== undefined && { to: String(to) }), ...(query && { q: query }) }).toString();
       const read = await client.get<{ from: number; to: number; readSeconds: number; done: boolean; error?: string;
@@ -391,7 +387,7 @@ export function registerPerception(deps: PerceptionDeps) {
       const found = await readingsOn(tl, project, range, { mediaId, wait: 20 });
       if (!found) return text(`Version ${tl.version} plays no transcribed speech.`);
       const { readings, ids, unread } = found;
-      const pct = (box: readonly number[]) => box.map(n => Math.round(n * 1000) / 10);
+      const pct = (box: readonly number[]) => box.map(pct1);
       const page = readings.slice(offset, offset + 100), left = readings.length - offset - page.length;
       return json({ version: tl.version, range: [range.start, range.end], recordings: ids, readings: readings.length,
         ...(unread.length && { reading: unread }),
@@ -410,11 +406,10 @@ export function registerPerception(deps: PerceptionDeps) {
       const [tl, { project }] = await Promise.all([deps.peekTimeline(version ?? "head"), deps.getProject()]);
       const range = { start: from ?? 0, end: to ?? timelineDuration(tl) };
       const { spans, ids, unread } = await motionOn(tl, project, range, { mediaId, wait: 20 });
-      const pct = (n: number) => Math.round(n * 1000) / 10;
       const page = spans.slice(offset, offset + 150), left = spans.length - offset - page.length;
       return json({ version: tl.version, range: [range.start, range.end], recordings: ids, spans: spans.length,
         ...(unread.length && { reading: unread }),
-        list: page.map(m => ({ from: m.from, to: m.to, mediaId: m.mediaId, box: m.box.map(pct), share: pct(m.share), ...(m.small && { small: m.small.map(p => p.map(pct)) }) })),
+        list: page.map(m => ({ from: m.from, to: m.to, mediaId: m.mediaId, box: m.box.map(pct1), share: pct1(m.share), ...(m.small && { small: m.small.map(p => p.map(pct1)) }) })),
         ...(left > 0 && { next: `offset ${offset + page.length} for the next ${Math.min(150, left)}` }) });
     });
 
@@ -426,8 +421,7 @@ export function registerPerception(deps: PerceptionDeps) {
       offset: z.number().int().min(0).default(0) },
     async ({ mediaId, from, to, track, offset }) => {
       const { project } = await deps.getProject();
-      const asset = project.media.find(m => m.id === mediaId);
-      if (!asset) throw new Error(`Media ${mediaId} is not in this project. Use project_get for media ids.`);
+      const asset = requireMediaAsset(project, mediaId);
       if (asset.kind !== "video") throw new Error(`Media ${mediaId} is ${asset.kind}: only a video has faces to find.`);
       const qs = new URLSearchParams({ ...(from !== undefined && { from: String(from) }), ...(to !== undefined && { to: String(to) }) }).toString();
       const read = await client.get<{ from: number; to: number; width?: number; height?: number; readSeconds: number; done: boolean; error?: string;
@@ -451,8 +445,7 @@ export function registerPerception(deps: PerceptionDeps) {
       seconds: z.number().min(5).max(120).optional().describe("Length of each stretch, default 30") },
     async ({ mediaId, from, to, count, seconds }) => {
       const { project } = await deps.getProject();
-      const asset = project.media.find(m => m.id === mediaId);
-      if (!asset) throw new Error(`Media ${mediaId} is not in this project. Use project_get for media ids.`);
+      const asset = requireMediaAsset(project, mediaId);
       if (asset.kind !== "video") throw new Error(`Media ${mediaId} is ${asset.kind}: only a video has a picture to keep time with its sound.`);
       const qs = new URLSearchParams({ ...(from !== undefined && { from: String(from) }), ...(to !== undefined && { to: String(to) }),
         ...(count !== undefined && { count: String(count) }), ...(seconds !== undefined && { seconds: String(seconds) }) }).toString();

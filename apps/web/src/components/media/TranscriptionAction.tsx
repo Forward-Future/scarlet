@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { MediaAsset } from "@scarlet/timeline";
 import { api, errorMessage } from "../../lib/client";
-import { transcriptionPaused, transcriptionProgressLabel, transcriptionTasks } from "../../lib/transcriptionProgress";
+import { isRunningTranscriptionTask, transcriptionPaused, transcriptionProgressLabel, transcriptionTasks } from "../../lib/transcriptionProgress";
 import { isPreparingMedia } from "../../lib/upload";
 import { absTime } from "../../lib/format";
 import { useProjectStore } from "../../stores/project";
@@ -72,7 +72,7 @@ export function ImportTranscriptionNotice({ policy }: { policy: ReturnType<typeo
 function useTranscriptionRun(asset: MediaAsset) {
   const current = useProjectStore((s) => s.current);
   const tasks = current ? transcriptionTasks(current.tasks, current.media, asset) : [];
-  const running = tasks.findLast((t) => ["queued", "claimed", "running"].includes(t.state));
+  const running = tasks.findLast(isRunningTranscriptionTask);
   const latest = tasks.reduce<(typeof tasks)[number] | undefined>((a, b) => !a || (b.createdAt ?? "") > (a.createdAt ?? "") ? b : a, undefined);
   const mediaPaused = !!current?.project.mediaPaused;
   return { running, latest, mediaPaused, paused: transcriptionPaused(latest, mediaPaused) };

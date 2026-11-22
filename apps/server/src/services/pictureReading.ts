@@ -6,12 +6,15 @@
  */
 import { randomUUID } from "node:crypto";
 import { closeSync, openSync, writeSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileInDirectory, screenFrames } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
+import { atomicWriteFile, rememberLast, round3 } from "../util.js";
 import { pictureDecoder, pictureLane } from "./pictureWork.js";
+
+export { rememberLast };
 
 export type VideoMedia = MediaAsset & { projectId: string };
 
@@ -53,7 +56,7 @@ interface Recording<W> {
 }
 
 /** Seconds or a fraction to the thousandth, as readings report them. */
-export const r3 = (n: number) => Math.round(n * 1000) / 1000;
+export const r3 = round3;
 
 /** Mean grey of each cell of a cols × rows grid over the frame, from every `step`th pixel each way. */
 export function pictureGrid(rgb: Buffer, width: number, height: number, cols = 32, rows = 18, step = 2): Float32Array {
@@ -73,20 +76,6 @@ export function pictureGrid(rgb: Buffer, width: number, height: number, cols = 3
 /** Recordings whose reading state a reader keeps. */
 const MAX_RECORDINGS = 32;
 
-/**
- * Put `value` in a map kept to `limit` entries as the most recently used, letting go of the least recently used first.
- * An entry `busy` says is in use stays, even past the limit.
- */
-export function rememberLast<K, V>(map: Map<K, V>, key: K, value: V, limit: number, busy: (value: V) => boolean = () => false): V {
-  map.delete(key);
-  for (const [other, old] of map) {
-    if (map.size < limit) break;
-    if (!busy(old)) map.delete(other);
-  }
-  map.set(key, value);
-  return value;
-}
-
 /** A reader for one kind of reading. `read` answers a range of a video, reading what hasn't been read yet. */
 export function pictureReader<W>(spec: PictureReading<W>) {
   const recordings = new Map<string, Recording<W>>();
@@ -102,10 +91,8 @@ export function pictureReader<W>(spec: PictureReading<W>) {
   }
 
   async function save(ctx: Ctx, media: VideoMedia, kept: Kept<W>) {
-    const path = keptPath(ctx, media), temp = `${path}.${randomUUID()}.tmp`;
-    await mkdir(ctx.paths.waveforms(media.projectId), { recursive: true });
-    await writeFile(temp, JSON.stringify(kept));
-    await rename(temp, path);
+    const path = keptPath(ctx, media);
+    await atomicWriteFile(path, JSON.stringify(kept), `${path}.${randomUUID()}.tmp`);
   }
 
   function recordingFor(ctx: Ctx, media: VideoMedia) {

@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod/v3";
 import { AgentOptionId, type AgentAvailability, type ModelOptions } from "@scarlet/shared";
+import { hasApiKey } from "./detect.js";
+import { findAcpEffortOption, findAcpModelOption, isAcpAuthError } from "./runners/acp.js";
 import { spawnLines } from "./runners/spawn.js";
 
 export type CliAgent = "claude" | "codex" | "gemini";
@@ -112,7 +114,7 @@ export async function discoverModels(agent: CliAgent, file: string, env: NodeJS.
   let complete = false;
   let failure: ProbeFailure | undefined;
   const cursors = new Set<string>();
-  const hasGeminiApiKey = Boolean(env.GEMINI_API_KEY || env.GOOGLE_API_KEY);
+  const hasGeminiApiKey = hasApiKey("gemini", env);
   try {
     const fail = (reason: ProbeFailure) => {
       failure = reason;
@@ -142,7 +144,7 @@ export async function discoverModels(agent: CliAgent, file: string, env: NodeJS.
         if (rpc.data.error || !rpc.data.result) {
           if (agent === "gemini" && pendingStep === "session_new" && !triedApiKeyAuth && hasGeminiApiKey) {
             const errObj = rpc.data.error && typeof rpc.data.error === "object" ? rpc.data.error as { code?: number; message?: string } : undefined;
-            if (errObj?.code === -32000 || /auth/i.test(String(errObj?.message ?? ""))) {
+            if (isAcpAuthError(errObj?.code, String(errObj?.message ?? ""))) {
               triedApiKeyAuth = true;
               pendingStep = "authenticate";
               request("authenticate", { methodId: "gemini-api-key" });
@@ -172,10 +174,8 @@ export async function discoverModels(agent: CliAgent, file: string, env: NodeJS.
           const session = geminiSession.safeParse(rpc.data.result);
           if (!session.success) return fail("invalid_response");
           const configs = session.data.configOptions ?? [];
-          const modelConfig = configs.find(c => c.category === "model" || c.id === "model" || c.configId === "model");
-          const thoughtConfig = configs.find(c =>
-            c.category === "thought_level" || ["thought_level", "reasoning_effort", "thinking_level"].includes(c.id ?? c.configId ?? ""),
-          );
+          const modelConfig = findAcpModelOption(configs);
+          const thoughtConfig = findAcpEffortOption(configs);
           const sharedOptions: ModelOptions = {
             efforts: flattenAcpOptions(thoughtConfig?.options).map(o => ({
               id: o.value,

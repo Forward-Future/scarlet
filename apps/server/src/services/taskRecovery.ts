@@ -1,28 +1,34 @@
-import { toolAnnotations } from "@scarlet/mcp/annotations";
-import { beginRevision, DialogueScanPage, planText, taskNeedsTranscripts, taskPlan, taskRecoveryAction, type RunChoice, type Task } from "@scarlet/shared";
 import os from "node:os";
-import { mergeRanges, type Change, type TimeRange } from "@scarlet/timeline";
+import { beginRevision, planText, taskNeedsTranscripts, taskPlan, taskRecoveryAction, type RunChoice, type Task } from "@scarlet/shared";
 import { processIsAlive, type Ctx } from "../context.js";
 import { now } from "../db.js";
 import { conflict, notFound } from "../errors.js";
 import { logId } from "../logText.js";
-import { appendTaskEvent, cancelTask, createTask, dropWaitingLooks, FINISHED_TASK, hasTranscript, PROJECT_EDIT_KINDS, recordWorkThrough, RESUMABLE, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
 import { recordTaskFinished } from "../telemetry/events.js";
-import { prepareCutReview } from "./changes.js";
-import { skillEditEnded, startLearningCheck } from "./learnings.js";
-import { latestTranscription, startTranscription, transcribeForDialogue } from "./ingest.js";
 import { getTranscriptionProvider, presetLabel } from "../transcribe/index.js";
+import { errorMessage } from "../util.js";
+import { latestTranscription, startTranscription, transcribeForDialogue } from "./ingest.js";
+import { skillEditEnded, startLearningCheck } from "./learnings.js";
 import { runAttempts, runRoot } from "./runAttempts.js";
+import { recoveryInstruction, savedChanges } from "./taskRecap.js";
+import { appendTaskEvent, cancelTask, createTask, dropWaitingLooks, FINISHED_TASK, hasTranscript, PROJECT_EDIT_KINDS, recordWorkThrough, RESUMABLE, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
 
-/** The change row can be durable even if its id hasn't yet been copied onto the task. */
-function savedChanges(ctx: Ctx, tasks: Task[]) {
-  return ctx.repos.changes.select(`project_id = ? AND
-    (json_extract(json, '$.taskId') IN (SELECT value FROM json_each(?)) OR id IN (SELECT value FROM json_each(?)))`,
-    [tasks[0]!.projectId, JSON.stringify(tasks.map(t => t.id)), JSON.stringify(tasks.flatMap(t => t.changeIds))], "created_at, rowid");
-}
+export { recoveryInstruction } from "./taskRecap.js";
 
 /** A run that keeps losing its worker stops carrying on by itself after this many attempts, and waits for the editor. */
 const LOST_WORKER_ATTEMPTS = 3;
+
+function completedTranscriptAfter(ctx: Ctx, projectId: string, mediaId: string, since: string) {
+  return ctx.repos.transcripts.select(
+    "media_id = ? AND project_id = ? AND created_at > ? AND json_extract(json, '$.speakerAnalysis') IS NULL AND json_extract(json, '$.aligning') IS NULL",
+    [mediaId, projectId, since],
+    "created_at DESC LIMIT 1",
+  )[0];
+}
+
+function runChoiceOverride(choice: RunChoice) {
+  return choice.agent ? { agent: choice.agent, model: choice.model, effort: choice.effort, fast: choice.fast, serviceTier: choice.serviceTier } : {};
+}
 
 /**
  * Called with the write lock held, after the worker has stopped or surrendered the job. Scarlet stopped, not the
@@ -47,7 +53,7 @@ function reconcileTask(ctx: Ctx, task: Task, unstarted: boolean, quit: boolean, 
       ctx.db.savepoint(() => resumeTask(ctx, saved, {}));
       carriesOn = true;
     } catch (err) {
-      ctx.log(`[task] ${task.id} couldn’t resume by itself: ${(err as Error).message}`);
+      ctx.log(`[task] ${task.id} couldn’t resume by itself: ${errorMessage(err)}`);
     }
   }
   // A learning check reads one message and edits nothing, so one cut short by a quit starts again as it first did,
@@ -123,8 +129,7 @@ function settleTask(ctx: Ctx, task: Task, unstarted: boolean, lastSeen?: string 
     // Nor does one whose word alignment the run hadn't finished: it is saved when Whisper ends, and the run starts again to finish it.
     const media = task.context.mediaId && ctx.repos.projects.getMedia(task.context.mediaId);
     if (media && media.projectId === task.projectId) {
-      const [transcript] = ctx.repos.transcripts.select("media_id = ? AND project_id = ? AND created_at > ? AND json_extract(json, '$.speakerAnalysis') IS NULL AND json_extract(json, '$.aligning') IS NULL",
-        [media.id, media.projectId, task.createdAt ?? now()], "created_at DESC LIMIT 1");
+      const transcript = completedTranscriptAfter(ctx, media.projectId, media.id, task.createdAt ?? now());
       if (transcript) {
         const lastTranscription = { completedAt: transcript.createdAt, model: transcript.modelLabel ?? presetLabel(transcript.localModel) };
         const updated = ctx.repos.projects.putMedia(media.projectId, { ...media, transcriptId: transcript.id, lastTranscription }, media.status, media.error);
@@ -202,27 +207,27 @@ export function recoverTasks(ctx: Ctx, starting = false): void {
           ctx.bus.taskQueued({ taskId: id, projectId: task.projectId });
         });
       } catch (err) {
-        ctx.log(`[task] ${id} couldn’t be recovered and will be tried again: ${(err as Error).message}`);
+        ctx.log(`[task] ${id} couldn’t be recovered and will be tried again: ${errorMessage(err)}`);
       }
     }
     if (starting) {
       try {
         ctx.db.savepoint(() => returnRulesLeftWithQuestions(ctx));
       } catch (err) {
-        ctx.log(`[task] couldn’t return the rules left with questions: ${(err as Error).message}`);
+        ctx.log(`[task] couldn’t return the rules left with questions: ${errorMessage(err)}`);
       }
     }
   }, "immediate")();
   try {
     resumeTranscriptions(ctx);
   } catch (err) {
-    ctx.log(`[task] couldn’t continue interrupted transcriptions: ${(err as Error).message}`);
+    ctx.log(`[task] couldn’t continue interrupted transcriptions: ${errorMessage(err)}`);
   }
 }
 
 /** A worker still stopping keeps its claim until cleanup. Check its transcription again then. */
 export function resumeProjectTranscriptions(ctx: Ctx, projectId: string): void {
-  const running = ctx.repos.tasks.select("project_id = ? AND kind = 'transcribe' AND state = 'running'", [projectId]);
+  const running = ctx.repos.tasks.runningTranscriptions(projectId);
   for (const task of running) {
     const worker = ctx.transcriptions.get(task.id);
     const mediaId = task.context.mediaId;
@@ -230,7 +235,7 @@ export function resumeProjectTranscriptions(ctx: Ctx, projectId: string): void {
     void ctx.track(worker.done.catch(() => {
       if (!ctx.shutdown.aborted) resumeTranscriptions(ctx, projectId, mediaId);
     }).catch(err => {
-      ctx.log(`[task] ${task.id} couldn’t check whether its transcription should start again: ${(err as Error).message}`);
+      ctx.log(`[task] ${task.id} couldn’t check whether its transcription should start again: ${errorMessage(err)}`);
     }), projectId);
   }
   resumeTranscriptions(ctx, projectId);
@@ -272,105 +277,14 @@ function resumeTranscriptions(ctx: Ctx, projectId?: string, mediaId?: string): v
         ctx.db.transaction(() => saveTask(ctx, { ...task, interrupted: undefined }), "immediate")();
         continue;
       }
-      if (ctx.db.prepare(`SELECT 1 FROM transcripts WHERE media_id = ? AND project_id = ? AND created_at > ?
-        AND json_extract(json, '$.speakerAnalysis') IS NULL AND json_extract(json, '$.aligning') IS NULL LIMIT 1`)
-        .get(media.id, task.projectId, task.createdAt ?? "")) continue;
+      if (completedTranscriptAfter(ctx, task.projectId, media.id, task.createdAt ?? "")) continue;
       const { task: restarted, done } = startTranscription(ctx, task.projectId, media, chosen, "interrupt", { interrupted: task });
       ctx.track(done.catch(() => null), task.projectId);
       ctx.log(`[task] ${task.id} was interrupted; continuing transcription of ${media.id} as ${restarted.id}`);
     } catch (err) {
-      ctx.log(`[task] ${task.id} couldn’t restart its transcription: ${(err as Error).message}`);
+      ctx.log(`[task] ${task.id} couldn’t restart its transcription: ${errorMessage(err)}`);
     }
   }
-}
-
-/**
- * How many of a waiting pass's staged cuts have no recommendation yet. The run that staged them knew, and the one that
- * carries on is a new process that doesn't: without this it can finish with them unchecked, and they reach the
- * editor as calls Scarlet never looked at.
- */
-function unchecked(ctx: Ctx, change: Change): string {
-  if (change.state !== "ready") return "";
-  try {
-    const total = prepareCutReview(ctx, change).review?.cuts.length ?? 0;
-    const left = total - (change.cutAssessments?.filter(a => !a.provisional).length ?? 0);
-    return left > 0 ? ` ${left} of its ${total} staged cuts ${left === 1 ? "has" : "have"} no recommendation yet.` : "";
-  } catch {
-    return "";
-  }
-}
-
-/** The edits an attempt tried to save after its last saved change and Scarlet refused, newest last, each said once. */
-function refusedSinceLastSave(ctx: Ctx, attempt: Task): string[] {
-  const events = ctx.repos.taskEvents.list(attempt.id);
-  const lastSave = events.findLastIndex(e => e.type === "change");
-  const said = new Set<string>();
-  for (const ev of events.slice(lastSave + 1)) {
-    const tool = typeof ev.data?.tool === "string" ? ev.data.tool.replace(/^scarlet\./, "") : "";
-    if (ev.type !== "log" || ev.data?.kind !== "tool_refused" || !tool || toolAnnotations(tool).readOnlyHint) continue;
-    const reason = ev.text.replace(/^Error:\s*/, "").replace(/\s+/g, " ").trim();
-    said.delete(`${tool}: ${reason.slice(0, 400)}`);
-    said.add(`${tool}: ${reason.slice(0, 400)}`);
-  }
-  return [...said].slice(-3);
-}
-
-/**
- * What an attempt that resumes or retries `task` is told of the run so far. `current`: the attempt being told, when it
- * already exists, which isn't part of what came before it.
- */
-export function recoveryInstruction(ctx: Ctx, task: Task, rootId?: string, current?: string): string {
-  const run = rootId && runAttempts(task.projectId, rootId);
-  const attempts = run ? ctx.repos.tasks.select(run.where, run.params, "created_at, rowid").filter(t => t.id !== current) : [task];
-  const events = attempts.flatMap(t => ctx.repos.taskEvents.list(t.id, rootId ? "conversation" : "questionsAndAnswers"));
-  const lines = [attempts[0]!.instruction];
-  for (const ev of events) {
-    if (ev.type === "question") lines.push(`Agent asked: ${ev.text}`);
-    if (ev.type === "answer") lines.push(`Editor answered: ${ev.text}`);
-  }
-  if (!rootId) return lines.join("\n");
-  lines.push("", "Resume this interrupted request. Continue only the unfinished work: the saved changes below and their states say what is done. Keep saved proposals and honor the editor’s decisions, including rejected or partially approved edits.");
-  if (task.needsTranscripts?.length) {
-    const ready = task.needsTranscripts.filter(id => hasTranscript(ctx, id));
-    lines.push(`The previous attempt ended without the transcript of ${task.needsTranscripts.join(", ")}.${ready.length ? ` Ready now: ${ready.join(", ")}.` : ""}`);
-  }
-  const progress: string[] = [];
-  const scans = new Map<string, TimeRange[]>();
-  for (const ev of events.filter(e => e.type === "log" && e.data?.kind !== "tool_refused")) {
-    if (ev.data?.scanPage) {
-      const page = DialogueScanPage.safeParse(ev.data.scanPage);
-      if (page.success && page.data.to !== undefined) {
-        const { mediaId, from, to } = page.data;
-        const ranges = scans.get(mediaId) ?? [];
-        ranges.push({ start: from, end: to });
-        scans.set(mediaId, ranges);
-      }
-    } else {
-      progress.push(ev.text);
-    }
-  }
-  // A line said again and again in a row would fill the window and push out what came before it.
-  for (const text of progress.filter((t, i) => t !== progress[i - 1]).slice(-8)) lines.push(`Previous progress: ${text}`);
-  const plan = taskPlan(ctx.repos.taskEvents.list(task.id, "lastPlanOrAnswer"));
-  if (plan) lines.push("Your plan when it stopped:", planText(plan));
-  for (const [mediaId, ranges] of scans) {
-    lines.push(`Scanned source seconds on ${mediaId}: ${mergeRanges(ranges).map(r => `${r.start}–${r.end}`).join(", ")}`);
-  }
-  const unsaved = refusedSinceLastSave(ctx, attempts.at(-1)!);
-  if (unsaved.length) {
-    // A restart that lands just after a refused save leaves that work undone, and nothing in the saved changes says so
-    // (2026-11-18: the framing of a demo's last four minutes was refused, then the app restarted to update).
-    lines.push("Not saved when it stopped (Scarlet refused these after its last saved change, so that work is still to do):");
-    for (const text of unsaved) lines.push(`- ${text}`);
-  }
-  for (const c of savedChanges(ctx, attempts)) {
-    // Scarlet closes a proposal when a later part or a revision takes its cuts over. The editor didn't turn it down:
-    // a resumed pass that read fifteen such proposals as [rejected] kept 24 of the 27 cuts held for review, "as you
-    // chose earlier" (2026-11-13).
-    const state = c.state === "rejected" && c.replacedBy ? `replaced by ${c.replacedBy}, which holds its cuts now; the editor made no decision on it` : c.state;
-    lines.push(`Saved change ${c.id} [${state}], version ${c.appliedVersion ?? c.toVersion}: ${c.description}${unchecked(ctx, c)}`);
-  }
-  return lines.join("\n");
 }
 
 /**
@@ -401,7 +315,7 @@ function resumeTask(ctx: Ctx, task: Task, opts: { choice?: RunChoice; afterProje
   if (!action) throw conflict("not_retryable", "This request cannot be retried.");
   const resumeRootId = action === "resume" ? task.resumeRootId ?? id : undefined;
   // A new id fences off late events, proposals and completions from the previous worker.
-  const run = choice.agent ? { agent: choice.agent, model: choice.model, effort: choice.effort, fast: choice.fast, serviceTier: choice.serviceTier } : {};
+  const run = runChoiceOverride(choice);
   let retry = createTask(ctx, {
     ...task, ...run, state: "queued", instruction: recoveryInstruction(ctx, task, resumeRootId), resumeRootId,
     resumesAfterProjectStop: afterProjectStop || undefined, wordsRead: true,
@@ -447,8 +361,6 @@ function resumeTask(ctx: Ctx, task: Task, opts: { choice?: RunChoice; afterProje
   return retry;
 }
 
-const ACTIVE_TRANSCRIPTION = "kind = 'transcribe' AND state IN ('queued','claimed','running') AND json_extract(json, '$.context.mediaId') = ?";
-
 /**
  * The editor asked to finish a run that ended without its transcripts once they're ready, or stopped waiting.
  * Transcripts that aren't being made yet start now. A run whose transcripts are already ready resumes at once.
@@ -459,7 +371,7 @@ export function continueWhenReady(ctx: Ctx, id: string, on: boolean): { task: Ta
   if (on && taskNeedsTranscripts(before)) {
     // Starting a transcription takes its own write lock.
     for (const mediaId of before.needsTranscripts!) {
-      if (hasTranscript(ctx, mediaId) || ctx.repos.tasks.select(`project_id = ? AND ${ACTIVE_TRANSCRIPTION}`, [before.projectId, mediaId]).length) continue;
+      if (hasTranscript(ctx, mediaId) || ctx.repos.tasks.hasActiveTranscription(before.projectId, mediaId)) continue;
       const media = ctx.repos.projects.getMedia(mediaId);
       if (!media || media.projectId !== before.projectId || !transcribeForDialogue(ctx, before.projectId, media)) {
         throw conflict("transcription_unavailable", `Scarlet can’t transcribe ${media?.name ?? mediaId} now. Check Transcription in Settings, and that caching isn’t paused.`);
@@ -497,7 +409,7 @@ export function continueReadyRuns(ctx: Ctx, projectId?: string): Task[] {
       const last = latestTranscription(ctx, task.projectId, id);
       return last?.state === "failed" && !!last.interrupted;
     };
-    const stopped = pending.filter(id => !restarts(id) && !ctx.repos.tasks.count(`project_id = ? AND ${ACTIVE_TRANSCRIPTION}`, [task.projectId, id]));
+    const stopped = pending.filter(id => !restarts(id) && !ctx.repos.tasks.hasActiveTranscription(task.projectId, id));
     if (stopped.length) {
       ctx.log(`[task] ${task.id} stopped waiting: the transcript of ${stopped.join(", ")} ended without being saved`);
       saveTask(ctx, { ...task, continueWhenReady: undefined });
@@ -509,7 +421,7 @@ export function continueReadyRuns(ctx: Ctx, projectId?: string): Task[] {
       const retry = check(id);
       if (retry) resumed.push(retry);
     } catch (err) {
-      ctx.log(`[task] ${id} couldn’t check its transcripts: ${(err as Error).message}`);
+      ctx.log(`[task] ${id} couldn’t check its transcripts: ${errorMessage(err)}`);
     }
   }
   return resumed;
@@ -522,7 +434,7 @@ export function wireContinueWhenReady(ctx: Ctx) {
     try {
       continueReadyRuns(ctx, event.projectId);
     } catch (err) {
-      ctx.log(`[task] couldn’t check runs waiting for transcripts: ${(err as Error).message}`);
+      ctx.log(`[task] couldn’t check runs waiting for transcripts: ${errorMessage(err)}`);
     }
   });
 }

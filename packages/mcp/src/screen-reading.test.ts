@@ -88,17 +88,21 @@ describe("framingReport", () => {
     const changes = (...at: number[]) => at.map(s => ({ at: s, areas: [[0.1, 0.2, 0.4, 0.45, 0.05]] as Array<[number, number, number, number, number]> }));
     const words = said("I mean it's pretty cool to watch", 16, 1);
     const report = (lines: ScreenLine[], seconds: ReturnType<typeof changes>) =>
-      framingReport(before, after, media, canvas, [], [], { lines: new Map([["screen", lines]]), seconds: new Map([["screen", seconds]]), words })[0]!;
+      framingReport(before, after, media, canvas, [], [], { lines: new Map([["screen", lines]]), seconds: new Map([["screen", seconds]]), motionRead: new Set(["screen"]), words })[0]!;
 
     // The demo's title stays on screen to source 34, timeline 24, while the frame's area keeps moving from source 27.
     const stretch = report([demo, outside], changes(11, 27));
     expect(stretch.shownAfter).toEqual({ from: 15, to: 24, showing: ["Watermelon vs. rifle bullet"], said: "I mean it's pretty cool to watch" });
     // Before, the title came up at source 12, timeline 2, and the frame's area held still from then on.
-    expect(stretch.shownBefore).toEqual({ from: 2, to: 5, showing: ["Watermelon vs. rifle bullet"], unchanged: true });
+    expect(stretch.shownBefore).toEqual({ from: 2, to: 5, showing: ["Watermelon vs. rifle bullet"], unchanged: true, stillEverywhere: true });
     // A screen that moves on as the stretch ends has nothing beside it; text outside the frame doesn't count.
     expect(report([{ ...demo, end: 25 }, outside], changes(25)).shownAfter).toBeUndefined();
     // With no text, an area that holds still says so, up to where the camera's cut takes the clock past its change.
-    expect(report([], changes(11, 40)).shownAfter).toEqual({ from: 15, to: 25, unchanged: true, said: "I mean it's pretty cool to watch" });
+    expect(report([], changes(11, 40)).shownAfter).toEqual({ from: 15, to: 25, unchanged: true, stillEverywhere: true, said: "I mean it's pretty cool to watch" });
+    // A pointer moving outside the frame leaves the frame's area unchanged, but the recording isn't still everywhere: a
+    // capture that stopped holds every pixel.
+    const pointer = { at: 30, areas: [[0.7, 0.7, 0.72, 0.72, 0.001]] as Array<[number, number, number, number, number]> };
+    expect(report([], [...changes(11, 40), pointer]).shownAfter).toEqual({ from: 15, to: 25, unchanged: true, said: "I mean it's pretty cool to watch" });
   });
 
   it("names the passages read aloud off the recording beside a stretch while it is off picture", () => {

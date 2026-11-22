@@ -3774,6 +3774,40 @@ it("lists each restart and long silence its edit still plays, and leaves cutting
   expect(await finish()).toMatchObject({ state: "done", repeatAudit: { remaining: 0 } });
 });
 
+it("lists a piece under a second left between two cuts until the pass changes it or keeps it with its reason", async () => {
+  const { ctx } = workspace;
+  const { host } = await (await api("POST", "/hosts/register", { name: "Host", platform: "test", agents: [{ id: "codex", installed: true }] })).json();
+  const pass = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/first-cut-dialogue", createdBy: { type: "human", name: "Editor" } });
+  await api("POST", `/hosts/${host.id}/claim`, { taskId: pass.id });
+  await micSpeech();
+  // “…inside the browser today. Um. Wow. Okay. Next we add sound effects and music.”, with “Um.” and “Okay.” cut out
+  // apart: “Wow.” plays alone for 0.6 s between the two cuts.
+  const words = [["We", .2, .4], ["built", .4, .8], ["a", .8, .9], ["tiny", .9, 1.3], ["game", 1.3, 1.7], ["that", 1.8, 2], ["runs", 2, 2.4],
+    ["right", 2.4, 2.7], ["inside", 2.7, 3.2], ["the", 3.2, 3.3], ["browser", 3.3, 3.9], ["today.", 3.9, 4.6], ["Um.", 5.2, 5.5], ["Wow.", 6.1, 6.5],
+    ["Okay.", 6.9, 7.4], ["Next", 8.1, 8.4], ["we", 8.4, 8.6], ["add", 8.6, 8.9], ["sound", 8.9, 9.4], ["effects", 9.4, 9.9], ["and", 9.9, 10.1], ["music.", 10.1, 10.7]]
+    .map(([text, start, end]) => ({ text: text as string, start: start as number, end: end as number }));
+  const transcript = ctx.repos.transcripts.put({ id: "mic-words", projectId: project.id, mediaId: "mic", language: "en", provider: "whispercpp",
+    segments: [{ id: "seg", start: .2, end: 10.7, text: words.map(w => w.text).join(" "), words }], createdAt: new Date().toISOString() });
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "Mic", path: "mic.wav", kind: "audio", hasAudio: true, duration: 20, transcriptId: transcript.id }, "ready");
+  const version = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, description: "Lay in the take", ops: [
+    { op: "addClip", trackId: "a1", clip: { id: "one", kind: "media", mediaId: "mic", sourceIn: 0, sourceOut: 5, timelineIn: 0 } },
+    { op: "addClip", trackId: "a1", clip: { id: "two", kind: "media", mediaId: "mic", sourceIn: 6, sourceOut: 6.6, timelineIn: 5 } },
+    { op: "addClip", trackId: "a1", clip: { id: "three", kind: "media", mediaId: "mic", sourceIn: 8, sourceOut: 15, timelineIn: 5.6 } },
+  ] }).change.toVersion;
+  const check = async (body: Record<string, unknown>) => (await api("POST", projectsPath() + `/tasks/${pass.id}/repeat-audit`, { version, ...body })).json();
+  const found = await check({});
+  expect(found.shortPieces).toEqual([{ id: expect.any(String), from: 5, to: 5.6, seconds: .6, mediaId: "mic", source: { start: 6, end: 6.6 }, plays: "Wow.",
+    before: "runs right inside the browser today.", after: "Next we add sound effects and", cutBefore: 1, cutAfter: 1.4 }]);
+  // How short a piece plays as a stutter is the skill's pace: asked from half a second, it isn't counted.
+  const shorter = await check({ piecesUnder: .5 });
+  expect(shorter.shortPieces).toBeUndefined();
+  expect(shorter.remaining).toBe(found.remaining - 1);
+  // Kept with a reason, it is settled.
+  const kept = await check({ keep: [{ id: found.shortPieces[0].id, reason: "His reaction to the game loading." }] });
+  expect(kept.shortPieces).toBeUndefined();
+  expect(kept.remaining).toBe(found.remaining - 1);
+});
+
 it("lists each join that divides a sentence until it is repaired or kept with its reason, and finishes a pass that says done over one", async () => {
   const { ctx } = workspace;
   const { host } = await (await api("POST", "/hosts/register", { name: "Host", platform: "test", agents: [{ id: "codex", installed: true }] })).json();
@@ -3809,7 +3843,8 @@ it("lists each join that divides a sentence until it is repaired or kept with it
   await expect((await check(version, [{ id: "unknown", reason: "Reads whole." }])).json()).resolves.toMatchObject({ error: { code: "unknown_repeat" } });
   // Repaired: the stray word goes, and the join is between two whole sentences.
   const repaired = proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, description: "Remove the stray word",
-    ops: [{ op: "rippleDelete", start: 2.55, end: 2.95 }] }).change.toVersion;
+    // To the frame after the join: one that stopped short of it would leave a frame of the take between two cuts.
+    ops: [{ op: "rippleDelete", start: 2.55, end: 2.98 }] }).change.toVersion;
   const after = await (await check(repaired)).json();
   expect(after.remaining).toBe(0);
   expect(after.fragments).toBeUndefined();

@@ -1,7 +1,7 @@
-import { makeMediaClip, makeTrack } from "./builders.js";
+import { detachedAudioClip, makeTrack } from "./builders.js";
 import type { TimelineOp } from "./ops.js";
 import type { MediaAsset, MediaClip, Timeline, Track } from "./schema.js";
-import { clipEnd } from "./time.js";
+import { clipEnd, sourceAt, uniqueId } from "./time.js";
 
 /**
  * Put a recording's picture in time with its own sound. Its sound stays where it is, so every cut placed by ear stays
@@ -32,9 +32,6 @@ export interface PictureSyncReport {
 type Placed = { clip: MediaClip; track: Track };
 
 const plays = (track: Track, clip: MediaClip) => !track.muted && track.kind !== "caption" && clip.enabled && clip.volume > 0;
-
-/** Where on the recording a clip is at a timeline time. */
-const sourceAt = (clip: MediaClip, at: number) => clip.sourceIn + (at - clip.timelineIn) * clip.speed;
 
 export function pictureSyncOps(timeline: Timeline, media: readonly MediaAsset[], mediaId: string, soundLeads: number): { ops: TimelineOp[]; report: PictureSyncReport } {
   const asset = media.find(m => m.id === mediaId);
@@ -80,12 +77,9 @@ export function pictureSyncOps(timeline: Timeline, media: readonly MediaAsset[],
     if (plays(track, clip)) {
       // Its sound goes on a track of its own, from where it is now, and the picture goes silent.
       const to = soundTrackFor(track, clip.timelineIn, clipEnd(clip));
-      let id = `${clip.id}_audio`;
-      while (ids.has(id)) id += "_";
+      const id = uniqueId(`${clip.id}_audio`, ids);
       ids.add(id);
-      ops.push({ op: "addClip", trackId: to, clip: makeMediaClip(clip.mediaId, clip.sourceIn, clip.sourceOut, clip.timelineIn, {
-        id, label: clip.label, speed: clip.speed, effects: clip.effects, volume: clip.volume, audioFadeIn: clip.audioFadeIn, audioFadeOut: clip.audioFadeOut,
-      }) });
+      ops.push({ op: "addClip", trackId: to, clip: detachedAudioClip(clip, id) });
       report.soundMoved.push(clip.id);
       current = 0;
     } else {

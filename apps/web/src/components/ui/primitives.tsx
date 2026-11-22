@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useId, useRef, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { errorMessage } from "../../lib/client";
-import { initials } from "../../lib/format";
 
 export function Spinner({ className = "" }: { className?: string }) {
   return (
@@ -67,19 +66,6 @@ export function ActivityProgress({ label, value, children }: { label: string; va
     <progress aria-label={label} className="activity-progress" value={value} max={1} />
     <div role="status" className="mt-1.5 text-xs text-muted tnum">{children}</div>
   </>;
-}
-
-export function Avatar({ name, size = 22 }: { name: string; size?: number }) {
-  return (
-    <span
-      className="inline-flex items-center justify-center rounded-full font-semibold select-none shrink-0 bg-raised text-muted"
-      style={{ width: size, height: size, fontSize: Math.max(9, size * 0.42) }}
-      title={name}
-      aria-label={name}
-    >
-      {initials(name)}
-    </span>
-  );
 }
 
 type Tone = "neutral" | "info";

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { speechActivity, speechActivityOf, speechActivityStart } from "@scarlet/render";
 import { extractWav } from "../render/ffmpeg.js";
 import { EMISSION_STORE_SUFFIXES, pcmWavHeader } from "../transcribe/wordAlign.js";
+import { readWavDataLayout } from "../util.js";
 
 type Paths = { paths: { tmp: string; waveforms(projectId: string): string } };
 
@@ -63,15 +64,9 @@ const decodes = new Map<string, { decoded: Promise<Decode>; users: number; timer
 async function wavLayout(path: string) {
   const handle = await open(path, "r");
   try {
-    const head = Buffer.alloc(64 * 1024);
-    const { bytesRead } = await handle.read(head, 0, head.length, 0);
-    const size = (await handle.stat()).size;
-    for (let at = 12; at + 8 <= bytesRead;) {
-      const id = head.toString("ascii", at, at + 4), bytes = head.readUInt32LE(at + 4), start = at + 8;
-      if (id === "data") return { data: start, samples: Math.floor(Math.min(bytes, size - start) / 2) };
-      at = start + bytes + bytes % 2;
-    }
-    throw new Error("The recording's decoded audio has no samples.");
+    const layout = await readWavDataLayout(handle);
+    if (!layout) throw new Error("The recording's decoded audio has no samples.");
+    return layout;
   } finally { await handle.close(); }
 }
 

@@ -5,6 +5,7 @@
  */
 import { discoverModels, ModelCatalogError, type CliAgent } from "./modelCatalog.js";
 import { stopCliTree } from "./processTree.js";
+import { errMsg } from "./runners/spawn.js";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, readFile, stat } from "node:fs/promises";
@@ -130,6 +131,13 @@ export function apiKeyVars(agent: string): string[] {
   return [];
 }
 
+/** True when any API-key variable for `agent` is set to a non-empty value in `env`. */
+export function hasApiKey(agent: string, env: NodeJS.ProcessEnv): boolean {
+  const keys = apiKeyVars(agent);
+  if (!keys.length) return false;
+  return Object.entries(env).some(([name, value]) => Boolean(value) && keys.includes(name.toUpperCase()));
+}
+
 export function stripVars(env: NodeJS.ProcessEnv, vars: string[]): NodeJS.ProcessEnv {
   const drop = new Set(vars.map((v) => v.toUpperCase()));
   return Object.fromEntries(Object.entries(env).filter(([k]) => !drop.has(k.toUpperCase())));
@@ -190,7 +198,7 @@ export async function detectClaude(o: DetectCtx): Promise<AgentAvailability> {
     if (o.env.CLAUDE_CODE_OAUTH_TOKEN) {
       loggedIn = true;
       auth = SUBSCRIPTION;
-    } else if (apiKeyVars("claude").some((k) => o.env[k])) {
+    } else if (hasApiKey("claude", o.env)) {
       loggedIn = true;
       auth = API_KEY;
     }
@@ -232,7 +240,7 @@ export async function detectCodex(o: DetectCtx): Promise<AgentAvailability> {
       /* no file */
     }
   }
-  if (loggedIn !== true && apiKeyVars("codex").some((k) => o.env[k])) {
+  if (loggedIn !== true && hasApiKey("codex", o.env)) {
     loggedIn = true;
     auth = API_KEY;
   }
@@ -259,7 +267,7 @@ export async function detectGemini(o: DetectCtx): Promise<AgentAvailability> {
   } else if (st && st.code !== 0) {
     loggedIn = false;
   }
-  if (loggedIn !== true && apiKeyVars("gemini").some((k) => o.env[k])) {
+  if (loggedIn !== true && hasApiKey("gemini", o.env)) {
     loggedIn = true;
     auth = API_KEY;
   }
@@ -283,7 +291,7 @@ export async function detect(opts: DetectOptions = {}): Promise<AgentAvailabilit
     const path = r.installed && r.loggedIn !== false ? await o.find(cliBinary(r.id)) : null;
     const catalog = path ? await (opts.catalog ?? discoverModels)(r.id as CliAgent, path, runnerEnv(r.id, results, env)).catch((err) => {
       if (err instanceof ModelCatalogError) log(`[host] model-catalog provider=${r.id} reason=${err.reason}`);
-      else log(`could not read the ${r.id} model list: ${err instanceof Error ? err.message : String(err)}`);
+      else log(`could not read the ${r.id} model list: ${errMsg(err)}`);
       return undefined;
     }) : undefined;
     return { ...r, ...catalog, ...(opts.models?.[r.id] ? { model: opts.models[r.id] } : {}) };

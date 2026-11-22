@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { PictureMark, PictureMarkKind } from "@scarlet/shared";
+import { blurOnPointerClick, isInEditableElement } from "../../lib/hotkeys";
 import { player } from "../../lib/player";
 import { usePlayerStore } from "../../stores/player";
 import { usePictureMarksStore, type MarkedFrame } from "../../stores/pictureMarks";
@@ -174,8 +175,7 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
   useEffect(() => {
     if (!marking && !drag) return;
     const key = (e: KeyboardEvent) => {
-      const typing = e.target instanceof Element && !!e.target.closest("input, textarea, select, [contenteditable='true']");
-      if (typing || e.isComposing) return;
+      if (isInEditableElement(e.target) || e.isComposing) return;
       const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
       if (e.key === "Escape" && plain) {
         if (dragging.current) {
@@ -342,19 +342,19 @@ export function PictureMarkTools({ projectId, enabled, onStart }: { projectId: s
         return <span key={t.tool} {...wrap(item)}>
           <button type="button" className="picture-mark-tool" aria-pressed={marking && tool === t.tool} disabled={!enabled}
             aria-label={t.label} aria-describedby={tip?.id === item.id ? tipId : undefined} {...focusProps(item)}
-            onClick={e => { if (e.detail) e.currentTarget.blur(); pick(t.tool); }}><Icon name={t.icon} size={15} /></button>
+            onClick={e => { blurOnPointerClick(e); pick(t.tool); }}><Icon name={t.icon} size={15} /></button>
         </span>;
       })}
       <i className="picture-mark-sep" aria-hidden="true" />
       <span {...wrap(ACTIONS.undo)}>
         <button type="button" className="picture-mark-tool" aria-label="Undo" disabled={!count}
           aria-describedby={tip?.id === ACTIONS.undo.id ? tipId : undefined} {...focusProps(ACTIONS.undo)}
-          onClick={e => { if (e.detail) e.currentTarget.blur(); store.undo(projectId); }}><Icon name="undo" size={15} /></button>
+          onClick={e => { blurOnPointerClick(e); store.undo(projectId); }}><Icon name="undo" size={15} /></button>
       </span>
       <span {...wrap(ACTIONS.clear)}>
         <button type="button" className="picture-mark-tool" aria-label="Clear marks" disabled={!count}
           aria-describedby={tip?.id === ACTIONS.clear.id ? tipId : undefined} {...focusProps(ACTIONS.clear)}
-          onClick={e => { if (e.detail) e.currentTarget.blur(); store.clear(projectId); }}><Icon name="x" size={15} /></button>
+          onClick={e => { blurOnPointerClick(e); store.clear(projectId); }}><Icon name="x" size={15} /></button>
       </span>
     </div>
     {tip && <div id={tipId} role="tooltip" className="picture-mark-tip">

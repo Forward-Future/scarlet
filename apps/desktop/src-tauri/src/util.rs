@@ -83,10 +83,38 @@ pub fn env_get<'a>(env: &'a HashMap<String, String>, key: &str) -> Option<&'a st
         return Some(v.as_str());
     }
     if cfg!(windows) {
-        let lk = key.to_ascii_lowercase();
-        return env.iter().find(|(k, _)| k.to_ascii_lowercase() == lk).map(|(_, v)| v.as_str());
+        return env.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
     }
     None
+}
+
+/// Remove every environment entry matching any name in `keys`, ignoring ASCII case.
+pub fn env_remove_ci(env: &mut HashMap<String, String>, keys: &[&str]) {
+    env.retain(|k, _| !keys.iter().any(|name| k.eq_ignore_ascii_case(name)));
+}
+
+/// Replace any case-insensitive variant of `key` with `key = value`.
+pub fn env_set_ci(env: &mut HashMap<String, String>, key: &str, value: String) {
+    env_remove_ci(env, &[key]);
+    env.insert(key.into(), value);
+}
+
+/// Keep only environment entries whose names match `allowed`, ignoring ASCII case.
+pub fn env_filter_allowlist(env: HashMap<String, String>, allowed: &[&str]) -> HashMap<String, String> {
+    env.into_iter().filter(|(k, _)| allowed.iter().any(|name| k.eq_ignore_ascii_case(name))).collect()
+}
+
+/// Write `bytes` to a sibling temp file in `path`'s parent directory, optionally fsync, then atomically replace `path`.
+pub fn write_file_atomic(path: &Path, bytes: &[u8], sync: bool) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = path.parent().ok_or_else(|| std::io::Error::other("missing parent directory"))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    tmp.write_all(bytes)?;
+    if sync {
+        tmp.as_file().sync_all()?;
+    }
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }
 
 pub fn assistant_prefix(home: &Path) -> PathBuf {

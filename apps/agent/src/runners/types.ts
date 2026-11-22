@@ -110,6 +110,13 @@ export function planEvent(steps: PlanStep[]): RunnerEvent {
   return { type: "plan", text: planText(steps), data: { steps } };
 }
 
+/** Emit a plan event only when the serialized steps differ from `previous`. */
+export function nextPlanEvent(steps: PlanStep[], previous: string | undefined): { serialized: string; event: RunnerEvent } | undefined {
+  const serialized = JSON.stringify(steps);
+  if (serialized === previous) return undefined;
+  return { serialized, event: planEvent(steps) };
+}
+
 /** The harness compacted the run's context. The engine logs it, with the task, and keeps it out of the chat. */
 export const COMPACTED = { type: "log", text: "Context compacted", data: { kind: "compaction" } } as const satisfies RunnerEvent;
 

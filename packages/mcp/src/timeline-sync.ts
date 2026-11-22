@@ -1,4 +1,5 @@
 import { carriesAudio, clipEnd, type MediaAsset, type MediaClip, type Timeline } from "@scarlet/timeline";
+import { round3 } from "./analysis.js";
 import { syncRate } from "./audio-sync.js";
 
 // Two recordings of the same event that play together (a camera inset over a screen capture, a separate mic
@@ -25,7 +26,7 @@ type Levels = (mediaId: string, from: number, to: number) => Promise<number[]>;
 
 interface Together { reference: MediaClip; secondary: MediaClip; from: number; to: number; offset: number }
 
-const r3 = (n: number) => Math.round(n * 1000) / 1000;
+const r3 = round3;
 const placement = (clip: MediaClip) => clip.sourceIn - clip.timelineIn;
 
 /** Every stretch where clips of two different recordings play at once, both at normal speed. */

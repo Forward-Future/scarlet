@@ -1,5 +1,5 @@
 import type { MediaClip, Timeline, TimeRange, Track } from "./schema.js";
-import { intervalCandidates } from "./intervals.js";
+import { indexBySource, intervalCandidates } from "./intervals.js";
 import { clipEnd, mergeRanges, sourceToTimeline, timelineDuration, timelineToSource } from "./time.js";
 import { shiftClip, trimHead, trimTail } from "./ops.js";
 import { stableStringify } from "./ids.js";
@@ -15,15 +15,7 @@ const EPS = 1e-6;
 const mediaClips = (track: Track) => track.clips.filter((c): c is MediaClip => c.kind === "media");
 const meet = (a: number, b: number) => Math.abs(a - b) <= EPS;
 
-function bySource(clips: MediaClip[]) {
-  const groups = new Map<string, MediaClip[]>();
-  for (const clip of clips) {
-    const list = groups.get(clip.mediaId);
-    if (list) list.push(clip);
-    else groups.set(clip.mediaId, [clip]);
-  }
-  return new Map([...groups].map(([id, list]) => [id, intervalCandidates(list, c => c.sourceIn, c => c.sourceOut)]));
-}
+const bySource = (clips: MediaClip[]) => indexBySource(clips, c => c);
 
 interface Fragment extends TimeRange {
   /** Offset from the original timeline to the current one. */
