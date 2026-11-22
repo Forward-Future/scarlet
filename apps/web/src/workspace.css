@@ -286,7 +286,7 @@
 .ruler-major > span { position: absolute; left: 3px; bottom: 9px; color: #aaa69e; font: 11px/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .timeline-lanes {
   position: absolute; inset: var(--ruler-height) 0 0; display: flex; flex-direction: column; overflow: hidden;
-  border-radius: inherit; background: #2d2b28; pointer-events: none;
+  border-radius: inherit; background: #2d2b28; pointer-events: none; isolation: isolate;
 }
 .timeline-media { display: flex; flex-direction: column; width: 100%; height: 100%; transform-origin: left center; }
 .timeline-media + .timeline-media { position:absolute; inset:0; }
@@ -330,6 +330,37 @@
 @keyframes waveform-grow { from { transform: scaleY(.15); opacity: .35; } }
 /* A half-width tile advances exactly one repeat so the ripple loops without a jump. */
 @keyframes waveform-travel { from { mask-position: 0% center; } to { mask-position: 100% center; } }
+/* While Scarlet is actively editing the video, a wide pillowy glow drifts gently back and forth across the timeline
+   lanes, synced by --edit-phase so saving a new cut mid-pass doesn't jump it, and fading out cleanly when done. */
+.timeline-editing-wash {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; border-radius: inherit;
+  mix-blend-mode: screen; opacity: 0; transition: opacity .55s ease;
+}
+.timeline-editing-wash[data-active] { opacity: 1; }
+.timeline-editing-wash::after {
+  content: ""; position: absolute; inset: -12% 0; width: 68%;
+  background: radial-gradient(ellipse 50% 80% at 50% 50%,
+    rgba(244, 241, 233, .14) 0%,
+    rgba(225, 217, 197, .055) 42%,
+    transparent 74%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .timeline-editing-wash::after {
+    animation: timeline-editing-drift 5.2s ease-in-out var(--edit-phase, 0s) infinite alternate;
+    animation-play-state: paused;
+  }
+  .timeline-editing-wash[data-active]::after { animation-play-state: running; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .timeline-editing-wash { transition: opacity .2s ease; }
+  .timeline-editing-wash::after { display: none; }
+  .timeline-editing-wash[data-active] { box-shadow: inset 0 0 0 1px rgba(244, 241, 233, .22); }
+}
+@keyframes timeline-editing-drift {
+  0%   { transform: translateX(-18%); opacity: .74; }
+  50%  { opacity: 1; }
+  100% { transform: translateX(65%); opacity: .74; }
+}
 .timeline-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 22px; margin-top: 6px; }
 .timeline-clock { color: var(--color-fg); font: 12px/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .timeline-clock > span { color: #8a867f; }
