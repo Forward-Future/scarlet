@@ -93,6 +93,8 @@ export type ReportReviewMarkers = (threadId: string, review?: LocatedReview) => 
 export interface ChatActions {
   /** How many requests about one cut or edit Scarlet is working on at this moment. It works on several at once when each is about its own. */
   atOnce?: number;
+  /** The queued request Scarlet will take up next, matching the tray's Next line. */
+  nextQueuedId?: string;
   showing?: ThreadEdit;
   /** The request whose own row opened the edit that's showing. Opened from a list or the timeline, there is none. */
   showingFrom?: string;

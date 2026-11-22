@@ -2325,6 +2325,9 @@ export function SimpleWorkspace() {
       fixed: t.createdBy.type !== "human" };
   }), [queued, tasks, changes, threadEdits, pass, allCalls]); // eslint-disable-line react-hooks/exhaustive-deps
   const queueHint = !editingPaused && queued[0] ? waitHint(queued[0]) : undefined;
+  const queueWaitsOn = !editingPaused && queued[0] ? waitsOnEditor(queued[0]) : undefined;
+  const nextQueuedId = !editingPaused && queued[0] && !queueWaitsOn ? queued[0].id : undefined;
+  const chatActions: ChatActions = nextQueuedId ? { ...actions, nextQueuedId } : actions;
   // The queued request whose words are in the message box to change, and the words as they stand there. Scarlet
   // doesn't start it meanwhile. A message being written waits, and is in the box again once these words are done.
   // They are kept as they are typed, as an unsent message is: after a quit the request is in the box again with the
@@ -2497,7 +2500,7 @@ export function SimpleWorkspace() {
       onCancel: () => setRewording(undefined) }}
     // Pause, Resume and Stop are at the right of the band of the request Scarlet has. Only with no such band, editing
     // paused while requests wait their turn, does the tray hold Resume.
-    tray={queuedItems.length > 0 || (editingPaused && !editing) ? <QueueTray items={queuedItems} hint={queueHint} waits={!editingPaused && queued[0] ? waitsOnEditor(queued[0]) : undefined} rewording={rewordingItem?.id} opened={trayOpen}
+    tray={queuedItems.length > 0 || (editingPaused && !editing) ? <QueueTray items={queuedItems} hint={queueHint} waits={queueWaitsOn} rewording={rewordingItem?.id} opened={trayOpen}
       onRemove={id => void queueAction(cancelTask(id, true)).catch(() => {})}
       paused={editingPaused}
       onContinue={editingPaused && !editing ? () => queueAction(resumeRunWith ? resumeEditing(current.id, resumeRunWith) : resumeEditing(current.id)).catch(() => {}) : undefined}
@@ -2557,7 +2560,7 @@ export function SimpleWorkspace() {
               {current.reviewStatus === "loading" ? <Loading label="Loading edits…" />
                 : current.reviewStatus === "error" ? <p className="simple-error" role="alert">{current.reviewError}{" "}
                   <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>
-                : ordered.length ? ordered.map(thread => <Turn key={thread.id} projectId={current.id} thread={thread} actions={actions}
+                : ordered.length ? ordered.map(thread => <Turn key={thread.id} projectId={current.id} thread={thread} actions={chatActions}
                   pinned={pinned} pinHost={pinHost} list={listOf(thread.id)}
                   reportReviewMarkers={showOtherFlags && thread.id !== focusThread?.id && thread.id !== passThread?.id
                     ? reportReviewMarkers : undefined} />)
