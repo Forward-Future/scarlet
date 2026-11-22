@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 21, 2026
 
+- Scarlet keeps one framing on a screen demo through a jump cut instead of zooming in or out a few percent for no reason.
 - An edit's card no longer keeps the words of the cuts you stepped through before it.
 - Edits run with Claude use far fewer tokens and finish sooner, and Claude now reads every tool's instructions in full.
 - A dialogue cut is done when Scarlet says it's done. It no longer starts itself over, up to four times, to recheck for repeats and the picture; what that check finds, the picture included, still goes to Scarlet as it works.

@@ -63,7 +63,7 @@ describe("framingReport", () => {
     expect(rest).toEqual([]);
     expect(stretch).toMatchObject({ mediaId: "screen", trackId: "scr", from: 0, to: 20, clips: 2 });
     expect(stretch!.holds.map(h => [h.from, h.frame])).toEqual([[0, [0, 0, 50, 50]], [11, [50, 50, 100, 100]]]);
-    expect(stretch!.moves).toEqual([{ from: 10, to: 11, fromFrame: [0, 0, 50, 50], toFrame: [50, 50, 100, 100], onCut: true }]);
+    expect(stretch!.moves).toEqual([{ from: 10, to: 11, fromFrame: [0, 0, 50, 50], toFrame: [50, 50, 100, 100], onCut: true, zoom: 0, shift: 100 }]);
     // The top-left quarter leaves out most of a passage at 30-60% across, 50-55% down.
     expect(stretch!.readsHidden).toEqual([expect.objectContaining({ from: 3, outsideFrame: 100 })]);
     // The cube still turning low on the picture as the frame moves up and away from it.
