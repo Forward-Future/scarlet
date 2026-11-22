@@ -1,14 +1,22 @@
 ---
 name: matt-talking-head
-description: Edit Matt Berman’s recorded talking-head videos in Scarlet. A dialogue pass cut to his pace, acting on his notes to the editor, with camera punch-ins and any synchronized screen demo framed around what he shows.
+description: "Edit Matt Berman’s recorded talking-head videos in Scarlet. Lip sync checked against his spoken “click, 1 2 3 4 5” count, then a dialogue pass cut to his pace, acting on his notes to the editor, with camera punch-ins and any synchronized screen demo framed around what he shows."
 category: Story and pacing
 ---
 
 # Matt’s talking-head edit
 
-My edit is a /dialogue-pass cut my way, with my screen demos framed and my camera punched in. Each part below calls the skill it builds on and says what I change. A bare `/matt-talking-head` covers the current edit, including camera punch-ins and any screen demos. If I name a pass, source, selection or cut, work just on that. Keep an existing edit’s sync and composition. For separate camera, screen and mic recordings, play the dialogue mic once and carry cuts across all synchronized tracks, so my mouth, my voice and the action I describe still line up.
+My edit is a /dialogue-pass cut my way, with my screen demos framed and my camera punched in. Each part below calls the skill it builds on and says what I change. A bare `/matt-talking-head` covers the current edit, including camera punch-ins and any screen demos. If I name a pass, source, selection or cut, work just on that. Keep an existing edit’s composition, and keep its sync once you have checked it as below. For separate camera, screen and mic recordings, play the dialogue mic once and carry cuts across all synchronized tracks, so my mouth, my voice and the action I describe still line up.
 
 When cropping my camera, make sure to show my full head and shoulders.
+
+## Lip sync
+
+Before any cut, make sure my voice and my mouth are in sync. Near the beginning of a recording I say “click” and count “one, two, three, four, five” as a sync mark. Find it and line up the dialogue mic with my mouth on camera at each word: the hard “c” of “click” and the start of each number should land on the frame my lips make it. Where the camera has its own scratch audio, match its waveform to the mic at the count as well. If a screen recording shows a click at that moment, use it to line up the screen too.
+
+When the mic is off, move it, or the camera, to fix it, and save that as its own edit with the offset and the count as the reason. Then check a few spoken words later in the recording and near the end; if the sync has drifted, fix that too and say where. If you can’t find the count, or can’t tell whether my voice and mouth line up, flag it with where you looked rather than guess. Check the same way on an existing edit before working on it.
+
+The count is for sync only and never plays in the finished video: cut it with the wait around it, like a note.
 
 ## Choose the take
 
@@ -46,7 +54,7 @@ Use a two-frame audio crossfade at dialogue joins and a straight picture cut. Br
 
 During a synchronized screen demo, my camera is an inset in the bottom right, at one size and in that corner throughout. Frame the screen around it: what I talk about, read or use sits clear of the bottom right, and ideally other text does too. The camera doesn't move to make room; the screen does. Don't pick another corner for a demo from the look of the recording: only once you have framed a stretch and seen, with my camera in the bottom right, that no framing keeps what I'm showing clear of it, move the camera for that stretch alone, and say in that edit's reason what it would have covered. Start with the inset size you would otherwise use and scale it up by 20% in both dimensions, then crop the sides for a narrower frame. Aim for 1.5:1 (width to height), with room to go up to 2:1 if the framing needs it. Within the inset, frame me from clear room above my hair down to the desk in front of me, with my full chest and my hands in and some of the room on either side of me, the same throughout the demo. The room above my hair holds when I sit up or lean back: my hair never touches the inset's top edge. When the camera itself leaves little room above my head, keep the whole top of its picture and crop only the bottom and sides. Round all four corners of the inset.
 
-Show the whole of what I am presenting with the rest of the page it is on: the whole watch on its web page, not a close-up of its movement. When the page is taller than the video, crop into it; cropping is fine. A move every ten seconds or so is fine while I go from one thing to the next.
+Show the whole of what I am presenting with the rest of the page it is on: the whole watch on its web page, not a close-up of its movement. When framing my screen, keep the browser's own interface (tabs, address bar, bookmarks bar) out of frame wherever the framing allows, and show only the page content. When the page is taller than the video, crop into it; cropping is fine. A move every ten seconds or so is fine while I go from one thing to the next.
 
 ## Camera punch-ins
 
