@@ -35,9 +35,11 @@ export interface SilenceLeft { id: string; start: number; end: number; seconds: 
   source: number; after: string; before: string; atJoin: boolean }
 /**
  * A wordless stretch this long that a pass leaves playing is accounted for: cut, or kept for what the viewer sees or
- * hears in it. The default when the check isn't given one; how long a silence may play unremarked is the skill's pace.
+ * hears in it. The default when the check isn't given one; how long a silence may play unremarked is the skill's pace,
+ * so the default is the stock dialogue-pass skill's dead air, about a second. It was 2 s: passes left five times the
+ * published editor's pauses of a second or more and asked about none of them (benchmarks/safety-only-sol-2026-11-21).
  */
-export const SILENCE_LEFT_SECONDS = 2;
+export const SILENCE_LEFT_SECONDS = 1;
 /** A join whose sound, read letter by letter, doesn't match the words the transcript says it plays. */
 export interface JoinHearing { at: number; mediaId: string; side: "out" | "in"; issue: "clipped" | "fragment"; heard: string;
   /** A clipped word: the transcript's word the cut goes through. */
