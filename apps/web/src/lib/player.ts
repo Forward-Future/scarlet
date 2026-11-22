@@ -454,6 +454,23 @@ export const player = {
         return;
       }
     }
+    // A file that doesn't know its length yet can't be put at the playhead: played now, WebKit starts it from its
+    // top, and a cut opened on a new element would play from 0:00. It plays once it knows, from the playhead.
+    if (el.readyState < 1 && el.getAttribute("src") && (!stream || stream.offset !== undefined)) {
+      const controller = new AbortController();
+      pendingPlay = controller;
+      usePlayerStore.getState().setPlaying(true);
+      el.addEventListener("loadedmetadata", () => {
+        if (controller.signal.aborted || pendingPlay !== controller) return;
+        pendingPlay = undefined;
+        if (el !== video) return usePlayerStore.getState().setPlaying(false);
+        const want = this.elementTime(usePlayerStore.getState().time);
+        if (Math.abs(el.currentTime - want) > 0.5 / (audition?.fps ?? passage?.fps ?? 30))
+          el.currentTime = Math.max(0, Number.isFinite(el.duration) ? Math.min(want, el.duration) : want);
+        void el.play().catch(refused);
+      }, { once: true, signal: controller.signal });
+      return;
+    }
     void el.play().catch(refused);
   },
   pause() {

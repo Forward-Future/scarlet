@@ -623,6 +623,22 @@ it("plays a file put up in place of a playing one only once it knows its length,
   next.remove();
 });
 
+it("plays a cut opened on a file that hasn't loaded yet from the cut, not from the file's top", () => {
+  // Keep moves to the next cut: a new element goes up for the working cut and its listen starts before the file knows
+  // its length. Played then, WebKit started it at 0:00 and the timeline followed it there, away from the cut.
+  const ready = vi.spyOn(HTMLMediaElement.prototype, "readyState", "get").mockReturnValue(0);
+  const next = replace("file.mp4");
+  player.setJoins(next, joinClock([{ start: 20, end: 25 }], 120));
+  release = player.audition({ start: 30, end: 40, skips: [] }, FPS);
+  expect(next.paused).toBe(true);
+  expect(usePlayerStore.getState().playing).toBe(true);
+  ready.mockReturnValue(1);
+  next.dispatchEvent(new Event("loadedmetadata"));
+  expect(next.currentTime).toBeCloseTo(25);
+  expect(next.paused).toBe(false);
+  next.remove();
+});
+
 it("leaves the element put up in place of a paused one paused", async () => {
   player.seek(30, true);
   const next = replace();

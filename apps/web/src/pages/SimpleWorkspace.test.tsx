@@ -115,6 +115,13 @@ const openEdits = async () => {
 };
 const showFolded = () => act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
 const show = async () => { await showFolded(); await openEdits(); };
+/** The video on screen has read its file's length, as a file does a moment after it goes up. Until then it can't
+ *  be put at the playhead, so a play waits for it. */
+const fileLoads = () => act(async () => {
+  const el = player.element()!;
+  Object.defineProperty(el, "readyState", { configurable: true, value: 1 });
+  el.dispatchEvent(new Event("loadedmetadata"));
+});
 const turns = () => [...container.querySelectorAll<HTMLElement>("section.simple-turn")];
 const threadWith = (changeId: string) => buildThreads(data).find(t => t.changes.some(c => c.id === changeId))!;
 const turnFor = (changeId: string) => turns().find(s => s.getAttribute("aria-label") === threadWith(changeId).title)!;
@@ -787,6 +794,7 @@ it("goes to After at a point picked outside the passage on Before, where Before 
   await show();
   await captionsOnBefore();
   const video = container.querySelector<HTMLVideoElement>('.watch-monitor video[aria-label="The current edit"]')!;
+  Object.defineProperty(video, "readyState", { configurable: true, value: 1 });
   // A press on the timeline just before the passage, while Before plays: the edit stays open, on After, and the
   // video plays from there once the pointer is up.
   let down: unknown;
@@ -11307,6 +11315,7 @@ it("plays an open edit on without a break when a new working cut lands while it 
   await show();
   await click(editRows("chg_approved_2")[1]!);
   await act(async () => {});
+  await fileLoads();
   expect(passage).toHaveBeenLastCalledWith({ start: 0, end: 5.4 }, expect.any(Number), undefined, false);
   await act(async () => player.seek(1.5, true));
   const was = player.element()!;
@@ -11340,6 +11349,7 @@ it("plays an open edit on without a break when a request about another of its ed
   await show();
   await click(editRows("chg_approved_2")[1]!);
   await act(async () => {});
+  await fileLoads();
   expect(openTitle()).toBe("captions");
   await act(async () => player.seek(1.5, true));
   const was = player.element()!;
@@ -11372,6 +11382,7 @@ it("plays the video on without a break while a pass saves new working cuts, and 
   appliedEdits();
   await show();
   await act(async () => {});
+  await fileLoads();
   await act(async () => { player.seek(4, true); player.play(); });
   const was = player.element()!;
   expect([editPanel(), was.paused]).toEqual([null, false]);
