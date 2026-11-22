@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createProject, emptyTimeline, makeMediaClip } from "./builders.js";
 import { audioCrossfadeOps } from "./joinCrossfade.js";
-import { applyOps } from "./ops.js";
+import { applyOps, ProposedOp, TimelineOp } from "./ops.js";
 import { toOtio } from "./otio.js";
 import { toFcpxml } from "./fcpxml.js";
 import type { HandoffSource } from "./handoff.js";
 import type { MediaAsset, MediaClip, Timeline } from "./schema.js";
-import { putBackSplit, splitEditWords, splitJoinOps } from "./splitJoin.js";
+import { expandSplitJoins, putBackSplit, splitEditWords, splitJoinOps } from "./splitJoin.js";
 import { clipEnd, timelineDuration } from "./time.js";
 
 const FPS = 25;
@@ -103,6 +103,51 @@ describe("splitJoinOps", () => {
   it("refuses a split longer than the sound it shortens", () => {
     const tl = conversation();
     expect(() => splitJoinOps(tl, media, FPS, [{ at: 4, shift: 3.99 }])).toThrow(/too soon to start/);
+  });
+});
+
+describe("a splitJoin step in a proposal", () => {
+  const step = (leftClipId: string, rightClipId: string, amount: { leads?: number; trails?: number }) =>
+    ProposedOp.parse({ op: "splitJoin", leftClipId, rightClipId, ...amount });
+
+  it("is proposed only: the ops a change keeps never hold one", () => {
+    expect(TimelineOp.safeParse({ op: "splitJoin", leftClipId: "ask", rightClipId: "answer", leads: 0.24 }).success).toBe(false);
+    expect(ProposedOp.safeParse({ op: "splitJoin", leftClipId: "ask", rightClipId: "answer", leads: 6 }).success).toBe(false);
+  });
+
+  it("expands into the clip ops that move the sound, which put back exactly and read on the card", () => {
+    const before = conversation();
+    const { ops, joins } = expandSplitJoins(before, media, FPS, [step("ask", "answer", { leads: 0.24 })]);
+    expect(ops).toEqual(splitJoinOps(before, media, FPS, [{ clipId: "answer", shift: -0.24 }]).ops);
+    expect(joins[0]).toMatchObject({ at: 4, shift: -0.24, leftClipId: "ask", rightClipId: "answer" });
+    const after = applyOps(before, ops);
+    const guest = sounds(after).find(c => c.mediaId === "guest")!;
+    expect(splitEditWords(guest.splitEdit, FPS)).toEqual(["Sound leads by 6 frames"]);
+    expect(putBackSplit(after, before, after, ops as never, { start: 3.76, end: 4 })?.tracks).toEqual(before.tracks);
+  });
+
+  it("is worked out on the timeline the ops before it leave, and leaves the others as they were", () => {
+    const before = conversation();
+    const ripple = { op: "rippleDelete" as const, start: 1, end: 2 };
+    const marker = { op: "addMarker" as const, marker: { id: "mk", time: 1, kind: "note" as const, text: "here" } };
+    const { ops, joins } = expandSplitJoins(before, media, FPS, [ripple, step("answer", "react", { trails: 0.4 }), marker]);
+    expect(ops[0]).toEqual(ripple);
+    expect(ops.at(-1)).toEqual(marker);
+    // The join at 8 s is at 7 s once a second has gone before it.
+    expect(joins[0]).toMatchObject({ at: 7, shift: 0.4 });
+    const guest = sounds(applyOps(before, ops)).find(c => c.mediaId === "guest")!;
+    close(clipEnd(guest), 7.4);
+    expect(guest.splitEdit).toEqual({ trails: 0.4 });
+    const plain = [ripple, marker];
+    expect(expandSplitJoins(before, media, FPS, plain)).toEqual({ ops: plain, joins: [] });
+  });
+
+  it("names the step it refuses: a join that isn't there, both ways at once, or no amount", () => {
+    const tl = conversation();
+    expect(() => expandSplitJoins(tl, media, FPS, [step("ask", "react", { leads: 0.2 })])).toThrow("ops[0] (splitJoin): ask doesn't cut to react: answer does, at 0:08.00.");
+    expect(() => expandSplitJoins(tl, media, FPS, [step("ask", "answer", { leads: 0.2, trails: 0.2 })])).toThrow(/ops\[0\] \(splitJoin\): give leads or trails, not both/);
+    expect(() => expandSplitJoins(tl, media, FPS, [step("ask", "answer", {})])).toThrow(/give leads or trails, in seconds/);
+    expect(() => expandSplitJoins(tl, media, FPS, [step("ask", "answer", { leads: 3.98 })])).toThrow(/ops\[0\] \(splitJoin\): .*too soon to stop/);
   });
 });
 

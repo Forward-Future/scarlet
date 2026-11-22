@@ -1,8 +1,5 @@
 import { clipEnd, type MediaClip, type SplitJoinPlaced, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 
-/** The amount a split moves a join's sound when the call gives none: the stock split-edits skill's. */
-export const SPLIT_DEFAULT = 0.25;
-
 /** What one split join will sound like, measured from the transcript of each side's recording, for the model to judge. */
 export interface SplitJoinEvidence {
   /** The picture cut and the sound cut, timeline seconds. */

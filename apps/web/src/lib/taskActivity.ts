@@ -34,7 +34,6 @@ const toolActivity: Record<string, string> = {
   faces: "Finding where the faces are",
   timeline_propose: "Proposing edit",
   timeline_crossfade_audio: "Smoothing dialogue",
-  timeline_split_join: "Letting sound lead or trail a cut",
   timeline_framing: "Framing the picture",
   screen_area: "Marking what viewers may see",
   timeline_first_cut: "Building first edit",

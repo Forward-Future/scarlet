@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { applyOps, createProject, emptyTimeline, makeMediaClip, splitJoinOps, type Project, type Timeline } from "@scarlet/timeline";
+import { applyOps, createProject, emptyTimeline, makeMediaClip, expandSplitJoins, type Project, type Timeline } from "@scarlet/timeline";
 import { probeMedia, probeToAssetFields, renderFullCached, renderPlaybackSegment, renderRange, resolveFfmpeg, runCapture } from "./index.js";
 
 const RATE = 48000, FPS = 25;
@@ -85,7 +85,7 @@ describe("a split edit as rendered", () => {
 
   it.each(paths)("plays the next voice before its picture by the amount set (a J cut): %s", async path => {
     near((await audible(await render(only(conversation(), "guest"), "straight", path))).from, 2);
-    const j = applyOps(conversation(), splitJoinOps(conversation(), project.media, FPS, [{ at: 2, shift: -0.24 }]).ops);
+    const j = applyOps(conversation(), expandSplitJoins(conversation(), project.media, FPS, [{ op: "splitJoin", leftClipId: "ask", rightClipId: "answer", leads: 0.24 }]).ops);
     const [file] = await render(j, "j", path);
     // The picture still cuts at 2 s.
     if (path !== "playback") {
@@ -99,7 +99,7 @@ describe("a split edit as rendered", () => {
 
   it.each(paths)("carries a voice over the next picture by the amount set (an L cut): %s", async path => {
     near((await audible(await render(only(conversation(), "host"), "straight-host", path))).to, 2);
-    const l = applyOps(conversation(), splitJoinOps(conversation(), project.media, FPS, [{ at: 2, shift: 0.4 }]).ops);
+    const l = applyOps(conversation(), expandSplitJoins(conversation(), project.media, FPS, [{ op: "splitJoin", leftClipId: "ask", rightClipId: "answer", trails: 0.4 }]).ops);
     if (path !== "playback") expect(await colourAt((await render(l, "l", path))[0]!, 2.1)).toBe("blue");
     near((await audible(await render(only(l, "host"), "l-host", path))).to, 2.4);
     near((await audible(await render(only(l, "guest"), "l-guest", path))).from, 2.4);

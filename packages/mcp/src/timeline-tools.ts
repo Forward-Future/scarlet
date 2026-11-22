@@ -21,7 +21,8 @@ import {
   introducedDoubledSound,
   newId,
   pictureSyncOps,
-  splitJoinOps,
+  expandSplitJoins,
+  type SplitJoinPlaced,
   timelineDuration,
   timelineFromKeepRanges,
   timelineToSource,
@@ -62,7 +63,7 @@ import { InsetFraming, InsetPresenter, syncPictureOps } from "./sync-layout.js";
 import { sourceRangeToTimeline, sourceToTimeline } from "./timeline-perception.js";
 import { DOUBLED_SOUND, doubledSoundText, OPS_DOC, validateOps } from "./timeline-validation.js";
 import { errorText, formatZodError, json, noteUnmeasured, text, type ToolRegistrar, type ToolResult } from "./tool-result.js";
-import { SPLIT_DEFAULT, splitJoinEvidence } from "./split-join.js";
+import { splitJoinEvidence } from "./split-join.js";
 import { transitionOps } from "./transition.js";
 
 /** Times one timeline_at call maps; the rest of a longer list come back to ask for. */
@@ -204,6 +205,7 @@ ${OPS_DOC}`,
       const body: ProposeChangeRequest = { description, reason, noteIds, intent, autoApprove: !taskId && autoApprove === true ? true : undefined, timelineEdits, skipRender,
         ...(withdraws?.length && { withdraws }) };
       const frameChanges: FrameAdjustment[] = [];
+      let splitJoins: SplitJoinPlaced[] = [];
       const inset = typeof pictureLayout === "object" ? pictureLayout : undefined;
       let insetNote: string | undefined;
       /** The inset as given, or the preset on the presenter where no framing was. Roles are checked before faces are read. */
@@ -225,7 +227,7 @@ ${OPS_DOC}`,
         if (!v.ops.length) throw new Error("ops is empty");
         if (before && (range || (selectedRange(task?.context) && v.ops.every(o => o.op === "rippleDelete" && !o.trackIds)))) {
           body.range = cutScope(before, await cutAnchor(before), range);
-          const aligned = boundedRippleOps(v.ops, body.range, (await getHeader()).project.settings.fps, timelineDuration(before));
+          const aligned = boundedRippleOps(v.ops as TimelineOp[], body.range, (await getHeader()).project.settings.fps, timelineDuration(before));
           const drift = rippleDrift();
           for (const [i, op] of aligned.entries()) {
             const asked = v.ops[i]!;
@@ -236,10 +238,21 @@ ${OPS_DOC}`,
               frameChanges.push({ asked: [asked.start, asked.end], removed: [op.start, op.end], ...(movedBy && { movedBy }) });
           }
           v.ops = aligned;
-        } else v.ops = await ripplesOnFrames(v.ops, before, frameChanges);
-        body.ops = v.ops;
+        } else v.ops = await ripplesOnFrames(v.ops as TimelineOp[], before, frameChanges);
+        // A splitJoin step becomes the clip ops that move the sound, worked out where it falls among the others.
+        if (v.ops.some(o => o.op === "splitJoin")) {
+          if (!before) throw new Error("A splitJoin needs a timeline with the join on it.");
+          const { project } = await getProject();
+          ({ ops: v.ops, joins: splitJoins } = expandSplitJoins(before, project.media, project.settings.fps, v.ops));
+          if (!timelineEdits?.length && splitJoins.length === ops.length) body.timelineEdits = splitJoins.map(j => ({
+            label: `${j.shift < 0 ? "J cut" : j.shift > 0 ? "L cut" : "Sound back on the cut"} at ${Math.floor(j.at / 60)}:${String(Math.floor(j.at % 60)).padStart(2, "0")}`,
+            range: { start: Math.min(j.at, j.at + j.shift), end: Math.max(j.at, j.at + j.shift) },
+            ...(reason && { reason }),
+          }));
+        }
+        body.ops = v.ops as TimelineOp[];
         // Dry-run against the pinned base before deriving the picture from the synchronized clips.
-        const placed = applyOps(before ?? emptyTimeline(projectId), v.ops);
+        const placed = applyOps(before ?? emptyTimeline(projectId), body.ops);
         await refuseDoubledSound(placed);
         // Dialogue removed here skips the edge placement and checks of dialogue_apply_cuts. Three removals on one pass
         // came this way, and an edge inside a sounding word is the clipped word the editor sends back. Each all-track
@@ -249,7 +262,7 @@ ${OPS_DOC}`,
           let on = before;
           // Every refused edge is named at once: named one at a time, a pass made six calls to learn of six edges (2026-11-15).
           const split: string[] = [];
-          for (const [i, op] of v.ops.entries()) {
+          for (const [i, op] of body.ops.entries()) {
             if (op.op === "rippleDelete" && !op.trackIds && op.end > op.start) {
               // Only a measured word split refuses the edit. A recording with nothing to measure goes ahead as asked; one
               // still being prepared is measured when the model calls again.
@@ -264,7 +277,7 @@ ${OPS_DOC}`,
             ". Nothing was saved. Remove dialogue with dialogue_apply_cuts, where a word reference puts each edge in the recording's silence, or move the edge onto quiet (dialogue_check_join measures it).");
         }
         await refuseEdgesInSound(before, placed);
-        if (inset) body.ops = [...v.ops, ...syncPictureOps((await getProject()).project, placed, await insetLayout(placed))];
+        if (inset) body.ops = [...body.ops, ...syncPictureOps((await getProject()).project, placed, await insetLayout(placed))];
       } else {
         const parsed = WritableTimeline.safeParse({ ...timeline, projectId, version: (timeline as { version?: string })?.version ?? "draft" });
         if (!parsed.success) {
@@ -276,7 +289,15 @@ ${OPS_DOC}`,
         if (inset) body.timeline = applyOps(parsed.data, syncPictureOps((await getProject()).project, parsed.data, await insetLayout(parsed.data)));
       }
       const result = await propose(body, before, frameChanges);
-      return insetNote ? { ...result, content: [...result.content, { type: "text" as const, text: insetNote }] } : result;
+      const notes = insetNote ? [insetNote] : [];
+      // Each split join as it will play: when each voice comes in and goes out, and the words it brings in or drops.
+      if (splitJoins.length && !result.isError) {
+        const said = new Map<string, TranscriptWord[] | null>();
+        for (const mediaId of new Set(splitJoins.flatMap(j => [j.left.mediaId, j.right.mediaId])))
+          said.set(mediaId, await transcriptWords(mediaId, false).catch(() => null));
+        notes.push(`Split joins: ${JSON.stringify(splitJoinEvidence(applyOps(before!, body.ops!), splitJoins, id => said.get(id)))}`);
+      }
+      return notes.length ? { ...result, content: [...result.content, ...notes.map(text => ({ type: "text" as const, text }))] } : result;
     },
   );
 
@@ -345,54 +366,6 @@ ${OPS_DOC}`,
       const { ops, report } = transitionOps(before, project.media, project.settings.fps, joins, style);
       const result = await propose({ intent, ops, description, reason, noteIds }, before);
       return { ...result, content: [...result.content, { type: "text" as const, text: `Joins:\n${report.join("\n")}` }] };
-    },
-  );
-
-  tool(
-    "timeline_split_join",
-    "Make J and L cuts: move a join's sound cut off its picture cut. The picture, the runtime and every other join stay as they are. `leads` starts the incoming shot's sound that many seconds before its picture (a J cut); `trails` carries the outgoing shot's sound on that many seconds over the next picture (an L cut); both 0 puts the sound back on the picture cut. The amount is set, not added: a second call replaces the first. Your skill says where and how far; " + SPLIT_DEFAULT + " s when the join gives no amount with `split`. Find a join by the clip it leads into (clipId) or its time on the bottom video track (at, timeline seconds). A picture clip that plays its own sound hands it to the dialogue track below its track and goes silent, as an audio crossfade does. The extra sound comes from each recording's own footage past the cut. Refused, with nothing saved: a join whose sound is not a straight cut (a crossfade or a gap), a sound that would reach past what was recorded or shrink to nothing, and a new sound edge that cuts a word while it sounds, with where the recording is quiet nearby. The result gives each join as it will play: `voiceIn` (seconds from the picture cut to the incoming shot's first word; negative is heard before its picture), `voiceOut` (to the end of the outgoing shot's last word), and the whole words the split brings in from footage outside the picture (`nowHeard`, which may be words an earlier cut took out) or takes away (`noLongerHeard`). All joins form one proposal.",
-    {
-      intent: intentInput,
-      joins: z.array(z.object({
-        clipId: z.string().optional(), at: z.number().finite().nonnegative().optional(),
-        split: z.enum(["J", "L"]).optional().describe(`J: the incoming sound leads; L: the outgoing sound trails. With no leads or trails, by ${SPLIT_DEFAULT} s`),
-        leads: z.number().finite().min(0).max(5).optional().describe("Seconds the incoming shot's sound starts before its picture"),
-        trails: z.number().finite().min(0).max(5).optional().describe("Seconds the outgoing shot's sound carries on past the picture cut"),
-      })).min(1).max(100),
-      reason: editReasonInput,
-    },
-    async ({ intent, joins, reason }) => {
-      const { project } = await getProject();
-      const fps = project.settings.fps;
-      if (!reason) throw new Error("Give reason: one short sentence for the card on why these joins split.");
-      const before = await baseTimeline();
-      const wanted = joins.map(({ split, leads, trails, ...where }) => {
-        if (leads && trails) throw new Error("Give a join leads or trails, not both: its sound cuts once.");
-        const shift = leads !== undefined || trails !== undefined ? (trails ?? 0) - (leads ?? 0)
-          : split === "J" ? -SPLIT_DEFAULT : split === "L" ? SPLIT_DEFAULT : undefined;
-        if (shift === undefined) throw new Error("Give each join leads, trails, or split (J or L).");
-        return { ...where, shift };
-      });
-      const { ops, joins: placed } = splitJoinOps(before, project.media, fps, wanted);
-      const next = applyOps(before, ops);
-      // Safety: a new sound edge inside a word plays a word cut while it sounds.
-      const inside = await edgesInSound(before, next).catch(withoutUnlessPreparing("failed to measure the split's new sound edges", [] as SoundingEdge[]));
-      if (inside.length) throw new Error(inside.slice(0, 12).map(e => edgeInSoundText(e, `the sound of ${e.clipId}`)).join("; ") +
-        ". Nothing was saved. Choose an amount that puts each sound edge in quiet, or leave that join as it is.");
-      const said = new Map<string, TranscriptWord[] | null>();
-      for (const mediaId of new Set(placed.flatMap(j => [j.left.mediaId, j.right.mediaId])))
-        said.set(mediaId, await transcriptWords(mediaId, false).catch(() => null));
-      const evidence = splitJoinEvidence(next, placed, id => said.get(id));
-      const clockOf = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
-      // One edit for each join, from where the sound now cuts to where the picture does.
-      const edits = placed.map(j => ({
-        label: `${j.shift < 0 ? "J cut" : j.shift > 0 ? "L cut" : "Sound back on the cut"} at ${clockOf(j.at)}`,
-        range: { start: Math.min(j.at, j.at + j.shift), end: Math.max(j.at, j.at + j.shift) },
-        reason,
-      }));
-      const description = edits.length === 1 ? edits[0]!.label : `Split edits at ${edits.length} joins`;
-      const result = await propose({ intent, ops, description, reason, timelineEdits: edits }, before);
-      return { ...result, content: [...result.content, { type: "text" as const, text: `Joins: ${JSON.stringify(evidence)}` }] };
     },
   );
 

@@ -1,5 +1,5 @@
 import { detachedAudioClip, makeTrack } from "./builders.js";
-import { applyOps, type TimelineOp } from "./ops.js";
+import { applyOps, type ProposedOp, type TimelineOp } from "./ops.js";
 import type { MediaAsset, MediaClip, Timeline, TimeRange, Track } from "./schema.js";
 import { clipEnd, sourceAt, uniqueId } from "./time.js";
 
@@ -15,7 +15,8 @@ import { clipEnd, sourceAt, uniqueId } from "./time.js";
  *
  * Code keeps it safe and nothing else: a sound can't reach past what was recorded, or shrink to nothing, or overlap
  * other sound on its track. Whether a new sound edge cuts a word while it sounds is measured by the caller, which has
- * the recordings (`timeline_split_join`). How far, and at which joins, is the model's call from the editor's skill.
+ * the recordings (`timeline_propose`, which measures every new sound edge). How far, and at which joins, is the
+ * model's call from the editor's skill.
  */
 
 const EPS = 1e-6;
@@ -25,6 +26,8 @@ const MEET = 1e-3;
 export interface SplitJoinTarget {
   /** The picture clip the join leads into. */
   clipId?: string;
+  /** The picture clip the join leads out of, checked against the one that meets `clipId`. */
+  leftClipId?: string;
   /** Or the join's time on the picture track, timeline seconds. */
   at?: number;
   /** The video track to look on with `at`; the bottom one by default. */
@@ -82,6 +85,7 @@ export function pictureJoin(timeline: Timeline, target: SplitJoinTarget, fps: nu
   const { clip, track } = right;
   const before = track.clips.find(c => c !== clip && c.enabled && Math.abs(clipEnd(c) - clip.timelineIn) <= MEET);
   if (before?.kind !== "media") throw new Error(`Nothing on ${track.id} cuts to ${clip.id} at ${clock(clip.timelineIn)}: a split edit needs two shots that meet.`);
+  if (target.leftClipId && before.id !== target.leftClipId) throw new Error(`${target.leftClipId} doesn't cut to ${clip.id}: ${before.id} does, at ${clock(clip.timelineIn)}.`);
   if (before.mediaId === clip.mediaId && before.speed === clip.speed && Math.abs(before.sourceOut - clip.sourceIn) < MEET)
     throw new Error(`The footage runs on at ${clock(clip.timelineIn)}: there is no cut there to split.`);
   return { left: { clip: before, track }, right };
@@ -212,6 +216,35 @@ export function splitJoinOps(timeline: Timeline, media: readonly Pick<MediaAsset
     placedJoins.push({ at, trackId: picR.track.id, leftClipId: picL.clip.id, rightClipId: picR.clip.id, was, shift, left, right });
   }
   return { ops, joins: placedJoins };
+}
+
+/**
+ * Proposed ops with each `splitJoin` step expanded into the clip ops that make it, worked out on the timeline the ops
+ * before it leave, and where each join's sound now cuts. Ops without one come back as they were.
+ */
+export function expandSplitJoins(timeline: Timeline, media: readonly Pick<MediaAsset, "id" | "kind" | "hasAudio" | "duration">[], fps: number,
+  proposed: readonly ProposedOp[]): { ops: TimelineOp[]; joins: SplitJoinPlaced[] } {
+  if (!proposed.some(op => op.op === "splitJoin")) return { ops: proposed as TimelineOp[], joins: [] };
+  const ops: TimelineOp[] = [], joins: SplitJoinPlaced[] = [];
+  let tl = timeline, pending: TimelineOp[] = [];
+  for (const [i, op] of proposed.entries()) {
+    if (op.op !== "splitJoin") { pending.push(op); continue; }
+    tl = applyOps(tl, pending);
+    ops.push(...pending);
+    pending = [];
+    if (op.leads && op.trails) throw new Error(`ops[${i}] (splitJoin): give leads or trails, not both: its sound cuts once.`);
+    if (op.leads === undefined && op.trails === undefined) throw new Error(`ops[${i}] (splitJoin): give leads or trails, in seconds (0 puts the sound back on the cut).`);
+    try {
+      const made = splitJoinOps(tl, media, fps, [{ clipId: op.rightClipId, leftClipId: op.leftClipId, shift: (op.trails ?? 0) - (op.leads ?? 0) }]);
+      tl = applyOps(tl, made.ops);
+      ops.push(...made.ops);
+      joins.push(...made.joins);
+    } catch (e) {
+      throw new Error(`ops[${i}] (splitJoin): ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  ops.push(...pending);
+  return { ops, joins };
 }
 
 /** What a split edit set at one join, read from a sound clip's record: J leads, L trails. */

@@ -30,4 +30,4 @@ These are usually where a split earns its place. They are a guide, not a rule: t
 - Each edge of the moved sound sits in a pause between words, never inside a word.
 - Use them where they help, not on every join: a whole edit of split joins blurs every change of shot.
 
-`timeline_split_join` makes the split, and its result says when each voice comes in and goes out against the picture cut. `timeline_transcript`, `dialogue_check_join` and `timeline_join_audit` show the words and the quiet around a join.
+A `splitJoin` step in `timeline_propose` makes the split, and its result says when each voice comes in and goes out against the picture cut. `timeline_transcript`, `dialogue_check_join` and `timeline_join_audit` show the words and the quiet around a join.

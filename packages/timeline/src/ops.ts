@@ -128,6 +128,24 @@ export const TimelineOp = z.discriminatedUnion("op", [
 ]);
 export type TimelineOp = z.infer<typeof TimelineOp>;
 
+/**
+ * A J or L cut at the join from `leftClipId` to `rightClipId` on a video track: the incoming sound `leads` its
+ * picture, or the outgoing sound `trails` past it, by that many seconds (0 puts the sound back on the cut). Proposed
+ * only: Scarlet expands it into the clip ops that move the sound (`expandSplitJoins`), and those are what a change keeps.
+ */
+export const SplitJoinOp = z.object({
+  op: z.literal("splitJoin"),
+  leftClipId: Id,
+  rightClipId: Id,
+  leads: z.number().finite().min(0).max(5).optional(),
+  trails: z.number().finite().min(0).max(5).optional(),
+});
+export type SplitJoinOp = z.infer<typeof SplitJoinOp>;
+
+/** What an edit may be proposed as: the stored ops, and the steps Scarlet expands into them. */
+export const ProposedOp = z.discriminatedUnion("op", [...TimelineOp.options, SplitJoinOp]);
+export type ProposedOp = z.infer<typeof ProposedOp>;
+
 export class OpError extends Error {
   constructor(
     message: string,

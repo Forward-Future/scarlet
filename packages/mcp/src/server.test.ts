@@ -4769,7 +4769,7 @@ it("refuses a whole new timeline that starts or ends a clip inside a sounding wo
   }
 });
 
-it("makes a J cut that leaves both sound edges in quiet, says when each voice comes and goes, and refuses one that cuts a word", async () => {
+it("makes a J cut as a timeline_propose step that leaves both sound edges in quiet, says when each voice comes and goes, and refuses one that cuts a word", async () => {
   const original = { timeline: mock.state.timeline, waveform: mock.state.waveform };
   const tl = emptyTimeline(mock.state.project.id);
   tl.version = "split-door";
@@ -4780,8 +4780,14 @@ it("makes a J cut that leaves both sound edges in quiet, says when each voice co
   const c = await connect("task-split");
   try {
     await c.callTool({ name: "timeline_get", arguments: {} });
-    const split = (leads: number) => c.callTool({ name: "timeline_split_join", arguments: { intent: "requested",
-      joins: [{ clipId: "second", leads }], reason: "The answer's voice leads into the cut." } }) as Promise<CallToolResult>;
+    const split = (leads: number, step: object = {}) => c.callTool({ name: "timeline_propose", arguments: { intent: "requested", description: "Lead the answer's voice into the cut",
+      ops: [{ op: "splitJoin", leftClipId: "first", rightClipId: "second", leads, ...step }], reason: "The answer's voice leads into the cut." } }) as Promise<CallToolResult>;
+    // What nobody would choose is refused with the step named: a join that isn't there, sound never recorded, both ways at once.
+    expect(textOf(await split(0.2, { leftClipId: "second", rightClipId: "first" }))).toContain("ops[0] (splitJoin): Nothing on v1 cuts to first");
+    expect(textOf(await split(3))).toMatch(/ops\[0\] \(splitJoin\): m1 has no recording before its start: its sound can lead the cut at 0:02.20 by at most/);
+    expect(textOf(await split(0.2, { trails: 0.2 }))).toContain("give leads or trails, not both");
+    expect(textOf(await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", description: "Split",
+      ops: [{ op: "splitJoin", leftClipId: "first", rightClipId: "second" }] } }) as CallToolResult)).toContain("give leads or trails, in seconds");
     // Leading by 0.9 s starts the sound inside “Um,” and stops the first shot's inside “welcome”.
     const through = await split(0.9);
     expect(through.isError).toBe(true);
@@ -4789,7 +4795,7 @@ it("makes a J cut that leaves both sound edges in quiet, says when each voice co
     expect(textOf(through)).toContain("Nothing was saved");
     const made = await split(0.2);
     expect(made.isError).toBeFalsy();
-    const joins = JSON.parse(textOf(made).split("Joins: ")[1]!.split("\n")[0]!);
+    const joins = JSON.parse(textOf(made).split("Split joins: ")[1]!.split("\n")[0]!);
     expect(joins).toEqual([{ at: 2.2, soundAt: 2, split: "J", voiceIn: 0.1, voiceOut: -0.4, nowHeard: [], noLongerHeard: [] }]);
     const body = mock.requests.filter(r => r.method === "POST" && r.path === `/projects/${mock.state.project.id}/changes`).at(-1)!.body as {
       ops: Array<{ op: string; clip?: { splitEdit?: unknown } }>; timelineEdits: Array<{ label: string; range: { start: number; end: number } }> };
