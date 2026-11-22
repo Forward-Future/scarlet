@@ -23,6 +23,7 @@ import {
   type TimelineDiff,
   type TimeRange,
 } from "@scarlet/timeline";
+import type { Render } from "@scarlet/shared";
 import type { Ctx } from "../../context.js";
 import { now } from "../../db.js";
 import { badRequest, conflict, HttpError, notFound } from "../../errors.js";
@@ -31,7 +32,7 @@ import { errorMessage, rememberLast } from "../../util.js";
 import { notify } from "../notify.js";
 import { requestCutPlaybackFile, waitForPlayback } from "../playback.js";
 import { currentCutRanges, reviewedCutsOnHead } from "../stagedCutRecovery.js";
-import { createTask } from "../tasks.js";
+import { createTask, FINISHED_TASK } from "../tasks.js";
 import { resolveTimeline, storeVersion } from "../timeline.js";
 import { CARRIED, latestAttempt, REVISED, saveChange, threadOfChange } from "./common.js";
 import { cutRevisionReference } from "./cutRevisionPrompts.js";
@@ -39,8 +40,8 @@ import { fadeJoins, fadePlaced, reviewedJoins } from "./joinCrossfades.js";
 import { approveChange } from "./lifecycle.js";
 import { activeStagedCut, requireUnscopedEdit, revisedPass } from "./stagedCutLineage.js";
 
-/** Queue the actual edited media the first call will open, including the footage on both sides of the join. */
-export function prepareFirstDecision(ctx: Ctx, change: Change, review: CutReview, index: number): Change["firstDecisionPreview"] {
+/** Queue the actual edited media a call will open, including the footage on both sides of the join, as its player asks for it. */
+function queueDecisionPlayback(ctx: Ctx, change: Change, review: CutReview, index: number, owner: string): Render | undefined {
   const project = ctx.repos.projects.header(change.projectId);
   const call = review.cuts[index];
   if (!project?.head || project.mediaPaused || !call) return;
@@ -64,14 +65,88 @@ export function prepareFirstDecision(ctx: Ctx, change: Change, review: CutReview
   }
   const range = cutPlaybackWindow(join - CUT_LEAD_SECONDS, join + CUT_TAIL_SECONDS, timelineDuration(after), project.settings.fps);
   if (!range) return;
-  const owner = newId("prep");
-  const render = requestCutPlaybackFile(ctx, project, after.version, range, owner);
-  if (render.state !== "done") ctx.db.afterCommit(() => {
-    const signal = ctx.mediaSignal(project.id);
-    void ctx.track(waitForPlayback(ctx, render, signal).finally(() => ctx.renders.release(render.id, owner)), project.id)
+  return requestCutPlaybackFile(ctx, project, after.version, range, owner);
+}
+
+/** Hold `owner`'s claim on a queued file until it is ready, then let it go: the finished file stays for the player. */
+function releaseWhenReady(ctx: Ctx, change: Change, render: Render, owner: string, done?: () => void) {
+  if (render.state === "done") {
+    ctx.renders.release(render.id, owner);
+    return done?.();
+  }
+  ctx.db.afterCommit(() => {
+    const signal = ctx.mediaSignal(change.projectId);
+    void ctx.track(waitForPlayback(ctx, render, signal).finally(() => { ctx.renders.release(render.id, owner); done?.(); }), change.projectId)
       .catch(error => { if (!signal.aborted) ctx.log(`[review] Could not prepare a file for ${change.id}: ${error}`); });
   });
+}
+
+/** Queue the actual edited media the first call will open, including the footage on both sides of the join. */
+export function prepareFirstDecision(ctx: Ctx, change: Change, review: CutReview, index: number): Change["firstDecisionPreview"] {
+  const owner = newId("prep");
+  const render = queueDecisionPlayback(ctx, change, review, index, owner);
+  if (!render) return;
+  releaseWhenReady(ctx, change, render, owner);
   return { index, renderId: render.id, queuedAt: now() };
+}
+
+/**
+ * The waiting call the editor reaches after deciding `decided`, as Keep moves on For you: the next by number, else
+ * the first by number. A call they have decided, or sent back to Scarlet, isn't waiting.
+ */
+export function nextWaitingCall(change: Change, decided?: number, sentBack: ReadonlySet<number> = new Set()): number | undefined {
+  const called = new Set(change.cutChoices?.map(c => c.index));
+  const waiting = (change.cutAssessments ?? []).filter(a => isPublishedCall(a) && a.index !== decided && !called.has(a.index) && !sentBack.has(a.index))
+    .sort((a, b) => (a.askOrder ?? Infinity) - (b.askOrder ?? Infinity) || a.index - b.index);
+  const after = change.cutAssessments?.find(a => a.index === decided)?.askOrder;
+  return (after === undefined ? undefined : waiting.find(a => (a.askOrder ?? Infinity) > after))?.index ?? waiting[0]?.index;
+}
+
+/** The next call each waiting pass has queued, by pass. One at a time: the editor reaches one call next. */
+const nextCalls = new WeakMap<Ctx, Map<string, { index: number; renderId: string; owner: string }>>();
+
+/**
+ * After the editor decides a call (Keep, Reject edit or Revise), queue the next waiting call's media as the first
+ * call's is, so it plays at once when they reach it. It is queued once the decision is saved, as a speculative render
+ * the editor's own playback goes ahead of. A call queued earlier that is no longer next is let go: a render no one
+ * else is watching stops, and one the editor opened plays on. Caller holds the write lock.
+ */
+export function prepareNextDecision(ctx: Ctx, changeId: string, decided?: number) {
+  ctx.db.afterCommit(() => {
+    const projectId = ctx.repos.changes.get(changeId)?.projectId;
+    if (!projectId) return;
+    // After the decision's own answer has gone out: the editor waits on that, not on this.
+    void ctx.track(new Promise<void>(resolve => setImmediate(resolve)).then(() => ctx.db.transaction(() => {
+      const byPass = nextCalls.get(ctx) ?? new Map<string, { index: number; renderId: string; owner: string }>();
+      nextCalls.set(ctx, byPass);
+      const change = ctx.repos.changes.get(changeId);
+      const waiting = change?.intent === "suggestion" && (change.state === "ready" || change.state === "revising") && change.cutReasons?.length;
+      // A call the editor sent back to Scarlet plays its revision once that lands, not the version waiting now.
+      const sentBack = new Set(waiting ? ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.context.changeId') = ? AND json_extract(json, '$.context.cutIndex') IS NOT NULL",
+        [change.projectId, change.id]).filter(t => !FINISHED_TASK.has(t.state)).map(t => t.context.cutIndex!) : []);
+      const index = waiting ? nextWaitingCall(change, decided, sentBack) : undefined;
+      const held = byPass.get(changeId);
+      if (held && held.index === index && ctx.repos.renders.get(held.renderId)?.state !== "cancelled") return;
+      if (held) {
+        byPass.delete(changeId);
+        ctx.renders.release(held.renderId, held.owner);
+      }
+      if (index === undefined || !change) return;
+      // The first call's file, queued when Scarlet asked, serves it already.
+      const first = change.firstDecisionPreview;
+      const firstState = first?.index === index ? ctx.repos.renders.get(first.renderId)?.state : undefined;
+      if (firstState && firstState !== "failed" && firstState !== "cancelled") return;
+      const review = prepareCutReview(ctx, change).review;
+      if (!review) return;
+      const owner = newId("prep");
+      const render = queueDecisionPlayback(ctx, change, review, index, owner);
+      if (!render) return;
+      const entry = { index, renderId: render.id, owner };
+      byPass.set(changeId, entry);
+      ctx.db.afterCommit(() => ctx.log(`[review] next_call change=${logId(changeId)} project=${logId(projectId)} cut=${index} render=${logId(render.id)} state=${render.state}`));
+      releaseWhenReady(ctx, change, render, owner, () => { if (byPass.get(changeId) === entry) byPass.delete(changeId); });
+    }, "immediate")()), projectId).catch(error => ctx.log(`[review] Could not prepare the next call of ${changeId}: ${errorMessage(error)}`));
+  });
 }
 
 export function recordPlayableDecision(ctx: Ctx, change: Change) {
@@ -270,6 +345,10 @@ export function saveCutChoices(ctx: Ctx, user: User, change: Change, body: SaveC
       ` skippedCuts=${slots(skipped)} cleared=${cleared.length} clearedCuts=${slots(cleared)}`);
   });
   if (!!applyWhenDone !== !!change.applyWhenDone) ctx.db.afterCommit(() => ctx.log(`[review] schedule ${target} outcome=${applyWhenDone ? "set" : "cleared"} reason=editor`));
+  // The call the editor reaches next plays at once too. Of several decided together, the latest by number leads.
+  const decided = [...approved, ...skipped].map(index => change.cutAssessments?.find(a => a.index === index) ?? { index, askOrder: undefined })
+    .sort((a, b) => (b.askOrder ?? -1) - (a.askOrder ?? -1))[0]?.index;
+  if (decided !== undefined) prepareNextDecision(ctx, change.id, decided);
   return recheckMovedCalls(ctx, saved, change, review) ?? applyChoicesWhenDone(ctx, saved) ?? saved;
 }
 
