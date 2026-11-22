@@ -4,7 +4,7 @@
  */
 import type { MediaClip, TimeRange, TranscriptWord } from "@scarlet/timeline";
 import { appendInterval, dbfs, isTag, round3 } from "./analysis.js";
-import { QUIET_RMS, quietReading, quietRms, type HeldBreath } from "./gap-sound.js";
+import { QUIET_RMS, quietReading, quietRms, roomRms, soundFloor, type HeldBreath } from "./gap-sound.js";
 
 export type Word = Pick<TranscriptWord, "text" | "start" | "end">;
 /** A word as the join check reads it: where the recording has it, and, when that is not where the transcript times it, `timed`. */
@@ -303,8 +303,8 @@ export function besideWord(runs: TimeRange[], side: "start" | "end") {
   return runs.reduce<TimeRange | undefined>((best, q) => !best || (side === "start" ? q.start < best.start : q.end > best.end) ? q : best, undefined);
 }
 
-/** Sound counts as speech within this of the level speech sits at on the page, as gapSound counts it. */
-const SPEECH_BELOW_DB = 12, QUIETEST_SPEECH_DBFS = -45, SYLLABLE_BELOW_DB = 6;
+/** A syllable reaches this close to the level speech sits at on the page. Sound counts as speech as gapSound counts it (soundFloor). */
+const SYLLABLE_BELOW_DB = 6;
 /** A run of sound this short is a click, not a syllable. */
 const MIN_WORD_SOUND = .06;
 /** How far from its timing a kept word's sound is looked for. */
@@ -324,7 +324,7 @@ export function soundingWord(page: JoinPage["edges"] | undefined, kept: Word, ne
   if (!page || !levels?.db.length) return;
   const loud = extremeLevel(page, kept.start, kept.end, "highest");
   if (!loud || loud.db > SPEECH_DBFS) return;
-  const speech = percentile85Db(levels.db), floor = Math.max(speech - SPEECH_BELOW_DB, QUIETEST_SPEECH_DBFS);
+  const speech = percentile85Db(levels.db), floor = soundFloor(speech, dbfs(roomRms(levels.db.map(d => 10 ** (d / 20)), levels.step)));
   // A run is a syllable once it gets near the level speech sits at. An inhale before the word can pass the floor,
   // as one did at -38 dBFS beside speech at -20, and it stays with the pause.
   const syllable = (from: number, to: number) => Math.max(...levels.db.slice(from, to)) >= speech - SYLLABLE_BELOW_DB;

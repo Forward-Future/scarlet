@@ -7,13 +7,12 @@ import { logId } from "../logText.js";
 import { recordTaskFinished } from "../telemetry/events.js";
 import { getTranscriptionProvider, presetLabel } from "../transcribe/index.js";
 import { errorMessage } from "../util.js";
-import { latestTranscription, startTranscription, transcribeForDialogue } from "./ingest.js";
+import { latestTranscription, startTranscription, transcribeForDialogue } from "./transcription.js";
 import { skillEditEnded, startLearningCheck } from "./learnings.js";
 import { runAttempts, runRoot } from "./runAttempts.js";
 import { recoveryInstruction, savedChanges } from "./taskRecap.js";
-import { appendTaskEvent, cancelTask, createTask, dropWaitingLooks, FINISHED_TASK, hasTranscript, PROJECT_EDIT_KINDS, recordWorkThrough, RESUMABLE, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
-
-export { recoveryInstruction } from "./taskRecap.js";
+import { appendTaskEvent, cancelTask, createTask, dropWaitingLooks, FINISHED_TASK, hasTranscript, PROJECT_EDIT_KINDS, recordWorkThrough, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
+import { RESUMABLE } from "./taskPrompts.js";
 
 /** A run that keeps losing its worker stops carrying on by itself after this many attempts, and waits for the editor. */
 const LOST_WORKER_ATTEMPTS = 3;

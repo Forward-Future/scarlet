@@ -18,7 +18,9 @@ export * from "./joinCrossfade.js";
 export * from "./doubledSound.js";
 export * from "./pictureSync.js";
 export * from "./putBack.js";
+export * from "./volume.js";
 
 export * from "./history.js";
 export * from "./handoff.js";
 export * from "./fcpxml.js";
+export * from "./splitJoin.js";

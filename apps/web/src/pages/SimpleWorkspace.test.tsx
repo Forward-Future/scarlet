@@ -333,7 +333,7 @@ it("turns the Before clip's play button while its stream waits for a section, an
   const reframed = container.querySelector(".watch-monitor")!;
   const button = () => reframed.querySelector(".monitor-playback > button")!;
   const shows = () => [button().getAttribute("aria-label"), button().querySelector("svg") ? "icon" : button().querySelector(".animate-spin") ? "spinner" : "empty"];
-  const video = reframed.querySelector<HTMLVideoElement>('video[aria-label="The current edit"]')!;
+  const video = reframed.querySelector<HTMLVideoElement>('video[aria-label="The video"]')!;
   Object.defineProperty(video, "readyState", { configurable: true, value: 1 });
   vi.useFakeTimers();
   try {
@@ -802,7 +802,7 @@ it("goes to After at a point picked outside the passage on Before, where Before 
   beforeClipReady();
   await show();
   await captionsOnBefore();
-  const video = container.querySelector<HTMLVideoElement>('.watch-monitor video[aria-label="The current edit"]')!;
+  const video = container.querySelector<HTMLVideoElement>('.watch-monitor video[aria-label="The video"]')!;
   Object.defineProperty(video, "readyState", { configurable: true, value: 1 });
   // A press on the timeline just before the passage, while Before plays: the edit stays open, on After, and the
   // video plays from there once the pointer is up.
@@ -885,7 +885,7 @@ it("leaves the playhead to the Before clip while it shows, stops it with the vid
   await click(appliedRows()[1]!);
   await act(async () => {});
   // After has played to 0:07.
-  const video = container.querySelector<HTMLVideoElement>('.watch-monitor video[aria-label="The current edit"]')!;
+  const video = container.querySelector<HTMLVideoElement>('.watch-monitor video[aria-label="The video"]')!;
   Object.defineProperty(video, "readyState", { configurable: true, value: 4 });
   const videoAt = (seconds: number, event: string) => act(async () => { video.currentTime = seconds; video.dispatchEvent(new Event(event)); });
   await videoAt(7, "timeupdate");
@@ -11795,7 +11795,7 @@ it("keeps the conversation and the cut on screen when the edit moves on and its 
   const before = units().length;
   expect(before).toBeGreaterThan(0);
   const shown = data.timeline!.version;
-  const video = () => container.querySelector('.watch-monitor video[aria-label="The current edit"]');
+  const video = () => container.querySelector('.watch-monitor video[aria-label="The video"]');
   expect(video()).not.toBeNull();
   // The engine moves the edit on, and every read of its new timeline fails.
   useProjectStore.setState({ refreshHead: initialStore.refreshHead });

@@ -1368,6 +1368,30 @@ describe("transcript tools", () => {
       expect(asked.every(r => r.headers[TASK_HEADER.toLowerCase()] === "tsk_noted" && r.headers[ATTEMPT_HEADER.toLowerCase()] === "2026-04-01T12:00:00.000Z")).toBe(true);
     } finally { await editor.close(); mock.state.extra = before; }
   });
+  it("transcript_fix corrects a phrase with its times, reads the fixed words again and counts captions still reading the old ones", async () => {
+    const state = makeState({ transcripts: { m1: structuredClone(transcript) } });
+    const fixture = await startMockServer(state);
+    const agent = new Client({ name: "transcript-fix", version: "1" });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    try {
+      const server = createScarletMcpServer(new ScarletClient({ baseUrl: fixture.url, token: "tok" }), {
+        projectId: "prj_test", agent: "claude", author: { type: "agent", name: "claude" } });
+      await server.connect(a);
+      await agent.connect(b);
+      // Read first: the session keeps these words, and the fix has to replace them.
+      expect(textOf(await agent.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 2, toWord: 2 } }) as CallToolResult)).toContain("#2 1.10-1.40 welcome");
+      state.timeline = emptyTimeline(state.project.id);
+      state.timeline.tracks.push({ id: "cap", kind: "caption", name: "Captions", clips: [
+        { id: "c1", kind: "caption", timelineIn: 1, timelineOut: 2, text: "welcome back." }] } as never);
+      const fixed = firstJson(await agent.callTool({ name: "transcript_fix", arguments: { find: "welcome back", replace: "Welcome Bach" } }) as CallToolResult);
+      expect(fixed).toEqual({ find: "welcome back", replace: "Welcome Bach", places: 2, captionsStillReading: 1, recordings: [{ mediaId: "m1", name: "talk.mp4", count: 2,
+        places: [{ index: 2, start: 1.1, end: 1.8, before: "welcome back.", after: "Welcome Bach." }, { index: 5, start: 3.6, end: 4.3, before: "welcome back", after: "Welcome Bach" }] }] });
+      expect(textOf(await agent.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 2, toWord: 3 } }) as CallToolResult)).toMatch(/#2 1\.10-1\.40 Welcome\n#3 1\.50-1\.80 Bach\./);
+      const none = firstJson(await agent.callTool({ name: "transcript_fix", arguments: { find: "Scarlett", replace: "Scarlet" } }) as CallToolResult);
+      expect(none).toMatchObject({ places: 0, recordings: [] });
+      expect(none.note).toContain("fuzzy");
+    } finally { await agent.close(); await fixture.close(); }
+  });
   it("transcript_search finds phrases with context", async () => {
     const r = (await client.callTool({ name: "transcript_search", arguments: { mediaId: "m1", query: "WELCOME back" } })) as CallToolResult;
     const t = textOf(r);
@@ -4789,6 +4813,44 @@ it("refuses a whole new timeline that starts or ends a clip inside a sounding wo
     expect(textOf(through)).toContain("dialogue_apply_cuts");
     // The same removal from the quiet after the word goes ahead.
     expect((await propose(2.0, 3.4)).isError).toBeFalsy();
+  } finally {
+    Object.assign(mock.state, original);
+    await c.close();
+  }
+});
+
+it("makes a J cut as a timeline_propose step that leaves both sound edges in quiet, says when each voice comes and goes, and refuses one that cuts a word", async () => {
+  const original = { timeline: mock.state.timeline, waveform: mock.state.waveform };
+  const tl = emptyTimeline(mock.state.project.id);
+  tl.version = "split-door";
+  // “Hello everyone welcome back.” then a cut to “welcome back to the show.”
+  tl.tracks[0]!.clips = [{ ...makeMediaClip("m1", 0, 2.2, 0), id: "first" }, { ...makeMediaClip("m1", 3.5, 5.4, 2.2), id: "second" }];
+  mock.state.timeline = tl;
+  mock.state.waveform = spokenWaveform;
+  const c = await connect("task-split");
+  try {
+    await c.callTool({ name: "timeline_get", arguments: {} });
+    const split = (leads: number, step: object = {}) => c.callTool({ name: "timeline_propose", arguments: { intent: "requested", description: "Lead the answer's voice into the cut",
+      ops: [{ op: "splitJoin", leftClipId: "first", rightClipId: "second", leads, ...step }], reason: "The answer's voice leads into the cut." } }) as Promise<CallToolResult>;
+    // What nobody would choose is refused with the step named: a join that isn't there, sound never recorded, both ways at once.
+    expect(textOf(await split(0.2, { leftClipId: "second", rightClipId: "first" }))).toContain("ops[0] (splitJoin): Nothing on v1 cuts to first");
+    expect(textOf(await split(3))).toMatch(/ops\[0\] \(splitJoin\): m1 has no recording before its start: its sound can lead the cut at 0:02.20 by at most/);
+    expect(textOf(await split(0.2, { trails: 0.2 }))).toContain("give leads or trails, not both");
+    expect(textOf(await c.callTool({ name: "timeline_propose", arguments: { intent: "requested", description: "Split",
+      ops: [{ op: "splitJoin", leftClipId: "first", rightClipId: "second" }] } }) as CallToolResult)).toContain("give leads or trails, in seconds");
+    // Leading by 0.9 s starts the sound inside “Um,” and stops the first shot's inside “welcome”.
+    const through = await split(0.9);
+    expect(through.isError).toBe(true);
+    expect(textOf(through)).toContain("which is sounding there");
+    expect(textOf(through)).toContain("Nothing was saved");
+    const made = await split(0.2);
+    expect(made.isError).toBeFalsy();
+    const joins = JSON.parse(textOf(made).split("Split joins: ")[1]!.split("\n")[0]!);
+    expect(joins).toEqual([{ at: 2.2, soundAt: 2, split: "J", voiceIn: 0.1, voiceOut: -0.4, nowHeard: [], noLongerHeard: [] }]);
+    const body = mock.requests.filter(r => r.method === "POST" && r.path === `/projects/${mock.state.project.id}/changes`).at(-1)!.body as {
+      ops: Array<{ op: string; clip?: { splitEdit?: unknown } }>; timelineEdits: Array<{ label: string; range: { start: number; end: number } }> };
+    expect(body.ops.filter(o => o.op === "addClip").map(o => o.clip!.splitEdit)).toEqual([undefined, { leads: 0.2 }]);
+    expect(body.timelineEdits).toEqual([expect.objectContaining({ label: "J cut at 0:02", range: { start: 2, end: 2.2 } })]);
   } finally {
     Object.assign(mock.state, original);
     await c.close();

@@ -70,7 +70,7 @@ export const DEFAULT_RESULT_CHARS = 40_000;
 const KNOWN: Record<string, AgentCapabilities> = {
   // What each harness delivers launched with Scarlet's tools only, as a side check is. A request is launched with its
   // harness's own shell, file and web tools as well (`workspaceCapabilities`).
-  // claude -p then runs with --tools "" (no file tools); Claude models take images but not audio.
+  // claude -p then runs with tool search alone (--tools ToolSearch, no file tools); Claude models take images but not audio.
   // Plan: Claude Code 2.1.316 has TaskCreate and TaskUpdate (TodoWrite before it) only when --tools names them.
   claude: { images: true, audio: false, files: false, plan: false, toolPrefix: "mcp__scarlet__", toolWaitSeconds: 240 },
   // codex exec has a writable workspace; MCP audio blocks are not forwarded to the model.

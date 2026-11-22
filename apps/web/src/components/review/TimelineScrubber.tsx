@@ -71,8 +71,8 @@ interface TimelineScrubberProps {
 }
 
 const noRange = () => {};
-// Two halves of the alternating 5.2s drift, so rebuilding the timeline mid-edit keeps the glow's place and direction.
-const EDIT_DRIFT_PERIOD = 10.4;
+// Two halves of the alternating 3.6s drift, so rebuilding the timeline mid-edit keeps the glow's place and direction.
+const EDIT_DRIFT_PERIOD = 7.2;
 const editDriftPhase = () => `${(-((performance.now() / 1000) % EDIT_DRIFT_PERIOD)).toFixed(3)}s`;
 
 export function PlayerTimeline(props: Omit<TimelineScrubberProps, "playhead">) {

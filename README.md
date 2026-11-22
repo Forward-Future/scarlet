@@ -70,6 +70,7 @@ Type `/` in the composer to run one of Scarlet’s built-in editing workflows. E
 | `/motion-graphics` | Generates lower thirds, titles, and callouts from HTML/CSS/JS rendered locally to transparent ProRes 4444 via bundled headless Chrome. |
 | `/b-roll` | Plans B-roll and graphic spots as To-dos first, then sources or creates only the ones you ask for. |
 | `/speed-through-waits` | Speeds through installs, builds, and loading screens while keeping tracks in sync and speech at normal speed. |
+| `/music-under-speech` | Dips music under speech so every word is clear, swelling back up in longer pauses and where nobody speaks. |
 | `/fit-length` | Trims an edit down to a target runtime by removing the least essential passages first. |
 | `/tighten-pauses-here` | Focuses pause tightening on a selected passage or the region around the playhead. |
 

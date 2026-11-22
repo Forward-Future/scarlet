@@ -18,6 +18,12 @@ it("counts what isn't a cut by what it did, after the cuts", () => {
   expect(say([cut(0, 60), cut(100, 171), { label: "Assemble the call" }])).toBe("Took out 2:11 in 2 cuts, and made 1 other edit.");
 });
 
+it("counts a music dip and a voice cleanup by what they did", () => {
+  expect(say([cut(0, 60), cut(100, 171), { label: "Dip the music under speech", kind: "dip" }])).toBe("Took out 2:11 in 2 cuts, and made 1 music dip.");
+  expect(say([cut(0, 60), { label: "Clean the voice", kind: "voice" }, { label: "Dip the bed", kind: "dip" }, { label: "Dip the outro", kind: "dip" }]))
+    .toBe("Took out 1:00 in 1 cut, and made 1 voice cleanup and 2 music dips.");
+});
+
 it("names a few edits that aren't cuts, and counts many by kind", () => {
   expect(say([{ label: "music bed", kind: "audio" }, { label: "captions", kind: "text" }, { label: "wrap" }])).toBe("Made 3 edits: music bed, captions, wrap.");
   const frames = ["Frame the watch", "Frame the prompt", "Frame the card", "Frame the chart"].map(label => ({ label, kind: "reframe" as const }));
@@ -59,6 +65,12 @@ it("counts transitions beside the other edits a request made", () => {
   const zoom = (n: number) => ({ label: `Zoom ${n}`, kind: "zoom" as const });
   const swipe = (n: number) => ({ label: `Swipe ${n}`, kind: "transition" as const });
   expect(say([zoom(1), zoom(2), zoom(3), zoom(4), swipe(1), swipe(2), swipe(3), swipe(4)])).toBe("Made 4 zooms and 4 transitions.");
+});
+
+it("counts split edits by what they are, beside the cuts and other edits a request made", () => {
+  const split = (n: number) => ({ label: `J cut at 0:0${n}`, kind: "split" as const });
+  expect(say([cut(0, 30), split(1), split(2), split(3), split(4)])).toBe("Took out 0:30 in 1 cut, and made 4 split edits.");
+  expect(say([{ label: "Zoom", kind: "zoom" as const }, split(1), split(2), split(3), split(4)])).toBe("Made 1 zoom and 4 split edits.");
 });
 
 it("counts the spots Scarlet marked for the editor on their own, since they changed nothing in the video", () => {

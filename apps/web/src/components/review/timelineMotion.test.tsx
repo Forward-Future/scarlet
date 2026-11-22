@@ -177,7 +177,7 @@ it("drifts a soft wash across the lanes while editing, holds its place across re
     await draw(120, false);
     expect(wash().dataset.active).toBeUndefined();
     expect(wash().style.getPropertyValue("--edit-phase")).toBe("");
-    // Editing starts: wash turns on and starts at the wall-clock phase (2.6s mod 10.4s).
+    // Editing starts: wash turns on and starts at the wall-clock phase (2.6s mod 7.2s).
     await draw(120, true);
     expect(wash().dataset.active).toBe("true");
     expect(wash().style.getPropertyValue("--edit-phase")).toBe("-2.600s");

@@ -614,12 +614,12 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
             {before && (showBefore || allowStandby) && <div key={`before ${key}`} className="absolute inset-0 bg-black" inert={!showBefore} data-parked={!showBefore || undefined}
               style={{ zIndex: showBefore ? 1 : 0 }} aria-hidden={!showBefore || undefined}>
               <CutSide project={current.project} timeline={before} url={beforeUrl} window={beforeWindow}
-                label={draftVersion ? "Proposed draft" : "The current edit"} fps={settings.fps} active={active} parkedAt={!showBefore ? leadIn : undefined} />
+                label={draftVersion ? "Proposed draft" : "The video"} fps={settings.fps} active={active} parkedAt={!showBefore ? leadIn : undefined} />
             </div>}
             {edited && (showAfter || allowStandby) && <div key="after" className="absolute inset-0 bg-black" inert={!showAfter} data-parked={!showAfter || undefined}
               style={{ zIndex: showAfter ? 1 : 0 }} aria-hidden={!showAfter || undefined}>
               <CutSide key={edited.joined.version} project={current.project} timeline={edited.joined.timeline} url={edited.url} window={afterWindow}
-                joins={edited.joined.clock} label={edited.url ? "The current edit" : "Proposed draft"} fps={settings.fps} active={active}
+                joins={edited.joined.clock} label={edited.url ? "The video" : "Proposed draft"} fps={settings.fps} active={active}
                 parkedAt={!showAfter ? edited.joined.clock.toMedia(leadIn) : undefined} />
             </div>}
             {!showBefore && !showAfter && <div key="cover" className="absolute inset-0 z-10 bg-black" />}
@@ -627,7 +627,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
           {!paired && (openingJoin || (draftVersion && !draft && !fullVideoUrl && !joined) ? <div className="absolute inset-0 grid place-content-center gap-2 text-sm text-muted" role="status">
             {draftFailed ? <>Couldn’t open this version.<button className="btn-ghost" onClick={onRetryDraft}>Retry</button></>
               : !openingJoin && "Opening the suggestion…"}
-          </div> : fullVideoUrl ? <CachedVideo key={fullVideoUrl} url={fullVideoUrl} label={source?.name ?? (draftVersion ? "Proposed draft" : "The current edit")}
+          </div> : fullVideoUrl ? <CachedVideo key={fullVideoUrl} url={fullVideoUrl} label={source?.name ?? (draftVersion ? "Proposed draft" : "The video")}
             hidden={false} active={active} autoPlay={!!source && autoPlaySource} joins={joined?.clock} />
           : joined ? <div className="absolute inset-0">
             <CutStream key={joined.version} project={current.project} timeline={joined.timeline} version={joined.version} joins={joined.clock} proposed onStart={noop} />
