@@ -80,6 +80,7 @@ export type ScarletApi = Pick<
   | "retryTask"
   | "continueWhenReady"
   | "answerTask"
+  | "addTaskNote"
   | "holdForRewording"
   | "rewordTask"
   | "startBeforeCalls"

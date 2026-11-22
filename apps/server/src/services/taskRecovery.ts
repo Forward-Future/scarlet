@@ -345,9 +345,10 @@ function resumeTask(ctx: Ctx, task: Task, opts: { choice?: RunChoice; afterProje
   // Scarlet's own resume after a quit or a pause keeps them, and an engine that starts finishes a check left waiting in
   // line that way (`settleClosingChecks`).
   const audit = task.repeatAudit && (byEditor ? { ...task.repeatAudit, returns: 0, totalReturns: undefined, queuedAt: undefined, failed: undefined } : task.repeatAudit);
-  // A request the editor started ahead of their calls was at work: it isn't put behind those calls again.
-  if (task.startsBeforeCalls || audit || task.reply) {
-    retry = saveTask(ctx, { ...retry, startsBeforeCalls: task.startsBeforeCalls, repeatAudit: audit, reply: task.reply });
+  // A request the editor started ahead of their calls was at work: it isn't put behind those calls again. The editor's
+  // notes to the request go on with it, those the run heard marked so: a session that carries on has them already.
+  if (task.startsBeforeCalls || audit || task.reply || task.notes?.length) {
+    retry = saveTask(ctx, { ...retry, startsBeforeCalls: task.startsBeforeCalls, repeatAudit: audit, reply: task.reply, notes: task.notes });
   }
   const proposal = task.kind === "revise" && task.context.changeId && ctx.repos.changes.get(task.context.changeId);
   // The revision begins again on the proposal it names while that one stands. A pass a later revision has replaced stays
