@@ -59,6 +59,11 @@ const initialStore = useProjectStore.getState();
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // Settle timeline zoom transitions at once instead of spinning real-time rAF loops inside act().
+  // No test here checks the eased zoom; it lands where it would with motion reduced.
+  const matchMedia = window.matchMedia.bind(window);
+  vi.spyOn(window, "matchMedia").mockImplementation(query => query === "(prefers-reduced-motion: reduce)"
+    ? Object.create(matchMedia(query), { matches: { value: true } }) : matchMedia(query));
   localStorage.clear();
   usePlayerStore.setState({ time: 0, duration: 0, playing: false, rate: 1 });
   // Each test starts with an empty message box, nothing saved for any request and no dialog left open over the keys.
@@ -365,8 +370,6 @@ const markers = () => vi.spyOn(api, "threadEdits").mockImplementation(async (_pr
 const editPanel = () => container.querySelector<HTMLElement>('[aria-label="Applied edit"]');
 const openTitle = () => container.querySelector('.simple-edit[aria-current="true"] .simple-edit-title')?.textContent;
 const press = (key: string) => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })); });
-/** Zooms settle at once, as they do with reduced motion, so a test knows what the timeline shows when it reads it. */
-const zoomAtOnce = () => { const reduced = window.matchMedia("(prefers-reduced-motion: reduce)"); vi.spyOn(window, "matchMedia").mockReturnValue(Object.create(reduced, { matches: { value: true } })); };
 
 it("sets the sentence on what a request made in the type of Scarlet's replies, no larger", async () => {
   // A test lays nothing out, so the two sizes are read from the simple view's stylesheet, a rule to a line.
@@ -552,7 +555,6 @@ it("lists a thread's edits once, numbered, and opens one with its decisions unde
   expect(dots.map(d => d.dataset.state)).toEqual([undefined, undefined, "kept"]);
   // A press on a dot opens its edit in the card, as its row in the chat does, instead of scrubbing.
   expect(editPanel()).toBeNull();
-  zoomAtOnce();
   await act(async () => { strip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(dots[2]!.style.left) * 10 })); });
   await act(async () => {});
   expect(openTitle()).toBe("wrap");
@@ -1567,7 +1569,6 @@ it("opens a located review check where it needs a look, then replays the edit fr
     { changeId, spot: 0, label: "Assembled the opening and demos", range: { start: 0, end: 16 }, previous: [],
       check, reason, reviewRange: { start: 10, end: 10 }, reviewSays: says },
   ] });
-  zoomAtOnce();
   await showFolded();
   const turn = turnFor(changeId);
   const dot = () => container.querySelector<HTMLElement>(".simple-timeline-mark.is-numbered");
@@ -2554,9 +2555,6 @@ const suggestionIn = (places: Array<{ start: number; end: number }>) => {
     ? { ...c, ranges: places, renders: places.map(range => ({ range, beforeRange: range, before: null, after: null })) } : c) };
   useProjectStore.setState({ current: data });
   vi.spyOn(api, "timeline").mockImplementation(async (_, version = "head") => ({ timeline: { ...data.timeline!, version } }));
-  // The timeline's zoom lands at once, as it does with motion reduced.
-  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
-  vi.spyOn(window, "matchMedia").mockReturnValue(Object.create(reduced, { matches: { value: true } }));
 };
 /** The timeline is 1000 px wide for a press or a hover, so a point's x is ten times its percent. */
 const timelineStrip = () => {
@@ -3667,7 +3665,6 @@ it("plays a call of a pass that has no cut list of its own", async () => {
 
 it("keeps the other calls' dots on the timeline while a call is open, so one press reaches the next", async () => {
   runningPass();
-  zoomAtOnce();
   await show();
   await act(async () => {});
   const dots = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark.is-numbered")];
@@ -8115,7 +8112,6 @@ it("opens the request's first waiting call after its last flagged edit is kept",
 it("keeps the waiting pass's flagged edit on the timeline, numbered after its calls, with a call open and with a request behind the pass", async () => {
   runningPass();
   flaggedPart();
-  zoomAtOnce();
   await show();
   await act(async () => {});
   const marks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")].map(m => m.classList.contains("is-numbered") ? m.textContent : `${m.dataset.state} dot`);
@@ -12116,7 +12112,6 @@ it("shows the whole timeline on any press on a request's band", async () => {
   useProjectStore.setState({ current: data });
   await showFolded();
   await act(async () => {});
-  zoomAtOnce();
   const ruler = () => container.querySelector(".timeline-ruler")!.textContent;
   const whole = ruler();
   const band = (changeId: string) => turnFor(changeId).querySelector<HTMLElement>(".unit-msg")!;
