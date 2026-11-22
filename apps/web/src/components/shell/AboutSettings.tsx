@@ -37,8 +37,8 @@ export function AboutSettings() {
               <div className="about-telemetry-details">
                 <ul className="list-disc space-y-1 pl-5">
                   <li>At startup, Scarlet sends the number of projects in your library, excluding the trash.</li>
-                  <li>When a tracked feature succeeds, Scarlet sends its name. This includes actions an agent takes on your behalf.</li>
-                  <li>When a task is queued, Scarlet sends its type, selected agent and fast-mode setting. When it finishes, Scarlet sends the type, agent, outcome (done, failed or cancelled), interruption flag, duration when available, and number of recorded changes. This includes background transcriptions and resumed tasks.</li>
+                  <li>When a tracked feature succeeds, Scarlet sends its name. This includes actions Scarlet takes on your behalf.</li>
+                  <li>When a task is queued, Scarlet sends its type, which of Claude Code, Codex or Gemini runs it, and its fast-mode setting. When it finishes, Scarlet sends the type, which of them ran it, outcome (done, failed or cancelled), interruption flag, duration when available, and number of recorded changes. This includes background transcriptions and resumed tasks.</li>
                   <li>When an export finishes, Scarlet sends the render type, outcome and quality setting when available.</li>
                   <li>When you explicitly keep an applied edit, send a revision about it or reject it, Scarlet sends the choice and an installation-specific code for that edit. The code links later choices about the same edit. A revision or a rejection counts when the request is accepted. Opening the card, dismissing it or leaving an edit untouched sends no review decision.</li>
                 </ul>

@@ -6,7 +6,7 @@ import { basename, dirname, join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it as vitestIt, vi, onTestFinished } from "vitest";
 import { partedIt } from "../../../test/parts";
-import { clipEnd, createProject, isPlayableMedia, cutPlaybackWindow, LEFT_OUT_READING, planPlaybackSegments, sha256, spanningSections, timelineDuration, timelineFromKeepRanges, Transform, type Change, type Clip, type Project } from "@scarlet/timeline";
+import { clipEnd, createProject, CUT_LEAD_SECONDS, CUT_TAIL_SECONDS, isPlayableMedia, cutPlaybackWindow, LEFT_OUT_READING, planPlaybackSegments, sha256, spanningSections, timelineDuration, timelineFromKeepRanges, Transform, type Change, type Clip, type Project } from "@scarlet/timeline";
 import { buildThreads, isThreadDone, queueOrder, queueWait, taskPlan, taskRecoveryAction, threadRevision, type Render, type Task } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "./app.js";
 import { BUNDLED_SKILLS } from "./bundledSkills.js";
@@ -31,7 +31,8 @@ import { speakerAnalysisVersion } from "./transcribe/speakerLabels.js";
 import { alignmentVersion } from "./transcribe/wordAlign.js";
 import { LocalWhisperModel } from "./transcribe/localModel.js";
 import { audioWorker } from "./transcribe/audioWorker.js";
-import { recoverIngest, transcribeMedia } from "./services/ingest.js";
+import { recoverIngest } from "./services/ingest.js";
+import { transcribeMedia } from "./services/transcription.js";
 import { ensureHead, resolveTimeline, storeVersion } from "./services/timeline.js";
 import { purgeTrash } from "./services/trash.js";
 import { scarletRenderAdapter } from "./render/scarletRender.js";
@@ -4495,6 +4496,57 @@ it("applies a pass when its run finishes with every staged cut settled by Scarle
 });
 
 /** A dialogue pass on a 20 s recording (or one of another length) that saves its cuts in parts, with the cut list, calls and notes of each part's review. */
+it("prepares the next waiting call after each decision, and lets go of one the editor has moved past", async () => {
+  const { ctx } = workspace;
+  const { base, staged, submit, choose, assess } = dialoguePassInParts(60);
+  // Renders wait until the test lets them finish, so each one's state can be read on the way.
+  let open!: () => void;
+  const gate = new Promise<void>(resolve => { open = resolve; });
+  const encode = vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { await gate; writeFileSync(file, "preview"); });
+  // A window on whole sections is drawn from the section cache first; here that waits too, then leaves it to renderRange.
+  const sections = vi.spyOn(ctx.render, "renderFullCached").mockImplementation(async () => { await gate; throw new Error("No cached sections in this test."); });
+  try {
+    const { review } = await submit(base, [staged(5, 6), staged(25, 26), staged(45, 46)]);
+    const calls = [5, 25, 45].map((start, index) => ({ index, start, end: start + 1, verdict: "ask", reason: `Check the pickup at ${start}.` }));
+    expect((await assess(review, calls)).status).toBe(200);
+    const first = ctx.repos.changes.get(review.id)!.firstDecisionPreview!;
+    expect(first.index).toBe(0);
+    const cuts = (await (await api("POST", `/changes/${review.id}/cut-review`, {})).json()).review.cuts as Array<{ at: number }>;
+    // The files queued for the calls after the first, in order, each named by the call whose join it plays.
+    const prepared = () => ctx.repos.renders.select("project_id = ? AND kind = 'segment'", [project.id], "created_at, rowid")
+      .filter(r => r.id !== first.renderId).map(r => ({ id: r.id, call: cuts.findIndex(c => r.range!.start <= c.at && c.at <= r.range!.end), version: r.version }));
+    const settle = async () => { while (ctx.pending.size) await Promise.race([Promise.allSettled([...ctx.pending]), setImmediate()]); };
+
+    // Keep on the first call queues the second, as the first was queued when Scarlet asked.
+    expect((await choose(review, [{ index: 0, choice: "cut" }])).status).toBe(200);
+    await vi.waitFor(() => expect(prepared()).toHaveLength(1));
+    expect(prepared()[0]).toMatchObject({ call: 1, version: review.toVersion });
+    const secondRender = prepared()[0]!.id;
+
+    // Deciding the second before its file is ready lets it go, and queues the third.
+    expect((await choose(review, [{ index: 0, choice: "cut" }, { index: 1, choice: "keep" }])).status).toBe(200);
+    await vi.waitFor(() => expect(prepared()).toHaveLength(2));
+    expect(prepared()[1]).toMatchObject({ call: 2, version: review.toVersion });
+    const thirdRender = prepared()[1]!.id;
+    await vi.waitFor(() => expect(ctx.repos.renders.get(secondRender)?.state).toBe("cancelled"));
+
+    // Once ready, opening the third call plays the file prepared for it: nothing is drawn again.
+    open();
+    await vi.waitFor(() => expect(ctx.repos.renders.get(thirdRender)?.state).toBe("done"));
+    const timeline = ctx.repos.versions.get(project.id, review.toVersion)!.timeline;
+    const asked = cutPlaybackWindow(cuts[2]!.at - CUT_LEAD_SECONDS, cuts[2]!.at + CUT_TAIL_SECONDS, timelineDuration(timeline), project.settings.fps)!;
+    const encodes = encode.mock.calls.length;
+    const play = await api("POST", projectsPath() + `/versions/${review.toVersion}/cut-playback-file`, asked);
+    expect((await play.json()).renderId).toBe(thirdRender);
+    expect(encode).toHaveBeenCalledTimes(encodes);
+
+    // With every call decided nothing is left to prepare.
+    expect((await choose(review, [0, 1, 2].map(index => ({ index, choice: "cut" })))).status).toBe(200);
+    await settle();
+    expect(prepared()).toHaveLength(2);
+  } finally { open(); sections.mockRestore(); }
+});
+
 function dialoguePassInParts(length = 20) {
   const { ctx } = workspace;
   vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });

@@ -49,13 +49,13 @@ it("caps a runaway burst and says how many lines it left out", () => {
 
 it("logs every media element's events, with its state and without its query", () => {
   const video = document.createElement("video");
-  video.setAttribute("aria-label", "The current edit");
+  video.setAttribute("aria-label", "The video");
   video.src = "http://127.0.0.1:5000/api/files/renders/rnd_1/file?token=sct_secret";
   document.body.append(video);
   video.dispatchEvent(new Event("waiting"));
   video.dispatchEvent(new Event("pause"));
   const [waiting, pause] = written();
-  expect(waiting).toContain(`waiting el=${logId(video)} name="The current edit" src=renders/rnd_1/file t=0`);
+  expect(waiting).toContain(`waiting el=${logId(video)} name="The video" src=renders/rnd_1/file t=0`);
   expect(waiting).toContain("paused=true");
   expect(waiting).not.toContain("sct_secret");
   expect(pause).toContain(" pause el=");

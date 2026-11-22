@@ -692,7 +692,7 @@ describe("runGemini", { timeout: 20_000 }, () => {
         upd({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "captions." } }),
         upd({ sessionUpdate: "usage_update", usage: { inputTokens: 100, cachedReadTokens: 40, outputTokens: 9 } }),
       ],
-    }, { agent: "gemini", model: "gemini-2.5-flash", effort: "high" });
+    }, { agent: "gemini", model: "gemini-2.5-flash", effort: "high", refusedTool: "{tool} was refused. Carry on." });
 
     expect(result).toEqual({
       ok: true,
@@ -724,7 +724,7 @@ describe("runGemini", { timeout: 20_000 }, () => {
       "session/prompt",
     ]);
     expect(sent.find((m) => m.method === "session/new")?.params).toMatchObject({ _meta: { antigravity: { systemPrompt: { append: "SYS" } } } });
-    expect(JSON.stringify(sent.filter((m) => m.method === "session/prompt").at(-1))).toContain("Scarlet refused bash: only Scarlet's own tools");
+    expect(JSON.stringify(sent.filter((m) => m.method === "session/prompt").at(-1))).toContain("bash was refused. Carry on.");
     // Allowed Scarlet MCP tool, denied built-in bash tool.
     expect(sent.find((m) => m.id === 99)).toMatchObject({ result: { outcome: { outcome: "selected", optionId: "allow1" } } });
     expect(sent.find((m) => m.id === 100)).toMatchObject({ result: { outcome: { outcome: "selected", optionId: "deny2" } } });
@@ -770,9 +770,17 @@ describe("runGemini", { timeout: 20_000 }, () => {
   it("stops a run whose turns keep ending on refused tools", async () => {
     const bash = JSON.stringify({ jsonrpc: "2.0", id: 100, method: "session/request_permission",
       params: { toolCall: { name: "bash" }, options: [{ optionId: "allow", kind: "allow_once" }, { optionId: "deny", kind: "reject_once" }] } });
-    const { result, stdin } = await run(runGemini, { acp: { everyTurn: true }, lines: [bash] }, { agent: "gemini" });
+    const { result, stdin } = await run(runGemini, { acp: { everyTurn: true }, lines: [bash] }, { agent: "gemini", refusedTool: "{tool} was refused. Carry on." });
     expect(result).toMatchObject({ ok: false, error: "Gemini stopped after Scarlet refused bash, a tool that doesn't run in Scarlet, 5 times." });
     expect((await stdin()).match(/"method":"session\/prompt"/g)).toHaveLength(5);
+  });
+
+  it("writes no words of its own for the model: without the engine's, a turn that ended on a refused tool fails", async () => {
+    const bash = JSON.stringify({ jsonrpc: "2.0", id: 100, method: "session/request_permission",
+      params: { toolCall: { name: "bash" }, options: [{ optionId: "allow", kind: "allow_once" }, { optionId: "deny", kind: "reject_once" }] } });
+    const { result, stdin } = await run(runGemini, { acp: { everyTurn: true }, lines: [bash] }, { agent: "gemini" });
+    expect(result).toMatchObject({ ok: false, error: "Gemini stopped after Scarlet refused bash, and this engine gave no words to carry on with. Update Scarlet's engine." });
+    expect((await stdin()).match(/"method":"session\/prompt"/g)).toHaveLength(1);
   });
 
   it("fails on a prompt error, refusal stopReason, or non-zero exit", async () => {
@@ -911,6 +919,7 @@ describe("runGemini", { timeout: 20_000 }, () => {
         {
           agent: "gemini",
           model: "gemini-4-neon",
+          refusedTool: "{tool} was refused. Carry on.",
           env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, FAKE_ACP_SCRIPT_TURNS: JSON.stringify(turns) },
           onUsage: (u) => live.push(u),
         },

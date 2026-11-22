@@ -7,6 +7,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { MediaAsset, MediaKind } from "@scarlet/timeline";
 import { LOCAL_MEDIA_INPUT, failureReason, resolveFfprobe, runCapture } from "./exec.js";
+import { pictureColorOf, type PictureColor } from "./hdr.js";
 
 export interface ProbeResult {
   previewClock?: { frameRate: string; startPts: number; videoStart?: number };
@@ -41,6 +42,8 @@ export interface ProbeResult {
   audioCodec?: string;
   audioDuration?: number;
   pixFmt?: string;
+  /** HDR or camera Log the video stream declares (`pictureColorOf`); absent for an ordinary BT.709 or untagged picture. */
+  color?: PictureColor;
   sampleRate?: number;
   channels?: number;
   /** Overall bitrate in bits/s, if the container reports one. */
@@ -78,11 +81,12 @@ interface FfprobeStream {
   nb_frames?: string;
   disposition?: { attached_pic?: number };
   side_data_list?: Array<{ side_data_type?: string; rotation?: number }>;
-  tags?: { rotate?: string; alpha_mode?: string; ALPHA_MODE?: string };
+  bits_per_raw_sample?: string;
+  tags?: { rotate?: string; alpha_mode?: string; ALPHA_MODE?: string } & Record<string, string | undefined>;
 }
 interface FfprobeOutput {
   streams?: FfprobeStream[];
-  format?: { start_time?: string; duration?: string; bit_rate?: string; format_name?: string };
+  format?: { start_time?: string; duration?: string; bit_rate?: string; format_name?: string; tags?: Record<string, string | undefined> };
 }
 
 const ALPHA_PIX_FMTS = /^(yuva|rgba|bgra|argb|abgr|gbrap|ya\d|ayuv|vuya|pal8)/;
@@ -245,6 +249,7 @@ export async function probeMedia(
     audioCodec: audio?.codec_name,
     audioDuration: Number(audio?.duration) || undefined,
     pixFmt: video?.pix_fmt,
+    color: isStillImage ? undefined : pictureColorOf(video, json.format?.tags),
     sampleRate: audio?.sample_rate ? Number(audio.sample_rate) : undefined,
     channels: audio?.channels,
     bitrate: Number.isFinite(bitrate) ? bitrate : undefined,
@@ -296,9 +301,11 @@ export function isMovingAsset(asset: Pick<MediaAsset, "kind" | "path">, file = a
   return asset.kind === "video" || (asset.kind === "graphic" && !isImagePath(file));
 }
 
-/** The media-asset fields the schema stores, taken from a probe. */
+/** The media-asset fields the schema stores, taken from a probe. A moving picture always records its colour, `{}` for
+ * ordinary SDR, so an asset without it is one imported before Scarlet read colour. */
 export function probeToAssetFields(probe: ProbeResult) {
   return {
+    ...(probe.hasVideo && !probe.isStillImage && { color: probe.color ?? {} }),
     duration: probe.duration || undefined,
     fps: probe.fps || undefined,
     width: probe.width || undefined,

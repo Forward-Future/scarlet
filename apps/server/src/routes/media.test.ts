@@ -9,7 +9,7 @@ import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { ffmpeg } from "../render/ffmpeg.js";
 import { OpenAIProvider } from "../transcribe/openai.js";
-import { transcribeForDialogue } from "../services/ingest.js";
+import { transcribeForDialogue } from "../services/transcription.js";
 import { previewIdentity } from "../services/previewPictures.js";
 import { emissionStorePaths } from "../services/recordingAudio.js";
 import { savedSpeakerTurns } from "../services/recordingSpeakers.js";

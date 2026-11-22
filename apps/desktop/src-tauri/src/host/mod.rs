@@ -677,7 +677,8 @@ impl HostRuntime {
             me.subscriptions_changed.notify_one();
             me.wake.notify_one();
             me.emit_status();
-            if !me.cancel.is_cancelled() {
+            // A side check is small and many finish together: the request they belong to reads the quota when it ends.
+            if !me.cancel.is_cancelled() && !run.side_check {
                 let bg = me.clone();
                 tauri::async_runtime::spawn(async move {
                     let _ = bg.refresh_quota(true, Some(&[agent.as_str()])).await;

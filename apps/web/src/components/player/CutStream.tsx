@@ -117,7 +117,7 @@ export function CutStream({ project, timeline, version, onStart, draft = false, 
   const waitProgress = waiting && preroll && prerollProgress && prerollProgress.total > 0
     ? `${prerollProgress.done}/${prerollProgress.total}` : undefined;
   return <>
-    <FramedVideo ref={video} aria-label={draft || proposed ? "Proposed draft" : "The current edit"}
+    <FramedVideo ref={video} aria-label={draft || proposed ? "Proposed draft" : "The video"}
       poster={poster} playsInline preload="auto" data-waiting={waiting || undefined}
       data-wait-stage={waiting ? "rendering" : undefined} data-wait-progress={waitProgress}
       onClick={() => player.toggle()} onPlaying={() => setStatus("ready")}

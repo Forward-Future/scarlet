@@ -7,6 +7,20 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 22, 2026
 
 - On a recording made in a noisy room, Scarlet trims pauses and places cuts on the quiet between words again instead of mistaking the room's noise for speech.
+- HDR video from an iPhone or other HDR camera now looks right in playback, thumbnails and exports instead of washed out, and Scarlet knows when footage was shot in a camera Log profile.
+- After you keep, reject or send back a call, Scarlet gets the next one ready so it plays the moment you open it.
+- A Keep that didn't reach Scarlet while it was restarting or reconnecting is now sent again, instead of staying unrecorded until the next launch.
+- Play no longer gets stuck showing pause over a still picture when a video fails to load.
+- Rejecting the one named edit of a video Scarlet built from pieces no longer puts back the footage its cuts took out.
+- Scarlet checks the sound at a cut even when another clip plays straight on from the same second, so a repeated passage can't end inside a word.
+- A pass's closing check measures sync and the picture again after a first read that failed, instead of leaving them out for the rest of the edit.
+- A Gemini edit that Scarlet stopped (a stall, a time limit, Stop this edit) no longer shows a Gemini error before the real reason.
+- An edit started from the command line no longer fails as interrupted after a minute and a half, and a finished one no longer hangs on a tool still running in the background.
+- Scarlet won't capture a page from your own computer or network for B-roll, however its address is written.
+- A cut you approved on a dialogue pass is listed once after the pass goes in, not again as an extra row you can't open.
+- Opening a cut no longer flashes black for a moment when its still is already loaded.
+- Resume editing picks up every paused request on the model you've picked, not only the one whose band you pressed.
+- Telling who is speaking works again on a new install: the speaker model downloads instead of failing every time.
 - A voice request aimed at a moment on the timeline now carries any attached files or marked frame with it instead of leaving them in the message box.
 - Skipping a second ahead with Shift+→ while watching a pass's edits no longer marks a skipped cut or edit as kept.
 - Timeline thumbnails stay cached while a recording prepares instead of redrawing on every progress update.
