@@ -54,6 +54,7 @@ import { player, type Audition } from "../lib/player";
 import { appliedCutClock, appliedCutSource, cutChange } from "../lib/appliedCutPlayback";
 import { cutAudition, cutAuditionClock, isolatedReviewCut } from "../lib/cutAudition";
 import { besides, removedSince } from "../lib/removedSince";
+import { cutViewBase, rebaseCut } from "../lib/cutViewBase";
 import { usePlayerStore } from "../stores/player";
 import { composeClocks, verifiedJoinClock, type JoinClock } from "../lib/joinClock";
 import { buildThreads, firstCutDeliveries, isRedo, requestTarget, revisionTarget, stagedCuts, threadConversation, type Thread, type ThreadEntry } from "../lib/threads";
@@ -1666,8 +1667,13 @@ export function SimpleWorkspace() {
   // has changed it since. An undone cut, whose version before it is the video now, keeps its own.
   const afterOf = (made: { version: string; removed?: TimeRange[] } | undefined, before: string | undefined) =>
     made && head && made.version !== head && before !== head ? { version: head, removed: undefined } : made;
-  const editPlaybackKey = (edit: ThreadEdit, after?: string) => JSON.stringify([current.id, firstKey(edit), edit.beforeCut?.version, after,
-    edit.beforeCut?.removed.start, edit.beforeCut?.removed.end]);
+  const editPlaybackKey = (edit: ThreadEdit, after?: string, base?: string) => JSON.stringify([current.id, firstKey(edit), edit.beforeCut?.version, after,
+    edit.beforeCut?.removed.start, edit.beforeCut?.removed.end, base]);
+  // The earlier version an applied cut opens on, so the cuts earlier batches made round it show too (`cutViewBase`).
+  const viewBaseOf = (edit: ThreadEdit, thread: Thread | undefined, edits: readonly ThreadEdit[]) => thread && cutViewBase(edit, edits, e => {
+    const made = Date.parse(cutChange(e, thread.changes)?.createdAt ?? "");
+    return Number.isFinite(made) ? made : NaN;
+  }, head ?? undefined);
   // Cuts are prepared and drafted on the working cut on screen: one saved under a playing listen waits with it, so the
   // listen's own version isn't thrown away and asked for again with each save.
   const shownProject = useMemo(() => head && head !== current.project.head ? { ...current.project, head } : current.project, [current.project, head]);
@@ -2478,8 +2484,11 @@ export function SimpleWorkspace() {
   const reviewingEdit = shownEdit && shownChange && focusThread ? shownEdit : undefined;
   const threadEdits = threadTimeline.edits;
   // An applied cut is gone from the working cut, so it plays on the version before it, where the timeline shades
-  // what came out. After steps over it, as the video plays now; Before plays through it.
-  const beforeCut = reviewingEdit?.beforeCut;
+  // what came out. After steps over it, as the video plays now; Before plays through it. When an earlier batch made a
+  // cut round it, that's the version before the earliest of them, so every cut round it shows (`cutViewBase`).
+  const ownCut = reviewingEdit?.beforeCut;
+  const cutBase = useMemo(() => reviewingEdit && viewBaseOf(reviewingEdit, focusThread, threadEdits),
+    [reviewingEdit, focusThread, threadEdits, head]); // eslint-disable-line react-hooks/exhaustive-deps
   const madeBy = useMemo(() => {
     const change = reviewingEdit?.beforeCut && focusThread && cutChange(reviewingEdit, focusThread.changes);
     return change && appliedCutSource(change);
@@ -2487,13 +2496,13 @@ export function SimpleWorkspace() {
   // After plays the version the cut made. Once later batches, revisions or other requests have changed the video
   // since, it plays the video as it runs now, which has this cut's join and theirs: the same version for the card,
   // for the file and window prepared ahead of it, and for the clock that maps it onto this timeline.
-  const latestAfter = useMemo(() => afterOf(madeBy, beforeCut?.version), [madeBy, beforeCut?.version, head]); // eslint-disable-line react-hooks/exhaustive-deps
+  const latestAfter = useMemo(() => afterOf(madeBy, ownCut?.version), [madeBy, ownCut?.version, head]); // eslint-disable-line react-hooks/exhaustive-deps
   // While the cut plays, After stays on the version it started on. A pass applying its next cuts moves the video on
   // every moment, and following it put up a new player each time, before the last had played a frame: nothing
   // played. Once the editor pauses, or the cut changes or another opens, it takes up the video as it runs now.
   const playingNow = usePlayerStore(s => s.playing);
   const heldAfter = useRef<{ key?: string; source?: typeof latestAfter }>(undefined);
-  const afterKey = reviewingEdit && editPlaybackKey(reviewingEdit);
+  const afterKey = reviewingEdit && editPlaybackKey(reviewingEdit, undefined, cutBase);
   // A cut the editor just rejected holds it too, for the moment it takes to leave the timeline: the video without it
   // lands meanwhile, and its card would start on a version it isn't in.
   const afterSource = (playingNow || threadTimeline.leaving) && latestAfter && heldAfter.current?.source && heldAfter.current.key === afterKey
@@ -2501,8 +2510,18 @@ export function SimpleWorkspace() {
   heldAfter.current = { key: afterKey, source: afterSource };
   const holdingAfter = afterSource !== latestAfter;
   const appliedAfterVersion = afterSource?.version;
-  const preparedEdit = reviewingEdit ? preparedCandidates.get(editPlaybackKey(reviewingEdit, appliedAfterVersion)) : undefined;
-  const cutBefore = useReviewTimeline(current.id, beforeCut?.version, preparedEdit?.before.timeline ?? timeline);
+  const preparedEdit = reviewingEdit ? preparedCandidates.get(editPlaybackKey(reviewingEdit, appliedAfterVersion, cutBase)) : undefined;
+  // The cut's footage on that earlier version. Until both versions are in, nothing plays, so the card doesn't start on
+  // its own version and change players; one that can't be placed there stays on its own.
+  const ownBefore = useReviewTimeline(current.id, cutBase && ownCut?.version, timeline);
+  const baseBefore = useReviewTimeline(current.id, cutBase, preparedEdit?.before.timeline ?? timeline);
+  const rebasedCut = useMemo(() => cutBase && ownCut && ownBefore.timeline && baseBefore.timeline
+    ? rebaseCut(ownBefore.timeline, baseBefore.timeline, ownCut.removed, fps) : undefined,
+  [cutBase, ownCut, ownBefore.timeline, baseBefore.timeline, fps]);
+  const rebasing = !!cutBase && !!ownCut && !rebasedCut && !ownBefore.error && !baseBefore.error && !(ownBefore.timeline && baseBefore.timeline);
+  const beforeCut = useMemo(() => ownCut && rebasedCut ? { version: cutBase!, removed: rebasedCut } : ownCut, [ownCut, rebasedCut, cutBase]);
+  const cutBefore = useReviewTimeline(current.id, rebasing ? undefined : beforeCut?.version,
+    rebasedCut ? baseBefore.timeline : preparedEdit?.before.timeline ?? timeline);
   const beforeTimeline = cutBefore.timeline ?? undefined;
   const beforeDuration = useMemo(() => beforeTimeline ? timelineDuration(beforeTimeline) : 0, [beforeTimeline]);
   // The side the editor chose and the listen they started belong to this opening of this edit, whichever version of
@@ -2559,7 +2578,8 @@ export function SimpleWorkspace() {
   // so After starts as soon as that one arrives.
   const appliedJoined = useMemo(() => {
     if (!appliedListen || appliedSide !== "after" || !appliedCut || !afterSource || !beforeTimeline || !afterTimeline) return;
-    const clock = appliedCutClock(beforeTimeline, afterTimeline, afterSource.removed, fps, appliedCut, appliedListen);
+    // The removals saved with the cut's change are in its own version's clock, not the earlier one it opens on.
+    const clock = appliedCutClock(beforeTimeline, afterTimeline, rebasedCut ? undefined : afterSource.removed, fps, appliedCut, appliedListen);
     return clock ? { version: afterSource.version, timeline: afterTimeline, clock } : undefined;
   }, [appliedListen, appliedCut, afterSource, beforeTimeline, afterTimeline, fps]); // eslint-disable-line react-hooks/exhaustive-deps
   const appliedFile = usePlaybackCache(current.project, { version: appliedAfterVersion, settingsRevision: current.renderSettingsRevision });
@@ -2986,14 +3006,19 @@ export function SimpleWorkspace() {
     };
     const addEdit = (edit: ThreadEdit, thread: Thread | undefined, edits: ThreadEdit[]) => {
       if (!edit.beforeCut || !thread) return;
-      const target = editToPrepare(edit, cutChange(edit, thread.changes), edits, afterOf);
+      const base = edit === reviewingEdit ? cutBase : viewBaseOf(edit, thread, edits);
+      const target = editToPrepare(edit, cutChange(edit, thread.changes), edits, afterOf, base);
       if (!target) return;
       if (edit === reviewingEdit) {
-        if (!beforeTimeline || (appliedSide === "after" && afterSource && !afterTimeline)) return;
+        if (!beforeTimeline || !appliedCut || (appliedSide === "after" && afterSource && !afterTimeline)) return;
+        // The card has already placed it, on its earlier version or its own.
         target.before = beforeTimeline;
-        if (target.after && afterTimeline) target.after = { ...target.after, version: afterTimeline };
+        target.cut = appliedCut;
+        delete target.base;
+        if (rebasedCut) target.nearby = [];
+        if (target.after && afterTimeline) target.after = { ...target.after, version: afterTimeline, ...rebasedCut && { removed: undefined } };
       }
-      add(editPlaybackKey(edit, target.after && (typeof target.after.version === "string" ? target.after.version : target.after.version.version)), target);
+      add(editPlaybackKey(edit, target.after && (typeof target.after.version === "string" ? target.after.version : target.after.version.version), base), target);
     };
     // An editor can open a cold card before its row is reached. Finish that audition file while its stream plays.
     if (openCall && (!openCallBack || returningCall) && !conflict) addCall(openCall);
@@ -3025,7 +3050,7 @@ export function SimpleWorkspace() {
     beforeTimeline, afterTimeline, appliedSide, madeBy, callTimeline, needsSingleCut, single.preview, listening?.side, versionAfter, savedAfter.timeline, !!preparedCall]); // eslint-disable-line react-hooks/exhaustive-deps
   const openVersion = versionBefore ?? head;
   const openCut = !activeReview ? undefined : beforeCut ?? (openCall && openVersion && heard ? { version: openVersion, removed: heard } : undefined);
-  const openPlaybackKey = reviewingEdit ? editPlaybackKey(reviewingEdit, appliedAfterVersion)
+  const openPlaybackKey = reviewingEdit ? editPlaybackKey(reviewingEdit, appliedAfterVersion, cutBase)
     : listening && beforeVersion ? callPlaybackKey(listening.index, beforeVersion) : undefined;
   const nextCutPlayback = usePrepareReviewCuts(shownProject, current.renderSettingsRevision, reviewQueue, draftCache, preparedCandidates,
     openCut && { ...openCut, key: openPlaybackKey });
@@ -3951,7 +3976,7 @@ export function SimpleWorkspace() {
           <CutPreview simple={{ seekFromMessage, typedTimes, marks: source || beforeCut ? [] : suggestion && lineFocus ? marks : leavingMarks, fit: fitTimeline, focus: leavingNow && lineFocus ? { ...lineFocus, leaving: true } : lineFocus, label: onVideo, compareHost: reviewingEdit ? compareHost : undefined, above: rejectedCard ?? editCard ?? callCard ?? suggestCard, foot: undoFoot,
             gaps: cutKey ? gaps : callGaps, skippedRanges: joinedPlayer?.clock.removed ?? stepsOver(appliedListen ?? playedAudition),
             nextCutPlayback, cutPlayback: appliedListen && beforeTimeline && cutKey && appliedCut
-              ? { key: editPlaybackKey(reviewingEdit!, appliedAfterVersion), start: appliedListen.start, side: appliedSide,
+              ? { key: editPlaybackKey(reviewingEdit!, appliedAfterVersion, cutBase), start: appliedListen.start, side: appliedSide,
                 beforeWindow: preparedEdit?.before.window, afterWindow: preparedAfter?.window,
                 beforeFile: preparedEdit?.before.file, afterFile: preparedAfter?.file }
               // On the version that still has the footage around the call, Before plays that version, and After the

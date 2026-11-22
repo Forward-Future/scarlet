@@ -6,6 +6,7 @@ import { api, IS_MOCK } from "../../lib/client";
 import { readTimeline } from "../../lib/timelineCache";
 import { cutAudition, cutAuditionClock, isolatedReviewCut } from "../../lib/cutAudition";
 import { besides, removedSince } from "../../lib/removedSince";
+import { rebaseCut } from "../../lib/cutViewBase";
 import { usePlayerStore } from "../../stores/player";
 import { useProjectStore } from "../../stores/project";
 import { singleCutDraft, type SingleCutDrafts } from "./useCutReview";
@@ -20,6 +21,8 @@ export interface CutToPrepare {
   nearby?: TimeRange[];
   after?: { version: Version; removed?: TimeRange[] };
   applied?: boolean;
+  /** An earlier version to open the applied cut on, when it still has the cut's footage (`cutViewBase`). */
+  base?: string;
   single?: { changeId: string; index: number; count: number };
 }
 
@@ -71,10 +74,11 @@ type AppliedAfter = NonNullable<CutToPrepare["after"]> & { version: string };
 
 /** `afterOf` names the version After plays, when the video has changed since the cut's own save. */
 export function editToPrepare(edit: ThreadEdit, change: Change | undefined, edits: readonly ThreadEdit[],
-  afterOf: (made: AppliedAfter | undefined, before: string) => AppliedAfter | undefined = made => made): CutToPrepare | undefined {
+  afterOf: (made: AppliedAfter | undefined, before: string) => AppliedAfter | undefined = made => made, base?: string): CutToPrepare | undefined {
   if (!edit.beforeCut) return;
   const { removed: cut, version } = edit.beforeCut;
-  return { cut, before: version, nearby: nearbyCuts(edits, version, cut), applied: true, after: afterOf(change && appliedCutSource(change), version) };
+  return { cut, before: version, nearby: nearbyCuts(edits, version, cut), applied: true, after: afterOf(change && appliedCutSource(change), version),
+    ...base && { base } };
 }
 
 export interface CutPlaybackWindow extends TimeRange { url: string }
@@ -119,8 +123,15 @@ export async function prepareCut(projectId: string, fps: number, target: CutToPr
     }
     if (target.after) return { timeline: await read(target.after.version), cut: target.cut, removed: target.after.removed };
   };
-  const [before, edited] = await Promise.all([read(target.before), readAfter().catch(() => undefined)]);
+  const [own, saved, base] = await Promise.all([read(target.before), readAfter().catch(() => undefined),
+    target.base ? read(target.base).catch(() => undefined) : undefined]);
   signal.throwIfAborted();
+  // On the earlier version, as the card places it: what came out since is all stepped over, and the removals saved
+  // with the cut's change are in its own version's clock.
+  const rebased = base && !target.single ? rebaseCut(own, base, target.cut, fps) : undefined;
+  const before = rebased ? base! : own;
+  if (rebased) target = { ...target, cut: rebased, nearby: [] };
+  const edited: { timeline: Timeline; cut: TimeRange; removed?: TimeRange[] } | undefined = saved && rebased ? { ...saved, cut: rebased, removed: undefined } : saved;
   const cut = edited?.cut ?? target.cut;
   const duration = timelineDuration(before);
   if (cut.start >= duration || cut.end <= cut.start) return;
