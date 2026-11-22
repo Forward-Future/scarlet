@@ -261,11 +261,41 @@ it("omits Pause from the Media hover card and More menu until media processing i
   expect(container.querySelector(".media-hover-card")?.textContent).toContain("Video cached for playback");
   expect(container.querySelector(".media-hover-card button")).toBeNull();
   expect(container.querySelectorAll('[role="menuitem"]')).toHaveLength(0);
-  // A file being read shows Pause in both places.
+  // A file being read shows Pause in both places, with a status label in the hover card.
   vi.mocked(api.sourceCaches).mockResolvedValue({ caches: [] });
   await show([video("cam", { status: "ingesting", preparation: { stage: "waveform", fraction: 0.2 } })]);
+  expect(container.querySelector(".media-hover-card strong")?.textContent).toBe("Preparing media");
   expect(container.querySelector(".media-hover-card button")?.textContent).toBe("Pause");
   expect([...container.querySelectorAll('[role="menuitem"]')].map(item => item.textContent)).toEqual(["Pause"]);
+});
+
+it("shows one progress row per active job in the hover card without listing individual files", async () => {
+  vi.mocked(api.sourceCaches).mockResolvedValue({ caches: [{ mediaId: "cam", state: "caching", progress: 0.03 }] });
+  const running = { ...transcription("cam", "running"), progress: { stage: "transcribing" as const, fraction: 0.45 } };
+  await show([video("cam", { name: "Screen 2026-11-19.mp4", transcriptId: undefined })], [running]);
+  const card = container.querySelector(".media-hover-card")!;
+  const jobs = [...card.querySelectorAll(".media-hover-job")];
+  expect(jobs.map(job => job.querySelector(".media-hover-row")?.textContent)).toEqual(["Caching3%", "Transcribing45%"]);
+  expect(card.querySelectorAll("progress")).toHaveLength(2);
+  expect(card.querySelector(".media-hover-foot button")?.textContent).toBe("Pause");
+  expect(card.textContent).toContain("You can edit during caching.");
+  expect(card.textContent).not.toContain("Screen 2026-11-19.mp4");
+  expect(card.textContent).not.toContain("Caching for playback");
+
+  // Queued transcription omits its bar and shows Queued beside Caching.
+  const queued = { ...transcription("cam", "queued"), progress: { stage: "queued" as const, fraction: 0 } };
+  await show([video("cam", { transcriptId: undefined })], [queued]);
+  expect(container.querySelectorAll(".media-hover-card progress")).toHaveLength(1);
+  expect(container.querySelector(".media-hover-card")?.textContent).toContain("TranscribingQueued");
+
+  // Audio-only transcription shows its percent, progress bar, and inline Pause.
+  vi.mocked(api.sourceCaches).mockResolvedValue({ caches: [] });
+  const mic = { ...video("mic", { transcriptId: undefined }), kind: "audio" as const };
+  const micRunning = { ...transcription(mic.id, "running"), progress: { stage: "transcribing" as const, fraction: 0.62 } };
+  await show([mic], [micRunning]);
+  expect(container.querySelector(".media-hover-card strong")?.textContent).toBe("Transcribing 62%");
+  expect(container.querySelector(".media-hover-card button")?.textContent).toBe("Pause");
+  expect(container.querySelector<HTMLProgressElement>(".media-hover-card progress")?.value).toBeCloseTo(0.62);
 });
 
 it("lets a keyboard user dismiss the Media hover card with Escape", async () => {
