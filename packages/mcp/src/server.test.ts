@@ -1888,7 +1888,7 @@ describe("skills_list and misc", () => {
       const tools = (await session.listTools()).tools;
       expect(tools.map(t => t.name).sort()).toEqual(["learning_suggest", "skills_list"]);
       const tool = tools.find(t => t.name === "learning_suggest")!;
-      expect(Object.keys(tool.inputSchema.properties ?? {}).sort()).toEqual(["replaces", "rule", "skill"]);
+      expect(Object.keys(tool.inputSchema.properties ?? {}).sort()).toEqual(["from", "replaces", "rule", "skill"]);
       // It only adds to a list the editor reviews, with what the skill says that the rule would replace.
       expect(tool.description).toContain("nothing in the skill changes unless they approve it");
       expect(tool.description).toContain("quote each passage of that skill the rule contradicts or overrides, word for word");
@@ -1901,6 +1901,11 @@ describe("skills_list and misc", () => {
       const replacing = { ...offer, replaces: ["Cut a breath short."] };
       expect((await session.callTool({ name: "learning_suggest", arguments: replacing }) as CallToolResult).isError).toBeFalsy();
       expect(mock.requests.at(-1)).toMatchObject({ method: "POST", path: endpoint, body: replacing });
+      // A rule from the editor's decisions cites them, with what they were in a few words.
+      expect(tool.description).toContain("When the rule comes from what the editor decided, give from: the ids of the decisions it comes from");
+      const decided = { ...offer, from: { decisions: ["call:chg_1:3", "rejected:chg_2:0"], what: "cuts you rejected" } };
+      expect((await session.callTool({ name: "learning_suggest", arguments: decided }) as CallToolResult).isError).toBeFalsy();
+      expect(mock.requests.at(-1)).toMatchObject({ method: "POST", path: endpoint, body: decided });
       // A rule is one sentence on one line.
       expect((await session.callTool({ name: "learning_suggest", arguments: { rule: "Two\nlines", skill: "house-style" } })).isError).toBe(true);
     } finally {

@@ -301,6 +301,21 @@
 .learn-revise:hover { background: none; }
 .learn-said { margin: 2px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--color-dim); overflow-wrap: anywhere;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+/* The decisions a rule came from: one dim line that unfolds into a row for each, its time a link to its cut or edit. */
+.learn-from { display: inline-flex; align-items: center; gap: 5px; margin: 2px 0 0; padding: 0; border: 0; background: none; font: inherit;
+  font-size: 12.5px; line-height: 1.45; color: var(--color-dim); cursor: pointer; text-align: left; }
+.learn-from:hover, .learn-from:focus-visible { color: var(--color-muted); }
+.learn-from svg { flex: none; transform: rotate(0deg); }
+.learn-from[aria-expanded="true"] svg { transform: rotate(90deg); }
+.learn-decisions { margin: 1px 0 0; padding: 0; list-style: none; }
+.learn-decision { display: flex; align-items: baseline; gap: 9px; font-size: 12.5px; line-height: 1.45; color: var(--color-dim); }
+.learn-decision-time { flex: none; min-width: 2.6em; padding: 0; border: 0; background: none; font: inherit; color: var(--color-muted);
+  font-variant-numeric: tabular-nums; }
+button.learn-decision-time { cursor: pointer; text-decoration: underline; text-decoration-color: var(--color-dim);
+  text-underline-offset: 3px; }
+button.learn-decision-time:hover { color: var(--color-fg); }
+button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2px solid var(--color-muted); outline-offset: 2px; border-radius: 3px; }
+.learn-decision-what { min-width: 0; overflow-wrap: anywhere; }
 .learn-replaces { margin: 2px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--color-muted); overflow-wrap: anywhere;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
 .learn-replaces-label { color: var(--color-warn); }

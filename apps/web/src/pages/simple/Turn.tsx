@@ -24,10 +24,17 @@ import { MarkedFrameOnRequest } from "./SourceProvenance";
 import { callRowKey, isWorking, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
 
 /**
- * A rule Scarlet picked up from this request, under what the request did: the skill it is for and the rule in quotes,
+ * A rule Scarlet picked up from this request, under what the request did: what the editor decided that it came from, if
+ * it came from their decisions, the skill it is for and the rule in quotes,
  * then Review, which opens Learnings at it, and Decline, which turns the rule down from here. The line goes once the
  * editor decides, here or in Learnings.
  */
+/** "Learned for dialogue-pass: ", or what it was learned from first: "Learned from 4 cuts you rejected, for dialogue-pass: ". */
+function learnedLead(learning: Learning, skill: string | undefined): string {
+  const from = learning.learnedFrom?.decisions.length ? `from ${learning.learnedFrom.decisions.length} ${learning.learnedFrom.what}` : "";
+  return from ? `Learned ${from}${skill ? `, for ${skill}` : ""}: ` : skill ? `Learned for ${skill}: ` : "Learned: ";
+}
+
 function LearnedLine({ learning, onReview }: { learning: Learning; onReview?(id: string): void }) {
   const skill = useSkillsStore(s => s.skills.find(k => k.id === learning.skillId)?.name);
   // The line names the skill, so the library is read once if nothing has read it yet. A read that failed isn't asked
@@ -45,7 +52,7 @@ function LearnedLine({ learning, onReview }: { learning: Learning; onReview?(id:
   };
   return <p className="simple-learned">
     <Icon name="bulb" size={13} />
-    <span>{skill ? `Learned for ${skill}: ` : "Learned: "}<span className="simple-learned-rule">“{learning.rule}”</span>
+    <span>{learnedLead(learning, skill)}<span className="simple-learned-rule">“{learning.rule}”</span>
       {onReview && <> <button type="button" className="simple-learned-review" onClick={() => onReview(learning.id)}
         title="Approve or revise it in Learnings">Review</button></>}
       {" "}<button type="button" className="simple-learned-decline" disabled={declining} onClick={decline}

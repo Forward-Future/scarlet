@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- Scarlet can now learn a rule from what you keep and reject, not only from what you say: Learnings shows which cuts it came from, and each one opens on the timeline.
 - A cut you approved on a dialogue pass is listed once after the pass goes in, not again as an extra row you can't open.
 - Opening a cut no longer flashes black for a moment when its still is already loaded.
 - Resume editing picks up every paused request on the model you've picked, not only the one whose band you pressed.

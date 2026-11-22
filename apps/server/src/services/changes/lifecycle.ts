@@ -24,6 +24,7 @@ import { actorFor, authorName, logActivity, quote } from "../activity.js";
 import { proposalAfterRevisions, resumeReviewState } from "../revisionState.js";
 import { reviewedCutsOnHead } from "../stagedCutRecovery.js";
 import { createTask } from "../tasks.js";
+import { startDecisionCheck } from "../learnings.js";
 import { ensureProjectHead, resolveTimeline, storeVersion } from "../timeline.js";
 import { ACTIVE_TASK, authorsAgent, latestAttempt, saveChange, STALE_SAVE, threadOfChange } from "./common.js";
 import { keptCuts, prepareCutReview, recheckApprovedCut, recordPlayableDecision } from "./cutReview.js";
@@ -326,6 +327,8 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
       ...(saved.restoredCuts?.length && { restoredCuts: saved.restoredCuts }),
     },
   });
+  // A pass whose calls the editor made went in: their decisions are read for a rule once nothing else of it waits.
+  if (saved.cutChoices?.length) startDecisionCheck(ctx, saved.projectId, saved.threadId);
   return { change: saved, project: updated, outcome };
 }
 

@@ -875,6 +875,78 @@ describe("scarlet server", () => {
     for (const open of scarlet.ctx.repos.tasks.select("project_id = ? AND state IN ('queued','claimed','running')", [project.id])) await api("POST", `/tasks/${open.id}/cancel`);
   });
 
+  it("reads the editor's decisions for a rule once they finish what a request left them, and keeps the decisions a rule cites", async () => {
+    await api("POST", "/skills", { body: { name: "decided-style", description: "How pauses are cut", content: "# Pauses" } });
+    const cancelOpen = async () => {
+      for (const open of scarlet.ctx.repos.tasks.select("state IN ('queued','claimed','running','waiting_for_user')", [])) await api("POST", `/tasks/${open.id}/cancel`);
+    };
+    await cancelOpen();
+    const checks = () => scarlet.ctx.repos.tasks.select("kind = 'learning_check'", [], "rowid ASC");
+    const asked = (await api<{ task: Task }>("POST", `/projects/${project.id}/tasks`, { body: { agent: "claude", model: "opus", instruction: "Tighten the pauses." } })).json.task;
+    // The request's own check is read as it is sent. Gone, it holds nothing back.
+    for (const check of checks().filter(c => c.state === "queued")) await api("POST", `/tasks/${check.id}/cancel`);
+    await api("POST", `/hosts/${host.id}/claim`, { body: { taskId: asked.id } });
+    const stamp = new Date().toISOString();
+    const pauses: Change = { ...firstChange, id: "chg_decided_pauses", threadId: asked.id, taskId: asked.id, state: "approved", createdAt: stamp, updatedAt: stamp,
+      timelineEdits: [{ label: "Pause cut to 0.2 s", range: { start: 220, end: 220.4 }, reason: "A long gap between sentences.", check: "Listen to the join." },
+        { label: "Pause cut to 0.3 s", range: { start: 72, end: 72.5 }, check: "Listen to the join." }],
+      kept: undefined, flags: undefined, cutChoices: undefined, appliedReview: undefined, approvedSpots: undefined, restoredCuts: undefined };
+    scarlet.ctx.repos.changes.put(pauses);
+    const keep = (spot: number) => api("POST", `/projects/${project.id}/kept-edits`, { body: { threadId: asked.id, edits: [{ changeId: pauses.id, spot }] } });
+    const before = checks().length;
+    // Nothing is read while Scarlet still works on the request, nor while something it flagged still waits.
+    await keep(0);
+    expect(checks()).toHaveLength(before);
+    await api("POST", `/tasks/${asked.id}/complete`, { body: { state: "done", summary: "Tightened the pauses." } });
+    await keep(0);
+    expect(checks()).toHaveLength(before);
+    // The last Keep starts one check, on the request's model, which reads the editor's decisions.
+    await keep(1);
+    const [check] = checks().slice(before);
+    expect(checks()).toHaveLength(before + 1);
+    expect(check).toMatchObject({ kind: "learning_check", agent: "claude", model: "opus", state: "queued", context: { checksTaskId: asked.id, readsDecisions: true } });
+    const prompt = (await api<{ systemPrompt: string }>("GET", `/tasks/${check!.id}/prompt`)).json.systemPrompt;
+    expect(prompt).toContain("The editor just finished deciding the cuts and edits Scarlet left for them in the request below.");
+    expect(prompt).toContain("They asked: “Tighten the pauses.”");
+    expect(prompt).toContain(`- \`kept:${pauses.id}:0\` Kept: Pause cut to 0.2 s; Scarlet’s reason: “A long gap between sentences.”; it asked the editor to check: “Listen to the join.”`);
+    expect(prompt).toContain(`- \`kept:${pauses.id}:1\` Kept: Pause cut to 0.3 s`);
+
+    // A rule cites the decisions it came from. They are kept with it, in the video's order, to be opened under it.
+    await api("POST", `/hosts/${host.id}/claim`, { body: { taskId: check!.id } });
+    const offer = `/projects/${project.id}/tasks/${check!.id}/learnings`;
+    const unknown = await api<{ error: { code: string } }>("POST", offer, { body: { rule: "Keep pauses whole.", skill: "decided-style", from: { decisions: ["kept:chg_nowhere:0"], what: "pauses you kept" } } });
+    expect(unknown.status).toBe(400);
+    expect(unknown.json.error.code).toBe("unknown_decision");
+    const rule = "Leave a pause between sentences under about a second.";
+    const learned = (await api<{ learning: Learning }>("POST", offer, { body: { rule, skill: "decided-style",
+      from: { decisions: [`kept:${pauses.id}:0`, `kept:${pauses.id}:1`, `kept:${pauses.id}:0`], what: "pauses you kept" } } })).json.learning;
+    expect(learned).toMatchObject({ taskId: asked.id, said: "Tighten the pauses.", state: "suggested", learnedFrom: { what: "pauses you kept", decisions: [
+      { id: `kept:${pauses.id}:1`, decision: "kept", label: "Pause cut to 0.3 s", projectId: project.id, threadId: asked.id, ref: { changeId: pauses.id, spot: 1 }, time: 72 },
+      { id: `kept:${pauses.id}:0`, decision: "kept", label: "Pause cut to 0.2 s", projectId: project.id, threadId: asked.id, ref: { changeId: pauses.id, spot: 0 }, time: 220 },
+    ] } });
+    expect(learned.learnedFrom!.decisions).toHaveLength(2);
+    expect(scarlet.ctx.repos.learnings.get(learned.id)?.learnedFrom?.decisions).toHaveLength(2);
+
+    // Declined, the rule isn't put to the editor again, and later checks are told so and what it came from.
+    await api("POST", `/projects/${project.id}/learnings/${learned.id}/decline`);
+    const again = await api<{ error: { code: string } }>("POST", offer, { body: { rule: rule.toUpperCase(), skill: "decided-style" } });
+    expect(again.status).toBe(409);
+    expect(again.json.error.code).toBe("declined");
+    const reread = (await api<{ systemPrompt: string }>("GET", `/tasks/${check!.id}/prompt`)).json.systemPrompt;
+    expect(reread).toContain(`“${rule}” (declined by the editor for decided-style)`);
+    expect(reread).toContain(`already behind the rule “${rule}”`);
+    await api("POST", `/tasks/${check!.id}/complete`, { body: { state: "done", summary: rule } });
+
+    // While the project's editing is paused, nothing is read; a check that hasn't begun reads what comes after it.
+    const more: Change = { ...pauses, id: "chg_decided_more", timelineEdits: [{ label: "Pause cut to 0.25 s", range: { start: 301, end: 301.3 }, check: "Listen." }] };
+    scarlet.ctx.repos.changes.put(more);
+    await api("POST", `/projects/${project.id}/stop-editing`);
+    await api("POST", `/projects/${project.id}/kept-edits`, { body: { threadId: asked.id, edits: [{ changeId: more.id, spot: 0 }] } });
+    expect(checks()).toHaveLength(before + 1);
+    await api("POST", `/projects/${project.id}/resume-editing`, { body: {} });
+    await cancelOpen();
+  });
+
   it("keeps a rule Scarlet picked up until the editor approves it, then has the skill revised with it", async () => {
     const skill = (await api<{ skill: Skill }>("POST", "/skills", { body: { name: "learned-style", description: "House rules", content: "---\nname: learned-style\ndescription: House rules\n---\n\nKeep the cold open.\n" } })).json.skill;
     const other = (await api<{ skill: Skill }>("POST", "/skills", { body: { name: "learned-other", content: "# Other" } })).json.skill;

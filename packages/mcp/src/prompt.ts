@@ -19,8 +19,17 @@ export interface LearningCheckContext {
   usedSkills: string[];
   /** What they asked before, in any project, oldest first: their words, what they were aimed at, and whether it was in another video. */
   earlier: Array<{ said: string; about?: string; elsewhere?: boolean }>;
-  /** Rules already offered to the editor or saved in a skill, oldest first. */
-  rules: Array<{ rule: string; skill: string; state: "offered" | "saved" }>;
+  /** The check started as the editor finished deciding what the request left them, to read their decisions; not as they sent it. */
+  readsDecisions?: boolean;
+  /**
+   * What the editor decided lately on cuts and edits Scarlet made, in any project, oldest first: the id a rule cites it
+   * by, Keep, Reject or a revision with their words, what the cut or edit was, what Scarlet measured and why it made it,
+   * the skills that made it, and the rule already offered from it.
+   */
+  decided?: Array<{ id: string; decision: "kept" | "rejected" | "revised"; label: string; details?: string[]; note?: string;
+    madeBy?: string[]; elsewhere?: boolean; ruleFrom?: string }>;
+  /** Rules already offered to the editor, saved in a skill or declined by them, oldest first. */
+  rules: Array<{ rule: string; skill: string; state: "offered" | "saved" | "declined" }>;
   /** The editor's skills a rule can go into. */
   skills: Array<{ id: string; name: string; description: string }>;
 }
@@ -162,31 +171,41 @@ function buildAreaCheckPrompt(check: { mediaId: string; at: number }, prefix: st
 
 function buildLearningCheckPrompt(check: LearningCheckContext): string {
   const list = (lines: string[]) => lines.map(l => `- ${l}`).join("\n");
+  const decided = check.decided ?? [];
+  const verb = { kept: "Kept", rejected: "Rejected", revised: "Revised" } as const;
+  const opening = check.readsDecisions
+    ? "The editor just finished deciding the cuts and edits Scarlet left for them in the request below. That work is done; you edit nothing and answer nothing. Decide one thing: do their decisions say how they want something done from now on, in any video like this one, and not only here?"
+    : "The editor just sent the agent the message that is your instruction. Another run is doing what it asks; you edit nothing and answer nothing. Decide one thing: does the message, or what they have decided lately, say how they want something done from now on, in any video like this one, and not only here?";
   return [
     `# You are listening for standing rules in Scarlet
 
 Scarlet is a video editor in which an AI agent edits for an editor. A skill is the editor’s standing brief to that agent for one kind of work: what they want kept, cut, changed and asked about. The agent reads it before it edits.
 
-The editor just sent the agent the message that is your instruction. Another run is doing what it asks; you edit nothing and answer nothing. Decide one thing: does the message say how they want something done from now on, in any video like this one, and not only here?
+${opening}
 
-It does in only two cases:
+It does in only these cases:
 - They said it as a rule themselves: their words are about every video or every time (“always”, “never”, “from now on”, how they like their videos), not about this one.
 - The same kind of fix keeps coming back: at least two of their earlier requests below asked for the same kind of change to what a skill made as this one does. That fix is how they want the skill to work. Offer it for that skill and name the requests it comes from.
+- Their decisions keep pointing the same way: they kept, rejected or revised the same kind of cut or edit a skill made, the same way each time, so the skill keeps getting it wrong for them. Weigh what Scarlet measured and why it made each one: a pattern is the same choice on cuts or edits that are alike, not a few that happen to share a word, and a choice that what was measured explains otherwise is no pattern. Offer it for the skill that made them, with the decisions it comes from in \`from\`.
 
-Anything else is not a rule, so call nothing: a note about this video, this moment or this cut that hasn’t come up before, however general it could be made; a rule the skill or a rule listed below already says, in any wording; and a rule that only tells the agent to do its work well (check, play back, adjust as needed) without saying what the editor wants.
+Anything else is not a rule, so call nothing: a note about this video, this moment or this cut that hasn’t come up before, however general it could be made; a rule the skill or a rule listed below already says, in any wording; a rule the editor declined, in any wording; and a rule that only tells the agent to do its work well (check, play back, adjust as needed) without saying what the editor wants.
 
 When it is a rule, read the skill it belongs in, in full, with \`skills_list\`, then offer it with \`learning_suggest\`: once, or once for each separate rule. The editor reviews what you offer beside what the skill says that it would change, and nothing changes in a skill unless they approve it.
 
-A rule is for every video the skill edits, so write the principle behind what they said, not its instances: no words, names, times or moments from this video or the requests, and a number they gave stays a guide, not a fixed amount. If what they asked can't be put that way, it isn't a rule.
+A rule is for every video the skill edits, so write the principle behind what they said or decided, not its instances: no words, names, times or moments from this video or the requests, and a number they gave or that their decisions show stays a guide, not a fixed amount. If it can't be put that way, it isn't a rule.
 
 End with one short line: the rule you offered, or “No rule.”`,
     `# The request\n\n${[
+      check.readsDecisions ? `They asked: “${check.said}”` : undefined,
       check.about,
       check.usedSkills.length ? `They chose ${check.usedSkills.length === 1 ? "this skill" : "these skills"} for it: ${check.usedSkills.join(", ")}.` : undefined,
       check.earlier.length ? `What they asked before, oldest first:\n${list(check.earlier.map(e => `“${e.said}”${[e.about && `about ${e.about}`, e.elsewhere && "in another video"].filter(Boolean).map(w => ` (${w})`).join("")}`))}` : "It is the first thing they asked.",
     ].filter(Boolean).join("\n\n")}`,
+    ...(decided.length ? [`# What they decided lately\n\nOn cuts and edits Scarlet made, oldest first, each with the id to cite it by:\n${list(decided.map(d =>
+      `\`${d.id}\` ${verb[d.decision]}: ${d.label}${d.note ? `, saying “${d.note}”` : ""}${(d.details ?? []).map(x => `; ${x}`).join("")}` +
+      `${d.madeBy?.length ? `; made with ${d.madeBy.join(", ")}` : ""}${d.elsewhere ? "; in another video" : ""}${d.ruleFrom ? `; already behind the rule “${d.ruleFrom}”` : ""}`))}`] : []),
     `# The editor’s skills\n\n${list(check.skills.map(s => `${s.name} (${s.id}): ${s.description.trim() || "no description"}`))}`,
-    ...(check.rules.length ? [`# Rules Scarlet already has\n\n${list(check.rules.map(r => `“${r.rule}” (${r.state === "saved" ? "saved in" : "offered for"} ${r.skill})`))}`] : []),
+    ...(check.rules.length ? [`# Rules Scarlet already has\n\n${list(check.rules.map(r => `“${r.rule}” (${r.state === "saved" ? "saved in" : r.state === "declined" ? "declined by the editor for" : "offered for"} ${r.skill})`))}`] : []),
   ].join("\n\n");
 }
 
