@@ -250,6 +250,13 @@ export const MediaClip = ClipBase.extend({
   effects: z.array(Effect).default([]),
   /** The transition into this clip from the one before it on its track. Absent: a straight cut. */
   transitionIn: Transition.optional(),
+  /**
+   * A split edit at this sound's ends: `leads`, the seconds it starts before the picture it belongs to cuts in (a J
+   * cut); `trails`, the seconds it carries on after that picture has cut away (an L cut). Set on the sound a split
+   * moved, which plays on an audio track apart from its silent picture (`splitJoinOps`). It only says what the edit
+   * did: the clip's own times are what play. Absent: its sound cuts with its picture.
+   */
+  splitEdit: z.object({ leads: Seconds.optional(), trails: Seconds.optional() }).optional(),
 });
 export type MediaClip = z.infer<typeof MediaClip>;
 

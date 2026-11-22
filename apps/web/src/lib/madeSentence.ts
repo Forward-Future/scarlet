@@ -10,7 +10,7 @@ export type SentencePart = string | { strong: string };
 const NOUNS: Partial<Record<EditKind, [one: string, many: string]>> = {
   restore: ["passage put back", "passages put back"], audio: ["sound fix", "sound fixes"], zoom: ["zoom", "zooms"], reframe: ["reframe", "reframes"],
   text: ["text edit", "text edits"], broll: ["B-roll shot", "B-roll shots"], overlay: ["overlay", "overlays"], graphic: ["graphic", "graphics"], speed: ["speed change", "speed changes"],
-  transition: ["transition", "transitions"],
+  transition: ["transition", "transitions"], split: ["split edit", "split edits"],
 };
 
 /** How many of a request's edits are named in its sentence before it counts them by kind instead. */

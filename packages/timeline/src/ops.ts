@@ -128,6 +128,24 @@ export const TimelineOp = z.discriminatedUnion("op", [
 ]);
 export type TimelineOp = z.infer<typeof TimelineOp>;
 
+/**
+ * A J or L cut at the join from `leftClipId` to `rightClipId` on a video track: the incoming sound `leads` its
+ * picture, or the outgoing sound `trails` past it, by that many seconds (0 puts the sound back on the cut). Proposed
+ * only: Scarlet expands it into the clip ops that move the sound (`expandSplitJoins`), and those are what a change keeps.
+ */
+export const SplitJoinOp = z.object({
+  op: z.literal("splitJoin"),
+  leftClipId: Id,
+  rightClipId: Id,
+  leads: z.number().finite().min(0).max(5).optional(),
+  trails: z.number().finite().min(0).max(5).optional(),
+});
+export type SplitJoinOp = z.infer<typeof SplitJoinOp>;
+
+/** What an edit may be proposed as: the stored ops, and the steps Scarlet expands into them. */
+export const ProposedOp = z.discriminatedUnion("op", [...TimelineOp.options, SplitJoinOp]);
+export type ProposedOp = z.infer<typeof ProposedOp>;
+
 export class OpError extends Error {
   constructor(
     message: string,
@@ -195,6 +213,8 @@ function applyToDraft(tl: Timeline, op: TimelineOp): Timeline {
       const next: Record<string, unknown> = { ...found.clip, ...patch };
       // A null transition takes the transition off: the join is a straight cut again.
       if (next.transitionIn === null) delete next.transitionIn;
+      // A null split edit says the sound cuts with its picture again.
+      if (next.splitEdit === null) delete next.splitEdit;
       const merged = Clip.parse(next);
       found.track.clips[found.index] = merged;
       sortClips(found.track);
@@ -411,9 +431,9 @@ export function trimHead<T extends Clip>(clip: T, at: number): T {
   const delta = at - clip.timelineIn;
   if (delta <= 0) return clip;
   if (clip.kind === "media") {
-    return { ...clip, timelineIn: at, sourceIn: clip.sourceIn + delta * (clip.speed ?? 1),
+    return withoutSplitAt({ ...clip, timelineIn: at, sourceIn: clip.sourceIn + delta * (clip.speed ?? 1),
       ...(clip.keyframes?.length && { keyframes: clip.keyframes.map(key => ({ ...key, time: key.time - delta })) }),
-    } as T;
+    }, "leads") as T;
   }
   if (clip.kind === "caption") return trimCaption(clip, at, clip.timelineOut) as T;
   return { ...clip, timelineIn: at } as T;
@@ -425,10 +445,19 @@ export function trimTail<T extends Clip>(clip: T, at: number): T {
   if (at >= end) return clip;
   if (clip.kind === "media") {
     const keep = at - clip.timelineIn;
-    return { ...clip, sourceOut: clip.sourceIn + keep * (clip.speed ?? 1) } as T;
+    return withoutSplitAt({ ...clip, sourceOut: clip.sourceIn + keep * (clip.speed ?? 1) }, "trails") as T;
   }
   if (clip.kind === "caption") return trimCaption(clip, clip.timelineIn, at) as T;
   return { ...clip, timelineOut: at } as T;
+}
+
+/** A sound trimmed at one end no longer meets its split edit there: the record of that end goes, the other stays. */
+function withoutSplitAt<T extends object>(clip: T, end: "leads" | "trails"): T {
+  const split = (clip as { splitEdit?: { leads?: number; trails?: number } }).splitEdit;
+  if (split?.[end] === undefined) return clip;
+  const { [end]: _gone, ...rest } = split;
+  const { splitEdit: _old, ...plain } = clip as T & { splitEdit?: unknown };
+  return (Object.keys(rest).length ? { ...plain, splitEdit: rest } : plain) as T;
 }
 
 export function splitClip(clip: Clip, at: number, newId: string): [Clip, Clip] {

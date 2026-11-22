@@ -61,6 +61,12 @@ it("counts transitions beside the other edits a request made", () => {
   expect(say([zoom(1), zoom(2), zoom(3), zoom(4), swipe(1), swipe(2), swipe(3), swipe(4)])).toBe("Made 4 zooms and 4 transitions.");
 });
 
+it("counts split edits by what they are, beside the cuts and other edits a request made", () => {
+  const split = (n: number) => ({ label: `J cut at 0:0${n}`, kind: "split" as const });
+  expect(say([cut(0, 30), split(1), split(2), split(3), split(4)])).toBe("Took out 0:30 in 1 cut, and made 4 split edits.");
+  expect(say([{ label: "Zoom", kind: "zoom" as const }, split(1), split(2), split(3), split(4)])).toBe("Made 1 zoom and 4 split edits.");
+});
+
 it("counts the spots Scarlet marked for the editor on their own, since they changed nothing in the video", () => {
   const spot = (label: string) => ({ label, kind: "other" as const, marker: true as const });
   expect(say([cut(0, 60), cut(100, 171), { label: "Punch in", kind: "zoom" }, spot("Fall Guys comparison footage"), spot("Boat comparison footage")]))
