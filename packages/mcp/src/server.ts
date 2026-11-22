@@ -27,7 +27,7 @@ import {
 import type { Author } from "@scarlet/timeline";
 import { registerChangeAndAssetTools, registerExportAndTaskTools } from "./admin-tools.js";
 import { toolAnnotations } from "./annotations.js";
-import { listToolsBriefly } from "./brief-tools.js";
+import { ALWAYS_LOAD, listToolsBriefly } from "./brief-tools.js";
 import { DialogueEvidence } from "./dialogue-decisions.js";
 import { registerDialogueReviewTools } from "./dialogue-review-tools.js";
 import { registerDialogueTools, type StagedReviewState } from "./dialogue-tools.js";
@@ -69,12 +69,11 @@ const AREA_CHECK_TOOLS: ReadonlySet<string> = new Set(["media_frame", "screen_ar
  * A harness with tool search (Claude Code's `ToolSearch`) lists tools by name and loads a definition when the model
  * looks it up; these are sent whole from the start of a request, as small tools nearly every request reads. A side
  * check or a skill revision has only a few tools, so all of them are, and no turn goes on a search. Claude Code cuts an
- * upfront description at 4,096 characters, so each of these stays under that (`tools.test.ts`).
+ * upfront description at 4,096 characters, so each of these stays under that (`tools.test.ts`). A harness that lists
+ * tools briefly (Gemini's) gets the same tools whole, and the rest through `tool_call` (`brief-tools.ts`).
  */
 export const ALWAYS_LOADED_TOOLS: ReadonlySet<string> = new Set(["project_get", "timeline_get", "task_log", "task_question"]);
 const FEW_TOOL_TASKS: ReadonlySet<string> = new Set(["area_check", "learning_check", "skill_edit", "skill_from_change"]);
-/** Claude Code's `_meta` key for a tool it sends whole from the start instead of behind tool search. */
-const ALWAYS_LOAD = "anthropic/alwaysLoad";
 const PASS_WIDE_TOOLS: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_review_save"]);
 
 /** When the tool call under way has to have answered by, in ms since the epoch: its harness's tool wait from when it began. */

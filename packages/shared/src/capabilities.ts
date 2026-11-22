@@ -42,7 +42,8 @@ export interface AgentCapabilities {
   toolWaitSeconds?: number;
   /**
    * The harness keeps only so much of its tools' definitions and drops the rest without telling the model, so Scarlet
-   * lists each tool by its first sentence and its parameters' shape, and the model reads the rest from `tool_help`.
+   * lists whole only the tools Claude Code gets from the start, names every other tool on one line of `tool_call`, which
+   * calls it, and the model reads a tool's whole description and parameters from `tool_help`.
    */
   briefTools?: boolean;
 }

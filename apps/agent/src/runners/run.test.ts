@@ -828,6 +828,29 @@ describe("runGemini", { timeout: 20_000 }, () => {
     ]);
   });
 
+  it("reads a call through tool_call as the tool it calls, and a question asked through it as no question", async () => {
+    const { result, events } = await run(runGemini, {
+      acp: true,
+      lines: [
+        upd({ sessionUpdate: "tool_call", toolCallId: "c1", name: "mcp_scarlet_tool_call", rawInput: { name: "mcp_scarlet_transcript_get", arguments: { mediaId: "m1" } } }),
+        upd({ sessionUpdate: "tool_call_update", toolCallId: "c1", status: "failed", rawOutput: { error: "no such media" } }),
+        upd({ sessionUpdate: "tool_call", toolCallId: "c2", name: "mcp_scarlet_tool_call", rawInput: { name: "task_question", arguments: { text: "Which take?" } } }),
+        upd({ sessionUpdate: "tool_call_update", toolCallId: "c2", status: "completed", rawOutput: { isError: true } }),
+        upd({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Done." } }),
+      ],
+    }, { agent: "gemini" });
+    expect(result.question).toBeUndefined();
+    expect(events.map((e) => [e.type, e.text])).toEqual([
+      ["log", "Gemini session started (gemini-2.5-pro)"],
+      ["tool", 'scarlet.transcript_get {"mediaId":"m1"}'],
+      ["error", 'scarlet.transcript_get failed: {"error":"no such media"}'],
+      ["tool", 'scarlet.tool_call {"name":"task_question","arguments":{"text":"Which take?"}}'],
+      ["log", "Done."],
+      ["result", "Done."],
+    ]);
+    expect(events[1]!.data).toEqual({ tool: "scarlet.transcript_get", input: { mediaId: "m1" }, toolId: "c1" });
+  });
+
   it("uses only the trimmed final assistant message as the summary, without prior progress chatter or truncation", async () => {
     const earlier = `\n\n${"Checking transition areas. ".repeat(90)}and checking the last transition areas.`;
     const progress = "\n\nFraming the benchmark graph demo cleanly inside the Kimi window.";
