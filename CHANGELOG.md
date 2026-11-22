@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- On a recording made in a noisy room, Scarlet trims pauses and places cuts on the quiet between words again instead of mistaking the room's noise for speech.
 - Scarlet can dip music under speech and let it swell back up in the pauses, with a new Music under speech skill for how deep and how fast.
 - Scarlet can clean the room and background noise out of a voice, when you ask for it or a skill of yours says to.
 - Scarlet can make J and L cuts, letting the next voice start just before its shot or a line carry on over the next one, and the edit's card says how far the sound leads or trails.
