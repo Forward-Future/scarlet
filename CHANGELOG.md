@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- On a recording made in a noisy room, Scarlet trims pauses and places cuts on the quiet between words again instead of mistaking the room's noise for speech.
 - HDR video from an iPhone or other HDR camera now looks right in playback, thumbnails and exports instead of washed out, and Scarlet knows when footage was shot in a camera Log profile.
 - After you keep, reject or send back a call, Scarlet gets the next one ready so it plays the moment you open it.
 - A Keep that didn't reach Scarlet while it was restarting or reconnecting is now sent again, instead of staying unrecorded until the next launch.

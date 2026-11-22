@@ -19,7 +19,7 @@ import {
   type Transcript,
   type TranscriptWord,
 } from "@scarlet/timeline";
-import { isTag } from "./analysis.js";
+import { dbfs, isTag } from "./analysis.js";
 import type { DialogueEvidence } from "./dialogue-decisions.js";
 import {
   clipEdgeSound,
@@ -30,7 +30,7 @@ import {
   type JoinPage,
 } from "./dialogue-join.js";
 import { audibleSourcePoints, type DialoguePlanSources } from "./dialogue-plan.js";
-import { gapSound, QUIET_PHRASE_CONTEXT, quietPhrases, speakingLevel, type GapLevels, type GapSound, type QuietPhrase } from "./gap-sound.js";
+import { gapSound, QUIET_PHRASE_CONTEXT, quietPhrases, roomRms, speakingLevel, type GapLevels, type GapSound, type QuietPhrase } from "./gap-sound.js";
 import { levelPoints, transcriptionNote, type SessionErrorHelpers } from "./media-state.js";
 import { Lanes } from "./review-prep.js";
 import { newClipEdges } from "./timeline-validation.js";
@@ -372,8 +372,8 @@ export function createMediaSession(deps: MediaSessionDeps) {
    */
   const measured: JoinPage[] = [];
   const measuring = new Map<string, Promise<void>>();
-  /** Prepared levels in five-minute stretches of a recording, read once each, with the level speech sits at in each. */
-  const levelChunks = new Map<string, Promise<{ levels: GapLevels; speech: number }>>();
+  /** Prepared levels in five-minute stretches of a recording, read once each, with the levels speech and the room sit at in each. */
+  const levelChunks = new Map<string, Promise<{ levels: GapLevels; speech: number; room: number }>>();
   /** Where each recording ends, from the project's media. Undefined when the project doesn't say. */
   const recordingEnds = new Map<string, Promise<number | undefined>>();
   function recordingEnd(mediaId: string) {
@@ -395,7 +395,10 @@ export function createMediaSession(deps: MediaSessionDeps) {
       chunk = recordingEnd(mediaId).catch(() => undefined).then(end => {
         const to = end !== undefined && end > from ? Math.min(asked, end) : asked;
         return readPrepared(mediaId, "waveform", () => client.waveform(mediaId, from, to, levelPoints(from, to), true));
-      }).then(wf => { const levels = { from: wf.from, to: wf.to, rms: wf.rms ?? [] }; return { levels, speech: speakingLevel(levels) }; });
+      }).then(wf => {
+        const levels = { from: wf.from, to: wf.to, rms: wf.rms ?? [] };
+        return { levels, speech: speakingLevel(levels), room: dbfs(roomRms(levels.rms, (levels.to - levels.from) / Math.max(1, levels.rms.length))) };
+      });
       levelChunks.set(key, chunk);
       chunk.catch(() => levelChunks.delete(key));
     }
@@ -439,7 +442,7 @@ export function createMediaSession(deps: MediaSessionDeps) {
       // A stretch that runs past its five minutes is read on its own, against the level of the stretch it starts in.
       const [home, own] = await Promise.all([levelChunk(mediaId, from, from + CHUNK),
         gap.end > from + CHUNK ? levelChunk(mediaId, Math.floor(gap.start), Math.ceil(gap.end)) : undefined]);
-      out.push(gapSound((own ?? home).levels, gap, home.speech, edge));
+      out.push(gapSound((own ?? home).levels, gap, home.speech, edge, home.room));
     }
     return out;
   }
