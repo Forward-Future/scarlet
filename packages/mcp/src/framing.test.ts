@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyOps, clipEnd, createProject, emptyTimeline, makeMediaClip, makeTrack, Transform, type MediaAsset, type MediaClip, type Timeline } from "@scarlet/timeline";
 import { boxInCorner, frameShown, framingOps, pictureBox, placeFrame, type Box } from "./framing.js";
-import { framingReport } from "./framing-report.js";
+import { framingReport, moveSize } from "./framing-report.js";
 
 const canvas = { width: 1920, height: 1080 };
 const source = { width: 3840, height: 2160 };
@@ -244,5 +244,15 @@ describe("framingOps", () => {
     expect(stretches[0]!.moves).toHaveLength(1);
     expect(stretches[0]!.moves[0]!.from).toBeCloseTo(7, 0);
     expect(stretches[0]!.moves[0]!.to).toBeCloseTo(8, 0);
+  });
+});
+
+describe("moveSize", () => {
+  it("says how much a move zooms and shifts, so a barely-there reframe shows as one", () => {
+    // The Benchmarks table, reframed across a jump cut from 71% of the width to 70%: a 1.4% zoom the viewer barely sees.
+    expect(moveSize([10, 5, 81, 76], [11, 5.5, 81, 75.5])).toEqual({ zoom: 1.4, shift: 0.7 });
+    expect(moveSize([0, 0, 100, 100], [25, 25, 75, 75])).toEqual({ zoom: 100, shift: 0 });
+    expect(moveSize([25, 25, 75, 75], [0, 0, 100, 100])).toEqual({ zoom: -50, shift: 0 });
+    expect(moveSize([], [0, 0, 100, 100])).toEqual({});
   });
 });
