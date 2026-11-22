@@ -1,18 +1,16 @@
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type Ref } from "react";
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type Ref } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import type { ThreadEdit } from "@scarlet/shared";
-import { isPlayableMedia, timelineDuration, type Change, type MediaAsset, type Project, type TimeRange, type Timeline } from "@scarlet/timeline";
-import { arrowSeekTime, handleCutArrow, isComposing, useHotkeys } from "../lib/hotkeys";
+import { isPlayableMedia, timelineDuration, type Change, type MediaAsset, type TimeRange, type Timeline } from "@scarlet/timeline";
+import { arrowSeekTime, blurOnPointerClick, handleCutArrow, isComposing, useHotkeys } from "../lib/hotkeys";
 import { canPlayOriginal, isPreparingMedia } from "../lib/upload";
-import { isLink } from "../lib/pendingImports";
-import { useUploader, useImportCount } from "../components/media/UploadDropzone";
-import { ImportProgress } from "../components/media/ImportProgress";
+import { useImportCount } from "../components/media/UploadDropzone";
 import { pauseForScrub, player, type ScrubRelease } from "../lib/player";
 import { playbackLog } from "../lib/playbackLog";
 import type { JoinClock } from "../lib/joinClock";
-import { api, IS_MOCK, loggedFetch, readLoggedBody } from "../lib/client";
+import { api, IS_MOCK } from "../lib/client";
 import { usePlayerStore } from "../stores/player";
 import { selectRender, useProjectStore } from "../stores/project";
 import { useShownCut } from "../stores/shownCut";
@@ -41,6 +39,11 @@ import { editFocus } from "../lib/editKind";
 import { editPlaybackRange } from "../lib/editPlaybackRange";
 import { momentRange } from "../lib/editMoments";
 import { editKey } from "../lib/keptEdits";
+import { MAX_RATE, MIN_RATE, PlaybackSpeed, RATE_STEP, stepPlaybackRate } from "./watch/PlaybackSpeed";
+import { ImportPreview } from "./watch/ImportPreview";
+import { CutSide, SelectedCutFrame } from "./watch/SelectedCutFrame";
+
+export { ImportPreview };
 
 const noop = () => {};
 const documentVisible = () => !document.hidden;
@@ -65,133 +68,6 @@ interface ThreadTimelineView {
   retry(): void;
   choose(edit: ThreadEdit): void;
   clear(): void;
-}
-const MIN_RATE = 0.5;
-const MAX_RATE = 2;
-const RATE_STEP = 0.25;
-
-function stepPlaybackRate(direction: -1 | 1, wrap = false) {
-  const rate = usePlayerStore.getState().rate;
-  let next = rate + direction * RATE_STEP;
-  // L goes round: past the fastest speed it starts again from the slowest, and Shift+L the other way.
-  if (wrap && next > MAX_RATE) next = MIN_RATE;
-  else if (wrap && next < MIN_RATE) next = MAX_RATE;
-  next = Math.min(MAX_RATE, Math.max(MIN_RATE, next));
-  if (next !== rate) player.setRate(next);
-}
-
-function PlaybackSpeed({ playable }: { playable: boolean }) {
-  const rate = usePlayerStore(s => s.rate);
-  const [open, setOpen] = useState(false);
-  const control = useRef<HTMLDivElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const panelId = useId();
-
-  useEffect(() => {
-    if (!open) return;
-    const dismissOutside = (event: Event) => {
-      if (!control.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const dismissEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || isComposing(event)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      setOpen(false);
-      trigger.current?.focus({ preventScroll: true });
-    };
-    document.addEventListener("pointerdown", dismissOutside, true);
-    document.addEventListener("focusin", dismissOutside);
-    document.addEventListener("keydown", dismissEscape, true);
-    return () => {
-      document.removeEventListener("pointerdown", dismissOutside, true);
-      document.removeEventListener("focusin", dismissOutside);
-      document.removeEventListener("keydown", dismissEscape, true);
-    };
-  }, [open]);
-
-  return <div ref={control} className="playback-speed" onClick={e => {
-    // A pointer adjustment hands Space back to the player. Keyboard users keep their place.
-    if (e.detail > 0 && e.target instanceof Element) e.target.closest("button")?.blur();
-  }}>
-    <button type="button" className="btn-icon playback-speed-trigger" ref={trigger}
-      aria-label={`Playback speed, ${rate}×`} title="Playback speed" aria-expanded={open} aria-controls={open ? panelId : undefined}
-      onClick={() => setOpen(shown => !shown)}>{rate}×<Icon name="down" size={10} /></button>
-    {open && <div className="playback-speed-panel" id={panelId} role="group" aria-label="Playback speed" data-escape-owner>
-      <button type="button" className="btn-icon" aria-label="Decrease playback speed" aria-keyshortcuts="Shift+L" title="Decrease playback speed (Shift L)"
-        disabled={!playable || rate <= MIN_RATE} onClick={() => stepPlaybackRate(-1)}>−</button>
-      <output>{rate}×</output>
-      <button type="button" className="btn-icon" aria-label="Increase playback speed" aria-keyshortcuts="L" title="Increase playback speed (L)"
-        disabled={!playable || rate >= MAX_RATE} onClick={() => stepPlaybackRate(1)}>+</button>
-    </div>}
-  </div>;
-}
-
-export function ImportPreview({ projectId, preparing, onMedia }: { projectId: string; preparing?: MediaAsset; onMedia(): void }) {
-  const { localImport, items } = useUploader(projectId);
-  const path = localImport?.path;
-  const [frame, setFrame] = useState<{ path: string; url: string }>();
-  useEffect(() => {
-    // A link is not a file on this computer: the engine has no frame of it until it has downloaded.
-    if (!path || isLink(path) || !/\.(mp4|mov|mkv|webm|m4v|avi|mxf|mts|m2ts|png|jpe?g|webp|gif)$/i.test(path)) return;
-    const controller = new AbortController();
-    let url: string | undefined;
-    void (async () => {
-      // Correlate the preview with the engine log and record any transfer failure after the headers.
-      const response = await loggedFetch(api.url(`/projects/${projectId}/media/import-frame`), {
-        method: "POST", signal: controller.signal, body: JSON.stringify({ path }),
-        headers: { "Content-Type": "application/json", ...(api.token && { Authorization: `Bearer ${api.token}` }) },
-      });
-      if (!response.ok) {
-        await readLoggedBody(response, () => response.text());
-        return;
-      }
-      const image = await readLoggedBody(response, () => response.blob());
-      if (controller.signal.aborted) return;
-      url = URL.createObjectURL(image);
-      setFrame({ path, url });
-    })().catch(() => {}); // The import still reports its own errors and prepares compatible footage.
-    return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
-  }, [path, projectId]);
-  const upload = items.find(item => item.state === "uploading" || item.state === "preparing");
-  return <div className="absolute inset-0 flex items-end justify-center p-3">
-    {frame && frame.path === path && <img src={frame.url} alt="" className="absolute inset-0 w-full h-full object-contain" />}
-    <div className="relative w-full max-w-sm rounded-lg border border-white/15 bg-black/85 px-4 py-3 text-fg">
-      <ImportProgress localImport={localImport} upload={upload} preparing={preparing} />
-      {!localImport && !upload && preparing && <button className="btn-quiet mt-1" onClick={onMedia}>View media</button>}
-    </div>
-  </div>;
-}
-
-function SelectedCutFrame({ url, time, fps }: { url: string; time: number; fps: number }) {
-  const [needed, setNeeded] = useState(false);
-  useLayoutEffect(() => {
-    const video = player.element();
-    const target = player.elementTime(time);
-    const decoded = () => !!video && !video.seeking && video.readyState >= 2 && Math.abs(video.currentTime - target) < 0.5 / fps;
-    if (decoded()) { setNeeded(false); return; }
-    // A local file or buffered fragment often wins the race against a JPEG.
-    // An unbuffered edit fragment must first render; request its exact still now.
-    const buffered = video?.buffered;
-    const missingFragment = video?.currentSrc.startsWith("blob:") && buffered &&
-      !Array.from({ length: buffered.length }, (_, i) => i).some(i => buffered.start(i) <= target && target < buffered.end(i));
-    const timer = video?.readyState && !missingFragment ? setTimeout(() => setNeeded(!decoded()), 120) : undefined;
-    if (timer === undefined) setNeeded(true);
-    const ready = () => {
-      if (decoded()) { clearTimeout(timer); setNeeded(false); }
-    };
-    video?.addEventListener("seeked", ready);
-    video?.addEventListener("loadeddata", ready);
-    video?.addEventListener("canplay", ready);
-    return () => {
-      clearTimeout(timer);
-      video?.removeEventListener("seeked", ready);
-      video?.removeEventListener("loadeddata", ready);
-      video?.removeEventListener("canplay", ready);
-    };
-  }, [url, time, fps]);
-  return needed && <img src={url} alt="Selected edit frame" draggable={false}
-    className="pointer-events-none absolute inset-0 h-full w-full object-contain opacity-0"
-    onLoad={e => { e.currentTarget.style.opacity = "1"; }} />;
 }
 
 interface PreviewProps {
@@ -264,43 +140,6 @@ interface PreviewProps {
 
 /** How far past a click after an edit's passage the stretched passage plays. */
 const REACH_AFTER_SECONDS = 2;
-
-/** Mount the bounded file only before an audition starts or while its side is parked. Seeking
- * outside it hands the same version clock back to the full segmented player at the editor's point. */
-function CutSide({ project, timeline, url, window, parkedAt, active, fps, label, joins }: {
-  project: Project; timeline: Timeline; url?: string; window?: CutPlaybackWindow; parkedAt?: number;
-  active: boolean; fps: number; label: string; joins?: JoinClock;
-}) {
-  const [outside, setOutside] = useState(false);
-  const handoff = useRef<{ time: number; resume: boolean }>(undefined);
-  const displayed = useRef<{ active: boolean; url?: string; file?: CutPlaybackWindow }>(undefined);
-  const isActive = parkedAt === undefined;
-  const current = isActive && displayed.current?.active ? displayed.current : { url, file: url ? undefined : window };
-  const { file } = current;
-  const fileDuration = useMemo(() => file ? timelineDuration(timeline) : 0, [file, timeline]);
-  useLayoutEffect(() => {
-    displayed.current = { active: isActive, url: current.url, file };
-    if (!isActive) setOutside(false);
-  }, [isActive, current.url, file]);
-  useLayoutEffect(() => {
-    if (!outside || !isActive || !handoff.current) return;
-    const { time, resume } = handoff.current;
-    handoff.current = undefined;
-    player.prepare();
-    player.seek(time, true);
-    if (resume) player.play();
-  }, [outside, isActive, joins]);
-  if (current.url || (file && !outside)) {
-    const path = current.url ?? file!.url;
-    return <CachedVideo key={path} url={path} label={label} fps={fps} active={active} hidden={false} autoPlay={false} joins={joins} parkedAt={parkedAt}
-      windowed={file ? { file, duration: fileDuration, outOfRange(time, resume) {
-        handoff.current = { time: joins ? joins.toView(time) : time, resume };
-        setOutside(true);
-      } } : undefined} />;
-  }
-  return <CutStream project={project} timeline={timeline} version={timeline.version} joins={joins}
-    proposed={label === "Proposed draft"} onStart={noop} parkedAt={parkedAt} />;
-}
 
 export function CutPreview({ threadView, workingCache, draftVersion, draft, draftFailed, openingJoin, cutLoadError, onRetryDraft, source, autoPlaySource, hasCut, change, spot, approval = false, playChange, active,
   onMedia, simple, joined }: PreviewProps) {
@@ -802,7 +641,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
           </MonitorPlayback>}
           {(source || cut || change || draftVersion) && <div className="monitor-controls">
             <PlaybackSpeed playable={playable} />
-            <button className="btn-icon" onClick={e => { if (e.detail) e.currentTarget.blur(); void toggleFullscreen(); }} aria-label={expanded ? "Exit full screen" : "Full screen"} title={expanded ? "Exit full screen" : "Full screen"}>
+            <button className="btn-icon" onClick={e => { blurOnPointerClick(e); void toggleFullscreen(); }} aria-label={expanded ? "Exit full screen" : "Full screen"} title={expanded ? "Exit full screen" : "Full screen"}>
               <Icon name="fullscreen" size={15} />
             </button>
           </div>}
