@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentTarget, canRetryTask, isSkillEdit, reviewItemPath, skillEditTarget, skillTaskTarget, splitAgentTarget, taskNeedsTranscripts, taskRecoveryAction,
+import { agentTarget, canRetryTask, isSkillEdit, KeepEditsRequest, reviewItemPath, skillEditTarget, skillTaskTarget, splitAgentTarget, taskNeedsTranscripts, taskRecoveryAction,
   taskWasStopped, Task } from "./api.js";
 
 const task = (fields: Record<string, unknown> = {}): Task => Task.parse({ id: "t1", projectId: "p1", kind: "edit", agent: "claude", instruction: "Tighten the intro",
@@ -103,5 +103,16 @@ describe("a link to a review item", () => {
   it("escapes the project and the thread", () => {
     expect(reviewItemPath("p1", "chg_1")).toBe("/p/p1?thread=chg_1");
     expect(reviewItemPath("my project/1", "a&b=c")).toBe("/p/my%20project%2F1?thread=a%26b%3Dc");
+  });
+});
+
+describe("KeepEditsRequest", () => {
+  it("accepts labels over 180 characters and checks over 120 while rejecting blank strings", () => {
+    const label = "x".repeat(240);
+    const check = "y".repeat(160);
+    expect(KeepEditsRequest.parse({ threadId: "thr_1", edits: [{ changeId: "chg_1", spot: 0, label: ` ${label} `, check: ` ${check} ` }] }))
+      .toEqual({ threadId: "thr_1", edits: [{ changeId: "chg_1", spot: 0, label, check }] });
+    expect(KeepEditsRequest.safeParse({ threadId: "thr_1", edits: [{ changeId: "chg_1", spot: 0, label: "   " }] }).success).toBe(false);
+    expect(KeepEditsRequest.safeParse({ threadId: "thr_1", edits: [{ changeId: "chg_1", spot: 0, check: "   " }] }).success).toBe(false);
   });
 });
