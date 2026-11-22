@@ -47,6 +47,11 @@ export interface ThreadEdit extends EditRef {
    */
   marker?: true;
   /**
+   * Scarlet changed nothing here: it named the spot to ask the editor to check it, such as where it stayed on the camera
+   * because the screen recording didn't show what was said. Its row and card say Check.
+   */
+  onlyCheck?: true;
+  /**
    * What a marker edit asks of the editor: Scarlet's reason to look when it gave one, or else what its to-do marker
    * says. It outlives a revision, whose `check` then only says it was revised.
    */
@@ -414,6 +419,7 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
         if (!edit.check && todo && !classified.restated[spot]) edit.markerSays = todo;
       }
       if (found && edit.named && kind === "other" && range.start === range.end) edit.still = true;
+      if (named && classified.nothing[spot] && kind === "other" && !edit.marker && edit.check) edit.onlyCheck = true;
       // Only a save that took footage out at the point can have moved a cut's join there. A punch-in or a title named on a
       // join changed no footage, and is an edit of its own. A save made of steps that left footage out at the join (`built`)
       // moved it too: on Matt's pass a later save rolled the edges of six cuts it had made, “Extend end of ‘subscription.’”,

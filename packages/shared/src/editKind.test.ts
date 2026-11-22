@@ -126,6 +126,15 @@ describe("telling what an applied edit did", () => {
       .toEqual(["broll", "other"]);
   });
 
+  it("says which named edits changed nothing at all", () => {
+    const media = [{ id: "screen", kind: "video" as const }];
+    const demo = makeMediaClip("screen", 0, 22.27, 15.6, { id: "demo" });
+    const laid = after(t => { t.tracks.push({ ...upper, clips: [demo] }); });
+    const pass = change([{ op: "addClip", trackId: "v2", clip: demo }]);
+    expect(classifyEdits(pass, [{ start: 15.6, end: 37.87 }, { start: 50, end: 51 }], { before: base, after: laid, media }).nothing)
+      .toEqual([false, true]);
+  });
+
   it("doesn't call an edit a cut because another edit of the same change cut", () => {
     // Two pop-ups cut out and one covered by holding a frame, which only trims clips: the cover took nothing out.
     const pass = change([
@@ -193,7 +202,7 @@ describe("telling an edit that only left a marker for the editor", () => {
 
   it("calls an edit a marker only when markers are all that land on it", () => {
     const only = classifyEdits(change([todo(12)]), [one]);
-    expect(only).toEqual({ kinds: ["other"], markers: [true], asks: ["Add the other boat renders"], restated: [true] });
+    expect(only).toEqual({ kinds: ["other"], markers: [true], asks: ["Add the other boat renders"], restated: [true], nothing: [false] });
     // Text and a zoom with a marker beside them changed the video: it is a mix of edits, not a to-do.
     const mixed = change([todo(12), { op: "addClip", trackId: "cap", clip: caption },
       { op: "updateClip", clipId: shot.id, patch: { transform: { scale: 1.3 } } }]);
@@ -213,11 +222,11 @@ describe("telling an edit that only left a marker for the editor", () => {
     const marked = after(t => { t.markers = [{ id: "mk", time: 12, kind: "todo", text: "Add the boat renders", resolved: false }]; });
     const moved = after(t => { t.markers = [{ id: "mk", time: 14, kind: "todo", text: "Add the boat renders", resolved: false }]; });
     expect(classifyEdits(change([{ op: "updateMarker", markerId: "mk", patch: { time: 14 } }]), [one], { before: marked, after: moved }))
-      .toEqual({ kinds: ["other"], markers: [true], asks: ["Add the boat renders"], restated: [false] });
+      .toEqual({ kinds: ["other"], markers: [true], asks: ["Add the boat renders"], restated: [false], nothing: [false] });
     expect(classifyEdits(change([{ op: "updateMarker", markerId: "mk", patch: { text: "Add both renders" } }]), [one], { before: marked, after: marked }))
-      .toMatchObject({ asks: ["Add both renders"], restated: [true] });
+      .toMatchObject({ asks: ["Add both renders"], restated: [true], nothing: [false] });
     expect(classifyEdits(change([{ op: "removeMarker", markerId: "mk" }, todo(13, "Add both renders")]), [one]))
-      .toEqual({ kinds: ["other"], markers: [true], asks: ["Add both renders"], restated: [true] });
+      .toEqual({ kinds: ["other"], markers: [true], asks: ["Add both renders"], restated: [true], nothing: [false] });
     expect(classifyEdits(change([{ op: "updateMarker", markerId: "mk", patch: { resolved: true } }]), [one]).markers).toEqual([false]);
     expect(classifyEdits(change([{ op: "removeMarker", markerId: "mk" }]), [one]).markers).toEqual([false]);
   });

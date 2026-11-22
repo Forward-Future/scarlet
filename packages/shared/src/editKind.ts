@@ -257,6 +257,8 @@ export function editKinds(change: Change, ranges: TimeRange[], clocks: Clocks = 
 export function classifyEdits(change: Change, ranges: TimeRange[], clocks: Clocks = {},
   rippleJoins?: readonly { range: TimeRange; facet?: "restore" }[]): {
   kinds: EditKind[]; markers: boolean[]; asks: (string | undefined)[]; restated: boolean[];
+  /** The edit has no step of its own and none the change couldn't place: Scarlet named it and changed nothing there. */
+  nothing: boolean[];
 } {
   // Known joins stand for the steps, so only the markers are read from them, and only when there are any.
   const marks = rippleJoins && ((change.ops ?? []) as Op[]).some(op => op.op === "addMarker" || op.op === "updateMarker");
@@ -265,7 +267,7 @@ export function classifyEdits(change: Change, ranges: TimeRange[], clocks: Clock
     ...steps.filter(f => f.facet === "marker")] : steps;
   const framing = facets.some(f => f.facet === "framing") && zooms(change) ? "zoom" : "reframe";
   const verdict = (here: Placed[], all = false) => ({ verdict: decide(here.map(f => f.facet), framing, clocks, all), here });
-  let found: { verdict: Verdict; here: Placed[] }[];
+  let found: { verdict: Verdict; here: Placed[]; nothing?: true }[];
   if (ranges.length <= 1 || !facets.length) {
     const whole = verdict(facets, true);
     // A save of the whole video has no steps to place, so what it did is read from how much longer or shorter it left
@@ -274,11 +276,11 @@ export function classifyEdits(change: Change, ranges: TimeRange[], clocks: Clock
     // the card called that passage "Added" (2026-11-16). Where the change says nothing looks or sounds different, an
     // edit it names changed nothing a word names.
     const changed = !facets.length && ranges.length > 1 && change.ranges?.length ? change.ranges : undefined;
-    const still = { verdict: "other" as const, here: [] as Placed[] };
+    const still = { verdict: "other" as const, here: [] as Placed[], nothing: true as const };
     found = ranges.map(range => !changed || changed.some(c => c.start <= range.end + 0.5 && c.end >= range.start - 0.5) ? whole : still);
   } else {
     const anywhere = facets.filter(f => !f.range);
-    const unplaced = anywhere.length ? verdict(anywhere) : { verdict: "other" as const, here: [] };
+    const unplaced = anywhere.length ? verdict(anywhere) : { verdict: "other" as const, here: [], nothing: true as const };
     const placed = facets.filter((f): f is Placed & { range: TimeRange } => !!f.range);
     const candidates = intervalCandidates(placed, f => f.range.start, f => f.range.end + 0.5);
     found = ranges.map(range => {
@@ -305,5 +307,6 @@ export function classifyEdits(change: Change, ranges: TimeRange[], clocks: Clock
       return asked.length ? asked.join(" ") : undefined;
     }),
     restated: found.map(({ verdict, here }) => verdict === "marker" && here.some(f => f.ask && f.restated)),
+    nothing: found.map(f => !!f.nothing),
   };
 }
