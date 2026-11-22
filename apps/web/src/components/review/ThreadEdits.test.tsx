@@ -6,7 +6,7 @@ import { buildThreads, threadEditList, type VersionSummary } from "@scarlet/shar
 import { api } from "../../lib/client";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { useProjectStore, type ProjectData } from "../../stores/project";
-import { rejectInstruction, ThreadAction, useThreadEdits } from "./ThreadEdits";
+import { rejectInstruction, revisionWord, ThreadAction, useThreadEdits } from "./ThreadEdits";
 import type { Thread, ThreadEdit } from "@scarlet/shared";
 
 let root: Root;
@@ -136,4 +136,15 @@ it("words the request to reject one edit by its number and name", () => {
   expect(rejectInstruction({ editNumber: 2, label: "captions" })).toBe("The editor rejected edit 2, “captions”. Put back exactly what it changed and leave every other edit as it is.");
   expect(rejectInstruction({ label: "captions" })).toMatch(/^The editor rejected “captions”\. /);
   expect(rejectInstruction({})).toMatch(/^The editor rejected this edit\. /);
+});
+
+it("labels queued revisions Up next when next in line, Queued otherwise, and Revising…/Rejecting… once active", () => {
+  expect(revisionWord(undefined)).toBeUndefined();
+  expect(revisionWord({ id: "t1", state: "queued" }, { nextQueuedId: "t1" })).toBe("Up next");
+  expect(revisionWord({ id: "t2", state: "queued" }, { nextQueuedId: "t1" })).toBe("Queued");
+  expect(revisionWord({ id: "t1", state: "queued" })).toBe("Queued");
+  expect(revisionWord({ id: "t1", state: "queued" }, { rejecting: true, nextQueuedId: "t1" })).toBe("Up next");
+  expect(revisionWord({ id: "t1", state: "claimed" }, { nextQueuedId: "t1" })).toBe("Revising…");
+  expect(revisionWord({ id: "t1", state: "running" })).toBe("Revising…");
+  expect(revisionWord({ id: "t1", state: "running" }, { rejecting: true })).toBe("Rejecting…");
 });

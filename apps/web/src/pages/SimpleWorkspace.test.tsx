@@ -1458,8 +1458,8 @@ it("stops asking for a look at a flagged edit once its revision is queued", asyn
   const turn = turnFor("chg_approved_2");
   const wrap = turn.querySelectorAll<HTMLElement>(".simple-edits .simple-edit")[2]!;
   expect(wrap.querySelector(".edit-badge")?.classList.contains("is-check")).toBe(false);
-  expect(wrap.querySelector(".simple-edit-check")?.textContent).toBe("Revising…");
-  expect(wrap.getAttribute("aria-label")).toBe("Edit 3: wrap, revising");
+  expect(wrap.querySelector(".simple-edit-check")?.textContent).toBe("Up next");
+  expect(wrap.getAttribute("aria-label")).toBe("Edit 3: wrap, up next");
   expect(turn.querySelector(".simple-review-tab-count")).toBeNull();
   const dots = [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark.is-numbered")];
   expect(dots).toHaveLength(3);
@@ -4429,7 +4429,7 @@ it("marks the right call Revising… when its revision named an earlier part who
   await nextPart({ cutReasons: [...PAIR, STAGED[1]!, STAGED[2]!, { start: 14, end: 15, reason: "A cough." }] });
   await act(async () => {});
   await click(passCard().querySelector(".simple-pass-need")!);
-  expect(passRows().find(r => r.textContent?.includes("Repeated aside."))!.querySelector(".simple-pass-value")?.textContent).toBe("Revising…");
+  expect(passRows().find(r => r.textContent?.includes("Repeated aside."))!.querySelector(".simple-pass-value")?.textContent).toBe("Up next");
   expect(passRows().find(r => r.textContent?.includes("Breath before the price."))!.querySelector(".simple-pass-value")?.textContent).toBe("−1.0 s");
 });
 
@@ -4797,7 +4797,7 @@ it("keeps a second call Revising… when the first revised cut comes back, and d
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("2 need you");
   await click(passCard().querySelector(".simple-pass-need")!);
   const aside = passRows().find(r => r.textContent?.includes("Repeated aside."))!;
-  expect(aside.querySelector(".simple-pass-value")?.textContent).toBe("Revising…");
+  expect(aside.querySelector(".simple-pass-value")?.textContent).toBe("Queued");
   expect(aside.querySelector(".simple-pass-time.is-need")).toBeNull();
   expect(aside.disabled).toBe(true);
   // The editor makes the two calls that are theirs. The pass still waits for the aside's revision before it applies.
@@ -4867,7 +4867,7 @@ it("keeps a call Revising… when it comes back revised while a second note on i
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("2 need you");
   await click(passCard().querySelector(".simple-pass-need")!);
   const row = passRows().find(r => r.textContent?.includes("Starts in the pause."))!;
-  expect(row.querySelector(".simple-pass-value")?.textContent).toBe("Revising…");
+  expect(row.querySelector(".simple-pass-value")?.textContent).toBe("Queued");
   expect(row.disabled).toBe(true);
   // The two calls that are the editor's don't apply the pass over it.
   await click(passRows().find(r => !r.disabled)!);
@@ -5068,7 +5068,7 @@ it("keeps a call Revising… when its revision named an earlier part and a later
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("2 need you");
   await click(passCard().querySelector(".simple-pass-need")!);
   const row = passRows().find(r => r.textContent?.includes("Repeated aside."))!;
-  expect(row.querySelector(".simple-pass-value")?.textContent).toBe("Revising…");
+  expect(row.querySelector(".simple-pass-value")?.textContent).toBe("Up next");
   expect(row.querySelector(".simple-pass-time.is-need")).toBeNull();
 });
 
@@ -5114,7 +5114,7 @@ it("keeps the call on screen on its cut when the pass saves its next part after 
   expect(save).toHaveBeenLastCalledWith("chg_ready_part2", expect.objectContaining({ fromVersion: "ver_fades", choices: [{ index: 3, choice: "keep" }] }));
 });
 
-it("keeps a call Revising… and its number when its revision named the part before Scarlet's own crossfades", async () => {
+it("keeps a call Up next and its number when its revision named the part before Scarlet's own crossfades", async () => {
   runningPass();
   const threadId = threadWith("chg_ready").id;
   // The editor sent the aside back while the pass ran, so the request waits in the queue and names the part it saw.
@@ -5136,10 +5136,10 @@ it("keeps a call Revising… and its number when its revision named the part bef
   expect(tag()).toBe("Cut 4");
   await click(passCard().querySelector(".simple-pass-need")!);
   const row = passRows().find(r => r.textContent?.includes("Repeated aside."))!;
-  expect([row.querySelector(".simple-pass-value")?.textContent, row.disabled]).toEqual(["Revising…", true]);
+  expect([row.querySelector(".simple-pass-value")?.textContent, row.disabled]).toEqual(["Up next", true]);
 });
 
-it("marks a call Revising… in the need-you list once its revision is queued behind the running pass", async () => {
+it("marks a call Up next in the need-you list once its revision is queued behind the running pass", async () => {
   flagged();
   const threadId = threadWith("chg_ready").id;
   data = { ...data,
@@ -5161,11 +5161,11 @@ it("marks a call Revising… in the need-you list once its revision is queued be
     context: { threadId, changeId: "chg_ready", cutIndex: 1, time: 230, end: 233, message: "Keep the breath." } }] };
   await act(async () => { useProjectStore.setState({ current: data }); });
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
-  // It stays in the "need you" list, marked Revising…, beside the call that still waits.
+  // It stays in the "need you" list, marked Up next while it waits in the queue, beside the call that still waits.
   await click(passCard().querySelector(".simple-pass-need")!);
   expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent).sort()).toEqual(["Breath before the price.", "Repeated aside."].sort());
   const row = passRows().find(r => r.textContent?.includes("Breath before the price."))!;
-  expect(row.querySelector(".simple-pass-value")?.textContent).toBe("Revising…");
+  expect(row.querySelector(".simple-pass-value")?.textContent).toBe("Up next");
   // Its number is no longer amber: it waits on Scarlet now. The call that still waits keeps its amber number.
   expect(passRows().map(r => r.querySelector(".edit-badge")?.classList.contains("is-check"))).toEqual(passRows().map(r => r !== row));
   expect(row.disabled).toBe(true);
@@ -5399,7 +5399,7 @@ it("hands an interrupted pass's unchecked cuts to the editor, and takes them bac
   // sent back is with Scarlet too: nothing waits on the editor.
   expect(passCard().querySelector(".simple-review-tab-count")).toBeNull();
   const row = passRows().find(r => r.textContent?.includes("Breath before the price."))!;
-  expect(row.querySelector(".simple-pass-value")?.textContent).toBe("Revising…");
+  expect(row.querySelector(".simple-pass-value")?.textContent).toBe("Up next");
   expect(passRows().some(r => r.textContent?.includes("Repeated aside."))).toBe(false);
 });
 
@@ -5757,6 +5757,41 @@ it("says on a pass's row when its cut is being revised, kept or not, and that it
   expect(stands("wrap")).toEqual([["simple-pass-value", "Audio"], ["simple-pass-check", "Revised"]]);
   expect(row("wrap").querySelector(".simple-pass-label small")?.textContent).toBe("v2");
   expect(row("music bed").querySelector(".simple-pass-check")).toBeNull();
+});
+
+it("says Up next for the first queued revision, Queued for later ones, and Revising… once Scarlet starts on it", async () => {
+  appliedPass(true);
+  const thread = threadWith("chg_approved_2");
+  const base = buildDb().tasks.find(t => t.id === "task_done")!;
+  const now = Date.now();
+  // A pass is running while two revisions wait behind it: captions is next in line, wrap sits behind it.
+  data = { ...data, tasks: [
+    ...data.tasks.map(t => t.id === "task_pass" ? { ...t, state: "running" as const, startedAt: new Date(now - 5_000).toISOString(), finishedAt: undefined } : t),
+    { ...base, id: "task_q1", state: "queued" as const, createdAt: new Date(now + 1_000).toISOString(), startedAt: undefined, finishedAt: undefined,
+      summary: null, changeIds: [], context: { changeId: "chg_approved_2", editIndex: 1, threadId: thread.id, message: "Make them bigger" } },
+    { ...base, id: "task_q2", state: "queued" as const, createdAt: new Date(now + 2_000).toISOString(), startedAt: undefined, finishedAt: undefined,
+      summary: null, changeIds: [], context: { changeId: "chg_approved_2", editIndex: 2, threadId: thread.id, message: "Tighten the wrap" } },
+  ] };
+  useProjectStore.setState({ current: data });
+  await show();
+  await act(async () => {});
+  const pass = () => container.querySelector<HTMLElement>(".simple-pin .simple-pass")!;
+  await click(seeAll(pass())!);
+  await act(async () => {});
+  const check = (label: string) => {
+    const row = [...pass().querySelectorAll<HTMLElement>(".simple-pass-list > li > button")]
+      .find(b => b.querySelector(".simple-pass-label")?.textContent?.startsWith(label))!;
+    const el = row.querySelector<HTMLElement>(".simple-pass-check");
+    return [el?.textContent ?? null, !!el?.classList.contains("working-text")];
+  };
+  expect(check("captions")).toEqual(["Up next", false]);
+  expect(check("wrap")).toEqual(["Queued", false]);
+  // Once Scarlet finishes the pass and starts on the first revision, its row shimmers as Revising… and the next moves to Up next.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_pass" ? { ...t, state: "done" as const, finishedAt: new Date(now + 3_000).toISOString() }
+    : t.id === "task_q1" ? { ...t, state: "running" as const, startedAt: new Date(now + 3_000).toISOString() } : t) }));
+  await act(async () => {});
+  expect(check("captions")).toEqual(["Revising…", true]);
+  expect(check("wrap")).toEqual(["Up next", false]);
 });
 
 it("marks a call v2 when the request that revised it waited its turn behind the running pass", async () => {
@@ -8114,7 +8149,7 @@ it("says Queued on the card of a cut sent back until Scarlet starts on it, and s
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
   await click(passCard().querySelector(".simple-pass-need")!);
   expect(passRows().map(r => [r.querySelector(".simple-pass-label")?.textContent, r.querySelector(".simple-pass-value")?.textContent]))
-    .toEqual([["A clean retake.", "Revising…"], ["Breath before the price.", expect.stringMatching(/^−/)], ["Repeated aside.", "Revising…"]]);
+    .toEqual([["A clean retake.", "Revising…"], ["Breath before the price.", expect.stringMatching(/^−/)], ["Repeated aside.", "Up next"]]);
   // Each call has its number among all three, amber only on the one that still waits.
   expect(passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".edit-badge")?.classList.contains("is-check")])).toEqual([["1", false], ["2", true], ["3", false]]);
   // ↓ steps from the call still waiting to the one that waits its turn. Its card says it's queued, and its number is
