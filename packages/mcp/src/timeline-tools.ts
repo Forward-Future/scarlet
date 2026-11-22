@@ -23,6 +23,7 @@ import {
   pictureSyncOps,
   expandSplitJoins,
   type SplitJoinPlaced,
+  type ProposedOp,
   timelineDuration,
   timelineFromKeepRanges,
   timelineToSource,
@@ -241,7 +242,7 @@ ${OPS_DOC}`,
         if (!checked.ops.length) throw new Error("ops is empty");
         const expanded = await expandDips(checked.ops, before ?? emptyTimeline(projectId), speechOn);
         dips = expanded.dips;
-        const v = { ops: expanded.ops };
+        const v: { ops: ProposedOp[] } = { ops: expanded.ops };
         if (before && (range || (selectedRange(task?.context) && v.ops.every(o => o.op === "rippleDelete" && !o.trackIds)))) {
           body.range = cutScope(before, await cutAnchor(before), range);
           const aligned = boundedRippleOps(v.ops as TimelineOp[], body.range, (await getHeader()).project.settings.fps, timelineDuration(before));
