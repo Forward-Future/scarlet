@@ -7,8 +7,9 @@ import { listMoments, type Moment } from "../../lib/editMoments";
 import { clock as clockLabel, editRemovedLabel, lengthLabel, plural } from "../../lib/format";
 import { editKey, reviewKey, useKeptEdits } from "../../lib/keptEdits";
 import { madeSentence, type SentencePart } from "../../lib/madeSentence";
+import { decidedPassCalls } from "../../lib/passCalls";
 import type { Thread } from "../../lib/threads";
-import { approves, callRowKey, isWorking, letGo, noNests, noRejected, noSpent, type ChatActions, type Nest, type PassList, type Spent } from "./types";
+import { callRowKey, isWorking, letGo, noNests, noRejected, noSpent, type ChatActions, type Nest, type PassList, type Spent } from "./types";
 
 /**
  * A finished request with one result opens its edit on the timeline. A collection opens a list to choose from. One
@@ -119,44 +120,10 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const totalRows = edits.length + (pass?.calls.length ?? 0);
   // Calls the editor decided before the pass applied stay in For you: approved cuts link to their applied edit row,
   // and skipped calls (or approved keep proposals) stay as decided rows.
-  const { decidedCallEditKeys, decidedCallRows } = useMemo(() => {
-    const decidedCallEditKeys = new Set<string>();
-    const decidedCallRows: { key: string; at: number; label: string; approved: boolean }[] = [];
-    if (pass) return { decidedCallEditKeys, decidedCallRows };
-    for (const change of thread.changes) {
-      if (change.state !== "approved" || !change.cutChoices?.length) continue;
-      const joins = change.appliedReview?.joins;
-      const hasReviewIndex = !!joins?.some(j => j.reviewIndex !== undefined);
-      for (const choice of change.cutChoices) {
-        const assessment = change.cutAssessments?.find(a => a.index === choice.index);
-        const approved = choice.choice === approves(assessment);
-        let matched: Omit<ThreadEdit, "at"> | undefined;
-        if (joins?.length && hasReviewIndex) {
-          const spot = joins.findIndex(j => j.reviewIndex === choice.index);
-          if (spot >= 0) {
-            matched = edits.find(e => matchesEdit(e, { changeId: change.id, spot }))
-              ?? rejected.find(e => matchesEdit(e, { changeId: change.id, spot }));
-          }
-        }
-        if (!matched && choice.choice === "cut" && choice.start !== undefined) {
-          matched = edits.find(e => e.changeId === change.id && Math.abs(e.range.start - choice.start!) < 0.05)
-            ?? rejected.find(e => e.changeId === change.id && Math.abs(e.range.start - choice.start!) < 0.05);
-        }
-        if (matched) {
-          decidedCallEditKeys.add(editKey(matched));
-          continue;
-        }
-        const cutReason = change.cutReasons?.[choice.index];
-        decidedCallRows.push({
-          key: `choice/${change.id}/${choice.index}`,
-          at: assessment?.start ?? choice.start ?? cutReason?.start ?? 0,
-          label: assessment?.summary || assessment?.reason || cutReason?.summary || cutReason?.reason || "Cut",
-          approved,
-        });
-      }
-    }
-    return { decidedCallEditKeys, decidedCallRows };
-  }, [pass, thread.changes, edits, rejected]);
+  const { decidedCallEditKeys, decidedCallRows } = useMemo(
+    () => decidedPassCalls(pass ? undefined : thread, edits, rejected),
+    [pass, thread, edits, rejected],
+  );
   const wasListed = (e: Omit<ThreadEdit, "at">) => listedNeed.current.has(editKey(e)) || e.previous.some(p => listedNeed.current.has(editKey(p)));
   const isForYouEdit = (e: Omit<ThreadEdit, "at">) => !!e.check || decidedCallEditKeys.has(editKey(e));
   const isForYouRejected = (e: Omit<ThreadEdit, "at">) => !!e.wasCheck || decidedCallEditKeys.has(editKey(e)) || wasListed(e);

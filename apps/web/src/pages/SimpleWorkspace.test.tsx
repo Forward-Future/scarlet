@@ -12420,3 +12420,118 @@ it("drifts the timeline wash only while Scarlet is actively editing the video sh
     ? { ...t, state: "done" as const, finishedAt: new Date().toISOString() } : t) }));
   expect(active()).toBe(false);
 });
+
+it("steps through a pass's For you items in exact list order with arrow keys across interleaved calls and flagged edits", async () => {
+  runningPass();
+  flaggedPart();
+  // Scarlet asks about two calls first (1 and 2), the flagged edit takes 3, then the third call arrives as 4.
+  const asked = (n: number) => askAll(STAGED).slice(0, n).map((a, i) => ({ ...a, askOrder: i + 1 }));
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: asked(2) } : c) };
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  await act(async () => {});
+  await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: asked(3) } : c) }));
+  const numbers = () => passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".simple-pass-label")?.textContent]);
+  expect(numbers()).toEqual([["1", "A clean retake."], ["2", "Breath before the price."], ["3", "wrap"], ["4", "Repeated aside."]]);
+
+  const currentCard = () => {
+    const callCard = container.querySelector('[aria-label="Call"]');
+    if (callCard) return `call:${callCard.querySelector(".edit-card-count")?.textContent}`;
+    const editCard = editPanel();
+    if (editCard) return `edit:${editCard.querySelector(".edit-card-count")?.textContent}`;
+    return null;
+  };
+  // Arrow keys walk 1 -> 2 -> 3 -> 4 and back 4 -> 3 -> 2 -> 1 without skipping the flagged edit.
+  await press("ArrowDown");
+  expect(currentCard()).toBe("call:Cut 1");
+  await press("ArrowDown");
+  expect(currentCard()).toBe("call:Cut 2");
+  await press("ArrowDown");
+  expect(currentCard()).toBe("edit:Edit 3");
+  await press("ArrowDown");
+  expect(currentCard()).toBe("call:Cut 4");
+  await press("ArrowUp");
+  expect(currentCard()).toBe("edit:Edit 3");
+  await press("ArrowUp");
+  expect(currentCard()).toBe("call:Cut 2");
+  await press("ArrowUp");
+  expect(currentCard()).toBe("call:Cut 1");
+});
+
+it("advances through a pass's For you items in exact list order on K and X across interleaved calls and flagged edits", async () => {
+  const { save } = runningPass();
+  flaggedPart();
+  const asked = (n: number) => askAll(STAGED).slice(0, n).map((a, i) => ({ ...a, askOrder: i + 1 }));
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: asked(2) } : c) };
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  await act(async () => {});
+  await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: asked(3) } : c) }));
+
+  const currentCard = () => {
+    const callCard = container.querySelector('[aria-label="Call"]');
+    if (callCard) return `call:${callCard.querySelector(".edit-card-count")?.textContent}`;
+    const editCard = editPanel();
+    if (editCard) return `edit:${editCard.querySelector(".edit-card-count")?.textContent}`;
+    return null;
+  };
+  await press("ArrowDown");
+  expect(currentCard()).toBe("call:Cut 1");
+  // Deciding with K / X advances strictly 1 -> 2 -> 3 -> 4 instead of jumping from 2 to 4 and back to 3.
+  await press("k");
+  expect(currentCard()).toBe("call:Cut 2");
+  await press("x");
+  await act(async () => {});
+  expect(currentCard()).toBe("edit:Edit 3");
+  await press("k");
+  expect(currentCard()).toBe("call:Cut 4");
+  await press("k");
+  await act(async () => {});
+  expect(save).toHaveBeenLastCalledWith("chg_ready", expect.objectContaining({ applyWhenDone: true }));
+  expect(currentCard()).toBeNull();
+});
+
+it("stays within For you when stepping with arrow keys from kept or rejected For you edits", async () => {
+  appliedEdits();
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({
+    version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [
+      { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, previous: [] },
+      { changeId: "chg_approved_2", spot: 1, label: "captions", range: { start: 0.2, end: 2.4 }, previous: [], check: "Check the second line" },
+      { changeId: "chg_approved_2", spot: 2, label: "zoom", range: { start: 4, end: 6 }, previous: [] },
+      { changeId: "chg_approved_2", spot: 3, label: "gone check", range: { start: 8, end: 9 }, previous: [], rejected: true, wasCheck: true },
+      { changeId: "chg_approved_2", spot: 4, label: "wrap", range: { start: 11.5, end: 16 }, previous: [], check: CHECK, summary: SUMMARY },
+    ],
+  }));
+  await showFolded();
+  await act(async () => {});
+  const turn = turnFor("chg_approved_2");
+  const forYouRows = () => [...turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
+  expect(forYouRows().map(r => r.querySelector(".simple-edit-title")?.textContent)).toEqual(["captions", "gone check", "wrap"]);
+
+  // Keep captions -> advances directly to wrap.
+  await click(forYouRows()[0]!);
+  await act(async () => {});
+  expect(openTitle()).toBe("captions");
+  await press("k");
+  expect(openTitle()).toBe("wrap");
+
+  // Reopen kept captions and press ArrowDown: stays in For you (goes to wrap, never unflagged zoom).
+  await click(forYouRows()[0]!);
+  await act(async () => {});
+  expect(openTitle()).toBe("captions");
+  await press("ArrowDown");
+  expect(openTitle()).toBe("wrap");
+  await press("ArrowUp");
+  expect(openTitle()).toBe("captions");
+
+  // Open rejected For you edit and step ArrowDown / ArrowUp: stays within For you (wrap / captions), never zoom.
+  await click(forYouRows()[1]!);
+  await act(async () => {});
+  await press("ArrowDown");
+  expect(openTitle()).toBe("wrap");
+  await click(forYouRows()[1]!);
+  await act(async () => {});
+  await press("ArrowUp");
+  expect(openTitle()).toBe("captions");
+});
