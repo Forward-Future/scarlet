@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import type { Change } from "@scarlet/timeline";
 import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task } from "@scarlet/shared";
-import { useAgentAvailability } from "../../components/agent/AgentChip";
+import { runChoiceDiffers, useAgentAvailability } from "../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../components/review/RunBundle";
 import { editGroups, useReviewed, useRevising, useThreadEdits } from "../../components/review/ThreadEdits";
 import { Icon } from "../../components/ui/primitives";
@@ -392,7 +392,9 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // A request that edits the video has its controls at the band's right for as long as Scarlet has it: Pause, which
     // holds all editing in the project, then Resume once it is paused, which picks the paused work up first; and Stop,
     // which ends just this one, paused or not. Each is an icon alone, named the moment the pointer rests on it.
-    const hold = editingPaused ? () => attempt(run.root, resumeEditing(projectId)) : () => attempt(run.root, stopEditing(projectId));
+    const hold = editingPaused
+      ? () => attempt(run.root, effective && runChoiceDiffers(task, effective) ? resumeEditing(projectId, effective) : resumeEditing(projectId))
+      : () => attempt(run.root, stopEditing(projectId));
     const editActions = editsProject && stop ?
       <div className="unit-actions">
         <TipButton className="unit-pause-edit" tip={editingPaused ? "Resume editing" : "Pause editing"}
