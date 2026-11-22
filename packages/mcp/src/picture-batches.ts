@@ -1,8 +1,8 @@
 import { newId } from "@scarlet/timeline";
 import type { InspectionWindow, SheetRequest } from "@scarlet/shared";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { setTimeout as delay } from "node:timers/promises";
 import type { z } from "zod/v3";
+import { raceTimeout } from "./tool-result.js";
 
 export type PictureRequest = z.output<typeof SheetRequest>;
 export interface PreparedPictures { result: CallToolResult; windows: InspectionWindow[]; request: PictureRequest }
@@ -69,9 +69,7 @@ export class PictureBatches {
     // Without a wait from the harness, stay under the common 60-second tool deadline while the rest of the batch finishes.
     const deadline = Date.now() + (this.opts.waitMs ?? 25_000);
     while (batch.items.length < batch.total && !this.lifetime.signal.aborted && !batch.stop.signal.aborted && Date.now() < deadline) {
-      const timer = new AbortController();
-      try { await Promise.race([batch.next, delay(deadline - Date.now(), undefined, { signal: timer.signal, ref: false })]); }
-      finally { timer.abort(); }
+      await raceTimeout(batch.next, deadline - Date.now(), undefined);
     }
     const items = batch.items.slice(cursor);
     const end = cursor + items.length;

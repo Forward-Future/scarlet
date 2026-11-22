@@ -1,6 +1,6 @@
 import { normalizeTranscriptToken } from "@scarlet/shared";
 import { clipEnd, rangesOverlap, timelineToSource, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
-import { isTag, round3 } from "./analysis.js";
+import { appendInterval, isTag, round3 } from "./analysis.js";
 import { dialogueAudioStream, dialogueClips, type AudioLevels } from "./dialogue-join.js";
 import type { DialoguePlanSources } from "./dialogue-plan.js";
 import { timelineJoins } from "./timeline-perception.js";
@@ -82,9 +82,7 @@ function nearbySound(levels: AudioLevels, kept: TimeRange, peak: number): TimeRa
   for (let i = first; i < last; i++) {
     const start = from + i * step, end = start + step;
     if (!(db[i]! >= floor) || (start < kept.end && end > kept.start)) continue;
-    const lastRun = runs.at(-1);
-    if (lastRun && Math.abs(lastRun.end - start) < EPS) lastRun.end = end;
-    else runs.push({ start, end });
+    appendInterval(runs, start, end, EPS);
   }
   const sustained = runs.filter(r => r.end - r.start >= MIN_SOUND - EPS);
   return sustained.find(r => r.start >= kept.end - EPS) ?? sustained.at(-1);

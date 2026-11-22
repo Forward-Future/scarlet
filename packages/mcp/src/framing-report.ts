@@ -15,8 +15,9 @@
  * beside its stretches. A silent recording shown over the main picture is reported too, where the edit turns it on or
  * moves its edges.
  */
-import { clipEnd, Transform as TransformSchema, type MediaAsset, type MediaClip, type Timeline } from "@scarlet/timeline";
-import { CORNERS, boxInCorner, coverOnText, frameShown, pictureBox, type Box, type Corner } from "./framing.js";
+import { clipEnd, type MediaAsset, type MediaClip, type Timeline } from "@scarlet/timeline";
+import { pct1, round2 } from "./analysis.js";
+import { CORNERS, boxArea, boxInCorner, boxMeet, clipFramingKey, coverOnText, frameShown, pictureBox, type Box, type Corner } from "./framing.js";
 import { CUT_SHOWN, cutShareOf, sourceOnScreen, type RecordingCut } from "./brief-pictures.js";
 import { readingsAt, type ScreenLine, type ScreenReading } from "./screen-reading.js";
 import { DETAIL_COLS, DETAIL_ROWS, SMALL, detailAreas, detailShare, type DetailFrame, type MotionSecond, type MotionSpan } from "./screen-motion.js";
@@ -104,13 +105,13 @@ const ACTION_HIDDEN = 0.1;
 const BESIDE_STEP = 0.5;
 export const BESIDE_MAX = 60;
 
-const pct = (b: readonly number[]) => b.map(n => Math.round(n * 1000) / 10);
-const r2 = (n: number) => Math.round(n * 100) / 100;
-const framing = (clip: MediaClip) => JSON.stringify([TransformSchema.parse(clip.transform ?? {}), (clip.keyframes ?? []).map(k => [k.time, k.transform, k.ease ?? "linear"])]);
-const area = (b: Box) => Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]);
+const pct = (b: readonly number[]) => b.map(pct1);
+const r2 = round2;
+const framing = clipFramingKey;
+const area = boxArea;
 /** A silent picture above the main one that covers at least this share of the video is shown in its place, as a screen recording over the camera is; a camera inset isn't. */
 const STANDS_IN = 0.5;
-const meet = (a: Box, b: Box): Box => [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])];
+const meet = boxMeet;
 
 /**
  * The stretches `after` frames that `before` framed otherwise: clips of a recording on one track, in a row, that the edit
