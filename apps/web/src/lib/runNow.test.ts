@@ -54,5 +54,11 @@ it("says when Scarlet starts, thinks, waits or reconnects", () => {
   expect(runNow([waiting])).toBe("Waiting for the transcript");
   expect(runNow([tool("transcript_get", { mediaId: "cam" }), waiting, { ...waiting, data: { ...waiting.data, done: true } }])).toBe("Reading the transcript");
   expect(runNow([waiting, tool("transcript_get", { mediaId: "cam" })])).toBe("Waiting for the transcript");
+  const compacting = log("Compacting context", { kind: "compaction", active: true });
+  expect(runNow([tool("dialogue_scan", { from: 0 }), compacting])).toBe("Compacting context");
+  expect(runNow([tool("dialogue_scan", { from: 0 }), compacting, log("Context compacted", { kind: "compaction" })])).toBe("Reading the dialogue from the start");
+  expect(runNow([tool("dialogue_scan", { from: 0 }), compacting, log("Compacting context", { kind: "compaction", active: false })])).toBe("Reading the dialogue from the start");
+  expect(runNow([compacting, tool("timeline_get")])).toBe("Looking at the timeline");
+  expect(runNow([compacting, log("Context compacted", { kind: "compaction" }), compacting])).toBe("Compacting context");
   expect(runNow([{ type: "answer", text: "White" }])).toBe("Reading your answer");
 });

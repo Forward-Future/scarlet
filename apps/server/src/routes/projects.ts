@@ -7,7 +7,7 @@ import { withActivity } from "../services/projectActivity.js";
 import { holdProjectEditing, resumeProjectEditing, resumeProjectTranscriptions } from "../services/taskRecovery.js";
 import { Hono } from "hono";
 import { z } from "zod/v3";
-import { EditReviewRequest, threadTimeline, type ThreadEdit, threadRevision, ThreadDisposition, CreateProjectRequest, UpdateProjectRequest, type ProjectDetail } from "@scarlet/shared";
+import { EditReviewRequest, RunChoice, threadTimeline, type ThreadEdit, threadRevision, ThreadDisposition, CreateProjectRequest, UpdateProjectRequest, type ProjectDetail } from "@scarlet/shared";
 import { createProject, hasInitialTimeline } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
@@ -41,7 +41,7 @@ export function projectRoutes(ctx: Ctx) {
 
   r.post("/projects/:id/stop-editing", c => c.json(holdProjectEditing(ctx, c.req.param("id"))));
 
-  r.post("/projects/:id/resume-editing", c => c.json(resumeProjectEditing(ctx, c.req.param("id"))));
+  r.post("/projects/:id/resume-editing", async c => c.json(resumeProjectEditing(ctx, c.req.param("id"), await jsonBody(c, RunChoice))));
 
   r.get("/projects/:id", (c) => {
     const id = c.req.param("id");

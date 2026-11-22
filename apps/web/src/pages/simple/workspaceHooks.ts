@@ -169,6 +169,7 @@ export function usePassCallNumbers(
   passRoot: Task | undefined,
   allCalls: readonly Call[],
   passEdits: readonly Omit<ThreadEdit, "at">[],
+  rejectedPassEdits: readonly Omit<ThreadEdit, "at">[] = [],
 ) {
   return useMemo(() => {
     const callNo = new Map<number, number>(), passEditNo = new Map<string, { n: number; name: string }>();
@@ -180,7 +181,10 @@ export function usePassCallNumbers(
       return a.askOrder === undefined ? { key: `cut/${a.index}`, rememberAs: slot } : { key: `ask/${a.askOrder}`, previous: slot };
     });
     const at = (e: { range: { start: number } }) => (e as { at?: number }).at ?? e.range.start;
-    const edits = passEdits.filter(e => !!e.check).sort((a, b) => at(a) - at(b));
+    const edits = [
+      ...passEdits.filter(e => !!e.check),
+      ...rejectedPassEdits.filter(e => !!e.wasCheck),
+    ].sort((a, b) => at(a) - at(b));
     const editKeyOf = (e: (typeof edits)[number]) => `edit/${editKey(e.previous[0] ?? e)}`;
     const numbers = needNumbers(projectId, passThread.id, passRoot?.resumeRootId ?? passRoot?.id ?? pass.id, [...callKeys, ...edits.map(editKeyOf)]);
     allCalls.forEach((call, i) => callNo.set(call.index, numbers.get(callKeys[i]!.key)!));
@@ -190,7 +194,7 @@ export function usePassCallNumbers(
       for (const ref of [e, ...e.previous]) passEditNo.set(editKey(ref), { n, name });
     }
     return { callNo, passEditNo };
-  }, [pass, passThread?.id, passRoot?.id, allCalls, passEdits, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pass, passThread?.id, passRoot?.id, allCalls, passEdits, rejectedPassEdits, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 /** Responds to `scarlet:bookmark-project` when leaving for Settings or restarting for an update. */

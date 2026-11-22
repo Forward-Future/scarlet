@@ -12,7 +12,7 @@ import { QueueTray, useRewordingHold, type QueuedRequest } from "../components/c
 import { recordEditReview } from "../lib/editReviews";
 import { recordUndo, undoLast } from "../lib/undo";
 import { editKey, keepEdits } from "../lib/keptEdits";
-import { AgentChip } from "../components/agent/AgentChip";
+import { AgentChip, runChoiceDiffers, useAgentAvailability } from "../components/agent/AgentChip";
 import type { PausedAt } from "../components/agent/Composer";
 import { useImportTranscription } from "../components/media/TranscriptionAction";
 import { Dropzone, useImportCount, useUploader } from "../components/media/UploadDropzone";
@@ -468,7 +468,7 @@ export function SimpleWorkspace() {
   // cut is on the version before it: each is a grey gap there, After steps over it as the video runs now, and a click
   // in one plays it in Before from that point. That version is the one before the earliest of the cuts joined there,
   // so it holds all of them. A call on another version, or one Scarlet is checking again, stays as it is.
-  const { listed: listedPassEdits, located: locatedPassEdits } = useThreadEdits(current.id, passThread);
+  const { listed: listedPassEdits, rejected: rejectedPassEdits, located: locatedPassEdits } = useThreadEdits(current.id, passThread);
   const callOnHead = !!listening && !!pass && listening.changeId === pass.id && !conflict && !versionBefore && !!heard && !!callDuration
     && !!timeline && timeline.version === head && callTimeline === timeline;
   const callBaseVersion = useMemo(() => {
@@ -1034,7 +1034,7 @@ export function SimpleWorkspace() {
   // numbers: each says the same number in the list, on the timeline and on its card, and is named as what it is,
   // "Cut 6", or "Edit 6" for one that took no footage out.
   const passRoot = pass ? (stagingTask(pass, changes, tasks) ?? tasks.find(t => t.id === pass.taskId)) : undefined;
-  const { callNo, passEditNo } = usePassCallNumbers(current.id, pass, passThread, passRoot, allCalls, passEdits);
+  const { callNo, passEditNo } = usePassCallNumbers(current.id, pass, passThread, passRoot, allCalls, passEdits, passThread ? rejectedPassEdits : noEdits);
   // A call says its place among the calls ("Cut 2 of 5") while its number is one of theirs. A call that arrived after
   // the edits were numbered has a number past them, and says the number alone.
   const ofCalls = (n?: number) => n !== undefined && n <= allCalls.length ? ` of ${allCalls.length}` : "";
@@ -2180,6 +2180,8 @@ export function SimpleWorkspace() {
   // A request in the chat that Scarlet has, whose band holds Pause or Resume and Stop. A new one waiting its turn is
   // in the tray instead.
   const editing = tasks.some(task => isProjectEditTask(task) && runIsActive(task) && !(waitingToStart(task) && rootOf(task) === task.id));
+  // Active edit work on the video shown here (not paused, not waiting on an answer, and not previewing a Media clip).
+  const timelineEditing = !editingPaused && !chosenSource && tasks.some(task => isProjectEditTask(task) && isWorking(task.state));
   const pinned = front ? rootOf(front) : pass && passTask ? rootOf(passTask) : undefined;
   // The requests waiting their turn, in the order Scarlet will run them: a note on a call of the pass that waits goes
   // ahead of a new edit asked before it, which the calls hold back. An interrupted request keeps its place here.
@@ -2346,6 +2348,8 @@ export function SimpleWorkspace() {
     taken.restore();
     return true;
   };
+  const { effective } = useAgentAvailability();
+  const resumeRunWith = effective && tasks.some(t => t.state === "queued" && t.resumesAfterProjectStop && !t.startedAt && runChoiceDiffers(t, effective)) ? effective : undefined;
   const composer = <WorkspaceComposer newEdit={!replyTo} playerVersion={playerVersion} mediaId={source?.id} key={JSON.stringify([current.id, replyTo])} thread={replyThread}
     // A new request is the latest thing said, so the chat goes to it. A cut or an edit that's open stays open.
     onCreated={() => { follow.current = true; }} onSent={sentUnder(aims.current)}
@@ -2366,7 +2370,7 @@ export function SimpleWorkspace() {
     tray={queuedItems.length > 0 || (editingPaused && !editing) ? <QueueTray items={queuedItems} hint={queueHint} waits={!editingPaused && queued[0] ? waitsOnEditor(queued[0]) : undefined} rewording={rewordingItem?.id} opened={trayOpen}
       onRemove={id => void queueAction(cancelTask(id, true)).catch(() => {})}
       paused={editingPaused}
-      onContinue={editingPaused && !editing ? () => queueAction(resumeEditing(current.id)).catch(() => {}) : undefined}
+      onContinue={editingPaused && !editing ? () => queueAction(resumeRunWith ? resumeEditing(current.id, resumeRunWith) : resumeEditing(current.id)).catch(() => {}) : undefined}
       // The editor's calls are theirs to put off: the request they hold back can start without them.
       onStart={!editingPaused && queued[0] && waitFor(queued[0])?.kind === "review" ? id => void queueAction(startBeforeCalls(id)).catch(() => {}) : undefined}
       // The pencil of the request whose words are in the box puts them back as they were.
@@ -2459,7 +2463,7 @@ export function SimpleWorkspace() {
                 ? { key: callPlaybackKey(listening.index, callTimeline.version), start: audition.start, side: listening.side,
                   beforeWindow: preparedCall?.before.window, afterWindow: preparedCall?.after.window,
                   beforeFile: preparedCall?.before.file, afterFile: preparedCall?.after.file } : undefined,
-            onGap: hearInBefore, onBand, onPick: pickPoint, onRange: markRange, holdPassage: cutWaits, reviewRange, writeRequest, heard: heardPick, quiet: quietOpen }} threadView={playerView}
+            onGap: hearInBefore, onBand, onPick: pickPoint, onRange: markRange, holdPassage: cutWaits, reviewRange, writeRequest, heard: heardPick, quiet: quietOpen, editing: timelineEditing }} threadView={playerView}
             workingCache={workingCache} draftVersion={previewVersion} draft={previewTimeline}
             openingJoin={!source && (appliedCut ? joinPending : openingJoin)} cutLoadError={cutLoadError}
             draftFailed={openingJoin ? !!single.error || (!!single.preview && !listenJoined) : pinnedCallVersion ? !!savedBefore.error : !appliedCut && draftFailed}

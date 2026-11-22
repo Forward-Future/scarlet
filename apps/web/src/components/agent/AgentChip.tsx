@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useMatch } from "react-router-dom";
-import type { AgentId, ModelOptions, SubscriptionQuota } from "@scarlet/shared";
+import type { AgentId, ModelOptions, RunChoice, SubscriptionQuota, Task } from "@scarlet/shared";
 import { isDesktop, type HostStatus } from "../../lib/desktop";
 import { AGENT_LABEL, isConfiguredAgent, onlineAgents, useHostsStore, type OnlineAgent } from "../../stores/hosts";
 import { modelChoices, selectVisibleModel, useModelPreferences } from "../../stores/modelPicker";
@@ -13,6 +13,14 @@ import { Icon } from "../ui/primitives";
 import { MENU_ITEM_CLASS } from "../shell/WorkspaceNavigation";
 
 export const NO_AGENT_REASON = "Sign in with Claude, ChatGPT or Google to let Scarlet edit";
+
+/** True when `choice` picks a different model, effort, or speed tier than `task` is currently set to run with. */
+export function runChoiceDiffers(task: Pick<Task, "agent" | "model" | "effort" | "fast" | "serviceTier">, choice: RunChoice): boolean {
+  if (!choice.agent) return false;
+  const tier = choice.serviceTier ?? (choice.fast ? "fast" : undefined);
+  const taskTier = task.serviceTier ?? (task.fast ? "fast" : undefined);
+  return choice.agent !== task.agent || choice.model !== task.model || choice.effort !== task.effort || tier !== taskTier;
+}
 
 const LOW_QUOTA_THRESHOLD = 20;
 const QUOTA_STALE_MS = 60_000;
@@ -616,7 +624,6 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
   const otherRows = scoped.filter((m) => !favorites.includes(m.key));
   const multiProvider = Boolean(query) || active === "all" || active === "favorites";
   const selectedInView = Boolean(selected && scoped.some((m) => m.key === selected.key));
-  const answerHint = threadInput === "answer" ? "This model is for your next edit. Your answer goes to the model that asked." : undefined;
 
   const renderModelRow = (m: (typeof choices)[number]) => (
     <div key={m.key} className="group flex items-center rounded-md pr-1 hover:bg-raised">
@@ -646,8 +653,8 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={iconOnly ? "Choose model" : emptyCatalog ? "Refresh models" : `Model: ${details}. Change model, effort or speed`}
-        aria-description={iconOnly && selected ? details : inHeader && emptyCatalog ? (answerHint ?? unavailableReason) : answerHint}
-        title={iconOnly ? (selected ? `Model: ${details}` : "Choose model") : inHeader ? (emptyCatalog ? (answerHint ?? unavailableReason) : selected ? `Model: ${details}${answerHint ? ` — ${answerHint}` : ""}` : answerHint) : answerHint ?? (emptyCatalog ? unavailableReason : selected ? effortTitle : undefined)}
+        aria-description={iconOnly && selected ? details : inHeader && emptyCatalog ? unavailableReason : undefined}
+        title={iconOnly ? (selected ? `Model: ${details}` : "Choose model") : inHeader ? (emptyCatalog ? unavailableReason : selected ? `Model: ${details}` : undefined) : emptyCatalog ? unavailableReason : selected ? effortTitle : undefined}
         onClick={() => {
           if (!open) {
             setScope(selected?.agent ?? "all");
@@ -741,7 +748,6 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
           }}
           className="fixed z-50 w-[22rem] !max-w-[calc(100vw-16px)] overflow-auto card shadow-2xl outline-none"
         >
-          {answerHint && <p className="border-b border-line px-3 py-2 text-xs text-muted">{answerHint}</p>}
           {!choices.length ? (
             <>
               <p className="px-3 py-3 text-[13px] text-muted">{unavailableReason}</p>

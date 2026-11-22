@@ -172,9 +172,69 @@
   .cut-transport { margin-top: 8px; }
 }
 
-.monitor-playback { position: absolute; bottom: 10px; left: 10px; display: flex; flex-wrap: wrap; align-items: center; max-width: calc(100% - 20px); gap: 2px; padding: 1px 9px 1px 2px; border-radius: 7px; background: rgb(16 16 16 / 86%); }
+.monitor-playback { position: absolute; z-index: 6; bottom: 10px; left: 10px; display: flex; flex-wrap: wrap; align-items: center; max-width: calc(100% - 20px); gap: 2px; padding: 1px 9px 1px 2px; border-radius: 7px; background: rgb(16 16 16 / 86%); }
+.watch-monitor .monitor-controls { z-index: 6; }
 .monitor-clock { color: #b6b3ac; font: 11px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .monitor-clock strong { font-weight: 500; color: #f4f0e8; }
+/* Slow cut loads and cold renders: brief outgoing-frame hold, dimmed lead-in still with a warm sheen synced to the
+   timeline's loading wave, thin bottom hairline, and an escalating frosted status pill after 1.5s. */
+.monitor-load { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; opacity: 1; transition: opacity .28s cubic-bezier(.22, .61, .36, 1); }
+.monitor-load[data-leaving] { opacity: 0; }
+.monitor-load-held { position: absolute; inset: 0; background: #000; }
+.monitor-load-held canvas { display: block; width: 100%; height: 100%; object-fit: contain; transition: filter .24s ease, opacity .24s ease; }
+.monitor-load-held[data-dimmed] canvas { filter: brightness(.74) saturate(.82); opacity: .94; }
+.monitor-load-still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000;
+  opacity: 0; filter: brightness(.76) saturate(.84); transition: opacity .22s ease; }
+.monitor-load-still[data-loaded] { opacity: 1; }
+.monitor-load-scrim { position: absolute; inset: 0; background: radial-gradient(ellipse 72% 72% at 50% 50%, rgb(10 10 10 / 26%), rgb(10 10 10 / 48%)); }
+.monitor-load-sheen { position: absolute; inset: 0; }
+.monitor-load-sheen > i {
+  position: absolute; inset: 0; background: rgb(225 217 197 / 13%);
+  mask-image: radial-gradient(ellipse 30% 115% at 42% 55%, #000 28%, transparent),
+              radial-gradient(ellipse 18% 95% at 80% 55%, #000 18%, transparent);
+  mask-size: 50% 100%;
+  mask-repeat: repeat-x;
+}
+.monitor-load-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; }
+.monitor-load-pill {
+  display: inline-flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); padding: 7px 14px 7px 11px; border-radius: 999px;
+  background: rgb(18 18 17 / 78%); border: 1px solid rgb(255 255 255 / 12%); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 46%), inset 0 1px 0 rgb(255 255 255 / 6%); color: #f4f0e8;
+  font: 500 12.5px/1.25 var(--font-sans); letter-spacing: -.005em; white-space: nowrap;
+}
+.monitor-load-ring { flex: none; width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid rgb(244 240 232 / 22%); border-top-color: #f4f0e8; }
+.monitor-load-meta { color: #a9a59d; font-weight: 400; font-variant-numeric: tabular-nums; }
+.monitor-load-hint {
+  max-width: calc(100% - 24px); padding: 3px 10px; border-radius: 999px; background: rgb(14 14 14 / 62%); border: 1px solid rgb(255 255 255 / 7%);
+  color: #c7c3ba; font: 400 11.5px/1.3 var(--font-sans); text-align: center;
+}
+.monitor-load-hint kbd {
+  display: inline-block; margin: 0 2px; padding: 0 5px; border-radius: 4px; border: 1px solid rgb(255 255 255 / 18%);
+  background: rgb(255 255 255 / 8%); color: #f4f0e8; font: 500 11px/16px var(--font-mono);
+}
+.monitor-load-bar { position: absolute; inset: auto 0 0 0; height: 2px; background: rgb(255 255 255 / 8%); overflow: hidden; }
+.monitor-load-bar-fill { display: block; height: 100%; background: linear-gradient(90deg, rgb(244 240 232 / 55%), #f4f0e8); transition: width .35s cubic-bezier(.22, .61, .36, 1); }
+.monitor-load-bar-fill.is-indeterminate { width: 34%; border-radius: 2px; background: linear-gradient(90deg, transparent, rgb(244 240 232 / 82%) 55%, transparent); }
+@media (prefers-reduced-motion: no-preference) {
+  .monitor-load-sheen > i { animation: waveform-travel 4.8s linear var(--wave-phase, 0s) infinite; }
+  .monitor-load-ring { animation: monitor-load-spin .85s linear infinite; }
+  .monitor-load-pill { animation: monitor-load-rise .24s cubic-bezier(.22, .61, .36, 1); }
+  .monitor-load-hint { animation: monitor-load-rise .28s cubic-bezier(.22, .61, .36, 1); }
+  .monitor-load-bar-fill.is-indeterminate { animation: monitor-load-sweep 1.8s cubic-bezier(.4, 0, .2, 1) infinite; }
+}
+@keyframes monitor-load-spin { to { transform: rotate(360deg); } }
+@keyframes monitor-load-rise { from { opacity: 0; transform: translateY(4px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes monitor-load-sweep { from { transform: translateX(-110%); } to { transform: translateX(310%); } }
+@media (prefers-reduced-motion: reduce) {
+  .monitor-load, .monitor-load-still, .monitor-load-held canvas, .monitor-load-bar-fill { transition: none; }
+  .monitor-load-sheen { display: none; }
+  .monitor-load-ring { border-color: rgb(244 240 232 / 55%); }
+  .monitor-load-bar-fill.is-indeterminate { width: 100%; opacity: .35; }
+}
+@container (max-width: 340px) {
+  .watch-monitor .monitor-load-pill { font-size: 11.5px; padding: 6px 11px 6px 9px; }
+  .watch-monitor .monitor-load-hint { font-size: 10.5px; }
+}
 /* Edits saved while the video plays wait until it stops: a note on the picture says they're ready. As it stops they
    come in, and the picture it stopped on stays until the new player's own is in, then fades into it. The note sits
    at the middle of the picture's foot, between the player's own controls. */
@@ -226,7 +286,7 @@
 .ruler-major > span { position: absolute; left: 3px; bottom: 9px; color: #aaa69e; font: 11px/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .timeline-lanes {
   position: absolute; inset: var(--ruler-height) 0 0; display: flex; flex-direction: column; overflow: hidden;
-  border-radius: inherit; background: #2d2b28; pointer-events: none;
+  border-radius: inherit; background: #2d2b28; pointer-events: none; isolation: isolate;
 }
 .timeline-media { display: flex; flex-direction: column; width: 100%; height: 100%; transform-origin: left center; }
 .timeline-media + .timeline-media { position:absolute; inset:0; }
@@ -270,6 +330,37 @@
 @keyframes waveform-grow { from { transform: scaleY(.15); opacity: .35; } }
 /* A half-width tile advances exactly one repeat so the ripple loops without a jump. */
 @keyframes waveform-travel { from { mask-position: 0% center; } to { mask-position: 100% center; } }
+/* While Scarlet is actively editing the video, a wide pillowy glow drifts gently back and forth across the timeline
+   lanes, synced by --edit-phase so saving a new cut mid-pass doesn't jump it, and fading out cleanly when done. */
+.timeline-editing-wash {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; border-radius: inherit;
+  mix-blend-mode: screen; opacity: 0; transition: opacity .55s ease;
+}
+.timeline-editing-wash[data-active] { opacity: 1; }
+.timeline-editing-wash::after {
+  content: ""; position: absolute; inset: -12% 0; width: 68%;
+  background: radial-gradient(ellipse 50% 80% at 50% 50%,
+    rgba(244, 241, 233, .14) 0%,
+    rgba(225, 217, 197, .055) 42%,
+    transparent 74%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .timeline-editing-wash::after {
+    animation: timeline-editing-drift 5.2s ease-in-out var(--edit-phase, 0s) infinite alternate;
+    animation-play-state: paused;
+  }
+  .timeline-editing-wash[data-active]::after { animation-play-state: running; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .timeline-editing-wash { transition: opacity .2s ease; }
+  .timeline-editing-wash::after { display: none; }
+  .timeline-editing-wash[data-active] { box-shadow: inset 0 0 0 1px rgba(244, 241, 233, .22); }
+}
+@keyframes timeline-editing-drift {
+  0%   { transform: translateX(-18%); opacity: .74; }
+  50%  { opacity: 1; }
+  100% { transform: translateX(65%); opacity: .74; }
+}
 .timeline-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 22px; margin-top: 6px; }
 .timeline-clock { color: var(--color-fg); font: 12px/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .timeline-clock > span { color: #8a867f; }
