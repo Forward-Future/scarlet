@@ -9,7 +9,7 @@ import { waitFor } from "../events.js";
 import { aboutStagedCut, appendTaskEvent, cancelTask, completeTask, createTask, FINISHED_TASK, followUpInstruction, holdForRewording, PROJECT_EDIT_KINDS, rewordTask, saveTask, startBeforeCalls, taskPrompt } from "../services/tasks.js";
 import { readPassRepeats } from "../services/passRepeats.js";
 import { callSentBack } from "../services/changes.js";
-import { jsonBody, requireProjectHeader } from "./util.js";
+import { jsonBody, requireProjectHeader, requireScoped } from "./util.js";
 import { actorFor, agentName, logActivity, quote } from "../services/activity.js";
 import { continueWhenReady, interruptTask, retryTask } from "../services/taskRecovery.js";
 import { requestAttempt, requireActiveAttempt } from "../services/taskAttempt.js";
@@ -44,11 +44,7 @@ function usageGroupBy(value: string | undefined, fallback: UsageGroupBy): UsageG
 export function taskRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
 
-  function requireTask(taskId: string, projectId?: string) {
-    const task = ctx.repos.tasks.get(taskId);
-    if (!task || (projectId !== undefined && task.projectId !== projectId)) throw notFound(`task ${taskId}`);
-    return task;
-  }
+  const requireTask = (taskId: string, projectId?: string) => requireScoped(ctx.repos.tasks, "task", taskId, projectId);
 
   r.post("/projects/:id/tasks", async (c) => {
     const project = requireProjectHeader(ctx, c.req.param("id"));

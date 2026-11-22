@@ -6,9 +6,9 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_PREVIEW_HEIGHT } from "@scarlet/timeline";
-import { FfmpegError, LOCAL_MEDIA_INPUT, failureReason, runFfmpeg, threadedAvcPreview } from "./exec.js";
+import { FfmpegError, LOCAL_MEDIA_INPUT, even, failureReason, runFfmpeg, threadedAvcPreview } from "./exec.js";
 import { probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
-import { resolveEncoding, softwareEncoder, type HwAccel, type VideoEncoder } from "./encoder.js";
+import { PROXY_AUDIO_BITRATE, resolveEncoding, softwareEncoder, type HwAccel, type VideoEncoder } from "./encoder.js";
 
 export interface ProxyOptions {
   /** Directory keyed by source identity and proxy format. */
@@ -59,7 +59,7 @@ export async function proxyCheckpoint(dir: string, height: number, fps: number, 
 /** The size `scale=w=-2:h=2*trunc(min(height,ih)/2)` produces, for the encoder probe. */
 function proxySize(probe: ProbeResult, height: number) {
   const h = Math.max(2, 2 * Math.trunc(Math.min(height, probe.height) / 2));
-  return { width: Math.max(2, 2 * Math.round((probe.width * h) / probe.height / 2)), height: h };
+  return { width: even((probe.width * h) / probe.height), height: h };
 }
 
 function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, opts: ProxyOptions, hardwareDecode: boolean): { input: string[]; output: string[] } {
@@ -173,7 +173,7 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
       ]);
       await writeFile(manifest, list.join("\n") + "\n");
       const audio = probe.hasAudio ? [...LOCAL_MEDIA_INPUT, "-i", input, "-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac",
-        "-b:a", "96k", "-ac", "2"] : ["-map", "0:v:0", "-an"];
+        "-b:a", PROXY_AUDIO_BITRATE, "-ac", "2"] : ["-map", "0:v:0", "-an"];
       await runFfmpeg(["-y", "-f", "concat", "-safe", "1", "-i", manifest, ...audio,
         "-c:v", "copy", "-movflags", "+faststart", output], { signal: opts.signal, ffmpegPath: opts.ffmpegPath,
         onProgress: opts.onProgress && (t => opts.onProgress!(PARTS + (1 - PARTS) * Math.min(1, t / Math.max(probe.duration, pictureDuration)))) });
@@ -188,7 +188,7 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
   if (video) args.push("-map", "0:v:0", ...video.output);
   else args.push("-vn");
   if (probe.hasAudio) {
-    args.push("-map", "0:a:0", "-c:a", "aac", "-b:a", "96k", "-ac", "2");
+    args.push("-map", "0:a:0", "-c:a", "aac", "-b:a", PROXY_AUDIO_BITRATE, "-ac", "2");
   } else {
     args.push("-an");
   }

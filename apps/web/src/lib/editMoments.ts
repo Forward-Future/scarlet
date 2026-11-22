@@ -1,5 +1,7 @@
+import type { EditRef } from "@scarlet/shared";
 import { CUT_LEAD_SECONDS, CUT_TAIL_SECONDS, type TimeRange } from "@scarlet/timeline";
-const editKey = (ref: { changeId: string; spot: number }) => `${ref.changeId}/${ref.spot}`;
+
+export const editKey = (ref: EditRef) => `${ref.changeId}/${ref.spot}`;
 
 /** What placing an edit in a moment needs to know of it. */
 export interface MomentEdit {

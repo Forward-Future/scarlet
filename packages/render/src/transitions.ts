@@ -4,6 +4,7 @@
  * inside each section's cache key, so a transition only re-renders the sections around its join.
  */
 import { planTransitions, type TransitionMotion } from "@scarlet/timeline";
+import { fnum } from "./exec.js";
 
 export { planTransitions };
 export type { TransitionMotion };
@@ -13,11 +14,9 @@ export function motionsIn(motions: readonly TransitionMotion[] | undefined, from
   return (motions ?? []).filter(m => m.end > from && m.start < to).map(m => ({ ...m, start: m.start - from, end: m.end - from }));
 }
 
-const n = (x: number) => String(Math.round(x * 1e6) / 1e6);
-
 /** How far through the motion the picture is at output time `t`, eased: 0 before it, 1 after. */
 function eased(m: TransitionMotion) {
-  const p = `clip((t-${n(m.start)})/${n(Math.max(1e-6, m.end - m.start))},0,1)`;
+  const p = `clip((t-${fnum(m.start)})/${fnum(Math.max(1e-6, m.end - m.start))},0,1)`;
   // A whip spends its time in the middle, where the blur hides the jump; the rest ease in and out.
   return m.type === "whip" ? `(${p}*${p}*${p}*(${p}*(6*${p}-15)+10))` : `(${p}*${p}*(3-2*${p}))`;
 }
@@ -29,8 +28,8 @@ export function motionFilters(motions: readonly TransitionMotion[], width: numbe
   // clock moved on by that much, then move the clock back.
   const fade = (m: TransitionMotion, options: string) => {
     const early = Math.max(0, -m.start);
-    const f = `fade=${options}:st=${n(m.start + early)}:d=${n(Math.max(1e-6, m.end - m.start))}`;
-    return early ? [`setpts=PTS+${n(early)}/TB`, f, `setpts=PTS-${n(early)}/TB`] : [f];
+    const f = `fade=${options}:st=${fnum(m.start + early)}:d=${fnum(Math.max(1e-6, m.end - m.start))}`;
+    return early ? [`setpts=PTS+${fnum(early)}/TB`, f, `setpts=PTS-${fnum(early)}/TB`] : [f];
   };
   for (const m of motions) {
     const d = Math.max(1e-6, m.end - m.start);
@@ -40,7 +39,7 @@ export function motionFilters(motions: readonly TransitionMotion[], width: numbe
       // A sideways blur through the middle of the move, as a fast pan smears.
       const vertical = m.direction === "up" || m.direction === "down";
       const size = Math.max(2, Math.round(width / 40));
-      out.push(`avgblur=sizeX=${vertical ? 1 : size}:sizeY=${vertical ? size : 1}:enable='between(t,${n(m.start + d * 0.15)},${n(m.end - d * 0.15)})'`);
+      out.push(`avgblur=sizeX=${vertical ? 1 : size}:sizeY=${vertical ? size : 1}:enable='between(t,${fnum(m.start + d * 0.15)},${fnum(m.end - d * 0.15)})'`);
     }
   }
   return out;

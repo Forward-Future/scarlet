@@ -47,13 +47,17 @@ pub struct DetectOptions<'a> {
 }
 
 fn parse_version(s: &str) -> Option<String> {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = RE.get_or_init(|| regex::Regex::new(r"(\d+\.\d+\.\d+(?:[-+.][\w.]+)?)").unwrap());
-    re.captures(s).map(|c| c[1].to_string())
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(\d+\.\d+\.\d+(?:[-+.][\w.]+)?)").unwrap());
+    RE.captures(s).map(|c| c[1].to_string())
 }
 
 fn env_truthy(env: &HashMap<String, String>, key: &str) -> bool {
     env_get(env, key).map(|v| !v.is_empty()).unwrap_or(false)
+}
+
+/// Whether any API-key variable for `agent` is set to a non-empty value in `env`.
+pub fn has_api_key(agent: &str, env: &HashMap<String, String>) -> bool {
+    api_key_vars(agent).iter().any(|k| env_truthy(env, k))
 }
 
 pub const SUBSCRIPTION: &str = "subscription";
@@ -75,7 +79,9 @@ pub fn api_key_vars(agent: &str) -> &'static [&'static str] {
 }
 
 pub(super) fn strip_vars(env: &HashMap<String, String>, vars: &[&str]) -> HashMap<String, String> {
-    env.iter().filter(|(k, _)| !vars.iter().any(|v| k.eq_ignore_ascii_case(v))).map(|(k, v)| (k.clone(), v.clone())).collect()
+    let mut out = env.clone();
+    crate::util::env_remove_ci(&mut out, vars);
+    out
 }
 
 /// The env a runner should use: when the CLI is signed in with a subscription,
@@ -91,9 +97,9 @@ pub fn runner_env(agent: &str, agents: &[AgentAvailability], env: &HashMap<Strin
 }
 
 /// Where the CLI is, or the entry for one that isn't installed.
-async fn installed<I: DetectIo>(io: &I, id: &str) -> Result<String, AgentAvailability> {
+async fn installed<I: DetectIo>(io: &I, id: &str) -> Result<String, Box<AgentAvailability>> {
     let Some(path) = io.find(cli_binary(id)).await else {
-        return Err(AgentAvailability { id: id.into(), installed: false, ..Default::default() });
+        return Err(Box::new(AgentAvailability { id: id.into(), installed: false, ..Default::default() }));
     };
     Ok(path)
 }
@@ -106,7 +112,7 @@ async fn cli_version<I: DetectIo>(io: &I, path: &str) -> Option<String> {
 pub async fn detect_claude<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentAvailability {
     let path = match installed(io, "claude").await {
         Ok(found) => found,
-        Err(missing) => return missing,
+        Err(missing) => return *missing,
     };
     let mut logged_in: Option<bool> = None;
     let mut auth: Option<String> = None;
@@ -152,7 +158,7 @@ pub async fn detect_claude<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentA
         if env_truthy(o.env, "CLAUDE_CODE_OAUTH_TOKEN") {
             logged_in = Some(true);
             auth = Some(SUBSCRIPTION.into());
-        } else if api_key_vars("claude").iter().any(|k| env_truthy(o.env, k)) {
+        } else if has_api_key("claude", o.env) {
             logged_in = Some(true);
             auth = Some(API_KEY.into());
         }
@@ -171,7 +177,7 @@ pub async fn detect_claude<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentA
 pub async fn detect_codex<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentAvailability {
     let path = match installed(io, "codex").await {
         Ok(found) => found,
-        Err(missing) => return missing,
+        Err(missing) => return *missing,
     };
     let mut logged_in: Option<bool> = None;
     let mut auth: Option<String> = None;
@@ -201,7 +207,7 @@ pub async fn detect_codex<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentAv
             }
         }
     }
-    if logged_in != Some(true) && api_key_vars("codex").iter().any(|k| env_truthy(o.env, k)) {
+    if logged_in != Some(true) && has_api_key("codex", o.env) {
         logged_in = Some(true);
         auth = Some(API_KEY.into());
     }
@@ -218,7 +224,7 @@ pub async fn detect_codex<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentAv
 pub async fn detect_gemini<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentAvailability {
     let path = match installed(io, "gemini").await {
         Ok(found) => found,
-        Err(missing) => return missing,
+        Err(missing) => return *missing,
     };
     let mut logged_in: Option<bool> = None;
     let mut auth: Option<String> = None;
@@ -236,7 +242,7 @@ pub async fn detect_gemini<I: DetectIo>(io: &I, o: &DetectOptions<'_>) -> AgentA
     } else if st.code.is_some() && st.code != Some(0) {
         logged_in = Some(false);
     }
-    if logged_in != Some(true) && api_key_vars("gemini").iter().any(|k| env_truthy(o.env, k)) {
+    if logged_in != Some(true) && has_api_key("gemini", o.env) {
         logged_in = Some(true);
         auth = Some(API_KEY.into());
     }

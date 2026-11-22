@@ -1,5 +1,6 @@
 import { clearUpdatePlace, saveUpdatePlace } from "../../lib/updatePlace";
 import { useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
+import { errorMessage } from "../../lib/client";
 import { desktop } from "../../lib/desktop";
 import { buildPercent, refreshUpdateStatus, useUpdateStatus } from "../../lib/updateStatus";
 import { changesSince, parseChangelog, plainChange } from "../../lib/changelog";
@@ -101,7 +102,7 @@ export function UpdateButton() {
       await desktop.restartForUpdate(ready);
     } catch (err) {
       clearUpdatePlace();
-      setRestart({ restarting: false, error: err instanceof Error ? err.message : String(err), about: ready });
+      setRestart({ restarting: false, error: errorMessage(err), about: ready });
       refreshUpdateStatus();
     }
   }

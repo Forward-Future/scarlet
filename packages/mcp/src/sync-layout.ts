@@ -1,5 +1,6 @@
 import { clipEnd, makeTrack, newId, Transform, type MediaAsset, type Project, type Timeline, type TimelineOp } from "@scarlet/timeline";
 import { z } from "zod/v3";
+import { round4 } from "./analysis.js";
 
 export const InsetFraming = z.object({
   scale: z.number().finite().positive(), x: z.number().finite(), y: z.number().finite(),
@@ -66,7 +67,7 @@ const HIGHEST = .02;
 /** A crop this close to the whole picture isn't worth the camera's resolution. */
 const WHOLE = .97;
 
-const round = (n: number) => Math.round(n * 1e4) / 1e4;
+const round = round4;
 const clamp = (n: number, size: number) => Math.min(Math.max(n, 0), 1 - size);
 
 /** The value at fraction `p` of the seconds given, each value weighted by its seconds. */

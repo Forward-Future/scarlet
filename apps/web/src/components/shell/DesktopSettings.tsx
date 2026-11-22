@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { desktop, isDesktop, type EngineStatus } from "../../lib/desktop";
 import { errorMessage, IS_MOCK } from "../../lib/client";
-import { plural } from "../../lib/format";
+import { fileBaseName, plural } from "../../lib/format";
 import { AGENT_LABEL, isConfiguredAgent } from "../../stores/hosts";
 import { AgentSignIn, authLabel, canSignIn, useLocalHost } from "./AgentSignIn";
 import { InlineError, Loading, SectionTitle } from "../ui/primitives";
@@ -188,7 +188,7 @@ export function ExportLogs() {
       <div className="flex flex-wrap items-center gap-2">
         <button className="btn-primary" disabled={state.phase === "saving"} onClick={save}>{state.phase === "saving" ? "Saving…" : "Export logs…"}</button>
         {state.phase === "saved" && <>
-          <span className="truncate text-[12.5px] text-muted" role="status" title={state.path}>Saved {state.path.split(/[\\/]/).pop()}</span>
+          <span className="truncate text-[12.5px] text-muted" role="status" title={state.path}>Saved {fileBaseName(state.path)}</span>
           <button className="btn-quiet" onClick={() => void desktop.revealPath(state.path).catch(e => setState({ phase: "failed", error: errorMessage(e) }))}>Show in folder</button>
         </>}
       </div>

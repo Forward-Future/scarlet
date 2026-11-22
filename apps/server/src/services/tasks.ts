@@ -1,33 +1,45 @@
-import { agentCapabilities, workspaceCapabilities, isAsideTask, SIDE_CHECK_KINDS, isLearningCheck, isProjectEditTask, PROJECT_EDIT_TASK_KINDS, isSkillEdit, planText, queueBlocker, type QueueChange, reviewItemPath, splitAgentTarget, TaskPlan, dialogueCommand, skillCommands, taskDialogueOperation, taskRunKind } from "@scarlet/shared";
-import { AgentId, type AgentHost, type CompleteTaskRequest, type Task, type TaskEvent, type TaskKind, type TaskPrompt, type User } from "@scarlet/shared";
-import { buildSystemPrompt } from "@scarlet/mcp/prompt";
-import { join } from "node:path";
-import { describeDialogueRemovals, dialogueReceipt, dialogueRemovals, newId, type Author, type Change, type Project } from "@scarlet/timeline";
-import { mimeFor, styleGuidePath } from "./graphics.js";
+import {
+  AgentId,
+  dialogueCommand,
+  isAsideTask,
+  isLearningCheck,
+  isProjectEditTask,
+  isSkillEdit,
+  planText,
+  PROJECT_EDIT_TASK_KINDS,
+  reviewItemPath,
+  skillCommands,
+  splitAgentTarget,
+  taskDialogueOperation,
+  TaskPlan,
+  type CompleteTaskRequest,
+  type Task,
+  type TaskEvent,
+  type TaskKind,
+  type User,
+} from "@scarlet/shared";
+import { describeDialogueRemovals, dialogueReceipt, dialogueRemovals, newId, type Author, type Change } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
-import { clip, logId, since, throttledLog } from "../logText.js";
-import { badRequest, conflict, notFound } from "../errors.js";
+import { badRequest, conflict } from "../errors.js";
+import { clip, logId, since } from "../logText.js";
 import { recordTaskFinished, recordTaskRequested } from "../telemetry/events.js";
-import { notify } from "./notify.js";
 import { actorFor, agentName, logActivity, quote } from "./activity.js";
+import { applyChoicesWhenDone, retireStaleSaves } from "./changes.js";
+import { skillEditEnded, startLearningCheck } from "./learnings.js";
+import { notify } from "./notify.js";
 import { restoreUnreplacedProposal } from "./revisionState.js";
-import { assistantSkills } from "./skills.js";
-import { applyChoicesWhenDone, changeDiff, cutRevisionReference, passToRevise, retireStaleSaves } from "./changes.js";
-import { resolveTimeline } from "./timeline.js";
 import { runAttemptIds } from "./runAttempts.js";
-import { learningCheckContext, skillEditEnded, startLearningCheck } from "./learnings.js";
-import { recoveryInstruction } from "./taskRecovery.js";
+import { aboutStagedCut, followUpInstruction, RESUMABLE } from "./taskPrompts.js";
+
+export { aboutStagedCut, followUpInstruction, pairQuestionsAndAnswers, RESUMABLE, taskPrompt } from "./taskPrompts.js";
+export { claimTask } from "./taskQueue.js";
 
 /** States a task never leaves. */
 export const FINISHED_TASK: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
-const queueLogs = new WeakMap<Ctx, ReturnType<typeof throttledLog>>();
 
 /** Requests that can edit a project's video. */
 export const PROJECT_EDIT_KINDS = `(${PROJECT_EDIT_TASK_KINDS.map(kind => `'${kind}'`).join(",")})`;
-const SIDE_CHECKS = `(${SIDE_CHECK_KINDS.map(kind => `'${kind}'`).join(",")})`;
-/** What a pause of the project's editing holds back: its requests, and the reads of them for a rule, which run on Resume. */
-const HELD_WHILE_PAUSED = `(${[...PROJECT_EDIT_TASK_KINDS, "learning_check"].map(kind => `'${kind}'`).join(",")})`;
 
 /** The recording has a saved transcript. */
 export function hasTranscript(ctx: Ctx, mediaId: string): boolean {
@@ -186,7 +198,7 @@ export function recordWorkThrough(task: Task, at: string): Task {
 }
 
 /** On upgrade, retain the known part of a claim that already paused for a question. */
-function pausedWork(ctx: Ctx, task: Task): number | undefined {
+export function pausedWork(ctx: Ctx, task: Task): number | undefined {
   const { startedAt, workedMs } = task;
   if (workedMs !== undefined || !startedAt) return workedMs;
   const question = ctx.repos.taskEvents.list(task.id, "questionsAndAnswers")
@@ -292,6 +304,42 @@ export function settleClosingChecks(ctx: Ctx): void {
   }, "immediate")();
 }
 
+/** Defer completion when a save hit a cut conflict, or convert to a failure once the answer also failed to finish. */
+function resolveCutConflictOnDone(ctx: Ctx, task: Task): { done: Task } | { fail: CompleteTaskRequest } {
+  if (task.state === "waiting_for_user") return { done: task };
+  if (!task.cutConflict!.retried) {
+    const queued = saveTask(ctx, { ...recordWorkThrough(task, now()), state: "queued", hostId: null, session: undefined,
+      cutConflict: { ...task.cutConflict!, retried: true } });
+    ctx.db.afterCommit(() => ctx.log(`[task] completion_deferred task=${logId(task.id)} project=${logId(task.projectId)} outcome=queued reason=cut_changed`));
+    ctx.bus.taskQueued({ taskId: queued.id, projectId: queued.projectId });
+    return { done: queued };
+  }
+  if (task.state === "queued") return { done: task };
+  if (!task.cutConflict!.answered) {
+    const asked = appendTaskEvent(ctx, task, { type: "question", text: task.cutConflict!.range
+      ? "The take here changed. Should I trim the current take or keep it as it plays?"
+      : "The takes have changed. Which words should I keep here?" }).task;
+    ctx.db.afterCommit(() => ctx.log(`[task] completion_deferred task=${logId(task.id)} project=${logId(task.projectId)} outcome=waiting_for_user reason=cut_changed`));
+    return { done: asked };
+  }
+  return { fail: { state: "failed", error: "Scarlet could not finish the cut using your answer. Your answer is saved." } };
+}
+
+/** Build the combined receipt summary when a completed task saved dialogue changes. */
+function formatDialogueSummary(changes: Change[]): string {
+  // A pass saved in parts reports its removals once.
+  const removals = changes.map(dialogueRemovals);
+  const combined = removals.filter(Boolean).length > 1 ? describeDialogueRemovals(removals.flatMap(r => r ?? [])) : undefined;
+  return changes.flatMap((c, i) => {
+    if (combined && removals[i]) return removals.findIndex(Boolean) === i ? [combined] : [];
+    const receipt = dialogueReceipt(c);
+    if (receipt) return [receipt];
+    if (c.state === "approved") return [`Applied “${c.description.replace(/[.!?]$/, "")}”.`];
+    if (c.state === "ready") return [`“${c.description.replace(/[.!?]$/, "")}” is pending review.`];
+    return [];
+  }).join(" ");
+}
+
 export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): Task {
   if (FINISHED_TASK.has(task.state)) {
     throw conflict("task_finished", `task is already ${task.state}`);
@@ -299,23 +347,9 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
   // A host can finish after an unsuccessful save. Keep the actual passage and the editor's answer
   // attached to this request even when the agent ended its turn without asking its own question.
   if (body.state === "done" && task.cutConflict) {
-    if (task.state === "waiting_for_user") return task;
-    if (!task.cutConflict.retried) {
-      const queued = saveTask(ctx, { ...recordWorkThrough(task, now()), state: "queued", hostId: null, session: undefined,
-        cutConflict: { ...task.cutConflict, retried: true } });
-      ctx.db.afterCommit(() => ctx.log(`[task] completion_deferred task=${logId(task.id)} project=${logId(task.projectId)} outcome=queued reason=cut_changed`));
-      ctx.bus.taskQueued({ taskId: queued.id, projectId: queued.projectId });
-      return queued;
-    }
-    if (task.state === "queued") return task;
-    if (!task.cutConflict.answered) {
-      const asked = appendTaskEvent(ctx, task, { type: "question", text: task.cutConflict.range
-        ? "The take here changed. Should I trim the current take or keep it as it plays?"
-        : "The takes have changed. Which words should I keep here?" }).task;
-      ctx.db.afterCommit(() => ctx.log(`[task] completion_deferred task=${logId(task.id)} project=${logId(task.projectId)} outcome=waiting_for_user reason=cut_changed`));
-      return asked;
-    }
-    body = { state: "failed", error: "Scarlet could not finish the cut using your answer. Your answer is saved." };
+    const resolved = resolveCutConflictOnDone(ctx, task);
+    if ("done" in resolved) return resolved.done;
+    body = resolved.fail;
   }
   if (task.kind === "skill_from_change" && body.state === "done" && !task.resultSkillId) {
     body = { state: "failed", error: "The requested skill was not saved. Request it again from the approved change." };
@@ -347,17 +381,7 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
   // kept, is the model's call, made in its run.
   const changes = body.state === "done" ? own() : [];
   const dialogue = changes.some(c => dialogueReceipt(c));
-  // A pass saved in parts reports its removals once.
-  const removals = changes.map(dialogueRemovals);
-  const combined = removals.filter(Boolean).length > 1 ? describeDialogueRemovals(removals.flatMap(r => r ?? [])) : undefined;
-  const summary = dialogue ? changes.flatMap((c, i) => {
-    if (combined && removals[i]) return removals.findIndex(Boolean) === i ? [combined] : [];
-    const receipt = dialogueReceipt(c);
-    if (receipt) return [receipt];
-    if (c.state === "approved") return [`Applied “${c.description.replace(/[.!?]$/, "")}”.`];
-    if (c.state === "ready") return [`“${c.description.replace(/[.!?]$/, "")}” is pending review.`];
-    return [];
-  }).join(" ") : body.summary ?? task.summary;
+  const summary = dialogue ? formatDialogueSummary(changes) : body.summary ?? task.summary;
   // The receipt takes a pass's summary, so what Scarlet said as it finished is kept beside it, for the editor.
   const reply = dialogue ? task.reply ?? (body.summary?.trim() || undefined) : task.reply;
   // The run finished without transcripts it waited for. What it saved stands, and the editor can resume it once they're ready.
@@ -455,185 +479,6 @@ export function cancelTask(ctx: Ctx, task: Task, opts: { withdrawn?: boolean } =
   return saved;
 }
 
-/**
- * CLIs whose sessions Scarlet resumes after an answer, a quit or a pause of the project's editing. A Codex run keeps
- * its thread in a private Codex home beside its task folder, out of the user's own Codex thread list. Started afresh, a
- * pass resumed after a quit spent 120 more turns and 13.7M tokens finding its place again (2026-11-18).
- */
-export const RESUMABLE = new Set<string>(["claude", "codex"]);
-
-/** What a run hears when it carries on in its own CLI session after Scarlet closed on it. */
-const INTERRUPTED = "Scarlet closed while you were working on this request, and it is open again. Carry on from where you stopped. " +
-  "What you saved is kept. Read the current project and change states first: the editor may have decided some of it since.";
-
-/** What a run hears when it carries on in its own CLI session after the editor paused editing on it and resumed. */
-const PAUSED = "The editor paused editing while you were working on this request, and has resumed it. Carry on from where you stopped. " +
-  "What you saved is kept. Read the current project and change states first: the editor may have decided some of it since.";
-
-/**
- * What a host tells the model after refusing it a tool that isn't Scarlet's, with `{tool}` for the tool's name. Gemini's
- * harness offers its own shell and file tools whatever it is launched with, so its hosts refuse them in the turn: all of
- * them on a side check, and on a request one that reaches outside the task folder.
- */
-const REFUSED_TOOL = "Scarlet refused {tool}: only Scarlet's own tools (the scarlet MCP server) run here, with no shell or file tools. " +
-  "Carry on with the request using Scarlet's tools.";
-const REFUSED_OUTSIDE = "Scarlet refused {tool}: it reaches outside your task folder. Keep your files in the task folder, " +
-  "and read the project's footage and the video through Scarlet's tools. Carry on.";
-
-/** Pair each `question` event with the `answer` that followed it. */
-export function pairQuestionsAndAnswers(events: Pick<TaskEvent, "type" | "text">[]): Array<{ question: string; answer: string }> {
-  const out: Array<{ question: string; answer: string }> = [];
-  let pending: string | null = null;
-  for (const e of events) {
-    if (e.type === "question") pending = e.text;
-    else if (e.type === "answer" && pending !== null) {
-      out.push({ question: pending, answer: e.text });
-      pending = null;
-    }
-  }
-  return out;
-}
-
-/**
- * What the agent is told. Every host fetches this, so there is one prompt.
- * After an answer, a host that still has the CLI session that asked continues
- * it with just the answer; otherwise the answers go in the system prompt.
- */
-export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh?: boolean; timeLimitMinutes?: number } = {}): TaskPrompt {
-  const project = ctx.repos.projects.get(task.projectId);
-  if (!project) throw notFound("project");
-  const c = task.context;
-  const editSkill = isSkillEdit(task) ? ctx.repos.skills.get(c.skillId ?? "") : undefined;
-  if (isSkillEdit(task) && !editSkill) throw notFound("the skill this request revises");
-  // A run that edits no video is told nothing of the video's timeline, the edit it's about or the editor's skills: a
-  // look at one frame, a read for a rule, a skill's revision. An edit's area checks each asked for a prompt, up to 20.
-  const aside = isAsideTask(task) || task.kind === "skill_from_change";
-  const notes = c.noteIds?.length ? ctx.repos.notes.select("project_id = ? AND id IN (SELECT value FROM json_each(?))", [task.projectId, JSON.stringify(c.noteIds)]) : undefined;
-  // A request about one staged cut names the pass as it stood when the editor sent it. A revision ahead of it in the
-  // queue, or a later part of the pass, has replaced that pass since, so the agent is told about the pass that waits now
-  // and the cut's index there.
-  const named = !aside && c.changeId ? ctx.repos.changes.get(c.changeId) : undefined;
-  const now = named?.projectId === task.projectId && c.cutIndex !== undefined ? passToRevise(ctx, named, task.id, c.cutIndex) : undefined;
-  const record = now?.change ?? named;
-  let change: { change: NonNullable<typeof record>; diff?: ReturnType<typeof changeDiff> } | undefined;
-  // A request about one staged cut isn't shown the whole pass's diff, so it isn't worked out.
-  if (record?.projectId === task.projectId && c.cutIndex !== undefined) change = { change: record };
-  else if (record?.projectId === task.projectId) {
-    try {
-      change = { change: record, diff: changeDiff(ctx, record) };
-    } catch (err) {
-      ctx.log(`[task] ${task.id} is told about ${record.id} without its diff: ${(err as Error).message}`);
-      change = { change: record };
-    }
-  }
-  const events = ctx.repos.taskEvents.list(task.id, "questionsAndAnswers");
-  const last = events.at(-1);
-  const answered = last?.type === "answer";
-  // A run interrupted before it finished carries on in the CLI session it was working in, when its host still has it.
-  const interrupted = !last && !!task.resumeRootId;
-  const resumeSession = !opts.fresh && (answered || interrupted) && task.session?.agent === task.agent && RESUMABLE.has(task.agent) ? task.session.id : undefined;
-  // A resumed attempt is told where its run stands as it starts, not as it stood when it was put back in line: the
-  // editor may have decided some of what it saved while it waited behind other requests or a pause. One that carries on
-  // in its own session is told it too, since the session never had it: the edits refused after its last save, the cuts
-  // a later part replaced while it was away.
-  const recap = !!task.resumeRootId && !(resumeSession && answered);
-  const before = recap ? ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.retryTaskId') = ?", [task.projectId, task.id])[0] : undefined;
-  const instruction = before ? recoveryInstruction(ctx, before, task.resumeRootId, task.id) : task.instruction;
-  // The run is launched with its harness's to-do tool, and asked to lay out its steps, when the harness has one and the
-  // chat will show the plan. A dialogue pass shows the stages Scarlet measures and a request about one staged cut its
-  // own two, and a skill edit changes no video: none is given the tool or asked, so each runs exactly as it did.
-  const plans = task.kind !== "skill_from_change" && !isAsideTask(task) && !taskRunKind(task)
-    && agentCapabilities(task.agent, (ctx.options.env ?? process.env).SCARLET_AGENT_CAPS).plan;
-  const told = { ...task, instruction };
-  const systemPrompt = buildSystemPrompt({
-    project: { project, timeline: !aside && project.head ? resolveTimeline(ctx, project, "head") : null },
-    task: now ? { ...told, context: { ...c, changeId: now.change.id, cutIndex: now.index } } : told,
-    notes,
-    change,
-    replacedPass: now && named?.id,
-    // A resumed session already holds the earlier questions and answers.
-    qa: resumeSession ? undefined : pairQuestionsAndAnswers(events),
-    skills: aside ? [] : assistantSkills(ctx.repos.skills.select("1=1", [], "name ASC"), c.skillIds, true),
-    editSkill: editSkill ?? undefined,
-    learningCheck: isLearningCheck(task) ? learningCheckContext(ctx, task) : undefined,
-    areaCheck: task.kind === "area_check" ? task.context.areaCheck : undefined,
-    checkIn: ctx.settings().checkIn,
-    workDir: opts.workDir,
-    timeLimitMinutes: opts.timeLimitMinutes,
-    // A request has its harness's own shell, file and web tools; a run that edits no video has Scarlet's alone.
-    capabilities: { ...(aside ? agentCapabilities(task.agent) : workspaceCapabilities(agentCapabilities(task.agent))), plan: plans },
-    ...graphicsContext(ctx, project, task),
-  });
-  // Whether the host launches the CLI with its own to-do tool on, with its shell, file and web tools (every request:
-  // the editor's decision of 2026-11-21 that no rule in Scarlet's code picks which run gets them, so what to use them
-  // for is the model's call), and what it says when it refuses a tool.
-  const launch = { ...(plans && { plan: true }), ...(!aside && { workspace: true }), refusedTool: aside ? REFUSED_TOOL : REFUSED_OUTSIDE };
-  if (resumeSession) {
-    return { systemPrompt, instruction: answered ? `The editor answered: "${last!.text.trim()}"\nContinue the task with that answer.`
-      : `${task.resumesAfterProjectStop ? PAUSED : INTERRUPTED}\n\n${instruction.trim()}`, resumeSession, ...launch };
-  }
-  return { systemPrompt, instruction: firstMessage(instruction.trim()), ...launch };
-}
-
-/**
- * What the editor gave a request for its graphics: the files attached to it and the project's style guide. A request that edits no video is given none.
- */
-function graphicsContext(ctx: Ctx, project: Project, task: Task) {
-  if (task.kind === "skill_from_change" || isAsideTask(task)) return {};
-  const attachments = (task.context.attachments ?? []).map(a => ({ ...a, mime: a.mime ?? mimeFor(a.name), path: join(ctx.paths.attachments(project.id), a.id, a.name) }));
-  const guide = project.styleGuide;
-  const guidePath = styleGuidePath(ctx, project.id, guide);
-  return {
-    ...(attachments.length && { attachments }),
-    ...(guide && { styleGuide: { name: guide.name, text: guide.text, ...(guidePath && { path: guidePath, mime: mimeFor(guidePath) }) } }),
-  };
-}
-
-/**
- * The request as a CLI's first message. Claude Code takes a message that begins with "/" for one of its own slash
- * commands. Finding none of that name, it tells the model the command did not run and to say it isn't installed, and
- * a pass then opened its reply with "The /first-cut-dialogue command isn't installed in this session" (2026-11-07).
- * A lead-in keeps the editor's words as typed and out of the CLI's command parser. The system prompt carries the
- * instruction as well, unchanged.
- */
-function firstMessage(instruction: string) {
-  return instruction.startsWith("/") ? `The editor's request: ${instruction}` : instruction;
-}
-
-/**
- * A follow-up in a thread that already has history: give the agent the gist of
- * what happened so far, keep what the person said in context.message. An earlier request the app worded for the
- * person reads as what it asked: its name in the chat, "Undo", doesn't say which edit was put back.
- */
-export function followUpInstruction(ctx: Ctx, projectId: string, threadId: string, text: string, before?: string): string {
-  const thread = ctx.repos.tasks.select("project_id = ? AND coalesce(json_extract(json, '$.context.threadId'), id) = ?", [projectId, threadId], "created_at ASC, rowid ASC");
-  // A request reworded in the queue is told what came before it, as it was when first asked.
-  const at = before ? thread.findIndex(t => t.id === before) : -1;
-  const tasks = at < 0 ? thread : thread.slice(0, at);
-  if (!tasks.length) return text;
-  const [last] = ctx.repos.changes.select("project_id = ? AND json_extract(json, '$.threadId') = ?", [projectId, threadId], "created_at DESC, rowid DESC LIMIT 1");
-  const lines = ["This continues an earlier request in the same thread."];
-  for (const t of tasks) {
-    lines.push(`- Asked: ${t.context.asked ?? t.context.message ?? t.instruction}`);
-    if (t.summary) lines.push(`  You replied: ${t.summary}`);
-  }
-  if (last) lines.push(`Latest change: "${last.description}" (${last.state}).`);
-  lines.push("", `Now: ${text}`);
-  return lines.join("\n");
-}
-
-/**
- * What Scarlet told the editor about the one staged cut a request is about, as a revision sent from that cut's card
- * says it: why it was proposed and how it was assessed. A call can be sent back this way while its pass still runs.
- * Empty when the request isn't about one.
- */
-export function aboutStagedCut(ctx: Ctx, projectId: string, context: Task["context"]): string {
-  const { changeId, cutIndex, time } = context;
-  const pass = changeId && cutIndex !== undefined && time !== undefined ? ctx.repos.changes.get(changeId) : undefined;
-  return pass?.projectId === projectId ? cutRevisionReference(pass, { cutIndex, time: time!, end: context.end, clipIds: context.clipIds ?? [],
-    version: context.version, mediaId: context.mediaId, markedRange: context.markedRange }) : "";
-}
-
 /** How long a hold for rewording lasts unless the app renews it, so a closed app can't keep a request from ever starting. */
 const REWORDING_HOLD_MS = 90_000;
 
@@ -705,129 +550,8 @@ export function rewordTask(ctx: Ctx, user: User, task: Task, text: string, skill
     summary: `${user.name} changed a waiting request to: ${quote(text, 120)}`, data: { taskId: task.id, threadId: task.context.threadId } });
   ctx.log(`[task] ${task.id} reworded while queued`);
   // The new words are read for a standing rule as the first were. A check still reading the old ones stops.
-  for (const check of ctx.repos.tasks.select("project_id = ? AND kind = 'learning_check' AND json_extract(json, '$.context.checksTaskId') = ?", [task.projectId, task.id])) {
-    if (!FINISHED_TASK.has(check.state)) cancelTask(ctx, check);
-  }
+  for (const check of openChecks(ctx, task, "learning_check")) cancelTask(ctx, check);
   startLearningCheck(ctx, saved);
   ctx.bus.taskQueued({ taskId: saved.id, projectId: saved.projectId });
   return saved;
-}
-
-function hostCanRun(host: AgentHost, task: Task): boolean {
-  const agent = host.agents.find(a => a.id === task.agent && a.installed && a.loggedIn !== false);
-  if (!agent) return false;
-  if (task.model && agent.models && !agent.models.includes(task.model) && agent.model !== task.model) return false;
-  if (!agent.modelOptions) return !task.effort && !task.serviceTier;
-  const options = agent.modelOptions[task.model ?? agent.model ?? ""];
-  return (!task.effort || !!options?.efforts.some(o => o.id === task.effort))
-    && (!task.serviceTier || !!options?.speeds.some(o => o.id === task.serviceTier));
-}
-
-/**
- * Claim the oldest queued task this host can run (or a specific one). Null when none.
- *
- * `freeAgents` are the runtimes with a free request slot. A host that runs side checks in slots of their own also sends
- * `checkAgents`, the runtimes with a free check slot: requests then go only to `freeAgents` and side checks only to
- * `checkAgents`. A host that sends no `checkAgents` claims every kind from `freeAgents`, as before.
- */
-export function claimTask(ctx: Ctx, host: AgentHost, taskId?: string, freeAgents?: string[], desktopPid?: number, checkAgents?: string[]): Task | null {
-  return ctx.db.transaction(() => claimNext(ctx, host, taskId, freeAgents, desktopPid, checkAgents), "immediate")();
-}
-
-function claimNext(ctx: Ctx, host: AgentHost, taskId?: string, freeAgents?: string[], desktopPid?: number, checkAgents?: string[]): Task | null {
-  if (taskId) {
-    const target = ctx.repos.tasks.get(taskId);
-    if (!target) return null;
-    if (target.state !== "queued") throw conflict("not_queued", `task is ${target.state}`);
-    if (!hostCanRun(host, target)) throw conflict("agent_unavailable", `host has no usable "${target.agent}" agent`);
-  }
-  const usable = (free?: string[]) => host.agents.filter(a => a.installed && a.loggedIn !== false && (!free || free.includes(a.id))).map(a => a.id);
-  const agents = usable(freeAgents);
-  const checkers = checkAgents && usable(checkAgents);
-  if (!taskId && !agents.length && !checkers?.length) return null;
-  const filter = taskId ? "q.id = ?" : checkers
-    ? `q.kind != 'transcribe' AND ((q.kind NOT IN ${SIDE_CHECKS} AND q.agent IN (SELECT value FROM json_each(?)))
-      OR (q.kind IN ${SIDE_CHECKS} AND q.agent IN (SELECT value FROM json_each(?))))`
-    : "q.kind != 'transcribe' AND q.agent IN (SELECT value FROM json_each(?))";
-  const filterArgs = taskId ? [taskId] : checkers ? [JSON.stringify(agents), JSON.stringify(checkers)] : [JSON.stringify(agents)];
-  // Include only tasks this host can claim in the candidate scan. The shared queue still sees
-  // requests for other hosts and requests being reworded, since they can hold up later work. A look at a frame serves
-  // the run that asked for it, and starts only while that run is at work.
-  const checkedAt = now();
-  const rows = ctx.db.prepare(`SELECT q.id, q.project_id, q.kind, q.json, q.created_at, p.editing_paused,
-    coalesce(json_extract(q.json, '$.rewordingUntil') > ?, 0) AS rewording FROM tasks q JOIN projects p ON p.id = q.project_id
-    LEFT JOIN tasks root ON root.id = json_extract(q.json, '$.resumeRootId')
-    LEFT JOIN tasks asker ON q.kind = 'area_check' AND asker.id = json_extract(q.json, '$.context.checksTaskId')
-    WHERE p.deleted_at IS NULL AND q.state = 'queued' AND ${filter}
-    AND (p.editing_paused = 0 OR q.kind NOT IN ${HELD_WHILE_PAUSED})
-    AND (q.kind != 'area_check' OR asker.state IN ('claimed', 'running')) AND q.kind != 'broll_make'
-    ORDER BY coalesce(asker.state IN ('claimed', 'running'), 0) DESC,
-      coalesce(root.created_at, q.created_at), coalesce(root.rowid, q.rowid), q.rowid`)
-    .iterate(checkedAt, ...filterArgs) as Iterable<{
-      id: string; project_id: string; kind: TaskKind; json: string; created_at: string; editing_paused: number; rewording: number;
-    }>;
-  // Only the columns the queue reads: an open pass's cut reasons are counted in SQL, never parsed, and an edit's
-  // lineage is read only for a request about an applied edit.
-  const lineage = ctx.db.prepare("SELECT json_extract(json, '$.timelineEdits') AS edits FROM changes WHERE id = ?");
-  function readQueue(projectId: string, editingPaused: boolean) {
-    const changes = (ctx.db.prepare(`SELECT id, project_id AS projectId, state, json_extract(json, '$.intent') AS intent,
-        json_extract(json, '$.taskId') AS taskId, json_extract(json, '$.threadId') AS threadId,
-        json_array_length(json_extract(json, '$.cutReasons')) AS cuts
-      FROM changes WHERE project_id = ? AND state IN ('ready', 'revising')
-        AND json_extract(json, '$.intent') = 'suggestion' AND json_array_length(json_extract(json, '$.cutReasons')) > 0`)
-      .all(projectId) as (Omit<QueueChange, "cutReasons" | "taskId" | "threadId"> & { taskId: string | null; threadId: string | null; cuts: number })[])
-      .map(({ cuts, taskId, threadId, ...change }): QueueChange =>
-        ({ ...change, taskId: taskId ?? undefined, threadId: threadId ?? undefined, cutReasons: { length: cuts } }));
-    const snapshot = ctx.repos.tasks.queue(projectId, changes.flatMap(change => change.taskId ? [change.taskId] : []));
-    const tasks = editingPaused ? snapshot.filter(task => !editsDialogue(task.kind) || FINISHED_TASK.has(task.state)) : snapshot;
-    const edits = new Map<string, Pick<Change, "id" | "timelineEdits"> | undefined>();
-    const lookup = (id: string) => {
-      if (!edits.has(id)) {
-        const row = lineage.get(id) as { edits: string | null } | undefined;
-        edits.set(id, row?.edits ? { id, timelineEdits: JSON.parse(row.edits) } : undefined);
-      }
-      return edits.get(id);
-    };
-    return { blocker: queueBlocker(tasks, editingPaused ? [] : changes, lookup),
-      byId: new Map(tasks.map(task => [task.id, task])) };
-  }
-  const queues = new Map<string, ReturnType<typeof readQueue>>();
-  const logBlocked = (row: { id: string; project_id: string; created_at: string }, reason: string, blocker?: string) => {
-    const wait = Date.parse(checkedAt) - Date.parse(row.created_at);
-    if (!(wait >= 30_000)) return;
-    let write = queueLogs.get(ctx);
-    if (!write) queueLogs.set(ctx, write = throttledLog(ctx.log, 60_000, 5000));  // One key per blocked queued request.
-    write(`${row.id}/${reason}/${blocker ?? ""}`, `[task] claim_blocked task=${logId(row.id)} project=${logId(row.project_id)} reason=${reason} wait_ms=${wait}` +
-      (blocker ? ` blocker=${logId(blocker)}` : ""));
-  };
-  for (const row of rows) {
-    if (row.rewording) {
-      logBlocked(row, "rewording");
-      continue;
-    }
-    // A host that can't run the request never reads the project's queue for it.
-    const task = ctx.repos.tasks.parse(row.json);
-    if (!hostCanRun(host, task)) {
-      logBlocked(row, "capability");
-      continue;
-    }
-    if (!isAsideTask({ kind: row.kind })) {
-      const queue = queues.get(row.project_id) ?? readQueue(row.project_id, row.editing_paused === 1);
-      queues.set(row.project_id, queue);
-      const candidate = queue.byId.get(row.id)!;
-      const blocker = queue.blocker(candidate);
-      if (blocker) {
-        logBlocked(row, blocker.reason, blocker.id);
-        continue;
-      }
-    }
-    const createdAt = task.createdAt ?? row.created_at;
-    const seenAt = now();
-    const startedAt = task.startedAt && task.startedAt >= seenAt ? new Date(Date.parse(task.startedAt) + 1).toISOString() : seenAt;
-    ctx.db.prepare("UPDATE tasks SET worker_pid = ?, worker_seen_at = ? WHERE id = ?").run(desktopPid, seenAt, task.id);
-    const waited = since(createdAt, Date.parse(seenAt));
-    ctx.log(`[task] ${task.id} claimed by ${host.name} (${host.id})${waited ? ` after ${waited} in the queue` : ""}`);
-    return saveTask(ctx, { ...task, createdAt, state: "claimed", hostId: host.id, startedAt, workedMs: pausedWork(ctx, task) ?? 0 });
-  }
-  return null;
 }

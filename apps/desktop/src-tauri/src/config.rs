@@ -199,9 +199,8 @@ impl Paths {
         let path = self.editor_model_file();
         let dir = path.parent().context("missing desktop config directory")?;
         std::fs::create_dir_all(dir)?;
-        let mut temp = tempfile::NamedTempFile::new_in(dir)?;
-        serde_json::to_writer(&mut temp, selection)?;
-        temp.persist(path)?;
+        let bytes = serde_json::to_vec(selection)?;
+        crate::util::write_file_atomic(&path, &bytes, false)?;
         Ok(())
     }
 

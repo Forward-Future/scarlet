@@ -21,8 +21,10 @@ import type {
 } from "@scarlet/shared";
 import type { Change, MediaAsset, Note, Project, Timeline } from "@scarlet/timeline";
 import { api, errorMessage } from "../lib/client";
+import { parseTimestamp } from "../lib/format";
 import { subscribeProject } from "../lib/realtime";
 import { mergeTaskEvents } from "../lib/taskActivity";
+import { createHeldProjectController, mergeSinceLoad, READ_AGAIN_AFTER_MS, sameVersion, upsert, upsertAnswered, upsertEditingTasks } from "./projectHelpers";
 
 type Status = "idle" | "loading" | "ready" | "error";
 
@@ -127,55 +129,6 @@ interface ProjectState {
   loadActivity(more?: boolean): Promise<void>;
 }
 
-/**
- * A task as a request answered it, unless the socket already has it further on. The engine tells the socket first, so
- * an answer that says "queued" can arrive after the task was claimed, and would put a running request back in line.
- */
-function upsertAnswered(tasks: Task[], task: Task): Task[] {
-  const held = tasks.find(t => t.id === task.id);
-  return held && task.state === "queued" && held.state !== "queued" && held.state !== "waiting_for_user" ? tasks : upsert(tasks, task);
-}
-
-function upsert<T extends { id: string }>(list: T[], item: T): T[] {
-  const i = list.findIndex((x) => x.id === item.id);
-  if (i < 0) return [...list, item];
-  const next = list.slice();
-  next[i] = item;
-  return next;
-}
-
-function upsertEditingTasks(before: Task[], live: Task[], changed: Task[]): Task[] {
-  const original = new Map(before.map(task => [task.id, task]));
-  return changed.reduce((tasks, task) => {
-    const current = tasks.find(item => item.id === task.id);
-    // The socket can already have a later state, but the stop response can carry a new retry link.
-    if (current && current !== original.get(task.id)) {
-      return task.retryTaskId && !current.retryTaskId ? upsert(tasks, { ...current, retryTaskId: task.retryTaskId }) : tasks;
-    }
-    return upsert(tasks, task);
-  }, live);
-}
-
-function mergeSinceLoad<T extends { id: string }>(snapshot: T[], base: T[], live: T[]): T[] {
-  if (base === live) return snapshot;
-  const before = new Map(base.map(item => [item.id, item]));
-  const newer = new Map(live.filter(item => item !== before.get(item.id)).map(item => [item.id, item]));
-  const result = snapshot.map(item => {
-    const update = newer.get(item.id);
-    newer.delete(item.id);
-    return update ?? item;
-  });
-  return [...result, ...newer.values()];
-}
-
-/** Project revisions order complete engine snapshots across the HTTP and realtime transports. */
-function olderProject(incoming: Project, held: Project): boolean {
-  return incoming.rowRevision !== undefined && held.rowRevision !== undefined && incoming.rowRevision < held.rowRevision;
-}
-
-/** The waits before the store tries again to read the open project. After the last it stops trying. */
-const READ_AGAIN_AFTER_MS = [1000, 2000, 4000, 8000];
-
 export const useProjectStore = create<ProjectState>((set, get, store) => {
   let renderLookup = 0;
   let projectLoad = 0;
@@ -189,57 +142,8 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
   let headLookup = 0;
   /** The read of the open project's new working cut that is out, and the one more a burst of new ones asked for. */
   let headRead: { projectId: string; job: Promise<void>; again?: Promise<void> } | undefined;
-  /**
-   * The open project as the engine last described it (`saved`), and the editor's changes to it the engine hasn't
-   * described yet: a rename still being saved, and filings an older engine confirmed without sending the project.
-   * Every snapshot the store takes goes through `takeProject`, and the project shown is `saved` with those on top.
-   * `read`: when the read that brought `saved` began. `changed`: when `saved` last changed. `shown`: what was shown.
-   */
-  let held: {
-    projectId: string; saved: Project; shown: Project; read: number; changed: number;
-    rename?: { name: string }; filings: Map<string, { value?: string; at: number }>;
-  } | undefined;
-  /** Orders reads and local changes against each other. */
-  let clock = 0;
-  const heldFor = (d: Pick<ProjectData, "id" | "project">) => {
-    // A project set from outside the store's actions starts again from what it shows.
-    if (held?.projectId !== d.id || held.shown !== d.project) {
-      held = { projectId: d.id, saved: d.project, shown: d.project, read: 0, changed: 0, filings: new Map() };
-    }
-    return held;
-  };
-  const showHeld = (h: NonNullable<typeof held>) => {
-    let project = h.saved;
-    // A filing the snapshot's read began after isn't in it.
-    const filings = [...h.filings].filter(([, filing]) => filing.at > h.read);
-    if (filings.length) {
-      const completedThreads = { ...project.completedThreads };
-      for (const [id, { value }] of filings) {
-        if (value === undefined) delete completedThreads[id];
-        else completedThreads[id] = value;
-      }
-      project = { ...project, completedThreads };
-    }
-    if (h.rename) project = { ...project, name: h.rename.name };
-    return h.shown = project;
-  };
-  /**
-   * Take a snapshot of the open project from the engine and return what to show, or nothing to keep what is shown.
-   * An older one is left: by its revision, or, from an older engine that gives none, when it was read before the
-   * snapshot held changed and is on the same head. `readAt`: when its read began, for a read that may have crossed
-   * other changes. An event or an answer is current as it arrives.
-   */
-  const takeProject = (d: Pick<ProjectData, "id" | "project">, incoming: Project, readAt = ++clock): Project | undefined => {
-    const h = heldFor(d);
-    if (olderProject(incoming, h.saved)) return undefined;
-    const unordered = incoming.rowRevision === undefined || h.saved.rowRevision === undefined;
-    if (unordered && h.changed > readAt && incoming.head === h.saved.head) return undefined;
-    h.saved = incoming;
-    h.read = readAt;
-    h.changed = ++clock;
-    for (const [id, filing] of h.filings) if (filing.at <= readAt) h.filings.delete(id);
-    return showHeld(h);
-  };
+  const heldProject = createHeldProjectController();
+  const { heldFor, showHeld, takeProject } = heldProject;
   const renderLookups = new Set<string>();
   let versionLookup: Promise<void> | undefined;
   let activityRead: { projectId: string; entries: Map<string, ActivityEntry> } | undefined;
@@ -321,7 +225,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     const before = get().current;
     if (before?.id !== projectId) return;
     heldFor(before);
-    const readAt = ++clock;
+    const readAt = heldProject.tick();
     const request = ++headLookup;
     const epoch = projectLoad;
     const detail = await api.workspace(projectId);
@@ -440,20 +344,18 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
         const subscribed = tries ? undefined : subscribeProject(id);
         if (subscribed) await subscribed;
         if (request !== projectLoad) return;
-        const readAt = ++clock;
+        const readAt = heldProject.tick();
         const detail = await api.workspace(id);
         if (request !== projectLoad) return;
         versionLookup = undefined;
         const prev = same ? get().current : null;
         const needsHistory = !prev || !!prev.reviewStatus;
         // A fresh read replaces the snapshot held. A rename or a filing still on its way stays on top of it.
-        const kept = prev && held?.projectId === id ? held : undefined;
-        held = { projectId: id, saved: detail.project, shown: detail.project, read: readAt, changed: ++clock,
-          rename: kept?.rename, filings: new Map([...kept?.filings ?? []].filter(([, filing]) => filing.at > readAt)) };
+        const project = heldProject.resetOnLoad(id, detail.project, readAt, !!prev);
         set({
           status: "ready", error: null,
           current: {
-            id, project: showHeld(held), timeline: sameVersion(prev?.timeline, detail.timeline), media: detail.project.media,
+            id, project, timeline: sameVersion(prev?.timeline, detail.timeline), media: detail.project.media,
             changes: prev?.changes ?? [], notes: prev?.notes ?? [], learnings: prev?.learnings, tasks: prev?.tasks ?? [], renders: [],
             // A reconnect keeps the token counts shown until the fresh read arrives: a total only climbs.
             taskUsage: prev?.taskUsage,
@@ -658,7 +560,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
           return shown ? { project: shown } : {};
         }
         // An older engine confirms only the filing. It stays on top of any snapshot read before it.
-        h.filings.set(threadId, { value: completedThreads[threadId] || undefined, at: ++clock });
+        h.filings.set(threadId, { value: completedThreads[threadId] || undefined, at: heldProject.tick() });
         return { project: showHeld(h) };
       });
       if (headChanged && project) void get().refreshHead(id).catch(headUnread(id, project.head));
@@ -962,14 +864,6 @@ export function selectRender(d: ProjectData | null, id: string | null | undefine
   return d.renders.find((r) => r.id === id);
 }
 
-/**
- * A version's content never changes, so a second read of the one on screen keeps the object the player was given.
- * A new object would reopen the playback stream and stop the video on a still.
- */
-function sameVersion(had: Timeline | null | undefined, read: Timeline | null): Timeline | null {
-  return had && read && had.version === read.version && read.version !== "draft" ? had : read;
-}
-
 export function selectHeadRender(d: Pick<ProjectData, "id" | "project" | "fullRenderKeys" | "renders"> | null, quality?: Render["quality"]): Render | undefined {
   if (!d || !d.project.head) return undefined;
   const keys = d.fullRenderKeys;
@@ -982,7 +876,7 @@ export function selectHeadRender(d: Pick<ProjectData, "id" | "project" | "fullRe
     const rank = (r: Render) => (r.state === "done" ? 0 : r.state === "running" || r.state === "queued" ? 1 : 2);
     const d1 = rank(a) - rank(b);
     if (d1 !== 0) return d1;
-    return (Date.parse(b.createdAt ?? "") || 0) - (Date.parse(a.createdAt ?? "") || 0);
+    return parseTimestamp(b.createdAt) - parseTimestamp(a.createdAt);
   });
   return full[0];
 }

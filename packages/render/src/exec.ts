@@ -3,11 +3,24 @@
  * them with abort support, parsing `-progress` output, and a spawn counter
  * that tests use to prove the segment cache avoided work.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { availableParallelism, homedir } from "node:os";
 import { isSea } from "node:sea";
 import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
+
+/** Quiet banner/stdin/error flags shared across ffmpeg invocations. */
+export const FFMPEG_BASE_ARGS = ["-hide_banner", "-nostdin", "-loglevel", "error"] as const;
+
+/** Quiet banner/stdin/stats flags for ffmpeg invocations that keep diagnostic stderr output. */
+export const FFMPEG_QUIET_ARGS = ["-hide_banner", "-nostdin", "-nostats"] as const;
+
+/** Round a pixel dimension to the nearest positive even integer (>= 2). */
+export const even = (n: number) => Math.max(2, 2 * Math.round(n / 2));
+
+/** Exact audio sample count for a `[start, end]` range at `sampleRate`. */
+export const sampleCount = (start: number, end: number, sampleRate: number) =>
+  Math.round(end * sampleRate) - Math.round(start * sampleRate);
 
 // Project assets must be self-contained media. Playlist/concat demuxers can open
 // additional files or URLs, bypassing the import boundary on the next decode.
@@ -211,88 +224,113 @@ function countSpawn(bin: string): void {
   else spawnStats.ffmpeg++;
 }
 
+interface ManagedHooks<T> {
+  onSpawn?: (child: ChildProcess) => void;
+  getStderr: () => string;
+  onClose: (code: number | null) => T;
+}
+
+/** Shared subprocess lifecycle: abort check, spawn counting/observer, error wrapping, and cleanup. */
+function spawnManaged<T>(
+  bin: string,
+  args: string[],
+  stdio: StdioOptions,
+  signal: AbortSignal | undefined,
+  hooks: ManagedHooks<T>,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new AbortError());
+    countSpawn(bin);
+    const child = spawn(bin, args, { stdio, windowsHide: true });
+    spawnObserver.spawned?.(child);
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      child.kill("SIGKILL");
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    hooks.onSpawn?.(child);
+    child.on("error", (e) => {
+      signal?.removeEventListener("abort", onAbort);
+      reject(new FfmpegError(mediaToolLaunchError(bin, e, `failed to start ${bin}: ${e.message}`), bin, args, null, hooks.getStderr(), false));
+    });
+    child.on("close", (code) => {
+      signal?.removeEventListener("abort", onAbort);
+      if (aborted) return reject(new AbortError());
+      try {
+        resolve(hooks.onClose(code));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
 /**
  * Run a binary to completion, collecting stdout as a Buffer and stderr as text.
  * Rejects with FfmpegError on a non-zero exit, AbortError when the signal fires.
  */
 export function runCapture(bin: string, args: string[], opts: CaptureOptions = {}): Promise<CaptureResult> {
-  return new Promise((resolve, reject) => {
-    if (opts.signal?.aborted) return reject(new AbortError());
-    countSpawn(bin);
-    const child = spawn(bin, args, { stdio: [opts.stdin ? "pipe" : "ignore", "pipe", "pipe"], windowsHide: true });
-    spawnObserver.spawned?.(child);
-    if (child.stdin && opts.stdin) {
-      // FFmpeg can close its input early on failure or cancellation. Its exit reports the cause.
-      child.stdin.on("error", () => {});
-      child.stdin.end(opts.stdin);
-    }
-    const out: Buffer[] = [];
-    let outBytes = 0;
-    let err = "";
-    let errBytes = 0, partialLine = "";
-    let aborted = false;
-    let failure: Error | undefined;
-    const maxStdout = opts.maxStdout ?? (opts.onStdoutChunk ? Infinity : 512 * 1024 * 1024);
-    const maxStderr = opts.maxStderr ?? 8 * 1024 * 1024;
-    const stop = (reason: Error) => {
-      if (failure) return;
-      failure = reason;
-      child.kill("SIGKILL");
-    };
-    const exceeded = (message: string) => new FfmpegError(message, bin, args, null, err.slice(-8192));
+  const out: Buffer[] = [];
+  let outBytes = 0;
+  let err = "";
+  let errBytes = 0, partialLine = "";
+  let failure: Error | undefined;
+  const maxStdout = opts.maxStdout ?? (opts.onStdoutChunk ? Infinity : 512 * 1024 * 1024);
+  const maxStderr = opts.maxStderr ?? 8 * 1024 * 1024;
+  const exceeded = (message: string) => new FfmpegError(message, bin, args, null, err.slice(-8192));
 
-    const onAbort = () => {
-      aborted = true;
-      child.kill("SIGKILL");
-    };
-    opts.signal?.addEventListener("abort", onAbort, { once: true });
-
-    child.stdout!.on("data", (chunk: Buffer) => {
-      if (failure) return;
-      outBytes += chunk.length;
-      if (outBytes > maxStdout) {
-        stop(exceeded(`stdout exceeded ${maxStdout} bytes`));
-        return;
+  return spawnManaged(bin, args, [opts.stdin ? "pipe" : "ignore", "pipe", "pipe"], opts.signal, {
+    getStderr: () => err,
+    onSpawn(child) {
+      if (child.stdin && opts.stdin) {
+        // FFmpeg can close its input early on failure or cancellation. Its exit reports the cause.
+        child.stdin.on("error", () => {});
+        child.stdin.end(opts.stdin);
       }
-      if (opts.onStdoutChunk) {
-        try { opts.onStdoutChunk(chunk); }
-        catch (error) { stop(error as Error); return; }
-      } else out.push(chunk);
-      opts.onStdoutBytes?.(outBytes);
-    });
-    child.stderr!.on("data", (chunk: Buffer) => {
-      if (failure) return;
-      errBytes += chunk.length;
-      if (errBytes > maxStderr) { stop(exceeded(`stderr exceeded ${maxStderr} bytes`)); return; }
-      const text = chunk.toString("utf8");
-      if (!opts.onStderrLine) { err += text; return; }
-      err = (err + text).slice(-8192);
-      const lines = (partialLine + text).split(/\r?\n/);
-      partialLine = lines.pop()!;
-      if (partialLine.length > 16_384 || lines.some(line => line.length > 16_384)) {
-        stop(exceeded("diagnostic line exceeded 16384 characters"));
-        return;
-      }
-      try { for (const line of lines) opts.onStderrLine(line); }
-      catch (error) { stop(error as Error); }
-    });
-    child.on("error", (e) => {
-      opts.signal?.removeEventListener("abort", onAbort);
-      reject(new FfmpegError(mediaToolLaunchError(bin, e, `failed to start ${bin}: ${e.message}`), bin, args, null, err, false));
-    });
-    child.on("close", (code) => {
-      opts.signal?.removeEventListener("abort", onAbort);
-      if (aborted) return reject(new AbortError());
-      if (failure) return reject(failure);
-      try { if (partialLine) opts.onStderrLine?.(partialLine); }
-      catch (error) { return reject(error); }
+      const stop = (reason: Error) => {
+        if (failure) return;
+        failure = reason;
+        child.kill("SIGKILL");
+      };
+      child.stdout!.on("data", (chunk: Buffer) => {
+        if (failure) return;
+        outBytes += chunk.length;
+        if (outBytes > maxStdout) {
+          stop(exceeded(`stdout exceeded ${maxStdout} bytes`));
+          return;
+        }
+        if (opts.onStdoutChunk) {
+          try { opts.onStdoutChunk(chunk); }
+          catch (error) { stop(error as Error); return; }
+        } else out.push(chunk);
+        opts.onStdoutBytes?.(outBytes);
+      });
+      child.stderr!.on("data", (chunk: Buffer) => {
+        if (failure) return;
+        errBytes += chunk.length;
+        if (errBytes > maxStderr) { stop(exceeded(`stderr exceeded ${maxStderr} bytes`)); return; }
+        const text = chunk.toString("utf8");
+        if (!opts.onStderrLine) { err += text; return; }
+        err = (err + text).slice(-8192);
+        const lines = (partialLine + text).split(/\r?\n/);
+        partialLine = lines.pop()!;
+        if (partialLine.length > 16_384 || lines.some(line => line.length > 16_384)) {
+          stop(exceeded("diagnostic line exceeded 16384 characters"));
+          return;
+        }
+        try { for (const line of lines) opts.onStderrLine(line); }
+        catch (error) { stop(error as Error); }
+      });
+    },
+    onClose(code) {
+      if (failure) throw failure;
+      if (partialLine) opts.onStderrLine?.(partialLine);
       if (code !== 0) {
-        return reject(
-          new FfmpegError(`${bin} exited with code ${code}:\n${stderrTail(err)}`, bin, args, code, err),
-        );
+        throw new FfmpegError(`${bin} exited with code ${code}:\n${stderrTail(err)}`, bin, args, code, err);
       }
-      resolve({ stdout: Buffer.concat(out), stderr: err, code: 0 });
-    });
+      return { stdout: Buffer.concat(out), stderr: err, code: 0 };
+    },
   });
 }
 
@@ -311,52 +349,34 @@ export interface RunFfmpegOptions {
  */
 export function runFfmpeg(args: string[], opts: RunFfmpegOptions = {}): Promise<{ stderr: string }> {
   const bin = resolveFfmpeg(opts.ffmpegPath);
-  const full = ["-hide_banner", "-nostdin", "-loglevel", "error"];
+  const full: string[] = [...FFMPEG_BASE_ARGS];
   if (opts.onProgress) full.push("-progress", "pipe:1", "-nostats");
   full.push(...args);
 
-  return new Promise((resolve, reject) => {
-    if (opts.signal?.aborted) return reject(new AbortError());
-    countSpawn(bin);
-    const child = spawn(bin, full, {
-      stdio: ["ignore", opts.onProgress ? "pipe" : "ignore", "pipe"],
-      windowsHide: true,
-    });
-    spawnObserver.spawned?.(child);
-    let err = "";
-    let aborted = false;
-    let pending = "";
-
-    const onAbort = () => {
-      aborted = true;
-      child.kill("SIGKILL");
-    };
-    opts.signal?.addEventListener("abort", onAbort, { once: true });
-
-    child.stdout?.on("data", (chunk: Buffer) => {
-      pending += chunk.toString("utf8");
-      const lines = pending.split(/\r?\n/);
-      pending = lines.pop() ?? "";
-      for (const line of lines) {
-        const t = parseProgressLine(line);
-        if (t !== undefined) opts.onProgress?.(t);
-      }
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      err = (err + chunk.toString("utf8")).slice(-65_536);
-    });
-    child.on("error", (e) => {
-      opts.signal?.removeEventListener("abort", onAbort);
-      reject(new FfmpegError(mediaToolLaunchError(bin, e, `failed to start ${bin}: ${e.message}`), bin, full, null, err, false));
-    });
-    child.on("close", (code) => {
-      opts.signal?.removeEventListener("abort", onAbort);
-      if (aborted) return reject(new AbortError());
+  let err = "";
+  let pending = "";
+  return spawnManaged(bin, full, ["ignore", opts.onProgress ? "pipe" : "ignore", "pipe"], opts.signal, {
+    getStderr: () => err,
+    onSpawn(child) {
+      child.stdout?.on("data", (chunk: Buffer) => {
+        pending += chunk.toString("utf8");
+        const lines = pending.split(/\r?\n/);
+        pending = lines.pop() ?? "";
+        for (const line of lines) {
+          const t = parseProgressLine(line);
+          if (t !== undefined) opts.onProgress?.(t);
+        }
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        err = (err + chunk.toString("utf8")).slice(-65_536);
+      });
+    },
+    onClose(code) {
       if (code !== 0) {
-        return reject(new FfmpegError(`ffmpeg exited with code ${code}:\n${stderrTail(err)}`, bin, full, code, err));
+        throw new FfmpegError(`ffmpeg exited with code ${code}:\n${stderrTail(err)}`, bin, full, code, err);
       }
-      resolve({ stderr: err });
-    });
+      return { stderr: err };
+    },
   });
 }
 
@@ -380,26 +400,26 @@ export function parseProgressLine(line: string): number | undefined {
 }
 
 /** Keep an answer, not a failure: a binary that could not start once may start the next time. */
-function forgetFailure<T>(cache: Map<string, Promise<T>>, bin: string, answer: Promise<T>): void {
-  answer.catch(() => {
-    if (cache.get(bin) === answer) cache.delete(bin);
-  });
+function cachedPerBinary<T>(run: (bin: string) => Promise<T>): (ffmpegPath?: string) => Promise<T> {
+  const cache = new Map<string, Promise<T>>();
+  return (ffmpegPath?: string) => {
+    const bin = resolveFfmpeg(ffmpegPath);
+    let p = cache.get(bin);
+    if (!p) {
+      p = run(bin);
+      cache.set(bin, p);
+      p.catch(() => {
+        if (cache.get(bin) === p) cache.delete(bin);
+      });
+    }
+    return p;
+  };
 }
-
-let versionCache: Map<string, Promise<string>> | undefined;
 
 /** `ffmpeg -version` first line, e.g. "ffmpeg version 9.0.2-full_build ...". Cached per binary. */
-export function ffmpegVersion(ffmpegPath?: string): Promise<string> {
-  const bin = resolveFfmpeg(ffmpegPath);
-  versionCache ??= new Map();
-  let p = versionCache.get(bin);
-  if (!p) {
-    p = runCapture(bin, ["-version"]).then((r) => r.stdout.toString("utf8").split(/\r?\n/)[0] ?? "");
-    versionCache.set(bin, p);
-    forgetFailure(versionCache, bin, p);
-  }
-  return p;
-}
+export const ffmpegVersion = cachedPerBinary((bin) =>
+  runCapture(bin, ["-version"]).then((r) => r.stdout.toString("utf8").split(/\r?\n/)[0] ?? ""),
+);
 
 /** Major version number parsed from `ffmpegVersion()`, or undefined for git builds without one. */
 export async function ffmpegMajor(ffmpegPath?: string): Promise<number | undefined> {
@@ -408,30 +428,18 @@ export async function ffmpegMajor(ffmpegPath?: string): Promise<number | undefin
   return m ? Number(m[1]) : undefined;
 }
 
-let encoderCache: Map<string, Promise<Set<string>>> | undefined;
-
 /** Names of encoders this ffmpeg build lists (`ffmpeg -encoders`). Cached per binary. */
-export function ffmpegEncoders(ffmpegPath?: string): Promise<Set<string>> {
-  const bin = resolveFfmpeg(ffmpegPath);
-  encoderCache ??= new Map();
-  let p = encoderCache.get(bin);
-  if (!p) {
-    p = runCapture(bin, ["-hide_banner", "-encoders"]).then((r) => {
-      const names = new Set<string>();
-      for (const line of r.stdout.toString("utf8").split(/\r?\n/)) {
-        // " V....D libx264              libx264 H.264 ..."; the legend above the list reads " V..... = Video".
-        const m = /^\s*[VAS][.F][.S][.X][.B][.D]\s+(\S+)/.exec(line);
-        if (m?.[1] && m[1] !== "=") names.add(m[1]);
-      }
-      return names;
-    });
-    encoderCache.set(bin, p);
-    forgetFailure(encoderCache, bin, p);
-  }
-  return p;
-}
-
-let filterCache: Map<string, Promise<Set<string>>> | undefined;
+export const ffmpegEncoders = cachedPerBinary((bin) =>
+  runCapture(bin, ["-hide_banner", "-encoders"]).then((r) => {
+    const names = new Set<string>();
+    for (const line of r.stdout.toString("utf8").split(/\r?\n/)) {
+      // " V....D libx264              libx264 H.264 ..."; the legend above the list reads " V..... = Video".
+      const m = /^\s*[VAS][.F][.S][.X][.B][.D]\s+(\S+)/.exec(line);
+      if (m?.[1] && m[1] !== "=") names.add(m[1]);
+    }
+    return names;
+  }),
+);
 
 /** Names in `ffmpeg -filters` output. Each filter's line reads " TSC drawtext   V->V   Draw text ..." (older builds
  * have two flag columns); the legend above the list reads " T.. = Timeline support" and has no arrow. */
@@ -445,17 +453,9 @@ export function parseFilterList(text: string): Set<string> {
 }
 
 /** Names of filters this ffmpeg build lists (`ffmpeg -filters`). Cached per binary. */
-export function ffmpegFilters(ffmpegPath?: string): Promise<Set<string>> {
-  const bin = resolveFfmpeg(ffmpegPath);
-  filterCache ??= new Map();
-  let p = filterCache.get(bin);
-  if (!p) {
-    p = runCapture(bin, ["-hide_banner", "-filters"]).then((r) => parseFilterList(r.stdout.toString("utf8")));
-    filterCache.set(bin, p);
-    forgetFailure(filterCache, bin, p);
-  }
-  return p;
-}
+export const ffmpegFilters = cachedPerBinary((bin) =>
+  runCapture(bin, ["-hide_banner", "-filters"]).then((r) => parseFilterList(r.stdout.toString("utf8"))),
+);
 
 /**
  * Whether this ffmpeg build can draw text. A build that can't be asked counts as able, so whatever stops it from

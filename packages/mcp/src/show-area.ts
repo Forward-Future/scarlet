@@ -1,6 +1,7 @@
 import { AREA_SLACK, areaAt, type AreaBox, type AreaSide, type HeldArea } from "@scarlet/shared";
 import { clipEnd, Transform as TransformSchema, type MediaAsset, type MediaClip, type Timeline } from "@scarlet/timeline";
-import { pictureBox, type Box } from "./framing.js";
+import { pct1, round3 } from "./analysis.js";
+import { clipFramingKey, isClipFramed, pictureBox, type Box } from "./framing.js";
 
 /** What the engine knows of a recording's areas (`GET …/show-area`). */
 export interface RecordingAreas { done: boolean; areas: HeldArea[]; unset: Array<[number, number]> }
@@ -25,10 +26,10 @@ export interface NoAreaSet {
 export interface ShowAreaFindings { outside: ShownOutside[]; noArea: NoAreaSet[]; notRead: string[] }
 
 const SIDES: readonly AreaSide[] = ["left", "top", "right", "bottom"];
-const pct = (n: number) => Math.round(n * 1000) / 10;
-const r3 = (n: number) => Math.round(n * 1000) / 1000;
-const framed = (clip: MediaClip) => !!clip.transform || !!clip.keyframes?.length;
-const framing = (clip: MediaClip) => JSON.stringify([TransformSchema.parse(clip.transform ?? {}), (clip.keyframes ?? []).map(k => [k.time, k.transform, k.ease ?? "linear"])]);
+const pct = pct1;
+const r3 = round3;
+const framed = isClipFramed;
+const framing = clipFramingKey;
 
 /** The part of its source a clip puts on the video at `local` seconds from its start, as fractions of the source; null when none shows or it is turned. */
 export function sourceShown(clip: MediaClip, local: number, source: { width: number; height: number }, canvas: { width: number; height: number }): Box | null {

@@ -1,5 +1,7 @@
 // Scarlet's waveform cache has one bucket per 20 ms. Compare landmarks across
 // the recordings with every possible offset on the other source clock.
+import { round3 } from "./analysis.js";
+
 export const syncRate = 50;
 
 function rollingVariance(data: Float64Array, count: number, width: number) {
@@ -193,7 +195,6 @@ export function syncPoints(reference: number[] | Float64Array, secondary: number
 }
 
 const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!;
-const round3 = (n: number) => Math.round(n * 1000) / 1000;
 
 /** Describe how the offset behaves across the recording: constant, a steady drift, or jumps between steady parts. */
 export function fitSync(found: SyncPoint[]): SyncFit & { mismatched?: number } {

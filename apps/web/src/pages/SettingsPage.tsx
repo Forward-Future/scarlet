@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { selectedLocalModel, type LocalTranscriptionModel, type ServerSettings } from "@scarlet/shared";
 import { api, errorMessage } from "../lib/client";
 import { desktop } from "../lib/desktop";
+import { useBeforeUnloadGuard, useEscapeToLeave } from "../lib/uiHooks";
 import { Link, Navigate, Outlet, useBlocker, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { ModelSettings } from "../components/shell/ModelSettings";
 import { DesktopAgents, DesktopDiagnostics, ExportLogs } from "../components/shell/DesktopSettings";
@@ -78,12 +79,7 @@ function ServerSettingsForm({ section }: { section: "general" | "advanced" }) {
     else leaving.proceed();
   }, [section, leaving, busy, saveError]);
   // Restart to update asks the page before it restarts, so an unsaved change holds it until it's saved or discarded.
-  useEffect(() => {
-    if (!dirty && !savingChoice) return;
-    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty, savingChoice]);
+  useBeforeUnloadGuard(dirty || savingChoice);
 
   if (error) return <ErrorState title="Couldn’t load server settings" body={error} onRetry={() => void load()} />;
   if (!settings) return <Loading label="Loading settings…" />;
@@ -285,25 +281,13 @@ export function SettingsPage() {
   const { hash } = useLocation();
   const navigate = useNavigate();
   const skills = useMatch("/settings/skills");
-  useEffect(() => {
-    // Esc leaves Settings like the back link, unless a menu, dialog or text field is using it.
-    // Leaving would drop a form's unsaved changes, so until they're saved Esc moves focus to its Save instead.
-    const leave = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-      if (useUiStore.getState().shortcutsOpen || document.querySelector('dialog[open], [role="menu"]')) return;
-      const target = e.target instanceof HTMLElement ? e.target : null;
-      if (target?.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")) {
-        target.blur();
-        return;
-      }
-      e.preventDefault();
-      const unsaved = document.querySelector("form[data-unsaved]");
-      if (unsaved) unsaved.querySelector<HTMLElement>('button[type="submit"]')?.focus();
-      else navigate(returnTo ?? "/", { replace: !!returnTo });
-    };
-    window.addEventListener("keydown", leave);
-    return () => window.removeEventListener("keydown", leave);
-  }, [navigate, returnTo]);
+  // Esc leaves Settings like the back link, unless a menu, dialog or text field is using it.
+  // Leaving would drop a form's unsaved changes, so until they're saved Esc moves focus to its Save instead.
+  useEscapeToLeave(() => {
+    const unsaved = document.querySelector("form[data-unsaved]");
+    if (unsaved) unsaved.querySelector<HTMLElement>('button[type="submit"]')?.focus();
+    else navigate(returnTo ?? "/", { replace: !!returnTo });
+  });
   if (movedTabs[hash]) return <Navigate replace to={movedTabs[hash]} />;
   const tab = skills ? "tools" : tabs.find(t => t.to === `/settings${hash}`)?.id ?? "general";
   const backLabel = returnTo ? "Back to project" : "Projects";

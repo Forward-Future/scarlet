@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Map, Value};
 
-use super::runner::{cut_short, exit_error, write_files, RunOptions, RunnerCommand};
-use super::spawn::{resolve_cli, spawn_lines, SpawnLinesOptions};
+use super::runner::{cut_short, exit_error, parse_json_object, write_files, RunOptions, RunnerCommand};
+use super::spawn::spawn_lines;
 use super::usage::{add_usage, claude_usage, AgentUsage};
-use super::types::{brief, brief_input, is_question_tool, plan_event, pretty_tool_name, question_words, tail_summary, value_text, McpSpec, PlanStep, RunResult, RunnerEvent, Workspace, CONTROL_DIR};
+use super::types::{brief, brief_input, is_question_tool, pretty_tool_name, prune_nulls, question_words, record_plan, tail_summary, trimmed_str, value_text, McpSpec, PlanStep, RunResult, RunnerEvent, Workspace, CONTROL_DIR};
 
 #[derive(Debug, Default, Clone)]
 pub struct ClaudeState {
@@ -74,13 +74,9 @@ fn step_state(status: &str) -> Option<&'static str> {
     }
 }
 
-fn words(v: Option<&Value>) -> Option<String> {
-    v.and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
-}
-
 /// Note a call to one of Claude Code's to-do tools. True when the call was one, so it isn't logged as a Scarlet tool.
 fn plan_call(plan: &mut ClaudePlan, name: &str, id: &str, input: Option<&Value>) -> bool {
-    let arg = |key: &str| words(input.and_then(|i| i.get(key)));
+    let arg = |key: &str| trimmed_str(input.and_then(|i| i.get(key)));
     match name {
         "TaskCreate" => {
             plan.calls.insert(id.to_string(), PlanCall::Create(arg("subject").or_else(|| arg("description")).unwrap_or_default()));
@@ -94,7 +90,7 @@ fn plan_call(plan: &mut ClaudePlan, name: &str, id: &str, input: Option<&Value>)
             let todos = input.and_then(|i| i.get("todos")).and_then(Value::as_array).cloned().unwrap_or_default();
             plan.steps = todos.iter().enumerate().filter_map(|(i, todo)| {
                 let state = todo.get("status").and_then(Value::as_str).and_then(step_state).unwrap_or("pending");
-                Some((i.to_string(), PlanStep { text: words(todo.get("content"))?, state }))
+                Some((i.to_string(), PlanStep { text: trimmed_str(todo.get("content"))?, state }))
             }).collect();
         }
         "TaskList" | "TaskGet" | "TodoRead" => {}
@@ -115,7 +111,7 @@ fn plan_result(plan: &mut ClaudePlan, id: &str, failed: bool, content: Option<&V
             let said = flatten_tool_result(content);
             let made = said.split_once("Task #").and_then(|(_, rest)| rest.split_once(" created")).map(|(id, _)| id.to_string())
                 .filter(|id| !id.is_empty() && !id.contains(char::is_whitespace))
-                .or_else(|| words(result.and_then(|r| r.get("task")).and_then(|t| t.get("id"))));
+                .or_else(|| trimmed_str(result.and_then(|r| r.get("task")).and_then(|t| t.get("id"))));
             if let (Some(made), false) = (made, text.is_empty()) {
                 plan.steps.push((made, PlanStep { text, state: "pending" }));
             }
@@ -142,11 +138,7 @@ fn plan_change(plan: &mut ClaudePlan) -> Option<RunnerEvent> {
         return None;
     }
     let steps: Vec<PlanStep> = plan.steps.iter().map(|(_, step)| step.clone()).collect();
-    if plan.sent.as_ref().map_or(steps.is_empty(), |sent| sent == &steps) {
-        return None;
-    }
-    plan.sent = Some(steps.clone());
-    Some(plan_event(&steps))
+    record_plan(&mut plan.sent, steps, true)
 }
 
 fn flatten_tool_result(content: Option<&Value>) -> String {
@@ -165,11 +157,6 @@ fn flatten_tool_result(content: Option<&Value>) -> String {
     }
 }
 
-fn prune(mut m: Map<String, Value>) -> Value {
-    m.retain(|_, v| !v.is_null());
-    Value::Object(m)
-}
-
 /// A compaction Claude Code reports once it has happened: what set it off and the context's size before and after.
 fn compaction_event(meta: Option<&Value>) -> RunnerEvent {
     let mut data = Map::new();
@@ -177,14 +164,13 @@ fn compaction_event(meta: Option<&Value>) -> RunnerEvent {
     for (from, to) in [("trigger", "trigger"), ("pre_tokens", "preTokens"), ("post_tokens", "postTokens")] {
         data.insert(to.into(), meta.and_then(|m| m.get(from)).cloned().unwrap_or(Value::Null));
     }
-    RunnerEvent::with("log", "Context compacted", prune(data))
+    RunnerEvent::with("log", "Context compacted", prune_nulls(data))
 }
 
 /// Parse one stream-json line from `claude -p --output-format stream-json --verbose`.
 pub fn parse_claude_line(line: &str, st: &mut ClaudeState) -> Vec<RunnerEvent> {
-    let msg: Value = match serde_json::from_str(line) {
-        Ok(Value::Object(m)) => Value::Object(m),
-        _ => return vec![RunnerEvent::new("log", line)],
+    let Some(msg) = parse_json_object(line) else {
+        return vec![RunnerEvent::new("log", line)];
     };
     let mut events = Vec::new();
     let kind = msg.get("type").and_then(Value::as_str);
@@ -222,7 +208,7 @@ pub fn parse_claude_line(line: &str, st: &mut ClaudeState) -> Vec<RunnerEvent> {
             }
             data.insert("model".into(), msg.get("model").cloned().unwrap_or(Value::Null));
             data.insert("mcp".into(), Value::Array(servers.clone()));
-            events.push(RunnerEvent::with("log", format!("Claude Code session started{model}{mcp}"), prune(data)));
+            events.push(RunnerEvent::with("log", format!("Claude Code session started{model}{mcp}"), prune_nulls(data)));
             if let Some(s) = status {
                 if s != "connected" {
                     events.push(RunnerEvent::new("error", format!("Scarlet MCP server status: {s}")));
@@ -280,7 +266,7 @@ pub fn parse_claude_line(line: &str, st: &mut ClaudeState) -> Vec<RunnerEvent> {
                             data.insert("tool".into(), Value::String(name));
                             data.insert("input".into(), input.cloned().unwrap_or(Value::Null));
                             data.insert("toolUseId".into(), Value::String(id));
-                            events.push(RunnerEvent::with("tool", text, prune(data)));
+                            events.push(RunnerEvent::with("tool", text, prune_nulls(data)));
                         }
                     } else if btype == "tool_result" {
                         let id = block.get("tool_use_id").map(value_text).unwrap_or_default();
@@ -348,7 +334,7 @@ pub fn parse_claude_line(line: &str, st: &mut ClaudeState) -> Vec<RunnerEvent> {
         data.insert("turns".into(), msg.get("num_turns").cloned().unwrap_or(Value::Null));
         data.insert("costUsd".into(), msg.get("total_cost_usd").cloned().unwrap_or(Value::Null));
         data.insert("usage".into(), msg.get("usage").cloned().unwrap_or(Value::Null));
-        events.push(RunnerEvent::with(if is_error { "error" } else { "result" }, text, prune(data)));
+        events.push(RunnerEvent::with(if is_error { "error" } else { "result" }, text, prune_nulls(data)));
         return events;
     }
 
@@ -469,7 +455,7 @@ pub fn build_claude_command(model: Option<&str>, effort: Option<&str>, service_t
 }
 
 pub async fn run_claude(opts: RunOptions) -> RunResult {
-    let bin = match opts.bin.clone().map(Ok).unwrap_or_else(|| resolve_cli("claude", &opts.env)) {
+    let bin = match opts.resolve_bin("claude") {
         Ok(b) => b,
         Err(e) => return RunResult::failed(e.to_string()),
     };
@@ -502,14 +488,9 @@ pub async fn run_claude(opts: RunOptions) -> RunResult {
         }
         false
     });
-    let outcome = match spawn_lines(
-        &cmd.file,
-        &cmd.args,
-        SpawnLinesOptions { cwd: opts.cwd.clone(), env: with_tool_timeout(&opts.env), stdin: cmd.stdin.clone(), cancel: opts.cancel.clone(), timeout: opts.timeout, stall: opts.stall, task: opts.task.clone() },
-        handler,
-    )
-    .await
-    {
+    let mut spawn = opts.spawn_options(cmd.stdin);
+    spawn.env = with_tool_timeout(&opts.env);
+    let outcome = match spawn_lines(&cmd.file, &cmd.args, spawn, handler).await {
         Ok(o) => o,
         Err(e) => return RunResult::failed(e.to_string()),
     };
@@ -550,10 +531,7 @@ mod tests {
     }
 
     fn mcp() -> McpSpec {
-        let mut env = BTreeMap::new();
-        env.insert("SCARLET_SERVER".to_string(), "http://localhost:4000".to_string());
-        env.insert("SCARLET_TOKEN".to_string(), "a\"b".to_string());
-        McpSpec { command: "C:\\Program Files\\nodejs\\node.exe".into(), args: vec!["C:\\scarlet\\packages\\mcp\\dist\\cli.js".into()], env }
+        crate::host::runner::testing::sample_mcp()
     }
 
     const FIXTURE: [&str; 7] = [

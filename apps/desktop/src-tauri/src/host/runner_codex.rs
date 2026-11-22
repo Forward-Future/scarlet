@@ -8,13 +8,13 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-use crate::util::{env_get, home_dir, iso_from_unix_secs, now_iso};
+use crate::util::{env_get, env_remove_ci, home_dir, iso_from_unix_secs, now_iso};
 use super::codex_app_server::run_app_server;
-use super::detect::api_key_vars;
-use super::runner::{cut_short, exit_error, report_usage, write_files, RunOptions, RunnerCommand};
-use super::spawn::{resolve_cli, spawn_lines, SpawnLinesOptions};
+use super::detect::has_api_key;
+use super::runner::{cut_short, exit_error, parse_json_object, report_usage, write_files, RunOptions, RunnerCommand};
+use super::spawn::spawn_lines;
 use super::usage::{add_usage, codex_app_server_usage, codex_usage, AgentUsage};
-use super::types::{brief, brief_input, is_question_tool, plan_event, question_words, tail_summary, truthy, value_text, McpSpec, PlanStep, QuotaBucket, RunResult, RunnerEvent, SubscriptionQuota, Workspace};
+use super::types::{brief, brief_input, is_question_tool, prune_nulls, question_words, record_plan, tail_summary, trimmed_str, truthy, value_text, McpSpec, PlanStep, QuotaBucket, RunResult, RunnerEvent, SubscriptionQuota, Workspace};
 
 #[derive(Debug, Default, Clone)]
 pub struct CodexState {
@@ -50,9 +50,9 @@ pub struct CodexState {
 /// whether it is finished. The stream leaves out which step is under way, so none is "in_progress".
 pub fn codex_plan(items: Option<&Value>) -> Option<Vec<PlanStep>> {
     let steps = items?.as_array()?.iter().filter_map(|entry| {
-        let text = entry.get("text").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty())?;
+        let text = trimmed_str(entry.get("text"))?;
         let done = entry.get("completed").and_then(Value::as_bool).unwrap_or(false);
-        Some(PlanStep { text: text.to_string(), state: if done { "done" } else { "pending" } })
+        Some(PlanStep { text, state: if done { "done" } else { "pending" } })
     });
     Some(steps.collect())
 }
@@ -70,17 +70,15 @@ fn s(v: Option<&Value>) -> Option<String> {
 }
 
 fn record_codex_plan(steps: Option<Vec<PlanStep>>, st: &mut CodexState, events: &mut Vec<RunnerEvent>) {
-    if let Some(steps) = steps.filter(|steps| st.plan.as_ref() != Some(steps)) {
-        events.push(plan_event(&steps));
-        st.plan = Some(steps);
+    if let Some(steps) = steps {
+        events.extend(record_plan(&mut st.plan, steps, false));
     }
 }
 
 /// Parse one JSONL line from `codex exec --json`.
 pub fn parse_codex_line(line: &str, st: &mut CodexState) -> Vec<RunnerEvent> {
-    let msg: Value = match serde_json::from_str(line) {
-        Ok(v @ Value::Object(_)) => v,
-        _ => return vec![RunnerEvent::new("log", line)],
+    let Some(msg) = parse_json_object(line) else {
+        return vec![RunnerEvent::new("log", line)];
     };
     let kind = msg.get("type").and_then(Value::as_str).unwrap_or("");
     codex_events(kind, &msg, st)
@@ -200,8 +198,7 @@ fn codex_events(kind: &str, msg: &Value, st: &mut CodexState) -> Vec<RunnerEvent
                         if let Some(id) = item.get("id") {
                             data.insert("itemId".into(), id.clone());
                         }
-                        data.retain(|_, v| !v.is_null());
-                        events.push(RunnerEvent::with("tool", text, Value::Object(data)));
+                        events.push(RunnerEvent::with("tool", text, prune_nulls(data)));
                     } else if completed && (status == Some("failed") || has_error) {
                         let detail = if has_error { item.get("error") } else { item.get("result") };
                         events.push(RunnerEvent::new("error", format!("{name} failed: {}", brief_input(detail, 400))));
@@ -485,7 +482,7 @@ pub fn codex_home_dir(run_dir: &Path) -> std::path::PathBuf {
 /// App Server reads user configuration from CODEX_HOME. Give it a private directory
 /// with the existing login and its write lock linked so Codex still owns token refreshes.
 fn isolated_codex_home(opts: &RunOptions) -> std::result::Result<std::path::PathBuf, &'static str> {
-    if api_key_vars("codex").iter().any(|key| env_get(&opts.env, key).is_some_and(|value| !value.is_empty())) {
+    if has_api_key("codex", &opts.env) {
         return Err("api_key");
     }
     // A task must not be able to supply its own App Server configuration or MCP servers.
@@ -613,8 +610,8 @@ pub fn parse_codex_rate_limits_notification(params: &Value, fetched_at: &str) ->
 }
 
 async fn try_app_server(opts: &RunOptions, bin: &str, home: &Path) -> Option<RunResult> {
-    let mut spawn = spawn_options(opts, None);
-    spawn.env.retain(|key, _| !["CODEX_HOME", "CODEX_SQLITE_HOME"].iter().any(|name| key.eq_ignore_ascii_case(name)));
+    let mut spawn = opts.spawn_options(None);
+    env_remove_ci(&mut spawn.env, &["CODEX_HOME", "CODEX_SQLITE_HOME"]);
     spawn.env.insert("CODEX_HOME".into(), home.to_string_lossy().into_owned());
     // The child already starts in the task directory. Passing cwd explicitly on thread/start
     // can make Codex trust a project and load its local configuration.
@@ -669,13 +666,9 @@ fn log_fallback(opts: &RunOptions, reason: &str) {
     log::log!(level, "[host] codex-fallback task={task} attempt={attempt} reason={reason}");
 }
 
-fn spawn_options(opts: &RunOptions, stdin: Option<String>) -> SpawnLinesOptions {
-    SpawnLinesOptions { cwd: opts.cwd.clone(), env: opts.env.clone(), stdin, cancel: opts.cancel.clone(), timeout: opts.timeout, stall: opts.stall, task: opts.task.clone() }
-}
-
 pub async fn run_codex(mut opts: RunOptions) -> RunResult {
     opts.env.extend(opts.mcp.env.clone());
-    let bin = match opts.bin.clone().map(Ok).unwrap_or_else(|| resolve_cli("codex", &opts.env)) {
+    let bin = match opts.resolve_bin("codex") {
         Ok(b) => b,
         Err(e) => return RunResult::failed(e.to_string()),
     };
@@ -715,7 +708,7 @@ pub async fn run_codex(mut opts: RunOptions) -> RunResult {
     let outcome = match spawn_lines(
         &built.cmd.file,
         &built.cmd.args,
-        spawn_options(&opts, built.cmd.stdin),
+        opts.spawn_options(built.cmd.stdin),
         handler,
     )
     .await
@@ -765,10 +758,7 @@ mod tests {
     }
 
     fn mcp() -> McpSpec {
-        let mut env = BTreeMap::new();
-        env.insert("SCARLET_SERVER".to_string(), "http://localhost:4000".to_string());
-        env.insert("SCARLET_TOKEN".to_string(), "a\"b".to_string());
-        McpSpec { command: "C:\\Program Files\\nodejs\\node.exe".into(), args: vec!["C:\\scarlet\\packages\\mcp\\dist\\cli.js".into()], env }
+        crate::host::runner::testing::sample_mcp()
     }
 
     const FIXTURE: [&str; 9] = [
@@ -1049,7 +1039,8 @@ mod tests {
         fn options(agent: &str, cwd: &Path, bin: Option<String>) -> (RunOptions, Arc<Mutex<Vec<RunnerEvent>>>) {
             let (mut opts, events) = runner_options(agent, cwd, bin);
             // Fixtures choose their credential store independently of the developer running the tests.
-            opts.env.retain(|key, _| !key.eq_ignore_ascii_case("CODEX_HOME") && !api_key_vars("codex").iter().any(|name| key.eq_ignore_ascii_case(name)));
+            env_remove_ci(&mut opts.env, &["CODEX_HOME"]);
+            env_remove_ci(&mut opts.env, crate::host::detect::api_key_vars("codex"));
             opts.env.insert("CODEX_HOME".into(), cwd.join("empty-codex-home").to_string_lossy().into_owned());
             (opts, events)
         }

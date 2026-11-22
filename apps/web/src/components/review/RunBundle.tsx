@@ -1,111 +1,17 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
-import { callNumbers, taskNeedsTranscripts, type SpeakerProgress, type Task, type TaskEvent, type UsageTotals } from "@scarlet/shared";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import { callNumbers, taskNeedsTranscripts, type SpeakerProgress, type Task, type TaskEvent } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
-import { useShallow } from "zustand/react/shallow";
-import { tokenBreakdown, tokenLabel } from "../../lib/format";
 import { useProjectStore } from "../../stores/project";
 import { useUiStore } from "../../stores/ui";
 import { runProgress } from "../../lib/runProgress";
 import { runNow, STARTING } from "../../lib/runNow";
 import { runningTranscription, transcriptionProgressLabel, transcriptsProgress } from "../../lib/transcriptionProgress";
-import { runAim, runIsActive, runItems, runLines, runSummary, workTime, workTimeLabel, type RunItem, type RunLine } from "../../lib/taskRun";
+import { isWorkingTask, runAim, runIsActive, runItems, runLines, runSummary, type RunItem, type RunLine } from "../../lib/taskRun";
 import { pendingMediaWaits, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
+import { useClippedExpand } from "../../lib/uiHooks";
+import { RequestMetrics, Tokens } from "./RequestMetrics";
 
-/**
- * Hovering or focusing the count shows the token breakdown and estimated API cost.
- * Shown only when turned on in Settings → Usage.
- * The note is placed against the window, so the pinned request's scrolling box doesn't clip it.
- */
-type RunUsage = Omit<UsageTotals, "firstAt" | "lastAt" | "models" | "reasoningTokens" | "runs">;
-const usd = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" });
-
-function listOf(items: string[]) {
-  return items.length < 3 ? items.join(" or ") : `${items.slice(0, -1).join(", ")} or ${items.at(-1)}`;
-}
-
-function formatEstimatedCost(estimate: RunUsage["estimatedApiCostUsd"]) {
-  if (estimate == null) return "Unavailable";
-  return estimate > 0 && estimate < 0.01 ? `<${usd.format(0.01)}` : usd.format(estimate);
-}
-
-function Tokens({ usage, className, time, details = [] }: {
-  usage?: RunUsage; className?: string; time?: string; details?: [label: string, value: string][];
-}) {
-  const ref = useRef<HTMLButtonElement>(null);
-  const panel = useRef<HTMLSpanElement>(null);
-  const id = useId();
-  const [mode, setMode] = useState<"preview" | "pinned" | null>(null);
-  const open = mode !== null && !!usage?.totalTokens;
-  // While the note is open it follows the count, which moves when the pinned request grows or the chat scrolls.
-  useLayoutEffect(() => {
-    if (!open) return;
-    const anchor = ref.current!;
-    const details = panel.current!;
-    let frame = 0;
-    const place = () => {
-      const box = anchor.getBoundingClientRect();
-      const { offsetHeight: height, offsetWidth: width } = details;
-      const above = box.top - 6 - height;
-      const top = above >= 8 ? above : Math.min(box.bottom + 6, window.innerHeight - height - 8);
-      details.style.top = `${Math.max(8, top)}px`;
-      details.style.left = `${Math.max(8, Math.min(box.right - width, window.innerWidth - width - 8))}px`;
-      frame = requestAnimationFrame(place);
-    };
-    place();
-    return () => cancelAnimationFrame(frame);
-  }, [open]);
-  useEffect(() => {
-    if (!open) { setMode(null); return; }
-    const closeOutside = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (!ref.current?.contains(target) && !panel.current?.contains(target)) setMode(null);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      setMode(null);
-    };
-    document.addEventListener("pointerdown", closeOutside);
-    document.addEventListener("keydown", closeOnEscape, true);
-    return () => {
-      document.removeEventListener("pointerdown", closeOutside);
-      document.removeEventListener("keydown", closeOnEscape, true);
-    };
-  }, [open]);
-  if (!usage?.totalTokens) return time ? <span className={`run-dim ${className ?? ""}`} title="Active time">
-    <span className="sr-only">Active time </span><span className="run-work-time">{time}</span>
-  </span> : null;
-  const parts: [string, number][] = [
-    ["Input", usage.inputTokens], ["Output", usage.outputTokens], ["Cache read", usage.cacheReadTokens],
-    ["Cache write", usage.cacheWriteTokens],
-  ];
-  const label = tokenLabel(usage.totalTokens);
-  const [count, unit] = label.split(" ");
-  const breakdown = tokenBreakdown({ ...usage, runs: undefined });
-  const cost = formatEstimatedCost(usage.estimatedApiCostUsd);
-  const costDescription = usage.estimatedApiCostUsd == null
-    ? usage.unpricedModels?.length ? `No price for ${listOf(usage.unpricedModels)} yet.` : "API pricing is unavailable for some or all of the reported usage."
-    : "Reported tokens at standard API rates for short context and default cache duration.";
-  const accessibleDetails = [...details.map(([name, value]) => `${name}: ${value}`), `Estimated API cost: ${cost}`].join(", ");
-  return <><button ref={ref} type="button" className={`run-dim run-tokens${className ? ` ${className}` : ""}`} title=""
-    aria-label={`${time ? `${time} active time, ` : ""}${label}: ${breakdown}. ${accessibleDetails}`} data-breakdown={breakdown}
-    aria-description={costDescription} aria-expanded={open} aria-controls={open ? id : undefined}
-    onPointerEnter={e => { if (e.pointerType !== "touch") setMode(value => value ?? "preview"); }}
-    onPointerLeave={() => { if (!ref.current?.matches(":focus-visible")) setMode(value => value === "preview" ? null : value); }}
-    onFocus={() => setMode(value => value ?? "preview")} onBlur={() => setMode(null)}
-    onClick={() => setMode(value => value === "pinned" ? null : "pinned")}>
-    {time && <><span className="run-work-time">{time}</span> <span className="unit-metrics-dot" aria-hidden>·</span>{" "}</>}
-    {count}<span className="unit-token-word"> {unit}</span>
-  </button>{open && createPortal(<span ref={panel} id={id} className="tokens-tip" aria-hidden data-escape-owner>
-      {time && <span><span>Active time</span><b>{time}</b></span>}
-      {details.map(([name, value]) => <span key={name}><span>{name}</span><b>{value}</b></span>)}
-      {parts.filter(([label, n]) => n || label === "Input" || label === "Output").map(([label, n]) =>
-        <span key={label}><span>{label}</span><b>{n.toLocaleString()}</b></span>)}
-      <span className="tokens-tip-total"><span>Total</span><b>{usage.totalTokens.toLocaleString()}</b></span>
-      <span title={costDescription} style={mode === "pinned" ? { pointerEvents: "auto" } : undefined}><span>Est Cost</span><b>{cost}</b></span>
-    </span>, document.body)}</>;
-}
+export { RequestMetrics };
 
 const voicePhase: Record<SpeakerProgress["phase"], string> = {
   audio: "Preparing audio", models: "Finding voices", segmenting: "Finding voices", identifying: "Finding voices",
@@ -118,22 +24,9 @@ const voicePhase: Record<SpeakerProgress["phase"], string> = {
  * while it's folded. However much Scarlet writes, a request stays a few lines tall.
  */
 export function Said({ text, lead, className, children }: { text: string; lead?: ReactNode; className?: string; children?: ReactNode }) {
-  const ref = useRef<HTMLParagraphElement>(null);
-  const [clipped, setClipped] = useState(false);
-  const [open, setOpen] = useState(false);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el || open) return;
-    const measure = () => setClipped(el.scrollHeight > el.clientHeight + 1);
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [text, open]);
-  const opens = clipped || open;
+  const { ref, clipped, open, opens, toggle } = useClippedExpand<HTMLParagraphElement>(text);
   return <p ref={ref} className={`${className ? `${className} ` : ""}said${open ? " is-open" : clipped ? " is-clipped" : ""}`}
-    title={clipped && !open ? "Show all of it" : undefined} aria-expanded={opens ? open : undefined} onClick={opens ? () => setOpen(!open) : undefined}>{lead}{children ?? text}</p>;
+    title={clipped && !open ? "Show all of it" : undefined} aria-expanded={opens ? open : undefined} onClick={opens ? toggle : undefined}>{lead}{children ?? text}</p>;
 }
 
 /**
@@ -197,7 +90,7 @@ const sinceRerun = (task: Task, events: readonly TaskEvent[]) => {
 };
 
 export function RunBundle(props: RunBundleProps) {
-  if (props.task.state === "running" || props.task.state === "claimed") return <WorkingRun {...props} />;
+  if (isWorkingTask(props.task.state)) return <WorkingRun {...props} />;
   return runIsActive(props.task) ? <WaitingRun {...props} /> : <FinishedRun {...props} />;
 }
 
@@ -205,57 +98,6 @@ export function RunBundle(props: RunBundleProps) {
 function useRunUsage(taskId: string, shown = true) {
   const show = useUiStore(s => s.showRunTokens) && shown;
   return useProjectStore(s => show ? s.current?.taskUsage?.[taskId] : undefined);
-}
-
-function runModelName(id: string) {
-  // Format versioned Claude IDs without resolving aliases against today's catalog.
-  const [, family, major, minor] = /^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)-(\d+)$/.exec(id) ?? [];
-  return family ? `Claude ${family.charAt(0).toUpperCase()}${family.slice(1)} ${major}.${minor}` : id;
-}
-
-/**
- * Active time and reported tokens for the whole request, including any attempts that carried it on.
- * Only the running request needs a ticking clock.
- */
-export function RequestMetrics({ attempts, events }: { attempts: readonly Task[]; events: Record<string, readonly TaskEvent[]> }) {
-  const show = useUiStore(s => s.showRunTokens);
-  const reports = useProjectStore(useShallow(s => show ? attempts.map(task => s.current?.taskUsage?.[task.id]) : []));
-  const working = attempts.some(task => task.state === "claimed" || task.state === "running");
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    if (!working) return;
-    setNow(Date.now());
-    const tick = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(tick);
-  }, [working]);
-
-  const durations = attempts.flatMap(task => {
-    const duration = workTime(task, events[task.id] ?? [], now);
-    return duration === undefined ? [] : [duration];
-  });
-  const time = durations.length ? workTimeLabel(durations.reduce((total, ms) => total + ms, 0), working) : undefined;
-  const sum = (key: Exclude<keyof RunUsage, "unpricedModels">) => reports.reduce((total, usage) => total + (usage?.[key] ?? 0), 0);
-  const totalTokens = sum("totalTokens");
-  const usage = totalTokens ? {
-    inputTokens: sum("inputTokens"), outputTokens: sum("outputTokens"),
-    cacheReadTokens: sum("cacheReadTokens"), cacheWriteTokens: sum("cacheWriteTokens"),
-    totalTokens,
-    estimatedApiCostUsd: reports.some(report => report?.totalTokens && report.estimatedApiCostUsd == null)
-      ? null : sum("estimatedApiCostUsd"),
-    unpricedModels: [...new Set(reports.flatMap(report => report?.unpricedModels ?? []))],
-  } : undefined;
-  const models = new Set<string>();
-  const efforts = new Set<string>();
-  for (const [i, task] of attempts.entries()) {
-    const report = reports[i];
-    if (!report) continue;
-    for (const model of report.models?.length ? report.models : [task.model ?? "Unknown"]) models.add(runModelName(model));
-    efforts.add(task.effort ? task.effort.charAt(0).toUpperCase() + task.effort.slice(1) : "Provider default");
-  }
-  return <Tokens usage={usage} time={time} className="unit-tokens" details={[
-    [models.size > 1 ? "Models" : "Model", [...models].join(", ")],
-    ["Thinking effort", [...efforts].join(", ")],
-  ]} />;
 }
 
 function WorkingRun({ task, events: all, changes, callNumber, say, result, onStop, actions }: RunBundleProps) {

@@ -7,6 +7,7 @@
  * looked (2026-11-17). This lines the two up on a version of the edit.
  */
 import { clipEnd, type MediaClip, type Timeline } from "@scarlet/timeline";
+import { round2, round3 } from "./analysis.js";
 import type { TimelineWord } from "./timeline-perception.js";
 
 export interface ScreenLine { start: number; end: number; text: string; box: [number, number, number, number] }
@@ -116,7 +117,6 @@ export function readingsAt(words: ReadonlyArray<Pick<TimelineWord, "text" | "sta
     } else joined.push({ ...run, source: [...run.source], lines: new Set(run.lines) });
   }
 
-  const r2 = (n: number) => Math.round(n * 100) / 100, r3 = (n: number) => Math.round(n * 1000) / 1000;
   return joined.map(run => {
     const spans = [...run.lines].map(l => lines.get(run.mediaId)![l]!).sort((a, b) => a.box[1] - b.box[1] || a.box[0] - b.box[0]);
     const box: [number, number, number, number] = [Math.min(...spans.map(s => s.box[0])), Math.min(...spans.map(s => s.box[1])),
@@ -124,7 +124,7 @@ export function readingsAt(words: ReadonlyArray<Pick<TimelineWord, "text" | "sta
     const said = heard.slice(run.first, run.last + 1);
     const found = runs.filter(r => r.mediaId === run.mediaId && r.first >= run.first && r.last <= run.last)
       .reduce((n, r) => n + r.last - r.first + 1, 0);
-    return { from: r3(said[0]!.start), to: r3(said.at(-1)!.end), mediaId: run.mediaId, source: [r2(run.source[0]), r2(run.source[1])] as [number, number],
+    return { from: round3(said[0]!.start), to: round3(said.at(-1)!.end), mediaId: run.mediaId, source: [round2(run.source[0]), round2(run.source[1])] as [number, number],
       said: said.map(w => w.text).join(" "), matched: found,
       lines: spans.map(s => ({ text: s.text, box: s.box })), box };
   });
