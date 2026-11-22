@@ -9,6 +9,16 @@ export function isEditableTarget(t: EventTarget | null): boolean {
   return t.getAttribute("role") === "combobox" && t.getAttribute("aria-expanded") === "true";
 }
 
+/** True when the event target is inside an editable form field or contenteditable surface. */
+export function isInEditableElement(t: EventTarget | null): t is HTMLElement {
+  return t instanceof HTMLElement && (isEditableTarget(t) || !!t.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])"));
+}
+
+/** Release focus after a pointer click so Space returns to playback; keyboard activation keeps focus. */
+export function blurOnPointerClick(e: { detail: number; currentTarget: HTMLElement }) {
+  if (e.detail) e.currentTarget.blur();
+}
+
 /**
  * True while an input method (Japanese, Chinese, Korean…) is composing. Safari
  * reports the Enter that commits a composition with isComposing false but

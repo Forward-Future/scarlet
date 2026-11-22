@@ -1,7 +1,7 @@
 import { DialogueScanPage, requestText, type Task, type TaskEvent } from "@scarlet/shared";
 import { cutSummary, mergeRanges, type Change, type TimeRange } from "@scarlet/timeline";
 import { appliedEditSummary } from "../components/review/cutReviewDetails";
-import { clock, lengthLabel, plural, tokenLabel } from "./format";
+import { clock, lengthLabel, parseTimestamp, plural, tokenLabel } from "./format";
 import { editConfirmation, inputMediaIds, taskChatText, toolName, waitLabels, waitTools } from "./taskActivity";
 
 /**
@@ -12,10 +12,18 @@ export type RunItem =
   | { kind: "note"; at: string; text: string }
   | { kind: "step"; at: string; verb: string; detail: string; pending?: boolean; background?: boolean; edit?: boolean };
 
-const ACTIVE = new Set(["queued", "claimed", "running", "waiting_for_user"]);
+const ACTIVE = new Set<Task["state"]>(["queued", "claimed", "running", "waiting_for_user"]);
+
+export function isActiveTask(state: Task["state"]): boolean {
+  return ACTIVE.has(state);
+}
+
+export function isWorkingTask(state: Task["state"]): boolean {
+  return state === "claimed" || state === "running";
+}
 
 export function runIsActive(task: Task) {
-  return ACTIVE.has(task.state);
+  return isActiveTask(task.state);
 }
 
 function input(event: TaskEvent): Record<string, unknown> {
@@ -315,13 +323,12 @@ export function runSummary(task: Task, change?: Change): string {
  * for the editor to answer a question. Time waiting on the editor is never Scarlet's work.
  */
 function workClock(task: Task, events: readonly TaskEvent[]) {
-  const time = (x?: string | null) => Date.parse(x ?? "") || 0;
-  const start = time(task.startedAt) || time(task.createdAt);
+  const start = parseTimestamp(task.startedAt) || parseTimestamp(task.createdAt);
   const waits: { from: number; to: number }[] = [];
   let asked: number | undefined;
   for (const event of events) {
     if (event.type !== "question" && event.type !== "answer") continue;
-    const at = time(event.at);
+    const at = parseTimestamp(event.at);
     if (!at) continue;
     if (event.type === "question") asked ??= at;
     else if (asked !== undefined) { waits.push({ from: Math.max(asked, start), to: at }); asked = undefined; }
@@ -337,7 +344,7 @@ function workClock(task: Task, events: readonly TaskEvent[]) {
 
 /** Active work in this task, including earlier claims when Scarlet recorded them. */
 export function workTime(task: Task, events: readonly TaskEvent[], now: number): number | undefined {
-  const working = task.state === "claimed" || task.state === "running";
+  const working = isWorkingTask(task.state);
   const start = Date.parse(task.startedAt ?? "");
   if (task.workedMs !== undefined) {
     return task.workedMs + (working && Number.isFinite(start) ? Math.max(0, now - start) : 0);
@@ -368,7 +375,7 @@ export function workTimeLabel(ms: number, working: boolean): string {
 export function spentLabel(attempts: readonly Task[], events: Record<string, readonly TaskEvent[]>,
   usage: Record<string, { totalTokens: number }> | undefined, now = Date.now()): string | undefined {
   const times = attempts.flatMap(task => { const ms = workTime(task, events[task.id] ?? [], now); return ms === undefined ? [] : [ms]; });
-  const time = times.length ? workTimeLabel(times.reduce((total, ms) => total + ms, 0), attempts.some(t => t.state === "claimed" || t.state === "running")) : undefined;
+  const time = times.length ? workTimeLabel(times.reduce((total, ms) => total + ms, 0), attempts.some(t => isWorkingTask(t.state))) : undefined;
   const tokens = usage ? attempts.reduce((total, task) => total + (usage[task.id]?.totalTokens ?? 0), 0) : 0;
   return [time, tokens ? tokenLabel(tokens) : undefined].filter(Boolean).join(" · ") || undefined;
 }

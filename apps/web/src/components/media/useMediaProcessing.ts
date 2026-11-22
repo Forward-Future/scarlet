@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { isRunningTranscriptionTask } from "../../lib/transcriptionProgress";
 import { isPreparingMedia } from "../../lib/upload";
 import { useProjectStore } from "../../stores/project";
 import { useSourceCaches } from "./sourceCaches";
@@ -7,8 +8,7 @@ export function useMediaProcessing() {
   const projectId = useProjectStore(s => s.current?.id);
   const paused = useProjectStore(s => !!s.current?.project.mediaPaused);
   const media = useProjectStore(s => s.current?.media);
-  const transcribing = useProjectStore(s => !!s.current?.tasks.some(t => t.kind === "transcribe" &&
-    (t.state === "queued" || t.state === "claimed" || t.state === "running")));
+  const transcribing = useProjectStore(s => !!s.current?.tasks.some(isRunningTranscriptionTask));
   const { caches } = useSourceCaches();
   const preparing = !!media?.some(isPreparingMedia);
   const caching = !!media?.some(m => {

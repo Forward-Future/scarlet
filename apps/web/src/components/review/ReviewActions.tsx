@@ -1,4 +1,4 @@
-import { useHotkeys } from "../../lib/hotkeys";
+import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
 
 /** The same decisions and shortcuts for every edit: Revise (R), and Apply (A) for a proposal or Keep (K) for an applied edit. */
 export function ReviewActions({ approve, revise, disabled, approvalDisabled, approveLabel = "Apply", approveKey = "A" }: {
@@ -16,7 +16,7 @@ export function ReviewActions({ approve, revise, disabled, approvalDisabled, app
       disabled={disabled || approvalDisabled} onClick={e => {
         // The button stays for the next edit. Clicked, it lets go of the focus (WebView2 leaves it there), or Space
         // would press it again while the video is paused. Pressed by keyboard, it keeps it.
-        if (e.detail) e.currentTarget.blur();
+        blurOnPointerClick(e);
         approve();
       }}>{approveLabel}</button>}
   </div>;

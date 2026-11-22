@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { cachedShare } from "@scarlet/shared";
 import { plural } from "../../lib/format";
-import { mediaProblems, mediaWarningLabel } from "../../lib/transcriptionProgress";
+import { isRunningTranscriptionTask, mediaProblems, mediaWarningLabel } from "../../lib/transcriptionProgress";
 import { useProjectStore } from "../../stores/project";
 import { MenuItem } from "../shell/WorkspaceNavigation";
 import { Icon } from "../ui/primitives";
@@ -114,8 +114,7 @@ export function MediaButton({ importing, importFailed, onOpen }: { importing: nu
 }
 
 function useTranscriptionActive(): boolean {
-  return useProjectStore(s => !!s.current?.tasks.some(t => t.kind === "transcribe" &&
-    (t.state === "queued" || t.state === "claimed" || t.state === "running")));
+  return useProjectStore(s => !!s.current?.tasks.some(isRunningTranscriptionTask));
 }
 
 /** Keep the same action in the workspace's More menu while there is work to pause, or while it is paused. */
