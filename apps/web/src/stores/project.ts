@@ -108,12 +108,12 @@ interface ProjectState {
   createTask(projectId: string, body: CreateTaskRequest): Promise<Task>;
   cancelTask(taskId: string, queuedOnly?: boolean): Promise<void>;
   stopEditing(projectId: string): Promise<void>;
-  resumeEditing(projectId: string): Promise<void>;
+  resumeEditing(projectId: string, runWith?: RunChoice): Promise<void>;
   /** Retry or resume a run. It runs on the model picked now. */
   retryTask(taskId: string, runWith?: RunChoice): Promise<void>;
   /** Finish a run that ended without its transcripts once they are ready, or stop waiting to. */
   continueWhenReady(taskId: string, on: boolean): Promise<void>;
-  answerTask(taskId: string, text: string, skillIds?: string[]): Promise<void>;
+  answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice): Promise<void>;
   /** Keep a queued request from starting while its words are changed, or let it go. */
   holdForRewording(taskId: string, on: boolean): Promise<void>;
   /** Change the words of a request still waiting its turn. */
@@ -748,8 +748,8 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     stopEditing(projectId) {
       return changeEditing(projectId, () => api.stopEditing(projectId));
     },
-    resumeEditing(projectId) {
-      return changeEditing(projectId, () => api.resumeEditing(projectId));
+    resumeEditing(projectId, runWith) {
+      return changeEditing(projectId, () => runWith ? api.resumeEditing(projectId, runWith) : api.resumeEditing(projectId));
     },
     async retryTask(taskId, runWith) {
       const { task } = await api.retryTask(taskId, runWith);
@@ -763,8 +763,8 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const { task, resumed } = await api.continueWhenReady(taskId, on);
       patch(task.projectId, (d) => ({ tasks: resumed ? upsertAnswered(upsert(d.tasks, task), resumed) : upsert(d.tasks, task) }));
     },
-    async answerTask(taskId, text, skillIds) {
-      return taskAnswered(api.answerTask(taskId, text, skillIds));
+    async answerTask(taskId, text, skillIds, runWith) {
+      return taskAnswered(runWith ? api.answerTask(taskId, text, skillIds, runWith) : api.answerTask(taskId, text, skillIds));
     },
     async holdForRewording(taskId, on) {
       // Letting go of a hold lets Scarlet start the request, and so does saving its new words. The socket may have it

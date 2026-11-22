@@ -29,6 +29,27 @@ export function shownVideo(monitor: HTMLElement) {
   return videos.at(-1);
 }
 
+type AmbientSource = HTMLVideoElement | HTMLImageElement | HTMLCanvasElement;
+
+/** Fallback still or held frame shown while the next video loads, so ambient light stays gently alive. */
+function shownAmbientSource(monitor: HTMLElement): AmbientSource | undefined {
+  const video = shownVideo(monitor);
+  if (video) return video;
+  const fallbacks = [...monitor.querySelectorAll<HTMLElement>("[data-ambient-source]")].filter(el => {
+    if (el.closest("[data-parked]") || el.getClientRects().length === 0 || getComputedStyle(el).visibility === "hidden") return false;
+    if (el instanceof HTMLImageElement) return el.complete && el.naturalWidth > 0 && el.naturalHeight > 0;
+    if (el instanceof HTMLCanvasElement) return el.width > 0 && el.height > 0;
+    return false;
+  });
+  return fallbacks.at(-1) as HTMLImageElement | HTMLCanvasElement | undefined;
+}
+
+function sourceSize(source: AmbientSource) {
+  if (source instanceof HTMLVideoElement) return { videoWidth: source.videoWidth, videoHeight: source.videoHeight };
+  if (source instanceof HTMLImageElement) return { videoWidth: source.naturalWidth, videoHeight: source.naturalHeight };
+  return { videoWidth: source.width, videoHeight: source.height };
+}
+
 const canvas2d = () => {
   const el = document.createElement("canvas");
   return { el, context: el.getContext("2d", { alpha: true }) };
@@ -64,7 +85,7 @@ export function AmbientLight({ stage, monitor }: { stage: RefObject<HTMLElement 
     const latest = frame.context, easing = glow.context;
     const all = [el, frame.el, glow.el, ...passes.map(p => p.el)];
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-    let shown: HTMLVideoElement | undefined, seen = "", settleUntil = 0, lastLook = 0, lit = false, blank = true;
+    let shown: AmbientSource | undefined, seen = "", settleUntil = 0, lastLook = 0, lit = false, blank = true;
     const fit = () => {
       const width = Math.max(1, Math.round(area.clientWidth * SCALE)), height = Math.max(1, Math.round(area.clientHeight * SCALE));
       if (el.width === width && el.height === height) return;
@@ -75,24 +96,27 @@ export function AmbientLight({ stage, monitor }: { stage: RefObject<HTMLElement 
     const look = () => {
       if (document.hidden || !monitor.current) return;
       fit();
-      const video = shownVideo(monitor.current);
-      if (!video) {
+      const source = shownAmbientSource(monitor.current);
+      if (!source) {
         if (lit) { context.clearRect(0, 0, el.width, el.height); easing.clearRect(0, 0, glow.el.width, glow.el.height); light(false); shown = undefined; blank = true; }
         return;
       }
+      const isVideo = source instanceof HTMLVideoElement;
       const still = reduceMotion.matches;
       // With motion reduced, a glow already drawn holds as it is while the picture plays.
-      if (still && !blank && !video.paused && !video.ended) return;
-      const box = video.getBoundingClientRect(), origin = area.getBoundingClientRect();
-      const picture = pictureRect(box, video);
-      const at = `${video.currentTime}|${box.left - origin.left}|${box.top - origin.top}|${picture.width}|${picture.height}`;
-      const fresh = video !== shown, now = Date.now();
+      if (still && !blank && isVideo && !source.paused && !source.ended) return;
+      const box = source.getBoundingClientRect(), origin = area.getBoundingClientRect();
+      const picture = pictureRect(box, sourceSize(source));
+      const stamp = isVideo ? source.currentTime : source instanceof HTMLImageElement ? source.currentSrc || source.src : "canvas";
+      const at = `${stamp}|${box.left - origin.left}|${box.top - origin.top}|${picture.width}|${picture.height}`;
+      const fresh = source !== shown, now = Date.now();
       if (fresh || blank || at !== seen) settleUntil = now + SETTLE;
       if (now > settleUntil) return;
       // A window out of sight runs its timers less often: the step follows the time since the last look, not the count.
       const step = 1 - (1 - EASE) ** Math.min(10, Math.max(0, now - lastLook) / TICK);
       lastLook = now;
-      shown = video;
+      const bridgeEase = !blank && !still && (!isVideo || (shown !== undefined && !(shown instanceof HTMLVideoElement)));
+      shown = source;
       seen = at;
       const x = (box.left - origin.left + area.scrollLeft + picture.x - picture.width * SPREAD) * SCALE;
       const y = (box.top - origin.top + area.scrollTop + picture.y - picture.height * SPREAD) * SCALE;
@@ -101,12 +125,12 @@ export function AmbientLight({ stage, monitor }: { stage: RefObject<HTMLElement 
         // The first look at a picture fills the glow at once. After that each look moves the whole glow a step toward
         // the frame, so light from a picture of another shape, or from before a resize, fades out too. With motion reduced
         // every look sets the glow at once.
-        if (fresh || blank || still) {
+        if ((fresh && !bridgeEase) || blank || still) {
           easing.clearRect(0, 0, glow.el.width, glow.el.height);
-          easing.drawImage(video, x, y, width, height);
+          easing.drawImage(source, x, y, width, height);
         } else {
           latest.clearRect(0, 0, frame.el.width, frame.el.height);
-          latest.drawImage(video, x, y, width, height);
+          latest.drawImage(source, x, y, width, height);
           easing.globalAlpha = step;
           easing.globalCompositeOperation = "destination-out";
           easing.fillRect(0, 0, glow.el.width, glow.el.height);

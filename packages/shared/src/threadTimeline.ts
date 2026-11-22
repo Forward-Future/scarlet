@@ -61,6 +61,11 @@ export interface ThreadEdit extends EditRef {
    * its request's list, marked Rejected, at the place it was.
    */
   rejected?: true;
+  /**
+   * The edit was flagged for the editor (`check`) before it was rejected. `check` is cleared so nothing treats a
+   * rejected edit as still waiting, while `wasCheck` keeps its row in For you, marked Rejected.
+   */
+  wasCheck?: true;
 }
 
 /** The editor's words for a rejection Scarlet was asked to make, in the chat and in the queue. */
@@ -441,6 +446,7 @@ function savedEdits(thread: Thread, visible: (version: string) => boolean, read?
           if (!change.rejects) edit.label = replaced.label;
           if (replaced.summary) edit.summary = replaced.summary; else delete edit.summary;
           if (replaced.reason) edit.reason = replaced.reason; else delete edit.reason;
+          if (replaced.check || replaced.wasCheck) edit.wasCheck = true;
           delete edit.check;
         }
         edits[prior] = edit;

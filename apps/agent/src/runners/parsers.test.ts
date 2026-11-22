@@ -39,10 +39,26 @@ describe("claude stream-json parser", () => {
     expect(st.mcpStatus).toBe("connected");
     expect(st.sessionId).toBe("s1");
   });
-  it("reports a compaction once it happens", () => {
+  it("reports a compaction while it runs and once it happens", () => {
     const st = newClaudeState();
-    const evs = feed(['{"type":"system","subtype":"compact_boundary","session_id":"s1","compact_metadata":{"trigger":"auto","pre_tokens":161204}}'], st, parseClaudeLine);
-    expect(evs).toEqual([{ type: "log", text: "Context compacted", data: { kind: "compaction", trigger: "auto", preTokens: 161204 } }]);
+    const evs = feed([
+      '{"type":"system","subtype":"status","status":"compacting","session_id":"s1"}',
+      '{"type":"system","subtype":"status","status":"compacting","session_id":"s1"}',
+      '{"type":"system","subtype":"compact_boundary","session_id":"s1","compact_metadata":{"trigger":"auto","pre_tokens":161204}}',
+      '{"type":"system","subtype":"status","status":null,"session_id":"s1"}',
+    ], st, parseClaudeLine);
+    expect(evs).toEqual([
+      { type: "log", text: "Compacting context", data: { kind: "compaction", active: true } },
+      { type: "log", text: "Context compacted", data: { kind: "compaction", trigger: "auto", preTokens: 161204 } },
+    ]);
+    const cleared = feed([
+      '{"type":"system","subtype":"status","status":"compacting","session_id":"s1"}',
+      '{"type":"system","subtype":"status","status":null,"session_id":"s1"}',
+    ], st, parseClaudeLine);
+    expect(cleared).toEqual([
+      { type: "log", text: "Compacting context", data: { kind: "compaction", active: true } },
+      { type: "log", text: "Compacting context", data: { kind: "compaction", active: false } },
+    ]);
   });
   it("sees a resume that found no session as never started", () => {
     // Recorded from claude 2.1.316 with --resume <unknown id>.
@@ -206,6 +222,17 @@ describe("codex exec --json parser", () => {
     expect(evs[5]!.text).toBe("Proposed the first cut as chg_2.");
     expect(st.turnCompleted).toBe(true);
     expect(st.lastMessage).toBe("Proposed the first cut as chg_2.");
+  });
+  it("reports a compaction while it runs and once it completes", () => {
+    const st = newCodexState();
+    const evs = feed([
+      '{"type":"item.started","item":{"id":"c1","type":"contextCompaction"}}',
+      '{"type":"item.completed","item":{"id":"c1","type":"contextCompaction"}}',
+    ], st, parseCodexLine);
+    expect(evs).toEqual([
+      { type: "log", text: "Compacting context", data: { kind: "compaction", active: true } },
+      { type: "log", text: "Context compacted", data: { kind: "compaction" } },
+    ]);
   });
   it("handles questions, failed turns and bare errors", () => {
     const st = newCodexState();

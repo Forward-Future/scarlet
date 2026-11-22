@@ -222,11 +222,16 @@ export class MockClient implements ScarletApi {
     });
     return this.latency({ project, tasks });
   }
-  async resumeEditing(id: string): Promise<{ project: Project; tasks: Task[] }> {
+  async resumeEditing(id: string, choice?: RunChoice): Promise<{ project: Project; tasks: Task[] }> {
     this.requireAuth();
     const wasPaused = this.projectById(id).editingPaused;
     const project = this.setEditingPaused(id, false);
     const tasks = wasPaused ? this.db.tasks.filter(task => task.projectId === id && task.state === "queued" && task.resumesAfterProjectStop) : [];
+    if (choice?.agent) {
+      for (const task of tasks) {
+        this.updateTask(task, { agent: choice.agent, model: choice.model, effort: choice.effort, fast: choice.fast, serviceTier: choice.serviceTier });
+      }
+    }
     return this.latency({ project, tasks: tasks.map(task => ({ ...task })) });
   }
   private setEditingPaused(id: string, editingPaused: boolean): Project {
@@ -1272,7 +1277,7 @@ export class MockClient implements ScarletApi {
     void this.runTask(task, { description: task.context.message ?? task.instruction, noteIds: task.context.noteIds, supersedes: proposal,
       previewOnly: this.chatLayouts && task.resumeRootId === "task_running" });
   }
-  async answerTask(taskId: string, text: string, skillIds?: string[]): Promise<{ task: Task }> {
+  async answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice): Promise<{ task: Task }> {
     this.requireAuth();
     const task = this.db.tasks.find((t) => t.id === taskId);
     if (!task) throw notFound("Task");
@@ -1285,7 +1290,11 @@ export class MockClient implements ScarletApi {
     }
     this.pushEvent(task, "answer", text);
     // An answer given while editing is stopped waits in line for Continue.
-    this.updateTask(task, { state: "queued", question: null });
+    this.updateTask(task, {
+      state: "queued",
+      question: null,
+      ...(runWith?.agent && { agent: runWith.agent, model: runWith.model, effort: runWith.effort, fast: runWith.fast, serviceTier: runWith.serviceTier }),
+    });
     void (async () => {
       while (task.state === "queued" && this.projectById(task.projectId).editingPaused) await sleep(300);
       if (task.state !== "queued") return;

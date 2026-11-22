@@ -80,6 +80,14 @@ impl ExportDestination {
     }
 }
 
+struct LockFile(File);
+
+impl Drop for LockFile {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 impl ExportDestinations {
     /// Restore the destinations of exports that were in progress at the last quit, and remove what a killed save left behind.
     pub fn load(&self, file: PathBuf) {
@@ -186,12 +194,13 @@ impl ExportDestinations {
     }
 
     // Lock a separate file that stays put while the destinations record is atomically replaced.
-    fn lock(file: &Path) -> io::Result<File> {
+    // Unlock on drop so a subprocess started on another thread cannot keep the lock held until exec closes O_CLOEXEC descriptors.
+    fn lock(file: &Path) -> io::Result<LockFile> {
         let dir = file.parent().ok_or_else(|| io::Error::other("no folder"))?;
         fs::create_dir_all(dir)?;
         let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(file.with_extension("lock"))?;
         lock.lock()?;
-        Ok(lock)
+        Ok(LockFile(lock))
     }
 
     /// The record, or none when it can't be parsed: a crash cut it off mid-write, or it was damaged. The exports it
