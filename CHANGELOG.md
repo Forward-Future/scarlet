@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- Tell Scarlet how a name or word is spelled and it corrects it everywhere in your transcripts at once, so captions, search and later edits use the right spelling, even if a recording is transcribed again.
 - A voice request aimed at a moment on the timeline now carries any attached files or marked frame with it instead of leaving them in the message box.
 - Skipping a second ahead with Shift+→ while watching a pass's edits no longer marks a skipped cut or edit as kept.
 - Timeline thumbnails stay cached while a recording prepares instead of redrawing on every progress update.

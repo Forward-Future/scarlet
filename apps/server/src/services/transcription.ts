@@ -1,8 +1,8 @@
 import { statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { Task } from "@scarlet/shared";
-import { newId, type MediaAsset, type Transcript, type TranscriptSegment } from "@scarlet/timeline";
+import { applyWordFixes, type Task } from "@scarlet/shared";
+import { newId, TranscriptWordFix, type MediaAsset, type Transcript, type TranscriptSegment } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { conflict, notFound } from "../errors.js";
@@ -397,7 +397,10 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
         if (replacing) return null; // The previous completed transcript remains the readable one.
       }
       const savedAt = now();
-      const transcript: Transcript = { id, mediaId: asset.id, language, provider: provider.name, localModel: provider.localModel, modelLabel: model, segments,
+      // Spellings the editor corrected on the transcript this one replaces, or on this one while it was aligned, read the same.
+      const fixes = editorWordFixes(ctx, projectId, asset.id, id);
+      const transcript: Transcript = { id, mediaId: asset.id, language, provider: provider.name, localModel: provider.localModel, modelLabel: model,
+        segments: fixes ? applyWordFixes({ id, mediaId: asset.id, segments }, fixes).segments : segments, ...(fixes && { wordFixes: fixes }),
         createdAt: savedAt, ...(aligning ? { aligning: { through: aligning.through } } : alignable && !alignmentFailed && { alignment: alignmentVersion }) };
       ctx.repos.transcripts.put({ ...transcript, projectId });
       const current = ctx.repos.projects.getMedia(asset.id);
@@ -482,6 +485,20 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
       else await remove();
     }
   }
+}
+
+/**
+ * The fixes the editor made to a recording's words: on the transcript being written (fixed while it was aligned), else
+ * on the one it replaces. Applied to Whisper's words as each save writes them.
+ */
+function editorWordFixes(ctx: Ctx, projectId: string, mediaId: string, id: string): TranscriptWordFix[] | undefined {
+  const row = ctx.db.prepare(`SELECT json_extract(t.json, '$.wordFixes') AS fixes FROM transcripts t
+    WHERE t.project_id = ? AND t.media_id = ? AND json_extract(t.json, '$.wordFixes') IS NOT NULL
+      AND (t.id = ? OR t.id = (SELECT json_extract(m.json, '$.transcriptId') FROM media m WHERE m.id = ?))
+    ORDER BY t.id = ? DESC, t.created_at DESC LIMIT 1`).get(projectId, mediaId, id, mediaId, id) as { fixes: string } | undefined;
+  if (!row) return undefined;
+  const fixes = TranscriptWordFix.array().safeParse(JSON.parse(row.fixes));
+  return fixes.success && fixes.data.length ? fixes.data : undefined;
 }
 
 /** Stop waiting for word alignment on a recording's transcript: its times are as final as they will get. */

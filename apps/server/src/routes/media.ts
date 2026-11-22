@@ -26,6 +26,7 @@ import { framePriority, pictureDecoder, pictureLane } from "../services/pictureW
 import { previewPictures } from "../services/previewPictures.js";
 import { getWaveform, ingestMedia, readWaveformCache, removeUnreadableMedia, settleAlignment, startTranscription, transcriptionHeld, writeHashedFile } from "../services/ingest.js";
 import { realignTranscript } from "../services/realign.js";
+import { fixTranscriptWords } from "../services/transcriptFix.js";
 import { recordingSpeechActivity } from "../services/recordingAudio.js";
 import { jsonBody, numberParam, optionalNumberParam, requireMedia, requireProjectHeader } from "./util.js";
 import { editorFirst } from "../services/editorFirst.js";
@@ -261,6 +262,20 @@ export function mediaRoutes(ctx: Ctx) {
     requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), project.id);
     requireAudio(media);
     return c.json(await ctx.track(realignTranscript(ctx, project.id, media.id, ctx.projectSignal(project.id)), project.id));
+  });
+
+  // Correct a word or phrase in the project's transcripts, keeping word times. The fix stays with each transcript.
+  r.post("/projects/:id/transcripts/fix", async (c) => {
+    const body = await jsonBody(c, z.object({
+      find: z.string().trim().min(1).max(200),
+      replace: z.string().trim().min(1).max(200),
+      mediaIds: z.array(z.string()).min(1).max(100).optional(),
+      from: z.number().min(0).optional(),
+      to: z.number().min(0).optional(),
+    }));
+    const project = requireProjectHeader(ctx, c.req.param("id"));
+    requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), project.id);
+    return c.json(fixTranscriptWords(ctx, project.id, body));
   });
 
   r.post("/projects/:id/media/:mediaId/prepare", async (c) => {
