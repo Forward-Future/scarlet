@@ -67,9 +67,11 @@ interface ComposerProps {
   pausedAt?: PausedAt;
   /**
    * Where the cut a call's tag names ("Cut 3") is in the video. The tag's line says it after the tag, with where the
-   * playhead is now: "at 2:47 · Playhead 2:57".
+   * playhead is now: "at 2:47.200 · Playhead 2:57.400".
    */
   aimTime?: number;
+  /** Exact time for a time-based target tag ("Cut at 2:05", "Edit at 0:11"), shown to the millisecond above the box. */
+  targetTime?: number;
   /**
    * The request Scarlet is working on that the message is a note to ("Add a note" on its working line). The tag says
    * Note, and the words reach that run on its next call. A request that has finished meanwhile takes them as a new edit.
@@ -77,7 +79,7 @@ interface ComposerProps {
   noteTo?: string;
   selectedEdit?: AgentContext; onClearSelectedEdit?(): void; thread?: Thread; onCreated?(task: Task): void; onSent?(): void; modelPicker?: boolean }
 
-function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, noteTo }: ComposerProps & { project: Project }) {
+function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime, noteTo }: ComposerProps & { project: Project }) {
   const media = useProjectStore(s => s.current?.media);
   const createTask = useProjectStore((s) => s.createTask);
   const createNote = useProjectStore((s) => s.createNote);
@@ -388,7 +390,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const tag = rewording ? undefined : targetTag;
   // A stretch marked on the timeline's ruler rides with the message, beside the tag of the cut or edit it is aimed at.
   const marked = rewording ? undefined : markedRangeOf(context);
-  const markedWords = marked ? clockRange(marked.start, marked.end) : "";
+  const markedWords = marked ? `${playbackClock(marked.start)} – ${playbackClock(marked.end)}` : "";
   // "Answer", "Reply" and "Note" name who the message goes to. The target label shows the place it is about.
   const wordTag = tag === "Answer" || tag === "Reply" || (tag === "Note" && noteTo) ? tag : undefined;
   const placeTag = wordTag ? undefined : tag;
@@ -399,10 +401,24 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   // Paused with a cut or an edit open, the tag shows the one time the editor is looking at: where they stopped. Its full
   // name still says which cut or edit the message goes to.
   // A call's tag keeps its number: the playhead's time is beside it already.
-  const stopped = replying && !targetIsPoint && pausedAt && aimTime === undefined ? clock(pausedAt.time) : undefined;
+  const stopped = replying && !targetIsPoint && pausedAt && aimTime === undefined ? playbackClock(pausedAt.time) : undefined;
+  const exactTime = targetTime !== undefined ? targetTime
+    : displayAnchor && placeTag && (placeTag.endsWith(` at ${clock(displayAnchor.time)}`) || placeTag === `At ${clock(displayAnchor.time)}`)
+      ? displayAnchor.time : undefined;
+  const placeDisplay = (() => {
+    if (stopped) return stopped;
+    if (!placeTag) return undefined;
+    const stripped = placeTag.replace(/^(?:(?:Cut|Edit) at|At) /, "");
+    if (exactTime === undefined) return stripped;
+    const whole = clock(exactTime);
+    const full = playbackClock(exactTime);
+    if (stripped === whole) return full;
+    if (stripped.endsWith(` at ${whole}`)) return `${stripped.slice(0, -whole.length)}${full}`;
+    return stripped;
+  })();
   const aimItems: AimItem[] = [
     ...placeTag ? [{ key: `target:${placeTag}`, name: targetIsPoint ? placeTag.replace(/^At /, "") : stopped ? `${placeTag}, stopped at ${stopped}` : placeTag,
-      displayName: stopped ?? placeTag.replace(/^(?:(?:Cut|Edit) at|At) /, ""),
+      displayName: placeDisplay,
       clearLabel: targetIsPoint ? `Take “${placeTag}” off: the message is about the whole video` : `Start a new edit instead of ${tagAct!.charAt(0).toLowerCase()}${tagAct!.slice(1)}`,
       onClear: takeOffTarget }] : [],
     ...marked ? [{ key: `range:${marked.start}/${marked.end}`, name: `Range ${markedWords}`,
@@ -446,7 +462,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       {primaryAim && <div className="composer-aim-line">
         <ComposerAim items={[primaryAim, ...additionalAims]} disabled={recording || heard} disabledReason="Waits until what you’re saying is sent" />
         {/* A call's tag is its number, so the line says where its cut is and where the playhead is now. */}
-        {aimTime !== undefined && placeTag && <span className="composer-aim-when">at {clock(aimTime)} · <PlayheadClock /></span>}
+        {aimTime !== undefined && placeTag && <span className="composer-aim-when">at {playbackClock(aimTime)} · <PlayheadClock /></span>}
       </div>}
       {(attached.length > 0 || markedFrame) && <AttachedFiles files={attached} onRemove={key => { detach(project.id, key); inputRef.current?.focus(); }}
         marked={markedFrame} onOpenMarked={frame => {

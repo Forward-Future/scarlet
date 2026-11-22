@@ -727,10 +727,10 @@ it("says where a call's cut is and where the playhead is after its numbered tag"
   await show({ thread: ready, targetTag: "Cut 3", aimTime: 167.2, pausedAt: { time: 177.4, version: "ver_before" } });
   // The tag keeps the call's number, paused or not: the playhead's time is beside it.
   expect(aimName()?.textContent).toBe("Cut 3");
-  expect(container.querySelector(".composer-aim-when")?.textContent).toBe("at 2:47 · Playhead 2:57");
-  // The playhead's clock follows the player, a second at a time.
+  expect(container.querySelector(".composer-aim-when")?.textContent).toBe("at 2:47.200 · Playhead 2:57.400");
+  // The playhead's clock follows the player to the millisecond.
   await act(async () => usePlayerStore.setState({ time: 181.9 }));
-  expect(container.querySelector(".composer-aim-when")?.textContent).toBe("at 2:47 · Playhead 3:01");
+  expect(container.querySelector(".composer-aim-when")?.textContent).toBe("at 2:47.200 · Playhead 3:01.900");
   usePlayerStore.setState({ time: 0 });
 });
 
@@ -739,8 +739,8 @@ it("shows where the editor paused in an open cut's tag, and sends the message to
   useUiStore.getState().setAgentContext({ changeId: ready.latest!.id, cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "Cut at 0:02" });
   await show({ thread: ready, targetTag: "Cut at 0:02", pausedAt: { time: 37.12, version: "ver_before" } });
   // One time in the box: where the video stopped. The tag's full name still says which cut the message goes to.
-  expect(aimName()?.textContent).toBe("0:37");
-  expect(aimName()?.title).toBe("About Cut at 0:02, stopped at 0:37");
+  expect(aimName()?.textContent).toBe("0:37.120");
+  expect(aimName()?.title).toBe("About Cut at 0:02, stopped at 0:37.120");
   expect(container.querySelector("textarea")!.value).toBe("");
   await type("trim more here");
   await submit();
@@ -752,7 +752,7 @@ it("names the open cut by its own time and sends no stopped frame without a paus
   const ready = buildThreads(current).find(t => t.needs === "decision")!;
   useUiStore.getState().setAgentContext({ changeId: ready.latest!.id, cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "Cut at 0:02" });
   await show({ thread: ready, targetTag: "Cut at 0:02" });
-  expect(aimName()?.textContent).toBe("0:02");
+  expect(aimName()?.textContent).toBe("0:02.300");
   await type("trim more");
   await submit();
   expect(vi.mocked(useProjectStore.getState().revise).mock.calls[0]![1].position).not.toHaveProperty("messageTime");
@@ -1022,17 +1022,17 @@ const aimField = () => container.querySelector<HTMLTextAreaElement>(".composer-m
 const clickAim = () => act(async () => aimButton()!.click());
 const aimClear = (label: string) => container.querySelector<HTMLButtonElement>(`.composer-aim-clear[aria-label="${label}"]`);
 const clearCut = "Start a new edit instead of revising cut at 2:05";
-const clearRange = "Take the marked range 0:42 – 0:51 off the message";
+const clearRange = "Take the marked range 0:42.000 – 0:51.500 off the message";
 
 it("names and clears the cut beside the draft", async () => {
   await show();
   expect(aimName()).toBeNull();
   const onClearTarget = vi.fn();
-  await show({ targetTag: "Cut at 2:05", onClearTarget });
+  await show({ targetTag: "Cut at 2:05", targetTime: 125.342, onClearTarget });
   // Where the message goes is a line of its own on top of the box, so the box keeps its width for the words.
   expect(container.querySelector(".composer-aim-line")?.nextElementSibling?.classList.contains("composer-box")).toBe(true);
   expect(container.querySelector(".composer-row .composer-aim")).toBeNull();
-  expect(aimName()?.textContent).toBe("2:05");
+  expect(aimName()?.textContent).toBe("2:05.342");
   expect(aimName()?.title).toBe("About Cut at 2:05");
   expect(aimButton()).toBeNull();
   expect(aimCard()).toBeNull();
@@ -1050,19 +1050,19 @@ it("clears a marked stretch independently of the cut the message is about", asyn
   const cut: AgentContext = { changeId: "chg_1", cutIndex: 0, version: "v1", time: 125, end: 127, clipIds: [], label: "Cut at 2:05" };
   await act(async () => useUiStore.getState().setAgentContext({ ...cut, markedRange: { start: 42, end: 51.5, version: "v2" } }));
   await show({ targetTag: "Cut at 2:05" });
-  expect(aimName()?.textContent).toBe("2:05");
+  expect(aimName()?.textContent).toBe("2:05.000");
   expect(aimButton()?.textContent).toContain("+1");
-  expect(aimButton()?.getAttribute("aria-label")).toBe("Show Range 0:42 – 0:51");
+  expect(aimButton()?.getAttribute("aria-label")).toBe("Show Range 0:42.000 – 0:51.500");
   await clickAim();
-  expect(aimRowLabel("Range 0:42 – 0:51")?.textContent).toBe("0:42–0:51");
-  expect(aimRowLabel("Range 0:42 – 0:51")?.getAttribute("title")).toBe("Range 0:42 – 0:51");
+  expect(aimRowLabel("Range 0:42.000 – 0:51.500")?.textContent).toBe("0:42.000–0:51.500");
+  expect(aimRowLabel("Range 0:42.000 – 0:51.500")?.getAttribute("title")).toBe("Range 0:42.000 – 0:51.500");
   expect(aimRowLabel("Cut at 2:05")).toBeNull();
   expect(aimClear(clearCut)).not.toBeNull();
   expect(aimClear(clearCut)?.closest(".composer-aim-card")).toBeNull();
   expect(aimCard()?.querySelector(`[aria-label="${clearCut}"]`)).toBeNull();
   await act(async () => aimClear(clearRange)!.click());
   expect(useUiStore.getState().agentContext).toEqual(cut);
-  expect(aimName()?.textContent).toBe("2:05");
+  expect(aimName()?.textContent).toBe("2:05.000");
   expect(aimName()?.title).toBe("About Cut at 2:05");
   expect(aimButton()).toBeNull();
   expect(aimCard()).toBeNull();
@@ -1070,8 +1070,8 @@ it("clears a marked stretch independently of the cut the message is about", asyn
   // Taking the only target off leaves a new edit about the whole video.
   await act(async () => useUiStore.getState().setAgentContext({ time: 42, end: 51.5, clipIds: [], markedRange: { start: 42, end: 51.5 } }));
   await show();
-  expect(aimName()?.textContent).toBe("0:42–0:51");
-  expect(aimName()?.title).toBe("About Range 0:42 – 0:51");
+  expect(aimName()?.textContent).toBe("0:42.000–0:51.500");
+  expect(aimName()?.title).toBe("About Range 0:42.000 – 0:51.500");
   expect(aimButton()).toBeNull();
   await act(async () => aimClear(clearRange)!.click());
   expect(useUiStore.getState().agentContext).toBeNull();
@@ -1079,10 +1079,12 @@ it("clears a marked stretch independently of the cut the message is about", asyn
 });
 
 it.each([
-  ["Cut 2", "Cut 2"],
-  ["Edit at 0:11", "0:11"],
-])("labels %s beside the draft as %s", async (targetTag, displayName) => {
-  await show({ targetTag });
+  ["Cut 2", undefined, "Cut 2"],
+  ["Edit at 0:11", undefined, "0:11"],
+  ["Edit at 0:11", 11.25, "0:11.250"],
+  ["3 edits at 2:40", 160.342, "3 edits at 2:40.342"],
+])("labels %s (time %s) beside the draft as %s", async (targetTag, targetTime, displayName) => {
+  await show({ targetTag, targetTime });
   expect(aimName()?.textContent).toBe(displayName);
   expect(aimName()?.title).toBe(`About ${targetTag}`);
   expect(aimClear(`Start a new edit instead of revising ${targetTag.toLowerCase()}`)).not.toBeNull();
