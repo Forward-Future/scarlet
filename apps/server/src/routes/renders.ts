@@ -108,7 +108,7 @@ export function renderRoutes(ctx: Ctx) {
     const { revision } = ctx.db.prepare("SELECT total_changes() || ':' || data_version AS revision FROM pragma_data_version").get() as { revision: string };
     if (sampledProject?.project.id === id && sampledProject.revision === revision) return sampledProject;
     const project = requireProject(ctx, id);
-    const inputs = createHash("sha256").update(JSON.stringify([project.settings, project.media])).digest("hex");
+    const inputs = createHash("sha256").update(JSON.stringify([project.settings, project.media.map(({ preparation: _p, ...asset }) => asset)])).digest("hex");
     const paths = new Map(project.media.map(asset => [asset.id, resolve(ctx.paths.media(id), asset.path)]));
     return sampledProject = { revision, project, inputs, paths };
   }
