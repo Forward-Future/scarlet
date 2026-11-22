@@ -57,14 +57,15 @@ function said(sentence: string | undefined, words: string) {
 /**
  * Where an edit sits on the timeline, drawn for what it did. A removal has no frames left, so a line marks its join.
  * Footage put back reads as added. Anything else keeps its footage, so After plays it: it's outlined and named, never
- * hatched like removed footage.
+ * hatched like removed footage. `name` names a moment's band for all of its edits.
  */
-export function editFocus(edit: ThreadEdit, duration: number): ProgressFocus | undefined {
+export function editFocus(edit: ThreadEdit, duration: number, name?: string): ProgressFocus | undefined {
   const word = editKindWord(edit);
   // A marker at a point took nothing out, so it isn't drawn or named as a cut.
   if (edit.at !== undefined) return focusAround({ start: edit.at, end: edit.at }, duration, word ?? (edit.marker ? undefined : "Cut"),
     edit.marker ? { tone: "kept" } : undefined);
   const restored = edit.kind === "restore";
-  return focusAround(edit.range, duration, restored ? `Added · ${lengthLabel(edit.range.end - edit.range.start)}` : word,
+  // A moment is named as its card is ("2 edits"), and an assembly or a mix as its row is ("Edit"): a band is never blank.
+  return focusAround(edit.range, duration, restored ? `Added · ${lengthLabel(edit.range.end - edit.range.start)}` : name ?? editRowWord(edit),
     { tone: restored ? "added" : "kept" });
 }

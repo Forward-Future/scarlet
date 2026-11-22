@@ -2748,7 +2748,9 @@ export function SimpleWorkspace() {
     // A doubt Scarlet left is the passage it asks the editor to look at or hear: amber, as what waits on them is.
     : reviewRange ? focusAround(reviewRange, cutDuration ?? 0, "Check", { tone: "check" })
     // A moment is drawn across all of its edits, as it plays.
-    : shownEdit ? editFocus(threadTimeline.selectedMoment ? { ...shownEdit, range: momentRange(threadTimeline.selectedMoment) } : shownEdit, cutDuration ?? 0) : undefined;
+    : shownEdit ? threadTimeline.selectedMoment
+      ? editFocus({ ...shownEdit, range: momentRange(threadTimeline.selectedMoment) }, cutDuration ?? 0, `${threadTimeline.selectedMoment.edits.length} edits`)
+      : editFocus(shownEdit, cutDuration ?? 0) : undefined;
   const playerView = suggestion || appliedCut ? undefined : !listening && focusThread && !source ? threadTimeline : undefined;
   // Each applied edit's dot names it, says where it sits and how long it runs, and quotes the change it came from.
   const editDot = (thread: Thread, e: ThreadEdit, title: string, at: number): TimelineDot => {

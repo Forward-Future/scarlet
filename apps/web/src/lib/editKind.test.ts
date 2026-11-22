@@ -10,6 +10,13 @@ describe("drawing an applied edit on the timeline", () => {
     expect(editFocus(edit({ kind: "zoom", range: { start: 40, end: 44 } }), 3000)).toMatchObject({ bandLabel: "Zoom", tone: "kept" });
   });
 
+  it("never leaves a band blank: a mix is named as its row is, a moment as its card is", () => {
+    expect(editFocus(edit({ kind: "other" }), 3000)).toMatchObject({ bandLabel: "Edit", tone: "kept" });
+    expect(editFocus(edit({}), 3000)).toMatchObject({ bandLabel: "Edit" });
+    expect(editFocus(edit({ kind: "other", marker: true }), 3000)).toMatchObject({ bandLabel: "To do" });
+    expect(editFocus(edit({ kind: "other" }), 3000, "2 edits")).toMatchObject({ bandLabel: "2 edits" });
+  });
+
   it("marks footage put back as added, with how much", () => {
     expect(editFocus(edit({ kind: "restore", range: { start: 555.4, end: 556.6 } }), 3000))
       .toMatchObject({ bandLabel: "Added · 1.2 s", tone: "added" });
