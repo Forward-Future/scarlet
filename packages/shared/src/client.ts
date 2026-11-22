@@ -773,6 +773,9 @@ export class ScarletClient {
   hosts() {
     return this.get<{ hosts: AgentHost[] }>("/hosts");
   }
+  refreshHostQuota(force = false) {
+    return this.post<{ ok: boolean }>("/hosts/quota/refresh", { force });
+  }
 
   // Graphics
   /** Draw a graphic from a page: `options` (GraphicRenderRequest), the page as `html`, and the files it links to as `asset`s. */

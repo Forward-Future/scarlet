@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
-import type { AgentId, ModelOptions } from "@scarlet/shared";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
+import type { AgentEffort, AgentId, ModelOptions } from "@scarlet/shared";
 import type { OnlineAgent } from "./hosts";
 
 export interface ModelChoice {
@@ -11,6 +11,15 @@ export interface ModelChoice {
   label: string;
   defaultEffort?: string;
   profiles: ModelOptions[];
+}
+
+export interface ModelTuning {
+  effort?: AgentEffort;
+  serviceTier?: string;
+}
+
+export function modelKey(agent: AgentId, model?: string): string {
+  return `${agent}:${model ?? ""}`;
 }
 
 export function modelChoices(agents: OnlineAgent[]): ModelChoice[] {
@@ -24,7 +33,7 @@ export function modelChoices(agents: OnlineAgent[]): ModelChoice[] {
       const profiles = agent.modelOptions[model ?? ""] ?? [];
       const defaultEffort = profiles[0]?.defaultEffort;
       return {
-        key: `${agent.id}:${model ?? ""}`,
+        key: modelKey(agent.id, model),
         agent: agent.id,
         model,
         name,
@@ -36,17 +45,33 @@ export function modelChoices(agents: OnlineAgent[]): ModelChoice[] {
   });
 }
 
+const safeStorage: StateStorage = {
+  getItem: (name) => {
+    try { return globalThis.localStorage?.getItem(name) ?? null; } catch { return null; }
+  },
+  setItem: (name, value) => {
+    try { globalThis.localStorage?.setItem(name, value); } catch { /* WebView storage may be full or unavailable */ }
+  },
+  removeItem: (name) => {
+    try { globalThis.localStorage?.removeItem(name); } catch { /* ignore */ }
+  },
+};
+
 interface ModelPreferences {
   hidden: string[];
   favorites: string[];
+  /** Last remembered effort & speed per model key (`${agent}:${model ?? ""}`). */
+  tuningByModel: Record<string, ModelTuning>;
   setVisible(keys: string[], visible: boolean): void;
   toggleFavorite(key: string): void;
+  setModelTuning(key: string, tuning: ModelTuning): void;
 }
 
 /** Local to this editor's profile. Newly discovered models are visible by default. */
 export const useModelPreferences = create<ModelPreferences>()(persist((set) => ({
   hidden: [],
   favorites: [],
+  tuningByModel: {},
   setVisible: (keys, visible) => set((state) => ({
     hidden: visible ? state.hidden.filter((k) => !keys.includes(k)) : [...new Set([...state.hidden, ...keys])],
     favorites: visible ? state.favorites : state.favorites.filter((k) => !keys.includes(k)),
@@ -55,7 +80,13 @@ export const useModelPreferences = create<ModelPreferences>()(persist((set) => (
     favorites: state.favorites.includes(key) ? state.favorites.filter((k) => k !== key) : [...state.favorites, key],
     hidden: state.hidden.filter((k) => k !== key),
   })),
-}), { name: "scarlet.modelPicker.v1" }));
+  setModelTuning: (key, tuning) => set((state) => {
+    const clean: ModelTuning = {};
+    if (tuning.effort) clean.effort = tuning.effort;
+    if (tuning.serviceTier) clean.serviceTier = tuning.serviceTier;
+    return { tuningByModel: { ...state.tuningByModel, [key]: clean } };
+  }),
+}), { name: "scarlet.modelPicker.v1", storage: createJSONStorage(() => safeStorage) }));
 
 export function selectVisibleModel(choices: ModelChoice[], pick: { agent: AgentId; model?: string }, agents: OnlineAgent[]) {
   const forAgent = choices.filter((m) => m.agent === pick.agent);

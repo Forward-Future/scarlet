@@ -10,6 +10,7 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { apiKeyVars, stripVars } from "../detect.js";
+import { parseCodexQuota } from "../quota.js";
 import { privateDirectory, writePrivateFile } from "../private-files.js";
 import { briefInput, COMPACTED, DEFAULT_STALL_MS, isQuestionTool, planEvent, questionText, workspaceEnv, type CodexFallbackReason, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
 import { earlyResult, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
@@ -528,6 +529,11 @@ async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin
           return;
         }
         const params = object(message.params);
+        if (method === "account/rateLimits/updated" && params) {
+          const quota = parseCodexQuota(params);
+          if (quota) opts.onQuota?.(quota);
+          return;
+        }
         if (!turnRequested || !params || params.threadId !== threadId) return;
         // A notification can be queued before the turn/start response confirms which turn is ours.
         if (pending === 3) pendingEvents.push([method, params]);

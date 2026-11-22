@@ -44,7 +44,7 @@ use crate::engine::EngineLaunch;
 use crate::util::{child_env, human_duration, now_iso};
 use api::Api;
 use runner::{run_agent, RunOptions};
-use types::{AgentAvailability, CompleteTaskRequest, McpSpec, RunResult, RunnerEvent, Task, TaskEvent, CLI_AGENTS};
+use types::{AgentAvailability, CompleteTaskRequest, McpSpec, RunResult, RunnerEvent, SubscriptionQuota, Task, TaskEvent, CLI_AGENTS};
 
 /// The folder under the work folder that holds one folder for each run.
 const TASKS_DIR: &str = "tasks-v2";
@@ -52,9 +52,20 @@ const TASKS_DIR: &str = "tasks-v2";
 /// Finished task folders keep their artifacts this long.
 const TASK_DIR_DAYS: u64 = 14;
 
+/// How long cached subscription quota stays fresh before a non-forced refresh re-probes.
+const QUOTA_TTL: Duration = Duration::from_secs(60);
+
 /// How long the host waits before each new try at a model list it could not read at launch: 30 seconds after it
 /// registers, then 1, 2 and 5 minutes on.
 const CATALOG_RETRY_WAITS: [Duration; 4] = [Duration::from_secs(30), Duration::from_secs(60), Duration::from_secs(120), Duration::from_secs(300)];
+
+/// Subscriptions only: omit quota when a provider is signed in via API key or not signed in.
+fn is_quota_eligible(agent: &AgentAvailability) -> bool {
+    CLI_AGENTS.contains(&agent.id.as_str())
+        && agent.installed
+        && agent.logged_in != Some(false)
+        && agent.auth.as_deref() != Some("api_key")
+}
 
 /// How to launch the Scarlet MCP stdio server: `<program> <prefix…> mcp --server … --project …`.
 #[derive(Debug, Clone)]
@@ -83,6 +94,8 @@ impl McpLauncher {
         struct Catalog {
             models: Vec<String>,
             model: Option<String>,
+            #[serde(default)]
+            plan: Option<String>,
             model_labels: BTreeMap<String, String>,
             model_options: BTreeMap<String, Value>,
         }
@@ -127,9 +140,34 @@ impl McpLauncher {
                 if let Some(ref o) = default_opts { catalog.model_options.entry(m.clone()).or_insert_with(|| o.clone()); }
             }
             if let Some(a) = agents.iter_mut().find(|a| a.id == id) {
+                if a.plan.is_none() {
+                    a.plan = catalog.plan;
+                }
                 take_catalog(a, catalog.model, catalog.model_options, Some(catalog.models), catalog.model_labels);
             }
         }
+    }
+
+    /// Query zero-token subscription quota for eligible providers via the engine CLI.
+    async fn load_quotas(&self, agents: &[AgentAvailability], env: &HashMap<String, String>) -> Vec<(String, SubscriptionQuota)> {
+        let probes = agents.iter().filter(|a| is_quota_eligible(a)).map(|a| async move {
+            let file = spawn::find_on_path(detect::cli_binary(&a.id), env)?;
+            let mut args = self.prefix_args.clone();
+            args.extend(["subscription-quota".into(), a.id.clone(), file]);
+            let probe_env = detect::runner_env(&a.id, std::slice::from_ref(a), env);
+            let result = spawn::exec_capture(&self.program, &args, &probe_env, Duration::from_secs(18)).await;
+            if result.code != Some(0) {
+                log::debug!("[host] subscription-quota provider={} code={:?}", a.id, result.code);
+                return None;
+            }
+            let trimmed = result.stdout.trim();
+            if trimmed.is_empty() || trimmed == "null" {
+                return None;
+            }
+            let quota = serde_json::from_str::<SubscriptionQuota>(trimmed).ok()?;
+            Some((a.id.clone(), quota))
+        });
+        futures_util::future::join_all(probes).await.into_iter().flatten().collect()
     }
 
     /// Build the per-task MCP spec written into the CLI's MCP config.
@@ -422,6 +460,8 @@ pub struct HostRuntime {
     engine_lost: AtomicBool,
     agents: RwLock<Vec<AgentAvailability>>,
     detecting: Mutex<()>,
+    quota_refreshing: Mutex<()>,
+    last_quota_at: StdMutex<Option<std::time::Instant>>,
     running: RunningTasks,
     host_id: StdMutex<Option<String>>,
     connected: AtomicBool,
@@ -493,18 +533,112 @@ impl HostRuntime {
         log::info!("assistants: {}", describe_agents(&found));
         let mut agents = self.agents.write().await;
         let mut failed = Vec::new();
-        for agent in found.iter_mut().filter(|a| lacks_models(a)) {
-            // A successful empty list replaces the old one. A failed probe keeps the last catalog the editor could use.
-            if let Some(old) = agents.iter().find(|a| a.id == agent.id && a.models.is_some()) {
-                take_catalog(agent, old.model.clone(), old.model_options.clone(), old.models.clone(), old.model_labels.clone());
+        for agent in found.iter_mut() {
+            if is_quota_eligible(agent) {
+                if let Some(old) = agents.iter().find(|a| a.id == agent.id) {
+                    agent.quota = old.quota.clone();
+                    if agent.plan.is_none() {
+                        agent.plan = old.plan.clone();
+                    }
+                }
+            } else {
+                agent.quota = None;
             }
-            failed.push(match agent.id.as_str() {
-                "claude" => "Claude Code", "codex" => "Codex", "gemini" => "Gemini", id => id,
-            });
+            if lacks_models(agent) {
+                // A successful empty list replaces the old one. A failed probe keeps the last catalog the editor could use.
+                if let Some(old) = agents.iter().find(|a| a.id == agent.id && a.models.is_some()) {
+                    take_catalog(agent, old.model.clone(), old.model_options.clone(), old.models.clone(), old.model_labels.clone());
+                }
+                failed.push(match agent.id.as_str() {
+                    "claude" => "Claude Code", "codex" => "Codex", "gemini" => "Gemini", id => id,
+                });
+            }
         }
         let error = (!failed.is_empty()).then(|| format!("Couldn't refresh models for {}. Try again.", failed.join(", ")));
         *agents = found;
         error
+    }
+
+    /// Probe subscription quota for eligible providers (cached with a 60 s TTL unless `force` is true).
+    async fn refresh_quota(&self, force: bool, only: Option<&[&str]>) -> HostStatus {
+        let _refreshing = self.quota_refreshing.lock().await;
+        if self.cancel.is_cancelled() {
+            return self.full_status().await;
+        }
+        let current = self.agents.read().await.clone();
+        let targets: Vec<AgentAvailability> = current
+            .iter()
+            .filter(|a| is_quota_eligible(a) && only.is_none_or(|ids| ids.contains(&a.id.as_str())))
+            .cloned()
+            .collect();
+        if !force && only.is_none() {
+            let fresh = self.last_quota_at.lock().unwrap().is_some_and(|at| at.elapsed() < QUOTA_TTL);
+            let all_loaded = targets.iter().all(|a| a.quota.is_some());
+            if fresh && all_loaded {
+                return self.full_status().await;
+            }
+        }
+        if targets.is_empty() {
+            return self.full_status().await;
+        }
+        let env = child_env(&self.paths.home);
+        let results = self.mcp.load_quotas(&targets, &env).await;
+        if self.cancel.is_cancelled() {
+            return self.full_status().await;
+        }
+        let mut changed = false;
+        {
+            let mut agents = self.agents.write().await;
+            for agent in agents.iter_mut() {
+                if !is_quota_eligible(agent) {
+                    if agent.quota.take().is_some() {
+                        changed = true;
+                    }
+                    continue;
+                }
+                if let Some((_, quota)) = results.iter().find(|(id, _)| id == &agent.id) {
+                    if agent.plan.is_none() {
+                        agent.plan = quota.plan.clone();
+                    }
+                    agent.quota = Some(quota.clone());
+                    changed = true;
+                }
+            }
+        }
+        if only.is_none() {
+            *self.last_quota_at.lock().unwrap() = Some(std::time::Instant::now());
+        }
+        if changed {
+            self.heartbeat().await;
+            self.emit_status();
+        }
+        self.full_status().await
+    }
+
+    /// Apply a live quota update streamed during an active run (e.g. Codex `account/rateLimits/updated`).
+    fn apply_live_quota(self: &Arc<Self>, agent_id: &str, quota: SubscriptionQuota) {
+        let me = self.clone();
+        let id = agent_id.to_string();
+        tauri::async_runtime::spawn(async move {
+            if me.cancel.is_cancelled() {
+                return;
+            }
+            let updated = {
+                let mut agents = me.agents.write().await;
+                let Some(agent) = agents.iter_mut().find(|a| a.id == id && is_quota_eligible(a)) else {
+                    return;
+                };
+                if agent.plan.is_none() {
+                    agent.plan = quota.plan.clone();
+                }
+                agent.quota = Some(quota);
+                true
+            };
+            if updated {
+                me.heartbeat().await;
+                me.emit_status();
+            }
+        });
     }
 
     // -- registration & heartbeat -------------------------------------------
@@ -664,6 +798,12 @@ impl HostRuntime {
                                             if kind == Some("project.subscribed") {
                                                 // The subscription is live. Recover any cancellation that preceded it.
                                                 self.heartbeat().await;
+                                            } else if kind == Some("host.quota_refresh") {
+                                                let force = v.get("force").and_then(Value::as_bool).unwrap_or(false);
+                                                let me = self.clone();
+                                                tauri::async_runtime::spawn(async move {
+                                                    let _ = me.refresh_quota(force, None).await;
+                                                });
                                             } else if kind == Some("task.updated") {
                                                 let task = v.get("task");
                                                 let state = task.and_then(|t| t.get("state")).and_then(Value::as_str);
@@ -789,7 +929,13 @@ impl HostRuntime {
         let me = self.clone();
         tauri::async_runtime::spawn(async move {
             let id = task.id.clone();
-            me.run_task_attempt(task, cancel, Some(run.clone())).await;
+            let agent = task.agent.clone();
+            let live_host = me.clone();
+            let live_agent = agent.clone();
+            let on_quota: runner::QuotaSink = Arc::new(move |quota| {
+                live_host.apply_live_quota(&live_agent, quota);
+            });
+            me.run_task_attempt(task, cancel, Some(run.clone()), Some(on_quota)).await;
             // An immediate editor answer can launch the next claim before this run has returned.
             {
                 let mut running = me.running.lock().unwrap();
@@ -800,6 +946,12 @@ impl HostRuntime {
             me.subscriptions_changed.notify_one();
             me.wake.notify_one();
             me.emit_status();
+            if !me.cancel.is_cancelled() {
+                let bg = me.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = bg.refresh_quota(true, Some(&[agent.as_str()])).await;
+                });
+            }
         });
     }
 
@@ -996,10 +1148,10 @@ impl HostRuntime {
     }
 
     pub async fn run_task(&self, task: Task, cancel: CancellationToken) {
-        self.run_task_attempt(task, cancel, None).await
+        self.run_task_attempt(task, cancel, None, None).await
     }
 
-    async fn run_task_attempt(&self, task: Task, cancel: CancellationToken, run: Option<Arc<RunningTask>>) {
+    async fn run_task_attempt(&self, task: Task, cancel: CancellationToken, run: Option<Arc<RunningTask>>, on_quota: Option<runner::QuotaSink>) {
         log::info!(
             "task {} ({}, {}{})",
             task.id,
@@ -1046,6 +1198,7 @@ impl HostRuntime {
             mcp: p.mcp,
             on_event: sink.clone(),
             on_usage: Some(live.sink()),
+            on_quota: on_quota.clone(),
             cancel: cancel.clone(),
             timeout: self.timeout,
             stall: self.stall,
@@ -1158,6 +1311,12 @@ impl HostRuntime {
         tauri::async_runtime::spawn(self.clone().heartbeat_loop());
         tauri::async_runtime::spawn(self.clone().ws_loop());
         tauri::async_runtime::spawn(self.clone().catalog_loop(&CATALOG_RETRY_WAITS));
+        {
+            let bg = self.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = bg.refresh_quota(false, None).await;
+            });
+        }
         self.clone().claim_loop().await;
     }
 
@@ -1352,6 +1511,8 @@ impl HostManager {
             engine_lost: AtomicBool::new(false),
             agents: RwLock::new(Vec::new()),
             detecting: Mutex::new(()),
+            quota_refreshing: Mutex::new(()),
+            last_quota_at: StdMutex::new(None),
             running: StdMutex::new(HashMap::new()),
             host_id: StdMutex::new(None),
             connected: AtomicBool::new(false),
@@ -1414,6 +1575,10 @@ impl HostManager {
                 rt.heartbeat().await;
                 rt.wake.notify_one();
                 rt.emit_status();
+                let bg = rt.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = bg.refresh_quota(true, None).await;
+                });
                 let mut status = rt.full_status().await;
                 status.error = status.error.or(catalog_error);
                 status
@@ -1430,6 +1595,15 @@ impl HostManager {
             status.error = Some("The local agent host is offline. Try again when it connects.".into());
         }
         status
+    }
+
+    /// Refresh subscription quota for eligible providers (non-blocking cache unless `force` is true).
+    pub async fn refresh_quota(&self, force: bool) -> HostStatus {
+        let rt = self.runtime.lock().await.clone();
+        match rt {
+            Some(rt) => rt.refresh_quota(force, None).await,
+            None => self.status().await,
+        }
     }
 }
 
@@ -1487,6 +1661,8 @@ mod tests {
             engine_lost: AtomicBool::new(false),
             agents: RwLock::new(Vec::new()),
             detecting: Mutex::new(()),
+            quota_refreshing: Mutex::new(()),
+            last_quota_at: StdMutex::new(None),
             running: StdMutex::new(HashMap::new()),
             host_id: StdMutex::new(Some("host_1".into())),
             connected: AtomicBool::new(false),

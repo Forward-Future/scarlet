@@ -106,6 +106,10 @@ impl Session {
                 return Ok(false);
             }
             let params = &message["params"];
+            if method == "account/rateLimits/updated" {
+                on_event(method, params);
+                return Ok(false);
+            }
             if self.thread.is_none() || params["threadId"].as_str() != self.thread.as_deref() {
                 return Ok(false);
             }

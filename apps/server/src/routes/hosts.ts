@@ -95,5 +95,11 @@ export function hostRoutes(ctx: Ctx) {
     return c.json({ hosts: ctx.repos.hosts.select().map(withOnline) });
   });
 
+  r.post("/hosts/quota/refresh", async (c) => {
+    const body = await jsonBody(c, z.object({ force: z.boolean().optional() }).optional());
+    ctx.bus.publish({ type: "host.quota_refresh", force: Boolean(body?.force) });
+    return c.json({ ok: true });
+  });
+
   return r;
 }

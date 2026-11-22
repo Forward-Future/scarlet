@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import { AGENT_LABEL, type AgentAvailability, type AgentHost, type AgentId, type ModelOptions } from "@scarlet/shared";
+import { AGENT_LABEL, type AgentAvailability, type AgentHost, type AgentId, type ModelOptions, type SubscriptionQuota } from "@scarlet/shared";
 import { api, errorMessage, IS_MOCK } from "../lib/client";
-import { desktop } from "../lib/desktop";
+import { desktop, isDesktop } from "../lib/desktop";
 import { changedDuringLoad } from "./changedDuringLoad";
 
 interface HostsState {
@@ -12,8 +12,10 @@ interface HostsState {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
   refreshingModels: boolean;
+  refreshingQuota: boolean;
   load(): Promise<void>;
   refreshModels(): Promise<void>;
+  refreshQuota(opts?: { force?: boolean }): Promise<void>;
   apply(host: AgentHost): void;
 }
 
@@ -27,6 +29,7 @@ const RETRY_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
 let retries = 0;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let pendingRefresh: Promise<void> | undefined;
+let pendingQuotaRefresh: Promise<void> | undefined;
 
 export const useHostsStore = create<HostsState>((set, get) => ({
   hosts: [],
@@ -36,6 +39,7 @@ export const useHostsStore = create<HostsState>((set, get) => ({
   status: "idle",
   error: null,
   refreshingModels: false,
+  refreshingQuota: false,
   async load() {
     clearTimeout(retryTimer);
     retryTimer = undefined;
@@ -83,6 +87,35 @@ export const useHostsStore = create<HostsState>((set, get) => ({
     });
     return pendingRefresh;
   },
+  refreshQuota(opts) {
+    if (IS_MOCK) return Promise.resolve();
+    const force = Boolean(opts?.force);
+    if (pendingQuotaRefresh) return pendingQuotaRefresh;
+    set({ refreshingQuota: true });
+    pendingQuotaRefresh = (async () => {
+      try {
+        if (isDesktop()) {
+          const status = await desktop.hostRefreshQuota(force);
+          if (status?.hostId && Array.isArray(status.agents)) {
+            const hosts = get().hosts;
+            if (hosts.some((h) => h.id === status.hostId)) {
+              set({
+                hosts: hosts.map((h) => (h.id === status.hostId ? { ...h, agents: status.agents } : h)),
+              });
+            }
+          }
+        } else {
+          await api.refreshHostQuota(force);
+        }
+      } catch {
+        // Quota refresh is strictly best-effort and never blocks or errors the picker.
+      }
+    })().finally(() => {
+      pendingQuotaRefresh = undefined;
+      set({ refreshingQuota: false });
+    });
+    return pendingQuotaRefresh;
+  },
   apply(host) {
     reports.set(host.id, host);
     const hosts = get().hosts.filter((h) => h.id !== host.id);
@@ -97,9 +130,21 @@ export interface OnlineAgent {
   modelOptions: Record<string, (ModelOptions | undefined)[]>;
   defaultModel?: string;
   hostNames: string[];
+  auth?: AgentAvailability["auth"];
+  plan?: string;
+  quota?: SubscriptionQuota;
 }
 
 export const isConfiguredAgent = (agent: AgentAvailability) => agent.id !== "api" && agent.installed && agent.loggedIn !== false;
+
+function isNewerQuota(next: SubscriptionQuota, prev?: SubscriptionQuota): boolean {
+  if (!prev) return true;
+  const nextMs = Date.parse(next.fetchedAt);
+  const prevMs = Date.parse(prev.fetchedAt);
+  if (!Number.isFinite(nextMs)) return false;
+  if (!Number.isFinite(prevMs)) return true;
+  return nextMs >= prevMs;
+}
 
 /** Agents that are installed and logged in on at least one online host. */
 export function onlineAgents(
@@ -134,6 +179,13 @@ export function onlineAgents(
         (cur.modelOptions[""] ??= []).push(a.modelOptions?.[model]);
       }
       if (a.model && cur.models.includes(a.model)) cur.defaultModel ??= a.model;
+      if (a.auth === "subscription") cur.auth = "subscription";
+      else if (a.auth && !cur.auth) cur.auth = a.auth;
+      if (a.auth !== "api_key") {
+        const plan = a.plan ?? a.quota?.plan;
+        if (plan && !cur.plan) cur.plan = plan;
+        if (a.quota && isNewerQuota(a.quota, cur.quota)) cur.quota = a.quota;
+      }
       cur.hostNames.push(h.name);
       map.set(a.id, cur);
     }

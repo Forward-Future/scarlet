@@ -71,6 +71,7 @@ it("refreshes the open picker and shares one discovery with Settings while prese
   const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
   await act(() => trigger.click());
   const picker = container.querySelector('[aria-label="Model selector"]')!;
+  await act(() => picker.querySelector<HTMLButtonElement>('[aria-label="Model actions"]')!.click());
   const refreshPicker = refreshButton(picker);
   const refreshSettings = refreshButton(container.querySelector("section")!);
   try {
@@ -155,13 +156,16 @@ it("shows the model name and effort dial and returns focus after keyboard naviga
     const defaultDial = trigger.querySelector("svg")!.innerHTML;
 
     await act(() => trigger.click());
-    expect(document.activeElement?.getAttribute("aria-label")).toBe("Search models");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Model selector");
     await press("ArrowDown");
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Codex · Aurora Alpha · Custom");
+    // Tuning dock starts collapsed showing current effort & speed summary.
+    expect(container.querySelector('[aria-label="Effort"]')).toBeNull();
+    await act(() => container.querySelector<HTMLButtonElement>('[aria-label="Tune Aurora Alpha · Custom options"]')!.click());
     const effortButtons = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Effort"] [role="radio"]')];
     const high = effortButtons.find(button => button.textContent === "High")!;
     effortButtons.find(button => button.textContent === "Medium")!.focus();
-    await press("ArrowDown");
+    await press("ArrowRight");
     expect(document.activeElement).toBe(high);
     await act(() => high.click());
     await press("Escape");
@@ -206,6 +210,7 @@ it("lists Standard once when the model names its own standard speed", async () =
   try {
     await act(() => root.render(<MemoryRouter><AgentChip /></MemoryRouter>));
     await act(() => container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!.click());
+    await act(() => container.querySelector<HTMLButtonElement>('[aria-label="Tune Opus 5.5 options"]')!.click());
     const speeds = () => [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Speed"] [role="radio"]')];
     expect(speeds().map(b => b.textContent)).toEqual(["Standard", "Fast"]);
     expect(speeds()[0]!.getAttribute("aria-checked")).toBe("true");
@@ -516,7 +521,8 @@ it("shares provider-scoped visibility and favorites between Settings and the pic
     await click(button("Favorites"));
     expect(button("Codex · New model")).toBeTruthy();
     expect(button("Codex · Shared")).toBeNull();
-    const search = container.querySelector<HTMLInputElement>('[aria-label="Search models"]')!;
+    await click(button("Search models"));
+    const search = container.querySelector<HTMLInputElement>('input[aria-label="Search models"]')!;
     await act(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "shared");
       search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -524,9 +530,10 @@ it("shares provider-scoped visibility and favorites between Settings and the pic
     expect(button("Codex · New model")).toBeNull();
     expect(button("Codex · Shared")).toBeTruthy();
     expect(button("Claude Code · Shared")).toBeTruthy();
+    await click(button("Close search"));
     await click(button("Codex"));
-    expect(search.value).toBe("");
     expect(button("Claude Code · Shared")).toBeNull();
+    await click(button("Tune Shared options"));
     const option = (group: string, label: string) => [...container.querySelectorAll<HTMLButtonElement>(`[aria-label="${group}"] button`)].find(b => b.textContent === label)!;
     expect(option("Effort", "Auto")).toBeUndefined();
     await click(option("Effort", "Ultra"));
@@ -544,6 +551,7 @@ it("shares provider-scoped visibility and favorites between Settings and the pic
     await click(button("Codex · Shared"));
     expect(picker().textContent).toContain("Shared");
     expect(container.querySelector('[aria-label="Models"] [role="radio"]')?.textContent).toContain("New model");
+    await click(button("Model actions"));
     await click(container.querySelector<HTMLAnchorElement>('a[href="/settings#models"]')!);
     await click(button("Show Codex · Shared in selector"));
     await click(button("Claude Code"));
@@ -627,6 +635,422 @@ it("keeps a sign-in row to its name and one control, with why a sign-in failed o
     useHostsStore.setState(oldHosts, true);
     useUiStore.setState(oldUi, true);
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("reflects each selected model's actual available efforts and speeds in the tuning dock", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const oldHosts = useHostsStore.getState();
+  const oldUi = useUiStore.getState();
+  const savedPick = localStorage.getItem("scarlet.agent");
+  const host = { ...buildDb().hosts[0]!, online: true };
+  useHostsStore.setState({
+    hosts: [{
+      ...host,
+      agents: [
+        {
+          id: "codex", installed: true,
+          models: ["gpt-5.4", "codex-fast-only"],
+          modelLabels: { "gpt-5.4": "GPT-5.4", "codex-fast-only": "Fast Only" },
+          modelOptions: {
+            "gpt-5.4": {
+              efforts: [{ id: "high" }, { id: "low" }, { id: "xhigh", label: "Extra high" }, { id: "medium" }],
+              defaultEffort: "medium",
+              speeds: [{ id: "priority", label: "Fast" }],
+            },
+            "codex-fast-only": {
+              efforts: [],
+              speeds: [{ id: "priority", label: "Fast" }],
+            },
+          },
+        },
+        {
+          id: "claude", installed: true,
+          models: ["claude-opus", "claude-haiku"],
+          modelLabels: { "claude-opus": "Opus", "claude-haiku": "Haiku" },
+          modelOptions: {
+            "claude-opus": {
+              efforts: [{ id: "max" }, { id: "low" }, { id: "high" }],
+              speeds: [{ id: "standard", label: "Standard" }, { id: "fast", label: "Fast" }],
+            },
+            "claude-haiku": { efforts: [], speeds: [] },
+          },
+        },
+        {
+          id: "gemini", installed: true,
+          models: ["gemini-pro"],
+          modelLabels: { "gemini-pro": "Gemini 2.5 Pro" },
+          modelOptions: {
+            "gemini-pro": {
+              efforts: [{ id: "high" }, { id: "low" }],
+              defaultEffort: "low",
+              speeds: [],
+            },
+          },
+        },
+      ],
+    }],
+  });
+  useUiStore.setState({ agent: { agent: "codex", model: "gpt-5.4" } });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const click = (el: HTMLElement) => act(() => el.click());
+  const byLabel = (name: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
+  const labelsIn = (group: string) => [...container.querySelectorAll<HTMLButtonElement>(`[aria-label="${group}"] [role="radio"]`)].map(b => b.textContent);
+  const press = (key: string) => act(() => {
+    document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  });
+  try {
+    await act(() => root.render(<MemoryRouter><AgentChip /></MemoryRouter>));
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
+    await click(trigger);
+
+    // Collapsed dock summarizes the selected model's actual default effort and speed.
+    const tuneBtn = byLabel("Tune GPT-5.4 options");
+    expect(tuneBtn.textContent).toContain("Medium");
+    expect(tuneBtn.textContent).toContain("Standard");
+    expect(container.querySelector('[aria-label="Effort"]')).toBeNull();
+
+    // Expanding shows efforts ordered low -> high and the exact speeds offered by GPT-5.4.
+    await click(tuneBtn);
+    expect(labelsIn("Effort")).toEqual(["Low", "Medium", "High", "Extra high"]);
+    expect(labelsIn("Speed")).toEqual(["Standard", "Fast"]);
+    await click([...container.querySelectorAll<HTMLButtonElement>('[aria-label="Effort"] [role="radio"]')].find(b => b.textContent === "Extra high")!);
+    await click([...container.querySelectorAll<HTMLButtonElement>('[aria-label="Speed"] [role="radio"]')].find(b => b.textContent === "Fast")!);
+    expect(useUiStore.getState().agent).toMatchObject({ agent: "codex", model: "gpt-5.4", effort: "xhigh", serviceTier: "priority" });
+
+    // Collapsing updates the summary bar with the chosen values.
+    const doneBtn = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("Done"))!;
+    await click(doneBtn);
+    expect(byLabel("Tune GPT-5.4 options").textContent).toContain("Extra high");
+    expect(byLabel("Tune GPT-5.4 options").textContent).toContain("Fast");
+
+    // Switching to another provider tab while GPT-5.4 stays selected displays its name above the dock.
+    await click(byLabel("Claude Code"));
+    expect(container.querySelector('[aria-label="Model selector"]')?.textContent).toContain("GPT-5.4");
+
+    // Switching to Claude Opus clears unsupported options and shows only Opus's 3 efforts + 2 speeds.
+    await click(byLabel("Claude Code · Opus"));
+    expect(useUiStore.getState().agent).toMatchObject({ agent: "claude", model: "claude-opus", effort: undefined, serviceTier: undefined });
+    await click(byLabel("Tune Opus options"));
+    expect(labelsIn("Effort")).toEqual(["Low", "High", "Max"]);
+    expect(labelsIn("Speed")).toEqual(["Standard", "Fast"]);
+
+    // Switching to Claude Haiku (no efforts, no speeds) removes the tuning dock entirely.
+    await click(byLabel("Claude Code · Haiku"));
+    expect(container.querySelector('[aria-label="Effort"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Speed"]')).toBeNull();
+    expect(container.textContent).not.toContain("Tune");
+
+    // Switching to Gemini (efforts only, no speeds) renders Effort slider without Speed controls.
+    await click(byLabel("Gemini"));
+    await click(byLabel("Gemini · Gemini 2.5 Pro"));
+    expect(labelsIn("Effort")).toEqual(["Low", "High"]);
+    expect(container.querySelector('[aria-label="Speed"]')).toBeNull();
+
+    // Switching to Codex Fast Only (speeds only, no efforts) renders Speed control without Effort slider.
+    await click(byLabel("Codex"));
+    await click(byLabel("Codex · Fast Only"));
+    expect(container.querySelector('[aria-label="Effort"]')).toBeNull();
+    expect(labelsIn("Speed")).toEqual(["Standard", "Fast"]);
+
+    // Switching to All tab shows models from every provider.
+    const allTab = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Providers"] button')].find(b => b.textContent === "All")!;
+    await click(allTab);
+    expect(byLabel("Codex · GPT-5.4")).toBeTruthy();
+    expect(byLabel("Claude Code · Opus")).toBeTruthy();
+    expect(byLabel("Gemini · Gemini 2.5 Pro")).toBeTruthy();
+
+    // Layered Escape closes gear menu -> search -> picker in order.
+    await click(byLabel("Model actions"));
+    expect(container.querySelector('[role="menu"][aria-label="Model actions"]')).toBeTruthy();
+    await press("Escape");
+    expect(container.querySelector('[role="menu"][aria-label="Model actions"]')).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+
+    // Typing a printable character jumps straight into inline search.
+    await press("k");
+    const searchInput = container.querySelector<HTMLInputElement>('input[aria-label="Search models"]')!;
+    expect(searchInput).toBeTruthy();
+    expect(searchInput.value).toBe("k");
+    expect(byLabel("Claude Code · Haiku")).toBeTruthy();
+    expect(byLabel("Claude Code · Opus")).toBeNull();
+
+    // Escape closes inline search without closing the picker; next Escape closes the picker.
+    await press("Escape");
+    expect(container.querySelector('input[aria-label="Search models"]')).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    await press("Escape");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useUiStore.setState(oldUi, true);
+    useHostsStore.setState(oldHosts, true);
+    if (savedPick === null) localStorage.removeItem("scarlet.agent");
+    else localStorage.setItem("scarlet.agent", savedPick);
+    vi.unstubAllGlobals();
+  }
+});
+
+it("remembers and restores the last effort and speed settings independently for each model", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const oldHosts = useHostsStore.getState();
+  const oldUi = useUiStore.getState();
+  const oldPrefs = useModelPreferences.getState();
+  const savedPick = localStorage.getItem("scarlet.agent");
+  const host = { ...buildDb().hosts[0]!, online: true };
+  const makeHost = (gpt54Efforts = [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh", label: "Extra high" }]): AgentHost => ({
+    ...host,
+    agents: [
+      {
+        id: "codex" as const,
+        installed: true,
+        models: ["gpt-5.4"],
+        modelLabels: { "gpt-5.4": "GPT-5.4" },
+        modelOptions: {
+          "gpt-5.4": {
+            efforts: gpt54Efforts,
+            defaultEffort: "medium",
+            speeds: [{ id: "priority", label: "Fast" }],
+          },
+        },
+      },
+      {
+        id: "claude" as const,
+        installed: true,
+        models: ["claude-opus", "claude-sonnet"],
+        modelLabels: { "claude-opus": "Opus", "claude-sonnet": "Sonnet" },
+        modelOptions: {
+          "claude-opus": {
+            efforts: [{ id: "low" }, { id: "high" }, { id: "max" }],
+            speeds: [{ id: "standard", label: "Standard" }, { id: "fast", label: "Fast" }],
+          },
+          "claude-sonnet": {
+            efforts: [{ id: "low" }, { id: "high" }],
+            speeds: [],
+          },
+        },
+      },
+    ],
+  });
+  useHostsStore.setState({ hosts: [makeHost()], status: "ready" });
+  useModelPreferences.setState({ hidden: [], favorites: [], tuningByModel: {} });
+  useUiStore.setState({ agent: { agent: "codex", model: "gpt-5.4" } });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const click = (el: HTMLElement) => act(() => el.click());
+  const byLabel = (name: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
+  const radioIn = (group: string, label: string) =>
+    [...container.querySelectorAll<HTMLButtonElement>(`[aria-label="${group}"] [role="radio"]`)].find((b) => b.textContent === label)!;
+  try {
+    await act(() => root.render(<MemoryRouter><AgentChip /></MemoryRouter>));
+    await click(container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!);
+
+    // Tune GPT-5.4 to Extra high + Fast.
+    await click(byLabel("Tune GPT-5.4 options"));
+    await click(radioIn("Effort", "Extra high"));
+    await click(radioIn("Speed", "Fast"));
+    expect(useUiStore.getState().agent).toMatchObject({ agent: "codex", model: "gpt-5.4", effort: "xhigh", serviceTier: "priority" });
+
+    // Switch to Claude Opus (never tuned yet) -> uses Opus's defaults, not GPT-5.4's settings.
+    await click(byLabel("Claude Code"));
+    await click(byLabel("Claude Code · Opus"));
+    expect(useUiStore.getState().agent).toMatchObject({ agent: "claude", model: "claude-opus", effort: undefined, serviceTier: undefined });
+
+    // Tune Opus to Max + Fast.
+    await click(radioIn("Effort", "Max"));
+    await click(radioIn("Speed", "Fast"));
+    expect(useUiStore.getState().agent).toMatchObject({ agent: "claude", model: "claude-opus", effort: "max", serviceTier: "fast" });
+
+    // Switch to Sonnet and set Low.
+    await click(byLabel("Claude Code · Sonnet"));
+    expect(useUiStore.getState().agent).toMatchObject({ agent: "claude", model: "claude-sonnet", effort: undefined, serviceTier: undefined });
+    await click(radioIn("Effort", "Low"));
+    expect(useUiStore.getState().agent).toMatchObject({ agent: "claude", model: "claude-sonnet", effort: "low", serviceTier: undefined });
+
+    // Switch back to GPT-5.4 -> restores Extra high + Fast.
+    await click(byLabel("Codex"));
+    await click(byLabel("Codex · GPT-5.4"));
+    expect(useUiStore.getState().agent).toMatchObject({ agent: "codex", model: "gpt-5.4", effort: "xhigh", serviceTier: "priority" });
+
+    // Switch back to Claude Opus -> restores Max + Fast.
+    await click(byLabel("Claude Code"));
+    await click(byLabel("Claude Code · Opus"));
+    expect(useUiStore.getState().agent).toMatchObject({ agent: "claude", model: "claude-opus", effort: "max", serviceTier: "fast" });
+
+    // Reset Opus speed back to Standard and switch away & back -> restores Standard (not Fast).
+    await click(radioIn("Speed", "Standard"));
+    expect(useUiStore.getState().agent).toMatchObject({ agent: "claude", model: "claude-opus", effort: "max", serviceTier: "standard" });
+    await click(byLabel("Claude Code · Sonnet"));
+    expect(useUiStore.getState().agent).toMatchObject({ agent: "claude", model: "claude-sonnet", effort: "low", serviceTier: undefined });
+    await click(byLabel("Claude Code · Opus"));
+    expect(useUiStore.getState().agent).toMatchObject({ agent: "claude", model: "claude-opus", effort: "max", serviceTier: "standard" });
+
+    // If a model's catalog later drops a previously remembered effort ("xhigh"), switching to it safely clamps.
+    await act(() => {
+      useHostsStore.setState({ hosts: [makeHost([{ id: "low" }, { id: "medium" }, { id: "high" }])] });
+    });
+    await click(byLabel("Codex"));
+    await click(byLabel("Codex · GPT-5.4"));
+    expect(useUiStore.getState().agent).toMatchObject({ agent: "codex", model: "gpt-5.4", effort: undefined, serviceTier: "priority" });
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useUiStore.setState(oldUi, true);
+    useHostsStore.setState(oldHosts, true);
+    useModelPreferences.setState(oldPrefs, true);
+    if (savedPick === null) localStorage.removeItem("scarlet.agent");
+    else localStorage.setItem("scarlet.agent", savedPick);
+    vi.unstubAllGlobals();
+  }
+});
+
+it("shows Option A subscription quota micro-bars, bottom dock pill, mutually exclusive drawers, and omits API-key providers", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const oldHosts = useHostsStore.getState();
+  const oldUi = useUiStore.getState();
+  const oldPrefs = useModelPreferences.getState();
+  const savedPick = localStorage.getItem("scarlet.agent");
+  const now = Date.now();
+  const freshIso = new Date(now - 20_000).toISOString();
+  const staleIso = new Date(now - 180_000).toISOString();
+  const resetsSoon = new Date(now + 102 * 60_000).toISOString();
+  const resetsWeekly = new Date(now + (3 * 24 + 4) * 60 * 60_000).toISOString();
+
+  const refreshQuotaSpy = vi.fn().mockResolvedValue(undefined);
+  const host = { ...buildDb().hosts[0]!, online: true };
+  useHostsStore.setState({
+    status: "ready",
+    refreshingQuota: false,
+    refreshQuota: refreshQuotaSpy,
+    hosts: [{
+      ...host,
+      agents: [
+        {
+          id: "claude",
+          installed: true,
+          loggedIn: true,
+          auth: "subscription",
+          plan: "Max",
+          models: ["claude-opus"],
+          modelLabels: { "claude-opus": "Opus" },
+          modelOptions: { "claude-opus": { efforts: [{ id: "high" }], speeds: [] } },
+          quota: {
+            plan: "Max",
+            fetchedAt: freshIso,
+            buckets: [
+              { id: "five_hour", label: "5-hour", window: "5h", remainingPercent: 14, resetsAt: resetsSoon },
+              { id: "seven_day", label: "Weekly", window: "weekly", remainingPercent: 59, resetsAt: resetsWeekly },
+            ],
+          },
+        },
+        {
+          id: "codex",
+          installed: true,
+          loggedIn: true,
+          auth: "api_key",
+          models: ["gpt-5.4"],
+          modelLabels: { "gpt-5.4": "GPT-5.4" },
+          modelOptions: { "gpt-5.4": { efforts: [{ id: "high" }], speeds: [] } },
+          // Even if stale quota were attached on the wire, API-key auth must omit it everywhere.
+          quota: {
+            plan: "Pro",
+            fetchedAt: freshIso,
+            buckets: [{ id: "5h", label: "5-hour", window: "5h", remainingPercent: 50 }],
+          },
+        },
+        {
+          id: "gemini",
+          installed: true,
+          loggedIn: true,
+          auth: "subscription",
+          plan: "Google AI Ultra",
+          models: ["gemini-3-pro"],
+          modelLabels: { "gemini-3-pro": "Gemini 3 Pro" },
+          modelOptions: { "gemini-3-pro": { efforts: [{ id: "high" }], speeds: [] } },
+          quota: {
+            plan: "Google AI Ultra",
+            fetchedAt: staleIso,
+            buckets: [
+              { id: "gemini-5h", label: "5-hour", window: "5h", remainingPercent: 92, resetsAt: resetsSoon },
+              { id: "gemini-weekly", label: "Weekly", window: "weekly", remainingPercent: 100, resetsAt: resetsWeekly },
+            ],
+          },
+        },
+      ],
+    }],
+  });
+  useModelPreferences.setState({ hidden: [], favorites: [], tuningByModel: {} });
+  useUiStore.setState({ agent: { agent: "claude", model: "claude-opus" } });
+
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const click = (el: HTMLElement) => act(() => el.click());
+  const byLabel = (name: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
+
+  try {
+    await act(() => root.render(<MemoryRouter><AgentChip /></MemoryRouter>));
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
+    await click(trigger);
+
+    // Opening with stale Gemini quota triggers a non-blocking background refresh (force: false).
+    expect(refreshQuotaSpy).toHaveBeenCalledWith({ force: false });
+
+    // Top provider pills show 2px micro-bars for Claude (low amber) and Gemini (normal), and NONE for API-key Codex.
+    const claudeBar = container.querySelector('[data-quota-bar="claude"]');
+    const geminiBar = container.querySelector('[data-quota-bar="gemini"]');
+    const codexBar = container.querySelector('[data-quota-bar="codex"]');
+    expect(claudeBar?.getAttribute("data-low")).toBe("true");
+    expect(geminiBar?.getAttribute("data-low")).toBe("false");
+    expect(codexBar).toBeNull();
+
+    // Collapsed bottom dock shows Tune on left and compact low-amber quota pill (14%) on right.
+    expect(byLabel("Tune Opus options")).toBeTruthy();
+    const quotaPill = byLabel("Subscription quota");
+    expect(quotaPill.textContent).toContain("14%");
+    expect(quotaPill.getAttribute("data-low")).toBe("true");
+
+    // Expanding Quota drawer hides Tune controls and shows Claude + Gemini cards (omitting API-key Codex, and NO "Switch").
+    await click(quotaPill);
+    expect(container.querySelector('[aria-label="Effort"]')).toBeNull();
+    const details = container.querySelector('[aria-label="Subscription quota details"]')!;
+    expect(details).toBeTruthy();
+    expect(details.textContent).toContain("Max");
+    expect(details.textContent).toContain("Low");
+    expect(details.textContent).toContain("14%");
+    expect(details.textContent).toContain("59%");
+    expect(details.textContent).toContain("Google AI Ultra");
+    expect(details.textContent).toContain("92%");
+    expect(details.textContent).not.toContain("Switch");
+    expect(details.querySelector('[data-quota-card="claude"]')?.getAttribute("data-low")).toBe("true");
+    expect(details.querySelector('[data-quota-card="gemini"]')?.getAttribute("data-low")).toBe("false");
+    expect(details.querySelector('[data-quota-card="codex"]')).toBeNull();
+
+    // Manual refresh button triggers forced refresh.
+    await click(byLabel("Refresh subscription quota"));
+    expect(refreshQuotaSpy).toHaveBeenCalledWith({ force: true });
+
+    // Collapsing Quota drawer restores the shared dock, and opening Tune hides Quota details.
+    const doneBtn = [...details.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes("Done"))!;
+    await click(doneBtn);
+    expect(container.querySelector('[aria-label="Subscription quota details"]')).toBeNull();
+    await click(byLabel("Tune Opus options"));
+    expect(container.querySelector('[aria-label="Effort"]')).toBeTruthy();
+    expect(container.querySelector('[aria-label="Subscription quota details"]')).toBeNull();
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useUiStore.setState(oldUi, true);
+    useHostsStore.setState(oldHosts, true);
+    useModelPreferences.setState(oldPrefs, true);
+    if (savedPick === null) localStorage.removeItem("scarlet.agent");
+    else localStorage.setItem("scarlet.agent", savedPick);
     vi.unstubAllGlobals();
   }
 });

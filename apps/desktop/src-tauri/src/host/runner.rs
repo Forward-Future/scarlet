@@ -15,6 +15,8 @@ use super::types::{tail_summary, McpSpec, RunResult, RunnerEvent};
 pub type EventSink = Arc<dyn Fn(RunnerEvent) + Send + Sync>;
 /// Takes the run's token count so far each time it changes, for a live count while the agent works.
 pub type UsageSink = Arc<dyn Fn(super::usage::AgentUsage) + Send + Sync>;
+/// Receives live subscription quota snapshots emitted by the CLI during a run.
+pub type QuotaSink = Arc<dyn Fn(super::types::SubscriptionQuota) + Send + Sync>;
 
 pub struct RunOptions {
     pub agent: String,
@@ -38,6 +40,7 @@ pub struct RunOptions {
     pub mcp: McpSpec,
     pub on_event: EventSink,
     pub on_usage: Option<UsageSink>,
+    pub on_quota: Option<QuotaSink>,
     pub cancel: CancellationToken,
     /// Optional cap on the whole run. None lets a working agent take as long as it needs.
     pub timeout: Option<Duration>,
@@ -183,6 +186,7 @@ pub(crate) mod testing {
             mcp,
             on_event: Arc::new(move |ev| seen.lock().unwrap().push(ev)),
             on_usage: None,
+            on_quota: None,
             cancel: CancellationToken::new(),
             timeout: None,
             stall: None,

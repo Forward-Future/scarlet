@@ -1320,6 +1320,10 @@ export class MockClient implements ScarletApi {
     this.requireAuth();
     return this.latency({ hosts: this.db.hosts }, 150);
   }
+  async refreshHostQuota(): Promise<{ ok: boolean }> {
+    this.requireAuth();
+    return this.latency({ ok: true }, 50);
+  }
   async skills(): Promise<{ skills: Skill[] }> {
     this.requireAuth();
     return this.latency({ skills: this.db.skills }, 150);

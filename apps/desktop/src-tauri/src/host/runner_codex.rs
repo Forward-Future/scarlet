@@ -8,13 +8,13 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-use crate::util::{env_get, home_dir};
+use crate::util::{env_get, home_dir, iso_from_unix_secs, now_iso};
 use super::codex_app_server::run_app_server;
 use super::detect::api_key_vars;
 use super::runner::{cut_short, exit_error, report_usage, write_files, RunOptions, RunnerCommand};
 use super::spawn::{resolve_cli, spawn_lines, SpawnLinesOptions};
 use super::usage::{add_usage, codex_app_server_usage, codex_usage, AgentUsage};
-use super::types::{brief, brief_input, is_question_tool, plan_event, question_words, tail_summary, truthy, value_text, McpSpec, PlanStep, RunResult, RunnerEvent, Workspace};
+use super::types::{brief, brief_input, is_question_tool, plan_event, question_words, tail_summary, truthy, value_text, McpSpec, PlanStep, QuotaBucket, RunResult, RunnerEvent, SubscriptionQuota, Workspace};
 
 #[derive(Debug, Default, Clone)]
 pub struct CodexState {
@@ -519,6 +519,99 @@ fn isolated_codex_home(opts: &RunOptions) -> std::result::Result<std::path::Path
     Ok(home)
 }
 
+fn format_codex_plan(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let known = match trimmed.to_ascii_lowercase().as_str() {
+        "free" => Some("Free"),
+        "plus" => Some("Plus"),
+        "pro" => Some("Pro"),
+        "max" => Some("Max"),
+        "team" => Some("Team"),
+        "enterprise" => Some("Enterprise"),
+        "edu" => Some("Edu"),
+        "go" => Some("Go"),
+        _ => None,
+    };
+    if let Some(label) = known {
+        return Some(label.to_string());
+    }
+    Some(trimmed.to_string())
+}
+
+fn codex_window_meta(mins: Option<f64>, fallback_id: &str) -> (String, String, Option<String>) {
+    let Some(m) = mins.filter(|m| m.is_finite() && *m > 0.0) else {
+        return if fallback_id == "primary" {
+            ("primary".into(), "5-hour".into(), Some("5h".into()))
+        } else {
+            ("secondary".into(), "Weekly".into(), Some("weekly".into()))
+        };
+    };
+    if m <= 360.0 {
+        let hours = ((m / 60.0).round() as u64).max(1);
+        return (format!("{hours}h"), format!("{hours}-hour"), Some(format!("{hours}h")));
+    }
+    if (6.0 * 1440.0..=8.0 * 1440.0).contains(&m) {
+        return ("weekly".into(), "Weekly".into(), Some("weekly".into()));
+    }
+    if m >= 1440.0 {
+        let days = (m / 1440.0).round() as u64;
+        return (format!("{days}d"), format!("{days}-day"), Some(format!("{days}d")));
+    }
+    let hours = (m / 60.0).round() as u64;
+    (format!("{hours}h"), format!("{hours}-hour"), Some(format!("{hours}h")))
+}
+
+fn codex_reset_iso(value: Option<&Value>) -> Option<String> {
+    let v = value?;
+    if let Some(s) = v.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(s.to_string());
+    }
+    let num = v.as_f64().filter(|n| n.is_finite() && *n > 0.0)?;
+    let secs = if num >= 1e12 { (num / 1000.0).round() as i64 } else { num.round() as i64 };
+    Some(iso_from_unix_secs(secs))
+}
+
+pub fn parse_codex_rate_limits_notification(params: &Value, fetched_at: &str) -> Option<SubscriptionQuota> {
+    let root = params.as_object()?;
+    let snapshot = root
+        .get("rateLimits")
+        .and_then(Value::as_object)
+        .or_else(|| {
+            root.get("rateLimitsByLimitId")
+                .and_then(Value::as_object)
+                .and_then(|by_id| {
+                    by_id
+                        .get("codex")
+                        .and_then(Value::as_object)
+                        .or_else(|| by_id.values().find_map(Value::as_object))
+                })
+        })
+        .or_else(|| (root.contains_key("primary") || root.contains_key("secondary")).then_some(root))?;
+
+    let mut buckets = Vec::new();
+    for (key, fallback_id) in [("primary", "primary"), ("secondary", "secondary")] {
+        let Some(rec) = snapshot.get(key).and_then(Value::as_object) else { continue };
+        let Some(used) = rec.get("usedPercent").or_else(|| rec.get("used_percent")).and_then(Value::as_f64).filter(|n| n.is_finite()) else {
+            continue;
+        };
+        let mins = rec.get("windowDurationMins").or_else(|| rec.get("window_duration_mins")).and_then(Value::as_f64);
+        let (meta_id, label, window) = codex_window_meta(mins, fallback_id);
+        let id = if buckets.iter().any(|b: &QuotaBucket| b.id == meta_id) { fallback_id.to_string() } else { meta_id };
+        let remaining = ((100.0 - used).clamp(0.0, 100.0) * 10.0).round() / 10.0;
+        let resets_at = codex_reset_iso(rec.get("resetsAt").or_else(|| rec.get("resets_at")));
+        buckets.push(QuotaBucket { id, label, window, remaining_percent: remaining, resets_at });
+    }
+    let unlimited = snapshot.get("credits").and_then(|c| c.get("unlimited")).and_then(Value::as_bool) == Some(true);
+    if buckets.is_empty() && !unlimited {
+        return None;
+    }
+    let plan = snapshot.get("planType").or_else(|| snapshot.get("plan_type")).and_then(Value::as_str).and_then(format_codex_plan);
+    Some(SubscriptionQuota { plan, buckets, unlimited: unlimited.then_some(true), fetched_at: fetched_at.to_string() })
+}
+
 async fn try_app_server(opts: &RunOptions, bin: &str, home: &Path) -> Option<RunResult> {
     let mut spawn = spawn_options(opts, None);
     spawn.env.retain(|key, _| !["CODEX_HOME", "CODEX_SQLITE_HOME"].iter().any(|name| key.eq_ignore_ascii_case(name)));
@@ -529,12 +622,18 @@ async fn try_app_server(opts: &RunOptions, bin: &str, home: &Path) -> Option<Run
     let turn = json!({ "input": [{ "type": "text", "text": opts.instruction, "text_elements": [] }] });
     let st = Arc::new(Mutex::new(CodexState { resumed: opts.resume_session.is_some(), ..Default::default() }));
     let live_state = st.clone();
-    let (on_event, on_usage) = (opts.on_event.clone(), opts.on_usage.clone());
+    let (on_event, on_usage, on_quota) = (opts.on_event.clone(), opts.on_usage.clone(), opts.on_quota.clone());
     let requested_model = opts.model.clone();
     let show_plan = opts.plan;
     let mut sent_usage = None;
     let executable = codex_executable(bin);
     let outcome = run_app_server(executable.as_deref().unwrap_or(bin), &app_server_args(opts, executable.as_deref()), spawn, thread, turn, Box::new(move |method, params| {
+        if method == "account/rateLimits/updated" {
+            if let (Some(sink), Some(quota)) = (&on_quota, parse_codex_rate_limits_notification(params, &now_iso())) {
+                sink(quota);
+            }
+            return false;
+        }
         let mut state = live_state.lock().unwrap();
         for event in app_server_events(method, params, &mut state) {
             if show_plan || event.kind != "plan" { on_event(event); }
@@ -919,6 +1018,27 @@ mod tests {
         ], &mut st);
         let u = st.usage.unwrap();
         assert_eq!((u.input_tokens, u.output_tokens, u.cache_read_tokens, u.reasoning_tokens), (210, 55, 800, 20));
+    }
+
+    #[test]
+    fn parses_live_codex_rate_limits_notification() {
+        let params = json!({
+            "rateLimits": {
+                "planType": "pro",
+                "primary": { "usedPercent": 86, "windowDurationMins": 300, "resetsAt": 1763790000 },
+                "secondary": { "usedPercent": 24, "windowDurationMins": 10080, "resetsAt": 1764300000 },
+                "credits": { "hasCredits": true, "unlimited": false }
+            }
+        });
+        let parsed = parse_codex_rate_limits_notification(&params, "2026-11-22T00:00:00.000Z").expect("quota");
+        assert_eq!(parsed.plan.as_deref(), Some("Pro"));
+        assert_eq!(parsed.unlimited, None);
+        assert_eq!(parsed.buckets.len(), 2);
+        assert_eq!(parsed.buckets[0].label, "5-hour");
+        assert_eq!(parsed.buckets[0].remaining_percent, 14.0);
+        assert!(parsed.buckets[0].resets_at.as_deref().unwrap().ends_with(".000Z"));
+        assert_eq!(parsed.buckets[1].label, "Weekly");
+        assert_eq!(parsed.buckets[1].remaining_percent, 76.0);
     }
 
     #[cfg(unix)]

@@ -8,7 +8,7 @@ import { spawnLines } from "./runners/spawn.js";
 export type CliAgent = "claude" | "codex" | "gemini";
 /** A model id that is safe to pass to a CLI as a launcher argument. */
 export const MODEL_ID = /^[a-z0-9][a-z0-9._:/@+\[\]-]*$/i;
-type Catalog = Pick<AgentAvailability, "models" | "model" | "modelLabels" | "modelOptions">;
+type Catalog = Pick<AgentAvailability, "models" | "model" | "modelLabels" | "modelOptions" | "plan">;
 
 const claudeEnvelope = z.object({
   type: z.literal("control_response"),
@@ -54,6 +54,11 @@ const geminiSession = z.object({
     currentModelId: z.string().optional(),
     availableModels: z.array(z.object({ modelId: z.string(), name: z.string() })),
   }).optional(),
+  _meta: z.object({
+    antigravity: z.object({
+      tier: z.union([z.string(), z.object({ name: z.string().optional() })]).optional(),
+    }).optional(),
+  }).optional(),
 });
 const rpcResponse = z.object({
   id: z.number(),
@@ -84,6 +89,7 @@ export async function discoverModels(agent: CliAgent, file: string, env: NodeJS.
   const names = new Map<string, string>();
   const modelOptions = new Map<string, ModelOptions>();
   let defaultModel: string | undefined;
+  let plan: string | undefined;
   const add = (id: string, name: string, options: ModelOptions = { efforts: [], speeds: [] }) => {
     if (id && !MODEL_ID.test(id)) return;
     names.set(id, name || id);
@@ -179,6 +185,9 @@ export async function discoverModels(agent: CliAgent, file: string, env: NodeJS.
             speeds: [],
             defaultEffort: thoughtConfig?.currentValue,
           };
+          const tier = session.data._meta?.antigravity?.tier;
+          const tierName = typeof tier === "string" ? tier : tier?.name;
+          if (tierName?.trim()) plan = tierName.trim();
           const configModels = flattenAcpOptions(modelConfig?.options);
           if (configModels.length > 0) {
             for (const m of configModels) if (m.value) add(m.value, m.name ?? m.value, sharedOptions);
@@ -233,6 +242,7 @@ export async function discoverModels(agent: CliAgent, file: string, env: NodeJS.
     return {
       models: [...names.keys()].filter(Boolean), modelLabels: Object.fromEntries(names), modelOptions: Object.fromEntries(modelOptions),
       ...(defaultModel && names.has(defaultModel) ? { model: defaultModel } : {}),
+      ...(plan ? { plan } : {}),
     };
   } finally {
     await rm(cwd, { recursive: true, force: true });

@@ -209,6 +209,16 @@ if (command === "review-spots") {
       console.error(`[models] ${agent}: ${err instanceof Error ? err.message : err}`);
       process.exitCode = 1;
     });
+} else if (command === "subscription-quota") {
+  const [agent, file] = rest;
+  if ((agent !== "claude" && agent !== "codex" && agent !== "gemini") || !file) process.exit(2);
+  import("@scarlet/agent/dist/quota.js")
+    .then(({ probeSubscriptionQuota }) => probeSubscriptionQuota(agent, file, process.env))
+    .then((quota) => console.log(JSON.stringify(quota ?? null)))
+    .catch(err => {
+      console.error(`[quota] ${agent}: ${err instanceof Error ? err.message : err}`);
+      process.exitCode = 1;
+    });
 } else if (command === "mcp") {
   runMcp(rest).catch((err) => {
     console.error(`[scarlet-engine mcp] ${err instanceof Error ? err.message : String(err)}`);
