@@ -37,6 +37,8 @@ export interface GeminiParseState {
   toolNames: Map<string, string>;
   pendingQuestionId?: string;
   question?: string;
+  /** The call that asked `question`. */
+  questionId?: string;
   questionPosted: boolean;
   shouldStop: boolean;
   completed: boolean;
@@ -273,18 +275,24 @@ function extractToolName(update: Record<string, unknown>): string {
 function questionUpdate(st: GeminiParseState, update: Record<string, unknown>, id: string | undefined, name: string, input: unknown, events: RunnerEvent[]) {
   if (id) st.pendingQuestionId = id;
   const text = questionText(input);
-  if (text) st.question = text;
+  // The question is the call that asked it: a later call can't take its place, or clear it when it is refused.
+  if (text && (st.question === undefined || st.questionId === id)) {
+    st.question = text;
+    st.questionId = id;
+  }
   const status = asString(update.status);
   if (status !== "completed" && status !== "failed" && status !== "error") return;
-  st.pendingQuestionId = undefined;
-  if (status !== "completed" || isFailedOutput(update.rawOutput, update.content)) {
-    st.question = undefined;
-    events.push({ type: "error", text: `${name} failed: ${briefInput(update.rawOutput ?? update.content ?? update.error, 400)}`.trim(), data: id ? { toolId: id } : undefined });
-  } else if (st.question) {
+  if (st.pendingQuestionId === id) st.pendingQuestionId = undefined;
+  const refused = status !== "completed" || isFailedOutput(update.rawOutput, update.content);
+  const asked = st.question !== undefined && st.questionId === id;
+  if (asked && !refused) {
     st.questionPosted = true;
     st.shouldStop = true;
-    events.push({ type: "question", text: st.question, data: { tool: name, ...(id ? { toolId: id } : {}) } });
+    events.push({ type: "question", text: st.question!, data: { tool: name, ...(id ? { toolId: id } : {}) } });
+    return;
   }
+  if (asked) st.question = st.questionId = undefined;
+  if (refused) events.push({ type: "error", text: `${name} failed: ${briefInput(update.rawOutput ?? update.content ?? update.error, 400)}`.trim(), data: id ? { toolId: id } : undefined });
 }
 
 function isFailedOutput(rawOutput: unknown, content: unknown): boolean {
@@ -435,12 +443,6 @@ export function takesSystemPrompt(result: unknown): boolean {
   return asRecord(asRecord(meta?.antigravity)?.systemPrompt)?.append === true;
 }
 
-/** What Gemini is told after Scarlet refused it a tool, when the engine gave no words of its own (`refusedTool`). */
-export function refusalText(names: string, words?: string): string {
-  return words?.trim() ? words.replaceAll("{tool}", names)
-    : `Scarlet refused ${names}: only Scarlet's own tools (the scarlet MCP server) run here, with no shell or file tools. Carry on with the request using Scarlet's tools.`;
-}
-
 /** How long agy has to exit on its own once Scarlet has closed its input. It can stay up, and the run would stall. */
 const STOP_GRACE_MS = 2000;
 
@@ -564,9 +566,15 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
       failSession(`Gemini stopped after Scarlet refused ${names}, a tool that doesn't run in Scarlet, ${carryOns + 1} times.`);
       return true;
     }
+    // The words are the engine's (`refusedTool`): a host writes nothing the model reads.
+    const words = opts.refusedTool?.trim();
+    if (!words) {
+      failSession(`Gemini stopped after Scarlet refused ${names}, and this engine gave no words to carry on with. Update Scarlet's engine.`);
+      return true;
+    }
     carryOns += 1;
     opts.onEvent({ type: "log", text: `Scarlet refused ${names}: only Scarlet's tools run here. Gemini carries on.`, data: { kind: "tool_refused", harnessTool: names } });
-    sendTurn(refusalText(names, opts.refusedTool));
+    sendTurn(words.replaceAll("{tool}", names));
     return true;
   };
 
@@ -728,7 +736,9 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
           syncUsage(st);
           reportUsage();
           const stopReason = asString(result.stopReason) ?? "end_turn";
-          if (stopReason === "cancelled" && st.question) {
+          // A turn Scarlet cancelled itself (a question to stop on, a stall, a time limit, Stop this edit) ended as
+          // asked: the host says why the run stopped, so it isn't reported as an error of Gemini's first.
+          if (stopReason === "cancelled" && (st.question || cancelSent)) {
             stopSession();
             return;
           }

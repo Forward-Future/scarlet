@@ -166,8 +166,13 @@ export function decidedPassCalls(
         }
       }
       if (!matched && choice.choice === "cut" && choice.start !== undefined) {
-        matched = edits.find(e => e.changeId === change.id && Math.abs(e.range.start - choice.start!) < 0.05)
-          ?? rejected.find(e => e.changeId === change.id && Math.abs(e.range.start - choice.start!) < 0.05);
+        // A call's start is on the video before the pass, and an applied edit's is where its join landed after it,
+        // earlier by all the footage cut before it. The join that took out the call's footage links the two.
+        const spot = joins?.findIndex(j => Math.abs(j.removed.start - choice.start!) < 0.05) ?? -1;
+        const at = spot >= 0 ? joins![spot]!.at : joins?.length ? undefined : choice.start;
+        const here = (e: Omit<ThreadEdit, "at">) => (spot >= 0 && matchesEdit(e, { changeId: change.id, spot }))
+          || (e.changeId === change.id && at !== undefined && Math.abs(e.range.start - at) < 0.05);
+        matched = edits.find(here) ?? rejected.find(here);
       }
       if (matched) {
         decidedCallEditKeys.add(editKey(matched));

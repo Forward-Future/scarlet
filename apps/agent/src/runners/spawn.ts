@@ -29,6 +29,8 @@ export interface SpawnLinesOptions {
   stallMs?: number;
   /** How long a stopped process has to finish before its group is killed. Default `KILL_AFTER_MS`. */
   killAfterMs?: number;
+  /** How long the output has to finish once the CLI itself has ended. Default `DRAIN_AFTER_MS`. */
+  drainAfterMs?: number;
   onLine: (line: string) => void;
   onStderr?: (chunk: string) => void;
 }
@@ -106,6 +108,9 @@ export function runnerSpec(file: string, args: string[], env: NodeJS.ProcessEnv)
   }
   return { file: node, args: [target, ...args], verbatim: false };
 }
+
+/** How long a CLI that has ended may keep its output open before the run is settled without it. */
+const DRAIN_AFTER_MS = 5000;
 
 export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions): SpawnHandle {
   const spec = runnerSpec(file, args, opts.env);
@@ -232,6 +237,16 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
       finish(null, null);
     });
     child.on("close", finish);
+    // `close` waits for the output to end, and a process the CLI started can hold it open after the CLI has ended: the
+    // run would then read as stalled, or never end with no stall limit. The output gets a moment, as on the desktop host.
+    child.on("exit", (code, signal) => {
+      setTimeout(() => {
+        if (settled) return;
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish(code, signal);
+      }, opts.drainAfterMs ?? DRAIN_AFTER_MS).unref();
+    });
   });
 
   if (child.stdin) {

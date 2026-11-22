@@ -12,7 +12,7 @@ import { QueueTray, useRewordingHold, type QueuedRequest } from "../components/c
 import { recordEditReview } from "../lib/editReviews";
 import { recordUndo, undoLast } from "../lib/undo";
 import { editKey, keepEdits } from "../lib/keptEdits";
-import { AgentChip, runChoiceDiffers, useAgentAvailability } from "../components/agent/AgentChip";
+import { AgentChip, resumeRunChoice, useAgentAvailability } from "../components/agent/AgentChip";
 import type { PausedAt } from "../components/agent/Composer";
 import { useImportTranscription } from "../components/media/TranscriptionAction";
 import { Dropzone, useImportCount, useUploader } from "../components/media/UploadDropzone";
@@ -2438,7 +2438,7 @@ export function SimpleWorkspace() {
     return true;
   };
   const { effective } = useAgentAvailability();
-  const resumeRunWith = effective && tasks.some(t => t.state === "queued" && t.resumesAfterProjectStop && !t.startedAt && runChoiceDiffers(t, effective)) ? effective : undefined;
+  const resumeRunWith = resumeRunChoice(tasks, effective);
   const composer = <WorkspaceComposer newEdit={!replyTo} playerVersion={playerVersion} mediaId={source?.id} key={JSON.stringify([current.id, replyTo])} thread={replyThread}
     // A new request is the latest thing said, so the chat goes to it. A cut or an edit that's open stays open.
     onCreated={() => { follow.current = true; }} onSent={sentUnder(aims.current)}

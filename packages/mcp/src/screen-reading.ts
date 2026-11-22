@@ -6,7 +6,7 @@
  * the other by hand across a whole edit is work a model skips: a pass that wrote every framing in one bulk edit never
  * looked (2026-11-17). This lines the two up on a version of the edit.
  */
-import { clipEnd, type MediaClip, type Timeline } from "@scarlet/timeline";
+import { clipEnd, sourceAt, type MediaClip, type Timeline } from "@scarlet/timeline";
 import { round2, round3 } from "./analysis.js";
 import type { TimelineWord } from "./timeline-perception.js";
 
@@ -50,8 +50,6 @@ function pictureClips(tl: Timeline, mediaIds: ReadonlySet<string>): Played[] {
     .map(clip => ({ clip, mediaId: clip.mediaId }))
     .sort((a, b) => a.clip.timelineIn - b.clip.timelineIn);
 }
-
-const sourceAt = (clip: MediaClip, t: number) => clip.sourceIn + (t - clip.timelineIn) * (clip.speed ?? 1);
 
 /**
  * The readings on a version: runs of heard words found, in order, in the text on screen of a recording whose picture
