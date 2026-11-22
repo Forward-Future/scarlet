@@ -2201,6 +2201,7 @@ export function SimpleWorkspace() {
   // has the timeline, so the name is kept from then. With the timeline on another request, or on none, the name must
   // not turn into "the edit at" where the request's passage starts: the box, the queue and the chat say the same words.
   const targetNames = useRef(new Map<string, string>());
+  const targetTimes = useRef(new Map<string, number>());
   const targetName = (about: AgentContext & object | Task["context"]) => {
     const { changeId, editIndex } = about;
     const key = changeId !== undefined && editIndex !== undefined ? `${changeId}/${editIndex}` : undefined;
@@ -2215,7 +2216,28 @@ export function SimpleWorkspace() {
     }
     const name = revisionTarget({ context: about } as Task, changes, placedEdits);
     if (key && name) targetNames.current.set(key, name);
+    if (key) {
+      const edit = placedEdits.find(e => matchesEdit(e, { changeId: changeId!, spot: editIndex! }));
+      if (edit) targetTimes.current.set(key, edit.at ?? edit.range.start);
+    }
     return name;
+  };
+  // Exact time for a time-bearing tag ("Cut at 2:05", "Edit at 0:11"), so the pill above the box shows milliseconds.
+  const targetTimeOf = (about: AgentContext & object) => {
+    const { changeId, editIndex, cutIndex } = about;
+    if (editIndex !== undefined && changeId !== undefined) {
+      const key = `${changeId}/${editIndex}`;
+      const placedEdits = threadTimeline.rejected.length ? [...threadEdits, ...threadTimeline.rejected] : threadEdits;
+      const edit = placedEdits.find(e => matchesEdit(e, { changeId, spot: editIndex }));
+      if (edit) return edit.at ?? edit.range.start;
+      const kept = targetTimes.current.get(key);
+      if (kept !== undefined) return kept;
+      const own = threads.find(t => t.changes.some(c => c.id === changeId));
+      const ownEdit = own && threadEditList(own).find(e => matchesEdit(e, { changeId, spot: editIndex }));
+      return ownEdit ? ownEdit.range.start : about.time;
+    }
+    if (cutIndex !== undefined) return about.time;
+    return undefined;
   };
   // The tag in the box says which cut or edit it is aimed at, so the line that names the aim is for screen readers only.
   const aimed = agentContext && agentContext !== "whole" ? agentContext : undefined;
@@ -2258,6 +2280,7 @@ export function SimpleWorkspace() {
     ? allCalls.find(a => a.index === aimed.cutIndex) ?? (aimed.end !== undefined ? { start: aimed.time, end: aimed.end } : undefined) : undefined;
   // A call's tag is only its number ("Cut 3"), so the box's tag line says where that cut is.
   const aimTime = boxTag && aimedCall && aimed && cutName(aimed) === boxTag ? (placeCut(aimedCall) ?? aimedCall).start : undefined;
+  const targetTime = aimed && replyThread && boxTag && aimTime === undefined ? targetTimeOf(aimed) : undefined;
   const aimLabel = !replyThread ? noteRun ? "Adding a note to the edit Scarlet is working on" : "Starting a new edit"
     : aimedCall && (targetLabel || aimedAtItem) ? `Revising the cut at ${clockLabel((placeCut(aimedCall) ?? aimedCall).start)}`
     : targetLabel ? `Revising ${targetLabel}`
@@ -2488,7 +2511,7 @@ export function SimpleWorkspace() {
     onCreated={() => { follow.current = true; }} onSent={sentUnder(aims.current)}
     // The box carries a tag naming the cut or edit it revises, or the point a new edit is about. Taking the tag off
     // makes the message a new edit about the whole video.
-    messageClock={messageClock} pausedAt={replyTo ? pausedAt : undefined} aimTime={aimTime}
+    messageClock={messageClock} pausedAt={replyTo ? pausedAt : undefined} aimTime={aimTime} targetTime={targetTime}
     targetTag={boxTag} onClearTarget={clearTarget} onRestoreTarget={restoreTarget} noteTo={!replyTo ? noteRun?.id : undefined}
     // A queued request's words have the box to themselves: its row in the tray, lit, says which request they are.
     rewording={rewordingItem && { id: rewordingItem.id, text: rewording!.text,
