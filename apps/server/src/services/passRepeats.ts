@@ -36,7 +36,8 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
   // findings this playback doesn't have.
   if (request.pictures && request.pictures.version !== tl.version) throw conflict("cut_changed", "Read the current edit and check its audio again.");
   const pictureFindings = request.pictures?.findings ?? [];
-  const check = await ctx.track(auditDialogueAudio(ctx, project, tl, task, AbortSignal.any([signal, ctx.projectSignal(projectId)]), request.silencesFrom), projectId);
+  const check = await ctx.track(auditDialogueAudio(ctx, project, tl, task, AbortSignal.any([signal, ctx.projectSignal(projectId)]), request.silencesFrom,
+    request.piecesUnder), projectId);
   return ctx.db.transaction(() => {
     const owner = current();
     const root = runRoot(owner);
@@ -82,8 +83,8 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
       }
     }
     if (request.keep.some(k => !check.repeats.some(r => r.id === k.id) && !check.silences.some(s => s.id === k.id) && !check.fragments.some(f => f.id === k.id) &&
-        !pictureFindings.some(p => p.id === k.id)))
-      throw badRequest("unknown_repeat", "A kept id must match a repeat, a silence, a divided sentence or a picture found on this version.");
+        !check.shortPieces.some(p => p.id === k.id) && !pictureFindings.some(p => p.id === k.id)))
+      throw badRequest("unknown_repeat", "A kept id must match a repeat, a silence, a short piece, a divided sentence or a picture found on this version.");
     if (request.keep.length) {
       const fresh = request.keep.filter(k => !kept.has(k.id));
       if (fresh.length) appendTaskEvent(ctx, owner, { type: "log", text: "", data: { kind: "repeat_kept", version: tl.version,
@@ -107,6 +108,9 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
     const within = (s: TimeRange, ranges: TimeRange[]) => ranges.some(p => p.start <= s.start + frame && p.end >= s.end - frame);
     const silences = check.silences.filter(s => !kept.has(s.id) && !within(s, protectedRanges) &&
       !stagedRanges.some(p => p.start < s.end - frame && p.end > s.start + frame));
+    // A piece between two cuts the pass kept on purpose, or one a cut staged for review takes out, is settled.
+    const shortPieces = check.shortPieces.filter(p => !kept.has(p.id) && !within({ start: p.from, end: p.to }, protectedRanges) &&
+      !stagedRanges.some(r => r.start < p.to - frame && r.end > p.from + frame));
     // A count and a range per recording, however long the pass: timeline_join_audit reads the range a page at a time.
     // One inside a range staged for review isn't played yet, as below.
     const unheardJoins = check.unheardJoins.flatMap(({ at, ...u }) => {
@@ -120,10 +124,10 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
     const last = owner.repeatAudit;
     // A picture finding is settled once the pass keeps it with its reason, or changes the picture there.
     const pictures = pictureFindings.filter(p => !kept.has(p.id));
-    const remaining = repeats.length + silences.length + fragments.length + pictures.length;
+    const remaining = repeats.length + silences.length + shortPieces.length + fragments.length + pictures.length;
     // A join inside a range staged for review isn't played yet; the review reads it.
     const joins = check.joins.filter(j => !stagedRanges.some(r => r.start - frame <= j.at && j.at <= r.end + frame));
-    const noFindings = !check.repeats.length && !check.silences.length && !check.fragments.length && !joins.length && !unheardJoins.length && !unavailable.length &&
+    const noFindings = !check.repeats.length && !check.silences.length && !check.shortPieces.length && !check.fragments.length && !joins.length && !unheardJoins.length && !unavailable.length &&
       !pictureFindings.length;
     // The receipt: what this reading left on the version it read, recorded with the request for the editor's window and
     // the evals. It holds nothing open: a pass that says it is done is done (2026-11-21). What an earlier engine noted of
@@ -135,6 +139,7 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
       repeats: repeats.slice(request.offset, request.offset + 25),
       ...(request.offset + 25 < Math.max(repeats.length, fragments.length) && { nextOffset: request.offset + 25 }),
       ...(silences.length && { silences: silences.slice(0, 25) }),
+      ...(shortPieces.length && { shortPieces: shortPieces.slice(0, 25) }),
       ...(fragments.length && { fragments: fragments.slice(request.offset, request.offset + 25) }),
       ...(pictures.length && { pictures: pictures.slice(0, 25) }),
       ...(check.unavailable.length && { unavailable: check.unavailable }),
