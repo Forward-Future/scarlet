@@ -328,7 +328,12 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     setError("");
     setHeard(true);
     try {
-      if (voiceReword.current || replying || !anchor || anchor.mediaId || !effective) return await speech.handle(r);
+      // A note at a moment takes no files or picture marks, so a spoken message that carries any goes through send as a request.
+      const carriesFiles = Boolean(
+        useAttachmentsStore.getState().byProject[project.id]?.some(a => a.state !== "failed")
+        || usePictureMarksStore.getState().byProject[project.id]?.marks.length,
+      );
+      if (voiceReword.current || replying || !anchor || anchor.mediaId || !effective || carriesFiles) return await speech.handle(r);
       setBusy(true);
       try {
         const { task } = await createVoiceNote(project.id, r.blob, { time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, version: anchor.version ?? head, assignTo: agentTarget(effective.agent, effective.model), effort: effective.effort, serviceTier: effective.serviceTier });
