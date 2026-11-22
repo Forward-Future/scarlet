@@ -11,9 +11,10 @@ import { clipRange, intervalCandidates, timelineDuration, type Change, type Clip
  * - `graphic` laid a graphic Scarlet made (a lower third, a title card) over the picture: a clip whose file is a graphic.
  * - `speed` changed how fast footage plays.
  * - `transition` set how the picture moves from one clip to the next at a join (a swipe, a dissolve, a dip).
+ * - `split` moved where a join's sound cuts against its picture: a J cut or an L cut.
  * - `other` did several of these at once, or something else (an assembly, a sync).
  */
-export type EditKind = "cut" | "restore" | "audio" | "zoom" | "reframe" | "text" | "broll" | "overlay" | "graphic" | "speed" | "transition" | "other";
+export type EditKind = "cut" | "restore" | "audio" | "zoom" | "reframe" | "text" | "broll" | "overlay" | "graphic" | "speed" | "transition" | "split" | "other";
 
 type Op = Record<string, unknown>;
 /**
@@ -93,6 +94,21 @@ function settled(time: number, later: Op[]): number {
   return time;
 }
 
+type SplitRecord = { leads?: number; trails?: number } | null | undefined;
+/**
+ * Where a split edit is, at each end of the sound it moved: from where the sound now cuts to where the picture does. A
+ * record taken off (null) is at the edge the step moved.
+ */
+function splitAt(clip: Extract<Clip, { kind: "media" }>, split: SplitRecord, patch?: Record<string, unknown>): TimeRange[] {
+  const end = clip.timelineIn + (clip.sourceOut - clip.sourceIn) / (clip.speed || 1);
+  const ranges: TimeRange[] = [];
+  if (split?.leads) ranges.push({ start: clip.timelineIn, end: clip.timelineIn + split.leads });
+  if (split?.trails) ranges.push({ start: end - split.trails, end });
+  if (ranges.length) return ranges;
+  const at = patch && "timelineIn" in patch ? clip.timelineIn : end;
+  return [{ start: at, end: at }];
+}
+
 /** Each op's facet, and where it lands on the finished cut when that can be told. */
 function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
   const laid = laidFiles(media);
@@ -135,6 +151,7 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
           ? { start: now(op.at), end: now(op.at + op.duration) } : undefined }];
       case "addClip": {
         const clip = op.clip as Clip | undefined;
+        if (clip?.kind === "media" && clip.splitEdit) return splitAt(clip, clip.splitEdit).map(range => ({ facet: "split" as const, range }));
         return clip ? [{ facet: placed(clip, op.trackId), range: range(clip) }] : [];
       }
       case "removeClip": {
@@ -150,7 +167,10 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
         const at = range(found?.clip);
         const keys = Object.keys(patch).filter(k => !NEUTRAL_KEYS.has(k));
         if (!keys.length) return [{ facet: "neutral", range: at }];
-        return keys.map(key => {
+        return keys.flatMap((key): Placed | Placed[] => {
+          // A split edit is at its join, between where the picture cuts and where the sound now does: one for each end.
+          if (key === "splitEdit") return found?.clip.kind === "media"
+            ? splitAt(found.clip, patch.splitEdit as SplitRecord, patch).map(range => ({ facet: "split" as const, range })) : [{ facet: "split" as const, range: at }];
           if (AUDIO_KEYS.has(key)) return { facet: "audio" as const, range: at };
           if (FRAMING_KEYS.has(key)) return { facet: "framing" as const, range: at };
           if (TEXT_KEYS.has(key)) return { facet: "text" as const, range: at };
@@ -212,6 +232,8 @@ function decide(facets: Facet[], framing: "zoom" | "reframe", { before, after }:
   // another overlay, they are overlays.
   if (set.has("graphic") && [...set].every(f => f === "graphic" || f === "audio")) return "graphic";
   if (set.has("broll") && [...set].every(f => f === "broll" || f === "audio")) return "broll";
+  // A split edit hands sound to a dialogue track and silences its picture to do it: it is still a split edit.
+  if (set.has("split") && [...set].every(f => f === "split" || f === "audio")) return "split";
   const laidOver = (f: Facet) => f === "overlay" || f === "broll" || f === "graphic" || f === "audio";
   if ((set.has("overlay") || set.has("broll") || set.has("graphic")) && [...set].every(laidOver)) return "overlay";
   if (set.size === 0) {

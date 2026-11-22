@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- Scarlet can make J and L cuts, letting the next voice start just before its shot or a line carry on over the next one, and the edit's card says how far the sound leads or trails.
 - Telling who is speaking works again on a new install: the speaker model downloads instead of failing every time.
 - A voice request aimed at a moment on the timeline now carries any attached files or marked frame with it instead of leaving them in the message box.
 - Skipping a second ahead with Shift+→ while watching a pass's edits no longer marks a skipped cut or edit as kept.

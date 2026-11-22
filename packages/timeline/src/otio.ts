@@ -258,6 +258,8 @@ function otioClip(clip: Clip, frames: number, rate: number, media: Map<string, M
         volume: clip.kind === "media" ? clip.volume : null,
         audioFadeIn: clip.kind === "media" ? clip.audioFadeIn : 0,
         audioFadeOut: clip.kind === "media" ? clip.audioFadeOut : 0,
+        // A split edit's sound is already where it plays, on its own track; this only names what moved it.
+        ...(clip.kind === "media" && clip.splitEdit ? { splitEdit: clip.splitEdit } : {}),
         // Files from before this was written gave a retimed clip's range the footage's length instead.
         ...(clip.kind === "media" && (clip.speed ?? 1) !== 1 ? { retimedLength: "timeline" } : {}),
       },
