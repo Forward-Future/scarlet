@@ -710,8 +710,9 @@ async function checkPartialWord(tl: Timeline, project: Pick<Project, "media">, c
 /** Read the two pieces that would play, clipping the listening windows at adjacent removals and source clip edges. */
 export async function checkKeptWords(tl: Timeline, project: Pick<Project, "media">, cut: TimeRange, nearby: NearbyWords,
   read?: ReadKeptWords, previousEnd = 0, nextStart = Infinity, playback?: JoinPlayback) {
-  const scan = playback?.partialOnly ? { repeatAtJoin: undefined, pickupRepeats: [] }
-    : dialogueJoinRepeats(nearby, cut, previousEnd, nextStart);
+  // A join staged for the editor is still read for a phrase it plays twice: the call reaches them as that join.
+  const repeats = dialogueJoinRepeats(nearby, cut, previousEnd, nextStart);
+  const scan = playback?.partialOnly ? { repeatAtJoin: repeats.repeatAtJoin, pickupRepeats: [] } : repeats;
   const unread = new Set<string>();
   if (!read) return { ...scan, partialWordRepeat: undefined, unread: [...unread] };
   const readWindow: ReadKeptWords = async (id, stream, from, to, cachedOnly) => {
