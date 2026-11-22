@@ -9,7 +9,7 @@ import { waitFor } from "../events.js";
 import { appendTaskEvent, cancelTask, completeTask, createTask, FINISHED_TASK, holdForRewording, PROJECT_EDIT_KINDS, rewordTask, saveTask, startBeforeCalls } from "../services/tasks.js";
 import { aboutStagedCut, followUpInstruction, taskPrompt } from "../services/taskPrompts.js";
 import { readPassRepeats } from "../services/passRepeats.js";
-import { callSentBack } from "../services/changes.js";
+import { callSentBack, prepareNextDecision } from "../services/changes.js";
 import { jsonBody, requireProjectHeader, requireScoped } from "./util.js";
 import { actorFor, agentName, logActivity, quote } from "../services/activity.js";
 import { continueWhenReady, interruptTask, retryTask } from "../services/taskRecovery.js";
@@ -94,7 +94,11 @@ export function taskRoutes(ctx: Ctx) {
         createdBy: actorFor(user),
       });
       // A pass set to apply when Scarlet finishes waits for a call the editor sends back, instead of applying over it.
-      if (changeId && cutIndex !== undefined) callSentBack(ctx, task);
+      if (changeId && cutIndex !== undefined) {
+        const pass = callSentBack(ctx, task);
+        // The editor moves on to the next call while Scarlet revises this one: it plays at once too.
+        prepareNextDecision(ctx, pass.changeId, pass.index);
+      }
       logActivity(ctx, {
         projectId: project.id,
         actor: actorFor(user),

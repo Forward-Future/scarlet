@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- After you keep, reject or send back a call, Scarlet gets the next one ready so it plays the moment you open it.
 - A Keep that didn't reach Scarlet while it was restarting or reconnecting is now sent again, instead of staying unrecorded until the next launch.
 - Play no longer gets stuck showing pause over a still picture when a video fails to load.
 - Rejecting the one named edit of a video Scarlet built from pieces no longer puts back the footage its cuts took out.
