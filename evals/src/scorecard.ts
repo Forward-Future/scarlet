@@ -306,7 +306,7 @@ export interface Card {
 }
 export interface Trial { caseId?: string; gradingSha256?: string; score: Score }
 
-const stat = (values: number[]): Stat | null => {
+export const stat = (values: number[]): Stat | null => {
   if (!values.length) return null;
   const mean = values.reduce((a, b) => a + b, 0) / values.length;
   return { mean: r1(mean), min: Math.min(...values), max: Math.max(...values), n: values.length,
@@ -314,7 +314,7 @@ const stat = (values: number[]): Stat | null => {
 };
 const numbers = (values: Array<number | null | undefined>) => values.filter((v): v is number => typeof v === "number");
 /** Recordings count equally; the spread is over every trial. */
-const acrossCases = (perCase: Array<Stat | null>): Stat | null => {
+export const acrossCases = (perCase: Array<Stat | null>): Stat | null => {
   const have = perCase.filter((s): s is Stat => !!s);
   return have.length ? { mean: r1(have.reduce((a, s) => a + s.mean, 0) / have.length), min: Math.min(...have.map(s => s.min)),
     max: Math.max(...have.map(s => s.max)), n: have.reduce((a, s) => a + s.n, 0) } : null;

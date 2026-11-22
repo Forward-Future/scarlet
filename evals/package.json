@@ -12,6 +12,8 @@
     "replay": "../node_modules/.bin/tsx src/replay.ts",
     "scorecard": "../node_modules/.bin/tsx src/scorecard.ts",
     "ledger": "../node_modules/.bin/tsx src/ledger.ts",
-    "in-use": "../node_modules/.bin/tsx src/inUse.ts"
+    "in-use": "../node_modules/.bin/tsx src/inUse.ts",
+    "picture-scorecard": "../node_modules/.bin/tsx src/pictureScorecard.ts",
+    "talked-about": "../node_modules/.bin/tsx src/talkedAbout.ts"
   }
 }

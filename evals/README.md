@@ -182,6 +182,42 @@ Deleting a project deletes its history from the library, so each run of the edit
 `<eval data>/in-use/history.json` and keeps reporting a project that has gone. `--db <copy> --save` adds a copy of a
 library taken before its projects were deleted.
 
+## The picture scorecard
+
+`pictureScorecard.ts` scores facts about what a cut shows, not a match with one editor's taste, with a ± from how much
+cuts of the same recording disagree. It reads no model.
+
+- **Clear of what you talk about.** While you say a sentence you marked, how much of the main thing you marked is on
+  screen: not under the camera, not cut off by a zoom or crop. It needn't be exact, so a cut scores by how close it
+  gets (a zoom that trims a tenth of the box scores 90% on that sentence), averaged over the sentences. A zoom into it
+  that keeps it all scores 100%. A crop may cut the wider view marked round it, and the camera over the wider view is
+  reported, not counted.
+- **Shown while you talk about it.** While you say a sentence you marked, the screen is on picture.
+- **Kept off when it mustn't show.** While you say a sentence you marked "don't show the screen" (H: your notes, a
+  script, a call), the screen isn't on picture.
+- **No flash shots.** No layout (camera, camera over the screen, screen) on for under 1.5 s between two others.
+
+The marks come from you: `talkedAbout.ts` opens a page on this computer that shows your screen recording with your
+voice, a sentence at a time, and you drag a box round the main thing you're talking about (1) and, if you like, one
+round the wider part of the screen that's also fine to show (2). N (nothing on this screen is what you mean) and H
+(this screen mustn't be shown) answer every sentence until the screen changes. The marks are saved as you go to
+`<eval data>/talked-about/<screen recording>.json`, and every cut of that recording is scored against them; a cut
+that plays a sentence you didn't mark isn't scored on it.
+
+The page offers only what the project's video plays now, so retakes and other footage its cut took out are never
+marked, and leaves out screens the video never puts on picture (`--all` offers everything). It asks about the most
+different screens first, one sentence each, then comes back for another on each screen, so a few minutes of marking
+covers every screen.
+
+```sh
+tsx evals/src/talkedAbout.ts --project <name>                 # mark sentences, at http://127.0.0.1:4719
+tsx evals/src/pictureScorecard.ts --project <name>            # the project's video as it is now
+tsx evals/src/pictureScorecard.ts <run dir> [<another run dir>] [--labels main,change]   # eval passes, compared
+tsx evals/src/pictureScorecard.ts --timeline <file>[,<file>]
+```
+
+run.ts saves each trial's `applied-timeline.json`, so eval passes can be scored on the picture later.
+
 ## Known moments, and how far trials agree
 
 Two trials of one configuration never make the same cut, so one rerun can't show whether a change fixed anything.
