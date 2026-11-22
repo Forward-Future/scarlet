@@ -48,7 +48,7 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
   const loading = new Map<number, AbortController>();
   const staged = new Map<number, ArrayBuffer>();
   let appended = -1;
-  let preroll: { first: number; last: number; finish(error?: Error): void } | undefined;
+  let preroll: { first: number; last: number; lastDone: number; onProgress?: (done: number, total: number) => void; finish(error?: Error): void } | undefined;
   let seekTimer: ReturnType<typeof setTimeout> | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let settledAt = -1;
@@ -145,9 +145,14 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
       // A short After audition buffers its lead-in and tail before the media clock starts. Rendering
       // the section after the join can take longer than the entire lead-in on a cold project.
       if (preroll) {
-        let firstMissing = preroll.first;
-        while (firstMissing <= preroll.last && ready.has(firstMissing)) firstMissing++;
-        if (firstMissing > preroll.last) preroll.finish();
+        let done = 0;
+        for (let i = preroll.first; i <= preroll.last; i++) if (ready.has(i)) done++;
+        const total = preroll.last - preroll.first + 1;
+        if (done !== preroll.lastDone) {
+          preroll.lastDone = done;
+          preroll.onProgress?.(done, total);
+        }
+        if (done >= total) preroll.finish();
       }
       let last = current;
       const playing = !video.paused;
@@ -284,7 +289,7 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
   video.addEventListener("waiting", starved);
   source.addEventListener("sourceopen", open, { once: true });
   video.src = url;
-  function bufferThrough(start: number, end: number, signal: AbortSignal) {
+  function bufferThrough(start: number, end: number, signal: AbortSignal, onProgress?: (done: number, total: number) => void) {
     return new Promise<void>((resolve, reject) => {
       signal.throwIfAborted();
       if (disposed) throw new DOMException("The stream closed.", "AbortError");
@@ -295,7 +300,14 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
         if (error) reject(error);
         else resolve();
       };
-      preroll = { first: indexAt(start), last: indexAt(Math.max(start, end - SECTION_EDGE)), finish };
+      const first = indexAt(start), last = indexAt(Math.max(start, end - SECTION_EDGE));
+      preroll = { first, last, lastDone: -1, onProgress, finish };
+      if (onProgress && !buffer) {
+        let done = 0;
+        for (let i = first; i <= last; i++) if (ready.has(i)) done++;
+        preroll.lastDone = done;
+        onProgress(done, last - first + 1);
+      }
       signal.addEventListener("abort", abort, { once: true });
       pump();
     });
