@@ -14,6 +14,8 @@ describe("drawing an applied edit on the timeline", () => {
     expect(editFocus(edit({ kind: "other" }), 3000)).toMatchObject({ bandLabel: "Edit", tone: "kept" });
     expect(editFocus(edit({}), 3000)).toMatchObject({ bandLabel: "Edit" });
     expect(editFocus(edit({ kind: "other", marker: true }), 3000)).toMatchObject({ bandLabel: "To do" });
+    // A spot Scarlet changed nothing at, to ask the editor to check it, says so.
+    expect(editFocus(edit({ kind: "other", onlyCheck: true }), 3000)).toMatchObject({ bandLabel: "Check" });
     expect(editFocus(edit({ kind: "other" }), 3000, "2 edits")).toMatchObject({ bandLabel: "2 edits" });
   });
 

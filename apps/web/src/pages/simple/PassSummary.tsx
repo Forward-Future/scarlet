@@ -187,7 +187,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     ...(pass?.calls ?? []).map(c => ({ key: callRowKey(c), at: c.start, displayAt: c.start, mark: c.at, hover: { threadId: thread.id, call: c.index }, label: c.summary, n: c.n, num: c.n as number | undefined, needs: c.state === "open", sentBack: c.state === "revising",
       decided: c.state === "approved" || c.state === "skipped",
       state: c.state === "approved" ? "Kept" : c.state === "skipped" ? "Rejected" : c.state === "revising" ? "Revising…" : c.version > 1 ? `v${c.version}` : undefined,
-      value: c.state === "approved" ? "Kept" : c.state === "skipped" ? "Rejected" : c.state === "revising" ? "Revising…" : undefined,
+      value: c.state === "approved" ? "Kept" : c.state === "skipped" ? "Rejected" : c.state === "revising" ? "Revising…" : c.tag,
       busy: c.state === "revising" && isWorking(c.run?.state),
       version: c.version > 1 ? c.version : 0, title: c.earlier && `v${c.version - 1}: ${c.earlier.reason ?? "Scarlet’s earlier version."}${c.earlier.note ? `\nYou: “${c.earlier.note}”` : ""}`,
       on: listening?.changeId === pass!.change.id && listening.index === c.index, word: undefined, revised: false, rejected: false, fresh: false,
@@ -273,7 +273,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
           onClick={e => { e.stopPropagation(); fold(moment); }}>{more}</span>}</>}</span>
       {/* The word a row ends on (v2, Kept, Revising…) says on hover what the requests about its cut or edit took:
           their time and tokens, nothing else. The rest of the row keeps the row's own hover. */}
-      {filter === "calls" ? row.state && <span className={row.busy ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(row.key)}>{row.state}</span>
+      {/* Every row ends on a word (2026-11-21, the editor's ask): where it stands once it has moved, or else what it is, as See all says. */}
+      {filter === "calls" ? (row.state ?? row.value) && <span className={row.busy ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(row.key)}>{row.state ?? row.value}</span>
         : row.value && <span className={row.busy && !row.word ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(row.key)}>{row.value}</span>}
       {/* An applied edit sent back, or come back revised, says so after its amount, as a row of any other request's
           list does: amber once it is back and waits on the editor, quiet while Scarlet is on it. */}

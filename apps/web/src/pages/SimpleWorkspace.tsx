@@ -34,7 +34,7 @@ import { Icon, Loading } from "../components/ui/primitives";
 import { api, errorMessage } from "../lib/client";
 import { readTimeline } from "../lib/timelineCache";
 import { appLog } from "../lib/appLog";
-import { clock as clockLabel, lengthLabel, parseTimestamp, plural } from "../lib/format";
+import { clock as clockLabel, lengthLabel, parseTimestamp, plural, removedSeconds } from "../lib/format";
 import { editPlaybackRange } from "../lib/editPlaybackRange";
 import { listMoments, momentRange } from "../lib/editMoments";
 import { editFocus, editKindWord } from "../lib/editKind";
@@ -1084,6 +1084,7 @@ export function SimpleWorkspace() {
       const edit = overrideForCall(a.index);
       const at = edit ? (edit.version === head ? edit.range.start : undefined) : placeCut(a)?.start;
       return { index: a.index, askOrder: a.askOrder, n: callNo.get(a.index)!, start: listedAt.get(a.index)!, at, summary: a.summary || a.reason, version: past.length + 1, earlier: past.at(-1),
+        tag: approves(a) === "cut" ? removedSeconds(a.end - a.start) : "Check",
         run: cutRuns.get(a.index),
         state: sentBack(a.index) ? "revising" : passChoices[a.index] === undefined ? "open" : passChoices[a.index] === approves(a) ? "approved" : "skipped" };
     }),
@@ -1814,7 +1815,7 @@ export function SimpleWorkspace() {
   const cutSwitched = shownSide?.side === "before" && shownSide.at !== undefined;
   // A marker left for the editor changed nothing in the video: its card says what it is, and has nothing to compare or undo.
   const shownMarker = !!reviewingEdit?.marker;
-  const shownKind = reviewingEdit && (shownMarker ? "To do" : editKindWord(reviewingEdit));
+  const shownKind = reviewingEdit && (shownMarker ? "To do" : reviewingEdit.onlyCheck ? (reviewRange ? undefined : "Check") : editKindWord(reviewingEdit));
   // The card's first line says exactly what the edit did: a cut's words, struck, or for any other edit what its steps
   // set (a caption's words, the file laid over the picture, how far a zoom goes). A moment holds several edits, and a
   // spot marked for the editor changed nothing, so neither has one.

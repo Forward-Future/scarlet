@@ -53,6 +53,8 @@ export interface PassCall {
   summary: string;
   state: CallState;
   version: number;
+  /** The word its row ends on while it waits: how much its cut takes out, or Check when Scarlet proposes keeping the footage. */
+  tag: string;
   /** The request about this cut that Scarlet is on, or the next one waiting, while it's sent back. */
   run?: Task;
   /** What the last version was and the note that sent it back, for a revised call. */
