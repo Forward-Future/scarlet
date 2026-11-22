@@ -102,6 +102,22 @@ describe("spawnLines", { timeout: 20_000 }, () => {
     expect(outcome).toMatchObject({ aborted: true, timedOut: false, killed: true });
   });
 
+  it.skipIf(process.platform === "win32")("settles a CLI that has ended while a process it started still holds its output open", async () => {
+    const dir = await tempDir();
+    const pidFile = join(dir, "pid");
+    // The child keeps the CLI's stdout and outlives it, in a group of its own as a daemon a tool started would be.
+    const script = `const c=require("child_process").spawn(process.execPath,["-e","setTimeout(()=>{},30000)"],{stdio:["ignore","inherit","inherit"],detached:true});require("fs").writeFileSync(${JSON.stringify(pidFile)},String(c.pid));c.unref();console.log("done")`;
+    const started = Date.now();
+    const { lines, done } = node(script, { drainAfterMs: 200 });
+    onTestFinished(async () => {
+      const pid = Number(await readFile(pidFile, "utf8").catch(() => ""));
+      if (pid) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+    });
+    expect(await done).toMatchObject({ code: 0, killed: false, timedOut: false });
+    expect(lines).toEqual(["done"]);
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
   it.skipIf(process.platform === "win32")("kills the group when the first stop is missed, and sends nothing once the CLI is gone", async () => {
     stops.calls = 0;
     stops.kills = 0;

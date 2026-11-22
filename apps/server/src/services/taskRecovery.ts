@@ -7,13 +7,12 @@ import { logId } from "../logText.js";
 import { recordTaskFinished } from "../telemetry/events.js";
 import { getTranscriptionProvider, presetLabel } from "../transcribe/index.js";
 import { errorMessage } from "../util.js";
-import { latestTranscription, startTranscription, transcribeForDialogue } from "./ingest.js";
+import { latestTranscription, startTranscription, transcribeForDialogue } from "./transcription.js";
 import { skillEditEnded, startLearningCheck } from "./learnings.js";
 import { runAttempts, runRoot } from "./runAttempts.js";
 import { recoveryInstruction, savedChanges } from "./taskRecap.js";
-import { appendTaskEvent, cancelTask, createTask, dropWaitingLooks, FINISHED_TASK, hasTranscript, PROJECT_EDIT_KINDS, recordWorkThrough, RESUMABLE, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
-
-export { recoveryInstruction } from "./taskRecap.js";
+import { appendTaskEvent, cancelTask, createTask, dropWaitingLooks, FINISHED_TASK, hasTranscript, PROJECT_EDIT_KINDS, recordWorkThrough, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
+import { RESUMABLE } from "./taskPrompts.js";
 
 /** A run that keeps losing its worker stops carrying on by itself after this many attempts, and waits for the editor. */
 const LOST_WORKER_ATTEMPTS = 3;
@@ -346,9 +345,10 @@ function resumeTask(ctx: Ctx, task: Task, opts: { choice?: RunChoice; afterProje
   // Scarlet's own resume after a quit or a pause keeps them, and an engine that starts finishes a check left waiting in
   // line that way (`settleClosingChecks`).
   const audit = task.repeatAudit && (byEditor ? { ...task.repeatAudit, returns: 0, totalReturns: undefined, queuedAt: undefined, failed: undefined } : task.repeatAudit);
-  // A request the editor started ahead of their calls was at work: it isn't put behind those calls again.
-  if (task.startsBeforeCalls || audit || task.reply) {
-    retry = saveTask(ctx, { ...retry, startsBeforeCalls: task.startsBeforeCalls, repeatAudit: audit, reply: task.reply });
+  // A request the editor started ahead of their calls was at work: it isn't put behind those calls again. The editor's
+  // notes to the request go on with it, those the run heard marked so: a session that carries on has them already.
+  if (task.startsBeforeCalls || audit || task.reply || task.notes?.length) {
+    retry = saveTask(ctx, { ...retry, startsBeforeCalls: task.startsBeforeCalls, repeatAudit: audit, reply: task.reply, notes: task.notes });
   }
   const proposal = task.kind === "revise" && task.context.changeId && ctx.repos.changes.get(task.context.changeId);
   // The revision begins again on the proposal it names while that one stands. A pass a later revision has replaced stays

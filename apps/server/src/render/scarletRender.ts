@@ -55,6 +55,7 @@ export const scarletRenderAdapter: RenderAdapter = {
       height: fields.height,
       hasAudio: probe.hasAudio,
       hasAlpha: probe.hasAlpha,
+      color: fields.color,
       kind,
       originalPlaybackType: originalPlaybackType(path, kind, probe.videoCodec, probe.audioCodec),
     };

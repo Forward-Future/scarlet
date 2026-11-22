@@ -97,6 +97,8 @@ const nativeSupport = new Map<string, boolean>();
 export function canPlayOriginal(media: MediaAsset): boolean {
   const type = media.originalPlaybackType;
   if ((media.kind !== "video" && media.kind !== "audio") || !type?.startsWith(`${media.kind}/`)) return false;
+  // An HDR original plays from its preview, tone-mapped to SDR as the video and its export are.
+  if (media.color?.hdr) return false;
   let supported = nativeSupport.get(type);
   if (supported === undefined) {
     supported = !!document.createElement("video").canPlayType(type);

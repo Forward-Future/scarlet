@@ -4,6 +4,8 @@ import { clipRange, intervalCandidates, timelineDuration, type Change, type Clip
  * What an applied edit did to the cut, so the timeline can draw it for what it is:
  * - `cut` took footage out, `restore` put footage back in.
  * - `audio` changed only sound (levels, room tone, a swapped dialogue track).
+ * - `dip` moved a clip's level over time, as music dipping under speech does.
+ * - `voice` cleaned a voice of the noise and the room around it.
  * - `zoom` and `reframe` moved or scaled the picture.
  * - `text` added or changed captions and titles.
  * - `broll` laid footage, or a picture taken from the web, over the picture: B-roll.
@@ -11,9 +13,10 @@ import { clipRange, intervalCandidates, timelineDuration, type Change, type Clip
  * - `graphic` laid a graphic Scarlet made (a lower third, a title card) over the picture: a clip whose file is a graphic.
  * - `speed` changed how fast footage plays.
  * - `transition` set how the picture moves from one clip to the next at a join (a swipe, a dissolve, a dip).
+ * - `split` moved where a join's sound cuts against its picture: a J cut or an L cut.
  * - `other` did several of these at once, or something else (an assembly, a sync).
  */
-export type EditKind = "cut" | "restore" | "audio" | "zoom" | "reframe" | "text" | "broll" | "overlay" | "graphic" | "speed" | "transition" | "other";
+export type EditKind = "cut" | "restore" | "audio" | "dip" | "voice" | "zoom" | "reframe" | "text" | "broll" | "overlay" | "graphic" | "speed" | "transition" | "split" | "other";
 
 type Op = Record<string, unknown>;
 /**
@@ -29,6 +32,10 @@ type Placed = { facet: Facet; range?: TimeRange; ask?: string; restated?: boolea
 type MarkerFields = { time?: unknown; text?: unknown; kind?: unknown; resolved?: unknown };
 
 const AUDIO_KEYS = new Set(["volume", "audioFadeIn", "audioFadeOut"]);
+/** Effects that change only sound. Any other effect changes the picture. */
+const AUDIO_EFFECTS = new Set(["denoise", "expander", "eq", "compressor", "limiter", "loudnorm", "voiceCleanup"]);
+type EffectFields = { type?: unknown; enabled?: unknown; params?: unknown };
+const cleansVoice = (effects: unknown) => Array.isArray(effects) && (effects as EffectFields[]).some(e => e?.type === "voiceCleanup" && e.enabled !== false);
 const FRAMING_KEYS = new Set(["transform", "keyframes"]);
 const TEXT_KEYS = new Set(["text", "words", "style"]);
 const OVERLAY_KEYS = new Set(["opacity", "videoFadeIn", "videoFadeOut", "color"]);
@@ -93,6 +100,21 @@ function settled(time: number, later: Op[]): number {
   return time;
 }
 
+type SplitRecord = { leads?: number; trails?: number } | null | undefined;
+/**
+ * Where a split edit is, at each end of the sound it moved: from where the sound now cuts to where the picture does. A
+ * record taken off (null) is at the edge the step moved.
+ */
+function splitAt(clip: Extract<Clip, { kind: "media" }>, split: SplitRecord, patch?: Record<string, unknown>): TimeRange[] {
+  const end = clip.timelineIn + (clip.sourceOut - clip.sourceIn) / (clip.speed || 1);
+  const ranges: TimeRange[] = [];
+  if (split?.leads) ranges.push({ start: clip.timelineIn, end: clip.timelineIn + split.leads });
+  if (split?.trails) ranges.push({ start: end - split.trails, end });
+  if (ranges.length) return ranges;
+  const at = patch && "timelineIn" in patch ? clip.timelineIn : end;
+  return [{ start: at, end: at }];
+}
+
 /** Each op's facet, and where it lands on the finished cut when that can be told. */
 function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
   const laid = laidFiles(media);
@@ -135,6 +157,7 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
           ? { start: now(op.at), end: now(op.at + op.duration) } : undefined }];
       case "addClip": {
         const clip = op.clip as Clip | undefined;
+        if (clip?.kind === "media" && clip.splitEdit) return splitAt(clip, clip.splitEdit).map(range => ({ facet: "split" as const, range }));
         return clip ? [{ facet: placed(clip, op.trackId), range: range(clip) }] : [];
       }
       case "removeClip": {
@@ -150,15 +173,28 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
         const at = range(found?.clip);
         const keys = Object.keys(patch).filter(k => !NEUTRAL_KEYS.has(k));
         if (!keys.length) return [{ facet: "neutral", range: at }];
-        return keys.map(key => {
+        return keys.flatMap((key): Placed | Placed[] => {
+          // A split edit is at its join, between where the picture cuts and where the sound now does: one for each end.
+          if (key === "splitEdit") return found?.clip.kind === "media"
+            ? splitAt(found.clip, patch.splitEdit as SplitRecord, patch).map(range => ({ facet: "split" as const, range })) : [{ facet: "split" as const, range: at }];
           if (AUDIO_KEYS.has(key)) return { facet: "audio" as const, range: at };
+          if (key === "volumeKeyframes") return { facet: "dip" as const, range: at };
           if (FRAMING_KEYS.has(key)) return { facet: "framing" as const, range: at };
           if (TEXT_KEYS.has(key)) return { facet: "text" as const, range: at };
           if (OVERLAY_KEYS.has(key)) return { facet: found && found.track.id !== baseVideo ? laid(found.clip) : "overlay" as const, range: at };
           if (key === "speed") return { facet: "speed" as const, range: at };
           // A transition is at its join, the clip's start, not along the clip.
           if (key === "transitionIn") return { facet: "transition" as const, range: found ? { start: found.clip.timelineIn, end: found.clip.timelineIn } : at };
-          if (key === "effects") return { facet: found?.track.kind === "audio" ? "audio" as const : "overlay" as const, range: at };
+          if (key === "effects") {
+            // An effect only the sound has is a sound edit wherever the clip is: voice cleanup on the camera's own sound.
+            const was = beforeClip(op.clipId)?.clip, had = was?.kind === "media" ? was.effects : [];
+            const now = Array.isArray(patch.effects) ? patch.effects as EffectFields[] : [];
+            const differs = [...now.filter(e => !had.some(h => JSON.stringify(h) === JSON.stringify(e))),
+              ...had.filter(h => !now.some(e => JSON.stringify(h) === JSON.stringify(e)))];
+            if (cleansVoice(now) && !cleansVoice(had)) return { facet: "voice" as const, range: at };
+            const sound = differs.length > 0 && differs.every(e => typeof e?.type === "string" && AUDIO_EFFECTS.has(e.type));
+            return { facet: sound || found?.track.kind === "audio" ? "audio" as const : "overlay" as const, range: at };
+          }
           return { facet: "other" as const, range: at };
         });
       }
@@ -208,10 +244,14 @@ function decide(facets: Facet[], framing: "zoom" | "reframe", { before, after }:
   // A cut can carry the trims and room tone that smooth its join; it is still a cut.
   if (set.has("cut") && !set.has("restore")) return "cut";
   if (set.has("restore") && !set.has("cut")) return "restore";
+  // A dip or a voice cleanup is what it is beside other sound edits: a music bed added and dipped is a dip.
+  for (const sound of ["dip", "voice"] as const) if (set.has(sound) && [...set].every(f => f === sound || f === "audio")) return sound;
   // A graphic laid over the picture is a graphic, and B-roll is B-roll, with or without sound. Laid together, or with
   // another overlay, they are overlays.
   if (set.has("graphic") && [...set].every(f => f === "graphic" || f === "audio")) return "graphic";
   if (set.has("broll") && [...set].every(f => f === "broll" || f === "audio")) return "broll";
+  // A split edit hands sound to a dialogue track and silences its picture to do it: it is still a split edit.
+  if (set.has("split") && [...set].every(f => f === "split" || f === "audio")) return "split";
   const laidOver = (f: Facet) => f === "overlay" || f === "broll" || f === "graphic" || f === "audio";
   if ((set.has("overlay") || set.has("broll") || set.has("graphic")) && [...set].every(laidOver)) return "overlay";
   if (set.size === 0) {

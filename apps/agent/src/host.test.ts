@@ -204,6 +204,50 @@ it("records the engine's resulting state and a question that no longer pauses th
   expect(lines.join("\n")).not.toContain("Private");
 });
 
+it("names a run started with runOne in its heartbeats, and stops it when a heartbeat's reply says it was cancelled", async () => {
+  const beats: string[][] = [];
+  let state: Task["state"] = "queued";
+  let cancel = false;
+  const client = new ScarletClient({
+    baseUrl: "https://fixture.test",
+    fetch: async (input, init) => {
+      const { pathname } = new URL(String(input));
+      if (pathname.endsWith("/hosts/register")) return Response.json({ host: { id: "host_1", userId: "u1", name: "one", platform: "test", agents: [], online: true } });
+      if (pathname.endsWith("/heartbeat")) {
+        beats.push((JSON.parse(String(init?.body)) as { running: string[] }).running);
+        if (cancel) state = "cancelled";
+        return Response.json({ cancelled: cancel ? [task.id] : [] });
+      }
+      if (pathname.endsWith("/claim")) return Response.json({ task: { ...task, state: state = "claimed" } });
+      if (pathname.endsWith("/prompt")) return Response.json({ systemPrompt: "SYS", instruction: "Edit this" });
+      if (pathname.endsWith("/complete")) return Response.json({ task: { ...task, state: state = "done" } });
+      return Response.json({ task: { ...task, state }, events: [] });
+    },
+  });
+  const host = (runner: RunAgentFn) => new AgentHost({
+    client, config: { server: "https://fixture.test", token: "fixture" }, workRoot, mcpCliPath: "fixture-mcp", runner,
+    detect: async () => [{ id: "claude", installed: true, loggedIn: true, version: "2.1.0", models: ["opus"] }],
+    heartbeatMs: 10, log: () => undefined,
+  });
+  // The engine fails a claimed run that no heartbeat names for 90 s as a lost worker.
+  const ended = await host(async () => {
+    await vi.waitFor(() => expect(beats.length).toBeGreaterThanOrEqual(2));
+    return { ok: true, summary: "" };
+  }).runOne(task.projectId, { kind: "edit", agent: "claude", instruction: task.instruction }, undefined, 5);
+  expect(ended.state).toBe("done");
+  expect(beats.slice(0, 2)).toEqual([[task.id], [task.id]]);
+
+  state = "queued";
+  cancel = true;
+  let aborted: unknown;
+  await host(async (opts) => {
+    await new Promise<void>((resolve) => opts.signal?.addEventListener("abort", () => resolve(), { once: true }));
+    aborted = opts.signal?.reason;
+    return { ok: false, summary: "", error: "stopped" };
+  }).runOne(task.projectId, { kind: "edit", agent: "claude", instruction: task.instruction }, undefined, 5);
+  expect(aborted).toBe("server-cancelled");
+});
+
 async function startHostAndWait(host: AgentHost, ready: Promise<unknown>) {
   const started = host.start();
   onTestFinished(async () => {

@@ -7,6 +7,7 @@ import type { TimeRange } from "@scarlet/timeline";
 import { FFMPEG_QUIET_ARGS, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, even, failureReason, ffSeconds, hasDrawtext, resolveFfmpeg, runCapture } from "./exec.js";
 import { drawtextFontArg } from "./fonts.js";
 import { withDecoderFallback } from "./probe.js";
+import { toneMapFilters, type HdrTransfer } from "./hdr.js";
 import { waveformFromPcm } from "./waveform.js";
 
 function input(file: string, range: TimeRange, decoder?: SheetOptions["decoder"]) {
@@ -73,11 +74,11 @@ export const UNLABELLED_SHEET = "The pictures have no time labels because this c
   + "left to right and top to bottom. Installing FFmpeg with Scarlet’s setup instructions and restarting Scarlet brings the labels back.";
 
 /** Each picture with its time under it; without `labels`, the same layout with the strip left blank. */
-function tileSheet(count: number, labels: boolean) {
+function tileSheet(count: number, labels: boolean, toneMap: string[] = []) {
   const columns = Math.min(3, count);
   const rows = Math.ceil(count / columns);
   const labelFont = drawtextFontArg();
-  return [sheetScale, "pad=320:204:(ow-iw)/2:(180-ih)/2", "setsar=1",
+  return [sheetScale, ...toneMap, "pad=320:204:(ow-iw)/2:(180-ih)/2", "setsar=1",
     ...labels ? [`drawtext=${labelFont}:text='%{pts\\:flt} s':fontsize=16:fontcolor=white:x=6:y=183`] : [],
     `tile=${columns}x${rows}:nb_frames=${count}:padding=2:color=black`].join(",");
 }
@@ -104,6 +105,8 @@ interface SheetOptions {
    * frames need turning (`storedAsShown`).
    */
   decoder?: "cuda" | "videotoolbox";
+  /** The file's HDR transfer (`MediaAsset.color.hdr`): the pictures are tone-mapped to SDR, on the CPU. */
+  hdr?: HdrTransfer;
   /** Hears why the window was read the slower way: the GPU could not decode it, or its pictures could not be kept from one read. */
   onFallback?: (reason: string) => void;
 }
@@ -111,8 +114,13 @@ interface SheetOptions {
 export async function contactSheet(file: string, range: TimeRange, opts: SheetOptions) {
   // CUDA frames stay on the GPU, where a clip stored sideways is not turned, so that clip decodes on the CPU.
   // VideoToolbox frames come back to memory and are turned as usual.
-  return withDecoderFallback(file, opts, "window", decoder => sheetFrom(file, range, { ...opts, decoder }));
+  // An HDR picture is tone-mapped on the CPU, which the bundled builds have no GPU filter for.
+  return withDecoderFallback(file, onCpuForHdr(opts), "window", decoder => sheetFrom(file, range, { ...opts, decoder }));
 }
+
+/** CUDA keeps frames on the GPU, where an HDR picture can't be tone-mapped. VideoToolbox frames come back to memory. */
+const onCpuForHdr = <O extends { hdr?: HdrTransfer; decoder?: SheetOptions["decoder"] }>(opts: O): O =>
+  opts.hdr && opts.decoder === "cuda" ? { ...opts, decoder: undefined } : opts;
 
 async function sheetFrom(file: string, range: TimeRange, opts: SheetOptions) {
   const duration = range.end - range.start;
@@ -128,6 +136,8 @@ async function sheetFrom(file: string, range: TimeRange, opts: SheetOptions) {
 
 async function readSheet(file: string, range: TimeRange, opts: SheetOptions, retainPictures: boolean) {
   const args = input(file, range, opts.decoder);
+  // An HDR picture is tone-mapped once it is sheet-sized, so the model sees what a normal screen shows.
+  const toneMap = await toneMapFilters(opts.hdr);
   const duration = range.end - range.start;
   const origin = opts.origin + range.start;
   const bin = resolveFfmpeg();
@@ -144,7 +154,8 @@ async function readSheet(file: string, range: TimeRange, opts: SheetOptions, ret
       ? shrinkFirst(opts.decoder, "192:108", activityFilterAt(opts.activityThreshold ?? ACTIVITY_THRESHOLD) + ",metadata=print:key=lavfi.bbox.w:file='pipe\\:2'")
       : shrinkFirst(opts.decoder, "160:-2", "scale=160:-2,select='gt(scene,0.22)',showinfo=checksum=0");
     const tiles = retainPictures ? ["-map", "0:v:0", "-an", "-vf",
-      shrinkFirst(opts.decoder, sheetSize, sheetScale + ":out_range=pc,format=yuv420p|yuv422p|yuv444p"), "-fps_mode", "passthrough",
+      shrinkFirst(opts.decoder, sheetSize, toneMap.length ? [sheetScale, ...toneMap, "scale=out_range=pc", "format=yuv420p"].join(",")
+        : sheetScale + ":out_range=pc,format=yuv420p|yuv422p|yuv444p"), "-fps_mode", "passthrough",
       "-enc_time_base", "demux", "-threads", "1", "-c:v", "rawvideo", "-f", "nut", "pipe:1"] : [];
     const scan = await runCapture(bin, [...args, ...(activity ? ["-map", "0:v:0"] : []), "-an", "-vf", filter,
       "-f", "null", "-", ...tiles], { ...optsIO, maxStdout: 48 * 1024 * 1024 });
@@ -155,7 +166,7 @@ async function readSheet(file: string, range: TimeRange, opts: SheetOptions, ret
   const times = sampleTimes(duration, opts.fps, opts.count, changes ?? scenes,
     opts.focus === undefined ? undefined : opts.focus - origin);
   const labels = await hasDrawtext(bin);
-  const graph = selectedSheet(duration, times, origin, labels);
+  const graph = selectedSheet(duration, times, origin, labels, pictures ? [] : toneMap);
   const selectedInput = pictures
     ? [...FFMPEG_QUIET_ARGS, "-copyts", "-color_range", "pc", "-f", "nut", "-i", "pipe:0"] : args;
   const { stdout, stderr } = await runCapture(bin, [...selectedInput, "-map", "0:v:0", "-an", "-vf", pictures ? graph : shrinkFirst(opts.decoder, sheetSize, graph),
@@ -164,13 +175,13 @@ async function readSheet(file: string, range: TimeRange, opts: SheetOptions, ret
 }
 
 /** Select the first displayed frame crossing each target and report its actual PTS. */
-function selectedSheet(duration: number, times: number[], origin: number, labels: boolean) {
+function selectedSheet(duration: number, times: number[], origin: number, labels: boolean, toneMap: string[] = []) {
   const select = ["isnan(prev_t)", ...times.slice(1).map(t => {
     const threshold = Math.max(0, t - 0.00001).toFixed(6);
     return `lt(prev_t,${threshold})*gte(t,${threshold})`;
   })].join("+");
   return [`trim=duration=${duration}`, `select='${select}'`, "settb=AVTB",
-    `setpts=PTS+${origin}/TB`, "showinfo=checksum=0", tileSheet(times.length, labels)].join(",");
+    `setpts=PTS+${origin}/TB`, "showinfo=checksum=0", tileSheet(times.length, labels, toneMap)].join(",");
 }
 
 function sheetResult(picture: Buffer, log: string, count: number) {
@@ -357,6 +368,8 @@ export interface ScreenFrameOptions {
   /** The size `screenFrameSize` gave for this recording. */
   width: number; height: number;
   decoder?: SheetOptions["decoder"];
+  /** The file's HDR transfer: the frames are tone-mapped to SDR, on the CPU. */
+  hdr?: HdrTransfer;
   signal?: AbortSignal;
   onFallback?: (reason: string) => void;
 }
@@ -370,7 +383,7 @@ export async function screenFrames(file: string, range: TimeRange, opts: ScreenF
   let delivered = 0;
   return withDecoderFallback(
     file,
-    opts,
+    onCpuForHdr(opts),
     "window",
     decoder => framesFrom(file, range, { ...opts, decoder }, decoder ? (i, rgb) => { delivered = i + 1; onFrame(i, rgb); } : onFrame),
     // Frames already handed over stay handed over: only fall back before the first frame is emitted.
@@ -380,7 +393,8 @@ export async function screenFrames(file: string, range: TimeRange, opts: ScreenF
 
 async function framesFrom(file: string, range: TimeRange, opts: ScreenFrameOptions, onFrame: (index: number, rgb: Buffer) => void) {
   const { width, height } = opts, size = width * height * 3;
-  const filter = shrinkFirst(opts.decoder, `${width}:${height}`, `fps=${opts.fps}:round=down,scale=${width}:${height}:flags=area,format=rgb24`);
+  const toneMap = (await toneMapFilters(opts.hdr)).map(f => f + ",").join("");
+  const filter = shrinkFirst(opts.decoder, `${width}:${height}`, `fps=${opts.fps}:round=down,scale=${width}:${height}:flags=area,${toneMap}format=rgb24`);
   let pending: Buffer[] = [], held = 0, index = 0;
   await runCapture(resolveFfmpeg(), [...input(file, range, opts.decoder), "-loglevel", "error", "-map", "0:v:0", "-an", "-vf", filter,
     "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], {

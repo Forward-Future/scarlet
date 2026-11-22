@@ -1,5 +1,5 @@
 import type { User } from "@scarlet/shared";
-import { diffTimelines, HistoryConflict, makeTimeMap, newId, planRevert, putBackCut, putBackLooks, timelineDuration, type Change, type TimeRange } from "@scarlet/timeline";
+import { diffTimelines, HistoryConflict, makeTimeMap, newId, planRevert, putBackCut, putBackLooks, putBackSplit, timelineDuration, type Change, type TimeRange } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { conflict, notFound } from "../errors.js";
@@ -101,7 +101,8 @@ export interface RejectedEdit {
 
 /**
  * Reject applied edits with no model, wherever the engine knows exactly what they changed. A cut's footage goes back at
- * its join. An edit of a change that only set how clips look or sound goes back to how those clips were. A change whose
+ * its join. An edit of a change that only set how clips look or sound goes back to how those clips were. A split edit's
+ * sound cuts with its picture again. A change whose
  * every edit is rejected comes out whole, as History's Undo takes it out. Every other edit stays as it is.
  *
  * It is refused (`needs_scarlet`) where the engine can't tell what an edit changed, where a later edit changed it
@@ -125,7 +126,10 @@ export function rejectEdits(ctx: Ctx, user: User, projectId: string, threadId: s
       if (!change || change.projectId !== projectId || change.state !== "approved" || !version || edits.some(e => e.revised)) throw unclear();
       const named = change.timelineEdits;
       const spots = new Set(edits.map(e => e.spot));
-      if (named?.length && named.length === spots.size && [...spots].every(spot => spot < named.length) && rejected.length === edits.length) {
+      // The footage a built video left out is the change's too, a cut of its own on each row after the named edits:
+      // while those stand, the named edits aren't every edit, and taking the change out would put their footage back.
+      const everyEdit = named?.length && named.length === spots.size && [...spots].every(spot => spot < named.length) && !change.leftOut?.joins.length;
+      if (everyEdit && rejected.length === edits.length) {
         // Every edit the change made is rejected and nothing else is: the change comes out, with what was made on it kept.
         try {
           result = planRevert(ctx.repos.versions.links(projectId), head, version, fps, id => resolveTimeline(ctx, project, id), id => ctx.repos.changes.get(id));
@@ -140,7 +144,8 @@ export function rejectEdits(ctx: Ctx, user: User, projectId: string, threadId: s
       if (!before || !after || !change.ops?.length) throw unclear();
       for (const edit of edits) {
         const range = named?.[edit.spot]?.range;
-        const next = range && putBackLooks(result, before, after, change.ops, range, named!.map(item => item.range), fps);
+        const next = range && (putBackLooks(result, before, after, change.ops, range, named!.map(item => item.range), fps)
+          ?? putBackSplit(result, before, after, change.ops, range));
         if (!next) throw unclear();
         result = next;
       }

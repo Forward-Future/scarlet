@@ -3,7 +3,7 @@
  * caption mapping and timeline summaries.
  * No I/O here so everything is unit-testable.
  */
-import type { Clip, MediaClip, Project, TimeRange, Timeline, Transcript, TranscriptWord } from "@scarlet/timeline";
+import type { Clip, MediaAsset, MediaClip, Project, TimeRange, Timeline, Transcript, TranscriptWord } from "@scarlet/timeline";
 import { clipEnd, formatTimecode, mergeRanges, rangesOverlap, timelineDuration } from "@scarlet/timeline";
 import { normalizeTranscriptToken } from "@scarlet/shared";
 
@@ -179,7 +179,10 @@ function describeClip(clip: Clip, fps = 30): string {
     const speed = clip.speed && clip.speed !== 1 ? ` x${clip.speed}` : "";
     const vol = clip.volume === 0 ? " muted" : "";
     const fades = clip.audioFadeIn || clip.audioFadeOut ? ` fades ${round3(clip.audioFadeIn ?? 0)}/${round3(clip.audioFadeOut ?? 0)}` : "";
-    return `${clip.id}${label} ${range} <- ${clip.mediaId} ${clip.sourceIn.toFixed(2)}–${clip.sourceOut.toFixed(2)}${speed}${vol}${fades}${off}`;
+    // A level that moves, and a voice cleaned, are said in a word: format full gives the keys and the effect.
+    const level = clip.volumeKeyframes?.length ? ` level keys ${clip.volumeKeyframes.length}` : "";
+    const voice = clip.effects?.some(e => e.type === "voiceCleanup" && e.enabled !== false) ? " voice cleanup" : "";
+    return `${clip.id}${label} ${range} <- ${clip.mediaId} ${clip.sourceIn.toFixed(2)}–${clip.sourceOut.toFixed(2)}${speed}${vol}${fades}${level}${voice}${off}`;
   }
   if (clip.kind === "caption") {
     return `${clip.id} ${range} caption "${truncate(clip.text, 60)}"${off}`;
@@ -235,6 +238,7 @@ export function summarizeProject(project: Project, timeline: Timeline | null, br
       m.hasAudio ? "audio" : "",
       m.kind === "graphic" ? "" : m.transcriptId ? "transcript" : "no transcript",
       m.graphic ? `drawn from ${m.graphic.source}` : "",
+      colorEvidence(m.color) ?? "",
     ]
       .filter(Boolean)
       .join(", ");
@@ -244,6 +248,21 @@ export function summarizeProject(project: Project, timeline: Timeline | null, br
   // The empty timeline's tracks are stated: three passes in three began by adding a video track "v1" and were refused.
   else lines.push("No timeline yet. The first edit starts from an empty one that already has a video track v1 and an audio track a1.");
   return lines.join("\n");
+}
+
+/**
+ * What a file declares about its picture's colour, when it isn't ordinary SDR: HDR, which Scarlet tone-maps to SDR
+ * itself, a camera Log curve, which stays as shot, or colour tags other than BT.709.
+ */
+export function colorEvidence(color: MediaAsset["color"]): string | undefined {
+  if (!color) return undefined;
+  const parts: string[] = [];
+  if (color.hdr) parts.push(`HDR ${color.hdr === "hlg" ? "HLG" : "PQ"}, shown, read and exported tone-mapped to SDR BT.709`);
+  if (color.log) parts.push(`camera Log (${color.log}), flat and low in contrast as shot, no look applied`);
+  if (!parts.length && (color.primaries || color.transfer)) {
+    parts.push(`colour tagged ${[color.primaries && `primaries ${color.primaries}`, color.transfer && `transfer ${color.transfer}`].filter(Boolean).join(", ")}`);
+  }
+  return parts.length ? parts.join("; ") : undefined;
 }
 
 export function truncate(s: string, n: number): string {

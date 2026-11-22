@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { applyOps, createProject, timelineFromKeepRanges, type Project } from "@scarlet/timeline";
+import { applyOps, createProject, emptyTimeline, makeMediaClip, splitJoinOps, timelineFromKeepRanges, type MediaClip, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
 import { localUser } from "../auth.js";
 import { recordHistoryEdit, rejectEdits } from "./cutHistory.js";
@@ -105,6 +105,58 @@ it("takes a look edit off again itself, undoes a request whose every edit is rej
   expect(scales(reject([close]).project.head!)).toEqual([undefined, undefined, undefined]);
 });
 
+it("puts one split edit's sound back on its picture cut itself, and keeps the other", () => {
+  const { ctx } = app;
+  const user = localUser(ctx);
+  for (const id of ["host", "guest"]) ctx.repos.projects.putMedia(project.id, { id, name: `${id}.mov`, kind: "video", path: `${id}.mov`, hasAudio: true, duration: 60 }, "ready");
+  const talk = emptyTimeline(project.id);
+  talk.tracks[0]!.clips = [makeMediaClip("host", 2, 12, 0, { id: "ask" }), makeMediaClip("guest", 10, 20, 10, { id: "answer" }), makeMediaClip("host", 30, 40, 20, { id: "react" })];
+  const first = storeVersion(ctx, project.id, talk, { parent: null });
+  const { ops } = splitJoinOps(first, ctx.repos.projects.get(project.id)!.media, 25, [{ at: 10, shift: -0.24 }, { at: 20, shift: 0.5 }]);
+  const split = storeVersion(ctx, project.id, applyOps(first, ops), { parent: first.version, changeId: "chg_split" });
+  ctx.repos.changes.put({ id: "chg_split", projectId: project.id, description: "Split edits", author: { type: "agent", id: "codex", name: "codex" }, state: "approved", noteIds: [], renders: [], ranges: [],
+    fromVersion: first.version, toVersion: split.version, appliedOnto: first.version, appliedVersion: split.version, ops,
+    timelineEdits: [{ label: "J cut at 0:10", range: { start: 9.76, end: 10 } }, { label: "L cut at 0:20", range: { start: 20, end: 20.5 } }],
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  ctx.repos.projects.update(project.id, { head: split.version });
+  const { project: after } = rejectEdits(ctx, user, project.id, "thread", [{ changeId: "chg_split", spot: 1, label: "L cut at 0:20", range: { start: 20, end: 20.5 } }],
+    split.version, ctx.repos.projects.get(project.id)!.branch ?? "main");
+  const tl = ctx.repos.versions.get(project.id, after.head!)!.timeline;
+  const clip = (id: string) => tl.tracks.flatMap(t => t.clips).find(c => c.id === id) as MediaClip;
+  // The reaction plays its own sound again; the answer's sound still leads into its picture and ends on the cut.
+  expect(clip("react").volume).toBe(1);
+  const answer = tl.tracks.find(t => t.kind === "audio" && t.clips.some(c => c.kind === "media" && c.mediaId === "guest"))!.clips.find(c => c.kind === "media" && c.mediaId === "guest") as MediaClip;
+  expect(answer).toMatchObject({ timelineIn: 9.76, sourceOut: 20, splitEdit: { leads: 0.24 } });
+});
+
+it("takes one music dip back with no model, after a later cut split the music it was on, and leaves the other", () => {
+  const { ctx } = app;
+  const user = localUser(ctx);
+  ctx.repos.projects.putMedia(project.id, { id: "camera", name: "interview.mov", kind: "video", path: "camera.mov" }, "ready");
+  ctx.repos.projects.putMedia(project.id, { id: "music", name: "bed.wav", kind: "audio", path: "bed.wav" }, "ready");
+  const start = timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 60 }]);
+  start.tracks.push({ id: "music", kind: "audio", name: "Music", muted: false, hidden: false, clips: [
+    makeMediaClip("music", 0, 20, 0, { id: "intro" }), makeMediaClip("music", 100, 120, 40, { id: "outro" })] });
+  const first = storeVersion(ctx, project.id, start, { parent: null });
+  const dip = [{ time: 2, db: 0, ease: "easeInOut" as const }, { time: 2.3, db: -18, ease: "linear" as const },
+    { time: 9, db: -18, ease: "easeInOut" as const }, { time: 9.8, db: 0, ease: "linear" as const }];
+  const ops = [{ op: "updateClip" as const, clipId: "intro", patch: { volumeKeyframes: dip } }, { op: "updateClip" as const, clipId: "outro", patch: { volumeKeyframes: dip } }];
+  const dipped = storeVersion(ctx, project.id, applyOps(first, ops), { parent: first.version, changeId: "chg_dip" });
+  const base = { projectId: project.id, author: { type: "agent" as const, id: "codex", name: "codex" }, state: "approved" as const, noteIds: [], renders: [], ranges: [],
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  ctx.repos.changes.put({ ...base, id: "chg_dip", description: "Dipped the music under speech", fromVersion: first.version, toVersion: dipped.version,
+    appliedOnto: first.version, appliedVersion: dipped.version, ops,
+    timelineEdits: [{ label: "Dip the intro music", range: { start: 0, end: 20 } }, { label: "Dip the outro music", range: { start: 40, end: 60 } }] });
+  // A later cut takes 5–6 s out of every track, through the intro's music.
+  const cut = storeVersion(ctx, project.id, applyOps(dipped, [{ op: "rippleDelete", start: 5, end: 6 }]), { parent: dipped.version });
+  ctx.repos.projects.update(project.id, { head: cut.version });
+  const branch = ctx.repos.projects.get(project.id)!.branch ?? "main";
+  const result = rejectEdits(ctx, user, project.id, "thread", [{ changeId: "chg_dip", spot: 0, label: "Dip the intro music", range: { start: 0, end: 19 } }],
+    cut.version, branch);
+  const music = ctx.repos.versions.get(project.id, result.project.head!)!.timeline.tracks.find(t => t.id === "music")!.clips;
+  expect(music.map(c => [c.id === "outro" ? "outro" : "intro", c.kind === "media" && c.volumeKeyframes?.length])).toEqual([["intro", undefined], ["intro", undefined], ["outro", 4]]);
+});
+
 it("undoes a request whose only edit is rejected, whatever it changed", () => {
   const { ctx } = app;
   const user = localUser(ctx);
@@ -120,4 +172,24 @@ it("undoes a request whose only edit is rejected, whatever it changed", () => {
     marked.version, ctx.repos.projects.get(project.id)!.branch ?? "main");
   expect(change).toMatchObject({ rejects: true, description: "Rejected · Title" });
   expect(ctx.repos.versions.get(project.id, after.head!)!.timeline.markers).toEqual([]);
+});
+
+it("keeps the cuts a built video left out when its one named edit is rejected", () => {
+  const { ctx } = app;
+  const user = localUser(ctx);
+  ctx.repos.projects.putMedia(project.id, { id: "camera", name: "interview.mov", kind: "video", path: "camera.mov" }, "ready");
+  const first = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 60 }]), { parent: null });
+  // The change built the video from two pieces, which left 20-30 s out, and named one edit besides: a title's marker.
+  const built = timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 20 }, { start: 30, end: 60 }]);
+  const ops = [{ op: "addMarker" as const, marker: { id: "mark", time: 5, text: "Title here" } }];
+  const marked = storeVersion(ctx, project.id, applyOps(built, ops), { parent: first.version, changeId: "chg_built" });
+  ctx.repos.changes.put({ id: "chg_built", projectId: project.id, description: "Built the video", author: { type: "agent", id: "codex", name: "codex" }, state: "approved", noteIds: [], renders: [], ranges: [],
+    fromVersion: first.version, toVersion: marked.version, appliedOnto: first.version, appliedVersion: marked.version, ops,
+    timelineEdits: [{ label: "Title", range: { start: 5, end: 5 } }], leftOut: { version: first.version, joins: [{ at: 20, removed: { start: 20, end: 30 } }] },
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  ctx.repos.projects.update(project.id, { head: marked.version });
+  // The title isn't every edit of the change: taking the change out would put the cut's footage back unasked.
+  expect(() => rejectEdits(ctx, user, project.id, "thread", [{ changeId: "chg_built", spot: 0, label: "Title", range: { start: 5, end: 5 } }],
+    marked.version, ctx.repos.projects.get(project.id)!.branch ?? "main")).toThrow("This edit can’t be put back as it was.");
+  expect(ctx.repos.projects.get(project.id)!.head).toBe(marked.version);
 });

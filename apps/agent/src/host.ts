@@ -88,6 +88,8 @@ export class AgentHost {
   private readonly log: (msg: string) => void;
   private agents: AgentAvailability[] = [];
   private running = new Map<string, RunningTask>(); // taskId -> run
+  private beating = false;
+  private beatAgain = false;
   /** Running task count per runtime; each may run up to maxParallel at once. */
   private busy = new Map<AgentId, number>();
   /** Running side checks per runtime, in slots of their own (`sideCheckSlots`), so a request never waits for its own checks behind itself. */
@@ -101,6 +103,7 @@ export class AgentHost {
   private wsTimer: NodeJS.Timeout | null = null;
   private loopPromise: Promise<void> | null = null;
   private quotaRefreshPromise: Promise<void> | null = null;
+  private quotaQueued: { agents: Set<AgentId> | null; promise: Promise<void> } | null = null;
   private lastQuotaAt = 0;
 
   constructor(opts: HostOptions) {
@@ -194,7 +197,22 @@ export class AgentHost {
         break;
       }
       if (claimed) {
-        await this.runTask(claimed, signal);
+        // Listed as running and named in a heartbeat, as `launch` does: the engine takes a claimed run that no
+        // heartbeat names for 90 s as lost, fails it and queues a resume, while this CLI works on.
+        const controller = new AbortController();
+        const follow = () => controller.abort(signal.reason);
+        if (signal.aborted) follow();
+        else signal.addEventListener("abort", follow, { once: true });
+        const promise = this.runTask(claimed, controller.signal);
+        this.running.set(claimed.id, { task: claimed, controller, promise });
+        const beat = setInterval(() => void this.heartbeat(), this.opts.heartbeatMs ?? 30_000);
+        try {
+          await promise;
+        } finally {
+          clearInterval(beat);
+          signal.removeEventListener("abort", follow);
+          if (this.running.get(claimed.id)?.controller === controller) this.running.delete(claimed.id);
+        }
         break;
       }
       // Held behind the project's other requests.
@@ -225,13 +243,29 @@ export class AgentHost {
 
   private async heartbeat(): Promise<void> {
     if (!this.config.hostId) return;
+    // One at a time: an engine that is slow to answer isn't sent a burst when it comes back. What was asked for
+    // meanwhile (a new quota to report, the next tick) goes in one heartbeat after it.
+    if (this.beating) {
+      this.beatAgain = true;
+      return;
+    }
+    this.beating = true;
     try {
-      await this.client.heartbeat(this.config.hostId, this.agents, [...this.running.keys()]);
-      await this.checkCancellations();
+      const reply = await this.client.heartbeat(this.config.hostId, this.agents, [...this.running.keys()]);
+      // The reply names the runs cancelled before this host subscribed, or while it was disconnected. An engine
+      // from before that reply is asked about each run.
+      if (reply?.cancelled) for (const id of reply.cancelled) this.running.get(id)?.controller.abort("server-cancelled");
+      else await this.checkCancellations();
     } catch (err) {
       this.log(`heartbeat failed: ${errMsg(err)}`);
       // Host may have been forgotten by a restarted server: re-register.
       if (isStatus(err, 404)) await this.register().catch((e) => this.log(`re-register failed: ${errMsg(e)}`));
+    } finally {
+      this.beating = false;
+      if (this.beatAgain && !this.stopped) {
+        this.beatAgain = false;
+        void this.heartbeat();
+      }
     }
   }
 
@@ -244,8 +278,20 @@ export class AgentHost {
     if (!force && this.lastQuotaAt > 0 && Date.now() - this.lastQuotaAt < QUOTA_TTL_MS) return;
     if (this.quotaRefreshPromise) {
       if (!force) return this.quotaRefreshPromise;
-      await this.quotaRefreshPromise.catch(() => undefined);
-      if (this.stopped) return;
+      // Runs that finish together share the one refresh that follows the probe in flight, rather than a CLI each.
+      const queued = this.quotaQueued;
+      if (queued) {
+        if (!opts.agents) queued.agents = null;
+        else for (const id of opts.agents) queued.agents?.add(id);
+        return queued.promise;
+      }
+      const next: { agents: Set<AgentId> | null; promise: Promise<void> } = { agents: opts.agents ? new Set(opts.agents) : null, promise: Promise.resolve() };
+      next.promise = this.quotaRefreshPromise.catch(() => undefined).then(() => {
+        this.quotaQueued = null;
+        return this.refreshQuotas({ force: true, ...(next.agents && { agents: [...next.agents] }) });
+      });
+      this.quotaQueued = next;
+      return next.promise;
     }
     const probe = this.opts.probeQuota ?? probeSubscriptionQuota;
     const env = this.opts.env ?? process.env;
@@ -595,7 +641,8 @@ export class AgentHost {
         const interrupted = (state === "cancelled" && this.stopped) || stopped || carriesOn;
         await this.cleanupTaskWorkspace(task, cwd, signal, landed, interrupted);
       }
-      if (!this.stopped && state !== "cancelled") {
+      // A side check is small and many finish together: the request they belong to reads the quota when it ends.
+      if (!this.stopped && state !== "cancelled" && !isSideCheck(task)) {
         void this.refreshQuotas({ force: true, agents: [task.agent] });
       }
     };

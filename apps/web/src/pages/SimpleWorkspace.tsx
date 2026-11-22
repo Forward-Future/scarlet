@@ -659,6 +659,10 @@ export function SimpleWorkspace() {
   const [replyTo, setReplyTo] = useState<string>();
   const replyThread = threads.find(t => t.id === replyTo);
   const replyGone = !!replyTo && !replyThread;
+  // "Add a note" on the working line of the request Scarlet is on aims a new edit's box at that run, tagged Note. The
+  // note follows the run to the attempt that carries it on after a quit or a pause. Any other aim takes it off.
+  const [noteTo, setNoteTo] = useState<string>();
+  const noteRun = noteTo ? lastAttempt(tasks.find(t => t.id === noteTo), tasks) : undefined;
   // Words chosen in the transcript that just took the box off a call to start a new edit: they are the message's, even
   // before anything is typed, so the move they made doesn't take them off again.
   const askedWords = useRef<AgentContext | undefined>(undefined);
@@ -697,6 +701,7 @@ export function SimpleWorkspace() {
     countAim();
     openDraft(current.id, thread.id);
     setReplyTo(thread.id);
+    setNoteTo(undefined);
     setTargetLabel(label);
     useUiStore.getState().setAgentContext(target);
   }
@@ -1022,10 +1027,19 @@ export function SimpleWorkspace() {
     openDraft(current.id, thread.id);
     setTargetLabel(undefined);
     setReplyTo(thread.id);
+    setNoteTo(undefined);
     const ui = useUiStore.getState();
     // The answer goes to the question. A cut or an edit the box was on would make it a revision of that instead.
     ui.setAgentContext(null);
     ui.focusComposer();
+  }
+  /** "Add a note": the box starts a new edit that goes to the run Scarlet is on as a note, with any words being written. */
+  function addNote(taskId: string) {
+    if (useUiStore.getState().speaking) return;
+    settleAim.current("new");
+    countAim();
+    setNoteTo(taskId);
+    useUiStore.getState().focusComposer();
   }
 
   const settingsOpen = useUiStore(s => s.projectSettingsOpen);
@@ -1121,6 +1135,7 @@ export function SimpleWorkspace() {
     review: reviewSuggestion,
     revise: reviseChange,
     reply: replyToThread,
+    addNote,
     cutName,
     callNumber: (changeId, cutIndex) => callNumber({ changeId, cutIndex }),
   };
@@ -1177,6 +1192,9 @@ export function SimpleWorkspace() {
   // The applied edit on screen, so Revise is about it and not a proposal still waiting.
   // An edit another request made is open here when this request flagged it (`Thread.flagged`).
   const shownChange = shownEdit && focusChanges.find(c => belongsTo(shownEdit, c));
+  // The card names voice cleanup only where its edit put it on or changed it, read against the version the edit was made on.
+  const shownCleanup = !!shownChange?.ops?.some(o => o.op === "updateClip" && JSON.stringify(o.patch).includes("voiceCleanup"));
+  const shownChangeBefore = useReviewTimeline(current.id, shownCleanup ? shownChange!.fromVersion : undefined, timeline).timeline;
   // Keep (K) records that the edit was reviewed and moves on to the next flagged edit that hasn't been; Revise (R) changes this one.
   const reviewingEdit = shownEdit && shownChange && focusThread ? shownEdit : undefined;
   const threadEdits = threadTimeline.edits;
@@ -1919,7 +1937,7 @@ export function SimpleWorkspace() {
   const editDid = !reviewingEdit || threadTimeline.selectedMoment || shownMarker ? undefined
     : beforeCut ? cutBefore.timeline && <CutWordsLine key={`what ${editKey(reviewingEdit)}`} timeline={cutBefore.timeline} media={media}
       range={beforeCut.removed} length={lengthLabel(removedLength)} verb="Took out" />
-    : (detail => detail && <p className="edit-card-what">{detail}</p>)(editDetail(shownChange, reviewingEdit, { timeline, media }));
+    : (detail => detail && <p className="edit-card-what">{detail}</p>)(editDetail(shownChange, reviewingEdit, { timeline, before: shownChangeBefore, media, fps }));
   // The transcript stays folded away. Its icon on the card opens it for this edit only.
   const scriptKey = reviewingEdit && beforeCut ? editKey(reviewingEdit) : undefined;
   const scriptOpen = !!scriptKey && scriptFor === scriptKey;
@@ -2126,6 +2144,7 @@ export function SimpleWorkspace() {
     const box = useUiStore.getState();
     aimForItem.current = !!aim.target;
     setReplyTo(aim.thread?.id);
+    setNoteTo(undefined);
     if (typing) ui.focusComposer();
     // A message saved for this request comes back as it was aimed.
     if (!carry && box.agentDraft.trim()) return setTargetLabel(undefined);
@@ -2216,7 +2235,13 @@ export function SimpleWorkspace() {
     if (cleared) emptied.current();
   }, [written]);
   // An answer says so too, so a message meant as a new edit isn't sent to Scarlet's question by mistake.
-  const boxTag = aimedAt ? (aimed && cutName(aimed)) ?? tagOf(aimedAt) : replyThread ? replyThread.question ? "Answer" : "Reply" : undefined;
+  const boxTag = aimedAt ? (aimed && cutName(aimed)) ?? tagOf(aimedAt) : replyThread ? replyThread.question ? "Answer" : "Reply" : noteRun ? "Note" : undefined;
+  // A note waits in the box for the run it is for. Once that run has ended, an empty box drops the tag; words being
+  // written keep it, and go as a new edit of their own when sent.
+  const noteRunEnded = !!noteTo && (!noteRun || !runIsActive(noteRun));
+  useEffect(() => {
+    if (noteRunEnded && !useUiStore.getState().agentDraft.trim()) setNoteTo(undefined);
+  }, [noteRunEnded, written]);
   const aimOnOpen = callCard ? answeringCut ? !aimed : aimed?.changeId === pass!.id && aimed.cutIndex === listening!.index
     : editOpen && !!aimed && aimed.cutIndex === undefined && (aimed.changeId === reviewingEdit!.changeId || aimed.changeId === shownChange!.id)
       && (aimed.editIndex === undefined || aimed.editIndex === reviewingEdit!.spot);
@@ -2233,7 +2258,7 @@ export function SimpleWorkspace() {
     ? allCalls.find(a => a.index === aimed.cutIndex) ?? (aimed.end !== undefined ? { start: aimed.time, end: aimed.end } : undefined) : undefined;
   // A call's tag is only its number ("Cut 3"), so the box's tag line says where that cut is.
   const aimTime = boxTag && aimedCall && aimed && cutName(aimed) === boxTag ? (placeCut(aimedCall) ?? aimedCall).start : undefined;
-  const aimLabel = !replyThread ? "Starting a new edit"
+  const aimLabel = !replyThread ? noteRun ? "Adding a note to the edit Scarlet is working on" : "Starting a new edit"
     : aimedCall && (targetLabel || aimedAtItem) ? `Revising the cut at ${clockLabel((placeCut(aimedCall) ?? aimedCall).start)}`
     : targetLabel ? `Revising ${targetLabel}`
     // A message that came back with its aim names it from the aim itself: a cut by where it is, an edit by its name.
@@ -2420,6 +2445,14 @@ export function SimpleWorkspace() {
   // Taking the tag off (Backspace in an empty box, or its ×) makes the message a new edit about the whole video. ⌘Z in
   // the empty box puts the aim back as it was, until the box is aimed again or written in.
   const clearTarget = () => {
+    // A note's tag taken off leaves a new edit, with any words written; ⌘Z puts the tag back.
+    if (noteTo && !replyTo) {
+      const was = noteTo;
+      setNoteTo(undefined);
+      countAim();
+      tagTakenOff.current = { aim: aims.current, restore: () => { countAim(); setNoteTo(was); useUiStore.getState().focusComposer(); } };
+      return;
+    }
     const ui = useUiStore.getState();
     const was = { replyTo, label: targetLabel, forItem: aimForItem.current, context: ui.agentContext };
     const before = aims.current;
@@ -2453,7 +2486,7 @@ export function SimpleWorkspace() {
     // The box carries a tag naming the cut or edit it revises, or the point a new edit is about. Taking the tag off
     // makes the message a new edit about the whole video.
     messageClock={messageClock} pausedAt={replyTo ? pausedAt : undefined} aimTime={aimTime}
-    targetTag={boxTag} onClearTarget={clearTarget} onRestoreTarget={restoreTarget}
+    targetTag={boxTag} onClearTarget={clearTarget} onRestoreTarget={restoreTarget} noteTo={!replyTo ? noteRun?.id : undefined}
     // A queued request's words have the box to themselves: its row in the tray, lit, says which request they are.
     rewording={rewordingItem && { id: rewordingItem.id, text: rewording!.text,
       onChange: text => setRewording(r => r && { ...r, text }),
