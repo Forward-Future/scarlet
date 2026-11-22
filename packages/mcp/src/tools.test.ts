@@ -704,6 +704,42 @@ describe("source_audio", () => {
       expect(textOf(outside)).toBe("Scarlet server error 400 (bad_request): Choose a window inside the recording.");
     } finally { await c.close(); }
   });
+  // agy gives Gemini no audio from a tool's result, but its own file viewer plays it a WAV from its folder (2026-11-22).
+  it("writes the passage to the task folder for a model that hears a file it opens there, up to 20 s", async () => {
+    const { mkdtemp, readFile, realpath, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const workDir = await realpath(await mkdtemp(join(tmpdir(), "scarlet-listen-")));
+    const layout = { width: 1280, height: 384, pixelsPerSecond: 80, rows: [] };
+    mock.state.extra = (req, res) => req.path === "/projects/prj_test/source-audio" ? reply(res, { wav: Buffer.from("RIFF-wav").toString("base64") })
+      : req.path === "/projects/prj_test/sound-picture" ? reply(res, { jpeg: "/9j/", layout }) : false;
+    mock.state.transcripts = { m1: transcript };
+    const byFile = (files: boolean) => connect({ agent: "gemini", workDir, capabilities: { images: true, audio: false, audioFiles: true, files, plan: false }, author: { type: "agent", name: "gemini" } });
+    const c = await byFile(true);
+    try {
+      const r = await ok(c, "source_audio", { mediaId: "m2", from: 1074.5, to: 1089.75 });
+      const said = JSON.parse(textOf(r)) as { listen: string; from: number; to: number; seconds: number; how: string };
+      expect(r.content).toHaveLength(1);
+      expect(said).toMatchObject({ from: 1074.5, to: 1089.75, seconds: 15.25 });
+      expect(said.listen).toBe(join(workDir, "listen", "m2-1074.50-1089.75.wav"));
+      expect(said.how).toMatch(/file viewer/);
+      expect(await readFile(said.listen, "utf8")).toBe("RIFF-wav");
+      const long = await call(c, "source_audio", { mediaId: "m2", from: 0, to: 25 });
+      expect(textOf(long)).toBe("Choose a passage of up to 20 s: m2 0–25 is 25.00 s.");
+      expect(sent("/projects/prj_test/source-audio")).toHaveLength(1);
+      const { tools } = await c.listTools();
+      expect(tools.find(t => t.name === "source_audio")?.description).toMatch(/^Listen to up to 20 seconds .*open it with your own file viewer/s);
+      // The sound picture of a passage comes with its file too.
+      const pic = await ok(c, "sound_picture", { mediaId: "m1", from: 0.4, to: 12.4 });
+      expect(pic.content.map(c => c.type)).toEqual(["text", "image", "text"]);
+      expect(JSON.parse((pic.content[2] as { text: string }).text).listen).toBe(join(workDir, "listen", "m1-0.40-12.40.wav"));
+    } finally { await c.close(); }
+    // A side check has no file tools to open it with, so it has no way to listen.
+    const sideCheck = await byFile(false);
+    try {
+      expect((await sideCheck.listTools()).tools.map(t => t.name)).not.toContain("source_audio");
+    } finally { await sideCheck.close(); await rm(workDir, { recursive: true, force: true }); }
+  });
 });
 
 describe("sound_picture", () => {

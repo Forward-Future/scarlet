@@ -13,6 +13,11 @@ export interface AgentCapabilities {
   images: boolean;
   /** Audio content blocks (WAV) in MCP tool results reach the model. */
   audio: boolean;
+  /**
+   * The model hears a WAV file in its task folder when it opens the file with its harness's own file viewer, though
+   * audio in a tool's result doesn't reach it. Only a run with file tools (`files`) can open one.
+   */
+  audioFiles?: boolean;
   /** The agent can read and write files in its task artifact directory (needed before `asset_add`). */
   files: boolean;
   /**
@@ -85,7 +90,10 @@ const KNOWN: Record<string, AgentCapabilities> = {
   // no wait set, Gemini's calls waited 45 s less their margin, so a save that needed area checks gave up at once.
   // Result size: agy 1.5 spills MCP text results over ~10,200 chars (~10 KiB) to output.txt (measured 2026-11-22:
   // 10,134 chars stayed inline, 10,304 chars spilled), forcing extra read_file turns. Leave headroom under that cliff.
-  gemini: { images: true, audio: false, files: false, plan: false, briefTools: true, resultChars: 9_000, toolWaitSeconds: 120 },
+  // Audio: checked through `agy acp` on 2026-11-22. Gemini hears no audio in an MCP tool result, nor in the prompt as an
+  // audio, embedded or linked block, but agy's own file viewer gives it a WAV from its folder: it wrote out a restart
+  // word for word, hesitations and all ("they are lobbying against, mm, they are lobbying to control GPUs").
+  gemini: { images: true, audio: false, audioFiles: true, files: false, plan: false, briefTools: true, resultChars: 9_000, toolWaitSeconds: 120 },
 };
 
 // An agent Scarlet didn't launch is someone's own MCP client, such as Claude Code or Claude Desktop pointed at Scarlet,
@@ -114,7 +122,7 @@ export function agentCapabilities(agent: string | undefined, override?: Partial<
     try {
       const parsed = JSON.parse(override) as Record<string, unknown>;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
-      for (const key of ["images", "audio", "files", "shell", "web", "plan", "briefTools"] as const) if (typeof parsed[key] === "boolean") extra[key] = parsed[key] as boolean;
+      for (const key of ["images", "audio", "audioFiles", "files", "shell", "web", "plan", "briefTools"] as const) if (typeof parsed[key] === "boolean") extra[key] = parsed[key] as boolean;
       if (typeof parsed.resultChars === "number") extra.resultChars = parsed.resultChars;
       if (typeof parsed.toolWaitSeconds === "number" && Number.isFinite(parsed.toolWaitSeconds) && parsed.toolWaitSeconds > 0) extra.toolWaitSeconds = parsed.toolWaitSeconds;
     } catch {

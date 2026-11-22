@@ -6,6 +6,8 @@ import {
   SheetOptions,
   SheetRequest,
   SoundPictureOptions,
+  SOURCE_AUDIO_IN_RESULT,
+  SOURCE_AUDIO_MOST,
   SourceAudioOptions,
   toolWait,
   type AgentCapabilities,
@@ -38,10 +40,22 @@ export interface InspectionToolsDeps {
   waitLeft(margin: number, most?: number): number;
   readPassage(version: string, range: TimeRange, edges?: boolean): void;
   postEvent(ev: Omit<TaskEvent, "taskId">): Promise<{ posted: boolean; error?: string }>;
+  /** Writes a file into the task folder and returns its path, for a model that hears a file it opens there. */
+  writeArtifact?(path: string, data: Uint8Array): Promise<string>;
+}
+
+/**
+ * How the model hears a recording, if it can: as audio in a tool's result, or as a WAV file Scarlet writes to its task
+ * folder for it to open with its harness's own file viewer (`audioFiles`), which can be longer.
+ */
+export function listening(caps: AgentCapabilities, canWrite: boolean): { by: "result" | "file"; most: number } | undefined {
+  if (caps.audio) return { by: "result", most: SOURCE_AUDIO_IN_RESULT };
+  if (caps.audioFiles && caps.files && canWrite) return { by: "file", most: SOURCE_AUDIO_MOST };
+  return undefined;
 }
 
 export function registerInspectionTools(deps: InspectionToolsDeps) {
-  const { tool, client, projectId, taskId, task, caps, fetchImpl, session, errors, scanScopes, waitLeft, readPassage, postEvent } = deps;
+  const { tool, client, projectId, taskId, task, caps, fetchImpl, session, errors, scanScopes, waitLeft, readPassage, postEvent, writeArtifact } = deps;
   const { getProject, getHeader, nextBaseAsk, moveBase, baseTimeline, transcriptWords } = session;
   const { withoutOnce } = errors;
   const hearing = caps.audio;
@@ -187,12 +201,29 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
       return { content };
     });
 
-  // Offered only to a model whose harness delivers audio (see agentCapabilities).
+  const listen = listening(caps, !!writeArtifact);
+
+  /**
+   * A passage of a recording for the model to hear: the audio itself, or the WAV file written to the task folder and
+   * where it is. One call's files keep apart by the passage's place, so a second listen to it reads the same file.
+   */
+  async function heard(mediaId: string, from: number, to: number, voice: z.infer<typeof SourceAudioOptions.voice>): Promise<ToolResult["content"]> {
+    const { wav } = await client.sourceAudio(projectId, { mediaId, from, to, ...(voice && { voice }) });
+    if (listen?.by !== "file") return [{ type: "audio", mimeType: "audio/wav", data: wav }];
+    const name = `listen/${mediaId}-${from.toFixed(2)}-${to.toFixed(2)}${voice ? `-${voice.replace(/\W+/g, "-")}` : ""}.wav`;
+    const file = await writeArtifact!(name, Buffer.from(wav, "base64"));
+    return [{ type: "text", text: JSON.stringify({ listen: file, mediaId, from, to, seconds: +(to - from).toFixed(2),
+      how: "Open this WAV file with your own file viewer to hear the passage. Its start is the recording's second `from`." }) }];
+  }
+
+  // Offered only to a model that can hear (see agentCapabilities).
   tool("source_audio",
-    "Listen to up to eight seconds of an original microphone or video, in source seconds: compare takes or hear an edge before deciding a cut.",
-    SourceAudioOptions, async args => {
-      const { wav } = await client.sourceAudio(projectId, args);
-      return { content: [{ type: "audio", mimeType: "audio/wav", data: wav }] };
+    `Listen to up to ${listen?.most ?? SOURCE_AUDIO_IN_RESULT} seconds of an original microphone or video, in source seconds: hear where a restart's abandoned attempt starts and ends, compare takes, or hear an edge before deciding a cut.` +
+      (listen?.by === "file" ? " Scarlet writes the passage as a WAV file to your task folder and says where: open it with your own file viewer to hear it." : ""),
+    SourceAudioOptions, async ({ mediaId, from, to, voice }) => {
+      const most = listen?.most ?? SOURCE_AUDIO_IN_RESULT;
+      if (to - from > most + 1e-6) return text(`Choose a passage of up to ${most} s: ${mediaId} ${from}–${to} is ${(to - from).toFixed(2)} s.`);
+      return { content: await heard(mediaId, from, to, voice) };
     });
 
   /** One recording's sound picture over a passage: its layout, the picture, and the audio for a model that can hear. */
@@ -202,15 +233,15 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
     const { jpeg, layout } = await client.soundPicture(projectId, { mediaId, from, to, ...(remove && { remove }), ...(voice && { voice }), ...(words && { words }) });
     const content: ToolResult["content"] = [{ type: "text", text: JSON.stringify({ mediaId, from, to, ...layout }) }, { type: "image", mimeType: "image/jpeg", data: jpeg }];
     // A model that can hear gets the passage itself with the picture, without asking twice.
-    if (hearing && to - from <= 8) {
-      const heard = await client.sourceAudio(projectId, { mediaId, from, to, ...(voice && { voice }) }).catch(withoutOnce(`failed to read the audio of ${mediaId} for a sound picture`, null));
-      if (heard) content.push({ type: "audio", mimeType: "audio/wav", data: heard.wav });
+    if (listen && to - from <= listen.most) {
+      const passage = await heard(mediaId, from, to, voice).catch(withoutOnce(`failed to read the audio of ${mediaId} for a sound picture`, null));
+      if (passage) content.push(...passage);
     }
     return content;
   }
 
   tool("sound_picture",
-    `Look at up to 15 s of a recording the way an editor does: its waveform over its spectrogram (0 to 8 kHz bottom to top, brighter is louder), with the transcript's words at their times and a tick where each starts. It shows what words and level figures cannot: a word cut short, the hiss of an “s”, a breath, a click, speech the transcript left out. With \`remove\`, those source ranges are shaded and a second row shows the passage as it would play with them out, at the same scale, each join a red line: look at a join before you make it. The text beside the picture gives each row's place in it and the pixels per second.${hearing ? " A passage of up to eight seconds also comes as audio." : ""} To see the same passage on several recordings, such as two microphones, list up to four as mediaIds instead of mediaId: each comes back in that order, its text first, and one that couldn't be drawn has an \`error\` (or \`preparing\`) in its place.`,
+    `Look at up to 15 s of a recording the way an editor does: its waveform over its spectrogram (0 to 8 kHz bottom to top, brighter is louder), with the transcript's words at their times and a tick where each starts. It shows what words and level figures cannot: a word cut short, the hiss of an “s”, a breath, a click, speech the transcript left out. With \`remove\`, those source ranges are shaded and a second row shows the passage as it would play with them out, at the same scale, each join a red line: look at a join before you make it. The text beside the picture gives each row's place in it and the pixels per second.${listen ? listen.by === "file" ? " Scarlet also writes the passage as a WAV file to your task folder, to open with your own file viewer and hear." : ` A passage of up to ${listen.most} seconds also comes as audio.` : ""} To see the same passage on several recordings, such as two microphones, list up to four as mediaIds instead of mediaId: each comes back in that order, its text first, and one that couldn't be drawn has an \`error\` (or \`preparing\`) in its place.`,
     { ...SoundPictureOptions, mediaId: SoundPictureOptions.mediaId.optional(),
       mediaIds: RecordingList.max(4).optional().describe("Several recordings to draw over the same passage in one call, instead of mediaId") },
     async ({ mediaId, mediaIds, from, to, remove, voice }) => {

@@ -33,7 +33,7 @@ import { registerDialogueReviewTools } from "./dialogue-review-tools.js";
 import { registerDialogueTools, type StagedReviewState } from "./dialogue-tools.js";
 import { keptEditsNote } from "./editor-kept.js";
 import { registerGraphics } from "./graphics-tools.js";
-import { registerInspectionTools } from "./inspection-tools.js";
+import { listening, registerInspectionTools } from "./inspection-tools.js";
 import { unsharedShape, watchRefusedArguments } from "./mcp-schema.js";
 import { registerMediaReadTools } from "./media-read-tools.js";
 import { createMediaSession } from "./media-session.js";
@@ -248,7 +248,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     shape: Shape,
     handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>,
   ) {
-    if (name === "source_audio" && !caps.audio) return;
+    if (name === "source_audio" && !listening(caps, true)) return;
     // Only a harness with file tools can put anything in the artifact directory for asset_add to import.
     if (name === "asset_add" && !caps.files) return;
     if (authoring && !SKILL_FROM_CHANGE_TOOLS.has(name)) return;
@@ -328,6 +328,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   const inspection = registerInspectionTools({
     tool, client, projectId: ctx.projectId, taskId: ctx.taskId, task: ctx.task, caps,
     fetchImpl, session, errors, scanScopes, waitLeft, readPassage: revision.readPassage, postEvent,
+    writeArtifact: async (path, data) => writeArtifact(await artifactDir(), path, data),
   });
 
   const proposePipeline = createProposePipeline({

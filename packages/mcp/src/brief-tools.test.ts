@@ -56,7 +56,9 @@ describe("brief tools", () => {
     expect(brief.slice(-2).map(t => t.name)).toEqual(["tool_help", "tool_call"]);
     const call = brief.at(-1)!;
     const index = call.description!.split("\nTools:\n")[1]!.split("\n");
-    expect(index).toEqual(full.filter(t => !ALWAYS_LOADED_TOOLS.has(t.name)).map(t => indexLine(t.name, t.description!)));
+    // Gemini hears a passage Scarlet writes to its folder, so it has source_audio where Claude Code, which can't hear, hasn't.
+    expect(index.filter(line => !line.startsWith("source_audio:"))).toEqual(full.filter(t => !ALWAYS_LOADED_TOOLS.has(t.name)).map(t => indexLine(t.name, t.description!)));
+    expect(index.some(line => line.startsWith("source_audio: Listen to up to 20 seconds"))).toBe(true);
     for (const line of index) expect(line.length).toBeLessThanOrEqual(line.indexOf(":") + 2 + INDEX_LINE_MAX);
     expect(call.inputSchema.required).toEqual(["name"]);
     // A call through it may save an edit or open a web page, so the harness treats it as the boldest tool it reaches.
