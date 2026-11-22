@@ -900,6 +900,40 @@ it("places an older transcript's words again with the current aligner, keeping i
   } finally { t.restore(); }
 });
 
+it("corrects a word in the transcripts with its times, keeps the fix while the words are placed, and applies it to a transcription made again", async () => {
+  await api("PATCH", "/settings", { transcription: { provider: "whispercpp", whisperModelPath: "fixture" } });
+  const fix = (body: object) => api("POST", `${projectsPath()}/transcripts/fix`, body);
+  let fixed: unknown;
+  // The editor corrects the first word while Scarlet is still placing the words on the audio.
+  const t = twoTurnTranscription(async turn => { if (turn === 1) fixed = await (await fix({ find: "hello", replace: "hullo" })).json(); });
+  try {
+    await transcribeMedia(t.ctx, project.id, t.media);
+    expect(fixed).toEqual({ recordings: [{ mediaId: t.media.id, name: "Interview", count: 1, wordsAdded: 0,
+      places: [{ index: 0, start: 10, end: 10.4, before: "hello", after: "hullo" }] }] });
+    // The turns that followed rewrote the transcript from Whisper's words and kept the fix, at the aligned time.
+    expect(t.linked()).toMatchObject({ wordFixes: [{ find: "hello", replace: "hullo" }],
+      segments: [{ text: "hullo", words: [{ text: "hullo", start: 10.1 }] }, { words: [{ text: "again", start: 400.1 }] }] });
+    while (t.ctx.pending.size) await Promise.allSettled([...t.ctx.pending]);
+
+    // A fix with another number of words shares the old word's time, and a new revision is linked.
+    const before = t.linked()!.id;
+    const split = await (await fix({ find: "again", replace: "a gain" })).json();
+    expect(split).toMatchObject({ recordings: [{ count: 1, wordsAdded: 1, places: [{ index: 1, before: "again", after: "a gain" }] }] });
+    const now = t.linked()!;
+    expect(now.id).not.toBe(before);
+    expect(now.segments[1]!.words.map(w => [w.text, w.start, w.end])).toEqual([["a", 400.1, 400.18], ["gain", 400.18, 400.5]]);
+    // Nothing left to fix reads zero places, and a range needs one recording.
+    expect(await (await fix({ find: "again", replace: "a gain" })).json()).toMatchObject({ recordings: [{ count: 0 }] });
+    expect((await fix({ find: "hullo", replace: "hello", from: 0, to: 20 })).status).toBe(400);
+
+    // Transcribed again, Whisper says "hello" and "again" once more: the saved transcript reads as the editor fixed it.
+    await transcribeMedia(t.ctx, project.id, t.media);
+    expect(t.linked()!.id).not.toBe(now.id);
+    expect(t.linked()!.segments.flatMap(s => s.words.map(w => w.text))).toEqual(["hullo", "a", "gain"]);
+    expect(t.linked()!.wordFixes).toHaveLength(2);
+  } finally { t.restore(); }
+});
+
 it("keeps an older transcript eligible for realignment when its recording cannot be decoded", async () => {
   const { ctx } = workspace;
   ctx.paths.ensureProject(project.id);

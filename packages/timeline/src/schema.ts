@@ -463,6 +463,19 @@ export const TranscriptSegment = z.object({
 });
 export type TranscriptSegment = z.infer<typeof TranscriptSegment>;
 
+/**
+ * A spelling the editor corrected across a transcript: the words that read `find` read `replace`, with their times.
+ * Kept on the transcript so a transcription made again, or its words placed again, reads the same.
+ * `from`/`to`: the source seconds the fix was limited to.
+ */
+export const TranscriptWordFix = z.object({
+  find: z.string().min(1),
+  replace: z.string().min(1),
+  from: Seconds.optional(),
+  to: Seconds.optional(),
+});
+export type TranscriptWordFix = z.infer<typeof TranscriptWordFix>;
+
 export const LocalTranscriptionModel = z.enum(["crisperwhisper", "whispercpp", "custom"]);
 export type LocalTranscriptionModel = z.infer<typeof LocalTranscriptionModel>;
 
@@ -485,6 +498,8 @@ export const Transcript = z.object({
   /** Model or adapter recorded when these words were transcribed, retained on speaker revisions. */
   modelLabel: z.string().optional(),
   segments: z.array(TranscriptSegment).default([]),
+  /** Spellings the editor corrected, in the order made. A new transcription of the recording applies them again. */
+  wordFixes: z.array(TranscriptWordFix).optional(),
   createdAt: z.string().datetime().optional(),
 });
 export type Transcript = z.infer<typeof Transcript>;

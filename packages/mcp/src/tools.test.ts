@@ -739,7 +739,7 @@ describe("tool annotations", () => {
   // run the others in parallel without asking, so a new tool is placed here or among the reads on purpose.
   const writes = ["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_check_repeats", "dialogue_review_save",
     "dialogue_revise_cut", "edit_flag", "note_reply", "note_resolve", "render_request", "screen_area", "task_log", "task_question", "learning_suggest", "skill_save_from_change", "skill_save_edit", "asset_add", "export_otio",
-    "graphic_render", "style_guide_save"];
+    "graphic_render", "style_guide_save", "transcript_fix"];
   const every = EDITING_TOOL_GROUPS.flatMap(g => [...g.tools] as string[]);
 
   it("gives every tool an input schema a harness can convert: no array that lists an item per position", async () => {
