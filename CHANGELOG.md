@@ -6,6 +6,9 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- A cut you approved on a dialogue pass is listed once after the pass goes in, not again as an extra row you can't open.
+- Opening a cut no longer flashes black for a moment when its still is already loaded.
+- Resume editing picks up every paused request on the model you've picked, not only the one whose band you pressed.
 - Telling who is speaking works again on a new install: the speaker model downloads instead of failing every time.
 - A voice request aimed at a moment on the timeline now carries any attached files or marked frame with it instead of leaving them in the message box.
 - Skipping a second ahead with Shift+→ while watching a pass's edits no longer marks a skipped cut or edit as kept.

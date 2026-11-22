@@ -7087,6 +7087,26 @@ it("holds Resume in the tray when editing is paused with only requests waiting t
   expect(resumeEditing).toHaveBeenCalledExactlyOnceWith(PRJ);
 });
 
+it("resumes from a band on the model picked now when any paused request would run on another, not only the band's own", async () => {
+  idle();
+  const base = data.tasks.find(t => t.id === "task_running")!;
+  const now = new Date().toISOString();
+  // The band's own request already runs on the picked model (Claude, Opus); another paused one runs on Codex.
+  const stopped = { ...base, state: "cancelled" as const, question: null, startedAt: now, finishedAt: now, retryTaskId: "interrupted_edit" };
+  const interrupted = { ...base, id: "interrupted_edit", context: { ...base.context, threadId: base.id }, state: "queued" as const,
+    question: null, startedAt: undefined, finishedAt: undefined, resumesAfterProjectStop: true, resumeRootId: base.id };
+  const elsewhere = { ...interrupted, id: "other_edit", agent: "codex" as const, model: "gpt", resumeRootId: "other_root",
+    instruction: "Add a title.", context: { message: "Add a title.", threadId: "other_root" } };
+  data = { ...data, project: { ...data.project, editingPaused: true }, tasks: [...data.tasks.map(t => t === base ? stopped : t), interrupted, elsewhere] };
+  const resumeEditing = vi.fn().mockResolvedValue(undefined);
+  useProjectStore.setState({ current: data, resumeEditing });
+  await show();
+  const control = container.querySelector<HTMLButtonElement>(`.unit[data-run="${base.id}"] .unit-msg .unit-actions .unit-pause-edit`)!;
+  expect(control.getAttribute("aria-label")).toBe("Resume editing");
+  await click(control);
+  expect(resumeEditing).toHaveBeenCalledExactlyOnceWith(PRJ, { agent: "claude", model: "opus" });
+});
+
 it("pauses project editing from the band beside Stop, keeps the paused request in the chat, and resumes from the same control", async () => {
   idle();
   const base = data.tasks.find(t => t.id === "task_running")!;
