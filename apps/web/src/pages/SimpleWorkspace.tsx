@@ -12,7 +12,7 @@ import { QueueTray, useRewordingHold, type QueuedRequest } from "../components/c
 import { recordEditReview } from "../lib/editReviews";
 import { recordUndo, undoLast } from "../lib/undo";
 import { editKey, keepEdits } from "../lib/keptEdits";
-import { AgentChip, runChoiceDiffers, useAgentAvailability } from "../components/agent/AgentChip";
+import { AgentChip, resumeRunChoice, useAgentAvailability } from "../components/agent/AgentChip";
 import type { PausedAt } from "../components/agent/Composer";
 import { useImportTranscription } from "../components/media/TranscriptionAction";
 import { Dropzone, useImportCount, useUploader } from "../components/media/UploadDropzone";
@@ -1169,6 +1169,9 @@ export function SimpleWorkspace() {
   // The applied edit on screen, so Revise is about it and not a proposal still waiting.
   // An edit another request made is open here when this request flagged it (`Thread.flagged`).
   const shownChange = shownEdit && focusChanges.find(c => belongsTo(shownEdit, c));
+  // The card names voice cleanup only where its edit put it on or changed it, read against the version the edit was made on.
+  const shownCleanup = !!shownChange?.ops?.some(o => o.op === "updateClip" && JSON.stringify(o.patch).includes("voiceCleanup"));
+  const shownChangeBefore = useReviewTimeline(current.id, shownCleanup ? shownChange!.fromVersion : undefined, timeline).timeline;
   // Keep (K) records that the edit was reviewed and moves on to the next flagged edit that hasn't been; Revise (R) changes this one.
   const reviewingEdit = shownEdit && shownChange && focusThread ? shownEdit : undefined;
   const threadEdits = threadTimeline.edits;
@@ -1911,7 +1914,7 @@ export function SimpleWorkspace() {
   const editDid = !reviewingEdit || threadTimeline.selectedMoment || shownMarker ? undefined
     : beforeCut ? cutBefore.timeline && <CutWordsLine key={`what ${editKey(reviewingEdit)}`} timeline={cutBefore.timeline} media={media}
       range={beforeCut.removed} length={lengthLabel(removedLength)} verb="Took out" />
-    : (detail => detail && <p className="edit-card-what">{detail}</p>)(editDetail(shownChange, reviewingEdit, { timeline, media, fps }));
+    : (detail => detail && <p className="edit-card-what">{detail}</p>)(editDetail(shownChange, reviewingEdit, { timeline, before: shownChangeBefore, media, fps }));
   // The transcript stays folded away. Its icon on the card opens it for this edit only.
   const scriptKey = reviewingEdit && beforeCut ? editKey(reviewingEdit) : undefined;
   const scriptOpen = !!scriptKey && scriptFor === scriptKey;
@@ -2438,7 +2441,7 @@ export function SimpleWorkspace() {
     return true;
   };
   const { effective } = useAgentAvailability();
-  const resumeRunWith = effective && tasks.some(t => t.state === "queued" && t.resumesAfterProjectStop && !t.startedAt && runChoiceDiffers(t, effective)) ? effective : undefined;
+  const resumeRunWith = resumeRunChoice(tasks, effective);
   const composer = <WorkspaceComposer newEdit={!replyTo} playerVersion={playerVersion} mediaId={source?.id} key={JSON.stringify([current.id, replyTo])} thread={replyThread}
     // A new request is the latest thing said, so the chat goes to it. A cut or an edit that's open stays open.
     onCreated={() => { follow.current = true; }} onSent={sentUnder(aims.current)}

@@ -63,6 +63,8 @@ export function putBackCut(head: Timeline, at: number, length: number, fps: numb
 
 const TIMING = new Set(["sourceIn", "sourceOut", "timelineIn", "timelineOut", "speed", "id", "kind", "mediaId"]);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+/** Clip fields whose items are timed from the clip's start. */
+const KEYED = new Set(["keyframes", "volumeKeyframes"]);
 
 /**
  * The timeline with one edit's look taken off again: an edit of a change that only set how clips look or sound (a
@@ -106,9 +108,16 @@ export function putBackLooks(head: Timeline, before: Timeline, after: Timeline, 
       // Footage that has since joined footage from outside the edit in one clip can't take the look back alone.
       if (clip.sourceIn < made.sourceIn - near * made.speed || clip.sourceOut > made.sourceOut + near * made.speed) return;
       const open = clip as unknown as Record<string, unknown>, set = made as unknown as Record<string, unknown>, prior = old as unknown as Record<string, unknown>;
+      // Keyframes are timed from a clip's start, so a piece of the clip a later cut split off times the same keys
+      // differently: they are compared, and put back, on the recording's clock.
+      const value = (key: string, of: MediaClip, at: Record<string, unknown>) => KEYED.has(key) && Array.isArray(at[key])
+        ? (at[key] as { time: number }[]).map(k => ({ ...k, time: Math.round((of.sourceIn + k.time * of.speed) * 1e6) / 1e6 })) : at[key];
       for (const key of keys) {
-        if (!same(open[key], set[key]) || same(open[key], prior[key])) continue;
-        if (prior[key] === undefined) delete open[key]; else open[key] = structuredClone(prior[key]);
+        if (!same(value(key, clip, open), value(key, made, set)) || same(value(key, clip, open), value(key, old, prior))) continue;
+        if (prior[key] === undefined) delete open[key];
+        else open[key] = KEYED.has(key) && Array.isArray(prior[key])
+          ? (prior[key] as { time: number }[]).map(k => ({ ...k, time: (old.sourceIn + k.time * old.speed - clip.sourceIn) / clip.speed }))
+          : structuredClone(prior[key]);
         undone++;
       }
     }

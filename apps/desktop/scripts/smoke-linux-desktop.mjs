@@ -192,7 +192,7 @@ try {
     await webdriver("POST", "/session/" + session + "/element/" + play["element-6066-11e4-a52e-4f735466cecf"] + "/click", {});
     await until("decoded H.264 picture advancing in the editor", async () => {
       const state = await execute(`
-        const video = document.querySelector('.watch-monitor video[aria-label="The current edit"]');
+        const video = document.querySelector('.watch-monitor video[aria-label="The video"]');
         return { played: !!video && video.readyState >= 2 && video.videoWidth > 0 && video.currentTime > 0.25,
           error: video?.error?.message || document.querySelector('.watch-monitor [role="alert"]')?.innerText };
       `);

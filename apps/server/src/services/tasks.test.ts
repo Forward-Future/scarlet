@@ -7,7 +7,8 @@ import { ATTEMPT_HEADER, TASK_HEADER, queueOrder, queueWait, taskPlan, type Task
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { PLAN_STEPS } from "@scarlet/mcp/prompt";
-import { appendTaskEvent, createTask, pairQuestionsAndAnswers, saveTask } from "./tasks.js";
+import { appendTaskEvent, createTask, saveTask } from "./tasks.js";
+import { pairQuestionsAndAnswers } from "./taskPrompts.js";
 import { recoverTasks } from "./taskRecovery.js";
 import { runAttemptIds } from "./runAttempts.js";
 import { learningCheckContext } from "./learnings.js";

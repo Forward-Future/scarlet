@@ -6,8 +6,7 @@ import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { waitFor } from "../events.js";
-import { notFound } from "../errors.js";
-import { claimTask } from "../services/tasks.js";
+import { claimTask } from "../services/taskQueue.js";
 import { prefetchDialoguePass } from "../services/dialoguePrefetch.js";
 import { jsonBody, requireScoped } from "./util.js";
 

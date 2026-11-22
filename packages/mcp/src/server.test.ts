@@ -1342,6 +1342,30 @@ describe("transcript tools", () => {
       expect(first).toContain("“Kept the cube solve animation” (chg_round4, edit 2)");
     } finally { await editor.close(); mock.state.extra = before; }
   });
+  it("transcript_fix corrects a phrase with its times, reads the fixed words again and counts captions still reading the old ones", async () => {
+    const state = makeState({ transcripts: { m1: structuredClone(transcript) } });
+    const fixture = await startMockServer(state);
+    const agent = new Client({ name: "transcript-fix", version: "1" });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    try {
+      const server = createScarletMcpServer(new ScarletClient({ baseUrl: fixture.url, token: "tok" }), {
+        projectId: "prj_test", agent: "claude", author: { type: "agent", name: "claude" } });
+      await server.connect(a);
+      await agent.connect(b);
+      // Read first: the session keeps these words, and the fix has to replace them.
+      expect(textOf(await agent.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 2, toWord: 2 } }) as CallToolResult)).toContain("#2 1.10-1.40 welcome");
+      state.timeline = emptyTimeline(state.project.id);
+      state.timeline.tracks.push({ id: "cap", kind: "caption", name: "Captions", clips: [
+        { id: "c1", kind: "caption", timelineIn: 1, timelineOut: 2, text: "welcome back." }] } as never);
+      const fixed = firstJson(await agent.callTool({ name: "transcript_fix", arguments: { find: "welcome back", replace: "Welcome Bach" } }) as CallToolResult);
+      expect(fixed).toEqual({ find: "welcome back", replace: "Welcome Bach", places: 2, captionsStillReading: 1, recordings: [{ mediaId: "m1", name: "talk.mp4", count: 2,
+        places: [{ index: 2, start: 1.1, end: 1.8, before: "welcome back.", after: "Welcome Bach." }, { index: 5, start: 3.6, end: 4.3, before: "welcome back", after: "Welcome Bach" }] }] });
+      expect(textOf(await agent.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 2, toWord: 3 } }) as CallToolResult)).toMatch(/#2 1\.10-1\.40 Welcome\n#3 1\.50-1\.80 Bach\./);
+      const none = firstJson(await agent.callTool({ name: "transcript_fix", arguments: { find: "Scarlett", replace: "Scarlet" } }) as CallToolResult);
+      expect(none).toMatchObject({ places: 0, recordings: [] });
+      expect(none.note).toContain("fuzzy");
+    } finally { await agent.close(); await fixture.close(); }
+  });
   it("transcript_search finds phrases with context", async () => {
     const r = (await client.callTool({ name: "transcript_search", arguments: { mediaId: "m1", query: "WELCOME back" } })) as CallToolResult;
     const t = textOf(r);

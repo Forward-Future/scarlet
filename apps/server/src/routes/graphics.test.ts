@@ -47,7 +47,7 @@ const LOWER_THIRD = `<!doctype html><html><head><style>html,body{margin:0;width:
 
 describe("pages from the web", () => {
   it("captures only public pages on the web, never a file or the machine's own network", async () => {
-    for (const url of ["file:///etc/passwd", "http://localhost:4317/api/projects", "http://127.0.0.1:9", "http://10.0.0.8/", "http://[::1]/",
+    for (const url of ["file:///etc/passwd", "http://localhost:4317/api/projects", "http://127.0.0.1:9", "http://10.0.0.8/", "http://[::1]/", "http://[::ffff:127.0.0.1]:4317/", "http://[::ffff:a00:8]/", "http://[fd00::1]/",
       "http://192.168.1.20/admin", "http://169.254.169.254/latest", "chrome://settings", "javascript:alert(1)", "not a url", "http://printer.local/"]) {
       const res = await api("POST", `/projects/${project.id}/web-captures`, { url });
       expect([res.status, (await res.json() as { error: { code: string } }).error.code], url).toEqual([400, "bad_url"]);

@@ -332,7 +332,7 @@ it("turns the Before clip's play button while its stream waits for a section, an
   const reframed = container.querySelector(".watch-monitor")!;
   const button = () => reframed.querySelector(".monitor-playback > button")!;
   const shows = () => [button().getAttribute("aria-label"), button().querySelector("svg") ? "icon" : button().querySelector(".animate-spin") ? "spinner" : "empty"];
-  const video = reframed.querySelector<HTMLVideoElement>('video[aria-label="The current edit"]')!;
+  const video = reframed.querySelector<HTMLVideoElement>('video[aria-label="The video"]')!;
   Object.defineProperty(video, "readyState", { configurable: true, value: 1 });
   vi.useFakeTimers();
   try {
@@ -801,7 +801,7 @@ it("goes to After at a point picked outside the passage on Before, where Before 
   beforeClipReady();
   await show();
   await captionsOnBefore();
-  const video = container.querySelector<HTMLVideoElement>('.watch-monitor video[aria-label="The current edit"]')!;
+  const video = container.querySelector<HTMLVideoElement>('.watch-monitor video[aria-label="The video"]')!;
   Object.defineProperty(video, "readyState", { configurable: true, value: 1 });
   // A press on the timeline just before the passage, while Before plays: the edit stays open, on After, and the
   // video plays from there once the pointer is up.
@@ -884,7 +884,7 @@ it("leaves the playhead to the Before clip while it shows, stops it with the vid
   await click(appliedRows()[1]!);
   await act(async () => {});
   // After has played to 0:07.
-  const video = container.querySelector<HTMLVideoElement>('.watch-monitor video[aria-label="The current edit"]')!;
+  const video = container.querySelector<HTMLVideoElement>('.watch-monitor video[aria-label="The video"]')!;
   Object.defineProperty(video, "readyState", { configurable: true, value: 4 });
   const videoAt = (seconds: number, event: string) => act(async () => { video.currentTime = seconds; video.dispatchEvent(new Event(event)); });
   await videoAt(7, "timeupdate");
@@ -7087,6 +7087,26 @@ it("holds Resume in the tray when editing is paused with only requests waiting t
   expect(resumeEditing).toHaveBeenCalledExactlyOnceWith(PRJ);
 });
 
+it("resumes from a band on the model picked now when any paused request would run on another, not only the band's own", async () => {
+  idle();
+  const base = data.tasks.find(t => t.id === "task_running")!;
+  const now = new Date().toISOString();
+  // The band's own request already runs on the picked model (Claude, Opus); another paused one runs on Codex.
+  const stopped = { ...base, state: "cancelled" as const, question: null, startedAt: now, finishedAt: now, retryTaskId: "interrupted_edit" };
+  const interrupted = { ...base, id: "interrupted_edit", context: { ...base.context, threadId: base.id }, state: "queued" as const,
+    question: null, startedAt: undefined, finishedAt: undefined, resumesAfterProjectStop: true, resumeRootId: base.id };
+  const elsewhere = { ...interrupted, id: "other_edit", agent: "codex" as const, model: "gpt", resumeRootId: "other_root",
+    instruction: "Add a title.", context: { message: "Add a title.", threadId: "other_root" } };
+  data = { ...data, project: { ...data.project, editingPaused: true }, tasks: [...data.tasks.map(t => t === base ? stopped : t), interrupted, elsewhere] };
+  const resumeEditing = vi.fn().mockResolvedValue(undefined);
+  useProjectStore.setState({ current: data, resumeEditing });
+  await show();
+  const control = container.querySelector<HTMLButtonElement>(`.unit[data-run="${base.id}"] .unit-msg .unit-actions .unit-pause-edit`)!;
+  expect(control.getAttribute("aria-label")).toBe("Resume editing");
+  await click(control);
+  expect(resumeEditing).toHaveBeenCalledExactlyOnceWith(PRJ, { agent: "claude", model: "opus" });
+});
+
 it("pauses project editing from the band beside Stop, keeps the paused request in the chat, and resumes from the same control", async () => {
   idle();
   const base = data.tasks.find(t => t.id === "task_running")!;
@@ -11773,7 +11793,7 @@ it("keeps the conversation and the cut on screen when the edit moves on and its 
   const before = units().length;
   expect(before).toBeGreaterThan(0);
   const shown = data.timeline!.version;
-  const video = () => container.querySelector('.watch-monitor video[aria-label="The current edit"]');
+  const video = () => container.querySelector('.watch-monitor video[aria-label="The video"]');
   expect(video()).not.toBeNull();
   // The engine moves the edit on, and every read of its new timeline fails.
   useProjectStore.setState({ refreshHead: initialStore.refreshHead });

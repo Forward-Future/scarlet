@@ -24,8 +24,11 @@ import { otherInputReader } from "../services/otherInput.js";
 import { sourceCacheStatuses, sourcePreviews } from "../services/sourcePreviews.js";
 import { framePriority, pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
-import { getWaveform, ingestMedia, readWaveformCache, removeUnreadableMedia, settleAlignment, startTranscription, transcriptionHeld, writeHashedFile } from "../services/ingest.js";
+import { ingestMedia, removeUnreadableMedia, writeHashedFile } from "../services/ingest.js";
+import { settleAlignment, startTranscription, transcriptionHeld } from "../services/transcription.js";
+import { getWaveform, readWaveformCache } from "../services/waveforms.js";
 import { realignTranscript } from "../services/realign.js";
+import { fixTranscriptWords } from "../services/transcriptFix.js";
 import { recordingSpeechActivity } from "../services/recordingAudio.js";
 import { jsonBody, numberParam, optionalNumberParam, requireMedia, requireProjectHeader } from "./util.js";
 import { editorFirst } from "../services/editorFirst.js";
@@ -192,7 +195,8 @@ export function mediaRoutes(ctx: Ctx) {
     requireProjectHeader(ctx, c.req.param("id"));
     const { path } = await jsonBody(c, z.object({ path: z.string() }));
     if (!isAbsolute(path) || !(await stat(path).catch(() => null))?.isFile()) throw notFound("source file");
-    const jpeg = await ctx.render.extractFrame(path, 0, { width: 960, signal: c.req.raw.signal });
+    const hdr = (await ctx.render.probeMedia(path, c.req.raw.signal).catch(() => undefined))?.color?.hdr;
+    const jpeg = await ctx.render.extractFrame(path, 0, { width: 960, signal: c.req.raw.signal, hdr });
     return new Response(new Uint8Array(jpeg), { headers: { "Content-Type": "image/jpeg", "Cache-Control": "no-store" } });
   });
 
@@ -261,6 +265,20 @@ export function mediaRoutes(ctx: Ctx) {
     requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), project.id);
     requireAudio(media);
     return c.json(await ctx.track(realignTranscript(ctx, project.id, media.id, ctx.projectSignal(project.id)), project.id));
+  });
+
+  // Correct a word or phrase in the project's transcripts, keeping word times. The fix stays with each transcript.
+  r.post("/projects/:id/transcripts/fix", async (c) => {
+    const body = await jsonBody(c, z.object({
+      find: z.string().trim().min(1).max(200),
+      replace: z.string().trim().min(1).max(200),
+      mediaIds: z.array(z.string()).min(1).max(100).optional(),
+      from: z.number().min(0).optional(),
+      to: z.number().min(0).optional(),
+    }));
+    const project = requireProjectHeader(ctx, c.req.param("id"));
+    requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), project.id);
+    return c.json(fixTranscriptWords(ctx, project.id, body));
   });
 
   r.post("/projects/:id/media/:mediaId/prepare", async (c) => {
@@ -439,7 +457,9 @@ export function mediaRoutes(ctx: Ctx) {
       throw badRequest("bad_area", "area is left,top,right,bottom in percent of the picture, at least 1 percent each way.");
     const area = asked?.map(n => n / 100) as [number, number, number, number] | undefined;
     const grid = c.req.query("grid") === "1" && media.width && media.height ? { width: media.width, height: media.height } : undefined;
-    const key = JSON.stringify([file, media.hash, source.size, source.mtimeMs, source.ctimeMs, t, w, preview, area, !!grid]);
+    // A file imported before Scarlet read colour has it read here: an HDR original's frame is tone-mapped to SDR.
+    const hdr = media.color ? media.color.hdr : (await ctx.render.probeMedia(file).catch(() => undefined))?.color?.hdr;
+    const key = JSON.stringify([file, media.hash, source.size, source.mtimeMs, source.ctimeMs, t, w, preview, area, !!grid, hdr]);
     const frame = async (demand: AbortSignal) => {
       const signal = AbortSignal.any([demand, ctx.projectSignal(media.projectId)]);
       if (preview && !area && !grid && media.fps && media.width && media.height) {
@@ -457,7 +477,7 @@ export function mediaRoutes(ctx: Ctx) {
       const indexedMp4 = !!media.previewClock && hasIndexedAvc(media);
       // The original decodes on an NVIDIA GPU when there is one.
       const decoder = await pictureDecoder(ctx.settings().render.hwaccel) === "cuda" ? "cuda" as const : undefined;
-      return ctx.render.extractFrame(file, t, { width: w, signal, indexedMp4, decoder, area, grid, fps: media.fps });
+      return ctx.render.extractFrame(file, t, { width: w, signal, indexedMp4, decoder, area, grid, fps: media.fps, hdr });
     };
     try {
       // Frames share the engine’s picture lane with contact sheets. The editor’s own requests go first, then the timeline’s.

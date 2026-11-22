@@ -25,7 +25,7 @@ These hold for every feature, not only dialogue: framing, captions, punch-ins, g
 
 What a skill says about a tool: it may name a tool so the model finds it, and say why this kind of work reaches for it. It does not say how the tool works, what it returns, what Scarlet enforces or which request is in scope. Those are already said by the tool, the prompt or the task context, and a skill the editor rewrites or deletes can't be where they live.
 
-Each thing is said once. The engine also writes a few instructions of its own (a redo after a conflict, a resumed run's recap; `taskPrompt` in `apps/server/src/services/tasks.ts`, `changes.ts`, `taskRecovery.ts`). They state the scope and the goal of that run. They don't restate a tool description or a skill.
+Each thing is said once. The engine also writes a few instructions of its own (a redo after a conflict, a resumed run's recap; `taskPrompt` in `apps/server/src/services/taskPrompts.ts`, `changes.ts`, `taskRecovery.ts`). They state the scope and the goal of that run. They don't restate a tool description or a skill.
 
 ## Where a new behavior belongs
 
@@ -47,6 +47,7 @@ The model can request an audio crossfade when submitting dialogue cuts. Scarlet 
 A transition is the same split. The editor's taste is in a skill ("every time I go from my camera to the screen recording, use a swipe"), or in the request itself. The model decides which joins get one. Scarlet puts it on those joins with `timeline_transition`, using the footage either side of each, and reports any join that had too little footage for the whole transition. [Transitions](../packages/timeline/src/transitions.ts) · [Drawing them](../packages/render/src/transitions.ts)
 
 A split edit (a J or L cut) follows it too. When and how far a join's sound should lead or trail its picture is taste, in the stock [split edits](../skills/split-edits/SKILL.md) skill, which only runs when it is asked for or looked up. The model picks the joins and the amount. Scarlet moves the sound with a `splitJoin` step in `timeline_propose`, using the footage either side, and reports when each voice comes in and goes out and which words the split brings in or drops. It refuses only what nobody would choose: sound that was never recorded, or a new sound edge inside a word, which `timeline_propose` measures for every edit. [Split edits](../packages/timeline/src/splitJoin.ts)
+Music under speech is the same split too. How deep the music goes, how fast it moves and which pauses it swells in are taste, in the `music-under-speech` skill. The model decides where to dip and passes those numbers in a `duckUnderSpeech` step of `timeline_propose`, whose defaults are the skill's. Scarlet finds the speech in the transcript, places the volume keyframes and reports any speech the dips leave at full level. Voice cleanup is an editor's decision the other way round: Scarlet puts it on only when the editor asks for it, in their words or a skill of theirs, so no stock skill names it. [Levels](../packages/timeline/src/volume.ts) · [Voice cleanup](../packages/render/src/effects.ts)
 
 ## How a skill reaches an edit
 

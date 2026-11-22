@@ -109,15 +109,17 @@ export function passToRevise(ctx: Ctx, named: Change, taskId: string | undefined
  * a revision or a later part of the pass has replaced that one, the pass that waits now is the one held. Caller holds
  * the write lock.
  */
-export function callSentBack(ctx: Ctx, request: Task): void {
+export function callSentBack(ctx: Ctx, request: Task): { changeId: string; index: number } {
   const { changeId, cutIndex } = request.context;
   const named = changeId && cutIndex !== undefined ? ctx.repos.changes.get(changeId) : undefined;
-  if (named?.projectId !== request.projectId) return;
-  const pass = passToRevise(ctx, named, request.id, cutIndex!)?.change ?? named;
+  if (named?.projectId !== request.projectId) return { changeId: changeId!, index: cutIndex! };
+  const slot = passToRevise(ctx, named, request.id, cutIndex!) ?? { change: named, index: cutIndex! };
+  const pass = slot.change;
   if (pass.applyWhenDone && pass.intent === "suggestion" && pass.cutReasons?.length && (pass.state === "ready" || pass.state === "revising")) {
     saveChange(ctx, { ...pass, applyWhenDone: undefined });
     ctx.db.afterCommit(() => ctx.log(`[review] schedule change=${logId(pass.id)} project=${logId(pass.projectId)} task=${logId(request.id)} outcome=cleared reason=revision`));
   }
+  return { changeId: pass.id, index: slot.index };
 }
 
 export function selectedStagedCut(ctx: Ctx, task?: Task | null) {

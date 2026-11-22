@@ -113,6 +113,18 @@ export const MediaAsset = z.object({
   height: z.number().int().positive().optional(),
   hasAudio: z.boolean().optional(),
   hasAlpha: z.boolean().optional(),
+  /**
+   * The colour a moving picture's file declares: an HDR transfer, which every picture Scarlet makes from it tone-maps
+   * to SDR, a camera Log curve it names, and its colour tags when they aren't BT.709. `{}` for ordinary SDR. Absent on
+   * a file imported before Scarlet read colour, until it is read.
+   */
+  color: z.object({
+    hdr: z.enum(["hlg", "pq"]).optional(),
+    log: z.string().optional(),
+    primaries: z.string().optional(),
+    transfer: z.string().optional(),
+    bitDepth: z.number().int().positive().optional(),
+  }).optional(),
   /** Automatic transcription permitted at import, retained across interrupted preparation. */
   transcriptionOnImport: z.enum(["openai", "whispercpp"]).optional(),
   /** Provider revision when imported. An older import without it needs a new transcription request. */
@@ -188,6 +200,18 @@ export const TransformKeyframe = z.object({
 });
 export type TransformKeyframe = z.infer<typeof TransformKeyframe>;
 
+/**
+ * A clip's level at `time` (seconds from the clip's start, as a transform keyframe's): `db` on top of its `volume`.
+ * Before the first the level is the first's, after the last the last's; between two it moves in dB as the earlier's
+ * ease says.
+ */
+export const VolumeKeyframe = z.object({
+  time: z.number().finite(),
+  db: z.number().min(-96).max(24),
+  ease: TransformKeyframe.shape.ease,
+});
+export type VolumeKeyframe = z.infer<typeof VolumeKeyframe>;
+
 export const Effect = z.object({
   type: z.string(), // e.g. "blur", "lut", "eq", "compressor", "denoise"
   params: z.record(z.unknown()).default({}),
@@ -241,6 +265,8 @@ export const MediaClip = ClipBase.extend({
   opacity: z.number().min(0).max(1).default(1),
   /** Linear gain multiplier for the clip's audio. 0 = mute. */
   volume: z.number().min(0).default(1),
+  /** The level moving over the clip, such as music dipping under speech. */
+  volumeKeyframes: z.array(VolumeKeyframe).optional(),
   /** Audio fade durations in seconds. */
   audioFadeIn: Seconds.default(0),
   audioFadeOut: Seconds.default(0),
@@ -458,6 +484,19 @@ export const TranscriptSegment = z.object({
 });
 export type TranscriptSegment = z.infer<typeof TranscriptSegment>;
 
+/**
+ * A spelling the editor corrected across a transcript: the words that read `find` read `replace`, with their times.
+ * Kept on the transcript so a transcription made again, or its words placed again, reads the same.
+ * `from`/`to`: the source seconds the fix was limited to.
+ */
+export const TranscriptWordFix = z.object({
+  find: z.string().min(1),
+  replace: z.string().min(1),
+  from: Seconds.optional(),
+  to: Seconds.optional(),
+});
+export type TranscriptWordFix = z.infer<typeof TranscriptWordFix>;
+
 export const LocalTranscriptionModel = z.enum(["crisperwhisper", "whispercpp", "custom"]);
 export type LocalTranscriptionModel = z.infer<typeof LocalTranscriptionModel>;
 
@@ -480,6 +519,8 @@ export const Transcript = z.object({
   /** Model or adapter recorded when these words were transcribed, retained on speaker revisions. */
   modelLabel: z.string().optional(),
   segments: z.array(TranscriptSegment).default([]),
+  /** Spellings the editor corrected, in the order made. A new transcription of the recording applies them again. */
+  wordFixes: z.array(TranscriptWordFix).optional(),
   createdAt: z.string().datetime().optional(),
 });
 export type Transcript = z.infer<typeof Transcript>;

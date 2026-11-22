@@ -228,7 +228,7 @@ export function expandSplitJoins(timeline: Timeline, media: readonly Pick<MediaA
   const ops: TimelineOp[] = [], joins: SplitJoinPlaced[] = [];
   let tl = timeline, pending: TimelineOp[] = [];
   for (const [i, op] of proposed.entries()) {
-    if (op.op !== "splitJoin") { pending.push(op); continue; }
+    if (op.op !== "splitJoin") { pending.push(op as TimelineOp); continue; }
     tl = applyOps(tl, pending);
     ops.push(...pending);
     pending = [];

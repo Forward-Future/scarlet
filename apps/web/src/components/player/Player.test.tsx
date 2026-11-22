@@ -126,7 +126,7 @@ it("plays a long clip section by section, and the edit as a stream until its fil
   const stream = vi.spyOn(cutStream, "openCutStream").mockImplementation(el => ({ seek() {}, finishSeek() {}, async bufferThrough() {}, sourceTime: () => el.currentTime, dispose() {} }));
   vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => new Promise(() => {}));
   await show({ cut: true });
-  expect(video()?.getAttribute("aria-label")).toBe("The current edit");
+  expect(video()?.getAttribute("aria-label")).toBe("The video");
   expect(video()?.hasAttribute("src")).toBe(false);
   expect(useProjectStore.getState().refreshFullRenders).toHaveBeenCalled();
   expect(stream).not.toHaveBeenCalled();

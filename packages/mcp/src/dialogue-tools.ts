@@ -19,6 +19,7 @@ import {
   type TaskEvent,
 } from "@scarlet/shared";
 import {
+  carriesAudio,
   clipEnd,
   CutAssessment,
   frameAligned,
@@ -424,7 +425,8 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
     async ({ mediaId, from, until, noCutsReadyThrough }) => {
       const { media } = await client.media(projectId);
       const asset = media.find(m => m.id === mediaId);
-      if (!asset || (asset.kind !== "audio" && !asset.hasAudio)) throw new Error("Choose a source with audio from this project.");
+      // A video not read yet isn't known to be silent: the line after says to check its import.
+      if (!asset || !carriesAudio(asset)) throw new Error("Choose a source with audio from this project.");
       if (!asset.duration) throw new Error("Source duration is unavailable. Check import status before scanning.");
       const end = Math.min(until ?? asset.duration, asset.duration);
       if (from >= end) throw new Error("Choose a nonempty range inside the source.");
@@ -516,10 +518,13 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
         const summary = syncSummary(pairs, new Map(project.media.map(m => [m.id, m.name])), fps);
         // A badly placed track can be out of line at every cut: the first 20 stretches say enough to fix it.
         return { pairs: pairs.map(p => p.outOfLine.length > 20 ? { ...p, outOfLine: p.outOfLine.slice(0, 20), outOfLineCount: p.outOfLine.length } : p), summary };
-      })().catch(without("the sync check", undefined));
+      })();
+      // Only an answer is kept: a read that failed (a waveform still being prepared) is made again at the next check.
+      const made = job;
+      made.catch(() => { if (syncChecks.get(version) === made) syncChecks.delete(version); });
       syncChecks.set(version, job);
     }
-    return job;
+    return job.catch(without("the sync check", undefined));
   }
 
   // The silence and piece lengths the model last asked the check for: the checks Scarlet runs after a save count by them too.
@@ -538,11 +543,14 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
           getPerception().cutsOn(tl, project, { wait: 0 }).catch(without("where the recordings cut", undefined))]);
         const brief = briefPictures(tl, project.media, project.settings, BRIEF_PICTURE_SECONDS, cuts?.cuts);
         return { version: tl.version, findings: pictureFindings(tl, brief, framed.framed, framed.words) };
-      })().catch(without("what the picture does", undefined));
-      // "head" names a different version after each save: only a named one is kept.
+      })();
+      // "head" names a different version after each save: only a named one is kept, and only an answer, so a read
+      // that failed is made again at the next check.
+      const made = job;
+      made.catch(() => { if (pictureChecks.get(version) === made) pictureChecks.delete(version); });
       if (version !== "head") pictureChecks.set(version, job);
     }
-    return job;
+    return job.catch(without("what the picture does", undefined));
   }
 
   async function checkRepeats(version: string, keep?: Array<{ id: string; reason: string }>, offset?: number, asked?: number, piecesUnderAsked?: number) {
