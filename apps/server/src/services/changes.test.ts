@@ -1,11 +1,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
-import { FlagEditRequest } from "@scarlet/shared";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { ATTEMPT_HEADER, FlagEditRequest, TASK_HEADER } from "@scarlet/shared";
 import { createProject, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
-import { localUser } from "../auth.js";
+import { accessToken, localUser } from "../auth.js";
 import { scarletRenderAdapter } from "../render/scarletRender.js";
 import { flagEdit, proposeChange } from "./changes.js";
 import { createTask } from "./tasks.js";
@@ -98,4 +98,127 @@ it("records a flag's playback range in the version it refers to", () => {
   expect(found.flagged).toMatchObject({ changeId: made.id, spot: 0 });
   expect(ctx.repos.changes.get(made.id)!.flags?.[1]?.location).toEqual({ version: moved.toVersion, range });
   expect(FlagEditRequest.safeParse({ check: "Check the mix", changeId: made.id, spot: 0, version: made.toVersion }).success).toBe(false);
+});
+
+it("projects only the named change's thread on edit-flags by changeId and preserves route behavior for revisions, elsewhere edits, errors, and ranges", async () => {
+  const { ctx, app } = workspace;
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "mic", path: "mic.wav", kind: "audio", duration: 60, hasAudio: true }, "ready");
+  const user = localUser(ctx);
+  const by = { type: "human" as const, id: user.id, name: user.name };
+  const token = accessToken(ctx);
+  const runner = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Audit edits", createdBy: by });
+  const startedAt = new Date().toISOString();
+  ctx.repos.tasks.put({ ...runner, state: "running", startedAt });
+
+  const postFlag = (body: object) => app.request(`/api/projects/${project.id}/edit-flags`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      [TASK_HEADER]: runner.id,
+      [ATTEMPT_HEADER]: startedAt,
+    },
+    body: JSON.stringify({ taskId: runner.id, ...body }),
+  });
+
+  // Thread 1: assemble + edit covering 0..10
+  const t1 = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Assemble intro", createdBy: by });
+  const c1 = proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: t1.id, description: "Assemble", skipRender: true,
+    ops: [{ op: "addClip", trackId: "a1", clip: { id: "raw", kind: "media", mediaId: "mic", timelineIn: 0, sourceIn: 0, sourceOut: 60 } }],
+    timelineEdits: [{ label: "Assemble intro", range: { start: 0, end: 10 } }],
+  }).change;
+
+  // Thread 2: unrelated edit + same-thread revision covering 2..8
+  const t2 = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Boost opening", createdBy: by });
+  const c2 = proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: t2.id, description: "Boost opening", skipRender: true,
+    ops: [{ op: "updateClip", clipId: "raw", patch: { volume: 0.9 } }],
+    timelineEdits: [{ label: "Boost opening", range: { start: 2, end: 8 } }],
+  }).change;
+  const t2Rev = createTask(ctx, { projectId: project.id, kind: "revise", agent: "codex", instruction: "Dial back boost", createdBy: by, context: { threadId: t2.id, changeId: c2.id } });
+  const c2Rev = proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: t2Rev.id, description: "Boost opening gently", skipRender: true,
+    ops: [{ op: "updateClip", clipId: "raw", patch: { volume: 0.95 } }],
+    timelineEdits: [{ label: "Boost opening gently", range: { start: 2, end: 8 }, replaces: { changeId: c2.id, spot: 0 } }],
+  }).change;
+
+  // Thread 3: edit flagged by runner (enters runner's `flagged` / elsewhere list) and revised from runner's thread
+  const t3 = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Lower hum", createdBy: by });
+  const c3 = proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: t3.id, description: "Lower hum", skipRender: true,
+    ops: [{ op: "updateClip", clipId: "raw", patch: { volume: 0.85 } }],
+    timelineEdits: [{ label: "Lower hum", range: { start: 20, end: 25 } }],
+  }).change;
+  expect((await postFlag({ changeId: c3.id, spot: 0, check: "Still hear hum" })).status).toBe(201);
+  const t4Rev = createTask(ctx, { projectId: project.id, kind: "revise", agent: "codex", instruction: "Fix hum", createdBy: by, context: { threadId: runner.id, changeId: c3.id } });
+  const c4Rev = proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: t4Rev.id, description: "Lower hum more", skipRender: true,
+    ops: [{ op: "updateClip", clipId: "raw", patch: { volume: 0.8 } }],
+    timelineEdits: [{ label: "Lower hum more", range: { start: 20, end: 25 }, replaces: { changeId: c3.id, spot: 0 } }],
+  }).change;
+
+  // Thread 5: ready suggestion (not applied)
+  const t5 = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Offer alternative", createdBy: by });
+  const cReady = proposeChange(ctx, user, project.id, {
+    intent: "suggestion", taskId: t5.id, description: "Try quieter", skipRender: true,
+    ops: [{ op: "updateClip", clipId: "raw", patch: { volume: 0.7 } }],
+    timelineEdits: [{ label: "Try quieter", range: { start: 30, end: 35 } }],
+  }).change;
+
+  // Flagging c1 by changeId must not read versions belonging only to unrelated threads (c2, c2Rev, c3).
+  const readSpy = vi.spyOn(ctx.repos.versions, "get");
+  const byIdRes = await postFlag({ changeId: c1.id, spot: 0, check: "Check intro pacing" });
+  expect(byIdRes.status).toBe(201);
+  const byIdBody = await byIdRes.json();
+  expect(byIdBody).toEqual({
+    flagged: { changeId: c1.id, spot: 0, label: "Assemble intro", request: "Assemble intro", range: { start: 0, end: 10 } },
+    version: c4Rev.toVersion,
+  });
+  const readVersions = readSpy.mock.calls.map(([, version]) => version);
+  expect(readVersions).not.toContain(c2.toVersion);
+  expect(readVersions).not.toContain(c2Rev.toVersion);
+  expect(readVersions).not.toContain(c3.toVersion);
+  readSpy.mockRestore();
+
+  // Same-thread revision: old replaced changeId is not found; replacement resolves to the revised edit.
+  const replacedOld = await postFlag({ changeId: c2.id, spot: 0, check: "Flag old" });
+  expect(replacedOld.status).toBe(404);
+  expect(await replacedOld.json()).toMatchObject({ error: { code: "not_found" } });
+  const replacedNew = await postFlag({ changeId: c2Rev.id, spot: 0, check: "Flag revision" });
+  expect(replacedNew.status).toBe(201);
+  expect(await replacedNew.json()).toEqual({
+    flagged: { changeId: c2Rev.id, spot: 0, label: "Boost opening gently", request: "Boost opening", range: { start: 2, end: 8 } },
+    version: c4Rev.toVersion,
+  });
+
+  // Elsewhere/flagged change and its revision from the flagging thread both resolve to their own threads.
+  const elsewhereOrig = await postFlag({ changeId: c3.id, spot: 0, check: "Flag orig again" });
+  expect(elsewhereOrig.status).toBe(201);
+  expect(await elsewhereOrig.json()).toMatchObject({ flagged: { changeId: c3.id, spot: 0, label: "Lower hum", request: "Lower hum" } });
+  const elsewhereRev = await postFlag({ changeId: c4Rev.id, spot: 0, check: "Flag elsewhere rev" });
+  expect(elsewhereRev.status).toBe(201);
+  expect(await elsewhereRev.json()).toMatchObject({ flagged: { changeId: c4Rev.id, spot: 0, label: "Lower hum more", request: "Audit edits" } });
+
+  // Missing, wrong spot, and staged changes return the same errors without scanning unrelated threads.
+  const errReadSpy = vi.spyOn(ctx.repos.versions, "get");
+  expect((await postFlag({ changeId: "chg_missing", spot: 0, check: "Missing" })).status).toBe(404);
+  expect((await postFlag({ changeId: c1.id, spot: 9, check: "Wrong spot" })).status).toBe(404);
+  const staged = await postFlag({ changeId: cReady.id, spot: 0, check: "Staged" });
+  expect(staged.status).toBe(400);
+  expect(await staged.json()).toMatchObject({ error: { code: "not_applied" } });
+  const errReadVersions = errReadSpy.mock.calls.map(([, version]) => version);
+  expect(errReadVersions).not.toContain(c2.toVersion);
+  expect(errReadVersions).not.toContain(c2Rev.toVersion);
+  expect(errReadVersions).not.toContain(c3.toVersion);
+  errReadSpy.mockRestore();
+
+  // Range form still projects across threads, picks the best overlap, and reports alsoThere.
+  const byRange = await postFlag({ range: { start: 2, end: 8 }, check: "Check overlap by range" });
+  expect(byRange.status).toBe(201);
+  expect(await byRange.json()).toEqual({
+    flagged: { changeId: c2Rev.id, spot: 0, label: "Boost opening gently", request: "Boost opening", range: { start: 2, end: 8 } },
+    version: c4Rev.toVersion,
+    alsoThere: [{ changeId: c1.id, spot: 0, label: "Assemble intro", request: "Assemble intro", range: { start: 0, end: 10 } }],
+  });
 });
