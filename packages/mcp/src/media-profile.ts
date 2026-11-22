@@ -5,10 +5,10 @@
  */
 import type { TranscriptWord } from "@scarlet/timeline";
 import { normalizeTranscriptToken, transcriptSequenceMatcher } from "@scarlet/shared";
+import { round2 } from "./analysis.js";
 
 const percentile = (sorted: number[], p: number) =>
   sorted.length ? sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))]! : undefined;
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
  * Room tone and speech level in dBFS (RMS). Buckets away from every transcript word are
