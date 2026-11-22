@@ -451,6 +451,7 @@ describe("gemini ACP parser", () => {
     expect(isScarletMcpPermission({ toolCall: { name: "mcp_scarlet_timeline_get", title: "Check the timeline" } })).toBe(true);
     expect(isScarletMcpPermission({ toolCall: { toolName: "scarlet/dialogue_apply_cuts" } })).toBe(true);
     expect(isScarletMcpPermission({ toolCall: { title: "scarlet.tool_help (read a tool)" } })).toBe(true);
+    expect(isScarletMcpPermission({ toolCall: { name: "mcp_scarlet_tool_call", title: "Read the dialogue" } })).toBe(true);
     // A path or file that starts like a Scarlet tool is not one.
     for (const name of ["scarlet/notes.md", "scarlet.json", "scarlet/timeline_get.md", "scarlet:timeline_getx", "mcp_scarlet_rm", "scarlet/../etc"]) {
       expect(isScarletMcpPermission({ toolCall: { name } })).toBe(false);
