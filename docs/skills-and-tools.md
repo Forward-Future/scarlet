@@ -25,7 +25,7 @@ These hold for every feature, not only dialogue: framing, captions, punch-ins, g
 
 What a skill says about a tool: it may name a tool so the model finds it, and say why this kind of work reaches for it. It does not say how the tool works, what it returns, what Scarlet enforces or which request is in scope. Those are already said by the tool, the prompt or the task context, and a skill the editor rewrites or deletes can't be where they live.
 
-Each thing is said once. The engine also writes a few instructions of its own (a redo after a conflict, a resumed run's recap; `taskPrompt` in `apps/server/src/services/tasks.ts`, `changes.ts`, `taskRecovery.ts`). They state the scope and the goal of that run. They don't restate a tool description or a skill.
+Each thing is said once. The engine also writes a few instructions of its own (a redo after a conflict, a resumed run's recap; `taskPrompt` in `apps/server/src/services/taskPrompts.ts`, `changes.ts`, `taskRecovery.ts`). They state the scope and the goal of that run. They don't restate a tool description or a skill.
 
 ## Where a new behavior belongs
 

@@ -1,4 +1,4 @@
-import { clipEnd, indexClipsAt, planTransitions, sourceToTimeline, type MediaClip, type Timeline } from "@scarlet/timeline";
+import { clipEnd, indexClipsAt, planTransitions, sourceAt, sourceToTimeline, type MediaClip, type Timeline } from "@scarlet/timeline";
 import { isTag } from "./analysis.js";
 import type { TimelineJoin } from "./timeline-perception.js";
 
@@ -7,7 +7,6 @@ type Side = TimelineJoin["tracks"][number];
 type Media = { id: string; kind: string; duration?: number };
 const epsilon = 1e-6;
 const millis = (t: number) => Math.round(t * 1000);
-const sourceAt = (c: MediaClip, t: number) => c.sourceIn + (t - c.timelineIn) * (c.speed ?? 1);
 
 export interface PictureEntrance {
   status: "measured" | "word-trimmed" | "onset-in-fade" | "unavailable";

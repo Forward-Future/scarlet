@@ -76,7 +76,7 @@ const streams = () => {
 it("opens the stream on the first play, from where the editor is, and says a section is on its way", async () => {
   const { open, opened } = streams();
   await show();
-  expect(video().getAttribute("aria-label")).toBe("The current edit");
+  expect(video().getAttribute("aria-label")).toBe("The video");
   // Nothing is asked of the engine until the editor plays.
   expect(open).not.toHaveBeenCalled();
   expect([waiting(), button()]).toEqual([false, null]);

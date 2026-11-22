@@ -623,6 +623,20 @@ it("plays a file put up in place of a playing one only once it knows its length,
   next.remove();
 });
 
+it("lets go of a play that waits on a file that fails to load, so Play works once it loads", () => {
+  const ready = vi.spyOn(HTMLMediaElement.prototype, "readyState", "get").mockReturnValue(0);
+  const next = replace("file.mp4");
+  player.play();
+  expect(usePlayerStore.getState().playing).toBe(true);
+  next.dispatchEvent(new Event("error"));
+  expect(usePlayerStore.getState().playing).toBe(false);
+  // Retry loads the file: Play starts it, where a wait still held would have ignored the press.
+  ready.mockReturnValue(1);
+  player.play();
+  expect(next.paused).toBe(false);
+  next.remove();
+});
+
 it("plays a cut opened on a file that hasn't loaded yet from the cut, not from the file's top", () => {
   // Keep moves to the next cut: a new element goes up for the working cut and its listen starts before the file knows
   // its length. Played then, WebKit started it at 0:00 and the timeline followed it there, away from the cut.

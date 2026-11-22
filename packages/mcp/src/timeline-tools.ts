@@ -614,8 +614,10 @@ ${OPS_DOC}`,
       let tl = build();
       let sounding = await measure(tl);
       if (sounding.some(e => e.fragment)) {
-        for (const e of sounding) {
-          const i = e.fragment ? rangeOf(tl, e.clipId) : -1, r = ranges[i];
+        // Each edge's keep is found before any range moves: the ranges place the clips of the timeline as built.
+        const keeps = sounding.map(e => e.fragment ? rangeOf(tl, e.clipId) : -1);
+        for (const [n, e] of sounding.entries()) {
+          const i = keeps[n]!, r = ranges[i];
           if (!r || !e.fragment) continue;
           const edge = e.side === "in" ? "start" : "end", to = round3(r[edge] + e.fragment.quietAt - e.source);
           if (e.side === "in" ? to >= r.end - .05 : to <= r.start + .05) continue;

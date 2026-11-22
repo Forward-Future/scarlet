@@ -254,7 +254,7 @@ async fn runs_acp_session_with_model_effort_permissions_and_usage() {
     assert!(sent.contains(r#""id":100"#) && sent.contains(r#""optionId":"no""#));
     // agy ended the first turn on the refused shell command: the run carried on, and was told why.
     assert_eq!(sent.matches(r#""method":"session/prompt""#).count(), 2);
-    assert!(sent.contains("Scarlet refused run_shell_command: only Scarlet's own tools"));
+    assert!(sent.contains("Scarlet refused run_shell_command. Carry on."));
     let events = events.lock().unwrap();
     assert!(events.iter().any(|e| e.kind == "log"
         && e.data.as_ref().is_some_and(|d| d["kind"] == "tool_refused" && d["harnessTool"] == "run_shell_command")));
@@ -401,6 +401,23 @@ done
     assert_eq!(events.iter().find(|e| e.kind == "result").map(|e| e.text.as_str()), Some(final_reply.as_str()));
     let logs: Vec<&str> = events.iter().filter(|e| e.kind == "log").map(|e| e.text.as_str()).collect();
     assert_eq!(logs, vec!["Gemini session started", earlier.as_str(), progress, final_reply.as_str()]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn writes_no_words_of_its_own_for_the_model_after_a_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let (script, log_path) = fake_agy(dir.path(), false);
+    let (mut opts, _) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    opts.refused_tool = None;
+    let res = run_gemini(opts).await;
+    assert!(!res.ok);
+    assert_eq!(
+        res.error.as_deref(),
+        Some("Gemini stopped after Scarlet refused run_shell_command, and this engine gave no words to carry on with. Update Scarlet's engine.")
+    );
+    let sent = std::fs::read_to_string(&log_path).unwrap();
+    assert_eq!(sent.matches(r#""method":"session/prompt""#).count(), 1);
 }
 
 #[cfg(unix)]

@@ -1,4 +1,4 @@
-/** Claude receives task text only on stdin and can call only Scarlet MCP tools. */
+/** Claude receives task text only on stdin. A side check can call only Scarlet MCP tools; a request has its shell, file and web tools too. */
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writePrivateFile } from "../private-files.js";
