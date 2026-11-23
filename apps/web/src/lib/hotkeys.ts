@@ -57,10 +57,14 @@ export function ignorePageShortcut(e: KeyboardEvent, owner?: Element | null): bo
 
 type SeekArrow = "ArrowLeft" | "ArrowRight";
 
-/** ← and → skip 5 seconds, and 1 second with Shift. Holding either repeats at the keyboard's own rate. */
-export function arrowSeekTime(time: number, key: SeekArrow, shift: boolean): number {
-  const stepMs = shift ? 1000 : 5000;
-  return (Math.round(time * 1000) + (key === "ArrowLeft" ? -stepMs : stepMs)) / 1000;
+/** ← and → skip 1 second, and 1 frame with Shift. Holding either repeats at the keyboard's own rate. */
+export function arrowSeekTime(time: number, key: SeekArrow, shift: boolean, fps = 30): number {
+  const dir = key === "ArrowLeft" ? -1 : 1;
+  if (shift) {
+    const rate = fps > 0 && Number.isFinite(fps) ? fps : 30;
+    return (Math.round(time * rate) + dir) / rate;
+  }
+  return (Math.round(time * 1000) + dir * 1000) / 1000;
 }
 
 export type KeyHandler = (e: KeyboardEvent) => void;
@@ -127,7 +131,7 @@ export const SHORTCUTS: Array<{ keys: string[]; what: string; where: string }> =
   { keys: [COMPARE_KEY], what: "Switch between Before and After", where: "Edit comparison" },
   { keys: ["Space"], what: "Play / pause", where: "Preview" },
   { keys: ["↑", "↓"], what: "Previous / next edit or call", where: "Edit or call card" },
-  { keys: ["←", "→"], what: "Back / forward 5 seconds (1 second with Shift)", where: "Preview" },
+  { keys: ["←", "→"], what: "Back / forward 1 second (1 frame with Shift)", where: "Preview" },
   { keys: ["L"], what: "Faster playback, back to 0.5× after 2× (Shift for slower)", where: "Preview" },
   { keys: ["−", "+"], what: "Zoom the timeline out / in (0 to fit)", where: "Timeline" },
   { keys: ["N"], what: "Type a message at the playhead", where: "In a project" },
