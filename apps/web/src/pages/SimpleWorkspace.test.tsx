@@ -9642,6 +9642,126 @@ it("keeps words chosen in the transcript with a call open on an empty box, for t
   expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_ready", cutIndex: 0, label: "“I”", time: expect.closeTo(2.3, 1) });
 });
 
+it("keeps an applied cut aimed when asking about transcript words in its passage, and shows its cut on every queued request", async () => {
+  idle();
+  const before = { ...data.timeline!, version: "v_before" };
+  const cut = { op: "rippleDelete" as const, start: 10, end: 12.4 };
+  const other = { op: "rippleDelete" as const, start: 6, end: 7 };
+  const working = { ...applyOps(before, [cut, other]), version: data.project.head! };
+  data = { ...data, timeline: working, changes: data.changes.map(c => c.id === "chg_approved_2"
+    ? { ...c, ops: [cut, other], fromVersion: "v_before", toVersion: working.version, appliedVersion: working.version,
+      approvedSpots: undefined, appliedReview: undefined,
+      timelineEdits: [
+        { label: "Trim the stumble", range: { start: 8.5, end: 11.5 }, kind: "cut" as const },
+        { label: "Earlier pause", range: { start: 5.5, end: 6.5 }, kind: "cut" as const },
+      ],
+      cutReasons: [{ ...cut, reason: "Trim the stumble" }, { ...other, reason: "Earlier pause" }] } : c) };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockResolvedValue({ version: working.version, edits: [
+    { changeId: "chg_approved_2", spot: 0, label: "Trim the stumble", range: { start: 8.5, end: 11.5 }, at: 10,
+      beforeCut: { version: "v_before", removed: { start: 10, end: 12.4 } }, previous: [] },
+    { changeId: "chg_approved_2", spot: 1, label: "Earlier pause", range: { start: 5.5, end: 6.5 }, at: 6,
+      beforeCut: { version: "v_before", removed: { start: 6, end: 7 } }, previous: [] },
+  ] });
+  vi.spyOn(api, "timeline").mockImplementation(async (_, version) => ({ timeline: version === "v_before" ? before : working }));
+  await show();
+  const cutRow = () => [...turnFor("chg_approved_2").querySelectorAll<HTMLButtonElement>(".simple-pass-list button, .simple-edits .simple-edit")]
+    .find(b => b.textContent?.includes("Trim the stumble"))!;
+  await click(cutRow());
+  await act(async () => {});
+  expect(boxTag()).toBe("Cut at 0:10");
+  await openTranscript();
+  const wordAt = (min: number, max: number) => {
+    const words = [...container.querySelectorAll<HTMLElement>(".simple-transcript [data-w]")];
+    return Number(words.find(w => {
+      const m = /^(\d+):(\d\d)/.exec(w.title);
+      if (!m) return false;
+      const secs = Number(m[1]) * 60 + Number(m[2]);
+      return secs >= min && secs <= max;
+    })!.dataset.w);
+  };
+  // Words inside the applied cut stay aimed at that cut, on the version before it.
+  await act(async () => useUiStore.getState().setAgentDraft("Keep this word"));
+  await askAboutWord(wordAt(10, 12));
+  expect(boxTag()).toBe("Cut at 0:10");
+  expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_approved_2", editIndex: 0, version: "v_before" });
+  expect(useUiStore.getState().agentDraft).toBe("Keep this word");
+  // Words flanking the cut in its audition (outside other cuts) also stay aimed at that cut so "cut this" / "add this" keeps its cut tag.
+  await askAboutWord(wordAt(8, 9));
+  expect(boxTag()).toBe("Cut at 0:10");
+  expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_approved_2", editIndex: 0, version: "v_before" });
+  const asked = useUiStore.getState().agentContext as AgentContext;
+  // Words in another cut, or far outside the audition, leave the open cut to start a new edit.
+  await askAboutWord(wordAt(6, 6));
+  expect(boxTag()).toBeUndefined();
+  expect(useUiStore.getState().agentContext).not.toHaveProperty("changeId");
+  await askAboutWord(wordAt(1, 3));
+  expect(boxTag()).toBeUndefined();
+  expect(useUiStore.getState().agentContext).not.toHaveProperty("changeId");
+  // Both queued requests associated with this cut show its cut badge in the queue tray (including Next).
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  const now = new Date().toISOString();
+  const queuedCut = (id: string, text: string, context: Task["context"]) => ({
+    ...base, id, kind: "edit" as const, state: "queued" as const, startedAt: undefined, finishedAt: undefined,
+    hostId: null, summary: null, changeIds: [], instruction: text, createdAt: now, context: { ...context, message: text },
+  });
+  await event(d => ({ ...d, tasks: [...d.tasks,
+    queuedCut("task_cut_1", "cut this", { threadId: "task_done", changeId: asked.changeId, editIndex: asked.editIndex, version: asked.version, time: asked.time, end: asked.end }),
+    queuedCut("task_cut_2", "add this to the cut section", { threadId: "task_done", changeId: "chg_approved_2", editIndex: 0, version: working.version, time: 8.5, end: 11.5 }),
+  ] }));
+  const tray = container.querySelector<HTMLElement>('[aria-label="Queued requests"]')!;
+  await click(tray.querySelector(".queue-head")!);
+  expect([...tray.querySelectorAll(".queue-row")].map(r => [r.querySelector(".queue-next")?.textContent, r.querySelector(".queue-target")?.textContent, r.querySelector(".queue-text")?.textContent]))
+    .toEqual([["Next", "Cut at 0:10", "cut this"], ["", "Cut at 0:10", "add this to the cut section"]]);
+});
+
+it("re-aims an empty box at the open applied cut or call when its row is pressed again after clearing the tag", async () => {
+  runningPass();
+  idle();
+  const before = { ...data.timeline!, version: "v_before" };
+  const cut = { op: "rippleDelete" as const, start: 10, end: 12.4 };
+  const other = { op: "rippleDelete" as const, start: 6, end: 7 };
+  const working = { ...applyOps(before, [cut, other]), version: data.project.head! };
+  data = { ...data, timeline: working, changes: data.changes.map(c => c.id === "chg_approved_2"
+    ? { ...c, ops: [cut, other], fromVersion: "v_before", toVersion: working.version, appliedVersion: working.version,
+      approvedSpots: undefined, appliedReview: undefined,
+      timelineEdits: [
+        { label: "Trim the stumble", range: { start: 8.5, end: 11.5 }, kind: "cut" as const },
+        { label: "Earlier pause", range: { start: 5.5, end: 6.5 }, kind: "cut" as const },
+      ],
+      cutReasons: [{ ...cut, reason: "Trim the stumble" }, { ...other, reason: "Earlier pause" }] } : c) };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockResolvedValue({ version: working.version, edits: [
+    { changeId: "chg_approved_2", spot: 0, label: "Trim the stumble", range: { start: 8.5, end: 11.5 }, at: 10,
+      beforeCut: { version: "v_before", removed: { start: 10, end: 12.4 } }, previous: [] },
+    { changeId: "chg_approved_2", spot: 1, label: "Earlier pause", range: { start: 5.5, end: 6.5 }, at: 6,
+      beforeCut: { version: "v_before", removed: { start: 6, end: 7 } }, previous: [] },
+  ] });
+  vi.spyOn(api, "timeline").mockImplementation(async (_, version) => ({ timeline: version === "v_before" ? before : working }));
+  await show();
+  // Staged call row pressed again after clearing the tag re-aims the empty box at that call.
+  const firstCall = container.querySelector<HTMLButtonElement>('[aria-label="Calls that need you"] button')!;
+  await click(firstCall);
+  await act(async () => {});
+  expect(boxTag()).toBe("Cut 1");
+  await act(async () => composer.props!.onClearTarget!());
+  expect(boxTag()).toBeUndefined();
+  await click(firstCall);
+  await act(async () => {});
+  expect(boxTag()).toBe("Cut 1");
+  // Applied cut row pressed again after clearing the tag re-aims the empty box at that cut.
+  const cutRow = () => [...turnFor("chg_approved_2").querySelectorAll<HTMLButtonElement>(".simple-pass-list button, .simple-edits .simple-edit")]
+    .find(b => b.textContent?.includes("Trim the stumble"))!;
+  await click(cutRow());
+  await act(async () => {});
+  expect(boxTag()).toBe("Cut at 0:10");
+  await act(async () => composer.props!.onClearTarget!());
+  expect(boxTag()).toBeUndefined();
+  await click(cutRow());
+  await act(async () => {});
+  expect(boxTag()).toBe("Cut at 0:10");
+});
+
 it("doesn't bring back words chosen in an earlier visit on an empty box, and keeps them with their message", async () => {
   idle();
   const owner = JSON.stringify([PRJ, null]);
