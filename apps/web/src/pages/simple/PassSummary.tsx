@@ -10,6 +10,7 @@ import { editKey } from "../../lib/keptEdits";
 import { madeSentence, type SentencePart } from "../../lib/madeSentence";
 import { decidedPassCalls } from "../../lib/passCalls";
 import { isRecheck, type Thread } from "../../lib/threads";
+import { useKeepSelectedInView } from "../../lib/uiHooks";
 import { callRowKey, isWorking, letGo, listedBefore, noNests, noRejected, noSpent, type ChatActions, type HoveredReviewRow, type Nest, type PassList, type Spent } from "./types";
 
 /**
@@ -77,8 +78,8 @@ function useReveal(open: unknown) {
     asked.current = false;
     if (open) {
       const rows = host.current?.querySelector(".simple-pass-list, .simple-edits");
-      const row = rows?.querySelector(':scope > li > button[aria-current="true"]') ?? rows?.querySelector(":scope > li > button");
-      row?.scrollIntoView?.({ block: "nearest" });
+      // When a row is already selected, useKeepSelectedInView keeps it in view; otherwise bring the first row in.
+      if (rows && !rows.querySelector('[aria-current="true"]')) rows.querySelector(":scope > li > button")?.scrollIntoView?.({ block: "nearest" });
     }
   }, [open]);
   return [host, () => { asked.current = true; }] as const;
@@ -142,10 +143,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const rejecting = useRejecting(thread);
   const [open, setOpen] = listState;
   const [host, reveal] = useReveal(open);
-  // The list follows the cut or edit that's open, so stepping with the arrows never leaves its row out of sight.
+  // The list follows the cut or edit that's open, so stepping with arrows or Keep never leaves its row out of sight.
   const list = useRef<HTMLOListElement>(null);
-  const onRow = actions.showing ? editKey(actions.showing) : actions.listening?.key;
-  useEffect(() => { list.current?.querySelector('[aria-current="true"]')?.scrollIntoView?.({ block: "nearest" }); }, [onRow, open]);
   const pass = actions.pass?.threadId === thread.id ? actions.pass : undefined;
   // An edit sent back for revision waits on Scarlet, not on the editor; a to-do parked as Later stays in For you
   // without holding up the waiting count.
@@ -197,8 +196,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     return () => { actions.listOpen(thread.id, false); actions.lightMark(); };
   }, [fullList, thread.id]); // eslint-disable-line react-hooks/exhaustive-deps
   // A pass that has only just begun has nothing to sum up yet. Its rows appear with its first calls, or once it is done.
-  // Every hook is above this line: the pass's first cuts arriving must not change how many hooks run.
-  if (!edits.length && !pass && !decidedCallRows.length && !forYouRejected.length) return null;
+  // Every hook runs before the early return below so hooks stay stable when rows arrive.
+  const empty = !edits.length && !pass && !decidedCallRows.length && !forYouRejected.length;
   const count = edits.length || pass?.cuts || 0;
   // While Scarlet is still on a pass that has asked about no cut, nothing needs the editor. The block is the pass's
   // stages then: no count of the cuts staged so far, which would sit still between its parts, and nothing to schedule.
@@ -340,6 +339,23 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   }
   // A request about any place of an edit made in many places sits under that edit's one row.
   const rowOf = (key: string) => places.get(key)?.first ?? key;
+  let selectedKey: string | undefined;
+  if (!empty && filter) {
+    let before = 0;
+    for (const { row, members, unfolded: momentOpen } of drawn) {
+      if (row.on) { selectedKey = `${filter}:${before}:${row.key}`; break; }
+      before += 1 + nests.filter(nest => rowOf(nest.key) === row.key || (!momentOpen && !!members?.some(m => m.key === nest.key))).length;
+      if (momentOpen && members) {
+        for (const m of members) {
+          if (m.on) { selectedKey = `${filter}:${before}:member:${m.key}`; break; }
+          before += 1 + nests.filter(nest => nest.key === m.key && m.key !== row.key).length;
+        }
+        if (selectedKey) break;
+      }
+    }
+  }
+  useKeepSelectedInView(list, selectedKey);
+  if (empty) return null;
   const placed = new Set(filter ? drawn.flatMap(({ row, members }) => [row.key, ...places.get(row.key)?.members.map(editKey) ?? [], ...members?.map(m => m.key) ?? []]) : []);
   const fold = (key: string) => setUnfolded(was => { const next = new Set(was); if (!next.delete(key)) next.add(key); return next; });
   // A list that leads with times widens their column for all its rows once one of them is past an hour ("1:02:07").

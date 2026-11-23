@@ -420,7 +420,7 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 /* One row for every list of edits in the chat: a pass's calls, every edit of a pass, any other request's edits. Its
    type, its box and what the pointer does to it are the same. Only what leads a row differs: a time, or a number. */
 .simple-pass-list > li > button, .simple-edit { padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--color-fg); font: inherit; font-size: 12.5px;
-  text-align: left; cursor: pointer; }
+  text-align: left; cursor: pointer; scroll-margin-block: 24px; }
 .simple-pass-list > li > button:hover:not(:disabled), .simple-edit:hover { background: rgba(255, 255, 255, .04); }
 .simple-pass-list > li > button.is-on, .simple-edit.is-on { background: var(--color-raised); }
 .simple-pass-list > li > button { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; width: 100%; }
@@ -741,7 +741,7 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 .req-result { color: var(--color-muted); }
 .req-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; border: 0; background: none; color: var(--color-fg); font: inherit; text-align: left; }
 /* A row that opens its edit on the timeline is a button across the row. */
-button.req-summary { flex: 1; align-self: stretch; margin: 0; cursor: pointer; }
+button.req-summary { flex: 1; align-self: stretch; margin: 0; cursor: pointer; scroll-margin-block: 24px; }
 .req-summary.is-note { padding-top: 3px; padding-bottom: 3px; white-space: normal; line-height: 1.45; }
 .req-summary.is-note > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 button.req-summary:hover > span { text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; }

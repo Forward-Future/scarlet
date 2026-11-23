@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { callNumbers, taskNeedsTranscripts, type SpeakerProgress, type Task, type TaskEvent } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
 import { useProjectStore } from "../../stores/project";
@@ -212,6 +212,10 @@ function WaitingRun({ task, events, changes, say, result, banded, paused, held, 
 
 function FinishedRun({ task, finalChange, say, told, result, recovery, summary, listedAbove, showing, banded, onOpen, onResume, onWaitForTranscripts }: RunBundleProps) {
   const usage = useRunUsage(task.id, !banded);
+  const summaryBtn = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    if (showing) summaryBtn.current?.scrollIntoView?.({ block: "nearest" });
+  }, [showing]);
   // Finished. A run that ended without the transcripts it waited for says so, since what it saved is only part of the request.
   const paused = taskNeedsTranscripts(task);
   const stopped = task.state === "cancelled";
@@ -244,7 +248,7 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
     {say}
     {rows ?? (!(waits || (((told && !opens) || madeAbove) && !usage?.totalTokens)) && <div className="req-row req-result">
       {/* The line stays on screen once pressed: clicked, it lets go of the focus, so Space plays instead of pressing it again. */}
-      {madeAbove ? null : opens ? <button type="button" className={madeClass} aria-current={showing || undefined}
+      {madeAbove ? null : opens ? <button ref={summaryBtn} type="button" className={madeClass} aria-current={showing || undefined}
           title={summary ? `${made}\nShow on the timeline` : "Show on the timeline"} onClick={e => { blurOnPointerClick(e); opens(); }}><span>{made}</span></button>
         : <span className={madeClass} title={summary}><span>{made}</span></span>}
       {/* What a stopped run saved is one line, and its one action follows on it. */}
