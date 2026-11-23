@@ -1,4 +1,4 @@
-//! Data model shared with the Scarlet server (subset of packages/shared/src/api.ts)
+//! Data model shared with the Scarlet server (subset of packages/shared/src/agents.ts and tasks.ts)
 //! plus the runner event types from apps/agent/src/runners/types.ts.
 
 use serde::{Deserialize, Serialize};
@@ -244,6 +244,21 @@ pub fn record_plan(last: &mut Option<Vec<PlanStep>>, steps: Vec<PlanStep>, suppr
     let event = plan_event(&steps);
     *last = Some(steps);
     Some(event)
+}
+
+/// The live status line while a CLI compacts its session's context (COMPACTING in apps/agent/src/runners/types.ts).
+pub fn compacting_event() -> RunnerEvent {
+    RunnerEvent::with("log", "Compacting context", serde_json::json!({"kind":"compaction","active":true}))
+}
+
+/// A compaction that ended without a report of one (COMPACTION_ENDED in apps/agent/src/runners/types.ts).
+pub fn compaction_ended_event() -> RunnerEvent {
+    RunnerEvent::with("log", "Compacting context", serde_json::json!({"kind":"compaction","active":false}))
+}
+
+/// A finished compaction, for a CLI that says nothing more about it (COMPACTED in apps/agent/src/runners/types.ts).
+pub fn compacted_event() -> RunnerEvent {
+    RunnerEvent::with("log", "Context compacted", serde_json::json!({"kind":"compaction"}))
 }
 
 /// Extract a non-empty string slice from an optional JSON value.

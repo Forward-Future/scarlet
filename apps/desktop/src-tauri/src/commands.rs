@@ -43,6 +43,20 @@ pub async fn agent_install(state: State<'_, AppState>, agent: String) -> Result<
     Ok(result)
 }
 
+#[tauri::command]
+pub async fn ffmpeg_status(state: State<'_, AppState>) -> Result<crate::ffmpeg::FfmpegStatus, String> {
+    let home = state.paths.home.clone();
+    let resources = state.paths.resource_dir.clone();
+    tokio::task::spawn_blocking(move || crate::ffmpeg::status(&home, resources.as_deref()))
+        .await
+        .map_err(|e| format!("Could not check FFmpeg status: {e}"))
+}
+
+#[tauri::command]
+pub async fn ffmpeg_install(state: State<'_, AppState>) -> Result<crate::ffmpeg::FfmpegStatus, String> {
+    crate::ffmpeg::install(&state.paths.home, state.paths.resource_dir.as_deref()).await
+}
+
 /// One-click subscription sign-in for an agent CLI ("claude", "codex", or "gemini").
 /// Progress arrives on `agent-login://status`.
 #[tauri::command]

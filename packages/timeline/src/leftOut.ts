@@ -10,7 +10,8 @@
  * the stretch between them was left out. This reads those joins from the version alone, and builds the version that
  * plays them, so a cut made this way has footage to show like any other.
  */
-import type { Clip, MediaClip, Timeline, TimeRange } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { Clip, MediaClip, Timeline } from "./timelineSchema.js";
 import { shiftClip, splitClip, straightenCrossfades } from "./ops.js";
 import { clipEnd, timelineDuration } from "./time.js";
 

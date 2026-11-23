@@ -10,11 +10,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Forward-Future/scarlet-releases/releases"><strong>Download Early Access (macOS &amp; Windows)</strong></a>
+  <a href="https://github.com/Forward-Future/scarlet/releases/latest"><strong>Download Scarlet (macOS &amp; Windows)</strong></a>
   &nbsp;·&nbsp;
   <a href="https://github.com/Forward-Future/scarlet-releases/releases?q=Ubuntu">Ubuntu 24.04 x86-64 Preview</a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/Forward-Future/scarlet/releases">Stable Releases</a>
+  <a href="https://github.com/Forward-Future/scarlet-releases/releases">Early Access</a>
   &nbsp;·&nbsp;
   <a href="skills/README.md">Editing Workflows</a>
 </p>
@@ -85,12 +85,12 @@ So your agent edits from real measurements instead of guesswork, Scarlet analyze
 ### Export & NLE handoff
 
 <p align="center">
-  <img src="assets/export-advanced.png" width="600" alt="Scarlet’s Advanced export sheet listing what the handoff folder holds: the timeline (.fcpxml and .otio), a copy of the footage, captions (.srt), a Read me, and what does not carry over.">
+  <img src="assets/export-advanced.png" width="600" alt="Scarlet’s export sheet for Resolve, Final Cut or Premiere, listing what the handoff folder holds: the timeline (.fcpxml and .otio), a copy of the footage, captions (.srt), a Read me, and what does not carry over.">
 </p>
 
 - **Direct MP4 export:** Export the full cut or a custom time range in **Compressed**, **High** (hardware-accelerated), or **Original quality**.
 - **Caption files:** Export the captions alone as SubRip (`.srt`) or WebVTT (`.vtt`), for the whole video or a custom range.
-- **Finish in your NLE (`Advanced export`):** Save a self-contained handoff folder with `.fcpxml` (DaVinci Resolve, Final Cut Pro), `.otio` (Premiere Pro 26.5+, DaVinci Resolve), copies of the used footage, `.srt` captions, and a plain-English Read me explaining how to open it in each app and what does not carry over.
+- **Finish in your NLE (`For Resolve, Final Cut or Premiere…`):** Save a self-contained handoff folder with `.fcpxml` (DaVinci Resolve, Final Cut Pro), `.otio` (Premiere Pro 26.5+, DaVinci Resolve), copies of the used footage, `.srt` captions, and a plain-English Read me explaining how to open it in each app and what does not carry over.
 - **Native desktop app & open MCP engine:** Built with Tauri 2 (Rust shell + local SQLite/Node engine + FFmpeg + headless Chrome) for macOS (Apple Silicon & Intel), Windows x64, and Ubuntu 24.04 x86-64. Power users can also connect external MCP clients (`pnpm mcp`) or run the headless engine via Docker (`docker compose up -d`).
 
 ---
@@ -100,7 +100,7 @@ So your agent edits from real measurements instead of guesswork, Scarlet analyze
 1. **Import your footage.** Click **New project**, name it, and choose your files—mix video (MP4, MOV), separate audio (WAV, MP3), and images (PNG, JPEG). You can start editing while proxies and transcripts prepare. In **Settings → General**, connect **Claude Code** or **Codex**.
 2. **Ask for a change.** Click a point on the timeline (or clear the time tag with `×` to edit the whole video), then type or hold `V` to speak. Try *“Remove the false starts and repeated takes, and keep the pauses before each answer”*—or type `/dialogue-pass` for a full first cut.
 3. **Review in context.** Open any edit from the conversation or timeline. Toggle Before/After with `\`, expand the cut’s transcript to see removed words, and step through items in **For you** with `↑` / `↓` to **Keep (`K`)**, **Approve (`A`)**, **Skip (`S`)**, or **Revise (`R`)**.
-4. **Export or hand off.** Click **Export** in the project header to save an MP4 or its captions as `.srt` or `.vtt`, or choose **Advanced export** to create a handoff folder for DaVinci Resolve, Final Cut Pro, or Premiere Pro.
+4. **Export or hand off.** Click **Export** in the project header to save an MP4 or its captions as `.srt` or `.vtt`, or choose **For Resolve, Final Cut or Premiere…** to create a handoff folder for DaVinci Resolve, Final Cut Pro, or Premiere Pro.
 
 ### Everyday Shortcuts
 

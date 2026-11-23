@@ -3,7 +3,8 @@ import { sameJson as equal, stableStringify } from "./ids.js";
 import { replayJoinFades } from "./joinCrossfade.js";
 import { applyOps, TimelineOp } from "./ops.js";
 import { assignSpots, replayOps, changedSpots, rangesOverlapWithin, planApply, makeTimeMap } from "./rebase.js";
-import { WritableTimeline, type Change, type Clip, type Timeline } from "./schema.js";
+import { WritableTimeline, type Clip, type Timeline } from "./timelineSchema.js";
+import type { Change } from "./changeSchema.js";
 import { clipEnd } from "./time.js";
 
 interface VersionLink { version: string; parent: string | null; revertsVersion?: string }

@@ -22,7 +22,7 @@ import {
 } from "./dialogue-join.js";
 import { cutReading, joinPlays, NOTE_QUOTE_REACH, quotesAwayFromCut, timelineWordsNear } from "./dialogue-plan.js";
 import { inspectDialogueSuggestion, MAX_WHOLE_PICTURE_SHEETS, type DialogueInspection } from "./dialogue-review.js";
-import { assessedCuts, type StagedReview, type StagedReviewState } from "./dialogue-tools.js";
+import { assessedCuts, type StagedReview, type StagedReviewState } from "./staged-review.js";
 import { deliverWav, listening } from "./inspection-tools.js";
 import { createAudioOption, crossfadeFrames, cutRow } from "./mcp-schema.js";
 import type { MediaSession } from "./media-session.js";

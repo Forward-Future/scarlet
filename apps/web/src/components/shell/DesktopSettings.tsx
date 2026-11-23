@@ -10,6 +10,7 @@ import { errorMessage, IS_MOCK } from "../../lib/client";
 import { fileBaseName, plural } from "../../lib/format";
 import { AGENT_LABEL, isConfiguredAgent } from "../../stores/hosts";
 import { AgentSignIn, authLabel, canSignIn, useLocalHost } from "./AgentSignIn";
+import { followDesktop } from "./followDesktop";
 import { InlineError, Loading, SectionTitle } from "../ui/primitives";
 
 const ENGINE_LABEL: Record<EngineStatus["state"], string> = {
@@ -25,17 +26,7 @@ function useDesktopStatus() {
   const host = useLocalHost();
   useEffect(() => {
     if (!isDesktop() || IS_MOCK) return;
-    let alive = true;
-    let received = false;
-    const listen = desktop.onEngineStatus((e) => {
-      received = true;
-      if (alive) setEngine(e);
-    });
-    void listen.then(() => desktop.engineStatus()).then(e => { if (alive && !received) setEngine(e); }).catch(() => undefined);
-    return () => {
-      alive = false;
-      void listen.then(off => off()).catch(() => undefined);
-    };
+    return followDesktop(on => desktop.onEngineStatus(on), () => desktop.engineStatus(), setEngine);
   }, []);
   return { engine, host };
 }

@@ -18,7 +18,7 @@ export const PAUSE_FLOOR_SECONDS = 0.3;
 /** The second saying starts within this long of the first, as played. */
 export const REPEAT_WITHIN = 3;
 
-interface KeptPause {
+export interface KeptPause {
   mediaId: string;
   /** The recording's seconds from the word before the pause to the word after it. */
   source: TimeRange;
@@ -30,7 +30,7 @@ interface KeptPause {
   afterWord?: number;
 }
 
-interface RepeatedWords {
+export interface RepeatedWords {
   mediaId: string;
   /** Where the first saying starts in the recording. */
   source: number;
@@ -49,7 +49,7 @@ interface RepeatedWords {
 }
 
 /** A stretch of a recording the part still plays between two words it keeps, for a reading of what sounds in it. */
-interface KeptGap { mediaId: string; source: TimeRange; after: string; before: string }
+export interface KeptGap { mediaId: string; source: TimeRange; after: string; before: string }
 /** The shortest stretch between two kept words worth a reading: a syllable. */
 const KEPT_GAP_SECONDS = 0.12;
 

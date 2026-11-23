@@ -9,7 +9,7 @@ import { platform, release } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
-import type { AgentAvailability, AgentId, AgentUsage, CreateTaskRequest, SubscriptionQuota, Task, TaskEvent } from "@scarlet/shared";
+import type { AgentAvailability, AgentId, AgentUsage, CreateTaskRequest, SubscriptionQuota, Task } from "@scarlet/shared";
 import { isSideCheck, ScarletClient, sideCheckSlots, TaskState } from "@scarlet/shared";
 import { privateDirectory } from "./private-files.js";
 import type { AgentConfig } from "./config.js";
@@ -22,10 +22,10 @@ import { codexHomeDir } from "./runners/codex.js";
 import { addUsage } from "./runners/usage.js";
 import { errMsg, mcpEnv, nodeExecutable, resolveMcpCliPath } from "./runners/spawn.js";
 import { DEFAULT_STALL_MS, type McpSpec, type RunAgentFn, type RunAgentResult, type RunnerEvent, type Workspace } from "./runners/types.js";
+import { promptTimeLimit, stalledReason, timedOutReason } from "./runLimits.js";
 import { claudeConfigDir, pruneTaskDirs, removeClaudeSessions, removeControlFiles, removeTokenFiles } from "./taskDirs.js";
+import { createEventForwarder, createLiveUsageReporter } from "./taskReports.js";
 import { workspaceTools } from "./workspaceTools.js";
-
-export { claudeConfigDir, claudeProjectDir, claudeProjectDirs, pruneTaskDirs, removeClaudeSessions, removeControlFiles, removeTokenFiles } from "./taskDirs.js";
 
 const QUOTA_TTL_MS = 60_000;
 
@@ -81,6 +81,23 @@ interface Prepared {
   mcp: McpSpec;
 }
 
+/** How a run ended, as the host completes it. `stopped`: the host stopped the run before it finished. The editor can resume it from what it saved. */
+interface Completion {
+  state: "done" | "failed" | "cancelled";
+  summary?: string;
+  error?: string;
+  stopped: boolean;
+}
+
+/**
+ * Whether the engine has a run's completion, and whether it handed the attempt's CLI session to the attempt that
+ * resumes it, as a pause of the project's editing does.
+ */
+interface Delivery {
+  landed: boolean;
+  carriesOn: boolean;
+}
+
 export class AgentHost {
   private readonly client: ScarletClient;
   private config: AgentConfig;
@@ -121,6 +138,14 @@ export class AgentHost {
     return [...this.running.keys()];
   }
 
+  private get env(): NodeJS.ProcessEnv {
+    return this.opts.env ?? process.env;
+  }
+
+  private get heartbeatMs(): number {
+    return this.opts.heartbeatMs ?? 30_000;
+  }
+
   /** Register, start heartbeats, WS and the claim loop. Resolves when the loop ends (after stop()). */
   async start(): Promise<void> {
     this.stopped = false;
@@ -128,13 +153,13 @@ export class AgentHost {
     const [agents] = await Promise.all([
       this.detectAgents(),
       // An old folder's Claude sessions go with it, wherever Claude Code keeps its files.
-      pruneTaskDirs(this.opts.workRoot, undefined, claudeConfigDir(this.opts.env ?? process.env)).catch((err) => this.log(`could not prune old task folders: ${errMsg(err)}`)),
+      pruneTaskDirs(this.opts.workRoot, undefined, claudeConfigDir(this.env)).catch((err) => this.log(`could not prune old task folders: ${errMsg(err)}`)),
       this.stopOrphans(),
     ]);
     this.agents = agents;
     await this.register();
     void this.refreshQuotas();
-    this.heartbeatTimer = setInterval(() => void this.heartbeat(), this.opts.heartbeatMs ?? 30_000);
+    this.heartbeatTimer = setInterval(() => void this.heartbeat(), this.heartbeatMs);
     if (this.opts.ws !== false) this.connectWs();
     this.loopPromise = this.claimLoop();
     return this.loopPromise;
@@ -172,7 +197,7 @@ export class AgentHost {
     await this.register();
     // The engine counts a host without heartbeats as gone, and hands its run on: a tool call longer than that
     // would leave this run's saves refused. `start` beats for its own runs; this one beats until it returns.
-    const beating = setInterval(() => void this.heartbeat(), this.opts.heartbeatMs ?? 30_000);
+    const beating = setInterval(() => void this.heartbeat(), this.heartbeatMs);
     try {
       return await this.followOne(projectId, request, signal, pollMs);
     } finally {
@@ -205,7 +230,7 @@ export class AgentHost {
         else signal.addEventListener("abort", follow, { once: true });
         const promise = this.runTask(claimed, controller.signal);
         this.running.set(claimed.id, { task: claimed, controller, promise });
-        const beat = setInterval(() => void this.heartbeat(), this.opts.heartbeatMs ?? 30_000);
+        const beat = setInterval(() => void this.heartbeat(), this.heartbeatMs);
         try {
           await promise;
         } finally {
@@ -294,7 +319,7 @@ export class AgentHost {
       return next.promise;
     }
     const probe = this.opts.probeQuota ?? probeSubscriptionQuota;
-    const env = this.opts.env ?? process.env;
+    const env = this.env;
     const only = opts.agents ? new Set(opts.agents) : null;
     const run = (async () => {
       const targets = this.agents.filter((a) => isQuotaEligible(a) && (!only || only.has(a.id)));
@@ -319,10 +344,8 @@ export class AgentHost {
         }
         const hit = results.find((r) => r?.id === agent.id);
         if (!hit) return agent;
-        const plan = hit.quota.plan ?? agent.plan;
-        const quota: SubscriptionQuota = { ...hit.quota, ...(plan ? { plan } : {}) };
         changed = true;
-        return { ...agent, ...(plan && !agent.plan ? { plan } : {}), quota };
+        return withQuota(agent, hit.quota);
       });
       this.lastQuotaAt = Date.now();
       if (changed) {
@@ -340,13 +363,7 @@ export class AgentHost {
     if (this.stopped) return;
     const idx = this.agents.findIndex((a) => a.id === agentId);
     if (idx < 0 || !isQuotaEligible(this.agents[idx]!)) return;
-    const current = this.agents[idx]!;
-    const plan = quota.plan ?? current.plan;
-    const updated: AgentAvailability = {
-      ...current,
-      ...(plan && !current.plan ? { plan } : {}),
-      quota: { ...quota, ...(plan ? { plan } : {}) },
-    };
+    const updated = withQuota(this.agents[idx]!, quota);
     this.agents = this.agents.map((a, i) => (i === idx ? updated : a));
     void this.heartbeat();
   }
@@ -506,75 +523,6 @@ export class AgentHost {
 
   // -- running one task -----------------------------------------------------
 
-  /** Forward events in stream order and bound how long completion waits for a stuck engine. */
-  private createEventForwarder(task: Task, signal: AbortSignal) {
-    let posting: Promise<void> = Promise.resolve();
-    const post = (ev: TaskEvent): Promise<void> => {
-      const at = new Date().toISOString();
-      return (posting = posting.then(async () => {
-        if (signal.aborted) return;
-        try {
-          await this.client.postTaskEvent(task.id, { ...ev, taskId: task.id, at }, task.startedAt);
-        } catch (err) {
-          this.log(`task ${task.id}: post event failed: ${errMsg(err)}`);
-        }
-      }));
-    };
-    const flush = async () => {
-      const limit = this.opts.eventFlushMs ?? 30_000;
-      const timer = new AbortController();
-      const late = await Promise.race([posting.then(() => false), delay(limit, true, { signal: timer.signal }).catch(() => false)]);
-      timer.abort();
-      if (!late) return;
-      this.log(`task ${task.id}: events still posting after ${humanDuration(limit)}; finishing without waiting for them`);
-      posting = Promise.resolve(); // What follows is not queued behind a request that hangs.
-    };
-    return { post, flush };
-  }
-
-  /**
-   * The engine replaces repeated usage reports for the same claim. Serialize live writes (throttled every 2s)
-   * and wait for any in-flight report before persisting the final total so slower requests cannot overwrite it.
-   */
-  private createLiveUsageReporter(task: Task, signal: AbortSignal) {
-    const startedAt = task.startedAt;
-    let closed = false;
-    let pending: AgentUsage | undefined;
-    let inFlight: Promise<unknown> | undefined;
-    let nextAt = 0;
-    let timer: NodeJS.Timeout | undefined;
-    const flush = () => {
-      clearTimeout(timer);
-      if (closed || signal.aborted || !pending || inFlight) return;
-      const wait = nextAt - Date.now();
-      if (wait > 0) {
-        timer = setTimeout(flush, wait).unref();
-        return;
-      }
-      const body = { ...pending, startedAt };
-      pending = undefined;
-      inFlight = this.client.recordTaskUsage(task.id, body, AbortSignal.timeout(5000))
-        .catch(err => this.log(`task ${task.id}: live usage report failed: ${errMsg(err)}`)).finally(() => {
-        inFlight = undefined;
-        nextAt = Date.now() + 2000;
-        flush();
-      });
-    };
-    return {
-      update: (snapshot: AgentUsage, priorUsage?: AgentUsage) => {
-        if (!startedAt || closed) return;
-        pending = addUsage(priorUsage, snapshot);
-        flush();
-      },
-      recordFinal: async (usage: AgentUsage | undefined) => {
-        closed = true;
-        clearTimeout(timer);
-        await inFlight;
-        if (usage) await this.client.recordTaskUsage(task.id, { ...usage, startedAt: task.startedAt }).catch(err => this.log(`usage report failed: ${errMsg(err)}`));
-      },
-    };
-  }
-
   /** Clean up control files and CLI sessions for a completed task attempt unless handed on to a resume. */
   private async cleanupTaskWorkspace(task: Task, cwd: string, signal: AbortSignal, landed: boolean, interrupted: boolean): Promise<void> {
     if (this.sharedWithAnotherAttempt(task, signal)) {
@@ -585,7 +533,7 @@ export class AgentHost {
     const real = task.agent === "claude" ? await realpath(cwd).catch(() => undefined) : undefined;
     await removeControlFiles(cwd).catch((err) => this.log(`could not clean task folder: ${errMsg(err)}`));
     if (real && landed && !interrupted) {
-      await removeClaudeSessions(real, claudeConfigDir(this.opts.env ?? process.env)).catch((err) => this.log(`could not remove Claude sessions: ${errMsg(err)}`));
+      await removeClaudeSessions(real, claudeConfigDir(this.env)).catch((err) => this.log(`could not remove Claude sessions: ${errMsg(err)}`));
     }
     if (task.agent === "codex" && landed && !interrupted) {
       await rm(codexHomeDir(cwd), { recursive: true, force: true }).catch((err) => this.log(`could not remove the Codex home: ${errMsg(err)}`));
@@ -596,47 +544,20 @@ export class AgentHost {
     this.log(`task ${task.id} (${task.kind}, ${task.agent}${task.model ? `/${task.model}` : ""})`);
     const started = performance.now();
     const identity = `task=${task.id} attempt=${task.startedAt ?? "unknown"}`;
-    const events = this.createEventForwarder(task, signal);
+    const events = createEventForwarder(this.client, task, signal, this.log, this.opts.eventFlushMs ?? 30_000);
     let cwd: string | undefined;
-    // `stopped`: the host stopped the run before it finished. The editor can resume it from what it saved.
-    const complete = async (state: "done" | "failed" | "cancelled", summary?: string, error?: string, stopped = false) => {
+    const complete = async (state: Completion["state"], summary?: string, error?: string, stopped = false) => {
       // A newer claim of this task may be using the folder.
       if (signal.reason === "superseded") return;
-      // Whether the engine has the completion. A task it cancelled itself is owed none.
-      let landed = true;
-      // The engine handed this attempt's CLI session to the attempt that resumes it, as a pause of the project's editing does.
-      let carriesOn = false;
+      let delivery: Delivery;
       if (signal.reason === "server-cancelled") {
-        // It says so on the task it cancelled. A task that can't be read keeps its session: the prune takes it later.
-        carriesOn = await this.client.task(task.id, "none").then(({ task: now }) => sessionCarriesOn(now), () => true);
+        // A task the engine cancelled itself is owed no completion. It says on the task whether the session carries on.
+        // A task that can't be read keeps its session: the prune takes it later.
+        delivery = { landed: true, carriesOn: await this.client.task(task.id, "none").then(({ task: now }) => sessionCarriesOn(now), () => true) };
       } else {
-        const body = { state, ifStartedAt: task.startedAt, summary, error, interrupted: (state === "cancelled" && this.stopped) || stopped ? true : undefined };
-        // A post the engine misses is tried again. Forgotten here, the task stays running there until the engine
-        // calls it interrupted and runs the finished request a second time. A copy does no harm: the engine ignores
-        // the completion of an attempt it has already ended.
-        landed = false;
-        let savedState: TaskState | undefined;
-        let superseded = false;
-        let changes = 0;
-        // One try while the host stops or once the engine cancels/supersedes the task.
-        await retryBackoff(3, signal, {
-          stopOnAbortAfterFirst: true,
-          run: async () => {
-            const saved = (await this.client.completeTask(task.id, body))?.task;
-            carriesOn = sessionCarriesOn(saved);
-            const parsed = TaskState.safeParse(saved?.state);
-            if (parsed.success) savedState = parsed.data;
-            superseded = !!task.startedAt && !!saved?.startedAt && saved.startedAt !== task.startedAt;
-            changes = saved?.changeIds?.length ?? 0;
-            landed = true;
-          },
-          onError: (err) => this.log(`complete failed for task ${task.id}: ${errMsg(err)}`),
-        });
-        const outcome = !landed ? "undelivered" : superseded ? "superseded" : !savedState ? "unconfirmed" : savedState === state ? "accepted" : "changed";
-        // A failed run's reason stays in the local log: the engine may never have received it.
-        const reason = state === "failed" ? ` reason=${JSON.stringify((error ?? "no reason given").slice(0, 300))}` : "";
-        this.log(`[host] completion ${identity} requested=${state} state=${savedState ?? "unknown"} outcome=${outcome} elapsedMs=${Math.round(performance.now() - started)} changes=${changes}${reason}`);
+        delivery = await this.postCompletion(task, signal, { state, summary, error, stopped }, identity, started);
       }
+      const { landed, carriesOn } = delivery;
       if (cwd) {
         const interrupted = (state === "cancelled" && this.stopped) || stopped || carriesOn;
         await this.cleanupTaskWorkspace(task, cwd, signal, landed, interrupted);
@@ -662,7 +583,7 @@ export class AgentHost {
     const runner = this.opts.runner ?? defaultRunAgent;
     const timeoutMs = this.runTimeoutMs;
     const stallMs = this.opts.stallMs ?? (this.config.stallMinutes ?? DEFAULT_STALL_MS / 60_000) * 60_000;
-    const liveUsage = this.createLiveUsageReporter(task, signal);
+    const liveUsage = createLiveUsageReporter(this.client, task, signal, this.log);
     let questionSeen: string | undefined;
     // A runner that returns says whether its run ended on a question. Only one that threw leaves the question it saw.
     let runnerThrew = false;
@@ -683,7 +604,7 @@ export class AgentHost {
       signal,
       timeoutMs,
       stallMs,
-      env: runnerEnv(task.agent, this.agents, this.opts.env ?? process.env),
+      env: runnerEnv(task.agent, this.agents, this.env),
       onUsage: snapshot => liveUsage.update(snapshot, priorUsage),
       onQuota: quota => this.applyLiveQuota(task.agent, quota),
       onCodexFallback: reason => this.log(`[host] codex-fallback ${identity} reason=${reason}`),
@@ -751,6 +672,39 @@ export class AgentHost {
     return complete("failed", result.summary || undefined, error, !!result.timedOut);
   }
 
+  /**
+   * Post a run's completion and log how the engine took it. A post the engine misses is tried again. Forgotten here,
+   * the task stays running there until the engine calls it interrupted and runs the finished request a second time. A
+   * copy does no harm: the engine ignores the completion of an attempt it has already ended.
+   */
+  private async postCompletion(task: Task, signal: AbortSignal, { state, summary, error, stopped }: Completion, identity: string, started: number): Promise<Delivery> {
+    const body = { state, ifStartedAt: task.startedAt, summary, error, interrupted: (state === "cancelled" && this.stopped) || stopped ? true : undefined };
+    let landed = false;
+    let carriesOn = false;
+    let savedState: TaskState | undefined;
+    let superseded = false;
+    let changes = 0;
+    // One try while the host stops or once the engine cancels/supersedes the task.
+    await retryBackoff(3, signal, {
+      stopOnAbortAfterFirst: true,
+      run: async () => {
+        const saved = (await this.client.completeTask(task.id, body))?.task;
+        carriesOn = sessionCarriesOn(saved);
+        const parsed = TaskState.safeParse(saved?.state);
+        if (parsed.success) savedState = parsed.data;
+        superseded = !!task.startedAt && !!saved?.startedAt && saved.startedAt !== task.startedAt;
+        changes = saved?.changeIds?.length ?? 0;
+        landed = true;
+      },
+      onError: (err) => this.log(`complete failed for task ${task.id}: ${errMsg(err)}`),
+    });
+    const outcome = !landed ? "undelivered" : superseded ? "superseded" : !savedState ? "unconfirmed" : savedState === state ? "accepted" : "changed";
+    // A failed run's reason stays in the local log: the engine may never have received it.
+    const reason = state === "failed" ? ` reason=${JSON.stringify((error ?? "no reason given").slice(0, 300))}` : "";
+    this.log(`[host] completion ${identity} requested=${state} state=${savedState ?? "unknown"} outcome=${outcome} elapsedMs=${Math.round(performance.now() - started)} changes=${changes}${reason}`);
+    return { landed, carriesOn };
+  }
+
   /** Whether another attempt at the same run is at work in the folder this one shares with it. */
   private sharedWithAnotherAttempt(task: Task, signal: AbortSignal): boolean {
     const root = task.resumeRootId ?? task.id;
@@ -787,7 +741,7 @@ export class AgentHost {
     const refused = (prompt as { refusedTool?: unknown }).refusedTool;
     const refusedTool = typeof refused === "string" && refused.trim() ? refused : undefined;
     // An engine from before the full toolset leaves it out: the run then has Scarlet's tools only, as it did.
-    const workspace = (prompt as { workspace?: unknown }).workspace === true ? await workspaceTools(cwd, this.opts.env ?? process.env) : undefined;
+    const workspace = (prompt as { workspace?: unknown }).workspace === true ? await workspaceTools(cwd, this.env) : undefined;
 
     const mcp: McpSpec = {
       command: nodeExecutable(),
@@ -805,6 +759,12 @@ export class AgentHost {
     };
     return { systemPrompt, instruction, resumeSession, plan, refusedTool, workspace, cwd, mcp };
   }
+}
+
+/** The agent with a fresh subscription quota, which names the agent's plan when detection didn't. */
+function withQuota(agent: AgentAvailability, quota: SubscriptionQuota): AgentAvailability {
+  const plan = quota.plan ?? agent.plan;
+  return { ...agent, ...(plan && !agent.plan ? { plan } : {}), quota: { ...quota, ...(plan ? { plan } : {}) } };
 }
 
 /** Whether the engine says this attempt's CLI session carries on in a later attempt. Read with care, as an older engine leaves it out. */
@@ -830,42 +790,6 @@ async function retryBackoff(
     }
   }
   return false;
-}
-
-/** Elapsed time for log lines: "850ms", "12s", "45m 2s", "1h 3m". Matches the desktop host. */
-export function humanDuration(ms: number): string {
-  const secs = Math.floor(Math.max(0, ms) / 1000);
-  if (secs === 0) return `${Math.max(0, Math.round(ms))}ms`;
-  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
-  if (h) return m ? `${h}h ${m}m` : `${h}h`;
-  if (m) return s ? `${m}m ${s}s` : `${m}m`;
-  return `${s}s`;
-}
-
-function minutes(ms: number): string {
-  const m = Math.max(1, Math.ceil(ms / 60_000));
-  return `${m} minute${m === 1 ? "" : "s"}`;
-}
-
-/**
- * A run's time cap as the prompt request takes it: whole minutes, rounded up as the stop reason rounds them.
- * The engine takes a limit of up to a day and refuses the request over that, so a longer one is left out: the host
- * still stops the run at it, and the prompt names no limit rather than a shorter one nothing enforces. Matches the desktop host.
- */
-export function promptTimeLimit(timeoutMs: number | undefined): number | undefined {
-  if (timeoutMs === undefined) return undefined;
-  const limit = Math.max(1, Math.ceil(timeoutMs / 60_000));
-  return limit <= 24 * 60 ? limit : undefined;
-}
-
-/** The task error for a run stopped at the optional time cap. The app reads the minutes from it. Matches the desktop host. */
-export function timedOutReason(limitMs: number): string {
-  return `timed out after ${minutes(limitMs)}, the limit for one agent run`;
-}
-
-/** The task error for a run stopped because its agent went silent. The app reads the minutes from it. Matches the desktop host. */
-export function stalledReason(stallMs: number): string {
-  return `stalled: the agent wrote nothing for ${minutes(stallMs)}`;
 }
 
 function isStatus(err: unknown, status: number): boolean {

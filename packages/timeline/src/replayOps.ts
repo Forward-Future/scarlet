@@ -1,6 +1,7 @@
 /** Op rebasing and footage/overlap invariants across timeline versions. */
-import { CaptionWord } from "./schema.js";
-import type { Clip, Marker, MediaClip, Timeline, TimeRange, Track } from "./schema.js";
+import { CaptionWord } from "./timelineSchema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { Clip, Marker, MediaClip, Timeline, Track } from "./timelineSchema.js";
 import { applyOp, applyOpInPlace, shiftClip, type TimelineOp } from "./ops.js";
 import { clipEnd, findClip, sourceAt, sourceToTimeline, subtractRanges } from "./time.js";
 import { indexBySource, intervalCandidates } from "./intervals.js";

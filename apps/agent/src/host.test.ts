@@ -8,7 +8,10 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { type AddressInfo } from "node:net";
 import { ScarletClient, type Task, type TaskEvent } from "@scarlet/shared";
 import * as mock from "@scarlet/mcp/mock";
-import { AgentHost, claudeConfigDir, claudeProjectDir, claudeProjectDirs, humanDuration, promptTimeLimit, pruneTaskDirs, removeClaudeSessions, removeControlFiles, stalledReason, timedOutReason, type HostOptions } from "./host.js";
+import { AgentHost, type HostOptions } from "./host.js";
+import { promptTimeLimit, stalledReason, timedOutReason } from "./runLimits.js";
+import { claudeConfigDir, claudeProjectDir, claudeProjectDirs, pruneTaskDirs, removeClaudeSessions, removeControlFiles } from "./taskDirs.js";
+import { humanDuration } from "./taskReports.js";
 import { codexHomeDir } from "./runners/codex.js";
 import { DEFAULT_STALL_MS } from "./runners/types.js";
 import type { RunAgentFn, RunAgentOptions } from "./runners/types.js";
@@ -238,9 +241,10 @@ it("names a run started with runOne in its heartbeats, and stops it when a heart
   expect(beats.slice(0, 2)).toEqual([[task.id], [task.id]]);
 
   state = "queued";
-  cancel = true;
   let aborted: unknown;
   await host(async (opts) => {
+    // Cancel only once the runner has started; an earlier heartbeat stops the task before calling it.
+    cancel = true;
     await new Promise<void>((resolve) => opts.signal?.addEventListener("abort", () => resolve(), { once: true }));
     aborted = opts.signal?.reason;
     return { ok: false, summary: "", error: "stopped" };
@@ -1223,14 +1227,16 @@ it("keeps the engine hearing from a request it runs on its own, through a long t
   srv.taskState = "done";
   const beats = () => srv.server.requests.filter((r) => r.path === "/hosts/host_1/heartbeat").length;
   // The run holds as a long tool call would, until the engine has heard from the host a few times.
-  const { host } = makeHost(srv, async () => {
+  const { host, client } = makeHost(srv, async () => {
     await vi.waitFor(() => expect(beats()).toBeGreaterThanOrEqual(3), { timeout: 2_000, interval: 10 });
     return { ok: true, summary: "Done" };
   }, undefined, { heartbeatMs: 20 });
+  const heartbeat = vi.spyOn(client, "heartbeat");
   const ended = await host.runOne("prj_test", { kind: "edit", agent: "claude", instruction: task.instruction });
   expect(ended.state).toBe("done");
   expect(srv.completes).toEqual([expect.objectContaining({ state: "done" })]);
-  const after = beats();
+  // A heartbeat still on its way when the run ends may send the one tick it held back; nothing follows it.
+  const after = heartbeat.mock.calls.length;
   await delay(100);
-  expect(beats()).toBe(after);
+  expect(heartbeat.mock.calls.length).toBeLessThanOrEqual(after + 1);
 });

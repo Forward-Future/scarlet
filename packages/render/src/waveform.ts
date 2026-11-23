@@ -241,10 +241,14 @@ async function loadVad() {
   return { Detector: await create(), mode: VADMode.NORMAL, voice: VADEvent.VOICE };
 }
 
+function checkSpeechWindow(from: number, to: number) {
+  if (from < 0 || to <= from || to > from + 60) throw new Error("Choose a speech window up to 60 seconds.");
+}
+
 /** WebRTC VAD over 20 ms frames. Warm up on the preceding audio, then return
  * source-time speech spans for this window only. Each decode has independent state. */
 export async function speechActivity(file: string, from: number, to: number, signal?: AbortSignal) {
-  if (from < 0 || to <= from || to > from + 60) throw new Error("Choose a speech window up to 60 seconds.");
+  checkSpeechWindow(from, to);
   const start = speechActivityStart(from);
   return speechActivityOf(pcmSamples(await decodePcm(file, { from: start, to, signal })), start, from, to);
 }
@@ -256,7 +260,7 @@ export function speechActivityStart(from: number) {
 
 /** The same from audio already decoded: `pcm` is 16 kHz mono from `start` (see `speechActivityStart`) to `to`. */
 export async function speechActivityOf(pcm: Int16Array, start: number, from: number, to: number) {
-  if (from < 0 || to <= from || to > from + 60) throw new Error("Choose a speech window up to 60 seconds.");
+  checkSpeechWindow(from, to);
   const { Detector, mode, voice } = await (vadFactory ??= loadVad().catch(error => { vadFactory = undefined; throw error; }));
   const detector = new Detector(mode, DECODE_RATE);
   const frame = new Int16Array(DECODE_RATE / 50);

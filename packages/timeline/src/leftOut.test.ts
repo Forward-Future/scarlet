@@ -3,7 +3,7 @@ import { emptyTimeline, makeMediaClip, timelineFromKeepRanges } from "./builders
 import { replayJoinFades } from "./joinCrossfade.js";
 import { leftOutJoins } from "./leftOut.js";
 import { clipEnd, timelineDuration } from "./time.js";
-import type { MediaClip, Timeline } from "./schema.js";
+import type { MediaClip, Timeline } from "./timelineSchema.js";
 
 /** A screen recording under a camera recorded with it, the camera `offset` seconds ahead, with the camera's sound. */
 function screenAndCamera(keep: Array<[number, number]>, { offset = 2, screenFrom = 0 } = {}): Timeline {

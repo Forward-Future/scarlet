@@ -4,8 +4,15 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 23, 2026
+
+- CrisperWhisper transcribes faster: Scarlet keeps the model loaded between parts of a recording and the short passages it reads while editing, instead of loading it again each time.
+- A microphone track that goes silent whenever its speaker isn't talking no longer fills its transcript with the same sentence repeated over the silence, and transcribes much faster.
+- Once your edits are decided and nothing is waiting on you, Export at the top turns white until you export the video, and the export for another editing app is now called “For Resolve, Final Cut or Premiere…”.
+
 ## November 22, 2026
 
+- Setup no longer needs a terminal or Node.js: Scarlet now installs FFmpeg inside the app with one click on Mac and Windows, and Claude Code and Codex install directly as standalone apps.
 - The Transcript panel is cleaner and easier to read: timestamps line up in a quiet left column, sparse remarks flow inline with small pause markers instead of breaking onto single-word lines, repeated "Voice unclear" headers are gone, and search now has previous, next, and clear buttons.
 - Scarlet no longer drops a cut it got right because the transcript and the recording spell or time a word differently, so a false start it found isn't left in.
 - A cut placed at the end of a word that runs straight into the next one no longer clips the word's last sound, like the “s” of “complaints”.

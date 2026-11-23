@@ -14,6 +14,7 @@ import { labelTranscript, numberSpeakers, speakerAnalysisVersion, speakerTurnCac
 import { AnalysisCache } from "./analysisCache.js";
 import { audioLane } from "./audioWork.js";
 import { editorFirst } from "./editorFirst.js";
+import { linkedTranscriptId } from "./transcriptReader.js";
 import { speakerGpuRuntime } from "../transcribe/speakerWorker.js";
 import { humanDuration } from "../logText.js";
 import { availableParallelism } from "node:os";
@@ -290,10 +291,7 @@ export class RecordingSpeakers {
       ctx.db.transaction(() => {
         const current = ctx.repos.projects.getMedia(media.id);
         if (!current || current.projectId !== projectId || current.path !== media.path || speakerStream(current) !== speakerStream(media)) return;
-        const linkedId = current.transcriptId ?? (ctx.db.prepare(
-          "SELECT id FROM transcripts WHERE media_id = ? AND project_id = ? ORDER BY created_at DESC LIMIT 1",
-        ).get(media.id, projectId) as { id: string } | undefined)?.id;
-        if (linkedId !== t.id) return;
+        if (linkedTranscriptId(ctx, projectId, media.id, current.transcriptId) !== t.id) return;
         const original = ctx.repos.transcripts.get(t.id);
         if (!original || original.aligning || original.speakerAnalysis?.version === speakerAnalysisVersion) return;
         const annotated = labelTranscript(original, turns);

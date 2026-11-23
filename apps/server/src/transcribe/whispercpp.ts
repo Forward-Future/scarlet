@@ -4,9 +4,10 @@ import { join, win32 } from "node:path";
 import { z } from "zod/v3";
 import { normalizeTranscriptToken } from "@scarlet/shared";
 import { newId, type TranscriptSegment, type TranscriptWord } from "@scarlet/timeline";
-import { extractWav, run } from "../render/ffmpeg.js";
+import { extractWav, FfmpegError, run } from "../render/ffmpeg.js";
 import { decodedRecording } from "../services/recordingAudio.js";
 import { SAMPLE_RATE } from "./ctcAlign.js";
+import { crisperWorker } from "./crisperWorker.js";
 import { SEAM_CONTEXT, savedWindows } from "./seams.js";
 import type { TranscribeInput, TranscribeResult, TranscriptionProvider } from "./index.js";
 
@@ -66,16 +67,19 @@ export function bundledWhisperOnGpu(platform: string = process.platform, arch: s
 
 /** GPU builds that failed a run the CPU build then finished. Each falls back to the CPU build until the engine restarts. */
 const failedGpu = new Set<string>();
+/** CrisperWhisper adapters that can't serve requests (crisperWorker.ts), each run once per window until the engine restarts. */
+const oneShotAdapters = new Set<string>();
 
 /** Save roughly two minutes per turn. Look for a pause either side before cutting the next WAV. */
 const CHUNK_SECONDS = 120;
 /**
- * Each window is a new process that loads its model again. For the CrisperWhisper adapter that is a Python start, a
- * torch import and its weights moved to the GPU, so it takes ten-minute windows: an hour is 6 loads rather than 30,
- * and a quit still keeps all but the window under way. It reads a whole recording in one run as well, so a longer
- * window is nothing it hasn't done.
+ * The CrisperWhisper adapter reads a whole recording in one run, and each window it reads costs more than its words:
+ * the eight seconds read again either side of a seam, and a new start for its context. It takes ten-minute windows:
+ * an hour is 6 rather than 30, and a quit still keeps all but the window under way.
  */
 const CRISPER_CHUNK_SECONDS = 600;
+/** What the CrisperWhisper adapter says that goes to the log: the device it read on, a GPU it gave up, the quiet it left out. */
+const CRISPER_NOTE = /^crisperwhisper (?:device = (?:mps|cuda|cpu)|fallback = (?:mps|cuda)|quiet = [\d.]+ s of [\d.]+ s not read)$/;
 const SEARCH_SECONDS = 4;
 
 /** Where a window that starts at `start` ends: the quietest 200 ms within a few seconds of `seconds` later. */
@@ -190,7 +194,27 @@ export class WhisperCppProvider implements TranscriptionProvider {
     onProgress?: (fraction: number) => void) {
     const base = join(tmpDir, newId("wcpp"));
     try {
-      const args = this.opts.crisperScript ? ["-I", "-B", this.opts.crisperScript] : [];
+      const onStderrLine = (line: string) => {
+        if (this.opts.crisperScript && CRISPER_NOTE.test(line)) this.opts.log?.(`[transcribe] ${line}`);
+        const percent = /progress\s*=\s*(\d+)%/.exec(line)?.[1];
+        if (percent) onProgress?.(Math.min(1, Number(percent) / 100));
+      };
+      this.opts.beforeRun?.();
+      const script = this.opts.crisperScript;
+      if (script && model && !oneShotAdapters.has(script)) {
+        // The adapter maps the dialogue prompt to its own verbatim mode, so a prompt changes nothing it reads.
+        try {
+          await crisperWorker.transcribe({ binary, args: ["-I", "-B", script, "--serve", "-m", model, "-t", String(whisperThreads())], wav, out: base,
+            language: language || this.opts.language || "auto", progress: !!onProgress, signal, onStderrLine });
+          return await this.readRun(base);
+        } catch (error) {
+          // A standalone adapter installed before the worker existed reads one file per run, and refuses --serve
+          // without -f. It still reads that way.
+          if (!(error instanceof FfmpegError && /unrecognized arguments: --serve|arguments are required: -f/.test(error.stderr))) throw error;
+          oneShotAdapters.add(script);
+        }
+      }
+      const args = script ? ["-I", "-B", script] : [];
       if (model) args.push("-m", model);
       args.push("-f", wav, "-ojf", "-of", base, "-np", "-l", language || this.opts.language || "auto", "-t", String(whisperThreads()));
       // Conditioning on earlier text can lock long recordings into repeating one sentence for minutes.
@@ -198,19 +222,15 @@ export class WhisperCppProvider implements TranscriptionProvider {
       if (prompt) args.push("--prompt", prompt);
       else args.push("-mc", "0");
       if (onProgress) args.push("-pp");
-      const onStderrLine = (line: string) => {
-        if (this.opts.crisperScript && /^crisperwhisper (?:device = (?:mps|cuda|cpu)|fallback = (?:mps|cuda))$/.test(line)) {
-          this.opts.log?.(`[transcribe] ${line}`);
-        }
-        const percent = /progress\s*=\s*(\d+)%/.exec(line)?.[1];
-        if (percent) onProgress?.(Math.min(1, Number(percent) / 100));
-      };
-      this.opts.beforeRun?.();
-      await run(binary, args, { signal, onStderrLine: onProgress || this.opts.crisperScript ? onStderrLine : undefined });
-      const json = readOutput(await readFile(base + ".json", "utf8"));
-      const modelLabel = adapterModelLabel(json.result?.model);
-      return { language: json.result?.language, segments: parseWhisperJson(json), ...(modelLabel && { modelLabel }) };
+      await run(binary, args, { signal, onStderrLine: onProgress || script ? onStderrLine : undefined });
+      return await this.readRun(base);
     } finally { await rm(base + ".json", { force: true }); }
+  }
+
+  private async readRun(base: string) {
+    const json = readOutput(await readFile(base + ".json", "utf8"));
+    const modelLabel = adapterModelLabel(json.result?.model);
+    return { language: json.result?.language, segments: parseWhisperJson(json), ...(modelLabel && { modelLabel }) };
   }
 }
 

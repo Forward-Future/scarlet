@@ -23,7 +23,7 @@ export function dialogueAudioStream(source: object) {
 }
 
 /** 85th percentile of dBFS buckets, used as the local speaking level. */
-export function percentile85Db(db: readonly number[]): number {
+function percentile85Db(db: readonly number[]): number {
   const sorted = [...db].sort((a, b) => a - b);
   return sorted[Math.floor(sorted.length * .85)]!;
 }
@@ -210,7 +210,7 @@ export const snapLimit = .12;
 /** An edge this close to a frame is on it, as the engine's frame rounding treats it (FRAME_SLACK in @scarlet/timeline). */
 export const FRAME_TOLERANCE = .001;
 /** A shorter quiet run inside a transcript word may be a stop consonant's closure, not a gap between words. */
-export const inWordGap = .1;
+const inWordGap = .1;
 
 /** The instant is inside the word's timing, clear of both its edges. */
 export const inWord = (w: Word, t: number) => w.start + wordMargin < t && t < w.end - wordMargin;

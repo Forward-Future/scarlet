@@ -1252,7 +1252,7 @@ it("labels a saved file from an earlier edit and still exports the current video
   expect(reveal).toHaveBeenCalledWith("/chosen/cut.mp4");
   expect(button("Close")).toBeUndefined();
   expect(button("Cancel")).toBeDefined();
-  expect(button("Advanced export")).toBeDefined();
+  expect(button("For Resolve, Final Cut or Premiere…")).toBeDefined();
   expect(container.querySelector('[role="alert"]')?.textContent ?? "").toBe("");
   // Cancelling the chooser leaves the last successful file available.
   choose.mockResolvedValueOnce(null);
@@ -1303,19 +1303,21 @@ it("asks for the file's name once, in the system's Save dialog, which opens on t
   expect(container.textContent).toContain("Disk full");
   expect(exportButton()!.textContent).toBe("Retry");
   expect(exportButton()!.disabled).toBe(false);
-  // Advanced export saves a folder, named for the project, for finishing the edit in another app.
-  await click(buttonByText("Advanced export")!);
+  // For Resolve, Final Cut or Premiere saves a folder, named for the project, for finishing the edit in another app.
+  await click(buttonByText("For Resolve, Final Cut or Premiere…")!);
   await click(exportButton()!);
   expect(choose).toHaveBeenLastCalledWith(data.project.name);
 });
 
-it("offers a folder for another app under Advanced export, saying what it holds and what doesn't carry over", async () => {
+it("offers a folder for another app under For Resolve, Final Cut or Premiere, saying what it holds and what doesn't carry over", async () => {
   const choose = vi.spyOn(desktop, "chooseVideoExport").mockResolvedValue({ ticket: 7, path: "/Users/me/Exports/Interview" });
   const handoff = vi.spyOn(api, "handoff").mockResolvedValue({ files: [{ path: "Interview.fcpxml", text: "<fcpxml/>" }], mediaBytes: 0 });
   const save = vi.spyOn(desktop, "finishFolderExport").mockResolvedValue("/Users/me/Exports/Interview");
   vi.spyOn(desktop, "discardVideoExport").mockResolvedValue();
   await show(<ExportSheet hasCut onClose={() => {}} />);
-  await click(buttonByText("Advanced export")!);
+  await click(buttonByText("For Resolve, Final Cut or Premiere…")!);
+  // The sheet is named for the apps it is for.
+  expect(container.textContent).toContain("Export for Resolve, Final Cut or Premiere");
   // The video's own settings go; the folder's contents come instead.
   expect(container.querySelector("#export-range")).toBeNull();
   expect(container.querySelector("details")).toBeNull();
@@ -1330,12 +1332,12 @@ it("offers a folder for another app under Advanced export, saying what it holds 
   expect(buttonByText("Show in folder")).toBeTruthy();
 });
 
-it("goes back from Advanced export to the video's settings", async () => {
+it("goes back from the folder for Resolve, Final Cut or Premiere to the video's settings", async () => {
   await show(<ExportSheet hasCut onClose={() => {}} />);
-  await click(buttonByText("Advanced export")!);
+  await click(buttonByText("For Resolve, Final Cut or Premiere…")!);
   await click(buttonByText("Back")!);
   expect(container.querySelector("#export-range")).not.toBeNull();
-  expect(buttonByText("Advanced export")).toBeTruthy();
+  expect(buttonByText("For Resolve, Final Cut or Premiere…")).toBeTruthy();
 });
 
 it("exports captions as a sidecar, keeps the range, and does not start a video render", async () => {

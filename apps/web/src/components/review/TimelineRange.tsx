@@ -23,7 +23,7 @@ const PRECISE_SLOP_PX = 2;
 export const LOUPE_PICTURES = 7;
 const LOUPE_PICTURE_PX = 88;
 /** How much wider than the plainest picture each one is, by its distance from the held frame: the held one biggest, its neighbours stepping down. */
-export const LOUPE_SCALES = [2.4, 1.45, 1.15, 1];
+const LOUPE_SCALES = [2.4, 1.45, 1.15, 1];
 const loupeWidth = (distance: number) => LOUPE_PICTURE_PX * (LOUPE_SCALES[Math.min(LOUPE_SCALES.length - 1, Math.abs(distance))] ?? 1);
 /** Pictures drawn past each side of the strip, so a step slides the next one in instead of popping it. */
 const LOUPE_SPARE = 2;
@@ -31,6 +31,10 @@ const LOUPE_SPARE = 2;
 const LOUPE_SHEET = 20;
 
 const toFrame = (time: number, fps: number) => Math.round(time * fps) / fps;
+const clampTime = (time: number, start: number, end: number) => Math.max(start, Math.min(end, time));
+
+/** The number of the last frame that starts before `end`. */
+export const lastFrameBefore = (end: number, fps: number) => Math.max(0, Math.ceil(end * fps - 1e-6) - 1);
 
 /** The edge within `reach` seconds of `time` that is nearest to it, if there is one. */
 export function snapTime(time: number, edges: readonly number[], reach: number) {
@@ -107,13 +111,7 @@ interface RangeSelect {
   beforeGesture(): void;
 }
 
-/**
- * A stretch of the timeline the editor marks for the message they're writing. A drag along the ruler draws it and the
- * video follows the end that moves. Each end has a handle the height of the timeline: dragged, it lands on the edge of a
- * cut or an edit it comes near; held still, it opens a close-up where the end moves a frame at a time. A press held
- * still on the ruler opens the same close-up, to draw a range by frames from there, and so does a drag that stops and
- * holds still: the end it was moving carries on by frames. A click on the ruler takes the range off.
- */
+/** A run of the video's frames in one picture, at `fps`: the close-up loads its strip a sheet at a time. */
 export interface LoupeSheet { fps: number; url(frames: number[]): string }
 
 /** A frame from the cached filmstrip, or its exact still if the sheet is unavailable. */
@@ -134,6 +132,13 @@ export function LoupePicture({ frame, last, fps, frameAt, sheet, foreground }: {
   return <QueuedImg src={src} alt="" draggable={false} decoding="async" />;
 }
 
+/**
+ * A stretch of the timeline the editor marks for the message they're writing. A drag along the ruler draws it and the
+ * video follows the end that moves. Each end has a handle the height of the timeline: dragged, it lands on the edge of a
+ * cut or an edit it comes near; held still, it opens a close-up where the end moves a frame at a time. A press held
+ * still on the ruler opens the same close-up, to draw a range by frames from there, and so does a drag that stops and
+ * holds still: the end it was moving carries on by frames. A click on the ruler takes the range off.
+ */
 export function useRangeSelect({ slider, drag, from, span, start, end, fps, edges, frameAt, sheet, pictureAspect = 16 / 9, range, onRange, onSeek, onScrubStart, onPress, beforeGesture }: RangeSelect) {
   const [live, setLive] = useState<{ range: TimeRange; moving: "start" | "end"; at: number; snapped: boolean; precise?: number }>();
   const gesture = useRef<Gesture>(undefined);
@@ -159,7 +164,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       snapped = edge !== undefined;
       time = edge ?? toFrame(time, fps);
     }
-    time = Math.max(start, Math.min(end, time));
+    time = clampTime(time, start, end);
     g.at = time;
     const next = g.last = orderedRange(g.anchor, time, start, end, fps);
     setLive({ range: next, moving: time >= g.anchor ? "end" : "start", at: time, snapped, precise: g.precise?.at });
@@ -176,7 +181,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     const perPixel = rect.width > 0 ? span / rect.width : 0;
     const pressed = from + (e.clientX - rect.left) * perPixel;
     const anchor = edge && range ? (edge === "start" ? range.end : range.start)
-      : snapTime(pressed, edges, RANGE_SNAP_PX * perPixel) ?? toFrame(Math.max(start, Math.min(end, pressed)), fps);
+      : snapTime(pressed, edges, RANGE_SNAP_PX * perPixel) ?? toFrame(clampTime(pressed, start, end), fps);
     const id = e.pointerId;
     const g: Gesture = { id, anchor, edge, from, span, left: rect.left, width: rect.width, x0: e.clientX, x: e.clientX, moved: false, stillX: e.clientX, stop: () => {} };
     // A drag that stops and holds still goes into the close-up at the end it was moving, without letting go.
@@ -211,11 +216,9 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       g.stop();
       setLive(undefined);
       if (drawn && g.last) now.current.onRange(g.last);
-      else {
-        if (!cancelled && !edge) {
-          if (range) now.current.onRange(undefined);
-          now.current.onPress(Math.max(now.current.start, Math.min(now.current.end, pressed)));
-        }
+      else if (!cancelled && !edge) {
+        if (range) now.current.onRange(undefined);
+        now.current.onPress(clampTime(pressed, now.current.start, now.current.end));
       }
     };
     g.stop = () => {
@@ -257,7 +260,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     e.preventDefault();
     e.stopPropagation();
     const step = (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 10 : 1) / fps;
-    const moved = toFrame(Math.max(start, Math.min(end, (edge === "start" ? range.start : range.end) + step)), fps);
+    const moved = toFrame(clampTime((edge === "start" ? range.start : range.end) + step, start, end), fps);
     const next = edge === "start" ? { start: Math.min(moved, range.end - 1 / fps), end: range.end } : { start: range.start, end: Math.max(moved, range.start + 1 / fps) };
     onRange(next, true);
     onSeek(edge === "start" ? next.start : next.end);
@@ -285,7 +288,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       {live && live.precise === undefined && <span aria-hidden="true" className="timeline-range-time" style={{ left: `${(left + right) / 2}%` }}>
         <DimMs text={preciseRange(live.range.start, live.range.end)} /> · {lengthLabel(live.range.end - live.range.start)}</span>}
       {handle("start")}{handle("end")}
-      {live?.precise !== undefined && edgeTime !== undefined && <RangeLoupe time={edgeTime} at={live.precise} fps={fps} last={Math.max(0, Math.ceil(end * fps - 1e-6) - 1)}
+      {live?.precise !== undefined && edgeTime !== undefined && <RangeLoupe time={edgeTime} at={live.precise} fps={fps} last={lastFrameBefore(end, fps)}
         inside={live.moving === "end" ? "before" : "after"} snapped={live.snapped} edges={edges} frameAt={frameAt} sheet={sheet} pictureAspect={pictureAspect} />}
     </>;
   }

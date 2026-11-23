@@ -2,7 +2,7 @@
 import { expect, it } from "vitest";
 import type { ThreadEdit } from "@scarlet/shared";
 import { originalReviewRef } from "../../lib/editReviews";
-import { editGroups } from "./ThreadEdits";
+import { editGroups } from "./threadEditState";
 
 const edit = (label: string, spot: number, cut = false): Omit<ThreadEdit, "at"> => ({ changeId: "chg_1", spot, label, range: { start: spot * 10, end: spot * 10 + 5 }, previous: [],
   ...(cut && { beforeCut: { version: "v1", removed: { start: spot * 10, end: spot * 10 + 2 } } }) }) as Omit<ThreadEdit, "at">;

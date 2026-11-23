@@ -8,7 +8,7 @@ export interface AcpConfigOption {
   options?: unknown[];
 }
 
-export function findAcpConfigOption<T extends Pick<AcpConfigOption, "id" | "configId" | "category">>(
+function findAcpConfigOption<T extends Pick<AcpConfigOption, "id" | "configId" | "category">>(
   configs: readonly T[],
   category: string,
   ids: readonly string[],
