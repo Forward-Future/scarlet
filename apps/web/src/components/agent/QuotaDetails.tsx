@@ -5,7 +5,10 @@ import {
   LOW_QUOTA_THRESHOLD, formatPercent, formatRelativeAge, formatResetCountdown, minRemainingPercent, providerShortName, type QuotaAgent,
 } from "./subscriptionQuota";
 
-/** The model selector's drawer listing each subscription's remaining quota, with its own refresh and Done. */
+/**
+ * The model selector's drawer listing each subscription's remaining quota, with its own refresh and Done. AgentChip
+ * calls it as a function (it holds no hooks) so the drawer reconciles in place with the dock.
+ */
 export function QuotaDetails({ quotaProviders, refreshingQuota, onRefresh, onDone }: {
   quotaProviders: QuotaAgent[];
   refreshingQuota: boolean;

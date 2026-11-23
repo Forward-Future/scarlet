@@ -249,7 +249,10 @@ export function SpeedSegmented({ options, value, onChange, inline = false }: {
   );
 }
 
-/** The model selector's drawer for the selected model's effort and speed, with Done to fold it. */
+/**
+ * The model selector's drawer for the selected model's effort and speed, with Done to fold it. AgentChip calls it as a
+ * function (it holds no hooks) so its Done button stays the very element the dock's Tune button was, keeping focus.
+ */
 export function TuneDrawer({ efforts, dialEffort, effortSummary, effortValue, speedOptions, activeSpeedId, onEffortChange, onSpeedChange, onDone }: {
   efforts: ModelOptions["efforts"];
   dialEffort?: ModelOptions["efforts"][number];

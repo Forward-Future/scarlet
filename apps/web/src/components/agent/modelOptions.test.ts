@@ -63,6 +63,7 @@ describe("subscription quota", () => {
   });
 
   it("names a provider without its tool suffix", () => {
-    expect(providerShortName("claude")).not.toMatch(/ (Code|CLI)$/);
+    expect(providerShortName("claude")).toBe("Claude");
+    expect(providerShortName("codex")).toBe("Codex");
   });
 });

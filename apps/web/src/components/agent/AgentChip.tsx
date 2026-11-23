@@ -681,24 +681,26 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
                       )}
                     </div>
                   ) : drawer === "tune" && effective && hasOptions ? (
-                    <TuneDrawer
-                      efforts={efforts}
-                      dialEffort={dialEffort}
-                      effortSummary={effortSummary}
-                      effortValue={effective.effort}
-                      speedOptions={speedOptions}
-                      activeSpeedId={activeSpeedId}
-                      onEffortChange={(effort) => choose({ effort })}
-                      onSpeedChange={(v) => choose({ serviceTier: v || undefined })}
-                      onDone={() => setDrawer("none")}
-                    />
+                    // Called, not mounted: the drawer's <div> and its Done button must stay the same elements as the
+                    // dock's <div> and Tune button, so React keeps the focused button and only flips aria-expanded.
+                    TuneDrawer({
+                      efforts,
+                      dialEffort,
+                      effortSummary,
+                      effortValue: effective.effort,
+                      speedOptions,
+                      activeSpeedId,
+                      onEffortChange: (effort) => choose({ effort }),
+                      onSpeedChange: (v) => choose({ serviceTier: v || undefined }),
+                      onDone: () => setDrawer("none"),
+                    })
                   ) : quotaProviders.length > 0 ? (
-                    <QuotaDetails
-                      quotaProviders={quotaProviders}
-                      refreshingQuota={refreshingQuota}
-                      onRefresh={() => void refreshQuota({ force: true })}
-                      onDone={() => setDrawer("none")}
-                    />
+                    QuotaDetails({
+                      quotaProviders,
+                      refreshingQuota,
+                      onRefresh: () => void refreshQuota({ force: true }),
+                      onDone: () => setDrawer("none"),
+                    })
                   ) : null}
                 </div>
               )}
