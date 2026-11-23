@@ -62,7 +62,7 @@ import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError 
 import { TimelineWorking } from "../components/review/TimelineWorking";
 import { Turn } from "./simple/Turn";
 import { useCallListen } from "./simple/useCallListen";
-import { useAppliedCut, type CutSide } from "./simple/useAppliedCut";
+import { useAppliedCut, type AppliedCutSide } from "./simple/useAppliedCut";
 import { useCallCardShortcuts, useCarryingFootage, useChatAutoFollow, useDraftTimeline, useEditCardShortcuts, useLandingTracker, useOutsideClearMarkedRange, usePassCallNumbers, usePassChoices, useProjectBookmark, useTranscriptEscape, useUndoShortcut, useWatchedMomentAutoKeep } from "./simple/workspaceHooks";
 import "../simple.css";
 
@@ -626,7 +626,7 @@ export function SimpleWorkspace() {
   onScreen.current = { other: !!showing || !!chosenSource, change: listening?.changeId ?? reviewId };
   // An applied cut's side, and whose words are open under the card. `at` starts the listen somewhere other than its
   // top. `visit` is footage another cut in this pass took out, which a click on the timeline went to Before to hear.
-  const [cutSide, setCutSide] = useState<CutSide>();
+  const [cutSide, setCutSide] = useState<AppliedCutSide>();
   const [scriptFor, setScriptFor] = useState<string>();
   // Before, and a cut's open words, belong to one visit: the next cut opens unlit and folded, and so does this one
   // when the editor opens it again. A card that only reloads under them, as when a new working cut lands, keeps both.

@@ -18,7 +18,7 @@ import { usePlayerStore } from "../../stores/player";
 import { afterPlayerMount, firstKey, type Side } from "./types";
 
 /** The side of an applied cut the editor chose, and where its listen starts (see `useAppliedCut`). */
-export interface CutSide { key: string; side: Side; take: number; at?: number; picked?: boolean; visit?: { at: string; start: number; end: number } }
+export interface AppliedCutSide { key: string; side: Side; take: number; at?: number; picked?: boolean; visit?: { at: string; start: number; end: number } }
 
 /** The version an applied cut's After plays, and the removals saved with it. */
 interface AfterSource { version: string; removed?: TimeRange[] }
@@ -32,8 +32,8 @@ interface AppliedCutInputs {
   head: ShownCut["head"];
   timeline: ShownCut["timeline"];
   fps: number;
-  cutSide: CutSide | undefined;
-  setCutSide: Dispatch<SetStateAction<CutSide | undefined>>;
+  cutSide: AppliedCutSide | undefined;
+  setCutSide: Dispatch<SetStateAction<AppliedCutSide | undefined>>;
   preparedCandidates: ReadonlyMap<string, PreparedCut>;
   afterOf: (made: AfterSource | undefined, before: string | undefined) => AfterSource | undefined;
   editPlaybackKey: (edit: ThreadEdit, after?: string, base?: string) => string;
