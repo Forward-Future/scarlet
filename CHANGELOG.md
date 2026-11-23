@@ -130,6 +130,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - A video with "vlog" in its title or comment is no longer taken for flat V-Log camera footage.
 - Correcting a word like “Scarlett's” or “it's” in the transcript now finds it, and correcting “that fine” no longer turns “that's fine” into “this's fine”.
 - An edit's card says only what that edit did: a camera inset no longer also names the punch-in on the clip right after it, and the punch-in no longer names the inset.
+- Opened from the Dock, Finder or the Start menu, Scarlet can now use the FFmpeg that Setup installed in the commands it runs while editing.
 
 ## November 22, 2026
 
