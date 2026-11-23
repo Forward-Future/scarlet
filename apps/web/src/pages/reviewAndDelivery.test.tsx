@@ -836,8 +836,14 @@ it("keeps both prepared decoders when opening a historical cut before its live r
   const edited = container.querySelector('video[src="/after.mp4"]');
   expect(original).not.toBeNull();
   expect(edited).not.toBeNull();
+  // Parked layers hide with opacity instead of an opaque black cover, so mounting or swapping them never blocks the ambient glow behind the monitor.
+  const parkedLayer = original?.closest<HTMLElement>("[data-parked]")?.parentElement?.closest<HTMLElement>("[data-parked]");
+  expect(parkedLayer?.style.opacity).toBe("0");
+  expect(container.querySelector(".watch-monitor .bg-black")).toBeNull();
   await draw("after");
   expect(player.element()).toBe(edited);
+  expect(original?.closest<HTMLElement>("[data-parked]")?.style.opacity).toBe("0");
+  expect(edited?.closest<HTMLElement>("[data-parked]")).toBeNull();
   await draw("before");
   expect(player.element()).toBe(original);
 });
