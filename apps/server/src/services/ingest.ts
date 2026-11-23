@@ -24,6 +24,7 @@ import { cloneOrSteadyCopy } from "./steadyCopy.js";
 import { cancelTask } from "./tasks.js";
 import { recoverImportTranscriptions, startImportTranscription } from "./transcription.js";
 import { olderWaveforms, waveformBase } from "./waveforms.js";
+import { recordMediaAdded } from "../telemetry/events.js";
 
 const GiB = 1024 ** 3;
 const URL_IMPORT_BYTES = 64 * GiB;
@@ -304,6 +305,7 @@ export async function ingestMedia(
       const match = format && !ctx.repos.projects.formatSet(project.id) && hasInitialTimeline(current) &&
         JSON.stringify(current.settings) === JSON.stringify(ProjectSettings.parse({}));
       const media = ctx.repos.projects.putMedia(project.id, asset, "ingesting");
+      recordMediaAdded(ctx, asset);
       if (match) {
         const updated = ctx.repos.projects.update(project.id, { settings: format });
         ctx.bus.publish({ type: "project.updated", projectId: project.id, project: updated });
