@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
-import { act, type ComponentProps } from "react";
+import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useHotkeys } from "../../lib/hotkeys";
+import { usePictureMarksStore } from "../../stores/pictureMarks";
 import { usePlayerStore } from "../../stores/player";
 import { ReviewActions } from "./ReviewActions";
 
@@ -12,6 +14,7 @@ const revise = vi.fn(), approve = vi.fn();
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   usePlayerStore.setState({ playing: false });
+  usePictureMarksStore.setState({ marking: null });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -101,6 +104,33 @@ it("shows Later (L) and Done (D) for a waiting to-do, and Done (D) alone when re
   expect(revise).toHaveBeenCalledTimes(1);
   await press("d");
   expect(approve).toHaveBeenCalledTimes(2);
+});
+
+it("takes Later's L before the player's speed key, which was there first, and leaves Shift+L, a parked to-do's L and Draw's D to the page", async () => {
+  const faster = vi.fn();
+  // The player's L, as WatchPage has it: on the page from when the project opens, before any card.
+  function Page({ children }: { children?: ReactNode }) {
+    useHotkeys(event => { if (event.key.toLowerCase() === "l") { event.preventDefault(); faster(event.shiftKey ? -1 : 1); } });
+    return children;
+  }
+  await act(async () => root.render(<Page />));
+  await act(async () => root.render(<Page><ReviewActions revise={revise} reviseLabel="Later" reviseKey="L" approve={approve} approveLabel="Done" approveKey="D" /></Page>));
+  await press("l");
+  expect([revise.mock.calls.length, faster.mock.calls]).toEqual([1, []]);
+  await press("L", { shiftKey: true });
+  expect([revise.mock.calls.length, faster.mock.calls]).toEqual([1, [[-1]]]);
+  // While the picture is being marked, D is Draw, and Later's L is still the card's.
+  usePictureMarksStore.setState({ marking: "prj" });
+  await press("d");
+  await press("l");
+  expect([approve.mock.calls.length, revise.mock.calls.length]).toEqual([0, 2]);
+  usePictureMarksStore.setState({ marking: null });
+  await press("d");
+  expect(approve).toHaveBeenCalledTimes(1);
+  // A to-do parked as Later has only Done: L is the player's again.
+  await act(async () => root.render(<Page><ReviewActions approve={approve} approveLabel="Done" approveKey="D" /></Page>));
+  await press("l");
+  expect([revise.mock.calls.length, faster.mock.calls]).toEqual([2, [[-1], [1]]]);
 });
 
 it("lets go of the focus when the decision is clicked, and keeps it when pressed by keyboard", async () => {
