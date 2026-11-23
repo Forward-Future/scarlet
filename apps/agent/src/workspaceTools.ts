@@ -3,7 +3,7 @@ import { delimiter, dirname, isAbsolute, join } from "node:path";
 import type { Workspace } from "./runners/types.js";
 
 /** Where a request's shell finds its programs, in the task folder: small launchers, first on its PATH. */
-export const TOOLS_DIR = ".tools";
+const TOOLS_DIR = ".tools";
 
 const runnable = (path: string) => access(path, constants.X_OK).then(() => true, () => false);
 
@@ -33,12 +33,12 @@ async function certificateFolders(env: NodeJS.ProcessEnv): Promise<string[]> {
 }
 
 /** A launcher for one program, by its full path. */
-export function launcher(target: string): string {
+function launcher(target: string): string {
   return `#!/bin/sh\nexec '${target.replaceAll("'", "'\\''")}' "$@"\n`;
 }
 
 /** The folder a program needs to read to run: its whole app bundle on a Mac, else the folder it sits in. */
-export function programFolder(path: string): string {
+function programFolder(path: string): string {
   const app = path.indexOf(".app/");
   return app >= 0 ? path.slice(0, app + 4) : dirname(path);
 }

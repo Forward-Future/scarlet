@@ -10,9 +10,9 @@ export const MONITOR_LOAD_HINT_MS = 2500;
 /** Duration of the smooth lift once playback is ready. */
 export const MONITOR_LOAD_LEAVE_MS = 280;
 
-export type WaitStage = "preparing" | "rendering" | "loading";
+type WaitStage = "preparing" | "rendering" | "loading";
 
-export interface WaitProgress {
+interface WaitProgress {
   done: number;
   total: number;
 }
@@ -45,9 +45,14 @@ function parseProgress(raw: string | undefined): WaitProgress | undefined {
   return { done, total };
 }
 
+/** A video kept out of sight: hidden, or parked for a later switch. */
+const isParked = (video: HTMLVideoElement) => !!video.closest("[hidden], [data-parked]");
+/** A video with a decoded picture to show. */
+const hasPicture = (video: HTMLVideoElement) => video.readyState >= 2 && video.videoWidth > 0;
+
 function activeVideos(root: HTMLElement | null): HTMLVideoElement[] {
   if (!root) return [];
-  return [...root.querySelectorAll("video")].filter(v => !v.closest("[hidden], [data-parked]"));
+  return [...root.querySelectorAll("video")].filter(v => !isParked(v));
 }
 
 function readVideoWait(root: HTMLElement | null): VideoWaitInfo {
@@ -57,8 +62,15 @@ function readVideoWait(root: HTMLElement | null): VideoWaitInfo {
   return { marked: true, stage, progress: parseProgress(waiting.dataset.waitProgress) };
 }
 
+function sameWait(a: VideoWaitInfo, b: VideoWaitInfo): boolean {
+  return a.marked === b.marked
+    && a.stage === b.stage
+    && a.progress?.done === b.progress?.done
+    && a.progress?.total === b.progress?.total;
+}
+
 function hasDecodedVideo(root: HTMLElement | null): boolean {
-  return activeVideos(root).some(v => v.readyState >= 2 && v.videoWidth > 0);
+  return activeVideos(root).some(hasPicture);
 }
 
 /** Captures a compact copy of the outgoing frame so cut switches don't snap to black. */
@@ -96,7 +108,7 @@ function waitCopy(stage: WaitStage, progress?: WaitProgress): { label: string; m
   return { label: "Loading clip\u2026" };
 }
 
-export interface MonitorLoadOverlayProps {
+interface MonitorLoadOverlayProps {
   monitor: RefObject<HTMLDivElement | null>;
   pictureWaiting: boolean;
   openingJoin: boolean;
@@ -157,22 +169,17 @@ export function MonitorLoadOverlay({
     if (!root) return;
     const syncWait = () => {
       const next = readVideoWait(root);
-      setVideoWait(prev =>
-        prev.marked === next.marked
-        && prev.stage === next.stage
-        && prev.progress?.done === next.progress?.done
-        && prev.progress?.total === next.progress?.total
-          ? prev : next);
+      setVideoWait(prev => sameWait(prev, next) ? prev : next);
     };
     const onDecoded = (event: Event) => {
       const target = event.target;
-      if (!(target instanceof HTMLVideoElement) || target.closest("[hidden], [data-parked]")) return;
-      if (target.readyState >= 2 && target.videoWidth > 0) lastDecodedVideo.current = target;
+      if (!(target instanceof HTMLVideoElement) || isParked(target)) return;
+      if (hasPicture(target)) lastDecodedVideo.current = target;
       if (event.type === "playing") heldCanvas.current = undefined;
     };
     const onCapture = (event: Event) => {
       const target = event.target;
-      if (!(target instanceof HTMLVideoElement) || target.closest("[hidden], [data-parked]")) return;
+      if (!(target instanceof HTMLVideoElement) || isParked(target)) return;
       const frame = captureFrame(target);
       if (frame) {
         lastDecodedVideo.current = target;
@@ -188,12 +195,14 @@ export function MonitorLoadOverlay({
       attributes: true,
       attributeFilter: ["hidden", "data-parked", "data-waiting", "data-wait-stage", "data-wait-progress"],
     });
-    for (const name of ["loadeddata", "canplay", "playing", "seeked"]) root.addEventListener(name, onDecoded, true);
-    for (const name of ["pause", "seeking", "waiting"]) root.addEventListener(name, onCapture, true);
+    const decodedEvents = ["loadeddata", "canplay", "playing", "seeked"];
+    const captureEvents = ["pause", "seeking", "waiting"];
+    for (const name of decodedEvents) root.addEventListener(name, onDecoded, true);
+    for (const name of captureEvents) root.addEventListener(name, onCapture, true);
     return () => {
       observer.disconnect();
-      for (const name of ["loadeddata", "canplay", "playing", "seeked"]) root.removeEventListener(name, onDecoded, true);
-      for (const name of ["pause", "seeking", "waiting"]) root.removeEventListener(name, onCapture, true);
+      for (const name of decodedEvents) root.removeEventListener(name, onDecoded, true);
+      for (const name of captureEvents) root.removeEventListener(name, onCapture, true);
     };
   }, [monitor]);
 
@@ -201,7 +210,7 @@ export function MonitorLoadOverlay({
   useLayoutEffect(() => {
     const root = monitor.current;
     if (!root) return;
-    const video = activeVideos(root).findLast(v => v.readyState >= 2 && v.videoWidth > 0) ?? lastDecodedVideo.current;
+    const video = activeVideos(root).findLast(hasPicture) ?? lastDecodedVideo.current;
     const frame = captureFrame(video);
     if (frame) {
       heldCanvas.current = frame;
@@ -230,12 +239,7 @@ export function MonitorLoadOverlay({
   useLayoutEffect(() => {
     const root = monitor.current;
     const latestDomWait = root ? readVideoWait(root) : { marked: false };
-    setVideoWait(prev =>
-      prev.marked === latestDomWait.marked
-      && prev.stage === latestDomWait.stage
-      && prev.progress?.done === latestDomWait.progress?.done
-      && prev.progress?.total === latestDomWait.progress?.total
-        ? prev : latestDomWait);
+    setVideoWait(prev => sameWait(prev, latestDomWait) ? prev : latestDomWait);
     const prev = wasActive.current;
     const stillActive = !disabled && (pictureWaiting || (openingJoin && openingReady) || (prev && latestDomWait.marked));
     wasActive.current = stillActive;

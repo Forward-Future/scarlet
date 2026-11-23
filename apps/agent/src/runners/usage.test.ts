@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { claudeRunUsage, newClaudeState, parseClaudeLine } from "./claude.js";
-import { newCodexState, parseCodexLine } from "./codex.js";
-import { newGeminiState, parseGeminiLine } from "./gemini.js";
+import { newCodexState, parseCodexLine } from "./codexParse.js";
+import { newGeminiState, parseGeminiLine } from "./geminiAcp.js";
 import { addUsage, claudeUsage, codexUsage, geminiTranscriptStepUsage, geminiUsage, tokenCount } from "./usage.js";
 
 const zero = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };

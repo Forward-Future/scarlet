@@ -19,7 +19,7 @@ import { RecordingSpeakers } from "./services/recordingSpeakers.js";
 import { CLASSES, SAMPLE_RATE, SEPARATOR, CTC_LETTERS } from "./transcribe/ctcAlign.js";
 import { EmissionFile } from "./transcribe/emissions.js";
 import { AnalysisCache } from "./services/analysisCache.js";
-import { resolveFfmpeg, runCapture } from "@scarlet/render";
+import { heardAudioKey, resolveFfmpeg, runCapture } from "@scarlet/render";
 import { previewPictures } from "./services/previewPictures.js";
 import { createTask, migrateDialogueOperations, appendTaskEvent, cancelTask, saveTask } from "./services/tasks.js";
 import { continueReadyRuns, continueWhenReady, recoverTasks } from "./services/taskRecovery.js";
@@ -524,8 +524,8 @@ it("returns legacy edit history immediately and backfills only open proposals", 
 });
 
 it.each([
-  { updateRoles: false, expectedStreams: [undefined] },
-  { updateRoles: true, expectedStreams: [undefined, 2] },
+  { updateRoles: false, expectedStreams: [null] },
+  { updateRoles: true, expectedStreams: [null, 2] },
 ])("retains the Whisper decode through speaker analysis and respects stream selection (%j)", async ({ updateRoles, expectedStreams }) => {
   const { ctx } = workspace;
   ctx.paths.ensureProject(project.id);
@@ -546,7 +546,7 @@ it.each([
   try {
     expect(await transcribeMedia(ctx, project.id, media)).toBeTruthy();
     while (ctx.pending.size) await Promise.all([...ctx.pending]);
-    expect(decode.mock.calls.map(([, , options]) => options?.audioStream)).toEqual(expectedStreams);
+    expect(decode.mock.calls.map(([, , options]) => heardAudioKey(options?.audio))).toEqual(expectedStreams);
     expect(speaker).toHaveBeenCalledTimes(1);
     for (const [, wav] of decode.mock.calls) expect(existsSync(wav)).toBe(false);
   } finally {
@@ -1776,6 +1776,33 @@ it("reads the footage a change left out as it built the video, when it is applie
   expect(ctx.repos.changes.get(change.id)!.updatedAt).toBe(stamp);
 });
 
+it("reads what a first cut saved whole left out of the recording, the end it didn't use too", async () => {
+  // Matt's 28-minute talking head was cut to 15 by saving the pieces to keep as the whole video. A first cut was
+  // skipped as having nothing to read, so none of its 104 cuts were listed and the request said 20 s came out (2026-11-23).
+  const { ctx } = workspace;
+  ctx.repos.projects.putMedia(project.id, { id: "take", kind: "video", name: "Take", path: "take.mp4", duration: 60, hasAudio: true }, "ready");
+  const whole = timelineFromKeepRanges(project.id, "take", [{ start: 5, end: 10 }, { start: 20, end: 30 }]);
+  const saved = await api("POST", projectsPath() + "/changes", { description: "First cut", firstCut: true, autoApprove: true, skipRender: true, timeline: whole });
+  expect(saved.status).toBe(201);
+  const { change } = await saved.json();
+  expect(change.leftOut.joins).toEqual([{ at: 0, removed: { start: 0, end: 5 } }, { at: 5, removed: { start: 10, end: 20 } }, { at: 15, removed: { start: 30, end: 60 } }]);
+  expect(change.leftOut.reading).toBe(LEFT_OUT_READING);
+  // The version that plays it all is the recording, whole.
+  const full = resolveTimeline(ctx, project, change.leftOut.version);
+  expect(timelineDuration(full)).toBeCloseTo(60);
+  // One an earlier build applied has nothing read. Starting Scarlet reads it, once.
+  ctx.repos.changes.put({ ...change, leftOut: undefined });
+  recordLeftOutFootage(ctx);
+  expect(ctx.repos.changes.get(change.id)!.leftOut).toEqual(change.leftOut);
+  const read = vi.spyOn(ctx.repos.changes, "parse");
+  recordLeftOutFootage(ctx);
+  expect(read).not.toHaveBeenCalled();
+  // A first cut that replaces a video already there took nothing from an empty timeline: nothing is read for it.
+  const again = await api("POST", projectsPath() + "/changes", { description: "First cut again", firstCut: true, autoApprove: true, skipRender: true,
+    timeline: timelineFromKeepRanges(project.id, "take", [{ start: 5, end: 10 }, { start: 22, end: 30 }]) });
+  expect((await again.json()).change.leftOut).toEqual({ joins: [] });
+});
+
 it("fills in legacy history metadata once and serves the same version summaries thereafter", async () => {
   const { ctx } = workspace;
   const { head } = ensureHead(ctx, project.id);
@@ -1977,6 +2004,12 @@ it("marks a run that ended without the transcripts it waited for, and resumes it
   expect(resumed).toMatchObject({ state: "queued", resumeRootId: task.id });
   expect(resumed.instruction).toContain("ended without the transcript of camera, screen. Ready now: camera, screen.");
   expect(continueReadyRuns(ctx)).toEqual([]);
+  // An answer to the resumed run's question starts it in a session that never read that: it is told again.
+  appendTaskEvent(ctx, resumed, { type: "question", text: "Keep the cold open?" });
+  appendTaskEvent(ctx, ctx.repos.tasks.get(resumed.id)!, { type: "answer", text: "Yes." });
+  const answered = await (await api("GET", `/tasks/${resumed.id}/prompt`)).json();
+  expect(answered.resumeSession).toBeUndefined();
+  expect(answered.instruction).toContain("ended without the transcript of camera, screen. Ready now: camera, screen.");
   // The finished run no longer offers to wait.
   expect((await api("POST", `/tasks/${task.id}/continue-when-ready`, { on: true })).status).toBe(200);
   expect(ctx.repos.tasks.select("project_id = ? AND kind = 'edit'", [project.id])).toHaveLength(2);
