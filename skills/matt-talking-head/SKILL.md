@@ -1,7 +1,7 @@
 ---
 name: matt-talking-head
 description: "Edit Matt Berman’s recorded talking-head videos in Scarlet. Lip sync checked against his spoken “click, 1 2 3 4 5” count, then a dialogue pass cut to his pace, acting on his notes to the editor, with camera punch-ins and any synchronized screen demo framed around what he shows."
-category: Story and pacing
+category: Examples
 ---
 
 # Matt’s talking-head edit

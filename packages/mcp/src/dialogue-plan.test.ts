@@ -124,7 +124,7 @@ describe("dialogue plan", () => {
     expect(plan).toMatchObject({ outcome: "ready", decisions: [{ start: 1.433, end: 2.967, review: false }] });
     if (plan.outcome !== "ready") return;
     expect(dialogueGate(plan).decisions).toEqual([{ cut: 0, kind: "retake", words: "I thought", asked: "cut", outcome: "cut", range: [1.43, 2.97],
-      evidence: measured + "before it (breath cut)." }]);
+      evidence: measured + "before it (breath cut).", plays: "… simulation. ‖ test …" }]);
     // Asked to keep it: in the quiet after the breath, padded as usual, and the breath plays.
     const kept = await planDialogueCuts(request, { ...sources, breath: "keep" });
     expect(kept).toMatchObject({ outcome: "ready", decisions: [{ start: expect.closeTo(1.65, 1), end: plan.decisions[0]!.end, review: false }] });
@@ -135,7 +135,8 @@ describe("dialogue plan", () => {
     const { sources: plain } = fixture();
     const without = await planDialogueCuts({ tl, localPauses: false, cuts: [cut(refs.word)] }, { ...plain, breath: "keep" });
     expect(without).toMatchObject({ outcome: "ready", decisions: [{ start: expect.closeTo(1.49, 1), review: false }] });
-    expect(without.outcome === "ready" && without.gate.get(0)).toEqual({ cut: 0, kind: "retake", words: "first", asked: "cut", outcome: "cut", range: expect.any(Array) });
+    expect(without.outcome === "ready" && without.gate.get(0)).toEqual({ cut: 0, kind: "retake", words: "first", asked: "cut", outcome: "cut", range: expect.any(Array),
+      plays: "… finish ‖ next …" });
   });
 
   it("names in the gate a breath the quiet after the kept word holds, and keeps it when asked", async () => {
@@ -1011,7 +1012,9 @@ describe("dialogue plan", () => {
       cut({ start: 2.5, end: 3.0, kind: "pause" }), cut({ start: 3.1667, end: 4.4, kind: "coaching" })] }, sources);
     if (plan.outcome !== "ready") throw new Error(plan.outcome);
     expect(plan.decisions.map(d => [d.start, d.end])).toEqual([[2.5, 3], [3.1667, 4.4]]);
-    expect(dialogueGate(plan).decisions).toEqual([]);
+    // Nothing moved: the gate only says what the coaching cut takes out and plays.
+    expect(dialogueGate(plan).decisions).toEqual([{ cut: 1, kind: "coaching", asked: "cut", outcome: "cut", range: [3.17, 4.4], removes: "next",
+      plays: "… finish first ‖" }]);
     // With a word in between, both stay where they were asked.
     const spoken = await planDialogueCuts({ tl, localPauses: false, cuts: [
       cut({ start: 1.5, end: 1.7, kind: "pause" }), cut({ start: 2.3, end: 3.2, kind: "pause" })] }, sources);

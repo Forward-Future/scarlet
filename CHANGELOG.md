@@ -7,6 +7,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 22, 2026
 
 - Edits on long 4K recordings are faster: when Scarlet checks what's on screen it reads the small cached copy of a recording instead of the full-size file, and its own requests no longer wait behind background reading of the rest of the recording.
+- Every cut or edit waiting on you in For you now shows a dashed border on the timeline, and turns solid once you decide it, so calls and flagged cuts look the same while you review them.
+- Matt's talking-head skill now comes switched off, under Examples in Settings › Skills, as an example of one editor's style built on the shipped skills.
 - Scarlet now opens on signing in to Claude, ChatGPT or Google until a model is ready. One press installs what's needed and opens your browser, and you can look around first. Add another from the first page signs in a second plan.
 - When Scarlet rechecks a cut you approved because its footage changed, the cut now says Rechecking…, and the work under it starts with an Auto tag and why, so it never looks like a revision nobody asked for.
 - Asking Scarlet to change an edit it already made now starts right away, even while it's still working on the rest of the video, and up to four things can run at once.

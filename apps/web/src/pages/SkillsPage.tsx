@@ -7,7 +7,7 @@ import { relTime } from "../lib/format";
 import { useSkillsStore } from "../stores/skills";
 import { Chip, EmptyState, ErrorState, Icon, Loading, SectionTitle, Toggle, InlineError } from "../components/ui/primitives";
 
-const categories = ["Getting started", "Story and pacing", "Sound", "Picture and graphics", "Delivery"];
+const categories = ["Getting started", "Story and pacing", "Sound", "Picture and graphics", "Delivery", "Examples"];
 
 export function SkillsPage() {
   const skills = useSkillsStore((s) => s.skills);

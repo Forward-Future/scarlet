@@ -27,7 +27,8 @@ class EngineError extends Error {
 export interface EngineOptions { url?: string; token?: string }
 
 export class Engine {
-  constructor(readonly url: string, private readonly token: string) { requireSecureEngineUrl(url); }
+  /** `desktop`: the editor's own Scarlet, found from its session file. Reads only: passes refuse it (run.ts). */
+  constructor(readonly url: string, private readonly token: string, readonly desktop = false) { requireSecureEngineUrl(url); }
 
   static async connect(opts: EngineOptions = {}): Promise<Engine> {
     const url = opts.url ?? process.env.SCARLET_ENGINE_URL;
@@ -172,6 +173,6 @@ function desktopSession(): Engine {
     if (!Number.isInteger(port) || port < 1 || port > 65535 || typeof token !== "string" || !/^sct_[a-f0-9]{64}$/.test(token)) {
       throw new Error("Invalid Scarlet desktop session");
     }
-    return new Engine(`http://127.0.0.1:${port}`, token);
+    return new Engine(`http://127.0.0.1:${port}`, token, true);
   } finally { closeSync(fd); }
 }
