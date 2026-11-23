@@ -316,13 +316,14 @@ it("carries a paused run on in its CLI session on the same model, and a run the 
   expect(opus.session).toBeUndefined();
   expect(get(quitAgain.id).sessionCarriesOn).toBeUndefined();
 
-  // A harness Scarlet doesn't resume carries no session on, paused or not.
+  // A Gemini run carries on in its agy session too.
   await api("POST", `/tasks/${opus.id}/cancel`);
   const gemini = await request("Add captions", "gemini");
   saveTask(app.ctx, { ...get(gemini.id), session: { agent: "gemini", id: "session-4" } });
-  await api("POST", `/projects/${project.id}/stop-editing`);
-  expect(get(gemini.id).sessionCarriesOn).toBeUndefined();
-  expect(get(get(gemini.id).retryTaskId!).session).toBeUndefined();
+  await quit(gemini);
+  expect(get(gemini.id).sessionCarriesOn).toBe(true);
+  expect(get(get(gemini.id).retryTaskId!).session).toEqual({ agent: "gemini", id: "session-4" });
+  expect((await prompt(get(gemini.id).retryTaskId!)).resumeSession).toBe("session-4");
 });
 
 it("tells a look at a frame nothing of the video's timeline or skills, and a request about one staged cut no whole diff", async () => {
