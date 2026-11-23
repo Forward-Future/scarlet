@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Ctx } from "../context.js";
 import { ffmpeg } from "../render/ffmpeg.js";
 import { rememberLast } from "../util.js";
-import { pictureReader, withFrames, type VideoMedia } from "./pictureReading.js";
+import { pictureReader, readingIdentity, withFrames, type VideoMedia } from "./pictureReading.js";
 import { fullProxyVariants, previewIdentity } from "./previewPictures.js";
 
 let root: string;
@@ -177,5 +178,14 @@ describe("what a reader keeps in memory", () => {
     rememberLast(map, "d", { busy: false }, 3, v => v.busy);
     // "a" is in use, so "c", now the least recently used of the rest, goes.
     expect([...map.keys()]).toEqual(["a", "b", "d"]);
+  });
+});
+
+describe("naming what a kept reading depends on", () => {
+  it("hashes the reading's version, the recording and its settings as each reading always has, so kept readings stay valid", () => {
+    const media = { hash: "abc", path: "a.mp4", duration: 12.5 } as VideoMedia;
+    const hashed = (parts: unknown[]) => createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+    expect(readingIdentity(2, media, 4, 384, [1, 2])).toBe(hashed([2, "abc", 12.5, 4, 384, [1, 2]]));
+    expect(readingIdentity(1, { ...media, hash: undefined }, 1.5)).toBe(hashed([1, "a.mp4", 12.5, 1.5]));
   });
 });
