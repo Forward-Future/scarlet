@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -47,6 +51,13 @@ beforeAll(async () => {
       sheets.push({ from, to, mode });
       result = { state: "ready", windows: [{ label: "Source", id: "m1", clock: "source", range: { start: from, end: to }, timestamps: [from],
         columns: 3, jpeg: "eA==", ...(mode === "activity" ? { changedFrames: 0 } : {}) }] };
+    } else if (req.path === "/projects/prj_test/source-audio") {
+      result = { wav: Buffer.from("RIFForig").toString("base64") };
+    } else if (req.path === "/projects/prj_test/review-cut") {
+      result = { state: "ready", index: 3, total: 4, newEvents: true, windows: [
+        { label: "Before", id: "v1", clock: "timeline", range: { start: 398.5, end: 401.5 }, timestamps: [400], columns: 3, jpeg: "eA==", wav: Buffer.from("RIFFbefore").toString("base64") },
+        { label: "After", id: "v2", clock: "timeline", range: { start: 398.5, end: 401.5 }, timestamps: [400], columns: 3, jpeg: "eA==", wav: Buffer.from("RIFFafter").toString("base64") },
+      ] };
     } else return false;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify(result));
@@ -157,4 +168,34 @@ it("pages multi-cut dialogue_review_inspect under caps.resultChars and keeps def
   expect(texts(second).filter(t => "firstPass" in t).map(t => t.index)).toEqual([deferredIdx]);
   const deferredStart = removed[deferredIdx]!.start;
   expect(sheets.slice(sheetsBefore).filter(s => s.from >= deferredStart - 3 && s.to <= removed[deferredIdx]!.end + 3)).toEqual([]);
+});
+
+it("writes original and rendered-join WAV files for audioFiles models when includeAudio is requested", async () => {
+  const workDir = mkdtempSync(join(tmpdir(), "scarlet-review-audio-"));
+  try {
+    const server = createScarletMcpServer(new ScarletClient({ baseUrl: mock.url, token: "tok" }), {
+      projectId: "prj_test", taskId: "review-task", taskStartedAt: "2026-04-01T12:00:00.000Z", agent: "gemini",
+      capabilities: { images: true, audio: false, audioFiles: true, files: true, plan: false },
+      workDir,
+      author: { type: "agent", id: "gemini", name: "gemini" },
+    });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const gemini = new Client({ name: "test-gemini-audio", version: "0" });
+    await gemini.connect(b);
+    sessions.push(gemini);
+
+    const res = await gemini.callTool({ name: "dialogue_review_inspect", arguments: { changeId: "pass", index: 3, includeAudio: true } }) as CallToolResult;
+    expect(res.isError).toBeFalsy();
+    const items = texts(res);
+    const wavs = items.filter(t => typeof t.listen === "string") as Array<{ listen: string; kind?: string; label?: string }>;
+    // Both original passage audio and Before/After rendered join WAVs are written to disk for the file viewer.
+    expect(wavs.some(w => w.kind === "original")).toBe(true);
+    expect(wavs.some(w => w.label === "After")).toBe(true);
+    for (const w of wavs) expect(existsSync(w.listen)).toBe(true);
+    expect(res.content.some(c => c.type === "audio")).toBe(false);
+    expect(items.at(-1)).toMatchObject({ complete: true });
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
 });

@@ -47,11 +47,13 @@ interface Target {
  * often come from two different recordings. Missing evidence stays explicit.
  * The closing receipt line is the caller's: it depends on what the agent has already seen. */
 export async function inspectDialogueSuggestion(client: ScarletClient, change: Change, review: CutReview,
-  media: MediaAsset[], index: number, { audio, images, wholePicture = false, sheet, unavailable, playback }: {
+  media: MediaAsset[], index: number, { audio, images, wholePicture = false, sheet, unavailable, playback, deliverAudio }: {
     audio: boolean; images: boolean; wholePicture?: boolean; sheet: ReadySheet;
     playback?: { original: CutReview["original"]; range: TimeRange; previewVersion: string };
     /** Notes on stderr a read that failed and was answered without. */
     unavailable?: (what: string, err: unknown) => void;
+    /** Custom WAV delivery (e.g. writing a file to the task folder for audioFiles harnesses). */
+    deliverAudio?: (wav: string, meta: { mediaId: string; from: number; to: number }) => Promise<CallToolResult["content"]>;
   }): Promise<DialogueInspection> {
   const cut = review.cuts[index];
   if (!cut) throw new Error(`Cut ${index} is outside this proposal (${review.cuts.length} cuts, index 0–${review.cuts.length - 1}).`);
@@ -112,7 +114,8 @@ export async function inspectDialogueSuggestion(client: ScarletClient, change: C
           const windows = to - from <= 8 ? [[from, to]] : [[from, from + 4], [to - 4, to]];
           for (const [s, e] of windows) {
             const { wav } = await client.sourceAudio(change.projectId, { mediaId: asset.id, from: s!, to: e! });
-            out.push({ type: "audio", mimeType: "audio/wav", data: wav });
+            if (deliverAudio) out.push(...await deliverAudio(wav, { mediaId: asset.id, from: s!, to: e! }));
+            else out.push({ type: "audio", mimeType: "audio/wav", data: wav });
           }
         }
         heard = true;
