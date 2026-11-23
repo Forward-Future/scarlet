@@ -2409,7 +2409,10 @@ it("opens a marker Scarlet left for the editor as a to-do: what to add first, no
   // Nothing in the video changed there, so there's no Before to play and nothing to reject.
   expect(panel.querySelector(".review-compare, .edit-card-before, .edit-card-reject")).toBeNull();
   expect([...panel.querySelectorAll(".edit-card-acts button")].map(b => [b.textContent, b.getAttribute("title")]))
-    .toEqual([["Revise", "Revise (R)"], ["Done", "Done (D)"]]);
+    .toEqual([["Later", "Later (L)"], ["Done", "Done (D)"]]);
+  const focusBefore = useUiStore.getState().composerFocus;
+  await press("r");
+  expect(useUiStore.getState().composerFocus).toBe(focusBefore);
   await press("u");
   expect(createTask).not.toHaveBeenCalled();
   // Done records it as Keep does, so it no longer waits on the editor.
@@ -12593,6 +12596,126 @@ it("keeps a flagged marker edit in For you marked Done across tab switches, and 
   await act(async () => {});
   expect([need()?.getAttribute("title"), row().classList.contains("is-decided"), row().querySelector(".simple-edit-value")?.textContent])
     .toEqual(["1 needs you", false, "To do"]);
+});
+
+it("parks a To do marker in For you with Later (L), drops the waiting count, advances, shows only Done when reopened, and supports ⌘Z", async () => {
+  appliedEdits();
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [
+      { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, previous: [] },
+      { changeId: "chg_approved_2", spot: 1, label: "Add studio B-roll", range: { start: 4, end: 6 }, previous: [], marker: true, check: "Add B-roll here" },
+      { changeId: "chg_approved_2", spot: 2, label: "intro title", range: { start: 9, end: 11 }, previous: [], check: "Check the intro title" },
+    ] }));
+  const keepSpy = vi.spyOn(api, "keepEdits").mockResolvedValue(undefined);
+  vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined);
+  await showFolded();
+  await act(async () => {});
+  const turn = turnFor("chg_approved_2");
+  const need = () => turn.querySelector<HTMLElement>(".simple-pass-need")!;
+  const rows = () => Array.from(turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit"));
+  const actions = () => [...editPanel()!.querySelectorAll(".edit-card-acts button")].map(b => [b.textContent, b.getAttribute("title")]);
+
+  // Only two tabs (For you | See all); both the to-do marker and the flagged edit live in For you.
+  expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
+  expect(need().getAttribute("title")).toBe("2 need you");
+  expect(rows().map(r => [r.querySelector(".simple-edit-title")?.textContent, r.querySelector(".simple-edit-value")?.textContent]))
+    .toEqual([["Add studio B-roll", "To do"], ["intro title", "Edit"]]);
+
+  // Pressing L on the to-do parks it in For you as Later without calling keepEdits, drops the waiting count, and advances.
+  await click(rows()[0]!);
+  await act(async () => {});
+  expect(actions()).toEqual([["Later", "Later (L)"], ["Done", "Done (D)"]]);
+  await press("l");
+  await act(async () => {});
+  expect(keepSpy).not.toHaveBeenCalled();
+  expect(need().getAttribute("title")).toBe("1 needs you");
+  expect(editPanel()?.querySelector(".edit-card-title")?.textContent).toContain("Check the intro title");
+  const brollRow = () => rows()[0]!;
+  expect([
+    brollRow().classList.contains("is-decided"),
+    brollRow().querySelector(".edit-badge")?.classList.contains("is-check"),
+    brollRow().querySelector(".edit-badge")?.classList.contains("is-kept"),
+    brollRow().querySelector(".simple-edit-value")?.textContent,
+  ]).toEqual([false, false, false, "Later"]);
+
+  // Keeping the remaining flagged edit closes the card (skipping the parked Later to-do) and clears the badge.
+  await press("k");
+  await act(async () => {});
+  expect(editPanel()).toBeNull();
+  expect([need().getAttribute("title"), turn.querySelector(".simple-review-tab-count")]).toEqual([null, null]);
+
+  // Switching to See all and back to For you preserves the parked Later row.
+  await click(seeAll(turn)!);
+  expect(reviewModes(turn)).toEqual([["For you", "false"], ["See all", "true"]]);
+  await click(need());
+  expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
+  expect(brollRow().querySelector(".simple-edit-value")?.textContent).toBe("Later");
+
+  // Reopening a Later to-do shows only Done (D); pressing L does nothing; pressing D marks it Done.
+  await click(brollRow());
+  await act(async () => {});
+  expect(actions()).toEqual([["Done", "Done (D)"]]);
+  await press("l");
+  expect(editPanel()).not.toBeNull();
+  await press("d");
+  await act(async () => {});
+  expect(editPanel()).toBeNull();
+  expect([brollRow().classList.contains("is-decided"), brollRow().querySelector(".edit-badge")?.classList.contains("is-kept"), brollRow().querySelector(".simple-edit-value")?.textContent])
+    .toEqual([true, true, "Done"]);
+
+  // ⌘Z undoes Done and returns the to-do to Later (not back to waiting yet) while reopening its card.
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
+  await act(async () => {});
+  expect(brollRow().querySelector(".simple-edit-value")?.textContent).toBe("Later");
+  expect(actions()).toEqual([["Done", "Done (D)"]]);
+
+  // Undo the kept edit and then undo Later: the to-do returns to waiting ("To do") and restores Later (L).
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
+  await act(async () => {});
+  expect(brollRow().querySelector(".simple-edit-value")?.textContent).toBe("To do");
+  expect(brollRow().querySelector(".edit-badge")?.classList.contains("is-check")).toBe(true);
+  expect(need().getAttribute("title")).toBe("2 need you");
+  expect(actions()).toEqual([["Later", "Later (L)"], ["Done", "Done (D)"]]);
+});
+
+it("parks a dialogue pass's To do marker as Later in For you without holding up the waiting count or auto-advance", async () => {
+  runningPass();
+  flaggedPart();
+  const request = threadWith("chg_ready").id;
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: useProjectStore.getState().current!.project.head!,
+    edits: threadId !== request ? [] : [
+      { changeId: "chg_part", spot: 0, label: "wrap", range: { start: 3, end: 5 }, previous: [], check: "Check the wrap" },
+      { changeId: "chg_part", spot: 1, label: "Shoot B-roll", range: { start: 8, end: 10 }, previous: [], marker: true, check: "Record studio B-roll here" },
+      { changeId: "chg_part", spot: 2, label: "music bed", range: { start: 0, end: 2 }, previous: [] },
+    ] }));
+  const asked = askAll(STAGED).slice(0, 1).map((a, i) => ({ ...a, askOrder: i + 1 }));
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: asked } : c) };
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  await act(async () => {});
+  const turn = turnFor("chg_ready");
+  const need = () => turn.querySelector<HTMLElement>(".simple-pass-need")!;
+
+  expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
+  expect(need().getAttribute("title")).toBe("3 need you");
+  expect(passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".simple-pass-label")?.textContent]))
+    .toEqual([["1", "A clean retake."], ["2", "wrap"], ["3", "Shoot B-roll"]]);
+
+  // Opening the to-do marker and pressing L parks it as Later in For you, drops the badge to 2, and wraps to Cut 1.
+  await click(passRows()[2]!);
+  await act(async () => {});
+  await press("l");
+  await act(async () => {});
+  expect(need().getAttribute("title")).toBe("2 need you");
+  expect(container.querySelector('[aria-label="Call"] .edit-card-count')?.textContent).toBe("Cut 1");
+  const markerRow = passRows()[2]!;
+  expect([
+    markerRow.classList.contains("is-decided"),
+    markerRow.querySelector(".edit-badge")?.classList.contains("is-check"),
+    markerRow.querySelector(".edit-badge")?.classList.contains("is-kept"),
+    markerRow.querySelector(".simple-pass-value")?.textContent,
+  ]).toEqual([false, false, false, "Later"]);
 });
 
 it("keeps a rejected flagged edit in For you marked Rejected and opens its Rejected card on click", async () => {

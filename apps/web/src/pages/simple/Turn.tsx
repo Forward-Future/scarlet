@@ -5,7 +5,7 @@ import type { Change } from "@scarlet/timeline";
 import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task } from "@scarlet/shared";
 import { resumeRunChoice, useAgentAvailability } from "../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../components/review/RunBundle";
-import { editGroups, useReviewed, useRevising, useThreadEdits } from "../../components/review/ThreadEdits";
+import { editGroups, useDeferred, useReviewed, useRevising, useThreadEdits } from "../../components/review/ThreadEdits";
 import { Icon } from "../../components/ui/primitives";
 import { TipButton } from "../../components/ui/TipButton";
 import { errorMessage } from "../../lib/client";
@@ -133,16 +133,17 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     || (!!pinned && thread.tasks.some(t => t.id === pinned)) || (!!reportReviewMarkers && asksForALook.current));
   asksForALook.current = listed.some(edit => !!edit.check);
   const reviewed = useReviewed(projectId, thread);
+  const deferred = useDeferred(projectId, thread);
   const revising = useRevising(thread);
   useEffect(() => {
     if (!reportReviewMarkers || !located) return;
-    const waiting = located.filter(edit => edit.check && !reviewed(edit) && !revising(edit));
+    const waiting = located.filter(edit => edit.check && !reviewed(edit) && !deferred(edit) && !revising(edit));
     if (!waiting.length) return;
     const numbers = new Map(editGroups(located).flatMap(({ members }) => members.map(({ edit }) => [edit, members[0]!.i + 1] as const)));
     const markers = waiting.map(edit => ({ edit, number: numbers.get(edit)!, total: located.length }));
     reportReviewMarkers(thread.id, { head, markers });
     return () => reportReviewMarkers(thread.id);
-  }, [thread.id, head, located, reviewed, revising, reportReviewMarkers]);
+  }, [thread.id, head, located, reviewed, deferred, revising, reportReviewMarkers]);
   // A thread with a dialogue pass sums it up on one line instead of listing every cut.
   const waitingPass = openPass(thread, allTasks);
   const pendingPass = !!waitingPass;
