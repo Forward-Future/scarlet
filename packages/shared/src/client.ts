@@ -322,6 +322,8 @@ export class ScarletClient extends ClientTransport {
       droppedFromReview?: Array<{ changeId: string; version: string; start: number; end: number; why: string }>;
       /** Cuts left out because they would have swapped a held staged cut for other edges Scarlet couldn't place either. */
       heldCutsStay?: Array<{ asked: TimeRange; staged: TimeRange; why: string }>;
+      /** Earlier staged cuts Scarlet checked and settled as cuts, never asked about, that went into the video with this save. */
+      settledApplied?: { cuts: number; why: string };
       /** The project head after this submission. Older engines omit it. */
       head?: string }>(
       `/projects/${encodeURIComponent(projectId)}/dialogue-cuts`, body);
