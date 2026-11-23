@@ -108,9 +108,30 @@ describe("leftOutJoins", () => {
     expect(title.map(c => [c.timelineIn, c.sourceIn, c.sourceOut])).toEqual([[4, 0, 10], [14, 6, 12]]);
   });
 
+  it("leaves out only the footage a first cut built in a new order never plays", () => {
+    // Matt's first cut put the intro he recorded again at 18:55 in front of the talk it was for, and the 18:55 before it
+    // was shown as one cut although all but a couple of minutes of it played straight after (2026-11-23).
+    const built = timelineFromKeepRanges("p", "m", [{ start: 50, end: 60 }, { start: 10, end: 20 }, { start: 30, end: 45 }, { start: 70, end: 80 }]);
+    const lengths = new Map([["m", 100]]);
+    const found = leftOutJoins(empty, built, 30, lengths)!;
+    // 20..30 before the first piece, the start of the recording before the step back to 10, 20..30 is played, 45..50
+    // before the moved piece is never played, and the end of the recording.
+    expect(found.joins).toEqual([
+      { at: 0, removed: { start: 0, end: 5 } },
+      { at: 10, removed: { start: 15, end: 25 } },
+      { at: 20, removed: { start: 35, end: 45 } },
+      { at: 35, removed: { start: 60, end: 70 } },
+      { at: 45, removed: { start: 80, end: 100 } },
+    ]);
+    // Every second left out is footage the cut never plays, each shown once.
+    const removed = found.joins.reduce((sum, j) => sum + j.removed.end - j.removed.start, 0);
+    expect(removed).toBeCloseTo(100 - 45);
+    expect(timelineDuration(found.original)).toBeCloseTo(100);
+    const clips = found.original.tracks[0]!.clips as MediaClip[];
+    expect(clips.map(c => [c.timelineIn, c.sourceIn, c.sourceOut])).toEqual([[0, 45, 60], [15, 0, 30], [45, 30, 45], [60, 60, 100]]);
+  });
+
   it("finds nothing left out where footage was rearranged, repeated or cut differently on each track", () => {
-    expect(leftOutJoins(empty, timelineFromKeepRanges("p", "m", [{ start: 50, end: 60 }, { start: 10, end: 20 }]))!.joins)
-      .toEqual([{ at: 0, removed: { start: 0, end: 50 } }]);
     const whole = timelineFromKeepRanges("p", "m", [{ start: 0, end: 100 }]);
     expect(leftOutJoins(whole, timelineFromKeepRanges("p", "m", [{ start: 0, end: 60 }, { start: 30, end: 100 }]))).toBeNull();
     const uneven = screenAndCamera([[0, 10], [14, 20]]);
