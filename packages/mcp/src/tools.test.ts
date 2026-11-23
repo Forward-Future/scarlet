@@ -1650,6 +1650,41 @@ describe("screen_text", () => {
   });
 });
 
+describe("screen_motion", () => {
+  const screen = { id: "scr", kind: "video" as const, name: "screen.mp4", path: "screen.mp4", duration: 1801, fps: 30, width: 1920, height: 1080, hasAudio: false };
+  beforeEach(() => {
+    mock.state.project.media = [...mock.state.project.media, screen];
+    mock.state.extra = (req, res) => req.path.endsWith("/media/scr/screen-motion")
+      ? reply(res, { mediaId: "scr", from: Number(req.query.get("from")), to: Number(req.query.get("to")), seconds: [], detail: [], readSeconds: 1, done: true }) : false;
+  });
+  const asked = async (clips: MediaClip[], args: Record<string, unknown>) => {
+    const tl = emptyTimeline("prj_test");
+    tl.version = "screen";
+    tl.tracks[0]!.clips = clips;
+    mock.state.timeline = tl;
+    mock.requests.length = 0;
+    const c = await connect();
+    try { await ok(c, "screen_motion", args); } finally { await c.close(); }
+    const query = sent("/projects/prj_test/media/scr/screen-motion", "GET").at(-1)!.query;
+    return [Number(query.get("from")), Number(query.get("to"))];
+  };
+
+  it("reads only the source seconds the asked range plays, a second either side", async () => {
+    // Five seconds near the end of a 30-minute recording: its own minute, not the whole recording.
+    expect(await asked([makeMediaClip("scr", 0, 1801, 0, { volume: 0 })], { from: 1505, to: 1510 })).toEqual([1504, 1511]);
+    // A range given backwards asks for the same seconds.
+    expect(await asked([makeMediaClip("scr", 0, 1801, 0, { volume: 0 })], { from: 1510, to: 1505 })).toEqual([1504, 1511]);
+    // At double speed from source 200, timeline 150-160 plays source 300-320.
+    expect(await asked([makeMediaClip("scr", 200, 400, 100, { volume: 0, speed: 2 })], { from: 150, to: 160 })).toEqual([299, 321]);
+    // Two clips of the recording, each partly in the range: the end of one and the start of the next.
+    expect(await asked([makeMediaClip("scr", 0, 60, 0, { volume: 0 }), makeMediaClip("scr", 1000, 1060, 60, { volume: 0 })], { from: 55, to: 65 })).toEqual([54, 1006]);
+    // With no range, the whole of what plays.
+    expect(await asked([makeMediaClip("scr", 30, 90, 0, { volume: 0 })], {})).toEqual([29, 91]);
+    // A clip that runs past its recording's end: the range in that tail still asks from inside the recording.
+    expect(await asked([makeMediaClip("scr", 0, 1810, 0, { volume: 0 })], { from: 1805, to: 1808 })).toEqual([1800, 1809]);
+  });
+});
+
 describe("faces", () => {
   const span = (track: number, start: number) => ({ track, start, end: start + 1, box: [0.4, 0.3, 0.58, 0.72], eyes: [0.49, 0.44], yaw: 0, confidence: 0.94 });
   it("lists where the faces are as compact JSON in source seconds and fractions, says how much is read, and pages", async () => {
