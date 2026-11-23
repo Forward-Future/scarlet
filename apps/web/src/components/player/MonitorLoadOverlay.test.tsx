@@ -87,17 +87,17 @@ const hint = () => container.querySelector<HTMLElement>(".monitor-load-hint");
 const still = () => container.querySelector<HTMLImageElement>(".monitor-load-still");
 const barFill = () => container.querySelector<HTMLElement>(".monitor-load-bar-fill");
 
-it("stays silent inside the 180ms grace period and escalates cleanly through sheen, pill, and Before hint", async () => {
+it("stays silent inside the 180ms grace period and escalates cleanly through lead-in still, pill, and Before hint", async () => {
   await render({ openingJoin: true, showVideo: false, canWatchBefore: true });
   await after(MONITOR_LOAD_GRACE_MS - 1);
   expect(overlay()).toBeNull();
 
-  // At 180ms: dimmed lead-in still + sheen + hairline appear, with no pill or extra status role yet.
+  // At 180ms: dimmed lead-in still + hairline appear without shimmer sheen, pill, or status role yet.
   await after(1);
   expect(overlay()?.dataset.active).toBe("true");
   expect(overlay()?.dataset.stage).toBe("preparing");
   expect(still()?.getAttribute("src")).toBe("/frames/fast.jpg");
-  expect(container.querySelector(".monitor-load-sheen")).not.toBeNull();
+  expect(container.querySelector(".monitor-load-sheen")).toBeNull();
   expect(barFill()?.classList.contains("is-indeterminate")).toBe(true);
   expect(pill()).toBeNull();
   expect(container.querySelector('[role="status"]')).toBeNull();
@@ -253,7 +253,8 @@ it("captures and holds the outgoing video frame across openingJoin until the lea
   const heldCanvas = container.querySelector<HTMLCanvasElement>(".monitor-load-held canvas");
   expect(heldCanvas).not.toBeNull();
   expect(heldCanvas?.dataset.ambientSource).toBe("true");
-  expect(container.querySelector(".monitor-load-sheen")).toBeNull();
+  expect(container.querySelector(".monitor-load-scrim")).toBeNull();
+  expect(barFill()).toBeNull();
 
   // Once past 180ms and the lead-in still loads, the lead-in replaces the held frame.
   await after(MONITOR_LOAD_GRACE_MS);
