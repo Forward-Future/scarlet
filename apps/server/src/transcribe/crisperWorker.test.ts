@@ -5,33 +5,43 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { FfmpegError } from "../render/ffmpeg.js";
 import { crisperWorker, type CrisperRequest } from "./crisperWorker.js";
 
-/** Answers as the adapter's --serve does: one JSON line a request, its stderr as it reads, and an exit after a failure. */
+/**
+ * Answers as the adapter's --serve does: one JSON line a request, its stderr as it reads closed by the end marker, and
+ * an exit after a failure. late.wav's reply goes out before its last stderr lines, as Windows can deliver them; old.wav
+ * answers as an adapter from before the marker did.
+ */
 const FAKE_ADAPTER = `
-import { existsSync, writeFileSync, writeSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 let served = 0;
-createInterface({ input: process.stdin }).on("line", line => {
+const err = text => process.stderr.write(text + "\\n");
+const out = text => process.stdout.write(text + "\\n");
+const input = createInterface({ input: process.stdin });
+input.on("line", line => {
   const request = JSON.parse(line);
   served++;
-  writeSync(2, "crisperwhisper device = mps\\n");
-  if (request.progress) writeSync(2, "progress = 50%\\n");
+  const old = request.wav.endsWith("old.wav");
+  err("crisperwhisper device = mps");
   if (request.wav.endsWith("broken.wav")) {
-    writeSync(2, "Traceback: the decoder broke\\n");
-    writeSync(1, JSON.stringify({ id: request.id, error: "the decoder broke" }) + "\\n");
-    process.exit(1);
+    err("Traceback: the decoder broke");
+    err("scarlet-crisper-end " + request.id);
+    out(JSON.stringify({ id: request.id, error: "the decoder broke", stderr_end: true }));
+    // As the adapter returns 1: it stops reading, and exits once what it wrote has gone.
+    process.exitCode = 1;
+    input.close();
+    process.stdin.destroy();
+    return;
   }
   if (request.wav.endsWith("long.wav")) return;
-  const finish = () => {
-    writeFileSync(request.out + ".json", JSON.stringify({ pid: process.pid, served, language: request.language }));
-    writeSync(1, "not a reply\\n" + JSON.stringify({ id: request.id, ok: true }) + "\\n");
+  writeFileSync(request.out + ".json", JSON.stringify({ pid: process.pid, served, language: request.language }));
+  const end = () => {
+    if (request.progress) err("progress = 50%");
+    if (!old) err("scarlet-crisper-end " + request.id);
   };
-  if (!existsSync(request.out + ".wait")) return finish();
-  const deadline = Date.now() + 2_000;
-  const poll = setInterval(() => {
-    if (!existsSync(request.out + ".ack") && Date.now() < deadline) return;
-    clearInterval(poll);
-    finish();
-  }, 5);
+  const reply = () => out("not a reply\\n" + JSON.stringify({ id: request.id, ok: true, ...(!old && { stderr_end: true }) }));
+  if (!request.wav.endsWith("late.wav")) return (end(), reply());
+  reply();
+  setTimeout(end, 100);
 });
 `;
 
@@ -62,31 +72,28 @@ const exited = async (pid: number) => {
 
 it("reads every request in one worker, which keeps its model, and gives each its own stderr lines", async () => {
   const lines: string[][] = [[], []];
-  const firstOut = join(dir, `out${outputs++}`);
-  const secondOut = join(dir, `out${outputs++}`);
-  await writeFile(firstOut + ".wait", "");
-  await writeFile(secondOut + ".wait", "");
-  const first = await read("a.wav", {
-    out: firstOut,
-    progress: true,
-    onStderrLine: line => {
-      lines[0]!.push(line);
-      if (lines[0]!.length === 2) void writeFile(firstOut + ".ack", "");
-    },
-  });
-  const second = await read("b.wav", {
-    out: secondOut,
-    language: "fr",
-    onStderrLine: line => {
-      lines[1]!.push(line);
-      if (lines[1]!.length === 1) void writeFile(secondOut + ".ack", "");
-    },
-  });
+  const first = await read("a.wav", { progress: true, onStderrLine: line => lines[0]!.push(line) });
+  const second = await read("b.wav", { language: "fr", onStderrLine: line => lines[1]!.push(line) });
   expect(second).toEqual({ pid: first.pid, served: 2, language: "fr" });
   expect(lines).toEqual([["crisperwhisper device = mps", "progress = 50%"], ["crisperwhisper device = mps"]]);
   // Requests made together are read one after another, by the same worker.
   const together = await Promise.all([read("c.wav"), read("d.wav"), read("e.wav")]);
   expect(together.map(r => [r.pid, r.served])).toEqual([[first.pid, 3], [first.pid, 4], [first.pid, 5]]);
+});
+
+it("keeps a request's last stderr lines with it when its reply arrives first, and starts the next after them", async () => {
+  const lines: string[][] = [[], []];
+  const late = read("late.wav", { progress: true, onStderrLine: line => lines[0]!.push(line) });
+  const next = read("b.wav", { onStderrLine: line => lines[1]!.push(line) });
+  const [first, second] = await Promise.all([late, next]);
+  expect(second.pid).toBe(first.pid);
+  expect(lines).toEqual([["crisperwhisper device = mps", "progress = 50%"], ["crisperwhisper device = mps"]]);
+});
+
+it("takes the reply alone as the end of a request from an adapter from before the stderr marker", async () => {
+  const first = await read("old.wav");
+  const second = await read("a.wav");
+  expect(second).toMatchObject({ pid: first.pid, served: 2 });
 });
 
 it("reports a reading that fails with the adapter's reason, and starts the next request in a new worker", async () => {

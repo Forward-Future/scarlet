@@ -347,9 +347,15 @@ cli.main()
             worker = subprocess.run([sys.executable, "-I", "-B", "-c", driver, str(adapter.parent), str(model)],
                                     input=requests, capture_output=True, text=True, timeout=30)
             replies = [json.loads(line) for line in worker.stdout.splitlines()]
-            self.assertEqual(replies, [{"id": 0, "ok": True}, {"id": 1, "ok": True}, {"id": 2, "ok": True},
-                                       {"id": 3, "error": "the decoder broke"}])
+            self.assertEqual(replies, [{"id": 0, "ok": True, "stderr_end": True}, {"id": 1, "ok": True, "stderr_end": True},
+                                       {"id": 2, "ok": True, "stderr_end": True},
+                                       {"id": 3, "error": "the decoder broke", "stderr_end": True}])
             self.assertEqual(worker.returncode, 1)
+            # Each request's stderr ends with its own marker, after everything written for it.
+            ends = [line for line in worker.stderr.splitlines() if line.startswith("scarlet-crisper-end")]
+            self.assertEqual(ends, [f"scarlet-crisper-end {i}" for i in range(4)])
+            self.assertLess(worker.stderr.index("progress = 100%"), worker.stderr.index("scarlet-crisper-end 1"))
+            self.assertGreater(worker.stderr.index("progress = 100%"), worker.stderr.index("scarlet-crisper-end 0"))
             self.assertIn("a library writing to stdout", worker.stderr)
             self.assertIn("and one writing to its descriptor", worker.stderr)
             # Progress only for the request that asked for it.

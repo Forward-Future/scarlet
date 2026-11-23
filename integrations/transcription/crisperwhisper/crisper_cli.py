@@ -457,7 +457,11 @@ def serve(model, threads, requests=sys.stdin):
     """Answer requests, one JSON line each on stdin, until stdin closes: {"id", "wav", "out", "language", "progress"}
     writes `out`.json as a run with `-f wav -of out` does, and one JSON line goes back on stdout, {"id", "ok": true}
     or {"id", "error"}. Anything else the libraries print goes to stderr. A request that fails ends the worker, so the
-    next starts with nothing left over from it."""
+    next starts with nothing left over from it.
+
+    Before each reply, the line `scarlet-crisper-end <id>` closes the request's stderr, and the reply says so with
+    "stderr_end": true. The engine reads the two pipes separately, and on Windows the reply often arrives first: it
+    waits for both, so a request's last progress lines stay with it rather than going to the next request."""
     global progress_wanted
     replies = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8")
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
@@ -466,8 +470,9 @@ def serve(model, threads, requests=sys.stdin):
     cache, torch, load_audio = prepare_runtime(model, threads)
 
     def reply(**fields):
+        sys.stderr.write(f"scarlet-crisper-end {fields.get('id')}\n")
         sys.stderr.flush()
-        replies.write(json.dumps(fields, ensure_ascii=False) + "\n")
+        replies.write(json.dumps({**fields, "stderr_end": True}, ensure_ascii=False) + "\n")
         replies.flush()
 
     while True:
