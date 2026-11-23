@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { FEATURE_NAMES, type TelemetryUnavailable } from "@scarlet/shared";
 import appIcon from "../../../../desktop/src-tauri/icons/128x128@2x.png";
-import { api, errorMessage } from "../../lib/client";
-import { desktop } from "../../lib/desktop";
+import { api, errorMessage, IS_MOCK } from "../../lib/client";
+import { desktop, isDesktop } from "../../lib/desktop";
+import { fileBaseName } from "../../lib/format";
+import { exportLogsAndReport, openProblemReport } from "../../lib/reportProblem";
 import { Icon, InlineError, Loading, Toggle } from "../ui/primitives";
 import { Changelog } from "./Changelog";
 import { UpdateSettings } from "./UpdateSettings";
@@ -27,7 +29,8 @@ export function AboutSettings() {
       </div>
       <div className="about-content">
         <Changelog />
-        <div>
+        <div className="about-sidebar">
+          <ReportProblemCard />
           <section className="card about-telemetry" aria-labelledby="telemetry-heading">
             <h2 id="telemetry-heading">Usage telemetry</h2>
             <TelemetrySwitch />
@@ -55,6 +58,74 @@ export function AboutSettings() {
           <ModelCredit />
         </div>
       </div>
+    </section>
+  );
+}
+
+function ReportProblemCard() {
+  const canExportLogs = isDesktop() && !IS_MOCK;
+  const [busy, setBusy] = useState(false);
+  const [savedPath, setSavedPath] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  async function reportWithLogs() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await exportLogsAndReport();
+      if (result) setSavedPath(result.path);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reportDirect() {
+    setBusy(true);
+    setError("");
+    try {
+      await openProblemReport();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card about-telemetry" aria-labelledby="report-problem-heading">
+      <h2 id="report-problem-heading">Report a problem</h2>
+      <p>
+        {canExportLogs
+          ? "Save a log zip (no videos, projects or sign-ins) and open a GitHub issue you can drop it into."
+          : "Open a GitHub issue with your Scarlet version filled in."}
+      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {canExportLogs ? (
+          <>
+            <button className="btn-primary" disabled={busy} onClick={() => void reportWithLogs()}>
+              {busy ? "Preparing…" : "Report a problem…"}
+            </button>
+            <button className="btn-quiet" disabled={busy} onClick={() => void reportDirect()}>
+              Open without logs
+            </button>
+          </>
+        ) : (
+          <button className="btn-primary" disabled={busy} onClick={() => void reportDirect()}>
+            Report a problem
+          </button>
+        )}
+      </div>
+      {savedPath && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-2 text-[12px]" role="status">
+          <span className="truncate" title={savedPath}>Saved {fileBaseName(savedPath)}. Drag it into the GitHub issue.</span>
+          <button className="btn-quiet" onClick={() => void desktop.revealPath(savedPath).catch(e => setError(errorMessage(e)))}>
+            Show in folder
+          </button>
+        </div>
+      )}
+      <InlineError><span data-log-private>{error}</span></InlineError>
     </section>
   );
 }
