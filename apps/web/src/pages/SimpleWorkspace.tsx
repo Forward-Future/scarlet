@@ -1,10 +1,8 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { ChatRail } from "../components/shell/ChatRail";
-import { ConnectionStatus } from "../components/shell/StatusIndicators";
-import { Dropdown, MenuItem } from "../components/shell/WorkspaceNavigation";
 import { appliedReviewChange, timelineDuration, type Change, type CutAssessment, type TimeRange } from "@scarlet/timeline";
 import { isAsideTask, fullRenderContext, isProjectEditTask, matchesEdit, queueOrder, queueWaits, requestText, threadEditList, type EditRef, type LearningDecision, type Task, type ThreadEdit } from "@scarlet/shared";
 import { editGroups, useDeferred, useReviewed, useRevising } from "../components/review/ThreadEdits";
@@ -12,12 +10,12 @@ import { QueueTray, useRewordingHold, type QueuedRequest } from "../components/c
 import { recordEditReview } from "../lib/editReviews";
 import { recordUndo, undoLast } from "../lib/undo";
 import { deferEdits, editKey, keepEdits } from "../lib/keptEdits";
-import { AgentChip, resumeRunChoice, useAgentAvailability } from "../components/agent/AgentChip";
+import { resumeRunChoice, useAgentAvailability } from "../components/agent/AgentChip";
 import type { PausedAt } from "../components/agent/Composer";
 import { useImportTranscription } from "../components/media/TranscriptionAction";
 import { Dropzone, useImportCount, useUploader } from "../components/media/UploadDropzone";
 import { MediaDrawer } from "../components/media/MediaDrawer";
-import { CachingMenuItem, MediaButton, useVideoCaching } from "../components/media/MediaMenuItems";
+import { useVideoCaching } from "../components/media/MediaMenuItems";
 import { LearningsPanel, learningsToReview } from "../components/review/LearningsPanel";
 import { usePlaybackCache } from "../components/player/usePlaybackCache";
 import { focusAround } from "../components/player/SimpleProgress";
@@ -28,9 +26,8 @@ import { editDetail } from "../lib/editDetail";
 import { editSource } from "../components/review/EditSource";
 import { useReviewTimeline } from "../components/review/useReviewTimeline";
 import { ExportSheet } from "../components/review/ExportVideo";
-import { ExportButton } from "../components/review/ExportMenuItem";
 import { useThreadTimeline } from "../components/review/useThreadTimeline";
-import { Icon, Loading } from "../components/ui/primitives";
+import { Loading } from "../components/ui/primitives";
 import { api, errorMessage } from "../lib/client";
 import { readTimeline } from "../lib/timelineCache";
 import { appLog } from "../lib/appLog";
@@ -58,6 +55,8 @@ import { EditHoverContext, type TimelineDot, type TimelineGap } from "../compone
 import { aimedAtChange, approves, belongsTo, firstKey, isWorking, noEdits, noop, shortTitle, stepsOver, tagOf,
   type ChatActions, type HoveredReviewRow, type Listening, type LocatedReview, type OpenList, type OpenPass, type Panel, type PassList, type ReportReviewMarkers } from "./simple/types";
 import { WorkspaceComposer } from "./simple/WorkspaceComposer";
+import { SimpleHeader } from "./simple/SimpleHeader";
+import { TranscriptRail } from "./simple/TranscriptRail";
 import { savedRewording, saveRewording } from "./simple/rewordingStorage";
 import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError } from "./simple/ReviewCards";
 import { TimelineWorking } from "../components/review/TimelineWorking";
@@ -76,11 +75,6 @@ function subscribeWidth(update: () => void) {
 const simpleRailWidth = (available: number) => Math.max(380, Math.min(480, available * 0.32));
 /** The narrowest the chat stays usable at. */
 const SIMPLE_RAIL_MIN = 320;
-/** The Transcript's column beside the player: wide enough for a few lines of words, never more of the window than the chat. */
-const transcriptRailWidth = (available: number) => Math.max(300, Math.min(400, available * 0.26));
-const TRANSCRIPT_RAIL_MIN = 260;
-
-const TranscriptPane = lazy(async () => ({ default: (await import("../components/transcript/TranscriptPane")).TranscriptPane }));
 
 /**
  * The workspace: speak or type an edit, then watch each change with Before and After.
@@ -2193,32 +2187,9 @@ export function SimpleWorkspace() {
         onPaths={paths => { void uploads.startPaths(paths); setPanel("media"); }}
         onFiles={files => { uploads.start(files); setPanel("media"); }}>
         <ChatRail compact={compact} id="simple-chat" className="simple-rail" label="Chat" storageKey="scarlet.simpleChatWidth" initialWidth={simpleRailWidth} minWidth={SIMPLE_RAIL_MIN}>
-          <header className="simple-header">
-            <Link to="/" className="simple-back" onClick={() => player.pause()} title="All projects" aria-label="All projects">
-              <span className="rotate-180 inline-flex"><Icon name="arrow" size={13} /></span></Link>
-            <h1 title={current.project.name}>{current.project.name}</h1>
-            <ConnectionStatus />
-            {/* The menu's button is marked when something inside needs the editor, and the row that does carries the
-                same mark. Media, Export and Model mark their own header buttons. */}
-            <div className="simple-tools">
-              <MediaButton importing={importing} importFailed={importFailed} onOpen={() => setPanel("media")} />
-              <ExportButton onOpen={() => setPanel("export")} />
-              <AgentChip variant="header" direction="down" threadInput={replyThread ? replyThread.question ? "answer" : "reply" : undefined} />
-              <Dropdown label="More" align="right" width={240} description={menuSays || undefined}
-                button={<span className={`btn-icon simple-more${menuSays ? " needs-you" : ""}`} title={menuSays || "More"}>
-                  <Icon name="more" /></span>}>
-                {close => <>
-                  <MenuItem onClick={() => { close(); setLearnFocus(undefined); setPanel("learnings"); }} title={toLearn ? `${plural(toLearn, "rule")} to review` : undefined}>
-                    <Icon name="bulb" />Learnings{toLearn > 0 && <span className="menu-dot" role="img" aria-label={`${plural(toLearn, "rule")} to review`} />}</MenuItem>
-                  <CachingMenuItem close={close} />
-                  <MenuItem onClick={() => { close(); setTranscript(v => !v); }}><Icon name="diff" />{transcript ? "Hide transcript" : "Transcript"}</MenuItem>
-                  <div role="separator" className="my-1 border-t border-line" />
-                  <MenuItem onClick={() => { close(); useUiStore.getState().setProjectSettingsOpen(true); }}><Icon name="monitor" />Project settings</MenuItem>
-                  <MenuItem to="/settings" onClick={close}><Icon name="settings" />App settings</MenuItem>
-                </>}
-              </Dropdown>
-            </div>
-          </header>
+          <SimpleHeader projectName={current.project.name} importing={importing} importFailed={importFailed}
+            threadInput={replyThread ? replyThread.question ? "answer" : "reply" : undefined} menuSays={menuSays} toLearn={toLearn}
+            transcript={transcript} setTranscript={setTranscript} setPanel={setPanel} openLearnings={() => { setLearnFocus(undefined); setPanel("learnings"); }} />
           {panel === "learnings" && <LearningsPanel focus={learnFocus} onOpenDecision={openDecision} onClose={() => { setPanel(null); setLearnFocus(undefined); }} />}
           {/* A pause of caching isn't said here: the editor chose it, and the menu's Resume caching row says it. */}
           {(importFailed || menuError) && <div className="simple-banner" role="status">
@@ -2281,20 +2252,8 @@ export function SimpleWorkspace() {
             <button type="button" className="btn-ghost" onClick={backToVideo}>Back to the video</button>
           </div>}
         </div>
-        {/* The Transcript is its own column on the right of the player, so the chat stays in view beside it. */}
-        {transcript && <ChatRail compact={compact} id="simple-transcript" className="simple-transcript-rail" label="Transcript" side="right" resizes="transcript"
-          storageKey="scarlet.simpleTranscriptWidth" initialWidth={transcriptRailWidth} minWidth={TRANSCRIPT_RAIL_MIN} maxWidth={available => available * 0.4}>
-          {/* Headed as the chat is: its name, and the × that closes it. */}
-          <header className="simple-header"><h1 title={source?.name}>Transcript{source && <span className="simple-header-sub"> · {source.name}</span>}</h1>
-            <button type="button" className="btn-icon" aria-label="Close transcript" title="Close transcript (Esc)"
-              onClick={() => setTranscript(false)}><Icon name="x" /></button></header>
-          <div className="simple-transcript"><Suspense fallback={<Loading label="Opening transcript…" />}>
-            {/* An applied cut plays on the version before it, so its transcript is that version's: the working cut's
-                would highlight and seek early by everything the pass took out before that point. */}
-            <TranscriptPane key={source?.id ?? (appliedCut ? beforeCut!.version : draftVersion) ?? head} draft={appliedCut ? beforeTimeline : draft} source={source}
-              onAsk={askAbout} />
-          </Suspense></div>
-        </ChatRail>}
+        {transcript && <TranscriptRail compact={compact} paneKey={source?.id ?? (appliedCut ? beforeCut!.version : draftVersion) ?? head}
+          draft={appliedCut ? beforeTimeline : draft} source={source} onAsk={askAbout} onClose={() => setTranscript(false)} />}
       </Dropzone>
     </main>
     {panel === "media" && <MediaDrawer uploads={uploads} notice={local ? undefined : notice}
