@@ -18,11 +18,11 @@ import type { Thread } from "../../lib/threads";
 import { useProjectStore } from "../../stores/project";
 import { commandSkillIds, enabledSkills, useSkillsStore } from "../../stores/skills";
 import { editTargetAt, markedRangeOf, pointOf, playheadPoints, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
-import { Icon, Spinner, InlineError } from "../ui/primitives";
+import { Icon, Spinner, InlineError, type IconName } from "../ui/primitives";
 import { AgentChip, runChoiceDiffers, useAgentAvailability } from "./AgentChip";
 import { SkillCommandInput } from "./SkillCommandInput";
 import { MicButton } from "./MicButton";
-import { ComposerAim, type AimItem } from "./ComposerAim";
+import { AimTimecode, ComposerAim, type AimItem } from "./ComposerAim";
 import { AttachedFiles, NO_FILES, PlayheadClock, sendMarks } from "./ComposerAttachments";
 
 const timestampLabel = (time: number) => playbackClock(time).replace(/\.000$/, "");
@@ -398,31 +398,58 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     if (onClearTarget) onClearTarget(); else setContext("whole");
     inputRef.current?.focus();
   };
-  // Paused with a cut or an edit open, the tag shows the one time the editor is looking at: where they stopped. Its full
-  // name still says which cut or edit the message goes to.
+  // Paused with a cut or an edit open, show the stopped frame alongside the target so the editor sees both which
+  // cut/edit the revision targets and which frame it carries as context.
   // A call's tag keeps its number: the playhead's time is beside it already.
   const stopped = replying && !targetIsPoint && pausedAt && aimTime === undefined ? playbackClock(pausedAt.time) : undefined;
   const exactTime = targetTime !== undefined ? targetTime
     : displayAnchor && placeTag && (placeTag.endsWith(` at ${clock(displayAnchor.time)}`) || placeTag === `At ${clock(displayAnchor.time)}`)
       ? displayAnchor.time : undefined;
-  const placeDisplay = (() => {
-    if (stopped) return stopped;
+  const expandedPlaceTag = (() => {
     if (!placeTag) return undefined;
-    const stripped = placeTag.replace(/^(?:(?:Cut|Edit) at|At) /, "");
-    if (exactTime === undefined) return stripped;
+    if (exactTime === undefined) return placeTag;
     const whole = clock(exactTime);
     const full = playbackClock(exactTime);
-    if (stripped === whole) return full;
-    if (stripped.endsWith(` at ${whole}`)) return `${stripped.slice(0, -whole.length)}${full}`;
-    return stripped;
+    if (placeTag === `At ${whole}`) return `At ${full}`;
+    if (placeTag.endsWith(` at ${whole}`)) return `${placeTag.slice(0, -whole.length)}${full}`;
+    return placeTag;
+  })();
+  const placeIcon: IconName | undefined = !placeTag ? undefined
+    : targetIsPoint ? "point"
+    : /^Cut\b/.test(placeTag) ? "scissors"
+    : "film";
+  const placeDisplay: ReactNode = (() => {
+    if (!expandedPlaceTag) return undefined;
+    const pausedSuffix = (targetClock?: string) => stopped && stopped !== targetClock
+      ? <><span className="composer-aim-sep" aria-hidden="true"> · </span><span className="composer-aim-verb">paused at</span> <AimTimecode value={stopped} /></>
+      : null;
+    if (targetIsPoint) {
+      const at = expandedPlaceTag.replace(/^At /, "");
+      return <><span className="composer-aim-verb">New edit at</span> <AimTimecode value={at} /></>;
+    }
+    const atMatch = expandedPlaceTag.match(/^(Cut|Edit|\d+ edits) at (.+)$/);
+    if (atMatch) {
+      const noun = atMatch[1]!.toLowerCase();
+      const at = atMatch[2]!;
+      return <><span className="composer-aim-verb">Revising {noun} at</span> <AimTimecode value={at} />{pausedSuffix(at)}</>;
+    }
+    if (/^(Cut|Edit) \d+$/.test(expandedPlaceTag)) {
+      return <><span className="composer-aim-verb">Revising</span> <span className="composer-aim-target">{expandedPlaceTag}</span>{pausedSuffix()}</>;
+    }
+    if (expandedPlaceTag === "Whole edit") {
+      return <><span className="composer-aim-verb">Revising</span> <span className="composer-aim-target">whole edit</span>{pausedSuffix()}</>;
+    }
+    return <><span className="composer-aim-verb">{tagAct ?? expandedPlaceTag}</span>{pausedSuffix()}</>;
   })();
   const aimItems: AimItem[] = [
     ...placeTag ? [{ key: `target:${placeTag}`, name: targetIsPoint ? placeTag.replace(/^At /, "") : stopped ? `${placeTag}, stopped at ${stopped}` : placeTag,
       displayName: placeDisplay,
+      icon: placeIcon,
       clearLabel: targetIsPoint ? `Take “${placeTag}” off: the message is about the whole video` : `Start a new edit instead of ${tagAct!.charAt(0).toLowerCase()}${tagAct!.slice(1)}`,
       onClear: takeOffTarget }] : [],
     ...marked ? [{ key: `range:${marked.start}/${marked.end}`, name: `Range ${markedWords}`,
-      displayName: markedWords.replace(" – ", "–"),
+      displayName: <><span className="composer-aim-verb">Range</span> <AimTimecode value={markedWords.replace(" – ", "–")} /></>,
+      icon: "trim" as const,
       clearLabel: `Take the marked range ${markedWords} off the message`, onClear: () => {
         const was = context && context !== "whole" ? context : undefined;
         setContext(withMarkedRange(context, undefined), was?.changeId ? was : undefined);
@@ -457,12 +484,12 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         {modelPicker && <div className="composer-model"><AgentChip threadInput={thread ? question ? "answer" : "reply" : undefined} /></div>}
       </div>
       {tray}
-      {/* Where the message goes (a cut, an edit, a moment, a stretch marked on the ruler) is a line of its own on top of
-          the box, under the queue's tray, so the box keeps its whole width for the words. */}
+      {/* Where the message goes (a cut, an edit, a moment, a stretch marked on the ruler) is a flush context header
+          on top of the box, under the queue's tray, so the box keeps its whole width for the words. */}
       {primaryAim && <div className="composer-aim-line">
-        <ComposerAim items={[primaryAim, ...additionalAims]} disabled={recording || heard} disabledReason="Waits until what you’re saying is sent" />
-        {/* A call's tag is its number, so the line says where its cut is and where the playhead is now. */}
-        {aimTime !== undefined && placeTag && <span className="composer-aim-when">at {playbackClock(aimTime)} · <PlayheadClock /></span>}
+        <ComposerAim items={[primaryAim, ...additionalAims]}
+          detail={aimTime !== undefined && placeTag ? <span className="composer-aim-when">at {playbackClock(aimTime)} · <PlayheadClock /></span> : undefined}
+          disabled={recording || heard} disabledReason="Waits until what you’re saying is sent" />
       </div>}
       {(attached.length > 0 || markedFrame) && <AttachedFiles files={attached} onRemove={key => { detach(project.id, key); inputRef.current?.focus(); }}
         marked={markedFrame} onOpenMarked={frame => {
@@ -505,7 +532,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
               title={recording || heard ? "Waits until what you’re saying is sent" : "New edit instead"} onClick={takeOffTarget}><Icon name="x" size={10} /></button>
           </span>}
           <SkillCommandInput key={owner} id={inputId} inputRef={inputRef} value={value} skills={skills}
-            placeholder={rewording ? "What should it ask instead?" : question ? "Answer Scarlet…" : wordTag === "Note" ? "Add a note for Scarlet…" : displayAnchor?.changeId && context ? "What should change?" : replying ? "Write a follow-up…" : NEW_EDIT_HINT}
+            placeholder={rewording ? "What should it ask instead?" : question ? "Answer Scarlet…" : wordTag === "Note" ? "Add a note for Scarlet…" : displayAnchor?.changeId && context ? (stopped ? "What should change at this frame?" : placeTag ? "What should change here?" : "What should change?") : replying ? "Write a follow-up…" : NEW_EDIT_HINT}
             timestamps={sameClock ? times : undefined} onTimestamp={inputClock?.seek} onChange={changeText} onSubmit={() => void submitText()} />
           {/* The reason is only for a mic with no agent to talk to. While a message sends or is written down the spinner says why. */}
           <MicButton onResult={(r) => void onVoice(r)} onStart={() => {

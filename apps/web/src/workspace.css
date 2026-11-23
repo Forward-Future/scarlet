@@ -87,36 +87,34 @@
 /* What the message revises, as a tag inside the box before the text. Its × makes the message a new edit. */
 .composer-tag { flex: none; align-self: center; display: inline-flex; align-items: center; gap: 3px; max-width: 55%; margin-right: 4px; padding: 0 2px 0 7px;
   border: 1px solid var(--color-line); border-radius: 4px; font-size: 11.5px; line-height: 20px; color: var(--color-muted); white-space: nowrap; }
-.composer-aim { flex: 0 1 auto; align-self: flex-start; display: flex; align-items: center;
-  min-width: 0; max-width: 48%; min-height: 26px; margin-top: 3px; padding: 0 7px;
-  border: 1px solid var(--color-line); border-radius: 6px; background: var(--color-panel); color: var(--color-fg);
-  font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.composer-aim-button { flex: none; display: flex; align-items: center; gap: 2px; min-height: 22px; margin-inline-start: 3px; padding: 0 3px;
+.composer-aim { flex: 1 1 auto; display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  width: 100%; min-width: 0; min-height: 28px; padding: 0 2px 0 6px; border-radius: 6px;
+  color: var(--color-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.composer-aim:hover, .composer-aim:focus-within { background: var(--color-raised); }
+.composer-aim-main { flex: 1 1 auto; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.composer-aim-icon { flex: none; display: inline-grid; place-items: center; width: 14px; color: var(--color-dim); }
+.composer-aim:is(:hover, :focus-within) .composer-aim-icon { color: var(--color-muted); }
+.composer-aim-button { flex: none; display: flex; align-items: center; gap: 2px; min-height: 20px; padding: 0 4px;
   border: 0; border-radius: 4px; background: none; color: var(--color-muted); cursor: pointer; }
-.composer-aim-button:is(:hover, [aria-expanded="true"]) { background: var(--color-raised); color: var(--color-fg); }
+.composer-aim-button:is(:hover, [aria-expanded="true"]) { background: var(--color-line); color: var(--color-fg); }
 .composer-aim-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.composer-aim-verb { color: var(--color-muted); }
+.composer-aim-target { color: var(--color-fg); font-weight: 500; }
+.composer-aim-time { font-family: var(--font-mono, monospace); font-size: 11.5px; color: var(--color-fg); }
+.composer-aim-ms { opacity: .48; }
+.composer-aim-sep { color: var(--color-dim); }
 .composer-aim-button > svg { transform: rotate(90deg); }
 .composer-aim-button[aria-expanded="true"] > svg { transform: rotate(-90deg); }
 .composer-aim-card { position: absolute; z-index: 6; bottom: calc(100% + 8px); left: 0; min-width: min(176px, 100%); width: max-content;
   max-width: 100%; padding: 4px; border: 1px solid var(--color-line); border-radius: 8px; background: var(--color-panel);
   box-shadow: 0 6px 20px #0005; }
 .composer-aim-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-left: 7px;
-  color: var(--color-fg); font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.composer-aim-clear { flex: none; display: inline-grid; place-items: center; width: 26px; height: 28px; padding: 0; border: 0;
-  border-radius: 5px; background: none; color: var(--color-muted); cursor: pointer; }
-.composer-aim > .composer-aim-clear { width: 20px; min-width: 0; height: 22px; margin-inline-start: 3px; border-radius: 4px; overflow: hidden; }
-@media (hover: hover) and (pointer: fine) {
-  .composer-aim:not(:hover, :focus-within) > .composer-aim-clear {
-    width: 0; margin-inline-start: 0; opacity: 0; pointer-events: none; transition-delay: 0s;
-  }
-}
-@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
-  .composer-aim > .composer-aim-clear {
-    transition: width 160ms cubic-bezier(.2, .8, .2, 1), margin-inline-start 160ms cubic-bezier(.2, .8, .2, 1), opacity 100ms ease-out 30ms;
-  }
-}
-.composer-aim-clear:hover:not(:disabled) { background: var(--color-raised); color: var(--color-fg); }
-.composer-aim-clear:disabled { color: var(--color-dim); cursor: default; }
+  color: var(--color-fg); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.composer-aim-clear { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0;
+  border-radius: 5px; background: none; color: var(--color-dim); cursor: pointer; }
+.composer-aim:is(:hover, :focus-within) > .composer-aim-clear, .composer-aim-clear:focus-visible { color: var(--color-muted); }
+.composer-aim-clear:hover:not(:disabled) { background: var(--color-line); color: var(--color-fg); }
+.composer-aim-clear:disabled { color: var(--color-dim); opacity: .5; cursor: default; }
 /* Hover or focus on the target lights what the message is about on the timeline. */
 .timeline-range.is-lit { box-shadow: 0 0 0 2px rgba(244, 241, 233, .4); }
 .simple-timeline-band.is-lit { box-shadow: 0 0 0 2px rgba(255, 160, 156, .55); }
@@ -554,13 +552,12 @@
   border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); font-size: 12.5px; color: var(--color-muted); }
 .composer-files + .composer-box { border-top-left-radius: 0; border-top-right-radius: 0; }
 .queue-tray + :is(.composer-files, .composer-aim-line), .composer-aim-line + .composer-files { border-radius: 0; }
-/* Where the message goes is the line on top of the box, read as the tray's lines are, its tag at the left. */
+/* Where the message goes is a flush context row on top of the box, read as attached-file rows are. */
 .composer-aim-line { position: relative; display: flex; align-items: center; min-width: 0; min-height: 30px; margin-bottom: calc(-1 * var(--model-row-gap, 9px));
-  padding: 2px 4px 2px 6px; border: 1px solid var(--color-line); border-bottom: 0; border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); }
+  padding: 2px 4px; border: 1px solid var(--color-line); border-bottom: 0; border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); }
 .composer-aim-line + .composer-box { border-top-left-radius: 0; border-top-right-radius: 0; }
-.composer-aim-line > .composer-aim { align-self: center; max-width: 100%; min-height: 24px; margin-top: 0; }
 /* After a call's tag: where its cut is and where the playhead is now. "at 2:47.200 · Playhead 2:57.400". */
-.composer-aim-when { flex: 0 1 auto; min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.composer-aim-when { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .composer-file { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 30px; padding: 0 4px 0 6px; border-radius: 6px; }
 .composer-file:hover, .composer-file:focus-within { background: var(--color-raised); color: var(--color-fg); }
 .composer-file-icon { flex: none; display: inline-grid; place-items: center; width: 16px; color: var(--color-dim); }
