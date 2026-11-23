@@ -945,16 +945,20 @@ export function SimpleWorkspace() {
   const cutWaits = !!beforeCut && !beforeTimeline;
   // On After the pass's other cuts are out of the media: they grey out, and a click plays one in Before from that point.
   // The grey and its name already say After skips it, so the hover note only says how much it took and Scarlet's words for it.
-  // On Before they play, so they're only outlined.
-  const gaps: TimelineGap[] = otherEdits.map(({ at, label, removed }) => ({ start: removed.start, end: removed.end,
+  // On Before they play, so they're only outlined; clicking one opens its edit instead of scrubbing.
+  const gaps: TimelineGap[] = otherEdits.map(({ at, label, removed, edit }) => ({ start: removed.start, end: removed.end,
     title: `Cut at ${at} · ${lengthLabel(removed.end - removed.start)}`, summary: label, label: `Cut at ${at}`, shortLabel: at,
-    skipped: appliedSide === "after" }));
+    skipped: appliedSide === "after",
+    open: edit && focusThread ? () => actions.openEdit(focusThread, edit, undefined, true) : undefined }));
   // A call shown where the cuts around it still have their footage marks them the same way, by their time on the
   // working cut and with Scarlet's words for the one that made each.
   const callGaps: TimelineGap[] | undefined = callView?.shown.map(({ at, removed }) => {
-    const made = [...locatedPassEdits ?? [], ...threadEdits].find(e => e.beforeCut && e.at !== undefined && Math.abs(e.at - at) < 1.5 / fps);
-    return { start: removed.start, end: removed.end, title: `Cut at ${clockLabel(at)} · ${lengthLabel(removed.end - removed.start)}`, summary: made?.label,
-      label: `Cut at ${clockLabel(at)}`, shortLabel: clockLabel(at), skipped: listening?.side === "after" };
+    const made = [...(locatedPassEdits ?? []).map(edit => ({ edit, thread: passThread })),
+      ...threadEdits.map(edit => ({ edit, thread: focusThread }))]
+      .find(({ edit }) => edit.beforeCut && edit.at !== undefined && Math.abs(edit.at - at) < 1.5 / fps);
+    return { start: removed.start, end: removed.end, title: `Cut at ${clockLabel(at)} · ${lengthLabel(removed.end - removed.start)}`, summary: made?.edit.label,
+      label: `Cut at ${clockLabel(at)}`, shortLabel: clockLabel(at), skipped: listening?.side === "after",
+      open: made?.thread ? () => actions.openEdit(made.thread!, made.edit, undefined, true) : undefined };
   });
   const hearInBefore = (gap: TimelineGap, time: number) => {
     if (callGaps) return hearGapInCall(gap, time);
