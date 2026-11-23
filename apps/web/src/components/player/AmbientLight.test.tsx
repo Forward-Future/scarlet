@@ -228,3 +228,41 @@ it("keeps ambient light alive from a loaded [data-ambient-source] still while no
   expect(canvas.dataset.lit).toBe("false");
   await act(async () => root.unmount());
 });
+
+it("applies saturation and brightness directly on the output canvas pixels instead of relying on CSS filters", async () => {
+  // One opaque pixel (200, 100, 50, 255) and one transparent pixel (10, 20, 30, 0).
+  const pixels = new Uint8ClampedArray([200, 100, 50, 255, 10, 20, 30, 0]);
+  const put = vi.fn();
+  const context = {
+    globalAlpha: 1,
+    globalCompositeOperation: "source-over",
+    clearRect: vi.fn(),
+    fillRect() {},
+    drawImage() {},
+    getImageData: () => ({ data: pixels, width: 2, height: 1 }),
+    putImageData: put,
+  };
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
+  const stage = document.createElement("section"), monitor = document.createElement("div");
+  Object.defineProperty(stage, "clientWidth", { value: 1000 });
+  Object.defineProperty(stage, "clientHeight", { value: 800 });
+  stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 800, right: 1000, bottom: 800, x: 0, y: 0, toJSON() {} });
+  const video = readyVideo();
+  monitor.append(video);
+  document.body.append(stage);
+  stage.append(monitor);
+  const stageRef = createRef<HTMLElement>(), monitorRef = createRef<HTMLDivElement>();
+  (stageRef as { current: HTMLElement | null }).current = stage;
+  (monitorRef as { current: HTMLDivElement | null }).current = monitor;
+  const host = document.createElement("div");
+  stage.prepend(host);
+  const root = createRoot(host);
+
+  await act(async () => root.render(<AmbientLight stage={stageRef} monitor={monitorRef} />));
+  expect(put).toHaveBeenCalledTimes(1);
+  // lum = 0.2126*200 + 0.7152*100 + 0.0722*50 = 117.65; saturate(1.4) -> (232.94, 92.94, 22.94); * 0.8 -> (186, 74, 18).
+  expect([...pixels.slice(0, 4)]).toEqual([186, 74, 18, 255]);
+  // Transparent pixels are untouched.
+  expect([...pixels.slice(4, 8)]).toEqual([10, 20, 30, 0]);
+  await act(async () => root.unmount());
+});

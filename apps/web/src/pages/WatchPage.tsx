@@ -608,22 +608,24 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
         <div ref={monitor} className="watch-monitor" data-landscape={pictureAspect > 1 || undefined}
           style={{ "--picture-aspect": pictureAspect } as CSSProperties}
           onLoadedMetadataCapture={readSourceSize}>
-          {layers.map(({ key, layer, before, beforeUrl, beforeWindow, edited, afterWindow, leadIn, showBefore, showAfter }) => <div key={layer} className="absolute inset-0"
-            inert={!showBefore && !showAfter} data-parked={(!showBefore && !showAfter) || undefined}
-            style={{ isolation: "isolate", zIndex: showBefore || showAfter ? 0 : -1 }} aria-hidden={(!showBefore && !showAfter) || undefined}>
-            {before && (showBefore || allowStandby) && <div key={`before ${key}`} className="absolute inset-0 bg-black" inert={!showBefore} data-parked={!showBefore || undefined}
-              style={{ zIndex: showBefore ? 1 : 0 }} aria-hidden={!showBefore || undefined}>
-              <CutSide project={current.project} timeline={before} url={beforeUrl} window={beforeWindow}
-                label={draftVersion ? "Proposed draft" : "The video"} fps={settings.fps} active={active} parkedAt={!showBefore ? leadIn : undefined} />
-            </div>}
-            {edited && (showAfter || allowStandby) && <div key="after" className="absolute inset-0 bg-black" inert={!showAfter} data-parked={!showAfter || undefined}
-              style={{ zIndex: showAfter ? 1 : 0 }} aria-hidden={!showAfter || undefined}>
-              <CutSide key={edited.joined.version} project={current.project} timeline={edited.joined.timeline} url={edited.url} window={afterWindow}
-                joins={edited.joined.clock} label={edited.url ? "The video" : "Proposed draft"} fps={settings.fps} active={active}
-                parkedAt={!showAfter ? edited.joined.clock.toMedia(leadIn) : undefined} />
-            </div>}
-            {!showBefore && !showAfter && <div key="cover" className="absolute inset-0 z-10 bg-black" />}
-          </div>)}
+          {layers.map(({ key, layer, before, beforeUrl, beforeWindow, edited, afterWindow, leadIn, showBefore, showAfter }) => {
+            const shown = showBefore || showAfter;
+            return <div key={layer} className="absolute inset-0"
+              inert={!shown} data-parked={!shown || undefined}
+              style={{ isolation: "isolate", zIndex: shown ? 0 : -1, ...!shown && { opacity: 0, pointerEvents: "none" } }} aria-hidden={!shown || undefined}>
+              {before && (showBefore || allowStandby) && <div key={`before ${key}`} className="absolute inset-0" inert={!showBefore} data-parked={!showBefore || undefined}
+                style={{ zIndex: showBefore ? 1 : 0, ...!showBefore && { opacity: 0, pointerEvents: "none" } }} aria-hidden={!showBefore || undefined}>
+                <CutSide project={current.project} timeline={before} url={beforeUrl} window={beforeWindow}
+                  label={draftVersion ? "Proposed draft" : "The video"} fps={settings.fps} active={active} parkedAt={!showBefore ? leadIn : undefined} />
+              </div>}
+              {edited && (showAfter || allowStandby) && <div key="after" className="absolute inset-0" inert={!showAfter} data-parked={!showAfter || undefined}
+                style={{ zIndex: showAfter ? 1 : 0, ...!showAfter && { opacity: 0, pointerEvents: "none" } }} aria-hidden={!showAfter || undefined}>
+                <CutSide key={edited.joined.version} project={current.project} timeline={edited.joined.timeline} url={edited.url} window={afterWindow}
+                  joins={edited.joined.clock} label={edited.url ? "The video" : "Proposed draft"} fps={settings.fps} active={active}
+                  parkedAt={!showAfter ? edited.joined.clock.toMedia(leadIn) : undefined} />
+              </div>}
+            </div>;
+          })}
           {!paired && (openingJoin || (draftVersion && !draft && !fullVideoUrl && !joined) ? <div className="absolute inset-0 grid place-content-center gap-2 text-sm text-muted" role="status">
             {draftFailed ? <>Couldn’t open this version.<button className="btn-ghost" onClick={onRetryDraft}>Retry</button></>
               : !openingJoin && "Opening the suggestion…"}
