@@ -238,9 +238,10 @@ it("names a run started with runOne in its heartbeats, and stops it when a heart
   expect(beats.slice(0, 2)).toEqual([[task.id], [task.id]]);
 
   state = "queued";
-  cancel = true;
   let aborted: unknown;
   await host(async (opts) => {
+    // Cancel only once the runner has started; an earlier heartbeat stops the task before calling it.
+    cancel = true;
     await new Promise<void>((resolve) => opts.signal?.addEventListener("abort", () => resolve(), { once: true }));
     aborted = opts.signal?.reason;
     return { ok: false, summary: "", error: "stopped" };
@@ -1230,7 +1231,16 @@ it("keeps the engine hearing from a request it runs on its own, through a long t
   const ended = await host.runOne("prj_test", { kind: "edit", agent: "claude", instruction: task.instruction });
   expect(ended.state).toBe("done");
   expect(srv.completes).toEqual([expect.objectContaining({ state: "done" })]);
-  const after = beats();
-  await delay(100);
-  expect(beats()).toBe(after);
+  // A heartbeat already sent when runOne returns, plus the one tick it held back, can still land after it ends.
+  const atEnd = beats();
+  let after = atEnd;
+  for (;;) {
+    await delay(100);
+    const now = beats();
+    if (now === after || now - atEnd > 2) {
+      expect(now).toBe(after);
+      break;
+    }
+    after = now;
+  }
 });
