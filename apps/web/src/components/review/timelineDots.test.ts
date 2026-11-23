@@ -88,6 +88,35 @@ describe("layoutMarks", () => {
     expect(new Set(same.map(m => m.key)).size).toBe(2);
   });
 
+  it("nudges the previous pill left when clamping the last pill inside the right edge would overlap it", () => {
+    // Two runs near the right end of a 1056 s (17:36) timeline on a 650 px track: together they exceed RUN_REACH, so
+    // "169–175" splits off at the edge. Clamping it inside the track must pull "150–168" left to preserve MARK_GAP.
+    const penultimate = Array.from({ length: 19 }, (_, i) => dot(854 + i * 9, 150 + i));
+    const tail = Array.from({ length: 7 }, (_, i) => dot(1024 + i * 5, 169 + i));
+    const layout = layoutMarks([...penultimate, ...tail], 0, 1056, 650);
+    expect(shapes(layout)).toEqual(["150–168", "169–175"]);
+    const [prev, last] = layout;
+    expect(last!.at / 100 * 650 + last!.width / 2).toBeLessThanOrEqual(650 + 1e-6);
+    expect((last!.at - prev!.at) / 100 * 650).toBeGreaterThanOrEqual(prev!.width / 2 + last!.width / 2 + 3 - 1e-6);
+    // "150–168" was nudged left from its natural midpoint to make room for the clamped tail pill.
+    expect(prev!.at).toBeLessThan((854 + 1016) / 2 / 1056 * 100);
+  });
+
+  it("nudges the next marker right when clamping the first pill inside the left edge would overlap it", () => {
+    // A pill centred near 0 s (width 31 px, half 15.5 px) clamps right to 15.5 px; an open edit just beyond its
+    // unclamped reach must move right so the clamped pill stays clear of it.
+    const marksAtStart: TimelineDot[] = [
+      dot(0.1, 1), dot(0.5, 2), dot(0.9, 3),
+      { ...dot(3.2, 4), current: true },
+    ];
+    const layout = layoutMarks(marksAtStart, 0, 100, 1000);
+    expect(shapes(layout)).toEqual(["1–3", "4"]);
+    const [first, second] = layout;
+    expect(first!.at / 100 * 1000 - first!.width / 2).toBeGreaterThanOrEqual(-1e-6);
+    expect((second!.at - first!.at) / 100 * 1000).toBeGreaterThanOrEqual(first!.width / 2 + second!.width / 2 + 3 - 1e-6);
+    expect(second!.at).toBeGreaterThan(3.2);
+  });
+
   it("draws circles before the track is measured", () => {
     expect(shapes(layoutMarks(marks.slice(0, 2), 0, 100, 0))).toEqual(["1", "2"]);
   });

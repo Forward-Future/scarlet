@@ -15,9 +15,11 @@ import { resolveTimeline } from "./timeline.js";
 /**
  * CLIs whose sessions Scarlet resumes after an answer, a quit or a pause of the project's editing. A Codex run keeps
  * its thread in a private Codex home beside its task folder, out of the user's own Codex thread list. Started afresh, a
- * pass resumed after a quit spent 120 more turns and 13.7M tokens finding its place again (2026-11-18).
+ * pass resumed after a quit spent 120 more turns and 13.7M tokens finding its place again (2026-11-18). agy keeps a
+ * Gemini session across its process (`session/resume`): two revisions restarted afresh after a quit measured their
+ * edges all over again, four more minutes each (2026-11-23).
  */
-export const RESUMABLE = new Set<string>(["claude", "codex"]);
+export const RESUMABLE = new Set<string>(["claude", "codex", "gemini"]);
 
 /** What a run hears when it carries on in its own CLI session after Scarlet closed on it. */
 const INTERRUPTED = "Scarlet closed while you were working on this request, and it is open again. Carry on from where you stopped. " +

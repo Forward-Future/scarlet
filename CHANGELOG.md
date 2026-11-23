@@ -21,6 +21,15 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Backspace in an empty box takes off an Answer tag too, a paused time leaves an open cut's tag once you play on and erase what you wrote, and opening an edit while you change a queued request's words no longer puts those words at risk.
 - After a click on Pause, a suggestion's line or the queue's heading, Space plays the video instead of pressing that control again.
 - At the narrowest chat a stopped request's Resume is no longer cut off, a list of edits above the message box no longer slides sideways, and a tall request there can't push the message box off the window.
+- Each request in the chat has a small arrow at its left that collapses it to one line, and expands it again.
+- Purple on a request now means one thing: its edits are the ones on the timeline. Click a request to pick it, running or finished, and click it again or press Esc to let go and see every request's edits on the timeline.
+- Edit-number pills near the start or end of the timeline no longer overlap the pill beside them.
+- An edit running on Gemini now picks up where it left off after Scarlet restarts, instead of starting its work over.
+- After Scarlet restarts, each request's list of edits comes back the way you left it, so a change you asked for on one edit stays under that edit's row.
+- Playing through the video no longer leaves faint vertical dashes along the timeline ruler.
+- During a dialogue pass, cuts Scarlet has checked and is sure of go into the video as it works, instead of waiting until you've answered every For you item, so the video you watch is the edit as it will be.
+- Rejecting an edit Scarlet has to put back itself now stays under that edit's row in the chat while Scarlet finishes, instead of jumping into a block of its own.
+- In See all, edits are grouped on one row only when they change the same part of the video: cuts a few seconds apart now each have their own row.
 - A stretch you mark on the timeline's ruler now stays while you play it, pause it and click around the timeline, so you can listen to it and adjust its ends. Esc takes it off.
 - In Media, “Tell Scarlet what this is” under a file lets you say what it is and how to use it, such as a finished sponsor read to drop in whole, and Scarlet leaves a file you add while it's editing alone unless you mention it.
 - Settings › General has Talking to you: write in your own words how Scarlet should talk to you in the chat and on its cards, the same in every project and with every model.

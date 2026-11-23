@@ -86,7 +86,8 @@ export interface OpenPass {
 }
 
 export type HoveredReviewRow = { threadId: string; editKey?: string; call?: number };
-type ReviewMarker = { edit: ThreadEdit; number: number; total: number };
+/** `state`: amber while it asks for a look, filled once kept, as its row in the chat says. */
+type ReviewMarker = { edit: ThreadEdit; number: number; total: number; state?: "check" | "kept" };
 export type LocatedReview = { head: string | null; markers: ReviewMarker[] };
 export type ReportReviewMarkers = (threadId: string, review?: LocatedReview) => void;
 
@@ -98,10 +99,14 @@ export interface ChatActions {
   showing?: ThreadEdit;
   /** The request whose own row opened the edit that's showing. Opened from a list or the timeline, there is none. */
   showingFrom?: string;
-  /** The request whose edits the timeline marks. Its band is a shade lighter. */
+  /** The request whose edits the timeline marks. Its band is deep violet. */
   marked?: string;
-  /** Put a request's edits on the timeline, from a press on its band. */
+  /** Pick a request, from a press on its band: its edits are the ones on the timeline. Pressed again, it lets go. */
   mark?(threadId: string): void;
+  /** The requests folded to their headings, by their run. */
+  collapsed?: ReadonlySet<string>;
+  /** Fold a request to its heading, or open it again, from the arrow at its heading's left. */
+  collapse?(run: string): void;
   /** Show the whole timeline, from a press on any request's band. */
   fitTimeline?(): void;
   pass?: OpenPass;

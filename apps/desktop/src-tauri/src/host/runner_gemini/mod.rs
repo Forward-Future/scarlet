@@ -1,9 +1,9 @@
 //! Gemini via Antigravity CLI (`agy acp`), speaking Agent Client Protocol (JSON-RPC 2.0) over stdio.
 //! Runs with `--sandbox` and an explicit `session/request_permission` handler: a request's agent may use agy's own
 //! shell, file and web tools inside its task folder as well as Scarlet's, and a side check only Scarlet's. Supports model selection,
-//! thinking level (`thought_level`) and token usage reporting. The runner can open a session again
-//! (`session/resume`), but the engine never asks it to: Gemini isn't among the agents it resumes, so an
-//! answer or an interruption starts a fresh run with the earlier questions and answers, or the recap.
+//! thinking level (`thought_level`) and token usage reporting. After an answer, a quit or a pause the engine
+//! asks it to open the run's session again (`session/resume`); a session agy can't open fails the attempt as
+//! `resume_failed`, and the run starts afresh with the recap.
 
 mod acp_parse;
 mod transcript;

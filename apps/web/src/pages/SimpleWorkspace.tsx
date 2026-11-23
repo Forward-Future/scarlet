@@ -42,7 +42,7 @@ import { usePlayerStore } from "../stores/player";
 import type { JoinClock } from "../lib/joinClock";
 import { buildThreads, firstCutDeliveries, isRedo, revisionTarget, stagedCuts, type Thread } from "../lib/threads";
 import { runIsActive } from "../lib/taskRun";
-import { lastAttempt, laterAttempts, notesStillAsked, redoWords, requestRoots, stagingTask, takenFromQueue, waitingToStart } from "../lib/requestRuns";
+import { lastAttempt, laterAttempts, notesStillAsked, redoWords, requestRoots, stagingTask, takenFromQueue, threadRuns, waitingToStart } from "../lib/requestRuns";
 import { callGoesTo, callRevisions, decidedPassCalls, isOpenPass, keepGoesTo, nextWaitingInForYou, noRevisions, openPass, passForYouOrder, passRevision, reviewCalls, revisedFrom, revisionCut, savedChoices, seeAllOrder,
   type Call, type CutChoice, type PassForYouItem } from "../lib/passCalls";
 import { callNow, carriedCall, carryingVersions, revisedCall } from "../lib/carriedCuts";
@@ -59,12 +59,13 @@ import { WorkspaceComposer } from "./simple/WorkspaceComposer";
 import { SimpleHeader } from "./simple/SimpleHeader";
 import { TranscriptRail } from "./simple/TranscriptRail";
 import { savedRewording, saveRewording } from "./simple/rewordingStorage";
+import { savedCollapsed, savedOpenLists, saveCollapsed, saveOpenLists } from "./simple/openListsStorage";
 import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError } from "./simple/ReviewCards";
 import { TimelineWorking } from "../components/review/TimelineWorking";
 import { Turn } from "./simple/Turn";
 import { useCallListen } from "./simple/useCallListen";
 import { useAppliedCut, type AppliedCutSide } from "./simple/useAppliedCut";
-import { useCallCardShortcuts, useCarryingFootage, useChatAutoFollow, useDraftTimeline, useEditCardShortcuts, useLandingTracker, useOutsideClearMarkedRange, usePassCallNumbers, usePassChoices, useProjectBookmark, useTranscriptEscape, useUndoShortcut, useWatchedMomentAutoKeep } from "./simple/workspaceHooks";
+import { useCallCardShortcuts, useCarryingFootage, useChatAutoFollow, useDraftTimeline, useEditCardShortcuts, useLandingTracker, useOutsideClearMarkedRange, usePassCallNumbers, usePassChoices, useProjectBookmark, useEscapeCloses, useUndoShortcut, useWatchedMomentAutoKeep } from "./simple/workspaceHooks";
 import "../simple.css";
 
 const narrow = window.matchMedia("(max-width: 767px)");
@@ -155,7 +156,32 @@ export function SimpleWorkspace() {
   // The request the editor went to, and an edit of it waiting to play once its markers load.
   const [focus, setFocus] = useState<{ threadId: string; changeId?: string; spot?: number; single?: boolean }>();
   // The list each request has open in the chat: every edit, or just the ones that need the editor. ↑ and ↓ read it.
-  const [lists, setLists] = useState<Record<string, OpenList>>({});
+  // They are kept across a restart, so the chat comes back as the editor left it.
+  const [lists, setLists] = useState<Record<string, OpenList>>(() => savedOpenLists(current.id));
+  const listsOf = useRef(current.id);
+  useEffect(() => {
+    if (listsOf.current === current.id) return saveOpenLists(current.id, lists);
+    listsOf.current = current.id;
+    setLists(savedOpenLists(current.id));
+  }, [current.id, lists]);
+  // The requests folded to their headings with the arrow at a heading's left, kept across a restart as the lists are.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => savedCollapsed(current.id));
+  const collapsedOf = useRef(current.id);
+  useEffect(() => {
+    if (collapsedOf.current === current.id) return saveCollapsed(current.id, collapsed);
+    collapsedOf.current = current.id;
+    setCollapsed(savedCollapsed(current.id));
+  }, [current.id, collapsed]);
+  const collapse = useCallback((run: string) => setCollapsed(all => {
+    const next = new Set(all);
+    if (!next.delete(run)) next.add(run);
+    return next;
+  }), []);
+  // A request whose cut or edit is opened is unfolded, so the row that says which one is open is in view.
+  const unfold = useCallback((thread: Thread) => setCollapsed(all => {
+    const runs = new Set(threadRuns(thread).map(run => run.root));
+    return [...runs].some(run => all.has(run)) ? new Set([...all].filter(run => !runs.has(run))) : all;
+  }), []);
   // One list of every edit is open at a time, so two "Hide" links never stand for one timeline: opening another
   // request's closes it. The list of what needs the editor is a review list, and leaves the others as they are.
   const listOf = (threadId: string): PassList => [lists[threadId], next => setLists(all => {
@@ -171,8 +197,8 @@ export function SimpleWorkspace() {
   const [hoveredEdit] = useState(() => createStore<number | undefined>(() => undefined));
   const [hoveredRow] = useState(() => createStore<HoveredReviewRow | undefined>(() => undefined));
   // The request whose band the editor pressed in the chat, to see its edits on the timeline. The latest request takes the
-  // timeline back when it is new or applies an edit. A second press on the marked band takes its edits off (null), and
-  // then no request's edits are marked until the editor presses a band or the latest request moves on.
+  // timeline back when it is new or applies an edit. A second press on the picked band, or Esc, lets go (null), and
+  // then the timeline marks every request's edits until the editor presses a band or the latest request moves on.
   const [picked, setPicked] = useState<string | null>();
   // Counts the presses on a band, each of which shows the whole timeline.
   const [fitTimeline, setFitTimeline] = useState(0);
@@ -631,16 +657,17 @@ export function SimpleWorkspace() {
   // Before, and a cut's open words, belong to one visit: the next cut opens unlit and folded, and so does this one
   // when the editor opens it again. A card that only reloads under them, as when a new working cut lands, keeps both.
   const startVisit = () => { setCutSide(undefined); setScriptFor(undefined); };
+  // The picked request lets go: its band is plain again and the timeline marks every request's edits.
+  function letGo(threadId: string) {
+    // Its full list goes with it, since an open list keeps its request on the timeline.
+    setLists(all => all[threadId] === "all" ? Object.fromEntries(Object.entries(all).filter(([id]) => id !== threadId)) : all);
+    if (openList === threadId) setOpenList(undefined);
+    setPicked(null);
+    setFocus(undefined);
+  }
   function markThread(threadId: string) {
-    // Pressed again with nothing open, the marked band lets go: its edits come off the timeline and it is plain again.
-    if (threadId === focusThread?.id && !showing && !listening && !suggestion) {
-      // Its full list goes with them, since an open list keeps its request on the timeline.
-      setLists(all => all[threadId] === "all" ? Object.fromEntries(Object.entries(all).filter(([id]) => id !== threadId)) : all);
-      if (openList === threadId) setOpenList(undefined);
-      setPicked(null);
-      setFocus(undefined);
-      return;
-    }
+    // Pressed again with nothing open, the picked band lets go.
+    if (threadId === focusThread?.id && !showing && !listening && !suggestion) return letGo(threadId);
     // Whatever was open goes with the timeline it was on, and so does another request's list of every edit.
     stopShowing();
     setLists(all => Object.entries(all).some(([id, list]) => id !== threadId && list === "all")
@@ -650,6 +677,7 @@ export function SimpleWorkspace() {
     setFocus(undefined);
   }
   function listenCall(change: Change, a: CutAssessment) {
+    if (passThread) unfold(passThread);
     // The same call opened again while it's open keeps its words where they are.
     if (listening?.changeId !== change.id || listening.index !== a.index) startVisit();
     setSourceChoice({ id: "", play: false });
@@ -693,6 +721,7 @@ export function SimpleWorkspace() {
     setAimAgain(n => n + 1);
   }
   function openEdit(thread: Thread, ref: EditRef, from?: string, single?: boolean) {
+    unfold(thread);
     // The edit that's open, pressed again, plays again from the top: its card and the timeline's zoom stay. A cut
     // starts over as the video runs, unlit; any other edit keeps its side. Esc is what closes it. A cut plays under
     // this view's own listen; any other edit under the player's. A moment's main edit picked on its own from under
@@ -856,6 +885,8 @@ export function SimpleWorkspace() {
     showingFrom: openedFrom && showing && matchesEdit(showing, openedFrom.ref) ? openedFrom.run : undefined,
     marked: focusThread?.id,
     mark: markThread,
+    collapsed,
+    collapse,
     fitTimeline() { setFitTimeline(n => n + 1); },
     reviewingId: suggestion?.id,
     listening,
@@ -896,7 +927,7 @@ export function SimpleWorkspace() {
   // The calls are on the timeline while the timeline is the pass's, while one of them is open, and while the editor
   // hasn't picked a request in the chat or gone to another's edit: they hold the next request. Another request picked,
   // or the marked band let go, the timeline marks only that request's edits, or nothing, and For you leads to them.
-  const callsShown = !!pass && (passThread?.id === focusThread?.id || listening?.changeId === pass.id || (picked === undefined && !focus));
+  const callsShown = !!pass && (passThread?.id === focusThread?.id || listening?.changeId === pass.id || (typeof picked !== "string" && !focus));
   const marks: TimelineDot[] = pass && !suggestion
     ? !callsShown ? [] : allCalls.flatMap(a => {
       const override = pass.cutEdits?.find(c => c.index === a.index);
@@ -1125,17 +1156,21 @@ export function SimpleWorkspace() {
   // In the default full timeline, unresolved flags from older requests also need a way in. Their chat lists already
   // load positions on the current working cut. Use those positions only, so old versions cannot put a dot at the wrong time.
   const showOtherFlags = picked === undefined && !focus && !suggestion && !listening && !source;
+  // With no request picked, the timeline marks every request's edits, each numbered as its own request's list has it:
+  // the editor let go of the picked band to see them all (2026-11-23). The waiting pass keeps its calls' dots.
+  const showEvery = picked === null && !focus && !suggestion && !listening && !source;
   const drawnChecks = new Set([...numberedDots, ...passDots].filter(dot => dot.state === "check").map(dot => dot.edit));
-  const otherFlags = showOtherFlags ? [...ordered].reverse().flatMap(thread => {
+  const otherFlags = showOtherFlags || showEvery ? [...ordered].reverse().flatMap(thread => {
     const review = backgroundReview.get(thread.id);
     if (!review || review.head !== head || thread.id === focusThread?.id || thread.id === passThread?.id) return [];
-    return review.markers.flatMap(({ edit, number, total }) => {
+    return review.markers.flatMap(({ edit, number, total, state }) => {
+      if (!showEvery && state !== "check") return [];
       const key = editKey(edit);
       if (drawnChecks.has(key)) return [];
       drawnChecks.add(key);
-      const at = edit.reviewRange?.start ?? edit.at ?? edit.range.start;
+      const at = (state === "check" ? edit.reviewRange?.start : undefined) ?? edit.at ?? edit.range.start;
       return [{ ...editDot(thread, edit, `${shortTitle(thread.title)} · ${number} of ${total} · ${clockLabel(at)}`, at),
-        n: number, group: thread.id, state: "check" as const, need: passEditName(edit, at) }];
+        n: number, group: thread.id, state, need: state === "check" ? passEditName(edit, at) : undefined }];
     });
   }) : [];
   const olderFlaggedEdits = new Set(otherFlags.map(dot => dot.edit));
@@ -1570,7 +1605,10 @@ export function SimpleWorkspace() {
 
   // Esc closes the Transcript beside the player. A cut, an edit or a suggestion that's open takes Esc first.
   const escClosesTranscript = workspaceActive && transcript && !reviewingEdit && !(reviewKeysOn && (!!listening || !!suggestion));
-  useTranscriptEscape(escClosesTranscript, () => setTranscript(false));
+  useEscapeCloses(escClosesTranscript, () => setTranscript(false));
+  // With nothing else for Esc to close, it lets go of the picked request, as a second press on its band does.
+  const escLetsGo = workspaceActive && !!focusThread && !transcript && !reviewingEdit && !listening && !suggestion && !showing;
+  useEscapeCloses(escLetsGo, () => { if (focusThread) letGo(focusThread.id); });
 
   // Keep the newest message in view as replies arrive, unless the editor scrolled up to read.
   const chat = useRef<HTMLDivElement>(null);
@@ -2039,7 +2077,7 @@ export function SimpleWorkspace() {
   // this version of the video is exported (the editor approved it on 2026-11-23).
   const flagsWait = threadTimeline.edits.some(waitingEdit)
     || passEdits.some(e => !!e.check && !passReviewed(e) && !passDeferred(e) && !passRevising(e))
-    || [...backgroundReview.values()].some(review => review.head === head && review.markers.length > 0);
+    || [...backgroundReview.values()].some(review => review.head === head && review.markers.some(marker => marker.state === "check"));
   const exportReady = hasCut && changes.some(c => c.state === "approved") && !asking && !pass && !front && !editing
     && !queued.length && !flagsWait;
   const chatActions: ChatActions = nextQueuedId ? { ...actions, nextQueuedId } : actions;
@@ -2240,8 +2278,8 @@ export function SimpleWorkspace() {
                   <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>
                 : ordered.length ? ordered.map(thread => <Turn key={thread.id} projectId={current.id} thread={thread} actions={chatActions}
                   pinned={pinned} pinHost={pinHost} list={listOf(thread.id)}
-                  reportReviewMarkers={showOtherFlags && thread.id !== focusThread?.id && thread.id !== passThread?.id
-                    ? reportReviewMarkers : undefined} />)
+                  reportReviewMarkers={(showOtherFlags || showEvery) && thread.id !== focusThread?.id && thread.id !== passThread?.id
+                    ? reportReviewMarkers : undefined} reportEvery={showEvery} />)
                 : !media.length ? <p className="simple-empty">Drop footage here, then say what you want.</p>
                 : caching && <p className="simple-empty" role="status">You can start editing while the video caches.</p>}
               {/* A new timeline that keeps failing to read is said after the conversation, which stays where it is. */}

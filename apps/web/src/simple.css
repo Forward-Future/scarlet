@@ -567,12 +567,22 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 .unit > .unit-msg { display: flex; align-items: baseline; gap: 10px; min-width: 0; margin: 0 calc(-1 * var(--chat-gutter, 18px)); padding: 8px var(--chat-gutter, 18px);
   border-top: 1px solid var(--color-line); border-bottom: 1px solid var(--color-line); background: rgba(255, 255, 255, .04); }
 .unit > .req { padding-top: 6px; }
-/* A request that applied edits puts them on the timeline when its band is pressed. The band whose edits are marked is
-   deep violet, its words brighter, with a brighter violet rule at its left. */
+/* A press on a request's band picks it: its edits are the ones on the timeline, and the band is deep violet, its words
+   brighter, with a brighter violet rule at its left. Pressed again it lets go. */
 .unit > .unit-msg.is-markable { cursor: pointer; }
 .unit > .unit-msg.is-markable:hover { background: rgba(255, 255, 255, .06); }
 .unit > .unit-msg.is-marked, .unit > .unit-msg.is-marked:hover { background: #2a2236; border-color: #3a3048; box-shadow: inset 3px 0 0 #b48ae6; }
 .unit > .unit-msg.is-marked p { color: var(--color-fg); }
+/* The arrow at the band's left folds the request to its heading, on one line, and opens it again. It points down while
+   the request is open. What is under the band is only out of sight: Scarlet's work there goes on being read. */
+.unit-fold { flex: none; align-self: flex-start; display: inline-grid; place-items: center; width: 16px; height: 19px; margin: 0 -4px 0 -5px; padding: 0; border: 0;
+  background: none; color: var(--color-dim); cursor: pointer; }
+.unit-fold:is(:hover, :focus-visible) { color: var(--color-fg); }
+.unit-fold svg { transform: rotate(90deg); transition: transform .14s ease; }
+.unit.is-collapsed .unit-fold svg { transform: none; }
+.unit.is-collapsed > :not(.unit-msg) { display: none; }
+.unit.is-collapsed > .unit-msg p, .simple-pin .unit.is-collapsed > .unit-msg p { -webkit-line-clamp: 1; }
+@media (prefers-reduced-motion: reduce) { .unit-fold svg { transition: none; } }
 /* Where the request stands: a dot while Scarlet asks, a word once it stopped early or left a suggestion. */
 .unit-state { flex: none; align-self: center; display: inline-flex; align-items: center; font-size: 12.5px; line-height: 19px; color: var(--color-muted); white-space: nowrap; }
 .unit-state:empty { display: none; }

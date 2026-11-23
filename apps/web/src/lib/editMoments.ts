@@ -17,8 +17,8 @@ export interface MomentEdit {
 }
 
 /**
- * A moment of a request's list: edits whose stretches overlap so much that they play as one change, such as a cut and
- * the zoom and reframe that begin on its join. `edits` leads with `main`, the edit the moment's row and card are
+ * A moment of a request's list: edits that change the same stretch of the video, such as a cut and the zoom and
+ * reframe that begin on its join. `edits` leads with `main`, the edit the moment's row and card are
  * named for; `members` are the same edits in the order they come in the video. `places` marks a row that is no
  * moment: one edit made in many places, which opens at its first place and doesn't play as one change.
  */
@@ -42,6 +42,9 @@ export function editWindow(edit: MomentEdit): TimeRange {
 /** A stretch this many times longer than another is under it, not with it: a music bed and a zoom in it. */
 const LONGER = 3;
 
+/** How near two points of the video are the same place: about a frame. */
+const SAME_PLACE = 0.05;
+
 /**
  * Whether two stretches overlap significantly: they share at least half of the shorter one, and neither is many times
  * the other. A cut and the zoom that starts on its join do; two edits that only touch don't, and nor do a music bed
@@ -51,6 +54,21 @@ export function overlapSignificantly(a: TimeRange, b: TimeRange) {
   const shared = Math.min(a.end, b.end) - Math.max(a.start, b.start);
   const shorter = Math.min(a.end - a.start, b.end - b.start), longer = Math.max(a.end - a.start, b.end - b.start);
   return shared > 0 && shared >= shorter / 2 && longer <= shorter * LONGER;
+}
+
+/**
+ * Whether two edits change the same stretch of the video, so they are one moment. Edits in different places never
+ * are, however close: two cuts are only when they join at the same point, and a cut and another edit only when its join
+ * is inside that edit. Two edits with a length share at least half of the shorter one. Neither may run many times the
+ * other, a cut counting as what its card plays round its join, so a music bed doesn't take every edit under it.
+ */
+export function samePlace(a: MomentEdit, b: MomentEdit) {
+  const sa = editStretch(a), sb = editStretch(b);
+  const pointA = sa.end <= sa.start, pointB = sb.end <= sb.start;
+  if (!pointA && !pointB) return overlapSignificantly(sa, sb);
+  const wa = editWindow(a), wb = editWindow(b);
+  const shorter = Math.min(wa.end - wa.start, wb.end - wb.start), longer = Math.max(wa.end - wa.start, wb.end - wb.start);
+  return sa.start <= sb.end + SAME_PLACE && sb.start <= sa.end + SAME_PLACE && longer <= shorter * LONGER;
 }
 
 /**
@@ -70,14 +88,14 @@ function mainOf<T extends MomentEdit>(members: T[]) {
  * to look at, or a spot it marked for them, is always a moment of its own: those are decided one by one.
  */
 export function listMoments<T extends MomentEdit>(edits: readonly T[]): Moment<T>[] {
-  const placed = edits.map(edit => ({ edit, stretch: editStretch(edit), window: editWindow(edit) }))
+  const placed = edits.map(edit => ({ edit, stretch: editStretch(edit) }))
     .sort((a, b) => a.stretch.start - b.stretch.start || a.stretch.end - b.stretch.end);
-  // An edit joins a moment when it overlaps the moment's first edit significantly, not just any edit already in it:
-  // a run of close cuts doesn't chain into one long moment.
+  // An edit joins a moment when it changes the same stretch as an edit already in it. Cuts at different joins never
+  // share one, so a run of close cuts stays a row each.
   const groups: { members: typeof placed; alone: boolean }[] = [];
   for (const item of placed) {
     const alone = !!item.edit.check || !!item.edit.marker;
-    const group = alone ? undefined : groups.findLast(g => !g.alone && overlapSignificantly(g.members[0]!.window, item.window));
+    const group = alone ? undefined : groups.findLast(g => !g.alone && g.members.some(m => samePlace(m.edit, item.edit)));
     if (group) group.members.push(item);
     else groups.push({ members: [item], alone });
   }

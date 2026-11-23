@@ -218,12 +218,36 @@ export function layoutMarks(marks: TimelineDot[], from: number, span: number, wi
     }
     row.push(next);
   }
-  // A marker sits at the middle of its run, moved along if it had to be, and never past the track's ends.
-  const half = (m: MarkLayout) => width > 0 ? m.width / 2 / width * 100 : 0;
-  return [...circles.values()].flatMap(row => row.map(({ layout }) => {
-    const at = position(mid(layout)) + (width > 0 ? (shift.get(layout) ?? 0) / width * 100 : 0);
-    return { ...layout, at: layout.times.length > 1 || shift.has(layout) ? Math.max(half(layout), Math.min(100 - half(layout), at)) : at };
-  })).sort((a, b) => a.at - b.at);
+  // A marker sits at the middle of its run, moved along if it had to be, and never past the track's ends. Clamping at
+  // either end pushes crowded neighbours aside rather than letting the clamped pill land on top of the one beside it.
+  const placeRow = (row: ReturnType<typeof marker>[]) => {
+    if (width <= 0) return row.map(({ layout }) => layout);
+    const natural = row.map(({ layout }) => (mid(layout) - from) / span * width);
+    const xs = row.map(({ layout }, i) => natural[i]! + (shift.get(layout) ?? 0));
+    const keepInside = (i: number) => row[i]!.layout.times.length > 1 || shift.has(row[i]!.layout) || xs[i] !== natural[i];
+    for (let i = 0; i < row.length; i++) {
+      const half = row[i]!.layout.width / 2;
+      if (keepInside(i) && xs[i]! < half) xs[i] = half;
+      if (i > 0 && groupSpan >= span) {
+        const clear = row[i - 1]!.layout.width / 2 + half + MARK_GAP;
+        if (xs[i]! < xs[i - 1]! + clear) xs[i] = xs[i - 1]! + clear;
+      }
+    }
+    for (let i = row.length - 1; i >= 0; i--) {
+      const half = row[i]!.layout.width / 2;
+      if (keepInside(i) && xs[i]! > width - half) xs[i] = width - half;
+      if (i < row.length - 1 && groupSpan >= span) {
+        const clear = half + row[i + 1]!.layout.width / 2 + MARK_GAP;
+        if (xs[i]! > xs[i + 1]! - clear) xs[i] = xs[i + 1]! - clear;
+      }
+    }
+    for (let i = 0; i < row.length; i++) {
+      const half = row[i]!.layout.width / 2;
+      if (keepInside(i) && xs[i]! < half) xs[i] = half;
+    }
+    return row.map(({ layout }, i) => ({ ...layout, at: xs[i]! / width * 100 }));
+  };
+  return [...circles.values()].flatMap(placeRow).sort((a, b) => a.at - b.at);
 }
 
 /** A hit prefers the visible marker: the open edit, then a pill drawn over another group's circle. */

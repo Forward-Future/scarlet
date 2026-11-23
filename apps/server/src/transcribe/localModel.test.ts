@@ -157,8 +157,43 @@ it("logs a download stopped when its last request is cancelled, and does not cal
   await vi.waitFor(async () => expect(await cache.status()).toMatchObject({ state: "downloading" }));
   stop.abort(new Error("cancelled"));
   await expect(job).rejects.toThrow("cancelled");
-  await vi.waitFor(() => expect(said).toEqual(["[model] test.bin: downloading 1 MB", "[model] test.bin: download stopped after <time>"]));
-  expect(await cache.status()).toEqual({ state: "missing" });
+  await vi.waitFor(async () => expect(await cache.status()).toEqual({ state: "missing" }));
+  expect(said).toEqual(["[model] test.bin: downloading 1 MB", "[model] test.bin: download stopped after <time>"]);
+  expect(await readdir(dir)).toEqual([]);
+});
+
+it("logs a download stopped without calling fetch when cancelled before the network request starts", async () => {
+  const fetchModel = vi.fn(async (_url: string, init: RequestInit) => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { init.signal!.addEventListener("abort", () => controller.error(init.signal!.reason)); },
+  })));
+  vi.stubGlobal("fetch", fetchModel);
+  const stop = new AbortController();
+  const cache = new LocalWhisperModel(dir, model, line => {
+    log(line);
+    if (line.includes("downloading")) stop.abort(new Error("cancelled"));
+  });
+  await expect(cache.get(stop.signal)).rejects.toThrow("cancelled");
+  await vi.waitFor(async () => expect(await cache.status()).toEqual({ state: "missing" }));
+  expect(said).toEqual(["[model] test.bin: downloading 1 MB", "[model] test.bin: download stopped after <time>"]);
+  expect(fetchModel).not.toHaveBeenCalled();
+  expect(await readdir(dir)).toEqual([]);
+});
+
+it("cancels the response stream and stops cleanly even if the stream ignores the abort signal", async () => {
+  let streamCancelled = false;
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(bytes.subarray(0, 1)); },
+    cancel() { streamCancelled = true; },
+  }))));
+  const cache = new LocalWhisperModel(dir, model, log);
+  const stop = new AbortController();
+  const job = cache.get(stop.signal);
+  await vi.waitFor(async () => expect(await cache.status()).toEqual({ state: "downloading", received: 1, total: bytes.length }));
+  stop.abort(new Error("cancelled"));
+  await expect(job).rejects.toThrow("cancelled");
+  await vi.waitFor(async () => expect(await cache.status()).toEqual({ state: "missing" }));
+  expect(said).toEqual(["[model] test.bin: downloading 1 MB", "[model] test.bin: download stopped after <time>"]);
+  expect(streamCancelled).toBe(true);
   expect(await readdir(dir)).toEqual([]);
 });
 

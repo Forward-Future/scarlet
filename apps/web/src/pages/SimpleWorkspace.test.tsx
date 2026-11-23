@@ -423,6 +423,27 @@ it("counts an earlier request's edit this request found a doubt about as one tha
   localStorage.clear();
 });
 
+it("keeps the list a request had open across a restart, so a request about one edit stays under its row", async () => {
+  appliedEdits();
+  await showFolded();
+  expect(reviewModes(turnFor("chg_approved_2"))).toEqual([["For you", "true"], ["See all", "false"]]);
+  await openEdits();
+  expect(reviewModes(turnFor("chg_approved_2"))).toEqual([["For you", "false"], ["See all", "true"]]);
+  // Scarlet restarts: the chat is drawn again from nothing, and See all is still open.
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await showFolded();
+  await act(async () => {});
+  expect(reviewModes(turnFor("chg_approved_2"))).toEqual([["For you", "false"], ["See all", "true"]]);
+  // Back on For you, a restart leaves it there.
+  await click(turnFor("chg_approved_2").querySelector(".simple-pass-need")!);
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await showFolded();
+  await act(async () => {});
+  expect(reviewModes(turnFor("chg_approved_2"))).toEqual([["For you", "true"], ["See all", "false"]]);
+});
+
 it("lists a thread's edits once, numbered, and opens one with its decisions under the player", async () => {
   const edits = appliedEdits();
   await showFolded();
@@ -1255,6 +1276,16 @@ it("gives the timeline to the latest request when its edit lands, though the edi
     summary: null, changeIds: [], question: null, instruction: "Fade the outro", context: { message: "Fade the outro" } }] }));
   await act(async () => {});
   expect(numbered()).toEqual([["3", "check"]]);
+  // The request in hand is the one picked, so its band is violet while it runs, before it has applied anything.
+  const pinned = () => container.querySelector<HTMLElement>(".simple-pin .unit-msg")!;
+  expect(pinned().classList.contains("is-marked")).toBe(true);
+  // Pressed, it lets go as any marked band does, and a second press picks it again.
+  await click(pinned());
+  await act(async () => {});
+  expect(pinned().classList.contains("is-marked")).toBe(false);
+  await click(pinned());
+  await act(async () => {});
+  expect(pinned().classList.contains("is-marked")).toBe(true);
   // While it works they look at the earlier request's flagged edit and close it without keeping it.
   await click(turnFor("chg_approved_2").querySelector(".simple-pass-need")!);
   await act(async () => {});
@@ -7736,7 +7767,7 @@ it("leaves a finished request as its heading with active time and what it made",
   const run = runOf("task_done");
   const unit = run.closest<HTMLElement>(".unit")!;
   // The heading is the editor's words, with no name or number: "Edit 14" anywhere is an edit Scarlet made.
-  expect(unit.querySelector(".unit-msg > :not(.simple-who, p, .unit-state, .unit-stop, .unit-tokens)")).toBeNull();
+  expect(unit.querySelector(".unit-msg > :not(.unit-fold, .simple-who, p, .unit-state, .unit-stop, .unit-tokens)")).toBeNull();
   expect(unit.querySelector(".unit-msg > .unit-tokens > .run-work-time")?.textContent).toMatch(/^\d+m \d+s$/);
   const words = unit.querySelector(".unit-msg p")!;
   expect(words.lastChild?.textContent).toBe(requestTextFor("task_done"));
@@ -9446,6 +9477,29 @@ it("keeps the chat anchored while scrolling a pass's edits, including when a rev
     }
     expect(styled(pinnedList, "max-height", "overflow-y")).toEqual(["none", "auto"]);
   });
+});
+
+it("keeps Scarlet's put-back of an edit under that edit's row once the edit reads Rejected, while it still checks its joins", async () => {
+  const { lists } = appliedPass(true);
+  const threadId = threadWith("chg_approved_2").id;
+  // Scarlet has saved the put-back: the engine lists the edit as rejected, while the request is still at work.
+  lists[threadId] = Array.from({ length: 3 }, (_, spot) => ({
+    changeId: "chg_approved_2", spot, label: `Edit ${spot + 1}`, range: { start: spot, end: spot + 1 }, previous: [],
+    ...spot === 0 ? { rejected: true as const, wasCheck: true as const } : { check: CHECK },
+  }));
+  const base = data.tasks.find(t => t.id === "task_pass")!;
+  const now = new Date().toISOString();
+  data = { ...data, tasks: [...data.tasks, { ...base, id: "task_reject", state: "running" as const, instruction: "The editor rejected edit 1. Put back exactly what it changed.",
+    summary: null, changeIds: [], createdAt: now, startedAt: now, finishedAt: undefined,
+    context: { threadId, changeId: "chg_approved_2", editIndex: 0, time: 0, message: "Reject edit" } }] };
+  useProjectStore.setState({ current: data });
+  await show();
+  await act(async () => {});
+  // It sits in the pass's block under the edit's row, never in a block of its own with a band.
+  expect(container.querySelector('.unit[data-run="task_reject"]')).toBeNull();
+  const under = container.querySelector<HTMLElement>('.subunit[data-run="task_reject"]');
+  expect(under?.closest('.unit')?.getAttribute("data-run")).toBe("task_pass");
+  expect(wordsOf(under!.querySelector(".subunit-msg p"))).toBe("Reject edit");
 });
 
 it("moves on to the next edit when one Scarlet didn't flag is kept, and closes after the last", async () => {
@@ -12957,12 +13011,22 @@ it("keeps one list of every edit open at a time, and puts a request's edits on t
   await act(async () => {});
   expect(band("chg_later").classList.contains("is-marked")).toBe(true);
   expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2"]);
-  // Pressed again, the marked band lets go: no band is shaded and no request's edits are numbered on the timeline.
+  // Pressed again, the picked band lets go: no band is shaded, and the timeline marks every request's edits, each
+  // with the number its own request's list has (2026-11-23).
   await click(band("chg_later"));
   await act(async () => {});
   expect(container.querySelectorAll(".unit-msg.is-marked")).toHaveLength(0);
-  expect(numbered()).toEqual([]);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "1", "2", "2", "3"]);
   // And a press marks it again.
+  await click(band("chg_later"));
+  await act(async () => {});
+  expect(band("chg_later").classList.contains("is-marked")).toBe(true);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2"]);
+  // Esc lets go as the second press does, and a press picks it again.
+  await press("Escape");
+  await act(async () => {});
+  expect(container.querySelectorAll(".unit-msg.is-marked")).toHaveLength(0);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "1", "2", "2", "3"]);
   await click(band("chg_later"));
   await act(async () => {});
   expect(band("chg_later").classList.contains("is-marked")).toBe(true);
@@ -12985,6 +13049,56 @@ it("keeps one list of every edit open at a time, and puts a request's edits on t
   expect(toggle("chg_later").getAttribute("aria-pressed")).toBe("false");
   expect(band("chg_approved_2").classList.contains("is-marked")).toBe(true);
   expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2", "3"]);
+});
+
+it("folds a request to its heading with the arrow at the heading's left, and opens it for an edit opened on the timeline", async () => {
+  earlierRequestOnly(false);
+  const later = laterRequest("chg_later", false);
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const request = (id: string, instruction: string, changeId: string) => Task.parse({ id, projectId: PRJ, kind: "edit", agent: "claude",
+    instruction, state: "done", createdBy: { type: "human", name: "Editor" }, changeIds: [changeId], createdAt: at, finishedAt: at });
+  data = { ...data, changes: [...data.changes.map(c => c.id === "chg_approved_2" ? { ...c, taskId: "task_zooms" } : c), { ...later.change, taskId: "task_fades" }],
+    tasks: [request("task_zooms", "Frame the screen", "chg_approved_2"), request("task_fades", "Fade both ends", "chg_later")] };
+  later.lists[threadWith("chg_later").id] = later.lists.chg_later!;
+  later.lists[threadWith("chg_approved_2").id] = later.lists[later.earlier]!;
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  await act(async () => {});
+  const unit = (changeId: string) => turnFor(changeId).querySelector<HTMLElement>(".unit")!;
+  const arrow = (changeId: string) => unit(changeId).querySelector<HTMLButtonElement>(".unit-msg > .unit-fold")!;
+  expect([arrow("chg_later").getAttribute("aria-expanded"), unit("chg_later").classList.contains("is-collapsed")]).toEqual(["true", false]);
+  // The arrow folds the request: only its heading shows. The band stays the picked one, and the timeline keeps its edits.
+  const marks = numbered();
+  await click(arrow("chg_later"));
+  expect([arrow("chg_later").getAttribute("aria-expanded"), unit("chg_later").classList.contains("is-collapsed")]).toEqual(["false", true]);
+  expect(arrow("chg_later").getAttribute("aria-label")).toMatch(/^Expand this edit: /);
+  expect(unit("chg_later").querySelector(".unit-msg")!.classList.contains("is-marked")).toBe(true);
+  expect(numbered()).toEqual(marks);
+  // The other request is as it was, and the fold is kept for the next time the project opens.
+  expect(unit("chg_approved_2").classList.contains("is-collapsed")).toBe(false);
+  expect(JSON.parse(localStorage.getItem(`scarlet.collapsedRequests.v1:${PRJ}`)!)).toHaveLength(1);
+  // An edit of the folded request opened from the timeline opens the request again, so its row is in view.
+  const strip = container.querySelector<HTMLElement>(".simple-timeline-hover")!;
+  strip.getBoundingClientRect = () => ({ left: 0, width: 1000 }) as DOMRect;
+  const dot = container.querySelector<HTMLElement>(".simple-timeline-mark.is-numbered")!;
+  await act(async () => { strip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(dot.style.left) * 10 })); });
+  await act(async () => {});
+  expect(container.querySelector(".edit-card")).not.toBeNull();
+  expect(unit("chg_later").classList.contains("is-collapsed")).toBe(false);
+  expect(localStorage.getItem(`scarlet.collapsedRequests.v1:${PRJ}`)).toBeNull();
+  // A press on the band's words is the band's: they don't open, and the press lets the picked band go.
+  const words = unit("chg_approved_2").querySelector<HTMLElement>(".unit-msg > p")!;
+  expect(words.hasAttribute("aria-expanded")).toBe(false);
+  expect(unit("chg_later").querySelector(".unit-msg")!.classList.contains("is-marked")).toBe(true);
+  await press("Escape");
+  await click(unit("chg_later").querySelector<HTMLElement>(".unit-msg > p")!);
+  await act(async () => {});
+  expect(container.querySelectorAll(".unit-msg.is-marked")).toHaveLength(0);
+  // The arrow opens a folded request too.
+  await click(arrow("chg_approved_2"));
+  expect(unit("chg_approved_2").classList.contains("is-collapsed")).toBe(true);
+  await click(arrow("chg_approved_2"));
+  expect(unit("chg_approved_2").classList.contains("is-collapsed")).toBe(false);
 });
 
 it("shows the whole timeline on any press on a request's band", async () => {
