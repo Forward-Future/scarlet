@@ -11,6 +11,7 @@ import { usePictureWait } from "../components/player/usePictureWait";
 import { TimelineScrubber } from "../components/review/TimelineScrubber";
 import { TimelineWaveform } from "../components/review/TimelineWaveform";
 import { FramingPreview } from "../components/review/FramingPreview";
+import { ReviewActions } from "../components/review/ReviewActions";
 import { WindowActions } from "../components/shell/WorkspaceNavigation";
 import { api } from "../lib/client";
 import { buildDb, mc, PRJ } from "../lib/mock/fixtures";
@@ -1097,6 +1098,40 @@ it("keeps a playing source on its file while preparing the newly selected previe
     expect(video().src).toBe(api.sourceCacheUrl(source.id, "new"));
     await show(null);
   } finally { vi.useRealTimers(); }
+});
+
+it("yields plain L to an open Later (L) to-do card while keeping Shift+L and normal L playback speed", async () => {
+  const noop = () => {};
+  const defer = vi.fn(), done = vi.fn();
+  usePlayerStore.setState({ rate: 1 });
+  const pressKey = (key: string, init: KeyboardEventInit = {}) =>
+    act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init })); });
+
+  // CutPreview mounts BEFORE ReviewActions (just like SimpleWorkspace) with playable media.
+  await show(<MemoryRouter>
+    <CutPreview simple={{ marks: [] }} workingCache={{ cache: { state: "ready", url: "/before.mp4" }, startCache: noop }}
+      active hasCut spot={0} autoPlaySource={false} onRetryDraft={noop} onMedia={noop} />
+    <ReviewActions revise={defer} reviseLabel="Later" reviseKey="L" approve={done} approveLabel="Done" approveKey="D" />
+  </MemoryRouter>);
+
+  // Plain L triggers Later without changing playback speed.
+  await pressKey("l");
+  expect(defer).toHaveBeenCalledTimes(1);
+  expect(usePlayerStore.getState().rate).toBe(1);
+
+  // Shift+L still slows playback and does not defer the to-do.
+  await pressKey("L", { shiftKey: true });
+  expect(defer).toHaveBeenCalledTimes(1);
+  expect(usePlayerStore.getState().rate).toBe(0.75);
+
+  // Without a Later (L) to-do card open, plain L speeds up playback as usual.
+  await show(<MemoryRouter>
+    <CutPreview simple={{ marks: [] }} workingCache={{ cache: { state: "ready", url: "/before.mp4" }, startCache: noop }}
+      active hasCut spot={0} autoPlaySource={false} onRetryDraft={noop} onMedia={noop} />
+  </MemoryRouter>);
+  await pressKey("l");
+  expect(usePlayerStore.getState().rate).toBe(1);
+  await show(null);
 });
 
 it("shows an export again after a reload or restart, saves it to the destination chosen before, and releases it", async () => {

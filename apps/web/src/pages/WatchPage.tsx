@@ -515,6 +515,8 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
       if (playable && !e.repeat) player.toggle();
     } else if (e.key.toLowerCase() === "l") {
       if (!playable || isComposing(e)) return;
+      // Plain L is Later on an open to-do's card; Shift+L still slows playback.
+      if (!e.shiftKey && document.querySelector('[data-log-control="defer-todo"]:not(:disabled)')) return;
       e.preventDefault();
       stepPlaybackRate(e.shiftKey ? -1 : 1, true);
     } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
@@ -643,7 +645,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
             disabled={!!cutLoadError || !!draftFailed || !!playingBefore || !!framing || !(source || cut || change || draftVersion)}
             transitionKey={transitionKey}
             resolveLeadIn={resolveLeadIn}
-            canWatchBefore={reviewCut?.side === "after"}
+            canWatchBefore={reviewCut?.side === "after" && !openingJoin}
           />
           {simple.label && <div className="simple-on-video" role="status">{simple.label}</div>}
           {!playingBefore && !framing && <PictureMarks projectId={current.id} version={source ? undefined : rangeVersion} mediaId={source?.id} fps={fps} />}

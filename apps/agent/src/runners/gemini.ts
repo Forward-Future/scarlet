@@ -227,6 +227,12 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
       stopSession();
       return;
     }
+    // Nobody asked for an effort: the run goes on with agy's own rather than failing over Scarlet's default.
+    if (step === "set_effort" && !opts.effort) {
+      opts.onEvent({ type: "log", text: `Gemini could not apply default effort (${detail}); continuing with agy's default.` });
+      sendPrompt();
+      return;
+    }
     failSession(`Gemini ${step} failed: ${detail}`);
   };
 

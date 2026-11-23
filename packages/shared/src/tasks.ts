@@ -237,6 +237,8 @@ export const Task = z.object({
    * the project's editing. The host keeps the session's files when the run ends; a run the editor stopped has none.
    */
   sessionCarriesOn: z.boolean().optional(),
+  /** Attempt `startedAt` whose CLI session was discarded (a model switch on an answer), so that host's late callbacks can't attach it again. */
+  sessionRevokedFor: z.string().datetime().optional(),
   /** Pending question from the agent, if waiting_for_user. */
   question: z.string().nullable().default(null),
   /** Where the editor can hear the updated passage while answering a question about a staged cut. */

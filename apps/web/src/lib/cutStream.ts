@@ -298,18 +298,21 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
     return new Promise<void>((resolve, reject) => {
       signal.throwIfAborted();
       if (disposed) throw new DOMException("The stream closed.", "AbortError");
+      // One preroll at a time: the one before ends here, and its own late abort can't clear this one.
+      preroll?.finish(new DOMException("Playback cancelled.", "AbortError"));
       const abort = () => finish(new DOMException("Playback cancelled.", "AbortError"));
       const finish = (error?: Error) => {
         signal.removeEventListener("abort", abort);
-        preroll = undefined;
+        if (preroll === entry) preroll = undefined;
         if (error) reject(error);
         else resolve();
       };
       const first = indexAt(start), last = indexAt(Math.max(start, end - SECTION_EDGE));
-      preroll = { first, last, lastDone: -1, onProgress, finish };
+      const entry = { first, last, lastDone: -1, onProgress, finish };
+      preroll = entry;
       if (onProgress && !buffer) {
         const done = readyIn(first, last);
-        preroll.lastDone = done;
+        entry.lastDone = done;
         onProgress(done, last - first + 1);
       }
       signal.addEventListener("abort", abort, { once: true });

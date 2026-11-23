@@ -376,6 +376,15 @@ impl AcpSession {
                 self.stop_session();
                 return true;
             }
+            // Nobody asked for an effort: the run goes on with agy's own rather than failing over Scarlet's default.
+            if self.step == Step::SetEffort && self.effort_override.is_none() {
+                (self.on_event)(RunnerEvent::new(
+                    "log",
+                    format!("Gemini could not apply default effort ({detail}); continuing with agy's default."),
+                ));
+                self.send_prompt();
+                return false;
+            }
             self.fail_session(format!("Gemini {} failed: {detail}", self.step.label()));
             return true;
         }
