@@ -54,6 +54,8 @@ interface PerceptionDeps {
 const OUT_WINDOW = [1, .3] as const;
 const IN_WINDOW = [.3, 1] as const;
 const MAX_AUDITS = 40;
+/** The picture readings a recording has, by their endpoint, and what each reads of it. */
+const PICTURE_READS = { "screen-text": "its text", "screen-motion": "its picture's changes", "picture-cuts": "its cuts", faces: "its faces" } as const;
 
 export function registerPerception(deps: PerceptionDeps) {
   const { tool, client } = deps;
@@ -98,12 +100,12 @@ export function registerPerception(deps: PerceptionDeps) {
     });
   }
 
-  /** A picture reading of each recording (`screen-text`, `screen-motion`, `picture-cuts`), waiting up to `wait` seconds for what isn't read yet. */
-  async function readPictures<T>(kind: "screen-text" | "screen-motion" | "picture-cuts", sources: Array<{ id: string; from: number; to: number }>, wait: number) {
+  /** A picture reading of each recording (`screen-text`, `screen-motion`, `picture-cuts`, `faces`), waiting up to `wait` seconds for what isn't read yet. */
+  async function readPictures<T>(kind: keyof typeof PICTURE_READS, sources: Array<{ id: string; from: number; to: number }>, wait: number) {
     const reads = await Promise.all(sources.map(async ({ id, from, to }) => ({ id,
       read: await client.get<{ from: number; to: number; readSeconds: number; done: boolean; error?: string } & T>(
         `/projects/${encodeURIComponent(deps.projectId)}/media/${encodeURIComponent(id)}/${kind}?from=${from}&to=${to}&wait=${wait}`) })));
-    const what = kind === "screen-text" ? "its text" : kind === "picture-cuts" ? "its cuts" : "its picture's changes";
+    const what = PICTURE_READS[kind];
     const unread = reads.filter(({ read }) => !read.done).map(({ id, read }) =>
       `${id}: ${read.readSeconds.toFixed(0)} of ${(read.to - read.from).toFixed(0)} s of ${what} read so far${read.error ? `, stopped: ${read.error}` : ", still reading: call again for the rest"}`);
     return { reads, unread };
@@ -147,14 +149,8 @@ export function registerPerception(deps: PerceptionDeps) {
       readPictures<{ cuts: RecordingCut[] }>("picture-cuts", sources, wait),
       wordsFor(tl, project).catch(() => new Map<string, TranscriptWord[]>()),
       // Where the speaker looks, in the picture of the recording heard beside each stretch: its face seen longest there.
-      Promise.all(clocks.filter(c => videos.has(c.id)).map(async ({ id, from, to }) => {
-        const read = await client.get<{ from: number; to: number; readSeconds: number; done: boolean; error?: string;
-          tracks: Array<{ track: number; seconds: number }>; spans: Array<{ track: number; start: number; end: number; eyesDown?: number; box: number[] }> }>(
-          `/projects/${encodeURIComponent(deps.projectId)}/media/${encodeURIComponent(id)}/faces?from=${from}&to=${to}&wait=${wait}`);
-        const main = [...read.tracks].sort((a, b) => b.seconds - a.seconds)[0]?.track;
-        return { id, spans: read.spans.filter(s => s.track === main),
-          unread: read.done ? undefined : `${id}: ${read.readSeconds.toFixed(0)} of ${(read.to - read.from).toFixed(0)} s of its faces read so far${read.error ? `, stopped: ${read.error}` : ", still reading: call again for the rest"}` };
-      })).catch(() => []),
+      readPictures<{ tracks: Array<{ track: number; seconds: number }>; spans: Array<{ track: number; start: number; end: number; eyesDown?: number; box: number[] }> }>(
+        "faces", clocks.filter(c => videos.has(c.id)), wait).catch(() => ({ reads: [], unread: [] })),
     ]);
     return {
       evidence: {
@@ -164,9 +160,12 @@ export function registerPerception(deps: PerceptionDeps) {
         detail: new Map(motion.reads.map(({ id, read }) => [id, read.detail ?? []])),
         cuts: new Map(cuts.reads.map(({ id, read }) => [id, read.cuts])),
         words: transcripts.size ? timelineWords(tl, transcripts, range) : [],
-        eyes: new Map(eyes.map(e => [e.id, e.spans])),
+        eyes: new Map(eyes.reads.map(({ id, read }) => {
+          const main = [...read.tracks].sort((a, b) => b.seconds - a.seconds)[0]?.track;
+          return [id, read.spans.filter(s => s.track === main)];
+        })),
       },
-      unread: [...text.unread, ...motion.unread, ...cuts.unread, ...eyes.flatMap(e => e.unread ? [e.unread] : [])],
+      unread: [...text.unread, ...motion.unread, ...cuts.unread, ...eyes.unread],
     };
   }
 

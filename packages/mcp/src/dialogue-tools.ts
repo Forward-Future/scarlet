@@ -71,7 +71,7 @@ import {
   type ToolRegistrar,
 } from "./tool-result.js";
 import { JoinChecks } from "./join-checks.js";
-import { createDialoguePartLeftovers } from "./dialogue-part-leftovers.js";
+import { createDialoguePartLeftovers, spanOf } from "./dialogue-part-leftovers.js";
 import { createDialogueRepeatCheck } from "./dialogue-repeat-check.js";
 import { createDialogueScanReader } from "./dialogue-scan-reader.js";
 import type { StagedReview, StagedReviewState } from "./staged-review.js";
@@ -352,8 +352,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
       // The lists read at once: each lists its own kind of thing once per pass (`listed`), and they share one read of the
       // version the pass continues on (`timelineAt`).
       const [quiet, { kept, keptPauses, repeatedWords, unexplainedSound }, [heardNotInTranscript, audioRecheck]] = await together(
-        async () => localPauses || only === "pause" || only === "filler" ? [] : await keptQuietPhrases(tl, continueFrom, decided,
-          scope ?? { start: Math.min(...decided.map(d => d.start)), end: Math.max(...decided.map(d => d.end)) })
+        async () => localPauses || only === "pause" || only === "filler" ? [] : await keptQuietPhrases(tl, continueFrom, decided, scope ?? spanOf(decided))
           .catch(without("failed to place the quiet phrases the part still plays", [])),
         async () => {
           // One read of the version the pass continues on places all three lists.
@@ -387,7 +386,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
           // transcript that read “And it just feels like” and “a conscientious objector” (2026-11-19).
           const heard = only && only !== "retake" && only !== "filler" ? [] : await (async () => {
             const after = await timelineAt(continueFrom, tl);
-            const part = scope ?? { start: Math.min(...decided.map(d => d.start)), end: Math.max(...decided.map(d => d.end)) };
+            const part = scope ?? spanOf(decided);
             // The part's stretch on the version it continues on: its applied cuts closed up that much of it.
             const removed = result.changes.some(c => c.intent !== "suggestion" && c.state === "approved")
               ? all.reduce((n, d) => d.review ? n : n + Math.max(0, Math.min(d.end, part.end) - Math.max(d.start, part.start)), 0) : 0;

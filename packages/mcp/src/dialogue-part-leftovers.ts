@@ -32,10 +32,25 @@ export interface DialoguePartLeftoversDeps {
   silencesAsked(): number | undefined;
 }
 
+/** From the first of these ranges to the end of the last: the stretch a part reaches without a range of its own. */
+export const spanOf = (ranges: ReadonlyArray<TimeRange>): TimeRange =>
+  ({ start: Math.min(...ranges.map(d => d.start)), end: Math.max(...ranges.map(d => d.end)) });
+
 export function createDialoguePartLeftovers(deps: DialoguePartLeftoversDeps) {
   const { client, projectId, session, errors, silencesAsked } = deps;
   const { transcriptWords, showWords, readQuietPhrases } = session;
   const { without, withoutOnce } = errors;
+
+  /** The words of each recording this version plays. `what` names a read that failed; `show` lets the agent cut by their indices. */
+  async function playedWords(tl: Timeline, what: (mediaId: string) => string, show: boolean) {
+    const transcripts = new Map<string, TranscriptWord[]>();
+    for (const id of new Set(audibleMediaClips(tl).map(c => c.mediaId))) {
+      const words = await transcriptWords(id, false).catch(without(what(id), null));
+      if (show) showWords(id, words);
+      if (words) transcripts.set(id, words);
+    }
+    return transcripts;
+  }
 
   /** Silences of two seconds or more inside this part that none of its decisions covers, on the version it was planned on. */
   async function passedSilences(tl: Timeline, kept: Array<{ start: number; end: number }>,
@@ -43,12 +58,8 @@ export function createDialoguePartLeftovers(deps: DialoguePartLeftoversDeps) {
     const decided = [...decisions.map(d => ({ start: d.start, end: d.end })), ...kept];
     if (!decided.length) return [];
     // Without a range, the part reaches from its first decision to its last.
-    const scope = range ?? { start: Math.min(...decided.map(d => d.start)), end: Math.max(...decided.map(d => d.end)) };
-    const transcripts = new Map<string, TranscriptWord[]>();
-    for (const id of new Set(audibleMediaClips(tl).map(c => c.mediaId))) {
-      const words = await transcriptWords(id, false).catch(without(`failed to read the words of ${id} for the silences a part keeps`, null));
-      if (words) transcripts.set(id, words);
-    }
+    const scope = range ?? spanOf(decided);
+    const transcripts = await playedWords(tl, id => `failed to read the words of ${id} for the silences a part keeps`, false);
     // From the silence length the pass last asked the closing check for, so both list the same stretches.
     return keptSilences(tl, timelineWords(tl, transcripts, scope), decided, silencesAsked());
   }
@@ -70,14 +81,9 @@ export function createDialoguePartLeftovers(deps: DialoguePartLeftoversDeps) {
     decisions: Array<{ start: number; end: number; review: boolean }>, range?: { start: number; end: number }, pausesFrom?: number) {
     const decided = [...decisions, ...kept];
     if (!decided.length) return { pauses: [], repeats: [], gaps: [] };
-    const scope = range ?? { start: Math.min(...decided.map(d => d.start)), end: Math.max(...decided.map(d => d.end)) };
-    const transcripts = new Map<string, TranscriptWord[]>();
-    for (const id of new Set(audibleMediaClips(tl).map(c => c.mediaId))) {
-      const words = await transcriptWords(id, false).catch(without(`failed to read the words of ${id} for what a part still plays`, null));
-      // keptPauses and repeatedWords name their words by these indices.
-      showWords(id, words);
-      if (words) transcripts.set(id, words);
-    }
+    const scope = range ?? spanOf(decided);
+    // keptPauses and repeatedWords name their words by these indices.
+    const transcripts = await playedWords(tl, id => `failed to read the words of ${id} for what a part still plays`, true);
     // A range staged for review still plays until the editor approves it.
     return partLeftovers(timelineWords(tl, transcripts, scope), decisions.filter(d => !d.review), kept, transcripts, pausesFrom ?? PAUSE_FLOOR_SECONDS);
   }
