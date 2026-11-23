@@ -9026,6 +9026,29 @@ it("keeps the chat anchored while scrolling a pass's edits, including when a rev
   });
 });
 
+it("keeps Scarlet's put-back of an edit under that edit's row once the edit reads Rejected, while it still checks its joins", async () => {
+  const { lists } = appliedPass(true);
+  const threadId = threadWith("chg_approved_2").id;
+  // Scarlet has saved the put-back: the engine lists the edit as rejected, while the request is still at work.
+  lists[threadId] = Array.from({ length: 3 }, (_, spot) => ({
+    changeId: "chg_approved_2", spot, label: `Edit ${spot + 1}`, range: { start: spot, end: spot + 1 }, previous: [],
+    ...spot === 0 ? { rejected: true as const, wasCheck: true as const } : { check: CHECK },
+  }));
+  const base = data.tasks.find(t => t.id === "task_pass")!;
+  const now = new Date().toISOString();
+  data = { ...data, tasks: [...data.tasks, { ...base, id: "task_reject", state: "running" as const, instruction: "The editor rejected edit 1. Put back exactly what it changed.",
+    summary: null, changeIds: [], createdAt: now, startedAt: now, finishedAt: undefined,
+    context: { threadId, changeId: "chg_approved_2", editIndex: 0, time: 0, message: "Reject edit" } }] };
+  useProjectStore.setState({ current: data });
+  await show();
+  await act(async () => {});
+  // It sits in the pass's block under the edit's row, never in a block of its own with a band.
+  expect(container.querySelector('.unit[data-run="task_reject"]')).toBeNull();
+  const under = container.querySelector<HTMLElement>('.subunit[data-run="task_reject"]');
+  expect(under?.closest('.unit')?.getAttribute("data-run")).toBe("task_pass");
+  expect(wordsOf(under!.querySelector(".subunit-msg p"))).toBe("Reject edit");
+});
+
 it("moves on to the next edit when one Scarlet didn't flag is kept, and closes after the last", async () => {
   laterRequest("chg_later", false);
   await show();

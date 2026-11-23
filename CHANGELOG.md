@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- Rejecting an edit Scarlet has to put back itself now stays under that edit's row in the chat while Scarlet finishes, instead of jumping into a block of its own.
 - In See all, edits are grouped on one row only when they change the same part of the video: cuts a few seconds apart now each have their own row.
 - A stretch you mark on the timeline's ruler now stays while you play it, pause it and click around the timeline, so you can listen to it and adjust its ends. Esc takes it off.
 - In Media, “Tell Scarlet what this is” under a file lets you say what it is and how to use it, such as a finished sponsor read to drop in whole, and Scarlet leaves a file you add while it's editing alone unless you mention it.

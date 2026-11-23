@@ -234,10 +234,13 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   // A request's tag names its edit as the list does: the engine's list knows where each edit sits in the cut now.
   const tagFor = (entry: ThreadEntry) => {
     const asked = entry.taskId ? thread.tasks.find(t => t.id === entry.taskId) : undefined;
-    return asked && revisionTarget(asked, thread.changes, listed);
+    return asked && revisionTarget(asked, thread.changes, everyEdit);
   };
+  // Every edit with a row, rejected ones too: Scarlet's put-back of an edit marks it rejected as soon as it saves, and
+  // the request that asked for it, still checking its joins, stays under that row rather than in a block of its own.
+  const everyEdit = useMemo(() => rejected.length ? [...listed, ...rejected] : listed, [listed, rejected]);
   // The one cut or edit each request was about.
-  const targets = new Map(runs.map(run => [run.root, run !== owner ? requestTarget(aimOf(run), finals.get(run.task.id), thread.changes, listed, thread.tasks) : undefined] as const));
+  const targets = new Map(runs.map(run => [run.root, run !== owner ? requestTarget(aimOf(run), finals.get(run.task.id), thread.changes, everyEdit, thread.tasks) : undefined] as const));
 
   // The cut or edit a request is about, as its row's key, whether or not that row is listed now: an applied edit, or a
   // call of the pass that waits.
