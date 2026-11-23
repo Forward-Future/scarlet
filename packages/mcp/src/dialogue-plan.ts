@@ -742,14 +742,17 @@ async function appendGateEvidence(
     if (c.notes?.length) report.push({ cut: c.input, kind: c.kind, ...(c.words && { words: c.words }), asked: c.decision, outcome: d.review ? "review" : "cut",
       range: [r2(d.start), r2(d.end)], evidence: c.notes.join(" ") });
   });
-  // A retake placed by seconds and applied without a hold is reported with what it takes out and what its join plays.
-  // A word reference names its words; seconds don't, and a range meant for the first take can sit on the pause after
-  // it or on the retake itself.
+  // An applied retake or coaching cut is reported with what it takes out and what its join plays, however it was named.
+  // A range meant for the first take can sit on the pause after it or on the retake itself, and a word reference that
+  // takes out the later try of a line never finished leaves the first playing as a fragment: a pass cut “they, they do
+  // believe.” by its words and played “They do believe ‖ And so what happens” with nothing in its result saying so
+  // (2026-11-22). Pauses and fillers take out no words a sentence needs, so they aren't read.
   await Promise.all(removals.map(async (c, i) => {
     const d = decisions[i]!;
-    if (d.review || c.kind !== "retake" || c.decision !== "cut" || c.words !== undefined) return;
+    if (d.review || (c.kind !== "retake" && c.kind !== "coaching") || c.decision !== "cut") return;
     const heard = await cutReading(tl, project, d, mediaId => sources.words(mediaId, undefined, false));
-    if (heard.plays) report.push({ cut: c.input, kind: c.kind, asked: c.decision, outcome: "cut", range: [r2(d.start), r2(d.end)], removes: heard.removes ?? "", plays: heard.plays });
+    if (heard.plays) report.push({ cut: c.input, kind: c.kind, ...(c.words && { words: c.words }), asked: c.decision, outcome: "cut", range: [r2(d.start), r2(d.end)],
+      ...(c.words === undefined && { removes: heard.removes ?? "" }), plays: heard.plays });
   }));
   // One line per submitted range: a later adjustment replaces an earlier one, keeping both reasons.
   const gate = new Map<number, GateLine>();
