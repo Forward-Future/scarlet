@@ -25,7 +25,7 @@ use tauri::{Manager, RunEvent};
 use config::{AppConfig, Paths};
 use engine::EngineManager;
 use host::login::LoginManager;
-use host::{HostManager, McpLauncher};
+use host::{manager::HostManager, McpLauncher};
 
 pub struct AppState {
     pub paths: Paths,

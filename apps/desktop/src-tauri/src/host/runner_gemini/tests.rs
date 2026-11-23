@@ -1,5 +1,19 @@
 use super::*;
+use super::acp_parse::SCARLET_TOOLS;
 use crate::host::runner::testing::sample_mcp;
+
+/// Parse one JSON-RPC notification line from `agy acp` (or non-JSON output as a log line).
+fn parse_gemini_line(line: &str, st: &mut GeminiState) -> Vec<RunnerEvent> {
+    let Some(msg) = parse_json_object(line) else {
+        return vec![RunnerEvent::new("log", line)];
+    };
+    if msg.get("method").and_then(Value::as_str) == Some("session/update") {
+        if let Some(update) = msg.pointer("/params/update") {
+            return parse_gemini_acp_update(update, st);
+        }
+    }
+    Vec::new()
+}
 
 fn feed(lines: &[&str], st: &mut GeminiState) -> Vec<RunnerEvent> {
     lines.iter().flat_map(|l| parse_gemini_line(l, st)).collect()

@@ -3,8 +3,10 @@ use std::path::Path;
 use super::catalog::describe_agents;
 use super::task_runner::{drain_events, log_completion, outcome, stalled_reason, timed_out_reason, Outcome};
 use super::types::{CompleteTaskRequest, RunResult, RunnerEvent};
-use super::workspace::real_path;
+use super::workspace::{claude_config_dir, claude_project_dir, real_path, remove_claude_sessions, remove_control_files};
 use super::*;
+use super::manager::{remember_host_id, run_limits, DEFAULT_STALL_MINUTES};
+use crate::config::AppConfig;
 use crate::util::now_iso;
 
 type EmittedEvents = Arc<StdMutex<Vec<(String, Value)>>>;
@@ -1081,7 +1083,7 @@ fn mcp_spec_points_at_the_engine_mcp_subcommand() {
     assert!(!spec.args.contains(&"--model".to_string()));
     assert!(!spec.env.contains_key("SCARLET_TASK"));
     // The generated Claude MCP config embeds exactly this spec.
-    let cfg: Value = serde_json::from_str(&runner_claude::mcp_config_json(&spec)).unwrap();
+    let cfg: Value = serde_json::from_str(&runner_claude::command::mcp_config_json(&spec)).unwrap();
     assert_eq!(cfg["mcpServers"]["scarlet"]["command"], json!("node"));
     assert_eq!(cfg["mcpServers"]["scarlet"]["args"][1], json!("mcp"));
     assert_eq!(cfg["mcpServers"]["scarlet"]["env"]["SCARLET_PROJECT"], json!("p"));

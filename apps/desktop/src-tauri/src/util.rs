@@ -93,12 +93,6 @@ pub fn env_remove_ci(env: &mut HashMap<String, String>, keys: &[&str]) {
     env.retain(|k, _| !keys.iter().any(|name| k.eq_ignore_ascii_case(name)));
 }
 
-/// Replace any case-insensitive variant of `key` with `key = value`.
-pub fn env_set_ci(env: &mut HashMap<String, String>, key: &str, value: String) {
-    env_remove_ci(env, &[key]);
-    env.insert(key.into(), value);
-}
-
 /// Keep only environment entries whose names match `allowed`, ignoring ASCII case.
 pub fn env_filter_allowlist(env: HashMap<String, String>, allowed: &[&str]) -> HashMap<String, String> {
     env.into_iter().filter(|(k, _)| allowed.iter().any(|name| k.eq_ignore_ascii_case(name))).collect()
