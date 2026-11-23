@@ -44,7 +44,7 @@ import { createNote, rejectChange, reopenChange, reviseChange, unapproveChange }
 import { applyChange, retryAttempt, runRetry, stopTask } from "./runs";
 import { approveLearning, createSkill, declineLearning, editSkill, reviseLearning, skillFromChange, updateSkill } from "./skills";
 import { MockStore } from "./store";
-import { addTaskNote, answerTask, createTask, holdForRewording, resumeEditing, rewordTask, startBeforeCalls, stopEditing } from "./taskActions";
+import { answerTask, createTask, holdForRewording, resumeEditing, rewordTask, startBeforeCalls, stopEditing } from "./taskActions";
 import { Trash } from "./trash";
 import { isFinished, notFound, now, sleep } from "./util";
 import { checkout, historyEdit } from "./versions";
@@ -541,10 +541,6 @@ export class MockClient implements ScarletApi {
     this.store.updateTask(task, { retryTaskId: retry.id });
     runRetry(this.store, retry);
     return { task: retry };
-  }
-  async addTaskNote(taskId: string, text: string): Promise<{ task: Task }> {
-    this.requireAuth();
-    return addTaskNote(this.store, taskId, text);
   }
   async answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice): Promise<{ task: Task }> {
     this.requireAuth();

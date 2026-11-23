@@ -1,6 +1,6 @@
 import { AboutSettings } from "../components/shell/AboutSettings";
 import { CheckInSettings } from "../components/shell/CheckInSettings";
-import { LocalModelNotice, TranscriptionGuide, useLocalModelStatus } from "../components/shell/LocalModelNotice";
+import { LocalModelNotice, TranscriptionGuide, useLocalModelStatus, useNeedsCrisperSetup } from "../components/shell/LocalModelNotice";
 import { PreferenceSelect } from "../components/ui/PreferenceSelect";
 import { StorageSettings } from "../components/shell/StorageSettings";
 import { UsageSettings } from "../components/shell/UsageSettings";
@@ -49,6 +49,7 @@ function ServerSettingsForm({ section }: { section: "general" | "advanced" }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const localStatus = useLocalModelStatus(busy ? undefined : saved?.transcription);
+  const showCrisperSetup = useNeedsCrisperSetup(localStatus);
   // Number fields hold what is typed until Save. Read as a number on every keystroke, an emptied field refilled at
   // once: clearing Concurrency put 1 back, so typing 4 after it made 14.
   const [typed, setTyped] = useState<{ handleSeconds?: string; concurrency?: string }>({});
@@ -158,7 +159,7 @@ function ServerSettingsForm({ section }: { section: "general" | "advanced" }) {
           </div>
           {tr.provider === "whispercpp" ? <>
             <LocalModelNotice model={localModel} status={localStatus} />
-            {localModel === "crisperwhisper" && <TranscriptionGuide crisper />}
+            {localModel === "crisperwhisper" && showCrisperSetup && <TranscriptionGuide crisper />}
             {localModel === "custom" && (
               <Link className="transcription-setup-row" to="/settings#advanced">
                 Configure model file and adapter <Icon name="chevron" size={14} />

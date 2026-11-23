@@ -3,7 +3,7 @@ import type { Project } from "@scarlet/timeline";
 import { markRenderDone } from "./renders";
 import { runTask, retryAttempt, runRetry, stopTask } from "./runs";
 import type { MockStore } from "./store";
-import { isFinished, now, sleep } from "./util";
+import { now, sleep } from "./util";
 
 export function createTask(store: MockStore, projectId: string, body: CreateTaskRequest) {
   store.projectById(projectId);
@@ -99,15 +99,6 @@ export function rewordTask(store: MockStore, taskId: string, text: string, skill
   }
   store.log(task.projectId, "request.reworded", `${store.currentUser().name} changed a waiting request to: “${words}”`);
   return { task };
-}
-
-/** A note to the request Scarlet is on, kept on its latest attempt. One that has finished takes none. */
-export function addTaskNote(store: MockStore, taskId: string, text: string) {
-  let task = store.taskById(taskId);
-  for (let hops = 0; task.retryTaskId && hops < 50; hops++) task = store.db.tasks.find(t => t.id === task.retryTaskId) ?? task;
-  if (isFinished(task.state)) throw new ScarletApiError(409, "task_finished", "Scarlet has finished this request, so the note goes as a request of its own.");
-  store.updateTask(task, { notes: [...task.notes ?? [], { id: `tnt_${Date.now().toString(36)}`, text: text.trim(), at: now() }] });
-  return { task: { ...task } };
 }
 
 export function answerTask(store: MockStore, taskId: string, text: string, skillIds?: string[], runWith?: RunChoice) {

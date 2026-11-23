@@ -423,8 +423,6 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
         summary={target?.note} listedAbove={inside && !!nested.get(run.root)?.startsWith("call/")} showing={showingIt} onOpen={proposing ? undefined : open}
         // Scarlet's own requests have no heading. Their menu stays with the active run's row.
         actions={request ? undefined : editActions} onStop={request || editsProject ? undefined : stop} paused={paused}
-        // While Scarlet works on a request that edits the video, a note can go to it without waiting for it to end.
-        onNote={actions.addNote && editsProject && isWorking(task.state) ? () => actions.addNote!(task.id) : undefined}
         // Only the thread's last run can be finished, and not while another request in it is under way.
         {...(task === thread.tasks.at(-1) && !thread.active && !thread.question && {
           onResume: () => attempt(run.root, retryTask(task.id)),

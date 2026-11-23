@@ -6,6 +6,9 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- The Transcript panel is cleaner and easier to read: timestamps line up in a quiet left column, sparse remarks flow inline with small pause markers instead of breaking onto single-word lines, repeated "Voice unclear" headers are gone, and search now has previous, next, and clear buttons.
+- Scarlet no longer drops a cut it got right because the transcript and the recording spell or time a word differently, so a false start it found isn't left in.
+- A cut placed at the end of a word that runs straight into the next one no longer clips the word's last sound, like the “s” of “complaints”.
 - The glow over the timeline is gone: under the timeline it now says what Scarlet is doing, and a press on it takes you to that request in the chat.
 - Edits on long 4K recordings are faster: when Scarlet checks what's on screen it reads the small cached copy of a recording instead of the full-size file, and its own requests no longer wait behind background reading of the rest of the recording.
 - The video player no longer shimmers across the picture while a clip is loading.
@@ -23,7 +26,6 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Scarlet no longer quits on its own if you launched it from a terminal and later close that terminal.
 - Scarlet can now find the beat, the bars and where the energy builds and drops in a music track, so you can ask it to cut to the music.
 - Scarlet can now learn a rule from what you keep and reject, not only from what you say: Learnings shows which cuts it came from, and each one opens on the timeline.
-- While Scarlet works on a request, Add a note beside what it's doing lets you tell it something without waiting for it to finish: it reads your note on its next step.
 - Scarlet can make J and L cuts, letting the next voice start just before its shot or a line carry on over the next one, and the edit's card says how far the sound leads or trails.
 - Scarlet can dip music under speech and let it swell back up in the pauses, with a new Music under speech skill for how deep and how fast.
 - Scarlet can clean the room and background noise out of a voice, when you ask for it or a skill of yours says to.

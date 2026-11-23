@@ -73,14 +73,9 @@ interface ComposerProps {
   aimTime?: number;
   /** Exact time for a time-based target tag ("Cut at 2:05", "Edit at 0:11"), shown to the millisecond above the box. */
   targetTime?: number;
-  /**
-   * The request Scarlet is working on that the message is a note to ("Add a note" on its working line). The tag says
-   * Note, and the words reach that run on its next call. A request that has finished meanwhile takes them as a new edit.
-   */
-  noteTo?: string;
   selectedEdit?: AgentContext; onClearSelectedEdit?(): void; thread?: Thread; onCreated?(task: Task): void; onSent?(): void; modelPicker?: boolean }
 
-function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime, noteTo }: ComposerProps & { project: Project }) {
+function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime }: ComposerProps & { project: Project }) {
   const media = useProjectStore(s => s.current?.media);
   const createTask = useProjectStore((s) => s.createTask);
   const createNote = useProjectStore((s) => s.createNote);
@@ -96,7 +91,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const clearSentDraft = useUiStore(s => s.clearSentDraft);
   const keepUnsent = useUiStore(s => s.keepUnsent);
   const answerTask = useProjectStore((s) => s.answerTask);
-  const addTaskNote = useProjectStore((s) => s.addTaskNote);
   const focusTick = useUiStore((s) => s.composerFocus);
   const [error, setError] = useState("");
   // Enter was pressed with no agent or model to send to. The line under the box says why for as long as that is so.
@@ -182,7 +176,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const numberedEdit = displayAnchor?.editNumber ?? (spot !== undefined ? spot + 1 : undefined);
   const editTitle = numberedEdit ? displayAnchor?.label ?? `Edit ${numberedEdit}` : thread && cutSummary(thread.title);
   const mode = !thread ? "New thread" : displayAnchor?.changeId && !numberedEdit && !selectedEdit ? "Revising" : "Reply to";
-  const sendLabel = noteTo && !thread ? "Send note" : !thread ? "Start new edit" : question ? "Send answer" : displayAnchor?.changeId ? "Send revision" : "Send reply";
+  const sendLabel = !thread ? "Start new edit" : question ? "Send answer" : displayAnchor?.changeId ? "Send revision" : "Send reply";
   const timestamp = displayAnchor && `${timestampLabel(displayAnchor.time)}${displayAnchor.end === undefined ? "" : `–${timestampLabel(displayAnchor.end)}`}`;
   const targetName = numberedEdit ? `Edit ${numberedEdit}` : displayAnchor?.changeId ? displayAnchor.label || editTitle || timestamp : timestamp;
   const sourceName = displayAnchor?.mediaId && media?.find(m => m.id === displayAnchor.mediaId)?.name;
@@ -206,9 +200,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       else await answerTask(question.id, answer, skillIds);
       return false;
     }
-    // A note goes to the run Scarlet is on, with no files: those wait for the next message, as with an answer. Once the
-    // request has finished, the words are a new edit of their own, which waits its turn in the queue like any other.
-    if (noteTo && !replying && await addTaskNote(noteTo, text) === "noted") return false;
     if (!effective) throw new Error(unavailableReason);
     let context: Parameters<typeof createTask>[1]["context"];
     if (replying) {
@@ -344,7 +335,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         useAttachmentsStore.getState().byProject[project.id]?.some(a => a.state !== "failed")
         || usePictureMarksStore.getState().byProject[project.id]?.marks.length,
       );
-      if (voiceReword.current || replying || noteTo || !anchor || anchor.mediaId || !effective || carriesFiles) return await speech.handle(r);
+      if (voiceReword.current || replying || !anchor || anchor.mediaId || !effective || carriesFiles) return await speech.handle(r);
       setBusy(true);
       try {
         const { task } = await createVoiceNote(project.id, r.blob, { time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, version: anchor.version ?? head, ...assignment(effective) });
@@ -385,7 +376,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const tagWords = targetTag && lowerFirst(targetTag);
   // What the tag's message does, for its hover note: a cut or an edit is revised, a question answered, an edit replied to.
   const tagAct = !targetTag ? undefined : question && targetTag === "Answer" ? "Answering Scarlet’s question"
-    : noteTo && targetTag === "Note" ? "Adding a note to the edit Scarlet is working on"
     : thread && targetTag === "Reply" ? "Replying to this edit" : `Revising ${tagWords === "whole edit" ? "the whole edit" : tagWords}`;
   // What taking the tag off says it does instead.
   const newEditInstead = tagAct && `Start a new edit instead of ${lowerFirst(tagAct)}`;
@@ -394,8 +384,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const marked = rewording ? undefined : markedRangeOf(context);
   const markedWords = marked ? preciseRange(marked.start, marked.end) : "";
   const markedPrecise = marked ? `${playbackClock(marked.start)} – ${playbackClock(marked.end)}` : "";
-  // "Answer", "Reply" and "Note" name who the message goes to. The target label shows the place it is about.
-  const wordTag = tag === "Answer" || tag === "Reply" || (tag === "Note" && noteTo) ? tag : undefined;
+  // "Answer" and "Reply" name who the message goes to. The target label shows the place it is about.
+  const wordTag = tag === "Answer" || tag === "Reply" ? tag : undefined;
   const placeTag = wordTag ? undefined : tag;
   const takeOffTarget = () => {
     if (onClearTarget) onClearTarget(); else setContext("whole");
@@ -493,10 +483,9 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       <div className={firstEditHint ? "composer-box first-edit-hint" : "composer-box"} onKeyDown={e => {
         if (rewording && e.key === "Escape" && !e.defaultPrevented && !isComposing(e)) rewording.onCancel();
         const emptyBox = !e.defaultPrevented && !isComposing(e) && !recording && !heard && e.target === inputRef.current && !inputRef.current.value;
-        if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && (aimItem || wordTag === "Note")) {
+        if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && aimItem) {
           e.preventDefault();
-          if (aimItem) aimItem.onClear();
-          else takeOffTarget();
+          aimItem.onClear();
         }
         if (e.key.toLowerCase() === "z" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && emptyBox && !rewording && onRestoreTarget?.()) {
           e.preventDefault();
@@ -523,7 +512,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
               title={recording || heard ? "Waits until what you’re saying is sent" : "New edit instead"} onClick={takeOffTarget}><Icon name="x" size={10} /></button>
           </span>}
           <SkillCommandInput key={owner} id={inputId} inputRef={inputRef} value={value} skills={skills}
-            placeholder={rewording ? "What should it ask instead?" : question ? "Answer Scarlet…" : wordTag === "Note" ? "Add a note for Scarlet…" : displayAnchor?.changeId && context ? (stopped ? "What should change at this frame?" : placeTag ? "What should change here?" : "What should change?") : replying ? "Write a follow-up…" : NEW_EDIT_HINT}
+            placeholder={rewording ? "What should it ask instead?" : question ? "Answer Scarlet…" : displayAnchor?.changeId && context ? (stopped ? "What should change at this frame?" : placeTag ? "What should change here?" : "What should change?") : replying ? "Write a follow-up…" : NEW_EDIT_HINT}
             timestamps={sameClock ? times : undefined} onTimestamp={inputClock?.seek} onChange={changeText} onSubmit={() => void submitText()} />
           {/* The reason is only for a mic with no agent to talk to. While a message sends or is written down the spinner says why. */}
           <MicButton onResult={(r) => void onVoice(r)} onStart={() => {

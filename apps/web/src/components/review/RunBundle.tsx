@@ -80,19 +80,6 @@ interface RunBundleProps {
   onResume?(): void;
   /** Resume it once its transcripts are ready, or stop waiting to. */
   onWaitForTranscripts?(on: boolean): void;
-  /** Aim the message box at this run as a note to it: "Add a note", at the right of the line that says what Scarlet is doing. */
-  onNote?(): void;
-}
-
-/**
- * The notes the editor added while Scarlet worked, under the sentence it opened with: a rule at their left, a small
- * Note tag and the editor's words, on two lines at most like any message. They stay with the request once it's done.
- */
-function EditorNotes({ task }: { task: Task }) {
-  if (!task.notes?.length) return null;
-  return <div className="req-notes">
-    {task.notes.map(note => <Said key={note.id} className="req-note" lead={<span className="req-note-tag">Note</span>} text={note.text} />)}
-  </div>;
 }
 
 /** What a pass sent back to check the finished cut is doing, whatever it said on its way in. */
@@ -114,7 +101,7 @@ function useRunUsage(taskId: string, shown = true) {
   return useProjectStore(s => show ? s.current?.taskUsage?.[taskId] : undefined);
 }
 
-function WorkingRun({ task, events: all, changes, callNumber, say, result, onStop, actions, onNote }: RunBundleProps) {
+function WorkingRun({ task, events: all, changes, callNumber, say, result, onStop, actions }: RunBundleProps) {
   // A pass sent back to check the finished cut for repeats runs again as the same request, in a new session. Its line
   // and its first sentence are that session's: what it said an hour ago on the first run isn't what it is doing now.
   const events = useMemo(() => sinceRerun(task, all), [task, all]);
@@ -143,26 +130,18 @@ function WorkingRun({ task, events: all, changes, callNumber, say, result, onSto
   // A run cut short, by Scarlet closing or restarting or by a pause, carries on under a new task. Until that attempt
   // makes its first call the line says so: the editor who just reopened Scarlet sees the edit wasn't started over.
   const pickingUp = !!task.resumeRootId && !rerun && !voice && (!doing || doing === STARTING);
-  // A note the editor just sent is what Scarlet reads next, until its next call or sentence takes the line.
-  const note = task.notes?.at(-1);
-  const readingNote = useMemo(() => !!note && !runNow(events.filter(e => (e.at ?? "") > note.at), aim?.note), [note, events, aim]);
   const words = transcripts ? `Transcribing the recordings · ${transcripts}`
-    : readingNote ? READING_NOTE
     : pickingUp ? PICKING_UP
     : doing ?? (voice ? voicePhase[voice.phase] : task.state === "claimed" ? STARTING : WORKING);
   // The timeline's status says the same words, so the editor can tell what Scarlet is on without the chat in view.
   usePublishWorkingLine(task.id, words);
   return <div className="req" data-state="working" aria-label="Scarlet’s work" aria-busy>
     {aim && <div className="req-said req-lead"><Said className="req-say" text={aim.text} /></div>}
-    <EditorNotes task={task} />
     <div className="req-row req-now">
       <StepMark state="working" />
       {/* The words shimmer while Scarlet works. A narrow chat shortens them to two lines; hovering says them whole. */}
       <span role="status" title={words} className="req-now-text working-text">{words}</span>
-      {(actions || onStop || onNote) && <div className="req-right">
-        {onNote && <button type="button" className="simple-link req-add-note" title="Tell Scarlet something while it works" onClick={onNote}>Add a note</button>}
-        {actions || (onStop && <button type="button" className="simple-link run-stop" onClick={onStop}>Stop</button>)}
-      </div>}
+      {(actions || onStop) && <div className="req-right">{actions || <button type="button" className="simple-link run-stop" onClick={onStop}>Stop</button>}</div>}
     </div>
     {say}
     {result?.(undefined)}
@@ -187,7 +166,6 @@ function WaitingRun({ task, events, changes, say, result, banded, paused, onStop
   const line = !(banded && (asking || (waiting && paused)));
   const opens = asking && shown.length > 0;
   return <div className="req" data-state={asking ? "asking" : "working"} aria-label="Scarlet’s work" aria-busy={!asking}>
-    <EditorNotes task={task} />
     {line && <div className="req-row req-status">
       <button type="button" className="req-toggle" aria-expanded={opens ? open : undefined} disabled={!opens}
         title={opens ? open ? "Hide the details" : "Show the details" : undefined} onClick={() => setOpen(!open)}>
@@ -232,7 +210,6 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
   // The row that says what the run saved is there, and it opens nothing: the action sits on it, after its words.
   const actsOnLine = !!state && !!banded && !rows && !opens && !madeAbove && !(told && !usage?.totalTokens);
   return <div className="req" data-state={paused ? "paused" : stopped ? "stopped" : failed ? "failed" : "done"}>
-    <EditorNotes task={task} />
     {state && !banded && <div className="req-row req-status">
       <span className={`req-state run-summary${failed ? " is-bad" : ""}`}>{state}</span>
       <span className="req-right">{action}</span>
@@ -255,7 +232,6 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
 /** What the line says when nothing names the work of the moment. */
 const WORKING = "Working on your edit";
 const PICKING_UP = "Picking up where it left off";
-const READING_NOTE = "Reading your note";
 
 /** How a run that didn't finish ended, in the words its block says: paused for its transcripts, stopped, or failed. */
 export function runEnded(task: Task) {

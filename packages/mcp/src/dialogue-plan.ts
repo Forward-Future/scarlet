@@ -20,13 +20,13 @@ import {
 } from "./dialogue-cut-resolve.js";
 import {
   checkKeptWords,
-  checkResumeQuote,
   dialogueAudioStream,
   dialogueCutPreview,
   dialogueJoinChecker,
   dialogueJoinWords,
   joinEvidence,
   quietFrameNote,
+  readResumeQuote,
   soundBesideEdge,
   SAME_WORD_UNHEARD,
   type JoinPace,
@@ -302,8 +302,8 @@ async function resolveAndValidatePlanCuts(req: DialoguePlanRequest, sources: Dia
   const kept = sorted.filter(c => c.decision === "keep" || c.picture === "protect").map(({ start, end }) => ({ start, end }));
   if (!removals.length) return { early: { outcome: "preserved", kept } };
 
-  // Quotes are opt-in assertions about the exact cut the agent submitted.
-  // Return conflicts to the caller before writing any part of the plan.
+  // Quotes are opt-in assertions about the exact cut the agent submitted. A production quote that conflicts goes
+  // back to the caller before any part of the plan is written; a resume quote that does is reported on its cut.
   const quoted = removals.filter(c => c.decision === "cut" &&
     ((c.kind === "retake" && c.resumeWith) || (c.kind === "coaching" && c.productionQuote)));
   const project = await sources.project();
@@ -313,9 +313,16 @@ async function resolveAndValidatePlanCuts(req: DialoguePlanRequest, sources: Dia
       if (c.kind === "coaching" && c.productionQuote) {
         reason = sources.evidence.checkProductionQuote(c, c.productionQuote, tl, project);
       } else if (c.resumeWith) {
-        const result = checkResumeQuote(tl, project, c.end, sources.evidence.scans, c.resumeWith);
-        if (result === "different") reason = "The surviving dialogue starts with different words than the supplied quote.";
-        if (result === "unverified") reason = "The scan cannot confirm the supplied quote here.";
+        // A resume quote the scan reads differently is reported, not refused: the scan and the transcript the agent
+        // quotes from are two readings of the recording, and neither is the recording. On two passes all nine cuts
+        // set aside this way were right, spelled or timed differently by the two (“open ai” and “OpenAI”, “gonna” and
+        // “going to”, a first “It” the transcript lacked), and each was sent again without its quote. One was a false
+        // start the editor paused the pass after: the resumed pass never heard of it and it played (2026-11-22).
+        const read = readResumeQuote(tl, project, c.end, sources.evidence.scans, c.resumeWith);
+        if (read.result === "different") c.notes = [...(c.notes ?? []),
+          `After this cut the scan reads “${read.heard}”, where your resumeWith quote says “${c.resumeWith}”. Saved as you placed it.`];
+        if (read.result === "unverified") c.notes = [...(c.notes ?? []),
+          "The scan has no words after this cut to compare your resumeWith quote with. Saved as you placed it."];
       }
       return reason ? [{ start: c.start, end: c.end, reason, cuts: [c.input] }] : [];
     });
