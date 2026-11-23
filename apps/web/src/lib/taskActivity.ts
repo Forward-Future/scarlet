@@ -179,6 +179,9 @@ export function taskActivityLabel(event: TaskEvent, waits: ReadonlySet<string> =
 const technical = /[{}`\n\r\\]|<\/?[a-z!][^<>]*>|[-=]>|https?:\/\/|\b\w+_\w+|(?:^|\s)\/\S|\b(?:MCP|stdout|stderr|JSON|ffmpeg|ffprobe|stack trace|tool call|exit code|API endpoint)\b/i;
 const command = /(?:^|\s)(?:[$%] |(?:bash|zsh|git|npm|pnpm|npx|node|python3?|curl|cargo|sudo|exec_command|ls|cd|chmod|mkdir)\s+\S)|^(?:ran|running|executed) (?:the )?(?:terminal |shell )?commands?\b|&&|\|\|/i;
 
+/** Whether words read as a sentence for the editor, rather than a command, a path or what a tool printed. */
+export const readsPlain = (text: string) => !technical.test(text) && !command.test(text);
+
 const savedPlaybackAllClear = /^(?:the )?playback (?:audio|repeat) check found no (?:outstanding accidental )?repeats[.!]?(?: no edits were needed[.!]?)?$/i;
 
 /** Older passes saved the automatic recheck's all-clear as a chat message. Keep any other words for the editor. */

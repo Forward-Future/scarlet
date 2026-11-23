@@ -6,6 +6,29 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- Choosing words in the Transcript and pressing “Ask about this” now shows the same `Range` tag above the message box as a stretch marked on the timeline, with its × to take it off before you send.
+- A request that couldn't finish says why under its heading when the model gave a reason, such as a usage limit or a sign-in that ran out, so you know before pressing Retry.
+- A request you pick up again while a dialogue pass waits for your calls says “Waits for your calls” in its block, with the same mark that starts it before them, instead of only “Queued”.
+- When Scarlet has several questions waiting, the message box answers them one at a time in the order asked: its tag says which (“Answer 1 of 2”), and Answer in the chat is on the question it will answer.
+- In See all, cuts that went in with a pass through your calls are ticked as kept, as Keep and the timeline already counted them.
+- Scarlet's own recheck under a cut's row says where it stands once, at the right of its heading with Pause and Stop, with no second “Stopped” or “Needs your answer” row.
+- With the chat dragged to its narrowest, the project's name keeps its room while the model button shows its dial alone, and a heading that says “Working on 3 at once” sets its time and tokens aside so your words stay readable.
+- The rest of the chat no longer fades when an edit is opened from a request's own line.
+- The words that say what Scarlet is doing, and Revising… on a row, shimmer while it works; they had stopped moving in the chat.
+- ⌘Z in a message box you have just emptied brings your words back instead of taking back your last Keep, and it puts back a marked range you took off the box.
+- ⌘Z takes back Keep or Reject edit on a call, which waits for you again, and after Keep on a moment it leaves an edit you had already kept on its own kept.
+- Closing a cut's card without deciding and pressing play no longer ticks that cut as kept.
+- With See all open while a pass waits, ↑ and ↓ follow the list row by row through its edits and calls, and an edit a pass made in many places is one stop: Keep keeps every place.
+- In For you, a flagged edit that came back revised says v2 while a pass waits, and a call you rejected shows at its time in the video as it is now.
+- A request that was paused for a transcript and then finished shows Scarlet's reply once, and “Transcribing the recordings” no longer drops back each time one of several transcripts is done.
+- A request about one cut or edit that was paused or restarted after it saved leaves the chat once it is done, and one that waits for a transcript keeps its way to finish through later requests.
+- After a restart or a pause, a request keeps the sentence Scarlet opened it with and says “Picking up where it left off” until its first step, and a press on “Scarlet is editing” under the timeline still brings it into view.
+- “9:16” in a message such as “make a 9:16 short” is read as the picture's shape, not as a time in the video.
+- A file that can't be added while your message waits for it keeps the message in the box and says why, instead of going out without it.
+- Esc ends the marking of a frame without closing the edit that's open, takes a marked range off from the empty message box at once, and closes the Transcript from its empty search field.
+- Backspace in an empty box takes off an Answer tag too, a paused time leaves an open cut's tag once you play on and erase what you wrote, and opening an edit while you change a queued request's words no longer puts those words at risk.
+- After a click on Pause, a suggestion's line or the queue's heading, Space plays the video instead of pressing that control again.
+- At the narrowest chat a stopped request's Resume is no longer cut off, a list of edits above the message box no longer slides sideways, and a tall request there can't push the message box off the window.
 - Ask Scarlet for a list of ideas and where they go, such as B-roll to add, and each one lands as a To do at its place on the timeline, listed in For you, instead of a long list in the chat.
 - Clicking anywhere else in the chat lets go of the purple request, just like pressing Esc.
 - When Scarlet tries to cut in the middle of a word you're still saying, it's now told exactly where the quiet is on either side, so it fixes the cut in one try instead of measuring again.

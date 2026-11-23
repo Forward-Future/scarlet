@@ -96,6 +96,11 @@ export interface ChatActions {
   atOnce?: number;
   /** The queued request Scarlet will take up next, matching the tray's Next line. */
   nextQueuedId?: string;
+  /**
+   * What a request in line waits for when that is the editor, as the tray says it ("Waits for your calls"), with the
+   * way to start it before the calls when they are what holds it.
+   */
+  waitsOn?(task: Task): { words: string; startNow?(): void } | undefined;
   showing?: ThreadEdit;
   /** The request whose own row opened the edit that's showing. Opened from a list or the timeline, there is none. */
   showingFrom?: string;
