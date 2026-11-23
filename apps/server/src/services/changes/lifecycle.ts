@@ -94,7 +94,7 @@ function resolveRestoredCutsTarget(
   restoredCuts: number[],
 ): ResolvedTarget {
   const { head } = project;
-  if (change.state !== "ready") throw conflict("cut_review_stale", "Scarlet is still working on this pass. Try again when it’s done.");
+  if (change.state !== "ready") throw conflict("cut_review_stale", "This pass has changed since. Open the call again from For you.");
   const unchanged = head === change.fromVersion && !change.cutEdits?.length;
   const { review, draft, joinFades } = prepareCutReview(ctx, change, unchanged ? restoredCuts : undefined);
   if (!review) throw badRequest("cuts_unsupported", "This proposal has no individually restorable cuts.");
