@@ -2,6 +2,7 @@ import { ScarletApiError } from "@scarlet/shared";
 import { applyReviewRemovals, contentHash, makeStagedCutMapper, planCutReview, reviewedTimeline } from "@scarlet/timeline";
 import type { Change, Project, Timeline, TimeRange } from "@scarlet/timeline";
 import type { MockDb } from "./fixtures";
+import type { MockStore } from "./store";
 import { notFound } from "./util";
 
 /**
@@ -54,4 +55,10 @@ export function buildCutReview(db: MockDb, change: Change, project: Project, res
   if (removed.some((r, i) => i > 0 && r.start < removed[i - 1]!.end - 1e-6)) throw stale("Two proposed cuts now cover the same footage.");
   const draft = selected.length ? save(applyReviewRemovals(head, removed, review.proposed.version), ontoVersion) : head;
   return { review, draft, ontoVersion, removed };
+}
+
+export async function reviewCuts(store: MockStore, changeId: string, restoredCuts?: number[], ontoVersion?: string) {
+  store.requireAuth();
+  const change = store.changeById(changeId);
+  return buildCutReview(store.db, change, store.projectById(change.projectId), restoredCuts, ontoVersion);
 }
