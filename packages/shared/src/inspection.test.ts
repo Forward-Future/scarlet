@@ -52,13 +52,13 @@ describe("the other inspection requests", () => {
     expect(ok(PictureActivityRequest, { windows: [{ ...window, mediaId: "" }] })).toBe(false);
   });
 
-  it("audition up to eight seconds of a source, of the mix or one confirmed voice", () => {
-    expect(ok(SourceAudioRequest, { mediaId: "m1", from: 2, to: 10 })).toBe(true);
-    // 16.1 - 8.1 is a hair over 8 in floating point: an exact eight-second window still counts.
-    expect(ok(SourceAudioRequest, { mediaId: "m1", from: 8.1, to: 16.1 })).toBe(true);
+  it("audition up to twenty seconds of a source, of the mix or one confirmed voice", () => {
+    expect(ok(SourceAudioRequest, { mediaId: "m1", from: 2, to: 22 })).toBe(true);
+    // 30.1 - 10.1 is a hair over 20 in floating point: an exact twenty-second window still counts.
+    expect(ok(SourceAudioRequest, { mediaId: "m1", from: 10.1, to: 30.1 })).toBe(true);
     expect(ok(SourceAudioRequest, { mediaId: "m1", from: 2, to: 10, voice: "other voices" })).toBe(true);
-    expect(reason(SourceAudioRequest, { mediaId: "m1", from: 2, to: 10.1 })).toBe("Choose a source audio window up to eight seconds");
-    expect(reason(SourceAudioRequest, { mediaId: "m1", from: 2, to: 2 })).toBe("Choose a source audio window up to eight seconds");
+    expect(reason(SourceAudioRequest, { mediaId: "m1", from: 2, to: 22.1 })).toBe("Choose a source audio window up to 20 seconds");
+    expect(reason(SourceAudioRequest, { mediaId: "m1", from: 2, to: 2 })).toBe("Choose a source audio window up to 20 seconds");
     expect(ok(SourceAudioRequest, { mediaId: "m1", from: 2, to: 10, voice: "guest" })).toBe(false);
   });
 

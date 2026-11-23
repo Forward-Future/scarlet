@@ -18,6 +18,7 @@ import {
   toolWait,
   workspaceCapabilities,
   type AgentCapabilities,
+  type Listener,
   type AgentId,
   type ScarletClient,
   type ScarletToolName,
@@ -33,7 +34,7 @@ import { registerDialogueReviewTools } from "./dialogue-review-tools.js";
 import { registerDialogueTools, type StagedReviewState } from "./dialogue-tools.js";
 import { keptEditsNote } from "./editor-kept.js";
 import { registerGraphics } from "./graphics-tools.js";
-import { registerInspectionTools } from "./inspection-tools.js";
+import { listening, registerInspectionTools } from "./inspection-tools.js";
 import { unsharedShape, watchRefusedArguments } from "./mcp-schema.js";
 import { registerMediaReadTools } from "./media-read-tools.js";
 import { createMediaSession } from "./media-session.js";
@@ -65,6 +66,8 @@ const SKILL_EDIT_TOOLS: ReadonlySet<string> = new Set(["task_log", "task_questio
 const LEARNING_CHECK_TOOLS: ReadonlySet<string> = new Set(["skills_list", "learning_suggest"]);
 /** An area check looks at one frame and says what of it viewers may see, and nothing else. */
 const AREA_CHECK_TOOLS: ReadonlySet<string> = new Set(["media_frame", "screen_area"]);
+/** A listen hears one passage for a request whose model can't, and answers in words: it plays the passage, and nothing else. */
+const LISTEN_CHECK_TOOLS: ReadonlySet<string> = new Set(["source_audio"]);
 /**
  * A harness with tool search (Claude Code's `ToolSearch`) lists tools by name and loads a definition when the model
  * looks it up; these are sent whole from the start of a request, as small tools nearly every request reads. A side
@@ -73,7 +76,7 @@ const AREA_CHECK_TOOLS: ReadonlySet<string> = new Set(["media_frame", "screen_ar
  * tools briefly (Gemini's) gets the same tools whole, and the rest through `tool_call` (`brief-tools.ts`).
  */
 export const ALWAYS_LOADED_TOOLS: ReadonlySet<string> = new Set(["project_get", "timeline_get", "task_log", "task_question"]);
-const FEW_TOOL_TASKS: ReadonlySet<string> = new Set(["area_check", "learning_check", "skill_edit", "skill_from_change"]);
+const FEW_TOOL_TASKS: ReadonlySet<string> = new Set(["area_check", "listen_check", "learning_check", "skill_edit", "skill_from_change"]);
 const PASS_WIDE_TOOLS: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_review_save"]);
 
 /** When the tool call under way has to have answered by, in ms since the epoch: its harness's tool wait from when it began. */
@@ -96,6 +99,11 @@ export interface ScarletMcpContext {
   agent?: AgentId | string;
   /** What the harness delivers to the model. Defaults to agentCapabilities(agent). Without audio, no tool offers WAV. */
   capabilities?: AgentCapabilities;
+  /**
+   * The model that listens for this request when its own can't hear, from the engine's answer about the task. With
+   * one, the request has `listen`; without one, no tool offers to hear.
+   */
+  listener?: Listener;
   /** Directory where the server may write files (OTIO exports). Defaults to the OS temp dir. */
   workDir?: string;
   /** fetch used for binary endpoints (frames). Defaults to global fetch. */
@@ -110,8 +118,9 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   const evidence = new DialogueEvidence();
   // A request is launched with its harness's own shell, file and web tools; a run that edits no video (a side check, a
   // skill's revision) with Scarlet's alone, and a client Scarlet didn't launch as it says of itself.
-  const harness = ctx.capabilities ?? agentCapabilities(ctx.agent);
-  const caps = ctx.task && isProjectEditTask(ctx.task) ? workspaceCapabilities(harness) : harness;
+  const harness = ctx.capabilities ?? agentCapabilities(ctx.agent, undefined, ctx.author?.model);
+  // A listen has its harness's file tools too, since Gemini hears a passage only by opening its file (`taskPrompt`).
+  const caps = ctx.task && (isProjectEditTask(ctx.task) || ctx.task.kind === "listen_check") ? workspaceCapabilities(harness) : harness;
 
   type DialogueOperation = ReturnType<typeof taskDialogueOperation>;
   let legacyOperation: Promise<DialogueOperation> | undefined;
@@ -143,6 +152,8 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
         ? "Scarlet exposes the tools for reading the editor’s skills and offering a rule for one; an empty MCP resource list is normal."
         : ctx.task?.kind === "area_check"
         ? "Scarlet exposes the tools for looking at one frame of a recording and saving what of it viewers may see; an empty MCP resource list is normal."
+        : ctx.task?.kind === "listen_check"
+        ? "Scarlet exposes the tool for playing one passage of a recording; an empty MCP resource list is normal."
         : "Scarlet exposes project context and editing operations as tools; an empty MCP resource list is normal. project_get returns the current edit and the editor’s selection. Transcript and waveform tools prepare missing data on demand.",
     },
   );
@@ -248,7 +259,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     shape: Shape,
     handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>,
   ) {
-    if (name === "source_audio" && !caps.audio) return;
+    if (name === "source_audio" && !listening(caps, true)) return;
     // Only a harness with file tools can put anything in the artifact directory for asset_add to import.
     if (name === "asset_add" && !caps.files) return;
     if (authoring && !SKILL_FROM_CHANGE_TOOLS.has(name)) return;
@@ -262,6 +273,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     // edits doesn't offer rules as well, so the editor never gets the same rule twice in two wordings.
     if (ctx.task?.kind === "learning_check" ? !LEARNING_CHECK_TOOLS.has(name) : name === "learning_suggest") return;
     if (ctx.task?.kind === "area_check" && !AREA_CHECK_TOOLS.has(name)) return;
+    if (ctx.task?.kind === "listen_check" && !LISTEN_CHECK_TOOLS.has(name)) return;
     const inputSchema = unsharedShape(shape);
     toolParameters.set(name, z.object(inputSchema));
     const alwaysLoad = ALWAYS_LOADED_TOOLS.has(name) || FEW_TOOL_TASKS.has(ctx.task?.kind ?? "");
@@ -326,8 +338,9 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   // Register tools in exact canonical order.
   const inspection = registerInspectionTools({
-    tool, client, projectId: ctx.projectId, taskId: ctx.taskId, task: ctx.task, caps,
+    tool, client, projectId: ctx.projectId, taskId: ctx.taskId, task: ctx.task, caps, listener: ctx.listener,
     fetchImpl, session, errors, scanScopes, waitLeft, readPassage: revision.readPassage, postEvent,
+    writeArtifact: async (path, data) => writeArtifact(await artifactDir(), path, data),
   });
 
   const proposePipeline = createProposePipeline({

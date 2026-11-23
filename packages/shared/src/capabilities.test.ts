@@ -8,7 +8,7 @@ describe("agentCapabilities", () => {
     // No harness's to-do tool is on: the chat shows no plan. Gemini's runner reads none.
     expect(agentCapabilities("claude")).toEqual({ images: true, audio: false, files: false, plan: false, resultChars: 40_000, toolPrefix: "mcp__scarlet__", toolWaitSeconds: 240 });
     expect(agentCapabilities("codex")).toEqual({ images: true, audio: false, files: true, plan: false, resultChars: 40_000, toolWaitSeconds: 240 });
-    expect(agentCapabilities("gemini")).toEqual({ images: true, audio: false, files: false, plan: false, briefTools: true, resultChars: 9_000, toolWaitSeconds: 120 });
+    expect(agentCapabilities("gemini")).toEqual({ images: true, audio: false, audioFiles: true, files: false, plan: false, briefTools: true, resultChars: 9_000, toolWaitSeconds: 120 });
     for (const agent of [undefined, "", "api", "toString", "Claude"]) expect(agentCapabilities(agent), String(agent)).toEqual({ images: true, audio: false, files: false, plan: false, resultChars: 40_000 });
   });
 

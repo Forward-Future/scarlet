@@ -769,6 +769,7 @@ export const TaskKind = z.enum([
   "skill_edit", // revise one skill as the editor described; not part of a project's conversation
   "learning_check", // read one request for a standing rule to offer; started with the request, beside it
   "area_check", // look at one frame of a recording and say what of it viewers may see; started when a save needs it
+  "listen_check", // hear one passage of a recording and say what it heard, for a request whose model can't hear; started by its `listen` call
   "broll_make", // retired 2026-11-21: a run beside a request that made one piece of B-roll. Every request has the shell and the web now. Kept so saved tasks still read.
   "transcribe", // server-side job, not dispatched to hosts
 ]);
@@ -863,6 +864,8 @@ export const Task = z.object({
       readsDecisions: z.literal(true).optional(),
       /** The frame an area_check task looks at: a recording and a source second. */
       areaCheck: z.object({ mediaId: Id, at: Seconds }).optional(),
+      /** The passage a listen_check task hears, in source seconds, and what the request that asked wants to know of it. */
+      listenCheck: z.object({ mediaId: Id, from: Seconds, to: Seconds, voice: z.enum(["me", "other voices"]).optional(), question: z.string().min(1).max(2000) }).optional(),
       time: Seconds.optional(),
       end: Seconds.optional(),
       clipIds: z.array(Id).optional(),
@@ -1056,28 +1059,33 @@ export function isAreaCheck(task: Pick<Task, "kind">): boolean {
   return task.kind === "area_check";
 }
 
+/** A run that hears one passage for a request whose own model can't hear, and says what it heard. */
+export function isListenCheck(task: Pick<Task, "kind">): boolean {
+  return task.kind === "listen_check";
+}
+
 /** A retired kind of run, which made one piece of B-roll beside a request. One saved earlier stays out of the conversation. */
 export function isBrollMake(task: Pick<Task, "kind">): boolean {
   return task.kind === "broll_make";
 }
 
-/** A run that edits no video, so it stays out of the project's conversation and queue: a skill edit, a learning check, or an area check. */
+/** A run that edits no video, so it stays out of the project's conversation and queue: a skill edit, a learning check, an area check or a listen check. */
 export function isAsideTask(task: Pick<Task, "kind">): boolean {
-  return isSkillEdit(task) || isLearningCheck(task) || isAreaCheck(task) || isBrollMake(task);
+  return isSkillEdit(task) || isLearningCheck(task) || isAreaCheck(task) || isListenCheck(task) || isBrollMake(task);
 }
 
 /**
- * A short check that runs beside a request and saves nothing to the video: a learning check or an area check. A host
+ * A short check that runs beside a request and saves nothing to the video: a learning check, an area check or a listen check. A host
  * runs these in slots of their own, so they never wait behind the requests they check. A running edit waits on its
  * area checks, and sharing its slots left it holding one while its checks queued for the rest (20 checks on 2 slots
  * took 12 minutes, 2026-11-20). A skill edit rewrites a skill and isn't one.
  */
 export function isSideCheck(task: Pick<Task, "kind">): boolean {
-  return isLearningCheck(task) || isAreaCheck(task);
+  return isLearningCheck(task) || isAreaCheck(task) || isListenCheck(task);
 }
 
 /** The kinds `isSideCheck` names, for the engine's claim query. */
-export const SIDE_CHECK_KINDS = ["learning_check", "area_check"] as const satisfies readonly TaskKind[];
+export const SIDE_CHECK_KINDS = ["learning_check", "area_check", "listen_check"] as const satisfies readonly TaskKind[];
 
 /**
  * Side checks a host runs at once per runtime, beside its `maxParallel` requests: twice as many, up to 12. Each looks at
@@ -1564,6 +1572,11 @@ export const ServerSettings = z.object({
   defaultAgent: AgentId.default("claude"),
   /** How many of a pass's cuts, the ones Scarlet thinks most likely to be wrong, the editor is asked to check. */
   checkIn: CheckIn.default("balanced"),
+  /**
+   * Which model listens to cuts for a request whose own model can't hear: "auto" (the best one signed in), "off", or
+   * one model as "agent:model" (`chooseListener`).
+   */
+  listening: z.string().regex(/^(auto|off|[a-z]+:[^\s]+)$/).default("auto"),
 });
 export type ServerSettings = z.infer<typeof ServerSettings>;
 

@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { fileInDirectoryAsync } from "@scarlet/render";
 import { Hono, type Context } from "hono";
 import type { MediaAsset } from "@scarlet/timeline";
+import { SOURCE_AUDIO_MOST } from "@scarlet/shared";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
@@ -12,6 +13,7 @@ import { musicBeats } from "../services/musicBeats.js";
 import { pictureCuts } from "../services/pictureCuts.js";
 import { screenMotion } from "../services/screenMotion.js";
 import { screenText } from "../services/screenText.js";
+import { listenFor } from "../services/listening.js";
 import { askAreas, editShowAreas, showArea, type ShowAreaEdit } from "../services/showArea.js";
 import { requestAttempt, requireActiveAttempt } from "../services/taskAttempt.js";
 import { optionalNumberParam, requireMedia } from "./util.js";
@@ -138,6 +140,22 @@ export function perceptionRoutes(ctx: Ctx) {
     if (attempt) requireActiveAttempt(ctx, attempt, media.projectId, body.taskId);
     const asked = await askAreas(ctx, media, { seconds: body.seconds as number[], taskId: body.taskId, waitMs: areaWait(c), again: body.again === true });
     return c.json({ ...asked, ...await showArea(ctx, media, { waitMs: 5000 }) });
+  });
+
+  // Have a model that hears listen to a passage for a request whose own model can't, and wait up to `wait` seconds
+  // (default 60) for what it heard. Only a running request asks, for itself.
+  r.post("/projects/:projectId/listen", async c => {
+    const body = await c.req.json().catch(() => null) as { taskId?: unknown; mediaId?: unknown; from?: unknown; to?: unknown; voice?: unknown; question?: unknown } | null;
+    const { taskId, mediaId, from, to, voice, question } = body ?? {};
+    if (typeof taskId !== "string" || typeof mediaId !== "string" || typeof from !== "number" || typeof to !== "number" || typeof question !== "string" || !question.trim()) {
+      throw badRequest("bad_request", "Send taskId, mediaId, from, to and question.");
+    }
+    requireSourceRange(from, to);
+    if (to - from > SOURCE_AUDIO_MOST + 0.05) throw badRequest("bad_range", `Choose a passage of up to ${SOURCE_AUDIO_MOST} s.`);
+    if (question.length > 2000) throw badRequest("bad_request", "Ask in up to 2,000 characters.");
+    requireActiveAttempt(ctx, requestAttempt(c.req.raw), c.req.param("projectId"), taskId);
+    const wait = Math.max(0, Math.min(240, optionalNumberParam(c.req.query("wait"), "wait") ?? 60)) * 1000;
+    return c.json(await listenFor(ctx, taskId, { mediaId, from, to, voice: voice === "me" || voice === "other voices" ? voice : undefined, question }, wait));
   });
 
   return r;
