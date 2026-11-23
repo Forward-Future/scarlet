@@ -117,9 +117,9 @@ it("leaves ← and → alone on the focused timeline while ⌘, Ctrl or Alt is h
   expect([await key({ key: "ArrowLeft", metaKey: true }), await key({ key: "ArrowRight", ctrlKey: true }), await key({ key: "ArrowRight", altKey: true })]).toEqual([false, false, false]);
   expect(onSeek).not.toHaveBeenCalled();
   expect(await key({ key: "ArrowRight" })).toBe(true);
-  expect(onSeek).toHaveBeenLastCalledWith(35);
+  expect(onSeek).toHaveBeenLastCalledWith(31);
   expect(await key({ key: "ArrowLeft", shiftKey: true })).toBe(true);
-  expect(onSeek).toHaveBeenLastCalledWith(29);
+  expect(onSeek).toHaveBeenLastCalledWith(899 / 30);
 });
 
 it("ends a drag that is held when a new working cut builds the timeline again, so the video it paused carries on", async () => {
