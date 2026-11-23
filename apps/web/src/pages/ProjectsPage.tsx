@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ProjectSummary } from "@scarlet/shared";
-import { errorMessage } from "../lib/client";
+import { errorMessage, IS_MOCK } from "../lib/client";
+import { isDesktop } from "../lib/desktop";
 import { plural } from "../lib/format";
 import { isEditableTarget } from "../lib/hotkeys";
 import { useProjectStore } from "../stores/project";
@@ -13,6 +14,9 @@ import { TrashButton } from "../components/shell/TrashButton";
 import { ConfirmDialog, EmptyState, ErrorState, Icon, InlineError, Loading, Modal, Spinner } from "../components/ui/primitives";
 import { ProjectCard } from "./projects/ProjectCard";
 import { FirstEditGuide, NewProjectModal } from "./projects/NewProjectModal";
+import { FirstSignIn, providerList, SIGN_IN_ORDER } from "./projects/FirstSignIn";
+import { isConfiguredAgent, useHostsStore } from "../stores/hosts";
+import { useUiStore } from "../stores/ui";
 
 function ProjectCollection({ projects, view, archived, notice, selectionSlot, selectAllSlot }: {
   projects: ProjectSummary[]; view: "list" | "grid"; archived: boolean; notice: string;
@@ -183,6 +187,31 @@ export function ProjectsPage() {
   const begin = (sources: ImportSource[]) => setDialog({ kind: "create", sources });
 
   const empty = !list.length && !archived && status === "ready";
+  // Nothing can be edited without a model, so while none is ready the first screen is signing in to one.
+  const hostsStatus = useHostsStore(s => s.status);
+  // The plans signed in, as one string so the store's answer only changes when they do.
+  const signedInIds = useHostsStore(s => [...new Set(s.hosts.flatMap(h => h.agents).filter(isConfiguredAgent).map(a => a.id))].join(","));
+  const signedIn = signedInIds ? signedInIds.split(",") : [];
+  const signInLater = useUiStore(s => s.signInLater);
+  const setSignInLater = useUiStore(s => s.setSignInLater);
+  // Opened from Quick start before any plan is signed in ("first"), or to add another plan once one is ("add").
+  const [signInAsked, setSignInAsked] = useState<"first" | "add" | null>(null);
+  const canSignInHere = isDesktop() && !IS_MOCK;
+  const needsSignIn = canSignInHere && !signedIn.length;
+  const hostsKnown = hostsStatus === "ready" || hostsStatus === "error";
+  const adding = canSignInHere && signInAsked === "add";
+  const signIn = hostsKnown && (adding || (needsSignIn && (signInAsked === "first" || (empty && !signInLater))));
+  const canAddPlan = canSignInHere && signedIn.length > 0 && SIGN_IN_ORDER.some(id => !signedIn.includes(id));
+  const askSignIn = (mode: "first" | "add") => {
+    setDialog(null);
+    setSignInLater(false);
+    setSignInAsked(mode);
+  };
+  const lookAround = () => {
+    if (!adding) setSignInLater(true);
+    setSignInAsked(null);
+  };
+
   const newProject = <button type="button" className="btn-primary" onClick={() => begin([])}>
     <Icon name="plus" size={15} /> New project
   </button>;
@@ -193,12 +222,12 @@ export function ProjectsPage() {
   return (
     <div className="flex-1 overflow-y-auto">
       <Dropzone onFiles={sources => begin(Array.from(sources))} onPaths={begin} label="Create a project from these files" notice={notice} className="min-h-full">
-        <main className={empty ? "library-page library-welcome" : "library-page"}>
+        <main className={empty || signIn ? "library-page library-welcome" : "library-page"}>
           <header className="library-heading">
-            <h1>Projects</h1>
+            <h1>{signIn ? "Scarlet" : "Projects"}</h1>
             <span ref={setSelectionSlot} className="contents" />
             <div className="flex-1" />
-            {list.length > 0 && quickStart}
+            {!signIn && list.length > 0 && quickStart}
             {(archived || list.some(p => p.archived)) && <div className="view-switch library-filter" role="group" aria-label="Project status">
               <button aria-pressed={!archived} onClick={() => setArchived(false)}>Active</button>
               <button aria-pressed={archived} onClick={() => setArchived(true)}>Archived</button>
@@ -209,11 +238,13 @@ export function ProjectsPage() {
               <button aria-label="List view" aria-pressed={view === "list"} title="List view" onClick={() => chooseView("list")}><Icon name="diff" size={15} /></button>
               <button aria-label="Grid view" aria-pressed={view === "grid"} title="Grid view" onClick={() => chooseView("grid")}><Icon name="library" size={14} /></button>
             </div>}
-            {!empty && newProject}
+            {!signIn && !empty && newProject}
             <WindowActions />
           </header>
-          {(status === "loading" || status === "idle") && !list.length ? (
-            // Wait for the library before offering a first project.
+          {signIn ? (
+            <FirstSignIn adding={adding} later={lookAround} laterLabel={adding ? "Done" : empty ? "Look around first" : "Back to projects"} />
+          ) : ((status === "loading" || status === "idle") && !list.length) || (empty && needsSignIn && !hostsKnown && !signInLater) ? (
+            // Wait for the library, and for whether a model is ready, before offering a first project.
             <Loading />
           ) : status === "error" && !list.length ? (
             <ErrorState body={error ?? undefined} onRetry={() => void loadList(true)} />
@@ -225,6 +256,8 @@ export function ProjectsPage() {
             <section className="library-first-edit" aria-labelledby="first-edit-title">
               <h2 id="first-edit-title">Make your first edit</h2>
               <p>Drop your footage here, then tell Scarlet what you’d like to change.</p>
+              {signedIn.some(id => SIGN_IN_ORDER.includes(id)) && <p className="first-signed-in">✓ Signed in with {providerList(signedIn)}
+                {canAddPlan && <> · <button type="button" className="first-edit-link" onClick={() => askSignIn("add")}>Add another</button></>}</p>}
               <div className="first-edit-actions">{newProject}{quickStart}</div>
             </section>
           ) : (
@@ -235,7 +268,7 @@ export function ProjectsPage() {
       </Dropzone>
 
       <Modal open={dialog?.kind === "guide"} onClose={() => setDialog(null)} title="Quick start" width={480} footer={newProject}>
-        <FirstEditGuide />
+        <FirstEditGuide onSignIn={needsSignIn ? () => askSignIn("first") : undefined} />
       </Modal>
       {dialog?.kind === "create" && (
         <NewProjectModal initialFiles={dialog.sources} empty={empty} notice={notice} local={local} onClose={() => setDialog(null)} />
