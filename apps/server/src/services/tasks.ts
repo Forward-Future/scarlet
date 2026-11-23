@@ -436,19 +436,21 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
 }
 
 /** The side checks of one kind a request started that haven't finished. */
-function openChecks(ctx: Ctx, task: Task, kind: "learning_check" | "area_check"): Task[] {
+function openChecks(ctx: Ctx, task: Task, kind: "learning_check" | "area_check" | "listen_check"): Task[] {
   if (!editsDialogue(task.kind)) return [];
   return ctx.repos.tasks.select("project_id = ? AND kind = ? AND json_extract(json, '$.context.checksTaskId') = ?", [task.projectId, kind, task.id])
     .filter(check => !FINISHED_TASK.has(check.state));
 }
 
 /**
- * A request that has ended leaves no look at a frame waiting to start: none would serve it, and a look left waiting
+ * A request that has ended leaves no look at a frame waiting to start, and no listen at all: none would serve it, and a look left waiting
  * would hold back the next request's asks about the same recording. One already looking finishes, since what it finds
  * is kept for the recording.
  */
 export function dropWaitingLooks(ctx: Ctx, task: Task): void {
   for (const check of openChecks(ctx, task, "area_check")) if (check.state === "queued") cancelTask(ctx, check);
+  // What a listen hears is told only to the run that asked, so one under way stops as well.
+  for (const check of openChecks(ctx, task, "listen_check")) cancelTask(ctx, check);
 }
 
 /**
@@ -472,6 +474,7 @@ export function cancelTask(ctx: Ctx, task: Task, opts: { withdrawn?: boolean } =
   // The frames a request asked to have looked at serve its own run alone, and that run is over: stopped, taken back or
   // put back in line by a pause, where the attempt that resumes it asks again.
   for (const check of openChecks(ctx, task, "area_check")) cancelTask(ctx, check);
+  for (const check of openChecks(ctx, task, "listen_check")) cancelTask(ctx, check);
   ctx.bus.taskQueued({ taskId: saved.id, projectId: saved.projectId });
   return saved;
 }

@@ -197,8 +197,76 @@ export function useKeptEdits(projectId: string, thread: Thread | undefined): Rea
   }, [projectId, threadId, local, engine]);
   return useMemo(() => engine.size ? new Set([...local, ...engine]) : local, [local, engine]);
 }
+
+/**
+ * To-do markers the editor parked for later ("Later") in this window, per thread. Kept separate from Keeps so the
+ * engine does not treat them as finished; marking a deferred to-do Done still overrides it and sends the Keep.
+ */
+const DEFER_PREFIX = "scarlet.deferred-edits.v1";
+const deferListeners = new Set<() => void>();
+const deferCache = new Map<string, { raw: string | null; value: ReadonlySet<string>; sessionOnly?: boolean }>();
+const deferStorageKey = (projectId: string, threadId: string) => `${DEFER_PREFIX}/${projectId}/${threadId}`;
+
+function readDeferred(projectId: string, threadId: string): ReadonlySet<string> {
+  const key = deferStorageKey(projectId, threadId);
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(key); } catch { /* ignore */ }
+  const known = deferCache.get(key);
+  if (known && (known.raw === raw || known.sessionOnly)) return known.value;
+  let value: ReadonlySet<string> = new Set();
+  try {
+    const saved = JSON.parse(raw ?? "null");
+    if (Array.isArray(saved)) value = new Set(saved.filter((k): k is string => typeof k === "string"));
+  } catch { /* ignore */ }
+  deferCache.set(key, { raw, value });
+  return value;
+}
+
+export function deferEdits(projectId: string, threadId: string, refs: KeptRef[]) {
+  const key = deferStorageKey(projectId, threadId);
+  const before = readDeferred(projectId, threadId);
+  const next = new Set(before);
+  for (const ref of refs) next.add(reviewKey(ref));
+  if (next.size === before.size) return false;
+  const raw = JSON.stringify([...next]);
+  try {
+    localStorage.setItem(key, raw);
+    deferCache.set(key, { raw, value: next });
+  } catch {
+    deferCache.set(key, { raw: null, value: next, sessionOnly: true });
+  }
+  appLog("review", "deferred", { project: projectId, thread: threadId, count: next.size - before.size });
+  for (const listener of deferListeners) listener();
+  return true;
+}
+
+export function undeferEdits(projectId: string, threadId: string, refs: KeptRef[]) {
+  const key = deferStorageKey(projectId, threadId);
+  const before = readDeferred(projectId, threadId);
+  const keys = new Set(refs.map(reviewKey));
+  const next = new Set([...before].filter(k => !keys.has(k)));
+  const raw = JSON.stringify([...next]);
+  try {
+    localStorage.setItem(key, raw);
+    deferCache.set(key, { raw, value: next });
+  } catch {
+    deferCache.set(key, { raw: null, value: next, sessionOnly: true });
+  }
+  appLog("review", "undeferred", { project: projectId, thread: threadId, count: keys.size });
+  for (const listener of deferListeners) listener();
+}
+
+export function useDeferredEdits(projectId: string, thread: Thread | undefined): ReadonlySet<string> {
+  const threadId = thread?.id;
+  return useSyncExternalStore(subscribeDeferred, () => threadId ? readDeferred(projectId, threadId) : empty);
+}
+
 const empty: ReadonlySet<string> = new Set();
 function subscribe(listener: () => void) {
   listeners.add(listener);
   return () => { listeners.delete(listener); };
+}
+function subscribeDeferred(listener: () => void) {
+  deferListeners.add(listener);
+  return () => { deferListeners.delete(listener); };
 }

@@ -1,6 +1,13 @@
 import { useEffect, useLayoutEffect, useId, useRef, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { errorMessage } from "../../lib/client";
 
+/** Render a formatted clock or range with any `.123` millisecond suffix dimmed and slightly smaller. */
+export function DimMs({ text }: { text: string }) {
+  if (!text.includes(".")) return <>{text}</>;
+  const parts = text.split(/(\.\d+)/g);
+  return <>{parts.map((part, i) => part.startsWith(".") ? <span key={i} className="time-ms">{part}</span> : part)}</>;
+}
+
 export function Spinner({ className = "" }: { className?: string }) {
   return (
     <span

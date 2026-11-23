@@ -109,7 +109,7 @@ interface PreviewProps {
     /** Changes each time the editor asks to see the whole timeline. */
     fit?: number;
     focus?: ProgressFocus; label?: string; compareHost?: HTMLElement | null; above?: ReactNode;
-    /** In the timeline's bottom row: what ⌘Z takes back. */
+    /** In the timeline's bottom row: why the last ⌘Z couldn't take its step back. */
     foot?: ReactNode;
     gaps?: TimelineGap[]; skippedRanges?: TimeRange[]; onGap?(gap: TimelineGap, time: number): void;
     /** A click inside the shaded passage, when the playing side steps over it. */
@@ -130,9 +130,7 @@ interface PreviewProps {
      */
     heard?: { current: string | undefined };
     /** Set while Scarlet opens again, at launch, what was open at the last quit: that passage is shown and not played. */
-    quiet?: { current: boolean };
-    /** Scarlet is actively editing the video shown here. */
-    editing?: boolean };
+    quiet?: { current: boolean } };
   /**
    * Play this rendered version instead, through `clock`, while everything on screen stays on the version shown.
    * Its joins are inside the rendered media, so a cut sounds exactly as it will. `file` is its saved preview, when
@@ -524,7 +522,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       e.preventDefault();
       if (!playable || duration <= 0) return;
-      const target = Math.max(0, Math.min(lastFrame, arrowSeekTime(usePlayerStore.getState().time, e.key, e.shiftKey)));
+      const target = Math.max(0, Math.min(lastFrame, arrowSeekTime(usePlayerStore.getState().time, e.key, e.shiftKey, fps)));
       seekFull(target);
       selectTime(target);
     } else if (e.key.toLowerCase() === "m" && simple.onPick && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -539,7 +537,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
       useUiStore.getState().focusComposer();
     }
   });
-  // A pause the editor makes writes its time into an empty message box, as if they had typed it.
+  // A pause the editor makes aims an empty message box at that moment in its tag, without writing into the box.
   const pickOnPause = useRef(() => {});
   pickOnPause.current = () => {
     if (simple.onPick && active && playable && duration > 0) selectTime(usePlayerStore.getState().time, "pause");
@@ -608,22 +606,24 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
         <div ref={monitor} className="watch-monitor" data-landscape={pictureAspect > 1 || undefined}
           style={{ "--picture-aspect": pictureAspect } as CSSProperties}
           onLoadedMetadataCapture={readSourceSize}>
-          {layers.map(({ key, layer, before, beforeUrl, beforeWindow, edited, afterWindow, leadIn, showBefore, showAfter }) => <div key={layer} className="absolute inset-0"
-            inert={!showBefore && !showAfter} data-parked={(!showBefore && !showAfter) || undefined}
-            style={{ isolation: "isolate", zIndex: showBefore || showAfter ? 0 : -1 }} aria-hidden={(!showBefore && !showAfter) || undefined}>
-            {before && (showBefore || allowStandby) && <div key={`before ${key}`} className="absolute inset-0 bg-black" inert={!showBefore} data-parked={!showBefore || undefined}
-              style={{ zIndex: showBefore ? 1 : 0 }} aria-hidden={!showBefore || undefined}>
-              <CutSide project={current.project} timeline={before} url={beforeUrl} window={beforeWindow}
-                label={draftVersion ? "Proposed draft" : "The video"} fps={settings.fps} active={active} parkedAt={!showBefore ? leadIn : undefined} />
-            </div>}
-            {edited && (showAfter || allowStandby) && <div key="after" className="absolute inset-0 bg-black" inert={!showAfter} data-parked={!showAfter || undefined}
-              style={{ zIndex: showAfter ? 1 : 0 }} aria-hidden={!showAfter || undefined}>
-              <CutSide key={edited.joined.version} project={current.project} timeline={edited.joined.timeline} url={edited.url} window={afterWindow}
-                joins={edited.joined.clock} label={edited.url ? "The video" : "Proposed draft"} fps={settings.fps} active={active}
-                parkedAt={!showAfter ? edited.joined.clock.toMedia(leadIn) : undefined} />
-            </div>}
-            {!showBefore && !showAfter && <div key="cover" className="absolute inset-0 z-10 bg-black" />}
-          </div>)}
+          {layers.map(({ key, layer, before, beforeUrl, beforeWindow, edited, afterWindow, leadIn, showBefore, showAfter }) => {
+            const shown = showBefore || showAfter;
+            return <div key={layer} className="absolute inset-0"
+              inert={!shown} data-parked={!shown || undefined}
+              style={{ isolation: "isolate", zIndex: shown ? 0 : -1, ...!shown && { opacity: 0, pointerEvents: "none" } }} aria-hidden={!shown || undefined}>
+              {before && (showBefore || allowStandby) && <div key={`before ${key}`} className="absolute inset-0" inert={!showBefore} data-parked={!showBefore || undefined}
+                style={{ zIndex: showBefore ? 1 : 0, ...!showBefore && { opacity: 0, pointerEvents: "none" } }} aria-hidden={!showBefore || undefined}>
+                <CutSide project={current.project} timeline={before} url={beforeUrl} window={beforeWindow}
+                  label={draftVersion ? "Proposed draft" : "The video"} fps={settings.fps} active={active} parkedAt={!showBefore ? leadIn : undefined} />
+              </div>}
+              {edited && (showAfter || allowStandby) && <div key="after" className="absolute inset-0" inert={!showAfter} data-parked={!showAfter || undefined}
+                style={{ zIndex: showAfter ? 1 : 0, ...!showAfter && { opacity: 0, pointerEvents: "none" } }} aria-hidden={!showAfter || undefined}>
+                <CutSide key={edited.joined.version} project={current.project} timeline={edited.joined.timeline} url={edited.url} window={afterWindow}
+                  joins={edited.joined.clock} label={edited.url ? "The video" : "Proposed draft"} fps={settings.fps} active={active}
+                  parkedAt={!showAfter ? edited.joined.clock.toMedia(leadIn) : undefined} />
+              </div>}
+            </div>;
+          })}
           {!paired && (openingJoin || (draftVersion && !draft && !fullVideoUrl && !joined) ? <div className="absolute inset-0 grid place-content-center gap-2 text-sm text-muted" role="status">
             {draftFailed ? <>Couldn’t open this version.<button className="btn-ghost" onClick={onRetryDraft}>Retry</button></>
               : !openingJoin && "Opening the suggestion…"}
@@ -681,7 +681,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
         </div>}
         {simple.above}
         <div>
-          <PlayerTimeline activeShortcuts={active} foot={simple.foot} editing={simple.editing} duration={duration} pictureAspect={pictureAspect} previewStrip={laneStrip} hoverVideo={hoverVideo}
+          <PlayerTimeline activeShortcuts={active} foot={simple.foot} duration={duration} pictureAspect={pictureAspect} previewStrip={laneStrip} hoverVideo={hoverVideo}
             waveform={{ media: current.media, mediaPaused: current.project.mediaPaused, source, timeline: laneTimeline, ...sameClockBefore && {
               audioFrom: playingBefore ? sameClockBefore : undefined, scaleWith: playingBefore ? laneTimeline : sameClockBefore } }} frameAt={frameAt} onSeek={seekFull} onSelectTime={selectTime} onScrubStart={scrubStart}
             range={simple.onRange ? shownRange : undefined} onRange={simple.onRange ? markRange : undefined} fps={fps}

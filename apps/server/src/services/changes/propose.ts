@@ -27,7 +27,7 @@ import { notify } from "../notify.js";
 import { removalOutsideSelection, rippleOutsideSelection } from "../selectedRemoval.js";
 import { editsDialogue, FINISHED_TASK } from "../tasks.js";
 import { ensureProjectHead, resolveTimeline, storeValidatedVersion } from "../timeline.js";
-import { anchorOriginal, authorFor, putAway, saveChange, threadOf, threadOfChange } from "./common.js";
+import { anchorOriginal, authorFor, editorAskedSince, putAway, saveChange, threadOf, threadOfChange } from "./common.js";
 import { fadeJoins, proposalJoins } from "./joinCrossfades.js";
 import { alternativeAlreadyChosen, approveChange, rejectChange } from "./lifecycle.js";
 import { scheduleSpotCheck, spotWindows } from "./spotChecks.js";
@@ -44,7 +44,7 @@ export interface ProposeResult {
    * A requested edit that could not go onto the video: it was written on `fromVersion`, and since then something else
    * changed the same footage. `reason` says what met and where, and `currentVersion` is the video as it is now.
    */
-  notApplied?: { reason: string; currentVersion: string };
+  notApplied?: { reason: string; currentVersion: string; editorAsked?: string[] };
 }
 
 const WITHDRAWN = "Replaced by a later option from the same request.";
@@ -321,7 +321,8 @@ export function persistProposal(ctx: Ctx, user: User, projectId: string, body: P
     change = applied.change;
     const current = ctx.repos.projects.header(projectId)?.head;
     if (applied.outcome === "conflict" && applied.reason && current) {
-      notApplied = { reason: applied.reason, currentVersion: current };
+      const editorAsked = editorAskedSince(ctx, projectId, fromVersion, current);
+      notApplied = { reason: applied.reason, currentVersion: current, ...(editorAsked.length && { editorAsked }) };
       ctx.log(`[edit] ${change.id} not applied: the video moved from ${fromVersion} to ${current} under it (${applied.reason})`);
     }
   }

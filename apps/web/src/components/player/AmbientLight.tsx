@@ -55,6 +55,10 @@ const canvas2d = () => {
   return { el, context: el.getContext("2d", { alpha: true }) };
 };
 
+/** Tone applied on the coarse canvas (`saturate(1.4) brightness(.8)`), avoiding CSS filters over a canvas in WebKit. */
+const SATURATE = 1.4;
+const BRIGHTNESS = 0.8;
+
 /** Blur `from` into `to` by averaging nine copies of it, `r` pixels apart. */
 function spread(from: HTMLCanvasElement, to: CanvasRenderingContext2D, r: number) {
   to.clearRect(0, 0, from.width, from.height);
@@ -65,14 +69,34 @@ function spread(from: HTMLCanvasElement, to: CanvasRenderingContext2D, r: number
   to.globalAlpha = 1;
 }
 
+/** Boost colour saturation and soften brightness on the coarse output canvas. */
+function tone(context: CanvasRenderingContext2D, width: number, height: number) {
+  if (typeof context.getImageData !== "function" || typeof context.putImageData !== "function") return;
+  try {
+    const image = context.getImageData(0, 0, width, height);
+    const data = image.data;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) continue;
+      const r = data[i]!, g = data[i + 1]!, b = data[i + 2]!;
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      data[i] = Math.min(255, Math.max(0, lum + (r - lum) * SATURATE)) * BRIGHTNESS;
+      data[i + 1] = Math.min(255, Math.max(0, lum + (g - lum) * SATURATE)) * BRIGHTNESS;
+      data[i + 2] = Math.min(255, Math.max(0, lum + (b - lum) * SATURATE)) * BRIGHTNESS;
+    }
+    context.putImageData(image, 0, 0);
+  } catch {
+    // A cross-origin source leaves the blurred glow without the pixel tone pass.
+  }
+}
+
 /**
  * The footage's own colours, glowing softly into the dark around the player and under the timeline, as a room lit by
  * its screen. It follows the picture as it plays and eases between shots. With motion reduced it holds still while the
  * picture plays and is set at once when it rests. It asks nothing of the video: it copies the frame on screen into a
  * small canvas behind the stage and blurs it there.
  *
- * The blur is the canvas's own. WebKit has no canvas filter, and a CSS blur on a canvas that changes repaints only the
- * part that was drawn on, so the light round the picture kept showing the frame before.
+ * Blur and tone are both the canvas's own. WebKit has no canvas filter, and CSS filters on a canvas behind sibling
+ * layers flicker or repaint only the drawn region when neighbouring panes scroll or repaint.
  */
 export function AmbientLight({ stage, monitor }: { stage: RefObject<HTMLElement | null>; monitor: RefObject<HTMLElement | null> }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -146,6 +170,7 @@ export function AmbientLight({ stage, monitor }: { stage: RefObject<HTMLElement 
           spread(from, to.context!, r);
           from = to.el;
         });
+        tone(context, el.width, el.height);
         blank = false;
         light(true);
       } catch {

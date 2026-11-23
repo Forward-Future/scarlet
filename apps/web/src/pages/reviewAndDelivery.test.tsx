@@ -307,14 +307,14 @@ it("loads the picture and the sound as one wave, and lands them together when th
   expect(strip().classList).not.toContain("is-loading");
 });
 
-it("skips 5 seconds with an arrow and 1 second with Shift, once per key repeat", async () => {
+it("skips 1 second with an arrow and 1 frame with Shift, once per key repeat", async () => {
   const onSeek = vi.fn();
-  await show(<TimelineScrubber duration={60} playhead={20} frameAt={() => undefined} onSeek={onSeek} />);
+  await show(<TimelineScrubber duration={60} playhead={20} fps={24} frameAt={() => undefined} onSeek={onSeek} />);
   const slider = labeled("Position in the video");
   const down = (key: string, shiftKey: boolean, repeat = false) => act(() => {
     slider.dispatchEvent(new KeyboardEvent("keydown", { key, shiftKey, repeat, bubbles: true }));
   });
-  for (const [key, shift, target] of [["ArrowRight", false, 25], ["ArrowLeft", false, 15], ["ArrowRight", true, 21], ["ArrowLeft", true, 19]] as const) {
+  for (const [key, shift, target] of [["ArrowRight", false, 21], ["ArrowLeft", false, 19], ["ArrowRight", true, 481 / 24], ["ArrowLeft", true, 479 / 24]] as const) {
     await down(key, shift);
     expect(onSeek).toHaveBeenLastCalledWith(target);
   }
@@ -335,7 +335,7 @@ it("seeks on one full-video timeline with keyboard steps and endpoints", async (
   await show(<TimelineScrubber duration={244} frameAt={() => undefined} onSeek={onSeek} playhead={192} />);
   expect(container.querySelectorAll('[role="slider"]')).toHaveLength(1);
   const slider = labeled("Position in the video");
-  for (const [key, target] of [["Home", 0], ["ArrowRight", 197], ["End", 244]] as const) {
+  for (const [key, target] of [["Home", 0], ["ArrowRight", 193], ["End", 244]] as const) {
     await act(() => slider.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })));
     expect(onSeek).toHaveBeenLastCalledWith(target);
   }
@@ -836,8 +836,14 @@ it("keeps both prepared decoders when opening a historical cut before its live r
   const edited = container.querySelector('video[src="/after.mp4"]');
   expect(original).not.toBeNull();
   expect(edited).not.toBeNull();
+  // Parked layers hide with opacity instead of an opaque black cover, so mounting or swapping them never blocks the ambient glow behind the monitor.
+  const parkedLayer = original?.closest<HTMLElement>("[data-parked]")?.parentElement?.closest<HTMLElement>("[data-parked]");
+  expect(parkedLayer?.style.opacity).toBe("0");
+  expect(container.querySelector(".watch-monitor .bg-black")).toBeNull();
   await draw("after");
   expect(player.element()).toBe(edited);
+  expect(original?.closest<HTMLElement>("[data-parked]")?.style.opacity).toBe("0");
+  expect(edited?.closest<HTMLElement>("[data-parked]")).toBeNull();
   await draw("before");
   expect(player.element()).toBe(original);
 });

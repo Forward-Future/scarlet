@@ -3,14 +3,15 @@ import type { TimeRange } from "@scarlet/timeline";
 import { clock, playbackClock } from "../../lib/format";
 import { arrowSeekTime } from "../../lib/hotkeys";
 import { usePlayerStore } from "../../stores/player";
+import { DimMs } from "../ui/primitives";
 import { timelinePosition } from "./useTimelineZoom";
 import { GLIDE_FROM_SECONDS, GLIDE_FROM_SHARE, GLIDE_MS } from "./timelineMarkerLayout";
 
 /** Only the slider value, label and playhead change on an ordinary playback tick. */
-export function TimelineSlider({ playhead, start, end, from, span, width, zoomSpace, selectPosition, drag, skippedRanges, loupe, children, ...props }: ComponentProps<"div"> & {
+export function TimelineSlider({ playhead, start, end, from, span, width, zoomSpace, selectPosition, drag, skippedRanges, loupe, fps = 30, children, ...props }: ComponentProps<"div"> & {
   playhead?: number; start: number; end: number; from: number; span: number; selectPosition(time: number): void;
   width: number; zoomSpace: number;
-  drag: RefObject<unknown>; skippedRanges?: TimeRange[]; loupe: boolean;
+  drag: RefObject<unknown>; skippedRanges?: TimeRange[]; loupe: boolean; fps?: number;
 }) {
   const position = usePlayerStore(s => timelinePosition(playhead ?? s.time, start, end));
   const percent = span ? (position - from) / span * 100 : 0;
@@ -36,7 +37,7 @@ export function TimelineSlider({ playhead, start, end, from, span, width, zoomSp
       if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
         e.preventDefault();
         e.stopPropagation();
-        selectPosition(arrowSeekTime(position, e.key, e.shiftKey));
+        selectPosition(arrowSeekTime(position, e.key, e.shiftKey, fps));
         return;
       }
       const target = { Home: start, End: end, PageDown: position + span, PageUp: position - span }[e.key];
@@ -48,7 +49,7 @@ export function TimelineSlider({ playhead, start, end, from, span, width, zoomSp
     {children}
     {position >= from && position <= from + span && <>
       {!loupe && <span aria-hidden="true" className={gliding ? "timeline-playhead-time is-gliding" : "timeline-playhead-time"}
-        style={{ left: `min(${percent}%, calc(100% - ${zoomSpace}px))`, transform: `translateX(-${stampAnchor}%)` }}>{stamp}</span>}
+        style={{ left: `min(${percent}%, calc(100% - ${zoomSpace}px))`, transform: `translateX(-${stampAnchor}%)` }}><DimMs text={stamp} /></span>}
       <div aria-hidden="true" className={gliding ? "timeline-playhead is-gliding" : "timeline-playhead"} style={{ left: `${percent}%` }} />
     </>}
   </div>;

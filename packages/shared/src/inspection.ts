@@ -187,8 +187,15 @@ export const DialogueWindowRequest = DialogueRangeRequest
       cachedOnly: z.literal(true).optional() }).optional() }))
   .refine(v => !v.keptSide || v.to <= v.from + JOIN_WORD_SECONDS + WINDOW_SLACK, `A kept-side reading covers up to ${JOIN_WORD_SECONDS} seconds`)
   .refine(v => v.to <= v.from + 60, "Choose up to sixty source seconds");
+/**
+ * The most audio one request reads, in seconds: a restart and the sentence round it. Audio in a tool's result keeps to
+ * `SOURCE_AUDIO_IN_RESULT`; a file in the task folder can be as long as this.
+ */
+export const SOURCE_AUDIO_MOST = 20;
+/** The most audio a tool's result carries itself, in seconds. */
+export const SOURCE_AUDIO_IN_RESULT = 8;
 export const SourceAudioRequest = z.object(SourceAudioOptions)
-  .refine(v => v.to > v.from && v.to - v.from <= 8 + WINDOW_SLACK, "Choose a source audio window up to eight seconds");
+  .refine(v => v.to > v.from && v.to - v.from <= SOURCE_AUDIO_MOST + WINDOW_SLACK, `Choose a source audio window up to ${SOURCE_AUDIO_MOST} seconds`);
 export const SoundPictureOptions = {
   mediaId: z.string().min(1),
   from: z.number().finite().nonnegative().describe("Start of the passage, source seconds"),

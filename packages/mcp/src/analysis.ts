@@ -224,6 +224,77 @@ export function summarizeTimeline(timeline: Timeline, fps = 30, brief?: { most: 
   return lines.join("\n");
 }
 
+/**
+ * Summarize a timeline for `timeline_get`, optionally scoped to `[from, to]` in timeline seconds
+ * and paged by clip start time when the summary would exceed `maxChars`.
+ */
+export function summarizeTimelinePage(
+  timeline: Timeline,
+  fps = 30,
+  opts: { from?: number; to?: number; maxChars?: number } = {},
+): string {
+  const { from, to, maxChars } = opts;
+  if (from === undefined && to === undefined) {
+    const full = summarizeTimeline(timeline, fps);
+    if (!maxChars || full.length <= maxChars) return full;
+  }
+  const duration = timelineDuration(timeline);
+  const windowFrom = from ?? 0;
+  const scoped = from !== undefined || to !== undefined;
+  const total = timeline.tracks.reduce((n, t) => n + t.clips.length, 0);
+  const inWindow = (c: Clip) => clipEnd(c) > windowFrom && (to === undefined || c.timelineIn < to);
+  const trackClips = timeline.tracks.map(t => ({
+    track: t,
+    clips: [...t.clips].sort((a, b) => a.timelineIn - b.timelineIn).filter(inWindow),
+  }));
+  const inWindowTotal = trackClips.reduce((n, t) => n + t.clips.length, 0);
+  const render = (cutoff?: number) => {
+    const lines: string[] = [
+      `Timeline "${timeline.name}" version ${timeline.version} — duration ${formatTimecode(duration, fps)} (${duration.toFixed(2)} s), ${timeline.tracks.length} tracks, ${timeline.markers.length} markers`,
+    ];
+    let shown = 0;
+    for (const { track: t, clips } of trackClips) {
+      const flags = [t.muted ? "muted" : "", t.hidden ? "hidden" : ""].filter(Boolean).join(", ");
+      lines.push(`Track ${t.id} (${t.kind}) "${t.name}" — ${t.clips.length} clips${flags ? ` [${flags}]` : ""}`);
+      for (const c of clips) {
+        if (cutoff !== undefined && c.timelineIn >= cutoff) continue;
+        lines.push(`  ${describeClip(c, fps)}`);
+        shown++;
+      }
+    }
+    const markers = timeline.markers.filter(m =>
+      m.time >= windowFrom && (cutoff !== undefined ? m.time < cutoff : to === undefined || m.time < to),
+    );
+    if (markers.length) {
+      lines.push("Markers:");
+      for (const m of markers) {
+        lines.push(`  ${m.id} @${formatTimecode(m.time, fps)} [${m.kind}] ${truncate(m.text, 80)}${m.resolved ? " (resolved)" : ""}`);
+      }
+    }
+    if (cutoff !== undefined) {
+      const floored = Math.floor(cutoff * 1000) / 1000;
+      const nextFrom = floored > windowFrom ? floored : cutoff;
+      lines.push(
+        `Showing ${shown} of ${inWindowTotal} clips${scoped ? " in range" : ""} (through ${cutoff.toFixed(2)} s); call timeline_get with from=${nextFrom}${to !== undefined ? ` and to=${round3(to)}` : ""} to read on, or timeline_at for one time.`,
+      );
+    } else if (scoped) {
+      lines.push(`Showing ${shown} clips in ${windowFrom.toFixed(2)}–${(to ?? duration).toFixed(2)} s (of ${total} total).`);
+    }
+    return lines.join("\n");
+  };
+  const whole = render();
+  if (!maxChars || whole.length <= maxChars) return whole;
+  const starts = [...new Set(trackClips.flatMap(t => t.clips.map(c => c.timelineIn)).filter(t => t > windowFrom))].sort((a, b) => a - b);
+  if (!starts.length) return whole;
+  let lo = 0, hi = starts.length - 1, best = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (render(starts[mid]!).length <= maxChars) { best = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return render(starts[best]!);
+}
+
 export function summarizeProject(project: Project, timeline: Timeline | null, brief?: { most: number; near?: TimeRange }): string {
   const s = project.settings;
   const lines = [

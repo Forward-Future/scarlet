@@ -78,6 +78,11 @@ body {
   }
 }
 
+.time-ms {
+  font-size: .85em;
+  opacity: .55;
+}
+
 .tnum {
   font-variant-numeric: tabular-nums;
 }
@@ -200,6 +205,29 @@ input[type="range"] {
       scrollbar-width: thin;
       scrollbar-color: #555555 transparent;
     }
+  }
+}
+
+@keyframes effort-capsule-sweep {
+  0% {
+    background-position: 140% 0;
+  }
+  100% {
+    background-position: -120% 0;
+  }
+}
+.effort-capsule-shimmer {
+  background: linear-gradient(
+    105deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.16) 48%,
+    transparent 76%
+  );
+  background-size: 220% 100%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .effort-capsule-shimmer {
+    animation: effort-capsule-sweep 3.2s ease-in-out infinite;
   }
 }
 

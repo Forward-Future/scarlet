@@ -117,9 +117,9 @@ it("leaves ← and → alone on the focused timeline while ⌘, Ctrl or Alt is h
   expect([await key({ key: "ArrowLeft", metaKey: true }), await key({ key: "ArrowRight", ctrlKey: true }), await key({ key: "ArrowRight", altKey: true })]).toEqual([false, false, false]);
   expect(onSeek).not.toHaveBeenCalled();
   expect(await key({ key: "ArrowRight" })).toBe(true);
-  expect(onSeek).toHaveBeenLastCalledWith(35);
+  expect(onSeek).toHaveBeenLastCalledWith(31);
   expect(await key({ key: "ArrowLeft", shiftKey: true })).toBe(true);
-  expect(onSeek).toHaveBeenLastCalledWith(29);
+  expect(onSeek).toHaveBeenLastCalledWith(899 / 30);
 });
 
 it("ends a drag that is held when a new working cut builds the timeline again, so the video it paused carries on", async () => {
@@ -166,30 +166,105 @@ it("stays where the editor zoomed while the video plays on elsewhere, instead of
   }
 });
 
-it("drifts a soft wash across the lanes while editing, holds its place across rebuilds, and keeps its phase to fade out", async () => {
-  let now = 2_600;
+it("keeps two-finger horizontal scrolling and pinch zoom separate instead of zooming while scrolling", async () => {
+  vi.useFakeTimers();
+  let now = 1_000;
   vi.spyOn(performance, "now").mockImplementation(() => now);
-  const wash = () => container.querySelector<HTMLElement>(".timeline-editing-wash")!;
-  const draw = (duration: number, editing?: boolean) => act(async () => root.render(
-    <TimelineScrubber duration={duration} playhead={0} editing={editing} frameAt={() => undefined} onSeek={() => {}} />,
-  ));
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(400);
   try {
-    await draw(120, false);
-    expect(wash().dataset.active).toBeUndefined();
-    expect(wash().style.getPropertyValue("--edit-phase")).toBe("");
-    // Editing starts: wash turns on and starts at the wall-clock phase (2.6s mod 7.2s).
-    await draw(120, true);
-    expect(wash().dataset.active).toBe("true");
-    expect(wash().style.getPropertyValue("--edit-phase")).toBe("-2.600s");
-    // A new cut rebuilds the timeline 3.1s later: the new wash picks up at 5.7s instead of snapping back to 0.
-    now += 3_100;
-    await draw(112, true);
-    expect(wash().dataset.active).toBe("true");
-    expect(wash().style.getPropertyValue("--edit-phase")).toBe("-5.700s");
-    // Editing finishes: data-active clears while --edit-phase stays so the fade-out holds where the glow was.
-    await draw(112, false);
-    expect(wash().dataset.active).toBeUndefined();
-    expect(wash().style.getPropertyValue("--edit-phase")).toBe("-5.700s");
+    await act(async () => root.render(<TimelineScrubber duration={100} playhead={50} frameAt={() => undefined} onSeek={() => {}} />));
+    const track = container.querySelector<HTMLElement>(".timeline-track")!;
+    vi.spyOn(track, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 80));
+    const zoomLevel = () => container.querySelector<HTMLElement>(".timeline-zoom-level")!.textContent;
+    const playheadLeft = () => parseFloat(container.querySelector<HTMLElement>(".timeline-playhead")!.style.left);
+
+    const wheel = (deltaX: number, deltaY: number, opts?: { ctrlKey?: boolean; shiftKey?: boolean; clientX?: number }) => act(async () => {
+      const event = new WheelEvent("wheel", { deltaX, deltaY, bubbles: true, cancelable: true });
+      Object.defineProperties(event, {
+        ctrlKey: { value: opts?.ctrlKey ?? false },
+        shiftKey: { value: opts?.shiftKey ?? false },
+        clientX: { value: opts?.clientX ?? 200 },
+      });
+      track.dispatchEvent(event);
+    });
+    const pinch = (type: "gesturestart" | "gesturechange" | "gestureend", scale: number, clientX = 200) => act(async () => {
+      const event = Object.assign(new Event(type, { bubbles: true, cancelable: true }), { scale, clientX });
+      track.dispatchEvent(event);
+    });
+
+    // Pinch in to 200%, with minor pre-pinch touch jitter and post-pinch finger-lift drift.
+    await wheel(2, 1);
+    now += 8;
+    await pinch("gesturestart", 1);
+    now += 8;
+    await wheel(12, -4);
+    now += 8;
+    await pinch("gesturechange", 2);
+    now += 8;
+    await pinch("gestureend", 2);
+    expect(zoomLevel()).toBe("200%");
+    const afterPinchLeft = playheadLeft();
+    expect(afterPinchLeft).toBeCloseTo(50);
+
+    // Trailing finger-lift wheel events right after gestureend must not pan or zoom.
+    now += 30;
+    await wheel(24, -15);
+    expect(zoomLevel()).toBe("200%");
+    expect(playheadLeft()).toBeCloseTo(afterPinchLeft);
+
+    // After the pinch cooldown, a realistic two-finger horizontal swipe with vertical touch-down jitter,
+    // a direction reversal (deltaX = 0, deltaY != 0), slight pinch drift, and momentum tail pans without zooming.
+    now += 200;
+    await wheel(0, 2);
+    now += 16;
+    await wheel(2, 3);
+    now += 16;
+    await wheel(18, 4);
+    now += 16;
+    await wheel(22, -3);
+    now += 16;
+    await wheel(0, -4);
+    now += 16;
+    await wheel(-8, 5);
+    now += 16;
+    await pinch("gesturestart", 1);
+    now += 16;
+    await pinch("gesturechange", 1.03);
+    now += 16;
+    await wheel(16, 2);
+    now += 16;
+    await pinch("gesturechange", 1.06);
+    now += 16;
+    await pinch("gestureend", 1.06);
+    now += 16;
+    await wheel(1, 3);
+    now += 32;
+    await wheel(0, 2);
+    expect(zoomLevel()).toBe("200%");
+    expect(playheadLeft()).toBeLessThan(afterPinchLeft);
+
+    // After the pan settles, pinch zoom (both WKWebView gesture and ctrl+wheel) works cleanly again,
+    // and interleaved plain wheel events during a ctrl+wheel pinch do not pan.
+    now += 250;
+    await wheel(0, -50, { ctrlKey: true });
+    const afterCtrlZoom = zoomLevel();
+    expect(parseInt(afterCtrlZoom!, 10)).toBeGreaterThan(200);
+    const anchoredLeft = playheadLeft();
+    now += 16;
+    await wheel(30, 0);
+    expect(zoomLevel()).toBe(afterCtrlZoom);
+    expect(playheadLeft()).toBeCloseTo(anchoredLeft);
+
+    // Intentional straight vertical scrolling still zooms, and ignores minor horizontal wobble while zooming.
+    now += 250;
+    await wheel(0, -40, { clientX: 200 });
+    const afterVerticalZoom = zoomLevel();
+    expect(parseInt(afterVerticalZoom!, 10)).toBeGreaterThan(parseInt(afterCtrlZoom!, 10));
+    const zoomedLeft = playheadLeft();
+    now += 16;
+    await wheel(25, 0);
+    expect(zoomLevel()).toBe(afterVerticalZoom);
+    expect(playheadLeft()).toBeCloseTo(zoomedLeft);
   } finally {
     vi.restoreAllMocks();
   }

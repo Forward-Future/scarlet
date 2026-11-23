@@ -6,7 +6,8 @@ import { expect, it, vi } from "vitest";
 import { buildDb } from "../../lib/mock/fixtures";
 import { useHostsStore } from "../../stores/hosts";
 import { useModelPreferences } from "../../stores/modelPicker";
-import { ModelSettings } from "./ModelSettings";
+import { api } from "../../lib/client";
+import { ListeningSettings, ModelSettings } from "./ModelSettings";
 
 it("renders each model on one line and places disabled models below active ones", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -170,5 +171,50 @@ it("shows a scroll cue for hidden models below when the list overflows and lets 
     useHostsStore.setState(oldHosts, true);
     useModelPreferences.setState(oldPrefs, true);
     vi.unstubAllGlobals();
+  }
+});
+
+it("lets the editor pick which model listens, or turn listening off, and says what it means", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const oldHosts = useHostsStore.getState();
+  const host = buildDb().hosts[0]!;
+  let saved = { ...buildDb().settings, listening: "auto" };
+  vi.spyOn(api, "settings").mockImplementation(async () => ({ settings: saved }));
+  const update = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: (saved = { ...saved, ...patch }) }));
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const status = () => container.querySelector(".transcription-status")!.textContent;
+  const shown = () => container.querySelector("#listening-model")!.textContent;
+  const show = async (agents: typeof host.agents) => {
+    useHostsStore.setState({ hosts: [{ ...host, online: true, agents }], status: "ready" });
+    await act(async () => root.render(<MemoryRouter><ListeningSettings key={Math.random()} /></MemoryRouter>));
+    await act(async () => {});
+  };
+  const claude = { id: "claude" as const, installed: true };
+  const gemini = { id: "gemini" as const, installed: true, models: ["gemini-4-neon"], modelLabels: { "gemini-4-neon": "Gemini 4 Neon" } };
+  const codex = { id: "codex" as const, installed: true, models: ["gpt-6.2-sol", "gpt-6-astra-audio"], modelLabels: { "gpt-6-astra-audio": "GPT-6 Astra Audio" } };
+  try {
+    await show([claude]);
+    expect(status()).toBe("No model here can hear. Sign in to Gemini so Scarlet listens to cuts instead of only reading the transcript. Manage sign-in");
+    await show([claude, gemini, codex]);
+    // Automatic says which model it uses: the best signed in, Gemini first, on Gemini's own default model.
+    expect(shown()).toContain("Automatic · Gemini");
+    expect(status()).toBe("Gemini listens to cuts for models that can’t hear, so Scarlet catches a stumble or a clipped word the transcript misses.");
+    // The editor can pick one model that hears, of those signed in, or turn it off.
+    await act(async () => container.querySelector<HTMLButtonElement>("#listening-model")!.click());
+    expect([...document.querySelectorAll("[role=option]")].map(o => o.textContent)).toEqual(["Automatic", "Gemini 4 Neon", "GPT-6 Astra Audio", "Off"]);
+    await act(async () => [...document.querySelectorAll<HTMLElement>("[role=option]")].find(o => o.textContent === "GPT-6 Astra Audio")!.click());
+    expect(update).toHaveBeenLastCalledWith({ listening: "codex:gpt-6-astra-audio" });
+    expect(status()).toMatch(/^GPT-6 Astra Audio listens to cuts/);
+    // A model picked that isn't signed in now listens for nobody, and says so: nothing else is swapped in.
+    await show([claude, gemini]);
+    expect(status()).toBe("gpt-6-astra-audio isn’t signed in, so nothing listens for now. Sign in again or choose another model. Manage sign-in");
+    saved = { ...saved, listening: "off" };
+    await show([claude, gemini]);
+    expect(status()).toBe("Off: models that can’t hear read the transcript and a picture of the sound instead.");
+  } finally {
+    act(() => root.unmount());
+    useHostsStore.setState(oldHosts, true);
+    vi.restoreAllMocks();
   }
 });

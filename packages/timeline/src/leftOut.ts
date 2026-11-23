@@ -11,16 +11,18 @@
  * plays them, so a cut made this way has footage to show like any other.
  */
 import type { Clip, MediaClip, Timeline, TimeRange } from "./schema.js";
-import { shiftClip, splitClip } from "./ops.js";
+import { shiftClip, splitClip, straightenCrossfades } from "./ops.js";
 import { clipEnd, timelineDuration } from "./time.js";
 
 const EPS = 1e-6;
 
 /**
  * Which reading of left-out footage a change's joins come from. 2: a join the version before already had on any track
- * is not the change's (2026-11-20). Joins an earlier reading found are read again.
+ * is not the change's (2026-11-20). 3: a centered audio crossfade on a join is straightened before reading and opening
+ * it, instead of splitting both overlapping clips out of sync (2026-11-22). Joins an earlier reading found are read
+ * again.
  */
-export const LEFT_OUT_READING = 2;
+export const LEFT_OUT_READING = 3;
 
 export interface LeftOut {
   /** `after` with every stretch it left out played where it was left out. */
@@ -38,7 +40,10 @@ const pairKey = (left: MediaClip, right: MediaClip) => `${left.mediaId}:${left.s
 function pairs(timeline: Timeline): Pair[] {
   const found: Pair[] = [];
   timeline.tracks.forEach((track, index) => {
-    const clips = [...track.clips].sort((a, b) => a.timelineIn - b.timelineIn);
+    const copy = { ...track, clips: [...track.clips].sort((a, b) => a.timelineIn - b.timelineIn) };
+    // A centered audio crossfade overlaps round the cut; straighten it to the cut at its centre to see the join.
+    straightenCrossfades(copy, 0, Number.POSITIVE_INFINITY);
+    const clips = copy.clips;
     for (let i = 1; i < clips.length; i++) {
       const left = clips[i - 1]!, right = clips[i]!;
       if (!plays(left) || !plays(right) || left.mediaId !== right.mediaId || Math.abs(clipEnd(left) - right.timelineIn) > 1e-3) continue;
@@ -94,6 +99,13 @@ export function leftOutJoins(before: Timeline, after: Timeline, fps = 30): LeftO
     // Last join first, so each is opened at the time it has on `after`.
     for (let j = found.length - 1; j >= 0; j--) {
       const { at, gap, tracks: changing } = found[j]!;
+      if (at > EPS) {
+        // Put a crossfade at this join back to its straight cut first; otherwise both overlapping clips get split and
+        // the clip after the cut stretches across the footage put back, throwing sound out of sync.
+        const working = { ...track, clips: [...clips].sort((a, b) => a.timelineIn - b.timelineIn) };
+        straightenCrossfades(working, at, at);
+        clips = working.clips;
+      }
       const next: Clip[] = [];
       for (const clip of clips) {
         if (clip.timelineIn >= at - 1e-3) next.push(shiftClip(clip, gap));

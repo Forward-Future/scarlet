@@ -13,6 +13,11 @@ export interface AgentCapabilities {
   images: boolean;
   /** Audio content blocks (WAV) in MCP tool results reach the model. */
   audio: boolean;
+  /**
+   * The model hears a WAV file in its task folder when it opens the file with its harness's own file viewer, though
+   * audio in a tool's result doesn't reach it. Only a run with file tools (`files`) can open one.
+   */
+  audioFiles?: boolean;
   /** The agent can read and write files in its task artifact directory (needed before `asset_add`). */
   files: boolean;
   /**
@@ -74,7 +79,7 @@ const KNOWN: Record<string, AgentCapabilities> = {
   // claude -p then runs with tool search alone (--tools ToolSearch, no file tools); Claude models take images but not audio.
   // Plan: Claude Code 2.1.316 has TaskCreate and TaskUpdate (TodoWrite before it) only when --tools names them.
   claude: { images: true, audio: false, files: false, plan: false, toolPrefix: "mcp__scarlet__", toolWaitSeconds: 240 },
-  // codex exec has a writable workspace; MCP audio blocks are not forwarded to the model.
+  // codex exec has a writable workspace. It forwards MCP audio blocks, but only some models hear them (`HEARING_MODELS`).
   // Plan: Codex 0.166 has update_plan only with tools.update_plan.enabled, and reports it as `todo_list` items.
   codex: { images: true, audio: false, files: true, plan: false, toolWaitSeconds: 240 },
   // agy acp then runs with Scarlet's permission handler allowing only Scarlet MCP tools (no file tools); audio forwarding from MCP is unverified. Its runner reads no plan.
@@ -83,7 +88,12 @@ const KNOWN: Record<string, AgentCapabilities> = {
   // dialogue_apply_cuts among them, so a Gemini pass couldn't save an edit; listed briefly (43 KB) all 51 stayed.
   // Tool wait: agy 1.x ends a tool call at 180 s (two saves on 2026-11-20 failed at 181 s; a 94 s call answered). With
   // no wait set, Gemini's calls waited 45 s less their margin, so a save that needed area checks gave up at once.
-  gemini: { images: true, audio: false, files: false, plan: false, briefTools: true, toolWaitSeconds: 120 },
+  // Result size: agy 1.5 spills MCP text results over ~10,200 chars (~10 KiB) to output.txt (measured 2026-11-22:
+  // 10,134 chars stayed inline, 10,304 chars spilled), forcing extra read_file turns. Leave headroom under that cliff.
+  // Audio: checked through `agy acp` on 2026-11-22. Gemini hears no audio in an MCP tool result, nor in the prompt as an
+  // audio, embedded or linked block, but agy's own file viewer gives it a WAV from its folder: it wrote out a restart
+  // word for word, hesitations and all ("they are lobbying against, mm, they are lobbying to control GPUs").
+  gemini: { images: true, audio: false, audioFiles: true, files: false, plan: false, briefTools: true, resultChars: 9_000, toolWaitSeconds: 120 },
 };
 
 // An agent Scarlet didn't launch is someone's own MCP client, such as Claude Code or Claude Desktop pointed at Scarlet,
@@ -101,14 +111,106 @@ export function workspaceCapabilities(caps: AgentCapabilities): AgentCapabilitie
   return { ...caps, files: true, shell: true, web: true };
 }
 
-export function agentCapabilities(agent: string | undefined, override?: Partial<AgentCapabilities> | string): AgentCapabilities {
-  const base = (agent && Object.hasOwn(KNOWN, agent) && KNOWN[agent]) || UNKNOWN;
+function validResultChars(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 2_000;
+}
+
+/**
+ * Models that hear audio in a tool's result where their harness's other models don't. Checked through Codex on
+ * 2026-11-22 with an MCP audio block: gpt-6-astra-audio wrote out all four slips of a hearing test, as Gemini did;
+ * gpt-6.2-sol heard nothing, and gpt-6.1-terra two of four.
+ */
+const HEARING_MODELS: Record<string, RegExp> = { codex: /-audio\b/i };
+
+/** Whether this model hears audio in a tool's result, though its harness's others don't. */
+export function modelHearsAudio(agent: string | undefined, model: string | undefined): boolean {
+  return !!(agent && model && Object.hasOwn(HEARING_MODELS, agent) && HEARING_MODELS[agent]!.test(model));
+}
+
+/** Whether a run with these capabilities can hear a recording: in a tool's result, or as a file it opens itself. */
+export function canHear(caps: Pick<AgentCapabilities, "audio" | "audioFiles">): boolean {
+  return caps.audio || !!caps.audioFiles;
+}
+
+/** A model that listens for a request whose own model can't hear, on a host that has it. */
+export interface Listener {
+  agent: string;
+  /** The model passed to its CLI; none for the CLI's own default. */
+  model?: string;
+}
+
+/** What a request heard through the model that listens for it (`POST /projects/:id/listen`). */
+export type ListenResult =
+  | { state: "heard"; answer: string; by: Listener }
+  | { state: "listening"; by: Listener }
+  | { state: "failed"; error: string; by: Listener }
+  | { state: "unavailable"; reason: string };
+
+/** What the listening setting needs to know of a host's agent. */
+type SignedInAgent = { id: string; installed: boolean; loggedIn?: boolean; model?: string; models?: string[] };
+
+/**
+ * The editor's listening setting: "auto" for the best model signed in that can hear (`listenerAmong`), "off" for none,
+ * or one model as "agent:model" ("gemini:gemini-4-neon", "codex:gpt-6-astra-audio").
+ */
+export type ListeningSetting = "auto" | "off" | `${string}:${string}`;
+
+/** The setting's value for one model: "agent:model", or "agent:default" for its CLI's own default model. */
+export const listenerKey = (listener: Listener): ListeningSetting => `${listener.agent}:${listener.model ?? "default"}`;
+
+/** Every model signed in on these agents that can hear, Gemini's first, for the editor to pick from. */
+export function hearingModels(agents: ReadonlyArray<SignedInAgent>): Listener[] {
+  const usable = agents.filter(a => a.installed && a.loggedIn !== false);
+  const seen = new Set<string>();
+  const out: Listener[] = [];
+  for (const a of [...usable.filter(a => a.id === "gemini"), ...usable.filter(a => a.id !== "gemini")]) {
+    const models = a.id === "gemini" ? [a.model, ...(a.models ?? [])] : [a.model, ...(a.models ?? [])].filter(m => modelHearsAudio(a.id, m));
+    for (const model of models) {
+      if (!model || seen.has(`${a.id}:${model}`)) continue;
+      seen.add(`${a.id}:${model}`);
+      out.push({ agent: a.id, model });
+    }
+    // Gemini whose CLI lists no models still hears, on its own default.
+    if (a.id === "gemini" && !models.some(Boolean)) out.push({ agent: "gemini" });
+  }
+  return out;
+}
+
+/**
+ * The model that listens under the editor's setting. A model they picked that isn't signed in now listens for nobody:
+ * Scarlet doesn't swap in another behind their back, and Settings says so.
+ */
+export function chooseListener(agents: ReadonlyArray<SignedInAgent>, setting: string = "auto"): Listener | undefined {
+  if (setting === "off") return undefined;
+  if (setting === "auto") return listenerAmong(agents);
+  return hearingModels(agents).find(l => listenerKey(l) === setting);
+}
+
+/**
+ * The model that listens for a request whose own model can't hear, among the agents the editor's hosts have signed in:
+ * Gemini first, which caught the most of the editor's own slips (6 of 9 on 40 labelled spots, 2026-11-22), then a Codex
+ * model that hears. None when no host has one.
+ */
+export function listenerAmong(agents: ReadonlyArray<SignedInAgent>): Listener | undefined {
+  const usable = agents.filter(a => a.installed && a.loggedIn !== false);
+  const gemini = usable.find(a => a.id === "gemini");
+  if (gemini) return { agent: "gemini", ...(gemini.model && { model: gemini.model }) };
+  for (const a of usable) {
+    const model = [a.model, ...(a.models ?? [])].find(m => modelHearsAudio(a.id, m));
+    if (model) return { agent: a.id, model };
+  }
+  return undefined;
+}
+
+export function agentCapabilities(agent: string | undefined, override?: Partial<AgentCapabilities> | string, model?: string): AgentCapabilities {
+  const known = (agent && Object.hasOwn(KNOWN, agent) && KNOWN[agent]) || UNKNOWN;
+  const base = modelHearsAudio(agent, model) ? { ...known, audio: true } : known;
   let extra: Partial<AgentCapabilities> = {};
   if (typeof override === "string" && override.trim()) {
     try {
       const parsed = JSON.parse(override) as Record<string, unknown>;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
-      for (const key of ["images", "audio", "files", "shell", "web", "plan", "briefTools"] as const) if (typeof parsed[key] === "boolean") extra[key] = parsed[key] as boolean;
+      for (const key of ["images", "audio", "audioFiles", "files", "shell", "web", "plan", "briefTools"] as const) if (typeof parsed[key] === "boolean") extra[key] = parsed[key] as boolean;
       if (typeof parsed.resultChars === "number") extra.resultChars = parsed.resultChars;
       if (typeof parsed.toolWaitSeconds === "number" && Number.isFinite(parsed.toolWaitSeconds) && parsed.toolWaitSeconds > 0) extra.toolWaitSeconds = parsed.toolWaitSeconds;
     } catch {
@@ -117,7 +219,7 @@ export function agentCapabilities(agent: string | undefined, override?: Partial<
       console.warn('[scarlet] SCARLET_AGENT_CAPS ignored: it must be a JSON object such as {"audio":true}');
     }
   } else if (override && typeof override === "object") extra = override;
-  const resultChars = extra.resultChars;
-  return { ...base, ...extra, resultChars: resultChars !== undefined && Number.isSafeInteger(resultChars) && resultChars >= 2_000
-    ? resultChars : DEFAULT_RESULT_CHARS };
+  const fallbackResultChars = validResultChars(base.resultChars) ? base.resultChars : DEFAULT_RESULT_CHARS;
+  const resultChars = validResultChars(extra.resultChars) ? extra.resultChars : fallbackResultChars;
+  return { ...base, ...extra, resultChars };
 }

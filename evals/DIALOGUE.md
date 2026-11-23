@@ -173,8 +173,10 @@ event to completion minus editor wait), along with tokens and estimated API cost
 
 **Every change to what the model reads ships with its scorecard beside main's** (the editor's rule, 2026-11-18): a
 skill, the prompt, a tool's description or what a tool returns. The standard run is two passes on each recording that
-has a published video, with the change, against the latest recorded run of main on the same recordings
-(`history.md` names it and the library to run in). Run main again only when it has moved since. Report the card, what
+has a published video, using Gemini 4 Neon at medium effort (`gemini:gemini-4-neon:medium`, the default for evals and
+benchmarks since 2026-11-22), with the change, against the latest recorded run of main on the same recordings
+(`history.md` names it and the library to run in,
+built from the eval videos with `store.ts`, never the editor's own Scarlet). Run main again only when it has moved since. Report the card, what
 moved outside the spread and what the run cost. A larger run needs the editor's yes first. A change that alters only
 placement or the transcript is judged by the ledger and replays, and by a scorecard when a replay can't show it.
 

@@ -66,14 +66,9 @@ interface TimelineScrubberProps {
   onRange?(range: TimeRange | undefined, byKey?: boolean): void;
   /** The video's frame rate: a marked range's ends sit on frames. */
   fps?: number;
-  /** Scarlet is actively editing the video shown here: drift a soft ambient glow across the lanes. */
-  editing?: boolean;
 }
 
 const noRange = () => {};
-// Two halves of the alternating 3.6s drift, so rebuilding the timeline mid-edit keeps the glow's place and direction.
-const EDIT_DRIFT_PERIOD = 7.2;
-const editDriftPhase = () => `${(-((performance.now() / 1000) % EDIT_DRIFT_PERIOD)).toFixed(3)}s`;
 
 export function PlayerTimeline(props: Omit<TimelineScrubberProps, "playhead">) {
   return <TimelineScrubber {...props} />;
@@ -111,15 +106,9 @@ export function TimelineScrubber(props: TimelineScrubberProps) {
   </HeldStillsContext.Provider>;
 }
 
-function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, subject, kept, foot, editing,
+function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, subject, kept, foot,
   pictureAspect = 16 / 9, frameAt, previewStrip, hoverVideo, onSeek, onSelectTime, onScrubStart, highlight, marks, typedTimes, gaps, skippedRanges, onGap, onBand, fit, range, onRange, fps = 30 }:
   TimelineScrubberProps & { subject: string; kept: RefObject<KeptView | undefined> }) {
-  const prevEditing = useRef(editing);
-  const [editPhase, setEditPhase] = useState<string | undefined>(() => editing ? editDriftPhase() : undefined);
-  useLayoutEffect(() => {
-    if (editing && !prevEditing.current) setEditPhase(editDriftPhase());
-    prevEditing.current = editing;
-  }, [editing]);
   const litMark = useStore(useContext(EditHoverContext));
   // The message box's icon is open: the passage the message is about lights up.
   const aimLit = useUiStore(s => s.aimLit);
@@ -387,7 +376,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
   return <div className="timeline-panel" onKeyDown={e => handleZoomKey(e.nativeEvent)}>
     <div ref={track} className={marking.marking ? "timeline-track is-marking" : "timeline-track"}><ScrubPreview suspended={!!lens} start={from} duration={span} pictureAspect={pictureAspect} frameAt={frameAt} hoverVideo={hoverVideo} note={markNote || undefined} pin={waiting?.time}>
     <TimelineSlider ref={slider} className="timeline-slider" playhead={playhead} start={start} end={end} from={from} span={span}
-      width={width} zoomSpace={zoomSpace} drag={drag} skippedRanges={skippedRanges} loupe={!!lens} selectPosition={selectPosition} tabIndex={total ? 0 : -1} aria-disabled={!total}
+      width={width} zoomSpace={zoomSpace} drag={drag} skippedRanges={skippedRanges} loupe={!!lens} fps={fps} selectPosition={selectPosition} tabIndex={total ? 0 : -1} aria-disabled={!total}
       aria-label="Position in the video" aria-description="Drag up from the picture or waveform to scrub one frame at a time."
       onPointerDown={e => {
         if (!total || e.button !== 0 || !e.isPrimary || drag.current) return;
@@ -428,14 +417,12 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
               visibleStart={target ? from : sample.from} visibleSpan={target ? span : sample.span} />
           </div>;
         })}
-        <div className="timeline-editing-wash" data-active={editing || undefined} aria-hidden="true"
-          style={editPhase ? { "--edit-phase": editPhase } as CSSProperties : undefined} />
       </div>
       {highlight?.band && (highlight.band.end > highlight.band.start
         // Panned or zoomed out of view, the band draws nothing: clamped to the edge it would leave a sliver that reads as a mark there.
         ? highlight.band.end > from && highlight.band.start < to &&
           // Pointer only: the keyboard reaches Before with \.
-          <span aria-hidden="true" className={`simple-timeline-band${highlight.tone ? ` is-${highlight.tone}` : ""}${onBand && !highlight.leaving ? " is-live" : ""}${aimLit ? " is-lit" : ""}${highlight.leaving ? " is-leaving" : ""}`} style={{ left: `${Math.min(100, Math.max(0, percent(highlight.band.start)))}%`,
+          <span aria-hidden="true" className={`simple-timeline-band${highlight.tone ? ` is-${highlight.tone}` : ""}${highlight.undecided ? " is-proposed" : ""}${onBand && !highlight.leaving ? " is-live" : ""}${aimLit ? " is-lit" : ""}${highlight.leaving ? " is-leaving" : ""}`} style={{ left: `${Math.min(100, Math.max(0, percent(highlight.band.start)))}%`,
             width: `${Math.max(0, Math.min(100, percent(highlight.band.end)) - Math.max(0, percent(highlight.band.start)))}%` }}
             onPointerDown={onBand ? e => {
               if (e.button !== 0 || !e.isPrimary || drag.current) return;
@@ -447,7 +434,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
             } : undefined}>
             {bandText && <span>{bandText}</span>}</span>
         : highlight.band.start >= from && highlight.band.start <= to &&
-          <span aria-hidden="true" className={`simple-timeline-cut${highlight.tone ? ` is-${highlight.tone}` : ""}${highlight.leaving ? " is-leaving" : ""}`} style={{ left: `${percent(highlight.band.start)}%` }}>
+          <span aria-hidden="true" className={`simple-timeline-cut${highlight.tone ? ` is-${highlight.tone}` : ""}${highlight.undecided ? " is-proposed" : ""}${highlight.leaving ? " is-leaving" : ""}`} style={{ left: `${percent(highlight.band.start)}%` }}>
             {highlight.bandLabel && <span>{highlight.bandLabel}</span>}</span>)}
       {gapNodes}
       {markLayout.length > 0 && <div aria-hidden="true" className={aimed ? "simple-timeline-hover is-aimed" : "simple-timeline-hover"}

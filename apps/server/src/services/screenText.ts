@@ -143,12 +143,12 @@ function identity(media: MediaAsset) {
  * reader ten at a time while the rest decode. Ten seconds to a decode took six seeks a window, and each seek decodes
  * up to the distance between keyframes again (withFrames).
  */
-async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end }: { start: number; end: number }, signal: AbortSignal): Promise<ScreenTextSpan[]> {
+async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end, unasked }: { start: number; end: number; unasked?: boolean }, signal: AbortSignal): Promise<ScreenTextSpan[]> {
   const source = media.width && media.height ? { width: media.width, height: media.height } : await probeMedia(file);
   const { width, height } = screenFrameSize(source.width, source.height);
   const [finder, reader, letters] = await Promise.all(modelsFor(ctx).map(m => m.get(signal))) as [string, string, string];
   let last: Float32Array | undefined;
-  const read = await withFrames(ctx, media, file, "screen-text", { start, end, fps: SCREEN_TEXT_FPS, width, height, signal, batch: BATCH_FRAMES }, (_, rgb) => {
+  const read = await withFrames(ctx, media, file, "screen-text", { start, end, fps: SCREEN_TEXT_FPS, width, height, signal, batch: BATCH_FRAMES, background: unasked }, (_, rgb) => {
     const grid = pictureGrid(rgb, width, height);
     if (last && !pictureChanged(last, grid)) return false;
     last = grid;

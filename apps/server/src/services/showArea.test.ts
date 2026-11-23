@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,6 +68,8 @@ it("looks at one frame of a recording with no area before the rest, and stops on
     expect(answers.looked).toEqual([100]);
     const state = await showArea(ctx, camera, { waitMs: 5000 });
     expect(state.unset).toEqual([]);
+    // The whole picture holds whatever the picture does, so its changes are never read for it.
+    expect(existsSync(join(ctx.paths.waveforms(projectId), "camera.picture-cuts.json"))).toBe(false);
     // Asked again, a second look is taken; after two that agree, no more are.
     expect((await askAreas(ctx, camera, { seconds: [700], taskId: task.id, waitMs: 20_000, again: true })).asked).toBe(1);
     expect((await askAreas(ctx, camera, { seconds: [1000], taskId: task.id, waitMs: 20_000, again: true })).asked).toBe(0);

@@ -76,8 +76,27 @@ fn parse_config_options(result: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// Default thinking effort Scarlet uses for Gemini runs when the user hasn't picked one.
+/// agy defaults `thought_level` to "high" (spending ~20-40 s thinking per tool-loop turn);
+/// "medium" matches Codex's default when offered by the session.
+const DEFAULT_GEMINI_EFFORT: &str = "medium";
+
+/// Interval for polling `transcript.jsonl` while a prompt turn is active, catching
+/// `PLANNER_RESPONSE` writes that flush right after `tool_call` before a slow tool runs.
+const TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
 fn config_option_id(opt: &Value) -> Option<&str> {
     non_empty_str(opt.get("id")).or_else(|| non_empty_str(opt.get("configId")))
+}
+
+fn config_option_has_value(opt: &Value, value: &str) -> bool {
+    let Some(items) = opt.get("options").and_then(Value::as_array) else {
+        return false;
+    };
+    items.iter().any(|item| {
+        item.get("value").and_then(Value::as_str) == Some(value)
+            || config_option_has_value(item, value)
+    })
 }
 
 fn find_config_option<'a>(configs: &'a [Value], category: &str, ids: &[&str]) -> Option<&'a Value> {
@@ -255,23 +274,28 @@ impl AcpSession {
     }
 
     fn maybe_set_effort_then_prompt(&mut self) {
-        if let Some(effort) = self.effort_override.clone() {
-            if let Some(config_id) = find_config_option(
-                &self.config_options,
-                "thought_level",
-                &["thought_level", "reasoning_effort", "thinking_level"],
-            )
-            .and_then(config_option_id)
-            .map(String::from)
-            {
-                if let Some(session_id) = self.st.session_id.clone() {
-                    self.step = Step::SetEffort;
-                    self.send_request(
-                        "session/set_config_option",
-                        json!({ "sessionId": session_id, "configId": config_id, "value": effort }),
-                    );
-                    return;
-                }
+        if let Some(thought_opt) = find_config_option(
+            &self.config_options,
+            "thought_level",
+            &["thought_level", "reasoning_effort", "thinking_level"],
+        ) {
+            let target_effort = self.effort_override.clone().or_else(|| {
+                let current = thought_opt.get("currentValue").and_then(Value::as_str);
+                (current != Some(DEFAULT_GEMINI_EFFORT)
+                    && config_option_has_value(thought_opt, DEFAULT_GEMINI_EFFORT))
+                    .then(|| DEFAULT_GEMINI_EFFORT.to_string())
+            });
+            if let (Some(effort), Some(config_id), Some(session_id)) = (
+                target_effort,
+                config_option_id(thought_opt).map(String::from),
+                self.st.session_id.clone(),
+            ) {
+                self.step = Step::SetEffort;
+                self.send_request(
+                    "session/set_config_option",
+                    json!({ "sessionId": session_id, "configId": config_id, "value": effort }),
+                );
+                return;
             }
         }
         self.send_prompt();
@@ -547,7 +571,25 @@ pub async fn run_gemini(opts: RunOptions) -> RunResult {
     let line_state = state.clone();
     let handler = Box::new(move |line: &str| line_state.lock().unwrap().on_line(line));
 
-    let outcome = match spawn_interactive(
+    let poll_state = state.clone();
+    let poll_handle = tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(TRANSCRIPT_POLL_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let mut sess = poll_state.lock().unwrap();
+            if sess.step == Step::Done {
+                break;
+            }
+            if sess.step == Step::Prompt {
+                sess.poll_transcript_usage();
+                sess.emit_usage();
+            }
+        }
+    });
+
+    let spawn_res = spawn_interactive(
         &cmd.file,
         &cmd.args,
         opts.spawn_options(None),
@@ -556,8 +598,9 @@ pub async fn run_gemini(opts: RunOptions) -> RunResult {
         interrupt,
         handler,
     )
-    .await
-    {
+    .await;
+    poll_handle.abort();
+    let outcome = match spawn_res {
         Ok(o) => o,
         Err(e) => return RunResult::failed(e.to_string()),
     };

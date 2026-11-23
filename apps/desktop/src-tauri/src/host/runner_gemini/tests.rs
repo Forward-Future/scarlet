@@ -560,3 +560,49 @@ fn lets_a_request_use_agys_own_tools_inside_its_folders_only() {
     assert!(!allow(json!({ "name": "read_file", "rawInput": { "path": "~/.ssh/id_rsa" } })));
     assert!(!allow(json!({ "name": "list_dir", "rawInput": { "paths": ["/w/artifacts", "/w2"] } })));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn defaults_unset_effort_to_medium_when_agy_starts_at_high() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("requests.jsonl");
+    let script = dir.path().join("fake-agy-high-default");
+    std::fs::write(
+        &script,
+        format!(
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> '{}'
+  id=$(printf '%s' "$line" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+  case "$line" in
+    *'"method":"initialize"'*)
+      echo '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1,"agentCapabilities":{{"_meta":{{"antigravity":{{"systemPrompt":{{"append":true}}}}}}}}}}}}'
+      ;;
+    *'"method":"session/new"'*)
+      echo '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"s-eff","configOptions":[{{"id":"thought_level","category":"thought_level","currentValue":"high","options":[{{"value":"low"}},{{"value":"medium"}},{{"value":"high"}}]}}]}}}}'
+      ;;
+    *'"method":"session/set_config_option"'*)
+      echo "{{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{{}}}}"
+      ;;
+    *'"method":"session/prompt"'*)
+      echo "{{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{{\"stopReason\":\"end_turn\"}}}}"
+      ;;
+  esac
+done
+"#,
+            log_path.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let (opts, _) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    assert!(opts.effort.is_none());
+    let res = run_gemini(opts).await;
+    assert!(res.ok, "unexpected error: {:?}", res.error);
+    let sent = std::fs::read_to_string(&log_path).unwrap();
+    assert!(sent.contains(r#""method":"session/set_config_option""#));
+    assert!(sent.contains(r#""configId":"thought_level""#));
+    assert!(sent.contains(r#""value":"medium""#));
+}

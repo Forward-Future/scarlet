@@ -54,6 +54,8 @@ export interface PromptContext {
   learningCheck?: LearningCheckContext;
   /** What an area_check task looks at. Such a task edits no video, so its prompt is about one frame. */
   areaCheck?: { mediaId: string; at: number };
+  /** What a listen_check task hears for a request whose model can't. Such a task edits no video, so its prompt is about one passage. */
+  listenCheck?: { mediaId: string; from: number; to: number; voice?: "me" | "other voices"; question: string };
   /** The editor's setting for how many of a pass's cuts they are asked to check. Omitted = balanced. */
   checkIn?: CheckIn;
   /** Directory the agent may use for temp files; mentioned in the prompt. */
@@ -169,6 +171,22 @@ function buildAreaCheckPrompt(check: { mediaId: string; at: number }, prefix: st
   ].join("\n\n");
 }
 
+function buildListenCheckPrompt(check: { mediaId: string; from: number; to: number; voice?: "me" | "other voices"; question: string }, caps: AgentCapabilities): string {
+  const prefix = caps.toolPrefix ?? "";
+  const call = `\`${prefix}source_audio\` with \`mediaId\` ${check.mediaId}, \`from\` ${check.from} and \`to\` ${check.to}${check.voice ? `, and \`voice\` "${check.voice}"` : ""}`;
+  const hear = caps.audio
+    ? `Call ${call}: the passage comes back as audio in its result.`
+    : `Call ${call}: Scarlet writes the passage as a WAV file to your folder and says where. Open that file with your own file viewer to hear it.`;
+  return [
+    "# You are listening to one passage of a recording for Scarlet, a video editor",
+    "Another model is editing this video and can't hear. It reads the recording as a transcript and measurements, which miss what an editor hears: a false start that reads as a finished line, a word cut off or slurred, a repeated word the transcript tidied away, a hum, a breath, a click.",
+    `It asked you to listen to recording \`${check.mediaId}\` from ${check.from} s to ${check.to} s and answer:\n\n> ${check.question.trim().replace(/\n+/g, "\n> ")}`,
+    `${hear} Listen to all of it, more than once if you need to.`,
+    "Answer from what you hear, not from what a transcript would say. Quote what is said word for word where it matters, with hesitations, false starts, repeated and cut-off words as they sound, and give each thing you name its time in source seconds (the passage starts at " + check.from + " s). Say plainly what you are unsure of. If you couldn't hear the passage, say so and don't guess.",
+    "Your reply is your answer, and it is all the editing model gets: a few plain sentences, then stop. Edit nothing and call no other tool.",
+  ].join("\n\n");
+}
+
 function buildLearningCheckPrompt(check: LearningCheckContext): string {
   const list = (lines: string[]) => lines.map(l => `- ${l}`).join("\n");
   const decided = check.decided ?? [];
@@ -254,6 +272,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   if (ctx.editSkill) return buildSkillEditPrompt(ctx, ctx.editSkill);
   if (ctx.learningCheck) return buildLearningCheckPrompt(ctx.learningCheck);
   if (ctx.areaCheck) return buildAreaCheckPrompt(ctx.areaCheck, ctx.capabilities?.toolPrefix ?? "");
+  if (ctx.listenCheck) return buildListenCheckPrompt(ctx.listenCheck, ctx.capabilities ?? agentCapabilities(ctx.task?.agent, undefined, ctx.task?.model));
   const parts: string[] = [SCARLET_INTRO];
   // Only a caller that says the run has the tool is asked: a harness's default says what it can do, not how this run was launched.
   if (ctx.capabilities?.plan) parts.push(PLAN_STEPS);

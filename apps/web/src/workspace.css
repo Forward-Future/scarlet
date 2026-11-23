@@ -28,9 +28,11 @@
    holds a coarse, blurred copy of the picture where it sits on screen. The monitor and the timeline's panel are a little
    see-through so it shows behind them, and unlit they look as they did. */
 .cut-preview { position: relative; isolation: isolate; }
-.ambient-light { position: absolute; inset: 0; z-index: -1; width: 100%; height: 100%; pointer-events: none;
-  filter: saturate(1.4) brightness(.8); opacity: 0; transition: opacity .6s ease; }
+.ambient-light { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; pointer-events: none;
+  opacity: 0; transition: opacity .6s ease; transform: translateZ(0); }
 .ambient-light[data-lit="true"] { opacity: .8; }
+.cut-preview > .watch-viewport { position: relative; z-index: 1; }
+.cut-preview > .cut-transport { position: relative; z-index: 2; }
 .cut-preview .watch-monitor { background: rgb(0 0 0 / 50%); }
 .cut-preview .timeline-panel { background: rgb(26 25 24 / 82%); }
 @media (prefers-reduced-transparency: reduce) { .ambient-light { display: none; } }
@@ -87,36 +89,24 @@
 /* What the message revises, as a tag inside the box before the text. Its × makes the message a new edit. */
 .composer-tag { flex: none; align-self: center; display: inline-flex; align-items: center; gap: 3px; max-width: 55%; margin-right: 4px; padding: 0 2px 0 7px;
   border: 1px solid var(--color-line); border-radius: 4px; font-size: 11.5px; line-height: 20px; color: var(--color-muted); white-space: nowrap; }
-.composer-aim { flex: 0 1 auto; align-self: flex-start; display: flex; align-items: center;
-  min-width: 0; max-width: 48%; min-height: 26px; margin-top: 3px; padding: 0 7px;
-  border: 1px solid var(--color-line); border-radius: 6px; background: var(--color-panel); color: var(--color-fg);
-  font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.composer-aim-button { flex: none; display: flex; align-items: center; gap: 2px; min-height: 22px; margin-inline-start: 3px; padding: 0 3px;
-  border: 0; border-radius: 4px; background: none; color: var(--color-muted); cursor: pointer; }
-.composer-aim-button:is(:hover, [aria-expanded="true"]) { background: var(--color-raised); color: var(--color-fg); }
+.composer-aim { flex: 1 1 auto; display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  width: 100%; min-width: 0; min-height: 28px; padding: 0 2px 0 8px; border-radius: 6px;
+  color: var(--color-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.composer-aim:hover, .composer-aim:focus-within { background: var(--color-raised); }
+.composer-aim-main { flex: 1 1 auto; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .composer-aim-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.composer-aim-button > svg { transform: rotate(90deg); }
-.composer-aim-button[aria-expanded="true"] > svg { transform: rotate(-90deg); }
-.composer-aim-card { position: absolute; z-index: 6; bottom: calc(100% + 8px); left: 0; min-width: min(176px, 100%); width: max-content;
-  max-width: 100%; padding: 4px; border: 1px solid var(--color-line); border-radius: 8px; background: var(--color-panel);
-  box-shadow: 0 6px 20px #0005; }
-.composer-aim-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-left: 7px;
-  color: var(--color-fg); font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.composer-aim-clear { flex: none; display: inline-grid; place-items: center; width: 26px; height: 28px; padding: 0; border: 0;
-  border-radius: 5px; background: none; color: var(--color-muted); cursor: pointer; }
-.composer-aim > .composer-aim-clear { width: 20px; min-width: 0; height: 22px; margin-inline-start: 3px; border-radius: 4px; overflow: hidden; }
-@media (hover: hover) and (pointer: fine) {
-  .composer-aim:not(:hover, :focus-within) > .composer-aim-clear {
-    width: 0; margin-inline-start: 0; opacity: 0; pointer-events: none; transition-delay: 0s;
-  }
-}
-@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
-  .composer-aim > .composer-aim-clear {
-    transition: width 160ms cubic-bezier(.2, .8, .2, 1), margin-inline-start 160ms cubic-bezier(.2, .8, .2, 1), opacity 100ms ease-out 30ms;
-  }
-}
-.composer-aim-clear:hover:not(:disabled) { background: var(--color-raised); color: var(--color-fg); }
-.composer-aim-clear:disabled { color: var(--color-dim); cursor: default; }
+.composer-aim-verb { color: var(--color-muted); }
+.composer-aim-target { color: var(--color-fg); font-weight: 500; }
+.composer-aim-time { font-family: var(--font-mono, monospace); font-size: 11.5px; color: var(--color-fg); font-variant-numeric: tabular-nums; }
+button.composer-aim-time { display: inline; margin: 0 -4px; padding: 1px 4px; border: 0; border-radius: 4px; background: none; cursor: pointer; transition: background .12s ease; }
+button.composer-aim-time:hover { background: rgba(255, 255, 255, .08); }
+button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, .35); outline-offset: 0; }
+.composer-aim-sep { color: var(--color-dim); }
+.composer-aim-clear { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0;
+  border-radius: 5px; background: none; color: var(--color-dim); cursor: pointer; }
+.composer-aim:is(:hover, :focus-within) > .composer-aim-clear, .composer-aim-clear:focus-visible { color: var(--color-muted); }
+.composer-aim-clear:hover:not(:disabled) { background: var(--color-line); color: var(--color-fg); }
+.composer-aim-clear:disabled { color: var(--color-dim); opacity: .5; cursor: default; }
 /* Hover or focus on the target lights what the message is about on the timeline. */
 .timeline-range.is-lit { box-shadow: 0 0 0 2px rgba(244, 241, 233, .4); }
 .simple-timeline-band.is-lit { box-shadow: 0 0 0 2px rgba(255, 160, 156, .55); }
@@ -176,8 +166,8 @@
 .watch-monitor .monitor-controls { z-index: 6; }
 .monitor-clock { color: #b6b3ac; font: 11px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .monitor-clock strong { font-weight: 500; color: #f4f0e8; }
-/* Slow cut loads and cold renders: brief outgoing-frame hold, dimmed lead-in still with a warm sheen synced to the
-   timeline's loading wave, thin bottom hairline, and an escalating frosted status pill after 1.5s. */
+/* Slow cut loads and cold renders: brief outgoing-frame hold, dimmed lead-in still, thin bottom hairline, and an
+   escalating frosted status pill after 1.5s. */
 .monitor-load { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; opacity: 1; transition: opacity .28s cubic-bezier(.22, .61, .36, 1); }
 .monitor-load[data-leaving] { opacity: 0; }
 .monitor-load-held { position: absolute; inset: 0; background: #000; }
@@ -187,14 +177,6 @@
   opacity: 0; filter: brightness(.76) saturate(.84); transition: opacity .22s ease; }
 .monitor-load-still[data-loaded] { opacity: 1; }
 .monitor-load-scrim { position: absolute; inset: 0; background: radial-gradient(ellipse 72% 72% at 50% 50%, rgb(10 10 10 / 26%), rgb(10 10 10 / 48%)); }
-.monitor-load-sheen { position: absolute; inset: 0; }
-.monitor-load-sheen > i {
-  position: absolute; inset: 0; background: rgb(225 217 197 / 13%);
-  mask-image: radial-gradient(ellipse 30% 115% at 42% 55%, #000 28%, transparent),
-              radial-gradient(ellipse 18% 95% at 80% 55%, #000 18%, transparent);
-  mask-size: 50% 100%;
-  mask-repeat: repeat-x;
-}
 .monitor-load-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; }
 .monitor-load-pill {
   display: inline-flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); padding: 7px 14px 7px 11px; border-radius: 999px;
@@ -216,7 +198,6 @@
 .monitor-load-bar-fill { display: block; height: 100%; background: linear-gradient(90deg, rgb(244 240 232 / 55%), #f4f0e8); transition: width .35s cubic-bezier(.22, .61, .36, 1); }
 .monitor-load-bar-fill.is-indeterminate { width: 34%; border-radius: 2px; background: linear-gradient(90deg, transparent, rgb(244 240 232 / 82%) 55%, transparent); }
 @media (prefers-reduced-motion: no-preference) {
-  .monitor-load-sheen > i { animation: waveform-travel 4.8s linear var(--wave-phase, 0s) infinite; }
   .monitor-load-ring { animation: monitor-load-spin .85s linear infinite; }
   .monitor-load-pill { animation: monitor-load-rise .24s cubic-bezier(.22, .61, .36, 1); }
   .monitor-load-hint { animation: monitor-load-rise .28s cubic-bezier(.22, .61, .36, 1); }
@@ -227,7 +208,6 @@
 @keyframes monitor-load-sweep { from { transform: translateX(-110%); } to { transform: translateX(310%); } }
 @media (prefers-reduced-motion: reduce) {
   .monitor-load, .monitor-load-still, .monitor-load-held canvas, .monitor-load-bar-fill { transition: none; }
-  .monitor-load-sheen { display: none; }
   .monitor-load-ring { border-color: rgb(244 240 232 / 55%); }
   .monitor-load-bar-fill.is-indeterminate { width: 100%; opacity: .35; }
 }
@@ -330,42 +310,21 @@
 @keyframes waveform-grow { from { transform: scaleY(.15); opacity: .35; } }
 /* A half-width tile advances exactly one repeat so the ripple loops without a jump. */
 @keyframes waveform-travel { from { mask-position: 0% center; } to { mask-position: 100% center; } }
-/* While Scarlet is actively editing the video, a wide pillowy glow drifts gently back and forth across the timeline
-   lanes, synced by --edit-phase so saving a new cut mid-pass doesn't jump it, and fading out cleanly when done. */
-.timeline-editing-wash {
-  position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; border-radius: inherit;
-  mix-blend-mode: screen; opacity: 0; transition: opacity .55s ease;
-}
-.timeline-editing-wash[data-active] {
-  opacity: 1;
-  box-shadow: inset 0 0 0 1px rgba(244, 241, 233, .14);
-}
-.timeline-editing-wash::after {
-  content: ""; position: absolute; inset: 0; width: 52%;
-  background:
-    radial-gradient(ellipse 48% 3px at 50% 0%, rgba(255, 253, 248, .55) 0%, transparent 100%),
-    radial-gradient(ellipse 50% 100% at 50% 50%,
-      rgba(244, 241, 233, .28) 0%,
-      rgba(228, 222, 206, .13) 42%,
-      transparent 76%);
-}
+/* While Scarlet is at work on the video, the chat's turning ring and what Scarlet is doing sit beside the clock under
+   the timeline. A press brings that request into the middle of the chat, which lights it for a moment. */
+.timeline-working { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 60%; margin: 0 auto 0 14px; padding: 2px 8px 2px 6px;
+  border-radius: 999px; color: #cfcac0; font: 12px/16px var(--font-sans); cursor: pointer; transition: background-color .15s ease, color .15s ease; }
+.timeline-working:hover, .timeline-working:focus-visible { background: rgba(244, 241, 233, .07); color: var(--color-fg); }
+.timeline-working .req-mark { width: 11px; height: 11px; }
+.timeline-working-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.timeline-working-text > span { color: #8a867f; }
+.timeline-working:hover .timeline-working-text > span, .timeline-working:focus-visible .timeline-working-text > span { color: #b9b5ac; }
+#simple-chat [data-flash] { border-radius: 8px; box-shadow: 0 0 0 6px rgba(244, 241, 233, .065), inset 0 0 0 999px rgba(244, 241, 233, .065); }
 @media (prefers-reduced-motion: no-preference) {
-  .timeline-editing-wash::after {
-    animation: timeline-editing-drift 3.6s ease-in-out var(--edit-phase, 0s) infinite alternate;
-    animation-play-state: paused;
-  }
-  .timeline-editing-wash[data-active]::after { animation-play-state: running; }
+  #simple-chat [data-flash] { animation: chat-flash 1.2s ease-out forwards; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .timeline-editing-wash { transition: opacity .2s ease; }
-  .timeline-editing-wash::after { display: none; }
-  .timeline-editing-wash[data-active] { box-shadow: inset 0 0 0 1px rgba(244, 241, 233, .34); }
-}
-@keyframes timeline-editing-drift {
-  0%   { transform: translateX(-23%); opacity: .82; }
-  50%  { opacity: 1; }
-  100% { transform: translateX(115%); opacity: .82; }
-}
+@keyframes chat-flash { 0%, 45% { box-shadow: 0 0 0 6px rgba(244, 241, 233, .075), inset 0 0 0 999px rgba(244, 241, 233, .075); }
+  100% { box-shadow: 0 0 0 6px transparent, inset 0 0 0 999px transparent; } }
 .timeline-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 22px; margin-top: 6px; }
 .timeline-clock { color: var(--color-fg); font: 12px/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .timeline-clock > span { color: #8a867f; }
@@ -383,14 +342,8 @@
 .timeline-zoom-slider::-moz-range-progress { height: 3px; border-radius: 2px; background: #aaa69e; }
 .timeline-zoom-slider::-moz-range-thumb { width: 11px; height: 11px; border: 0; border-radius: 50%; background: #f1f1f1; }
 .timeline-zoom-slider:focus-visible { outline: 2px solid var(--color-fg); outline-offset: 2px; border-radius: 4px; }
-/* What ⌘Z takes back, beside the zoom while there is something to take back: an icon, "Undo Keep" and the key, small. */
+/* Why the last ⌘Z couldn't take its step back, beside the zoom. */
 .timeline-undo { display: flex; align-items: center; gap: 10px; min-width: 0; margin-left: auto; font: 12px/1 var(--font-sans); }
-.timeline-undo-button { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border-radius: 5px; background: transparent;
-  color: var(--color-muted); white-space: nowrap; cursor: pointer; }
-.timeline-undo-button::after { content: attr(data-key); content: attr(data-key) / ""; margin-left: 2px; font-size: 10px; color: var(--color-dim); }
-.timeline-undo-button:enabled:hover { background: var(--color-raised); color: var(--color-fg); }
-.timeline-undo-button:disabled { cursor: default; color: var(--color-dim); }
-.timeline-undo-button:focus-visible { outline: 2px solid var(--color-fg); outline-offset: -2px; }
 .timeline-undo-error { min-width: 0; overflow: hidden; color: var(--color-bad); text-overflow: ellipsis; white-space: nowrap; }
 .timeline-zoom-level { min-width: 4ch; margin-left: 2px; color: #8a867f; font: 12px/1 var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
 .timeline-filmstrip > div, .filmstrip-held > div { min-width: 0; overflow: hidden; background: var(--color-raised); }
@@ -554,13 +507,10 @@
   border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); font-size: 12.5px; color: var(--color-muted); }
 .composer-files + .composer-box { border-top-left-radius: 0; border-top-right-radius: 0; }
 .queue-tray + :is(.composer-files, .composer-aim-line), .composer-aim-line + .composer-files { border-radius: 0; }
-/* Where the message goes is the line on top of the box, read as the tray's lines are, its tag at the left. */
+/* Where the message goes is a flush context row on top of the box, read as attached-file rows are. */
 .composer-aim-line { position: relative; display: flex; align-items: center; min-width: 0; min-height: 30px; margin-bottom: calc(-1 * var(--model-row-gap, 9px));
-  padding: 2px 4px 2px 6px; border: 1px solid var(--color-line); border-bottom: 0; border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); }
+  padding: 2px 4px; border: 1px solid var(--color-line); border-bottom: 0; border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); }
 .composer-aim-line + .composer-box { border-top-left-radius: 0; border-top-right-radius: 0; }
-.composer-aim-line > .composer-aim { align-self: center; max-width: 100%; min-height: 24px; margin-top: 0; }
-/* After a call's tag: where its cut is and where the playhead is now. "at 2:47.200 · Playhead 2:57.400". */
-.composer-aim-when { flex: 0 1 auto; min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .composer-file { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 30px; padding: 0 4px 0 6px; border-radius: 6px; }
 .composer-file:hover, .composer-file:focus-within { background: var(--color-raised); color: var(--color-fg); }
 .composer-file-icon { flex: none; display: inline-grid; place-items: center; width: 16px; color: var(--color-dim); }

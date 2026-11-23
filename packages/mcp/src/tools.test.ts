@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { EDITING_TOOL_GROUPS, ScarletApiError, ScarletClient, Task } from "@scarlet/shared";
+import { agentCapabilities, EDITING_TOOL_GROUPS, ScarletApiError, ScarletClient, Task } from "@scarlet/shared";
 import { applyOps, emptyTimeline, makeMediaClip, OpError, timelineDuration, type MediaClip, type Note, type Timeline, type Transcript } from "@scarlet/timeline";
 import { z } from "zod/v3";
 import { toolAnnotations } from "./annotations.js";
@@ -704,6 +704,90 @@ describe("source_audio", () => {
       expect(textOf(outside)).toBe("Scarlet server error 400 (bad_request): Choose a window inside the recording.");
     } finally { await c.close(); }
   });
+  // agy gives Gemini no audio from a tool's result, but its own file viewer plays it a WAV from its folder (2026-11-22).
+  it("writes the passage to the task folder for a model that hears a file it opens there, up to 20 s", async () => {
+    const { mkdtemp, readFile, realpath, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const workDir = await realpath(await mkdtemp(join(tmpdir(), "scarlet-listen-")));
+    const layout = { width: 1280, height: 384, pixelsPerSecond: 80, rows: [] };
+    mock.state.extra = (req, res) => req.path === "/projects/prj_test/source-audio" ? reply(res, { wav: Buffer.from("RIFF-wav").toString("base64") })
+      : req.path === "/projects/prj_test/sound-picture" ? reply(res, { jpeg: "/9j/", layout }) : false;
+    mock.state.transcripts = { m1: transcript };
+    const byFile = (files: boolean) => connect({ agent: "gemini", workDir, capabilities: { images: true, audio: false, audioFiles: true, files, plan: false }, author: { type: "agent", name: "gemini" } });
+    const c = await byFile(true);
+    try {
+      const r = await ok(c, "source_audio", { mediaId: "m2", from: 1074.5, to: 1089.75 });
+      const said = JSON.parse(textOf(r)) as { listen: string; from: number; to: number; seconds: number; how: string };
+      expect(r.content).toHaveLength(1);
+      expect(said).toMatchObject({ from: 1074.5, to: 1089.75, seconds: 15.25 });
+      expect(said.listen).toBe(join(workDir, "listen", "m2-1074.50-1089.75.wav"));
+      expect(said.how).toMatch(/file viewer/);
+      expect(await readFile(said.listen, "utf8")).toBe("RIFF-wav");
+      const long = await call(c, "source_audio", { mediaId: "m2", from: 0, to: 25 });
+      expect(textOf(long)).toBe("Choose a passage of up to 20 s: m2 0–25 is 25.00 s.");
+      expect(sent("/projects/prj_test/source-audio")).toHaveLength(1);
+      const { tools } = await c.listTools();
+      expect(tools.find(t => t.name === "source_audio")?.description).toMatch(/^Listen to up to 20 seconds .*open it with your own file viewer/s);
+      // The sound picture of a passage comes with its file too.
+      const pic = await ok(c, "sound_picture", { mediaId: "m1", from: 0.4, to: 12.4 });
+      expect(pic.content.map(c => c.type)).toEqual(["text", "image", "text"]);
+      expect(JSON.parse((pic.content[2] as { text: string }).text).listen).toBe(join(workDir, "listen", "m1-0.40-12.40.wav"));
+    } finally { await c.close(); }
+    // A side check has no file tools to open it with, so it has no way to listen.
+    const sideCheck = await byFile(false);
+    try {
+      expect((await sideCheck.listTools()).tools.map(t => t.name)).not.toContain("source_audio");
+    } finally { await sideCheck.close(); await rm(workDir, { recursive: true, force: true }); }
+  });
+});
+
+// Claude and most Codex models can't hear: a model that can (Gemini first) listens for them and answers in words (2026-11-22).
+describe("listen", () => {
+  const base = { state: "running", projectId: "prj_test", agent: "claude", hostId: "host_a", createdBy: { type: "human", name: "Editor" } } as const;
+  const edit = Task.parse({ ...base, id: "edit-task", kind: "edit", instruction: "Cut the dialogue", context: {} });
+  it("has a model that can hear listen to a passage for a request whose model can't, and gives its words", async () => {
+    let answer: unknown = { state: "heard", answer: "The first try runs 1075.2–1077.9 s and trails off on “pace”; the kept line starts at 1078.4 s.", by: { agent: "gemini" } };
+    mock.state.extra = (req, res) => req.path === "/projects/prj_test/listen" ? reply(res, answer) : false;
+    const c = await connect({ taskId: edit.id, task: edit, listener: { agent: "gemini" } });
+    try {
+      const names = (await c.listTools()).tools.map(t => t.name);
+      expect(names).toContain("listen");
+      expect(names).not.toContain("source_audio");
+      const r = await ok(c, "listen", { mediaId: "m2", from: 1074.5, to: 1089.75, question: "Where does the abandoned first try end?" });
+      expect(JSON.parse(textOf(r))).toEqual({ mediaId: "m2", from: 1074.5, to: 1089.75, heardBy: "Gemini",
+        heard: "The first try runs 1075.2–1077.9 s and trails off on “pace”; the kept line starts at 1078.4 s." });
+      expect(sent("/projects/prj_test/listen")[0]!.body).toEqual({ taskId: "edit-task", mediaId: "m2", from: 1074.5, to: 1089.75, question: "Where does the abandoned first try end?" });
+      answer = { state: "listening", by: { agent: "gemini" } };
+      expect(textOf(await ok(c, "listen", { mediaId: "m2", from: 1074.5, to: 1089.75, question: "Where does the abandoned first try end?" })))
+        .toBe("Gemini is still listening to m2 1074.5–1089.75 s. Call listen again with the same passage and question for its answer.");
+      const long = await call(c, "listen", { mediaId: "m2", from: 0, to: 25, question: "What is said?" });
+      expect(textOf(long)).toBe("Choose a passage of up to 20 s: m2 0–25 is 25.00 s.");
+      expect(sent("/projects/prj_test/listen")).toHaveLength(2);
+    } finally { await c.close(); }
+  });
+  it("is offered only where it helps: never to a model that hears, nor with no listener signed in", async () => {
+    const codexAudio = Task.parse({ ...edit, agent: "codex", model: "gpt-6-astra-audio" });
+    const sessions = [
+      await connect({ taskId: edit.id, task: edit }),
+      await connect({ agent: "codex", taskId: codexAudio.id, task: codexAudio, capabilities: agentCapabilities("codex", undefined, "gpt-6-astra-audio"), listener: { agent: "gemini" } }),
+    ];
+    try {
+      const [none, hears] = await Promise.all(sessions.map(async c => (await c.listTools()).tools.map(t => t.name)));
+      expect(none).not.toContain("listen");
+      expect(none).not.toContain("source_audio");
+      expect(hears).not.toContain("listen");
+      expect(hears).toContain("source_audio");
+    } finally { await Promise.all(sessions.map(c => c.close())); }
+  });
+  it("gives the run that listens the passage as a file and nothing else", async () => {
+    const check = Task.parse({ ...base, id: "listen-task", agent: "gemini", kind: "listen_check", instruction: "Hear m2",
+      context: { checksTaskId: "edit-task", listenCheck: { mediaId: "m2", from: 1074.5, to: 1089.75, question: "Where does the first try end?" } } });
+    const c = await connect({ agent: "gemini", taskId: check.id, task: check, capabilities: agentCapabilities("gemini"), author: { type: "agent", name: "gemini" } });
+    try {
+      expect((await c.listTools()).tools.map(t => t.name)).toEqual(["source_audio"]);
+    } finally { await c.close(); }
+  });
 });
 
 describe("sound_picture", () => {
@@ -890,11 +974,12 @@ describe("tool annotations", () => {
     const check = Task.parse({ ...task, id: "check-task", kind: "learning_check", context: { checksTaskId: "asked-task" } });
     const edit = Task.parse({ ...task, id: "edit-task", kind: "edit", instruction: "Add B-roll", context: {} });
     const sessions = [await hearing(), await connect({ agent: "codex", taskId: task.id, task }), await connect({ agent: "codex", taskId: check.id, task: check }),
-      await connect({ agent: "codex", taskId: edit.id, task: edit })];
+      await connect({ agent: "codex", taskId: edit.id, task: edit }), await connect({ taskId: edit.id, task: edit, listener: { agent: "gemini" } })];
     try {
       const tools = (await Promise.all(sessions.map(c => c.listTools()))).flatMap(l => l.tools);
       // The hearing session lists every editing tool; the skill request adds the tool that saves its revision, the
-      // check that reads a request the one that offers a rule, and the edit request the one that captures a page.
+      // check that reads a request the one that offers a rule, the edit request the one that captures a page, and a
+      // request whose model can't hear, with a model signed in that can, the one that has it listen.
       expect([...new Set(tools.map(t => t.name))].sort()).toEqual(every.filter(name => name !== "skill_save_from_change").sort());
       for (const t of tools) expect(t.annotations, t.name).toEqual(toolAnnotations(t.name));
     } finally { await Promise.all(sessions.map(c => c.close())); }
@@ -944,6 +1029,75 @@ describe("timeline_join_audit", () => {
       expect(textOf(await ok(c, "timeline_join_audit", { at: [10.5] }))).toBe("No joins on version pieces at those times.");
       const both = await call(c, "timeline_join_audit", { changeId: "chg_1", version: "pieces" });
       expect(textOf(both)).toContain("Give changeId or version, not both.");
+    } finally { await c.close(); }
+  });
+
+  it("pages timeline_transcript to stay within caps.resultChars", async () => {
+    const words = Array.from({ length: 400 }, (_, i) => ({
+      text: `word_${String(i).padStart(3, "0")}`,
+      start: i * 0.2,
+      end: i * 0.2 + 0.15,
+    }));
+    mock.state.transcripts.m1 = {
+      id: "t-long",
+      mediaId: "m1",
+      segments: [{ id: "s1", start: 0, end: 80, text: words.map(w => w.text).join(" "), words }],
+    };
+    const tl = emptyTimeline("prj_test");
+    tl.version = "long";
+    tl.tracks[1]!.clips = [makeMediaClip("m1", 0, 80, 0)];
+    mock.state.timeline = tl;
+    const c = await connect({
+      agent: "gemini",
+      capabilities: { images: true, audio: false, files: false, plan: false, resultChars: 2_000 },
+    });
+    try {
+      const first = textOf(await ok(c, "timeline_transcript", { detail: "words" }));
+      expect(first.length).toBeLessThanOrEqual(2_000);
+      const next = /Showing (\d+) of 400 words; continue with from=([\d.]+)\./.exec(first);
+      expect(next).not.toBeNull();
+      expect(Number(next![1])).toBeGreaterThan(0);
+      expect(Number(next![1])).toBeLessThan(400);
+      const second = textOf(await ok(c, "timeline_transcript", { detail: "words", from: Number(next![2]) }));
+      expect(second.length).toBeLessThanOrEqual(2_000);
+      expect(second).toContain(`#${next![1]} `);
+    } finally { await c.close(); }
+  });
+
+  it("pages timeline_join_audit and timeline_get to stay within caps.resultChars", async () => {
+    const tl = emptyTimeline("prj_test");
+    tl.version = "many_joins";
+    for (let i = 0; i < 36; i++) {
+      tl.tracks[1]!.clips.push(makeMediaClip("m1", i * 4, i * 4 + 2, i * 2, { id: `c_${i}` }));
+    }
+    mock.state.timeline = tl;
+    mock.state.waveform = (mediaId, from, to, points) => ({
+      mediaId, from, to, peaks: Array(points).fill(0.001), rms: Array(points).fill(0.001), speechActivity: [],
+    });
+    const c = await connect({
+      agent: "gemini",
+      capabilities: { images: true, audio: false, files: false, plan: false, resultChars: 1_500 },
+    });
+    try {
+      const firstAuditText = textOf(await ok(c, "timeline_join_audit"));
+      expect(firstAuditText.length).toBeLessThanOrEqual(1_500);
+      const firstAudit = JSON.parse(firstAuditText) as { audits: Array<{ at: number }>; next?: string };
+      expect(firstAudit.audits.length).toBeGreaterThan(0);
+      expect(firstAudit.audits.length).toBeLessThan(35);
+      const nextFrom = /from=([\d.]+)/.exec(firstAudit.next ?? "");
+      expect(nextFrom).not.toBeNull();
+      const secondAuditText = textOf(await ok(c, "timeline_join_audit", { from: Number(nextFrom![1]) }));
+      expect(secondAuditText.length).toBeLessThanOrEqual(1_500);
+      const secondAudit = JSON.parse(secondAuditText) as { audits: Array<{ at: number }> };
+      expect(secondAudit.audits[0]!.at).toBeGreaterThan(firstAudit.audits.at(-1)!.at);
+
+      const firstTl = textOf(await ok(c, "timeline_get", { format: "summary" }));
+      expect(firstTl.length).toBeLessThanOrEqual(1_500);
+      const tlNext = /call timeline_get with from=([\d.]+)/.exec(firstTl);
+      expect(tlNext).not.toBeNull();
+      const secondTl = textOf(await ok(c, "timeline_get", { format: "summary", from: Number(tlNext![1]) }));
+      expect(secondTl.length).toBeLessThanOrEqual(1_500);
+      expect(secondTl).toContain("c_35 ");
     } finally { await c.close(); }
   });
 });

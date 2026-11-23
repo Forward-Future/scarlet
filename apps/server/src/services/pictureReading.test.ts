@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Ctx } from "../context.js";
 import { ffmpeg } from "../render/ffmpeg.js";
 import { pictureReader, rememberLast, withFrames, type VideoMedia } from "./pictureReading.js";
+import { fullProxyVariants, previewIdentity } from "./previewPictures.js";
 
 let root: string;
 let live: AbortController, media: AbortController;
@@ -80,6 +81,14 @@ describe("reading a video's picture a window at a time", () => {
     expect(reads).toEqual([0]);
   });
 
+  it("tells a reading which windows nobody asked for", async () => {
+    const seen: Array<[number, boolean | undefined]> = [];
+    const reader = pictureReader<number>({ name: "test-asked", window: 60, identity: m => String(m.hash),
+      async read(_ctx, _media, _file, { index, unasked }) { seen.push([index, unasked]); return index; } });
+    await reader.read(ctx(), video(), { from: 70, to: 100 });
+    await expect.poll(() => seen).toEqual([[1, false], [0, true], [2, true]]);
+  });
+
   it("refuses what has no picture to read, or no file", async () => {
     const { reader } = counting();
     await expect(reader.read(ctx(), video({ kind: "audio" } as Partial<VideoMedia>), {})).rejects.toThrow("Only a video has a picture to read.");
@@ -104,6 +113,47 @@ describe("decoding frames for a reading", () => {
     expect(handed.map(h => h.bytes)).toEqual([4, 4, 1].map(n => n * 160 * 90 * 3));
     expect(results).toEqual([4, 4, 1]);
     expect(existsSync(join(root, "tmp")) ? readdirSync(join(root, "tmp")) : []).toEqual([]);
+  });
+});
+
+describe("reading small frames from a recording's preview copy", () => {
+  /** A red original and its preview copy, which is blue so a frame says which file it came from. */
+  async function redWithBlueCopy(copy: "blue" | "broken" | "short" = "blue") {
+    const clip = join(root, "media", "red.mp4");
+    const encode = (color: string, out: string, seconds = 2) =>
+      ffmpeg(["-f", "lavfi", "-i", `color=c=${color}:size=320x180:rate=25:duration=${seconds}`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", out]);
+    await encode("red", clip);
+    // No steady picture clock is recorded for it, as for a screen recorder's file: the copy is found all the same.
+    const asset = video({ path: "red.mp4", duration: 2, fps: 25, width: 320, height: 180, hasAlpha: false });
+    const { local } = await previewIdentity(join(root, "media"), asset);
+    const file = fullProxyVariants(join(root, "proxies"), [local], asset.height)[0]!.file;
+    mkdirSync(join(root, "proxies"));
+    if (copy === "broken") writeFileSync(file, "not a video");
+    else await encode("blue", file, copy === "short" ? 1 : 2);
+    return { clip, asset };
+  }
+  const firstPixel = async (asset: VideoMedia, clip: string, frames: { height: number; fromCopy?: boolean }) => {
+    let pixel: number[] = [];
+    await withFrames(ctx(), asset, clip, "test-copy", { start: 0, end: 1, fps: 1, width: frames.height * 16 / 9, signal: live.signal, ...frames },
+      (_at, rgb) => { if (!pixel.length) pixel = [...rgb.subarray(0, 3)]; return false; }, async () => undefined);
+    return pixel[0]! > pixel[2]! ? "original" : "copy";
+  };
+
+  it("reads frames no taller than the copy from it, and anything else from the original", async () => {
+    const { clip, asset } = await redWithBlueCopy();
+    expect(await firstPixel(asset, clip, { height: 90, fromCopy: true })).toBe("copy");
+    // A reading that didn't ask for the copy, and one whose frames are taller than it, see the original.
+    expect(await firstPixel(asset, clip, { height: 90 })).toBe("original");
+    expect(await firstPixel(asset, clip, { height: 360, fromCopy: true })).toBe("original");
+  });
+
+  it("reads the original when the copy isn't a whole copy of it", async () => {
+    // A file that isn't a video, and a copy half as long as the recording.
+    const broken = await redWithBlueCopy("broken");
+    expect(await firstPixel(broken.asset, broken.clip, { height: 90, fromCopy: true })).toBe("original");
+    rmSync(join(root, "proxies"), { recursive: true });
+    const { clip, asset } = await redWithBlueCopy("short");
+    expect(await firstPixel(asset, clip, { height: 90, fromCopy: true })).toBe("original");
   });
 });
 

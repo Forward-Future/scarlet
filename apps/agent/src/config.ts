@@ -22,7 +22,7 @@ export interface AgentConfig {
   timeoutMinutes?: number;
   /** Stop a run whose agent has written nothing for this many minutes (default 10). */
   stallMinutes?: number;
-  /** Tasks each agent runtime may run at once (default 3, max 8). */
+  /** Tasks each agent runtime may run at once (default 4, max 8): a request about the whole video and three revisions beside it. */
   maxParallel?: number;
   /** Default model per agent runtime. */
   models?: Partial<Record<string, string>>;

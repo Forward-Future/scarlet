@@ -93,7 +93,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     taskStartedAt,
     task,
     agent: opts.agent,
-    capabilities: agentCapabilities(opts.agent, process.env.SCARLET_AGENT_CAPS),
+    capabilities: agentCapabilities(opts.agent, process.env.SCARLET_AGENT_CAPS, opts.model),
+    ...(assignment?.listener && { listener: assignment.listener }),
     workDir: opts.workDir,
     author: { type: "agent", id: opts.agent ?? "agent", name: opts.agent ?? "agent", model: opts.model },
   });

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { absTime, authorLabel, clock, clockRange, fmtBytes, initials, pct, lengthLabel, playbackClock, plural, relTime, removedSeconds, tokenBreakdown, tokenLabel, trashedLine } from "./format";
+import { absTime, authorLabel, clock, clockRange, fmtBytes, initials, pct, lengthLabel, playbackClock, plural, preciseRange, relTime, removedSeconds, tokenBreakdown, tokenLabel, trashedLine } from "./format";
 
 afterEach(() => vi.useRealTimers());
 
@@ -77,6 +77,12 @@ it("reads the player's position to the millisecond, carrying a rounded-up millis
   expect(playbackClock(61.0421)).toBe("1:01.042");
   expect(playbackClock(59.9996)).toBe("1:00.000");
   expect(playbackClock(-1)).toBe("0:00.000");
+});
+
+it("shows milliseconds on a precise range only when both ends fall in the same second", () => {
+  expect(preciseRange(42, 51.5)).toBe("0:42 – 0:51");
+  expect(preciseRange(812.444, 812.478)).toBe("13:32.444 – 13:32.478");
+  expect(preciseRange(4.2, 4.8)).toBe("0:04.200 – 0:04.800");
 });
 
 it("sizes a file in the unit that reads best", () => {

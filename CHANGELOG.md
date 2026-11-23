@@ -6,6 +6,21 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- The glow over the timeline is gone: under the timeline it now says what Scarlet is doing, and a press on it takes you to that request in the chat.
+- Edits on long 4K recordings are faster: when Scarlet checks what's on screen it reads the small cached copy of a recording instead of the full-size file, and its own requests no longer wait behind background reading of the rest of the recording.
+- The video player no longer shimmers across the picture while a clip is loading.
+- Left and right arrow keys now move the playhead one second at a time, and Shift with an arrow key steps frame by frame.
+- Pausing the video now shows the paused time in the tag above the message box instead of typing a timestamp into the input box, so the box stays empty until you write.
+- An open cut now plays your video as it is now, not an older copy with a picture you'd since changed, when it meets a cut made after it.
+- Every cut or edit waiting on you in For you now shows a dashed border on the timeline, and turns solid once you decide it, so calls and flagged cuts look the same while you review them.
+- Matt's talking-head skill now comes switched off, under Examples in Settings › Skills, as an example of one editor's style built on the shipped skills.
+- Scarlet now opens on signing in to Claude, ChatGPT or Google until a model is ready. One press installs what's needed and opens your browser, and you can look around first. Add another from the first page signs in a second plan.
+- When Scarlet rechecks a cut you approved because its footage changed, the cut now says Rechecking…, and the work under it starts with an Auto tag and why, so it never looks like a revision nobody asked for.
+- Asking Scarlet to change an edit it already made now starts right away, even while it's still working on the rest of the video, and up to four things can run at once.
+- The model menu's effort control is now a smooth pill slider you can drag or click, and its bottom bar drops the extra Tune label so your current effort and speed sit cleanly beside the chevron.
+- Scarlet now listens to cuts with Claude and Codex too: when Gemini is signed in, it listens for the model you picked. In Settings › Models you can choose which model listens, or turn listening off.
+- With Gemini, Scarlet now listens to a restart before deciding where to cut it, so a first try that sounds like a finished line comes out and the first word of the line you kept stays.
+- Scarlet no longer quits on its own if you launched it from a terminal and later close that terminal.
 - Scarlet can now find the beat, the bars and where the energy builds and drops in a music track, so you can ask it to cut to the music.
 - Scarlet can now learn a rule from what you keep and reject, not only from what you say: Learnings shows which cuts it came from, and each one opens on the timeline.
 - Scarlet can make J and L cuts, letting the next voice start just before its shot or a line carry on over the next one, and the edit's card says how far the sound leads or trails.

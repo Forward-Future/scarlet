@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
 import { clock, playbackClock } from "../../lib/format";
 import { usePlayerStore } from "../../stores/player";
-import { Icon, Spinner } from "../ui/primitives";
+import { DimMs, Icon, Spinner } from "../ui/primitives";
 
 export function PlaybackTime({ time, end }: { time: number; end: number }) {
-  return <><strong>{playbackClock(time)}</strong> / {playbackClock(end)}</>;
+  return <><strong><DimMs text={playbackClock(time)} /></strong> / <DimMs text={playbackClock(end)} /></>;
 }
 
 /** `coarse` shows whole seconds (1:05 / 3:20); the timeline still gives the exact time where the pointer is. */

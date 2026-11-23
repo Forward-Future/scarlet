@@ -9,10 +9,15 @@ import { useUiStore } from "../../stores/ui";
 import { Dropzone, enqueueImports, filename, type ImportSource } from "../../components/media/UploadDropzone";
 import { Field, Icon, InlineError, Modal, Spinner } from "../../components/ui/primitives";
 
-export function FirstEditGuide() {
+/** Quick start. While no model is ready its first step is signing in, and `onSignIn` brings back the sign-in screen. */
+export function FirstEditGuide({ onSignIn }: { onSignIn?: () => void }) {
   return (
     <>
       <ol className="first-edit-steps">
+        {onSignIn && <li>
+          <h3>Sign in to a model</h3>
+          <p>Scarlet uses your own Claude, ChatGPT or Google plan. <button type="button" className="first-edit-link" onClick={onSignIn}>Sign in</button></p>
+        </li>}
         <li>
           <h3>Add your footage</h3>
           <p>Drop a clip onto Projects or choose <strong>New project</strong>.</p>
@@ -20,7 +25,6 @@ export function FirstEditGuide() {
         <li>
           <h3>Ask for an edit</h3>
           <p>Close Media, then type or say “Trim the silence before my first word.”</p>
-          <p>If prompted, connect Claude, ChatGPT or Google under <strong>More → Set up a model</strong>.</p>
         </li>
         <li>
           <h3>Play it back</h3>

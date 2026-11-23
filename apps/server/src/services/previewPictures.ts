@@ -80,6 +80,34 @@ export async function legacyFullPicture(mediaRoot: string, asset: MediaAsset, ke
   }
 }
 
+/**
+ * A recording's whole preview copy, for a reading that takes pictures by their time: what is on screen a few times a
+ * second, not which frame it is. The copy keeps each picture's own timestamp (`-fps_mode passthrough`), so the picture
+ * at a second of it is the one at that second of the original, whether or not the recording's frame rate is steady.
+ * `previewPictures` asks for a steady rate, which a frame-exact picture needs and a screen recorder's file often lacks:
+ * OBS recordings at 29.97005 and 60.00006 frames a second had every reading of theirs decode the 4K original, a minute
+ * of it in 93 s on a busy machine against 5 s from the copy (2026-11-22). The copy is this file's (its name is bound to
+ * the file), starts within a frame of it and is as long to within two, so it is whole.
+ */
+export async function previewCopyByTime(mediaRoot: string, asset: MediaAsset, minimumHeight: number, signal?: AbortSignal) {
+  if (asset.hasAlpha !== false || !asset.fps || !asset.height) return;
+  const { local, shared, present } = await previewIdentity(mediaRoot, asset);
+  if (!present || (asset.fingerprintStamp && !shared)) return;
+  const root = join(dirname(mediaRoot), "proxies"), frame = 1 / asset.fps;
+  for (const { file, height } of fullProxyVariants(root, shared ? [shared, local] : [local], asset.height)) {
+    if (height < minimumHeight || !(await stat(file).catch(() => null))?.size) continue;
+    try {
+      const [source, proxy] = await Promise.all([probeMedia(join(mediaRoot, asset.path), { signal }), probeMedia(file, { signal })]);
+      if (source.hasAlpha || source.videoStreamCount !== 1 || source.videoStart === undefined || proxy.videoStart === undefined) continue;
+      if (proxy.height < minimumHeight || Math.abs(source.width * proxy.height / source.height - proxy.width) > 2) continue;
+      const length = (probe: typeof source) => probe.videoDuration ?? probe.duration;
+      if (Math.abs(proxy.videoStart - source.videoStart) > frame + 1e-6 || Math.abs(length(proxy) - length(source)) > 2 * frame + 1e-6) continue;
+      if (source.videoFrameCount && proxy.videoFrameCount && Math.abs(source.videoFrameCount - proxy.videoFrameCount) > 2) continue;
+      return { file, start: source.videoStart - proxy.videoStart };
+    } catch { signal?.throwIfAborted(); }
+  }
+}
+
 /** Source preview chunks are independently decodable. Use picture only, and only at adequate resolution. */
 export function previewPictures(mediaRoot: string, frame?: { signal?: AbortSignal }) {
   const root = join(dirname(mediaRoot), "proxies");

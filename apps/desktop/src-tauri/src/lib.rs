@@ -56,15 +56,56 @@ pub(crate) fn is_demo(app: &tauri::AppHandle) -> bool {
     cfg!(debug_assertions) && app.config().identifier == "com.forwardfuture.scarlet.demo"
 }
 
+thread_local! {
+    static IN_PANIC_HOOK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+struct PanicHookGuard;
+
+impl Drop for PanicHookGuard {
+    fn drop(&mut self) {
+        IN_PANIC_HOOK.with(|in_hook| in_hook.set(false));
+    }
+}
+
+fn run_panic_hook_once(log_panic: impl FnOnce(), previous: impl FnOnce()) {
+    let reentrant = IN_PANIC_HOOK.with(|in_hook| in_hook.replace(true));
+    let _guard = (!reentrant).then_some(PanicHookGuard);
+    if !reentrant {
+        log_panic();
+    }
+    previous();
+}
+
 /// Write a panic to the log before the default hook prints it. A release build aborts on a panic, so this is
 /// the only place one is written down.
 fn log_panics() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        // On one line, as every record is: where it happened, then the message.
-        log::error!("panic: {}", info.to_string().replace('\n', " "));
-        previous(info);
+        run_panic_hook_once(
+            || {
+                // On one line, as every record is: where it happened, then the message.
+                log::error!("panic: {}", info.to_string().replace('\n', " "));
+            },
+            || previous(info),
+        );
     }));
+}
+
+fn write_log_line(writer: &mut impl std::io::Write, record: &log::Record) {
+    let _ = writeln!(writer, "{}", record.args());
+}
+
+/// Mirror logs to stdout without letting a closed terminal or pipe crash Scarlet.
+/// `TargetKind::Stdout` hands stdout straight to `fern`, which falls back to stderr on write error and
+/// panics if stderr fails too (e.g. when the shell that launched the app closes).
+fn stdout_log_target() -> tauri_plugin_log::Target {
+    let dispatch = tauri_plugin_log::fern::Dispatch::new().chain(
+        tauri_plugin_log::fern::Output::call(|record| {
+            write_log_line(&mut std::io::stdout().lock(), record);
+        }),
+    );
+    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Dispatch(dispatch))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -93,8 +134,8 @@ pub fn run() {
                 .max_file_size(5_000_000)
                 .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(5))
                 .targets([
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir { file_name: Some("scarlet-desktop".into()) }),
+                    stdout_log_target(),
                 ])
                 .build(),
         )
@@ -234,5 +275,68 @@ mod tests {
         assert_eq!(level, log::Level::Error);
         // Where it happened is on the line too, and it is one line.
         assert!(line.contains("lib.rs") && !line.contains('\n'), "{line}");
+    }
+
+    #[test]
+    fn stdout_log_writer_ignores_io_errors_and_formats_lines() {
+        struct FailingWriter;
+        impl std::io::Write for FailingWriter {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed pipe"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed pipe"))
+            }
+        }
+
+        let record = log::Record::builder()
+            .level(log::Level::Info)
+            .target("scarlet_desktop_lib::commands")
+            .args(format_args!("[ui] [window] resize"))
+            .build();
+
+        // Must not panic when stdout returns BrokenPipe / EIO.
+        super::write_log_line(&mut FailingWriter, &record);
+
+        let mut buf = Vec::new();
+        super::write_log_line(&mut buf, &record);
+        assert_eq!(String::from_utf8(buf).unwrap(), "[ui] [window] resize\n");
+
+        // Ensure the Dispatch target builds cleanly.
+        let _ = super::stdout_log_target();
+    }
+
+    #[test]
+    fn panic_hook_skips_reentrant_logging_and_resets_after_unwind() {
+        use std::cell::Cell;
+
+        let log_calls = Cell::new(0usize);
+        let prev_calls = Cell::new(0usize);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::run_panic_hook_once(
+                || {
+                    log_calls.set(log_calls.get() + 1);
+                    // Simulate logging re-entering the panic hook on the same thread.
+                    super::run_panic_hook_once(
+                        || log_calls.set(log_calls.get() + 1),
+                        || prev_calls.set(prev_calls.get() + 1),
+                    );
+                    panic!("simulated logger failure");
+                },
+                || prev_calls.set(prev_calls.get() + 1),
+            );
+        }));
+        assert!(result.is_err());
+        assert_eq!(log_calls.get(), 1, "re-entrant panic hook should skip logging");
+        assert_eq!(prev_calls.get(), 1, "re-entrant panic hook should still call previous");
+
+        // Guard must have reset on unwind so a later panic on this thread still logs.
+        super::run_panic_hook_once(
+            || log_calls.set(log_calls.get() + 1),
+            || prev_calls.set(prev_calls.get() + 1),
+        );
+        assert_eq!(log_calls.get(), 2);
+        assert_eq!(prev_calls.get(), 2);
     }
 }

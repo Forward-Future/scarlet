@@ -29,6 +29,24 @@ node_modules/.bin/vitest run --config evals/vitest.config.ts
 node_modules/.bin/tsc -p evals/tsconfig.json
 ```
 
+## The eval videos
+
+Evals start from the raw recordings and the video the editor published, never from the editor's own Scarlet: not their
+projects, their edits or their installed skills. The videos live in `$SCARLET_EVAL_VIDEOS` (default
+`~/Movies/Scarlet eval videos`), one folder per recording named `<date> <title>`, with `raw camera.*`, `raw screen.*`
+(a second file of a kind gets a number: `raw camera 2.mp4`) and, when there is one, `published.*`.
+
+`store.ts library` builds a new library for one recording with this checkout's engine: a project of the raw files, on
+the raw assembly the scorecard's cases start from (`--start empty` leaves the timeline empty, as a project the editor
+makes starts), a project of the published video, and their transcripts. It starts with the skills this checkout ships.
+Build the case from it with `dataset.ts` and run passes against its engine; `run.ts` refuses to run passes in the
+editor's own Scarlet.
+
+```sh
+$TSX evals/src/store.ts list
+$TSX evals/src/store.ts library "Neon review" --out ~/Library/Caches/scarlet-evals/lib-neon --keep   # prints the case command
+```
+
 ## The dialogue ledger
 
 Every mistake the editor reports in a dialogue cut is an entry with a check, and every change to dialogue cutting is
@@ -443,12 +461,15 @@ Run `python3 -B evals/compare.py "$EPISODE" --freeze CASE_ID` to hash the privat
 
 ## Run
 
+`--configs` defaults to `gemini:gemini-4-neon:medium` (Gemini 4 Neon, medium effort), the default model for evals and
+benchmarks unless comparing models or asked otherwise.
+
 ```sh
 # Show exactly what would be sent. Nothing is launched without --yes.
-$TSX evals/src/run.ts --cases my-case --configs codex:<model>:medium,claude:<model>:high --trials 3 --dry-run
+$TSX evals/src/run.ts --cases my-case --configs gemini:gemini-4-neon:medium --trials 3 --dry-run
 
 # Launch (billed agent tasks).
-$TSX evals/src/run.ts --cases my-case --configs … --trials 3 --yes
+$TSX evals/src/run.ts --cases my-case --trials 3 --yes
 ```
 
 `--yes` refuses a case with no published video attached (`reference.published`): its scorecard would fill only 2 of 15

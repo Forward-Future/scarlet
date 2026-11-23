@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod/v3";
 import {
+  DEFAULT_RESULT_CHARS,
   ScarletApiError,
   SheetRequest,
   type AgentCapabilities,
@@ -201,35 +202,52 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
       const end = wholePicture ? index + 1 : Math.min(review.cuts.length, index + Math.min(count, INSPECT_AT_ONCE));
       reviews.ahead(change, end, review.cuts.length);
       const indexes = Array.from({ length: end - index }, (_, k) => index + k);
-      const results = await Promise.all(indexes.map(i => reviews.take(change, { index: i, audio, wholePicture })));
+      const jobs = indexes.map(i => {
+        const req: InspectionRequest = { index: i, audio, wholePicture };
+        return { i, req, job: reviews.prepare(change, req, "now") };
+      });
+      const maxChars = caps.resultChars ?? DEFAULT_RESULT_CHARS;
+      const asked = Math.min(review.cuts.length, index + count);
+      const reserve = !wholePicture && asked > index + 1 ? 200 : 0;
+      const textLen = (parts: ToolResult["content"]) =>
+        parts.reduce((n, part) => n + (part.type === "text" ? part.text.length : 0), 0);
       const content: ToolResult["content"] = [];
-      results.forEach((result, k) => {
-        const i = indexes[k]!;
+      const delivered: number[] = [];
+      let textChars = 0;
+      for (const { i, req, job } of jobs) {
+        const result = await job;
         // An honest receipt: every view arrived, the join was measured or there is none, and a hearing model got the join audio.
         const { receipt } = result;
         const inspected = receipt.complete && !!(receipt.joinAudit || receipt.noJoin) && receipt.heardJoin !== false;
+        const windows = result.receipt.picture;
+        const whole = result.wholeSheets <= MAX_WHOLE_PICTURE_SHEETS;
+        const footer: ToolResult["content"][number] = { type: "text", text: JSON.stringify({ complete: inspected, additionalActivityWindows: windows,
+          ...(windows.length ? { closerLook: whole ? `dialogue_review_inspect with index ${i} and wholePicture true returns them in one result.`
+            : `This removal needs ${result.wholeSheets} activity sheets. Use frame_contact_sheet_batch for a closer look.` } : {}) }) };
+        const cutChars = textLen(result.content) + footer.text.length;
+        // Always deliver at least one cut; leave deferred cuts cached warm in ReviewInspections for the next call.
+        if (delivered.length > 0 && textChars + cutChars + reserve > maxChars) break;
+        reviews.consume(change, req, job);
         const edit = change.cutEdits?.find(e => e.index === i);
         if (edit && inspected) revision.readPassage(edit.version, edit.range);
         const key = JSON.stringify([changeId, change.fromVersion, change.toVersion, i]);
         if (inspected) inspections.add(key); else inspections.delete(key);
-        const windows = result.receipt.picture;
-        const whole = result.wholeSheets <= MAX_WHOLE_PICTURE_SHEETS;
-        content.push(...result.content, { type: "text", text: JSON.stringify({ complete: inspected, additionalActivityWindows: windows,
-          ...(windows.length ? { closerLook: whole ? `dialogue_review_inspect with index ${i} and wholePicture true returns them in one result.`
-            : `This removal needs ${result.wholeSheets} activity sheets. Use frame_contact_sheet_batch for a closer look.` } : {}) }) });
+        content.push(...result.content, footer);
+        textChars += cutChars;
+        delivered.push(i);
         // If the agent looks closer, the whole picture is ready. It waits behind the cuts the agent reads next.
         if (windows.length && whole && !wholePicture) void reviews.prepare(change, { index: i, audio, wholePicture: true }, "later").catch(() => undefined);
-      });
+      }
+      const deliveredEnd = index + delivered.length;
       const version = JSON.stringify([changeId, change.fromVersion, change.toVersion]);
       const seen = lookedAt.get(version) ?? new Set<number>();
       lookedAt.set(version, seen);
-      for (const i of indexes) seen.add(i);
+      for (const i of delivered) seen.add(i);
       // Cuts with a carried recommendation count too, so the figure never drops below what is saved.
       const assessed = change.cutAssessments?.filter(a => !a.provisional).map(a => a.index) ?? [];
       await cutProgress(changeId, assessed.length, review.cuts.length, new Set([...assessed, ...seen]).size);
-      const asked = Math.min(review.cuts.length, index + count);
-      if (!wholePicture && end < asked) content.push({ type: "text", text: JSON.stringify({ returned: [index, end - 1],
-        next: `Continue with index ${end} (count ${asked - end}) for cuts ${end}–${asked - 1}.` }) });
+      if (!wholePicture && deliveredEnd < asked) content.push({ type: "text", text: JSON.stringify({ returned: [index, deliveredEnd - 1],
+        next: `Continue with index ${deliveredEnd} (count ${asked - deliveredEnd}) for cuts ${deliveredEnd}–${asked - 1}.` }) });
       return { content };
     });
 
@@ -470,7 +488,22 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
       }
       const pass = { changeId: revised.id, state: revised.state, fromVersion: revised.fromVersion, toVersion: revised.toVersion,
         ...(replaced && { movedOn: replaced, note: `A revision had replaced ${changeId} with ${replaced} since this was asked. Scarlet made this move on ${replaced}, so the pass keeps that revision.` }) };
-      return json(cuts ? { ...pass, moved: results } : { ...pass, ...results[0] });
+      if (!cuts) return json({ ...pass, ...results[0] });
+      const maxChars = caps.resultChars ?? DEFAULT_RESULT_CHARS;
+      const omitted: number[] = [];
+      const build = () => ({ ...pass, moved: results, ...(omitted.length && { nearbyWordsOmitted: omitted.slice().sort((a, b) => a - b) }) });
+      if (JSON.stringify(build()).length > maxChars) {
+        // Shed nearbyWords on settled moves first (from the end), then unsettled moves if still over budget.
+        for (const settledOnly of [true, false]) {
+          for (let i = results.length - 1; i >= 0 && JSON.stringify(build()).length > maxChars; i--) {
+            const entry = results[i]!;
+            if (!entry.nearbyWords || (settledOnly && (entry.next || entry.error))) continue;
+            delete entry.nearbyWords;
+            if (typeof entry.index === "number") omitted.push(entry.index);
+          }
+        }
+      }
+      return json(build());
     });
 
   return {

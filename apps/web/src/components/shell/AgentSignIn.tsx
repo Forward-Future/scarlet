@@ -128,6 +128,49 @@ function InstallAgent({ agent }: { agent: SignInAgent }) {
   );
 }
 
+/** A sign-in under way: the browser has the next step. Claude and Gemini can hand back a code to paste instead. */
+function LoginWaiting({ id, login, compact }: { id: SignInAgent; login: ReturnType<typeof useAgentLogin>; compact: boolean }) {
+  const [code, setCode] = useState("");
+  const [showCode, setShowCode] = useState(id === "gemini");
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 text-[12px]">
+        <Spinner className="size-3" />
+        <span className="text-muted">Finish signing in in your browser…</span>
+        {login.status?.url && !compact && (
+          <button className="btn-quiet py-0.5" onClick={() => void desktop.openUrl(login.status!.url!).catch(() => undefined)}>
+            Open page again
+          </button>
+        )}
+        <button className="btn-quiet py-0.5" onClick={() => void login.cancel()}>
+          Cancel
+        </button>
+      </div>
+      {(!compact || id === "gemini") && login.status?.acceptsCode && (
+        showCode ? (
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (code.trim()) void login.submitCode(code);
+            }}
+          >
+            <input className="field font-mono flex-1 py-1" placeholder="Paste the code from the browser" value={code} onChange={(e) => setCode(e.target.value)} autoFocus />
+            <button className="btn-primary py-1" disabled={!code.trim()}>
+              Submit
+            </button>
+          </form>
+        ) : (
+          <button className="btn-quiet py-0.5 text-[11.5px]" onClick={() => setShowCode(true)}>
+            Browser showed a code instead?
+          </button>
+        )
+      )}
+      <InlineError>{login.error}</InlineError>
+    </div>
+  );
+}
+
 /**
  * The sign-in control for one agent. `compact` renders just the button, its
  * progress and why a sign-in failed, for menus; the full row adds the fallback
@@ -137,8 +180,6 @@ function InstallAgent({ agent }: { agent: SignInAgent }) {
 export function AgentSignIn({ agent, compact = false }: { agent: AgentAvailability; compact?: boolean }) {
   const id = agent.id as SignInAgent;
   const login = useAgentLogin(id);
-  const [code, setCode] = useState("");
-  const [showCode, setShowCode] = useState(id === "gemini");
 
   if (!agent.installed) {
     return compact || !isDesktop() || IS_MOCK ? null : <InstallAgent agent={id} />;
@@ -149,51 +190,9 @@ export function AgentSignIn({ agent, compact = false }: { agent: AgentAvailabili
     return <span className="text-dim text-[11.5px]">Run <code className="font-mono">npx scarlet-agent auth {id}</code> on that machine</span>;
   }
 
-  const start = () => {
-    setShowCode(id === "gemini");
-    setCode("");
-    void login.start();
-  };
+  const start = () => void login.start();
 
-  if (login.waiting) {
-    return (
-      <div className="space-y-1.5">
-        <div className="flex items-center gap-2 text-[12px]">
-          <Spinner className="size-3" />
-          <span className="text-muted">Finish signing in in your browser…</span>
-          {login.status?.url && !compact && (
-            <button className="btn-quiet py-0.5" onClick={() => void desktop.openUrl(login.status!.url!).catch(() => undefined)}>
-              Open page again
-            </button>
-          )}
-          <button className="btn-quiet py-0.5" onClick={() => void login.cancel()}>
-            Cancel
-          </button>
-        </div>
-        {(!compact || id === "gemini") && login.status?.acceptsCode && (
-          showCode ? (
-            <form
-              className="flex items-center gap-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (code.trim()) void login.submitCode(code);
-              }}
-            >
-              <input className="field font-mono flex-1 py-1" placeholder="Paste the code from the browser" value={code} onChange={(e) => setCode(e.target.value)} autoFocus />
-              <button className="btn-primary py-1" disabled={!code.trim()}>
-                Submit
-              </button>
-            </form>
-          ) : (
-            <button className="btn-quiet py-0.5 text-[11.5px]" onClick={() => setShowCode(true)}>
-              Browser showed a code instead?
-            </button>
-          )
-        )}
-        <InlineError>{login.error}</InlineError>
-      </div>
-    );
-  }
+  if (login.waiting) return <LoginWaiting id={id} login={login} compact={compact} />;
 
   const signedInWithSub = agent.loggedIn !== false && agent.auth === "subscription";
   if (signedInWithSub) {
@@ -223,6 +222,53 @@ export function AgentSignIn({ agent, compact = false }: { agent: AgentAvailabili
       <InlineError>{login.error}</InlineError>
     </div>
   );
+}
+
+/**
+ * The first screen's button for one agent: one press installs its command-line tool when this computer lacks it, then
+ * signs in, so a new editor doesn't meet an Install step first. Claude Code and Codex install with npm, so a computer
+ * without Node.js says how to get it.
+ */
+export function SignInWith({ agent }: { agent: AgentAvailability }) {
+  const id = agent.id as SignInAgent;
+  const login = useAgentLogin(id);
+  const [installing, setInstalling] = useState(false);
+  const [needsNode, setNeedsNode] = useState(false);
+  const [error, setError] = useState("");
+
+  const press = async () => {
+    setError("");
+    setNeedsNode(false);
+    if (!agent.installed) {
+      setInstalling(true);
+      try {
+        if (await desktop.agentInstall(id) === "needsNode") return setNeedsNode(true);
+      } catch (e) {
+        return setError(errorMessage(e));
+      } finally {
+        setInstalling(false);
+      }
+    }
+    void login.start();
+  };
+
+  if (login.waiting) return <div className="first-sign-in-waiting"><LoginWaiting id={id} login={login} compact={false} /></div>;
+  return (
+    <div className="first-sign-in-choice">
+      <button type="button" className="btn-ghost" disabled={installing} title={`Uses your ${SIGN_IN[id].plan} subscription; opens your browser`} onClick={() => void press()}>
+        {installing ? <><Spinner className="size-3" /> Installing {AGENT_LABEL[id]}…</> : SIGN_IN[id].button}
+      </button>
+      {needsNode && <p className="text-[12px] text-muted">{AGENT_LABEL[id]} needs Node.js. Install it, then press {SIGN_IN[id].button} again.
+        {" "}<button type="button" className="underline" onClick={() => void desktop.openUrl("https://nodejs.org/en/download").catch(e => setError(errorMessage(e)))}>Get Node.js</button>
+      </p>}
+      <InlineError>{error || login.error}</InlineError>
+    </div>
+  );
+}
+
+/** Who a configured agent signs in with, as its button says it: Claude, ChatGPT or Google. */
+export function signInProvider(id: string): string | undefined {
+  return canSignIn(id) ? SIGN_IN[id].button.replace(/^Sign in with /, "") : undefined;
 }
 
 /** This desktop app's own agent host, live (null in a browser or until it reports). */

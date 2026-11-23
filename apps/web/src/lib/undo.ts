@@ -3,13 +3,13 @@ import type { EditRef, Task } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
 import { appLog, errorName } from "./appLog";
 import { api, errorMessage } from "./client";
-import { unkeepEdits, type KeptRef } from "./keptEdits";
+import { undeferEdits, unkeepEdits, type KeptRef } from "./keptEdits";
 import { lastAttempt } from "./requestRuns";
 import { isActiveTask } from "./taskRun";
 
 /**
- * What ⌘Z takes back, newest last: the editor's Keeps and the revisions they sent, in this window's session. Each
- * ⌘Z takes back one, so several in a row walk back through them.
+ * What ⌘Z takes back, newest last: the editor's Keeps, Later deferrals, and the revisions they sent, in this window's
+ * session. Each ⌘Z takes back one, so several in a row walk back through them.
  */
 export type UndoStep = {
   id: number;
@@ -23,6 +23,13 @@ export type UndoStep = {
   threadId: string;
   refs: KeptRef[];
   /** The edit the card was on, opened again once its Keep is taken back. */
+  edit: EditRef & { single?: boolean };
+} | {
+  kind: "defer";
+  word: "Later";
+  threadId: string;
+  refs: KeptRef[];
+  /** The to-do the card was on, opened again once Later is taken back. */
   edit: EditRef & { single?: boolean };
 } | {
   kind: "revision";
@@ -68,24 +75,13 @@ export function lastStep(steps: readonly UndoStep[], projectId: string) {
   return steps.findLast(step => step.projectId === projectId);
 }
 
-/** The key that takes a step back, as this computer writes it. */
-export function undoKey() {
-  return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘Z" : "Ctrl+Z";
-}
-
-/** What the label and its hover say the next ⌘Z takes back: "Undo Keep", and "Undo Keep of Cut at 2:05 (⌘Z)". */
-export function undoWords(step: UndoStep) {
-  const what = stepWord(step);
-  return { label: `Undo ${what}`, title: `Undo ${what}${step.name ? ` of ${step.name}` : ""} (${undoKey()})` };
-}
-
-const stepWord = (step: UndoStep) => step.kind === "keep" ? step.word : step.word ?? "revision";
+const stepWord = (step: UndoStep) => step.kind === "keep" || step.kind === "defer" ? step.word : step.word ?? "revision";
 
 /**
  * Take back the newest step in this project. A Keep is taken back here and on the engine, and the edit waits on the
- * editor again. A revision still waiting or under way is stopped; one that landed is taken out again: an applied
- * version is reverted, and a new version of a pass that waits is put away for the one it replaced. Says what it took
- * back, or nothing when there was nothing to take back.
+ * editor again. A Later deferral is cleared locally so the to-do waits again. A revision still waiting or under way is
+ * stopped; one that landed is taken out again: an applied version is reverted, and a new version of a pass that waits
+ * is put away for the one it replaced. Says what it took back, or nothing when there was nothing to take back.
  */
 export async function undoLast(projectId: string, project: { changes: readonly Change[]; tasks: readonly Task[] },
   revert: (version: string) => Promise<void>): Promise<UndoStep | undefined> {
@@ -96,16 +92,17 @@ export async function undoLast(projectId: string, project: { changes: readonly C
   useUndoStore.setState({ undoing: step.id, error: undefined });
   try {
     if (step.kind === "keep") unkeepEdits(projectId, step.threadId, step.refs);
+    else if (step.kind === "defer") undeferEdits(projectId, step.threadId, step.refs);
     else if (step.version) await revert(step.version);
     else if (step.taskId) await undoRevision(step.taskId, project, revert);
-    appLog("action", "undo", { project: projectId, kind: step.kind, ...(step.kind === "keep" && { change: step.edit.changeId }) });
+    appLog("action", "undo", { project: projectId, kind: step.kind, ...((step.kind === "keep" || step.kind === "defer") && { change: step.edit.changeId }) });
     useUndoStore.setState(s => ({ steps: s.steps.filter(other => other.id !== step.id) }));
     return step;
   } catch (error) {
     appLog("action", "undo-failed", { project: projectId, kind: step.kind, name: errorName(error) }, { level: "warn" });
     // It goes from the list all the same: pressed again, ⌘Z goes on to the step before it rather than failing again.
     useUndoStore.setState(s => ({ steps: s.steps.filter(other => other.id !== step.id),
-      error: { projectId, text: `Couldn’t undo ${step.kind === "keep" || step.word ? stepWord(step) : "the revision"}: ${reason(error)}` } }));
+      error: { projectId, text: `Couldn’t undo ${step.kind === "keep" || step.kind === "defer" || step.word ? stepWord(step) : "the revision"}: ${reason(error)}` } }));
   } finally {
     useUndoStore.setState(s => s.undoing === step.id ? { undoing: undefined } : s);
   }

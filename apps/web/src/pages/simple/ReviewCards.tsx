@@ -10,12 +10,12 @@ import { EditVersion, RejectEdit, type RejectedEdit } from "../../components/rev
 import { Icon } from "../../components/ui/primitives";
 import { editNote } from "../../lib/editKind";
 import { clock as clockLabel, lengthLabel } from "../../lib/format";
-import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
+import { useHotkeys } from "../../lib/hotkeys";
 import { editKey } from "../../lib/keptEdits";
 import type { Call, CutChoice, Revision } from "../../lib/passCalls";
-import type { Thread } from "../../lib/threads";
+import { isRecheck, type Thread } from "../../lib/threads";
 import { useClippedExpand } from "../../lib/uiHooks";
-import { lastStep, undoKey, undoWords, useUndoStore } from "../../lib/undo";
+import { useUndoStore } from "../../lib/undo";
 import type { AgentContext } from "../../stores/ui";
 import { approves, checkSpan, letGo, type Listening, type Side } from "./types";
 
@@ -48,7 +48,7 @@ export function CallStanding({ run, answer }: { run?: Task; answer?(): void }) {
   return state === "queued" ? <span className="edit-card-status" role="status">Queued</span>
     : state === "waiting_for_user" && answer ? <button type="button" className="simple-link edit-card-status is-ask" aria-label="Answer" onClick={answer}>Needs your answer</button>
     : state === "waiting_for_user" ? <span className="edit-card-status is-ask" role="status">Needs your answer</span>
-    : <span className="edit-card-status working-text" role="status">Revising…</span>;
+    : <span className="edit-card-status working-text" role="status">{run && isRecheck(run) ? "Rechecking…" : "Revising…"}</span>;
 }
 
 /**
@@ -79,12 +79,9 @@ export function CallActions({ choice, proposes = "cut", disabled, decide, revise
 }
 
 /**
- * What the next ⌘Z takes back, in the timeline's bottom row, while there is something to take back: "Undo Keep ⌘Z".
- * Its hover names the cut or edit. A press does what ⌘Z does.
+ * Why the last ⌘Z couldn't take its step back, in the timeline's bottom row.
  */
-export function UndoLabel({ projectId, onUndo }: { projectId: string; onUndo(): void }) {
-  const step = useUndoStore(s => lastStep(s.steps, projectId));
-  const undoing = useUndoStore(s => s.undoing !== undefined);
+export function UndoError({ projectId }: { projectId: string }) {
   const error = useUndoStore(s => s.error?.projectId === projectId ? s.error : undefined);
   // The reason goes after a while, as soon as anything else is done or taken back.
   useEffect(() => {
@@ -92,14 +89,10 @@ export function UndoLabel({ projectId, onUndo }: { projectId: string; onUndo(): 
     const timer = setTimeout(() => useUndoStore.setState(s => s.error === error ? { error: undefined } : s), 10_000);
     return () => clearTimeout(timer);
   }, [error]);
-  if (!step && !error) return null;
-  const words = step && undoWords(step);
+  if (!error) return null;
   return <span className="timeline-undo">
     {/* Why the last one couldn't be taken back. It went from the list, so the next press goes on to the one before. */}
-    {error && <span className="timeline-undo-error" role="alert" title={error.text}>{error.text}</span>}
-    {step && words && <button type="button" className="timeline-undo-button" data-key={undoKey()} aria-keyshortcuts="Meta+Z Control+Z" title={words.title}
-      disabled={undoing} onClick={e => { blurOnPointerClick(e); onUndo(); }}>
-      <Icon name="undo" size={12} />{undoing ? "Undoing…" : words.label}</button>}
+    <span className="timeline-undo-error" role="alert" title={error.text}>{error.text}</span>
   </span>;
 }
 
@@ -116,7 +109,7 @@ export function RejectedEditCard({ edit }: { edit: ThreadEdit }) {
 export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPassNo, editPlace, flaggedCount, editDid, selectedMoment,
   shownKind, shownMarker, reviewRange, onPlayCheck, visiting, beforeCut, cutBeforeTimeline, cutBeforeError, onRetryCutBefore,
   media, removedLength, otherCuts, scriptKey, scriptOpen, onToggleScript, shownSource, sourceKey, sourceOpen, onToggleSource, cutSwitched, cutTake, appliedSide, workspaceActive,
-  cutKey, onChooseCutSide, setCompareHost, onRevise, onKeep, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject }: {
+  cutKey, onChooseCutSide, setCompareHost, onRevise, onDefer, onKeep, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject }: {
   projectId: string;
   focusThread: Thread;
   reviewingEdit: ThreadEdit;
@@ -152,6 +145,7 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
   onChooseCutSide(side: Side): void;
   setCompareHost: (el: HTMLElement | null) => void;
   onRevise(): void;
+  onDefer?: () => void;
   onKeep(): void;
   appliedTarget?: AgentContext;
   rejectTarget?: AgentContext;
@@ -205,8 +199,10 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
         {sourceKey && <SourceLink open={sourceOpen} toggle={onToggleSource} />}
       </span>
       <span className="edit-card-acts">
-        <ReviewActions revise={onRevise} approve={onKeep}
-          approveLabel={shownMarker ? "Done" : "Keep"} approveKey={shownMarker ? "D" : "K"} />
+        {/* A to-do marker changed nothing in the video, so there is nothing to revise: offer Later (L) when still waiting, and Done (D). */}
+        <ReviewActions revise={shownMarker ? onDefer : onRevise}
+          reviseLabel={shownMarker ? "Later" : "Revise"} reviseKey={shownMarker ? "L" : "R"}
+          approve={onKeep} approveLabel={shownMarker ? "Done" : "Keep"} approveKey={shownMarker ? "D" : "K"} />
         {/* Reject edit is a small × after Keep, as on a call's card: it puts back just this edit, also on
             a moment's card. The edit leaves the timeline where it is and the card stays, saying Rejected. A spot marked for the editor changed nothing, so
             it has none. Each edit has its own: one on its way for the edit before doesn't hold this one's back. */}

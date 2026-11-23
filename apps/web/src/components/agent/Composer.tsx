@@ -11,7 +11,7 @@ import { usePictureMarksStore } from "../../stores/pictureMarks";
 import { player } from "../../lib/player";
 import { toggleMarking } from "../player/PictureMarks";
 import { isComposing } from "../../lib/hotkeys";
-import { clock, clockRange, playbackClock } from "../../lib/format";
+import { clock, clockRange, playbackClock, preciseRange } from "../../lib/format";
 import type { RecorderResult } from "../../lib/recorder";
 import { useSpeech } from "../../lib/speech";
 import type { Thread } from "../../lib/threads";
@@ -22,8 +22,8 @@ import { Icon, Spinner, InlineError } from "../ui/primitives";
 import { AgentChip, runChoiceDiffers, useAgentAvailability } from "./AgentChip";
 import { SkillCommandInput } from "./SkillCommandInput";
 import { MicButton } from "./MicButton";
-import { ComposerAim, type AimItem } from "./ComposerAim";
-import { AttachedFiles, NO_FILES, PlayheadClock, sendMarks } from "./ComposerAttachments";
+import { AimTimecode, ComposerAim, type AimItem } from "./ComposerAim";
+import { AttachedFiles, NO_FILES, sendMarks } from "./ComposerAttachments";
 
 const timestampLabel = (time: number) => playbackClock(time).replace(/\.000$/, "");
 
@@ -65,10 +65,7 @@ interface ComposerProps {
    * that time in place of the cut's or the edit's; the message is still theirs, and Scarlet is told the frame too.
    */
   pausedAt?: PausedAt;
-  /**
-   * Where the cut a call's tag names ("Cut 3") is in the video. The tag's line says it after the tag, with where the
-   * playhead is now: "at 2:47.200 · Playhead 2:57.400".
-   */
+  /** Where the cut a call's tag names ("Cut 3") is in the video, shown after a dot ("Cut 3 · 2:47"). */
   aimTime?: number;
   /** Exact time for a time-based target tag ("Cut at 2:05", "Edit at 0:11"), shown to the millisecond above the box. */
   targetTime?: number;
@@ -362,13 +359,13 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const duration = inputClock?.duration ?? 0;
   const times = useMemo(() => messageTimestamps(value, duration), [value, duration]);
   const firstTime = times[0]?.time;
-  // A time alone, as a pause writes it, says where but not what: there is nothing to send until words follow it.
+  // A time alone says where but not what: there is nothing to send until words follow it.
   const onlyTime = !rewording && times.length === 1 && value.trim() === times[0]!.text;
   useLayoutEffect(() => {
     if (rewording || replying || !aimsByText) return;
     if (typedPoint && !sameClock && messageTimestamps(value, Infinity).some(t => t.time === typedPoint.time)) return;
     if (inputClock && firstTime !== undefined) {
-      // A clock in whole seconds covers the moment it names to the frame, such as the one a pause wrote in.
+      // A clock in whole seconds covers the moment it names to the frame.
       if (sameClock && typedPoint && (firstTime === typedPoint.time || (!times[0]!.text.includes(".") && Math.floor(typedPoint.time) === firstTime))) return;
       setContext({ ...editTargetAt(firstTime, inputClock.version, inputClock.timeline, inputClock.mediaId), fromMessage: true });
     } else if (typedPoint) setContext(null);
@@ -380,7 +377,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const tag = rewording ? undefined : targetTag;
   // A stretch marked on the timeline's ruler rides with the message, beside the tag of the cut or edit it is aimed at.
   const marked = rewording ? undefined : markedRangeOf(context);
-  const markedWords = marked ? `${playbackClock(marked.start)} – ${playbackClock(marked.end)}` : "";
+  const markedWords = marked ? preciseRange(marked.start, marked.end) : "";
+  const markedPrecise = marked ? `${playbackClock(marked.start)} – ${playbackClock(marked.end)}` : "";
   // "Answer" and "Reply" name who the message goes to. The target label shows the place it is about.
   const wordTag = tag === "Answer" || tag === "Reply" ? tag : undefined;
   const placeTag = wordTag ? undefined : tag;
@@ -388,38 +386,54 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     if (onClearTarget) onClearTarget(); else setContext("whole");
     inputRef.current?.focus();
   };
-  // Paused with a cut or an edit open, the tag shows the one time the editor is looking at: where they stopped. Its full
-  // name still says which cut or edit the message goes to.
-  // A call's tag keeps its number: the playhead's time is beside it already.
-  const stopped = replying && !targetIsPoint && pausedAt && aimTime === undefined ? playbackClock(pausedAt.time) : undefined;
+  // Paused with a cut or an edit open, the header shows the one time the editor is looking at: where they stopped.
+  // Its full name on hover still says which cut or edit the message goes to.
+  const stopped = replying && !targetIsPoint && pausedAt && aimTime === undefined ? clock(pausedAt.time) : undefined;
   const exactTime = targetTime !== undefined ? targetTime
     : displayAnchor && placeTag && (placeTag.endsWith(` at ${clock(displayAnchor.time)}`) || placeTag === `At ${clock(displayAnchor.time)}`)
       ? displayAnchor.time : undefined;
-  const placeDisplay = (() => {
-    if (stopped) return stopped;
+  const placeDisplay: ReactNode = (() => {
     if (!placeTag) return undefined;
-    const stripped = placeTag.replace(/^(?:(?:Cut|Edit) at|At) /, "");
-    if (exactTime === undefined) return stripped;
-    const whole = clock(exactTime);
-    const full = playbackClock(exactTime);
-    if (stripped === whole) return full;
-    if (stripped.endsWith(` at ${whole}`)) return `${stripped.slice(0, -whole.length)}${full}`;
-    return stripped;
+    if (targetIsPoint) {
+      const time = placeTag.replace(/^At /, "");
+      const exact = exactTime !== undefined ? playbackClock(exactTime) : displayAnchor ? playbackClock(displayAnchor.time) : undefined;
+      return <><span className="composer-aim-verb">At</span> <AimTimecode key={`pt:${placeTag}:${exact ?? ""}`} value={time} precise={exact} /></>;
+    }
+    if (/^(?:Cut|Edit) \d+$/.test(placeTag)) {
+      return aimTime !== undefined
+        ? <><span className="composer-aim-target">{placeTag}</span> <span className="composer-aim-sep" aria-hidden="true">·</span> <AimTimecode key={`call:${placeTag}:${aimTime}`} value={clock(aimTime)} precise={playbackClock(aimTime)} /></>
+        : <span className="composer-aim-target">{placeTag}</span>;
+    }
+    const timed = /^(Cut|Edit|\d+ edits) at (.+)$/.exec(placeTag);
+    if (timed) {
+      const noun = timed[1]!;
+      const time = stopped ?? timed[2]!;
+      const exact = stopped && pausedAt ? playbackClock(pausedAt.time) : exactTime !== undefined ? playbackClock(exactTime) : displayAnchor ? playbackClock(displayAnchor.time) : undefined;
+      return <><span className="composer-aim-verb">{noun}</span> <AimTimecode key={`edit:${placeTag}:${exact ?? time}`} value={time} precise={exact} /></>;
+    }
+    return <span className="composer-aim-verb">{placeTag}</span>;
   })();
-  const aimItems: AimItem[] = [
-    ...placeTag ? [{ key: `target:${placeTag}`, name: targetIsPoint ? placeTag.replace(/^At /, "") : stopped ? `${placeTag}, stopped at ${stopped}` : placeTag,
-      displayName: placeDisplay,
-      clearLabel: targetIsPoint ? `Take “${placeTag}” off: the message is about the whole video` : `Start a new edit instead of ${tagAct!.charAt(0).toLowerCase()}${tagAct!.slice(1)}`,
-      onClear: takeOffTarget }] : [],
-    ...marked ? [{ key: `range:${marked.start}/${marked.end}`, name: `Range ${markedWords}`,
-      displayName: markedWords.replace(" – ", "–"),
-      clearLabel: `Take the marked range ${markedWords} off the message`, onClear: () => {
-        const was = context && context !== "whole" ? context : undefined;
-        setContext(withMarkedRange(context, undefined), was?.changeId ? was : undefined);
-        inputRef.current?.focus();
-      } }] : [],
-  ];
-  const [primaryAim, ...additionalAims] = aimItems;
+  const placeName = placeTag
+    ? targetIsPoint ? placeTag.replace(/^At /, "") : stopped ? `${placeTag}, stopped at ${stopped}` : placeTag
+    : undefined;
+  const aimItem: AimItem | undefined = marked ? {
+    key: `range:${marked.start}/${marked.end}`,
+    name: `Range ${markedWords}`,
+    displayName: <><span className="composer-aim-verb">Range</span> <AimTimecode key={`range:${marked.start}/${marked.end}`} value={markedWords} precise={markedPrecise} /></>,
+    clearLabel: `Take the marked range ${markedWords} off the message`,
+    onClear: () => {
+      const was = context && context !== "whole" ? context : undefined;
+      setContext(withMarkedRange(context, undefined), was?.changeId ? was : undefined);
+      inputRef.current?.focus();
+    },
+  } : placeTag ? {
+    key: `target:${placeTag}`,
+    name: placeName!,
+    displayName: placeDisplay,
+    title: `About ${placeName}`,
+    clearLabel: targetIsPoint ? `Take “${placeTag}” off: the message is about the whole video` : `Start a new edit instead of ${tagAct!.charAt(0).toLowerCase()}${tagAct!.slice(1)}`,
+    onClear: takeOffTarget,
+  } : undefined;
   const saveLabel = rewording ? "Save the new words" : sendLabel;
   function changeText(text: string) {
     dismissFirstEditHint();
@@ -447,12 +461,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         {modelPicker && <div className="composer-model"><AgentChip threadInput={thread ? question ? "answer" : "reply" : undefined} /></div>}
       </div>
       {tray}
-      {/* Where the message goes (a cut, an edit, a moment, a stretch marked on the ruler) is a line of its own on top of
-          the box, under the queue's tray, so the box keeps its whole width for the words. */}
-      {primaryAim && <div className="composer-aim-line">
-        <ComposerAim items={[primaryAim, ...additionalAims]} disabled={recording || heard} disabledReason="Waits until what you’re saying is sent" />
-        {/* A call's tag is its number, so the line says where its cut is and where the playhead is now. */}
-        {aimTime !== undefined && placeTag && <span className="composer-aim-when">at {playbackClock(aimTime)} · <PlayheadClock /></span>}
+      {/* Where the message goes (a cut, an edit, a moment, a stretch marked on the ruler) is a flush context header
+          on top of the box, under the queue's tray, so the box keeps its whole width for the words. */}
+      {aimItem && <div className="composer-aim-line">
+        <ComposerAim item={aimItem} disabled={recording || heard} disabledReason="Waits until what you’re saying is sent" />
       </div>}
       {(attached.length > 0 || markedFrame) && <AttachedFiles files={attached} onRemove={key => { detach(project.id, key); inputRef.current?.focus(); }}
         marked={markedFrame} onOpenMarked={frame => {
@@ -466,9 +478,9 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       <div className={firstEditHint ? "composer-box first-edit-hint" : "composer-box"} onKeyDown={e => {
         if (rewording && e.key === "Escape" && !e.defaultPrevented && !isComposing(e)) rewording.onCancel();
         const emptyBox = !e.defaultPrevented && !isComposing(e) && !recording && !heard && e.target === inputRef.current && !inputRef.current.value;
-        if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && placeTag) {
+        if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && aimItem) {
           e.preventDefault();
-          takeOffTarget();
+          aimItem.onClear();
         }
         if (e.key.toLowerCase() === "z" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && emptyBox && !rewording && onRestoreTarget?.()) {
           e.preventDefault();
@@ -495,7 +507,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
               title={recording || heard ? "Waits until what you’re saying is sent" : "New edit instead"} onClick={takeOffTarget}><Icon name="x" size={10} /></button>
           </span>}
           <SkillCommandInput key={owner} id={inputId} inputRef={inputRef} value={value} skills={skills}
-            placeholder={rewording ? "What should it ask instead?" : question ? "Answer Scarlet…" : displayAnchor?.changeId && context ? "What should change?" : replying ? "Write a follow-up…" : NEW_EDIT_HINT}
+            placeholder={rewording ? "What should it ask instead?" : question ? "Answer Scarlet…" : displayAnchor?.changeId && context ? (stopped ? "What should change at this frame?" : placeTag ? "What should change here?" : "What should change?") : replying ? "Write a follow-up…" : NEW_EDIT_HINT}
             timestamps={sameClock ? times : undefined} onTimestamp={inputClock?.seek} onChange={changeText} onSubmit={() => void submitText()} />
           {/* The reason is only for a mic with no agent to talk to. While a message sends or is written down the spinner says why. */}
           <MicButton onResult={(r) => void onVoice(r)} onStart={() => {

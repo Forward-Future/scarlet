@@ -77,17 +77,28 @@ it("leaves Esc to a small popover that is open, so one press doesn't also close 
   expect(ignorePageShortcut(new KeyboardEvent("keydown", { key: "Escape" }))).toBe(false);
 });
 
-it("skips five seconds with an arrow and one with Shift, without drifting off the millisecond", () => {
-  expect(arrowSeekTime(10, "ArrowRight", false)).toBe(15);
-  expect(arrowSeekTime(10, "ArrowLeft", false)).toBe(5);
-  expect(arrowSeekTime(10, "ArrowLeft", true)).toBe(9);
-  expect(arrowSeekTime(10, "ArrowRight", true)).toBe(11);
-  // Repeated skips from an awkward time stay exact.
+it("skips one second with an arrow and one frame with Shift, without drifting", () => {
+  expect(arrowSeekTime(10, "ArrowRight", false)).toBe(11);
+  expect(arrowSeekTime(10, "ArrowLeft", false)).toBe(9);
+  expect(arrowSeekTime(10, "ArrowLeft", true)).toBe(299 / 30);
+  expect(arrowSeekTime(10, "ArrowRight", true)).toBe(301 / 30);
+  expect(arrowSeekTime(10, "ArrowLeft", true, 24)).toBe(239 / 24);
+  expect(arrowSeekTime(10, "ArrowRight", true, 24)).toBe(241 / 24);
+  // Repeated second skips from an awkward time stay exact.
   let time = 0.1;
-  for (let i = 0; i < 3; i++) time = arrowSeekTime(time, "ArrowRight", true);
+  for (let i = 0; i < 3; i++) time = arrowSeekTime(time, "ArrowRight", false);
   expect(time).toBe(3.1);
+  // Repeated frame skips stay on exact frame boundaries, including NTSC rates and quantized video clocks.
+  let frameTime = 0;
+  for (let i = 0; i < 30; i++) frameTime = arrowSeekTime(frameTime, "ArrowRight", true, 30);
+  expect(frameTime).toBe(1);
+  let ntscTime = 0;
+  for (let i = 0; i < 30; i++) ntscTime = arrowSeekTime(ntscTime, "ArrowRight", true, 30000 / 1001);
+  expect(ntscTime).toBeCloseTo(1.001, 10);
+  expect(arrowSeekTime(10.033, "ArrowRight", true, 30)).toBe(302 / 30);
   // The caller clamps: a skip back from the start is before it.
-  expect(arrowSeekTime(2, "ArrowLeft", false)).toBe(-3);
+  expect(arrowSeekTime(0.5, "ArrowLeft", false)).toBe(-0.5);
+  expect(arrowSeekTime(0, "ArrowLeft", true, 30)).toBe(-1 / 30);
 });
 
 it("steps between cuts once for each plain ↑ or ↓ press, and leaves every other key alone", () => {

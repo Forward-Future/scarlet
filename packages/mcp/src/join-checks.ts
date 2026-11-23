@@ -1,3 +1,4 @@
+import { DEFAULT_RESULT_CHARS } from "@scarlet/shared";
 import { json, notePreparing, raceTimeout, text, unmeasured, type ToolResult } from "./tool-result.js";
 
 type JoinReading = Record<string, unknown>;
@@ -12,15 +13,13 @@ interface JoinJob {
 }
 
 /**
- * The longest list of checked joins dialogue_check_join returns whole, in characters. Claude Code withholds a tool
- * result over 25,000 tokens, and a run has no tool to read it back with: lists of 24 to 35 cuts, 57,000 characters
- * and more, came back to real passes as "exceeds maximum allowed tokens", and each was checked again a few at a time
- * or saved unchecked.
+ * The longest list of checked joins dialogue_check_join returns whole, in characters, when no harness-specific
+ * resultChars is given. Claude Code withholds a tool result over 25,000 tokens, and agy spills past ~10,200 chars.
  */
-const JOIN_LIST_CHARS = 40_000;
+const JOIN_LIST_CHARS = DEFAULT_RESULT_CHARS;
 
 /** Compact the response that is being delivered. Keep the original measurements for later collection. */
-function joinList(job: JoinJob, version: string, pending: boolean) {
+function joinList(job: JoinJob, version: string, pending: boolean, maxChars: number) {
   const joins: JoinReading[] = job.readings.map(reading => reading ? { ...reading } : { status: "pending" });
   const header = pending ? { version, status: "measuring",
     pendingCuts: job.readings.flatMap((reading, i) => reading ? [] : [i]), retryAfterSeconds: 5,
@@ -31,16 +30,25 @@ function joinList(job: JoinJob, version: string, pending: boolean) {
     }
   };
   const whole = JSON.stringify({ ...header, joins });
-  if (whole.length <= JOIN_LIST_CHARS) { acknowledge(); return text(whole); }
-  // A longer list would not reach the model at all, so it gives up its bulk: the words around each join, then
+  if (whole.length <= maxChars) { acknowledge(); return text(whole); }
+  // A longer list would not reach the model inline, so it gives up its bulk: the words around each join, then
   // the readings at its edges. Joins with both edges on quiet give theirs up first, since nothing about them is
   // left to judge, then the others from the end of the list. Every join keeps its status and its range, and the
   // result names each one that came back without some of it, for the agent to check again in a shorter list.
   const short = new Set<number>();
   // Counted as if every join were named, so what goes back is never longer than this.
   let size = JSON.stringify({ ...header, joins, evidenceLeftOut: joins.map((_, i) => i) }).length;
-  for (const [field, quiet] of [["nearbyWords", true], ["audio", true], ["alternativeWordRanges", true], ["nearbyWords", false], ["audio", false], ["alternativeWordRanges", false], ["acousticRetakeContinuity", true], ["acousticRetakeContinuity", false], ["partialWordRepeat", true], ["partialWordRepeat", false]] as const) {
-    for (let i = joins.length - 1; i >= 0 && size > JOIN_LIST_CHARS; i--) {
+  for (const [field, quiet] of [
+    ["nearbyWords", true], ["audio", true], ["alternativeWordRanges", true],
+    ["nearbyWords", false], ["audio", false], ["alternativeWordRanges", false],
+    ["acousticRetakeContinuity", true], ["acousticRetakeContinuity", false],
+    ["partialWordRepeat", true], ["partialWordRepeat", false],
+    // Under tighter harness budgets (e.g. Gemini's 9,000 chars), a large batch can still exceed maxChars after
+    // dropping the bulk fields above. Shed prose/echo fields on clean joins first so status and range always fit.
+    ["notes", true], ["words", true], ["sourceRange", true], ["removes", true], ["plays", true], ["reason", true],
+    ["notes", false], ["words", false], ["sourceRange", false], ["removes", false], ["plays", false],
+  ] as const) {
+    for (let i = joins.length - 1; i >= 0 && size > maxChars; i--) {
       const join = joins[i]!;
       if (!(field in join) || (join.status === "unchanged") !== quiet) continue;
       // The value, its name in quotes, the colon and the comma.
@@ -57,6 +65,7 @@ function joinList(job: JoinJob, version: string, pending: boolean) {
  * later independent check gets fresh transcript, scan and audio evidence, even on the same timeline. */
 export class JoinChecks {
   private readonly jobs = new Map<string, JoinJob>();
+  constructor(private readonly maxChars = JOIN_LIST_CHARS) {}
 
   async collect(key: string, version: string, count: number, run: Run, waitMs: number): Promise<ToolResult> {
     for (const [id, job] of this.jobs) {
@@ -92,10 +101,10 @@ export class JoinChecks {
       for (const [what, why] of job.missed) unmeasured.getStore()?.set(what, why);
       if (typeof result === "symbol") {
         notePreparing();
-        return joinList(job, version, true);
+        return joinList(job, version, true, this.maxChars);
       }
       if (this.jobs.get(key) === job) this.jobs.delete(key);
-      if (!result) return joinList(job, version, false);
+      if (!result) return joinList(job, version, false, this.maxChars);
       // The single-cut response includes all of its audio evidence.
       job.inspections.get(0)?.();
       job.inspections.delete(0);

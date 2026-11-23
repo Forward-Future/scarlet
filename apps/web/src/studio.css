@@ -37,6 +37,17 @@
 .library-first-edit > p { margin-top: 18px; font-size: 16px; line-height: 1.55; color: var(--color-muted); text-wrap: balance; }
 .first-edit-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; margin-top: 24px; }
 .first-edit-actions button { min-height: 40px; padding-inline: 16px; gap: 8px; }
+.first-sign-in-list { display: flex; flex-direction: column; gap: 10px; width: min(300px, 100%); margin: 28px auto 0; text-align: left; }
+.first-sign-in-choice { display: flex; flex-direction: column; gap: 6px; }
+.first-sign-in-choice > .btn-ghost { justify-content: center; min-height: 40px; gap: 8px; font-size: 14px; }
+.first-sign-in-waiting { padding: 8px 2px; text-align: center; }
+.first-sign-in-waiting .flex { justify-content: center; }
+.first-sign-in-done { min-height: 40px; display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--color-muted); }
+.first-sign-in-later { margin-top: 20px; color: var(--color-dim); font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
+.first-sign-in-later:hover { color: var(--color-muted); }
+.first-signed-in .first-edit-link { color: var(--color-muted); }
+.first-edit-link { color: var(--color-fg); text-decoration: underline; text-underline-offset: 3px; }
+.first-signed-in { margin-top: 10px; font-size: 13px; color: var(--color-dim); }
 .first-edit-steps { list-style: decimal; padding-inline-start: 1.5rem; }
 .first-edit-steps li { padding-inline-start: .4rem; }
 .first-edit-steps li + li { margin-top: 18px; }

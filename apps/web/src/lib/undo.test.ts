@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Task } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
 import { api } from "./client";
-import { lastStep, recordUndo, undoLast, undoWords, useUndoStore } from "./undo";
+import { lastStep, recordUndo, undoLast, useUndoStore } from "./undo";
 
 beforeEach(() => {
   vi.spyOn(api, "cancelTask").mockImplementation(async id => ({ task: { id } as Task }));
@@ -28,10 +28,10 @@ it("takes back the newest step first, one per press, and only in its own project
   recordUndo({ kind: "revision", projectId: "other", taskId: "task_x" });
   recordUndo({ kind: "keep", word: "Keep", projectId: "prj", threadId: "thr", refs: [{ changeId: "chg", spot: 1 }], edit: { changeId: "chg", spot: 1 }, name: "Cut at 0:09" });
   const steps = () => useUndoStore.getState().steps;
-  expect(undoWords(lastStep(steps(), "prj")!).label).toBe("Undo Keep");
+  expect(lastStep(steps(), "prj")).toMatchObject({ kind: "keep", word: "Keep" });
   expect(await undoLast("prj", { changes: [], tasks: [] }, noRevert)).toMatchObject({ kind: "keep" });
   expect(api.unkeepEdits).toHaveBeenCalledWith("prj", { threadId: "thr", edits: [{ changeId: "chg", spot: 1 }] });
-  expect(undoWords(lastStep(steps(), "prj")!)).toMatchObject({ label: "Undo revision" });
+  expect(lastStep(steps(), "prj")).toMatchObject({ kind: "revision", taskId: "task_a" });
   expect(await undoLast("prj", { changes: [], tasks: [task("task_a", "queued")] }, noRevert)).toMatchObject({ taskId: "task_a" });
   expect(api.cancelTask).toHaveBeenCalledWith("task_a", false, true);
   expect(lastStep(steps(), "prj")).toBeUndefined();

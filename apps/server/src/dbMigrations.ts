@@ -1,3 +1,4 @@
+import { LEFT_OUT_READING } from "@scarlet/timeline";
 import type { Db } from "./db.js";
 
 /** Versioned migrations; `PRAGMA user_version` tracks how many have been applied. */
@@ -456,16 +457,22 @@ const LOOKUP_INDEXES = {
     AND json_array_length(coalesce(json_extract(json, '$.cutReasons'), '[]')) = 0`,
   // Joins an earlier reading of the footage left out found, read again with the current one (LEFT_OUT_READING).
   changes_left_out_reread: `ON changes(created_at) WHERE state = 'approved' AND json_array_length(json_extract(json, '$.leftOut.joins')) > 0
-    AND coalesce(json_extract(json, '$.leftOut.reading'), 1) < 2`,
+    AND coalesce(json_extract(json, '$.leftOut.reading'), 1) < ${LEFT_OUT_READING}`,
   tasks_dialogue_unset: "ON tasks(created_at) WHERE kind IN ('edit','revise','note') AND json_type(json, '$.context.dialogueOperation') IS NULL",
 };
 
 export function ensureLookupIndexes(db: Db): void {
-  const names = Object.keys(LOOKUP_INDEXES);
-  const missing = () => names.filter(name => !db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = ?").get(name));
-  if (!missing().length) return;
+  const names = Object.keys(LOOKUP_INDEXES) as Array<keyof typeof LOOKUP_INDEXES>;
+  const definition = (name: keyof typeof LOOKUP_INDEXES) => `CREATE INDEX ${name} ${LOOKUP_INDEXES[name]}`;
+  const stale = () => names.filter(name => {
+    const row = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?").get(name) as { sql: string | null } | undefined;
+    return row?.sql !== definition(name);
+  });
+  if (!stale().length) return;
   db.transaction(() => {
-    // Another engine opening this library may have added them since. Look again with the write lock held.
-    for (const name of missing()) db.exec(`CREATE INDEX IF NOT EXISTS ${name} ${LOOKUP_INDEXES[name as keyof typeof LOOKUP_INDEXES]};`);
+    // Another engine opening this library may have updated them since. Look again with the write lock held.
+    for (const name of stale()) {
+      db.exec(`DROP INDEX IF EXISTS ${name}; ${definition(name)};`);
+    }
   }, "immediate")();
 }

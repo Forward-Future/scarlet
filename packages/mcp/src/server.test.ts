@@ -241,8 +241,8 @@ describe("tools/list", () => {
     const names = tools.map((t) => t.name).sort();
     // Claude's harness does not deliver audio, so nothing offers WAV. This session has no task, so it isn't launched with
     // file tools: nothing imports from the artifact directory or captures a page. Only the check that reads a request
-    // offers a rule.
-    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => !["source_audio", "learning_suggest", "asset_add", "web_capture"].includes(n)).sort());
+    // offers a rule, and only a request with a model that can hear signed in has it listen.
+    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => !["source_audio", "listen", "learning_suggest", "asset_add", "web_capture"].includes(n)).sort());
     for (const t of tools) expect(Object.keys(t.inputSchema.properties ?? {})).not.toContain("includeAudio");
     expect(JSON.stringify(tools)).not.toMatch(/\bWAV\b|can (hear|play)|accepts audio|consume audio/);
     for (const t of tools) expect(t.description?.length ?? 0).toBeGreaterThan(20);
@@ -2851,6 +2851,44 @@ it("says what a join plays, so a check that takes out the whole retake shows the
   }
 });
 
+it("says what a cut named by its words plays, so taking out the later try of an unfinished line shows the first left as a fragment", async () => {
+  const original = { extra: mock.state.extra, timeline: mock.state.timeline, waveform: mock.state.waveform, transcripts: mock.state.transcripts };
+  const isolated = await connect();
+  // "incredible tools. They do believe they, they do believe. [pause] And so what happens": neither try finishes; a pass
+  // cut the later one by its words and the edit played "They do believe ‖ And so what happens" (2026-11-22).
+  const said: Array<[string, number, number]> = [["incredible", .2, .9], ["tools.", .94, 1.4], ["They", 1.9, 2.1], ["do", 2.16, 2.36],
+    ["believe", 2.4, 2.8], ["they,", 3.0, 3.2], ["they", 3.5, 3.7], ["do", 3.74, 3.9], ["believe.", 3.94, 4.3], ["And", 7.0, 7.12],
+    ["so", 7.14, 7.3], ["what", 7.34, 7.56], ["happens", 7.6, 8.1]];
+  const words = said.map(([text, start, end]) => ({ text, start, end }));
+  mock.state.transcripts = { m1: { ...transcript, segments: [{ id: "s1", start: 0, end: 9, text: said.map(w => w[0]).join(" "), words }] } };
+  const tl = emptyTimeline(mock.state.project.id);
+  tl.version = "unfinished-line";
+  tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 9, 0)];
+  mock.state.timeline = tl;
+  mock.state.waveform = (mediaId, from, to, points) => {
+    const levels = Array.from({ length: points }, (_, i) => {
+      const t = from + (i + .5) * (to - from) / points;
+      return words.some(w => w.start <= t && t < w.end) ? .2 : .001;
+    });
+    return { mediaId, from, to, peaks: levels, rms: levels, speechActivity: words };
+  };
+  mock.state.extra = (req, res) => {
+    if (!req.path.endsWith("/dialogue-detections") && !req.path.endsWith("/dialogue-cuts")) return false;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify(req.path.endsWith("/dialogue-cuts") ? { changes: [] } : { segments: [], acoustic: [] }));
+    return true;
+  };
+  try {
+    const applied = await isolated.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Cut the repeat",
+      cuts: [{ mediaId: "m1", fromWord: 5, toWord: 8, kind: "retake", decision: "cut", reason: "Keep the first “They do believe”." }] } }) as CallToolResult;
+    expect(JSON.parse(textOf(applied)).gate.decisions).toContainEqual(expect.objectContaining({ cut: 0, words: "they, they do believe.",
+      plays: expect.stringContaining("They do believe ‖ And so what") }));
+  } finally {
+    await isolated.close();
+    Object.assign(mock.state, original);
+  }
+});
+
 it("inspects a split word and submits only the exact timing and disposition the agent chooses", async () => {
   const original = { extra: mock.state.extra, timeline: mock.state.timeline, waveform: mock.state.waveform };
   const isolated = await connect();
@@ -4421,7 +4459,7 @@ it("cuts by word reference: edges go in the measured gaps, and every gate decisi
     expect(saved).toMatchObject({ description: "Remove the first attempt", cuts: [{ start: 1.033, end: 3.567, review: false }] });
     expect(saved.cuts[0]).not.toHaveProperty("check");
     expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut",
-      range: [1.03, 3.57] }]);
+      range: [1.03, 3.57], plays: "… Hello everyone ‖ welcome back to the show. …" }]);
     // Without measured silence beside the words, the edge falls back to word timings and Scarlet stages the cut, saying why.
     mock.state.waveform = (mediaId, from, to, points) => ({ mediaId, from, to, peaks: Array(points).fill(.2), rms: Array(points).fill(.2),
       speechActivity: [{ start: from, end: to }] });
@@ -4951,7 +4989,8 @@ it("reads a transcript whose words are still being placed on the audio, and hold
     mock.state.transcripts = { m1: transcript };
     await new Promise(resolve => setTimeout(resolve, 1600));
     const applied = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Remove the first attempt", cuts: [cut] } }) as CallToolResult;
-    expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut", range: [1.03, 3.57] }]);
+    expect(JSON.parse(textOf(applied)).gate.decisions).toEqual([{ cut: 0, kind: "retake", words: "welcome back. Um,", asked: "cut", outcome: "cut", range: [1.03, 3.57],
+      plays: "… Hello everyone ‖ welcome back to the show. …" }]);
     expect(textOf(await editor.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 4, toWord: 4 } }) as CallToolResult)).toContain("#4 2.50-2.70 Um,");
   } finally {
     Object.assign(mock.state, original);

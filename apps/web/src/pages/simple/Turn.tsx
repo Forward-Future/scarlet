@@ -5,7 +5,7 @@ import type { Change } from "@scarlet/timeline";
 import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task } from "@scarlet/shared";
 import { resumeRunChoice, useAgentAvailability } from "../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../components/review/RunBundle";
-import { editGroups, useReviewed, useRevising, useThreadEdits } from "../../components/review/ThreadEdits";
+import { editGroups, useDeferred, useReviewed, useRevising, useThreadEdits } from "../../components/review/ThreadEdits";
 import { Icon } from "../../components/ui/primitives";
 import { TipButton } from "../../components/ui/TipButton";
 import { errorMessage } from "../../lib/client";
@@ -14,7 +14,7 @@ import { editKey } from "../../lib/keptEdits";
 import { isDialoguePass, isOpenPass, openPass, waitsToPlay } from "../../lib/passCalls";
 import { aboutOne, aimOf, closingReply, notesStillAsked, threadRuns, waitingToStart, type Run } from "../../lib/requestRuns";
 import { runIsActive, spentLabel } from "../../lib/taskRun";
-import { firstCutDeliveries, isRedo, requestTarget, revisionTarget, threadConversation, type Thread, type ThreadEntry } from "../../lib/threads";
+import { firstCutDeliveries, isRecheck, isRedo, RECHECK_WORDS, requestTarget, revisionTarget, threadConversation, type Thread, type ThreadEntry } from "../../lib/threads";
 import { useNearView } from "../../lib/useNearView";
 import { useProjectStore } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
@@ -133,16 +133,17 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     || (!!pinned && thread.tasks.some(t => t.id === pinned)) || (!!reportReviewMarkers && asksForALook.current));
   asksForALook.current = listed.some(edit => !!edit.check);
   const reviewed = useReviewed(projectId, thread);
+  const deferred = useDeferred(projectId, thread);
   const revising = useRevising(thread);
   useEffect(() => {
     if (!reportReviewMarkers || !located) return;
-    const waiting = located.filter(edit => edit.check && !reviewed(edit) && !revising(edit));
+    const waiting = located.filter(edit => edit.check && !reviewed(edit) && !deferred(edit) && !revising(edit));
     if (!waiting.length) return;
     const numbers = new Map(editGroups(located).flatMap(({ members }) => members.map(({ edit }) => [edit, members[0]!.i + 1] as const)));
     const markers = waiting.map(edit => ({ edit, number: numbers.get(edit)!, total: located.length }));
     reportReviewMarkers(thread.id, { head, markers });
     return () => reportReviewMarkers(thread.id);
-  }, [thread.id, head, located, reviewed, revising, reportReviewMarkers]);
+  }, [thread.id, head, located, reviewed, deferred, revising, reportReviewMarkers]);
   // A thread with a dialogue pass sums it up on one line instead of listing every cut.
   const waitingPass = openPass(thread, allTasks);
   const pendingPass = !!waitingPass;
@@ -324,7 +325,10 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // While every edit is listed, the list takes the place of Scarlet's reply; putting it away brings the reply back. The
     // short list of what needs the editor, shown without a click, leaves the reply where it is.
     const listing = run === owner && hasRows && passList[0] === "all";
+    // Scarlet's recheck of a cut the editor approved, under that cut's row: its reason is its heading, not a line under its work.
+    const autoHeading = inside && isRecheck(task);
     mine.forEach((e, i) => {
+      if (autoHeading && e.kind === "system" && e.text === RECHECK_WORDS) return;
       // All of what Scarlet said: folded it keeps to two lines, and a click opens the rest.
       if (e.kind === "agent") { if (!quiet && !(e.onNote && closed)) { told = true; if (!listing) said.push(<Said key={i} className="req-say" text={e.fullText ?? e.text} />); } }
       else if (e.kind === "question") said.push(<p key={i} className={e.answered ? "req-say is-quiet" : "req-say"}>{e.text}
@@ -427,9 +431,13 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const wrong = failed?.run === run.root && <p className="simple-error unit-error" role="alert">{failed.text}</p>;
     // Inside another request's block, under the row it is about: its tag and the editor's words, with where it stands
     // at their right, as in a block's heading, and its work. Under its row the row names it, and the tag is hidden.
+    // A recheck Scarlet started itself has no words of the editor's: its reason takes their place, after an Auto tag
+    // that stays in view, so it never reads as a revision nobody asked for (2026-11-22).
     if (inside) return <div key={run.root} className="subunit" data-run={run.root}>
       {request && <div className="subunit-msg"><span className="simple-who">You</span>
         <Said lead={<span className="simple-revising">{about ?? "Revision"}</span>} text={request.text} /><span className="unit-state">{standing}</span>{headingEnd}</div>}
+      {!request && autoHeading && <div className="subunit-msg"><span className="simple-who">Scarlet</span>
+        <Said lead={<span className="simple-revising is-auto" title="Scarlet started this itself">Auto</span>} text={RECHECK_WORDS} /><span className="unit-state">{standing}</span></div>}
       {bundle}
       {wrong}
     </div>;

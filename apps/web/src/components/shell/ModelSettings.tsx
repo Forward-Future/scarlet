@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { AgentId } from "@scarlet/shared";
+import { chooseListener, hearingModels, listenerKey, type AgentId, type Listener } from "@scarlet/shared";
+import { api, errorMessage } from "../../lib/client";
+import { PreferenceSelect } from "../ui/PreferenceSelect";
 import { ModelProviders } from "../agent/ModelProviders";
 import { Link } from "react-router-dom";
 import { ModelRefreshButton, ModelRefreshFeedback, useModelRefresh } from "../agent/ModelRefresh";
 import { AGENT_LABEL, onlineAgents, useHostsStore } from "../../stores/hosts";
 import { modelChoices, useModelPreferences, type ModelChoice } from "../../stores/modelPicker";
 import { FavoriteButton } from "../agent/FavoriteButton";
-import { Icon, Loading, SectionTitle, Toggle } from "../ui/primitives";
+import { Icon, InlineError, Loading, SectionTitle, Toggle } from "../ui/primitives";
 
 interface ScrollCue {
   canScrollUp: boolean;
@@ -221,6 +223,82 @@ export function ModelSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
           )}
         </>}
       </div>}
+    </section>
+  );
+}
+
+/**
+ * Which model listens to cuts for the models that can't hear (Claude, most of Codex's): Automatic, the best one signed
+ * in; one the editor picks; or Off. Saved for every project, as Checking with you is.
+ */
+export function ListeningSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
+  const { hosts, status } = useHostsStore();
+  const [value, setValue] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let current = true;
+    void api.settings().then(r => { if (current) setValue(r.settings.listening); }).catch(e => { if (current) setError(errorMessage(e)); });
+    return () => { current = false; };
+  }, []);
+  if (!value) return error ? <InlineError>{error}</InlineError> : null;
+  const agents = hosts.filter(h => h.online).flatMap(h => h.agents);
+  const nameOf = (l: Listener) => l.agent === "gemini" && !l.model ? "Gemini"
+    : agents.find(a => a.id === l.agent)?.modelLabels?.[l.model ?? ""] ?? l.model ?? AGENT_LABEL[l.agent as AgentId];
+  const models = hearingModels(agents);
+  const picked = value !== "auto" && value !== "off" ? value : undefined;
+  const missing = picked && !models.some(l => listenerKey(l) === picked);
+  const pickedName = picked && (missing ? picked.split(":").slice(1).join(":") : nameOf(models.find(l => listenerKey(l) === picked)!));
+  const options = [
+    { value: "auto", label: "Automatic" },
+    ...models.map(l => ({ value: listenerKey(l) as string, label: nameOf(l) })),
+    ...(missing ? [{ value: picked, label: `${pickedName} (not signed in)` }] : []),
+    { value: "off", label: "Off" },
+  ];
+  const listener = chooseListener(agents, value);
+  const choose = async (next: string) => {
+    const previous = value;
+    setValue(next);
+    setError("");
+    setBusy(true);
+    try {
+      setValue((await api.updateSettings({ listening: next })).settings.listening);
+    } catch (e) {
+      setValue(previous);
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const signIn = onSignIn
+    ? <button className="underline" onClick={onSignIn}>Manage sign-in</button>
+    : <Link to="/settings#hosts" className="underline">Manage sign-in</Link>;
+  const catches = "so Scarlet catches a stumble or a clipped word the transcript misses.";
+  return (
+    <section className="card transcription-preferences check-in-preferences" aria-labelledby="listening-heading">
+      <div className="transcription-header">
+        <div className="transcription-heading">
+          <span className="transcription-glyph"><Icon name="audio" size={22} /></span>
+          <div>
+            <h2 id="listening-heading">Listening</h2>
+            <p>Which model listens to cuts for models that can’t hear.</p>
+          </div>
+        </div>
+        <div className="min-w-0">
+          <label className="label" htmlFor="listening-model">Listening model</label>
+          <PreferenceSelect id="listening-model" value={value} disabled={busy} options={options} onChange={next => void choose(next)}
+            valueLabel={value === "auto" && listener ? `Automatic · ${nameOf(listener)}` : undefined} />
+        </div>
+      </div>
+      {/* One span: the status line lays its children out side by side, and this is one sentence. */}
+      <p className="transcription-status text-muted"><span>{
+        value === "off" ? "Off: models that can’t hear read the transcript and a picture of the sound instead."
+        : missing ? <>{pickedName} isn’t signed in, so nothing listens for now. Sign in again or choose another model. {signIn}</>
+        : listener ? <>{nameOf(listener)} listens to cuts for models that can’t hear, {catches}</>
+        : status === "loading" ? "Looking for models that can hear…"
+        : <>No model here can hear. Sign in to Gemini so Scarlet listens to cuts instead of only reading the transcript. {signIn}</>
+      }</span></p>
+      {error && <InlineError>{error}</InlineError>}
     </section>
   );
 }

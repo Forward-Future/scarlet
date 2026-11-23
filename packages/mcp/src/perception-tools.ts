@@ -3,7 +3,7 @@
  * playback order, a deterministic audit of each join, version diffs and a per-media profile.
  */
 import { z } from "zod/v3";
-import { ScarletApiError, type ProjectDetail, type ScarletClient, type WaveformResponse } from "@scarlet/shared";
+import { DEFAULT_RESULT_CHARS, ScarletApiError, type ProjectDetail, type ScarletClient, type WaveformResponse } from "@scarlet/shared";
 import { timelineDuration, type Project, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
 import { auditJoin, formatTimelineTranscript, heardOnlyVerbatim, joinTook, newJoins, timelineJoins, timelineWords, type HeardOnly, type JoinAudit, type TimelineJoin, type TimelineWord } from "./timeline-perception.js";
 import { pictureEntranceReader } from "./picture-entrance.js";
@@ -46,6 +46,8 @@ interface PerceptionDeps {
   unavailable(what: string, err: unknown): void;
   /** Whether this run has the frame tools: its harness shows the model images and the editor left them on. */
   seesFrames: boolean;
+  /** Character target for paging long text responses (`AgentCapabilities.resultChars`). */
+  resultChars?: number;
 }
 
 /** Outgoing side: what was heard before the join and what was removed after it. */
@@ -258,12 +260,30 @@ export function registerPerception(deps: PerceptionDeps) {
       }
       shown = shown.map(w => marked.get(w.mediaId)?.has(w.index) ? { ...w, text: `${OTHER_INPUT} ${w.text}` } : w);
     }
+    const budget = deps.resultChars ?? DEFAULT_RESULT_CHARS;
+    const allHeard = await heardOnly(tl, transcripts, shown);
+    const render = (slice: TimelineWord[]) => {
+      const sliceJoins = joins.filter(j => !slice.length || j.at <= slice.at(-1)!.end + 1e-3 || slice.length === words.length);
+      const sliceHeard = slice.length === words.length ? allHeard : allHeard.filter(h => h.start <= slice.at(-1)!.end + 1e-3);
+      const body = formatTimelineTranscript(slice, sliceJoins,
+        { detail, fps: project.settings.fps, all, removed: join => joinTook(join, transcripts), heard: sliceHeard });
+      const more = words.length > slice.length ? `\nShowing ${slice.length} of ${words.length} words; continue with from=${(slice.at(-1)!.end + 0.001).toFixed(3)}.` : "";
+      return `Version ${tl.version}, ${range.start.toFixed(2)}–${range.end.toFixed(2)} of ${duration.toFixed(2)} s timeline: ${words.length} words, ${joins.length} joins.\n${body}${more}`;
+    };
+    let output = render(shown);
+    if (shown.length > 1 && output.length > budget) {
+      let lo = 1, hi = shown.length - 1;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (render(shown.slice(0, mid)).length <= budget) lo = mid;
+        else hi = mid - 1;
+      }
+      shown = shown.slice(0, lo);
+      output = render(shown);
+    }
     if (shown.length) deps.readPassage(tl.version, { start: Math.max(0, range.start),
       end: shown.length < words.length ? shown.at(-1)!.end : Math.min(duration, range.end) });
-    const body = formatTimelineTranscript(shown, joins.filter(j => !shown.length || j.at <= shown.at(-1)!.end + 1e-3 || shown.length === words.length),
-      { detail, fps: project.settings.fps, all, removed: join => joinTook(join, transcripts), heard: await heardOnly(tl, transcripts, shown) });
-    const more = words.length > limit ? `\nShowing ${limit} of ${words.length} words; continue with from=${(shown.at(-1)!.end + 0.001).toFixed(3)}.` : "";
-    return text(`Version ${tl.version}, ${range.start.toFixed(2)}–${range.end.toFixed(2)} of ${duration.toFixed(2)} s timeline: ${words.length} words, ${joins.length} joins.\n${body}${more}`);
+    return text(output);
   }
 
   tool("timeline_transcript",
@@ -295,10 +315,17 @@ export function registerPerception(deps: PerceptionDeps) {
       if (!joins.length) return text(`No ${changeId ? "new " : ""}joins on version ${tl.version}${at ? " at those times" : ""}.`);
       const page = joins.slice(0, MAX_AUDITS);
       const audits = await auditJoins(tl, project, page, all);
-      const clean = audits.filter(a => a.verdict === "clean").length;
-      return json({ version: tl.version, ...(changeId && { changeId }), joins: joins.length, clean, audits,
-        // `from` takes a join up to a millisecond before it, so the next page starts two past the last one audited.
-        ...(joins.length > page.length && { next: `Call again with from=${page.at(-1)!.at + .002}` }) });
+      const budget = deps.resultChars ?? DEFAULT_RESULT_CHARS;
+      const buildAudit = (count: number) => {
+        const slice = audits.slice(0, count);
+        const clean = slice.filter(a => a.verdict === "clean").length;
+        return { version: tl.version, ...(changeId && { changeId }), joins: joins.length, clean, audits: slice,
+          // `from` takes a join up to a millisecond before it, so the next page starts two past the last one audited.
+          ...(joins.length > slice.length && { next: `Call again with from=${page[slice.length - 1]!.at + .002}` }) };
+      };
+      let count = audits.length;
+      while (count > 1 && JSON.stringify(buildAudit(count)).length > budget) count--;
+      return json(buildAudit(count));
     });
 
   tool("timeline_diff",
