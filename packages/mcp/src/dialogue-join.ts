@@ -496,10 +496,13 @@ interface EdgeAudio {
   /** Transcript words near the edge. Their timings are approximate; use them to name words, not to place the cut. */
   words: string;
   transcriptSplitsWord?: string;
+  /** With `onTimeline`: the same quiet points in timeline seconds, where an edge given in timeline seconds moves to. */
+  quietBeforeOnTimeline?: number;
+  quietAfterOnTimeline?: number;
 }
 
 /** The measured audio around each boundary, so a model can place and judge the edge from the recording itself. */
-export function joinAudio(tl: Timeline, project: Project, range: TimeRange, pages: JoinPage[]): EdgeAudio[] {
+export function joinAudio(tl: Timeline, project: Project, range: TimeRange, pages: JoinPage[], { onTimeline = false } = {}): EdgeAudio[] {
   const { clips, streams } = dialogueClips(tl, project);
   const out: EdgeAudio[] = [];
   for (const [edge, at] of [["start", range.start], ["end", range.end]] as const) {
@@ -517,9 +520,17 @@ export function joinAudio(tl: Timeline, project: Project, range: TimeRange, page
       // Measured quiet or room tone under the edge means the word is not sounding there (e.g. a scan timing
       // stretched across a dip over an omitted syllable), matching clipEdgeSound's soundUnderEdge.
       const split = atRoomTone(page, t) ? undefined : page.words.find(w => inWord(w, t));
+      const quietBefore = before && round3(Math.min(t, before.end - quietMargin));
+      const quietAfter = after && round3(Math.max(t, after.start + quietMargin));
+      // Only where the clip still plays there: past its ends the timeline second would be another clip's.
+      const placed = (q: number | undefined) => {
+        if (q === undefined || q < clip.sourceIn - 1e-6 || q > clip.sourceOut + 1e-6) return;
+        return round3(sourceToTimeline(clip, q));
+      };
+      const beforeOn = onTimeline ? placed(quietBefore) : undefined, afterOn = onTimeline ? placed(quietAfter) : undefined;
       out.push({ edge, mediaId: clip.mediaId, at: round3(t), sound: soundAt(page, t), ...(levels && { levels }),
-        ...(before && { quietBefore: round3(Math.min(t, before.end - quietMargin)) }),
-        ...(after && { quietAfter: round3(Math.max(t, after.start + quietMargin)) }),
+        ...(quietBefore !== undefined && { quietBefore }), ...(quietAfter !== undefined && { quietAfter }),
+        ...(beforeOn !== undefined && { quietBeforeOnTimeline: beforeOn }), ...(afterOn !== undefined && { quietAfterOnTimeline: afterOn }),
         words: page.words.filter(w => w.end > t - 1.2 && w.start < t + 1.2)
           .map(w => (w.end <= t ? "" : w.start >= t ? "" : "▸") + w.text.trim() + "[" + w.start.toFixed(2) + "-" + w.end.toFixed(2) + "]").join(" "),
         ...(split && { transcriptSplitsWord: plain(split) }) });
