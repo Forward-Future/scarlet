@@ -80,12 +80,13 @@ export function createDialoguePartLeftovers(deps: DialoguePartLeftoversDeps) {
   async function passedLeftovers(tl: Timeline, kept: Array<{ start: number; end: number }>,
     decisions: Array<{ start: number; end: number; review: boolean }>, range?: { start: number; end: number }, pausesFrom?: number) {
     const decided = [...decisions, ...kept];
-    if (!decided.length) return { pauses: [], repeats: [], gaps: [] };
+    if (!decided.length) return { pauses: [], repeats: [], gaps: [], transcripts: new Map<string, TranscriptWord[]>() };
     const scope = range ?? spanOf(decided);
-    // keptPauses and repeatedWords name their words by these indices.
+    // keptPauses and repeatedWords name their words by these indices. The transcripts come back too, so the part's
+    // short pieces are read on the same words.
     const transcripts = await playedWords(tl, id => `failed to read the words of ${id} for what a part still plays`, true);
     // A range staged for review still plays until the editor approves it.
-    return partLeftovers(timelineWords(tl, transcripts, scope), decisions.filter(d => !d.review), kept, transcripts, pausesFrom ?? PAUSE_FLOOR_SECONDS);
+    return { ...partLeftovers(timelineWords(tl, transcripts, scope), decisions.filter(d => !d.review), kept, transcripts, pausesFrom ?? PAUSE_FLOOR_SECONDS), transcripts };
   }
 
   /** The version a part continues on, read once however many lists are placed on it. */

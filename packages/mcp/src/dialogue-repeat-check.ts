@@ -118,5 +118,7 @@ export function createDialogueRepeatCheck(deps: DialogueRepeatCheckDeps) {
     checkedVersion: () => checkedVersion,
     /** The silence length the model last asked the check for. */
     silencesAsked: () => silencesAsked,
+    /** The short-piece length the model last asked the check for. */
+    piecesAsked: () => piecesAsked,
   };
 }

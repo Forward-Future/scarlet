@@ -54,8 +54,8 @@ export function watchRefusedArguments(server: McpServer, failed: (name: string, 
 
 /** The includeAudio flag exists only for a model that can hear; the type always carries it so handlers stay simple. */
 export type AudioShape = { includeAudio: z.ZodDefault<z.ZodBoolean> };
-export const createAudioOption = (hearing: boolean) => (description: string) =>
-  (hearing ? { includeAudio: z.boolean().default(false).describe(description) } : {}) as AudioShape;
+export const createAudioOption = (hearing: boolean, defaultValue = false) => (description: string) =>
+  (hearing ? { includeAudio: z.boolean().default(defaultValue).describe(description) } : {}) as AudioShape;
 
 /**
  * An area of a picture as [left, top, right, bottom] in percent of it. An array of one item type, not a tuple: Codex

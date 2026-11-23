@@ -21,6 +21,7 @@ import {
   type Author,
   type TimeRange,
   type Timeline,
+  type TranscriptWord,
 } from "@scarlet/timeline";
 import { round2 } from "./analysis.js";
 import { DialogueEvidence } from "./dialogue-decisions.js";
@@ -33,7 +34,8 @@ import {
   DIP_DBFS,
   joinAudio,
 } from "./dialogue-join.js";
-import { PAUSE_FLOOR_SECONDS } from "./dialogue-leftovers.js";
+import { PAUSE_FLOOR_SECONDS, shortPiecesInPart } from "./dialogue-leftovers.js";
+import { deliverWav, listening } from "./inspection-tools.js";
 import {
   cutReading,
   cutsReach,
@@ -98,6 +100,7 @@ export interface DialogueToolsDeps {
   readPassage(version: string, range: TimeRange, edges?: boolean): void;
   postEvent(ev: Omit<TaskEvent, "taskId">): Promise<{ posted: boolean; error?: string }>;
   prepareReview(changeId: string): Promise<StagedReview | undefined>;
+  writeArtifact?(path: string, data: Uint8Array): Promise<string>;
   getPerception(): PerceptionApi;
 }
 
@@ -105,7 +108,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
   const {
     tool, client, projectId, taskId, task, author, caps, joinWaitMs,
     evidence, session, errors, stagedState,
-    dialogueOperation, readPassage, postEvent, prepareReview, getPerception,
+    dialogueOperation, readPassage, postEvent, prepareReview, writeArtifact, getPerception,
   } = deps;
   const {
     getProject, peekTimeline, moveBase, cutAnchor, transcriptWords,
@@ -113,12 +116,13 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
     refusalNext, planSources,
   } = session;
   const { without, withoutOnce, together } = errors;
-  const hearing = caps.audio;
-  const audioOption = createAudioOption(hearing);
+  const listen = listening(caps, !!writeArtifact);
+  const defaultAudio = listen?.by === "file";
+  const audioOption = createAudioOption(!!listen, defaultAudio);
 
   const joinChecks = new JoinChecks(caps.resultChars);
   const scanReader = createDialogueScanReader(deps);
-  const { checkRepeats, checkedRepeats, checkedVersion, silencesAsked } = createDialogueRepeatCheck(deps);
+  const { checkRepeats, checkedRepeats, checkedVersion, silencesAsked, piecesAsked } = createDialogueRepeatCheck(deps);
   const { passedSilences, listed, fresh, candidate, passedLeftovers, timelineAt, placeSilences, keptQuietPhrases } =
     createDialoguePartLeftovers({ ...deps, silencesAsked });
 
@@ -156,11 +160,14 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
     { version: z.string(), crossfadeFrames, pace: paceInput, breath: breathInput("fromWord/toWord", "The result's breath names any found, either way."), ...WordRef, ...PauseRef, start: z.number().finite().nonnegative().optional(), end: z.number().finite().positive().optional(), resumeWith,
       cuts: z.array(z.object({ ...WordRef, ...PauseRef, start: z.number().finite().nonnegative().optional(), end: z.number().finite().positive().optional(), resumeWith }))
         .min(1).max(100).optional().describe("Several removals to check in one call, instead of start/end or a word reference"),
-      ...audioOption("Attach about two seconds of the original recording around each edge as WAV, for a single range") },
+      ...audioOption(listen?.by === "file"
+        ? "Write WAV files of about two seconds of the original recording around each edge to your task folder to open with your file viewer, for a single range"
+        : "Attach about two seconds of the original recording around each edge as WAV, for a single range") },
     async ({ version, includeAudio, resumeWith, cuts, crossfadeFrames = 0, pace, breath, ...cut }) => {
       const tl = await peekTimeline(version);
       const snapshot = tl.version === "draft" ? createHash("sha256").update(JSON.stringify(tl)).digest("hex") : tl.version;
-      const key = JSON.stringify([snapshot, cuts, cut, resumeWith, crossfadeFrames, pace, breath, !!includeAudio]);
+      const wantAudio = !!listen && (includeAudio ?? defaultAudio);
+      const key = JSON.stringify([snapshot, cuts, cut, resumeWith, crossfadeFrames, pace, breath, wantAudio]);
       return joinChecks.collect(key, tl.version, cuts?.length ?? 1, async publish => {
         const { project } = await getProject();
         const resolve = async (c: typeof cut, label: string) => {
@@ -221,13 +228,19 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
         const { reading: checked, inspected } = await report(resolved, resumeWith);
         publish(0, checked, inspected);
         const result = json({ version: tl.version, ...checked });
-        if (!includeAudio || !hearing) return result;
+        if (!wantAudio || !listen) return result;
         for (const edge of checked.audio) {
-          const from = Math.max(0, edge.at - 1);
+          const from = Math.max(0, edge.at - 1), to = edge.at + 1;
           try {
-            const { wav } = await client.sourceAudio(projectId, { mediaId: edge.mediaId, from, to: edge.at + 1 });
-            result.content.push({ type: "text", text: `Original ${edge.edge} edge of ${edge.mediaId}: the boundary is ${(edge.at - from).toFixed(2)} s into this clip (source ${edge.at} s).` },
-              { type: "audio", mimeType: "audio/wav", data: wav });
+            const { wav } = await client.sourceAudio(projectId, { mediaId: edge.mediaId, from, to });
+            const note = `Original ${edge.edge} edge of ${edge.mediaId}: the boundary is ${(edge.at - from).toFixed(2)} s into this clip (source ${edge.at} s).`;
+            if (listen.by === "file") {
+              result.content.push(...await deliverWav(listen, wav, `listen/edge-${edge.edge}-${edge.mediaId}-${edge.at.toFixed(2)}.wav`,
+                { edge: edge.edge, mediaId: edge.mediaId, at: edge.at, from, to, boundaryOffset: +(edge.at - from).toFixed(2) },
+                `${note} Open this WAV file with your own file viewer to hear it.`, writeArtifact));
+            } else {
+              result.content.push({ type: "text", text: note }, { type: "audio", mimeType: "audio/wav", data: wav });
+            }
           } catch (err) {
             noteEvidenceMiss("join audio");
             result.content.push({ type: "text", text: `Audio for the ${edge.edge} edge is unavailable: ${describeError(err)}. Judge it from the levels.` });
@@ -238,7 +251,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
     });
 
   tool("dialogue_apply_cuts",
-    `Save your decisions on an assembled version: cut, review or keep ranges, sorted and nonoverlapping. ${cutCoordinates} Cut ranges apply together; review stages a range for the editor; keep or omission retains it. Scarlet measures each retake, filler, pause and quoted production edge. An edge on sound moves a few frames onto silence, or onto the low point between two words said in one breath, and applies; an edge between named words said straight through, with no low point, goes where the transcript parts them and applies; a larger move narrows the cut and stages it, unless unsureJoins is cut. An edge Scarlet can't move out of sound stays held, and its held reason says what the join plays, what the passage plays if the cut is kept and, for a range given in seconds, the nearest quiet or low point either side and the words moving there keeps or removes. A pause's edge moves onto the quiet beside it. A retake cut with no quiet to start in, where the take resumes on the word the first take broke off on, starts where the first delivery of that word begins, matched on the sound of the two; nothing measured says how that join plays, so it is staged, unless unsureJoins is cut. A range that leaves kept words playing twice that way is placed as given, and the gate says from where a cut takes them out too. A short piece between cuts with a transcript word at room-tone level returns quietKeptWord with nearby measured sound in source seconds. Footage between separate removals stays in the timeline. \`gate\` lists changes to the measured plan with their evidence. Its ranges describe placement before the engine rounds to project frames. The returned timelineEdits describe the saved edits. A resumeWith quote the scan reads differently doesn't hold its cut: the cut is placed as given and its gate line says what the scan reads after it. A coaching cut whose production quote doesn't verify, or a cut whose join would play words twice or a kept word too quietly, or that removes a restart and runs on past it, taking words at its edge that nothing either side of the join says again, or a pause trim whose range holds sound at speaking level that no word explains or whose pause holds words the transcript doesn't have, is left out with its evidence in \`notSaved\`, and the rest of the part saves. Save a long pass in parts and continue on \`continueFrom\`. For a first dialogue pass, send at most ${FIRST_CUT_BATCH_SIZE} nearby cut or review decisions as soon as they are ready, with any keep or protected ranges they depend on. The gate reports an applied cut whose edge sits within ${SPEECH_BESIDE_EDGE} s of the sound it removes, since the picture can show a word starting that the sound has not reached; whether that needs the editor is yours to judge. Each applied retake or coaching cut is listed with removes and plays: the words it takes out and its join as the viewer hears it. What Scarlet changed on its own comes back with why: \`stagedForEditor\` (confident cuts that wait for the editor), \`onFrames\` (edges put on whole frames), \`droppedFromReview\` (an earlier part's staged cuts whose footage a later edit broke up) and \`heldCutsStay\` (cuts not saved because, sent with unsureJoins cut, they would have replaced a staged cut held for its join with other edges Scarlet couldn't place either). For a requested crossfade, \`joinCrossfades\` reports how many joins were faded and why any stayed straight. The result also lists what this part still plays, each thing once per pass, at \`at\` on continueFrom: keptSilences (${SILENCE_LEFT_SECONDS} s or more without words that no decision covers, the silences dialogue_check_repeats lists, or from the length you last gave it as silencesFrom, with the afterWord that trims an untouched one), keptPauses (the longest thirty of ${PAUSE_FLOOR_SECONDS} s or more, or from the length you give as pausesFrom, with the afterWord that trims an untouched one), repeatedWords (said twice in a row, with the pause the edit plays between them, atJoin when a cut made it; fromWord/toWord name the first) unexplainedSound (speaking-level sound the transcript has no word for, often what is left of a take beside a cut) and heardNotInTranscript (words the scan read in what this part still plays that the transcript has no word for, such as a false start or a repeat it tidied away: where and how long they play on the version the part continues on, the words, and the words round them as the scan read them; they have no word index, so a cut of them is given in timeline seconds). These are evidence, not decisions: a pause can be a beat, a repeat emphasis, a sound a breath. Ranges your previous part staged on that version join this part's review (carriedForward). Cuts already handed to the editor keep their passage and note (heldForReview). \`description\` is your one-sentence summary for the editor.`,
+    `Save your decisions on an assembled version: cut, review or keep ranges, sorted and nonoverlapping. ${cutCoordinates} Cut ranges apply together; review stages a range for the editor; keep or omission retains it. Scarlet measures each retake, filler, pause and quoted production edge. An edge on sound moves a few frames onto silence, or onto the low point between two words said in one breath, and applies; an edge between named words said straight through, with no low point, goes where the transcript parts them and applies; a larger move narrows the cut and stages it, unless unsureJoins is cut. An edge Scarlet can't move out of sound stays held, and its held reason says what the join plays, what the passage plays if the cut is kept and, for a range given in seconds, the nearest quiet or low point either side and the words moving there keeps or removes. A pause's edge moves onto the quiet beside it. A retake cut with no quiet to start in, where the take resumes on the word the first take broke off on, starts where the first delivery of that word begins, matched on the sound of the two; nothing measured says how that join plays, so it is staged, unless unsureJoins is cut. A range that leaves kept words playing twice that way is placed as given, and the gate says from where a cut takes them out too. A short piece between cuts with a transcript word at room-tone level returns quietKeptWord with nearby measured sound in source seconds. Footage between separate removals stays in the timeline. \`gate\` lists changes to the measured plan with their evidence. Its ranges describe placement before the engine rounds to project frames. The returned timelineEdits describe the saved edits. A resumeWith quote the scan reads differently doesn't hold its cut: the cut is placed as given and its gate line says what the scan reads after it. A coaching cut whose production quote doesn't verify, or a cut whose join would play words twice or a kept word too quietly, or that removes a restart and runs on past it, taking words at its edge that nothing either side of the join says again, or a pause trim whose range holds sound at speaking level that no word explains or whose pause holds words the transcript doesn't have, is left out with its evidence in \`notSaved\`, and the rest of the part saves. Save a long pass in parts and continue on \`continueFrom\`. For a first dialogue pass, send at most ${FIRST_CUT_BATCH_SIZE} nearby cut or review decisions as soon as they are ready, with any keep or protected ranges they depend on. The gate reports an applied cut whose edge sits within ${SPEECH_BESIDE_EDGE} s of the sound it removes, since the picture can show a word starting that the sound has not reached; whether that needs the editor is yours to judge. Each applied retake or coaching cut is listed with removes and plays: the words it takes out and its join as the viewer hears it. What Scarlet changed on its own comes back with why: \`stagedForEditor\` (confident cuts that wait for the editor), \`onFrames\` (edges put on whole frames), \`droppedFromReview\` (an earlier part's staged cuts whose footage a later edit broke up) and \`heldCutsStay\` (cuts not saved because, sent with unsureJoins cut, they would have replaced a staged cut held for its join with other edges Scarlet couldn't place either). For a requested crossfade, \`joinCrossfades\` reports how many joins were faded and why any stayed straight. The result also lists what this part still plays, each thing once per pass, at \`at\` on continueFrom: keptSilences (${SILENCE_LEFT_SECONDS} s or more without words that no decision covers, the silences dialogue_check_repeats lists, or from the length you last gave it as silencesFrom, with the afterWord that trims an untouched one), keptPauses (the longest thirty of ${PAUSE_FLOOR_SECONDS} s or more, or from the length you give as pausesFrom, with the afterWord that trims an untouched one), repeatedWords (said twice in a row, with the pause the edit plays between them, atJoin when a cut made it; fromWord/toWord name the first), shortPieces (a stretch under ${SHORT_PIECE_SECONDS} s left between two cuts of one recording, with plays, before, after, cutBefore and cutAfter, so you can cut it with the waits either side or restore one of the cuts), unexplainedSound (speaking-level sound the transcript has no word for, often what is left of a take beside a cut) and heardNotInTranscript (words the scan read in what this part still plays that the transcript has no word for, such as a false start or a repeat it tidied away: where and how long they play on the version the part continues on, the words, and the words round them as the scan read them; they have no word index, so a cut of them is given in timeline seconds). These are evidence, not decisions: a pause can be a beat, a repeat emphasis, a sound a breath. Ranges your previous part staged on that version join this part's review (carriedForward). Cuts already handed to the editor keep their passage and note (heldForReview). \`description\` is your one-sentence summary for the editor.`,
     { version: z.string(), description: z.string().min(1), crossfadeFrames, pace: paceInput, breath: breathInput("fromWord/toWord or removeRepeat", "The gate names any found, either way."), unsureJoins: unsureJoinsInput, noteIds: z.array(z.string()).optional(),
       range: z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().positive() }).optional().describe("Requested TIMELINE range if only part of the edit is in scope"),
       only: z.enum(["pause", "filler", "retake", "coaching"]).optional().describe("For a request limited to one type of removal. Omit for a full dialogue pass."),
@@ -312,7 +325,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
         async () => only && only !== "pause" ? [] : await passedSilences(tl, plan.kept, all, range)
           .catch(without("failed to find the silences this part keeps", [])),
         () => passedLeftovers(tl, plan.kept, all, range, pausesFrom)
-          .catch(without("failed to read what this part still plays", { pauses: [], repeats: [], gaps: [] })));
+          .catch(without("failed to read what this part still plays", { pauses: [], repeats: [], gaps: [], transcripts: new Map<string, TranscriptWord[]>() })));
       // A save that fails still waits for them, so its result says what they went without.
       const result = await client.submitDialogueCuts(projectId, { fromVersion: tl.version, description, cuts: all, range: scope, kept: plan.kept, crossfadeFrames,
         taskId, author, noteIds }).finally(() => leftBehind);
@@ -351,7 +364,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
       const repeats = (only && only !== "retake" && only !== "filler" ? [] : left.repeats).filter(r => fresh("repeat", r.mediaId, r.source));
       // The lists read at once: each lists its own kind of thing once per pass (`listed`), and they share one read of the
       // version the pass continues on (`timelineAt`).
-      const [quiet, { kept, keptPauses, repeatedWords, unexplainedSound }, [heardNotInTranscript, audioRecheck]] = await together(
+      const [quiet, { kept, keptPauses, repeatedWords, unexplainedSound }, [heardNotInTranscript, shortPieces, audioRecheck]] = await together(
         async () => localPauses || only === "pause" || only === "filler" ? [] : await keptQuietPhrases(tl, continueFrom, decided, scope ?? spanOf(decided))
           .catch(without("failed to place the quiet phrases the part still plays", [])),
         async () => {
@@ -380,21 +393,33 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
           })().catch(without(`failed to place the kept silences on ${continueFrom}`, { kept: [], keptPauses: [], repeatedWords: [], unexplainedSound: [] }));
         },
         async () => {
+          const part = scope ?? spanOf(decided);
+          // The part's stretch on the version it continues on: its applied cuts closed up that much of it.
+          const removed = result.changes.some(c => c.intent !== "suggestion" && c.state === "approved")
+            ? all.reduce((n, d) => d.review ? n : n + Math.max(0, Math.min(d.end, part.end) - Math.max(d.start, part.start)), 0) : 0;
+          const partAfter = { start: part.start, end: Math.max(part.start, part.end - removed) };
           // Words the scan read in what this part still plays that the transcript has no word for. A false start the
           // transcript tidied away has no index to cut it by and is in none of the lists above: a pass left “And it just
           // feel, uh” playing before “It just feels like”, and “a conscious conscientious objector”, having cut by a
           // transcript that read “And it just feels like” and “a conscientious objector” (2026-11-19).
           const heard = only && only !== "retake" && only !== "filler" ? [] : await (async () => {
             const after = await timelineAt(continueFrom, tl);
-            const part = scope ?? spanOf(decided);
-            // The part's stretch on the version it continues on: its applied cuts closed up that much of it.
-            const removed = result.changes.some(c => c.intent !== "suggestion" && c.state === "approved")
-              ? all.reduce((n, d) => d.review ? n : n + Math.max(0, Math.min(d.end, part.end) - Math.max(d.start, part.start)), 0) : 0;
-            const found = await getPerception().heardOnlyOn(after, { start: part.start, end: Math.max(part.start, part.end - removed) });
+            const found = await getPerception().heardOnlyOn(after, partAfter);
             return found.filter(h => fresh("heard", h.mediaId, h.source.start)).slice(0, 30)
               .map(h => candidate({ at: h.start, seconds: round2(h.end - h.start), text: h.text, context: h.context,
                 mediaId: h.mediaId, sourceSeconds: [h.source.start, h.source.end] }, "heard", h.mediaId, h.source.start));
           // An extra reading: a version or an engine that can't give it leaves the receipt as it was.
+          })().catch(() => []);
+          // Short pieces left stranded between two cuts on the continued timeline, under the pace the pass last gave the
+          // repeat check (piecesUnder), so this list and the closing check agree on what a stutter piece is.
+          const short = await (async () => {
+            if (!decided.length) return [];
+            const after = await timelineAt(continueFrom, tl);
+            const under = piecesAsked() ?? SHORT_PIECE_SECONDS;
+            const margin = { start: Math.max(0, partAfter.start - under), end: partAfter.end + under };
+            return shortPiecesInPart(after, margin, left.transcripts, under)
+              .filter(p => fresh("shortPiece", p.mediaId, p.source.start)).slice(0, 30)
+              .map(({ source, ...p }) => candidate(p, "shortPiece", p.mediaId, source.start));
           })().catch(() => []);
           // The repeat check comes after those words: where it reads a language from the scan, it saves pages they'd read.
           const recheck = checkedVersion() === tl.version || task?.repeatAudit?.version === tl.version
@@ -403,7 +428,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
               return { version: continueFrom, error: error.message, next: "The edit was saved. Retry dialogue_check_repeats on this version." };
             })
             : undefined;
-          return [heard, recheck] as const;
+          return [heard, short, recheck] as const;
         });
       const maxChars = caps.resultChars ?? DEFAULT_RESULT_CHARS;
       const gate = dialogueGate(plan);
@@ -414,6 +439,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
       const keptOut = kept.slice();
       const pausesOut = keptPauses.slice();
       const repeatsOut = repeatedWords.slice();
+      const shortOut = shortPieces.slice();
       const soundOut = unexplainedSound.slice();
       const heardOut = heardNotInTranscript.slice();
       const quietOut = quiet.slice();
@@ -426,6 +452,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
         ...(keptOut.length && { keptSilences: keptOut }),
         ...(pausesOut.length && { keptPauses: pausesOut.map(c => c.item) }),
         ...(repeatsOut.length && { repeatedWords: repeatsOut.map(c => c.item) }),
+        ...(shortOut.length && { shortPieces: shortOut.map(c => c.item) }),
         ...(soundOut.length && { unexplainedSound: soundOut.map(c => c.item) }),
         ...(heardOut.length && { heardNotInTranscript: heardOut.map(c => c.item) }),
         ...(quietOut.length && { keptQuietPhrases: quietOut.map(c => c.item) }),
@@ -458,6 +485,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
           ["unexplainedSound", soundOut],
           ["keptSilences", keptOut],
           ["keptQuietPhrases", quietOut],
+          ["shortPieces", shortOut],
           ["repeatedWords", repeatsOut],
           ["heardNotInTranscript", heardOut],
         ];
@@ -470,7 +498,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
           if (JSON.stringify(receipt).length <= maxChars) break;
         }
       }
-      for (const list of [pausesOut, repeatsOut, soundOut, heardOut, quietOut]) {
+      for (const list of [pausesOut, repeatsOut, shortOut, soundOut, heardOut, quietOut]) {
         for (const entry of list) listed.add(entry.key);
       }
       return json(receipt);

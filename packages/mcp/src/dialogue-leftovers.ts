@@ -4,10 +4,10 @@
  * restart it missed and a word doubled across one of its own joins all went unseen until the editor played the cut.
  * Scarlet reports them; the model decides.
  */
-import { adjacentRepeatCandidates, normalizeTranscriptToken } from "@scarlet/shared";
-import type { TimeRange, TranscriptWord } from "@scarlet/timeline";
+import { adjacentRepeatCandidates, normalizeTranscriptToken, SHORT_PIECE_SECONDS } from "@scarlet/shared";
+import { clipEnd, type MediaClip, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 import type { TimelineWord } from "./timeline-perception.js";
-import { isTag, round2, round3 } from "./analysis.js";
+import { audibleClipsByTrack, isTag, round2, round3 } from "./analysis.js";
 
 /**
  * Under this, word to word, a gap is the rhythm of speech and not a pause, so it is never listed. Which pauses are worth
@@ -52,6 +52,22 @@ export interface RepeatedWords {
 export interface KeptGap { mediaId: string; source: TimeRange; after: string; before: string }
 /** The shortest stretch between two kept words worth a reading: a syllable. */
 const KEPT_GAP_SECONDS = 0.12;
+
+export interface PartShortPiece {
+  /** Timeline range on the version the part continues on. */
+  from: number;
+  to: number;
+  seconds: number;
+  mediaId: string;
+  source: TimeRange;
+  plays: string;
+  fromWord?: number;
+  toWord?: number;
+  before: string;
+  after: string;
+  cutBefore: number;
+  cutAfter: number;
+}
 
 const endsSentence = (text: string) => /[.?!]["'”’)\]]*$/u.test(text.trim());
 
@@ -113,8 +129,9 @@ export function partLeftovers(words: readonly TimelineWord[], cuts: readonly Tim
     const found = repeatLengths(i).find(n => {
       const last = heard[i + n - 1]!, next = heard[i + n]!;
       if (next.start - last.end - cutIn(last.end, next.start) >= REPEAT_WITHIN) return false;
-      // "…it. It…" ends one sentence and starts the next.
-      if (n === 1 && endsSentence(heard[i]!.text)) return false;
+      // “…it. It…” ends one sentence and starts the next — unless a cut sits between them and joined the two words
+      // (“Grok 4.7. Yeah. ‖ Yeah, so if you look right here”).
+      if (n === 1 && endsSentence(heard[i]!.text) && cutIn(last.end, next.start) <= 1e-6) return false;
       // The first saying is one unbroken run of a recording, so its words can be named.
       return heard.slice(i, i + n).every((w, k) => w.mediaId === heard[i]!.mediaId && w.index === heard[i]!.index + k);
     });
@@ -127,4 +144,62 @@ export function partLeftovers(words: readonly TimelineWord[], cuts: readonly Tim
     i += found;
   }
   return { pauses, repeats, gaps };
+}
+
+/**
+ * Pieces under `under` seconds left playing between two cuts of the same recording inside `range` on `tl`.
+ * Mirrors `piecesLeft` in dialogueRepeatAudit so a pass sees a stutter piece as soon as its part creates one,
+ * instead of only in the closing repeat check.
+ */
+export function shortPiecesInPart(tl: Timeline, range: TimeRange,
+  transcripts: ReadonlyMap<string, readonly TranscriptWord[]>, under = SHORT_PIECE_SECONDS): PartShortPiece[] {
+  const found: PartShortPiece[] = [];
+  const seen = new Set<string>();
+  const wordsIn = (run: readonly MediaClip[]) => {
+    const words = transcripts.get(run[0]!.mediaId);
+    if (!words?.length) return [] as Array<{ text: string; index: number }>;
+    const start = run[0]!.sourceIn, end = run.at(-1)!.sourceOut;
+    const out: Array<{ text: string; index: number }> = [];
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i]!;
+      if (w.end <= w.start || isTag(w.text) || !w.text.trim()) continue;
+      const mid = (w.start + w.end) / 2;
+      if (mid >= start && mid < end) out.push({ text: w.text.trim(), index: i });
+    }
+    return out;
+  };
+  for (const clips of audibleClipsByTrack(tl)) {
+    const sorted = [...clips].sort((a, b) => a.timelineIn - b.timelineIn);
+    const runs: MediaClip[][] = [];
+    for (const clip of sorted) {
+      const run = runs.at(-1), last = run?.at(-1);
+      if (run && last && last.mediaId === clip.mediaId && (last.speed ?? 1) === (clip.speed ?? 1) &&
+          Math.abs(clip.timelineIn - clipEnd(last)) < 1e-3 && Math.abs(clip.sourceIn - last.sourceOut) < 1e-3) run.push(clip);
+      else runs.push([clip]);
+    }
+    const cutBetween = (a: MediaClip[] | undefined, b: MediaClip[] | undefined) => !!a && !!b && a.at(-1)!.mediaId === b[0]!.mediaId &&
+      b[0]!.timelineIn <= clipEnd(a.at(-1)!) + 1e-3 && Math.abs(b[0]!.sourceIn - a.at(-1)!.sourceOut) >= 1e-3;
+    runs.forEach((run, i) => {
+      const before = runs[i - 1], after = runs[i + 1];
+      const from = run[0]!.timelineIn, to = clipEnd(run.at(-1)!);
+      if (to - from >= under - 1e-6 || to <= range.start || from >= range.end) return;
+      if (!cutBetween(before, run) || !cutBetween(run, after)) return;
+      const mediaId = run[0]!.mediaId;
+      const source = { start: round3(run[0]!.sourceIn), end: round3(run.at(-1)!.sourceOut) };
+      const key = `${mediaId}:${round2(source.start)}:${round2(source.end)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const played = wordsIn(run);
+      found.push({
+        from: round3(from), to: round3(to), seconds: round2(to - from), mediaId, source,
+        plays: played.map(w => w.text).join(" "),
+        ...(played.length && { fromWord: played[0]!.index, toWord: played.at(-1)!.index }),
+        before: wordsIn(before!).slice(-6).map(w => w.text).join(" "),
+        after: wordsIn(after!).slice(0, 6).map(w => w.text).join(" "),
+        cutBefore: round2(run[0]!.sourceIn - before!.at(-1)!.sourceOut),
+        cutAfter: round2(after![0]!.sourceIn - run.at(-1)!.sourceOut),
+      });
+    });
+  }
+  return found.sort((a, b) => a.from - b.from);
 }

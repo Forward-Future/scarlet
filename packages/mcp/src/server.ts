@@ -331,11 +331,13 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     return change;
   }
 
+  const writeFile = async (path: string, data: Uint8Array) => writeArtifact(await artifactDir(), path, data);
+
   // Register tools in exact canonical order.
   const inspection = registerInspectionTools({
     tool, client, projectId: ctx.projectId, taskId: ctx.taskId, task: ctx.task, caps, listener: ctx.listener,
     fetchImpl, session, errors, scanScopes, waitLeft, readPassage: revision.readPassage, postEvent,
-    writeArtifact: async (path, data) => writeArtifact(await artifactDir(), path, data),
+    writeArtifact: writeFile,
   });
 
   const proposePipeline = createProposePipeline({
@@ -353,14 +355,14 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     task: ctx.task, author: ctx.author, caps, joinWaitMs: ctx.joinWaitMs, evidence, session,
     errors, proposePipeline, scanScopes, stagedState, dialogueOperation, waitLeft, finished,
     readPassage: revision.readPassage, postEvent, prepareReview: id => reviewTools.prepareReview(id),
-    getPerception: () => perception,
+    writeArtifact: writeFile, getPerception: () => perception,
   });
 
   const reviewTools = registerDialogueReviewTools({
     tool, client, projectId: ctx.projectId, taskId: ctx.taskId, task: ctx.task, author: ctx.author,
     caps, session, errors, revision, stagedState, localPausesMode,
     rendersDone: inspection.rendersDone, inspect: inspection.inspect, postEvent,
-    getPerception: () => perception,
+    writeArtifact: writeFile, getPerception: () => perception,
   });
 
   // The only close handler: a second assignment would replace this one.
