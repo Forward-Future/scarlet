@@ -77,7 +77,6 @@
  *   POST   /tasks/:taskId/cancel?queuedOnly=1&withdrawn=1 → { task: Task } (both optional; withdrawn: the editor took the words back, so no rule is learned from them)
  *   POST   /tasks/:taskId/retry  RunChoice?              → { task: Task } (resume an interrupted request or retry a failure, on the model given)
  *   POST   /tasks/:taskId/answer    { text }             → { task: Task }     (human answers an agent question)
- *   POST   /tasks/:taskId/notes     { text }             → { task: Task }     (the editor adds a note to a running request; 409 task_finished once it ended)
  *   GET    /projects/:id/usage?by=thread|task|agent|model|day → UsageResponse  (agent token usage, newest group first)
  *   GET    /usage?by=project|thread|task|agent|model|day    → UsageResponse  (all projects, including trashed ones not yet removed)
  *   GET    /under-way                                    → { edits, queued, exports }  (what quitting would stop, in every project)
@@ -801,18 +800,6 @@ export const TaskAttachment = z.object({
 });
 export type TaskAttachment = z.infer<typeof TaskAttachment>;
 
-/**
- * A note the editor added to a request while Scarlet worked on it, in their words. The run hears it at the top of its
- * next Scarlet tool result, or with its instruction when it picks up again (`heardAt` once it has).
- */
-export const TaskNote = z.object({
-  id: Id,
-  text: z.string().trim().min(1).max(4000),
-  at: z.string().datetime(),
-  heardAt: z.string().datetime().optional(),
-});
-export type TaskNote = z.infer<typeof TaskNote>;
-
 export const Task = z.object({
   id: Id,
   projectId: Id,
@@ -971,8 +958,6 @@ export const Task = z.object({
   sessionCarriesOn: z.boolean().optional(),
   /** Pending question from the agent, if waiting_for_user. */
   question: z.string().nullable().default(null),
-  /** Notes the editor added while the request ran, oldest first. A resumed attempt carries them on. */
-  notes: z.array(TaskNote).max(50).optional(),
   /** Where the editor can hear the updated passage while answering a question about a staged cut. */
   cutConflict: z.object({ version: Id, range: TimeRange.optional(), changeId: Id.optional(), index: z.number().int().nonnegative().optional(),
     answered: z.literal(true).optional(), retried: z.literal(true).optional(),

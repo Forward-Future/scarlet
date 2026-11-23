@@ -39,8 +39,7 @@ const it = partedIt(vitestIt);
 /** The message box has its own tests. Here it records what the workspace hands it, and draws the tray it is given. */
 type BoxProps = { onCreated?(task: { id: string }): void; onSent?(): void; tray?: React.ReactNode; targetTag?: string; targetTime?: number; targetIsPoint?: boolean; onClearTarget?(): void; onRestoreTarget?(): boolean;
   messageClock?: import("../lib/messageTimestamps").MessageClock; pausedAt?: import("../components/agent/Composer").PausedAt; aimTime?: number;
-  rewording?: { id: string; text: string; onChange(text: string): void; onSave(text: string, skillIds?: string[]): Promise<void>; onCancel(): void };
-  noteTo?: string };
+  rewording?: { id: string; text: string; onChange(text: string): void; onSave(text: string, skillIds?: string[]): Promise<void>; onCancel(): void } };
 const composer = vi.hoisted(() => ({ props: undefined as BoxProps | undefined }));
 vi.mock("../components/agent/Composer", () => ({ Composer: (props: BoxProps) => { composer.props = props; return props.tray ?? null; } }));
 vi.mock("../components/agent/AgentChip", async importOriginal => ({
@@ -7149,8 +7148,7 @@ it("shows active time in the band before Stop this edit, with one line of what t
   expect(run.closest(".unit")!.querySelector(".unit-msg > .unit-tokens > .run-work-time")?.textContent).toMatch(/^\d+m \d+s$/);
   expect(editActionsOf("task_running").getAttribute("aria-label")).toBe(`Stop this edit: ${requestTextFor("task_running")}`);
   expect(run.closest(".unit")!.querySelector(".unit-msg")!.lastElementChild).toBe(editActionsOf("task_running").closest(".unit-actions"));
-  // At the line's right is only Add a note: Pause and Stop are in the band.
-  expect(run.querySelector(".req-now .req-right")!.textContent).toBe("Add a note");
+  expect(run.querySelector(".req-now .req-right")).toBeNull();
   expect(run.closest(".unit")!.querySelector(".unit-ring")).toBeNull();
   // It is the only line: what Scarlet did before this moment isn't listed under it, and steps carry no clock time.
   expect(run.querySelectorAll(".req-row").length).toBe(1);
@@ -12668,85 +12666,4 @@ it("stays within For you when stepping with arrow keys from kept or rejected For
   await act(async () => {});
   await press("ArrowUp");
   expect(openTitle()).toBe("captions");
-});
-
-/** A note to the request Scarlet is on. */
-const addNoteLink = () => runOf("task_running").querySelector<HTMLButtonElement>(".req-now .req-right .req-add-note");
-const lineNow = () => runOf("task_running").querySelector('.req-now [role="status"]')?.textContent;
-const noteRows = () => [...runOf("task_running").querySelectorAll(".req-notes > .req-note")].map(n => [n.querySelector(".req-note-tag")?.textContent, wordsOf(n)?.replace(/^Note/, "")]);
-const withNote = (text: string, at = new Date().toISOString()) => event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_running"
-  ? { ...t, notes: [...t.notes ?? [], { id: `tnt_${(t.notes?.length ?? 0) + 1}`, text, at }] } : t) }));
-
-it("leaves the box a new edit until Add a note, at the right of what Scarlet is doing, aims it at that request as a Note", async () => {
-  await show();
-  // At rest the box answers Scarlet's question, as it always has; nothing about the running request is in it.
-  expect(boxTag()).toBe("Answer");
-  expect(composer.props!.noteTo).toBeUndefined();
-  expect(addNoteLink()!.textContent).toBe("Add a note");
-  expect(addNoteLink()!.closest(".req-now")).not.toBeNull();
-  await act(async () => useUiStore.getState().setAgentDraft("Actually, keep the story in the intro."));
-  await click(addNoteLink()!);
-  // The box is tagged Note and its words go to that run. What was being written comes along.
-  expect(boxTag()).toBe("Note");
-  expect(composer.props!.noteTo).toBe("task_running");
-  expect(useUiStore.getState().agentDraft).toBe("Actually, keep the story in the intro.");
-  expect(container.querySelector(".simple-target")?.textContent ?? "").not.toContain("Answering");
-  // × (or Backspace in the empty box) makes it a new edit again, and ⌘Z puts the tag back.
-  await act(async () => composer.props!.onClearTarget!());
-  expect([boxTag(), composer.props!.noteTo]).toEqual([undefined, undefined]);
-  expect(useUiStore.getState().agentDraft).toBe("Actually, keep the story in the intro.");
-  await act(async () => useUiStore.getState().setAgentDraft(""));
-  await act(async () => { composer.props!.onRestoreTarget!(); });
-  expect([boxTag(), composer.props!.noteTo]).toEqual(["Note", "task_running"]);
-  // Sent, the box is free again: a new edit, or the question that waits.
-  await act(async () => composer.props!.onSent!());
-  expect(composer.props!.noteTo).toBeUndefined();
-  expect(boxTag()).not.toBe("Note");
-});
-
-it("shows a sent note under the request's opening sentence, and says Scarlet is reading it until its next call", async () => {
-  data = { ...data, taskEvents: { ...data.taskEvents, task_running: [...data.taskEvents.task_running ?? [],
-    { id: "ev_aim", taskId: "task_running", at: new Date(Date.now() - 60_000).toISOString(), type: "log", data: { kind: "editor_progress" },
-      text: "I’ll tighten the takes, take out the restarts and long pauses, and flag the cuts that need your ear." }] } };
-  useProjectStore.setState({ current: data });
-  await show();
-  const before = lineNow();
-  expect(before).not.toBe("Reading your note");
-  await withNote("Actually, keep the story in the intro.");
-  // Under the opening sentence: a small Note tag and the editor's words.
-  const notes = runOf("task_running").querySelector(".req-notes")!;
-  expect(notes.previousElementSibling?.classList.contains("req-lead")).toBe(true);
-  expect(notes.nextElementSibling?.classList.contains("req-now")).toBe(true);
-  expect(noteRows()).toEqual([["Note", "Actually, keep the story in the intro."]]);
-  expect(lineNow()).toBe("Reading your note");
-  // Scarlet's next call takes the line, as any call does.
-  await event(d => ({ ...d, taskEvents: { ...d.taskEvents, task_running: [...d.taskEvents.task_running ?? [],
-    { id: "ev_after", taskId: "task_running", at: new Date(Date.now() + 1000).toISOString(), type: "log", data: { kind: "editor_progress" }, text: "Keeping the intro story whole." }] } }));
-  expect(lineNow()).toBe("Keeping the intro story whole.");
-  expect(noteRows()).toEqual([["Note", "Actually, keep the story in the intro."]]);
-});
-
-it("drops the tag from an empty box once the request ends, and keeps it on words written, which then go as a new edit", async () => {
-  await show();
-  await click(addNoteLink()!);
-  expect(boxTag()).toBe("Note");
-  await act(async () => useUiStore.getState().setAgentDraft("Keep the laugh at 2:10."));
-  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_running" ? { ...t, state: "done" as const, finishedAt: new Date().toISOString() } : t) }));
-  // The words were written for that request: they keep their tag, and the box sends them as a request of their own
-  // when the run has ended (the message box's own tests send it).
-  expect([boxTag(), composer.props!.noteTo]).toEqual(["Note", "task_running"]);
-  await act(async () => useUiStore.getState().setAgentDraft(""));
-  expect([boxTag(), composer.props!.noteTo]).toEqual([undefined, undefined]);
-});
-
-it("follows the run to the attempt that carries it on after a quit", async () => {
-  await show();
-  await click(addNoteLink()!);
-  const now = new Date().toISOString();
-  await event(d => {
-    const running = d.tasks.find(t => t.id === "task_running")!;
-    return { ...d, tasks: [...d.tasks.map(t => t.id === "task_running" ? { ...t, state: "cancelled" as const, retryTaskId: "task_running_2", finishedAt: now } : t),
-      { ...running, id: "task_running_2", resumeRootId: "task_running", createdAt: now, startedAt: now }] };
-  });
-  expect([boxTag(), composer.props!.noteTo]).toEqual(["Note", "task_running_2"]);
 });
