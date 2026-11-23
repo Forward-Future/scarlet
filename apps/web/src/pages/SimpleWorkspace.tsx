@@ -59,6 +59,7 @@ import { WorkspaceComposer } from "./simple/WorkspaceComposer";
 import { SimpleHeader } from "./simple/SimpleHeader";
 import { TranscriptRail } from "./simple/TranscriptRail";
 import { savedRewording, saveRewording } from "./simple/rewordingStorage";
+import { savedOpenLists, saveOpenLists } from "./simple/openListsStorage";
 import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError } from "./simple/ReviewCards";
 import { TimelineWorking } from "../components/review/TimelineWorking";
 import { Turn } from "./simple/Turn";
@@ -155,7 +156,14 @@ export function SimpleWorkspace() {
   // The request the editor went to, and an edit of it waiting to play once its markers load.
   const [focus, setFocus] = useState<{ threadId: string; changeId?: string; spot?: number; single?: boolean }>();
   // The list each request has open in the chat: every edit, or just the ones that need the editor. ↑ and ↓ read it.
-  const [lists, setLists] = useState<Record<string, OpenList>>({});
+  // They are kept across a restart, so the chat comes back as the editor left it.
+  const [lists, setLists] = useState<Record<string, OpenList>>(() => savedOpenLists(current.id));
+  const listsOf = useRef(current.id);
+  useEffect(() => {
+    if (listsOf.current === current.id) return saveOpenLists(current.id, lists);
+    listsOf.current = current.id;
+    setLists(savedOpenLists(current.id));
+  }, [current.id, lists]);
   // One list of every edit is open at a time, so two "Hide" links never stand for one timeline: opening another
   // request's closes it. The list of what needs the editor is a review list, and leaves the others as they are.
   const listOf = (threadId: string): PassList => [lists[threadId], next => setLists(all => {

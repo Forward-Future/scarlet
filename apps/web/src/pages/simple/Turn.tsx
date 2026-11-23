@@ -202,7 +202,12 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   // went in leaves the thread's edits, and the list of those still waiting on the editor stays open: their place in
   // the chat must not go with the calls (2026-11-16).
   const passLine = summed && hasRows;
-  useEffect(() => { if (!passLine) passList[1](open => open === "need" && hasRows ? open : undefined); }, [passLine]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Only when the line goes: a list kept open across a restart is drawn before its rows have loaded, and stays open.
+  const hadPassLine = useRef(passLine);
+  useEffect(() => {
+    if (hadPassLine.current && !passLine) passList[1](open => open === "need" && hasRows ? open : undefined);
+    hadPassLine.current = passLine;
+  }, [passLine]); // eslint-disable-line react-hooks/exhaustive-deps
   // Each press starts clean: the last failure's line doesn't stay under a request once the same action works.
   const attempt = (run: string, job: Promise<unknown>) => { setFailed(undefined); void job.catch(e => setFailed({ run, text: errorMessage(e) })); };
   // Nor once the request has moved on by itself: a Stop refused because the run had just ended has nothing left to press.

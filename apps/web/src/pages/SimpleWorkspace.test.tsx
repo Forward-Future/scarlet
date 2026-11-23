@@ -422,6 +422,27 @@ it("counts an earlier request's edit this request found a doubt about as one tha
   localStorage.clear();
 });
 
+it("keeps the list a request had open across a restart, so a request about one edit stays under its row", async () => {
+  appliedEdits();
+  await showFolded();
+  expect(reviewModes(turnFor("chg_approved_2"))).toEqual([["For you", "true"], ["See all", "false"]]);
+  await openEdits();
+  expect(reviewModes(turnFor("chg_approved_2"))).toEqual([["For you", "false"], ["See all", "true"]]);
+  // Scarlet restarts: the chat is drawn again from nothing, and See all is still open.
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await showFolded();
+  await act(async () => {});
+  expect(reviewModes(turnFor("chg_approved_2"))).toEqual([["For you", "false"], ["See all", "true"]]);
+  // Back on For you, a restart leaves it there.
+  await click(turnFor("chg_approved_2").querySelector(".simple-pass-need")!);
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await showFolded();
+  await act(async () => {});
+  expect(reviewModes(turnFor("chg_approved_2"))).toEqual([["For you", "true"], ["See all", "false"]]);
+});
+
 it("lists a thread's edits once, numbered, and opens one with its decisions under the player", async () => {
   const edits = appliedEdits();
   await showFolded();
