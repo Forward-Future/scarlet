@@ -34,6 +34,20 @@ it("draws Before and After on one scale, so a level change shows as a change in 
   expect(waveformScale(new Float32Array([.01]))).toBe(46 / .25);
 });
 
+it("draws a clip's volume keyframes, so music dipped under speech dips on the timeline", () => {
+  const wave = { mediaId: "bed", from: 0, to: 4, peaks: [.5, .5, .5, .5], rms: [.25, .25, .25, .25] };
+  // An 18 dB dip over the middle two seconds, the way duckUnderSpeech sets it, on a clip at 0.8 starting at 10 s.
+  const volumeKeyframes = [{ time: 0, db: 0, ease: "linear" as const }, { time: 1, db: -18, ease: "linear" as const },
+    { time: 3, db: -18, ease: "linear" as const }, { time: 4, db: 0, ease: "linear" as const }];
+  const span = { id: "bed", start: 10, end: 14, sourceIn: 0, speed: 1, gain: .8, volumeKeyframes, fadeIn: 0, fadeOut: 0 };
+  const { peaks, rms } = waveformBars([span], new Map([["bed", wave]]), 10, 4, 8);
+  const dipped = .4 * 10 ** (-18 / 20);
+  // Bars sit at their middle: the ramp down, the dip, the ramp back up.
+  expect([...peaks].map(p => +p.toFixed(4))).toEqual([.4 * 10 ** (-4.5 / 20), .4 * 10 ** (-13.5 / 20), dipped, dipped, dipped, dipped,
+    .4 * 10 ** (-13.5 / 20), .4 * 10 ** (-4.5 / 20)].map(p => +p.toFixed(4)));
+  expect(rms[3]).toBeCloseTo(.2 * 10 ** (-18 / 20));
+});
+
 it("answers a window from one read already that holds it as finely, and reads again only when it can't", async () => {
   // The engine's answer: one bucket per hundredth of a second, each the time it starts at.
   const read = vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to, points = 1000) => ({

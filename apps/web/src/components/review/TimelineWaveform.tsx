@@ -1,11 +1,11 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { clipEnd, timelineToSource, type MediaAsset, type Timeline } from "@scarlet/timeline";
+import { clipEnd, clipGainAt, timelineToSource, type MediaAsset, type MediaClip, type Timeline } from "@scarlet/timeline";
 import type { WaveformResponse } from "@scarlet/shared";
 import { originalClipAt } from "./thumbs";
 import { api } from "../../lib/client";
 import { useArrival, wavePhase } from "./laneLoading";
 
-type Span = { id: string; start: number; end: number; sourceIn: number; speed: number; gain: number; fadeIn: number; fadeOut: number; ingesting?: boolean };
+type Span = { id: string; start: number; end: number; sourceIn: number; speed: number; gain: number; volumeKeyframes?: MediaClip["volumeKeyframes"]; fadeIn: number; fadeOut: number; ingesting?: boolean };
 /**
  * scaleWith: another version on the same clock, such as the other side of a Before/After comparison.
  * Both share one scale, so a level change shows as a change in height instead of being normalized away.
@@ -48,7 +48,7 @@ function audioSpans({ source, timeline, media, original }: WaveformMedia, start:
       const out = clipEnd(clip);
       if (!asset || clip.timelineIn >= end || out <= start) continue;
       spans.push({ id: clip.mediaId, start: clip.timelineIn, end: out, sourceIn: clip.sourceIn,
-        speed: clip.speed, gain: clip.volume, fadeIn: clip.audioFadeIn, fadeOut: clip.audioFadeOut, ingesting: asset.status === "ingesting" });
+        speed: clip.speed, gain: clip.volume, volumeKeyframes: clip.volumeKeyframes, fadeIn: clip.audioFadeIn, fadeOut: clip.audioFadeOut, ingesting: asset.status === "ingesting" });
     }
   }
   return spans;
@@ -152,7 +152,8 @@ export function waveformBars(spans: Span[], waves: Map<string, WaveformResponse>
       }
       const mid = (a + b) / 2;
       const fade = Math.min(1, span.fadeIn ? (mid - span.start) / span.fadeIn : 1, span.fadeOut ? (span.end - mid) / span.fadeOut : 1);
-      const gain = span.gain * fade;
+      // The level the clip plays at here, its volume keyframes on top, such as music dipped under speech.
+      const gain = clipGainAt({ timelineIn: span.start, volume: span.gain, volumeKeyframes: span.volumeKeyframes }, mid) * fade;
       const amplitude = peak * gain;
       if (a > start + i * step || b < start + (i + 1) * step) {
         // Two clips meeting inside one pixel are consecutive, not twice as loud.
