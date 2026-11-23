@@ -6,7 +6,8 @@ import { buildThreads, threadEditList, type VersionSummary } from "@scarlet/shar
 import { api } from "../../lib/client";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { useProjectStore, type ProjectData } from "../../stores/project";
-import { rejectInstruction, revisionWord, ThreadAction, useThreadEdits } from "./ThreadEdits";
+import { rejectInstruction, ThreadAction } from "./ThreadEdits";
+import { revisionWord, useThreadEdits } from "./threadEditState";
 import type { Thread, ThreadEdit } from "@scarlet/shared";
 
 let root: Root;

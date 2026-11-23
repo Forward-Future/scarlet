@@ -26,6 +26,10 @@ import { AimTimecode, ComposerAim, type AimItem } from "./ComposerAim";
 import { AttachedFiles, NO_FILES, sendMarks } from "./ComposerAttachments";
 
 const timestampLabel = (time: number) => playbackClock(time).replace(/\.000$/, "");
+const lowerFirst = (text: string) => `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+/** The agent, model, effort and speed a note or a revision is given to: the run choice the box is set to. */
+const assignment = (run: NonNullable<ReturnType<typeof useAgentAvailability>["effective"]>) =>
+  ({ assignTo: agentTarget(run.agent, run.model), effort: run.effort, serviceTier: run.serviceTier });
 
 /** A focused request takes replies. The cut can take a timestamped note or a new project request. */
 /** `modelPicker={false}` leaves the model choice to the page, which shows it elsewhere. */
@@ -212,8 +216,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       const position = anchor && { ...requestPosition(anchor), ...stoppedAt() };
       // A revision takes no files, so one that carries some is a request in the thread, as a reply is.
       if (revising && !attachments) {
-        const task = await revise(revising.id, { text, skillIds, voiceTranscript, assignTo: agentTarget(effective.agent, effective.model),
-          effort: effective.effort, serviceTier: effective.serviceTier, ...(position && { position }) });
+        const task = await revise(revising.id, { text, skillIds, voiceTranscript, ...assignment(effective), ...(position && { position }) });
         recordEditReview(project.id, anchor, "revise");
         if (task) recordRevision(task);
         return true;
@@ -225,7 +228,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       // A note at a moment takes no files, so a message that carries some is a request about that moment.
       context = { skillIds, version: anchor.version ?? head, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, markedRange: anchor.markedRange, ...carried };
     } else if (anchor) {
-      const { task } = await createNote(project.id, { skillIds, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, text, voiceTranscript, version: anchor.version ?? head, assignTo: agentTarget(effective.agent, effective.model), effort: effective.effort, serviceTier: effective.serviceTier });
+      const { task } = await createNote(project.id, { skillIds, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, text, voiceTranscript, version: anchor.version ?? head, ...assignment(effective) });
       if (task) onCreated?.(task);
       return true;
     } else {
@@ -344,7 +347,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       if (voiceReword.current || replying || noteTo || !anchor || anchor.mediaId || !effective || carriesFiles) return await speech.handle(r);
       setBusy(true);
       try {
-        const { task } = await createVoiceNote(project.id, r.blob, { time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, version: anchor.version ?? head, assignTo: agentTarget(effective.agent, effective.model), effort: effective.effort, serviceTier: effective.serviceTier });
+        const { task } = await createVoiceNote(project.id, r.blob, { time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, version: anchor.version ?? head, ...assignment(effective) });
         if (task) onCreated?.(task);
         clearVoiceTarget(anchor);
       } catch (e) {
@@ -379,11 +382,13 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       setContext({ ...editTargetAt(firstTime, inputClock.version, inputClock.timeline, inputClock.mediaId), fromMessage: true });
     } else if (typedPoint) setContext(null);
   }, [value, firstTime, inputClock, typedPoint, sameClock, rewording, replying, aimsByText, setContext]);
-  const tagWords = targetTag && `${targetTag.charAt(0).toLowerCase()}${targetTag.slice(1)}`;
+  const tagWords = targetTag && lowerFirst(targetTag);
   // What the tag's message does, for its hover note: a cut or an edit is revised, a question answered, an edit replied to.
   const tagAct = !targetTag ? undefined : question && targetTag === "Answer" ? "Answering Scarlet’s question"
     : noteTo && targetTag === "Note" ? "Adding a note to the edit Scarlet is working on"
     : thread && targetTag === "Reply" ? "Replying to this edit" : `Revising ${tagWords === "whole edit" ? "the whole edit" : tagWords}`;
+  // What taking the tag off says it does instead.
+  const newEditInstead = tagAct && `Start a new edit instead of ${lowerFirst(tagAct)}`;
   const tag = rewording ? undefined : targetTag;
   // A stretch marked on the timeline's ruler rides with the message, beside the tag of the cut or edit it is aimed at.
   const marked = rewording ? undefined : markedRangeOf(context);
@@ -402,12 +407,12 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const exactTime = targetTime !== undefined ? targetTime
     : displayAnchor && placeTag && (placeTag.endsWith(` at ${clock(displayAnchor.time)}`) || placeTag === `At ${clock(displayAnchor.time)}`)
       ? displayAnchor.time : undefined;
+  const exactClock = exactTime !== undefined ? playbackClock(exactTime) : displayAnchor ? playbackClock(displayAnchor.time) : undefined;
   const placeDisplay: ReactNode = (() => {
     if (!placeTag) return undefined;
     if (targetIsPoint) {
       const time = placeTag.replace(/^At /, "");
-      const exact = exactTime !== undefined ? playbackClock(exactTime) : displayAnchor ? playbackClock(displayAnchor.time) : undefined;
-      return <><span className="composer-aim-verb">At</span> <AimTimecode key={`pt:${placeTag}:${exact ?? ""}`} value={time} precise={exact} /></>;
+      return <><span className="composer-aim-verb">At</span> <AimTimecode key={`pt:${placeTag}:${exactClock ?? ""}`} value={time} precise={exactClock} /></>;
     }
     if (/^(?:Cut|Edit) \d+$/.test(placeTag)) {
       return aimTime !== undefined
@@ -418,7 +423,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     if (timed) {
       const noun = timed[1]!;
       const time = stopped ?? timed[2]!;
-      const exact = stopped && pausedAt ? playbackClock(pausedAt.time) : exactTime !== undefined ? playbackClock(exactTime) : displayAnchor ? playbackClock(displayAnchor.time) : undefined;
+      const exact = stopped && pausedAt ? playbackClock(pausedAt.time) : exactClock;
       return <><span className="composer-aim-verb">{noun}</span> <AimTimecode key={`edit:${placeTag}:${exact ?? time}`} value={time} precise={exact} /></>;
     }
     return <span className="composer-aim-verb">{placeTag}</span>;
@@ -441,7 +446,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     name: placeName!,
     displayName: placeDisplay,
     title: `About ${placeName}`,
-    clearLabel: targetIsPoint ? `Take “${placeTag}” off: the message is about the whole video` : `Start a new edit instead of ${tagAct!.charAt(0).toLowerCase()}${tagAct!.slice(1)}`,
+    clearLabel: targetIsPoint ? `Take “${placeTag}” off: the message is about the whole video` : newEditInstead!,
     onClear: takeOffTarget,
   } : undefined;
   const saveLabel = rewording ? "Save the new words" : sendLabel;
@@ -514,7 +519,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
             <span className="composer-tag-name">{wordTag}</span>
             {/* A spoken message stays where it was said until it is out: aiming the box elsewhere would drop it. */}
             <button type="button" className="composer-tag-clear" disabled={recording || heard}
-              aria-label={`Start a new edit instead of ${tagAct!.charAt(0).toLowerCase()}${tagAct!.slice(1)}`}
+              aria-label={newEditInstead}
               title={recording || heard ? "Waits until what you’re saying is sent" : "New edit instead"} onClick={takeOffTarget}><Icon name="x" size={10} /></button>
           </span>}
           <SkillCommandInput key={owner} id={inputId} inputRef={inputRef} value={value} skills={skills}
