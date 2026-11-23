@@ -33,8 +33,8 @@ export type UndoStep = {
   edit: EditRef & { single?: boolean };
 } | {
   kind: "revision";
-  /** "Reject" for a Reject edit, which asks Scarlet to put the edit back as a revision does. */
-  word?: "Reject";
+  /** "Reject" for a Reject edit, which asks Scarlet to put the edit back as a revision does; "Add" for a to-do's Add. */
+  word?: "Reject" | "Add";
   /** The request the revision went out as. */
   taskId?: string;
   /** The version a rejection made when the engine put the cut back itself, with no request: ⌘Z takes that version out. */

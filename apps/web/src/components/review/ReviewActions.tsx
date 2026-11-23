@@ -1,8 +1,12 @@
+import type { ReactNode } from "react";
 import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
 
-/** The same decisions and shortcuts for every edit: Revise (R) or Later (L), and Apply (A), Keep (K), or Done (D). */
-export function ReviewActions({ approve, revise, disabled, approvalDisabled, approveLabel = "Apply", approveKey = "A", reviseLabel = "Revise", reviseKey = "R" }: {
-  approve?: () => void; revise?: () => void; disabled?: boolean; approvalDisabled?: boolean;
+/**
+ * The same decisions and shortcuts for every edit: Revise (R) or Later (L), and Apply (A), Keep (K), or Done (D).
+ * `lead` is a pill of the card's own before them, such as a to-do's Add (A).
+ */
+export function ReviewActions({ lead, approve, revise, disabled, approvalDisabled, approveLabel = "Apply", approveKey = "A", reviseLabel = "Revise", reviseKey = "R" }: {
+  lead?: ReactNode; approve?: () => void; revise?: () => void; disabled?: boolean; approvalDisabled?: boolean;
   approveLabel?: string; approveKey?: string; reviseLabel?: string; reviseKey?: string;
 }) {
   useHotkeys(event => {
@@ -12,6 +16,7 @@ export function ReviewActions({ approve, revise, disabled, approvalDisabled, app
     if (action) { event.preventDefault(); action(); }
   });
   return <div className="review-actions">
+    {lead}
     {revise && <button type="button" className="btn-ghost" data-key={reviseKey} data-log-control={reviseKey === "L" ? "defer-todo" : "revise-edit"} aria-keyshortcuts={reviseKey} title={`${reviseLabel} (${reviseKey})`} disabled={disabled} onClick={e => {
       if (reviseKey !== "R") blurOnPointerClick(e);
       revise();

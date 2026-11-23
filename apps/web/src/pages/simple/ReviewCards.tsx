@@ -6,7 +6,7 @@ import { CutMark, CutWordsLine, EditPassage } from "../../components/review/CutT
 import { SourceLink, SourceRow } from "../../components/review/EditSource";
 import { OtherTakes } from "../../components/review/OtherTakes";
 import { ReviewActions } from "../../components/review/ReviewActions";
-import { EditVersion, RejectEdit, type RejectedEdit } from "../../components/review/ThreadEdits";
+import { AddTodo, EditVersion, RejectEdit, type RejectedEdit } from "../../components/review/ThreadEdits";
 import { Icon } from "../../components/ui/primitives";
 import { editNote } from "../../lib/editKind";
 import { clock as clockLabel, lengthLabel } from "../../lib/format";
@@ -124,7 +124,7 @@ export function RejectedEditCard({ edit }: { edit: ThreadEdit }) {
 export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPassNo, editPlace, flaggedCount, editDid, selectedMoment,
   shownKind, shownMarker, reviewRange, onPlayCheck, visiting, beforeCut, cutBeforeTimeline, cutBeforeError, onRetryCutBefore,
   media, removedLength, otherCuts, scriptKey, scriptOpen, onToggleScript, shownSource, sourceKey, sourceOpen, onToggleSource, cutSwitched, cutTake, appliedSide, workspaceActive,
-  cutKey, onChooseCutSide, setCompareHost, onRevise, onDefer, onKeep, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject }: {
+  cutKey, onChooseCutSide, setCompareHost, onRevise, onDefer, onKeep, onSentAdd, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject }: {
   projectId: string;
   focusThread: Thread;
   reviewingEdit: ThreadEdit;
@@ -162,6 +162,8 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
   onRevise(): void;
   onDefer?: () => void;
   onKeep(): void;
+  /** A to-do that still waits or was parked has Add: the request it sent. */
+  onSentAdd?: (task: Task) => void;
   appliedTarget?: AgentContext;
   rejectTarget?: AgentContext;
   openEditKey?: string;
@@ -209,14 +211,17 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
         {sourceKey && <SourceLink open={sourceOpen} toggle={onToggleSource} />}
       </span>
       <span className="edit-card-acts">
-        {/* A to-do marker changed nothing in the video, so there is nothing to revise: offer Later (L) when still waiting, and Done (D). */}
-        <ReviewActions revise={shownMarker ? onDefer : onRevise}
+        {/* A to-do marker changed nothing in the video, so there is nothing to revise or keep: Add (A) asks Scarlet to
+            make or find what it says to add, Later (L) parks it while it still waits, and the × rejects it. */}
+        <ReviewActions lead={shownMarker && onSentAdd && rejectTarget && <AddTodo key={`add ${openEditKey}`} projectId={projectId} thread={focusThread}
+            target={rejectTarget} ask={reviewingEdit.todo} onSent={onSentAdd} />}
+          revise={shownMarker ? onDefer : onRevise}
           reviseLabel={shownMarker ? "Later" : "Revise"} reviseKey={shownMarker ? "L" : "R"}
-          approve={onKeep} approveLabel={shownMarker ? "Done" : "Keep"} approveKey={shownMarker ? "D" : "K"} />
+          approve={shownMarker ? undefined : onKeep} approveLabel="Keep" approveKey="K" />
         {/* Reject edit is a small × after Keep, as on a call's card: it puts back just this edit, also on
-            a moment's card. The edit leaves the timeline where it is and the card stays, saying Rejected. A spot marked for the editor changed nothing, so
-            it has none. Each edit has its own: one on its way for the edit before doesn't hold this one's back. */}
-        {appliedTarget && rejectTarget && !shownMarker && <RejectEdit key={`reject ${openEditKey}`} projectId={projectId} thread={focusThread} target={rejectTarget}
+            a moment's card. The edit leaves the timeline where it is and the card stays, saying Rejected. A to-do marked for the editor has it too:
+            its marker comes off. Each edit has its own: one on its way for the edit before doesn't hold this one's back. */}
+        {appliedTarget && rejectTarget && <RejectEdit key={`reject ${openEditKey}`} projectId={projectId} thread={focusThread} target={rejectTarget}
           edits={rejectedEdits} editsOn={appliedTarget.version}
           onEngine={onEngineReject} onSent={onSentReject} />}
       </span>

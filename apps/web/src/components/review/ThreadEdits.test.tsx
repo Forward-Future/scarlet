@@ -6,7 +6,7 @@ import { buildThreads, threadEditList, type VersionSummary } from "@scarlet/shar
 import { api } from "../../lib/client";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { useProjectStore, type ProjectData } from "../../stores/project";
-import { rejectInstruction, ThreadAction, ThreadEdits } from "./ThreadEdits";
+import { addInstruction, rejectInstruction, ThreadAction, ThreadEdits } from "./ThreadEdits";
 import { revisionWord, useThreadEdits } from "./threadEditState";
 import type { Thread, ThreadEdit } from "@scarlet/shared";
 
@@ -148,6 +148,13 @@ it("labels queued revisions Up next when next in line, Queued otherwise, and Rev
   expect(revisionWord({ id: "t1", state: "claimed" }, { nextQueuedId: "t1" })).toBe("Revising…");
   expect(revisionWord({ id: "t1", state: "running" })).toBe("Revising…");
   expect(revisionWord({ id: "t1", state: "running" }, { rejecting: true })).toBe("Rejecting…");
+  expect(revisionWord({ id: "t1", state: "running" }, { adding: true })).toBe("Adding…");
+  expect(revisionWord({ id: "t1", state: "queued" }, { adding: true })).toBe("Queued");
+});
+
+it("words the request to add a to-do with what it asks for", () => {
+  expect(addInstruction("Add the other boat renders")).toBe("The editor asked you to add what this to-do asks for: “Add the other boat renders”. Make or find it, put it in the video at this spot, and mark the to-do resolved.");
+  expect(addInstruction()).toMatch(/^The editor asked you to add what this to-do asks for\. /);
 });
 
 it("scrolls the selected edit row into view across stepping, tab switches, and rejected rows", async () => {

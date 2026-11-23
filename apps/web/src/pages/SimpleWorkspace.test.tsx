@@ -2505,7 +2505,7 @@ it("names B-roll from the web B-roll, and opens where it came from behind the ca
   expect([openTitle(), editPanel()!.querySelector(".edit-source"), sourceIcon()?.getAttribute("aria-expanded")]).toEqual(["The Ledger’s article", null, "false"]);
 });
 
-it("opens a marker Scarlet left for the editor as a to-do: what to add first, nothing to compare or undo, and Done", async () => {
+it("opens a marker Scarlet left for the editor as a to-do: what to add first, nothing to compare or keep, and Add, Later and the × that rejects it", async () => {
   appliedEdits();
   vi.mocked(api.threadEdits).mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
@@ -2526,19 +2526,75 @@ it("opens a marker Scarlet left for the editor as a to-do: what to add first, no
   const earlier = data.changes.find(c => c.id === "chg_approved_2")!.fromVersion;
   expect(timeline.mock.calls.filter(([, version]) => version === earlier)).toEqual([]);
   expect(panel.querySelector(".edit-card-length.is-kind")?.textContent).toBe("To do");
-  // Nothing in the video changed there, so there's no Before to play and nothing to reject.
-  expect(panel.querySelector(".review-compare, .edit-card-before, .edit-card-reject")).toBeNull();
+  // Nothing in the video changed there, so there's no Before to play and nothing to keep.
+  expect(panel.querySelector(".review-compare, .edit-card-before")).toBeNull();
   expect([...panel.querySelectorAll(".edit-card-acts button")].map(b => [b.textContent, b.getAttribute("title")]))
-    .toEqual([["Later", "Later (L)"], ["Done", "Done (D)"]]);
+    .toEqual([["Add", "Have Scarlet add it (A)"], ["Later", "Later (L)"], ["", "Reject edit (X)"]]);
   const focusBefore = useUiStore.getState().composerFocus;
   await press("r");
   expect(useUiStore.getState().composerFocus).toBe(focusBefore);
   await press("u");
   expect(createTask).not.toHaveBeenCalled();
-  // Done records it as Keep does, so it no longer waits on the editor.
+  // There is no Done or Keep: D and K record nothing.
   await press("d");
+  await press("k");
   await act(async () => {});
-  expect(localStorage.getItem(`scarlet.kept-edits.v1/${PRJ}/${threadWith("chg_approved_2").id}`)).toContain("chg_approved_2/1");
+  expect(localStorage.getItem(`scarlet.kept-edits.v1/${PRJ}/${threadWith("chg_approved_2").id}`) ?? "").not.toContain("chg_approved_2/1");
+  expect(editPanel()).not.toBeNull();
+});
+
+it("rejects a to-do with its ×: the engine takes its marker off with no request to Scarlet, and the card says Rejected", async () => {
+  appliedEdits();
+  vi.mocked(api.threadEdits).mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [
+      { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, previous: [] },
+      { changeId: "chg_approved_2", spot: 1, label: "Boat comparison footage", at: 9.2, range: { start: 7.7, end: 10.7 }, previous: [], kind: "other" as const,
+        marker: true as const, check: "Add the other boat renders", todo: "Add the other boat renders" },
+    ] }));
+  const head = data.project.head!;
+  const rejectEdits = vi.fn(async (..._request: unknown[]) => "ver_back");
+  const createTask = vi.fn();
+  useProjectStore.setState({ createTask, rejectEdits: rejectEdits as never });
+  await show();
+  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await act(async () => {});
+  await press("x");
+  await act(async () => {});
+  expect(rejectEdits.mock.calls).toEqual([[threadWith("chg_approved_2").id, head,
+    [{ changeId: "chg_approved_2", spot: 1, label: "Boat comparison footage", range: { start: 7.7, end: 10.7 }, marker: true }]]]);
+  expect(createTask).not.toHaveBeenCalled();
+});
+
+it("has Scarlet add what a to-do asks for with Add (A): one request about that to-do, which reads Add it, and the card goes on", async () => {
+  appliedEdits();
+  vi.mocked(api.threadEdits).mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [
+      { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, previous: [] },
+      { changeId: "chg_approved_2", spot: 1, label: "Boat comparison footage", at: 9.2, range: { start: 7.7, end: 10.7 }, previous: [], kind: "other" as const,
+        marker: true as const, check: "Add the other boat renders", todo: "Add the other boat renders" },
+    ] }));
+  let sent!: () => void;
+  const createTask = vi.fn((..._request: unknown[]) => new Promise(resolve => { sent = () => resolve({ id: "task_add" }); }));
+  useProjectStore.setState({ createTask: createTask as never });
+  await show();
+  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await act(async () => {});
+  const add = () => editPanel()!.querySelector<HTMLButtonElement>('.edit-card-acts button[data-key="A"]')!;
+  expect([add().textContent, add().title]).toEqual(["Add", "Have Scarlet add it (A)"]);
+  await press("a");
+  // On its way: another press sends nothing more.
+  expect(add().disabled).toBe(true);
+  await press("a");
+  expect(createTask).toHaveBeenCalledTimes(1);
+  const [, request] = createTask.mock.calls[0]! as unknown as [string, { kind: string; instruction: string; context: Record<string, unknown> }];
+  expect(request.kind).toBe("edit");
+  // The editor wrote nothing: the chat says Add it, and Scarlet is told what the to-do asks for.
+  expect(request.context).toMatchObject({ changeId: "chg_approved_2", editIndex: 1, threadId: threadWith("chg_approved_2").id, message: "Add it" });
+  expect(request.instruction).toContain("“Add the other boat renders”");
+  await act(async () => { sent(); });
+  // The card goes on as it does after Later, to the next edit that hasn't been kept.
+  expect(openTitle()).toBe("music bed");
+  expect(editPanel()!.querySelector('.edit-card-acts button[data-key="A"]')).toBeNull();
 });
 
 it("has no menu on a request for now: Undo these edits and File this thread aren't in the chat", async () => {
@@ -13534,7 +13590,7 @@ it("shows draft timestamps on the player timeline, with seeking reserved for the
   expect(marks()).toEqual([]);
 });
 
-it("keeps a flagged marker edit in For you marked Done across tab switches, and ⌘Z returns it to waiting", async () => {
+it("keeps a to-do marked Done before the card lost Done in For you, marked Done across tab switches", async () => {
   appliedEdits();
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
@@ -13549,11 +13605,14 @@ it("keeps a flagged marker edit in For you marked Done across tab switches, and 
   const row = () => turn.querySelector<HTMLButtonElement>(".simple-edits .simple-edit")!;
   expect([need()?.getAttribute("title"), row().classList.contains("is-decided"), row().querySelector(".simple-edit-value")?.textContent])
     .toEqual(["1 needs you", false, "To do"]);
+  // The card has no Done any more: D leaves it waiting. One marked Done earlier is recorded as a kept edit is.
   await click(row());
   await act(async () => {});
   await press("d");
   await act(async () => {});
-  expect(editPanel()).toBeNull();
+  expect([editPanel() !== null, need()?.getAttribute("title")]).toEqual([true, "1 needs you"]);
+  await press("Escape");
+  await act(async () => keepEdits(PRJ, threadWith("chg_approved_2").id, [{ changeId: "chg_approved_2", spot: 1 }]));
   expect([need()?.getAttribute("title"), turn.querySelector(".simple-review-tab-count")]).toEqual([null, null]);
   expect([row().classList.contains("is-decided"), row().querySelector(".edit-badge")?.classList.contains("is-kept"), row().querySelector(".simple-edit-value")?.textContent])
     .toEqual([true, true, "Done"]);
@@ -13563,14 +13622,9 @@ it("keeps a flagged marker edit in For you marked Done across tab switches, and 
   await click(need()!);
   expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
   expect([row().classList.contains("is-decided"), row().querySelector(".simple-edit-value")?.textContent]).toEqual([true, "Done"]);
-  // ⌘Z undoes Done and returns the marker to waiting in For you.
-  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
-  await act(async () => {});
-  expect([need()?.getAttribute("title"), row().classList.contains("is-decided"), row().querySelector(".simple-edit-value")?.textContent])
-    .toEqual(["1 needs you", false, "To do"]);
 });
 
-it("parks a To do marker in For you with Later (L), drops the waiting count, advances, shows only Done when reopened, and supports ⌘Z", async () => {
+it("parks a To do marker in For you with Later (L), drops the waiting count, advances, shows no Later when reopened, and supports ⌘Z", async () => {
   appliedEdits();
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
@@ -13596,7 +13650,7 @@ it("parks a To do marker in For you with Later (L), drops the waiting count, adv
   // Pressing L on the to-do parks it in For you as Later without calling keepEdits, drops the waiting count, and advances.
   await click(rows()[0]!);
   await act(async () => {});
-  expect(actions()).toEqual([["Later", "Later (L)"], ["Done", "Done (D)"]]);
+  expect(actions()).toEqual([["Add", "Have Scarlet add it (A)"], ["Later", "Later (L)"], ["", "Reject edit (X)"]]);
   await press("l");
   await act(async () => {});
   expect(keepSpy).not.toHaveBeenCalled();
@@ -13623,23 +13677,15 @@ it("parks a To do marker in For you with Later (L), drops the waiting count, adv
   expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
   expect(brollRow().querySelector(".simple-edit-value")?.textContent).toBe("Later");
 
-  // Reopening a Later to-do shows only Done (D); pressing L does nothing; pressing D marks it Done.
+  // Reopening a Later to-do shows Add (A) and the × that rejects it, with no Later; L and D do nothing.
   await click(brollRow());
   await act(async () => {});
-  expect(actions()).toEqual([["Done", "Done (D)"]]);
+  expect(actions()).toEqual([["Add", "Have Scarlet add it (A)"], ["", "Reject edit (X)"]]);
   await press("l");
-  expect(editPanel()).not.toBeNull();
   await press("d");
   await act(async () => {});
-  expect(editPanel()).toBeNull();
-  expect([brollRow().classList.contains("is-decided"), brollRow().querySelector(".edit-badge")?.classList.contains("is-kept"), brollRow().querySelector(".simple-edit-value")?.textContent])
-    .toEqual([true, true, "Done"]);
-
-  // ⌘Z undoes Done and returns the to-do to Later (not back to waiting yet) while reopening its card.
-  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
-  await act(async () => {});
+  expect(editPanel()).not.toBeNull();
   expect(brollRow().querySelector(".simple-edit-value")?.textContent).toBe("Later");
-  expect(actions()).toEqual([["Done", "Done (D)"]]);
 
   // Undo the kept edit and then undo Later: the to-do returns to waiting ("To do") and restores Later (L).
   await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
@@ -13648,7 +13694,7 @@ it("parks a To do marker in For you with Later (L), drops the waiting count, adv
   expect(brollRow().querySelector(".simple-edit-value")?.textContent).toBe("To do");
   expect(brollRow().querySelector(".edit-badge")?.classList.contains("is-check")).toBe(true);
   expect(need().getAttribute("title")).toBe("2 need you");
-  expect(actions()).toEqual([["Later", "Later (L)"], ["Done", "Done (D)"]]);
+  expect(actions()).toEqual([["Add", "Have Scarlet add it (A)"], ["Later", "Later (L)"], ["", "Reject edit (X)"]]);
 });
 
 it("parks a dialogue pass's To do marker as Later in For you without holding up the waiting count or auto-advance", async () => {
