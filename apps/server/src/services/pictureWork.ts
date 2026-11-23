@@ -1,4 +1,4 @@
-import { availableParallelism } from "node:os";
+import { availableParallelism, loadavg } from "node:os";
 import { resolveVideoEncoder, type HwAccel } from "@scarlet/render";
 
 /**
@@ -11,13 +11,17 @@ import { resolveVideoEncoder, type HwAccel } from "@scarlet/render";
  * Whose picture it is. The editor's own (the monitor, a frame being scrubbed) has a slot kept for it; the timeline's
  * stills go ahead of the agent's but take no kept slot, so a scrub still finds one free. On 2026-11-21 a pass's frames
  * held the lane for a whole pass and the timeline's stills, each 1m40s in line, never landed between its saves.
+ * "background" is the rest of a recording, read once any of it was asked about: it goes behind everything asked for.
+ * On 2026-11-22 a pass's own frames and contact sheets stood in line with eight such readings of two 4K recordings.
  */
 export type PicturePriority = boolean | "timeline";
+/** A turn in the lane: a request's priority, or "background" for what no request asked for. */
+export type LanePriority = PicturePriority | "background";
 /** A frame request's `priority`: "interactive" for the editor's own, "timeline" for the timeline's stills. */
 export function framePriority(query: string | undefined): PicturePriority {
   return query === "interactive" ? true : query === "timeline" ? "timeline" : false;
 }
-const rankOf = (priority: PicturePriority = false) => priority === true ? 2 : priority === "timeline" ? 1 : 0;
+const rankOf = (priority: LanePriority = false) => priority === true ? 2 : priority === "timeline" ? 1 : priority === "background" ? -1 : 0;
 
 export class PictureLane {
   private active = 0;
@@ -32,7 +36,7 @@ export class PictureLane {
 
   private room(rank: number) { return this.active < this.slots + (rank === 2 ? this.reserved : 0); }
 
-  async run<T>(job: () => Promise<T>, options: { priority?: PicturePriority; signal?: AbortSignal } = {}): Promise<T> {
+  async run<T>(job: () => Promise<T>, options: { priority?: LanePriority; signal?: AbortSignal } = {}): Promise<T> {
     const { signal } = options;
     const rank = rankOf(options.priority);
     signal?.throwIfAborted();
@@ -45,7 +49,8 @@ export class PictureLane {
           if (index >= 0) this.waiting.splice(index, 1);
           reject(signal!.reason);
         };
-        // Each request goes after earlier ones of its own rank, ahead of lower ones: the editor's, the timeline's, the agent's.
+        // Each request goes after earlier ones of its own rank, ahead of lower ones: the editor's, the timeline's, the
+        // agent's, then what nobody asked for.
         const index = this.waiting.findIndex(w => w.rank < rank);
         this.waiting.splice(index < 0 ? this.waiting.length : index, 0, entry);
         signal?.addEventListener("abort", cancel, { once: true });
@@ -89,4 +94,14 @@ export async function pictureDecoder(accel: HwAccel): Promise<"cuda" | "videotoo
   if (accel === "none") return;
   if (accel === "videotoolbox" || (accel === "auto" && process.platform === "darwin")) return "videotoolbox";
   if (accel === "nvenc" || (accel === "auto" && await resolveVideoEncoder("auto").catch(() => "libx264") === "h264_nvenc")) return "cuda";
+}
+
+/**
+ * Whether the machine has twice as much work as cores or more, by the last minute's load. A 4K decode on the CPU then
+ * gets a share of its cores, while the GPU's decoder is not shared the same way: at five times as much work as cores, ten seconds of a
+ * 4K recording took 17.4 s on the CPU and 5.0 s with VideoToolbox, against 0.5 s and 2.6 s on an idle machine
+ * (M-series, 2026-11-22 and 2026-11-13). Windows reports no load, so it never counts as busy.
+ */
+export function machineBusy(load = loadavg()[0]!, cores = availableParallelism()): boolean {
+  return load > 2 * cores;
 }

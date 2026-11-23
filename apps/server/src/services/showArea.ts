@@ -54,7 +54,7 @@ function edges(ctx: Ctx, media: VideoMedia): Promise<Edges> {
       const file = await sourceFile(ctx, media), started = Date.now(), parts: Uint8Array[] = [];
       // A reading a running edit asked for: a pause of the project's media work doesn't stop it, the project closing does.
       await withFrames(ctx, media, file, "show-edges", { start: 0, end: media.duration ?? 0, fps: 1 / SHOW_EDGE_STEP, width: SHOW_EDGE_WIDTH, height: SHOW_EDGE_HEIGHT,
-        signal: ctx.projectSignal(media.projectId) }, (_at, rgb) => { parts.push(edgeBits(rgb)); return false; }, async () => undefined);
+        signal: ctx.projectSignal(media.projectId), fromCopy: true }, (_at, rgb) => { parts.push(edgeBits(rgb)); return false; }, async () => undefined);
       if (!parts.length) throw new Error("no frames could be read");
       const bits = Buffer.concat(parts);
       await atomicWriteFile(path, bits, `${path}.${randomUUID()}`);
@@ -79,8 +79,10 @@ export async function showArea(ctx: Ctx, media: VideoMedia, opts: { waitMs: numb
   const run = edges(ctx, media);
   run.catch(() => {});
   // Where the picture changes at once, so a box with one edge to find holds until a switch to another app. Read beside
-  // the edges; until it has been, such a box holds only on its own frame.
-  const changes = areas.length ? pictureChanges(ctx, media, AREA_PICTURE_CHANGE, opts.waitMs).catch(() => undefined) : Promise.resolve(undefined);
+  // the edges; until it has been, such a box holds only on its own frame. The whole picture holds wherever no other box
+  // does, whatever the picture does: with no other box there is nothing for the changes to decide, and on 2026-11-22
+  // each of a pass's five checks of a camera waited 100 s for a reading of every frame of it.
+  const changes = areas.some(a => !wholePicture(a.area)) ? pictureChanges(ctx, media, AREA_PICTURE_CHANGE, opts.waitMs).catch(() => undefined) : Promise.resolve(undefined);
   const found = await Promise.race([run.catch(() => undefined), new Promise<undefined>(done => { setTimeout(() => done(undefined), opts.waitMs).unref(); })]);
   if (!found) {
     const error = failed.get(media.id);
@@ -97,7 +99,7 @@ async function frameEdges(ctx: Ctx, media: VideoMedia, at: number): Promise<Uint
   let bits: Uint8Array | undefined;
   const file = await sourceFile(ctx, media);
   await withFrames(ctx, media, file, "show-area", { start: at, end: Math.min(media.duration ?? at + 1, at + 0.5), fps: 4, width: SHOW_EDGE_WIDTH, height: SHOW_EDGE_HEIGHT,
-    signal: ctx.projectSignal(media.projectId) }, (_at, rgb) => { bits ??= edgeBits(rgb); return false; }, async () => undefined).catch(() => undefined);
+    signal: ctx.projectSignal(media.projectId), fromCopy: true }, (_at, rgb) => { bits ??= edgeBits(rgb); return false; }, async () => undefined).catch(() => undefined);
   return bits;
 }
 

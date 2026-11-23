@@ -104,14 +104,14 @@ function identity(media: MediaAsset) {
 const bitsDiffer = (a: Uint8Array, b: Uint8Array) => { let n = 0; for (let i = 0; i < a.length; i++) { let x = a[i]! ^ b[i]!; while (x) { n += x & 1; x >>= 1; } } return n; };
 
 /** Compare one window's frames, a quarter second apart, and keep the seconds whose picture changed, with the picture's detail once a second where it changed. */
-async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end }: { start: number; end: number }, signal: AbortSignal): Promise<MotionWindow> {
+async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end, unasked }: { start: number; end: number; unasked?: boolean }, signal: AbortSignal): Promise<MotionWindow> {
   const source = media.width && media.height ? { width: media.width, height: media.height } : await probeMedia(file);
   const { width, height } = screenFrameSize(source.width, source.height, MOTION_SIDE);
   const seconds = new Map<number, Uint8Array>();
   let last: Float32Array | undefined;
   const detail: DetailFrame[] = [];
   let detailKept: Uint8Array | undefined, detailSecond = -Infinity;
-  await withFrames(ctx, media, file, "screen-motion", { start, end, fps: MOTION_FPS, width, height, signal }, (at, rgb) => {
+  await withFrames(ctx, media, file, "screen-motion", { start, end, fps: MOTION_FPS, width, height, signal, fromCopy: true, background: unasked }, (at, rgb) => {
     // Every pixel: a pointer-sized change has to register.
     const now = pictureGrid(rgb, width, height, COLS, ROWS, 1);
     if (last) {

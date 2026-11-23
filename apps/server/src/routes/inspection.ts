@@ -12,7 +12,7 @@ import { sharedDialogueDetector } from "../services/dialogueDetections.js";
 import { transcribeForDialogue } from "../services/transcription.js";
 import { inspectionPictures } from "../services/inspectionPictures.js";
 import { pictureDecoder, pictureLane } from "../services/pictureWork.js";
-import { previewPictures } from "../services/previewPictures.js";
+import { previewCopyByTime, previewPictures } from "../services/previewPictures.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 import { resolveTimeline } from "../services/timeline.js";
 import { emissionStorePaths } from "../services/recordingAudio.js";
@@ -75,7 +75,11 @@ export function inspectionRoutes(ctx: Ctx) {
   async function sourcePicture(project: Pick<Project, "id">, media: MediaAsset, range: TimeRange, mode: WindowOptions["mode"]) {
     const height = Math.min(Math.max(mode === "activity" ? 540 : 180, ctx.settings().render.previewHeight), media.height ?? 0);
     if (!height) return;
-    return previewPictures(ctx.paths.media(project.id))(media, range.start, range.end, height).catch(() => undefined);
+    const root = ctx.paths.media(project.id);
+    // A sheet's tiles and a window's activity are pictures at their times, so a recording without a steady frame rate
+    // is read from its whole copy too.
+    return await previewPictures(root)(media, range.start, range.end, height).catch(() => undefined)
+      ?? await previewCopyByTime(root, media, height).catch(() => undefined);
   }
 
   /** The file to listen to, and which of its audio streams: a confirmed voice's input, or the first. */
