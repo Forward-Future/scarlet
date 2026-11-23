@@ -27,16 +27,15 @@ import { callRowKey, isWorking, letGo, listedBefore, noop, PAUSED_HINT, tagOf, t
 const UNSAID = /^(?:Edit stopped\.|Edit resumed\.|I couldn’t finish this edit\.)$/;
 
 /** "Learned for dialogue-pass: ", or what it was learned from first: "Learned from 4 cuts you rejected, for dialogue-pass: ". */
-function learnedLead(learning: Learning, skill: string | undefined): string {
-  const from = learning.learnedFrom?.decisions.length ? `from ${learning.learnedFrom.decisions.length} ${learning.learnedFrom.what}` : "";
-  return from ? `Learned ${from}${skill ? `, for ${skill}` : ""}: ` : skill ? `Learned for ${skill}: ` : "Learned: ";
+// What the rule came from ("from 3 cuts you rejected") is said in Learnings, not on the chat's one line.
+function learnedLead(skill: string | undefined): string {
+  return skill ? `Learned for ${skill}: ` : "Learned: ";
 }
 
 /**
- * A rule Scarlet picked up from this request, under what the request did: what the editor decided that it came from, if
- * it came from their decisions, the skill it is for and the rule in quotes,
- * then Review, which opens Learnings at it, and Decline, which turns the rule down from here. The line goes once the
- * editor decides, here or in Learnings.
+ * A rule Scarlet picked up from this request, under what the request did, on one line: the skill it is for and the rule
+ * in quotes, cut short with an ellipsis when long and whole on hover, then Review, which opens Learnings at it, and
+ * Decline, which turns the rule down from here. The line goes once the editor decides, here or in Learnings.
  */
 function LearnedLine({ learning, onReview }: { learning: Learning; onReview?(id: string): void }) {
   const skill = useSkillsStore(s => s.skills.find(k => k.id === learning.skillId)?.name);
@@ -55,12 +54,13 @@ function LearnedLine({ learning, onReview }: { learning: Learning; onReview?(id:
   };
   return <p className="simple-learned">
     <Icon name="bulb" size={13} />
-    <span>{learnedLead(learning, skill)}<span className="simple-learned-rule">“{learning.rule}”</span>
-      {onReview && <> <button type="button" className="simple-learned-review" onClick={() => onReview(learning.id)}
-        title="Approve or revise it in Learnings">Review</button></>}
-      {" "}<button type="button" className="simple-learned-decline" disabled={declining} onClick={decline}
-        title="Don't learn this">Decline</button>
-      {failed && <span className="simple-learned-failed" role="alert"> Couldn't decline. {failed}</span>}</span>
+    <span className="simple-learned-line"><span className="simple-learned-lead">{learnedLead(skill)}</span>
+      <span className="simple-learned-rule" title={learning.rule}>“{learning.rule}”</span>
+      {onReview && <button type="button" className="simple-learned-review" onClick={() => onReview(learning.id)}
+        title="Approve or revise it in Learnings">Review</button>}
+      <button type="button" className="simple-learned-decline" disabled={declining} onClick={decline}
+        title="Don't learn this">Decline</button></span>
+    {failed && <span className="simple-learned-failed" role="alert">Couldn't decline. {failed}</span>}
   </p>;
 }
 
@@ -459,7 +459,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
         <TipButton className="unit-stop-edit" tip="Stop this edit" aria-label={request ? `Stop this edit: ${request.text}` : "Stop this edit"}
           aria-description="What it already changed stays, and the next request can start." onClick={stop}><Icon name="stop" size={13} /></TipButton></div> : undefined;
     const requestControl = editsProject ? editActions : stop && <button type="button" className="simple-link unit-stop" onClick={stop}>Stop</button>;
-    const headingEnd = <><RequestMetrics attempts={run.attempts} events={events} />{requestControl}</>;
+    // The request Scarlet has keeps its time and tokens in view; a finished one shows them when the pointer rests on its heading.
+    const headingEnd = <><RequestMetrics attempts={run.attempts} events={events} quiet={!runIsActive(task)} />{requestControl}</>;
     // The sentence Scarlet opened the request with is written once and stays: picked up after a pause or a restart,
     // the request keeps it, from the first attempt that said one. Only an attempt's whole history says whether it did.
     const before = task.resumeRootId && isWorking(task.state) ? run.attempts.filter(t => t !== task && (t.resumeRootId ?? t.id) === task.resumeRootId) : [];

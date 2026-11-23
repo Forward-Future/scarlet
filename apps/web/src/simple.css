@@ -218,7 +218,10 @@
 .simple-edits > li { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; justify-items: start; }
 .simple-edits > li > * { grid-column: 1 / -1; }
 .simple-edit { display: grid; grid-template-columns: subgrid; align-items: center; justify-self: stretch; width: calc(100% + 16px); margin: 0 -8px; }
-.simple-edit-title { grid-column: 2; min-width: 0; overflow-wrap: anywhere; }
+/* A row is one line, so a long list reads at a glance. The open row reads in full, and its card has the whole note. */
+.simple-edit-title { grid-column: 2; display: flex; align-items: baseline; min-width: 0; overflow-wrap: anywhere; }
+.simple-edit-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.simple-edit.is-on .simple-edit-words { white-space: normal; }
 .simple-edit-value { grid-column: 3; }
 .simple-edit-check, .simple-pass-check { grid-column: 2 / -1; font-size: 12px; line-height: 1.35; color: var(--color-warn); }
 .simple-edit-check.is-kept, .simple-pass-check.is-kept { color: var(--color-dim); }
@@ -372,8 +375,14 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 .learn-item[aria-current="true"] { margin: 0 -14px; padding-left: 14px; padding-right: 14px; background: rgb(255 255 255 / 4%); }
 /* The line under a request that taught Scarlet a rule: the skill, the rule in quotes, Review in amber, which opens
    Learnings at it, and Decline, muted as the chat's other links rest. It goes once the editor decides. */
-.simple-learned { display: flex; align-items: baseline; gap: 7px; margin: 6px 0 2px; font-size: 12.5px; line-height: 1.45;
+.simple-learned { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 7px; margin: 6px 0 2px; font-size: 12.5px; line-height: 1.45;
   color: var(--color-muted); overflow-wrap: anywhere; }
+/* One line: a long rule is cut short with an ellipsis and reads whole on hover and in Learnings. Review and Decline
+   stay at its end. Why a decline failed goes on the line under it. */
+.simple-learned-line { flex: 1; display: flex; align-items: baseline; gap: 5px; min-width: 0; white-space: nowrap; }
+.simple-learned-lead, .simple-learned-line > button { flex: none; }
+.simple-learned-rule { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.simple-learned-failed { flex-basis: 100%; padding-left: 20px; }
 .simple-learned > svg { flex: none; position: relative; top: 2px; color: var(--color-warn); }
 .simple-learned-rule { color: var(--color-fg); }
 .simple-learned-review { margin-left: 2px; padding: 0; border: 0; background: none; font: inherit; color: var(--color-warn); white-space: nowrap; cursor: pointer;
@@ -582,6 +591,12 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 .unit.is-collapsed .unit-fold svg { transform: none; }
 .unit.is-collapsed > :not(.unit-msg) { display: none; }
 .unit.is-collapsed > .unit-msg p, .simple-pin .unit.is-collapsed > .unit-msg p { -webkit-line-clamp: 1; }
+/* Folded requests next to each other sit together as one list: no gap, one rule between them. An open request keeps
+   its space. */
+.simple-chat > .simple-turn:has(> .unit.is-collapsed:last-child) + .simple-turn:has(> .unit.is-collapsed:first-child) { margin-top: -16px; }
+.simple-turn > .unit.is-collapsed + .unit.is-collapsed { margin-top: -12px; }
+.simple-chat > .simple-turn:has(> .unit.is-collapsed:last-child) + .simple-turn > .unit.is-collapsed:first-child > .unit-msg,
+.simple-turn > .unit.is-collapsed + .unit.is-collapsed > .unit-msg { border-top: 0; }
 @media (prefers-reduced-motion: reduce) { .unit-fold svg { transition: none; } }
 /* Where the request stands: a dot while Scarlet asks, a word once it stopped early or left a suggestion. */
 .unit-state { flex: none; align-self: center; display: inline-flex; align-items: center; font-size: 12.5px; line-height: 19px; color: var(--color-muted); white-space: nowrap; }
@@ -604,6 +619,12 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
   font-size: 12px; line-height: 1.4; font-weight: 400; color: var(--color-fg); white-space: nowrap; pointer-events: none; }
 .unit-tokens { flex: none; align-self: baseline; font-size: 12.5px; line-height: 19px; white-space: nowrap; }
 .unit-metrics-dot { color: var(--color-dim); }
+/* A finished request's time and tokens aren't drawn in its heading: they show in the note above when the pointer rests
+   on the heading. The count stays where it was, unseen, for the note to hang from and for the keyboard to reach. */
+.unit-msg, .subunit-msg { position: relative; }
+.run-tokens.is-quiet { position: absolute; top: 0; right: 0; opacity: 0; pointer-events: none; }
+.unit > .unit-msg > .run-tokens.is-quiet { top: 8px; right: var(--chat-gutter, 18px); }
+.run-tokens.is-quiet:focus-visible { opacity: 1; }
 /* A request's tokens open every part of the count on hover, in a note above the count at its right edge. It's fixed
    to the window (its place set when it opens) so the pinned request's scrolling box doesn't clip it. The empty title
    keeps the heading's own (the editor's whole message) from showing over it. */
@@ -800,8 +821,10 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .simple-made-line > .simple-made { margin-right: 9px; }
 .req .simple-pass-ok, .req .simple-pass-line > .simple-link { flex: none; white-space: nowrap; }
 .req .simple-pass .req-right { gap: 6px; }
-/* A row is one line. Its title carries the whole note, and the card on the timeline shows it in full. */
+/* A row is one line. Its title carries the whole note, and the card on the timeline shows it in full. The open row
+   reads in full, as an open edit's row does. */
 .req .simple-pass-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.req .simple-pass-list > li > button.is-on .simple-pass-label { white-space: normal; }
 /* A revised row keeps its "v2" in view: long words give way before it, not the version after them. */
 .req .simple-pass-label:has(> .edit-version) { display: flex; align-items: baseline; }
 .req .simple-pass-label > .simple-pass-tick, .req .simple-pass-label > .edit-version { flex: none; }
@@ -827,8 +850,15 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .simple-pass-list > li > button.is-rejected :is(.simple-pass-label, .simple-pass-time, .simple-pass-value),
 .simple-edit.is-rejected :is(.simple-edit-title, .simple-edit-value) { color: var(--color-dim); }
 .edit-badge.is-rejected { border-color: var(--color-line); color: var(--color-dim); }
-/* "Need you" is the short list: a call's number, Scarlet's note, and a word once it's settled or sent back. */
-.simple-pass-list.is-short > li > button { grid-template-columns: minmax(18px, max-content) minmax(0, 1fr) auto; align-items: center; }
+/* "Need you" is the short list: a call's number, Scarlet's note, and a word once it's settled or sent back. One number
+   column for the whole list, as every other request's list has, so a kept call's wider badge moves every row's words
+   together and they start on one edge. A request under a row spans the row, and its own width counts for nothing. */
+.simple-pass-list.is-short { display: grid; grid-template-columns: minmax(18px, max-content) minmax(0, 1fr) auto; column-gap: 8px; align-content: start; }
+.simple-pass-list.is-short > li { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+.simple-pass-list.is-short > li > * { grid-column: 1 / -1; }
+.simple-pass-list.is-short > li > button { grid-template-columns: subgrid; align-items: center; }
+.simple-pass-list.is-short > li > .subunit { justify-self: stretch; contain: inline-size; }
+.simple-pass-list.is-short .simple-pass-value { justify-self: end; }
 .simple-pass-list > li > button:is(.is-decided, .is-rejected, :disabled) .edit-badge,
 .simple-edit.is-decided .edit-badge { border-color: var(--color-line); color: var(--color-dim); }
 .simple-pass-list > li > button.is-decided .edit-badge.is-kept,
