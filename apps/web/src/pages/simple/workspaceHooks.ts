@@ -335,8 +335,8 @@ export function useCallCardShortcuts(reviewKeysOn: boolean, hasPass: boolean, st
   }, [reviewKeysOn, hasPass]);
 }
 
-/** Esc closes the Transcript column when no edit/call/suggestion card owns Esc. */
-export function useTranscriptEscape(enabled: boolean, onClose: () => void) {
+/** Esc closes what is behind every card: the Transcript column, then the picked request. An edit, call or suggestion card takes Esc first. */
+export function useEscapeCloses(enabled: boolean, onClose: () => void) {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => {

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement, type
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import type { Change } from "@scarlet/timeline";
-import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task } from "@scarlet/shared";
+import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task, type ThreadEdit } from "@scarlet/shared";
 import { resumeRunChoice, useAgentAvailability } from "../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../components/review/RunBundle";
 import { editGroups, useDeferred, useReviewed, useRevising, useThreadEdits } from "../../components/review/threadEditState";
@@ -95,8 +95,10 @@ function ChangeReply({ thread, entry, actions }: { thread: Thread; entry: Extrac
  * `pinHost`, and takes its place in the chat when it's done. A request still waiting its turn isn't here at all; it's in
  * the tray on the message box.
  */
-export function Turn({ projectId, thread, actions, pinned, pinHost, list: passList, reportReviewMarkers }: { projectId: string; thread: Thread; actions: ChatActions; pinned?: string; pinHost: HTMLElement | null;
+export function Turn({ projectId, thread, actions, pinned, pinHost, list: passList, reportReviewMarkers, reportEvery }: { projectId: string; thread: Thread; actions: ChatActions; pinned?: string; pinHost: HTMLElement | null;
   reportReviewMarkers?: ReportReviewMarkers;
+  /** With no request picked the timeline marks every request's edits, so this one reports them all, not only the ones that wait. */
+  reportEvery?: boolean;
   /** Which of this request's lists is open. */
   list: PassList }) {
   const notes = useProjectStore(s => s.current?.notes ?? []);
@@ -139,20 +141,22 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   const inView = useNearView(section, ".simple-chat");
   const asksForALook = useRef(false);
   const { listed, rejected, located, head } = useThreadEdits(projectId, thread, inView || !!passList[0] || actions.marked === thread.id
-    || (!!pinned && thread.tasks.some(t => t.id === pinned)) || (!!reportReviewMarkers && asksForALook.current));
+    || (!!pinned && thread.tasks.some(t => t.id === pinned)) || (!!reportReviewMarkers && (!!reportEvery || asksForALook.current)));
   asksForALook.current = listed.some(edit => !!edit.check);
   const reviewed = useReviewed(projectId, thread);
   const deferred = useDeferred(projectId, thread);
   const revising = useRevising(thread);
   useEffect(() => {
     if (!reportReviewMarkers || !located) return;
-    const waiting = located.filter(edit => edit.check && !reviewed(edit) && !deferred(edit) && !revising(edit));
-    if (!waiting.length) return;
+    const waits = (edit: ThreadEdit) => !!edit.check && !reviewed(edit) && !deferred(edit) && !revising(edit);
+    const reported = reportEvery ? located : located.filter(waits);
+    if (!reported.length) return;
     const numbers = new Map(editGroups(located).flatMap(({ members }) => members.map(({ edit }) => [edit, members[0]!.i + 1] as const)));
-    const markers = waiting.map(edit => ({ edit, number: numbers.get(edit)!, total: located.length }));
+    const markers = reported.map(edit => ({ edit, number: numbers.get(edit)!, total: located.length,
+      state: reviewed(edit) ? "kept" as const : waits(edit) ? "check" as const : undefined }));
     reportReviewMarkers(thread.id, { head, markers });
     return () => reportReviewMarkers(thread.id);
-  }, [thread.id, head, located, reviewed, deferred, revising, reportReviewMarkers]);
+  }, [thread.id, head, located, reviewed, deferred, revising, reportReviewMarkers, reportEvery]);
   // A thread with a dialogue pass sums it up on one line instead of listing every cut.
   const waitingPass = openPass(thread, allTasks);
   const pendingPass = !!waitingPass;
@@ -458,21 +462,27 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       {bundle}
       {wrong}
     </div>;
-    // A press on any request's band shows the whole timeline. On the band of a request that applied edits it also puts
-    // them on the timeline; its band is a shade lighter while they are the ones marked. Its links and Stop keep their
-    // own presses.
-    const markable = !!actions.mark && thread.changes.some(c => c.state === "approved");
+    // A press on a request's band picks it: its band is deep violet and its edits are the ones on the timeline, whether
+    // it has finished or Scarlet is still on it, and whether or not it has applied anything yet. Pressed again it lets
+    // go, and the timeline marks every request's edits. Either press shows the whole timeline. The band's words stay
+    // folded, so a press on them is the band's too. Its arrow, links and Stop keep their own presses.
+    const markable = !!actions.mark;
     const marked = markable && actions.marked === thread.id;
     const pressable = markable || !!actions.fitTimeline;
-    const block = <div key={run.root} className="unit" data-run={run.root} data-pinned={isPinned || undefined}>
+    // The arrow at the band's left folds the request to its heading, on one line, and opens it again. What is under the
+    // band stays mounted, so Scarlet's work goes on being read while it is out of sight.
+    const shut = !!request && !!actions.collapsed?.has(run.root);
+    const block = <div key={run.root} className={`unit${shut ? " is-collapsed" : ""}`} data-run={run.root} data-pinned={isPinned || undefined}>
       {request && <div className={`unit-msg${pressable ? " is-markable" : ""}${marked ? " is-marked" : ""}`}
         aria-current={marked || undefined} onClick={pressable ? e => {
-          // A press on long words opens or folds them, and leaves the timeline as it is.
-          if ((e.target as Element).closest('button, a, input, textarea, [role="menu"], .said.is-clipped, .said.is-open') || window.getSelection()?.toString()) return;
+          if ((e.target as Element).closest('button, a, input, textarea, [role="menu"]') || window.getSelection()?.toString()) return;
           if (markable) actions.mark!(thread.id);
           actions.fitTimeline?.();
-        } : undefined}><span className="simple-who">You</span>
-        <Said lead={<>{(about ?? tag) && <span className="simple-revising">{about ?? tag}</span>}<MarkedFrameOnRequest projectId={projectId} task={task} /></>} text={request.text} />
+        } : undefined}>
+        {actions.collapse && <TipButton className="unit-fold" tip={shut ? "Expand" : "Collapse"} aria-expanded={!shut}
+          aria-label={`${shut ? "Expand" : "Collapse"} this edit: ${request.text}`} onClick={() => actions.collapse!(run.root)}><Icon name="chevron" size={11} /></TipButton>}
+        <span className="simple-who">You</span>
+        <Said fixed lead={<>{(about ?? tag) && <span className="simple-revising">{about ?? tag}</span>}<MarkedFrameOnRequest projectId={projectId} task={task} /></>} text={request.text} />
         <span className="unit-state">{standing}</span>{headingEnd}</div>}
       {bundle}
       {learnedIn(run).map(l => <LearnedLine key={l.id} learning={l} onReview={actions.reviewLearning} />)}
@@ -480,19 +490,23 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     </div>;
     // Scarlet's closing words on what it applied read under the block and go where it goes: above the message box
     // with it, and out of the chat with a request about one cut or edit that has left. The open list takes their place.
-    const replies = listing ? [] : entries.flatMap((e, i) => closingReply(e) && ids.has(e.replyTo!) ? [loose(e, i)] : []);
+    const replies = listing || shut ? [] : entries.flatMap((e, i) => closingReply(e) && ids.has(e.replyTo!) ? [loose(e, i)] : []);
     // Always the same shape, so the block isn't mounted anew when its replies give way to its list and come back.
     const node = <Fragment key={run.root}>{block}{replies}</Fragment>;
     return isPinned && pinHost ? createPortal(node, pinHost, run.root) : node;
   };
   const placed = new Set<string>();
+  // The request the lines that follow are under. Folded to its heading, it takes them out of sight with it.
+  let under: Run | undefined;
   const nodes = entries.flatMap((item, i) => {
     if (item.kind === "change" && folded.has(item.change.id)) return [];
     const run = item.taskId ? runOf.get(item.taskId) : undefined;
     if (run) {
       if (placed.has(run.root)) return [];
       placed.add(run.root);
-      return settled(run) || nested.has(run.root) ? [] : [unit(run)];
+      if (settled(run) || nested.has(run.root)) return [];
+      under = run;
+      return [unit(run)];
     }
     // A closing reply is drawn with the request it answers.
     if (closingReply(item) && runOf.has(item.replyTo!)) return [];
@@ -500,7 +514,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // "Put the camera in the bottom-right corner" read twice).
     if (!owner && hasRows && item.kind === "change" && item.change.state === "approved") return [];
     // What a queued request says is in the tray.
-    return item.taskId ? [] : [loose(item, i)];
+    return item.taskId || (under && actions.collapsed?.has(under.root)) ? [] : [loose(item, i)];
   });
   // A run that has said nothing yet still shows.
   for (const run of runs) if (!placed.has(run.root) && !settled(run) && !nested.has(run.root)) nodes.push(unit(run));

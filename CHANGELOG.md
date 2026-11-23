@@ -6,6 +6,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- Each request in the chat has a small arrow at its left that collapses it to one line, and expands it again.
+- Purple on a request now means one thing: its edits are the ones on the timeline. Click a request to pick it, running or finished, and click it again or press Esc to let go and see every request's edits on the timeline.
 - Edit-number pills near the start or end of the timeline no longer overlap the pill beside them.
 - An edit running on Gemini now picks up where it left off after Scarlet restarts, instead of starting its work over.
 - After Scarlet restarts, each request's list of edits comes back the way you left it, so a change you asked for on one edit stays under that edit's row.

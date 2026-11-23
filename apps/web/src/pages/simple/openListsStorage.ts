@@ -23,3 +23,22 @@ export function saveOpenLists(projectId: string, lists: Record<string, OpenList>
     else localStorage.removeItem(openListsKey(projectId));
   } catch { /* Without storage the lists last for this session only. */ }
 }
+
+/** The requests the editor folded to their headings, kept per project like the lists: the chat comes back as it was left. */
+const collapsedKey = (projectId: string) => `scarlet.collapsedRequests.v1:${projectId}`;
+
+export function savedCollapsed(projectId: string): ReadonlySet<string> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(collapsedKey(projectId)) ?? "null") as unknown;
+    return new Set(Array.isArray(saved) ? saved.filter((run): run is string => typeof run === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function saveCollapsed(projectId: string, runs: ReadonlySet<string>) {
+  try {
+    if (runs.size) localStorage.setItem(collapsedKey(projectId), JSON.stringify([...runs]));
+    else localStorage.removeItem(collapsedKey(projectId));
+  } catch { /* Without storage the folds last for this session only. */ }
+}
