@@ -18,7 +18,7 @@
  * from those clips and from audio tracks, mixed. No transforms, fades, captions
  * or colour clips (gaps render black/silent).
  */
-import { LOCAL_MEDIA_INPUT, extractWaveformFull as decodeWaveform, hashFile, renderPlaybackSegment, type WaveformCache as BinaryWaveformCache } from "@scarlet/render";
+import { audioMapArgs, LOCAL_MEDIA_INPUT, extractWaveformFull as decodeWaveform, hashFile, renderPlaybackSegment, type WaveformCache as BinaryWaveformCache } from "@scarlet/render";
 import { join } from "node:path";
 import type { MediaAsset, MediaClip, MediaKind, Project, Timeline, TimeRange } from "@scarlet/timeline";
 import { clipEnd, timelineDuration, timelineToSource } from "@scarlet/timeline";
@@ -212,20 +212,19 @@ async function extractFrame(path: string, t: number, opts: { width: number; sign
 
 async function makeProxy(input: string, output: string, opts: Parameters<RenderAdapter["makeProxy"]>[2]) {
   const h = Math.max(2, Math.round(opts.height / 2) * 2);
-  let duration: number | undefined;
-  if (opts.onProgress) {
-    try {
-      duration = (await probeMedia(input)).duration;
-    } catch {
-      /* progress is best-effort */
-    }
-  }
+  // The preview plays the track the editor chose, or every track mixed, named by number: left to itself FFmpeg plays
+  // the stream with the most channels.
+  const probed = await probeMedia(input).catch(() => undefined);
+  const duration = probed?.duration;
+  const streams = probed ? [...probed.kind === "audio" ? [] : ["-map", "0:v:0"],
+    ...probed.hasAudio ? audioMapArgs({ audioTrack: opts.audioTrack, audioStreamCount: probed.audioStreams?.length }, { channelLayout: "stereo", label: "pa" }) : []] : [];
   await ffmpeg(
     [
       ...(opts.onProgress ? ["-progress", "pipe:1", "-nostats"] : []),
       ...(opts.range ? ["-ss", ffmpegPosition(opts.range.start)] : []),
       ...LOCAL_MEDIA_INPUT, "-i", input,
       ...(opts.range ? ["-t", String(opts.range.end - opts.range.start)] : []),
+      ...streams,
       "-vf", `scale=-2:'min(${h},ih)'`,
       "-c:v", "libx264", "-preset", opts.range ? "ultrafast" : "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
       "-force_key_frames", "expr:gte(t,n_forced*0.5)",

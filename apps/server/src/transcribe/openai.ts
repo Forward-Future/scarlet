@@ -90,8 +90,7 @@ export class OpenAIProvider implements TranscriptionProvider {
           await extractWav(input.path, out, {
             start: from,
             duration: Math.min(1, seam - from),
-            audioStream: input.audioStream,
-            audioStreamCount: input.audioStreamCount,
+            audio: input.audio,
             signal: input.signal,
           });
           heard = !await emptyDecode(out);
@@ -100,8 +99,7 @@ export class OpenAIProvider implements TranscriptionProvider {
           await extractWav(input.path, out, {
             start: readFrom,
             duration: readTo - readFrom,
-            audioStream: input.audioStream,
-            audioStreamCount: input.audioStreamCount,
+            audio: input.audio,
             signal: input.signal,
           });
           const json = await this.call(out, input.language ?? this.opts.language, input);

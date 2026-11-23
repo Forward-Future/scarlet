@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
-import type { AudioTrackSelection } from "@scarlet/timeline";
 import { editorFirst } from "../services/editorFirst.js";
-import { audioMixStreamsFilter, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, mediaToolLaunchError, resolveAudioTrack, resolveFfmpeg, resolveFfprobe } from "@scarlet/render";
+import { audioMapArgs, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, mediaToolLaunchError, resolveFfmpeg, resolveFfprobe, type HeardAudio } from "@scarlet/render";
 
 // Same resolution as the renderer: env override → binary beside the engine → PATH.
 export const FFMPEG = resolveFfmpeg();
@@ -107,11 +106,14 @@ export const ffprobe = (args: string[], opts: RunOptions = {}) => run(resolveFfp
  */
 export const ffmpegPosition = (seconds: number) => Math.abs(seconds) < 1e-6 ? "0" : String(seconds);
 
-/** Extract (part of) a file's audio as 16 kHz mono PCM wav, the format whisper wants. */
+/**
+ * Extract (part of) a file's audio as 16 kHz mono PCM wav, the format whisper wants. `audio`: the track to read, or every
+ * track mixed. Without one it is the first audio stream, named, never the one FFmpeg would pick by itself.
+ */
 export async function extractWav(
   input: string,
   output: string,
-  opts: { start?: number; duration?: number; sampleRate?: number; audioStream?: AudioTrackSelection; audioStreamCount?: number; signal?: AbortSignal;
+  opts: { start?: number; duration?: number; sampleRate?: number; audio?: HeardAudio; signal?: AbortSignal;
     progress?: { duration: number; onProgress: (fraction: number) => void } } = {},
 ): Promise<void> {
   const args: string[] = [];
@@ -120,13 +122,7 @@ export async function extractWav(
   if (opts.duration !== undefined) args.push("-t", String(opts.duration));
   args.push(...LOCAL_MEDIA_INPUT, "-i", input);
   if (opts.progress) args.push("-progress", "pipe:1", "-nostats");
-  const resolved = resolveAudioTrack(opts.audioStream, opts.audioStreamCount);
-  if (resolved.mode === "mix") {
-    const mix = audioMixStreamsFilter(0, resolved.count, { sampleRate: rate, channelLayout: "mono", outLabel: "wav_out", prefix: "wav_" });
-    args.push("-filter_complex", `${mix}`, "-map", "[wav_out]", "-vn", "-map_metadata", "-1", "-ac", "1", "-ar", String(rate), "-c:a", "pcm_s16le", "-y", output);
-  } else {
-    if (opts.audioStream !== undefined) args.push("-map", `0:a:${resolved.stream}`);
-    args.push("-vn", "-map_metadata", "-1", "-af", SOURCE_AUDIO_CLOCK, "-ac", "1", "-ar", String(rate), "-c:a", "pcm_s16le", "-y", output);
-  }
+  args.push(...audioMapArgs(opts.audio, { filters: SOURCE_AUDIO_CLOCK, sampleRate: rate, channelLayout: "mono", label: "wav" }),
+    "-vn", "-map_metadata", "-1", "-ac", "1", "-ar", String(rate), "-c:a", "pcm_s16le", "-y", output);
   await ffmpeg(args, { signal: opts.signal, ...opts.progress });
 }

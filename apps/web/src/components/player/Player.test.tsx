@@ -117,6 +117,22 @@ it("starts on a clip's original file when the browser can play it, and hands ove
   expect(container.textContent).toContain("Preparing a compatible preview…");
 });
 
+it("plays a video with several audio tracks from its preview of the chosen track, never its original", async () => {
+  vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockReturnValue("probably");
+  const opened = vi.spyOn(sourcePlayback, "openSourcePlayback").mockReturnValue({ prepare() {}, seek() {}, dispose() {} } as unknown as ReturnType<typeof sourcePlayback.openSourcePlayback>);
+  const tracks = { audioStreams: [{ index: 0 }, { index: 1 }], originalPlaybackType: "video/mp4", duration: 600 };
+  await show({ source: prepared({ ...tracks, previewMode: "on-demand" }) });
+  // The original would play whichever track the player picks: its preview plays first, then parts made of the track.
+  expect(opened.mock.calls[0]![1]).toMatchObject({ original: api.mediaFileUrl(clip.id, true) });
+  expect(opened.mock.calls[0]![1].chunkUrl(2)).toBe(api.sourcePreviewUrl(clip.id, 2));
+  // Another track picked opens its own preview.
+  await show({ source: prepared({ ...tracks, previewMode: "on-demand", audioTrack: 1 }) });
+  expect(opened).toHaveBeenCalledTimes(2);
+  // One audio track plays the original, as ever.
+  await show({ source: prepared({ originalPlaybackType: "video/mp4", duration: 600 }) });
+  expect(opened.mock.calls[2]![1]).toMatchObject({ original: api.mediaFileUrl(clip.id) });
+});
+
 it("plays a long clip section by section, and the edit as a stream until its file is saved", async () => {
   const opened = vi.spyOn(sourcePlayback, "openSourcePlayback").mockReturnValue({ prepare() {}, seek() {}, dispose() {} } as unknown as ReturnType<typeof sourcePlayback.openSourcePlayback>);
   await show({ source: prepared({ previewMode: "on-demand", duration: 600 }) });

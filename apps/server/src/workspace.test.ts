@@ -19,7 +19,7 @@ import { RecordingSpeakers } from "./services/recordingSpeakers.js";
 import { CLASSES, SAMPLE_RATE, SEPARATOR, CTC_LETTERS } from "./transcribe/ctcAlign.js";
 import { EmissionFile } from "./transcribe/emissions.js";
 import { AnalysisCache } from "./services/analysisCache.js";
-import { resolveFfmpeg, runCapture } from "@scarlet/render";
+import { heardAudioKey, resolveFfmpeg, runCapture } from "@scarlet/render";
 import { previewPictures } from "./services/previewPictures.js";
 import { createTask, migrateDialogueOperations, appendTaskEvent, cancelTask, saveTask } from "./services/tasks.js";
 import { continueReadyRuns, continueWhenReady, recoverTasks } from "./services/taskRecovery.js";
@@ -524,8 +524,8 @@ it("returns legacy edit history immediately and backfills only open proposals", 
 });
 
 it.each([
-  { updateRoles: false, expectedStreams: [undefined] },
-  { updateRoles: true, expectedStreams: [undefined, 2] },
+  { updateRoles: false, expectedStreams: [null] },
+  { updateRoles: true, expectedStreams: [null, 2] },
 ])("retains the Whisper decode through speaker analysis and respects stream selection (%j)", async ({ updateRoles, expectedStreams }) => {
   const { ctx } = workspace;
   ctx.paths.ensureProject(project.id);
@@ -546,7 +546,7 @@ it.each([
   try {
     expect(await transcribeMedia(ctx, project.id, media)).toBeTruthy();
     while (ctx.pending.size) await Promise.all([...ctx.pending]);
-    expect(decode.mock.calls.map(([, , options]) => options?.audioStream)).toEqual(expectedStreams);
+    expect(decode.mock.calls.map(([, , options]) => heardAudioKey(options?.audio))).toEqual(expectedStreams);
     expect(speaker).toHaveBeenCalledTimes(1);
     for (const [, wav] of decode.mock.calls) expect(existsSync(wav)).toBe(false);
   } finally {

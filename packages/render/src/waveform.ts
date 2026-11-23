@@ -9,7 +9,7 @@
  */
 import { endianness } from "node:os";
 import type { AudioTrackSelection } from "@scarlet/timeline";
-import { audioMixStreamsFilter, resolveAudioTrack } from "./audioTrack.js";
+import { audioMapArgs, type HeardAudio } from "./audioTrack.js";
 import { FFMPEG_BASE_ARGS, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, ffSeconds, resolveFfmpeg, runCapture } from "./exec.js";
 
 const DECODE_RATE = 16000;
@@ -50,31 +50,18 @@ export interface WaveformCache {
   rms: Float32Array;
 }
 
-function pcmArgs(file: string, opts: { from?: number; to?: number; channel?: number; audioTrack?: AudioTrackSelection; audioStreamCount?: number }): string[] {
+function pcmArgs(file: string, opts: { from?: number; to?: number; channel?: number } & HeardAudio): string[] {
   const args: string[] = [...FFMPEG_BASE_ARGS];
   if (opts.from !== undefined) args.push("-ss", ffSeconds(opts.from));
   if (opts.to !== undefined) args.push("-t", String(Math.max(0, opts.to - (opts.from ?? 0))));
   args.push(...LOCAL_MEDIA_INPUT, "-i", file, "-vn");
-  const resolved = resolveAudioTrack(opts.audioTrack, opts.audioStreamCount);
-  if (resolved.mode === "mix") {
-    const post = opts.channel === undefined ? "" : `,pan=mono|c0=c${opts.channel}`;
-    const mix = audioMixStreamsFilter(0, resolved.count, {
-      sampleRate: DECODE_RATE,
-      channelLayout: opts.channel === undefined ? "mono" : undefined,
-      outLabel: "wf_mix",
-      prefix: "wf_",
-    });
-    args.push("-filter_complex", `${mix};[wf_mix]${SOURCE_AUDIO_CLOCK}${post}[wf_out]`, "-map", "[wf_out]");
-  } else {
-    args.push("-map", `0:a:${resolved.stream}`);
-    const filters = opts.channel === undefined ? SOURCE_AUDIO_CLOCK : `${SOURCE_AUDIO_CLOCK},pan=mono|c0=c${opts.channel}`;
-    args.push("-af", filters);
-  }
+  const filters = opts.channel === undefined ? SOURCE_AUDIO_CLOCK : `${SOURCE_AUDIO_CLOCK},pan=mono|c0=c${opts.channel}`;
+  args.push(...audioMapArgs(opts, { filters, sampleRate: DECODE_RATE, channelLayout: opts.channel === undefined ? "mono" : undefined, label: "wf" }));
   args.push("-ac", "1", "-ar", String(DECODE_RATE), "-f", "s16le", "-");
   return args;
 }
 
-async function decodePcm(file: string, opts: { from?: number; to?: number; channel?: number; audioTrack?: AudioTrackSelection; audioStreamCount?: number; ffmpegPath?: string; signal?: AbortSignal }): Promise<Buffer> {
+async function decodePcm(file: string, opts: { from?: number; to?: number; channel?: number; ffmpegPath?: string; signal?: AbortSignal } & HeardAudio): Promise<Buffer> {
   const { stdout } = await runCapture(resolveFfmpeg(opts.ffmpegPath), pcmArgs(file, opts), { signal: opts.signal });
   return stdout;
 }
@@ -267,10 +254,10 @@ function checkSpeechWindow(from: number, to: number) {
 
 /** WebRTC VAD over 20 ms frames. Warm up on the preceding audio, then return
  * source-time speech spans for this window only. Each decode has independent state. */
-export async function speechActivity(file: string, from: number, to: number, signal?: AbortSignal) {
+export async function speechActivity(file: string, from: number, to: number, signal?: AbortSignal, audio?: HeardAudio) {
   checkSpeechWindow(from, to);
   const start = speechActivityStart(from);
-  return speechActivityOf(pcmSamples(await decodePcm(file, { from: start, to, signal })), start, from, to);
+  return speechActivityOf(pcmSamples(await decodePcm(file, { ...audio, from: start, to, signal })), start, from, to);
 }
 
 /** Where the audio for a speech window starts: the detector warms up on the 0.3 s before it. */

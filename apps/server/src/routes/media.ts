@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { MultipartParseError, parseMultipartRequest } from "@remix-run/multipart-parser/future";
-import { fileInDirectoryAsync, hasIndexedAvc } from "@scarlet/render";
+import { fileInDirectoryAsync, hasIndexedAvc, heardAudio, heardAudioKey } from "@scarlet/render";
 import { Hono } from "hono";
 import { z } from "zod/v3";
 import { AudioTrackSelection, DialogueVoiceRoles, isPlayableMedia, MediaKind, Provenance, WebSource } from "@scarlet/timeline";
@@ -21,6 +21,7 @@ import { getTranscriptionProvider, importTranscriptionPolicy } from "../transcri
 import { AnalysisCache } from "../services/analysisCache.js";
 import { transcriptReader } from "../services/transcriptReader.js";
 import { otherInputReader } from "../services/otherInput.js";
+import { afterAudioTrackChange } from "../services/audioTrackChange.js";
 import { sourceCacheStatuses, sourcePreviews } from "../services/sourcePreviews.js";
 import { framePriority, pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
@@ -135,9 +136,11 @@ export function mediaRoutes(ctx: Ctx) {
         audioTrack: normalized,
       }, status, error);
       ctx.bus.publish({ type: "media.updated", projectId: current.projectId, media: saved });
-      return saved;
+      return { before: current, saved };
     }, "immediate")();
-    return c.json({ media });
+    // What was made from the old track is made again from the new one: its transcript and its previews.
+    await ctx.track(afterAudioTrackChange(ctx, media.before, { ...media.saved, projectId: media.before.projectId }), source.projectId);
+    return c.json({ media: media.saved });
   });
 
   r.post("/projects/:id/media", async (c) => {
@@ -355,13 +358,19 @@ export function mediaRoutes(ctx: Ctx) {
     return serveFile(c.req.raw, file, { contentType: `image/${/\.png$/.test(file) ? "png" : /\.webp$/.test(file) ? "webp" : "jpeg"}` });
   });
 
-  r.get("/media/:mediaId/proxy", (c) => {
+  r.get("/media/:mediaId/proxy", async (c) => {
     const media = requireMedia(ctx, c.req.param("mediaId"));
     const proxy = join(ctx.paths.proxies(media.projectId), `${media.id}.mp4`);
     // ffmpeg creates its output before the MP4 is playable.
-    return !media.previewMode && isPlayableMedia(media) && existsSync(proxy)
-      ? serveFile(c.req.raw, proxy)
-      : serveOriginal(c.req.raw, join(ctx.paths.media(media.projectId), media.path));
+    if (!media.previewMode && isPlayableMedia(media) && existsSync(proxy)) return serveFile(c.req.raw, proxy);
+    // A video with several audio tracks would play whichever track the player picks. It plays its playback cache, made
+    // of the chosen track, and until that is ready the parts made of it on demand.
+    if (media.kind === "video" && (media.audioStreams?.length ?? 0) > 1) {
+      const cached = await sourcePreviews.fullFile(ctx, media);
+      if (cached) return serveFile(c.req.raw, cached);
+      throw notFound("preview of the chosen audio track");
+    }
+    return serveOriginal(c.req.raw, join(ctx.paths.media(media.projectId), media.path));
   });
 
   r.on(["GET", "POST"], "/media/:mediaId/playback-cache", async c => {
@@ -405,9 +414,10 @@ export function mediaRoutes(ctx: Ctx) {
       const file = await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path);
       if (!file) throw notFound("source file");
       const info = await stat(file);
-      const key = JSON.stringify(["vad", file, media.hash, info.size, info.ctimeMs, info.mtimeMs, from, to]);
+      const audio = heardAudio(media);
+      const key = JSON.stringify(["vad", file, media.hash, info.size, info.ctimeMs, info.mtimeMs, from, to, heardAudioKey(audio)]);
       // Up to a minute, read because someone asked: a running edit checks its joins with it while caching is paused too.
-      const spans = await speech.get(key, () => ctx.track(recordingSpeechActivity(ctx, file, from, to, ctx.projectSignal(media.projectId)), media.projectId));
+      const spans = await speech.get(key, () => ctx.track(recordingSpeechActivity(ctx, file, from, to, ctx.projectSignal(media.projectId), audio), media.projectId));
       return c.json({ mediaId: media.id, from, to, ...wf, speechActivity: spans });
     }
     if (c.req.query("format") === "peaks-f64le") {

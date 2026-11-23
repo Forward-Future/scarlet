@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_PREVIEW_HEIGHT, type AudioTrackSelection } from "@scarlet/timeline";
-import { audioMixStreamsFilter, resolveAudioTrack } from "./audioTrack.js";
+import { audioMapArgs } from "./audioTrack.js";
 import { FfmpegError, LOCAL_MEDIA_INPUT, even, failureReason, runFfmpeg, threadedAvcPreview } from "./exec.js";
 import { CUDA_FRAMES_INPUT } from "./mediaInput.js";
 import { probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
@@ -183,12 +183,9 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
         "file " + name, "inpoint 0", "duration " + ((parts[i + 1]?.start ?? pictureDuration) - start).toFixed(9),
       ]);
       await writeFile(manifest, list.join("\n") + "\n");
-      const resolved = resolveAudioTrack(opts.audioTrack, probe.audioStreams?.length);
+      const heard = { audioTrack: opts.audioTrack, audioStreamCount: probe.audioStreams?.length };
       const audio = probe.hasAudio
-        ? resolved.mode === "mix"
-          ? [...LOCAL_MEDIA_INPUT, "-i", input, "-filter_complex", audioMixStreamsFilter(1, resolved.count, { channelLayout: "stereo", outLabel: "paout", prefix: "pa_" }),
-            "-map", "0:v:0", "-map", "[paout]", ...PROXY_AUDIO]
-          : [...LOCAL_MEDIA_INPUT, "-i", input, "-map", "0:v:0", "-map", `1:a:${resolved.stream}`, ...PROXY_AUDIO]
+        ? [...LOCAL_MEDIA_INPUT, "-i", input, "-map", "0:v:0", ...audioMapArgs(heard, { input: 1, channelLayout: "stereo", label: "pa" }), ...PROXY_AUDIO]
         : ["-map", "0:v:0", "-an"];
       await runFfmpeg(["-y", "-f", "concat", "-safe", "1", "-i", manifest, ...audio,
         "-c:v", "copy", "-movflags", "+faststart", output], { signal: opts.signal, ffmpegPath: opts.ffmpegPath,
@@ -204,13 +201,7 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
   if (video) args.push("-map", "0:v:0", ...video.output);
   else args.push("-vn");
   if (probe.hasAudio) {
-    const resolved = resolveAudioTrack(opts.audioTrack, probe.audioStreams?.length);
-    if (resolved.mode === "mix") {
-      args.push("-filter_complex", audioMixStreamsFilter(0, resolved.count, { channelLayout: "stereo", outLabel: "paout", prefix: "pa_" }),
-        "-map", "[paout]", ...PROXY_AUDIO);
-    } else {
-      args.push("-map", `0:a:${resolved.stream}`, ...PROXY_AUDIO);
-    }
+    args.push(...audioMapArgs({ audioTrack: opts.audioTrack, audioStreamCount: probe.audioStreams?.length }, { channelLayout: "stereo", label: "pa" }), ...PROXY_AUDIO);
   } else {
     args.push("-an");
   }

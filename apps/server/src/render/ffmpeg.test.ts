@@ -35,7 +35,7 @@ it("extracts the sound whisper wants: 16 kHz mono, of the whole file or a part o
 
   const part = join(directory, "part.wav");
   const seen: number[] = [];
-  await extractWav(tone, part, { start: 0.5, duration: 1, sampleRate: 8000, audioStream: 1, progress: { duration: 1, onProgress: p => seen.push(p) } });
+  await extractWav(tone, part, { start: 0.5, duration: 1, sampleRate: 8000, audio: { audioTrack: 1 }, progress: { duration: 1, onProgress: p => seen.push(p) } });
   const cut = wav(part);
   expect(cut).toMatchObject({ rate: 8000, channels: 1 });
   expect(cut.seconds).toBeCloseTo(1, 1);
@@ -60,7 +60,7 @@ it("keeps a later microphone on the recording clock in transcription WAVs", asyn
     "-i", "sine=frequency=440:sample_rate=16000:duration=1", "-c:v", "libx264", "-c:a", "pcm_s16le", camera]);
   for (const start of [0, 0.25]) {
     const out = join(directory, `late-${start}.wav`);
-    await extractWav(camera, out, { start, duration: 1 - start, audioStream: 0 });
+    await extractWav(camera, out, { start, duration: 1 - start, audio: { audioTrack: 0 } });
     const data = readFileSync(out);
     const pcm = data.subarray(data.indexOf("data") + 8);
     expect(pcm.length).toBe((1 - start) * 16000 * 2);
@@ -70,8 +70,27 @@ it("keeps a later microphone on the recording clock in transcription WAVs", asyn
   }
 });
 
+it("reads the first audio stream, by number, when no track is chosen", async () => {
+  // Neither track is marked default, so FFmpeg left to itself takes the stereo tone for having more channels.
+  const tracks = join(directory, "first-silent.mka");
+  await ffmpeg(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono:d=1", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1",
+    "-map", "0:a", "-map", "1:a", "-ac:a:1", "2", "-disposition:a:0", "0", "-disposition:a:1", "0", "-c:a", "pcm_s16le", "-y", tracks]);
+  const loudest = async (audio?: Parameters<typeof extractWav>[2]) => {
+    const out = join(directory, `heard-${JSON.stringify(audio ?? null).replace(/\W/g, "")}.wav`);
+    await extractWav(tracks, out, audio);
+    const data = readFileSync(out);
+    const pcm = data.subarray(data.indexOf("data") + 8);
+    let peak = 0;
+    for (let i = 0; i + 1 < pcm.length; i += 2) peak = Math.max(peak, Math.abs(pcm.readInt16LE(i)));
+    return peak;
+  };
+  expect(await loudest()).toBe(0);
+  expect(await loudest({ audio: { audioTrack: 1 } })).toBeGreaterThan(1000);
+  expect(await loudest({ audio: { audioTrack: "all", audioStreamCount: 2 } })).toBeGreaterThan(1000);
+});
+
 it("says which stream is missing with ffmpeg's own words when the file has no such audio", async () => {
-  const failure = await extractWav(tone, join(directory, "none.wav"), { audioStream: 5 }).then(() => null, e => e as FfmpegError);
+  const failure = await extractWav(tone, join(directory, "none.wav"), { audio: { audioTrack: 5 } }).then(() => null, e => e as FfmpegError);
   expect(failure).toBeInstanceOf(FfmpegError);
   expect(failure!.message).toMatch(/exited with code \d+: [\s\S]*0:a:5/);
   expect(failure!.args).toContain("0:a:5");

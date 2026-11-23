@@ -114,7 +114,7 @@ class SourcePreviews {
         await mkdir(ctx.paths.proxies(media.projectId), { recursive: true });
         signal.throwIfAborted();
         await ctx.render.makeProxy(identity.file, temp, {
-          height, hwaccel: ctx.settings().render.hwaccel, signal, checkpointDir,
+          height, audioTrack: media.audioTrack, hwaccel: ctx.settings().render.hwaccel, signal, checkpointDir,
           onFallback: stage => ctx.log(`[media] proxy_fallback ${target} stage=${stage}`),
           onProgress: p => { job.progress = p; job.remainingSeconds = timeLeft(p); },
         });
@@ -197,7 +197,7 @@ class SourcePreviews {
       const temp = file + "." + randomUUID() + ".part.mp4";
       try {
         await ctx.render.makeProxy(identity.file, temp, {
-          height, range, hwaccel: ctx.settings().render.hwaccel, signal: lifetime,
+          height, range, audioTrack: media.audioTrack, hwaccel: ctx.settings().render.hwaccel, signal: lifetime,
           onFallback: stage => {
             let log = proxyFallbacks.get(ctx);
             if (!log) proxyFallbacks.set(ctx, log = throttledLog(ctx.log));

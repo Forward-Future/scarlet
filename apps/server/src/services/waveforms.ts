@@ -1,5 +1,5 @@
-import { readFile, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile, rm, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
 import {
   decodeWaveformCache,
   encodeWaveformCache,
@@ -95,6 +95,15 @@ async function buildWaveform(ctx: Ctx, media: MediaWithStatus & { projectId: str
 export function olderWaveforms(ctx: Ctx, projectId: string, mediaId: string) {
   const base = join(ctx.paths.waveforms(projectId), mediaId);
   return [".v4", ".v3", ".v2", ""].flatMap(version => [base + version + ".waveform", base + version + ".json"]);
+}
+
+/** A recording's waveforms of every audio track it was heard on, and those an older engine wrote. */
+export async function everyWaveform(ctx: Ctx, projectId: string, mediaId: string) {
+  const dir = ctx.paths.waveforms(projectId), base = waveformBase(ctx, projectId, mediaId);
+  const tracks = basename(waveformBase(ctx, projectId, mediaId, "all")).replace(/all$/, "");
+  const names = await readdir(dir).catch(() => [] as string[]);
+  return [base + ".waveform", base + ".json", ...olderWaveforms(ctx, projectId, mediaId),
+    ...names.filter(name => name.startsWith(tracks) && /\.(waveform|json)$/.test(name)).map(name => join(dir, name))];
 }
 
 export function waveformBase(ctx: Ctx, projectId: string, mediaId: string, audioTrack?: AudioTrackSelection) {

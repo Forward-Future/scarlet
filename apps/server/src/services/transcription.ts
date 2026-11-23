@@ -1,6 +1,7 @@
 import { statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
+import { heardAudio } from "@scarlet/render";
 import { applyWordFixes, type Task } from "@scarlet/shared";
 import { newId, TranscriptWordFix, type MediaAsset, type Transcript, type TranscriptSegment } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
@@ -256,16 +257,16 @@ async function fillAlignedHoles(p: PostAlignContext, alignable: boolean, segment
   if (!alignable) return segments;
   const full = p.wav ?? join(p.ctx.paths.tmp, newId("recording") + ".wav");
   try {
-    if (!p.wav) await extractWav(p.src, full, { signal: p.signal, audioStream: p.asset.audioTrack, audioStreamCount: p.asset.audioStreams?.length });
+    if (!p.wav) await extractWav(p.src, full, { signal: p.signal, audio: heardAudio(p.asset) });
     return await fillTranscriptHoles({
       wav: full, segments, tmpDir: p.ctx.paths.tmp, signal: p.signal,
       log: message => p.ctx.log(`${message} (${p.asset.id})`),
       read: p.provider.name !== "whispercpp" ? undefined : async laid =>
         (await p.lane.run(p.work, p.signal, () => p.provider.transcribe({ path: laid, dialogueWindow: {}, tmpDir: p.ctx.paths.tmp, signal: p.signal, language: p.language }))).segments,
       align: async found => alignTranscript(p.ctx, {
-        source: p.src, wav: full, audioStream: p.asset.audioTrack, audioStreamCount: p.asset.audioStreams?.length,
+        source: p.src, wav: full, audio: heardAudio(p.asset),
         language: p.language, segments: found, signal: p.signal,
-        emissions: await emissionStore(p.ctx, p.projectId, p.src, p.asset.audioTrack), work: p.alignment,
+        emissions: await emissionStore(p.ctx, p.projectId, p.src, heardAudio(p.asset)), work: p.alignment,
       }),
     });
   } catch (error) {
@@ -291,11 +292,11 @@ async function restoreTidiedWords(
 ): Promise<TranscriptSegment[]> {
   if (!alignable || alignmentFailed || p.provider.name !== "whispercpp" || !readsEnglishSpeech(p.language)) return segments;
   const full = p.wav ?? join(p.ctx.paths.tmp, newId("recording") + ".wav");
-  const file = await emissionStore(p.ctx, p.projectId, p.src, p.asset.audioTrack);
+  const file = await emissionStore(p.ctx, p.projectId, p.src, heardAudio(p.asset));
   let store: EmissionFile | null = null;
   const opened = async () => store ??= await EmissionFile.open(file);
   try {
-    if (!p.wav) await extractWav(p.src, full, { signal: p.signal, audioStream: p.asset.audioTrack, audioStreamCount: p.asset.audioStreams?.length });
+    if (!p.wav) await extractWav(p.src, full, { signal: p.signal, audio: heardAudio(p.asset) });
     return await putBackTidiedWords({
       wav: full, segments, tmpDir: p.ctx.paths.tmp, signal: p.signal,
       log: message => p.ctx.log(`${message} (${p.asset.id})`),
@@ -332,7 +333,7 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
   // A local model can be changed while its audio is queued or while the old model's first words are being aligned.
   const signal = AbortSignal.any([interrupted, ctx.repos.settings.transcriptionSignal]);
   if (transcriptionHeld(ctx, projectId)) controller.abort(new Error("Project media processing stopped."));
-  const wav = provider.name === "whispercpp" && matchesSpeakerStream(asset)
+  const wav = provider.name === "whispercpp" && matchesSpeakerStream(asset, heardAudio(asset))
     ? join(ctx.paths.tmp, newId("recording") + ".wav") : undefined;
   const work: AudioWork = { mediaId: asset.id, kind: "transcript" };
   const alignment: AudioWork = { mediaId: asset.id, kind: "alignment" };
@@ -362,7 +363,7 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     const transcribe = () => {
       ctx.log(`[transcribe] recognition_started ${target} provider=${provider.name}`);
       progress.transcribing(recognized);
-      return provider.transcribe({ path: src, audioStream: asset.audioTrack, audioStreamCount: asset.audioStreams?.length,
+      return provider.transcribe({ path: src, audio: heardAudio(asset),
         duration: asset.duration, tmpDir: ctx.paths.tmp, signal, keepWavAt: wav,
         checkpoint: saved.recognition, onProgress: progress.transcribing, beforeUpload: checkRunning,
       });
@@ -429,7 +430,7 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     if (alignable && !saved.alignment) early = !!save(result.segments, { through: 0, nextWord: 0, fraction: 0 });
     progress.aligning(saved.alignment?.fraction ?? 0);
     // The old process's scratch WAV is gone. Recreate the shared decode before alignment or the gap check reads it.
-    if (saved.aligned && wav) await extractWav(src, wav, { signal, audioStream: asset.audioTrack, audioStreamCount: asset.audioStreams?.length });
+    if (saved.aligned && wav) await extractWav(src, wav, { signal, audio: heardAudio(asset) });
     // While a pass is reading this recording, its alignment lets the speakers a pass waits for finish first
     // (RecordingSpeakers.awaitedByPass). Nothing a pass reads needs word times before its first page.
     // A pass reading any recording of the project counts: it turns to this one next, and its first page here waits
@@ -438,8 +439,8 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     const speakersFirst = () => ctx.speakers.beside && passReading() ? ctx.speakers.awaitedByPass(projectId) : undefined;
     let publishedThrough = saved.alignment?.through ?? 0;
     const finishedAlignment = saved.alignment?.complete;
-    const aligned = finishedAlignment ? result.segments : await alignTranscript(ctx, { source: src, wav, audioStream: asset.audioTrack, audioStreamCount: asset.audioStreams?.length, language, segments: result.segments, signal, resume: saved.alignment,
-      emissions: alignable ? await emissionStore(ctx, projectId, src, asset.audioTrack) : undefined, hold: speakersFirst,
+    const aligned = finishedAlignment ? result.segments : await alignTranscript(ctx, { source: src, wav, audio: heardAudio(asset), language, segments: result.segments, signal, resume: saved.alignment,
+      emissions: alignable ? await emissionStore(ctx, projectId, src, heardAudio(asset)) : undefined, hold: speakersFirst,
       work: alignment, onProgress: progress.aligning,
       onFailure: () => { alignmentFailed = true; },
       onTurn: (soFar, through, cursor) => {
@@ -457,7 +458,7 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     if (!stored && early) keepTimes(ctx, asset.id, task.id);
     if (stored?.speakerSource) {
       const decoded = wav && stamp && asset.path === stored.speakerSource.path
-        ? { wav, size: stamp.size, mtimeMs: stamp.mtimeMs, ctimeMs: stamp.ctimeMs } : undefined;
+        ? { wav, audio: heardAudio(asset), size: stamp.size, mtimeMs: stamp.mtimeMs, ctimeMs: stamp.ctimeMs } : undefined;
       labeling = ctx.speakers.ensure(ctx, projectId, stored.speakerSource, stored.transcript, decoded, transcriptionHeld(ctx, projectId));
     }
     // The first pass on this recording finds its pages read.

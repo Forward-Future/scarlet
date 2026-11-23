@@ -55,9 +55,9 @@ it("shares emissions across directory aliases while keeping different audio stre
   await symlink(media, alias, "junction");
   const source = join(media, "interview.wav"), otherPath = join(alias, "interview.wav");
   await writeFile(source, "recording");
-  const store = await emissionStore(ctx(), "p", source, 1);
-  expect(await emissionStore(ctx(), "p", otherPath, 1)).toBe(store);
-  expect(await emissionStore(ctx(), "p", otherPath, 0)).not.toBe(store);
+  const store = await emissionStore(ctx(), "p", source, { audioTrack: 1 });
+  expect(await emissionStore(ctx(), "p", otherPath, { audioTrack: 1 })).toBe(store);
+  expect(await emissionStore(ctx(), "p", otherPath, { audioTrack: 0 })).not.toBe(store);
 });
 
 it("keeps the decode for the next reader, then removes it once nobody has read it for two minutes", async () => {

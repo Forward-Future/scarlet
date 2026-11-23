@@ -9,6 +9,7 @@ import type { TimeRange } from "@scarlet/timeline";
 import { FFMPEG_QUIET_ARGS, requireDrawtext, resolveFfmpeg, runCapture } from "./exec.js";
 import { drawtextFontArg } from "./fonts.js";
 import { rangeInput } from "./mediaInput.js";
+import { audioMixStreamsFilter, resolveAudioTrack, type HeardAudio } from "./audioTrack.js";
 
 export interface SoundPictureWord { text: string; start: number; end: number }
 export interface SoundPictureOptions {
@@ -17,7 +18,8 @@ export interface SoundPictureOptions {
   /** Ranges inside it to take out, for the second row. */
   remove?: TimeRange[];
   words?: SoundPictureWord[];
-  stream?: number;
+  /** The audio to draw: a recording's chosen track, a voice's own input, or every track mixed. */
+  audio?: HeardAudio;
   signal?: AbortSignal;
 }
 
@@ -58,9 +60,10 @@ export function soundPictureGraph(opts: SoundPictureOptions): { graph: string; l
   const text = (s: string, px: number, y: number, size = 14, color = "0xe8e8e8") =>
     `drawtext=${face}:expansion=none:text='${plain(s)}':fontsize=${size}:fontcolor=${color}:x=${Math.max(2, px)}:y=${y}`;
   const box = (px: number, y: number, w: number, h: number, color: string) => `drawbox=x=${px}:y=${y}:w=${Math.max(1, w)}:h=${h}:color=${color}:t=fill`;
-  const stream = `0:a:${opts.stream ?? 0}`;
+  const heard = resolveAudioTrack(opts.audio?.audioTrack, opts.audio?.audioStreamCount);
+  const stream = heard.mode === "mix" ? "heard" : `0:a:${heard.stream}`;
   const height = ROW * (cut ? 2 : 1);
-  const chains: string[] = [], draw: string[] = [];
+  const chains: string[] = heard.mode === "mix" ? [audioMixStreamsFilter(0, heard.count, { outLabel: "heard", prefix: "heard_" })] : [], draw: string[] = [];
   const layout: SoundPictureLayout = { width: W, height, pixelsPerSecond: Math.round(pps * 100) / 100, rows: [] };
   const taps = 2 + (cut ? pieces.length : 0);
   chains.push(`[${stream}]aresample=16000,aformat=sample_fmts=fltp:channel_layouts=mono,asplit=${taps}${Array.from({ length: taps }, (_, i) => `[a${i}]`).join("")}`);

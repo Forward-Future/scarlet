@@ -2,8 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { Project, Timeline } from "@scarlet/timeline";
-import { audioMixStreamsFilter, resolveAudioTrack } from "./audioTrack.js";
+import { Project, Timeline, type AudioTrackSelection } from "@scarlet/timeline";
+import { audioMapArgs, audioMixStreamsFilter, heardAudio, heardAudioKey, resolveAudioTrack, type HeardAudio } from "./audioTrack.js";
+import { audition, reviewWindow } from "./inspection.js";
+import { frameLoudness } from "./lipSync.js";
+import { makeProxy } from "./proxy.js";
+import { soundPictureGraph } from "./soundPicture.js";
 import { runFfmpeg } from "./exec.js";
 import { buildFilterGraph } from "./graph.js";
 import { probeMedia, probeToAssetFields } from "./probe.js";
@@ -163,5 +167,92 @@ describe("multi-audio-track media end-to-end", () => {
     const outAllWf = await extractWaveform(outAll, { from: 0, to: 2, points: 4 });
     expect(outAllWf.rms[0]).toBeGreaterThan(0.05);
     expect(outAllWf.rms[3]).toBeGreaterThan(0.05);
+  });
+});
+
+describe("what Scarlet hears from a recording with several tracks", () => {
+  let dir: string;
+  /**
+   * Track 1 is silent mono; Track 2 is a stereo tone. Neither is marked default, so FFmpeg left to itself picks Track 2
+   * for having more channels.
+   */
+  let file: string;
+  const range = { start: 0.5, end: 1.5 };
+  const second = { audioTrack: 1, audioStreamCount: 2 } as const;
+  const mixed = { audioTrack: "all", audioStreamCount: 2 } as const;
+
+  /** RMS of a 16-bit mono WAV's samples, as audition returns it. */
+  const rmsOf = (base64: string) => {
+    const pcm = Buffer.from(base64, "base64").subarray(44);
+    const samples = new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.length / 2));
+    return Math.sqrt(samples.reduce((sum, s) => sum + (s / 32768) ** 2, 0) / Math.max(1, samples.length));
+  };
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "scarlet-heard-"));
+    file = join(dir, "first-silent.mkv");
+    await runFfmpeg(["-y", "-f", "lavfi", "-i", "color=c=black:s=64x64:r=24:d=2",
+      "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono:d=2",
+      "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=2",
+      "-map", "0:v", "-map", "1:a", "-map", "2:a", "-ac:a:1", "2", "-disposition:a:0", "0", "-disposition:a:1", "0",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k", file]);
+  });
+
+  afterAll(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  it("maps a track by its number and names caches by it, the first track as before", () => {
+    expect(audioMapArgs(undefined)).toEqual(["-map", "0:a:0"]);
+    expect(audioMapArgs(second, { input: 1, filters: "volume=2" })).toEqual(["-map", "1:a:1", "-af", "volume=2"]);
+    const all = audioMapArgs(mixed, { filters: "volume=2", label: "x" });
+    expect(all.slice(0, 1)).toEqual(["-filter_complex"]);
+    expect(all[1]).toContain("[0:a:0]");
+    expect(all[1]).toContain("[0:a:1]");
+    expect(all[1]).toContain("[x_mix]volume=2[x]");
+    expect(all.slice(2)).toEqual(["-map", "[x]"]);
+    expect([heardAudioKey(undefined), heardAudioKey({ audioTrack: 0 }), heardAudioKey(second), heardAudioKey(mixed),
+      heardAudioKey({ audioTrack: "all" })]).toEqual([null, null, 1, "all", null]);
+    expect(heardAudio({ audioTrack: 1, audioStreams: [{ index: 0 }, { index: 1 }] })).toEqual(second);
+  });
+
+  it("listens to the chosen track: the first by default, not the stream FFmpeg would pick", async () => {
+    expect(rmsOf(await audition(file, range))).toBeLessThan(0.001);
+    expect(rmsOf(await audition(file, range, undefined, second))).toBeGreaterThan(0.05);
+    expect(rmsOf(await audition(file, range, undefined, mixed))).toBeGreaterThan(0.05);
+    const waves = await Promise.all([undefined, second].map(audio => extractWaveform(file, { from: 0.5, to: 1.5, points: 2, ...audio })));
+    expect(waves.map(w => w.rms[0]! > 0.05)).toEqual([false, true]);
+  });
+
+  it("reads the cut inspector's levels and audition from the chosen track, mixed tracks included", async () => {
+    const review = (audio?: HeardAudio) => reviewWindow(file, range, { origin: 0, fps: 24, count: 2, includeAudio: true, tempDir: dir, audio });
+    const [first, chosen, all] = await Promise.all([review(), review(second), review(mixed)]);
+    expect(rmsOf(first.wav!)).toBeLessThan(0.001);
+    expect(rmsOf(chosen.wav!)).toBeGreaterThan(0.05);
+    expect(rmsOf(all.wav!)).toBeGreaterThan(0.05);
+  });
+
+  it("measures lip sync against the chosen track's sound", async () => {
+    const heard = await Promise.all([undefined, second].map(audio => frameLoudness(file, range, { fps: 24, frames: 24, audio })));
+    const mean = (values: Float32Array) => values.reduce((a, b) => a + b, 0) / values.length;
+    expect(mean(heard[1]!)).toBeGreaterThan(mean(heard[0]!) + 3);
+  });
+
+  it("draws the chosen track, or every track mixed, in a sound picture", () => {
+    expect(soundPictureGraph({ range, audio: second }).graph).toContain("[0:a:1]aresample");
+    const all = soundPictureGraph({ range, audio: mixed }).graph;
+    expect(all).toContain("amix=inputs=2");
+    expect(all).toContain("[heard]aresample");
+  });
+
+  it("makes previews from the chosen track", async () => {
+    const level = async (audioTrack?: AudioTrackSelection) => {
+      const out = join(dir, `proxy-${audioTrack ?? "first"}.mp4`);
+      await makeProxy(file, out, { height: 64, audioTrack });
+      return (await extractWaveform(out, { from: 0.5, to: 1.5, points: 1 })).rms[0]!;
+    };
+    expect(await level()).toBeLessThan(0.001);
+    expect(await level(1)).toBeGreaterThan(0.05);
+    expect(await level("all")).toBeGreaterThan(0.05);
   });
 });

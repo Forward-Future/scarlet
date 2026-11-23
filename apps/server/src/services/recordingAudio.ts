@@ -1,19 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
 import { open, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AudioTrackSelection } from "@scarlet/timeline";
-import { speechActivity, speechActivityOf, speechActivityStart } from "@scarlet/render";
+import { heardAudioKey, speechActivity, speechActivityOf, speechActivityStart, type HeardAudio } from "@scarlet/render";
 import { extractWav } from "../render/ffmpeg.js";
 import { EMISSION_STORE_SUFFIXES, pcmWavHeader } from "../transcribe/wordAlign.js";
 import { readWavDataLayout } from "../util.js";
 
 type Paths = { paths: { tmp: string; waveforms(projectId: string): string } };
 
-async function stamp(file: string, audioStream?: AudioTrackSelection) {
+/** The recording as it is now and the audio heard from it: what a decode or a store of what was heard from it is named by. */
+async function stamp(file: string, audio?: HeardAudio) {
   // Ingestion and inspection can reach the same recording through different spellings of the library path.
   const source = await realpath(file);
   const info = await stat(source);
-  return [source, info.size, info.mtimeMs, info.ctimeMs, audioStream === 0 ? null : (audioStream ?? null)] as const;
+  return [source, info.size, info.mtimeMs, info.ctimeMs, heardAudioKey(audio)] as const;
 }
 
 function emissionPath(ctx: Paths, projectId: string, identity: readonly unknown[]) {
@@ -28,16 +28,16 @@ function emissionPath(ctx: Paths, projectId: string, identity: readonly unknown[
  * as it is now, so a replaced recording starts a new store. The transcript's alignment and every scan page of the
  * recording read and fill the same one.
  */
-export async function emissionStore(ctx: Paths, projectId: string, file: string, audioStream?: AudioTrackSelection) {
-  return emissionPath(ctx, projectId, await stamp(file, audioStream));
+export async function emissionStore(ctx: Paths, projectId: string, file: string, audio?: HeardAudio) {
+  return emissionPath(ctx, projectId, await stamp(file, audio));
 }
 
 /**
  * Every store a recording's emissions can be under: older engines wrote under the import path during transcription
  * and the resolved path during a scan, and a recording aligned in another language keeps that language's beside it.
  */
-export async function emissionStorePaths(ctx: Paths, projectId: string, file: string, imported: string, audioStream?: AudioTrackSelection) {
-  const [source, ...identity] = await stamp(file, audioStream);
+export async function emissionStorePaths(ctx: Paths, projectId: string, file: string, imported: string, audio?: HeardAudio) {
+  const [source, ...identity] = await stamp(file, audio);
   return [...new Set([source, file, imported])].map(path => emissionPath(ctx, projectId, [path, ...identity]))
     .flatMap(store => EMISSION_STORE_SUFFIXES.map(suffix => store + suffix));
 }
@@ -77,13 +77,13 @@ async function wavLayout(path: string) {
  * instead took ffmpeg 0.5 to 0.9 s a page on an 8 GB recording, twice over (the page's audio, and its speech
  * detection), which was as long as the models then ran.
  */
-export async function recordingWav(ctx: Paths, file: string, signal: AbortSignal, audioStream?: number): Promise<RecordingAudio> {
-  const key = JSON.stringify([ctx.paths.tmp, await stamp(file, audioStream)]);
+export async function recordingWav(ctx: Paths, file: string, signal: AbortSignal, audio?: HeardAudio): Promise<RecordingAudio> {
+  const key = JSON.stringify([ctx.paths.tmp, await stamp(file, audio)]);
   let entry = decodes.get(key);
   if (!entry) {
     const wav = join(ctx.paths.tmp, `recording-${randomUUID()}.wav`);
     // The decode outlives the request that started it, so that request's signal doesn't stop it for the others.
-    const decoded = extractWav(file, wav, { audioStream }).then(async () => ({ wav, ...await wavLayout(wav) }));
+    const decoded = extractWav(file, wav, { audio }).then(async () => ({ wav, ...await wavLayout(wav) }));
     const created = entry = { decoded, users: 0 };
     decodes.set(key, created);
     // A file that can't be deleted (held open by another program) stays for the startup sweep: nothing to stop the engine over.
@@ -142,19 +142,19 @@ function pcmWindows({ wav, samples, data }: Decode): Omit<RecordingAudio, "relea
 }
 
 /**
- * Where a recording's first audio stream holds speech between `from` and `to` (up to a minute), read from the
- * recording's one decode rather than a decode of the window. A pass asks this of window after overlapping window,
- * 808 times on one pass, and each decoded its minute again from the source, two at a time: 7 s a call on average.
- * The stream is the one a window's decode reads (`0:a:0`). A recording that won't decode whole is read by the window.
+ * Where the heard audio (the recording's chosen track, or its first) holds speech between `from` and `to` (up to a
+ * minute), read from the recording's one decode rather than a decode of the window. A pass asks this of window after
+ * overlapping window, 808 times on one pass, and each decoded its minute again from the source, two at a time: 7 s a
+ * call on average. A recording that won't decode whole is read by the window.
  */
-export async function recordingSpeechActivity(ctx: Paths, file: string, from: number, to: number, signal: AbortSignal) {
+export async function recordingSpeechActivity(ctx: Paths, file: string, from: number, to: number, signal: AbortSignal, audio?: HeardAudio) {
   const start = speechActivityStart(from);
   let recording: RecordingAudio | undefined;
   try {
-    recording = await recordingWav(ctx, file, signal, 0);
+    recording = await recordingWav(ctx, file, signal, audio);
   } catch {
     signal.throwIfAborted();
-    return speechActivity(file, from, to, signal);
+    return speechActivity(file, from, to, signal, audio);
   }
   try {
     return await speechActivityOf(await recording.pcm(start, to), start, from, to);

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { statSync, type Stats } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { heardAudio, heardAudioKey } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Task } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
@@ -27,12 +28,14 @@ export async function transcriptionIdentity(ctx: Ctx, asset: MediaAsset, source:
   const script = runtime?.script && runtime.script === ctx.crisperAdapter
     ? createHash("sha256").update(await readFile(runtime.script)).digest("hex")
     : file(runtime?.script);
+  // Another audio track's words are another transcript's. The first track's keep the identity they had.
+  const heard = heardAudioKey(heardAudio(asset));
   return JSON.stringify([1, alignmentVersion, asset.path, source?.size, source?.mtimeMs, source?.ctimeMs,
     settings.language, revision, provider.name, provider.localModel, provider.modelLabel,
     file(adapter), file(runtime?.model), script,
     runtime && !runtime.model && !runtime.adapterOwnsModel ? bundledWhisperModel.sha256 : undefined,
     provider.name === "openai" ? settings.openaiModel : undefined,
-    ...(asset.audioTrack !== undefined && asset.audioTrack !== 0 ? [asset.audioTrack] : [])]);
+    ...heard === null ? [] : [heard]]);
 }
 
 /** The task claim, the saved prefix and the authority to append to it change hands in the same transaction.

@@ -125,8 +125,7 @@ export class WhisperCppProvider implements TranscriptionProvider {
     try {
       await extractWav(input.path, wav, {
         signal: input.signal,
-        audioStream: input.audioStream,
-        audioStreamCount: input.audioStreamCount,
+        audio: input.audio,
       });
       if (input.checkpoint) return await this.transcribeChunks(wav, input, input.checkpoint);
       return await this.transcribeWav(wav, input.tmpDir, input.signal, input.language, undefined, input.onProgress);

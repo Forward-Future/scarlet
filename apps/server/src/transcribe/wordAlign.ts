@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { open, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { QUIET_PEAK, QUIET_RMS } from "@scarlet/mcp/gap-sound";
-import { speechActivityOf } from "@scarlet/render";
+import { speechActivityOf, type HeardAudio } from "@scarlet/render";
 import type { TimeRange, TranscriptSegment } from "@scarlet/timeline";
 import { humanDuration } from "../logText.js";
 import { extractWav } from "../render/ffmpeg.js";
@@ -282,7 +282,7 @@ export function alignWords(ctx: { paths: { root: string } }, wav: string | (() =
  * Keeps the provider's times when the aligner cannot run, and the words it had placed when it fails part way.
  */
 export async function alignTranscript(ctx: { paths: { root: string; tmp: string }; log(message: string): void },
-  input: { source: string; wav?: string; audioStream?: import("@scarlet/timeline").AudioTrackSelection; audioStreamCount?: number; language?: string; segments: TranscriptSegment[]; signal: AbortSignal; work?: AudioWork;
+  input: { source: string; wav?: string; audio?: HeardAudio; language?: string; segments: TranscriptSegment[]; signal: AbortSignal; work?: AudioWork;
     /** Where this recording's emissions are kept, so its scan pages and a later transcript reuse them. */
     emissions?: string; resume?: AlignmentCheckpoint;
     /** Asked before each turn: something this alignment should let finish first, or nothing. */
@@ -299,7 +299,7 @@ export async function alignTranscript(ctx: { paths: { root: string; tmp: string 
   let decoded = !!input.wav;
   const audio = async () => {
     if (!decoded) {
-      await extractWav(source, wav, { signal, audioStream: input.audioStream, audioStreamCount: input.audioStreamCount });
+      await extractWav(source, wav, { signal, audio: input.audio });
       decoded = true;
     }
     return wav;

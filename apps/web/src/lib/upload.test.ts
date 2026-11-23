@@ -138,6 +138,9 @@ it("plays an original only when it is video or sound in a format this window can
   // HDR plays from its preview, tone-mapped to SDR as the video and its export are; ordinary footage plays as it is.
   expect(canPlayOriginal(media({ originalPlaybackType: "video/mp4", color: { hdr: "hlg" } }))).toBe(false);
   expect(canPlayOriginal(media({ originalPlaybackType: "video/mp4", color: {} }))).toBe(true);
+  // A video with several audio tracks plays from its preview of the chosen track: the original plays whichever the
+  // player picks.
+  expect(canPlayOriginal(media({ originalPlaybackType: "video/mp4", audioStreams: [{ index: 0 }, { index: 1 }] }))).toBe(false);
   // The window is asked once for each format.
   expect(canPlayOriginal(media({ id: "med_2", originalPlaybackType: "video/mp4" }))).toBe(true);
   expect(asked).toEqual(["video/mp4", "video/x-prores"]);
