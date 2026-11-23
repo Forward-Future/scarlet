@@ -8,10 +8,11 @@ export interface ProgressFocus {
   bandLabel?: string;
   /**
    * Removed footage is hatched red (the default). `kept`: the footage stays in the edit (a sound fix, a zoom, a title), so After
-   * plays it and it’s only outlined. `added`: footage an edit put back. `proposed`: a call's cut, still in the video until
-   * the editor approves it, so it is drawn as removed footage with a dashed edge.
+   * plays it and it’s only outlined. `added`: footage an edit put back.
    */
-  tone?: "kept" | "added" | "check" | "proposed";
+  tone?: "kept" | "added" | "check";
+  /** Still waiting on the editor's decision (an undecided call, suggestion, or flagged edit): drawn with a dashed edge. */
+  undecided?: boolean;
   /** The editor rejected the edit a moment ago: its band fades where it is, and takes no press meanwhile. */
   leaving?: boolean;
 }
@@ -21,12 +22,12 @@ const MOST_OF_THE_VIDEO = 0.8;
 
 /** The context to show around a change: enough to see what comes before and after it. */
 export function focusAround(range: TimeRange, duration: number, bandLabel?: string,
-  { tone, playbackEnd }: { tone?: ProgressFocus["tone"]; playbackEnd?: number } = {}): ProgressFocus | undefined {
+  { tone, undecided, playbackEnd }: { tone?: ProgressFocus["tone"]; undecided?: boolean; playbackEnd?: number } = {}): ProgressFocus | undefined {
   if (duration > 0 && range.end - range.start >= duration * MOST_OF_THE_VIDEO) return undefined;
   // Center the band with room past the last played frame, including any neighboring cuts the audition skips.
   const pad = Math.max(5, (range.end - range.start) * 0.15, (playbackEnd ?? range.end) - range.end + 2);
   return {
     view: { start: Math.max(0, range.start - pad), end: Math.min(duration || range.end + pad, range.end + pad) },
-    band: range, bandLabel, tone,
+    band: range, bandLabel, tone, ...undecided && { undecided },
   };
 }
