@@ -1,4 +1,4 @@
-//! Data model shared with the Scarlet server (subset of packages/shared/src/api.ts)
+//! Data model shared with the Scarlet server (subset of packages/shared/src/agents.ts and tasks.ts)
 //! plus the runner event types from apps/agent/src/runners/types.ts.
 
 use serde::{Deserialize, Serialize};
