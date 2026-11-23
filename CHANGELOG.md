@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- Settings › General has Talking to you: write in your own words how Scarlet should talk to you in the chat and on its cards, the same in every project and with every model.
 - Edits run on Gemini no longer pick up the personal instructions you wrote for your own Gemini chats, as Claude and Codex edits already didn't.
 - When Scarlet moves a later take to the front of the video, the footage before it no longer shows as one huge cut: only what the video never uses shows as cut.
 - Recordings with more than one audio track, such as OBS captures or multi-mic podcasts, have an Audio track picker in Media: choose one track or mix them all, and Scarlet listens to, plays and exports that choice, and transcribes the recording again when you change it.

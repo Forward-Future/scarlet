@@ -4052,6 +4052,19 @@ it("tells a dialogue pass how many of its cuts the editor's setting asks them to
   ctx.repos.settings.update({ checkIn: "balanced" });
 });
 
+it("tells every request how the editor wants Scarlet to write to them, in their own words, once they've said", async () => {
+  const { ctx } = workspace;
+  const request = (await (await api("POST", projectsPath() + "/tasks", { agent: "gemini", instruction: "Tighten the intro" })).json()).task as Task;
+  const prompt = async () => (await (await api("GET", `/tasks/${request.id}/prompt`)).json()).systemPrompt as string;
+  // Nothing is added until the editor writes something in Settings.
+  expect(ctx.settings().talkingToYou).toBe("");
+  expect(await prompt()).not.toContain("How the editor wants you to write to them");
+  expect((await api("PATCH", "/settings", { talkingToYou: "Say times as 1:05, not 65 seconds." })).status).toBe(200);
+  expect(await prompt()).toMatch(/# How the editor wants you to write to them\n\n[^]*\n\nSay times as 1:05, not 65 seconds\.$/m);
+  expect((await api("PATCH", "/settings", { talkingToYou: "x".repeat(2001) })).status).toBe(400);
+  ctx.repos.settings.update({ talkingToYou: "" });
+});
+
 it("holds new requests while a dialogue pass's staged cuts wait for the editor, except ones about that pass", async () => {
   const { ctx } = workspace;
   vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });

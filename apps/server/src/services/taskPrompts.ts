@@ -119,6 +119,8 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     areaCheck: task.kind === "area_check" ? task.context.areaCheck : undefined,
     listenCheck: isListenCheck(task) ? task.context.listenCheck : undefined,
     checkIn: ctx.settings().checkIn,
+    // A run that edits no video writes nothing the editor reads as Scarlet talking to them.
+    talkingToYou: aside ? undefined : ctx.settings().talkingToYou,
     workDir: opts.workDir,
     timeLimitMinutes: opts.timeLimitMinutes,
     // A request has its harness's own shell, file and web tools; a run that edits no video has Scarlet's alone.
