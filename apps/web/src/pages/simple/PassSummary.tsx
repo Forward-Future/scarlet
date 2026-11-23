@@ -8,7 +8,7 @@ import { clock as clockLabel, editRemovedLabel, lengthLabel, plural } from "../.
 import { editKey, reviewKey, useKeptEdits } from "../../lib/keptEdits";
 import { madeSentence, type SentencePart } from "../../lib/madeSentence";
 import { decidedPassCalls } from "../../lib/passCalls";
-import type { Thread } from "../../lib/threads";
+import { isRecheck, type Thread } from "../../lib/threads";
 import { callRowKey, isWorking, letGo, noNests, noRejected, noSpent, type ChatActions, type Nest, type PassList, type Spent } from "./types";
 
 /**
@@ -203,7 +203,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     }),
     // A call goes by its number, as on its card and on the timeline.
     ...(pass?.calls ?? []).map(c => {
-      const callWord = c.state === "revising" ? (revisionWord(c.run, { nextQueuedId: actions.nextQueuedId }) ?? "Revising…") : undefined;
+      const callWord = c.state === "revising" ? (revisionWord(c.run, { recheck: !!c.run && isRecheck(c.run), nextQueuedId: actions.nextQueuedId }) ?? "Revising…") : undefined;
       return { key: callRowKey(c), at: c.start, displayAt: c.start, mark: c.at,
         hover: { threadId: thread.id, call: c.index } as { threadId: string; editKey?: string; call?: number } | undefined,
         label: c.summary, n: c.n, num: c.n as number | undefined, needs: c.state === "open", sentBack: c.state === "revising",

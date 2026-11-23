@@ -8507,7 +8507,14 @@ it("shows Scarlet's recheck of an approved cut under that call, with why and non
   const under = container.querySelector<HTMLElement>('.subunit[data-run="task_recheck"]');
   expect(under).not.toBeNull();
   expect(under!.closest(".unit")?.getAttribute("data-run")).not.toBe("task_keep");
-  expect(under!.textContent).toContain("The footage here changed after you approved it. Rechecking the cut.");
+  // Nobody typed it, so Scarlet's reason heads it where the editor's words head a revision, after an Auto tag that stays
+  // in view under the row, and isn't said again under its work. The row says Rechecking…, not Revising… (2026-11-22).
+  const heading = under!.querySelector(".subunit-msg");
+  expect([heading?.querySelector(".simple-revising.is-auto")?.textContent, heading?.querySelector("p")?.textContent])
+    .toEqual(["Auto", "AutoThe footage changed after you approved it."]);
+  expect(under!.querySelector(".req .is-note")).toBeNull();
+  expect(under!.textContent!.split("The footage changed after you approved it.").length - 1).toBe(1);
+  expect(under!.closest("li")?.querySelector(":scope > button .simple-pass-value")?.textContent).toBe("Rechecking…");
   expect(under!.textContent).not.toMatch(/keep|Kept the original delivery|The video changed|Recheck this cut/);
 });
 

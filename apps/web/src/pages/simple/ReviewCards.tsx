@@ -13,7 +13,7 @@ import { clock as clockLabel, lengthLabel } from "../../lib/format";
 import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
 import { editKey } from "../../lib/keptEdits";
 import type { Call, CutChoice, Revision } from "../../lib/passCalls";
-import type { Thread } from "../../lib/threads";
+import { isRecheck, type Thread } from "../../lib/threads";
 import { useClippedExpand } from "../../lib/uiHooks";
 import { lastStep, undoKey, undoWords, useUndoStore } from "../../lib/undo";
 import type { AgentContext } from "../../stores/ui";
@@ -48,7 +48,7 @@ export function CallStanding({ run, answer }: { run?: Task; answer?(): void }) {
   return state === "queued" ? <span className="edit-card-status" role="status">Queued</span>
     : state === "waiting_for_user" && answer ? <button type="button" className="simple-link edit-card-status is-ask" aria-label="Answer" onClick={answer}>Needs your answer</button>
     : state === "waiting_for_user" ? <span className="edit-card-status is-ask" role="status">Needs your answer</span>
-    : <span className="edit-card-status working-text" role="status">Revising…</span>;
+    : <span className="edit-card-status working-text" role="status">{run && isRecheck(run) ? "Rechecking…" : "Revising…"}</span>;
 }
 
 /**

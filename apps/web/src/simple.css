@@ -611,6 +611,8 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 /* Under the row it is about, that row names it: its own tag shows only where it sits apart from its row. */
 .subunit-msg .simple-revising { margin: 0 7px 0 0; }
 .simple-pass-list .subunit-msg .simple-revising, .simple-edits > li > .subunit .subunit-msg .simple-revising { display: none; }
+/* A recheck Scarlet started itself keeps its Auto tag under the row: it says who asked, which the row doesn't. */
+:is(.simple-pass-list, .simple-edits) .subunit .subunit-msg .simple-revising.is-auto { display: inline-block; }
 /* The list's rows reach 8px past the text on each side: a request under one ends where the row's own words do. */
 .simple-pass-list > li > .subunit { margin-right: 8px; }
 .unit-msg p { flex: 1; min-width: 0; margin: 0; font-size: 13px; line-height: 1.45; color: var(--color-muted); white-space: pre-wrap; overflow-wrap: anywhere;
