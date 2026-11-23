@@ -310,42 +310,21 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
 @keyframes waveform-grow { from { transform: scaleY(.15); opacity: .35; } }
 /* A half-width tile advances exactly one repeat so the ripple loops without a jump. */
 @keyframes waveform-travel { from { mask-position: 0% center; } to { mask-position: 100% center; } }
-/* While Scarlet is actively editing the video, a wide pillowy glow drifts gently back and forth across the timeline
-   lanes, synced by --edit-phase so saving a new cut mid-pass doesn't jump it, and fading out cleanly when done. */
-.timeline-editing-wash {
-  position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; border-radius: inherit;
-  mix-blend-mode: screen; opacity: 0; transition: opacity .55s ease;
-}
-.timeline-editing-wash[data-active] {
-  opacity: 1;
-  box-shadow: inset 0 0 0 1px rgba(244, 241, 233, .14);
-}
-.timeline-editing-wash::after {
-  content: ""; position: absolute; inset: 0; width: 52%;
-  background:
-    radial-gradient(ellipse 48% 3px at 50% 0%, rgba(255, 253, 248, .55) 0%, transparent 100%),
-    radial-gradient(ellipse 50% 100% at 50% 50%,
-      rgba(244, 241, 233, .28) 0%,
-      rgba(228, 222, 206, .13) 42%,
-      transparent 76%);
-}
+/* While Scarlet is at work on the video, the chat's turning ring and what Scarlet is doing sit beside the clock under
+   the timeline. A press brings that request into the middle of the chat, which lights it for a moment. */
+.timeline-working { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 60%; margin: 0 auto 0 14px; padding: 2px 8px 2px 6px;
+  border-radius: 999px; color: #cfcac0; font: 12px/16px var(--font-sans); cursor: pointer; transition: background-color .15s ease, color .15s ease; }
+.timeline-working:hover, .timeline-working:focus-visible { background: rgba(244, 241, 233, .07); color: var(--color-fg); }
+.timeline-working .req-mark { width: 11px; height: 11px; }
+.timeline-working-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.timeline-working-text > span { color: #8a867f; }
+.timeline-working:hover .timeline-working-text > span, .timeline-working:focus-visible .timeline-working-text > span { color: #b9b5ac; }
+#simple-chat [data-flash] { border-radius: 8px; box-shadow: 0 0 0 6px rgba(244, 241, 233, .065), inset 0 0 0 999px rgba(244, 241, 233, .065); }
 @media (prefers-reduced-motion: no-preference) {
-  .timeline-editing-wash::after {
-    animation: timeline-editing-drift 3.6s ease-in-out var(--edit-phase, 0s) infinite alternate;
-    animation-play-state: paused;
-  }
-  .timeline-editing-wash[data-active]::after { animation-play-state: running; }
+  #simple-chat [data-flash] { animation: chat-flash 1.2s ease-out forwards; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .timeline-editing-wash { transition: opacity .2s ease; }
-  .timeline-editing-wash::after { display: none; }
-  .timeline-editing-wash[data-active] { box-shadow: inset 0 0 0 1px rgba(244, 241, 233, .34); }
-}
-@keyframes timeline-editing-drift {
-  0%   { transform: translateX(-23%); opacity: .82; }
-  50%  { opacity: 1; }
-  100% { transform: translateX(115%); opacity: .82; }
-}
+@keyframes chat-flash { 0%, 45% { box-shadow: 0 0 0 6px rgba(244, 241, 233, .075), inset 0 0 0 999px rgba(244, 241, 233, .075); }
+  100% { box-shadow: 0 0 0 6px transparent, inset 0 0 0 999px transparent; } }
 .timeline-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 22px; margin-top: 6px; }
 .timeline-clock { color: var(--color-fg); font: 12px/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .timeline-clock > span { color: #8a867f; }

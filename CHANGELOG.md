@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- The glow over the timeline is gone: under the timeline it now says what Scarlet is doing, and a press on it takes you to that request in the chat.
 - Edits on long 4K recordings are faster: when Scarlet checks what's on screen it reads the small cached copy of a recording instead of the full-size file, and its own requests no longer wait behind background reading of the rest of the recording.
 - The video player no longer shimmers across the picture while a clip is loading.
 - Left and right arrow keys now move the playhead one second at a time, and Shift with an arrow key steps frame by frame.

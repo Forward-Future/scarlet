@@ -9,6 +9,7 @@ import { runningTranscription, transcriptionProgressLabel, transcriptsProgress }
 import { isWorkingTask, runAim, runIsActive, runItems, runLines, runSummary, type RunItem, type RunLine } from "../../lib/taskRun";
 import { pendingMediaWaits, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
 import { useClippedExpand } from "../../lib/uiHooks";
+import { usePublishWorkingLine } from "../../lib/workingLines";
 import { RequestMetrics, Tokens } from "./RequestMetrics";
 
 export { RequestMetrics };
@@ -149,6 +150,8 @@ function WorkingRun({ task, events: all, changes, callNumber, say, result, onSto
     : readingNote ? READING_NOTE
     : pickingUp ? PICKING_UP
     : doing ?? (voice ? voicePhase[voice.phase] : task.state === "claimed" ? STARTING : WORKING);
+  // The timeline's status says the same words, so the editor can tell what Scarlet is on without the chat in view.
+  usePublishWorkingLine(task.id, words);
   return <div className="req" data-state="working" aria-label="Scarlet’s work" aria-busy>
     {aim && <div className="req-said req-lead"><Said className="req-say" text={aim.text} /></div>}
     <EditorNotes task={task} />
@@ -325,7 +328,7 @@ function TranscriptWait({ task, onResume, onWait, aside }: { task: Task; onResum
 }
 
 /** Where a step stands, as the mark before it: a tick once done, a turning ring while under way. */
-function StepMark({ state }: { state: "done" | "working" }) {
+export function StepMark({ state }: { state: "done" | "working" }) {
   return <span className="req-mark" data-state={state} aria-hidden>
     {state === "done" && <svg viewBox="0 0 16 16"><path d="m4 8.4 2.6 2.6L12 5.4" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg>}
   </span>;

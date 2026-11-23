@@ -166,35 +166,6 @@ it("stays where the editor zoomed while the video plays on elsewhere, instead of
   }
 });
 
-it("drifts a soft wash across the lanes while editing, holds its place across rebuilds, and keeps its phase to fade out", async () => {
-  let now = 2_600;
-  vi.spyOn(performance, "now").mockImplementation(() => now);
-  const wash = () => container.querySelector<HTMLElement>(".timeline-editing-wash")!;
-  const draw = (duration: number, editing?: boolean) => act(async () => root.render(
-    <TimelineScrubber duration={duration} playhead={0} editing={editing} frameAt={() => undefined} onSeek={() => {}} />,
-  ));
-  try {
-    await draw(120, false);
-    expect(wash().dataset.active).toBeUndefined();
-    expect(wash().style.getPropertyValue("--edit-phase")).toBe("");
-    // Editing starts: wash turns on and starts at the wall-clock phase (2.6s mod 7.2s).
-    await draw(120, true);
-    expect(wash().dataset.active).toBe("true");
-    expect(wash().style.getPropertyValue("--edit-phase")).toBe("-2.600s");
-    // A new cut rebuilds the timeline 3.1s later: the new wash picks up at 5.7s instead of snapping back to 0.
-    now += 3_100;
-    await draw(112, true);
-    expect(wash().dataset.active).toBe("true");
-    expect(wash().style.getPropertyValue("--edit-phase")).toBe("-5.700s");
-    // Editing finishes: data-active clears while --edit-phase stays so the fade-out holds where the glow was.
-    await draw(112, false);
-    expect(wash().dataset.active).toBeUndefined();
-    expect(wash().style.getPropertyValue("--edit-phase")).toBe("-5.700s");
-  } finally {
-    vi.restoreAllMocks();
-  }
-});
-
 it("keeps two-finger horizontal scrolling and pinch zoom separate instead of zooming while scrolling", async () => {
   vi.useFakeTimers();
   let now = 1_000;
