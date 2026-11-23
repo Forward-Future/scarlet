@@ -45,13 +45,13 @@ export function leftOutOf(ctx: Ctx, project: Omit<Project, "media">, change: Cha
 
 /**
  * Read the footage left out by changes an earlier build applied without looking: a video built from the pieces to
- * keep showed none of what it left out as cuts (2026-11-12). Joins an earlier reading found are read again: it took a
- * screen and a camera inset laid over a camera already cut for footage left out, and called every framed demo a Cut
- * (2026-11-20). Runs once as Scarlet starts.
+ * keep showed none of what it left out as cuts (2026-11-12). Joins an earlier reading found are read again: reading 1
+ * took a screen and a camera inset laid over a camera already cut for footage left out (2026-11-20), and reading 2
+ * split crossfaded audio joins out of sync when opening them (2026-11-22). Runs once as Scarlet starts.
  */
 export function recordLeftOutFootage(ctx: Ctx): void {
   const stale = (ctx.db.prepare(`SELECT json FROM changes INDEXED BY changes_left_out_reread WHERE state = 'approved'
-    AND json_array_length(json_extract(json, '$.leftOut.joins')) > 0 AND coalesce(json_extract(json, '$.leftOut.reading'), 1) < 2
+    AND json_array_length(json_extract(json, '$.leftOut.joins')) > 0 AND coalesce(json_extract(json, '$.leftOut.reading'), 1) < ${LEFT_OUT_READING}
     ORDER BY created_at`).all() as { json: string }[]).map(row => ctx.repos.changes.parse(row.json));
   for (const change of stale) {
     const project = ctx.repos.projects.header(change.projectId);
@@ -60,6 +60,7 @@ export function recordLeftOutFootage(ctx: Ctx): void {
     ctx.repos.changes.put({ ...change, leftOut });
     const was = change.leftOut!.joins.length;
     if (leftOut.joins.length !== was) ctx.log(`[edit] ${change.id} read again: ${was} stretches of footage were taken for left out, ${leftOut.joins.length} are`);
+    else if (leftOut.version !== change.leftOut!.version) ctx.log(`[edit] ${change.id} read again: rebuilt the footage left out for review`);
   }
   // The index holds only the changes still to read. Left to choose, SQLite would read every applied change by its state.
   const built = (ctx.db.prepare(`SELECT json FROM changes INDEXED BY changes_left_out_unread WHERE state = 'approved'

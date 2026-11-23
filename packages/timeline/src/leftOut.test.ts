@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptyTimeline, makeMediaClip, timelineFromKeepRanges } from "./builders.js";
+import { replayJoinFades } from "./joinCrossfade.js";
 import { leftOutJoins } from "./leftOut.js";
 import { clipEnd, timelineDuration } from "./time.js";
 import type { MediaClip, Timeline } from "./schema.js";
@@ -85,5 +86,71 @@ describe("leftOutJoins", () => {
     (uneven.tracks[0]!.clips[1] as MediaClip).sourceIn = 12;
     (uneven.tracks[0]!.clips[1] as MediaClip).sourceOut = 18;
     expect(leftOutJoins(whole, uneven)).toBeNull();
+  });
+
+  it("keeps sound in sync across a crossfaded join when opening the footage it left out", () => {
+    // Two cuts with centered audio crossfades; the second cut is then extended 2 s earlier and crossfaded again.
+    const before = replayJoinFades(
+      screenAndCamera([[10, 20], [25, 42], [48, 60]], { offset: 2 }),
+      [{ at: 10, trackId: "a1" }, { at: 27, trackId: "a1" }],
+      0.0667,
+    );
+    const after = replayJoinFades(
+      screenAndCamera([[10, 20], [25, 40], [48, 60]], { offset: 2 }),
+      [{ at: 10, trackId: "a1" }, { at: 25, trackId: "a1" }],
+      0.0667,
+    );
+    const found = leftOutJoins(before, after, 30)!;
+    // Only the extended join at 25 s is new (the whole 8 s stretch 40..48 left out there); 10 s was already cut.
+    expect(found.joins).toEqual([{ at: 25, removed: { start: 25, end: 33 } }]);
+    expect(timelineDuration(found.original)).toBeCloseTo(45);
+
+    const video = found.original.tracks[2]!.clips as MediaClip[];
+    const audio = found.original.tracks[1]!.clips as MediaClip[];
+    expect(audio).toHaveLength(3);
+    expect(audio.map(c => c.id).some(id => id.includes("_after"))).toBe(false);
+    // The opened join at 25..33 s plays straight through in sync with the camera, with its crossfade cleared.
+    expect(audio[1]!.timelineIn).toBeCloseTo(10 - 0.0667 / 2);
+    expect(clipEnd(audio[1]!)).toBeCloseTo(33);
+    expect(audio[1]!.sourceOut).toBeCloseTo(50);
+    expect(audio[1]!.audioFadeOut).toBe(0);
+    expect(audio[2]!.timelineIn).toBeCloseTo(33);
+    expect(audio[2]!.sourceIn).toBeCloseTo(50);
+    expect(audio[2]!.audioFadeIn).toBe(0);
+    // The untouched cut at 10 s keeps its crossfade.
+    expect(audio[0]!.audioFadeOut).toBeCloseTo(0.0667);
+    expect(audio[1]!.audioFadeIn).toBeCloseTo(0.0667);
+    // Every clip on the audio track stays in exact sync with its camera clip (no 8 s slip across 25..33 s).
+    for (let i = 0; i < audio.length; i++) {
+      expect(audio[i]!.sourceIn - audio[i]!.timelineIn).toBeCloseTo(video[i]!.sourceIn - video[i]!.timelineIn);
+    }
+  });
+
+  it("opens multiple adjacent crossfaded joins in sync and treats already-crossfaded joins as known", () => {
+    const plain = screenAndCamera([[10, 20], [25, 40], [50, 60]], { offset: 2 });
+    const faded = replayJoinFades(plain, [{ at: 10, trackId: "a1" }, { at: 25, trackId: "a1" }], 0.0667);
+    // Adding crossfades to cuts `before` already had leaves nothing new out.
+    expect(leftOutJoins(plain, faded, 30)).toBeNull();
+    // Nudging a video clip at a join `before`'s crossfaded dialogue already had leaves nothing new out.
+    const nudged = structuredClone(faded);
+    const v2Clip = nudged.tracks[2]!.clips[1] as MediaClip;
+    v2Clip.sourceIn -= 0.05;
+    v2Clip.sourceOut -= 0.05;
+    expect(leftOutJoins(faded, nudged, 30)).toBeNull();
+    // Building all pieces with crossfades from empty opens every join cleanly and in sync.
+    const found = leftOutJoins(empty, faded, 30)!;
+    expect(found.joins).toEqual([
+      { at: 0, removed: { start: 0, end: 10 } },
+      { at: 10, removed: { start: 20, end: 25 } },
+      { at: 25, removed: { start: 40, end: 50 } },
+    ]);
+    const audio = found.original.tracks[1]!.clips as MediaClip[];
+    expect(audio).toHaveLength(3);
+    for (const clip of audio) {
+      expect(clip.sourceIn - clip.timelineIn).toBeCloseTo(2);
+      expect(clip.audioFadeIn).toBe(0);
+      expect(clip.audioFadeOut).toBe(0);
+    }
+    for (let i = 1; i < audio.length; i++) expect(audio[i]!.timelineIn).toBeCloseTo(clipEnd(audio[i - 1]!));
   });
 });
