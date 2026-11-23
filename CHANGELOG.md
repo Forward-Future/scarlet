@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- Recordings with more than one audio track, such as OBS captures or multi-mic podcasts, have an Audio track picker in Media: choose one track or mix them all, and Scarlet listens to, plays and exports that choice, and transcribes the recording again when you change it.
 - Third-party models run through Antigravity (such as Claude Opus 5.5) now use Gemini to listen to cuts instead of receiving audio files they cannot hear, and no longer appear in the Listening model picker.
 - Dialogue passes on an already-assembled recording stay on batched dialogue cuts instead of rebuilding the whole timeline in one pass, and unsure joins during assembly ask to listen or stage for review rather than forcing exact timestamps.
 - Clicking a dotted cut on the Before timeline, even a very narrow one without a label, now opens that edit so you can see which one it is, while dragging across it still scrubs.

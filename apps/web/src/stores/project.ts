@@ -19,7 +19,7 @@ import type {
   VersionSummary,
   WsEvent,
 } from "@scarlet/shared";
-import type { Change, MediaAsset, Note, Project, Timeline } from "@scarlet/timeline";
+import type { AudioTrackSelection, Change, MediaAsset, Note, Project, Timeline } from "@scarlet/timeline";
 import { api, errorMessage } from "../lib/client";
 import { parseTimestamp } from "../lib/format";
 import { subscribeProject } from "../lib/realtime";
@@ -126,6 +126,8 @@ interface ProjectState {
   upsertMedia(projectId: string, media: MediaAsset): void;
   /** Take a file Scarlet couldn't read out of the project. The engine refuses one the video or its history uses. */
   removeMedia(mediaId: string): Promise<void>;
+  /** Choose which audio track (or all tracks mixed) Scarlet reads from a multi-track recording. */
+  setMediaAudioTrack(mediaId: string, audioTrack: AudioTrackSelection): Promise<void>;
   loadActivity(more?: boolean): Promise<void>;
 }
 
@@ -833,6 +835,12 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       await api.removeMedia(projectId, mediaId);
       // The socket says so as well. The row goes without waiting for it.
       patch(projectId, d => ({ media: d.media.filter(m => m.id !== mediaId) }));
+    },
+    async setMediaAudioTrack(mediaId, audioTrack) {
+      const projectId = get().current?.id;
+      if (!projectId) return;
+      const { media } = await api.setMediaAudioTrack(mediaId, audioTrack);
+      patch(projectId, d => ({ media: upsert(d.media, media) }));
     },
     async loadActivity(more) {
       const cur = get().current;

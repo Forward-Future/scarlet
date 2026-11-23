@@ -30,7 +30,7 @@ import type {
   User,
   VersionSummary,
 } from "@scarlet/shared";
-import type { Change, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript } from "@scarlet/timeline";
+import type { AudioTrackSelection, Change, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript } from "@scarlet/timeline";
 import { diffTimelines, newId, timelineDuration, ASPECT_PRESETS } from "@scarlet/timeline";
 import type { ActivityEntry, ApproveResponse, HandoffResponse, TrashedProject } from "@scarlet/shared";
 import type { ScarletApi } from "../api";
@@ -38,7 +38,7 @@ import { bootBackgroundActivity } from "./background";
 import { reviewCuts } from "./cutReview";
 import type { Emitter } from "./emitter";
 import { captionDataUrl, handoffFiles, otioDataUrl } from "./exportFiles";
-import { addImportedMedia, removeMedia, transcribe, uploadMedia } from "./media";
+import { addImportedMedia, removeMedia, setMediaAudioTrack, transcribe, uploadMedia } from "./media";
 import { releaseRender, renders, requestRender } from "./renderJobs";
 import { createNote, rejectChange, reopenChange, reviseChange, unapproveChange } from "./review";
 import { applyChange, retryAttempt, runRetry, stopTask } from "./runs";
@@ -266,6 +266,10 @@ export class MockClient implements ScarletApi {
     this.requireAuth();
     return this.latency(removeMedia(this.store, projectId, mediaId));
   }
+  async setMediaAudioTrack(mediaId: string, audioTrack: AudioTrackSelection): Promise<{ media: MediaAsset }> {
+    this.requireAuth();
+    return this.latency(setMediaAudioTrack(this.store, mediaId, audioTrack));
+  }
   /** The demo groups no retakes. */
   async retakes(_projectId: string, mediaId: string, _from: number, _to: number): Promise<{ mediaId: string; groups: [] }> {
     this.requireAuth();
@@ -461,8 +465,8 @@ export class MockClient implements ScarletApi {
   renderFileUrl(renderId: string): string {
     return `/sample.mp4#render=${renderId}`;
   }
-  mediaFileUrl(mediaId: string, proxy = false): string {
-    return `/sample.mp4#media=${mediaId}${proxy ? "&proxy" : ""}`;
+  mediaFileUrl(mediaId: string, proxy = false, audioTrack?: AudioTrackSelection): string {
+    return `/sample.mp4#media=${mediaId}${proxy ? "&proxy" : ""}${proxy && audioTrack !== undefined ? `&track=${audioTrack}` : ""}`;
   }
   async sourceCache(_mediaId: string, _prepare = false): Promise<PlaybackCacheStatus> { return { state: "ready" }; }
   async sourceCaches(projectId: string): Promise<{ caches: SourceCacheStatus[] }> {

@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
-import { fileInDirectoryAsync } from "@scarlet/render";
+import { fileInDirectoryAsync, heardAudio, heardAudioKey, type HeardAudio } from "@scarlet/render";
 import { SpeakerProgress } from "@scarlet/shared";
 import { newId, type MediaAsset, type Transcript } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
@@ -57,32 +57,36 @@ const embedding = {
 /** A transcription job owns this WAV until its speaker analysis settles. */
 export interface DecodedRecording {
   wav: string;
-  audioStream?: number;
+  /** The audio the WAV holds. */
+  audio?: HeardAudio;
   size: number;
   mtimeMs: number;
   ctimeMs: number;
 }
 
-function speakerStream(media: MediaAsset) {
+/** What speaker analysis hears: a confirmed three-input recording's mix, or else the track the editor chose. */
+function speakerAudio(media: MediaAsset): HeardAudio {
   const roles = media.voiceRoles;
-  return roles ? 3 - (roles.me - 1) - (roles.other - 1) : undefined;
+  return roles ? { audioTrack: 3 - (roles.me - 1) - (roles.other - 1) } : heardAudio(media);
 }
 
-const turnsKey = (file: string, info: { size: number; mtimeMs: number; ctimeMs: number }, audioStream?: number) =>
-  createHash("sha256").update(JSON.stringify([speakerTurnCacheVersion, file, info.size, info.mtimeMs, info.ctimeMs, audioStream ?? null])).digest("hex");
+/** The mix's number names a three-input recording's turns, as it always has. */
+const speakerKey = (media: MediaAsset) => media.voiceRoles ? speakerAudio(media).audioTrack : heardAudioKey(heardAudio(media));
+
+const turnsKey = (file: string, info: { size: number; mtimeMs: number; ctimeMs: number }, audioKey: unknown) =>
+  createHash("sha256").update(JSON.stringify([speakerTurnCacheVersion, file, info.size, info.mtimeMs, info.ctimeMs, audioKey ?? null])).digest("hex");
 const turnsFile = (ctx: Pick<Ctx, "paths">, projectId: string, key: string) => join(ctx.paths.waveforms(projectId), `speakers-${key}.json`);
 
 /** Where the speaker turns of a recording are saved, named for its file as it is now. Nothing once the file is gone. */
 export async function savedSpeakerTurns(ctx: Pick<Ctx, "paths">, projectId: string, media: MediaAsset) {
   const file = await fileInDirectoryAsync(ctx.paths.media(projectId), media.path);
   const info = file && await stat(file).catch(() => null);
-  return file && info ? turnsFile(ctx, projectId, turnsKey(file, info, speakerStream(media))) : undefined;
+  return file && info ? turnsFile(ctx, projectId, turnsKey(file, info, speakerKey(media))) : undefined;
 }
 
-export function matchesSpeakerStream(media: MediaAsset, decodedStream?: number) {
-  const stream = speakerStream(media);
-  // An unspecified FFmpeg map may select a different stream on multistream recordings.
-  return decodedStream === stream;
+/** Whether a WAV decoded of `decoded` holds what speaker analysis hears. */
+export function matchesSpeakerStream(media: MediaAsset, decoded?: HeardAudio) {
+  return heardAudioKey(decoded) === heardAudioKey(speakerAudio(media));
 }
 
 export class RecordingSpeakers {
@@ -159,8 +163,8 @@ export class RecordingSpeakers {
       // The synchronous code below calls cache.get before the next request resumes on its microtask.
       placed();
     }
-    const audioStream = speakerStream(media);
-    const key = turnsKey(file, info, audioStream);
+    const audio = speakerAudio(media);
+    const key = turnsKey(file, info, speakerKey(media));
     const dir = ctx.paths.waveforms(projectId);
     const saved = turnsFile(ctx, projectId, key);
     const analyse = async (signal: AbortSignal): Promise<SpeakerTurn[]> => {
@@ -170,7 +174,7 @@ export class RecordingSpeakers {
         if (Array.isArray(result) && result.every(t => t && Number.isFinite(t.start) && Number.isFinite(t.end) && t.end > t.start && Number.isInteger(t.speaker) && t.speaker >= 0)) return result;
       } catch { /* An absent or incomplete cache can be rebuilt from the source. */ }
       const reuse = decoded && decoded.size === info.size && decoded.mtimeMs === info.mtimeMs && decoded.ctimeMs === info.ctimeMs &&
-        matchesSpeakerStream(media, decoded.audioStream);
+        matchesSpeakerStream(media, decoded.audio);
       const wav = reuse ? decoded.wav : join(ctx.paths.tmp, randomUUID() + ".wav");
       const tmp = saved + "." + randomUUID() + ".tmp";
       const report = (progress: SpeakerProgress | null) => {
@@ -185,7 +189,7 @@ export class RecordingSpeakers {
         // three-input recordings, the two isolated microphones identify its mix.
         if (!reuse) {
           report({ phase: "audio" });
-          await extractWav(file, wav, { audioStream, signal, progress: media.duration ? {
+          await extractWav(file, wav, { audio, signal, progress: media.duration ? {
             duration: media.duration, onProgress: part => report({ phase: "audio", percent: Math.floor(part * 100) }),
           } : undefined });
         }
@@ -280,7 +284,7 @@ export class RecordingSpeakers {
   ensure(ctx: Ctx, projectId: string, media: MediaAsset, t: Pick<Transcript, "id" | "speakerAnalysis" | "aligning">, decoded: DecodedRecording | undefined, held: boolean): Promise<void> {
     if (t.aligning || t.speakerAnalysis?.version === speakerAnalysisVersion || ctx.settings().transcription.provider === "none" ||
         (!media.hasAudio && media.kind !== "audio") || held || ctx.projectSignal(projectId).aborted) return Promise.resolve();
-    const key = JSON.stringify([projectId, media.id, t.id, speakerStream(media)]);
+    const key = JSON.stringify([projectId, media.id, t.id, speakerKey(media)]);
     const running = this.revisions.get(key);
     if (running) return running;
     if ((this.retryAfter.get(key) ?? 0) > Date.now()) return Promise.resolve();
@@ -290,7 +294,7 @@ export class RecordingSpeakers {
       const turns = await this.turns(ctx, projectId, media, decoded, awaited);
       ctx.db.transaction(() => {
         const current = ctx.repos.projects.getMedia(media.id);
-        if (!current || current.projectId !== projectId || current.path !== media.path || speakerStream(current) !== speakerStream(media)) return;
+        if (!current || current.projectId !== projectId || current.path !== media.path || speakerKey(current) !== speakerKey(media)) return;
         if (linkedTranscriptId(ctx, projectId, media.id, current.transcriptId) !== t.id) return;
         const original = ctx.repos.transcripts.get(t.id);
         if (!original || original.aligning || original.speakerAnalysis?.version === speakerAnalysisVersion) return;

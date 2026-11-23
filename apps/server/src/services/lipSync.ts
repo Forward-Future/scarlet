@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { curvePeak, fileInDirectory, lipSyncStretch, type CropBox, type LipSyncReading } from "@scarlet/render";
+import { curvePeak, fileInDirectory, heardAudio, heardAudioKey, lipSyncStretch, type CropBox, type LipSyncReading } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { atomicWriteFile, rememberLast } from "../util.js";
@@ -104,7 +104,9 @@ const STILL_FINDING = "The faces in this stretch are still being found: ask agai
 const STILL_MEASURING = "Still being measured: ask again.";
 
 function identity(media: MediaAsset) {
-  return readingIdentity(LIP_SYNC_VERSION, media, MAX_SHIFT);
+  // A reading against a track the editor chose is that track's. The first track's readings keep their name.
+  const heard = heardAudioKey(heardAudio(media));
+  return readingIdentity(LIP_SYNC_VERSION, media, MAX_SHIFT, ...heard === null ? [] : [heard]);
 }
 
 /** Measure each stretch of a recording not measured yet, waiting up to `waitMs` for the answers; the rest carry on and are kept. */
@@ -150,7 +152,7 @@ export async function lipSync(ctx: Ctx, media: VideoMedia, range: { from?: numbe
       } else {
         const decoder = await pictureDecoder(ctx.settings().render.hwaccel);
         const reading = await pictureLane(ctx).run(() => lipSyncStretch(file, { start: stretch.from, end: stretch.to },
-          { box: face.mouth satisfies CropBox, width, height, fps, maxShift: MAX_SHIFT, decoder, signal }), { signal });
+          { box: face.mouth satisfies CropBox, width, height, fps, maxShift: MAX_SHIFT, decoder, signal, audio: heardAudio(media) }), { signal });
         const { curve, ...measured } = reading;
         result = { ...stretch, face, reading: measured, curve };
       }
