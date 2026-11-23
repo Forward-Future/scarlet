@@ -385,10 +385,11 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
           their time and tokens, nothing else. The rest of the row keeps the row's own hover. */}
       {/* Every row ends on a word (2026-11-21, the editor's ask): where it stands once it has moved, or else what it is, as See all says. */}
       {filter === "calls" ? (row.state ?? row.value) && <span className={row.busy ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(row.key)}>{row.state ?? row.value}</span>
+        : row.word ? null
         : filter === "need" ? (row.decision ?? row.value) && <span className={row.busy && !row.word ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(row.key)}>{row.decision ?? row.value}</span>
         : row.value && <span className={row.busy && !row.word ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(row.key)}>{row.value}</span>}
-      {/* An applied edit sent back, or come back revised, says so after its amount, as a row of any other request's
-          list does: amber once it is back and waits on the editor, quiet while Scarlet is on it. */}
+      {/* An applied edit sent back, or come back revised, ends on that word in place of its amount: quiet while
+          Scarlet is on it, amber once it is back and waits on the editor. One word a row, on the row's own line. */}
       {filter !== "calls" && row.word && <span className={`simple-pass-check${row.revised ? "" : " is-kept"}${row.busy ? " working-text" : ""}`} title={spent.get(row.key)}>{row.word}</span>}
     </button>
     {/* Folded, a request about any of the moment's edits sits under the moment's row; unfolded, under its edit's. */}
@@ -399,7 +400,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         onPointerEnter={() => actions.lightMark(m.mark, m.hover)} onPointerLeave={() => actions.lightMark()}>
         <span className="simple-pass-label">{m.decided && !m.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}<span className="simple-pass-words">{m.label}</span>
           {m.version > 0 && <EditVersion n={m.version} hover={spent.get(m.key)} />}</span>
-        {m.value && <span className={m.busy && !m.word ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(m.key)}>{m.value}</span>}
+        {m.value && !m.word && <span className={m.busy && !m.word ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(m.key)}>{m.value}</span>}
         {m.word && <span className={`simple-pass-check${m.revised ? "" : " is-kept"}${m.busy ? " working-text" : ""}`} title={spent.get(m.key)}>{m.word}</span>}
       </button>{nests.filter(nest => nest.key === m.key && m.key !== row.key).map(nest => nest.node)}</li>)}
     </ol>}</li>)}

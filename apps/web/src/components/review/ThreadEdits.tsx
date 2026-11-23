@@ -270,7 +270,9 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
         <EditBadge n={n} kept={isKept} check={check} />
         <span className="simple-edit-title"><span className="simple-edit-words">{title}</span>{version > 0 && places === 1 && <EditVersion n={version} hover={took} />}</span>
         {/* What the row ends on says on hover what the requests about this edit took: their time and tokens, nothing else. */}
-        {value && <span className="simple-edit-value" title={took}>{value}</span>}
+        {/* Sent back or come back revised, the row ends on that (Revising…, Up next, Revised) in place of what it was:
+            one word a row, on the row's own line. */}
+        {value && !statusWord && !revised && <span className="simple-edit-value" title={took}>{value}</span>}
         {statusWord ? <span className={busy ? "simple-edit-check is-kept working-text" : "simple-edit-check is-kept"} title={took}>{statusWord}</span>
           : revised && <span className="simple-edit-check" title={took}>{edit.check}</span>}
       </button>{nested}</li>{goneAfter(edit.range.start, rows[at + 1]?.edit.range.start ?? Infinity)}</Fragment>;

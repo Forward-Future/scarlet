@@ -223,8 +223,10 @@
 .simple-edit-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .simple-edit.is-on .simple-edit-words { white-space: normal; }
 .simple-edit-value { grid-column: 3; }
-.simple-edit-check, .simple-pass-check { grid-column: 2 / -1; font-size: 12px; line-height: 1.35; color: var(--color-warn); }
-.simple-edit-check.is-kept, .simple-pass-check.is-kept { color: var(--color-dim); }
+/* Sent back or come back revised, a row ends on that word (Revising…, Up next, Revised), where its amount was: one
+   word a row, on the row's own line. Amber once it is back and waits on the editor. */
+.simple-edit-check, .simple-pass-check { grid-column: 3; justify-self: end; font-size: 12px; color: var(--color-warn); white-space: nowrap; }
+.simple-edit-check.is-kept, .simple-pass-check.is-kept { color: var(--color-muted); }
 /* The edit's number; amber while it asks for a look. Kept: filled, widened to a pill with a check beside the number. */
 .edit-badge { justify-self: start; display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; border: 1.2px solid var(--color-muted);
   background: var(--color-raised); color: var(--color-fg); font-size: 10px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
