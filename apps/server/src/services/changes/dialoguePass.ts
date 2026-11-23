@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cutAnchorOn, cutScope, selectedRange, taskDialogueOperation, type DialogueCutsRequest, type JoinCrossfades, type User } from "@scarlet/shared";
+import { cutAnchorOn, cutScope, selectedRange, taskDialogueOperation, type DialogueCutsRequest, type JoinCrossfades, type Task, type User } from "@scarlet/shared";
 import {
   describeDialogueRemovals,
   frameAlignedRemoval,
@@ -36,6 +36,102 @@ export interface DialogueCutsAdjustments {
   droppedFromReview?: Array<{ changeId: string; version: string; start: number; end: number; why: string }>;
   /** Cuts left out because they would have replaced a staged cut held for its join with other edges, applied only by unsureJoins cut. */
   heldCutsStay?: Array<{ asked: TimeRange; staged: TimeRange; why: string }>;
+}
+
+/** `a` holds all of `r`, give or take a hundredth of a millisecond. */
+const covers = (a: TimeRange, r: TimeRange) => r.start >= a.start - 1e-5 && r.end <= a.end + 1e-5;
+/** The footage a cut takes: its restorable range when it has one. */
+const outer = (c: { start: number; end: number; originalRange?: { start: number; end: number } }) => c.originalRange ?? c;
+const overlaps = (a: { start: number; end: number }, b: { start: number; end: number }) => a.start < b.end - 1e-6 && a.end > b.start + 1e-6;
+
+/** Why confident cuts wait for the editor here instead of applying, or nothing when they apply. The agent sent them as cuts, so it is told. */
+function whyConfidentCutsWait(sourceTask: Task | null | undefined, branch: string | undefined): string | undefined {
+  if (!sourceTask) return "No request of the editor's is attached, so every cut waits for them.";
+  if (sourceTask.context.reviewAllCuts) return "The editor asked to review every cut.";
+  if (sourceTask.createdBy.type !== "human") return "Scarlet started this request, not the editor, so its cuts wait for them.";
+  if (!editsDialogue(sourceTask.kind)) return `A ${sourceTask.kind} request stages its cuts for the editor.`;
+  if (sourceTask.context.branch !== branch) return "The editor moved to another version of the edit while this request ran.";
+  return undefined;
+}
+
+/** Refuse a plan whose ranges can't be cut from a timeline of `duration` seconds. */
+function assertCutRanges(cuts: readonly TimeRange[], duration: number): void {
+  const sorted = [...cuts].sort((a, b) => a.start - b.start);
+  // Say which range is wrong: the agent sees only this message, and a plan it can't place it submits again unchanged.
+  const span = (c: TimeRange) => `${c.start.toFixed(2)}–${c.end.toFixed(2)} s`;
+  const empty = sorted.find(c => c.end <= c.start), past = sorted.find(c => c.end > duration);
+  const second = sorted.findIndex((c, i) => i > 0 && c.start < sorted[i - 1]!.end);
+  if (empty) throw badRequest("invalid_cuts", `The range ${span(empty)} is empty. Give each range an end after its start.`);
+  if (past) throw badRequest("invalid_cuts", `The range ${span(past)} runs past the end of the timeline at ${duration.toFixed(2)} s.`);
+  if (second > 0) throw badRequest("invalid_cuts", `The ranges ${span(sorted[second - 1]!)} and ${span(sorted[second]!)} overlap. End the first where the second starts, or merge them.`);
+  if (sorted.reduce((n, c) => n + c.end - c.start, 0) >= duration - 1e-7) throw badRequest("invalid_cuts", "These ranges remove the whole timeline. Retain some footage.");
+}
+
+/** A cut of a plan as it goes onto the frame grid. */
+type FrameCut = TimeRange & { submitted?: true; review?: boolean; preserveEdges?: boolean; originalRange?: TimeRange };
+
+/**
+ * Whole frames: a cut of a whole number of frames moves everything after it by whole frames, so the cached preview
+ * sections after it still match. Rounding inward never removes more than the plan; a sub-frame cut rounds to the nearest
+ * frame, and stops at the end of an edit that ends between two frames: a cut past the end has no review.
+ * `rebasing`: the plan moves onto the current version, so the submitted range and kept footage no longer apply as given.
+ */
+function onWholeFrames<C extends FrameCut>(planned: C[], fps: number, duration: number, { range, kept, rebasing }: { range?: TimeRange; kept: readonly TimeRange[]; rebasing: boolean }):
+  { cuts: C[]; onFrames?: DialogueCutsAdjustments["onFrames"] } {
+  const bounded = !!range || kept.length > 0;
+  let cuts = planned;
+  const asPlanned = cuts.map(c => ({ start: c.start, end: c.end }));
+  const beforeFrames = cuts;
+  cuts = cuts.map((c, i) => {
+    if (c.preserveEdges) return c; // A manual trim can put the same source frames between project frames.
+    // The submitted limits refer to the submitted version. When rebasing, round within the
+    // mapped removal itself so a nearby frame on the new timeline cannot escape those limits.
+    const scope = c.submitted ? (bounded && rebasing ? c : range) : undefined;
+    const retained = c.submitted && !rebasing ? kept : [];
+    const before = asPlanned[i - 1], after = asPlanned[i + 1];
+    const gaps = [...retained];
+    if (before && c.start > before.end && c.start - before.end < 1 / fps) gaps.push({ start: before.end, end: c.start });
+    if (after && c.end < after.start && after.start - c.end < 1 / fps) gaps.push({ start: c.end, end: after.start });
+    const { start, end } = frameAlignedRemoval(c, fps, scope, gaps);
+    return { ...c, start, end: Math.min(end, duration) };
+  });
+  // Two cuts that met at one instant still meet. Rounded inward each, they would leave a frame of footage between
+  // them that nobody decided to keep, so their shared edge goes to the nearest frame instead.
+  for (let i = 1; i < cuts.length; i++) {
+    const before = cuts[i - 1]!, after = cuts[i]!;
+    if (Math.abs(asPlanned[i]!.start - asPlanned[i - 1]!.end) > 1e-9 || after.start - before.end < 1e-9) continue;
+    if (before.preserveEdges && after.preserveEdges) continue;
+    const shared = before.preserveEdges ? before.end : after.preserveEdges ? after.start : Math.round(asPlanned[i]!.start * fps) / fps;
+    if (shared <= before.start || shared >= after.end) continue;
+    cuts[i - 1] = { ...before, end: shared };
+    cuts[i] = { ...after, start: shared };
+  }
+  const frame = 1 / fps;
+  // What putting the agent's cuts on whole frames moved, so it reads the saved ranges and not its own.
+  const shifts = cuts.flatMap((c, i) => {
+    const was = beforeFrames[i]!;
+    if (!c.submitted) return [];
+    const moved = Math.max(Math.abs(c.start - was.start), Math.abs(c.end - was.end));
+    return moved > 1e-6 ? [moved] : [];
+  });
+  const onFrames = shifts.length ? { cuts: shifts.length, largestShift: round3(Math.max(...shifts)),
+    why: `Cuts are saved on whole frames at ${fps} fps, rounded inward and never past the timeline's end; timelineEdits has the saved ranges.` } : undefined;
+  if (cuts.some((c, i) => i > 0 && (c.preserveEdges || cuts[i - 1]!.preserveEdges) && overlaps(c, cuts[i - 1]!)))
+    throw conflict("cut_changed", "A new range reaches into a carried cut after frame alignment. Check their shared edge.");
+  // A staged cut carries the range the editor can restore. Moving the cut beside it onto a frame can carry that
+  // cut's edge a few milliseconds into the range: a removal that met a staged retake at 265.46 s ended on frame
+  // 7,964 at 265.4667 s, and the whole plan was refused. The range gives way by that much; a real overlap is still refused.
+  cuts = cuts.map(c => {
+    if (!c.originalRange || c.preserveEdges) return c;
+    let { start, end } = c.originalRange;
+    for (const other of cuts) {
+      if (other === c || other.review) continue;
+      if (other.start < start && other.end > start && other.end - start <= frame + 1e-9) start = other.end;
+      if (other.end > end && other.start < end && end - other.start <= frame + 1e-9) end = other.start;
+    }
+    return start === c.originalRange.start && end === c.originalRange.end ? c : { ...c, originalRange: { start, end } };
+  });
+  return { cuts, onFrames };
 }
 
 /**
@@ -120,7 +216,6 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       if (branch && branch !== project.branch || !lineage.has(fromVersion) || waiting.some(c => !lineage.has(c.fromVersion)))
         throw conflict("cut_changed", "The recovered review belongs to a different edit. Continue the pass on its original cut.");
     }
-    const covers = (a: TimeRange, r: TimeRange) => r.start >= a.start - 1e-5 && r.end <= a.end + 1e-5;
     const editorChoice = (change: Change, r: TimeRange) => change.cutChoices?.find(c => covers(c, r))?.choice;
     const assessmentOf = (change: Change, r: TimeRange) => change.cutAssessments?.find(a => covers(a, r));
     const changed = new Set<TimeRange>();
@@ -209,8 +304,6 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       }
       return { ...change, cutReasons: reasons, cutAssessments: assessments, cutChoices: choices };
     });
-    const outer = (c: { start: number; end: number; originalRange?: { start: number; end: number } }) => c.originalRange ?? c;
-    const overlaps = (a: { start: number; end: number }, b: { start: number; end: number }) => a.start < b.end - 1e-6 && a.end > b.start + 1e-6;
     /** `asked` is where the plan put a cut the editor hasn't called, before it is moved onto the frame grid and the current version. */
     type Planned = DialogueCutsRequest["cuts"][number] & { crossfade?: number; legacySuggest?: true; assessment?: CutAssessment; choice?: CutChoice["choice"]; asked?: TimeRange;
       submitted?: true; recovered?: boolean; preserveEdges?: boolean; protectedSlot?: string; lapsed?: true };
@@ -250,14 +343,8 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       }
     }
     const heldRanges = [...protectedCuts.keys()];
-    const requested = sourceTask && sourceTask.createdBy.type === "human" && editsDialogue(sourceTask.kind) &&
-      sourceTask.context.branch === project.branch && !sourceTask.context.reviewAllCuts;
-    // Why confident cuts wait for the editor here instead of applying. The agent sent them as cuts, so it is told.
-    const stagedWhy = requested ? undefined : !sourceTask ? "No request of the editor's is attached, so every cut waits for them."
-      : sourceTask.context.reviewAllCuts ? "The editor asked to review every cut."
-      : sourceTask.createdBy.type !== "human" ? "Scarlet started this request, not the editor, so its cuts wait for them."
-      : !editsDialogue(sourceTask.kind) ? `A ${sourceTask.kind} request stages its cuts for the editor.`
-      : "The editor moved to another version of the edit while this request ran.";
+    const stagedWhy = whyConfidentCutsWait(sourceTask, project.branch);
+    const requested = !stagedWhy;
     const candidates = body.cuts.map(c => ({ ...c, crossfade: frames / fps, ...(current && { ...moveToHead(c), ...(c.originalRange && { originalRange: moveToHead(c.originalRange) }) }),
       asked: { start: c.start, end: c.end } }));
     const overruled = candidates.filter(c => decided.some(d => overlaps(outer(c), d)));
@@ -306,15 +393,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     }
     let cuts: Planned[] = [...planned.map(c => ({ ...c, submitted: true as const })), ...carried].sort((a, b) => a.start - b.start);
     let duration = timelineDuration(base);
-    const sorted = [...body.cuts].sort((a, b) => a.start - b.start);
-    // Say which range is wrong: the agent sees only this message, and a plan it can't place it submits again unchanged.
-    const span = (c: TimeRange) => `${c.start.toFixed(2)}–${c.end.toFixed(2)} s`;
-    const empty = sorted.find(c => c.end <= c.start), past = sorted.find(c => c.end > duration);
-    const second = sorted.findIndex((c, i) => i > 0 && c.start < sorted[i - 1]!.end);
-    if (empty) throw badRequest("invalid_cuts", `The range ${span(empty)} is empty. Give each range an end after its start.`);
-    if (past) throw badRequest("invalid_cuts", `The range ${span(past)} runs past the end of the timeline at ${duration.toFixed(2)} s.`);
-    if (second > 0) throw badRequest("invalid_cuts", `The ranges ${span(sorted[second - 1]!)} and ${span(sorted[second]!)} overlap. End the first where the second starts, or merge them.`);
-    if (sorted.reduce((n, c) => n + c.end - c.start, 0) >= duration - 1e-7) throw badRequest("invalid_cuts", "These ranges remove the whole timeline. Retain some footage.");
+    assertCutRanges(body.cuts, duration);
     // A pass that repeats only calls already on this version has nothing to save or announce.
     if (!planned.length && (held.length || heldCutsStay.length) && waiting.length === 1 && !alreadyRemoved.length && waiting[0]!.fromVersion === head) {
       return { changes: waiting, carriedForward: carried.length, ...(held.length && { heldForReview: held.map(c => c.asked) }),
@@ -325,61 +404,9 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       if (!current) cuts = cuts.map(c => ({ ...c, ...moveToHead(c), ...(c.originalRange && { originalRange: moveToHead(c.originalRange) }) }));
       duration = timelineDuration(resolveTimeline(ctx, project, head));
     }
-    // Whole frames: a cut of a whole number of frames moves everything after it by whole frames, so the cached preview
-    // sections after it still match. Rounding inward never removes more than the plan; a sub-frame cut rounds to the nearest
-    // frame, and stops at the end of an edit that ends between two frames: a cut past the end has no review.
-    const bounded = !!body.range || kept.length > 0;
-    const asPlanned = cuts.map(c => ({ start: c.start, end: c.end }));
-    const beforeFrames = cuts;
-    cuts = cuts.map((c, i) => {
-      if (c.preserveEdges) return c; // A manual trim can put the same source frames between project frames.
-      // The submitted limits refer to the submitted version. When rebasing, round within the
-      // mapped removal itself so a nearby frame on the new timeline cannot escape those limits.
-      const scope = c.submitted ? (bounded && toHead ? c : body.range) : undefined;
-      const retained = c.submitted && !toHead ? kept : [];
-      const before = asPlanned[i - 1], after = asPlanned[i + 1];
-      const gaps = [...retained];
-      if (before && c.start > before.end && c.start - before.end < 1 / fps) gaps.push({ start: before.end, end: c.start });
-      if (after && c.end < after.start && after.start - c.end < 1 / fps) gaps.push({ start: c.end, end: after.start });
-      const { start, end } = frameAlignedRemoval(c, fps, scope, gaps);
-      return { ...c, start, end: Math.min(end, duration) };
-    });
-    // Two cuts that met at one instant still meet. Rounded inward each, they would leave a frame of footage between
-    // them that nobody decided to keep, so their shared edge goes to the nearest frame instead.
-    for (let i = 1; i < cuts.length; i++) {
-      const before = cuts[i - 1]!, after = cuts[i]!;
-      if (Math.abs(asPlanned[i]!.start - asPlanned[i - 1]!.end) > 1e-9 || after.start - before.end < 1e-9) continue;
-      if (before.preserveEdges && after.preserveEdges) continue;
-      const shared = before.preserveEdges ? before.end : after.preserveEdges ? after.start : Math.round(asPlanned[i]!.start * fps) / fps;
-      if (shared <= before.start || shared >= after.end) continue;
-      cuts[i - 1] = { ...before, end: shared };
-      cuts[i] = { ...after, start: shared };
-    }
-    const frame = 1 / fps;
-    // What putting the agent's cuts on whole frames moved, so it reads the saved ranges and not its own.
-    const shifts = cuts.flatMap((c, i) => {
-      const was = beforeFrames[i]!;
-      if (!c.submitted) return [];
-      const moved = Math.max(Math.abs(c.start - was.start), Math.abs(c.end - was.end));
-      return moved > 1e-6 ? [moved] : [];
-    });
-    const onFrames = shifts.length ? { cuts: shifts.length, largestShift: round3(Math.max(...shifts)),
-      why: `Cuts are saved on whole frames at ${fps} fps, rounded inward and never past the timeline's end; timelineEdits has the saved ranges.` } : undefined;
-    if (cuts.some((c, i) => i > 0 && (c.preserveEdges || cuts[i - 1]!.preserveEdges) && overlaps(c, cuts[i - 1]!)))
-      throw conflict("cut_changed", "A new range reaches into a carried cut after frame alignment. Check their shared edge.");
-    // A staged cut carries the range the editor can restore. Moving the cut beside it onto a frame can carry that
-    // cut's edge a few milliseconds into the range: a removal that met a staged retake at 265.46 s ended on frame
-    // 7,964 at 265.4667 s, and the whole plan was refused. The range gives way by that much; a real overlap is still refused.
-    cuts = cuts.map(c => {
-      if (!c.originalRange || c.preserveEdges) return c;
-      let { start, end } = c.originalRange;
-      for (const other of cuts) {
-        if (other === c || other.review) continue;
-        if (other.start < start && other.end > start && other.end - start <= frame + 1e-9) start = other.end;
-        if (other.end > end && other.start < end && end - other.start <= frame + 1e-9) end = other.start;
-      }
-      return start === c.originalRange.start && end === c.originalRange.end ? c : { ...c, originalRange: { start, end } };
-    });
+    const aligned = onWholeFrames(cuts, fps, duration, { range: body.range, kept, rebasing: !!toHead });
+    cuts = aligned.cuts;
+    const onFrames = aligned.onFrames;
     const satisfied = { ...(alreadyRemoved.length && { alreadyRemoved }), ...(droppedFromReview.length && { droppedFromReview }), ...(heldCutsStay.length && { heldCutsStay }) };
     if (!cuts.length) return { changes: [], ...satisfied };
     const applied = cuts.filter(c => requested && !c.review);

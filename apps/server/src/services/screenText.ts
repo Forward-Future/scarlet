@@ -5,13 +5,12 @@
  * that doesn't. This is evidence for the model, never a decision.
  */
 import { join } from "node:path";
-import { probeMedia, screenFrameSize } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { audioWorker } from "../transcribe/audioWorker.js";
 import { LocalWhisperModel } from "../transcribe/localModel.js";
 import { SCREEN_TEXT_MODELS, type ScreenLine } from "../transcribe/screenTextModel.js";
-import { pictureGrid, pictureReader, r3, readingIdentity, withFrames, type VideoMedia } from "./pictureReading.js";
+import { pictureGrid, pictureReader, r3, readingFrameSize, readingIdentity, withFrames, type VideoMedia } from "./pictureReading.js";
 
 /** Bump when the reading changes: the models, the sampling or how lines become spans. Kept readings are read again. */
 const SCREEN_TEXT_VERSION = 2;
@@ -142,8 +141,7 @@ function identity(media: MediaAsset) {
  * up to the distance between keyframes again (withFrames).
  */
 async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end, unasked }: { start: number; end: number; unasked?: boolean }, signal: AbortSignal): Promise<ScreenTextSpan[]> {
-  const source = media.width && media.height ? { width: media.width, height: media.height } : await probeMedia(file);
-  const { width, height } = screenFrameSize(source.width, source.height);
+  const { width, height } = await readingFrameSize(media, file);
   const [finder, reader, letters] = await Promise.all(modelsFor(ctx).map(m => m.get(signal))) as [string, string, string];
   let last: Float32Array | undefined;
   const read = await withFrames(ctx, media, file, "screen-text", { start, end, fps: SCREEN_TEXT_FPS, width, height, signal, batch: BATCH_FRAMES, background: unasked }, (_, rgb) => {

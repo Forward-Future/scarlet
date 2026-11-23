@@ -9,10 +9,9 @@
  * The same frames say where the picture has anything in it at all (`detail`): a camera inset laid over a screen sat on
  * the usage rings of a quota page, with nothing there that screen text reads (2026-11-20).
  */
-import { probeMedia, screenFrameSize } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
-import { pictureGrid, pictureReader, r3, readingIdentity, withFrames, type VideoMedia } from "./pictureReading.js";
+import { pictureGrid, pictureReader, r3, readingFrameSize, readingIdentity, withFrames, type VideoMedia } from "./pictureReading.js";
 
 /** Bump when the reading changes: the sampling, the grid or how changes become areas. Kept readings are read again. */
 const MOTION_VERSION = 2;
@@ -103,8 +102,7 @@ const bitsDiffer = (a: Uint8Array, b: Uint8Array) => { let n = 0; for (let i = 0
 
 /** Compare one window's frames, a quarter second apart, and keep the seconds whose picture changed, with the picture's detail once a second where it changed. */
 async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end, unasked }: { start: number; end: number; unasked?: boolean }, signal: AbortSignal): Promise<MotionWindow> {
-  const source = media.width && media.height ? { width: media.width, height: media.height } : await probeMedia(file);
-  const { width, height } = screenFrameSize(source.width, source.height, MOTION_SIDE);
+  const { width, height } = await readingFrameSize(media, file, MOTION_SIDE);
   const seconds = new Map<number, Uint8Array>();
   let last: Float32Array | undefined;
   const detail: DetailFrame[] = [];

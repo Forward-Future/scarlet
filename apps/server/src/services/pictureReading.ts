@@ -8,7 +8,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, openSync, writeSync } from "node:fs";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { fileInDirectory, screenFrames } from "@scarlet/render";
+import { fileInDirectory, probeMedia, screenFrameSize, screenFrames } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { atomicWriteFile, rememberLast, round3 } from "../util.js";
@@ -31,6 +31,12 @@ export interface PictureReading<W> {
 /** A kept reading's identity: its version, the recording, and every setting the reading depends on, in order. */
 export function readingIdentity(version: number, media: MediaAsset, ...dependsOn: unknown[]): string {
   return createHash("sha256").update(JSON.stringify([version, media.hash ?? media.path, media.duration, ...dependsOn])).digest("hex");
+}
+
+/** The size a recording's frames are read at: its own size, from its record or else the file, fit to `maxSide`. */
+export async function readingFrameSize(media: VideoMedia, file: string, maxSide?: number): Promise<{ width: number; height: number }> {
+  const source = media.width && media.height ? { width: media.width, height: media.height } : await probeMedia(file);
+  return screenFrameSize(source.width, source.height, maxSide);
 }
 
 export interface PictureReadResult<W> {
