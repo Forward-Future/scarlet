@@ -28,8 +28,15 @@ const LOWEST_FLOOR_RMS = 1e-4;
 /** The bucket length the floor is read at, whatever the levels' own. */
 const FLOOR_BUCKET = .02;
 
-/** Noisy-room headroom above the 2nd-percentile room floor (steady HVAC/cafe noise swings ~4–6 dB above its 2nd percentile). */
-const NOISE_HEADROOM_DB = 6;
+/**
+ * The most the quiet ceiling sits above the room on a noisy recording. How far it goes follows how much the room's own
+ * level moves: 3 dB, plus twice the rise from the room (2nd percentile) to the 10th percentile, up to 6 dB. A steady hiss
+ * barely moves, so a fixed 6 dB sat 5 dB over all of it and the soft ends of words just over the hiss read as quiet;
+ * rumble and traffic swing 6–9 dB, and a 3 dB ceiling missed most of their pauses. Mixed under four real recordings
+ * (2026-11-23), at -40 dBFS of white noise the soft word ends called quiet fell from 58% to 8% with the same 66% of
+ * pauses found, and pink and brown noise kept 75% and 58% of pauses against 49% and 28% before the headroom.
+ */
+const NOISE_HEADROOM_DB = { least: 3, most: 6, perSpreadDb: 2 };
 /** Only lift the quiet ceiling above QUIET_RMS when speech sits clearly above the room floor and the floor is plausible room noise. */
 const MIN_NOISY_ROOM_SNR_DB = 8;
 const MAX_NOISY_FLOOR_RMS = 0.063; // -24 dBFS
@@ -44,13 +51,16 @@ const MAX_NOISY_FLOOR_RMS = 0.063; // -24 dBFS
  */
 export function quietRms(rms: ArrayLike<number>, step = FLOOR_BUCKET): number {
   if (!rms.length) return QUIET_RMS;
-  const room = roomRms(rms, step);
+  const floor = floorLevels(rms, step);
+  const room = floorAt(floor, .02);
   const speechDb = typicalLevel(Array.from(rms));
   const roomDb = dbfs(room);
   // Never as loud as sound at speaking level (soundFloor): over a noisy room the fixed QUIET_RMS sat 5 dB under a soft
   // speaker's voice, and the soft ends of words, over the noise, read as quiet a cut could end in (2026-11-22).
   const speech = 10 ** (soundFloor(speechDb, roomDb) / 20);
-  const noisyHeadroom = room * 10 ** (NOISE_HEADROOM_DB / 20);
+  const spread = dbfs(floorAt(floor, .1)) - roomDb;
+  const headroom = Math.min(NOISE_HEADROOM_DB.most, NOISE_HEADROOM_DB.least + NOISE_HEADROOM_DB.perSpreadDb * spread);
+  const noisyHeadroom = room * 10 ** (headroom / 20);
   const ceiling = noisyHeadroom > QUIET_RMS && room <= MAX_NOISY_FLOOR_RMS && speechDb - roomDb >= MIN_NOISY_ROOM_SNR_DB
     ? noisyHeadroom
     : QUIET_RMS;
@@ -72,6 +82,11 @@ export function quietPeak(quietBelow: number): number {
  */
 export function roomRms(rms: ArrayLike<number>, step = FLOOR_BUCKET): number {
   if (!rms.length) return LOWEST_FLOOR_RMS;
+  return floorAt(floorLevels(rms, step), .02);
+}
+
+/** The levels on 20 ms buckets, whatever their own bucket length (`step`), quietest first. */
+function floorLevels(rms: ArrayLike<number>, step: number): Float64Array {
   const k = Math.max(1, Math.round(FLOOR_BUCKET / step));
   const merged = new Float64Array(Math.ceil(rms.length / k));
   for (let i = 0; i < merged.length; i++) {
@@ -79,8 +94,12 @@ export function roomRms(rms: ArrayLike<number>, step = FLOOR_BUCKET): number {
     for (let j = i * k; j < Math.min(rms.length, (i + 1) * k); j++) { power += rms[j]! ** 2; n++; }
     merged[i] = Math.sqrt(power / n);
   }
-  const sorted = merged.sort();
-  return Math.max(LOWEST_FLOOR_RMS, sorted[Math.floor(sorted.length * 0.02)]!);
+  return merged.sort();
+}
+
+/** The level at fraction `q` of sorted floor levels, never under LOWEST_FLOOR_RMS. */
+function floorAt(sorted: Float64Array, q: number): number {
+  return Math.max(LOWEST_FLOOR_RMS, sorted[Math.floor(sorted.length * q)]!);
 }
 
 /** A sound this quiet and this brief, with room tone either side, is a lip tick, not a word: it does not end a silence. */

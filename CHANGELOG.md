@@ -6,7 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
-- Dialogue cuts now place cleanly in noisy rooms (like fans, AC, or cafés) instead of getting held because the room tone sits above -40 dBFS.
+- Dialogue cuts now place cleanly in rooms with steady background noise, like a fan, air conditioning or traffic hum, without cutting into soft word endings.
 - The Transcript panel is cleaner and easier to read: timestamps line up in a quiet left column, sparse remarks flow inline with small pause markers instead of breaking onto single-word lines, repeated "Voice unclear" headers are gone, and search now has previous, next, and clear buttons.
 - Scarlet no longer drops a cut it got right because the transcript and the recording spell or time a word differently, so a false start it found isn't left in.
 - A cut placed at the end of a word that runs straight into the next one no longer clips the word's last sound, like the “s” of “complaints”.

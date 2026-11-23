@@ -91,6 +91,21 @@ describe("a voice over a noisy room", () => {
     const nonstop = Array.from({ length: 500 }, (_, i) => .10 * (1 + .1 * Math.sin(i)));
     expect(quietRms(nonstop, .02)).toBeCloseTo(.01, 6);
   });
+
+  it("gives a steady hiss less headroom than a room whose noise swings, so soft word ends over the hiss stay sound", () => {
+    // The same speech over -34 dBFS of noise: a hiss that barely moves, and rumble that swings ~6 dB like brown noise.
+    const room = (swing: (i: number) => number) => Array.from({ length: 500 }, (_, i) => {
+      const t = (i + .5) / 50;
+      return t < 2.9 || t >= 4.6 ? .16 : .02 * swing(i);
+    });
+    const hiss = room(() => 1), rumble = room(i => 10 ** ((3 * Math.sin(i * 1.3) + 3) / 20) / 1.41);
+    // Hiss: 3 dB over its level. Rumble: the full 6 dB over its quietest.
+    expect(20 * Math.log10(quietRms(hiss, .02) / roomRms(hiss, .02))).toBeCloseTo(3, 1);
+    expect(20 * Math.log10(quietRms(rumble, .02) / roomRms(rumble, .02))).toBeCloseTo(6, 1);
+    // A soft word end 4 dB over the hiss is sound, not quiet a cut could end in.
+    const softEnd = .02 * 10 ** (4 / 20);
+    expect(softEnd).toBeGreaterThan(quietRms(hiss, .02));
+  });
 });
 
 describe("quiet transcribed phrases", () => {
