@@ -10,6 +10,7 @@ import { desktop, isDesktop, type AgentLoginStatus, type HostStatus } from "../.
 import { errorMessage, IS_MOCK } from "../../lib/client";
 import { AGENT_LABEL } from "../../stores/hosts";
 import { InlineError, Spinner } from "../ui/primitives";
+import { followDesktop } from "./followDesktop";
 
 type SignInAgent = "claude" | "codex" | "gemini";
 
@@ -18,6 +19,9 @@ const SIGN_IN: Record<SignInAgent, { button: string; plan: string }> = {
   codex: { button: "Sign in with ChatGPT", plan: "ChatGPT" },
   gemini: { button: "Sign in with Google", plan: "Google AI" },
 };
+
+/** What a sign-in button says on hover. */
+const signInTitle = (id: SignInAgent) => `Uses your ${SIGN_IN[id].plan} subscription; opens your browser`;
 
 export function canSignIn(id: string): id is SignInAgent {
   return id === "claude" || id === "codex" || id === "gemini";
@@ -43,24 +47,14 @@ function useAgentLogin(agent: SignInAgent) {
 
   useEffect(() => {
     if (!isDesktop()) return;
-    let alive = true;
-    let off: (() => void) | undefined;
-    let received = false;
-    void desktop.onAgentLogin((s) => {
-      if (alive && s.agent === agent) {
-        received = true;
-        setStatus(s);
-      }
-    }).then(async (unsubscribe) => {
-      if (!alive) return unsubscribe();
-      off = unsubscribe;
-      const latest = await desktop.agentLoginStatus(agent);
-      if (alive && !received && latest?.state === "waiting") setStatus(latest);
-    }).catch(() => undefined);
-    return () => {
-      alive = false;
-      off?.();
-    };
+    return followDesktop<AgentLoginStatus>(
+      on => desktop.onAgentLogin(s => { if (s.agent === agent) on(s); }),
+      async () => {
+        const latest = await desktop.agentLoginStatus(agent);
+        return latest?.state === "waiting" ? latest : null;
+      },
+      setStatus,
+    );
   }, [agent]);
 
   return {
@@ -98,6 +92,11 @@ function useAgentLogin(agent: SignInAgent) {
   };
 }
 
+/** Opens the Node.js download page, which Claude Code and Codex need to install. */
+function GetNodeButton({ onError }: { onError(message: string): void }) {
+  return <button type="button" className="underline" onClick={() => void desktop.openUrl("https://nodejs.org/en/download").catch(e => onError(errorMessage(e)))}>Get Node.js</button>;
+}
+
 function InstallAgent({ agent }: { agent: SignInAgent }) {
   const [busy, setBusy] = useState(false);
   const [needsNode, setNeedsNode] = useState(false);
@@ -118,7 +117,7 @@ function InstallAgent({ agent }: { agent: SignInAgent }) {
   return (
     <div className="space-y-1 text-[12px]">
       {needsNode && <p>Install Node.js LTS, then return here to finish.
-        {" "}<button type="button" className="underline" onClick={() => void desktop.openUrl("https://nodejs.org/en/download").catch(e => setError(errorMessage(e)))}>Get Node.js</button>
+        {" "}<GetNodeButton onError={setError} />
       </p>}
       <button type="button" className="btn-ghost" disabled={busy} onClick={() => void install()}>
         {busy ? <><Spinner className="size-3" /> Installing…</> : `Install ${AGENT_LABEL[agent]}`}
@@ -209,7 +208,7 @@ export function AgentSignIn({ agent, compact = false }: { agent: AgentAvailabili
 
   const onApiKey = agent.loggedIn !== false && agent.auth === "api_key";
   const button = (
-    <button className={onApiKey ? "btn-quiet py-0.5" : "btn-primary py-1"} title={`Uses your ${SIGN_IN[id].plan} subscription; opens your browser`} onClick={start}>
+    <button className={onApiKey ? "btn-quiet py-0.5" : "btn-primary py-1"} title={signInTitle(id)} onClick={start}>
       {onApiKey && id !== "codex" ? "Use my subscription instead" : SIGN_IN[id].button}
     </button>
   );
@@ -255,11 +254,11 @@ export function SignInWith({ agent }: { agent: AgentAvailability }) {
   if (login.waiting) return <div className="first-sign-in-waiting"><LoginWaiting id={id} login={login} compact={false} /></div>;
   return (
     <div className="first-sign-in-choice">
-      <button type="button" className="btn-ghost" disabled={installing} title={`Uses your ${SIGN_IN[id].plan} subscription; opens your browser`} onClick={() => void press()}>
+      <button type="button" className="btn-ghost" disabled={installing} title={signInTitle(id)} onClick={() => void press()}>
         {installing ? <><Spinner className="size-3" /> Installing {AGENT_LABEL[id]}…</> : SIGN_IN[id].button}
       </button>
       {needsNode && <p className="text-[12px] text-muted">{AGENT_LABEL[id]} needs Node.js. Install it, then press {SIGN_IN[id].button} again.
-        {" "}<button type="button" className="underline" onClick={() => void desktop.openUrl("https://nodejs.org/en/download").catch(e => setError(errorMessage(e)))}>Get Node.js</button>
+        {" "}<GetNodeButton onError={setError} />
       </p>}
       <InlineError>{error || login.error}</InlineError>
     </div>
@@ -276,22 +275,7 @@ export function useLocalHost(): HostStatus | null {
   const [host, setHost] = useState<HostStatus | null>(null);
   useEffect(() => {
     if (!isDesktop()) return;
-    let alive = true;
-    let off: (() => void) | undefined;
-    let received = false;
-    void desktop.onHostStatus((h) => {
-      received = true;
-      if (alive) setHost(h);
-    }).then(async (unsubscribe) => {
-      if (!alive) return unsubscribe();
-      off = unsubscribe;
-      const latest = await desktop.hostStatus();
-      if (alive && !received) setHost(latest);
-    }).catch(() => undefined);
-    return () => {
-      alive = false;
-      off?.();
-    };
+    return followDesktop(on => desktop.onHostStatus(on), () => desktop.hostStatus(), setHost);
   }, []);
   return host;
 }

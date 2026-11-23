@@ -2,7 +2,7 @@ import { useState, type KeyboardEvent, type RefObject } from "react";
 import { flushSync } from "react-dom";
 
 /** Where a `/skill` being typed sits in the text. */
-export type TypedToken = { start: number; end: number };
+type TypedToken = { start: number; end: number };
 
 /**
  * The list that opens at a `/` as the editor types in the message box:
@@ -57,5 +57,5 @@ export function useTokenList(field: RefObject<HTMLTextAreaElement | null>, value
     setCaret(position);
   };
 
-  return { caret, focused, setFocused, dismissed, index, setIndex, syncCaret, focus, typed, close, activeIndex, navigate, replaceToken };
+  return { caret, focused, setFocused, dismissed, index, syncCaret, focus, typed, close, activeIndex, navigate, replaceToken };
 }
