@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- Edit-number pills near the start or end of the timeline no longer overlap the pill beside them.
 - An edit running on Gemini now picks up where it left off after Scarlet restarts, instead of starting its work over.
 - After Scarlet restarts, each request's list of edits comes back the way you left it, so a change you asked for on one edit stays under that edit's row.
 - Playing through the video no longer leaves faint vertical dashes along the timeline ruler.
