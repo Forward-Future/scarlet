@@ -11,7 +11,7 @@ import type { ToolResult } from "./tool-result.js";
  * of its own, which a harness may show the model untyped. Eighteen parameters of seven tools read that way, the word
  * references in dialogue_check_join's `cuts` and timelineEdits' reason among them (2026-11-20).
  */
-export function unshared<T extends z.ZodTypeAny>(schema: T): T {
+function unshared<T extends z.ZodTypeAny>(schema: T): T {
   const copy = (value: unknown): unknown => value instanceof z.ZodType ? unshared(value)
     : Array.isArray(value) ? value.map(copy)
     : value instanceof Map ? new Map([...value].map(([key, item]) => [key, copy(item)]))
