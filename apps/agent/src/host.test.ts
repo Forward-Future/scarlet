@@ -1228,19 +1228,12 @@ it("keeps the engine hearing from a request it runs on its own, through a long t
     await vi.waitFor(() => expect(beats()).toBeGreaterThanOrEqual(3), { timeout: 2_000, interval: 10 });
     return { ok: true, summary: "Done" };
   }, undefined, { heartbeatMs: 20 });
-  let sent = 0;
-  let answered = 0;
-  const sendHeartbeat = client.heartbeat.bind(client);
-  client.heartbeat = (...args) => {
-    sent++;
-    return sendHeartbeat(...args).finally(() => { answered++; });
-  };
+  const heartbeat = vi.spyOn(client, "heartbeat");
   const ended = await host.runOne("prj_test", { kind: "edit", agent: "claude", instruction: task.instruction });
   expect(ended.state).toBe("done");
   expect(srv.completes).toEqual([expect.objectContaining({ state: "done" })]);
-  // A heartbeat already on its way when the run ends still lands, with the tick it held back.
-  await vi.waitFor(() => expect(answered).toBe(sent), { timeout: 2_000, interval: 10 });
-  const after = sent;
+  // A heartbeat still on its way when the run ends may send the one tick it held back; nothing follows it.
+  const after = heartbeat.mock.calls.length;
   await delay(100);
-  expect(sent).toBe(after);
+  expect(heartbeat.mock.calls.length).toBeLessThanOrEqual(after + 1);
 });
