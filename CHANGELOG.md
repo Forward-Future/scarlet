@@ -6,7 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
-- The Matt’s talking-head example skill no longer includes Matt’s personal camera setup or editor name, so any editor can copy and adapt it directly.
+- The talking-head example skill no longer includes Matt’s own camera setup or editor name, so any editor can adapt it.
 - L on a to-do's card sets it aside for later instead of changing the playback speed; Shift+L still slows playback.
 - Shift+← and Shift+→ move exactly one frame when the video is paused between two frames, instead of none or two.
 - A Gemini request no longer fails when Gemini turns down the effort level Scarlet picks by default.
