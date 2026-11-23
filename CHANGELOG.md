@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- A request that punches in on one part of the video and moves or crops the camera inset on another now calls the inset change a reframe, not a zoom.
 - The Transcript panel is cleaner and easier to read: timestamps line up in a quiet left column, sparse remarks flow inline with small pause markers instead of breaking onto single-word lines, repeated "Voice unclear" headers are gone, and search now has previous, next, and clear buttons.
 - Scarlet no longer drops a cut it got right because the transcript and the recording spell or time a word differently, so a false start it found isn't left in.
 - A cut placed at the end of a word that runs straight into the next one no longer clips the word's last sound, like the “s” of “complaints”.

@@ -50,6 +50,17 @@ describe("telling what an applied edit did", () => {
       { before: base })).toEqual(["reframe"]);
   });
 
+  it("names each framing edit of one save by its own scale: an inset beside a punch-in is still a reframe", () => {
+    const framed = after(t => { t.tracks.push({ ...upper, clips: [makeMediaClip("interview", 0, 30, 0, { id: "inset" })] });
+      t.tracks.find(x => x.kind === "video")!.clips = [{ ...shot, id: "a", timelineOut: 30, sourceOut: 30 },
+        { ...shot, id: "b", timelineIn: 30, sourceIn: 30 }]; });
+    const pass = change([
+      { op: "updateClip", clipId: "inset", patch: { transform: { scale: 0.3, x: 0.33, y: 0.3, cropLeft: 0.2, cropRight: 0.2 } } },
+      { op: "updateClip", clipId: "b", patch: { transform: { scale: 1.3 } } },
+    ]);
+    expect(editKinds(pass, [{ start: 0, end: 30 }, { start: 30, end: 60 }], { before: framed, after: framed })).toEqual(["reframe", "zoom"]);
+  });
+
   it("names a title text, and b-roll, a graphic or a color card laid over the picture an overlay", () => {
     expect(editKinds(change([{ op: "addClip", trackId: "cap", clip: { kind: "caption", id: "t", timelineIn: 10, timelineOut: 14, text: "Hi" } }]),
       [one])).toEqual(["text"]);

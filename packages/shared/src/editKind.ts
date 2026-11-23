@@ -26,9 +26,9 @@ type Op = Record<string, unknown>;
 type Facet = EditKind | "framing" | "picture" | "marker" | "neutral";
 /**
  * `ask`: what a to-do marker asks of the editor, in its own words. `restated`: this step wrote those words, as against
- * a move of a marker that only still says them.
+ * a move of a marker that only still says them. `zoom`: this framing step scaled the picture up.
  */
-type Placed = { facet: Facet; range?: TimeRange; ask?: string; restated?: boolean };
+type Placed = { facet: Facet; range?: TimeRange; ask?: string; restated?: boolean; zoom?: boolean };
 type MarkerFields = { time?: unknown; text?: unknown; kind?: unknown; resolved?: unknown };
 
 const AUDIO_KEYS = new Set(["volume", "audioFadeIn", "audioFadeOut"]);
@@ -179,7 +179,7 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
             ? splitAt(found.clip, patch.splitEdit as SplitRecord, patch).map(range => ({ facet: "split" as const, range })) : [{ facet: "split" as const, range: at }];
           if (AUDIO_KEYS.has(key)) return { facet: "audio" as const, range: at };
           if (key === "volumeKeyframes") return { facet: "dip" as const, range: at };
-          if (FRAMING_KEYS.has(key)) return { facet: "framing" as const, range: at };
+          if (FRAMING_KEYS.has(key)) return { facet: "framing" as const, range: at, ...(zooms(patch) && { zoom: true }) };
           if (TEXT_KEYS.has(key)) return { facet: "text" as const, range: at };
           if (OVERLAY_KEYS.has(key)) return { facet: found && found.track.id !== baseVideo ? laid(found.clip) : "overlay" as const, range: at };
           if (key === "speed") return { facet: "speed" as const, range: at };
@@ -265,15 +265,11 @@ function decide(facets: Facet[], framing: "zoom" | "reframe", { before, after }:
 }
 
 /** Scaling the picture up is a zoom; moving, cropping or shrinking it (an inset) is a reframe. */
-function zooms(change: Change): boolean {
-  return ((change.ops ?? []) as Op[]).some(op => {
-    const patch = op.op === "updateClip" && op.patch && typeof op.patch === "object" ? op.patch as Record<string, unknown> : undefined;
-    if (!patch) return false;
-    const transform = patch.transform as { scale?: unknown } | undefined;
-    const keyframes = Array.isArray(patch.keyframes) ? patch.keyframes as { transform?: { scale?: unknown } }[] : [];
-    const scaledUp = (scale: unknown) => typeof scale === "number" && scale > 1.001;
-    return scaledUp(transform?.scale) || keyframes.some(k => scaledUp(k.transform?.scale));
-  });
+function zooms(patch: Record<string, unknown>): boolean {
+  const transform = patch.transform as { scale?: unknown } | undefined;
+  const keyframes = Array.isArray(patch.keyframes) ? patch.keyframes as { transform?: { scale?: unknown } }[] : [];
+  const scaledUp = (scale: unknown) => typeof scale === "number" && scale > 1.001;
+  return scaledUp(transform?.scale) || keyframes.some(k => scaledUp(k.transform?.scale));
 }
 
 /**
@@ -305,8 +301,9 @@ export function classifyEdits(change: Change, ranges: TimeRange[], clocks: Clock
   const steps = !rippleJoins || marks ? opFacets(change, clocks).filter(f => f.facet !== "neutral") : [];
   const facets: Placed[] = rippleJoins ? [...rippleJoins.map(({ range, facet }) => ({ facet: facet ?? "cut" as const, range })),
     ...steps.filter(f => f.facet === "marker")] : steps;
-  const framing = facets.some(f => f.facet === "framing") && zooms(change) ? "zoom" : "reframe";
-  const verdict = (here: Placed[], all = false) => ({ verdict: decide(here.map(f => f.facet), framing, clocks, all), here });
+  // Each edit is a zoom or a reframe by its own framing steps: a punch-in saved beside an inset doesn't make the inset a zoom.
+  const verdict = (here: Placed[], all = false) => ({ verdict: decide(here.map(f => f.facet), here.some(f => f.zoom) ? "zoom" : "reframe",
+    clocks, all), here });
   let found: { verdict: Verdict; here: Placed[]; nothing?: true }[];
   if (ranges.length <= 1 || !facets.length) {
     const whole = verdict(facets, true);
