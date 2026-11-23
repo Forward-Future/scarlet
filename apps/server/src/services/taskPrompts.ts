@@ -96,7 +96,7 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   const recap = !!task.resumeRootId && !(resumeSession && answered);
   const before = recap ? ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.retryTaskId') = ?", [task.projectId, task.id])[0] : undefined;
   const instruction = answered && !resumeSession
-    ? answerHandoffInstruction(ctx, task)
+    ? answerHandoffInstruction(ctx, task, before)
     : before ? recoveryInstruction(ctx, before, task.resumeRootId, task.id) : task.instruction;
   // The run is launched with its harness's to-do tool, and asked to lay out its steps, when the harness has one and the
   // chat will show the plan. A dialogue pass shows the stages Scarlet measures and a request about one staged cut its
@@ -198,14 +198,17 @@ export function followUpInstruction(ctx: Ctx, projectId: string, threadId: strin
     const reply = t.reply?.trim();
     if (summary) lines.push(`  You replied: ${summary}`);
     else if (reply) lines.push(`  You replied: ${reply}`);
-    if (summary && reply && reply !== summary) lines.push(`  Editorial note: ${reply}`);
+    if (summary && reply && reply !== summary) lines.push(`  Your reply to the editor: ${reply}`);
   }
   if (recentChanges.length) {
+    // A proposal a revision replaced is stored as rejected, though the editor decided nothing about it.
+    const changeState = (c: (typeof recentChanges)[number]) =>
+      c.state === "rejected" && c.replacedBy ? `replaced by ${c.replacedBy}, which holds its cuts now; the editor made no decision on it` : c.state;
     for (const change of recentChanges.slice(0, -1)) {
-      lines.push(`Earlier change: "${change.description}" (${change.state}).`);
+      lines.push(`Earlier change: "${change.description}" (${changeState(change)}).`);
     }
     const last = recentChanges.at(-1)!;
-    lines.push(`Latest change: "${last.description}" (${last.state}).`);
+    lines.push(`Latest change: "${last.description}" (${changeState(last)}).`);
   }
   lines.push("", `Now: ${text}`);
   return lines.join("\n");

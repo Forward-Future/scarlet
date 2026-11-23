@@ -8,6 +8,48 @@ export const EditReviewRequest = z.object({
 }).strict();
 export type EditReviewRequest = z.infer<typeof EditReviewRequest>;
 
+/** Which build an install runs: a public release package, or anything built from source (dev, local-main, review apps). */
+export const TELEMETRY_CHANNELS = ["release", "dev"] as const;
+export type TelemetryChannel = (typeof TELEMETRY_CHANNELS)[number];
+
+/**
+ * Why a request or an export failed, as a fixed category the engine reads off the failure locally. The failure's own
+ * words never leave the installation.
+ */
+export const FAILURE_REASONS = [
+  "agent_not_installed",
+  "agent_not_signed_in",
+  "rate_limited",
+  "model_unavailable",
+  "provider_error",
+  "tools_unavailable",
+  "timeout",
+  "interrupted",
+  "crashed",
+  "transcription_model_missing",
+  "media_unreadable",
+  "out_of_disk",
+  "network",
+  "other",
+] as const;
+export type FailureReason = (typeof FAILURE_REASONS)[number];
+
+/** How long a recording added to a project runs. */
+export const MEDIA_DURATION_BUCKETS = ["lt_1m", "1_10m", "10_30m", "30_60m", "gt_60m"] as const;
+export type MediaDurationBucket = (typeof MEDIA_DURATION_BUCKETS)[number];
+
+export function mediaDurationBucket(seconds: number): MediaDurationBucket {
+  if (seconds < 60) return "lt_1m";
+  if (seconds < 600) return "1_10m";
+  if (seconds < 1800) return "10_30m";
+  if (seconds < 3600) return "30_60m";
+  return "gt_60m";
+}
+
+/** The ways an edit leaves Scarlet. */
+export const EXPORT_ROUTES = ["render", "handoff", "otio", "srt", "vtt"] as const;
+export type ExportRoute = (typeof EXPORT_ROUTES)[number];
+
 /**
  * The requests counted as feature use: things an editor (or an agent on their behalf) chose to do. The names are
  * fixed, so no path, id or free text can reach analytics. Polling, host housekeeping and agent tooling are left out,
@@ -53,6 +95,7 @@ const FEATURES = [
   ["POST", "/storage/cleanup", "storage.cleanup"],
 
   ["PUT", "/media/:mediaId/voice-roles", "media.voice_roles"],
+  ["PUT", "/media/:mediaId/audio-track", "media.audio_track"],
   ["POST", "/projects/:id/media", "media.upload"],
   ["POST", "/projects/:id/media/import", "media.import"],
   ["POST", "/media/:mediaId/transcribe", "media.transcribe"],

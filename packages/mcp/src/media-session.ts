@@ -29,7 +29,8 @@ import {
   NoCachedSpeech,
   type JoinPage,
 } from "./dialogue-join.js";
-import { audibleSourcePoints, type DialoguePlanSources } from "./dialogue-plan.js";
+import type { DialoguePlanSources } from "./dialogue-plan.js";
+import { audibleSourcePoints } from "./dialogue-reading.js";
 import { gapSound, QUIET_PHRASE_CONTEXT, quietPhrases, roomRms, speakingLevel, type GapLevels, type GapSound, type QuietPhrase } from "./gap-sound.js";
 import { levelPoints, transcriptionNote, type SessionErrorHelpers } from "./media-state.js";
 import { Lanes } from "./review-prep.js";

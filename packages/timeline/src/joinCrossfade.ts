@@ -1,7 +1,9 @@
 import { detachedAudioClip, makeTrack } from "./builders.js";
 import { applyOps, type TimelineOp } from "./ops.js";
-import type { MediaAsset, MediaClip, Timeline, Track } from "./schema.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { Timeline, Track } from "./timelineSchema.js";
 import { clipDuration, clipEnd, isGlobalRippleDelete, uniqueId } from "./time.js";
+import { plays, type Placed } from "./audible.js";
 
 /**
  * Centered audio-only crossfades at dialogue joins. Each side of a join reaches half the overlap into its real source
@@ -22,7 +24,6 @@ export interface JoinFadeReport {
   plain: Array<{ at: number; reason: string }>;
 }
 
-type Placed = { clip: MediaClip; track: Track };
 type Refusal = { clipId: string; reason: "fade" | "audio" | "handles" | "short" | "occupied" };
 
 const REASON: Record<Refusal["reason"], string> = {
@@ -37,9 +38,8 @@ const REASON: Record<Refusal["reason"], string> = {
 function audibleClips(timeline: Timeline): Map<string, Placed> {
   const clips = new Map<string, Placed>();
   for (const track of timeline.tracks) {
-    if (track.muted || track.kind === "caption") continue;
     for (const clip of track.clips) {
-      if (clip.kind === "media" && clip.enabled && clip.volume > 0) clips.set(clip.id, { clip, track });
+      if (clip.kind === "media" && plays(track, clip)) clips.set(clip.id, { clip, track });
     }
   }
   return clips;
@@ -124,18 +124,33 @@ function crossfadePlanner(timeline: Timeline, assets: Map<string, MediaAsset> | 
   };
 }
 
-/** Expand touching audio clips into real source handles, keeping the picture edit and total runtime intact. */
+/**
+ * How far apart two clips can be and still meet, in seconds: well under a frame at any rate. A version rebuilt from
+ * unrounded times can leave its sound pieces a millisecond or two apart or overlapping at a join (picture sync on Matt's
+ * talking head, 2026-11-23). Refused there, the model spent an edit closing every seam by hand, which the editor saw as
+ * 96 rows of "no audible change", and then faded the joins instead of crossfading them.
+ */
+export const TOUCHING_SECONDS = 0.004;
+
+/**
+ * Expand touching audio clips into real source handles, keeping the picture edit and total runtime intact. Clips that
+ * meet within `TOUCHING_SECONDS` touch: the crossfade is centred on the seam and spans it, so the overlap is the
+ * duration asked for.
+ */
 export function audioCrossfadeOps(timeline: Timeline, media: MediaAsset[], joins: ClipJoin[], duration: number): TimelineOp[] {
   const clips = audibleClips(timeline);
   const planner = crossfadePlanner(timeline, new Map(media.map(asset => [asset.id, asset])));
   for (const { leftClipId, rightClipId } of joins) {
     const left = clips.get(leftClipId);
     const right = clips.get(rightClipId);
-    if (!left || !right || left === right || left.track !== right.track ||
-        Math.abs(clipEnd(left.clip) - right.clip.timelineIn) > 1e-7) {
-      throw new Error(`Choose touching audible clips on the same track: ${leftClipId}, ${rightClipId}`);
+    const seam = left && right ? right.clip.timelineIn - clipEnd(left.clip) : 0;
+    if (!left || !right || left === right || left.track !== right.track || Math.abs(seam) > TOUCHING_SECONDS) {
+      const apart = left && right && left !== right && left.track === right.track
+        ? ` (${seam > 0 ? `${(seam * 1000).toFixed(1)} ms apart` : `overlapping by ${(-seam * 1000).toFixed(1)} ms`})` : "";
+      throw new Error(`Choose touching audible clips on the same track: ${leftClipId}, ${rightClipId}${apart}`);
     }
-    const refused = planner.add(left, right, duration);
+    // Each side reaches half the overlap past the seam's middle, so the two sounds overlap by `duration` exactly.
+    const refused = planner.add(left, right, duration + seam);
     if (refused?.reason === "fade") throw new Error(`The join at ${rightClipId} already has a fade or is selected twice`);
     if (refused?.reason === "audio") throw new Error(`No confirmed audio on ${refused.clipId}`);
     if (refused?.reason === "occupied") throw new Error(`The dialogue track already has sound where ${refused.clipId}'s crossfade would go`);

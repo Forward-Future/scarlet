@@ -9,20 +9,14 @@
  * (2026-11-18), so a correction is made on the words Whisper gave.
  */
 import { applyWordFix, type WordFixPlace } from "@scarlet/shared";
-import { newId, type Transcript, type TranscriptWordFix } from "@scarlet/timeline";
+import { newId, type TranscriptWordFix } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { badRequest, notFound } from "../errors.js";
+import { linkedTranscript } from "./transcriptReader.js";
 
 export type TranscriptFixReport =
   | { mediaId: string; name: string; count: number; wordsAdded: number; places: WordFixPlace[] }
   | { mediaId: string; name: string; skipped: string };
-
-/** The transcript a recording reads: the linked one, else its latest. */
-function linked(ctx: Ctx, projectId: string, mediaId: string, transcriptId?: string): Transcript | undefined {
-  const id = transcriptId ?? (ctx.db.prepare("SELECT id FROM transcripts WHERE media_id = ? AND project_id = ? ORDER BY created_at DESC LIMIT 1")
-    .get(mediaId, projectId) as { id: string } | undefined)?.id;
-  return id ? ctx.repos.transcripts.get(id) ?? undefined : undefined;
-}
 
 export function fixTranscriptWords(ctx: Ctx, projectId: string, fix: TranscriptWordFix & { mediaIds?: string[] }): { recordings: TranscriptFixReport[] } {
   const { mediaIds, ...rule } = fix;
@@ -36,7 +30,7 @@ export function fixTranscriptWords(ctx: Ctx, projectId: string, fix: TranscriptW
       ?? all.filter(m => m.hasAudio || m.kind === "audio");
     const recordings: TranscriptFixReport[] = [];
     for (const media of asked) {
-      const original = linked(ctx, projectId, media.id, media.transcriptId);
+      const original = linkedTranscript(ctx, projectId, media.id, media.transcriptId);
       if (!original?.segments.length) {
         if (mediaIds) recordings.push({ mediaId: media.id, name: media.name, skipped: "It has no transcript yet. Fix it once its transcript is saved." });
         continue;

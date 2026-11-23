@@ -3,10 +3,12 @@ import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildClaudeCommand, claudeCanRunBare, claudeRunUsage, newClaudeState, parseClaudeLine } from "./claude.js";
-import { buildCodexCommand, newCodexState, parseCodexLine, tomlInlineTable, tomlString } from "./codex.js";
-import { acpMcpServer, buildGeminiCommand, isScarletMcpPermission, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./gemini.js";
+import { buildCodexCommand, tomlInlineTable, tomlString } from "./codex.js";
+import { newCodexState, parseCodexLine } from "./codexParse.js";
+import { acpMcpServer, buildGeminiCommand, isScarletMcpPermission, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./geminiAcp.js";
 import { quoteForCmd, spawnLines, spawnSpec } from "./spawn.js";
 import { briefInput, isQuestionTool, prettyToolName, workspaceEnv, type RunnerEvent } from "./types.js";
+import { holdQuestion, settleQuestion, type QuestionCallState } from "./questionCalls.js";
 
 function feed<S>(lines: string[], st: S, parse: (l: string, s: S) => RunnerEvent[]): RunnerEvent[] {
   const out: RunnerEvent[] = [];
@@ -788,5 +790,46 @@ describe("resolveMcpCliPath", () => {
     const p = resolveMcpCliPath();
     expect(p.replace(/\\/g, "/").endsWith("packages/mcp/dist/cli.js")).toBe(true);
     await expect(access(p)).resolves.toBeUndefined();
+  });
+});
+
+describe("question calls", () => {
+  const fresh = (): QuestionCallState => ({ questionPosted: false, shouldStop: false });
+
+  it("holds the first call's words and posts them when that call succeeds", () => {
+    const st = fresh();
+    holdQuestion(st, "q1", "Keep the cold open?");
+    expect(st).toMatchObject({ question: "Keep the cold open?", questionCall: "q1", questionPosted: false, shouldStop: false });
+    expect(settleQuestion(st, "q1", false)).toBe("Keep the cold open?");
+    expect(st).toMatchObject({ question: "Keep the cold open?", questionPosted: true, shouldStop: true });
+  });
+
+  it("holds nothing for a call with no words", () => {
+    const st = fresh();
+    holdQuestion(st, "q1", undefined);
+    expect(st.question).toBeUndefined();
+    expect(settleQuestion(st, "q1", false)).toBeUndefined();
+    expect(st.questionPosted).toBe(false);
+  });
+
+  it("lets the asking call update its words, but not a later call take its place", () => {
+    const st = fresh();
+    holdQuestion(st, "q1", "First?");
+    holdQuestion(st, "q1", "First, reworded?");
+    holdQuestion(st, "q2", "Second?");
+    expect(st).toMatchObject({ question: "First, reworded?", questionCall: "q1" });
+    expect(settleQuestion(st, "q2", false)).toBeUndefined();
+    expect(st.questionPosted).toBe(false);
+  });
+
+  it("clears a question its own call had refused, and keeps one a later refused call didn't ask", () => {
+    const st = fresh();
+    holdQuestion(st, "q1", "First?");
+    expect(settleQuestion(st, "q2", true)).toBeUndefined();
+    expect(st).toMatchObject({ question: "First?", questionCall: "q1" });
+    expect(settleQuestion(st, "q1", true)).toBeUndefined();
+    expect(st.question).toBeUndefined();
+    expect(st.questionCall).toBeUndefined();
+    expect(st).toMatchObject({ questionPosted: false, shouldStop: false });
   });
 });

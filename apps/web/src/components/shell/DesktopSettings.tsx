@@ -9,7 +9,8 @@ import { desktop, isDesktop, type EngineStatus } from "../../lib/desktop";
 import { errorMessage, IS_MOCK } from "../../lib/client";
 import { fileBaseName, plural } from "../../lib/format";
 import { AGENT_LABEL, isConfiguredAgent } from "../../stores/hosts";
-import { AgentSignIn, authLabel, canSignIn, useLocalHost } from "./AgentSignIn";
+import { AgentSignIn, AgentUpdate, authLabel, canSignIn, useLocalHost } from "./AgentSignIn";
+import { followDesktop } from "./followDesktop";
 import { InlineError, Loading, SectionTitle } from "../ui/primitives";
 
 const ENGINE_LABEL: Record<EngineStatus["state"], string> = {
@@ -25,17 +26,7 @@ function useDesktopStatus() {
   const host = useLocalHost();
   useEffect(() => {
     if (!isDesktop() || IS_MOCK) return;
-    let alive = true;
-    let received = false;
-    const listen = desktop.onEngineStatus((e) => {
-      received = true;
-      if (alive) setEngine(e);
-    });
-    void listen.then(() => desktop.engineStatus()).then(e => { if (alive && !received) setEngine(e); }).catch(() => undefined);
-    return () => {
-      alive = false;
-      void listen.then(off => off()).catch(() => undefined);
-    };
+    return followDesktop(on => desktop.onEngineStatus(on), () => desktop.engineStatus(), setEngine);
   }, []);
   return { engine, host };
 }
@@ -72,6 +63,7 @@ export function DesktopAgents({ onConnected }: { onConnected?: () => void }) {
               <div className="flex-1 min-w-0">
                 <div className="text-[13px]">{AGENT_LABEL[a.id]}</div>
                 <div className={`text-[12px] ${isConfiguredAgent(a) ? "text-muted" : "text-dim"}`}>{isConfiguredAgent(a) ? authLabel(a) : a.installed ? "Not signed in" : "Not installed on this computer"}</div>
+                <AgentUpdate agent={a} />
               </div>
               <AgentSignIn agent={a} />
             </li>

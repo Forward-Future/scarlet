@@ -1,5 +1,5 @@
 import { frameAlignedRemoval, makeTimeMap, mergeRanges, removedJoins, sourceToTimeline, timelineDuration, type Timeline, type TimelineOp, type TimeRange } from "@scarlet/timeline";
-import type { Task } from "./api.js";
+import type { Task } from "./tasks.js";
 
 /**
  * The range the editor selected for a request, in the seconds its context gives. A request sent from an applied edit

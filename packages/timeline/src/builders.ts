@@ -1,8 +1,11 @@
 /**
  * Convenience constructors used by the server, MCP tools and tests.
  */
-import type { MediaAsset, MediaClip, Project, ProjectSettings, Timeline, Track, TranscriptWord } from "./schema.js";
-import { Project as ProjectSchema, Timeline as TimelineSchema } from "./schema.js";
+import type { MediaAsset, TranscriptWord } from "./mediaSchema.js";
+import type { MediaClip, Timeline, Track } from "./timelineSchema.js";
+import type { Project, ProjectSettings } from "./projectSchema.js";
+import { Timeline as TimelineSchema } from "./timelineSchema.js";
+import { Project as ProjectSchema } from "./projectSchema.js";
 import { contentHash, newId } from "./ids.js";
 
 export const ASPECT_PRESETS: Record<string, { width: number; height: number }> = {

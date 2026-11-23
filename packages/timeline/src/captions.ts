@@ -3,7 +3,7 @@
  * timelineOut, written to the millisecond. Cue text is the clip's plain text;
  * karaoke word spans and caption style (including uppercase) are left out.
  */
-import type { Timeline, Track } from "./schema.js";
+import type { Timeline, Track } from "./timelineSchema.js";
 
 export type CaptionExportFormat = "srt" | "vtt";
 
