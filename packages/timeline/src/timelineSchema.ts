@@ -2,6 +2,7 @@
 import { z } from "zod/v3";
 import { timelinePlanningIssue } from "./time.js";
 import { Id, RenderColor, Seconds } from "./schemaBase.js";
+import { AudioTrackSelection } from "./mediaSchema.js";
 
 // ---------------------------------------------------------------------------
 // Clips
@@ -106,6 +107,8 @@ export const MediaClip = ClipBase.extend({
   /** Audio fade durations in seconds. */
   audioFadeIn: Seconds.default(0),
   audioFadeOut: Seconds.default(0),
+  /** Optional per-clip audio stream override (`0..N-1` or `"all"`). Absent inherits the asset's `audioTrack` (default `0`). */
+  audioTrack: AudioTrackSelection.optional(),
   /** Video fade durations in seconds (fade from/to black or transparent). */
   videoFadeIn: Seconds.default(0),
   videoFadeOut: Seconds.default(0),

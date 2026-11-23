@@ -56,8 +56,28 @@ export const DialogueVoiceRoles = z.object({
 }).refine(v => v.me !== v.other, "Choose two different isolated inputs");
 export type DialogueVoiceRoles = z.infer<typeof DialogueVoiceRoles>;
 
+/** Metadata for one audio stream inside a media container (`0:a:index`). */
+export const AudioStreamInfo = z.object({
+  /** Zero-based index among the file's audio streams (`0:a:index`). */
+  index: z.number().int().nonnegative(),
+  codec: z.string().optional(),
+  channels: z.number().int().positive().optional(),
+  sampleRate: z.number().int().positive().optional(),
+  language: z.string().optional(),
+  title: z.string().optional(),
+});
+export type AudioStreamInfo = z.infer<typeof AudioStreamInfo>;
+
+/** Which audio stream(s) to read from a multi-track recording: a zero-based stream index or `"all"` to mix every track. */
+export const AudioTrackSelection = z.union([z.literal("all"), z.number().int().nonnegative()]);
+export type AudioTrackSelection = z.infer<typeof AudioTrackSelection>;
+
 export const MediaAsset = z.object({
   voiceRoles: DialogueVoiceRoles.optional(),
+  /** All probed audio streams for recordings with multiple audio tracks (e.g. OBS, podcasts). */
+  audioStreams: z.array(AudioStreamInfo).optional(),
+  /** Selected audio stream index or `"all"` to mix all streams. Absent means the first audio stream (`0`). */
+  audioTrack: AudioTrackSelection.optional(),
   id: Id,
   /** The desktop import that created this asset, retained so retrying that request returns the same file. */
   importId: z.string().uuid().optional(),

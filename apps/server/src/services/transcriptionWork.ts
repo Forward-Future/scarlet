@@ -31,7 +31,8 @@ export async function transcriptionIdentity(ctx: Ctx, asset: MediaAsset, source:
     settings.language, revision, provider.name, provider.localModel, provider.modelLabel,
     file(adapter), file(runtime?.model), script,
     runtime && !runtime.model && !runtime.adapterOwnsModel ? bundledWhisperModel.sha256 : undefined,
-    provider.name === "openai" ? settings.openaiModel : undefined]);
+    provider.name === "openai" ? settings.openaiModel : undefined,
+    ...(asset.audioTrack !== undefined && asset.audioTrack !== 0 ? [asset.audioTrack] : [])]);
 }
 
 /** The task claim, the saved prefix and the authority to append to it change hands in the same transaction.

@@ -256,15 +256,16 @@ async function fillAlignedHoles(p: PostAlignContext, alignable: boolean, segment
   if (!alignable) return segments;
   const full = p.wav ?? join(p.ctx.paths.tmp, newId("recording") + ".wav");
   try {
-    if (!p.wav) await extractWav(p.src, full, { signal: p.signal });
+    if (!p.wav) await extractWav(p.src, full, { signal: p.signal, audioStream: p.asset.audioTrack, audioStreamCount: p.asset.audioStreams?.length });
     return await fillTranscriptHoles({
       wav: full, segments, tmpDir: p.ctx.paths.tmp, signal: p.signal,
       log: message => p.ctx.log(`${message} (${p.asset.id})`),
       read: p.provider.name !== "whispercpp" ? undefined : async laid =>
         (await p.lane.run(p.work, p.signal, () => p.provider.transcribe({ path: laid, dialogueWindow: {}, tmpDir: p.ctx.paths.tmp, signal: p.signal, language: p.language }))).segments,
       align: async found => alignTranscript(p.ctx, {
-        source: p.src, wav: full, language: p.language, segments: found, signal: p.signal,
-        emissions: await emissionStore(p.ctx, p.projectId, p.src), work: p.alignment,
+        source: p.src, wav: full, audioStream: p.asset.audioTrack, audioStreamCount: p.asset.audioStreams?.length,
+        language: p.language, segments: found, signal: p.signal,
+        emissions: await emissionStore(p.ctx, p.projectId, p.src, p.asset.audioTrack), work: p.alignment,
       }),
     });
   } catch (error) {
@@ -290,11 +291,11 @@ async function restoreTidiedWords(
 ): Promise<TranscriptSegment[]> {
   if (!alignable || alignmentFailed || p.provider.name !== "whispercpp" || !readsEnglishSpeech(p.language)) return segments;
   const full = p.wav ?? join(p.ctx.paths.tmp, newId("recording") + ".wav");
-  const file = await emissionStore(p.ctx, p.projectId, p.src);
+  const file = await emissionStore(p.ctx, p.projectId, p.src, p.asset.audioTrack);
   let store: EmissionFile | null = null;
   const opened = async () => store ??= await EmissionFile.open(file);
   try {
-    if (!p.wav) await extractWav(p.src, full, { signal: p.signal });
+    if (!p.wav) await extractWav(p.src, full, { signal: p.signal, audioStream: p.asset.audioTrack, audioStreamCount: p.asset.audioStreams?.length });
     return await putBackTidiedWords({
       wav: full, segments, tmpDir: p.ctx.paths.tmp, signal: p.signal,
       log: message => p.ctx.log(`${message} (${p.asset.id})`),
@@ -361,7 +362,8 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     const transcribe = () => {
       ctx.log(`[transcribe] recognition_started ${target} provider=${provider.name}`);
       progress.transcribing(recognized);
-      return provider.transcribe({ path: src, duration: asset.duration, tmpDir: ctx.paths.tmp, signal, keepWavAt: wav,
+      return provider.transcribe({ path: src, audioStream: asset.audioTrack, audioStreamCount: asset.audioStreams?.length,
+        duration: asset.duration, tmpDir: ctx.paths.tmp, signal, keepWavAt: wav,
         checkpoint: saved.recognition, onProgress: progress.transcribing, beforeUpload: checkRunning,
       });
     };
@@ -427,7 +429,7 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     if (alignable && !saved.alignment) early = !!save(result.segments, { through: 0, nextWord: 0, fraction: 0 });
     progress.aligning(saved.alignment?.fraction ?? 0);
     // The old process's scratch WAV is gone. Recreate the shared decode before alignment or the gap check reads it.
-    if (saved.aligned && wav) await extractWav(src, wav, { signal });
+    if (saved.aligned && wav) await extractWav(src, wav, { signal, audioStream: asset.audioTrack, audioStreamCount: asset.audioStreams?.length });
     // While a pass is reading this recording, its alignment lets the speakers a pass waits for finish first
     // (RecordingSpeakers.awaitedByPass). Nothing a pass reads needs word times before its first page.
     // A pass reading any recording of the project counts: it turns to this one next, and its first page here waits
@@ -436,8 +438,8 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     const speakersFirst = () => ctx.speakers.beside && passReading() ? ctx.speakers.awaitedByPass(projectId) : undefined;
     let publishedThrough = saved.alignment?.through ?? 0;
     const finishedAlignment = saved.alignment?.complete;
-    const aligned = finishedAlignment ? result.segments : await alignTranscript(ctx, { source: src, wav, language, segments: result.segments, signal, resume: saved.alignment,
-      emissions: alignable ? await emissionStore(ctx, projectId, src) : undefined, hold: speakersFirst,
+    const aligned = finishedAlignment ? result.segments : await alignTranscript(ctx, { source: src, wav, audioStream: asset.audioTrack, audioStreamCount: asset.audioStreams?.length, language, segments: result.segments, signal, resume: saved.alignment,
+      emissions: alignable ? await emissionStore(ctx, projectId, src, asset.audioTrack) : undefined, hold: speakersFirst,
       work: alignment, onProgress: progress.aligning,
       onFailure: () => { alignmentFailed = true; },
       onTurn: (soFar, through, cursor) => {

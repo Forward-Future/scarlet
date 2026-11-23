@@ -1,4 +1,5 @@
 export { fileInDirectory, fileInDirectoryAsync } from "./assetPath.js";
+export * from "./audioTrack.js";
 export * from "./exec.js";
 export * from "./probe.js";
 export * from "./hdr.js";

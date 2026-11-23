@@ -30,7 +30,7 @@ import type {
   User,
   VersionSummary,
 } from "@scarlet/shared";
-import type { Change, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript } from "@scarlet/timeline";
+import type { AudioTrackSelection, Change, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript } from "@scarlet/timeline";
 import { diffTimelines, newId, timelineDuration, ASPECT_PRESETS } from "@scarlet/timeline";
 import type { ActivityEntry, ApproveResponse, HandoffResponse, TrashedProject } from "@scarlet/shared";
 import type { ScarletApi } from "../api";
@@ -38,7 +38,7 @@ import { bootBackgroundActivity } from "./background";
 import { reviewCuts } from "./cutReview";
 import type { Emitter } from "./emitter";
 import { captionDataUrl, handoffFiles, otioDataUrl } from "./exportFiles";
-import { addImportedMedia, removeMedia, transcribe, uploadMedia } from "./media";
+import { addImportedMedia, removeMedia, setMediaAudioTrack, transcribe, uploadMedia } from "./media";
 import { releaseRender, renders, requestRender } from "./renderJobs";
 import { createNote, rejectChange, reopenChange, reviseChange, unapproveChange } from "./review";
 import { applyChange, retryAttempt, runRetry, stopTask } from "./runs";
@@ -265,6 +265,10 @@ export class MockClient implements ScarletApi {
   async removeMedia(projectId: string, mediaId: string): Promise<Record<string, never>> {
     this.requireAuth();
     return this.latency(removeMedia(this.store, projectId, mediaId));
+  }
+  async setMediaAudioTrack(mediaId: string, audioTrack: AudioTrackSelection): Promise<{ media: MediaAsset }> {
+    this.requireAuth();
+    return this.latency(setMediaAudioTrack(this.store, mediaId, audioTrack));
   }
   /** The demo groups no retakes. */
   async retakes(_projectId: string, mediaId: string, _from: number, _to: number): Promise<{ mediaId: string; groups: [] }> {

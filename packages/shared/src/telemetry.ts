@@ -95,6 +95,7 @@ const FEATURES = [
   ["POST", "/storage/cleanup", "storage.cleanup"],
 
   ["PUT", "/media/:mediaId/voice-roles", "media.voice_roles"],
+  ["PUT", "/media/:mediaId/audio-track", "media.audio_track"],
   ["POST", "/projects/:id/media", "media.upload"],
   ["POST", "/projects/:id/media/import", "media.import"],
   ["POST", "/media/:mediaId/transcribe", "media.transcribe"],

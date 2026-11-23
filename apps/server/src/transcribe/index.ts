@@ -1,5 +1,5 @@
 import type { LocalTranscriptionModel, ServerSettings } from "@scarlet/shared";
-import type { TranscriptSegment } from "@scarlet/timeline";
+import type { AudioTrackSelection, TranscriptSegment } from "@scarlet/timeline";
 import { win32 } from "node:path";
 import type { Ctx } from "../context.js";
 import { FfmpegError } from "../render/ffmpeg.js";
@@ -14,6 +14,10 @@ export interface TranscribeInput {
   beforeUpload?: () => void;
   /** Any media file ffmpeg can read. */
   path: string;
+  /** Selected audio stream index or `"all"` to mix all streams. Absent reads the default stream (`0`). */
+  audioStream?: AudioTrackSelection;
+  /** Total number of audio streams in the file (used when `audioStream === "all"`). */
+  audioStreamCount?: number;
   /** Caller-owned, pre-extracted mono WAV of at most one minute for dialogue analysis. */
   dialogueWindow?: { prompt?: string };
   duration?: number;

@@ -31,6 +31,7 @@ function audioMixPlan(project: Project, timeline: Timeline, range: TimeRange, ca
     const asset = media.get(clip.mediaId);
     return [{
       source: asset?.hash ?? asset?.path ?? clip.mediaId, kind: asset?.kind, hasAudio: asset?.hasAudio,
+      ...((clip.audioTrack ?? asset?.audioTrack) !== undefined ? { audioTrack: clip.audioTrack ?? asset?.audioTrack } : {}),
       graphicStill: asset?.kind === "graphic" ? isImagePath(asset.path) : undefined,
       videoStart: asset?.previewClock?.videoStart, volume: clip.volume, speed: clip.speed,
       seek: fnum(clip.sourceIn + p.local0 * clip.speed), visible: fnum(p.vis), delay: Math.round(p.pos * sampleRate),

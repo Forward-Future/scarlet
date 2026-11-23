@@ -123,7 +123,11 @@ export class WhisperCppProvider implements TranscriptionProvider {
     }
     const wav = input.keepWavAt ?? join(input.tmpDir, newId("wcpp") + ".wav");
     try {
-      await extractWav(input.path, wav, { signal: input.signal });
+      await extractWav(input.path, wav, {
+        signal: input.signal,
+        audioStream: input.audioStream,
+        audioStreamCount: input.audioStreamCount,
+      });
       if (input.checkpoint) return await this.transcribeChunks(wav, input, input.checkpoint);
       return await this.transcribeWav(wav, input.tmpDir, input.signal, input.language, undefined, input.onProgress);
     } finally { if (!input.keepWavAt) await rm(wav, { force: true }); }

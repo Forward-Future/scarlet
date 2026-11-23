@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { open, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { AudioTrackSelection } from "@scarlet/timeline";
 import { speechActivity, speechActivityOf, speechActivityStart } from "@scarlet/render";
 import { extractWav } from "../render/ffmpeg.js";
 import { EMISSION_STORE_SUFFIXES, pcmWavHeader } from "../transcribe/wordAlign.js";
@@ -8,11 +9,11 @@ import { readWavDataLayout } from "../util.js";
 
 type Paths = { paths: { tmp: string; waveforms(projectId: string): string } };
 
-async function stamp(file: string, audioStream?: number) {
+async function stamp(file: string, audioStream?: AudioTrackSelection) {
   // Ingestion and inspection can reach the same recording through different spellings of the library path.
   const source = await realpath(file);
   const info = await stat(source);
-  return [source, info.size, info.mtimeMs, info.ctimeMs, audioStream ?? null] as const;
+  return [source, info.size, info.mtimeMs, info.ctimeMs, audioStream === 0 ? null : (audioStream ?? null)] as const;
 }
 
 function emissionPath(ctx: Paths, projectId: string, identity: readonly unknown[]) {
@@ -27,7 +28,7 @@ function emissionPath(ctx: Paths, projectId: string, identity: readonly unknown[
  * as it is now, so a replaced recording starts a new store. The transcript's alignment and every scan page of the
  * recording read and fill the same one.
  */
-export async function emissionStore(ctx: Paths, projectId: string, file: string, audioStream?: number) {
+export async function emissionStore(ctx: Paths, projectId: string, file: string, audioStream?: AudioTrackSelection) {
   return emissionPath(ctx, projectId, await stamp(file, audioStream));
 }
 
@@ -35,7 +36,7 @@ export async function emissionStore(ctx: Paths, projectId: string, file: string,
  * Every store a recording's emissions can be under: older engines wrote under the import path during transcription
  * and the resolved path during a scan, and a recording aligned in another language keeps that language's beside it.
  */
-export async function emissionStorePaths(ctx: Paths, projectId: string, file: string, imported: string, audioStream?: number) {
+export async function emissionStorePaths(ctx: Paths, projectId: string, file: string, imported: string, audioStream?: AudioTrackSelection) {
   const [source, ...identity] = await stamp(file, audioStream);
   return [...new Set([source, file, imported])].map(path => emissionPath(ctx, projectId, [path, ...identity]))
     .flatMap(store => EMISSION_STORE_SUFFIXES.map(suffix => store + suffix));

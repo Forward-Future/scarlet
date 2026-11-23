@@ -7,7 +7,7 @@ import { MultipartParseError, parseMultipartRequest } from "@remix-run/multipart
 import { fileInDirectoryAsync, hasIndexedAvc } from "@scarlet/render";
 import { Hono } from "hono";
 import { z } from "zod/v3";
-import { DialogueVoiceRoles, isPlayableMedia, MediaKind, Provenance, WebSource } from "@scarlet/timeline";
+import { AudioTrackSelection, DialogueVoiceRoles, isPlayableMedia, MediaKind, Provenance, WebSource } from "@scarlet/timeline";
 import { flattenWords } from "@scarlet/shared";
 import { retakeGroups } from "@scarlet/mcp/media-profile";
 import type { AppEnv } from "../auth.js";
@@ -99,6 +99,41 @@ export function mediaRoutes(ctx: Ctx) {
       requireProjectLocalPauseTarget(ctx, attempt, source.projectId);
       const current = requireMedia(ctx, source.id);
       const saved = ctx.repos.projects.putMedia(current.projectId, { ...current, voiceRoles: roles }, current.status, current.error);
+      ctx.bus.publish({ type: "media.updated", projectId: current.projectId, media: saved });
+      return saved;
+    }, "immediate")();
+    return c.json({ media });
+  });
+
+  r.put("/media/:mediaId/audio-track", async c => {
+    const source = requireMedia(ctx, c.req.param("mediaId"));
+    requireAudio(source);
+    const attempt = requestAttempt(c.req.raw);
+    requireProjectLocalPauseTarget(ctx, attempt, source.projectId);
+    const { audioTrack } = await jsonBody(c, z.object({ audioTrack: AudioTrackSelection }));
+    let streams = source.audioStreams;
+    if (!streams) {
+      const file = await fileInDirectoryAsync(ctx.paths.media(source.projectId), source.path);
+      if (file) {
+        const signal = AbortSignal.any([ctx.projectSignal(source.projectId), c.req.raw.signal]);
+        const probed = await ctx.track(ctx.render.probeMedia(file, signal), source.projectId).catch(() => undefined);
+        if (probed?.audioStreams && probed.audioStreams.length > 1) streams = probed.audioStreams;
+      }
+    }
+    const count = streams?.length ?? 1;
+    if (typeof audioTrack === "number" && audioTrack >= count) {
+      throw badRequest("bad_audio_track", `This file only has ${count} audio ${count === 1 ? "track" : "tracks"}.`);
+    }
+    const normalized = audioTrack === 0 ? undefined : audioTrack;
+    const media = ctx.db.transaction(() => {
+      requireProjectLocalPauseTarget(ctx, attempt, source.projectId);
+      const current = requireMedia(ctx, source.id);
+      const { status, error, projectId: _p, ...rest } = current;
+      const saved = ctx.repos.projects.putMedia(current.projectId, {
+        ...rest,
+        ...(streams && streams.length > 1 ? { audioStreams: streams } : {}),
+        audioTrack: normalized,
+      }, status, error);
       ctx.bus.publish({ type: "media.updated", projectId: current.projectId, media: saved });
       return saved;
     }, "immediate")();
@@ -353,7 +388,7 @@ export function mediaRoutes(ctx: Ctx) {
     // The timeline's drawing never asks for voice activity. A read that does is a tool's, such as a running edit's
     // inspection of a cut, so a waveform it lacks is prepared for it while the project's media work is paused too.
     const cache = c.req.query("cachedOnly") === "1"
-      ? await readWaveformCache(ctx, media.projectId, media.id, media.status === "failed" ? undefined : media.path)
+      ? await readWaveformCache(ctx, media.projectId, media.id, media.status === "failed" ? undefined : media.path, media.audioTrack)
       : await getWaveform(ctx, media, c.req.query("speechActivity") === "1");
     if (!cache) throw notFound("waveform (media has no audio or is still ingesting)");
     const from = numberParam(c.req.query("from"), "from", 0);
