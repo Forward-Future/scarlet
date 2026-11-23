@@ -14,7 +14,7 @@ import { editKey } from "../../lib/keptEdits";
 import { isDialoguePass, isOpenPass, openPass, waitsToPlay } from "../../lib/passCalls";
 import { aboutOne, aimOf, closingReply, notesStillAsked, threadRuns, waitingToStart, type Run } from "../../lib/requestRuns";
 import { runIsActive, spentLabel } from "../../lib/taskRun";
-import { firstCutDeliveries, isRedo, requestTarget, revisionTarget, threadConversation, type Thread, type ThreadEntry } from "../../lib/threads";
+import { firstCutDeliveries, isRecheck, isRedo, RECHECK_WORDS, requestTarget, revisionTarget, threadConversation, type Thread, type ThreadEntry } from "../../lib/threads";
 import { useNearView } from "../../lib/useNearView";
 import { useProjectStore } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
@@ -324,7 +324,10 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // While every edit is listed, the list takes the place of Scarlet's reply; putting it away brings the reply back. The
     // short list of what needs the editor, shown without a click, leaves the reply where it is.
     const listing = run === owner && hasRows && passList[0] === "all";
+    // Scarlet's recheck of a cut the editor approved, under that cut's row: its reason is its heading, not a line under its work.
+    const autoHeading = inside && isRecheck(task);
     mine.forEach((e, i) => {
+      if (autoHeading && e.kind === "system" && e.text === RECHECK_WORDS) return;
       // All of what Scarlet said: folded it keeps to two lines, and a click opens the rest.
       if (e.kind === "agent") { if (!quiet && !(e.onNote && closed)) { told = true; if (!listing) said.push(<Said key={i} className="req-say" text={e.fullText ?? e.text} />); } }
       else if (e.kind === "question") said.push(<p key={i} className={e.answered ? "req-say is-quiet" : "req-say"}>{e.text}
@@ -429,9 +432,13 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const wrong = failed?.run === run.root && <p className="simple-error unit-error" role="alert">{failed.text}</p>;
     // Inside another request's block, under the row it is about: its tag and the editor's words, with where it stands
     // at their right, as in a block's heading, and its work. Under its row the row names it, and the tag is hidden.
+    // A recheck Scarlet started itself has no words of the editor's: its reason takes their place, after an Auto tag
+    // that stays in view, so it never reads as a revision nobody asked for (2026-11-22).
     if (inside) return <div key={run.root} className="subunit" data-run={run.root}>
       {request && <div className="subunit-msg"><span className="simple-who">You</span>
         <Said lead={<span className="simple-revising">{about ?? "Revision"}</span>} text={request.text} /><span className="unit-state">{standing}</span>{headingEnd}</div>}
+      {!request && autoHeading && <div className="subunit-msg"><span className="simple-who">Scarlet</span>
+        <Said lead={<span className="simple-revising is-auto" title="Scarlet started this itself">Auto</span>} text={RECHECK_WORDS} /><span className="unit-state">{standing}</span></div>}
       {bundle}
       {wrong}
     </div>;

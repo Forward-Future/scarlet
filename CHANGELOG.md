@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- When Scarlet rechecks a cut you approved because its footage changed, the cut now says Rechecking…, and the work under it starts with an Auto tag and why, so it never looks like a revision nobody asked for.
 - Asking Scarlet to change an edit it already made now starts right away, even while it's still working on the rest of the video, and up to four things can run at once.
 - The model menu's effort control is now a smooth pill slider you can drag or click, and its bottom bar drops the extra Tune label so your current effort and speed sit cleanly beside the chevron.
 - Scarlet now listens to cuts with Claude and Codex too: when Gemini is signed in, it listens for the model you picked. In Settings › Models you can choose which model listens, or turn listening off.

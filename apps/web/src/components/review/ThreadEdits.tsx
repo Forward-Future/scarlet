@@ -214,13 +214,13 @@ export function useRevising(thread: Thread | undefined) {
 
 /**
  * The word on a row whose edit or cut has a request with Scarlet: "Revising…" or "Rejecting…" once Scarlet has
- * started on it, "Up next" while it is next in line in the queue, and "Queued" while it waits behind other work
+ * started on it ("Rechecking…" when Scarlet sent an approved cut back to itself), "Up next" while it is next in line in the queue, and "Queued" while it waits behind other work
  * or while editing is paused.
  */
-export function revisionWord(run: { id: string; state: Task["state"] } | undefined, { rejecting = false, nextQueuedId }: { rejecting?: boolean; nextQueuedId?: string } = {}) {
+export function revisionWord(run: { id: string; state: Task["state"] } | undefined, { rejecting = false, recheck = false, nextQueuedId }: { rejecting?: boolean; recheck?: boolean; nextQueuedId?: string } = {}) {
   if (!run) return undefined;
   if (run.state === "queued") return nextQueuedId && run.id === nextQueuedId ? "Up next" : "Queued";
-  return rejecting ? "Rejecting…" : "Revising…";
+  return rejecting ? "Rejecting…" : recheck ? "Rechecking…" : "Revising…";
 }
 
 /**
