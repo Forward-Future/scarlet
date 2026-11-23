@@ -1,7 +1,9 @@
 import { detachedAudioClip, makeTrack } from "./builders.js";
 import { applyOps, type TimelineOp } from "./ops.js";
-import type { MediaAsset, MediaClip, Timeline, Track } from "./schema.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { Timeline, Track } from "./timelineSchema.js";
 import { clipDuration, clipEnd, isGlobalRippleDelete, uniqueId } from "./time.js";
+import { plays, type Placed } from "./audible.js";
 
 /**
  * Centered audio-only crossfades at dialogue joins. Each side of a join reaches half the overlap into its real source
@@ -22,7 +24,6 @@ export interface JoinFadeReport {
   plain: Array<{ at: number; reason: string }>;
 }
 
-type Placed = { clip: MediaClip; track: Track };
 type Refusal = { clipId: string; reason: "fade" | "audio" | "handles" | "short" | "occupied" };
 
 const REASON: Record<Refusal["reason"], string> = {
@@ -37,9 +38,8 @@ const REASON: Record<Refusal["reason"], string> = {
 function audibleClips(timeline: Timeline): Map<string, Placed> {
   const clips = new Map<string, Placed>();
   for (const track of timeline.tracks) {
-    if (track.muted || track.kind === "caption") continue;
     for (const clip of track.clips) {
-      if (clip.kind === "media" && clip.enabled && clip.volume > 0) clips.set(clip.id, { clip, track });
+      if (clip.kind === "media" && plays(track, clip)) clips.set(clip.id, { clip, track });
     }
   }
   return clips;

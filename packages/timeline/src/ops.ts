@@ -3,8 +3,9 @@
  * replacement timeline). Ops are applied immutably and validated.
  */
 import { z } from "zod/v3";
-import { duplicateClipId, WritableTimeline, Clip, Marker, Track, Timeline, Seconds, Id, CaptionStyle, RenderColor } from "./schema.js";
-import type { CaptionClip } from "./schema.js";
+import { Seconds, Id, RenderColor } from "./schemaBase.js";
+import { duplicateClipId, WritableTimeline, Clip, Marker, Track, Timeline, CaptionStyle } from "./timelineSchema.js";
+import type { CaptionClip } from "./timelineSchema.js";
 import { newId } from "./ids.js";
 import { clipEnd, findClipLocation } from "./time.js";
 
