@@ -2496,6 +2496,13 @@ it("names B-roll from the web B-roll, and opens where it came from behind the ca
   // The address opens the page.
   await click(row.querySelector(".edit-source-url")!);
   expect(opened).toHaveBeenCalledWith(url);
+  // A clip of a video on the web says which part of that video it is, beside a picture from the clip.
+  const clipOf = { ...article, kind: "video" as const, name: "demo.mp4", duration: 6.5,
+    source: { url: "https://www.youtube.com/watch?v=agents", capturedAt: "2026-11-23T12:00:00.000Z", capture: "sources/demo.jpg", clip: { start: 31, end: 37.5 } } };
+  await act(async () => useProjectStore.setState({ current: { ...data, media: data.media.map(m => m.id === article.id ? clipOf : m) } }));
+  expect([row.querySelector(".edit-source-capture i"), row.querySelector(".edit-source-url")!.textContent, row.querySelector(".edit-source-said")!.textContent])
+    .toEqual([null, "https://www.youtube.com/watch?v=agents", "Captured Nov 23, 2026. Taken from 0:31 – 0:37."]);
+  await act(async () => useProjectStore.setState({ current: data }));
   // The next edit laid nothing from the web: no icon, and the row is folded.
   await press("ArrowDown");
   expect(openTitle()).toBe("wrap");
