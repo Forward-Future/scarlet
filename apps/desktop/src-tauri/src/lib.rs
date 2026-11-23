@@ -157,6 +157,7 @@ pub fn run() {
             commands::host_refresh_agents,
             commands::host_refresh_quota,
             commands::agent_install,
+            commands::agent_update,
             commands::ffmpeg_status,
             commands::ffmpeg_install,
             crisper::install_crisper_model,

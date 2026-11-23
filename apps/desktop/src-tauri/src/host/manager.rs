@@ -155,6 +155,8 @@ impl HostManager {
                 tauri::async_runtime::spawn(async move {
                     let _ = bg.refresh_quota(true, None).await;
                 });
+                let bg = rt.clone();
+                tauri::async_runtime::spawn(async move { bg.check_updates().await });
                 let mut status = rt.full_status().await;
                 status.error = status.error.or(catalog_error);
                 status
@@ -171,6 +173,24 @@ impl HostManager {
             status.error = Some("The local agent host is offline. Try again when it connects.".into());
         }
         status
+    }
+
+    /// Whether a run is using `agent` right now. Its CLI isn't updated under it.
+    pub async fn is_running(&self, agent: &str) -> bool {
+        let rt = self.runtime.lock().await.clone();
+        rt.is_some_and(|rt| rt.running.lock().unwrap().values().any(|run| run.agent == agent))
+    }
+
+    /// Look again for newer CLIs now, as after an update.
+    pub async fn check_updates(&self) -> HostStatus {
+        let rt = self.runtime.lock().await.clone();
+        match rt {
+            Some(rt) => {
+                rt.check_updates().await;
+                rt.full_status().await
+            }
+            None => self.status().await,
+        }
     }
 
     /// Refresh subscription quota for eligible providers (non-blocking cache unless `force` is true).

@@ -29,6 +29,7 @@ mod task_runner;
 #[cfg(test)]
 mod tests;
 pub mod types;
+pub mod update;
 pub mod usage;
 mod workspace;
 
@@ -523,6 +524,7 @@ impl HostRuntime {
         let env = child_env(&self.paths.home);
         let _ = tokio::join!(self.detect_agents(&env), cleanup);
         self.emit_status();
+        tauri::async_runtime::spawn(self.clone().update_check_loop());
         // Register (retry until it works or we are stopped).
         let mut delay = 2u64;
         loop {

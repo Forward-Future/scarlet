@@ -81,9 +81,9 @@ fn verified_body(script: &InstallerScript) -> Option<&'static str> {
 }
 
 // Serialize assistant installs so shared directories/prefixes are never raced.
-static INSTALL_LOCK: Mutex<()> = Mutex::const_new(());
+pub(super) static INSTALL_LOCK: Mutex<()> = Mutex::const_new(());
 
-fn npm_package(agent: &str) -> Option<&'static str> {
+pub(super) fn npm_package(agent: &str) -> Option<&'static str> {
     match agent {
         "claude" => Some("@anthropic-ai/claude-code"),
         "codex" => Some("@openai/codex"),
@@ -228,7 +228,7 @@ async fn install_via_script(
     Ok(InstallResult::Installed)
 }
 
-fn install_spawn_options(cwd: std::path::PathBuf, env: HashMap<String, String>, stdin: Option<String>) -> SpawnLinesOptions {
+pub(super) fn install_spawn_options(cwd: std::path::PathBuf, env: HashMap<String, String>, stdin: Option<String>) -> SpawnLinesOptions {
     SpawnLinesOptions {
         cwd,
         env,
@@ -242,7 +242,7 @@ fn install_spawn_options(cwd: std::path::PathBuf, env: HashMap<String, String>, 
 
 /// What npm / installers run with: Scarlet's own prefix and the few variables an install needs. Nothing else the app
 /// inherited reaches it, so no token or registry setting from the environment does.
-fn install_env(env: HashMap<String, String>, prefix: &Path) -> HashMap<String, String> {
+pub(super) fn install_env(env: HashMap<String, String>, prefix: &Path) -> HashMap<String, String> {
     const ALLOWED: &[&str] = &[
         "PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "COMSPEC", "PATHEXT", "TEMP", "TMP", "TMPDIR",
         "APPDATA", "LOCALAPPDATA", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS",
@@ -252,7 +252,7 @@ fn install_env(env: HashMap<String, String>, prefix: &Path) -> HashMap<String, S
     install_env
 }
 
-fn install_failure_reason(outcome: &super::spawn::SpawnOutcome, fallback: &'static str) -> &'static str {
+pub(super) fn install_failure_reason(outcome: &super::spawn::SpawnOutcome, fallback: &'static str) -> &'static str {
     if outcome.timed_out {
         "Installation timed out. Check your connection and try again."
     } else if outcome.stderr.contains("No space left") || outcome.stderr.contains("ENOSPC") {

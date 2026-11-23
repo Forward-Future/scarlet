@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use super::catalog::{describe_agents, is_quota_eligible, lacks_models, take_catalog};
 use super::types::{AgentAvailability, SubscriptionQuota};
-use super::{detect, HostRuntime, HostStatus};
+use super::{detect, update, HostRuntime, HostStatus};
 use crate::util::child_env;
 
 /// How long cached subscription quota stays fresh before a non-forced refresh re-probes.
@@ -22,6 +22,10 @@ impl HostRuntime {
         let mut agents = self.agents.write().await;
         let mut failed = Vec::new();
         for agent in found.iter_mut() {
+            // The update offered for this version stands until the next lookup (`check_updates`).
+            if let Some(old) = agents.iter().find(|a| a.id == agent.id && a.version == agent.version) {
+                agent.latest_version = old.latest_version.clone();
+            }
             if is_quota_eligible(agent) {
                 if let Some(old) = agents.iter().find(|a| a.id == agent.id) {
                     agent.quota = old.quota.clone();
@@ -101,6 +105,42 @@ impl HostRuntime {
             self.emit_status();
         }
         self.full_status().await
+    }
+
+    /// Look up the newest version of each installed CLI and offer the ones Scarlet can update (`update::offers`).
+    pub(super) async fn check_updates(&self) {
+        let current = self.agents.read().await.clone();
+        let offers = update::offers(&current, &child_env(&self.paths.home)).await;
+        if self.cancel.is_cancelled() {
+            return;
+        }
+        let mut changed = false;
+        {
+            let mut agents = self.agents.write().await;
+            for agent in agents.iter_mut() {
+                // An assistant detected again meanwhile at another version waits for the next lookup.
+                let Some((_, offer)) = offers.iter().find(|(id, _)| *id == agent.id) else { continue };
+                let was = current.iter().find(|a| a.id == agent.id).and_then(|a| a.version.clone());
+                if agent.version == was && agent.latest_version != *offer {
+                    agent.latest_version = offer.clone();
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.emit_status();
+        }
+    }
+
+    /// Look for newer CLIs at start and every few hours while Scarlet stays open.
+    pub(super) async fn update_check_loop(self: Arc<Self>) {
+        loop {
+            self.check_updates().await;
+            tokio::select! {
+                _ = self.cancel.cancelled() => return,
+                _ = tokio::time::sleep(update::CHECK_EVERY) => {}
+            }
+        }
     }
 
     /// Apply a live quota update streamed during an active run (e.g. Codex `account/rateLimits/updated`).

@@ -15,7 +15,7 @@ import {
   LOW_QUOTA_THRESHOLD, QUOTA_STALE_MS, formatPercent, isSubscriptionProvider, minRemainingPercent, providerShortName, type QuotaAgent,
 } from "./subscriptionQuota";
 import { useUiStore } from "../../stores/ui";
-import { AgentSignIn, canSignIn, useLocalHost } from "../shell/AgentSignIn";
+import { AgentSignIn, AgentUpdate, canSignIn, useLocalHost } from "../shell/AgentSignIn";
 import { Icon } from "../ui/primitives";
 import { MENU_ITEM_CLASS } from "../shell/WorkspaceNavigation";
 
@@ -189,6 +189,17 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
   // Installed on this computer but not signed in yet: offer the one-click sign-in.
   const needsSignIn = (localHost?.agents ?? []).filter((a) => a.installed && canSignIn(a.id) && a.loggedIn === false && !agents.some((x) => x.id === a.id));
 
+  // A newer Claude Code, Codex or Gemini the app can update in place: the header's button carries the amber dot and the
+  // selector offers the update, as Settings does.
+  const updates = (localHost?.agents ?? []).filter((a) => a.installed && a.latestVersion && canSignIn(a.id));
+  const updateNote = updates.length ? `A newer ${updates.map((a) => AGENT_LABEL[a.id]).join(" and ")} is available` : undefined;
+  const updateRows = updates.map((a) => (
+    <div key={a.id} className="px-3 py-2 grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1 border-t border-line/60" data-agent-update={a.id}>
+      <span className="flex min-w-0 items-center gap-2 text-[13px] text-muted"><span className="truncate">{AGENT_LABEL[a.id]}</span><span className="menu-dot" aria-hidden /></span>
+      <AgentUpdate agent={a} compact />
+    </div>
+  ));
+
   // An empty or offline catalog doesn't establish that the editor needs to sign in.
   const checkingLocalAgents = isDesktop() && !localHost?.agents.length;
   const needsSetup = hostsReady && !checkingLocalAgents && !hasConfiguredHost && !localHost?.agents.some(isConfiguredAgent);
@@ -345,7 +356,7 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={iconOnly ? "Choose model" : emptyCatalog ? "Refresh models" : `Model: ${details}. Change model, effort or speed`}
-        aria-description={iconOnly && selected ? details : inHeader && emptyCatalog ? unavailableReason : undefined}
+        aria-description={iconOnly && selected ? details : inHeader && emptyCatalog ? unavailableReason : inHeader ? updateNote : undefined}
         title={iconOnly ? (selected ? `Model: ${details}` : "Choose model") : inHeader ? (emptyCatalog ? unavailableReason : selected ? `Model: ${details}` : undefined) : emptyCatalog ? unavailableReason : selected ? effortTitle : undefined}
         onClick={() => {
           if (!open) {
@@ -372,7 +383,7 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
         {...(inMenu && { role: "menuitem" })}
         className={inMenu ? `${MENU_ITEM_CLASS} text-fg`
           : iconOnly ? "btn-icon aria-expanded:bg-raised aria-expanded:text-fg"
-          : inHeader ? `btn-quiet simple-model aria-expanded:bg-raised aria-expanded:text-fg${none ? " needs-you" : ""}`
+          : inHeader ? `btn-quiet simple-model aria-expanded:bg-raised aria-expanded:text-fg${none || updateNote ? " needs-you" : ""}`
           : `inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] hover:text-fg ${none ? "border-warn/40 text-warn" : "border-line text-muted hover:border-dim"}`}
       >
         {iconOnly ? <EffortDial level={effortLevel(efforts, dialEffort?.id)} /> : inMenu ? <>
@@ -382,6 +393,7 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
         </> : inHeader ? <>
           <span className="truncate">{label}</span>
           {selected ? <EffortDial level={effortLevel(efforts, dialEffort?.id)} /> : <span className="menu-dot" role="img" aria-label={unavailableReason} />}
+          {selected && updateNote && <span className="menu-dot" role="img" aria-label={updateNote} />}
         </> : <>
           {none && <span className="size-1.5 rounded-full bg-warn" aria-hidden />}
           <span className="truncate">{label}</span>
@@ -417,6 +429,7 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
             <>
               <p className="px-3 py-3 text-[13px] text-muted">{unavailableReason}</p>
               <SignInRows agents={needsSignIn} />
+              {updateRows}
               <div className="border-t border-line/60 px-3 py-1.5">
                 <div className="flex flex-wrap items-center justify-between gap-x-3">
                   <ModelRefreshButton action={modelRefresh} />
@@ -706,6 +719,7 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
               )}
 
               <SignInRows agents={needsSignIn} />
+              {updateRows}
 
               {modelRefresh.result !== null && (
                 <div className="border-t border-line/60 px-3 py-1.5">
