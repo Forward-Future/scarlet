@@ -112,7 +112,7 @@ export const crossfadeFrames = CrossfadeFrames.optional()
 
 export const repeatedPhrase = z.string().trim().min(1);
 
-export const resumeWith = z.string().trim().min(1).max(240).optional().describe("For a retake, quote the first consecutive words to keep immediately after the removal. Include the continuation that distinguishes this delivery.");
+export const resumeWith = z.string().trim().min(1).max(240).optional().describe("For a retake, quote the first consecutive words to keep immediately after the removal. Include the continuation that distinguishes this delivery. When the scan reads other words there, the result says which.");
 
 /**
  * A cut's row in the chat, where the editor reads what Scarlet wants them to approve. Passes wrote what they had done

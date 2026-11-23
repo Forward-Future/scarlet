@@ -70,6 +70,28 @@ describe("native retake boundaries", () => {
     expect(cut.start).toBeCloseTo(1.5, 1);
     expect(cut.problems).toEqual([]);
   });
+  it("leaves an edge typed at a word's end there when the only trough is the stop inside that word", () => {
+    // “these complaints and all of,” said straight through, then a pause and “next”. “complaints” closes on its “t” at
+    // 1.60–1.62 s, at room tone, and its “s” sounds on to 1.72 s, where “and” begins. An edge typed there went back
+    // onto the closure and the cut took the “s” (2026-11-22).
+    const said = [{ start: .7, end: 1, text: "these" }, { start: 1, end: 1.72, text: "complaints" }, { start: 1.74, end: 1.86, text: "and" },
+      { start: 1.86, end: 2.1, text: "all" }, { start: 2.1, end: 2.4, text: "of," }, { start: 3.6, end: 3.9, text: "next" }];
+    const talk = [{ start: .7, end: 2.4 }, { start: 3.6, end: 3.9 }];
+    const heard = (s: number): JoinPage => {
+      const rms = Array.from({ length: 500 }, (_, i) => i >= 160 && i <= 162 ? .001 : i >= 163 && i <= 172 ? s
+        : talk.some(v => v.start <= i/100 && i/100 < v.end) ? .04 : .001);
+      return { mediaId: "mic", start: 0, end: 5, edges: joinEvidence(said, { from: 0, to: 5, peaks: rms, rms, speechActivity: talk }) };
+    };
+    const { p, tl } = fixture();
+    const placed = checkDialogueJoin(tl, p, { start: 1.73, end: 3.5 }, [heard(.01)]);
+    expect(placed).toMatchObject({ status: "snapped", start: 1.73, end: 3.5 });
+    expect(placed.reason).toContain("start stays where the transcript parts “complaints” and “and”, said straight through: " +
+      "the low point 0.13 s earlier (-60 dBFS) is inside “complaints”, which sounds on after it");
+    // With nothing sounding between the stop and where the transcript ends the word, the stop is where the words
+    // part, timed late: the edge goes onto it as before.
+    const moved = checkDialogueJoin(tl, p, { start: 1.73, end: 3.5 }, [heard(.001)]);
+    expect(moved.start).toBeLessThan(1.7);
+  });
   it("only moves inward, past complete edge words, onto project frames in quiet audio", () => {
     const { p, tl } = fixture();
     const fixed = checkDialogueJoin(tl,p,{start:1.15,end:3.6},[page]);

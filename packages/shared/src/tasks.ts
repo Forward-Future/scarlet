@@ -79,18 +79,6 @@ export const TaskAttachment = z.object({
 });
 export type TaskAttachment = z.infer<typeof TaskAttachment>;
 
-/**
- * A note the editor added to a request while Scarlet worked on it, in their words. The run hears it at the top of its
- * next Scarlet tool result, or with its instruction when it picks up again (`heardAt` once it has).
- */
-export const TaskNote = z.object({
-  id: Id,
-  text: z.string().trim().min(1).max(4000),
-  at: z.string().datetime(),
-  heardAt: z.string().datetime().optional(),
-});
-export type TaskNote = z.infer<typeof TaskNote>;
-
 export const Task = z.object({
   id: Id,
   projectId: Id,
@@ -251,8 +239,6 @@ export const Task = z.object({
   sessionCarriesOn: z.boolean().optional(),
   /** Pending question from the agent, if waiting_for_user. */
   question: z.string().nullable().default(null),
-  /** Notes the editor added while the request ran, oldest first. A resumed attempt carries them on. */
-  notes: z.array(TaskNote).max(50).optional(),
   /** Where the editor can hear the updated passage while answering a question about a staged cut. */
   cutConflict: z.object({ version: Id, range: TimeRange.optional(), changeId: Id.optional(), index: z.number().int().nonnegative().optional(),
     answered: z.literal(true).optional(), retried: z.literal(true).optional(),

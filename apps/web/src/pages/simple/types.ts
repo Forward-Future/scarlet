@@ -130,8 +130,6 @@ export interface ChatActions {
   /** Light the timeline's marker at this time, or none: the pointer is over that edit's row in the chat. */
   lightMark(time?: number, target?: HoveredReviewRow): void;
   reply(thread: Thread): void;
-  /** Aim the message box at the request Scarlet is working on, as a note to it ("Add a note" on its working line). */
-  addNote?(taskId: string): void;
   revise(thread: Thread, change: Change): void;
   /**
    * What a request about one cut is called while that cut is a call of the pass waiting now, or an edit of its request

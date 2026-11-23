@@ -214,18 +214,21 @@ export async function checkKeptWords(tl: Timeline, project: Pick<Project, "media
   return { repeatAtJoin: scan.repeatAtJoin ?? heard.repeatAtJoin, pickupRepeats, partialWordRepeat, unread: [...unread] };
 }
 
-/** Check the start of the chosen delivery, including the continuation that distinguishes it from a rehearsal. */
-export function checkResumeQuote(tl: Timeline, project: Project, end: number, pages: JoinPage[], quote: string) {
+/**
+ * The start of the chosen delivery against the agent's quote of it, including the continuation that distinguishes it
+ * from a rehearsal, and the words the scan reads there (`heard`) when they differ.
+ */
+export function readResumeQuote(tl: Timeline, project: Project, end: number, pages: JoinPage[], quote: string): { result: "matches" | "different" | "unverified"; heard?: string } {
   const { clips, streams } = dialogueClips(tl, project);
   const tokens = (s: string) => s.split(/\s+/u).map(normalizeTranscriptToken).filter(Boolean);
   const expected = tokens(quote);
-  if (!expected.length) return "unverified";
+  if (!expected.length) return { result: "unverified" };
   let matched = false;
   for (const clip of clips) {
     if (end < clip.timelineIn || end >= clip.timelineIn + clipDuration(clip)) continue;
     const t = timelineToSource(clip, end);
     const page = pageAt(pages, clip.mediaId, dialogueAudioStream(clip) ?? streams.get(clip.mediaId), t);
-    if (!page) return "unverified";
+    if (!page) return { result: "unverified" };
     const resumingAtDip = atQuietOrDip(page, t);
     const words = page.words.filter(w => {
       if (w.end <= t || w.end > clip.sourceOut) return false;
@@ -236,11 +239,16 @@ export function checkResumeQuote(tl: Timeline, project: Project, end: number, pa
       return resumingAtDip && w.end > t + wordMargin &&
         (extremeLevel(page, t, w.end, "highest")?.db ?? -Infinity) > SPEECH_DBFS;
     });
-    if (!words.length) return "unverified";
+    if (!words.length) return { result: "unverified" };
     const heard = words.slice(0, expected.length).flatMap(w => tokens(w.text));
-    if (heard.some((word, i) => i < expected.length && expected[i] !== word)) return "different";
-    if (heard.length < expected.length) return "unverified";
+    if (heard.some((word, i) => i < expected.length && expected[i] !== word))
+      return { result: "different", heard: words.slice(0, expected.length + 1).map(w => w.text.trim()).join(" ") };
+    if (heard.length < expected.length) return { result: "unverified" };
     matched = true;
   }
-  return matched ? "matches" : "unverified";
+  return { result: matched ? "matches" : "unverified" };
+}
+
+export function checkResumeQuote(tl: Timeline, project: Project, end: number, pages: JoinPage[], quote: string) {
+  return readResumeQuote(tl, project, end, pages, quote).result;
 }

@@ -56,6 +56,13 @@ export function useLocalModelStatus(source?: ServerSettings["transcription"]): L
   return result.status;
 }
 
+export function useNeedsCrisperSetup(status?: LocalModelStatus | null) {
+  const phase = useCrisperSetup(state => state.phase);
+  if (status?.state === "ready" && status.active === "crisperwhisper") return false;
+  if (phase !== "idle") return true;
+  return !!status && status.state !== "checking";
+}
+
 export function LocalModelNotice({ model, status }: { model: LocalTranscriptionModel; status?: LocalModelStatus | null }) {
   const fallback = status?.fallback && status.active === "whispercpp";
   let text: string;
