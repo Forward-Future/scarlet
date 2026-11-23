@@ -68,8 +68,12 @@ export function appliedCutClock(before: Timeline, after: Timeline, saved: TimeRa
   const tolerance = 0.5 / fps, same = (a: number, b: number) => Math.abs(a - b) <= tolerance;
   const heard = listen.skips.filter(r => r.removed);
   const present = pair.overlaps(listen.start, listen.end).map(join => join.removed).filter(r => r.end > listen.start && r.start < listen.end);
-  // The edit must close every gap the listen requests without swallowing any additional retained footage.
-  const covers = (outer: TimeRange, inner: TimeRange) => outer.start <= inner.start + tolerance && outer.end >= inner.end - tolerance;
+  // The edit must close every gap the listen requests without swallowing any additional retained footage. A later cut
+  // that meets this one can take out a frame more at their shared edge as the two are joined: that frame is gone from
+  // the video now, so it still matches. Without the frame, After fell back to the version before every later edit,
+  // and played a picture the video no longer has.
+  const edge = 1.5 / fps;
+  const covers = (outer: TimeRange, inner: TimeRange) => outer.start <= inner.start + edge && outer.end >= inner.end - edge;
   if (!present.some(r => covers(r, cut)) || !heard.every(s => present.some(r => covers(r, s))) ||
       !present.every(r => heard.some(s => covers(s, { start: Math.max(r.start, listen.start), end: Math.min(r.end, listen.end) })))) return;
   const start = clock.toMedia(listen.start), end = clock.toMedia(listen.end);
