@@ -168,13 +168,105 @@ def whisper_json(language, words):
         text = "".join((" " if i and w.space_before else "") + w.text for i, w in enumerate(group))
         segments.append({"text": text,
                          "offsets": {"from": group[0].start, "to": group[-1].end}, "tokens": tokens})
-    return {"result": {"language": language}, "transcription": segments}
+    # Audio that held nothing to read has no language of its own: "auto" is the request, not an answer.
+    result = {"language": language} if language and language != "auto" else {}
+    return {"result": result, "transcription": segments}
+
+
+# Scarlet takes out any line whose loudest moment is under -60 dBFS, whatever the recording (UNHEARD_DBFS in
+# transcriptHoles.ts): nothing said that quietly stays in a transcript. A long stretch that quiet is no use to the
+# model, and it costs. On a gated microphone track (digital silence whenever its speaker was quiet, 2026-11-23) every
+# thirty seconds of silence came back as the last sentence said, again and again: "I'm using the one that you're
+# using." a hundred times over, each window decoding to its token limit, and the next window carrying it on as context.
+QUIET_DBFS = -60
+QUIET_STEP = 0.02
+# Shorter quiet is a pause between words and is read as it is.
+LONG_QUIET = 2.0
+# A long quiet keeps this much at each end beside sound, so a word's soft edge stays and the model hears a pause.
+QUIET_KEPT = 0.5
+
+
+@dataclass
+class Piece:
+    """Audio the model reads: `length` seconds from `source` in the recording, at `at` in what the model hears."""
+    source: float
+    at: float
+    length: float
+
+
+def quiet_steps(pcm, rate=16000):
+    """Whether each 20 ms of the audio is under QUIET_DBFS."""
+    import numpy as np
+
+    size = round(QUIET_STEP * rate)
+    samples = np.asarray(pcm, dtype=np.float32)
+    count = -(-len(samples) // size)
+    padded = np.zeros(count * size, dtype=np.float32)
+    padded[:len(samples)] = samples
+    power = np.square(padded.reshape(count, size), dtype=np.float64).mean(axis=1)
+    return (power < (10 ** (QUIET_DBFS / 20)) ** 2).tolist()
+
+
+def sounding_pieces(quiet, duration):
+    """The audio with every quiet stretch of LONG_QUIET or more shortened to QUIET_KEPT beside the sound either side.
+    Empty when nothing in it is louder than quiet. One piece, the whole of it, when nothing is that long."""
+    steps = len(quiet)
+    if not steps or all(quiet):
+        return []
+    kept = []
+    start = 0.0
+    i = 0
+    while i < steps:
+        if not quiet[i]:
+            i += 1
+            continue
+        j = i
+        while j < steps and quiet[j]:
+            j += 1
+        begin, end = i * QUIET_STEP, min(duration, j * QUIET_STEP)
+        if end - begin >= LONG_QUIET:
+            # Quiet at the very start or end has sound on one side only.
+            if begin > 0:
+                kept.append((start, begin + QUIET_KEPT))
+            start = end - QUIET_KEPT if j < steps else duration
+        i = j
+    if start < duration:
+        kept.append((start, duration))
+    pieces = []
+    at = 0.0
+    for source, until in kept:
+        pieces.append(Piece(source, at, until - source))
+        at += until - source
+    return pieces
+
+
+def compacted(pcm, pieces, rate=16000):
+    """The samples of `pieces`, one after another."""
+    import numpy as np
+
+    return np.concatenate([pcm[round(p.source * rate):round((p.source + p.length) * rate)] for p in pieces])
+
+
+def restore_times(words, pieces):
+    """Words timed on the pieces laid end to end, back on the recording's clock. A word stays inside the piece it
+    starts in: the quiet between two pieces was at least a second long, and nobody said anything in it."""
+    starts = [p.at * 1000 for p in pieces]
+    for word in words:
+        piece = pieces[max(0, bisect_right(starts, word.start) - 1)]
+        at, length, source = piece.at * 1000, piece.length * 1000, piece.source * 1000
+        start = min(length, max(0, word.start - at))
+        word.start = round(source + start, 6)
+        word.end = round(source + min(length, max(start, word.end - at)), 6)
+    return words
+
+
+progress_wanted = False
 
 
 class ChunkProgress(logging.Handler):
     def emit(self, record):
         found = re.match(r"Chunk (\d+)/(\d+):", record.getMessage())
-        if found:
+        if found and progress_wanted:
             done, total = map(int, found.groups())
             if total:
                 print(f"progress = {min(99, int(100 * done / total))}%", file=sys.stderr, flush=True)
@@ -257,12 +349,30 @@ def wait_for_local_asr_slot():
             return
 
 
-def recognize(pcm, model, cache, language, device):
-    import torch
+# The model on the device it last ran on. A worker that serves several requests (--serve) loads it once: started
+# again for each ten-minute window, a run spent its first seconds importing torch and moving 3 GB of weights to the GPU.
+_recognizer = {}
+
+
+def recognizer_on(model, cache, device):
     from crisperwhisper import CrisperWhisperModel
 
-    recognizer = CrisperWhisperModel(str(model.parent), backend="transformers", device=device,
-                                     compute_type="float32" if device == "cpu" else "float16", cache_dir=str(cache))
+    if device not in _recognizer:
+        forget_recognizer()
+        _recognizer[device] = CrisperWhisperModel(str(model.parent), backend="transformers", device=device,
+                                                  compute_type="float32" if device == "cpu" else "float16",
+                                                  cache_dir=str(cache))
+    return _recognizer[device]
+
+
+def forget_recognizer():
+    _recognizer.clear()
+
+
+def recognize(pcm, model, cache, language, device):
+    import torch
+
+    recognizer = recognizer_on(model, cache, device)
     engine = recognizer._engine
     print(f"crisperwhisper device = {engine.device.type}", file=sys.stderr, flush=True)
     if language == "auto":
@@ -272,6 +382,15 @@ def recognize(pcm, model, cache, language, device):
     if engine.get_language_id(language) is None:
         raise ValueError(f"Unsupported CrisperWhisper language code: {language}")
     return recognizer.transcribe(pcm, sr=16000, language=language, mode="verbatim", word_timestamps=True)
+
+
+def release_device_cache(torch, device):
+    gc.collect()
+    try:
+        getattr(torch, device).empty_cache()
+    except (AttributeError, RuntimeError):
+        # A device which became unavailable can also refuse cache cleanup.
+        pass
 
 
 def recognize_locally(pcm, model, cache, language, torch, progress):
@@ -286,42 +405,37 @@ def recognize_locally(pcm, model, cache, language, torch, progress):
             print(f"crisperwhisper fallback = {device}", file=sys.stderr, flush=True)
             reason = str(error).partition("\n")[0][:300] or type(error).__name__
             print(f"GPU recognition failed: {reason}", file=sys.stderr, flush=True)
-        gc.collect()
-        try:
-            getattr(torch, device).empty_cache()
-        except RuntimeError:
-            # A device which became unavailable can also refuse cache cleanup.
-            pass
+        forget_recognizer()
+        release_device_cache(torch, device)
         if progress:
             print("progress = 0%", file=sys.stderr, flush=True)
     return recognize(pcm, model, cache, language, "cpu")
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--version", action="version", version="CrisperWhisper 2.0 local Scarlet adapter")
-    parser.add_argument("-m", required=True, type=Path, metavar="MODEL_SAFETENSORS")
-    parser.add_argument("-f", required=True, type=Path, metavar="WAV")
-    parser.add_argument("-of", required=True, type=Path, metavar="OUTPUT_PREFIX")
-    parser.add_argument("-ojf", action="store_true", required=True)
-    parser.add_argument("-np", action="store_true")
-    parser.add_argument("-l", default="auto", metavar="LANGUAGE")
-    parser.add_argument("-t", type=int, default=8, metavar="THREADS")
-    parser.add_argument("-mc", type=int, choices=[0], metavar="0")
-    parser.add_argument("--prompt", help="Scarlet’s disfluency-style prompt uses native verbatim mode.")
-    parser.add_argument("-pp", action="store_true", help="Print Scarlet-compatible progress to stderr.")
-    args = parser.parse_args()
+def transcribe_file(wav, prefix, language, model, cache, torch, load_audio):
+    pcm = load_audio(str(wav))
+    language = language.lower()
+    words = []
+    if len(pcm):
+        duration = len(pcm) / 16000
+        pieces = sounding_pieces(quiet_steps(pcm), duration)
+        whole = len(pieces) == 1 and pieces[0].source == 0 and pieces[0].length == duration
+        if pieces and not whole:
+            heard = sum(p.length for p in pieces)
+            print(f"crisperwhisper quiet = {duration - heard:.1f} s of {duration:.1f} s not read", file=sys.stderr, flush=True)
+            pcm = compacted(pcm, pieces)
+        if pieces:
+            result = recognize_locally(pcm, model, cache, language, torch, progress_wanted)
+            language = result.language
+            words = reconcile(result.text, result.words, len(pcm) / 16000, language)
+            if not whole:
+                words = restore_times(words, pieces)
+    save_json(whisper_json(language, words), prefix)
+    if progress_wanted:
+        print("progress = 100%", file=sys.stderr, flush=True)
 
-    if args.t < 1:
-        parser.error("The thread count must be positive.")
-    model = args.m.expanduser().resolve()
-    if model.name != "model.safetensors" or not model.is_file():
-        parser.error("Select this local model's model.safetensors file.")
-    if not args.f.is_file():
-        parser.error(f"Input audio does not exist: {args.f}")
-    if not args.of.parent.is_dir():
-        parser.error(f"Output folder does not exist: {args.of.parent}")
-    wait_for_local_asr_slot()
+
+def prepare_runtime(model, threads):
     cache = model.parent.parent / "cache"
     cache.mkdir(exist_ok=True)
     os.environ.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1",
@@ -330,25 +444,86 @@ def main():
     import torch
     from crisperwhisper.audio import load_audio
 
-    torch.set_num_threads(args.t)
+    torch.set_num_threads(threads)
     torch.set_num_interop_threads(1)
-    if args.pp:
-        logger = logging.getLogger("crisperwhisper.longform.continuation")
-        logger.setLevel(logging.INFO)
-        logger.addHandler(ChunkProgress())
-        logger.propagate = False
+    logger = logging.getLogger("crisperwhisper.longform.continuation")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(ChunkProgress())
+    logger.propagate = False
+    return cache, torch, load_audio
 
-    pcm = load_audio(str(args.f))
-    language = args.l.lower()
-    if len(pcm):
-        result = recognize_locally(pcm, model, cache, language, torch, args.pp)
-        language = result.language
-        words = reconcile(result.text, result.words, len(pcm) / 16000, language)
-    else:
-        words = []
-    save_json(whisper_json(language, words), args.of)
-    if args.pp:
-        print("progress = 100%", file=sys.stderr, flush=True)
+
+def serve(model, threads, requests=sys.stdin):
+    """Answer requests, one JSON line each on stdin, until stdin closes: {"id", "wav", "out", "language", "progress"}
+    writes `out`.json as a run with `-f wav -of out` does, and one JSON line goes back on stdout, {"id", "ok": true}
+    or {"id", "error"}. Anything else the libraries print goes to stderr. A request that fails ends the worker, so the
+    next starts with nothing left over from it."""
+    global progress_wanted
+    replies = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8")
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    sys.stdout = sys.stderr
+    wait_for_local_asr_slot()
+    cache, torch, load_audio = prepare_runtime(model, threads)
+
+    def reply(**fields):
+        replies.write(json.dumps(fields, ensure_ascii=False) + "\n")
+        replies.flush()
+
+    while True:
+        line = requests.readline()
+        if not line:
+            return 0
+        if not line.strip():
+            continue
+        request = {}
+        try:
+            request = json.loads(line)
+            progress_wanted = bool(request.get("progress"))
+            transcribe_file(Path(request["wav"]), Path(request["out"]), request.get("language") or "auto",
+                            model, cache, torch, load_audio)
+        except Exception as error:
+            reply(id=request.get("id") if isinstance(request, dict) else None,
+                  error=str(error).partition("\n")[0][:500] or type(error).__name__)
+            return 1
+        # The weights stay. What the decode left in the device's cache goes back while the worker waits.
+        release_device_cache(torch, preferred_device(torch))
+        reply(id=request.get("id"), ok=True)
+
+
+def main():
+    global progress_wanted
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", action="version", version="CrisperWhisper 2.0 local Scarlet adapter")
+    parser.add_argument("-m", required=True, type=Path, metavar="MODEL_SAFETENSORS")
+    parser.add_argument("-f", type=Path, metavar="WAV")
+    parser.add_argument("-of", type=Path, metavar="OUTPUT_PREFIX")
+    parser.add_argument("-ojf", action="store_true")
+    parser.add_argument("-np", action="store_true")
+    parser.add_argument("-l", default="auto", metavar="LANGUAGE")
+    parser.add_argument("-t", type=int, default=8, metavar="THREADS")
+    parser.add_argument("-mc", type=int, choices=[0], metavar="0")
+    parser.add_argument("--prompt", help="Scarlet’s disfluency-style prompt uses native verbatim mode.")
+    parser.add_argument("-pp", action="store_true", help="Print Scarlet-compatible progress to stderr.")
+    parser.add_argument("--serve", action="store_true", help="Keep the model loaded and read requests from stdin.")
+    args = parser.parse_args()
+
+    if args.t < 1:
+        parser.error("The thread count must be positive.")
+    model = args.m.expanduser().resolve()
+    if model.name != "model.safetensors" or not model.is_file():
+        parser.error("Select this local model's model.safetensors file.")
+    if args.serve:
+        sys.exit(serve(model, args.t))
+    if not (args.f and args.of and args.ojf):
+        parser.error("Give -f, -of and -ojf, or --serve.")
+    if not args.f.is_file():
+        parser.error(f"Input audio does not exist: {args.f}")
+    if not args.of.parent.is_dir():
+        parser.error(f"Output folder does not exist: {args.of.parent}")
+    wait_for_local_asr_slot()
+    cache, torch, load_audio = prepare_runtime(model, args.t)
+    progress_wanted = args.pp
+    transcribe_file(args.f, args.of, args.l, model, cache, torch, load_audio)
 
 
 if __name__ == "__main__":
