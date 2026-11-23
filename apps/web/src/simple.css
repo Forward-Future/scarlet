@@ -624,6 +624,12 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 @container (max-width: 350px) {
   .unit-token-word { display: none; }
 }
+/* "Working on 3 at once" is the longest thing a heading says at its right. With the time, the tokens, Pause and Stop
+   beside it the editor's words were left a few letters, so the time and tokens step aside for it until the chat is
+   wide enough for all of them. */
+@container (max-width: 460px) {
+  :is(.unit-msg, .subunit-msg):has(.unit-word.is-at-once) > .unit-tokens { display: none; }
+}
 /* Stop, or the word for where it stands, sits on the first line of the editor's words, on their baseline, however
    many lines they take. A dot has no baseline of its own, so it sits in the middle of that
    line, beside the Stop after it. */
@@ -739,12 +745,6 @@ button.req-summary { flex: 1; align-self: stretch; margin: 0; cursor: pointer; }
 .req-summary.is-note { padding-top: 3px; padding-bottom: 3px; white-space: normal; line-height: 1.45; }
 .req-summary.is-note > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 button.req-summary:hover > span { text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; }
-/* While a request's row has its cut or edit open on the timeline, the rest of the chat steps back, its own message
-   included. Nothing is added to the row itself. */
-.simple-chat :is(.simple-turn, .simple-turn > *, .unit-msg) { transition: opacity .15s; }
-.simple-chat:has(button.req-summary[aria-current]) .simple-turn:not(:has(button.req-summary[aria-current])),
-.simple-chat .simple-turn:has(button.req-summary[aria-current]) > :not(:has(button.req-summary[aria-current])),
-.simple-chat .unit:has(button.req-summary[aria-current]) > .unit-msg { opacity: .35; }
 /* Scarlet's words for the editor: a reply, a question and its answer, why it stopped. */
 .req-said { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 3px 0 6px; }
 .req-status + .req-said, .run-wait + .req-said { padding-top: 0; }
@@ -885,6 +885,10 @@ button.queue-head:hover { color: var(--color-fg); }
 :is(.simple-media, .simple-export, .simple-model).needs-you { display: inline-flex; align-items: center; gap: 6px; color: var(--color-fg); }
 :is(.simple-media, .simple-export, .simple-model) .menu-dot { margin-left: 0; }
 .simple-model { max-width: 140px; min-width: 0; }
+/* At the chat's narrowest the project's name was down to a letter. The model button keeps its dial there and gives its
+   name's room to the project's: the model still reads on hover and to screen readers. A button with no dial is saying
+   something the editor has to read ("Offline", "Set up a model"), and keeps its words. */
+.simple-rail[data-narrow] .simple-model:has(> svg) > .truncate { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (max-width: 767px) {
   .simple-transcript-rail { order: 2; width: 100%; max-height: 45%; border-left: 0; border-top: 1px solid var(--color-line); }
 }

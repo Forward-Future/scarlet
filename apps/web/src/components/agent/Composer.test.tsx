@@ -437,6 +437,30 @@ it("takes an Answer or a Reply tag off on Backspace in an empty box, as its × d
   expect(onClearTarget).toHaveBeenCalledTimes(3);
 });
 
+it("says which of several waiting questions an answer is for, after the Answer tag's word", async () => {
+  const asking = buildThreads(current).find(t => t.question)!;
+  /** The tag's word, the count after it, and what the tag says on hover. */
+  const tag = () => [container.querySelector(".composer-tag-name")?.textContent, container.querySelector(".composer-tag-note")?.textContent,
+    container.querySelector<HTMLElement>(".composer-tag")?.title];
+  // Scarlet asked two questions: the box answers them one at a time, in the order asked, and says which this one is.
+  await show({ thread: asking, targetTag: "Answer", targetTagNote: "1 of 2" });
+  expect(tag()).toEqual(["Answer", "1 of 2", "Answering question 1 of 2. The next follows once this is sent."]);
+  // The count follows the word inside the tag, before its ×.
+  expect([...container.querySelector(".composer-tag")!.children].map(el => el.className)).toEqual(["composer-tag-name", "composer-tag-note", "composer-tag-clear"]);
+  // One question waiting: the tag is as it was, with no count.
+  await show({ thread: asking, targetTag: "Answer" });
+  expect(tag()).toEqual(["Answer", undefined, "Answering Scarlet’s question"]);
+  // A count is an answer's alone. A reply has none, and neither has a cut or an edit the box is aimed at.
+  await show({ thread: buildThreads(current)[0], targetTag: "Reply", targetTagNote: "1 of 2" });
+  expect(tag()).toEqual(["Reply", undefined, "Replying to this edit"]);
+  await show({ thread: asking, targetTag: "Cut at 2:05", targetTagNote: "1 of 2" });
+  expect(container.querySelector(".composer-tag-note")).toBeNull();
+  expect(container.textContent).not.toContain("1 of 2");
+  await show({ targetTag: "At 0:07", targetIsPoint: true, targetTagNote: "1 of 2" });
+  expect(container.querySelector(".composer-tag-note")).toBeNull();
+  expect(container.textContent).not.toContain("1 of 2");
+});
+
 it("sends the version of an explicitly attached point even when the project head has advanced", async () => {
   // The edit moved on to v_new and its timeline couldn't be read yet: the one before is on screen and in the player.
   useProjectStore.setState({ current: { ...current, project: { ...project, head: "v_new" } } });

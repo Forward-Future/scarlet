@@ -6,7 +6,7 @@ import { Icon } from "../../components/ui/primitives";
 import { editKindWord, editRowWord } from "../../lib/editKind";
 import { editPlaces, listMoments, type Moment } from "../../lib/editMoments";
 import { clock as clockLabel, editRemovedLabel, lengthLabel, plural } from "../../lib/format";
-import { editKey, reviewKey, useKeptEdits } from "../../lib/keptEdits";
+import { editKey } from "../../lib/keptEdits";
 import { madeSentence, type SentencePart } from "../../lib/madeSentence";
 import { decidedPassCalls } from "../../lib/passCalls";
 import { isRecheck, type Thread } from "../../lib/threads";
@@ -140,7 +140,6 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const deferred = useDeferred(projectId, thread);
   const revising = useRevising(thread);
   const rejecting = useRejecting(thread);
-  const kept = useKeptEdits(projectId, thread);
   const [open, setOpen] = listState;
   const [host, reveal] = useReveal(open);
   // The list follows the cut or edit that's open, so stepping with the arrows never leaves its row out of sight.
@@ -231,8 +230,10 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       const revised = e.check === REVISED_CHECK && !seen && !sent;
       const needs = !!e.check && !seen && !later && !sent;
       const sentBack = !!e.check && !seen && !!sent;
-      // Ticked once the editor has kept it: a flagged edit they reviewed, an approved pass call, or any edit kept.
-      const decided = !needs && !sent && !later && ((!!e.check && seen) || (group ? group.members.every(m => kept.has(reviewKey(m))) : kept.has(reviewKey(e))) || decidedCallEditKeys.has(key));
+      // Ticked once the editor has kept it: any edit kept, an approved pass call, or a cut that went in with the pass
+      // through its calls. That is what Keep's next row, the watch and the timeline's dots go by, so the tick agrees
+      // with them (the editor's call, 2026-11-23).
+      const decided = !needs && !sent && !later && ((group ? group.members.every(m => reviewed(m)) : seen) || decidedCallEditKeys.has(key));
       const decision = decided ? (e.marker ? "Done" : "Kept") : later ? "Later" : undefined;
       // Where it stands, when it isn't simply waiting: the word a row among the calls ends on. In the list of every edit
       // it follows the row's amount, as in any other request's list, and the amount stays.

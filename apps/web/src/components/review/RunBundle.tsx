@@ -11,6 +11,7 @@ import { isWorkingTask, runAim, runIsActive, runItems, runLines, runSummary, typ
 import { toolName, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
 import { useClippedExpand } from "../../lib/uiHooks";
 import { usePublishWorkingLine } from "../../lib/workingLines";
+import { Icon } from "../ui/primitives";
 import { RequestMetrics, Tokens } from "./RequestMetrics";
 
 export { RequestMetrics };
@@ -74,6 +75,12 @@ interface RunBundleProps {
   banded?: boolean;
   /** The project's editing is paused, so a run in line waits for Continue. */
   paused?: boolean;
+  /**
+   * What a run in line waits for when that is the editor, in the queue's own words ("Waits for your calls"), and the
+   * way to start it without them when there is one. A request picked up again isn't in the queue's tray, so its block
+   * says it.
+   */
+  held?: { words: string; startNow?(): void };
   /** Show what a finished run made, from its own row; or put it away again while it's `showing`. */
   onOpen?(): void;
   showing?: boolean;
@@ -163,7 +170,7 @@ function WorkingRun({ task, events: all, opening, changes, callNumber, say, resu
   </div>;
 }
 
-function WaitingRun({ task, events, changes, say, result, banded, paused, onStop, actions }: RunBundleProps) {
+function WaitingRun({ task, events, changes, say, result, banded, paused, held, onStop, actions }: RunBundleProps) {
   const usage = useRunUsage(task.id, !banded);
   const asking = task.state === "waiting_for_user";
   const waiting = task.state === "queued";
@@ -175,7 +182,9 @@ function WaitingRun({ task, events, changes, say, result, banded, paused, onStop
   }, [asking, banded, task, events, changes]);
   const lines = useMemo(() => open ? tidy(runLines(task, events, shown, Date.now())) : [], [open, task, events, shown]);
   // A request in line again says Queued, the word its cut's card and the tray use, or Paused while it waits for Continue.
-  const label = waiting ? paused ? "Paused" : "Queued" : "Needs your answer";
+  // One the editor holds back says so, as the tray does of the request that's next: it won't start by itself.
+  const waitsOnEditor = waiting && !paused ? held : undefined;
+  const label = waiting ? paused ? "Paused" : waitsOnEditor?.words ?? "Queued" : "Needs your answer";
   // A question's steps open from its line. A question under a heading has no such line: the heading's dot, the question
   // and Answer say it. Nor has a paused request: its heading says Paused.
   const line = !(banded && (asking || (waiting && paused)));
@@ -185,11 +194,13 @@ function WaitingRun({ task, events, changes, say, result, banded, paused, onStop
       <button type="button" className="req-toggle" aria-expanded={opens ? open : undefined} disabled={!opens}
         title={opens ? open ? "Hide the details" : "Show the details" : undefined} onClick={() => setOpen(!open)}>
         {asking && <span className="req-dot" aria-hidden />}
-        <span role="status" title={waiting && paused ? "Editing is paused. Continue, above the message box, picks this up where it left off." : label}
-          className={asking ? "req-ask" : undefined}>{label}</span>
+        <span role="status" title={waiting && paused ? "Editing is paused. Resume picks this up where it left off." : label}
+          className={asking || waitsOnEditor ? "req-ask" : undefined}>{label}</span>
       </button>
       <div className="req-right">
         {asking && <Tokens usage={usage} />}
+        {waitsOnEditor?.startNow && <button type="button" className="queue-start" aria-label="Start now" title="Start now, before your calls"
+          onClick={waitsOnEditor.startNow}><Icon name="play" size={10} /></button>}
         {actions || (onStop && <button type="button" className="simple-link run-stop" onClick={onStop}>Stop</button>)}
       </div>
     </div>}

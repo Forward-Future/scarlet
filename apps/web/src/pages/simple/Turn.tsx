@@ -372,8 +372,10 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       if (autoHeading && e.kind === "system" && e.text === RECHECK_WORDS) return;
       // All of what Scarlet said: folded it keeps to two lines, and a click opens the rest.
       if (e.kind === "agent") { if (!quiet && !(e.onNote && closed)) { told = true; if (!listing) said.push(<Said key={i} className="req-say" text={e.fullText ?? e.text} />); } }
+      // Several questions can wait in one block, one from each cut or edit Scarlet works on. They are answered one at a
+      // time, in the order asked: Answer is on the one the message box will answer, and moves on once that is sent.
       else if (e.kind === "question") said.push(<p key={i} className={e.answered ? "req-say is-quiet" : "req-say"}>{e.text}
-        {!e.answered && <button type="button" className="simple-link is-warn" onClick={() => actions.reply(thread)}>Answer</button>}</p>);
+        {!e.answered && (!thread.question || thread.question.id === e.taskId) && <button type="button" className="simple-link is-warn" onClick={() => actions.reply(thread)}>Answer</button>}</p>);
       // The editor's answer is their message: two lines at most, and a click opens the rest.
       else if (e.kind === "answer") said.push(<Said key={i} className="req-say is-yours" text={e.text} />);
       // An applied change is on the card's last row. A suggestion still says what it is and how to play it. A pass's
@@ -439,7 +441,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const atOnce = actions.atOnce ?? 0;
     const among = !inside && atOnce > 1 && [run, ...(run === owner ? runs.filter(r => nested.has(r.root)) : [])]
       .some(r => aboutOne(r) && isWorking(r.task.state));
-    const standing = stands ?? (among ? <span className="unit-word" title={`Scarlet is working on ${atOnce} cuts or edits at the same time.`}>Working on {atOnce} at once</span> : null);
+    const standing = stands ?? (among ? <span className="unit-word is-at-once" title={`Scarlet is working on ${atOnce} cuts or edits at the same time.`}>Working on {atOnce} at once</span> : null);
     const stop = runIsActive(task) && !(waitingToStart(task) && run.root === task.id) ? () => attempt(run.root, cancelTask(task.id)) : undefined;
     // A request that edits the video has its controls at the band's right for as long as Scarlet has it: Pause, which
     // holds all editing in the project, then Resume once it is paused, which picks the paused work up first; and Stop,
@@ -462,13 +464,17 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // the request keeps it, from the first attempt that said one. Only an attempt's whole history says whether it did.
     const before = task.resumeRootId && isWorking(task.state) ? run.attempts.filter(t => t !== task && (t.resumeRootId ?? t.id) === task.resumeRootId) : [];
     const opened = before.every(t => wholeHistory.includes(t.id)) ? before.find(t => runAim(events[t.id] ?? [])) : undefined;
-    const bundle = <RunBundle task={task} events={events[task.id] ?? []} opening={opened && events[opened.id]} changes={thread.changes} finalChange={final} banded={!!request} callNumber={actions.callNumber}
+    // A recheck Scarlet began itself is headed too, by its reason after the Auto tag: where it stands and its controls
+    // are at that heading's right, as a request's are, and not said again on a row under it.
+    const headed = !!request || autoHeading;
+    const bundle = <RunBundle task={task} events={events[task.id] ?? []} opening={opened && events[opened.id]} changes={thread.changes} finalChange={final} banded={headed} callNumber={actions.callNumber}
         say={said.length ? <div className="req-said">{said}</div> : undefined} told={told} result={rows} recovery={recovery}
         // Under its call's row, that row is the cut it saved, with Scarlet's note: the note isn't said again under it.
         // A pass's calls are listed for as long as it waits, so a request keyed to one is always under its row.
         summary={target?.note} listedAbove={inside && !!nested.get(run.root)?.startsWith("call/")} showing={showingIt} onOpen={proposing ? undefined : open}
-        // Scarlet's own requests have no heading. Their menu stays with the active run's row.
-        actions={request ? undefined : editActions} onStop={request || editsProject ? undefined : stop} paused={paused}
+        // Scarlet's other requests have no heading. Their menu stays with the active run's row.
+        actions={headed ? undefined : editActions} onStop={headed || editsProject ? undefined : stop} paused={paused}
+        held={task.state === "queued" ? actions.waitsOn?.(task) : undefined}
         // Only the thread's last run can be finished, and not while another request in it is under way. One about a
         // single cut or edit isn't held to being the last, as with Resume: a pass's thread takes a request for every
         // call, and another call's request would take its way to finish from it for good.
@@ -485,7 +491,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       {request && <div className="subunit-msg"><span className="simple-who">You</span>
         <Said lead={<span className="simple-revising">{about ?? "Revision"}</span>} text={request.text} /><span className="unit-state">{standing}</span>{headingEnd}</div>}
       {!request && autoHeading && <div className="subunit-msg"><span className="simple-who">Scarlet</span>
-        <Said lead={<span className="simple-revising is-auto" title="Scarlet started this itself">Auto</span>} text={RECHECK_WORDS} /><span className="unit-state">{standing}</span></div>}
+        <Said lead={<span className="simple-revising is-auto" title="Scarlet started this itself">Auto</span>} text={RECHECK_WORDS} /><span className="unit-state">{standing}</span>{headingEnd}</div>}
       {bundle}
       {wrong}
     </div>;

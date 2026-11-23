@@ -6,6 +6,13 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- A request that couldn't finish says why under its heading when the model gave a reason, such as a usage limit or a sign-in that ran out, so you know before pressing Retry.
+- A request you pick up again while a dialogue pass waits for your calls says “Waits for your calls” in its block, with the same mark that starts it before them, instead of only “Queued”.
+- When Scarlet has several questions waiting, the message box answers them one at a time in the order asked: its tag says which (“Answer 1 of 2”), and Answer in the chat is on the question it will answer.
+- In See all, cuts that went in with a pass through your calls are ticked as kept, as Keep and the timeline already counted them.
+- Scarlet's own recheck under a cut's row says where it stands once, at the right of its heading with Pause and Stop, with no second “Stopped” or “Needs your answer” row.
+- With the chat dragged to its narrowest, the project's name keeps its room while the model button shows its dial alone, and a heading that says “Working on 3 at once” sets its time and tokens aside so your words stay readable.
+- The rest of the chat no longer fades when an edit is opened from a request's own line.
 - The words that say what Scarlet is doing, and Revising… on a row, shimmer while it works; they had stopped moving in the chat.
 - ⌘Z in a message box you have just emptied brings your words back instead of taking back your last Keep, and it puts back a marked range you took off the box.
 - ⌘Z takes back Keep or Reject edit on a call, which waits for you again, and after Keep on a moment it leaves an edit you had already kept on its own kept.

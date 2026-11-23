@@ -2,7 +2,7 @@ import { closingCheckFailed, taskDialogueOperation, matchesEdit, noteThread, Dia
 import { clock, parseTimestamp } from "./format";
 import { cutSummary, dialogueReceipt, mergeRanges, rangesOverlap, reviewReasons, type TimeRange, type Author, type Change, type Note } from "@scarlet/timeline";
 import { appliedEditSummary } from "../components/review/cutReviewDetails";
-import { editConfirmation, taskChatText } from "./taskActivity";
+import { editConfirmation, readsPlain, taskChatText } from "./taskActivity";
 import { runIsActive } from "./taskRun";
 
 export { buildThreads, type Thread } from "@scarlet/shared";
@@ -176,6 +176,21 @@ export function requestTarget(task: Task, made: Change | undefined, changes: rea
   return edit ? { note, edit } : { note, changeId: change.id, call: index };
 }
 
+/**
+ * Why a run or a render failed, when what its host or model reported reads as a sentence the editor can act on ("You've
+ * hit your usage limit"). A CLI that ended by itself reports its name and code, then the end of what it wrote: its last
+ * line is the reason. A command, a path or a tool's output says nothing to the editor, and gives none.
+ */
+export function failureReason(error: string | undefined): string | undefined {
+  const exit = /^\S+ exited with code \S+?(?::\s*([\s\S]*))?$/.exec(error?.trim() ?? "");
+  const line = (exit ? exit[1] ?? "" : error ?? "").split(/\r?\n/).map(l => l.trim()).filter(Boolean).at(-1) ?? "";
+  const said = line.replace(/^(?:[A-Za-z]*error|fatal|failed)\s*:\s*/i, "").replace(/\s+/g, " ").trim();
+  // A line of a stack trace, or one that names a file, is the program talking to its author.
+  const trace = /^at\s|(?:^|[\s("'])(?:~?\/|[A-Za-z]:\\)\S|\.\w{1,5}:\d+/.test(said);
+  if (said.split(" ").length < 3 || said.length > 200 || trace || !readsPlain(said)) return undefined;
+  return `${said.charAt(0).toUpperCase()}${said.slice(1)}${/[.!?…]$/.test(said) ? "" : "."}`;
+}
+
 /** What the chat says of a run that failed or was stopped. */
 function failureText(t: Task, hasEdit: boolean) {
   if (t.state === "cancelled") return "Edit stopped.";
@@ -190,7 +205,9 @@ function failureText(t: Task, hasEdit: boolean) {
   if (t.agent === "claude" && t.error?.includes("Sandbox required but unavailable")) {
     return "Claude Code couldn’t start because its required shell sandbox was unavailable.";
   }
-  return "I couldn’t finish this edit.";
+  // The reason the host or the model gave is what the editor can act on before trying again. With none that reads, the
+  // heading's "Couldn't finish" has said all there is.
+  return failureReason(t.error) ?? "I couldn’t finish this edit.";
 }
 
 /** The run's agent, as the author of what it said. */
@@ -294,7 +311,7 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
       const finalSummary = task && !dialogueTasks.has(task.id) ? editConfirmation(summary, request) : undefined;
       const description = editConfirmation(cutSummary(c.description), request);
       const text = c.state === "approved" ? appliedEditSummary(c)
-        : c.state === "failed" ? "I couldn’t prepare the preview for this edit."
+        : c.state === "failed" ? `I couldn’t prepare the preview for this edit.${failureReason(c.error) ? ` ${failureReason(c.error)}` : ""}`
         : dialogueReceipt(c) ?? finalSummary ?? description ?? "I prepared a version for you to review.";
       const at = c.state === "approved" ? c.updatedAt ?? c.createdAt
         : finalReply && parseTimestamp(task.finishedAt) > parseTimestamp(c.createdAt) ? task.finishedAt : c.createdAt;

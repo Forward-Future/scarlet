@@ -50,6 +50,8 @@ interface ComposerProps {
   tray?: ReactNode;
   /** What the message revises, as a tag inside the box before the text: "Cut at 2:05". Its × takes the target off. */
   targetTag?: string;
+  /** Which of the questions that wait this answer is for, when Scarlet has asked several: "1 of 2". They are answered one at a time, in the order asked. */
+  targetTagNote?: string;
   /** The tag is a moment a new edit is about ("At 18:28"), not something being revised. Its × makes the message about the whole video. */
   targetIsPoint?: boolean;
   messageClock?: MessageClock;
@@ -75,7 +77,7 @@ interface ComposerProps {
   targetTime?: number;
   selectedEdit?: AgentContext; onClearSelectedEdit?(): void; thread?: Thread; onCreated?(task: Task): void; onSent?(): void; modelPicker?: boolean }
 
-function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime }: ComposerProps & { project: Project }) {
+function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime }: ComposerProps & { project: Project }) {
   const media = useProjectStore(s => s.current?.media);
   const createTask = useProjectStore((s) => s.createTask);
   const createNote = useProjectStore((s) => s.createNote);
@@ -379,7 +381,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   }, [value, firstTime, inputClock, typedPoint, sameClock, rewording, replying, aimsByText, setContext]);
   const tagWords = targetTag && lowerFirst(targetTag);
   // What the tag's message does, for its hover note: a cut or an edit is revised, a question answered, an edit replied to.
-  const tagAct = !targetTag ? undefined : question && targetTag === "Answer" ? "Answering Scarlet’s question"
+  const answerNote = question && targetTag === "Answer" ? targetTagNote : undefined;
+  const tagAct = !targetTag ? undefined : question && targetTag === "Answer" ? answerNote ? `Answering question ${answerNote}. The next follows once this is sent.` : "Answering Scarlet’s question"
     : thread && targetTag === "Reply" ? "Replying to this edit" : `Revising ${tagWords === "whole edit" ? "the whole edit" : tagWords}`;
   // What taking the tag off says it does instead.
   const newEditInstead = tagAct && `Start a new edit instead of ${lowerFirst(tagAct)}`;
@@ -535,6 +538,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         <div className="composer-row">
           {wordTag && <span className="composer-tag" title={tagAct}>
             <span className="composer-tag-name">{wordTag}</span>
+            {wordTag === "Answer" && answerNote && <span className="composer-tag-note">{answerNote}</span>}
             {/* A spoken message stays where it was said until it is out: aiming the box elsewhere would drop it. */}
             <button type="button" className="composer-tag-clear" disabled={recording || heard}
               aria-label={newEditInstead}

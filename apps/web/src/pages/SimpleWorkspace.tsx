@@ -1983,6 +1983,11 @@ export function SimpleWorkspace() {
   }, [written]);
   // An answer says so too, so a message meant as a new edit isn't sent to Scarlet's question by mistake.
   const boxTag = aimedAt ? (aimed && cutName(aimed)) ?? tagOf(aimedAt) : replyThread ? replyThread.question ? "Answer" : "Reply" : undefined;
+  // Scarlet can have several questions waiting, one from each cut or edit it works on. The box answers them one at a
+  // time, in the order asked, and its tag says which this one is: "Answer 1 of 2".
+  const questions = tasks.filter(t => t.kind !== "transcribe" && t.state === "waiting_for_user" && !!t.question);
+  const answerNote = boxTag === "Answer" && questions.length > 1 && replyThread?.question
+    ? `${questions.findIndex(t => t.id === replyThread.question!.id) + 1} of ${questions.length}` : undefined;
   const aimOnOpen = callCard ? answeringCut ? !aimed : aimed?.changeId === pass!.id && aimed.cutIndex === listening!.index
     : editOpen && !!aimed && aimed.cutIndex === undefined && (aimed.changeId === reviewingEdit!.changeId || aimed.changeId === shownChange!.id)
       && (aimed.editIndex === undefined || aimed.editIndex === reviewingEdit!.spot);
@@ -2080,7 +2085,13 @@ export function SimpleWorkspace() {
     || [...backgroundReview.values()].some(review => review.head === head && review.markers.some(marker => marker.state === "check"));
   const exportReady = hasCut && changes.some(c => c.state === "approved") && !asking && !pass && !front && !editing
     && !queued.length && !flagsWait;
-  const chatActions: ChatActions = nextQueuedId ? { ...actions, nextQueuedId } : actions;
+  // A request picked up again waits in its own block, not in the tray: the block says what it waits for as the tray
+  // would, and starts it before the calls the same way.
+  const waitsOn = (task: Task) => {
+    const words = editingPaused ? undefined : waitsOnEditor(task);
+    return words ? { words, startNow: waitFor(task)?.kind === "review" ? () => void queueAction(startBeforeCalls(task.id)).catch(() => {}) : undefined } : undefined;
+  };
+  const chatActions: ChatActions = { ...actions, waitsOn, ...(nextQueuedId && { nextQueuedId }) };
   // The queued request whose words are in the message box to change, and the words as they stand there. Scarlet
   // doesn't start it meanwhile. A message being written waits, and is in the box again once these words are done.
   // They are kept as they are typed, as an unsent message is: after a quit the request is in the box again with the
@@ -2227,7 +2238,7 @@ export function SimpleWorkspace() {
     // The box carries a tag naming the cut or edit it revises, or the point a new edit is about. Taking the tag off
     // makes the message a new edit about the whole video.
     messageClock={messageClock} pausedAt={replyTo ? pausedAt : undefined} aimTime={aimTime} targetTime={targetTime}
-    targetTag={boxTag} onClearTarget={clearTarget} onRestoreTarget={restoreTarget}
+    targetTag={boxTag} targetTagNote={answerNote} onClearTarget={clearTarget} onRestoreTarget={restoreTarget}
     // A queued request's words have the box to themselves: its row in the tray, lit, says which request they are.
     rewording={rewordingItem && { id: rewordingItem.id, text: rewording!.text,
       onChange: text => setRewording(r => r && { ...r, text }),

@@ -30,6 +30,7 @@ import { lengthLabel } from "../lib/format";
 import * as watch from "./WatchPage";
 import { madeSentence, sentenceText } from "../lib/madeSentence";
 import { QueueTray } from "../components/chat/QueueTray";
+import { ChatRail } from "../components/shell/ChatRail";
 import { cutSource } from "../components/review/retakeLookup";
 import { enqueueImports } from "../components/media/UploadDropzone";
 
@@ -38,7 +39,7 @@ import { selectOption } from "../../test/selectOption";
 const it = partedIt(vitestIt);
 
 /** The message box has its own tests. Here it records what the workspace hands it, and draws the tray it is given. */
-type BoxProps = { onCreated?(task: { id: string }): void; onSent?(): void; tray?: React.ReactNode; targetTag?: string; targetTime?: number; targetIsPoint?: boolean; onClearTarget?(): void; onRestoreTarget?(): boolean;
+type BoxProps = { onCreated?(task: { id: string }): void; onSent?(): void; tray?: React.ReactNode; targetTag?: string; targetTagNote?: string; targetTime?: number; targetIsPoint?: boolean; onClearTarget?(): void; onRestoreTarget?(): boolean;
   messageClock?: import("../lib/messageTimestamps").MessageClock; pausedAt?: import("../components/agent/Composer").PausedAt; aimTime?: number;
   rewording?: { id: string; text: string; onChange(text: string): void; onSave(text: string, skillIds?: string[]): Promise<void>; onCancel(): void } };
 const composer = vi.hoisted(() => ({ props: undefined as BoxProps | undefined }));
@@ -2035,6 +2036,8 @@ it("answers Scarlet's question with the next message when nothing is open, until
   // With no cut or edit open, the box is already on the question, and its tag says so.
   expect(target()).toBe("Answering “" + threadWith("chg_approved_2").title + "”");
   expect(boxTag()).toBe("Answer");
+  // One question waits, so the tag has no count of them.
+  expect(composer.props!.targetTagNote).toBeUndefined();
   expect(useUiStore.getState().draftOwner).toBe(JSON.stringify([PRJ, threadWith("chg_approved_2").id]));
   // The conversation is whole: nothing is hidden to show the question.
   expect(turns().some(t => t.hidden)).toBe(false);
@@ -2052,6 +2055,41 @@ it("answers Scarlet's question with the next message when nothing is open, until
   // not A, S, R or K on whatever card is open.
   expect(useUiStore.getState().composerFocus).toBe(1);
   expect(container.querySelector(".simple-target button")).toBeNull();
+});
+
+it("answers Scarlet's questions one at a time, in the order asked, and says which of them the box is on", async () => {
+  finishedPass();
+  idle();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutReasons: STAGED.map(r => ({ start: r.start, end: r.end, reason: r.reason })) } : c) };
+  const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+  // Scarlet revises two cuts of the pass at once, and asks about each. They are the only questions in the project.
+  const FIRST = "Cut after the breath, or before it?", SECOND = "Keep the price in?";
+  const first = callRequest("task_first", 0, { kind: "revise" as const, state: "waiting_for_user" as const, question: FIRST, createdAt: at(0), startedAt: at(0) });
+  const second = callRequest("task_second", 1, { kind: "revise" as const, state: "waiting_for_user" as const, question: SECOND, createdAt: at(1000), startedAt: at(1000) });
+  data = { ...data, tasks: [...data.tasks, first, second],
+    taskEvents: { ...data.taskEvents, task_first: [{ type: "question" as const, at: at(500), text: FIRST }], task_second: [{ type: "question" as const, at: at(1500), text: SECOND }] } };
+  useProjectStore.setState({ current: data });
+  await show();
+  await act(async () => {});
+  /** A request's question under its cut's row: its words, and the link after them when it is the one the box answers. */
+  const asked = (taskId: string) => {
+    const line = container.querySelector(`.subunit[data-run="${taskId}"] .req-say`);
+    return line ? [[...line.childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join(""), line.querySelector("button")?.textContent] : undefined;
+  };
+  const links = () => container.querySelectorAll(".req-say .simple-link.is-warn").length;
+  // Both questions read under their cuts. Only the first has Answer: it is the one the next message goes to.
+  expect([asked("task_first"), asked("task_second"), links()]).toEqual([[FIRST, "Answer"], [SECOND, undefined], 1]);
+  // The box is on it, and its tag says which of the two this is.
+  expect([boxTag(), composer.props!.targetTagNote]).toEqual(["Answer", "1 of 2"]);
+  // Answer on the first means the same.
+  await click(buttonIn(container.querySelector('.subunit[data-run="task_first"]')!, "Answer")!);
+  expect([boxTag(), composer.props!.targetTagNote]).toEqual(["Answer", "1 of 2"]);
+  // The first is answered, and Scarlet works on. The second is the one the box answers now: it has the link, and
+  // with one question left the tag has no count.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_first" ? { ...t, state: "running" as const, question: null } : t),
+    taskEvents: { ...d.taskEvents, task_first: [...d.taskEvents.task_first!, { type: "answer" as const, at: at(2000), text: "After it." }] } }));
+  expect([asked("task_first"), asked("task_second"), links()]).toEqual([[FIRST, undefined], [SECOND, "Answer"], 1]);
+  expect([boxTag(), composer.props!.targetTagNote]).toEqual(["Answer", undefined]);
 });
 
 it("keeps the editor's answer and a note of theirs to two lines, with the whole of it in the title", async () => {
@@ -4826,6 +4864,58 @@ it("starts the request the calls hold back from its row in the tray, without the
   expect(marks()).toEqual([undefined, undefined]);
 });
 
+it.each([
+  // Resume carries a stopped request on, and the new attempt names the one it began as.
+  ["Resume", { state: "cancelled" as const }, { resumeRootId: "task_lower" }],
+  // Retry starts a request that failed with nothing saved over, and only the failed attempt names the new one.
+  ["Retry", { state: "failed" as const, error: "unexpected status 500" }, {}],
+])("says in its own block what holds back a request picked up again with %s, and starts it before the calls from there", async (_how, ended, pickedUp) => {
+  finishedPass();
+  idle();
+  const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+  // A request about the whole video that ended early before the pass was made. With the pass waiting on its calls the
+  // editor picks it up: the request is in line again under a new attempt, which the calls hold back.
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  const stopped = { ...base, id: "task_lower", kind: "edit" as const, instruction: "Add a lower third with my name.", changeIds: [], summary: null,
+    context: { threadId: "task_lower", message: "Add a lower third with my name." }, createdAt: at(-1_200_000), startedAt: at(-1_190_000), finishedAt: at(-1_180_000), retryTaskId: "task_lower_again", ...ended };
+  const again = { ...stopped, id: "task_lower_again", state: "queued" as const, error: undefined, retryTaskId: undefined, createdAt: at(0), startedAt: undefined, finishedAt: undefined, ...pickedUp };
+  data = { ...data, tasks: [...data.tasks, stopped, again] };
+  // The engine marks the request as started before the calls, and they hold it no longer.
+  const startBeforeCalls = vi.fn().mockImplementation(async (id: string) => {
+    await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === id ? { ...t, startsBeforeCalls: true } : t) }));
+  });
+  useProjectStore.setState({ current: data, startBeforeCalls });
+  await show();
+  await act(async () => {});
+  expect(container.querySelector(".simple-pin .simple-pass-need")?.getAttribute("title")).toBe("3 need you");
+  // The tray lists requests that haven't begun, and this one has: it is in the chat, in the block it began in.
+  expect(container.querySelector('[aria-label="Queued requests"]')).toBeNull();
+  const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_lower"]')!;
+  const mark = () => block().querySelector<HTMLButtonElement>(".req-status .req-right > button.queue-start");
+  /** Its row's words, whether they are amber, and the name of the play mark at the row's right. */
+  const row = () => {
+    const status = block().querySelector<HTMLElement>(".req-status [role=status]");
+    return [status?.textContent, status?.classList.contains("req-ask"), mark()?.title];
+  };
+  // So its row says what the tray would: it waits for the calls, in amber, with the tray's mark to start it without them.
+  expect(row()).toEqual(["Waits for your calls", true, "Start now, before your calls"]);
+  expect(mark()!.getAttribute("aria-label")).toBe("Start now");
+  // With editing paused nothing starts until Resume: its band says Paused, and the row and its mark go.
+  await event(d => ({ ...d, project: { ...d.project, editingPaused: true } }));
+  expect([block().querySelector(".unit-msg .unit-word")?.textContent, block().querySelector(".req-status, .queue-start")]).toEqual(["Paused", null]);
+  await event(d => ({ ...d, project: { ...d.project, editingPaused: false } }));
+  expect(row()).toEqual(["Waits for your calls", true, "Start now, before your calls"]);
+  // The mark starts this attempt, the one in line, without the calls. Nothing of the editor's holds it then: Queued.
+  await click(mark()!);
+  expect(startBeforeCalls).toHaveBeenCalledExactlyOnceWith("task_lower_again");
+  expect(row()).toEqual(["Queued", false, undefined]);
+  expect(container.querySelector(".simple-pin .simple-pass-need")?.getAttribute("title")).toBe("3 need you");
+  // Scarlet's question in another request holds it next: the row says so, with no mark, since an answer isn't theirs to waive.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_waiting" ? { ...t, state: "waiting_for_user" as const, question: "Purple or white?" } : t) }));
+  expect(row()).toEqual(["Waits for your answer", true, undefined]);
+  expect(startBeforeCalls).toHaveBeenCalledOnce();
+});
+
 it("shows a pass's calls, and the suggestion its run left after them, while they hold the next request", async () => {
   // The engine holds the next request until the calls are made (2026-11-08: the calls weren't shown, so it never started).
   passLeftSuggestion();
@@ -5011,6 +5101,8 @@ it("shows Scarlet on two calls at once: each row has its own actions, alongside 
   const word = block().querySelector(".unit-msg .unit-word")!;
   expect(word.textContent).toBe("Working on 2 at once");
   expect(word.getAttribute("title")).toBe("Scarlet is working on 2 cuts or edits at the same time.");
+  // It is marked as that word, so a narrow chat can give it the room of the time and tokens beside it.
+  expect(word.className).toBe("unit-word is-at-once");
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
   // Each call has its own menu under its row.
   const working = [...passCard().querySelectorAll(".simple-pass-value.working-text")];
@@ -5024,6 +5116,9 @@ it("shows Scarlet on two calls at once: each row has its own actions, alongside 
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_aside" ? { ...t, state: "cancelled" as const, finishedAt: new Date().toISOString() } : t) }));
   await act(async () => {});
   expect([...block().querySelectorAll(".unit-msg .unit-word")].map(el => el.textContent)).not.toContain("Working on 2 at once");
+  // An ordinary word, such as the stopped request's, isn't marked that way.
+  const stopped = container.querySelector('.subunit[data-run="task_aside"] .subunit-msg .unit-word')!;
+  expect([stopped.textContent, stopped.className]).toEqual(["Stopped", "unit-word"]);
 });
 
 it("keeps a call Revising… when it comes back revised while a second note on it still waits", async () => {
@@ -6579,6 +6674,45 @@ it("drags the divider to resize the chat against the player, and remembers the w
     await act(async () => root.render(null));
     await show();
     expect(container.querySelector<HTMLElement>("#simple-chat")!.style.width).toBe("800px");
+  } finally { localStorage.removeItem("scarlet.simpleChatWidth"); }
+});
+
+it("says when the chat is dragged near its narrowest, so its header can give its room to what matters most", async () => {
+  vi.stubGlobal("innerWidth", 2000);
+  // The editor left the chat at its narrowest.
+  localStorage.setItem("scarlet.simpleChatWidth", "320");
+  try {
+    await show();
+    const rail = () => container.querySelector<HTMLElement>("#simple-chat")!;
+    const divider = () => container.querySelector<HTMLElement>('[role="separator"][aria-label="Resize chat"]')!;
+    /** How wide the chat is, and what it says of being narrow: an empty mark, or nothing at all. */
+    const narrow = () => [rail().style.width, rail().getAttribute("data-narrow")];
+    expect(narrow()).toEqual(["320px", ""]);
+    divider().setPointerCapture = vi.fn();
+    const pointer = (type: string, clientX: number) => new PointerEvent(type, { bubbles: true, button: 0, isPrimary: true, pointerId: 1, clientX });
+    // Dragged wider it stops saying so from 360px, and says it again under that.
+    await act(() => divider().dispatchEvent(pointer("pointerdown", 320)));
+    await act(() => divider().dispatchEvent(pointer("pointermove", 380)));
+    expect(narrow()).toEqual(["380px", null]);
+    await act(() => divider().dispatchEvent(pointer("pointermove", 360)));
+    expect(narrow()).toEqual(["360px", null]);
+    await act(() => divider().dispatchEvent(pointer("pointermove", 359)));
+    expect(narrow()).toEqual(["359px", ""]);
+    await act(() => divider().dispatchEvent(pointer("pointerup", 380)));
+    expect(narrow()).toEqual(["380px", null]);
+    // Left there, it opens that way.
+    await act(async () => root.render(null));
+    await show();
+    expect(narrow()).toEqual(["380px", null]);
+    // A window too small for the chat beside the player lays it out another way, at no width of its own: it never says so.
+    await act(async () => root.render(null));
+    const lone = (compact: boolean) => act(async () => root.render(<ChatRail compact={compact} id="lone-chat" storageKey="scarlet.simpleChatWidth" minWidth={320}>Chat</ChatRail>));
+    const loneRail = () => container.querySelector<HTMLElement>("#lone-chat")!;
+    localStorage.setItem("scarlet.simpleChatWidth", "320");
+    await lone(false);
+    expect([loneRail().style.width, loneRail().getAttribute("data-narrow")]).toEqual(["320px", ""]);
+    await lone(true);
+    expect([loneRail().style.width, loneRail().hasAttribute("data-narrow")]).toEqual(["", false]);
   } finally { localStorage.removeItem("scarlet.simpleChatWidth"); }
 });
 
@@ -8994,6 +9128,51 @@ it("shows Scarlet's recheck of an approved cut under that call, with why and non
   expect(under!.textContent!.split("The footage changed after you approved it.").length - 1).toBe(1);
   expect(under!.closest("li")?.querySelector(":scope > button .simple-pass-value")?.textContent).toBe("Rechecking…");
   expect(under!.textContent).not.toMatch(/keep|Kept the original delivery|The video changed|Recheck this cut/);
+});
+
+it("says where Scarlet's recheck stands once, at the right of its Auto heading, with Pause and Stop there while it runs", async () => {
+  finishedPass();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutReasons: STAGED.map(r => ({ start: r.start, end: r.end, reason: r.reason })) } : c) };
+  useProjectStore.setState({ current: data });
+  await show();
+  await act(async () => {});
+  const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+  const recheck = callRequest("task_recheck", 0, { kind: "revise" as const, state: "running" as const, createdAt: at(0), startedAt: at(0),
+    createdBy: { type: "scarlet" as const, name: "Scarlet" }, cutConflict: { version: "v_head", approved: true as const },
+    instruction: "The editor approved this cut. The passage changed before it could apply.", context: { ...callRequest("x", 0, {}).context, message: "Recheck this cut" } });
+  await event(d => ({ ...d, tasks: [...d.tasks, recheck] }));
+  const under = () => container.querySelector<HTMLElement>('.subunit[data-run="task_recheck"]')!;
+  const heading = () => under().querySelector<HTMLElement>(":scope > .subunit-msg")!;
+  const said = (words: string) => under().textContent!.split(words).length - 1;
+  expect(heading().querySelector(".simple-revising.is-auto")?.textContent).toBe("Auto");
+  // While it runs its heading ends as a request's does: its active time, then Pause and Stop. No row under it holds them.
+  expect([...heading().querySelectorAll(":scope > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Pause editing", "Stop this edit"]);
+  expect(heading().lastElementChild?.className).toBe("unit-actions");
+  expect(heading().querySelector(":scope > .unit-tokens > .run-work-time")).not.toBeNull();
+  expect(under().querySelector(".req .req-right, .req .unit-actions, .req .run-stop")).toBeNull();
+  expect([...under().querySelectorAll(".req-row")].map(row => row.className)).toEqual(["req-row req-now"]);
+  // It asks: the heading's dot, the question and Answer say so. No row says "Needs your answer" over them.
+  const question = "The join lands on a breath now. Cut after it?";
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_recheck" ? { ...t, state: "waiting_for_user" as const, question } : t),
+    taskEvents: { ...d.taskEvents, task_recheck: [{ type: "question" as const, at: at(1000), text: question }] } }));
+  expect(heading().querySelector(":scope > .unit-state > .unit-dot")).not.toBeNull();
+  expect([...under().querySelectorAll(".req-say")].map(p => [p.textContent, p.querySelector("button")?.textContent])).toEqual([[`${question}Answer`, "Answer"]]);
+  expect(under().querySelector(".req-status, .req-row")).toBeNull();
+  expect(said("Needs your answer")).toBe(0);
+  expect([...heading().querySelectorAll(":scope > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Pause editing", "Stop this edit"]);
+  // It was stopped: the heading says so, once. No row says it again, and its one action is still there, after what it saved.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_recheck" ? { ...t, state: "cancelled" as const, question: null, finishedAt: at(2000) } : t) }));
+  expect(heading().querySelector(":scope > .unit-state")?.textContent).toBe("Stopped");
+  expect(said("Stopped")).toBe(1);
+  expect(under().querySelector(".req-status, .req-state, .unit-actions")).toBeNull();
+  expect([...under().querySelectorAll(".req-row")].map(row => [row.className, row.textContent, row.querySelector("button")?.textContent])).toEqual([["req-row req-result", "Nothing savedResume", "Resume"]]);
+  // It couldn't finish: the same, in those words.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_recheck" ? { ...t, state: "failed" as const, error: "unexpected status 500" } : t) }));
+  expect(heading().querySelector(":scope > .unit-state")?.textContent).toBe("Couldn’t finish");
+  expect(said("Couldn’t finish")).toBe(1);
+  expect(under().querySelector(".req-status, .req-state")).toBeNull();
+  // Its reason heads it throughout, and is never said again under its work.
+  expect(said("The footage changed after you approved it.")).toBe(1);
 });
 
 it("keeps a request about one cut in the conversation while it's stopped early, and takes it out once it's done", async () => {
@@ -13584,6 +13763,90 @@ it("keeps a dialogue pass's decided calls in For you after the pass applies", as
   // See all lists only the actual applied edits, not the skipped call.
   await click(seeAll(pass)!);
   expect(passRows().map(r => r.querySelector(".simple-pass-words")?.textContent)).toEqual([STAGED[0]!.reason, STAGED[2]!.reason]);
+});
+
+it("ticks in See all the cuts that went in with a pass through its calls, Scarlet's own picks too, and not an edit that still waits, a doubt raised since or a cut sent back", async () => {
+  const CUTS: Staged[] = [...STAGED, { start: 14, end: 15, reason: "A second go at the sign-off." }];
+  finishedPass(CUTS);
+  vi.spyOn(api, "timeline").mockImplementation(async (_, version = "head") => ({ timeline: { ...data.timeline!, version } }));
+  const thread = threadWith("chg_ready");
+  const ready = data.changes.find(c => c.id === "chg_ready")!;
+  // The pass went in on its last call. The editor kept the first cut and rejected the second. The last two had no
+  // call: Scarlet settled them itself, and they went in with the others.
+  const approved = { ...ready, state: "approved" as const, appliedVersion: ready.toVersion,
+    cutAssessments: ready.cutAssessments!.map(a => a.index >= 2 ? { ...a, verdict: "cut" as const } : a),
+    cutChoices: [
+      { index: 0, start: CUTS[0]!.start, end: CUTS[0]!.end, choice: "cut" as const },
+      { index: 1, start: CUTS[1]!.start, end: CUTS[1]!.end, choice: "keep" as const },
+    ],
+    appliedReview: { duration: 13, originalDuration: 16, originalVersion: "ver_1", joins: [
+      { reviewIndex: 0, at: 2, removed: { start: CUTS[0]!.start, end: CUTS[0]!.end } },
+      { reviewIndex: 2, at: 10, removed: { start: CUTS[2]!.start, end: CUTS[2]!.end } },
+      { reviewIndex: 3, at: 12, removed: { start: CUTS[3]!.start, end: CUTS[3]!.end } },
+    ] } };
+  // An edit the same request applied on its own asks for a look, and still waits on the editor.
+  const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_done", threadId: thread.id,
+    createdAt: new Date(Date.now() - 30_000).toISOString() };
+  data = { ...data, changes: [...data.changes.filter(c => c.id !== "chg_approved_2").map(c => c.id === "chg_ready" ? approved : c), part],
+    tasks: data.tasks.map(t => t.id === "task_done" ? { ...t, changeIds: [part.id, ...t.changeIds] } : t) };
+  useProjectStore.setState({ current: data });
+  const cut = (spot: number, at: number, staged: Staged) => ({ changeId: "chg_ready", spot, label: staged.reason, range: { start: at - 1, end: at + 1 }, at, kind: "cut" as const,
+    beforeCut: { version: "ver_1", removed: { start: staged.start, end: staged.end } }, previous: [] });
+  // A later request raised a doubt about the last cut, which Scarlet had settled: that is new, and the editor's to look at.
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_ready").id ? [] : [
+      cut(0, 2, CUTS[0]!),
+      { changeId: "chg_part", spot: 0, label: "mid check", range: { start: 5, end: 5.5 }, kind: "audio" as const, previous: [], check: CHECK },
+      cut(1, 10, CUTS[2]!),
+      { ...cut(2, 12, CUTS[3]!), check: "The sign-off now starts on a breath.", recheck: "2026-11-23T10:00:00.000Z" },
+    ] }));
+  await showFolded();
+  await act(async () => {});
+  expect(needYou()).toBe("2 need you");
+  await click(seeAll(passCard())!);
+  await act(async () => {});
+  /** Each row of the list: its words, whether it is ticked (the row's class and its tick), its time, and what it ends on. */
+  const listed = () => passRows().map(r => [r.querySelector(".simple-pass-words")?.textContent, r.classList.contains("is-decided"), !!r.querySelector(".simple-pass-tick"),
+    r.querySelector(".simple-pass-time")?.textContent, r.querySelector(".simple-pass-value")?.textContent]);
+  const lit = () => passRows().find(r => r.getAttribute("aria-current"))?.querySelector(".simple-pass-words")?.textContent;
+  // The cut the editor approved is ticked, and so is the one Scarlet settled: it went in with the pass, and keeps its
+  // amount. The edit that asks for a look and the cut doubted since aren't, and their times still say they need the
+  // editor. The call the editor rejected left its footage in, so it has no row here.
+  expect(listed()).toEqual([
+    [CUTS[0]!.reason, true, true, "0:02", "−1.0 s"],
+    ["mid check", false, false, "0:05, needs you", "Audio"],
+    [CUTS[2]!.reason, true, true, "0:10", "−1.0 s"],
+    [CUTS[3]!.reason, false, false, "0:12, needs you", "−1.0 s"],
+  ]);
+  // The timeline's dots say the same: filled for the two cuts that are kept, amber for the two that wait.
+  expect(ticks()).toEqual(["kept", "check", "kept", "check"]);
+  // Keep agrees with the ticks. From the edit that waits it goes past the ticked cut to the one doubted since, and from
+  // that one, the last waiting, nothing is left to keep: the card closes, and every row of the list is ticked.
+  await click(passRow("mid check"));
+  await act(async () => {});
+  expect([!!editPanel(), lit()]).toEqual([true, "mid check"]);
+  await press("k");
+  await act(async () => {});
+  expect([!!editPanel(), lit(), needYou()]).toEqual([true, CUTS[3]!.reason, "1 needs you"]);
+  await press("k");
+  await act(async () => {});
+  expect([editPanel(), lit(), needYou()]).toEqual([null, undefined, null]);
+  expect(listed()).toEqual([
+    [CUTS[0]!.reason, true, true, "0:02", "−1.0 s"],
+    ["mid check", true, true, "0:05", "Audio"],
+    [CUTS[2]!.reason, true, true, "0:10", "−1.0 s"],
+    [CUTS[3]!.reason, true, true, "0:12", "−1.0 s"],
+  ]);
+  expect(ticks()).toEqual(["kept", "kept", "kept", "kept"]);
+  // Sent back for revision, the cut Scarlet settled is on its way out: its tick goes, and its row says so after its amount.
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  const now = new Date().toISOString();
+  await event(d => ({ ...d, tasks: [...d.tasks, { ...base, id: "task_revise_settled", state: "running" as const, createdAt: now, startedAt: now, finishedAt: undefined,
+    summary: null, changeIds: [], context: { changeId: "chg_ready", editIndex: 1, threadId: thread.id, message: "Leave a beat before it" } }] }));
+  await act(async () => {});
+  expect(listed()[2]).toEqual([CUTS[2]!.reason, false, false, "0:10", "−1.0 s"]);
+  expect(passRow(CUTS[2]!.reason).querySelector(".simple-pass-check")?.textContent).toBe("Revising…");
+  expect(listed().filter((_, i) => i !== 2).every(([, decided, tick]) => decided && tick)).toBe(true);
 });
 
 it("says under the timeline what Scarlet is doing while it edits the video shown, and a press brings that request into view", async () => {

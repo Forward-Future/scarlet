@@ -477,6 +477,46 @@ it("leaves a question under a heading to the heading, opens the steps before it 
   bare.unmount();
 });
 
+it("says what a request in line again waits for when that is the editor, with the way to start it before their calls", () => {
+  openProject();
+  const queued: Task = { ...task, state: "queued", summary: null, finishedAt: undefined };
+  // The row's words, whether they are amber as a question's are, and the tray's play mark at the row's right.
+  const row = (host: HTMLElement) => {
+    const status = host.querySelector<HTMLElement>(".req-status [role=status]");
+    return [status?.textContent, status?.classList.contains("req-ask"), !!host.querySelector(".req-status .req-right > button.queue-start")];
+  };
+  const mark = (host: HTMLElement) => host.querySelector<HTMLButtonElement>(".req-status .req-right > button.queue-start")!;
+  // Nothing of the editor's holds it: Queued, the word its cut's card and the tray use, and nothing to press.
+  const view = render(<RunBundle task={queued} events={[]} changes={[]} banded />);
+  expect(row(view.host)).toEqual(["Queued", false, false]);
+  // The calls of a pass hold it: the tray's own words, in amber, and its play mark, which starts it without them.
+  const startNow = vi.fn();
+  const calls = { words: "Waits for your calls", startNow };
+  view.rerender(<RunBundle task={queued} events={[]} changes={[]} banded held={calls} />);
+  expect(row(view.host)).toEqual(["Waits for your calls", true, true]);
+  expect([mark(view.host).title, mark(view.host).getAttribute("aria-label"), mark(view.host).textContent]).toEqual(["Start now, before your calls", "Start now", ""]);
+  expect(startNow).not.toHaveBeenCalled();
+  act(() => mark(view.host).click());
+  expect(startNow).toHaveBeenCalledOnce();
+  // Scarlet's question holds it: the words, and no mark, since an answer isn't theirs to waive.
+  view.rerender(<RunBundle task={queued} events={[]} changes={[]} banded held={{ words: "Waits for your answer" }} />);
+  expect(row(view.host)).toEqual(["Waits for your answer", true, false]);
+  view.unmount();
+  // With editing paused nothing starts until Resume, whatever else holds the request: it says Paused, and has no mark.
+  const paused = render(<RunBundle task={queued} events={[]} changes={[]} paused held={calls} />);
+  expect(row(paused.host)).toEqual(["Paused", false, false]);
+  expect(paused.host.querySelector<HTMLElement>(".req-status [role=status]")?.title).toBe("Editing is paused. Resume picks this up where it left off.");
+  // Under a heading, which says Paused itself, the row goes with its mark.
+  paused.rerender(<RunBundle task={queued} events={[]} changes={[]} banded paused held={calls} />);
+  expect(paused.host.querySelector(".req-status, .queue-start")).toBeNull();
+  paused.unmount();
+  // The words are a queued request's alone: a question Scarlet asks keeps its own row.
+  const asking = render(<RunBundle task={{ ...queued, state: "waiting_for_user" }} events={[]} changes={[]} held={calls} />);
+  expect(row(asking.host)).toEqual(["Needs your answer", true, false]);
+  asking.unmount();
+  expect(startNow).toHaveBeenCalledOnce();
+});
+
 it("leaves a question's tokens to its heading, and has a row for them with no heading", () => {
   useUiStore.getState().setShowRunTokens(true);
   openProject({ [task.id]: totals({ totalTokens: 900 }) });
