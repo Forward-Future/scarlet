@@ -36,7 +36,7 @@ export function requireProjectEditAttempt(ctx: Ctx, attempt: TaskAttempt | undef
 }
 
 /** Local pause work can prepare source measurements and address the notes that requested it. */
-export function requireLocalPauseTarget(task: Task | undefined, noteId?: string) {
+function requireLocalPauseTarget(task: Task | undefined, noteId?: string) {
   if (task && taskDialogueOperation(task) === "local-pauses" && !(noteId && task.context.noteIds?.includes(noteId)))
     throw badRequest("local_pauses", "This request only tightens local pauses.");
 }

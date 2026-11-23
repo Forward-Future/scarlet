@@ -44,6 +44,18 @@ export function transcriptLanguage(ctx: Ctx, projectId: string, media: { id: str
   return row?.language;
 }
 
+/** The id of the transcript a recording reads: the linked one, else its latest. */
+export function linkedTranscriptId(ctx: Ctx, projectId: string, mediaId: string, transcriptId?: string): string | undefined {
+  return transcriptId ?? (ctx.db.prepare("SELECT id FROM transcripts WHERE media_id = ? AND project_id = ? ORDER BY created_at DESC LIMIT 1")
+    .get(mediaId, projectId) as { id: string } | undefined)?.id;
+}
+
+/** The transcript a recording reads: the linked one, else its latest. */
+export function linkedTranscript(ctx: Ctx, projectId: string, mediaId: string, transcriptId?: string): Transcript | undefined {
+  const id = linkedTranscriptId(ctx, projectId, mediaId, transcriptId);
+  return id ? ctx.repos.transcripts.get(id) ?? undefined : undefined;
+}
+
 export function transcriptReader(ctx: Ctx) {
   const documents = new Map<string, { id: string; revision: string | null; doc: TranscriptDocument }>();
   let bytes = 0;

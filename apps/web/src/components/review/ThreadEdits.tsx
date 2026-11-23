@@ -1,15 +1,14 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { historyLineage } from "@scarlet/timeline";
-import { isRejectRequest, matchesEdit, threadEditList, threadRevision, isThreadDone, REJECT_MESSAGE, REVISED_CHECK, ScarletApiError, type EditRef, type Task, type Thread, type ThreadEdit, type VersionSummary } from "@scarlet/shared";
+import { matchesEdit, threadRevision, isThreadDone, REJECT_MESSAGE, REVISED_CHECK, ScarletApiError, type EditRef, type Task, type Thread, type ThreadEdit, type VersionSummary } from "@scarlet/shared";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
-import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
+import { editGroups, noEdits, revisionWord, useDeferred, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
 import { editRemovedLabel } from "../../lib/format";
 import { editRowWord } from "../../lib/editKind";
-import { editKey, keepEdits, reviewKey, useDeferredEdits, useKeptEdits } from "../../lib/keptEdits";
-import { isActiveTask, isWorkingTask } from "../../lib/taskRun";
+import { editKey, keepEdits } from "../../lib/keptEdits";
+import { isWorkingTask } from "../../lib/taskRun";
 import { useProjectStore } from "../../stores/project";
-import { useShownCutStore } from "../../stores/shownCut";
 import { Dropdown, MenuItem } from "../shell/WorkspaceNavigation";
 import { Icon } from "../ui/primitives";
 import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
@@ -107,144 +106,9 @@ export function EditVersion({ n, title, hover }: { n: number; title?: string;
   return <small className="edit-version" title={title ?? hover} tabIndex={title ? 0 : undefined}>v{n}</small>;
 }
 
-type ListedEdit = Omit<ThreadEdit, "at">;
-
-/**
- * A thread's edits as the timeline numbers them: the engine's list for the working cut, which leaves out
- * undone work, and the thread's own saved list until that arrives. With no thread, none.
- *
- * `needed`: whether the list is read again when the working cut moves. Every request in the chat lists its edits, and
- * each new working cut would read them all again. One out of view keeps the list it last read, and reads it again
- * once it is needed: in view, above the message box, or on the timeline. Its first read is always made, and so is
- * one after the request's own edits or flags change. `located` is the engine's list for the working cut as it is
- * now, so a list kept from an earlier one has none.
- */
-export function useThreadEdits(projectId: string, thread: Thread | undefined, needed = true) {
-  // Located on the working cut on screen, which holds while the video plays: the engine's list for a newer one waits.
-  const head = useShownCutStore(s => s.head);
-  const media = useProjectStore(s => s.current?.media);
-  const saved = useMemo(() => thread ? threadEditList(thread, media) : [], [thread, media]);
-  // An edit another request made counts here once this request flagged it.
-  const applied = !!thread?.changes.some(c => c.state === "approved") || !!thread?.flagged?.length;
-  const key = useThreadEditKey(projectId, head, thread);
-  const [loaded, setLoaded] = useState<{ key: string; threadId: string; edits?: ThreadEdit[] }>();
-  // The read last asked for. While the list isn't needed it stays the one asked for, so nothing is read again,
-  // unless the request itself changed: only a new working cut is waited out.
-  const own = useThreadEditKey(projectId, null, thread);
-  const asked = useRef<{ key: string; own: string }>(undefined);
-  const wanted = needed || asked.current?.own !== own ? key : asked.current.key;
-  useEffect(() => {
-    if (!head || !applied || !thread) return;
-    asked.current = { key, own };
-    let live = true;
-    requestThreadEdits(key, projectId, thread.id).then(({ edits, version }) => {
-      if (live && version === head) setLoaded({ key, threadId: thread.id, edits });
-    }, () => {
-      // The saved list stands in, but only when there is no list of this request's from the engine already: that one
-      // is numbered as the timeline is, and a read that failed once, as while the engine restarts, must not swap it
-      // for the saved list, which counts differently.
-      if (live) setLoaded(had => had?.threadId === thread.id && had.edits ? had : { key, threadId: thread.id });
-    });
-    return () => { live = false; };
-  }, [wanted]); // eslint-disable-line react-hooks/exhaustive-deps
-  // While a new list loads, keep the engine's numbering and the flags the editor saw. A flagged edit shows while its
-  // request still works: "N need you" counts it from the moment it lands.
-  const shown = useRef<{ key: string; edits: ListedEdit[] }>(undefined);
-  const current = loaded?.key === key;
-  const previous = loaded && loaded.threadId === thread?.id && shown.current?.key === loaded.key ? shown.current.edits : undefined;
-  // Out of view, the engine's last list stands even when it arrived after the working cut had moved on.
-  const kept = !needed && loaded?.threadId === thread?.id ? loaded?.edits : undefined;
-  const edits = (current ? loaded.edits : previous ?? kept) ?? saved;
-  useEffect(() => { if (current && loaded.edits) shown.current = { key, edits }; }, [current, loaded, key, edits]);
-  // An edit the editor rejected is out of the video: it is no edit to open, count or mark, only a row that says so.
-  const live = useMemo(() => edits.filter(e => !e.rejected), [edits]);
-  const rejected = useMemo(() => edits.filter(e => e.rejected), [edits]);
-  const located = useMemo(() => applied && current ? loaded.edits?.filter(e => !e.rejected) : undefined, [applied, current, loaded]);
-  return { listed: applied ? live : noEdits, rejected: applied ? rejected : noEdits, located, head };
-}
-
-const noEdits: ListedEdit[] = [];
-
-/** Whether the request on its way for an edit is the editor's rejection of it, so its row says Rejecting… and not Revising…. */
-export function useRejecting(thread: Thread | undefined) {
-  return useMemo(() => {
-    const pending = (thread?.tasks ?? []).flatMap(t => isActiveTask(t.state) && isRejectRequest(t) && t.context.changeId && t.context.editIndex !== undefined
-      ? [{ changeId: t.context.changeId, spot: t.context.editIndex }] : []);
-    return (edit: ListedEdit) => pending.some(ref => matchesEdit(edit as ThreadEdit, ref));
-  }, [thread]);
-}
-
 /** The × a rejected edit's row leads with, where a kept one has its tick. */
 export function RejectedMark() {
   return <span className="simple-pass-tick is-rejected" role="img" aria-label="Rejected"><Icon name="x" size={10} /></span>;
-}
-
-/** Whether the editor has reviewed an edit: kept here, or decided cut by cut when the pass was applied. */
-export function useReviewed(projectId: string, thread: Thread | undefined) {
-  const kept = useKeptEdits(projectId, thread);
-  return useMemo(() => {
-    const decided = new Set(thread?.changes.filter(c => c.state === "approved" && (c.appliedReview || c.approvedSpots)).map(c => c.id));
-    // A pass decided cut by cut was reviewed as it was applied, not a doubt raised about one of its edits since,
-    // nor what a later save asks of a cut it moved.
-    return (edit: EditRef & { recheck?: string; reviewRef?: EditRef }) =>
-      kept.has(reviewKey(edit)) || (!edit.recheck && !edit.reviewRef && decided.has(edit.changeId));
-  }, [kept, thread]);
-}
-
-/** Whether the editor parked a to-do marker for later ("Later") in For you. */
-export function useDeferred(projectId: string, thread: Thread | undefined) {
-  const deferred = useDeferredEdits(projectId, thread);
-  return useMemo(() => (edit: EditRef & { marker?: boolean; recheck?: string; reviewRef?: EditRef }) =>
-    !!edit.marker && deferred.has(reviewKey(edit)), [deferred]);
-}
-
-/**
- * Whether a request about an edit is queued or running: the editor asked Scarlet to revise or undo it, so the edit
- * no longer waits for them. Once the request finishes, its new version carries its own flag; if it fails, the edit
- * needs a look again. It answers with that request's id and state, so a row can tell Scarlet at work from a request
- * still waiting its turn: the one Scarlet is on, when there are several.
- */
-export function useRevising(thread: Thread | undefined) {
-  return useMemo(() => {
-    const pending = (thread?.tasks ?? []).flatMap(t => isActiveTask(t.state) && t.context.changeId && t.context.editIndex !== undefined
-      ? [{ id: t.id, changeId: t.context.changeId, spot: t.context.editIndex, state: t.state }] : []);
-    return (edit: ListedEdit) => {
-      let first: (typeof pending)[number] | undefined;
-      for (const ref of pending) if (matchesEdit(edit, ref)) {
-        if (isWorkingTask(ref.state)) return { id: ref.id, state: ref.state };
-        first ??= ref;
-      }
-      return first ? { id: first.id, state: first.state } : undefined;
-    };
-  }, [thread]);
-}
-
-/**
- * The word on a row whose edit or cut has a request with Scarlet: "Revising…" or "Rejecting…" once Scarlet has
- * started on it ("Rechecking…" when Scarlet sent an approved cut back to itself), "Up next" while it is next in line in the queue, and "Queued" while it waits behind other work
- * or while editing is paused.
- */
-export function revisionWord(run: { id: string; state: Task["state"] } | undefined, { rejecting = false, recheck = false, nextQueuedId }: { rejecting?: boolean; recheck?: boolean; nextQueuedId?: string } = {}) {
-  if (!run) return undefined;
-  if (run.state === "queued") return nextQueuedId && run.id === nextQueuedId ? "Up next" : "Queued";
-  return rejecting ? "Rejecting…" : recheck ? "Rechecking…" : "Revising…";
-}
-
-/**
- * The distinct edits in a list. One request can make the same edit in many places ("Camera full screen" in twelve
- * stretches): those share a name and read as one edit with a count of places. Cuts stay one each, since each removes
- * its own words.
- */
-export function editGroups<T extends ListedEdit>(edits: readonly T[]): { label: string; members: { edit: T; i: number }[] }[] {
-  const groups: { label: string; members: { edit: T; i: number }[] }[] = [];
-  const named = new Map<string, number>();
-  edits.forEach((edit, i) => {
-    const at = edit.beforeCut ? undefined : named.get(edit.label);
-    if (at !== undefined) { groups[at]!.members.push({ edit, i }); return; }
-    if (!edit.beforeCut) named.set(edit.label, groups.length);
-    groups.push({ label: edit.label, members: [{ edit, i }] });
-  });
-  return groups;
 }
 
 /**
@@ -292,7 +156,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   // A press shows it again: where it was on the timeline, with its note, over the video as it plays without it.
   const goneAfter = (from: number, to: number) => gone.filter(e => e.range.start >= from && e.range.start < to).map(e => {
     // Lit for the edit it was, too, while that one is still on its card, leaving.
-    const on = !!showing && (matchesEdit(showing, e) || matchesEdit(e as ThreadEdit, showing));
+    const on = !!showing && (matchesEdit(showing, e) || matchesEdit(e, showing));
     return <li key={editKey(e)}><button type="button" className={on ? "simple-edit is-rejected is-on" : "simple-edit is-rejected"} aria-current={on || undefined}
       data-log-control="open-edit" data-log-label="Rejected edit" aria-label={`${e.label}, rejected`}
       onClick={event => { blurOnPointerClick(event); onPlay(e); }}>

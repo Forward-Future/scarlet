@@ -87,11 +87,21 @@ export class OpenAIProvider implements TranscriptionProvider {
         let chunk: TranscriptSegment[] = [];
         let heard = from === 0;
         if (!heard) {
-          await extractWav(input.path, out, { start: from, duration: Math.min(1, seam - from), signal: input.signal });
+          await extractWav(input.path, out, {
+            start: from,
+            duration: Math.min(1, seam - from),
+            audio: input.audio,
+            signal: input.signal,
+          });
           heard = !await emptyDecode(out);
         }
         if (heard) {
-          await extractWav(input.path, out, { start: readFrom, duration: readTo - readFrom, signal: input.signal });
+          await extractWav(input.path, out, {
+            start: readFrom,
+            duration: readTo - readFrom,
+            audio: input.audio,
+            signal: input.signal,
+          });
           const json = await this.call(out, input.language ?? this.opts.language, input);
           language ??= json.language;
           chunk = toSegments(json, readFrom);

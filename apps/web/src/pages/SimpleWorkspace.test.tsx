@@ -2911,6 +2911,35 @@ it("numbers an applied pass's cuts on the timeline while it has the timeline, as
   expect(drawn()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
 });
 
+it("lists an edit a pass made in many places as one row with its count, and counts it once", async () => {
+  // A fade on every dialogue join of Matt's talking head was 101 rows that all read "Softened every dialogue join",
+  // and the sentence said "102 sound fixes" (2026-11-23). One name, one row: a cut and a flagged edit stay one each.
+  const fades = Array.from({ length: 5 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
+    range: { start: 2 + i * 2, end: 4 + i * 2 }, kind: "audio" as const, previous: [] }));
+  const cuts = [3, 9].map((at, i) => ({ changeId: "chg_approved_2", spot: 20 + i, label: "Cut", kind: "cut" as const, at, range: { start: at, end: at },
+    beforeCut: { version: "v_before", removed: { start: at, end: at + 30 } }, previous: [] }));
+  const flagged = { changeId: "chg_approved_2", spot: 30, label: "Softened every dialogue join", range: { start: 13, end: 14 }, kind: "audio" as const,
+    check: "The fade may clip a word", previous: [] };
+  data = { ...data, tasks: [...data.tasks, { ...data.tasks.find(t => t.id === "task_done")!, id: "task_pass", kind: "edit" as const,
+    instruction: "/dialogue-pass", context: { message: "/dialogue-pass" }, changeIds: ["chg_approved_2"] }] };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [...cuts, ...fades, flagged] }));
+  await show();
+  await act(async () => {});
+  const pass = turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
+  expect(pass.querySelector(".simple-made")?.textContent).toBe("Took out 1:00 in 2 cuts, and made 2 sound fixes.");
+  await click(seeAll(pass)!);
+  await act(async () => {});
+  const rows = () => [...pass.querySelectorAll<HTMLButtonElement>(".simple-pass-list > li > button")];
+  expect(rows().map(r => [r.querySelector(".simple-pass-words")?.textContent, r.querySelector(".simple-pass-value")?.textContent])).toEqual([
+    ["Softened every dialogue join", "5 places"], ["Cut", "−30 s"], ["Cut", "−30 s"], ["Softened every dialogue join", "Audio"]]);
+  // Its row opens its first place, and is lit while any of its places is open.
+  await click(rows()[0]!);
+  await act(async () => {});
+  expect(rows().map(r => r.getAttribute("aria-current"))).toEqual(["true", null, null, null]);
+});
+
 it("switches an applied pass between For you and See all, with its cuts numbered on the timeline", async () => {
   appliedEdits();
   data = { ...data, tasks: [...data.tasks, { ...data.tasks.find(t => t.id === "task_done")!, id: "task_pass", kind: "edit" as const,
@@ -6611,6 +6640,56 @@ it("offers Resume from the Media hover card and More while media processing is p
   expect(updateProject).toHaveBeenCalledExactlyOnceWith({ mediaPaused: false }, PRJ);
 });
 
+it("turns the header's Export white, with no mark, once the video has edits and nothing waits, until this version is exported", async () => {
+  appliedEdits();
+  // Nothing of Scarlet's runs or waits its turn, and no pass or question waits on the editor.
+  const settled = data.tasks.filter(t => t.state === "done" || t.state === "failed" || t.state === "cancelled");
+  data = { ...data, tasks: settled };
+  useProjectStore.setState({ current: data });
+  const file = { name: "Interview.mp4", format: "mp4" as const, video: { kind: "full" as const, quality: "delivery" as const } };
+  const context = fullRenderContext(data.project);
+  const exports = (job: ReturnType<typeof useExports.getState>["jobs"][string]) => act(async () => useExports.setState({ jobs: { [PRJ]: job } }));
+  await show();
+  await act(async () => {});
+  const ready = () => exportButton().classList.contains("ready");
+  const says = () => [ready(), exportButton().getAttribute("aria-description"), exportButton().querySelector(".menu-dot")?.getAttribute("aria-label") ?? null];
+  // A flagged edit waits on the editor in For you: Export stays quiet.
+  const turn = turnFor("chg_approved_2");
+  const need = () => turn.querySelector<HTMLElement>(".simple-pass-need");
+  expect(need()?.getAttribute("title")).toBe("1 needs you");
+  expect(says()).toEqual([false, null, null]);
+  // Kept, nothing waits: Export is white, as ⋯ is when it needs the editor, with no dot and no count.
+  await click(need()!);
+  await act(async () => {});
+  expect(openTitle()).toBe("wrap");
+  await press("k");
+  expect(need()?.getAttribute("title")).toBeNull();
+  expect(says()).toEqual([true, "Not exported since your last edit", null]);
+  expect(exportButton().title).toBe("Not exported since your last edit");
+  expect(exportButton().textContent).toBe("Export");
+  expect(exportButton().classList.contains("needs-you")).toBe(false);
+  expect(moreButton().querySelector(".needs-you")).toBeNull();
+  // While it exports, and once this version is exported, Export says so as before and is quiet.
+  await exports({ file, context, version: data.project.head!, phase: "rendering", progress: 0.42, cancel: () => {} });
+  expect(says()).toEqual([false, "Exporting 42%", null]);
+  await exports({ file, context, version: data.project.head!, phase: "choosing", progress: 0, cancel: () => {} });
+  expect(ready()).toBe(false);
+  await exports({ phase: "done", path: "/Users/me/Movies/Interview.mp4", context });
+  expect(says()).toEqual([false, "Exported · Interview.mp4", null]);
+  // A file exported from an earlier version of the video isn't this one's.
+  await exports({ phase: "done", path: "/Users/me/Movies/Interview.mp4", context: "an earlier video" });
+  expect(says()).toEqual([true, "Not exported since your last edit", null]);
+  // One that stopped is marked as before, amber, not white.
+  await exports({ phase: "failed", error: "Disk full", file, context });
+  expect(says()).toEqual([false, "The export didn’t finish", "The export didn’t finish"]);
+  await exports(undefined);
+  expect(ready()).toBe(true);
+  // While Scarlet works on a request the video is still changing: Export is quiet again.
+  const asked = settled.find(t => t.kind !== "transcribe")!;
+  await act(async () => useProjectStore.setState({ current: { ...data, tasks: [...settled, { ...asked, id: "tsk_busy", state: "running" }] } }));
+  expect(says()).toEqual([false, null, null]);
+});
+
 it("says how an export is going on the header's Export button, and marks it for one that stopped until Export has shown why", async () => {
   const file = { name: "Interview.mp4", format: "mp4" as const, video: { kind: "full" as const, quality: "delivery" as const } };
   const context = fullRenderContext(data.project);
@@ -6704,10 +6783,12 @@ it("continues editing during an export and reopens the original range, quality a
   expect(sheet().querySelector<HTMLInputElement>("#export-end")!.value).toBe(end);
   expect(sheet().querySelector('[role="alert"]')?.textContent ?? "").toBe("");
   expect(choose).toHaveBeenCalledTimes(1);
-  expect(request).toHaveBeenCalledTimes(1);
+  // One export was asked for. The player may ask for its own playback render meanwhile, when the test runs slowly.
+  const exportRequests = request.mock.calls.filter(([, body]) => !!body.export);
+  expect(exportRequests).toHaveLength(1);
   await click(buttonIn(sheet(), "Cancel export")!);
   expect(sheet().querySelector("progress")).toBeNull();
-  expect(release).toHaveBeenCalledWith("custom-export", request.mock.calls[0]![1].owner);
+  expect(release).toHaveBeenCalledWith("custom-export", exportRequests[0]![1].owner);
   expect(exportButton().querySelector("svg")).toBeNull();
 });
 
@@ -7593,6 +7674,18 @@ it("shades and steps over what a later batch of the pass took out, since the vid
   // After plays as the video runs now: over the later cut as well as this one, on the working edit's own media.
   expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 8.5, end: 9.5, removed: true }, { start: 10, end: 12.4, removed: true }] }, expect.any(Number));
   expect(player.mediaTime(13)).toBeCloseTo(9.6, 6);
+  // On Before, the other cut is only outlined; clicking it opens that edit instead of scrubbing.
+  await click(container.querySelector<HTMLElement>('.edit-card button[aria-label="Before"]')!);
+  await act(async () => {});
+  const dotted = container.querySelector<HTMLElement>(".simple-timeline-gap")!;
+  expect(dotted.classList.contains("is-skipped")).toBe(false);
+  expect(dotted.classList.contains("is-clickable")).toBe(true);
+  await act(async () => {
+    dotted.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, isPrimary: true, pointerId: 1 }));
+    dotted.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, isPrimary: true, pointerId: 1 }));
+  });
+  await act(async () => {});
+  expect(container.querySelector(".edit-card")?.textContent).toContain("Drop the long pause");
 });
 
 it("opens a cut on the version before an earlier batch's cut beside it, so that cut shows as a gap too", async () => {

@@ -23,7 +23,7 @@ export function timelineFrameUrl(src: string | undefined) {
 const clipIndexes = new WeakMap<Timeline, ReturnType<typeof indexClipsAt>>();
 const mediaIndexes = new WeakMap<readonly MediaAsset[], Map<string, MediaAsset>>();
 /** Scrubbing and the original waveform sample the same immutable media list many times. */
-export function mediaAtId(media: readonly MediaAsset[], id: string) {
+function mediaAtId(media: readonly MediaAsset[], id: string) {
   let index = mediaIndexes.get(media);
   if (!index) {
     index = new Map(media.map(asset => [asset.id, asset]));

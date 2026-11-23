@@ -84,7 +84,7 @@ export async function firstCutRanges(keep: FirstCutKeep[], projectId: string, au
         const decision = plan.decisions[0]!;
         const note = plan.removals[0]?.notes?.join(" ");
         if (decision.review || note) {
-          issues.push(`${handles}: ${note || decision.held || decision.reason} Inspect the source and supply exact seconds for these handles.`);
+          issues.push(`${handles}: ${note || decision.held || decision.reason} Hear the passage (source_audio or listen) before cutting here: keep these words together in timeline_first_cut and handle this cut with dialogue_apply_cuts (which stages unsure joins for review), or supply exact source seconds only after confirming by ear that the cut belongs.`);
         } else {
           const detail = plan.gate.get(0)?.evidence;
           set(decision.start, decision.end, typeof detail === "string" ? detail : undefined);

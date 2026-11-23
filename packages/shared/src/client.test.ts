@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiPathId, ScarletApiError, ScarletClient } from "./client.js";
+import { ScarletClient } from "./client.js";
+import { apiPathId, ScarletApiError } from "./clientTransport.js";
 
 interface Call { method: string; url: string; path: string; headers: Record<string, string>; body: unknown }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });

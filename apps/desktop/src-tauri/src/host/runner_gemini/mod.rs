@@ -11,10 +11,9 @@ mod transcript;
 mod tests;
 
 pub use acp_parse::{
-    acp_mcp_server, build_gemini_command, is_scarlet_mcp_permission, parse_gemini_acp_update, parse_gemini_line,
-    permission_outcome, system_prompt_meta, workspace_permission, GeminiState, SCARLET_TOOLS,
+    acp_mcp_server, build_gemini_command, is_scarlet_mcp_permission, parse_gemini_acp_update, permission_outcome,
+    system_prompt_meta, workspace_permission, GeminiState,
 };
-pub use transcript::agy_transcript_path;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -376,6 +375,15 @@ impl AcpSession {
                 self.st.failed = Some(format!("Gemini could not resume session: {detail}"));
                 self.stop_session();
                 return true;
+            }
+            // Nobody asked for an effort: the run goes on with agy's own rather than failing over Scarlet's default.
+            if self.step == Step::SetEffort && self.effort_override.is_none() {
+                (self.on_event)(RunnerEvent::new(
+                    "log",
+                    format!("Gemini could not apply default effort ({detail}); continuing with agy's default."),
+                ));
+                self.send_prompt();
+                return false;
             }
             self.fail_session(format!("Gemini {} failed: {detail}", self.step.label()));
             return true;

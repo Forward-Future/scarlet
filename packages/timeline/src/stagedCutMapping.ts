@@ -1,4 +1,5 @@
-import type { MediaClip, Timeline, TimeRange, Track } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { MediaClip, Timeline, Track } from "./timelineSchema.js";
 import { indexBySource, intervalCandidates } from "./intervals.js";
 import { clipEnd, mergeRanges, sourceToTimeline, timelineDuration, timelineToSource } from "./time.js";
 import { shiftClip, trimHead, trimTail } from "./ops.js";
