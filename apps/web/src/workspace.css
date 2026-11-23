@@ -373,14 +373,8 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
 .timeline-zoom-slider::-moz-range-progress { height: 3px; border-radius: 2px; background: #aaa69e; }
 .timeline-zoom-slider::-moz-range-thumb { width: 11px; height: 11px; border: 0; border-radius: 50%; background: #f1f1f1; }
 .timeline-zoom-slider:focus-visible { outline: 2px solid var(--color-fg); outline-offset: 2px; border-radius: 4px; }
-/* What ⌘Z takes back, beside the zoom while there is something to take back: an icon, "Undo Keep" and the key, small. */
+/* Why the last ⌘Z couldn't take its step back, beside the zoom. */
 .timeline-undo { display: flex; align-items: center; gap: 10px; min-width: 0; margin-left: auto; font: 12px/1 var(--font-sans); }
-.timeline-undo-button { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border-radius: 5px; background: transparent;
-  color: var(--color-muted); white-space: nowrap; cursor: pointer; }
-.timeline-undo-button::after { content: attr(data-key); content: attr(data-key) / ""; margin-left: 2px; font-size: 10px; color: var(--color-dim); }
-.timeline-undo-button:enabled:hover { background: var(--color-raised); color: var(--color-fg); }
-.timeline-undo-button:disabled { cursor: default; color: var(--color-dim); }
-.timeline-undo-button:focus-visible { outline: 2px solid var(--color-fg); outline-offset: -2px; }
 .timeline-undo-error { min-width: 0; overflow: hidden; color: var(--color-bad); text-overflow: ellipsis; white-space: nowrap; }
 .timeline-zoom-level { min-width: 4ch; margin-left: 2px; color: #8a867f; font: 12px/1 var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
 .timeline-filmstrip > div, .filmstrip-held > div { min-width: 0; overflow: hidden; background: var(--color-raised); }

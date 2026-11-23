@@ -68,17 +68,6 @@ export function lastStep(steps: readonly UndoStep[], projectId: string) {
   return steps.findLast(step => step.projectId === projectId);
 }
 
-/** The key that takes a step back, as this computer writes it. */
-export function undoKey() {
-  return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘Z" : "Ctrl+Z";
-}
-
-/** What the label and its hover say the next ⌘Z takes back: "Undo Keep", and "Undo Keep of Cut at 2:05 (⌘Z)". */
-export function undoWords(step: UndoStep) {
-  const what = stepWord(step);
-  return { label: `Undo ${what}`, title: `Undo ${what}${step.name ? ` of ${step.name}` : ""} (${undoKey()})` };
-}
-
 const stepWord = (step: UndoStep) => step.kind === "keep" ? step.word : step.word ?? "revision";
 
 /**
