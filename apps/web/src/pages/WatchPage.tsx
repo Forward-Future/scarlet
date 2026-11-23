@@ -109,7 +109,7 @@ interface PreviewProps {
     /** Changes each time the editor asks to see the whole timeline. */
     fit?: number;
     focus?: ProgressFocus; label?: string; compareHost?: HTMLElement | null; above?: ReactNode;
-    /** In the timeline's bottom row: what ⌘Z takes back. */
+    /** In the timeline's bottom row: why the last ⌘Z couldn't take its step back. */
     foot?: ReactNode;
     gaps?: TimelineGap[]; skippedRanges?: TimeRange[]; onGap?(gap: TimelineGap, time: number): void;
     /** A click inside the shaded passage, when the playing side steps over it. */
@@ -539,7 +539,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
       useUiStore.getState().focusComposer();
     }
   });
-  // A pause the editor makes writes its time into an empty message box, as if they had typed it.
+  // A pause the editor makes aims an empty message box at that moment in its tag, without writing into the box.
   const pickOnPause = useRef(() => {});
   pickOnPause.current = () => {
     if (simple.onPick && active && playable && duration > 0) selectTime(usePlayerStore.getState().time, "pause");
