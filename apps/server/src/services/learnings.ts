@@ -1,4 +1,4 @@
-import { isLearningCheck, isSkillEdit, namedTimelineEdits, sameRun, type ApproveLearningRequest, type Learning, type LearningDecision, type ReviseLearningRequest, type RunChoice, type Skill, type SuggestLearningRequest, type TaskSkillDraft, type Task, type User } from "@scarlet/shared";
+import { isLearningCheck, isSkillEdit, namedTimelineEdits, REJECT_MESSAGE, sameRun, type ApproveLearningRequest, type Learning, type LearningDecision, type ReviseLearningRequest, type RunChoice, type Skill, type SuggestLearningRequest, type TaskSkillDraft, type Task, type User } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
 import { stripFrontmatter, type LearningCheckContext } from "@scarlet/mcp/prompt";
 import { clock, newId } from "@scarlet/timeline";
@@ -127,8 +127,10 @@ function recentDecisions(ctx: Ctx, limit: number): Decided[] {
           ...(staged?.held ? [`what Scarlet measured at its edges: “${clip(staged.held, 200)}”`] : [])] });
     }
   }
-  const revisions = ctx.repos.tasks.select(`${LIVE_PROJECT} AND kind = 'revise' AND json_extract(json, '$.createdBy.type') = 'human' AND json_extract(json, '$.resumeRootId') IS NULL
-    AND json_extract(json, '$.context.changeId') IS NOT NULL`, [], `created_at DESC, rowid DESC LIMIT ${DECISION_CHANGES}`);
+  // Revise on an applied edit sends a request in its thread (kind edit), since only a proposal takes kind revise. The ×
+  // that asks Scarlet to put an edit back is sent the same way, and is a rejection, not a revision.
+  const revisions = ctx.repos.tasks.select(`${LIVE_PROJECT} AND kind IN ('edit', 'revise') AND json_extract(json, '$.createdBy.type') = 'human' AND json_extract(json, '$.resumeRootId') IS NULL
+    AND json_extract(json, '$.context.changeId') IS NOT NULL AND json_extract(json, '$.context.message') IS NOT ?`, [REJECT_MESSAGE], `created_at DESC, rowid DESC LIMIT ${DECISION_CHANGES}`);
   for (const task of revisions) {
     const c = task.context;
     const spot = c.editIndex ?? c.cutIndex;
