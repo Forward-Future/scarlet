@@ -3,7 +3,7 @@
 import type { PriceList } from "./modelPrices.js";
 
 export const MODEL_PRICES_SNAPSHOT: PriceList = {
-  fetchedAt: "2026-11-18T16:46:37.078Z",
+  fetchedAt: "2026-11-23T18:02:42.233Z",
   models: {
     "chat-latest": {"rates":[5,30,0.5]},
     "claude-fable-5": {"rates":[10,50,1,12.5]},
@@ -55,6 +55,7 @@ export const MODEL_PRICES_SNAPSHOT: PriceList = {
     "gemini-4-argon": {"rates":[2,10,0.1],"tiers":{"flex":[1,5,0.05],"priority":[3.6,18,0.18]}},
     "gemini-4-carbon": {"rates":[2,10,0.1],"tiers":{"flex":[1,5,0.05],"priority":[3.6,18,0.18]}},
     "gemini-4-hydrogen": {"rates":[1.5,7.5,0.075],"tiers":{"flex":[0.75,3.75,0.0375],"priority":[2.7,13.5,0.135]}},
+    "gemini-4-neon": {"rates":[3,15,0.15],"tiers":{"flex":[1.5,7.5,0.075],"priority":[5.4,27,0.27]}},
     "gemini-exp-1114": {"rates":[0,0]},
     "gemini-exp-1206": {"rates":[0.3,2.5,0.03]},
     "gemini-flash-latest": {"rates":[0.75,3.75,0.075],"tiers":{"flex":[0.375,1.875,0.0375],"priority":[1.35,6.75,0.135]}},
@@ -70,6 +71,7 @@ export const MODEL_PRICES_SNAPSHOT: PriceList = {
     "gemma-3-27b-it": {"rates":[0,0]},
     "gemma-4-26b-a4b-it": {"rates":[0,0]},
     "gemma-4-31b-it": {"rates":[0,0]},
+    "genie-4": {"rates":[1.5,9]},
     "gpt-3.5-turbo": {"rates":[0.5,1.5]},
     "gpt-3.5-turbo-0125": {"rates":[0.5,1.5]},
     "gpt-3.5-turbo-1106": {"rates":[1,2]},
@@ -134,7 +136,7 @@ export const MODEL_PRICES_SNAPSHOT: PriceList = {
     "gpt-6-astra-law": {"rates":[10,50,1]},
     "gpt-6-cyber": {"rates":[20,100,2,25]},
     "gpt-6-luna": {"rates":[0.1,0.5,0.01,0.125],"tiers":{"decisions":[0.1,0,0.01,0.125],"flex":[0.05,0.25,0.005,0.0625],"priority":[0.2,1,0.02,0.25]}},
-    "gpt-6-rosalind": {"rates":[10,50,1,18.75]},
+    "gpt-6-rosalind": {"rates":[10,50,1,12.5]},
     "gpt-6-sol": {"rates":[2,10,0.2,2.5],"tiers":{"flex":[1,5,0.1,1.25],"priority":[4,20,0.4,5]}},
     "gpt-6.1-sol": {"rates":[2,10,0.1,2.5],"tiers":{"flex":[1,5,0.05,1.25],"priority":[4,20,0.2,5],"ultrafast":[12,60,0.6,15]}},
     "gpt-6.1-terra": {"rates":[1,5,0.05,1.25],"tiers":{"flex":[0.5,2.5,0.025,0.625],"priority":[2,10,0.1,2.5]}},
