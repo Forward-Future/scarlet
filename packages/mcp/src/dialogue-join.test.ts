@@ -643,6 +643,18 @@ describe("native retake boundaries", () => {
       speechActivity: [{ start: .6, end: 1.62 }, { start: 2.44, end: 2.92 }] })!;
     expect(narrow.breaths).toBeUndefined();
     expect(narrow.quiet.find(q => q.start > 1.5 && q.start < 2)!.end).toBeCloseTo(2.46);
+    // A breath, room tone, then a soft “s”/“f”/“h” that starts before the transcript's word timing: the fold stops at the
+    // room tone, so the cut's end stays clear of the consonant even though no word covers it yet.
+    const hissRms = Array.from({ length: 200 }, (_, i) => {
+      const t = i / 50;
+      if ((t >= .6 && t < 1.0) || (t >= 1.2 && t < 1.6) || (t >= 2.62 && t < 2.9)) return .12;
+      return (t >= 2.24 && t < 2.36) ? .008 : (t >= 2.50 && t < 2.62) ? .004 : .0006;
+    });
+    const hiss = joinEvidence(said, { from: 0, to: 4, peaks: hissRms, rms: hissRms,
+      speechActivity: [{ start: .6, end: 1.62 }, { start: 2.22, end: 2.92 }] })!;
+    expect(hiss.quiet.find(q => q.start > 1.5 && q.start < 2)!.end).toBeCloseTo(2.50);
+    expect(hiss.breaths).toEqual([{ start: expect.closeTo(2.24), end: expect.closeTo(2.36), db: -42, side: "before" }]);
+    expect(wordCutRange(said, 1, 1, () => hiss).end).toBeLessThanOrEqual(2.50);
   });
 
   it("doesn't take a stop inside the kept word, which sounds on after it, for where the words part", () => {

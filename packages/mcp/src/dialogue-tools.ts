@@ -593,7 +593,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
       cuts: z.array(z.object({ ...WordRef, ...PauseRef, start: z.number().finite().nonnegative().optional(), end: z.number().finite().positive().optional(), resumeWith }))
         .min(1).max(100).optional().describe("Several removals to check in one call, instead of start/end or a word reference"),
       ...audioOption(listen?.by === "file"
-        ? "Write WAV files of about two seconds of the original recording around each edge to your task folder to open with your file viewer, for a single range (default true)"
+        ? "Write WAV files of about two seconds of the original recording around each edge to your task folder to open with your file viewer, for a single range"
         : "Attach about two seconds of the original recording around each edge as WAV, for a single range") },
     async ({ version, includeAudio, resumeWith, cuts, crossfadeFrames = 0, pace, breath, ...cut }) => {
       const tl = await peekTimeline(version);
@@ -950,12 +950,14 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
                 mediaId: h.mediaId, sourceSeconds: [h.source.start, h.source.end] }, "heard", h.mediaId, h.source.start));
           // An extra reading: a version or an engine that can't give it leaves the receipt as it was.
           })().catch(() => []);
-          // Short pieces under SHORT_PIECE_SECONDS left stranded between two cuts on the continued timeline.
+          // Short pieces left stranded between two cuts on the continued timeline, under the pace the pass last gave the
+          // repeat check (piecesUnder), so this list and the closing check agree on what a stutter piece is.
           const short = await (async () => {
             if (!decided.length) return [];
             const after = await timelineAt(continueFrom, tl);
-            const margin = { start: Math.max(0, partAfter.start - SHORT_PIECE_SECONDS), end: partAfter.end + SHORT_PIECE_SECONDS };
-            return shortPiecesInPart(after, margin, left.transcripts)
+            const under = piecesAsked ?? SHORT_PIECE_SECONDS;
+            const margin = { start: Math.max(0, partAfter.start - under), end: partAfter.end + under };
+            return shortPiecesInPart(after, margin, left.transcripts, under)
               .filter(p => fresh("shortPiece", p.mediaId, p.source.start)).slice(0, 30)
               .map(({ source, ...p }) => candidate(p, "shortPiece", p.mediaId, source.start));
           })().catch(() => []);

@@ -296,7 +296,7 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
   const { includeAudio: _reviewAudio, ...cutReviewShape } = CutReviewOptions;
   tool("change_review_cut",
     "Compare one chronological cut or changed spot on the original and proposed versions. Reports new black frames, freezes and abrupt mix-level changes (dB)." + (caps.images ? " Includes labeled composite frames." : "") + " Read total to review the next index. For how a dialogue join sounds, use timeline_join_audit.",
-    { ...cutReviewShape, ...audioOption(listen?.by === "file" ? "Write a short WAV file of each side to your task folder to open with your file viewer and hear (default true)" : "Attach a short WAV of each side") },
+    { ...cutReviewShape, ...audioOption(listen?.by === "file" ? "Write a short WAV file of each side to your task folder to open with your file viewer and hear" : "Attach a short WAV of each side") },
     args => inspect(() => client.reviewCut(projectId, { ...args, includeAudio: !!listen && (args.includeAudio ?? defaultAudio) })));
 
   // Only the run that looks at one frame gives an area. A pass given the same power answered for a whole recording at
