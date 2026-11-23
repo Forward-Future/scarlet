@@ -417,7 +417,20 @@ it("can retry an installation error and keeps showing a pending install when Gen
   vi.mocked(api.localModelStatus).mockResolvedValue({ state: "ready", selected: "crisperwhisper", active: "crisperwhisper", fallback: false });
   await act(async () => finish());
   expect(el.querySelector('form [role="status"]')?.textContent).toBe("CrisperWhisper is ready.");
-  expect(pending.disabled).toBe(false);
+  expect(el.querySelector("form details")).toBeNull();
+});
+
+it("hides CrisperWhisper setup while checking and when CrisperWhisper is already installed", async () => {
+  vi.mocked(api.settings).mockResolvedValue({ settings: freshLocalSettings, transcriptionAvailable: true });
+  let resolveStatus!: (status: Awaited<ReturnType<typeof api.localModelStatus>>) => void;
+  vi.mocked(api.localModelStatus).mockImplementation(() => new Promise(resolve => { resolveStatus = resolve; }));
+  await open();
+  expect(el.querySelector('form [role="status"]')?.textContent).toBe("Checking model…");
+  expect(el.querySelector("form details")).toBeNull();
+  await act(async () => resolveStatus({ state: "ready", selected: "crisperwhisper", active: "crisperwhisper", fallback: false }));
+  expect(el.querySelector('form [role="status"]')?.textContent).toBe("CrisperWhisper is ready.");
+  expect(el.querySelector("form details")).toBeNull();
+  expect(el.querySelector("form")?.textContent).not.toContain("Set up CrisperWhisper");
 });
 
 it("can turn on the local default from a previously disabled transcription provider", async () => {

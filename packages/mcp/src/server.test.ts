@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { agentCapabilities, ATTEMPT_HEADER, ProposeChangeRequest, ScarletApiError, ScarletClient, Task, TASK_HEADER } from "@scarlet/shared";
+import { agentCapabilities, ProposeChangeRequest, ScarletApiError, ScarletClient, Task } from "@scarlet/shared";
 import type { MediaClip, Timeline, Transcript } from "@scarlet/timeline";
 import { applyOps, clipEnd, emptyTimeline, makeMediaClip } from "@scarlet/timeline";
 import { createScarletMcpServer, SCARLET_TOOL_NAMES } from "./server.js";
@@ -1359,32 +1359,6 @@ describe("transcript tools", () => {
         .toEqual({ ...reading, from: 4, levels });
       expect(mock.requests.filter(r => r.path.endsWith("/music-beats")).at(-1)!.query.get("from")).toBe("4");
     } finally { mock.state.extra = before; }
-  });
-  it("puts a note the editor added while the run worked at the top of its next tool result, once", async () => {
-    const task = Task.parse({ id: "tsk_noted", projectId: "prj_test", kind: "edit", state: "running", agent: "codex",
-      instruction: "Cut dialogue", context: {}, createdBy: { type: "human", name: "Editor" } });
-    const before = mock.state.extra;
-    let unheard = ["Actually, keep the story in the intro."];
-    mock.state.extra = (req, res) => {
-      if (req.method !== "POST" || !req.path.endsWith("/tasks/tsk_noted/notes/heard")) return before?.(req, res) ?? false;
-      const notes = unheard.map((text, i) => ({ id: `tnt_${i}`, text, at: "2026-11-22T12:00:00.000Z", heardAt: "2026-11-22T12:00:05.000Z" }));
-      unheard = [];
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ notes,
-        ...(notes.length && { text: `The editor added a note to this request while you worked: “${notes[0]!.text}”` }) }));
-      return true;
-    };
-    const editor = await connect(task.id, undefined, task);
-    try {
-      const first = await editor.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 0, toWord: 1 } }) as CallToolResult;
-      expect((first.content[0] as { text: string }).text).toBe("The editor added a note to this request while you worked: “Actually, keep the story in the intro.”");
-      expect(textOf(first)).toContain("#0 0.20-0.50 Hello");
-      const next = textOf(await editor.callTool({ name: "transcript_get", arguments: { mediaId: "m1", fromWord: 0, toWord: 1 } }) as CallToolResult);
-      expect(next).not.toContain("added a note");
-      // Each call asks with the run's own attempt, so a run that has ended can't take the next attempt's notes.
-      const asked = mock.requests.filter(r => r.path.endsWith("/notes/heard"));
-      expect(asked).toHaveLength(2);
-      expect(asked.every(r => r.headers[TASK_HEADER.toLowerCase()] === "tsk_noted" && r.headers[ATTEMPT_HEADER.toLowerCase()] === "2026-04-01T12:00:00.000Z")).toBe(true);
-    } finally { await editor.close(); mock.state.extra = before; }
   });
   it("transcript_fix corrects a phrase with its times, reads the fixed words again and counts captions still reading the old ones", async () => {
     const state = makeState({ transcripts: { m1: structuredClone(transcript) } });
@@ -3641,14 +3615,14 @@ it("exposes cross-page attempts and lets the agent choose whether to check the n
     const wrong = JSON.parse(await call("dialogue_check_join", { version: tl.version, start: cut.start, end: cut.end, resumeWith }));
     expect(wrong).toMatchObject({ status: "unchanged", resumeAtOriginalEnd: "different" });
     expect(wrong.nearbyWords.end[0].words).toContainEqual([7, expect.closeTo(7.1), "the"]);
-    expect(JSON.parse(await apply([cut]))).toMatchObject({ needsRevision: true, disputedEdges: [{ start: 5, end: 7.125, cuts: [0] }] });
-    expect(mock.requests.some(r => r.path.endsWith("/dialogue-cuts"))).toBe(false);
-    // A dispute sets aside only the cuts that make it: the rest of the batch saves, and the result says what didn't.
-    const other = { start: 1, end: 1.5, decision: "cut", kind: "retake", reason: "Drop a false start." };
-    const partial = JSON.parse(await apply([other, cut]));
-    expect(partial.needsRevision).toBeUndefined();
-    expect(partial.notSaved).toMatchObject({ cuts: [1], disputedEdges: [{ start: 5, end: 7.125 }], next: expect.stringContaining("Resubmit only these") });
-    expect(mock.requests.filter(r => r.path.endsWith("/dialogue-cuts")).map(r => r.body)).toEqual([expect.objectContaining({ cuts: [expect.objectContaining({ start: 1, end: 1.5 })] })]);
+    // A resume quote the scan reads differently is reported on its cut, which saves as placed: the scan is one
+    // reading of the recording and the transcript the quote came from another.
+    const quoted = JSON.parse(await apply([cut]));
+    expect(quoted.needsRevision).toBeUndefined();
+    expect(quoted.notSaved).toBeUndefined();
+    expect(quoted.gate.decisions).toContainEqual(expect.objectContaining({ cut: 0, outcome: "cut",
+      evidence: expect.stringContaining(`After this cut the scan reads “new model from DeepSeek flew under the radar.”, where your resumeWith quote says “${resumeWith}”. Saved as you placed it.`) }));
+    expect(mock.requests.filter(r => r.path.endsWith("/dialogue-cuts")).map(r => r.body)).toEqual([expect.objectContaining({ cuts: [expect.objectContaining({ start: 5, end: 7.125 })] })]);
     mock.requests.length = 0;
     const cleanEnd = 7; // Source 60, before the only delivery that reaches "flew under the radar".
     expect(JSON.parse(await call("dialogue_check_join", { version: tl.version, start: cut.start, end: cleanEnd, resumeWith })))
@@ -3667,6 +3641,14 @@ it("exposes cross-page attempts and lets the agent choose whether to check the n
     const before = saves();
     expect(JSON.parse(await apply([doubled]))).toMatchObject({ needsRevision: true, disputedEdges: [{ repeat }] });
     expect(saves()).toBe(before);
+    // A dispute sets aside only the cuts that make it: the rest of the batch saves, and the result says what didn't.
+    const other = { start: 1, end: 1.5, decision: "cut", kind: "retake", reason: "Drop a false start." };
+    const partial = JSON.parse(await apply([other, doubled]));
+    expect(partial.needsRevision).toBeUndefined();
+    expect(partial.notSaved).toMatchObject({ cuts: [1], disputedEdges: [{ repeat }], next: expect.stringContaining("Resubmit only these") });
+    expect(mock.requests.filter(r => r.path.endsWith("/dialogue-cuts")).at(-1)?.body).toMatchObject({ cuts: [{ start: 1, end: 1.5 }] });
+    expect(saves()).toBe(before + 1);
+    mock.requests.splice(mock.requests.findLastIndex(r => r.path.endsWith("/dialogue-cuts")), 1);
     await apply([{ ...doubled, keepRepeat: repeat.words }]);
     expect(saves()).toBe(before + 1);
     // Finishing a production cut before both takes leaves a restart wholly in the kept recording.

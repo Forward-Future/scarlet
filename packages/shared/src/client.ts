@@ -42,7 +42,6 @@ import type {
   TaskAttachment,
   RecordTaskUsageRequest,
   Task,
-  TaskNote,
   TaskEvent,
   TaskPrompt,
   TaskSkillDraft,
@@ -733,20 +732,6 @@ export class ScarletClient {
   }
   answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice) {
     return this.post<{ task: Task }>(`/tasks/${taskId}/answer`, { ...runWith, text, skillIds });
-  }
-  /**
-   * Add a note to a request Scarlet is working on, which its run hears on its next tool call. A request that has
-   * finished takes none: the engine answers 409 `task_finished`, and the words go as a request of their own.
-   */
-  addTaskNote(taskId: string, text: string) {
-    return this.post<{ task: Task }>(`/tasks/${apiPathId(taskId)}/notes`, { text });
-  }
-  /**
-   * The editor's notes this run hasn't heard yet, marked heard as they're handed over, and `text`, what the run is told
-   * of them. Called by Scarlet's tools.
-   */
-  takeTaskNotes(projectId: string, taskId: string) {
-    return this.post<{ notes: TaskNote[]; text?: string }>(`/projects/${apiPathId(projectId)}/tasks/${apiPathId(taskId)}/notes/heard`, {});
   }
   /** Keep a queued request from starting while the editor changes its words, or let it go. Renew it to keep holding. */
   holdForRewording(taskId: string, on: boolean) {

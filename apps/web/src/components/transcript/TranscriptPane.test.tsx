@@ -295,3 +295,65 @@ it("ignores right-click when starting drag selection on words", async () => {
   });
   expect(button("Ask about this")).toBeUndefined();
 });
+
+it("omits speaker labels when only one identified speaker exists and flows sparse utterances with inline pause markers", async () => {
+  const longer = { ...source, duration: 200 };
+  useProjectStore.setState({ current: { ...useProjectStore.getState().current!, media: [longer] } });
+  vi.mocked(api.transcript).mockResolvedValue({
+    id: "test-transcript",
+    mediaId: longer.id,
+    segments: [
+      { id: "s1", start: 5, end: 6, text: "Thank", words: [{ text: "Thank", start: 5, end: 6 }] },
+      { id: "s2", start: 21, end: 22, text: "you.", words: [{ text: "you.", start: 21, end: 22 }] },
+      { id: "s3", start: 150, end: 152, text: "Welcome everyone.", words: [
+        { text: "Welcome", start: 150, end: 151, speaker: "Speaker 1" },
+        { text: "everyone.", start: 151, end: 152, speaker: "Speaker 1" },
+      ] },
+    ],
+  });
+  await act(async () => root.render(<MemoryRouter><TranscriptPane source={longer} onAsk={() => {}} /></MemoryRouter>));
+  expect(container.querySelectorAll(".reading-speaker")).toHaveLength(0);
+  expect(container.textContent).not.toContain("Voice unclear");
+  // Short sparse utterances (5s and 21s) flow together in one turn with a quiet inline pause marker instead of 1 word per line.
+  expect(container.querySelectorAll(".reading-turn")).toHaveLength(2);
+  expect(container.querySelector(".reading-pause")?.getAttribute("data-pause")).toBe("15s");
+  expect(container.querySelector(".transcript-gap-break")?.getAttribute("data-gap-label")).toBe("2m 8s silence");
+});
+
+it("shows speaker labels only on voice changes or after a long silence, and avoids repeating unclear labels", async () => {
+  const longer = { ...source, duration: 200 };
+  useProjectStore.setState({ current: { ...useProjectStore.getState().current!, media: [longer] } });
+  vi.mocked(api.transcript).mockResolvedValue({
+    id: "test-transcript",
+    mediaId: longer.id,
+    segments: [
+      { id: "s1", start: 0, end: 1, text: "Hi.", words: [{ text: "Hi.", start: 0, end: 1, speaker: "Speaker 1" }] },
+      { id: "s2", start: 5, end: 6, text: "Again.", words: [{ text: "Again.", start: 5, end: 6, speaker: "Speaker 1" }] },
+      { id: "s3", start: 80, end: 81, text: "Later.", words: [{ text: "Later.", start: 80, end: 81, speaker: "Speaker 1" }] },
+      { id: "s4", start: 85, end: 86, text: "Hello.", words: [{ text: "Hello.", start: 85, end: 86, speaker: "Speaker 2" }] },
+      { id: "s5", start: 91, end: 92, text: "Hmm.", words: [{ text: "Hmm.", start: 91, end: 92 }] },
+      { id: "s6", start: 165, end: 166, text: "Wait.", words: [{ text: "Wait.", start: 165, end: 166 }] },
+    ],
+  });
+  await act(async () => root.render(<MemoryRouter><TranscriptPane source={longer} onAsk={() => {}} /></MemoryRouter>));
+  const labels = [...container.querySelectorAll(".reading-turn")].map(turn => turn.querySelector(".reading-speaker")?.textContent?.trim() ?? null);
+  // s1+s2 merge into one Speaker 1 turn; s3 starts after a 74s silence and reminds Speaker 1; s4 switches to Speaker 2;
+  // s5 switches to Voice unclear; s6 after another long silence does not repeat Voice unclear.
+  expect(labels).toEqual(["Speaker 1", "Speaker 1", "Speaker 2", "Voice unclear", null]);
+});
+
+it("steps through search matches with next/previous buttons and clears the query", async () => {
+  await mount();
+  await search("word4");
+  expect(container.querySelector(".transcript-search-count")?.textContent).toBe("1 of 11");
+  const next = container.querySelector<HTMLButtonElement>('button[aria-label="Next match"]')!;
+  const prev = container.querySelector<HTMLButtonElement>('button[aria-label="Previous match"]')!;
+  const clear = container.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]')!;
+  await act(async () => next.click());
+  expect(container.querySelector(".transcript-search-count")?.textContent).toBe("2 of 11");
+  await act(async () => prev.click());
+  expect(container.querySelector(".transcript-search-count")?.textContent).toBe("1 of 11");
+  await act(async () => clear.click());
+  expect(container.querySelector(".transcript-search-count")).toBeNull();
+  expect(container.querySelector<HTMLInputElement>('input[type="search"]')!.value).toBe("");
+});

@@ -584,7 +584,7 @@ const STILL_SPEAKING_DB = 15, STILL_SPEAKING_SECONDS = .06;
  * before the dip from where it starts it (`side` end): then the dip is inside the word, such as the stop before a
  * consonant, and an edge there cuts the word short.
  */
-function keptSoundsPast(page: NonNullable<JoinPage["edges"]>, dip: TimeRange, kept: Word, side: "start" | "end") {
+export function keptSoundsPast(page: NonNullable<JoinPage["edges"]>, dip: TimeRange, kept: Word, side: "start" | "end") {
   const levels = page.levels, loudest = extremeLevel(page, kept.start, kept.end, "highest");
   if (!levels || !loudest) return false;
   const from = side === "start" ? dip.end : kept.start, to = side === "start" ? kept.end : dip.start;

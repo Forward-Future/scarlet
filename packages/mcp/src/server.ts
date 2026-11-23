@@ -232,17 +232,6 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     }
   }
 
-  // The editor's notes to this request, added while it runs, which the run hears at the top of its next result.
-  const hearsNotes = !!ctx.taskId && !!ctx.task && isProjectEditTask(ctx.task);
-  async function notesLine() {
-    if (!hearsNotes) return undefined;
-    try {
-      return (await client.takeTaskNotes(ctx.projectId, ctx.taskId!)).text;
-    } catch {
-      return undefined;
-    }
-  }
-
   /** A call's outcome in the run's diagnostics, and what it refused in the task's history. */
   async function reportResult(name: string, outcome: ToolOutcome, began: number, misses: number, result: ToolResult) {
     // Preserve the project's existing refusal receipt separately from the operational log.
@@ -320,9 +309,6 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
         const kept = await keptLine();
         if (kept) result = { ...result, content: [...result.content, { type: "text", text: kept }] };
         await reportResult(name, outcome, began, misses, result);
-        // Put first, after the result is read for what it refused: the save's own answer leads it there.
-        const noted = await notesLine();
-        if (noted) result = { ...result, content: [{ type: "text", text: noted }, ...result.content] };
         return result;
       } finally {
         calls.delete(call);
