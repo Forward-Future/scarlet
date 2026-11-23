@@ -4,6 +4,7 @@
 import { FILMSTRIP_SEEK_BATCH, sparseFilmstrip, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
 import { buildFilterGraph, type GraphOptions } from "./graph.js";
 import { FFMPEG_BASE_ARGS, INDEXED_MP4_INPUT, LOCAL_MEDIA_INPUT, failureReason, ffSeconds, requireDrawtext, resolveFfmpeg, runCapture, withStreamInfoFallback } from "./exec.js";
+import { CUDA_FRAMES_INPUT } from "./mediaInput.js";
 import { withDecoderFallback } from "./probe.js";
 import { toneMapFilters, type HdrTransfer } from "./hdr.js";
 import { drawtextFontArg } from "./fonts.js";
@@ -99,7 +100,7 @@ async function frameFrom(file: string, tSeconds: number, opts: FrameOptions): Pr
   const picture = gpu ? `scale_cuda=${width}:-2:interp_algo=bicubic:format=yuv420p,hwdownload,format=yuv420p` : `${crop}scale=${width}:${height}${toneMap}${grid}`;
   const input = [
     ...FFMPEG_BASE_ARGS,
-    ...(gpu ? ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] : []),
+    ...(gpu ? CUDA_FRAMES_INPUT : []),
     ...(opts.indexedMp4 ? INDEXED_MP4_INPUT : []),
   ];
   /**
