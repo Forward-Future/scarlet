@@ -7329,16 +7329,67 @@ it("puts two edits' revisions made at once onto the video, and tells the one tha
   const afterTail = ctx.repos.projects.get(project.id)!.head!;
   expect(afterTail).not.toBe(afterTop);
 
-  // The third meets footage the first took out. Nothing is applied, and it is told what met and the video to redo it on.
+  // The third meets footage the first took out. Nothing is applied, and it is told what met, the video to redo it on,
+  // and the editor's words for the requests that changed the video since it read it, which stand.
   const third = await save(again, "Trim the top more", 2, 5);
   expect(third.change.state).toBe("ready");
-  expect(third.notApplied).toEqual({ reason: expect.stringContaining("overlaps"), currentVersion: afterTail });
+  expect(third.notApplied).toEqual({ reason: expect.stringContaining("overlaps"), currentVersion: afterTail,
+    editorAsked: ["Trim the top.", "Trim the tail."] });
   expect(ctx.repos.projects.get(project.id)!.head).toBe(afterTail);
   // Made again on the current video it applies, and the refused save is put away when the run ends.
   const redone = await save(again, "Trim the top more", 1, 3, afterTail);
   expect(redone).toMatchObject({ change: { state: "approved" } });
   expect((await api("POST", `/tasks/${again.id}/complete`, { state: "done" })).status).toBe(200);
   expect(ctx.repos.changes.get(third.change.id)).toMatchObject({ state: "rejected", replacedBy: redone.change.id });
+});
+
+it("revises an edit a running request applied while that request goes on, and tells it the editor's revision stands", async () => {
+  const { ctx } = workspace;
+  vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
+  const { host } = await (await api("POST", "/hosts/register", { name: "Editor", platform: "test", agents: [{ id: "codex", installed: true }] })).json();
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "mic", path: "mic.wav", kind: "audio", duration: 60, hasAudio: true }, "ready");
+  proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", description: "Assemble", autoApprove: true,
+    ops: [{ op: "addClip", trackId: "a1", clip: { id: "raw", kind: "media", mediaId: "mic", timelineIn: 0, sourceIn: 0, sourceOut: 60 } }] });
+  const send = async (instruction: string, context?: object) =>
+    (await (await api("POST", projectsPath() + "/tasks", { agent: "codex", instruction, ...(context && { context }) })).json()).task as Task;
+  const claim = async () => {
+    for (;;) {
+      const { task } = await (await api("POST", `/hosts/${host.id}/claim`, {})).json() as { task: Task | null };
+      if (task?.kind !== "learning_check") return task;
+    }
+  };
+  const save = async (task: Task, description: string, start: number, end: number, fromVersion: string, extra: object = {}) =>
+    await (await api("POST", projectsPath() + "/changes?summary=true", { intent: "requested", taskId: task.id, fromVersion, description,
+      ops: [{ op: "rippleDelete", start, end }], ...extra })).json() as { change: Change; notApplied?: { reason: string; currentVersion: string; editorAsked?: string[] } };
+
+  // The pass starts on the whole video and applies a cut.
+  const pass = await send("/matt-talking-head");
+  expect((await claim())?.id).toBe(pass.id);
+  const read = ctx.repos.projects.get(project.id)!.head!;
+  const cut = await save(pass, "Cut the false start", 10, 12, read, { timelineEdits: [{ label: "False start", range: { start: 10, end: 10 } }] });
+  expect(cut.change.state).toBe("approved");
+  const afterCut = ctx.repos.projects.get(project.id)!.head!;
+
+  // While it works on, the editor asks to take more out at that cut. Scarlet starts on it at once, beside the pass.
+  const extend = await send("extend to cut to 0:14", { threadId: pass.id, changeId: cut.change.id, editIndex: 0 });
+  expect((await claim())?.id).toBe(extend.id);
+  const revised = await save(extend, "Took out up to 0:14", 10, 12, afterCut,
+    { timelineEdits: [{ label: "False start", range: { start: 10, end: 10 }, replaces: { changeId: cut.change.id, spot: 0 } }] });
+  expect(revised.change.state).toBe("approved");
+  const afterRevision = ctx.repos.projects.get(project.id)!.head!;
+  expect((await api("POST", `/tasks/${extend.id}/complete`, { state: "done" })).status).toBe(200);
+
+  // The pass still reads the video it read before. A cut elsewhere goes onto the video as it is now.
+  const elsewhere = await save(pass, "Trim the pause", 40, 41, afterCut);
+  expect(elsewhere.change.state).toBe("approved");
+  expect(elsewhere.notApplied).toBeUndefined();
+  // One over the footage the editor's revision changed isn't applied, and the pass is told the editor asked for it.
+  const over = await save(pass, "Tighten the join", 9, 11, afterCut);
+  expect(over.change.state).toBe("ready");
+  expect(over.notApplied).toMatchObject({ currentVersion: ctx.repos.projects.get(project.id)!.head!, editorAsked: ["extend to cut to 0:14"] });
+  expect(ctx.repos.projects.get(project.id)!.head).not.toBe(afterRevision);
+  const timeline = (await (await api("GET", `${projectsPath()}/timeline`)).json()).timeline as { tracks: Array<{ clips: Array<{ sourceIn: number; sourceOut: number }> }> };
+  expect(timeline.tracks.flatMap(t => t.clips.map(c => [c.sourceIn, c.sourceOut]))).toEqual([[0, 10], [14, 42], [43, 60]]);
 });
 
 it("puts a doubt a later request found about an earlier request's edit in front of the editor, with the request that found it", async () => {

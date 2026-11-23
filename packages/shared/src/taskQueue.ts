@@ -108,15 +108,29 @@ function targetKey(task: QueueTask, changeById: (id: string) => EditLineage | un
 }
 
 /**
- * Scarlet works on two requests at once when each is about one cut or edit and they are about different ones: each
- * agent then works on its own footage. A call's revision is saved into the pass as it stands when it lands, with the
- * other revisions and the editor's calls made meanwhile. An applied edit's revision is put onto the video as it is
- * when it lands, and one that meets footage another request changed is told so, with where, and saves again on the
- * current video. Any other request is about the whole video, or about footage nothing names ahead of time, so it runs
- * alone. Two requests about the same cut or edit keep the order they were asked in. What counts as the same cut or
- * edit comes from requestTargetKey.
+ * Whether two requests in a project must take turns. Requests about different cuts or edits work at once, an agent on
+ * each, and so does a request about one applied edit beside a request about the whole video, such as the pass that
+ * made it: an applied edit's revision is replayed onto the video as it is when it lands, through the footage, and a
+ * save that meets footage another request changed since it read the video isn't applied (`notApplied`, or a pass
+ * part's `cut_changed`), so its agent reads the passage again and is told when the editor asked for what changed it.
+ * A call's revision saves into its pass, so it takes turns with any request in the pass's thread (the run still
+ * making the pass, or a reply to it) and works beside a request about the whole video in another thread. Two requests
+ * about the whole video, and two about the same cut or edit, keep the order they were asked in. What counts as the
+ * same cut or edit comes from requestTargetKey.
  */
-const differentTargets = (a?: string, b?: string): boolean => a !== undefined && b !== undefined && a !== b;
+function takeTurns(a: QueueTask, aKey: string | undefined, b: QueueTask, bKey: string | undefined): boolean {
+  if (aKey !== undefined && bKey !== undefined) return aKey === bKey;
+  if (aKey === undefined && bKey === undefined) return true;
+  const [one, key, whole] = aKey !== undefined ? [a, aKey, b] : [b, bKey!, a];
+  const [kind] = JSON.parse(key) as ["call" | "edit", ...unknown[]];
+  return kind === "call" && threadOfRequest(one) === threadOfRequest(whole);
+}
+
+/** The thread a request belongs to; a resumed run keeps its first run's thread. */
+const threadOfRequest = (task: QueueTask) => task.context.threadId ?? task.resumeRootId ?? task.id;
+
+/** A request about one applied edit, which the calls of a pass waiting on the editor don't hold back. */
+const aboutAppliedEdit = (key: string | undefined) => key !== undefined && (JSON.parse(key) as unknown[])[0] === "edit";
 
 /**
  * The order requests were asked in. A resumed run keeps the place of the run it continues. Requests saved in the same
@@ -162,8 +176,12 @@ function queuePolicy<T extends QueueTask, C extends QueueChange>(tasks: readonly
     return keys.get(task);
   };
   const others = (task: T, other: T) => task.id !== other.id && task.projectId === other.projectId
-    && !differentTargets(keyOf(task), keyOf(other));
-  const holding = (task: T) => task.startsBeforeCalls ? [] : reviews(task).filter(change => !aboutChange(task, change));
+    && takeTurns(task, keyOf(task), other, keyOf(other));
+  // A pass's calls hold back requests built on the video before they're decided. An applied edit's revision isn't one:
+  // the pass's cuts are anchored in the footage and carry onto the video it leaves, one at a time, as the editor's own
+  // put-backs do, and a cut whose footage it changed goes back to Scarlet for a new look.
+  const holding = (task: T) => task.startsBeforeCalls || aboutAppliedEdit(keyOf(task)) ? []
+    : reviews(task).filter(change => !aboutChange(task, change));
   const ahead = (task: T, prior: T) => others(task, prior) && order(prior, task) < 0
     && !reviews(task).some(change => aboutChange(task, change) && !aboutChange(prior, change));
   const running = (task: T) => active.find(other => others(task, other));

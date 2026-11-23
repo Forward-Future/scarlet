@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- Asking Scarlet to change an edit it already made now starts right away, even while it's still working on the rest of the video, and up to four things can run at once.
 - The model menu's effort control is now a smooth pill slider you can drag or click, and its bottom bar drops the extra Tune label so your current effort and speed sit cleanly beside the chevron.
 - Scarlet now listens to cuts with Claude and Codex too: when Gemini is signed in, it listens for the model you picked. In Settings › Models you can choose which model listens, or turn listening off.
 - With Gemini, Scarlet now listens to a restart before deciding where to cut it, so a first try that sounds like a finished line comes out and the first word of the line you kept stays.

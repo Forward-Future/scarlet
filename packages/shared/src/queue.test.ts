@@ -102,7 +102,8 @@ it("answers why each queued request waits from one reading of the snapshot", () 
   for (const t of all) expect(wait(t)).toEqual(queueWait(t, all, []));
   expect(wait(pass)).toBeUndefined();
   expect(wait(captions)).toEqual({ kind: "run", task: pass });
-  expect(wait(fix)).toEqual({ kind: "run", task: pass });
+  // A revision of an applied edit starts beside the pass, ahead of the whole-video requests asked before it.
+  expect(wait(fix)).toBeUndefined();
 });
 
 it("stops holding the queue for a pass version that a finished revision replaced", () => {
@@ -215,14 +216,40 @@ it("lets requests about different cuts or edits run at once, and keeps every oth
   const zoomFix = task("zoomFix", "queued", 4, { threadId: "zoom", changeId: "chg_zoom", editIndex: 0 });
   const titleFix = task("titleFix", "running", 3, { threadId: "zoom", changeId: "chg_zoom", editIndex: 1 });
   expect(queueWait(zoomFix, [titleFix, zoomFix], [])).toBeUndefined();
-  // A request about the whole video runs alone: it waits for the revisions under way, and later revisions wait for it.
+  // A request about the whole video works beside an applied edit's revision, either way round: the revision lands on
+  // the video through the footage, and a save that meets what the other changed is told so and made again.
   const captions = task("captions", "queued", 5);
-  expect(queueWait(captions, [titleFix, captions], [])).toEqual({ kind: "run", task: titleFix });
+  expect(queueWait(captions, [titleFix, captions], [])).toBeUndefined();
   const later = task("later", "queued", 6, { threadId: "zoom", changeId: "chg_zoom", editIndex: 2 });
-  expect(queueWait(later, [titleFix, captions, later], [])).toEqual({ kind: "ahead", count: 1 });
-  expect(queueWait(later, [{ ...captions, state: "running" }, later], [])).toEqual({ kind: "run", task: { ...captions, state: "running" } });
-  // A pass's calls still hold a revision of an edit the pass isn't about.
-  expect(queueWait(zoomFix, [pass, first, zoomFix], [review])).toEqual({ kind: "review", change: review });
+  expect(queueWait(later, [titleFix, captions, later], [])).toBeUndefined();
+  expect(queueWait(later, [{ ...captions, state: "running" }, later], [])).toBeUndefined();
+  // Two requests about the whole video still take turns.
+  const music = task("music", "queued", 7);
+  expect(queueWait(music, [{ ...captions, state: "running" }, music], [])).toEqual({ kind: "run", task: { ...captions, state: "running" } });
+  expect(queueWait(music, [titleFix, captions, music], [])).toEqual({ kind: "ahead", count: 1 });
+  // A pass's calls don't hold a revision of an applied edit: the pass's cuts carry onto the video it leaves.
+  expect(queueWait(zoomFix, [pass, first, zoomFix], [review])).toBeUndefined();
+});
+
+it("revises an edit the pass already applied while the pass goes on, and keeps its calls for after", () => {
+  // 2026-11-22: a pass had applied its cut at 2:38 and was still working when the editor asked to extend that cut. The
+  // revision waited 30 minutes in the tray for the pass to finish.
+  const pass = task("pass", "running", 0);
+  const extend = task("extend", "queued", 30, { threadId: "pass", changeId: "chg_applied", editIndex: 7 });
+  const zoom = task("zoom", "queued", 31);
+  const call = task("call", "queued", 32, { threadId: "pass", changeId: "chg_pass", cutIndex: 1 });
+  const all = [pass, extend, zoom, call];
+  expect(queueWait(extend, all, [review])).toBeUndefined();
+  // A new request about the whole video and a call of the pass being made still wait for the pass.
+  expect(queueWait(zoom, all, [review])).toEqual({ kind: "run", task: pass });
+  expect(queueWait(call, all, [review])).toEqual({ kind: "run", task: pass });
+  expect(queueOrder(all, [review]).map(t => t.id)).toEqual(["extend", "zoom", "call"]);
+  // So does a second request about the same edit, behind the first.
+  const again = task("again", "queued", 33, { threadId: "pass", changeId: "chg_applied", editIndex: 7 });
+  expect(queueWait(again, [pass, { ...extend, state: "running" }, again], [review])).toEqual({ kind: "run", task: { ...extend, state: "running" } });
+  // A resumed pass keeps its thread: a call of it still waits for the run that continues it.
+  const resumed = { ...task("again2", "running", 40), resumeRootId: "pass", context: { branch: "main" } } as Task;
+  expect(queueWait(call, [resumed, call], [review])).toEqual({ kind: "run", task: resumed });
 });
 
 // The engine claims through the same rules (queueAdmission in claimNext); tasks.test.ts runs these cases there.
@@ -235,14 +262,17 @@ it.each([
   { name: "two calls of one pass", a: { threadId: "pass", changeId: "P", cutIndex: 1 }, b: { threadId: "pass", changeId: "P", cutIndex: 2 }, beside: true },
   { name: "one call, sent about two versions of its pass", a: { threadId: "pass", changeId: "P", cutIndex: 2 }, b: { threadId: "pass", changeId: "P2", cutIndex: 2 }, beside: false },
   { name: "a call and an applied edit", a: { threadId: "pass", changeId: "P", cutIndex: 0 }, b: { threadId: "pass", changeId: "P", editIndex: 0 }, beside: true },
-  { name: "an edit and the whole video", a: { threadId: "t", changeId: "A", editIndex: 0 }, b: { threadId: "t" }, beside: false },
+  { name: "an edit and the whole video", a: { threadId: "t", changeId: "A", editIndex: 0 }, b: { threadId: "t" }, beside: true },
+  { name: "an edit and the whole video in another thread", a: { threadId: "t", changeId: "A", editIndex: 0 }, b: { threadId: "u" }, beside: true },
+  { name: "a call and the run of its pass's thread", a: { threadId: "pass", changeId: "P", cutIndex: 0 }, b: { threadId: "pass" }, beside: false },
+  { name: "a call and the whole video in another thread", a: { threadId: "pass", changeId: "P", cutIndex: 0 }, b: { threadId: "u" }, beside: true },
 ])("keys a request by the cut or edit it is about: $name", ({ a, b, beside }) => {
   // A2 revises A's edit 0 at its spot 1, and A3 revises that at its spot 0.
   const changes = [{ id: "A" }, { id: "A2", timelineEdits: [{ label: "Other", range: { start: 0, end: 1 } }, { label: "Zoom", range: { start: 2, end: 3 }, replaces: { changeId: "A", spot: 0 } }] },
     { id: "A3", timelineEdits: [{ label: "Zoom", range: { start: 2, end: 3 }, replaces: { changeId: "A2", spot: 1 } }] }] as Change[];
   const x = task("x", "queued", 1, a), y = task("y", "running", 0, b);
   const kx = requestTargetKey(x, changes), ky = requestTargetKey(y, changes);
-  expect(kx !== undefined && ky !== undefined && kx !== ky).toBe(beside);
+  if (kx !== undefined && ky !== undefined) expect(kx !== ky).toBe(beside);
   expect(queueWait(x, [y, x], changes)).toEqual(beside ? undefined : { kind: "run", task: y });
   const yx = task("y", "queued", 1, b), xy = task("x", "running", 0, a);
   expect(queueWait(yx, [xy, yx], changes)).toEqual(beside ? undefined : { kind: "run", task: xy });

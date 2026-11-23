@@ -10724,6 +10724,46 @@ it("draws a revision of one applied edit under that edit's row, at work, and und
   expect(container.querySelector(".simple-pin .unit")).toBeNull();
 });
 
+it("draws a revision of an edit under its row while the request that made it still works, each with its own Stop", async () => {
+  appliedEdits();
+  idle();
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  const now = new Date().toISOString();
+  // The request that made the edits is still at work when the editor sends one of them back (2026-11-22).
+  data = { ...data, tasks: [...data.tasks, { ...base, id: "task_made", kind: "edit" as const, state: "running" as const, summary: null,
+    instruction: "/matt-talking-head", startedAt: now, finishedAt: undefined, expectedSeconds: undefined,
+    context: { message: "/matt-talking-head" }, changeIds: ["chg_approved_2"] }] };
+  const thread = threadWith("chg_approved_2");
+  const revision = { ...base, id: "task_fix", kind: "edit" as const, state: "running" as const, summary: null, changeIds: [], instruction: "Make the captions bigger.",
+    createdAt: now, startedAt: now, finishedAt: undefined, expectedSeconds: undefined,
+    context: { threadId: thread.id, changeId: "chg_approved_2", editIndex: 1, time: 0.2, end: 2.4, message: "Make the captions bigger." } };
+  data = { ...data, tasks: [...data.tasks, revision] };
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  await act(async () => {});
+  const sub = () => container.querySelector<HTMLElement>('.subunit[data-run="task_fix"]')!;
+  const owner = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
+  // One block, above the message box: the request at work, with the revision inside it rather than in the queue.
+  expect(container.querySelector('.unit[data-run="task_fix"]')).toBeNull();
+  expect(container.querySelector(".queue-tray")).toBeNull();
+  expect(sub().closest('.unit[data-run="task_made"]')).toBe(owner());
+  expect(owner().closest(".simple-pin")).not.toBeNull();
+  // Each has its own Stop: the request's in its band, the revision's on its own heading.
+  expect(owner().querySelector(':scope > .unit-msg [aria-label^="Stop this edit"]')).not.toBeNull();
+  expect(sub().querySelector('.subunit-msg > .unit-actions [aria-label^="Stop this edit"]')).not.toBeNull();
+  expect(sub().querySelector('[aria-label="Scarlet’s work"] .working-text')).not.toBeNull();
+  // Opened, the edit's row says it is being revised while the request goes on.
+  await click(seeAll(owner())!);
+  const row = sub().previousElementSibling as HTMLElement;
+  expect([row.querySelector(".simple-edit-title")?.textContent, row.querySelector(".simple-edit-check")?.textContent]).toEqual(["captions", "Revising…"]);
+  // The revision lands and leaves; the request is still at work, above the message box.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_fix" ? { ...t, state: "done" as const, finishedAt: new Date().toISOString(), changeIds: ["chg_fixed"] } : t),
+    changes: [...d.changes, { ...d.changes.find(c => c.id === "chg_approved_2")!, id: "chg_fixed", taskId: "task_fix", threadId: thread.id, createdAt: new Date().toISOString(),
+      timelineEdits: [{ label: "captions", range: { start: 0.2, end: 2.4 } }] }] }));
+  expect(container.querySelector('[data-run="task_fix"]')).toBeNull();
+  expect(owner().closest(".simple-pin")).not.toBeNull();
+});
+
 it("keeps the list of what needs the editor, and only that, once one of its edits is sent back for revision", async () => {
   const edits = appliedEdits();
   idle();

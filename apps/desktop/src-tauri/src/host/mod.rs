@@ -793,7 +793,7 @@ impl HostManager {
         };
         let (models, (timeout, stall), max_parallel) = {
             let cfg = self.config.lock().unwrap();
-            (cfg.models.clone(), run_limits(&cfg), cfg.max_parallel.unwrap_or(3).clamp(1, 8))
+            (cfg.models.clone(), run_limits(&cfg), cfg.max_parallel.unwrap_or(4).clamp(1, 8))
         };
         let config = self.config.clone();
         let cfg_path = self.paths.config_file.clone();
