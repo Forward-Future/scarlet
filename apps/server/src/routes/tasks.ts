@@ -15,7 +15,6 @@ import { actorFor, agentName, logActivity, quote } from "../services/activity.js
 import { continueWhenReady, interruptTask, retryTask } from "../services/taskRecovery.js";
 import { listenerFor } from "../services/listening.js";
 import { requestAttempt, requireActiveAttempt } from "../services/taskAttempt.js";
-import { addTaskNote, editorNotesText, takeUnheardNotes } from "../services/taskNotes.js";
 
 // `tool_help` reads the rest of a tool's description to a harness given only each tool's first sentence (Gemini's).
 const diagnosticTools = new Set<string>([...EDITING_TOOL_GROUPS.flatMap(group => [...group.tools]), "tool_help"]);
@@ -150,8 +149,7 @@ export function taskRoutes(ctx: Ctx) {
     const { workDir, fresh, timeLimit } = z.object({ workDir: z.string().max(4096).regex(/^[^\r\n]*$/).optional(), fresh: z.enum(["1", "true"]).optional(),
       timeLimit: z.coerce.number().int().positive().max(24 * 60).optional() })
       .parse({ workDir: c.req.query("workDir") || undefined, fresh: c.req.query("fresh") || undefined, timeLimit: c.req.query("timeLimit") || undefined });
-    // The run starts with the editor's notes it hasn't heard, which are then marked heard.
-    return c.json(taskPrompt(ctx, requireTask(c.req.param("taskId"), c.req.param("projectId")), { workDir, fresh: !!fresh, timeLimitMinutes: timeLimit, hearNotes: true }));
+    return c.json(taskPrompt(ctx, requireTask(c.req.param("taskId"), c.req.param("projectId")), { workDir, fresh: !!fresh, timeLimitMinutes: timeLimit }));
   });
 
   // `withdrawn`: the editor took the request back with ⌘Z, and nothing is learned from its words. Stop this edit sends
@@ -212,26 +210,6 @@ export function taskRoutes(ctx: Ctx) {
       return updated;
     }, "immediate")();
     return c.json({ task: updated });
-  });
-
-  // A note the editor adds to the request Scarlet is on. Its run hears it on its next tool call.
-  r.post("/tasks/:taskId/notes", async (c) => {
-    const { text } = await jsonBody(c, z.object({ text: z.string().trim().min(1).max(4000) }));
-    const task = ctx.db.transaction(() => addTaskNote(ctx, requireTask(c.req.param("taskId")), text), "immediate")();
-    return c.json({ task });
-  });
-
-  // Called by Scarlet's tools as each result goes back: the notes the run hasn't heard, which it hears with that result.
-  r.post("/projects/:projectId/tasks/:taskId/notes/heard", (c) => {
-    const read = () => {
-      const task = requireTask(c.req.param("taskId"), c.req.param("projectId"));
-      requireActiveAttempt(ctx, requestAttempt(c.req.raw), task.projectId, task.id);
-      return task;
-    };
-    // Nearly every call finds none, and takes no write lock to say so.
-    const notes = read().notes?.some(n => !n.heardAt) ? ctx.db.transaction(() => takeUnheardNotes(ctx, read()), "immediate")() : [];
-    const text = editorNotesText(notes);
-    return c.json({ notes, ...(text && { text }) });
   });
 
   // Called by agent hosts
