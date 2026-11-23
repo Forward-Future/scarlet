@@ -917,6 +917,7 @@ export function SimpleWorkspace() {
       return { changeId: prior?.previous.id ?? change.id, index: prior?.call.index ?? a.index, cut: { start: a.start, end: a.end }, side: "after", take: (prev?.take ?? 0) + 1,
         key: same ? prev.key : `${change.id}/${a.index}` };
     });
+    setAimAgain(n => n + 1);
   }
   function playChange(thread: Thread, change: Change) {
     // The request's line pressed again while its edit is open plays that edit again as its row does: on the side it
@@ -954,9 +955,10 @@ export function SimpleWorkspace() {
     if (showing && matchesEdit(showing, ref) && thread.id === focus?.threadId && sameWay) {
       setOpenedFrom(from ? { run: from, ref: { changeId: ref.changeId, spot: ref.spot } } : undefined);
       player.pause();
+      // Choosing it again takes the aim off an empty message box, so the box is aimed at the cut or edit again.
       if (cutKey) setCutSide(prev => ({ key: cutKey, side: "after", take: (prev?.key === cutKey ? prev.take : 0) + 1 }));
-      // Choosing it again takes the aim off an empty message box, so the box is aimed at the edit again.
-      else { threadTimeline.choose(showing, "chat"); setAimAgain(n => n + 1); }
+      else threadTimeline.choose(showing, "chat");
+      setAimAgain(n => n + 1);
       return;
     }
     startVisit();
@@ -2187,22 +2189,50 @@ export function SimpleWorkspace() {
     settleAim.current(held.why);
   }, [speaking]);
   /**
-   * Words chosen in the transcript ("Ask about this"), with a call open. Words in the call's passage on the working cut
-   * are about that call: the message revises that one cut, and says where the editor was looking. Words anywhere else
-   * start a new edit about them, as they do with nothing open. Either way the message being written comes along. Left
-   * on the call's request, the words would name no cut, and the message would send the whole pass back.
+   * Words chosen in the transcript ("Ask about this"), with a call or an edit open. Words in the open cut or edit's
+   * passage (including the words flanking a cut in its audition, outside other cuts) are about it: the message revises
+   * that one cut or edit, and says where the editor was looking. Words anywhere else start a new edit about them, as
+   * they do with nothing open. Either way the message being written comes along. Left on the open request, the words
+   * would name no cut or edit, and the message would go to the whole request.
    */
   const askAbout = (words: AgentContext) => {
-    if (!callCard || !pass || !listening) return;
-    const passage = callView?.cut ?? heard;
-    const inCall = !!passage && !words.mediaId && words.version === (callView?.version ?? pinnedCallVersion ?? head) && words.end !== undefined && words.time < passage.end && words.end > passage.start;
-    settleAim.current(inCall ? "take" : "new");
-    // Only a box that leaves a request gets taken off words by that move; one already on a new edit keeps no note.
-    if (!inCall && replyTo) askedWords.current = words;
-    const aim = inCall ? { ...cutTarget(pass, listening.index, listening.cut).target,
-      version: words.version, time: words.time, end: words.end, clipIds: words.clipIds, label: words.label } : words;
-    if (inCall) wordsInCall.current = aim;
-    useUiStore.getState().setAgentContext(aim);
+    const overlaps = (r: TimeRange) => words.end !== undefined && words.time < r.end && words.end > r.start;
+    if (callCard && pass && listening) {
+      const cut = callView?.cut ?? heard;
+      const listen = playedAudition ?? audition;
+      const otherCallCuts = [
+        ...(callView ? callView.shown.map(r => r.removed) : []),
+        ...allCalls.flatMap(c => {
+          if (c.index === listening.index) return [];
+          const placed = placeCut(c);
+          if (!placed) return [];
+          if (!callView) return [placed];
+          const start = callView.toBase(placed.start), end = callView.toBase(placed.end);
+          return start !== null && end !== null && end > start ? [{ start, end }] : [];
+        }),
+      ];
+      const inCall = !!cut && !words.mediaId && words.version === (callView?.version ?? pinnedCallVersion ?? head)
+        && (overlaps(cut) || (!!listen && overlaps(listen) && !otherCallCuts.some(overlaps)));
+      settleAim.current(inCall ? "take" : "new");
+      // Only a box that leaves a request gets taken off words by that move; one already on a new edit keeps no note.
+      if (!inCall && replyTo) askedWords.current = words;
+      const aim = inCall ? { ...cutTarget(pass, listening.index, listening.cut).target,
+        version: words.version, time: words.time, end: words.end, clipIds: words.clipIds, label: words.label } : words;
+      if (inCall) wordsInCall.current = aim;
+      useUiStore.getState().setAgentContext(aim);
+      return;
+    }
+    if (editOpen && reviewingEdit && shownChange && focusThread) {
+      const version = appliedCut ? beforeCut!.version : draftVersion ?? head;
+      const inEdit = !words.mediaId && words.version === version && (appliedCut
+        ? overlaps(appliedCut) || (!!appliedListen && overlaps(appliedListen) && !otherCuts.some(overlaps))
+        : overlaps(reviewingEdit.range));
+      settleAim.current(inEdit ? "take" : "new");
+      if (!inEdit && replyTo) askedWords.current = words;
+      const aim = inEdit ? { ...editAim(reviewingEdit, shownChange).target,
+        version: words.version, time: words.time, end: words.end, clipIds: words.clipIds, label: words.label } : words;
+      useUiStore.getState().setAgentContext(aim);
+    }
   };
   // A request about an edit is named as that edit's row is: "the cut at 2:05". The row is in hand while its request
   // has the timeline, so the name is kept from then. With the timeline on another request, or on none, the name must
@@ -2356,7 +2386,7 @@ export function SimpleWorkspace() {
     const target = targetName(t.context);
     return { id: t.id, text: isRedo(t) ? redoWords(t, tasks, changes) : requestText(t), target: cutName(t.context) ?? (target && tagOf(target)),
       fixed: t.createdBy.type !== "human" };
-  }), [queued, tasks, changes, threadEdits, pass, allCalls]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [queued, tasks, changes, threadEdits, threadTimeline.rejected, threads, pass, allCalls, passEditNo, callNo, footage]); // eslint-disable-line react-hooks/exhaustive-deps
   const queueHint = !editingPaused && queued[0] ? waitHint(queued[0]) : undefined;
   const queueWaitsOn = !editingPaused && queued[0] ? waitsOnEditor(queued[0]) : undefined;
   const nextQueuedId = !editingPaused && queued[0] && !queueWaitsOn ? queued[0].id : undefined;
