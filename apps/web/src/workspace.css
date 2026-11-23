@@ -31,6 +31,8 @@
 .ambient-light { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; pointer-events: none;
   opacity: 0; transition: opacity .6s ease; transform: translateZ(0); }
 .ambient-light[data-lit="true"] { opacity: .8; }
+/* Where the canvas can't tone its own pixels (footage from another origin), the element is toned instead. */
+.ambient-light[data-css-tone="true"] { filter: saturate(1.4) brightness(.8); }
 .cut-preview > .watch-viewport { position: relative; z-index: 1; }
 .cut-preview > .cut-transport { position: relative; z-index: 2; }
 .cut-preview .watch-monitor { background: rgb(0 0 0 / 50%); }

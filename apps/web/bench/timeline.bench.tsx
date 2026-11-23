@@ -3,7 +3,8 @@
 import { bench, describe, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { layoutMarks, PlayerTimeline } from "../src/components/review/TimelineScrubber";
+import { PlayerTimeline } from "../src/components/review/TimelineScrubber";
+import { layoutMarks } from "../src/components/review/timelineMarkerLayout";
 import { usePlayerStore } from "../src/stores/player";
 import { renderToString } from "react-dom/server";
 import { Change, emptyTimeline, makeMediaClip, makeTrack, type MediaAsset } from "@scarlet/timeline";

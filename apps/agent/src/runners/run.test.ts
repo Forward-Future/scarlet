@@ -104,7 +104,12 @@ rl.on("line", line => {
     if (params.sessionId === "g1") return send({ id, result: { sessionId: "g1", configOptions } });
     return send({ id, error: { code: -32602, message: "session not found: " + params.sessionId } });
   }
-  if (method === "session/set_config_option") return send({ id, result: { configOptions } });
+  if (method === "session/set_config_option") {
+    if (process.env.FAKE_ACP_FAIL_EFFORT && params?.configId === "thought_level") {
+      return send({ id, error: { code: -32602, message: process.env.FAKE_ACP_FAIL_EFFORT } });
+    }
+    return send({ id, result: { configOptions } });
+  }
   if (method === "session/prompt") {
     promptId = id;
     if (process.env.FAKE_ACP_FAIL_PROMPT) return send({ id, error: { code: -32603, message: process.env.FAKE_ACP_FAIL_PROMPT } });
@@ -757,6 +762,22 @@ describe("runGemini", { timeout: 20_000 }, () => {
       configId: "thought_level",
       value: "medium",
     });
+  });
+
+  it("continues when default effort is rejected, but fails if an explicit effort is rejected", async () => {
+    const fallback = await run(runGemini, { acp: true }, {
+      agent: "gemini",
+      env: { FAKE_ACP_DEFAULT_EFFORT: "high", FAKE_ACP_FAIL_EFFORT: "thought level unsupported for model" },
+    });
+    expect(fallback.result).toMatchObject({ ok: true });
+    expect(fallback.events.some((e) => e.type === "log" && e.text.includes("could not apply default effort"))).toBe(true);
+
+    const explicit = await run(runGemini, { acp: true }, {
+      agent: "gemini",
+      effort: "low",
+      env: { FAKE_ACP_DEFAULT_EFFORT: "high", FAKE_ACP_FAIL_EFFORT: "thought level unsupported for model" },
+    });
+    expect(explicit.result).toMatchObject({ ok: false, error: "Gemini set_effort failed: thought level unsupported for model" });
   });
 
   it("refuses to run Gemini without Scarlet's instructions when agy doesn't say it takes them", async () => {

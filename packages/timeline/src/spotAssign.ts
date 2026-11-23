@@ -1,7 +1,8 @@
 /** Spot attribution, selective approval, property-edit merging, and apply planning. */
 import { ZodError } from "zod/v3";
-import { CaptionWord, duplicateClipId } from "./schema.js";
-import type { Clip, Timeline, TimeRange } from "./schema.js";
+import { CaptionWord, duplicateClipId } from "./timelineSchema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { Clip, Timeline } from "./timelineSchema.js";
 import { OpError, applyOp, applyOpInPlace, replayOnCopy, type TimelineOp } from "./ops.js";
 import { clipEnd, findClip, isGlobalRippleDelete, sourceAt, timelineDuration } from "./time.js";
 import { intervalCandidates } from "./intervals.js";

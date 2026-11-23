@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
-import { fileInDirectory } from "@scarlet/render";
+import { fileInDirectory, heardAudio, heardAudioKey } from "@scarlet/render";
 import { decodeImportFilename, importLinkFilename, type User } from "@scarlet/shared";
 import { hasInitialTimeline, newId, ProjectSettings, videoFormat, type MediaAsset, type MediaKind, type Project } from "@scarlet/timeline";
 import { engineIsAlive, type Ctx } from "../context.js";
@@ -14,6 +14,7 @@ import type { importTranscriptionPolicy } from "../transcribe/index.js";
 import { errorMessage, sameStamp } from "../util.js";
 import { actorFor, logActivity, quote } from "./activity.js";
 import { audioLane } from "./audioWork.js";
+import { hearsSameTrack, remakeTrackPreview } from "./audioTrackChange.js";
 import { editorFirst } from "./editorFirst.js";
 import { downloadImport } from "./importUrl.js";
 import { quietProgress } from "./progressSave.js";
@@ -23,7 +24,8 @@ import { prepareSourceProxies, sourcePreviews } from "./sourcePreviews.js";
 import { cloneOrSteadyCopy } from "./steadyCopy.js";
 import { cancelTask } from "./tasks.js";
 import { recoverImportTranscriptions, startImportTranscription } from "./transcription.js";
-import { olderWaveforms, waveformBase } from "./waveforms.js";
+import { everyWaveform } from "./waveforms.js";
+import { recordMediaAdded } from "../telemetry/events.js";
 
 const GiB = 1024 ** 3;
 const URL_IMPORT_BYTES = 64 * GiB;
@@ -271,6 +273,7 @@ export async function ingestMedia(
       width: probe.width,
       height: probe.height,
       hasAudio: probe.hasAudio,
+      ...(probe.audioStreams ? { audioStreams: probe.audioStreams } : {}),
       hasAlpha: probe.hasAlpha,
       color: probe.color,
       provenance: opts.by,
@@ -304,6 +307,7 @@ export async function ingestMedia(
       const match = format && !ctx.repos.projects.formatSet(project.id) && hasInitialTimeline(current) &&
         JSON.stringify(current.settings) === JSON.stringify(ProjectSettings.parse({}));
       const media = ctx.repos.projects.putMedia(project.id, asset, "ingesting");
+      recordMediaAdded(ctx, asset);
       if (match) {
         const updated = ctx.repos.projects.update(project.id, { settings: format });
         ctx.bus.publish({ type: "project.updated", projectId: project.id, project: updated });
@@ -338,10 +342,11 @@ async function ingestInBackground(ctx: Ctx, projectId: string, asset: MediaAsset
   const proxy = join(ctx.paths.proxies(projectId), `${asset.id}.mp4`);
   let preparation = asset.preparation;
   const publish = ctx.db.transaction((status: MediaWithStatus["status"], preparation?: MediaAsset["preparation"], error?: string) => {
-    // A manual transcription can finish while the proxy is being built, and the recording's voice roles can be saved.
+    // A manual transcription can finish while the proxy is being built, and the recording's voice roles or audio track can be saved.
     const current = ctx.repos.projects.getMedia(asset.id);
     const media = ctx.repos.projects.putMedia(projectId, { ...asset, transcriptId: current?.transcriptId,
-      lastTranscription: current?.lastTranscription, voiceRoles: current?.voiceRoles, preparation }, status, error);
+      lastTranscription: current?.lastTranscription, voiceRoles: current?.voiceRoles,
+      audioTrack: current?.audioTrack, audioStreams: current?.audioStreams ?? asset.audioStreams, preparation }, status, error);
     ctx.bus.publish({ type: "media.updated", projectId, media });
     return media;
   }, "immediate");
@@ -386,16 +391,22 @@ async function ingestInBackground(ctx: Ctx, projectId: string, asset: MediaAsset
       hashQueue.set(ctx, Promise.all([previous, job.catch(() => {})]).then(() => {}));
       await job;
     }
+    let previewTrack: MediaAsset | undefined;
     if (asset.kind === "video" && !asset.previewMode && !(preparation?.stage === "waveform" && existsSync(proxy))) {
       const height = Math.min(ctx.settings().render.previewHeight, asset.height ?? 720);
       const onProgress = reportStage("preview");
       onProgress(0);
-      await ctx.render.makeProxy(src, proxy, { height, onProgress, signal,
+      // The editor can pick the recording's audio track while it is added: the preview plays the one chosen.
+      const heard = ctx.repos.projects.getMedia(asset.id) ?? asset;
+      await ctx.render.makeProxy(src, proxy, { height, audioTrack: heard.audioTrack, onProgress, signal,
         onFallback: stage => ctx.log(`[media] proxy_fallback media=${logId(asset.id)} project=${logId(projectId)} height=${height} stage=${stage}`),
       });
+      previewTrack = heard;
     }
     signal.throwIfAborted();
     asset = publish("ready");
+    // Picked while the preview was made, another track's preview is made once the recording is ready.
+    if (previewTrack && !hearsSameTrack(previewTrack, asset)) void ctx.track(remakeTrackPreview(ctx, { ...asset, status: "ready", projectId }), projectId);
     if (asset.kind === "video") prepareSourceProxies(ctx, [asset.id]);
     logActivity(ctx, { projectId, actor: { type: "scarlet", name: "Scarlet" }, type: "media.added", summary: `${quote(asset.name)} was added${asset.duration ? ` (${Math.round(asset.duration)} s)` : ""}`, data: { mediaId: asset.id } });
     if (asset.transcriptId) return;
@@ -441,11 +452,15 @@ export async function removeUnreadableMedia(ctx: Ctx, projectId: string, id: str
     await ctx.transcriptions.get(task.id)?.done.catch(() => null);
   }
   const original = fileInDirectory(ctx.paths.media(projectId), media.path);
-  const waveform = waveformBase(ctx, projectId, id);
   // Its previews, aligner emissions and speaker turns are named for the file as it is on disk, so they are found
-  // before the file goes. This includes stores kept under an older spelling of the source path.
-  const named = (await Promise.all([sourcePreviews.filesOf(ctx, media), savedSpeakerTurns(ctx, projectId, media),
-    original && emissionStorePaths(ctx, projectId, original, join(ctx.paths.media(projectId), media.path)).catch(() => [])])).flat();
+  // before the file goes. This includes stores kept under an older spelling of the source path, and those of every
+  // audio track it was heard on.
+  const tracks = [...new Map([media.audioTrack, ...(media.audioStreams ?? []).map(s => s.index), "all" as const]
+    .map(audioTrack => ({ ...media, audioTrack }))
+    .map(heard => [JSON.stringify(heardAudioKey(heardAudio(heard))), heard] as const)).values()];
+  const named = (await Promise.all([everyWaveform(ctx, projectId, id), ...tracks.flatMap(heard => [
+    sourcePreviews.filesOf(ctx, heard), savedSpeakerTurns(ctx, projectId, heard),
+    original && emissionStorePaths(ctx, projectId, original, join(ctx.paths.media(projectId), media.path), heardAudio(heard)).catch(() => [])])])).flat();
   ctx.db.transaction(() => {
     removable();
     ctx.db.prepare("DELETE FROM transcripts WHERE media_id = ?").run(id);
@@ -455,6 +470,6 @@ export async function removeUnreadableMedia(ctx: Ctx, projectId: string, id: str
   }, "immediate")();
   ctx.log(`[media] ${id} removed from ${projectId}: "${media.name.slice(0, 80)}"`);
   // The file is out of the project either way. An original that can't be deleted now goes with the next sweep of leftovers.
-  await Promise.all([original, waveform + ".waveform", waveform + ".json", ...olderWaveforms(ctx, projectId, id), ...named]
+  await Promise.all([original, ...new Set(named)]
     .map(path => path && rm(path, { recursive: true, force: true }).catch(error => ctx.log(`[media] ${id} left ${path} behind: ${errorMessage(error)}`))));
 }

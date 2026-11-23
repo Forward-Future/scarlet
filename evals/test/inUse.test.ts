@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Change, timelineFromKeepRanges, type Timeline } from "../../packages/timeline/src/index.ts";
-import { Task } from "../../packages/shared/src/api.ts";
+import { Task } from "../../packages/shared/src/tasks.ts";
 import { merge, report, requestStats, reviewOutcomes, summarize, type ProjectData } from "../src/inUse.ts";
 
 const timeline = (version: string): Timeline => ({ ...timelineFromKeepRanges("prj", "interview", [{ start: 0, end: 600 }]), version });

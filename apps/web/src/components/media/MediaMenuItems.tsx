@@ -15,7 +15,7 @@ import { useMediaProcessing } from "./useMediaProcessing";
  * A transcription the pause stopped isn't one: it starts again on resume. A file that failed to import never became
  * the project's, so only Media's list of imports says why: `importFailed` marks the button for it the same way.
  */
-export function useMediaWarning(importFailed = false): string | undefined {
+function useMediaWarning(importFailed = false): string | undefined {
   const media = useProjectStore(s => s.current?.media);
   const tasks = useProjectStore(s => s.current?.tasks);
   const paused = useProjectStore(s => !!s.current?.project.mediaPaused);
@@ -82,13 +82,7 @@ export function MediaButton({ importing, importFailed, onOpen }: { importing: nu
   const transcriptionBlock = showTranscription && (transcribing.queued ? <div className="media-hover-row">
     <span className="text-muted" role="status">Transcribing</span>
     <span className="text-dim">Queued</span>
-  </div> : <div className="media-hover-job">
-    <div className="media-hover-row">
-      <strong role="status">{transcribing.percent ? "Transcribing" : "Transcribing…"}</strong>
-      {transcribing.percent && <span className="text-muted tnum">{transcribing.percent}</span>}
-    </div>
-    <progress className="activity-progress" aria-label={transcriptionLabel} max={1} value={transcribing.progress} />
-  </div>);
+  </div> : <HoverJob verb="Transcribing" percent={transcribing.percent} progress={transcribing.progress} />);
 
   return <div className="media-hover" data-dismissed={dismissed || undefined} data-escape-owner={(hasCard && focused && !dismissed) || undefined}
     onPointerEnter={() => setDismissed(false)} onFocus={() => { setFocused(true); setDismissed(false); }}
@@ -110,13 +104,7 @@ export function MediaButton({ importing, importFailed, onOpen }: { importing: nu
       <div className="card" role="group" aria-label="Media processing">
         {warning && <span className="text-warn">{warning}</span>}
         {active ? <>
-          <div className="media-hover-job">
-            <div className="media-hover-row">
-              <strong role="status">{percent ? "Caching" : "Caching…"}</strong>
-              {percent && <span className="text-muted tnum">{percent}</span>}
-            </div>
-            <progress className="activity-progress" aria-label={label ?? "Caching"} max={1} value={progress} />
-          </div>
+          <HoverJob verb="Caching" percent={percent} progress={progress} />
           {transcriptionBlock}
           {adding && <span className="text-muted" role="status">{adding}</span>}
           <div className="media-hover-foot">
@@ -139,6 +127,17 @@ export function MediaButton({ importing, importFailed, onOpen }: { importing: nu
         {processing.error && <span className="simple-error" role="alert">{processing.error}</span>}
       </div>
     </div>}
+  </div>;
+}
+
+/** A job under way in the hover card: its word, how far it has got once that's known, and a bar. */
+function HoverJob({ verb, percent, progress }: { verb: string; percent?: string; progress?: number }) {
+  return <div className="media-hover-job">
+    <div className="media-hover-row">
+      <strong role="status">{percent ? verb : `${verb}…`}</strong>
+      {percent && <span className="text-muted tnum">{percent}</span>}
+    </div>
+    <progress className="activity-progress" aria-label={percent ? `${verb} ${percent}` : verb} max={1} value={progress} />
   </div>;
 }
 

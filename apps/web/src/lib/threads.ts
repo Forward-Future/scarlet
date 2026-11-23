@@ -176,6 +176,26 @@ export function requestTarget(task: Task, made: Change | undefined, changes: rea
   return edit ? { note, edit } : { note, changeId: change.id, call: index };
 }
 
+/** What the chat says of a run that failed or was stopped. */
+function failureText(t: Task, hasEdit: boolean) {
+  if (t.state === "cancelled") return "Edit stopped.";
+  // The host stopped the run: its agent went silent ("stalled: … N minutes"), or it reached an optional
+  // time cap ("timed out after N minutes", or a bare "timed out" from hosts that stopped every run at 45).
+  const quiet = /^stalled\b.*?(\d+) minutes?/.exec(t.error ?? "");
+  const limit = /^timed out(?: after (\d+) minutes?)?/.exec(t.error ?? "");
+  const kept = hasEdit ? " What it saved is kept." : "";
+  if (quiet) return `Scarlet went quiet for ${quiet[1]} ${quiet[1] === "1" ? "minute" : "minutes"}, so the edit was stopped.${kept}`;
+  if (limit) return (limit[1] ? `The edit reached its ${limit[1]}-minute limit.` : "The edit ran out of time.") + kept;
+  if (t.interrupted) return hasEdit ? "Scarlet was interrupted after saving changes." : "The edit was interrupted before it finished.";
+  if (t.agent === "claude" && t.error?.includes("Sandbox required but unavailable")) {
+    return "Claude Code couldn’t start because its required shell sandbox was unavailable.";
+  }
+  return "I couldn’t finish this edit.";
+}
+
+/** The run's agent, as the author of what it said. */
+const agentAuthor = (task: Task): Author => ({ type: "agent", id: task.agent, name: task.agent, model: task.model });
+
 /** Saved conversation entries in chronological order. */
 export function threadConversation(thread: Thread, notes: Note[], events: Record<string, TaskEvent[]> = {}, firstCuts?: Map<string, FirstCutDelivery>) {
   const out: ThreadEntry[] = [];
@@ -234,7 +254,7 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
       if (full) {
         const text = editConfirmation(reply, requested) ?? full;
         out.push({ kind: "agent", at: t.finishedAt ?? t.createdAt ?? "", text, fullText: full === text ? undefined : full,
-          author: { type: "agent", id: t.agent, name: t.agent, model: t.model } });
+          author: agentAuthor(t) });
       }
     }
     // The pass finished and its closing check for repeats couldn't run. The pass stands; the check can be run again.
@@ -254,21 +274,8 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
       // stood before that one.
       const aboutOne = t.context.cutIndex !== undefined || t.context.editIndex !== undefined;
       const available = (aboutOne || t === thread.tasks.at(-1)) && !thread.active && !thread.question && !t.retryTaskId && recovery;
-      let text = "I couldn’t finish this edit.";
-      if (t.agent === "claude" && t.error?.includes("Sandbox required but unavailable")) {
-        text = "Claude Code couldn’t start because its required shell sandbox was unavailable.";
-      }
-      if (t.interrupted) text = hasEdit ? "Scarlet was interrupted after saving changes." : "The edit was interrupted before it finished.";
-      // The host stopped the run: its agent went silent ("stalled: … N minutes"), or it reached an optional
-      // time cap ("timed out after N minutes", or a bare "timed out" from hosts that stopped every run at 45).
-      const quiet = /^stalled\b.*?(\d+) minutes?/.exec(t.error ?? "");
-      const limit = /^timed out(?: after (\d+) minutes?)?/.exec(t.error ?? "");
-      const kept = hasEdit ? " What it saved is kept." : "";
-      if (quiet) text = `Scarlet went quiet for ${quiet[1]} ${quiet[1] === "1" ? "minute" : "minutes"}, so the edit was stopped.${kept}`;
-      else if (limit) text = (limit[1] ? `The edit reached its ${limit[1]}-minute limit.` : "The edit ran out of time.") + kept;
-      if (stopped) text = "Edit stopped.";
       out.push({ kind: "system", at: t.finishedAt ?? t.createdAt ?? "",
-        text, tone: stopped || taskWasStopped(t) ? "warn" : "bad",
+        text: failureText(t, hasEdit), tone: stopped || taskWasStopped(t) ? "warn" : "bad",
         action: available ? { taskId: t.id, label: recovery === "resume" ? "Resume agent" : "Retry edit" } : undefined });
     }
     for (let i = start; i < out.length; i++) out[i]!.taskId = t.id;
@@ -293,7 +300,7 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
       const completion = editConfirmation(summary, request, "full");
       if (task && completion && completion !== text && c.state === "approved" && finalSummary) {
         out.push({ kind: "agent", at: task.finishedAt ?? task.createdAt ?? "", text: completion, change: c, replyTo: task.id,
-          author: { type: "agent", id: task.agent, name: task.agent, model: task.model } });
+          author: agentAuthor(task) });
       }
     }
     // Applied after the video had moved on, a suggestion goes back to Scarlet to be made again. It says so once, in
@@ -301,7 +308,7 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
     // and what happens to it. What the redo makes, or how it ended, takes the line's place.
     const redo = thread.tasks.find(t => isRedo(t) && t.context.changeId === c.id && runIsActive(t));
     if (redo) out.push({ kind: "agent", taskId: task?.id, at: redo.createdAt ?? c.updatedAt ?? "", text: redo.state === "queued" && !redo.startedAt ? REDO_WAITS : REDOING,
-      author: { type: "agent", id: redo.agent, name: redo.agent, model: redo.model } });
+      author: agentAuthor(redo) });
     for (const feedback of notes.filter(n => n.changeId === c.id)) {
       // The note's own words are what its request was sent as. A reply to it is Scarlet's, and never part of them.
       const words = noteThread(feedback).text;
