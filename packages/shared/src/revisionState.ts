@@ -1,5 +1,6 @@
 import type { Change, ChangeState } from "@scarlet/timeline";
-import type { Render, Task } from "./api.js";
+import type { Render } from "./api.js";
+import type { Task } from "./tasks.js";
 
 export function beginRevision(change: Change, task: Task): Change {
   return { ...change, state: "revising", revisionFrom: change.state === "revising" ? change.revisionFrom :

@@ -16,10 +16,11 @@
  */
 import { DatabaseSync } from "node:sqlite";
 import { Change, mergeRanges, Note, Timeline, type CutAssessment } from "../../packages/timeline/src/index.ts";
-import { Task } from "../../packages/shared/src/api.ts";
+import { Task } from "../../packages/shared/src/tasks.ts";
 import { callNumbers, cutInPass, passRunOver } from "../../packages/shared/src/passCalls.ts";
 import { buildThreads, type Thread } from "../../packages/shared/src/threads.ts";
-import { isRejectRequest, matchesEdit, REVISED_CHECK, threadTimeline, type ThreadEdit } from "../../packages/shared/src/threadTimeline.ts";
+import { isRejectRequest, matchesEdit, REVISED_CHECK, type ThreadEdit } from "../../packages/shared/src/threadEdits.ts";
+import { threadTimeline } from "../../packages/shared/src/threadTimeline.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { cli, isMain, main } from "./args.ts";

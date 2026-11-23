@@ -5,7 +5,8 @@ import { applyOps, ProposedOp, TimelineOp } from "./ops.js";
 import { toOtio } from "./otio.js";
 import { toFcpxml } from "./fcpxml.js";
 import type { HandoffSource } from "./handoff.js";
-import type { MediaAsset, MediaClip, Timeline } from "./schema.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { MediaClip, Timeline } from "./timelineSchema.js";
 import { expandSplitJoins, putBackSplit, splitEditWords, splitJoinOps } from "./splitJoin.js";
 import { clipEnd, timelineDuration } from "./time.js";
 

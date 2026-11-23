@@ -1,5 +1,6 @@
 /** Content-based diffing between two timeline versions. */
-import type { Clip, MediaClip, Timeline, TimeRange, Track } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { Clip, MediaClip, Timeline, Track } from "./timelineSchema.js";
 import { clipEnd, JOIN_SLACK, meets, sourceAt, timelineDuration } from "./time.js";
 import { intervalCandidates } from "./intervals.js";
 import { stableStringify } from "./ids.js";

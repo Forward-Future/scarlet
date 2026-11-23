@@ -469,6 +469,8 @@ describe("timeline_first_cut indexed keeps", () => {
         keep: [{ fromWord: 0, toWord: 3, start: 0.1 }, { fromWord: 5, toWord: 9, end: 5.5 }],
       } }) as CallToolResult;
       expect(textOf(result)).toMatch(/join|quiet|review|silence|edge/i);
+      expect(textOf(result)).toContain("dialogue_apply_cuts");
+      expect(textOf(result)).toMatch(/source_audio or listen/);
       expect(mock.requests.some(r => r.path.endsWith("/m1/waveform"))).toBe(true);
       expect(mock.requests.some(r => r.method === "POST" && r.path === "/projects/prj_test/changes")).toBe(false);
     } finally { await editor.close(); }

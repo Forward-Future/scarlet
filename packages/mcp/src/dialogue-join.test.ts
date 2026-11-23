@@ -601,6 +601,62 @@ describe("native retake boundaries", () => {
     expect([cut.problems, kept.problems]).toEqual([[], []]);
   });
 
+  it("cuts after an intake breath before the incoming word by default, before it when asked to keep it, and protects soft onsets", () => {
+    // Quiet from 1.6 s, an intake breath at 2.40–2.54 s (-42 dBFS) with the detector already on, 80 ms of room tone
+    // back to 2.62 s, then “which” at 2.62 s: the breath folds into the quiet and is cut by default, or kept on request.
+    const said = [{ start: .6, end: 1.0, text: "now" }, { start: 1.2, end: 1.6, text: "first" }, { start: 2.62, end: 2.9, text: "which" }];
+    const at = (t: number) => ((t >= .6 && t < 1.0) || (t >= 1.2 && t < 1.6) || (t >= 2.62 && t < 2.9)) ? .12
+      : (t >= 2.40 && t < 2.54) ? .008 : .0006;
+    const rms = Array.from({ length: 200 }, (_, i) => at(i / 50));
+    const edges = joinEvidence(said, { from: 0, to: 4, peaks: rms, rms,
+      speechActivity: [{ start: .6, end: 1.62 }, { start: 2.38, end: 2.92 }] })!;
+    expect(edges.quiet.find(q => q.start < 2 && q.end > 2.5)).toEqual({ start: expect.closeTo(1.6), end: expect.closeTo(2.62) });
+    expect(edges.breaths).toEqual([{ start: expect.closeTo(2.40), end: expect.closeTo(2.54), db: -42, side: "before" }]);
+    const measured = "A breath precedes “which”: 0.14 s at up to -42 dBFS (24 dB under the word), in no word; the cut ends ";
+    const cut = wordCutRange(said, 1, 1, () => edges);
+    expect(cut.end).toBeCloseTo(2.62 - AIR_BEFORE_SPEECH);
+    expect(cut.breath).toBe(measured + "after it (breath cut).");
+    // Even with a tight voiceIn < quietMargin, breath: "cut" and "keep" still honor the incoming breath.
+    const tight = wordCutRange(said, 1, 1, () => edges, undefined, undefined, .02, "cut");
+    expect(tight.end).toBeCloseTo(2.60);
+    expect(tight.breath).toBe(measured + "after it (breath cut).");
+    const kept = wordCutRange(said, 1, 1, () => edges, undefined, undefined, undefined, "keep");
+    expect(kept.end).toBeCloseTo(2.40 - AIR_BEFORE_SPEECH);
+    expect(kept.breath).toBe(measured + "before it, so it plays (breath keep).");
+    // A soft word-initial consonant rising straight into speech with no return to room tone stays untouched.
+    const softRms = Array.from({ length: 200 }, (_, i) => {
+      const t = i / 50;
+      if ((t >= .6 && t < 1.0) || (t >= 1.2 && t < 1.6) || (t >= 2.62 && t < 2.9)) return .12;
+      return t >= 2.50 && t < 2.62 ? .005 : .0006;
+    });
+    const soft = joinEvidence(said, { from: 0, to: 4, peaks: softRms, rms: softRms,
+      speechActivity: [{ start: .6, end: 1.62 }, { start: 2.50, end: 2.92 }] })!;
+    expect(soft.breaths).toBeUndefined();
+    expect(soft.quiet.find(q => q.start > 1.5 && q.start < 2)!.end).toBeCloseTo(2.50);
+    // Only 20 ms of room tone after a breath is too narrow to pad back by quietMargin without landing on the breath.
+    const narrowRms = Array.from({ length: 200 }, (_, i) => {
+      const t = i / 50;
+      if ((t >= .6 && t < 1.0) || (t >= 1.2 && t < 1.6) || (t >= 2.62 && t < 2.9)) return .12;
+      return t >= 2.46 && t < 2.60 ? .008 : .0006;
+    });
+    const narrow = joinEvidence(said, { from: 0, to: 4, peaks: narrowRms, rms: narrowRms,
+      speechActivity: [{ start: .6, end: 1.62 }, { start: 2.44, end: 2.92 }] })!;
+    expect(narrow.breaths).toBeUndefined();
+    expect(narrow.quiet.find(q => q.start > 1.5 && q.start < 2)!.end).toBeCloseTo(2.46);
+    // A breath, room tone, then a soft “s”/“f”/“h” that starts before the transcript's word timing: the fold stops at the
+    // room tone, so the cut's end stays clear of the consonant even though no word covers it yet.
+    const hissRms = Array.from({ length: 200 }, (_, i) => {
+      const t = i / 50;
+      if ((t >= .6 && t < 1.0) || (t >= 1.2 && t < 1.6) || (t >= 2.62 && t < 2.9)) return .12;
+      return (t >= 2.24 && t < 2.36) ? .008 : (t >= 2.50 && t < 2.62) ? .004 : .0006;
+    });
+    const hiss = joinEvidence(said, { from: 0, to: 4, peaks: hissRms, rms: hissRms,
+      speechActivity: [{ start: .6, end: 1.62 }, { start: 2.22, end: 2.92 }] })!;
+    expect(hiss.quiet.find(q => q.start > 1.5 && q.start < 2)!.end).toBeCloseTo(2.50);
+    expect(hiss.breaths).toEqual([{ start: expect.closeTo(2.24), end: expect.closeTo(2.36), db: -42, side: "before" }]);
+    expect(wordCutRange(said, 1, 1, () => hiss).end).toBeLessThanOrEqual(2.50);
+  });
+
   it("doesn't take a stop inside the kept word, which sounds on after it, for where the words part", () => {
     // “subscription” runs into “I” with no pause. The stop before its last syllable falls to -52 dBFS at 1.2 s, and the
     // word sounds at full level for 0.36 s after it: an edge there takes off “-tion”.
@@ -786,6 +842,31 @@ describe("a restart that begins on the word the first take broke off after", () 
   it("offers nothing when the take resumes on another word", () => {
     const { p, tl } = fixture();
     expect(checkDialogueJoin(tl, p, { start: 1.22, end: 2.34 }, [page("when")]).sameWordJoin).toBeUndefined();
+  });
+
+  it("matches a short repeated word without correlating past its end into a following gap", () => {
+    // “means, it basically”: the first “it” (1.16–1.24 s) runs straight out of “means,” and into “basically”,
+    // while the second “it” (2.40–2.48 s) starts out of a pause and dips briefly before “basically”.
+    const { p, tl } = fixture();
+    const first = [-32, -31, -34, -36, -34, -29, -27, -30, -33, -31, -28]; // 1.08..1.30: “means,” ends ~1.16, “it” 1.16..1.24
+    const second = [-68, -46, -35, -29, -27, -30, -45, -42, -30, -28];     // 2.36..2.56: “it” rises at 2.38, peaks 2.42-2.44, dips at 2.48
+    const db = Array.from({ length: 250 }, (_, i) => {
+      if (i >= 54 && i - 54 < first.length) return first[i - 54]!;
+      if (i >= 118 && i - 118 < second.length) return second[i - 118]!;
+      return (i >= 30 && i < 54) || (i >= 65 && i < 82) || (i >= 128 && i < 160) ? -32 : -68;
+    });
+    const rms = db.map(v => 10 ** (v / 20));
+    const said = [
+      { start: .6, end: 1.16, text: "means," }, { start: 1.16, end: 1.24, text: "it" }, { start: 1.24, end: 1.64, text: "basically" },
+      { start: 2.38, end: 2.48, text: "it" }, { start: 2.52, end: 3.2, text: "basically" },
+    ];
+    const shortPage: JoinPage = { mediaId: "mic", start: 0, end: 5,
+      edges: joinEvidence(said, { from: 0, to: 5, peaks: rms, rms, speechActivity: [{ start: .6, end: 1.66 }, { start: 2.38, end: 3.2 }] }) };
+    const held = checkDialogueJoin(tl, p, { start: 1.18, end: 2.34 }, [shortPage]);
+    expect(held.status).toBe("review");
+    expect(held.sameWordJoin).toMatchObject({ word: "it", end: 2.34 });
+    expect(held.sameWordJoin!.start).toBeGreaterThanOrEqual(1.13);
+    expect(held.sameWordJoin!.start).toBeLessThanOrEqual(1.20);
   });
 });
 

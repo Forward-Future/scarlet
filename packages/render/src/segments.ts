@@ -6,7 +6,6 @@
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { mergeRanges, planPlaybackSegments, planSegments, timelineDuration } from "@scarlet/timeline";
 import type { Clip, Project, Timeline, TimeRange } from "@scarlet/timeline";
@@ -36,6 +35,7 @@ import {
   renderBatch,
   segmentTimelines,
   withStagedFile,
+  withTempDir,
 } from "./segmentUtils.js";
 import { planTransitions } from "./transitions.js";
 
@@ -64,8 +64,7 @@ export interface AssembleOptions {
 /** Concatenate identically-encoded mp4 segments without re-encoding. */
 export async function assembleSegments(files: string[], output: string, opts: AssembleOptions = {}): Promise<void> {
   if (!files.length) throw new Error("no segments to assemble");
-  const tmp = await fs.mkdtemp(path.join(opts.tempDir ?? os.tmpdir(), "scarlet-concat-"));
-  try {
+  await withTempDir(opts.tempDir, "scarlet-concat-", async tmp => {
     const audio = opts.completedAudio;
     const durations = audio?.pictureDurations ?? opts.pictureDurations;
     if (durations && durations.length !== files.length) throw new Error("Picture duration count differs.");
@@ -84,9 +83,7 @@ export async function assembleSegments(files: string[], output: string, opts: As
     // packet to zero would delay every picture of an assembled preview by 1024 samples.
     await runFfmpeg(["-y", "-copyts", ...streams, "-map_chapters", "-1", "-avoid_negative_ts", "disabled", "-c", "copy", "-movflags", "+faststart", output],
       { ffmpegPath: opts.ffmpegPath, signal: opts.signal });
-  } finally {
-    await fs.rm(tmp, { recursive: true, force: true });
-  }
+  });
 }
 
 export interface CachedRenderOptions extends RenderOptions {
@@ -256,6 +253,31 @@ export async function renderPlaybackSegment(project: Project, timeline: Timeline
   return { warnings };
 }
 
+/**
+ * Remux a delivery that is one whole, untouched original: its picture copied losslessly, with the mixed program
+ * sound. False when the timeline is anything else or the copy doesn't check out; the edit is rendered then.
+ */
+async function copyWholeOriginal(project: Project, timeline: Timeline, picture: Timeline, duration: number,
+  size: { width: number; height: number }, cacheDir: string, output: string, opts: CachedRenderOptions,
+  probes: NonNullable<RenderOptions["probes"]>, warn: (message: string) => void): Promise<boolean> {
+  const original = await wholeOriginalPicture(project, picture, duration, size, opts);
+  if (!original) return false;
+  const audio = await renderProgramAudio(project, timeline, cacheDir, { ...opts, probes });
+  await fs.mkdir(path.dirname(path.resolve(output)), { recursive: true });
+  return withStagedFile(output, "assembly.mp4", async staged => {
+    const ok = await copyOriginalPicture(original, audio, staged, project.settings, opts).catch((error: unknown) => {
+      opts.signal?.throwIfAborted();
+      if (!(error instanceof FfmpegError)) throw error;
+      warn(`Could not copy the original picture (${failureReason(error)}); rendered the edit instead.`);
+      return false;
+    });
+    if (!ok) return false;
+    opts.signal?.throwIfAborted();
+    await fs.rename(staged, output);
+    return true;
+  });
+}
+
 /** Render only the segments missing from `cacheDir`, then concatenate everything into `output`. */
 export async function renderFullCached(
   project: Project,
@@ -309,28 +331,10 @@ export async function renderFullCached(
   const concurrency = Math.max(1, opts.concurrency ?? 1);
   const probes = opts.probes ?? new Map();
   // Never replace reusable encoded sections. A whole, untouched picture with a cold cache can instead be remuxed losslessly.
-  if (quality === "delivery" && todo.length === segments.length && !opts.exportRange && !opts.extraArgs?.length && !opts.splits?.length) {
-    const original = await wholeOriginalPicture(project, picture, total, size, opts);
-    if (original) {
-      const audio = await renderProgramAudio(project, timeline, cacheDir, { ...opts, probes });
-      await fs.mkdir(path.dirname(path.resolve(output)), { recursive: true });
-      const copied = await withStagedFile(output, "assembly.mp4", async staged => {
-        const ok = await copyOriginalPicture(original, audio, staged, project.settings, opts).catch((error: unknown) => {
-          opts.signal?.throwIfAborted();
-          if (!(error instanceof FfmpegError)) throw error;
-          warn(`Could not copy the original picture (${failureReason(error)}); rendered the edit instead.`);
-          return false;
-        });
-        if (!ok) return false;
-        opts.signal?.throwIfAborted();
-        await fs.rename(staged, output);
-        return true;
-      });
-      if (copied) {
-        opts.onProgress?.(1);
-        return { output, duration: total, segments: [], rendered: 0, reused: 0, encoder: "copy", warnings };
-      }
-    }
+  if (quality === "delivery" && todo.length === segments.length && !opts.exportRange && !opts.extraArgs?.length && !opts.splits?.length &&
+      await copyWholeOriginal(project, timeline, picture, total, size, cacheDir, output, opts, probes, warn)) {
+    opts.onProgress?.(1);
+    return { output, duration: total, segments: [], rendered: 0, reused: 0, encoder: "copy", warnings };
   }
   // Previews are short sections of long-GOP sources. Decoding each from its keyframe
   // in its own process costs more than the encode, so adjacent sections share one.

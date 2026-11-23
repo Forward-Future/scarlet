@@ -10,8 +10,12 @@
  * either; they are re-timed onto the edited cut through the footage, and
  * captions on footage that was cut are dropped.
  */
-import type { CaptionClip, Clip, ColorClip, MediaAsset, MediaClip, Project, Timeline, TimeRange, Track } from "./schema.js";
-import { RenderColor, Timeline as TimelineSchema } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { CaptionClip, Clip, ColorClip, MediaClip, Timeline, Track } from "./timelineSchema.js";
+import type { Project } from "./projectSchema.js";
+import { RenderColor } from "./schemaBase.js";
+import { Timeline as TimelineSchema } from "./timelineSchema.js";
 import { makeMediaClip } from "./builders.js";
 import { newId } from "./ids.js";
 import { firstIndex, intervalCandidates } from "./intervals.js";
@@ -230,6 +234,11 @@ function retimeCaption(clip: CaptionClip, ranges: ReturnType<typeof captionRange
   return clips;
 }
 
+/** Keyframes timed from `from`'s start, timed instead from a clip of the same footage that reads from `sourceIn` at `speed`. */
+function retimedKeys<K extends { time: number }>(keys: K[] | undefined, from: MediaClip, sourceIn: number, speed: number) {
+  return keys?.map(k => ({ ...k, time: (from.sourceIn - sourceIn + k.time * from.speed) / speed }));
+}
+
 /** Parse OTIO tracks into Scarlet tracks, inheriting looks and IDs from `base`. */
 function importOtioTracks(otioTracks: Json[], project: Project, base: Timeline): { tracks: Track[]; independentAudio: Set<string> } {
   const missing = new Set<string>();
@@ -333,8 +342,8 @@ function importOtioTracks(otioTracks: Json[], project: Project, base: Timeline):
         ? {
             label: match.label,
             transform: match.transform,
-            keyframes: match.keyframes?.map(k => ({ ...k, time: (match.sourceIn - sourceIn + k.time * match.speed) / speed })),
-            volumeKeyframes: match.volumeKeyframes?.map(k => ({ ...k, time: (match.sourceIn - sourceIn + k.time * match.speed) / speed })),
+            keyframes: retimedKeys(match.keyframes, match, sourceIn, speed),
+            volumeKeyframes: retimedKeys(match.volumeKeyframes, match, sourceIn, speed),
             opacity: match.opacity,
             volume: match.volume,
             audioFadeIn: match.audioFadeIn,

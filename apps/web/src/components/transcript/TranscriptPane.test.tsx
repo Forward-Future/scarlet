@@ -12,7 +12,8 @@ import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { useProjectStore } from "../../stores/project";
 import { usePlayerStore } from "../../stores/player";
 import { useUiStore } from "../../stores/ui";
-import { findWords, TranscriptPane } from "./TranscriptPane";
+import { TranscriptPane } from "./TranscriptPane";
+import { findWords } from "./transcriptSearch";
 import { forgetTranscriptPages } from "./useTranscriptWindow";
 
 const duration = 60;

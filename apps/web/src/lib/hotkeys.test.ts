@@ -96,6 +96,9 @@ it("skips one second with an arrow and one frame with Shift, without drifting", 
   for (let i = 0; i < 30; i++) ntscTime = arrowSeekTime(ntscTime, "ArrowRight", true, 30000 / 1001);
   expect(ntscTime).toBeCloseTo(1.001, 10);
   expect(arrowSeekTime(10.033, "ArrowRight", true, 30)).toBe(302 / 30);
+  // Paused mid-frame (frame 300 at 30fps): ← goes to 299, → goes to 301 (never staying on 300 or skipping 301).
+  expect(arrowSeekTime(10.02, "ArrowLeft", true, 30)).toBe(299 / 30);
+  expect(arrowSeekTime(10.02, "ArrowRight", true, 30)).toBe(301 / 30);
   // The caller clamps: a skip back from the start is before it.
   expect(arrowSeekTime(0.5, "ArrowLeft", false)).toBe(-0.5);
   expect(arrowSeekTime(0, "ArrowLeft", true, 30)).toBe(-1 / 30);

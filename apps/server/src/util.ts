@@ -1,5 +1,5 @@
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { mkdir, rename, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
 import { dirname } from "node:path";
 
 export function errorMessage(err: unknown): string {
@@ -38,11 +38,6 @@ export interface FileStamp {
 
 export function sameStamp(a: FileStamp, b: FileStamp): boolean {
   return a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
-}
-
-export async function statStamp(file: string): Promise<FileStamp | undefined> {
-  const info = await stat(file).catch(() => undefined);
-  return info ? { size: info.size, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs } : undefined;
 }
 
 /** Write `data` to `tempPath` (preserving caller's leftover-sweeper naming) and atomically rename into place. */

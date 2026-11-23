@@ -5,7 +5,9 @@
  * evidence for the model: whether a shift is worth correcting is its call.
  */
 import type { TimeRange } from "@scarlet/timeline";
-import { FFMPEG_QUIET_ARGS, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, ffSeconds, resolveFfmpeg, runCapture } from "./exec.js";
+import { FFMPEG_QUIET_ARGS, SOURCE_AUDIO_CLOCK, resolveFfmpeg, runCapture } from "./exec.js";
+import { rangeInput } from "./mediaInput.js";
+import { audioMapArgs, type HeardAudio } from "./audioTrack.js";
 
 /** The mouth's area of the frame: [left, top, right, bottom] as fractions. */
 export type CropBox = readonly [number, number, number, number];
@@ -83,8 +85,7 @@ export async function mouthMotion(file: string, range: TimeRange, opts: {
   const h = even(Math.min(height - top, (Math.min(1, box[3]) - Math.max(0, box[1])) * height));
   // The mouth is a few hundred pixels: decoded frames come back to memory either way, so CUDA doesn't keep them.
   const hardware = opts.decoder ? ["-hwaccel", opts.decoder] : [];
-  const { stdout } = await runCapture(resolveFfmpeg(), [...FFMPEG_QUIET_ARGS, "-loglevel", "error", ...hardware,
-    "-ss", ffSeconds(range.start), "-t", String(range.end - range.start), ...LOCAL_MEDIA_INPUT, "-i", file,
+  const { stdout } = await runCapture(resolveFfmpeg(), [...FFMPEG_QUIET_ARGS, "-loglevel", "error", ...hardware, ...rangeInput(file, range),
     "-map", "0:v:0", "-an", "-vf", `fps=${fps},crop=${w}:${h}:${left}:${top},scale=${MOUTH_W}:${MOUTH_H}:flags=area,format=gray`,
     "-f", "rawvideo", "-"], { signal: opts.signal, maxStderr: 64 * 1024 });
   const size = MOUTH_W * MOUTH_H, count = Math.floor(stdout.length / size);
@@ -98,10 +99,9 @@ export async function mouthMotion(file: string, range: TimeRange, opts: {
 }
 
 /** The sound's loudness over each frame of `range` at `fps`, as the log of its RMS level. */
-export async function frameLoudness(file: string, range: TimeRange, opts: { fps: number; frames: number; stream?: number; signal?: AbortSignal }): Promise<Float32Array> {
-  const { stdout } = await runCapture(resolveFfmpeg(), [...FFMPEG_QUIET_ARGS, "-loglevel", "error",
-    "-ss", ffSeconds(range.start), "-t", String(range.end - range.start), ...LOCAL_MEDIA_INPUT, "-i", file,
-    "-map", `0:a:${opts.stream ?? 0}`, "-vn", "-af", SOURCE_AUDIO_CLOCK, "-ac", "1", "-ar", String(SOUND_RATE), "-f", "s16le", "-"],
+export async function frameLoudness(file: string, range: TimeRange, opts: { fps: number; frames: number; audio?: HeardAudio; signal?: AbortSignal }): Promise<Float32Array> {
+  const { stdout } = await runCapture(resolveFfmpeg(), [...FFMPEG_QUIET_ARGS, "-loglevel", "error", ...rangeInput(file, range),
+    ...audioMapArgs(opts.audio, { filters: SOURCE_AUDIO_CLOCK }), "-vn", "-ac", "1", "-ar", String(SOUND_RATE), "-f", "s16le", "-"],
     { signal: opts.signal, maxStderr: 64 * 1024 });
   const samples = new Int16Array(stdout.buffer, stdout.byteOffset, Math.floor(stdout.length / 2));
   const loudness = new Float32Array(opts.frames);
@@ -117,6 +117,8 @@ export async function frameLoudness(file: string, range: TimeRange, opts: { fps:
 /** Measure one stretch of a recording: the mouth in `box` against the sound, shifted up to `maxShift` seconds either way. `curve` is the match at each shift, a frame apart. */
 export async function lipSyncStretch(file: string, range: TimeRange, opts: {
   box: CropBox; width: number; height: number; fps: number; maxShift: number; decoder?: "videotoolbox" | "cuda"; signal?: AbortSignal;
+  /** The sound to measure against: the recording's chosen track, or every track mixed. */
+  audio?: HeardAudio;
 }): Promise<LipSyncReading & { curve: number[] }> {
   let motion: Float32Array;
   try { motion = await mouthMotion(file, range, opts); }
@@ -125,7 +127,7 @@ export async function lipSyncStretch(file: string, range: TimeRange, opts: {
     if (!opts.decoder) throw error;
     motion = await mouthMotion(file, range, { ...opts, decoder: undefined });
   }
-  const loudness = await frameLoudness(file, range, { fps: opts.fps, frames: motion.length, signal: opts.signal });
+  const loudness = await frameLoudness(file, range, { fps: opts.fps, frames: motion.length, audio: opts.audio, signal: opts.signal });
   const curve = shiftCurve(motion, loudness, Math.max(1, Math.round(opts.maxShift * opts.fps)));
   return { ...curvePeak(curve, opts.fps, Math.min(motion.length, loudness.length)), curve: curve.map(n => Math.round(n * 1e4) / 1e4) };
 }

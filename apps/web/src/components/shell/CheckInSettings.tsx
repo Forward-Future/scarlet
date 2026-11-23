@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
 import { CHECK_IN_SHARE, type CheckIn } from "@scarlet/shared";
-import { api, errorMessage } from "../../lib/client";
 import { PreferenceSelect } from "../ui/PreferenceSelect";
 import { Icon, InlineError } from "../ui/primitives";
+import { useServerSetting } from "./useServerSetting";
 
 const steps: { value: CheckIn; label: string }[] = [
   { value: "less", label: "Less" },
@@ -16,29 +15,8 @@ const steps: { value: CheckIn; label: string }[] = [
  * is asked to look. The same for every project, saved as chosen.
  */
 export function CheckInSettings() {
-  const [value, setValue] = useState<CheckIn | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let current = true;
-    void api.settings().then(r => { if (current) setValue(r.settings.checkIn); }).catch(e => { if (current) setError(errorMessage(e)); });
-    return () => { current = false; };
-  }, []);
+  const { value, busy, error, choose } = useServerSetting("checkIn");
   if (!value) return error ? <InlineError>{error}</InlineError> : null;
-  const choose = async (next: CheckIn) => {
-    const previous = value;
-    setValue(next);
-    setError("");
-    setBusy(true);
-    try {
-      setValue((await api.updateSettings({ checkIn: next })).settings.checkIn);
-    } catch (e) {
-      setValue(previous);
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
   return (
     <section className="card transcription-preferences check-in-preferences" aria-labelledby="check-in-heading">
       <div className="transcription-header">
