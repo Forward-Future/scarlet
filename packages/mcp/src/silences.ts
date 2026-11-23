@@ -102,7 +102,7 @@ export function pictureReading(w: PictureActivityWindow, shift: number) {
     ...(w.changedFrames > 0 && { typicalAreaPct: pct(w.typicalArea), largestAreaPct: pct(w.largestArea), largestAt: at(w.largestAt), lastChangeAt: at(w.lastChangeAt) }) };
 }
 
-interface KeptSilence { mediaId: string; source: TimeRange; start: number; end: number; seconds: number; after: string; before: string;
+export interface KeptSilence { mediaId: string; source: TimeRange; start: number; end: number; seconds: number; after: string; before: string;
   /** The word it follows, where it is the whole pause between two neighbouring words: `afterWord` in dialogue_apply_cuts trims it. */
   afterWord?: number }
 
