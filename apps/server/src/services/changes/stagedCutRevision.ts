@@ -175,7 +175,7 @@ export function reviseStagedCut(ctx: Ctx, user: User, named: Change, namedIndex:
       let previewVersion = edit.previewVersion;
       if (!placement.keep && edit.range.end > edit.range.start) {
         const source = resolveTimeline(ctx, project, edit.version);
-        previewVersion = storeRevisedCutPreview(ctx, project.id, source, edit.range, revised.toVersion, crossfade, source.version);
+        previewVersion = storeRevisedCutPreview(ctx, project.id, source, edit.range, { reviewId: revised.toVersion, crossfade, parent: source.version });
       }
       cutEdits.push({ ...edit, previewVersion });
     }

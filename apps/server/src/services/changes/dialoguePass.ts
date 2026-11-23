@@ -481,7 +481,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
         const inside = within({ start, end });
         if (inside.some(c => c.recovered)) {
           const source = resolveTimeline(ctx, project, version);
-          const previewVersion = storeRevisedCutPreview(ctx, project.id, source, { start, end }, change.toVersion, cutCrossfade(change, { start, end }), version);
+          const previewVersion = storeRevisedCutPreview(ctx, project.id, source, { start, end }, { reviewId: change.toVersion, crossfade: cutCrossfade(change, { start, end }), parent: version });
           cutEdits.push({ index, version, range: { start, end }, previewVersion });
         }
         const assessment = inside[0]?.assessment;

@@ -34,7 +34,8 @@ export function fadeJoins(ctx: Ctx, projectId: string, timeline: Timeline, joins
 }
 
 /** Store the version a revised cut's preview plays: `source` without `range`, its join faded by `crossfade`. */
-export function storeRevisedCutPreview(ctx: Ctx, projectId: string, source: Timeline, range: TimeRange, reviewId: string, crossfade: number, parent: string): string {
+export function storeRevisedCutPreview(ctx: Ctx, projectId: string, source: Timeline, range: TimeRange,
+  { reviewId, crossfade, parent }: { reviewId: string; crossfade: number; parent: string }): string {
   return storeVersion(ctx, projectId, fadeJoins(ctx, projectId, applyReviewRemovals(source, [range], reviewId), [{ at: range.start, duration: crossfade }]).timeline,
     { parent, description: "Preview this revised cut" }).version;
 }
