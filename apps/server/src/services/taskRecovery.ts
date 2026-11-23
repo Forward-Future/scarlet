@@ -2,7 +2,7 @@ import os from "node:os";
 import { beginRevision, planText, taskNeedsTranscripts, taskPlan, taskRecoveryAction, type RunChoice, type Task } from "@scarlet/shared";
 import { processIsAlive, type Ctx } from "../context.js";
 import { now } from "../db.js";
-import { conflict, notFound } from "../errors.js";
+import { badRequest, conflict, notFound } from "../errors.js";
 import { logId } from "../logText.js";
 import { recordTaskFinished } from "../telemetry/events.js";
 import { getTranscriptionProvider, presetLabel } from "../transcribe/index.js";
@@ -98,6 +98,7 @@ export function holdProjectEditing(ctx: Ctx, projectId: string) {
 
 /** Release the queue under the same lock as claims. */
 export function resumeProjectEditing(ctx: Ctx, projectId: string, choice: RunChoice = {}) {
+  if (choice.agent === "api") throw badRequest("agent_unavailable", "Choose Claude, Codex or Gemini to run this request.");
   return ctx.db.transaction(() => {
     const previous = ctx.repos.projects.header(projectId);
     if (!previous) throw notFound("project");

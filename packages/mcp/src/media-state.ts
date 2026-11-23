@@ -7,7 +7,7 @@ import { MediaPreparing, describeError, noteEvidenceMiss, notePreparing, noteUnm
 export const levelPoints = (from: number, to: number) => Math.max(10, Math.ceil((to - from) * 100));
 
 /** "about 37 min" or "about 3 h 48 min". */
-export function roughDuration(seconds: number) {
+function roughDuration(seconds: number) {
   const minutes = Math.max(1, Math.round(seconds / 60));
   return minutes < 90 ? `about ${minutes} min` : `about ${Math.floor(minutes / 60)} h ${minutes % 60} min`;
 }

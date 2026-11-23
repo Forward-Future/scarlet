@@ -1,4 +1,6 @@
-import type { MediaAsset, MediaClip, Timeline, TimeRange } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { MediaClip, Timeline } from "./timelineSchema.js";
 import { carriesAudio, clipEnd, findClipLocation, sourceToTimeline, timelineToSource } from "./time.js";
 
 /** Two audible clips playing the same moment of the same recording at once, which the mix sums. */

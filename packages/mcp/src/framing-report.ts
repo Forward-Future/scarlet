@@ -412,7 +412,7 @@ export function framingReport(before: Timeline | null, after: Timeline, media: r
  * one that plays on into the stretch keeps the time: the other is footage from the far side of the cut, and taken as
  * the clock it put a screen a minute off what it showed (2026-11-20). Undefined when nothing else plays there.
  */
-export function besideWalk(tl: Timeline, run: readonly MediaClip[], side: "after" | "before", pictures?: readonly MediaClip[]) {
+function besideWalk(tl: Timeline, run: readonly MediaClip[], side: "after" | "before", pictures?: readonly MediaClip[]) {
   const mediaId = run[0]!.mediaId;
   const edgeClip = side === "after" ? run.at(-1)! : run[0]!;
   const at = side === "after" ? clipEnd(edgeClip) : edgeClip.timelineIn;
@@ -466,7 +466,7 @@ export function besideReach(tl: Timeline, framed: readonly FramedStretch[]) {
 }
 
 /** The source seconds of each recording that the framed stretches and the video beside them reach, to read what it shows there. */
-export function besideSources(tl: Timeline, framed: readonly FramedStretch[]): Array<{ id: string; from: number; to: number }> {
+function besideSources(tl: Timeline, framed: readonly FramedStretch[]): Array<{ id: string; from: number; to: number }> {
   const reach = new Map<string, { from: number; to: number }>();
   const add = (id: string, seconds: number[]) => {
     const was = reach.get(id);

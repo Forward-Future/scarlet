@@ -14,15 +14,16 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { rm } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import {
-  Browser,
   ChromeNotFound,
   chromeCandidates,
   evaluate,
   findChrome,
   hasChrome,
+  inBrowser,
   openPage,
   withBrowser,
   within,
+  type Browser,
   type CdpPage,
   type GraphicPageOptions,
 } from "./chromeCdp.js";
@@ -340,10 +341,7 @@ const PAGE_FACTS = String.raw`(() => {
  * page gets a moment after it loads for what it draws late (fonts, embeds), and keeps its own background.
  */
 export async function capturePage(opts: PageCaptureOptions): Promise<PageCapture> {
-  const browser = await Browser.launch(findChrome(opts.chromePath), opts.signal);
-  const abort = () => void browser.close();
-  opts.signal?.addEventListener("abort", abort, { once: true });
-  try {
+  return inBrowser(opts, async browser => {
     const page = await openPage(browser, opts.url, { width: opts.width, height: opts.height, scale: 1 }, opts.signal)
       .catch((error: Error) => { throw error instanceof AbortError ? error : new Error(error.message.replace(/the graphic's page/gi, "the page")); });
     await browser.send("Emulation.setDefaultBackgroundColorOverride", {}, page.sessionId);
@@ -355,15 +353,8 @@ export async function capturePage(opts: PageCaptureOptions): Promise<PageCapture
       clip: { x: 0, y: 0, width: opts.width, height, scale: 1 } }, page.sessionId) as { data: string };
     const headings = facts.headings.filter(h => h.top < height).map(h => ({ text: h.text, box: {
       left: Math.max(0, h.left / opts.width), top: Math.max(0, h.top / height), right: Math.min(1, h.right / opts.width), bottom: Math.min(1, h.bottom / height) } }));
-    opts.signal?.throwIfAborted();
     return { png: Buffer.from(data, "base64"), title: facts.title, url: facts.url, text: facts.text, width: opts.width, height, headings };
-  } catch (error) {
-    if (opts.signal?.aborted) throw new AbortError();
-    throw error;
-  } finally {
-    opts.signal?.removeEventListener("abort", abort);
-    await browser.close();
-  }
+  });
 }
 
 /** Where the drawn part of each frame is, as fractions of the frame: the box around its pixels that aren't transparent. */

@@ -257,14 +257,14 @@ export async function evaluate<T>(browser: Browser, page: CdpPage, expression: s
   return result.result?.value as T;
 }
 
-export async function withBrowser<T>(opts: GraphicPageOptions, run: (browser: Browser, url: string) => Promise<T>): Promise<T> {
-  if (!existsSync(opts.htmlFile)) throw new Error(`No graphic page at ${opts.htmlFile}`);
+/** Run `work` in a fresh headless Chrome that the signal closes. It's checked once more after `work` returns, an
+ * abort turns any failure into an AbortError, and the browser always closes. */
+export async function inBrowser<T>(opts: { chromePath?: string; signal?: AbortSignal }, work: (browser: Browser) => Promise<T>): Promise<T> {
   const browser = await Browser.launch(findChrome(opts.chromePath), opts.signal);
   const abort = () => void browser.close();
   opts.signal?.addEventListener("abort", abort, { once: true });
   try {
-    opts.signal?.throwIfAborted();
-    const result = await run(browser, pathToFileURL(opts.htmlFile).href);
+    const result = await work(browser);
     opts.signal?.throwIfAborted();
     return result;
   } catch (error) {
@@ -274,4 +274,12 @@ export async function withBrowser<T>(opts: GraphicPageOptions, run: (browser: Br
     opts.signal?.removeEventListener("abort", abort);
     await browser.close();
   }
+}
+
+export async function withBrowser<T>(opts: GraphicPageOptions, run: (browser: Browser, url: string) => Promise<T>): Promise<T> {
+  if (!existsSync(opts.htmlFile)) throw new Error(`No graphic page at ${opts.htmlFile}`);
+  return inBrowser(opts, browser => {
+    opts.signal?.throwIfAborted();
+    return run(browser, pathToFileURL(opts.htmlFile).href);
+  });
 }

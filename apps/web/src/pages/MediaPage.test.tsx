@@ -358,6 +358,40 @@ it("pauses and resumes media processing from the library toolbar", async () => {
   });
 });
 
+it("shows an audio track picker only for multi-track recordings and saves the selected track", async () => {
+  const single = fixtureVideo({ id: "single", name: "single.mov" });
+  const multi = fixtureVideo({
+    id: "obs",
+    name: "podcast.mkv",
+    audioStreams: [
+      { index: 0, title: "Host Mic", channels: 1, codec: "aac", sampleRate: 48000 },
+      { index: 1, title: "Guest", channels: 2, codec: "aac", sampleRate: 48000 },
+    ],
+  });
+  await showMedia({ media: [single, multi] }, async container => {
+    const save = vi.spyOn(api, "setMediaAudioTrack").mockImplementation(async (mediaId, audioTrack) => ({
+      media: { ...multi, id: mediaId, audioTrack: audioTrack === 0 ? undefined : audioTrack },
+    }));
+    expect(container.querySelector('[aria-label="Audio track for single.mov"]')).toBeNull();
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-label="Audio track for podcast.mkv"]');
+    expect(trigger).not.toBeNull();
+    expect(trigger?.textContent).toContain("Track 1 — Host Mic");
+
+    // Open dropdown and select "All tracks (mixed)"
+    await act(async () => trigger!.click());
+    const options = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')];
+    expect(options.map(o => o.textContent)).toEqual([
+      expect.stringContaining("All tracks (mixed)"),
+      expect.stringContaining("Track 1 — Host Mic"),
+      expect.stringContaining("Track 2 — Guest"),
+    ]);
+    await act(async () => options[0]!.click());
+    expect(save).toHaveBeenCalledWith("obs", "all");
+    expect(container.querySelector('[aria-label="Audio track for podcast.mkv"]')?.textContent).toContain("All tracks (mixed)");
+  });
+});
+
+
 it("confirms a saved recording's replacement, shows its progress, and lets a failed job be retried", async () => {
   const video = fixtureVideo({ id: "camera", name: "camera.mov", transcriptId: "saved-transcript" });
   const settings = buildDb().settings;

@@ -10,7 +10,8 @@
  * the stretch between them was left out. This reads those joins from the version alone, and builds the version that
  * plays them, so a cut made this way has footage to show like any other.
  */
-import type { Clip, MediaClip, Timeline, TimeRange } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { Clip, MediaClip, Timeline } from "./timelineSchema.js";
 import { shiftClip, splitClip, straightenCrossfades } from "./ops.js";
 import { clipEnd, timelineDuration } from "./time.js";
 
@@ -19,10 +20,11 @@ const EPS = 1e-6;
 /**
  * Which reading of left-out footage a change's joins come from. 2: a join the version before already had on any track
  * is not the change's (2026-11-20). 3: a centered audio crossfade on a join is straightened before reading and opening
- * it, instead of splitting both overlapping clips out of sync (2026-11-22). Joins an earlier reading found are read
- * again.
+ * it, instead of splitting both overlapping clips out of sync (2026-11-22). 4: pieces half a frame apart or less still
+ * meet, so a join whose sound is a millisecond off its picture isn't a new one (2026-11-23). Joins an earlier reading
+ * found are read again.
  */
-export const LEFT_OUT_READING = 3;
+export const LEFT_OUT_READING = 4;
 
 export interface LeftOut {
   /** `after` with every stretch it left out played where it was left out. */
@@ -36,8 +38,12 @@ interface Pair { track: number; left: MediaClip; right: MediaClip; gap: number }
 const plays = (clip: Clip): clip is MediaClip => clip.kind === "media" && clip.enabled !== false && (clip.speed ?? 1) === 1;
 const pairKey = (left: MediaClip, right: MediaClip) => `${left.mediaId}:${left.sourceOut.toFixed(3)}:${right.sourceIn.toFixed(3)}`;
 
-/** Every place on a track where one piece of a recording ends and another piece of the same recording begins. */
-function pairs(timeline: Timeline): Pair[] {
+/**
+ * Every place on a track where one piece of a recording ends and another piece of the same recording begins. Pieces a
+ * hair apart or overlapping still meet (`touch`): picture sync left Matt's sound pieces a millisecond off at their joins
+ * (2026-11-23), and the join its picture shared with them was read as new footage left out.
+ */
+function pairs(timeline: Timeline, touch = 1e-3): Pair[] {
   const found: Pair[] = [];
   timeline.tracks.forEach((track, index) => {
     const copy = { ...track, clips: [...track.clips].sort((a, b) => a.timelineIn - b.timelineIn) };
@@ -46,7 +52,7 @@ function pairs(timeline: Timeline): Pair[] {
     const clips = copy.clips;
     for (let i = 1; i < clips.length; i++) {
       const left = clips[i - 1]!, right = clips[i]!;
-      if (!plays(left) || !plays(right) || left.mediaId !== right.mediaId || Math.abs(clipEnd(left) - right.timelineIn) > 1e-3) continue;
+      if (!plays(left) || !plays(right) || left.mediaId !== right.mediaId || Math.abs(clipEnd(left) - right.timelineIn) > touch) continue;
       found.push({ track: index, left, right, gap: right.sourceIn - left.sourceOut });
     }
   });
@@ -62,19 +68,24 @@ function pairs(timeline: Timeline): Pair[] {
  * A join counts when every track that changes piece there skips the same stretch of its recording, as a screen and a
  * camera recorded together do. Tracks that skip different amounts, or step back in the recording, rearranged the
  * footage and took nothing out. Footage before the first piece counts when `before` was empty: the start of the
- * recording was left out. Footage after the last piece doesn't, since a version built in parts has more to come.
+ * recording was left out. Footage after the last piece doesn't, since a version built in parts has more to come,
+ * unless `after` is a whole first cut and `lengths` gives each recording's length: a first cut built on an empty
+ * timeline is the whole video, so the end of the recording it didn't use was left out too. Matt's talking head was cut
+ * from 28 minutes to 15 that way, and the editor was told 20 s came out (2026-11-23).
  */
-export function leftOutJoins(before: Timeline, after: Timeline, fps = 30): LeftOut | null {
+export function leftOutJoins(before: Timeline, after: Timeline, fps = 30, lengths?: ReadonlyMap<string, number>): LeftOut | null {
   const frame = 1 / fps;
-  const known = new Set(pairs(before).map(p => pairKey(p.left, p.right)));
+  const touch = frame / 2;
+  const known = new Set(pairs(before, touch).map(p => pairKey(p.left, p.right)));
   const byTime = new Map<number, Pair[]>();
-  for (const pair of pairs(after)) {
+  for (const pair of pairs(after, touch)) {
     const key = Math.round(pair.right.timelineIn * fps * 2);
     const group = byTime.get(key);
     if (group) group.push(pair); else byTime.set(key, [pair]);
   }
   const found: Array<{ at: number; gap: number; tracks: Set<number> }> = [];
-  const head = timelineDuration(before) <= EPS ? after.tracks.flatMap((track, index) => {
+  const empty = timelineDuration(before) <= EPS;
+  const head = empty ? after.tracks.flatMap((track, index) => {
     const first = track.clips.find(c => c.timelineIn <= EPS);
     return first && plays(first) ? [{ index, sourceIn: first.sourceIn }] : [];
   }) : [];
@@ -85,6 +96,15 @@ export function leftOutJoins(before: Timeline, after: Timeline, fps = 30): LeftO
     if (gap <= frame / 2 || group.some(p => Math.abs(p.gap - gap) > frame) || group.some(p => known.has(pairKey(p.left, p.right)))) continue;
     found.push({ at: group[0]!.right.timelineIn, gap, tracks: new Set(group.map(p => p.track)) });
   }
+  const end = timelineDuration(after);
+  const tails = empty && lengths ? after.tracks.flatMap((track, index) => {
+    const last = track.clips.reduce<Clip | undefined>((latest, c) => !latest || clipEnd(c) > clipEnd(latest) ? c : latest, undefined);
+    if (!last || !plays(last) || Math.abs(clipEnd(last) - end) > touch) return [];
+    const length = lengths.get(last.mediaId);
+    return length === undefined ? [] : [{ index, rest: length - last.sourceOut }];
+  }) : [];
+  const tail = tails.length ? Math.min(...tails.map(t => t.rest)) : 0;
+  if (tail > frame / 2 && end > EPS) found.push({ at: end, gap: tail, tracks: new Set(tails.map(t => t.index)) });
   if (!found.length) return null;
   found.sort((a, b) => a.at - b.at);
 

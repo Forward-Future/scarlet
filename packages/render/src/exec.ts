@@ -6,8 +6,8 @@
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { availableParallelism, homedir } from "node:os";
-import { isSea } from "node:sea";
 import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
+import { isSea } from "node:sea";
 
 /** Quiet banner/stdin/error flags shared across ffmpeg invocations. */
 export const FFMPEG_BASE_ARGS = ["-hide_banner", "-nostdin", "-loglevel", "error"] as const;
@@ -75,34 +75,33 @@ const binaryCache = new Map<string, string | null>();
  */
 function findBinary(name: string): string | null {
   const cached = binaryCache.get(name);
-  if (cached !== undefined) return cached;
+  if (cached) return cached;
   const dirs = [process.env.SCARLET_BIN_DIR, dirname(process.execPath)].filter((d): d is string => !!d);
-  // The Mac setup helper puts its caption-capable build here. A GUI login PATH can
-  // put a different Homebrew FFmpeg first. Only a packaged engine uses the helper.
-  if (process.platform === "darwin" && isSea()) dirs.push(join(homedir(), ".local", "bin"));
+  // Scarlet's in-app installer (and the Mac setup helper) places verified ffmpeg/ffprobe in ~/.local/bin.
+  if ((process.platform === "darwin" && isSea()) || process.platform === "win32") {
+    dirs.push(join(homedir(), ".local", "bin"));
+  }
   // On Windows spawn("ffmpeg") finds the empty Tauri dev placeholder in the
   // working directory before PATH. Choose a real executable by absolute path.
   if (process.platform === "win32") {
     dirs.push(...(process.env.PATH ?? "").split(delimiter).map(dir => dir.replace(/^"|"$/g, "")).filter(isAbsolute));
   }
-  let found: string | null = null;
   for (const dir of dirs) {
     const candidate = join(dir, name + EXE);
     try {
       const info = statSync(candidate);
       if (!info.isFile() || !info.size) continue;
       accessSync(candidate, constants.X_OK);
-      found = candidate;
-      break;
+      binaryCache.set(name, candidate);
+      return candidate;
     } catch {
       // A missing or unusable candidate leaves this tool to the next directory.
     }
   }
-  binaryCache.set(name, found);
-  return found;
+  return null;
 }
 
-/** Explicit arguments and environment overrides precede local binaries, the Mac helper and PATH. */
+/** Explicit arguments and environment overrides precede local binaries, Scarlet's ~/.local/bin install and PATH. */
 export function resolveFfmpeg(explicit?: string): string {
   return explicit ?? process.env.SCARLET_FFMPEG ?? process.env.FFMPEG_PATH ?? findBinary("ffmpeg") ?? "ffmpeg";
 }
@@ -113,11 +112,9 @@ export function resolveFfprobe(explicit?: string): string {
 
 /** How to install the FFmpeg Scarlet supports on this platform, as one sentence. */
 function installFfmpeg(platform: NodeJS.Platform = process.platform): string {
-  return platform === "win32"
-    ? "In PowerShell, run winget install --id Gyan.FFmpeg.Essentials --exact."
-    : platform === "darwin"
-      ? "Run the FFmpeg setup helper linked in the Scarlet download instructions."
-      : "Install the FFmpeg package from your system’s package manager.";
+  return platform === "win32" || platform === "darwin"
+    ? "Click Install FFmpeg on the Projects screen or in Settings > General."
+    : "Install the FFmpeg package from your system’s package manager.";
 }
 
 /** Show the prerequisite at the import or render that needs it. Other launch errors keep their diagnostics. */
@@ -416,10 +413,13 @@ function cachedPerBinary<T>(run: (bin: string) => Promise<T>): (ffmpegPath?: str
   };
 }
 
+/** The first line a media tool prints for `-version`. */
+function versionLine(bin: string): Promise<string> {
+  return runCapture(bin, ["-version"]).then((r) => r.stdout.toString("utf8").split(/\r?\n/)[0] ?? "");
+}
+
 /** `ffmpeg -version` first line, e.g. "ffmpeg version 9.0.2-full_build ...". Cached per binary. */
-export const ffmpegVersion = cachedPerBinary((bin) =>
-  runCapture(bin, ["-version"]).then((r) => r.stdout.toString("utf8").split(/\r?\n/)[0] ?? ""),
-);
+export const ffmpegVersion = cachedPerBinary(versionLine);
 
 /** Major version number parsed from `ffmpegVersion()`, or undefined for git builds without one. */
 export async function ffmpegMajor(ffmpegPath?: string): Promise<number | undefined> {
@@ -472,6 +472,37 @@ export async function hasDrawtext(ffmpegPath?: string): Promise<boolean> {
 /** Throw `MissingFilterError` before any work when this ffmpeg can't draw text that `need` requires. */
 export async function requireDrawtext(need: string, ffmpegPath?: string): Promise<void> {
   if (!await hasDrawtext(ffmpegPath)) throw new MissingFilterError("drawtext", missingTextFilterMessage(need));
+}
+
+export interface FfmpegCheck {
+  ok: boolean;
+  ffmpeg: { path: string; version?: string; error?: string };
+  ffprobe: { path: string; version?: string; error?: string };
+  /** Hardware H.264 encoders this build lists (presence, not necessarily usability). */
+  hwEncoders: string[];
+}
+
+/** Verify ffmpeg and ffprobe start, and report what the build offers. */
+export async function checkFfmpeg(paths: ToolPaths = {}): Promise<FfmpegCheck> {
+  const ffmpegPath = resolveFfmpeg(paths.ffmpegPath);
+  const ffprobePath = resolveFfprobe(paths.ffprobePath);
+  const out: FfmpegCheck = { ok: false, ffmpeg: { path: ffmpegPath }, ffprobe: { path: ffprobePath }, hwEncoders: [] };
+  try {
+    out.ffmpeg.version = await ffmpegVersion(ffmpegPath);
+  } catch (e) {
+    out.ffmpeg.error = (e as Error).message;
+  }
+  try {
+    out.ffprobe.version = await versionLine(ffprobePath);
+  } catch (e) {
+    out.ffprobe.error = (e as Error).message;
+  }
+  if (!out.ffmpeg.error) {
+    const enc = await ffmpegEncoders(ffmpegPath).catch(() => new Set<string>());
+    out.hwEncoders = ["h264_nvenc", "h264_qsv", "h264_amf", "h264_videotoolbox", "h264_mf", "h264_vaapi"].filter((e) => enc.has(e));
+  }
+  out.ok = !out.ffmpeg.error && !out.ffprobe.error;
+  return out;
 }
 
 /** Format a number for ffmpeg expressions/options: fixed precision, no exponent notation. */
