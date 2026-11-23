@@ -108,6 +108,18 @@ it("rejects a saved version that takes extra footage or leaves in a neighboring 
   expect(appliedCutClock(before, extra, undefined, 30, removed, both)?.toMedia(13)).toBe(10.5);
 });
 
+it("plays the video as it is now when a later cut that meets this one took out a frame more at their edge", () => {
+  // This cut and a later one that runs on from it are one removal in the video now, starting a frame earlier.
+  const later = { start: 12, end: 20 };
+  const now = timeline("now", [{ start: 0, end: 10 - 1 / 30 }, { start: 20, end: 30 }]);
+  const listen = cutAudition(removed, "after", 30, { others: [later] });
+  const clock = appliedCutClock(before, now, undefined, 30, removed, listen);
+  expect(clock?.toMedia(21)).toBeCloseTo(11 - 1 / 30);
+  // Two frames more is footage the video still had when the cut was made: that version keeps playing.
+  const more = timeline("more", [{ start: 0, end: 10 - 2 / 30 }, { start: 20, end: 30 }]);
+  expect(appliedCutClock(before, more, undefined, 30, removed, listen)).toBeUndefined();
+});
+
 it("rejects an equal-duration replacement inside the lead-in even when both ends and the selected join match", () => {
   const edited = timeline("replacement", [{ start: 0, end: 8.5 }, { start: 40, end: 41 }, { start: 9.5, end: 10 }, { start: 12, end: 30 }]);
   expect(appliedCutClock(before, edited, undefined, 30, removed, cutAudition(removed, "after", 30))).toBeUndefined();
