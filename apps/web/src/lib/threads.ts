@@ -248,7 +248,9 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
       out.push({ kind: "system", at: t.finishedAt ?? t.createdAt ?? "", text: "Scarlet was interrupted after saving changes.", tone: "warn" });
     }
     // A dialogue pass's summary is Scarlet's receipt of what it saved. What Scarlet said as it finished is its reply.
-    if (t.state === "done" && (t.reply || !hasEdit)) {
+    // An attempt that was carried on, as one paused for its transcripts is, leaves the reply to the attempt that
+    // finishes the request: the engine hands a pass's words on to it, and they read twice otherwise.
+    if (t.state === "done" && !t.retryTaskId && (t.reply || !hasEdit)) {
       const reply = taskChatText(t, t.reply || t.summary);
       const full = editConfirmation(reply, requested, "full");
       if (full) {
@@ -298,7 +300,8 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
         : finalReply && parseTimestamp(task.finishedAt) > parseTimestamp(c.createdAt) ? task.finishedAt : c.createdAt;
       out.push({ kind: "change", taskId: task?.id, at: at ?? "", change: c, text });
       const completion = editConfirmation(summary, request, "full");
-      if (task && completion && completion !== text && c.state === "approved" && finalSummary) {
+      // Nor does an attempt that was carried on close the request: the attempt that finished it does.
+      if (task && !task.retryTaskId && completion && completion !== text && c.state === "approved" && finalSummary) {
         out.push({ kind: "agent", at: task.finishedAt ?? task.createdAt ?? "", text: completion, change: c, replyTo: task.id,
           author: agentAuthor(task) });
       }

@@ -64,6 +64,8 @@
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+    /* The chat gives these words a colour of their own in rules that load later; the fill is what lets the sweep show through them. */
+    -webkit-text-fill-color: transparent;
     animation: working-text-sweep 2s linear infinite;
   }
   @keyframes working-text-sweep { to { background-position: 0% 0; } }

@@ -249,7 +249,11 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     const frame = usePictureMarksStore.getState().byProject[project.id];
     const drawing = frame?.marks.length ? frame : undefined;
     if (!useAttachmentsStore.getState().byProject[project.id]?.length && !drawing) return { files: undefined, drawn: undefined, done: () => {} };
+    const adding = (useAttachmentsStore.getState().byProject[project.id] ?? []).filter(a => a.state === "adding").map(a => a.key);
     const ready = await useAttachmentsStore.getState().settled(project.id);
+    // A file the message waited for that couldn't be added stops the send: the words stay in the box, and its row too.
+    const failed = useAttachmentsStore.getState().byProject[project.id]?.find(a => a.state === "failed" && adding.includes(a.key));
+    if (failed) throw new Error(failed.error ?? "Couldn’t add it");
     const files = ready.flatMap(a => a.attachment ?? []);
     const drawn = drawing && await sendMarks(project.id, drawing);
     if (drawn) files.push(drawn.attachment);
@@ -391,6 +395,26 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     if (onClearTarget) onClearTarget(); else setContext("whole");
     inputRef.current?.focus();
   };
+  // The marked range Backspace or its × just took off the box, and what that left the box aimed at. ⌘Z in the empty box
+  // puts the range back, until the box is aimed again, written in or spoken into.
+  const rangeTakenOff = useRef<{ was: AgentContext; left: AgentContext | null }>(undefined);
+  /** Takes the marked range off the message, and says what the box was aimed at and what that leaves. */
+  const takeOffRange = () => {
+    const was = context && context !== "whole" ? context : undefined;
+    const left = withMarkedRange(context, undefined);
+    setContext(left, was?.changeId ? was : undefined);
+    return was && { was, left };
+  };
+  useEffect(() => {
+    if (rangeTakenOff.current && rangeTakenOff.current.left !== context) rangeTakenOff.current = undefined;
+  }, [context]);
+  const restoreRange = () => {
+    const taken = rangeTakenOff.current;
+    rangeTakenOff.current = undefined;
+    if (!taken) return false;
+    setContext(taken.was);
+    return true;
+  };
   // Paused with a cut or an edit open, the header shows the one time the editor is looking at: where they stopped.
   // Its full name on hover still says which cut or edit the message goes to.
   const stopped = replying && !targetIsPoint && pausedAt && aimTime === undefined ? clock(pausedAt.time) : undefined;
@@ -427,8 +451,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     displayName: <><span className="composer-aim-verb">Range</span> <AimTimecode key={`range:${marked.start}/${marked.end}`} value={markedWords} precise={markedPrecise} /></>,
     clearLabel: `Take the marked range ${markedWords} off the message`,
     onClear: () => {
-      const was = context && context !== "whole" ? context : undefined;
-      setContext(withMarkedRange(context, undefined), was?.changeId ? was : undefined);
+      rangeTakenOff.current = takeOffRange();
       inputRef.current?.focus();
     },
   } : placeTag ? {
@@ -444,8 +467,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     dismissFirstEditHint();
     setError("");
     if (rewording) return rewording.onChange(text);
-    if (text.trim()) captureTarget();
-    else if (context && context !== "whole" && playheadPoints.has(context)) setContext(null);
+    if (text.trim()) {
+      rangeTakenOff.current = undefined;
+      captureTarget();
+    } else if (context && context !== "whole" && playheadPoints.has(context)) setContext(null);
     setRefused(false);
     setDraft(text);
   }
@@ -483,11 +508,15 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       <div className={firstEditHint ? "composer-box first-edit-hint" : "composer-box"} onKeyDown={e => {
         if (rewording && e.key === "Escape" && !e.defaultPrevented && !isComposing(e)) rewording.onCancel();
         const emptyBox = !e.defaultPrevented && !isComposing(e) && !recording && !heard && e.target === inputRef.current && !inputRef.current.value;
-        if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && aimItem) {
+        // Esc in an empty box takes a marked range off at once, as Esc anywhere else on the page does. A popover that is
+        // open takes its own Esc first.
+        if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && emptyBox && marked && !document.querySelector("[data-escape-owner]")) takeOffRange();
+        if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && (aimItem || wordTag)) {
           e.preventDefault();
-          aimItem.onClear();
+          // "Answer" and "Reply" come off as their own × takes them off.
+          if (aimItem) aimItem.onClear(); else takeOffTarget();
         }
-        if (e.key.toLowerCase() === "z" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && emptyBox && !rewording && onRestoreTarget?.()) {
+        if (e.key.toLowerCase() === "z" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && emptyBox && !rewording && (restoreRange() || onRestoreTarget?.())) {
           e.preventDefault();
         }
       }}
@@ -518,6 +547,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
           <MicButton onResult={(r) => void onVoice(r)} onStart={() => {
             dismissFirstEditHint();
             setError("");
+            rangeTakenOff.current = undefined;
             voiceReword.current = rewording ? rewordSession : undefined;
             if (!voiceReword.current) voiceAnchor.current = captureTarget();
           }} onRecording={setRecording} onError={setError} followHold disabled={unavailable || busy || speech.busy} disabledReason={unavailable ? unavailableReason : undefined} label="Talk to Scarlet" />

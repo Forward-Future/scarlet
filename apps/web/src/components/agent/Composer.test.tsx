@@ -406,6 +406,37 @@ it("takes the tag off on Backspace in an empty box, but not on a held Backspace,
   expect(onRestoreTarget).toHaveBeenCalledTimes(2);
 });
 
+it("takes an Answer or a Reply tag off on Backspace in an empty box, as its × does, and puts it back on ⌘Z", async () => {
+  const onClearTarget = vi.fn();
+  const onRestoreTarget = vi.fn(() => true);
+  const asking = buildThreads(current).find(t => t.question)!;
+  await show({ thread: asking, targetTag: "Answer", onClearTarget, onRestoreTarget });
+  const press = async (key: string, init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+    await act(async () => { container.querySelector("textarea")!.dispatchEvent(event); });
+    return event.defaultPrevented;
+  };
+  expect(container.querySelector(".composer-tag-name")?.textContent).toBe("Answer");
+  // Words in the box are what Backspace deletes, and a held Backspace that just emptied it stops there.
+  await type("Yes");
+  await press("Backspace");
+  await type("");
+  await press("Backspace", { repeat: true });
+  expect(onClearTarget).not.toHaveBeenCalled();
+  expect(await press("Backspace")).toBe(true);
+  expect(onClearTarget).toHaveBeenCalledTimes(1);
+  await press("z", { metaKey: true });
+  expect(onRestoreTarget).toHaveBeenCalledTimes(1);
+  // The × does the same.
+  await act(async () => container.querySelector<HTMLButtonElement>(".composer-tag-clear")!.click());
+  expect(onClearTarget).toHaveBeenCalledTimes(2);
+  // A reply to a request comes off the same way.
+  await show({ thread: buildThreads(current)[0], targetTag: "Reply", onClearTarget, onRestoreTarget });
+  expect(container.querySelector(".composer-tag-name")?.textContent).toBe("Reply");
+  expect(await press("Backspace")).toBe(true);
+  expect(onClearTarget).toHaveBeenCalledTimes(3);
+});
+
 it("sends the version of an explicitly attached point even when the project head has advanced", async () => {
   // The edit moved on to v_new and its timeline couldn't be read yet: the one before is on screen and in the player.
   useProjectStore.setState({ current: { ...current, project: { ...project, head: "v_new" } } });
@@ -1122,6 +1153,76 @@ it("clears a chosen range on Backspace in an empty box before taking off the ope
   expect(onClearTarget).toHaveBeenCalledTimes(1);
 });
 
+it("puts a marked range taken off the empty box back on ⌘Z, until the box is aimed again or written in", async () => {
+  const cut: AgentContext = { changeId: "chg_1", cutIndex: 0, version: "v1", time: 125, end: 127, clipIds: [], label: "Cut at 2:05" };
+  const marked = { ...cut, markedRange: { start: 42, end: 51.5 } };
+  const onRestoreTarget = vi.fn(() => false);
+  const press = async (key: string, init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+    await act(async () => { aimField().dispatchEvent(event); });
+    return event.defaultPrevented;
+  };
+  await act(async () => useUiStore.getState().setAgentContext(marked));
+  await show({ targetTag: "Cut at 2:05", onRestoreTarget });
+  // Backspace takes the range off, and ⌘Z puts it back on the cut as it was. Nothing else is asked to undo.
+  await press("Backspace");
+  expect(aimName()?.textContent).toBe("Cut 2:05");
+  expect(await press("z", { metaKey: true })).toBe(true);
+  expect(useUiStore.getState().agentContext).toEqual(marked);
+  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
+  expect(onRestoreTarget).not.toHaveBeenCalled();
+  // Only once: a second ⌘Z has no range to put back.
+  expect(await press("z", { metaKey: true })).toBe(false);
+  expect(onRestoreTarget).toHaveBeenCalledTimes(1);
+  // Its × is the same, also for a range that was all the message was about.
+  await act(async () => useUiStore.getState().setAgentContext({ time: 42, end: 51.5, clipIds: [], markedRange: { start: 42, end: 51.5 } }));
+  await show({ onRestoreTarget });
+  await act(async () => aimClear(clearRange)!.click());
+  expect(aimName()).toBeNull();
+  expect(await press("z", { ctrlKey: true })).toBe(true);
+  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
+  // Words written since the range came off are the message: ⌘Z is theirs.
+  await act(async () => aimClear(clearRange)!.click());
+  await type("Tighten this");
+  await type("");
+  expect(await press("z", { metaKey: true })).toBe(false);
+  expect(aimName()).toBeNull();
+  // A box aimed somewhere else since has that aim, not the range, to keep.
+  await act(async () => useUiStore.getState().setAgentContext({ time: 42, end: 51.5, clipIds: [], markedRange: { start: 42, end: 51.5 } }));
+  await act(async () => aimClear(clearRange)!.click());
+  await selectPoint({ time: 9, clipIds: [] });
+  await act(async () => useUiStore.getState().setAgentContext(null));
+  expect(await press("z", { metaKey: true })).toBe(false);
+  expect(aimName()).toBeNull();
+});
+
+it("takes a marked range off on the first Esc in an empty box, and leaves a message being written and its range alone", async () => {
+  const cut: AgentContext = { changeId: "chg_1", cutIndex: 0, version: "v1", time: 125, end: 127, clipIds: [], label: "Cut at 2:05" };
+  const marked = { ...cut, markedRange: { start: 42, end: 51.5 } };
+  const onClearTarget = vi.fn();
+  const esc = () => act(async () => { aimField().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+  await act(async () => useUiStore.getState().setAgentContext(marked));
+  await show({ targetTag: "Cut at 2:05", onClearTarget });
+  // Marking the range put the caret in the box. Words in it keep the range: Esc only lets go of the box.
+  await type("Tighten this");
+  await act(async () => aimField().focus());
+  await esc();
+  expect([useUiStore.getState().agentDraft, useUiStore.getState().agentContext]).toEqual(["Tighten this", marked]);
+  expect(document.activeElement).not.toBe(aimField());
+  // Empty, the same Esc takes the range off, as Esc anywhere else on the page does. The cut stays the box's.
+  await type("");
+  await act(async () => aimField().focus());
+  await esc();
+  expect(useUiStore.getState().agentContext).toEqual(cut);
+  expect(aimName()?.textContent).toBe("Cut 2:05");
+  expect(document.activeElement).not.toBe(aimField());
+  // With no range, Esc takes nothing off.
+  await act(async () => aimField().focus());
+  await esc();
+  expect(useUiStore.getState().agentContext).toEqual(cut);
+  expect(onClearTarget).not.toHaveBeenCalled();
+});
+
 it("keeps a picked moment, and a whole-video choice, through a time typed in the message", async () => {
   const messageClock = { version: project.head!, duration: 150, timeline: current.timeline, seek: vi.fn() };
   await show({ messageClock });
@@ -1623,6 +1724,29 @@ it("says why a file couldn't be attached", async () => {
   expect(container.querySelector(".composer-file.is-failed")?.textContent).toContain("The file is too large.");
 });
 
+it("keeps the message in the box when a file it was waiting for couldn't be added, and says why", async () => {
+  let fail!: (reason: Error) => void;
+  vi.spyOn(api, "uploadAttachment").mockImplementation(() => new Promise((_resolve, reject) => { fail = reject; }));
+  await show();
+  await act(async () => { dropTargets.get(container.querySelector(".composer-dock")!)!.drop(["/Users/me/Brand guide.pdf"]); });
+  expect(container.querySelector(".composer-file.is-adding")).not.toBeNull();
+  await type("Use these colors for the lower thirds");
+  // Enter while the file is still being added: the message waits for it.
+  await submit();
+  expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
+  await act(async () => { fail(new Error("The file is too large.")); });
+  await act(async () => {});
+  // It didn't go out without the file: the words and the file's row stay, and the line over the box says why.
+  expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
+  expect(container.querySelector("textarea")!.value).toBe("Use these colors for the lower thirds");
+  expect(container.querySelector(".composer-file.is-failed")?.textContent).toContain("The file is too large.");
+  expect(container.querySelector('.composer-dock > [role="alert"]')?.textContent).toBe("The file is too large.");
+  // Sent again, the message goes without the file that couldn't be added, as one that had failed before Enter does.
+  await submit();
+  expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({ instruction: "Use these colors for the lower thirds" }));
+  expect(container.querySelector(".composer-files")).toBeNull();
+});
+
 it("carries the frame the editor drew on with the next message: its picture as a file, and the marks", async () => {
   const picture = new Blob(["png"], { type: "image/png" });
   const draw = vi.spyOn(markedFrame, "markedFramePicture").mockResolvedValue(picture);
@@ -1660,6 +1784,23 @@ it("takes the marked frame off the message with its ×", async () => {
   await act(async () => remove.click());
   expect(usePictureMarksStore.getState().byProject[PRJ]).toBeUndefined();
   expect(container.querySelector(".composer-files")).toBeNull();
+});
+
+it("counts the marked frame among the 20 files a message can carry, so the message can still be sent", async () => {
+  vi.spyOn(markedFrame, "markedFramePicture").mockResolvedValue(new Blob(["png"], { type: "image/png" }));
+  vi.spyOn(api, "uploadAttachment").mockImplementation(async (_project, file) => "path" in file
+    ? { attachment: { id: `att_${file.path}`, name: file.path.split("/").pop()!, size: 10 } }
+    : { attachment: { id: "att_frame", name: "Marked frame 0.07.png", size: 3, mime: "image/png" } });
+  usePictureMarksStore.setState({ marking: null, byProject: { [PRJ]: { time: 7, version: project.head!, picture: "frame://7", marks: [{ kind: "box", box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } }] } } });
+  await show();
+  // Twenty files dropped on a box that already carries a marked frame: the frame is one of the twenty.
+  await act(async () => dropTargets.get(container.querySelector(".composer-dock")!)!.drop(Array.from({ length: 20 }, (_, i) => `/Users/me/shot-${i + 1}.png`)));
+  expect(container.querySelectorAll(".composer-files .composer-file:not(.is-marked-frame)")).toHaveLength(19);
+  await type("Match these shots to the marked frame");
+  await submit();
+  const sent = vi.mocked(useProjectStore.getState().createTask).mock.calls[0]![1].context!.attachments!;
+  expect(sent).toHaveLength(20);
+  expect(sent.at(-1)).toMatchObject({ id: "att_frame" });
 });
 
 it("sends a message about a moment that carries files as a request about that moment, since a note takes none", async () => {
@@ -1807,6 +1948,32 @@ it("leaves an explicit range on the message and out-of-bounds or incomplete cloc
   await type("Compare this with 0:10");
   await submit();
   expect(useProjectStore.getState().createNote).toHaveBeenCalledWith(PRJ, expect.objectContaining({ time: 2, end: 8 }));
+});
+
+it("reads 9:16 as the picture's shape, not a time, unless the words before it point at a time", async () => {
+  // A video longer than 9:16, so that time is in it.
+  const messageClock = { duration: 900, version: project.head!, seek: vi.fn() };
+  await show({ messageClock });
+  const stamps = () => Array.from(container.querySelectorAll(".composer-timestamp"), stamp => stamp.textContent);
+  for (const words of ["Make a 9:16 short of the best part", "Crop to 9:16 for Shorts", "9:16 version, please", "Reframe in 9:16."]) {
+    await type(words);
+    expect([words, stamps(), useUiStore.getState().agentContext]).toEqual([words, [], null]);
+  }
+  // Said as a time, it is one.
+  for (const words of ["Tighten the pause at 9:16", "Cut from 9:10 to 9:16", "Mute 9:10 – 9:16", "Drop everything after 9:16", "Look @ 9:16"]) {
+    await type(words);
+    expect([words, stamps().at(-1), useUiStore.getState().agentContext]).toEqual([words, "9:16", expect.objectContaining({ fromMessage: true })]);
+  }
+  // Any other clock is a time wherever it stands, as before.
+  await type("Compare 9:17 with the open");
+  expect(stamps()).toEqual(["9:17"]);
+  // The short is a new edit about the whole video, not a note at 9:16.
+  await type("Make a 9:16 short of the best part");
+  await submit();
+  expect(useProjectStore.getState().createNote).not.toHaveBeenCalled();
+  expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
+    instruction: "Make a 9:16 short of the best part", context: { version: project.head },
+  }));
 });
 
 it("updates the note target when a timestamp is edited and recognizes an hour clock in pasted prose", async () => {

@@ -3,11 +3,12 @@ import { callNumbers, taskNeedsTranscripts, type SpeakerProgress, type Task, typ
 import type { Change } from "@scarlet/timeline";
 import { useProjectStore } from "../../stores/project";
 import { useUiStore } from "../../stores/ui";
+import { blurOnPointerClick } from "../../lib/hotkeys";
 import { runProgress } from "../../lib/runProgress";
 import { runNow, STARTING } from "../../lib/runNow";
 import { runningTranscription, transcriptionProgressLabel, transcriptsProgress } from "../../lib/transcriptionProgress";
 import { isWorkingTask, runAim, runIsActive, runItems, runLines, runSummary, type RunItem, type RunLine } from "../../lib/taskRun";
-import { pendingMediaWaits, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
+import { toolName, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
 import { useClippedExpand } from "../../lib/uiHooks";
 import { usePublishWorkingLine } from "../../lib/workingLines";
 import { RequestMetrics, Tokens } from "./RequestMetrics";
@@ -50,6 +51,8 @@ export function Said({ text, lead, className, children }: { text: string; lead?:
 interface RunBundleProps {
   task: Task;
   events: readonly TaskEvent[];
+  /** The history of the attempt Scarlet opened the request in, once the request was picked up again under this one. */
+  opening?: readonly TaskEvent[];
   changes: readonly Change[];
   /** The number a call of the waiting pass goes by in the window, when the window has numbered it. */
   callNumber?(changeId: string, cutIndex: number): number | undefined;
@@ -101,13 +104,14 @@ function useRunUsage(taskId: string, shown = true) {
   return useProjectStore(s => show ? s.current?.taskUsage?.[taskId] : undefined);
 }
 
-function WorkingRun({ task, events: all, changes, callNumber, say, result, onStop, actions }: RunBundleProps) {
+function WorkingRun({ task, events: all, opening, changes, callNumber, say, result, onStop, actions }: RunBundleProps) {
   // A pass sent back to check the finished cut for repeats runs again as the same request, in a new session. Its line
   // and its first sentence are that session's: what it said an hour ago on the first run isn't what it is doing now.
   const events = useMemo(() => sinceRerun(task, all), [task, all]);
   // That check is named for what it is, above the line that says what it's on this moment.
   const rerun = !!task.repeatAudit?.returns;
-  const aim = useMemo(() => rerun ? { text: FINAL_CHECK, note: "" } : runAim(events), [events, rerun]);
+  // The sentence is written once: a request picked up after a pause or a restart keeps the one it opened with.
+  const aim = useMemo(() => rerun ? { text: FINAL_CHECK, note: "" } : (opening && runAim(opening)) ?? runAim(events), [events, rerun, opening]);
   const progress = useMemo(() => runProgress(events), [events]);
   const voices = useProjectStore(s => s.current?.speakerProgress);
   const voice = progress.read && !progress.read.seconds ? progress.recordings?.map(id => voices?.[id]).find(Boolean) : undefined;
@@ -123,13 +127,21 @@ function WorkingRun({ task, events: all, changes, callNumber, say, result, onSto
   const media = useProjectStore(s => s.current?.media);
   const transcripts = useMemo(() => {
     if (doing !== TRANSCRIPT_WAIT) return;
-    const ids = [...pendingMediaWaits(events)].flatMap(key => key.startsWith("transcript/") ? [key.slice("transcript/".length)] : []);
-    const progress = transcriptsProgress(tasks ?? [], media ?? [], ids);
+    // The figure is of every recording the run has waited for, saved or not. Counted over the ones still pending, it
+    // dropped back each time one of several transcripts was saved. One whose transcript couldn't be made is left out.
+    const ids = new Set<string>();
+    for (const { type, data } of events) {
+      if (type !== "log" || data?.kind !== "media_wait" || data.wait !== "transcript" || typeof data.mediaId !== "string") continue;
+      if (data.done && data.failed) ids.delete(data.mediaId);
+      else ids.add(data.mediaId);
+    }
+    const progress = transcriptsProgress(tasks ?? [], media ?? [], [...ids]);
     return progress && progress.stage !== "queued" ? transcriptionProgressLabel(progress) : undefined;
   }, [doing, events, tasks, media]);
   // A run cut short, by Scarlet closing or restarting or by a pause, carries on under a new task. Until that attempt
   // makes its first call the line says so: the editor who just reopened Scarlet sees the edit wasn't started over.
-  const pickingUp = !!task.resumeRootId && !rerun && !voice && (!doing || doing === STARTING);
+  // A model that thinks before that call hasn't made it: "Thinking" doesn't take the words away.
+  const pickingUp = !!task.resumeRootId && !rerun && !voice && !events.some(e => e.type === "tool" && toolName(e) !== "task_log");
   const words = transcripts ? `Transcribing the recordings · ${transcripts}`
     : pickingUp ? PICKING_UP
     : doing ?? (voice ? voicePhase[voice.phase] : task.state === "claimed" ? STARTING : WORKING);
@@ -217,8 +229,9 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
     {paused && <TranscriptWait task={task} onResume={onResume} onWait={onWaitForTranscripts} aside={waits && usage?.totalTokens ? aside : undefined} />}
     {say}
     {rows ?? (!(waits || (((told && !opens) || madeAbove) && !usage?.totalTokens)) && <div className="req-row req-result">
+      {/* The line stays on screen once pressed: clicked, it lets go of the focus, so Space plays instead of pressing it again. */}
       {madeAbove ? null : opens ? <button type="button" className={madeClass} aria-current={showing || undefined}
-          title={summary ? `${made}\nShow on the timeline` : "Show on the timeline"} onClick={opens}><span>{made}</span></button>
+          title={summary ? `${made}\nShow on the timeline` : "Show on the timeline"} onClick={e => { blurOnPointerClick(e); opens(); }}><span>{made}</span></button>
         : <span className={madeClass} title={summary}><span>{made}</span></span>}
       {/* What a stopped run saved is one line, and its one action follows on it. */}
       {actsOnLine && action}

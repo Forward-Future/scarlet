@@ -14,14 +14,17 @@ import { editKey } from "../../lib/keptEdits";
 import { markedFrameUrl } from "../../lib/markedFramePictures";
 import { isDialoguePass, isOpenPass, openPass, waitsToPlay } from "../../lib/passCalls";
 import { aboutOne, aimOf, closingReply, notesStillAsked, threadRuns, waitingToStart, type Run } from "../../lib/requestRuns";
-import { runIsActive, spentLabel } from "../../lib/taskRun";
+import { runAim, runIsActive, spentLabel } from "../../lib/taskRun";
 import { firstCutDeliveries, isRecheck, isRedo, RECHECK_WORDS, requestTarget, revisionTarget, threadConversation, type Thread, type ThreadEntry } from "../../lib/threads";
 import { useNearView } from "../../lib/useNearView";
 import { useProjectStore } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
 import { useUiStore } from "../../stores/ui";
 import { PassSummary, ThreadResult } from "./PassSummary";
-import { callRowKey, isWorking, listedBefore, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
+import { callRowKey, isWorking, letGo, listedBefore, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
+
+/** What the chat says of how a run ended that a request's block doesn't read out: its heading says it stopped or couldn't finish. */
+const UNSAID = /^(?:Edit stopped\.|Edit resumed\.|I couldn’t finish this edit\.)$/;
 
 /** "Learned for dialogue-pass: ", or what it was learned from first: "Learned from 4 cuts you rejected, for dialogue-pass: ". */
 function learnedLead(learning: Learning, skill: string | undefined): string {
@@ -84,7 +87,7 @@ function ChangeReply({ thread, entry, actions }: { thread: Thread; entry: Extrac
     <span className="simple-who">Scarlet</span>
     {/* A suggestion still waiting has no Play link under it: its one line is the control, led by the play mark. */}
     {pending && !pass ? <button type="button" className={reviewing ? "simple-suggest is-on" : "simple-suggest"} aria-pressed={reviewing}
-      title={reviewing ? "Stop showing this suggestion" : "Play this suggestion"} onClick={() => reviewing ? actions.stopShowing() : actions.review(change)}>
+      title={reviewing ? "Stop showing this suggestion" : "Play this suggestion"} onClick={letGo(() => reviewing ? actions.stopShowing() : actions.review(change))}>
       <Icon name="play" size={11} /><span title={entry.text}>{entry.text}</span></button> : <Said text={entry.text} />}
   </div>;
 }
@@ -105,6 +108,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const own = s.current?.taskEvents[t.id];
     return own ? [[t.id, own] as const] : [];
   }))));
+  // The attempts whose whole history is here, not only what was said in them.
+  const wholeHistory = useProjectStore(useShallow(s => thread.tasks.flatMap(t => s.current?.taskEventScopes?.[t.id] === "all" ? [t.id] : [])));
   const loadTaskEvents = useProjectStore(s => s.loadTaskEvents);
   const cancelTask = useProjectStore(s => s.cancelTask);
   const editingPaused = useProjectStore(s => s.current?.id === projectId && s.current.project.editingPaused);
@@ -124,10 +129,13 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   const historyKey = useMemo(() => JSON.stringify(thread.tasks.filter(t => !waitingToStart(t)).map(t => [t.id, runIsActive(t)])), [thread.tasks]);
   useEffect(() => {
     const scopes = useProjectStore.getState().current?.taskEventScopes;
+    // The requests Scarlet has picked up again under a new attempt. What it opened one with is in the history of the
+    // attempts before, among their tool events.
+    const pickedUp = new Set(thread.tasks.flatMap(t => t.resumeRootId && runIsActive(t) && !waitingToStart(t) ? [t.resumeRootId] : []));
     for (const task of thread.tasks) {
       if (waitingToStart(task)) continue;
       // Live activity and an open question can use tool events. Finished requests keep their conversation and result.
-      const scope = runIsActive(task) ? "all" : "conversation";
+      const scope = runIsActive(task) || pickedUp.has(task.resumeRootId ?? task.id) ? "all" : "conversation";
       if (scopes?.[task.id] !== "all" && scopes?.[task.id] !== scope) void loadTaskEvents(task.id, scope).catch(noop);
     }
   }, [historyKey, loadTaskEvents]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -188,6 +196,16 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   }, [thread]);
   const runs = useMemo(() => threadRuns(thread), [thread]);
   const runOf = new Map(runs.flatMap(run => run.attempts.map(t => [t.id, run] as const)));
+  // What a request made. An attempt that picks it up after a pause or a restart starts with no change of its own:
+  // what the attempts before it saved is still what the request made.
+  const finalOf = (run: Run) => {
+    if (runIsActive(run.task)) return undefined;
+    for (let i = run.attempts.length - 1; i >= 0; i--) {
+      const attempt = run.attempts[i]!, final = finals.get(attempt.id);
+      if (final || !attempt.resumeRootId) return final;
+    }
+    return undefined;
+  };
   // The rules this thread's requests taught Scarlet that still wait on the editor's call.
   const learned = useProjectStore(useShallow(s => (s.current?.learnings ?? []).filter(l => l.state === "suggested" && runOf.has(l.taskId))));
   // The thread's edits list on the card of the run that made them: the dialogue pass, else the first request. A
@@ -237,7 +255,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     return asked && revisionTarget(asked, thread.changes, listed);
   };
   // The one cut or edit each request was about.
-  const targets = new Map(runs.map(run => [run.root, run !== owner ? requestTarget(aimOf(run), finals.get(run.task.id), thread.changes, listed, thread.tasks) : undefined] as const));
+  const targets = new Map(runs.map(run => [run.root, run !== owner ? requestTarget(aimOf(run), finalOf(run), thread.changes, listed, thread.tasks) : undefined] as const));
 
   // The cut or edit a request is about, as its row's key, whether or not that row is listed now: an applied edit, or a
   // call of the pass that waits.
@@ -271,9 +289,11 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     if (run.task.state === "cancelled" || run.task.state === "failed") return overtaken(run);
     // One paused for its transcripts ended as done, and stopped early all the same: it stays, with its way to finish.
     if (run.task.state !== "done" || !!runEnded(run.task) || !targets.get(run.root)) return false;
-    const final = finals.get(run.task.id);
-    // Done with no change and not a word from Scarlet: there is nothing for it to say by staying.
-    if (!final) return !entries.some(e => (e.kind === "agent" || e.kind === "question" || e.kind === "system") && !!e.taskId && run.attempts.some(t => t.id === e.taskId));
+    const final = finalOf(run);
+    // Done with no change and not a word from Scarlet: there is nothing for it to say by staying. That an attempt
+    // stopped and was picked up again is no word of Scarlet's: of those lines only the last attempt's own reason reads.
+    if (!final) return !entries.some(e => e.kind === "system" ? e.taskId === run.task.id && !UNSAID.test(e.text)
+      : (e.kind === "agent" || e.kind === "question") && !!e.taskId && run.attempts.some(t => t.id === e.taskId));
     // A version that couldn't be prepared changed nothing either, and only Scarlet's words here say so. Nor has a
     // suggestion Scarlet is to make again changed anything yet: the request stays to say so while that redo waits.
     if (final.state === "failed" || thread.tasks.some(t => isRedo(t) && runIsActive(t) && t.context.changeId === final.id)) return false;
@@ -361,7 +381,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       }
       else if (e.kind === "system" && e.taskId === task.id) {
         // The card's own row says it stopped or couldn't finish; only a specific reason adds to that.
-        if (!/^(?:Edit stopped\.|Edit resumed\.|I couldn’t finish this edit\.)$/.test(e.text)) said.push(<p key={i} className={`req-say is-note${e.tone === "bad" ? " is-bad" : ""}`}>{e.text}</p>);
+        if (!UNSAID.test(e.text)) said.push(<p key={i} className={`req-say is-note${e.tone === "bad" ? " is-bad" : ""}`}>{e.text}</p>);
         const action = e.action;
         // Asked again since, and done: picking the old one up would do the same work a second time. The same words
         // about another cut or edit were other work, and leave this one to pick up.
@@ -370,7 +390,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
         if (action && !redone) recovery = { label: action.label === "Resume agent" ? "Resume" : "Retry", run: () => attempt(run.root, retryTask(action.taskId)) };
       }
     });
-    const final = finals.get(task.id);
+    const final = finalOf(run);
     // The requests about one of this block's cuts or edits, each drawn under its row.
     const nests: Nest[] = !inside && run === owner ? [...nested].map(([root, key]) => ({ key, node: unit(runs.find(r => r.root === root)!, true) })) : [];
     const rows = run === owner && hasRows ? (aside: ReactNode) => summed
@@ -420,20 +440,27 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
         <TipButton className="unit-pause-edit" tip={editingPaused ? "Resume editing" : "Pause editing"}
           aria-description={editingPaused ? "Paused work picks up first, where it left off."
             : "All editing in this project stops. Nothing new starts, and edits already made stay."}
-          onClick={hold}><Icon name={editingPaused ? "play" : "pause"} size={13} /></TipButton>
+          // Pause becomes Resume in place: clicked, it lets go of the focus, so Space plays and can't press Resume.
+          onClick={letGo(hold)}><Icon name={editingPaused ? "play" : "pause"} size={13} /></TipButton>
         <TipButton className="unit-stop-edit" tip="Stop this edit" aria-label={request ? `Stop this edit: ${request.text}` : "Stop this edit"}
           aria-description="What it already changed stays, and the next request can start." onClick={stop}><Icon name="stop" size={13} /></TipButton></div> : undefined;
     const requestControl = editsProject ? editActions : stop && <button type="button" className="simple-link unit-stop" onClick={stop}>Stop</button>;
     const headingEnd = <><RequestMetrics attempts={run.attempts} events={events} />{requestControl}</>;
-    const bundle = <RunBundle task={task} events={events[task.id] ?? []} changes={thread.changes} finalChange={final} banded={!!request} callNumber={actions.callNumber}
+    // The sentence Scarlet opened the request with is written once and stays: picked up after a pause or a restart,
+    // the request keeps it, from the first attempt that said one. Only an attempt's whole history says whether it did.
+    const before = task.resumeRootId && isWorking(task.state) ? run.attempts.filter(t => t !== task && (t.resumeRootId ?? t.id) === task.resumeRootId) : [];
+    const opened = before.every(t => wholeHistory.includes(t.id)) ? before.find(t => runAim(events[t.id] ?? [])) : undefined;
+    const bundle = <RunBundle task={task} events={events[task.id] ?? []} opening={opened && events[opened.id]} changes={thread.changes} finalChange={final} banded={!!request} callNumber={actions.callNumber}
         say={said.length ? <div className="req-said">{said}</div> : undefined} told={told} result={rows} recovery={recovery}
         // Under its call's row, that row is the cut it saved, with Scarlet's note: the note isn't said again under it.
         // A pass's calls are listed for as long as it waits, so a request keyed to one is always under its row.
         summary={target?.note} listedAbove={inside && !!nested.get(run.root)?.startsWith("call/")} showing={showingIt} onOpen={proposing ? undefined : open}
         // Scarlet's own requests have no heading. Their menu stays with the active run's row.
         actions={request ? undefined : editActions} onStop={request || editsProject ? undefined : stop} paused={paused}
-        // Only the thread's last run can be finished, and not while another request in it is under way.
-        {...(task === thread.tasks.at(-1) && !thread.active && !thread.question && {
+        // Only the thread's last run can be finished, and not while another request in it is under way. One about a
+        // single cut or edit isn't held to being the last, as with Resume: a pass's thread takes a request for every
+        // call, and another call's request would take its way to finish from it for good.
+        {...(!thread.active && !thread.question && (task === thread.tasks.at(-1) || (aboutOne(run) && !overtaken(run))) && {
           onResume: () => attempt(run.root, retryTask(task.id)),
           onWaitForTranscripts: (on: boolean) => attempt(run.root, continueWhenReady(task.id, on)),
         })} />;

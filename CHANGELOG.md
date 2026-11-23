@@ -6,6 +6,21 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- The words that say what Scarlet is doing, and Revising… on a row, shimmer while it works; they had stopped moving in the chat.
+- ⌘Z in a message box you have just emptied brings your words back instead of taking back your last Keep, and it puts back a marked range you took off the box.
+- ⌘Z takes back Keep or Reject edit on a call, which waits for you again, and after Keep on a moment it leaves an edit you had already kept on its own kept.
+- Closing a cut's card without deciding and pressing play no longer ticks that cut as kept.
+- With See all open while a pass waits, ↑ and ↓ follow the list row by row through its edits and calls, and an edit a pass made in many places is one stop: Keep keeps every place.
+- In For you, a flagged edit that came back revised says v2 while a pass waits, and a call you rejected shows at its time in the video as it is now.
+- A request that was paused for a transcript and then finished shows Scarlet's reply once, and “Transcribing the recordings” no longer drops back each time one of several transcripts is done.
+- A request about one cut or edit that was paused or restarted after it saved leaves the chat once it is done, and one that waits for a transcript keeps its way to finish through later requests.
+- After a restart or a pause, a request keeps the sentence Scarlet opened it with and says “Picking up where it left off” until its first step, and a press on “Scarlet is editing” under the timeline still brings it into view.
+- “9:16” in a message such as “make a 9:16 short” is read as the picture's shape, not as a time in the video.
+- A file that can't be added while your message waits for it keeps the message in the box and says why, instead of going out without it.
+- Esc ends the marking of a frame without closing the edit that's open, takes a marked range off from the empty message box at once, and closes the Transcript from its empty search field.
+- Backspace in an empty box takes off an Answer tag too, a paused time leaves an open cut's tag once you play on and erase what you wrote, and opening an edit while you change a queued request's words no longer puts those words at risk.
+- After a click on Pause, a suggestion's line or the queue's heading, Space plays the video instead of pressing that control again.
+- At the narrowest chat a stopped request's Resume is no longer cut off, a list of edits above the message box no longer slides sideways, and a tall request there can't push the message box off the window.
 - A stretch you mark on the timeline's ruler now stays while you play it, pause it and click around the timeline, so you can listen to it and adjust its ends. Esc takes it off.
 - In Media, “Tell Scarlet what this is” under a file lets you say what it is and how to use it, such as a finished sponsor read to drop in whole, and Scarlet leaves a file you add while it's editing alone unless you mention it.
 - Settings › General has Talking to you: write in your own words how Scarlet should talk to you in the chat and on its cards, the same in every project and with every model.

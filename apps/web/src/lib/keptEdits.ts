@@ -85,6 +85,12 @@ function read(projectId: string, threadId: string): ReadonlySet<string> {
 
 export type KeptRef = EditRef & { recheck?: string; reviewRef?: EditRef } & Partial<Pick<ThreadEdit, "label" | "check" | "range">>;
 
+/** The edits among `refs` that aren't kept yet: the ones a Keep of them all would newly keep, and ⌘Z would take back. */
+export function notYetKept<T extends KeptRef>(projectId: string, threadId: string, refs: readonly T[]): T[] {
+  const kept = read(projectId, threadId);
+  return refs.filter(ref => !kept.has(reviewKey(ref)));
+}
+
 export function keepEdits(projectId: string, threadId: string, refs: KeptRef[], version?: string) {
   const key = storageKey(projectId, threadId);
   const before = read(projectId, threadId);

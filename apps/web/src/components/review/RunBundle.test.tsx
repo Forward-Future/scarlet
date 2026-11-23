@@ -264,6 +264,23 @@ it("says what Scarlet is doing this moment on one line under its opening sentenc
   bare.unmount();
 });
 
+it("keeps saying a request is picking up where it left off until its first call, on a model that thinks first", () => {
+  openProject();
+  const again: Task = { ...task, id: "tsk_again", state: "running", summary: null, finishedAt: undefined, resumeRootId: task.id };
+  const started: TaskEvent[] = [{ type: "log", at: "2026-11-05T10:00:01.000Z", text: "Codex session started", data: { kind: "init" } },
+    { type: "log", at: "2026-11-05T10:00:02.000Z", text: "(thinking) Where was I.", data: { kind: "reasoning" } }];
+  const view = render(<RunBundle task={again} events={started} changes={[]} banded />);
+  const now = () => view.host.querySelector(".req-now [role=status]")?.textContent;
+  expect(now()).toBe("Picking up where it left off");
+  // Its first call takes the line, and thinking after that reads as it does on any request.
+  const called: TaskEvent[] = [...started, { type: "tool", at: "2026-11-05T10:00:05.000Z", text: "timeline_get", data: { tool: "scarlet.timeline_get", input: {} } }];
+  view.rerender(<RunBundle task={again} events={called} changes={[]} banded />);
+  expect(now()).toBe("Looking at the timeline");
+  view.rerender(<RunBundle task={again} events={[...called, { ...started[1]!, at: "2026-11-05T10:00:09.000Z" }]} changes={[]} banded />);
+  expect(now()).toBe("Thinking");
+  view.unmount();
+});
+
 it("says how far the transcripts it waits on are, and keeps file progress in Media", () => {
   vi.useFakeTimers({ now: Date.parse("2026-11-05T10:00:10.000Z"), toFake: ["Date", "setInterval", "clearInterval"] });
   const running: Task = { ...task, state: "running", summary: null, finishedAt: undefined };
@@ -404,6 +421,33 @@ it("keeps the figure of a paused run's transcripts going on when one of them is 
   // Counted over the camera alone, it started again at 3%.
   project([transcribe("cam", words(0.03, 480)), transcribe("mic", { state: "done" })], ["mic"]);
   expect(percent()).toBe("27");
+  view.unmount();
+});
+
+it("keeps the figure of a working run's transcripts going on when one of them is saved, rather than starting it again", () => {
+  const running: Task = { ...task, state: "running", summary: null, finishedAt: undefined };
+  const transcribe = (mediaId: string, over: Partial<Task>): Task => ({ ...task, id: `tsk_${mediaId}`, kind: "transcribe", agent: "api",
+    instruction: `Transcribe ${mediaId}`, context: { mediaId }, startedAt: undefined, finishedAt: undefined, summary: null, ...over });
+  const words = (fraction: number, remainingSeconds: number) => ({ state: "running" as const,
+    progress: { stage: "transcribing" as const, fraction: fraction / 3, remainingSeconds: remainingSeconds * 3, words: { fraction, remainingSeconds } } });
+  const project = (tasks: Task[], saved: string[] = []) => act(() => useProjectStore.setState({ current: { id: "prj_1", tasks: [running, ...tasks], taskEvents: {},
+    media: [{ id: "cam", duration: 3000 }, { id: "mic", duration: 1000 }].map(m => saved.includes(m.id) ? { ...m, transcriptId: `trs_${m.id}` } : m) } as unknown as ProjectData }));
+  const wait = (mediaId: string, over: object = {}): TaskEvent => ({ type: "log", at: "2026-11-05T10:00:10.000Z", text: "Waiting for the transcript",
+    data: { kind: "media_wait", wait: "transcript", mediaId, ...over } });
+  // The run waits on both. The camera's transcript waits its turn behind the mic's, which has 90% of its words: 23% of the two.
+  project([transcribe("cam", { state: "running", progress: { stage: "queued", fraction: 0 } }), transcribe("mic", words(0.9, 20))]);
+  const view = render(<RunBundle task={running} events={[wait("cam"), wait("mic")]} changes={[]} banded />);
+  const line = () => view.host.querySelector(".req-now [role=status]")?.textContent;
+  expect(line()).toBe("Transcribing the recordings · 23%");
+  // The mic's is saved and the camera's begins, with 3% of its words in. The mic's share stays counted, so the figure
+  // goes on from 23%. Counted over the camera alone, it dropped back to 3%.
+  project([transcribe("cam", words(0.03, 480)), transcribe("mic", { state: "done" })], ["mic"]);
+  view.rerender(<RunBundle task={running} events={[wait("cam"), wait("mic"), wait("mic", { done: true })]} changes={[]} banded />);
+  expect(line()).toBe("Transcribing the recordings · 27%");
+  // A recording whose transcript couldn't be made is no longer waited for, and has no share in the figure.
+  view.rerender(<RunBundle task={running} events={[wait("cam"), wait("mic"), wait("mic", { done: true, failed: true })]} changes={[]} banded />);
+  project([transcribe("cam", words(0.03, 480)), transcribe("mic", { state: "failed" })]);
+  expect(line()).toBe("Transcribing the recordings · 3%");
   view.unmount();
 });
 
@@ -576,6 +620,26 @@ it("says what a stopped run saved in words, and opens the timeline from them onl
   view.rerender(<RunBundle task={stopped} events={[]} changes={[]} finalChange={made} banded recovery={resume} onOpen={() => {}} />);
   expect(view.host.querySelector("button.req-summary")?.textContent).toBe("Trimmed the pause before the answer");
   expect(view.host.querySelector(".req-act")?.textContent).toBe("Resume");
+  view.unmount();
+});
+
+it("lets go of the focus when the line that opens what a run made is clicked, so Space plays instead of pressing it again", () => {
+  openProject();
+  const made = { id: "chg_1", state: "approved", description: "Trimmed the pause before the answer.", cutReasons: [], ranges: [] } as unknown as Parameters<typeof RunBundle>[0]["finalChange"];
+  const onOpen = vi.fn();
+  const view = render(<RunBundle task={task} events={[]} changes={[]} finalChange={made} banded onOpen={onOpen} />);
+  const line = view.host.querySelector<HTMLButtonElement>("button.req-summary")!;
+  // A press with the mouse carries a click count, and in WebView2 it leaves the button focused. The line stays on
+  // screen, so Space would press it again.
+  line.focus();
+  act(() => { line.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 })); });
+  expect(onOpen).toHaveBeenCalledOnce();
+  expect(document.activeElement).not.toBe(line);
+  // Pressed with the keyboard it keeps the focus, so Tab goes on from there.
+  line.focus();
+  act(() => { line.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 0 })); });
+  expect(onOpen).toHaveBeenCalledTimes(2);
+  expect(document.activeElement).toBe(line);
   view.unmount();
 });
 

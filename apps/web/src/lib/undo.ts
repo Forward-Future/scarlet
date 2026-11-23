@@ -8,8 +8,8 @@ import { lastAttempt } from "./requestRuns";
 import { isActiveTask } from "./taskRun";
 
 /**
- * What ⌘Z takes back, newest last: the editor's Keeps, Later deferrals, and the revisions they sent, in this window's
- * session. Each ⌘Z takes back one, so several in a row walk back through them.
+ * What ⌘Z takes back, newest last: the editor's Keeps, Later deferrals, calls, and the revisions they sent, in this
+ * window's session. Each ⌘Z takes back one, so several in a row walk back through them.
  */
 export type UndoStep = {
   id: number;
@@ -42,7 +42,19 @@ export type UndoStep = {
   /** The edit the card went on from (Reject edit moves on as Keep does), opened again once it is taken back. */
   threadId?: string;
   edit?: EditRef & { single?: boolean };
+} | {
+  /** Keep or Reject edit on a call of a pass that waits on the editor. */
+  kind: "call";
+  word: "Keep" | "Reject";
+  /** The pass the call was made on, and which of its cuts. */
+  changeId: string;
+  index: number;
+  /** What the call was decided as before, when this changed a decision already made: taken back, it is that again. */
+  was?: "keep" | "cut";
 });
+
+/** A call's step, as the page that holds the pass takes it back. */
+export type CallStep = Extract<UndoStep, { kind: "call" }>;
 
 /** A step as it is recorded, before it has its place in the list. */
 type NewStep = UndoStep extends infer S ? S extends UndoStep ? Omit<S, "id"> : never : never;
@@ -70,6 +82,14 @@ export function recordUndo(step: NewStep) {
   }));
 }
 
+/**
+ * No pass waits on the editor any more: a pass that went in holds every cut of it, so none of the calls made on it can
+ * be taken back. ⌘Z says so once, and goes on to what came before them.
+ */
+export function forgetCalls(projectId: string) {
+  useUndoStore.setState(s => ({ steps: s.steps.filter(step => step.projectId !== projectId || step.kind !== "call") }));
+}
+
 /** The step the next ⌘Z takes back in this project. */
 export function lastStep(steps: readonly UndoStep[], projectId: string) {
   return steps.findLast(step => step.projectId === projectId);
@@ -81,10 +101,12 @@ const stepWord = (step: UndoStep) => step.kind === "keep" || step.kind === "defe
  * Take back the newest step in this project. A Keep is taken back here and on the engine, and the edit waits on the
  * editor again. A Later deferral is cleared locally so the to-do waits again. A revision still waiting or under way is
  * stopped; one that landed is taken out again: an applied version is reverted, and a new version of a pass that waits
- * is put away for the one it replaced. Says what it took back, or nothing when there was nothing to take back.
+ * is put away for the one it replaced. A call's Keep or Reject edit is taken back by the page that holds its pass
+ * (`uncall`), which throws the reason when it can't be. Says what it took back, or nothing when there was nothing to
+ * take back.
  */
 export async function undoLast(projectId: string, project: { changes: readonly Change[]; tasks: readonly Task[] },
-  revert: (version: string) => Promise<void>): Promise<UndoStep | undefined> {
+  revert: (version: string) => Promise<void>, uncall?: (step: CallStep) => void): Promise<UndoStep | undefined> {
   const state = useUndoStore.getState();
   if (state.undoing !== undefined) return;
   const step = lastStep(state.steps, projectId);
@@ -93,6 +115,10 @@ export async function undoLast(projectId: string, project: { changes: readonly C
   try {
     if (step.kind === "keep") unkeepEdits(projectId, step.threadId, step.refs);
     else if (step.kind === "defer") undeferEdits(projectId, step.threadId, step.refs);
+    else if (step.kind === "call") {
+      if (!uncall) throw new Error("its pass isn’t open here.");
+      uncall(step);
+    }
     else if (step.version) await revert(step.version);
     else if (step.taskId) await undoRevision(step.taskId, project, revert);
     appLog("action", "undo", { project: projectId, kind: step.kind, ...((step.kind === "keep" || step.kind === "defer") && { change: step.edit.changeId }) });

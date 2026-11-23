@@ -309,6 +309,29 @@ it("shows the saved first-cut reply and leaves a clean playback recheck out of t
   expect(said(joinNote)).toEqual([reply, joinNote]);
 });
 
+it("says a request's reply once after it was paused for a transcript and then finished", () => {
+  const said = (tasks: Task[]) => {
+    const [thread] = buildThreads({ tasks, changes: [], notes: [] });
+    return threadConversation(thread!, []).entries.flatMap(e => e.kind === "agent" ? [e.text] : []);
+  };
+  const context = { threadId: "pass", message: "/dialogue-pass" };
+  // The engine hands a pass's closing words on to the attempt that finishes it, so both attempts hold the same reply.
+  const reply = "First cut saved. Review the flagged demo holds.";
+  const paused = task("pass", "done", { context, reply, needsTranscripts: ["mic"], finishedAt: at(1) });
+  expect(said([paused])).toEqual([reply]);
+  const finished = task("finish", "done", { context, reply, resumeRootId: paused.id, createdAt: at(2), finishedAt: at(3) });
+  expect(said([{ ...paused, retryTaskId: finished.id }, finished])).toEqual([reply]);
+  // Any other request says what it came to in the end, not also what it said when it paused.
+  const waiting = task("ask", "done", { context: { threadId: "ask", message: "Caption the mic" }, summary: "The mic has no transcript yet.",
+    needsTranscripts: ["mic"], finishedAt: at(1), retryTaskId: "again" });
+  const again = task("again", "done", { context: waiting.context, summary: "Captioned the mic.", resumeRootId: waiting.id, createdAt: at(2), finishedAt: at(3) });
+  expect(said([waiting, again])).toEqual(["Captioned the mic."]);
+  // The same when each attempt applied an edit and closed with words about it.
+  const first = change("cam", "approved", { taskId: waiting.id }), second = change("mic", "approved", { taskId: again.id, createdAt: at(2), updatedAt: at(2) });
+  const [thread] = buildThreads({ tasks: [{ ...waiting, changeIds: [first.id] }, { ...again, changeIds: [second.id] }], changes: [first, second], notes: [] });
+  expect(threadConversation(thread!, []).entries.flatMap(e => e.kind === "agent" ? [e.text] : [])).toEqual(["Captioned the mic."]);
+});
+
 it("leaves out a dialogue part's review that the next part of the same pass took over", () => {
   const id = (n: string, kind: string) => `chg_${n.repeat(64)}_${kind}`;
   const pass = task("Dialogue", "done", { changeIds: [id("a", "applied"), id("a", "review"), id("b", "applied"), id("b", "review")] });
