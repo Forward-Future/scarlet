@@ -656,3 +656,40 @@ it("shows one window-wide update on Projects while building and when ready", asy
     vi.unstubAllGlobals();
   }
 });
+
+it("offers Try a sample project on an empty library, opens it on success, and reports errors inline", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const previous = useProjectStore.getState();
+  const db = buildDb();
+  const sample = { ...db.projects.find(p => p.id === PRJ)!, id: "prj_sample", name: "Sample project" };
+  const createSample = vi.fn<() => Promise<typeof sample>>()
+    .mockRejectedValueOnce(new Error("Install FFmpeg first to create the sample project."))
+    .mockResolvedValueOnce(sample);
+  vi.spyOn(api, "projects").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "trash").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings });
+  useProjectStore.setState({ list: [], listStatus: "ready", createSampleProject: createSample });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const button = (text: string) => [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === text)!;
+  try {
+    await act(async () => root.render(<MemoryRouter><Routes>
+      <Route path="/" element={<ProjectsPage />} />
+      <Route path="/p/:id" element={<p>Opened sample workspace</p>} />
+    </Routes></MemoryRouter>));
+    expect(button("Try a sample project")).toBeTruthy();
+    await act(async () => button("Try a sample project").click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Install FFmpeg first");
+    await act(async () => button("Try a sample project").click());
+    expect(createSample).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Opened sample workspace");
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useProjectStore.setState(previous, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+

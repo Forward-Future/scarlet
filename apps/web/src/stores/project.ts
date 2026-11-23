@@ -72,6 +72,7 @@ interface ProjectState {
   /** `retry` is the editor asking again after a failure, which shows as loading. A refresh never does. */
   loadList(retry?: boolean): Promise<void>;
   createProject(body: { name: string; settings?: Partial<Project["settings"]> }): Promise<Project>;
+  createSampleProject(): Promise<Project>;
   deleteProject(id: string): Promise<void>;
 
   current: ProjectData | null;
@@ -316,6 +317,14 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       listRevision++;
       const summary: ProjectSummary = { id: project.id, name: project.name, settings: project.settings, head: project.head, mediaPaused: project.mediaPaused,
         createdAt: project.createdAt, updatedAt: project.updatedAt, mediaCount: 0, poster: null, pendingChanges: 0, openNotes: 0 };
+      set({ list: [summary, ...get().list.filter(p => p.id !== project.id)], listStatus: "ready" });
+      return project;
+    },
+    async createSampleProject() {
+      const { project } = await api.createSampleProject();
+      listRevision++;
+      const summary: ProjectSummary = { id: project.id, name: project.name, settings: project.settings, head: project.head, mediaPaused: project.mediaPaused,
+        createdAt: project.createdAt, updatedAt: project.updatedAt, mediaCount: project.media.length, poster: null, pendingChanges: 0, openNotes: 0 };
       set({ list: [summary, ...get().list.filter(p => p.id !== project.id)], listStatus: "ready" });
       return project;
     },
