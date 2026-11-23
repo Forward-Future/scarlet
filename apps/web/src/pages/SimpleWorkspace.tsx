@@ -60,7 +60,7 @@ import { EditHoverContext, type TimelineDot, type TimelineGap } from "../compone
 import { afterPlayerMount, aimedAtChange, approves, belongsTo, firstKey, isWorking, noEdits, noop, savedRewording, saveRewording, shortTitle, stepsOver, tagOf,
   type ChatActions, type HoveredReviewRow, type JoinedListen, type Listening, type LocatedReview, type OpenList, type OpenPass, type Panel, type PassList, type ReportReviewMarkers, type Side } from "./simple/types";
 import { WorkspaceComposer } from "./simple/SourceProvenance";
-import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoLabel } from "./simple/ReviewCards";
+import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError } from "./simple/ReviewCards";
 import { Turn } from "./simple/Turn";
 import { useCallCardShortcuts, useCarryingFootage, useChatAutoFollow, useDraftTimeline, useEditCardShortcuts, useLandingTracker, useOutsideClearMarkedRange, usePassCallNumbers, usePassChoices, useProjectBookmark, useTranscriptEscape, useUndoShortcut, useWatchedMomentAutoKeep } from "./simple/workspaceHooks";
 import "../simple.css";
@@ -1870,7 +1870,7 @@ export function SimpleWorkspace() {
     else closeEdit();
   }
   // ⌘Z takes back the editor's last Keep or revision, and the one before it on the next press. A Keep taken back opens
-  // its edit again, where it waits on the editor. The label in the timeline's bottom row says what the next ⌘Z takes back.
+  // its edit again, where it waits on the editor.
   const threadsNow = useRef(threads);
   threadsNow.current = threads;
   const latestActions = useRef(actions);
@@ -1886,7 +1886,7 @@ export function SimpleWorkspace() {
     if (opened && thread) latestActions.current.openEdit(thread, opened.edit, undefined, opened.edit.single);
   };
   useUndoShortcut(workspaceActive, current.id, undoKeys);
-  const undoFoot = <UndoLabel projectId={current.id} onUndo={() => void undoKeys.current.undo()} />;
+  const undoFoot = <UndoError projectId={current.id} />;
   // With a pass's list of every edit open, watching the video is the review: a moment the video plays through, from
   // before it starts to past its end without a jump, is kept, all its edits at once. Only the moments that need no
   // decision of the editor's are: one that asks for a look, or a spot marked for them, waits for their own Keep. While
