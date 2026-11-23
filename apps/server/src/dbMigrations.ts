@@ -455,6 +455,10 @@ const LOOKUP_INDEXES: Record<string, string> = {
   changes_left_out_unread: `ON changes(created_at) WHERE state = 'approved' AND json_extract(json, '$.leftOut') IS NULL
     AND json_array_length(coalesce(json_extract(json, '$.ops'), '[]')) > 0
     AND json_array_length(coalesce(json_extract(json, '$.cutReasons'), '[]')) = 0`,
+  // A first cut saved whole, which has no steps: what it left out of the recording is read once (2026-11-23).
+  changes_first_cut_unread: `ON changes(created_at) WHERE state = 'approved' AND json_extract(json, '$.leftOut') IS NULL
+    AND json_extract(json, '$.firstCut') = 1
+    AND json_array_length(coalesce(json_extract(json, '$.cutReasons'), '[]')) = 0`,
   // Joins an earlier reading of the footage left out found, read again with the current one (LEFT_OUT_READING).
   // Named with LEFT_OUT_READING so an older release opening the same library keeps its own partial index intact.
   [`changes_left_out_reread_v${LEFT_OUT_READING}`]: `ON changes(created_at) WHERE state = 'approved' AND json_array_length(json_extract(json, '$.leftOut.joins')) > 0

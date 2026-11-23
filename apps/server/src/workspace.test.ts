@@ -1776,6 +1776,33 @@ it("reads the footage a change left out as it built the video, when it is applie
   expect(ctx.repos.changes.get(change.id)!.updatedAt).toBe(stamp);
 });
 
+it("reads what a first cut saved whole left out of the recording, the end it didn't use too", async () => {
+  // Matt's 28-minute talking head was cut to 15 by saving the pieces to keep as the whole video. A first cut was
+  // skipped as having nothing to read, so none of its 104 cuts were listed and the request said 20 s came out (2026-11-23).
+  const { ctx } = workspace;
+  ctx.repos.projects.putMedia(project.id, { id: "take", kind: "video", name: "Take", path: "take.mp4", duration: 60, hasAudio: true }, "ready");
+  const whole = timelineFromKeepRanges(project.id, "take", [{ start: 5, end: 10 }, { start: 20, end: 30 }]);
+  const saved = await api("POST", projectsPath() + "/changes", { description: "First cut", firstCut: true, autoApprove: true, skipRender: true, timeline: whole });
+  expect(saved.status).toBe(201);
+  const { change } = await saved.json();
+  expect(change.leftOut.joins).toEqual([{ at: 0, removed: { start: 0, end: 5 } }, { at: 5, removed: { start: 10, end: 20 } }, { at: 15, removed: { start: 30, end: 60 } }]);
+  expect(change.leftOut.reading).toBe(LEFT_OUT_READING);
+  // The version that plays it all is the recording, whole.
+  const full = resolveTimeline(ctx, project, change.leftOut.version);
+  expect(timelineDuration(full)).toBeCloseTo(60);
+  // One an earlier build applied has nothing read. Starting Scarlet reads it, once.
+  ctx.repos.changes.put({ ...change, leftOut: undefined });
+  recordLeftOutFootage(ctx);
+  expect(ctx.repos.changes.get(change.id)!.leftOut).toEqual(change.leftOut);
+  const read = vi.spyOn(ctx.repos.changes, "parse");
+  recordLeftOutFootage(ctx);
+  expect(read).not.toHaveBeenCalled();
+  // A first cut that replaces a video already there took nothing from an empty timeline: nothing is read for it.
+  const again = await api("POST", projectsPath() + "/changes", { description: "First cut again", firstCut: true, autoApprove: true, skipRender: true,
+    timeline: timelineFromKeepRanges(project.id, "take", [{ start: 5, end: 10 }, { start: 22, end: 30 }]) });
+  expect((await again.json()).change.leftOut).toEqual({ joins: [] });
+});
+
 it("fills in legacy history metadata once and serves the same version summaries thereafter", async () => {
   const { ctx } = workspace;
   const { head } = ensureHead(ctx, project.id);

@@ -57,6 +57,7 @@ export {
   changeEdits,
   changeRemovals,
   isRejectRequest,
+  LEFT_OUT,
   matchesEdit,
   namedTimelineEdits,
   REJECT_MESSAGE,

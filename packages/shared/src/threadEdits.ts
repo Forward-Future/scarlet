@@ -2,7 +2,7 @@
  * The edits a thread's applied changes made, each in the clock of the version that saved it. `threadTimeline` places
  * them on the working cut.
  */
-import { appliedReviewChange, cutKindRow, intervalCandidates, removedJoins, reviewCutSummaries, reviewKindRows, reviewReasons, type Change, type CutAssessment, type MediaAsset, type Timeline, type TimeRange } from "@scarlet/timeline";
+import { appliedReviewChange, cutKindRow, intervalCandidates, removedJoins, reviewCutSummaries, timelineDuration, reviewKindRows, reviewReasons, type Change, type CutAssessment, type MediaAsset, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { Thread } from "./threads.js";
 import { classifyEdits, type EditKind } from "./editKind.js";
 
@@ -103,8 +103,8 @@ export interface SavedEdit extends ThreadEdit {
   markerSays?: string;
 }
 
-/** A cut Scarlet named no edit for, in a video it built from the pieces to keep. */
-const LEFT_OUT = "Cut";
+/** A cut Scarlet named no edit for, in a video it built from the pieces to keep. The engine names its row by its words. */
+export const LEFT_OUT = "Cut";
 
 const TIMING_KEYS = new Set(["sourceIn", "sourceOut", "timelineIn", "timelineOut", "speed"]);
 const rangeKey = ({ start, end }: TimeRange) => `${start}/${end}`;
@@ -328,17 +328,31 @@ export function savedEdits(thread: Pick<Thread, "changes"> & Partial<Pick<Thread
     const dialogue = !change.approvedSpots && !change.appliedReview ? dialogueEdits(change) : undefined;
     const named = namedEdits(change, () => dialogue);
     // A save of the whole video has no steps to read. What it took out and put back is read from the versions either side.
-    const saved = named && !change.ops?.length && read ? { before: read(change.fromVersion), after: read(change.toVersion) } : undefined;
-    const found = saved?.before && saved.after ? { before: saved.before, after: saved.after } : undefined;
     // A change that built the video from the pieces to keep never had the rest on its timeline. The engine read what
     // it left out between them once it was applied, with a version that plays it.
     // A change that took its footage out as cuts, with or without the fades that smooth them, is read from those.
     const rippled = dialogue ?? (!change.approvedSpots && !change.appliedReview ? dialogueEdits(change, true) : undefined);
-    const built = named && !rippled && change.leftOut?.version && change.leftOut.joins.length
+    // What a save took out doesn't depend on how Scarlet made it or on its naming its edits: one model names every
+    // cut, another saves the video with one sentence about it, another trims and moves clips step by step. A save
+    // nothing else reads is read from the versions either side of it (2026-11-23).
+    const unnamed = !named && !dialogue && !change.approvedSpots && !change.appliedReview;
+    // A first cut saved whole names no edits: every stretch of the recording it left out is one of its cuts, and they
+    // are all it did. Listed as one row for the whole video, Matt's 28-minute recording cut to 15 showed none of its
+    // 104 cuts and the request said 20 s had come out (2026-11-23).
+    const whole = unnamed && !rippled && !!change.firstCut && !change.ops?.length;
+    const built = (named || unnamed) && !rippled && change.leftOut?.version && change.leftOut.joins.length
       ? { version: change.leftOut.version, joins: change.leftOut.joins } : undefined;
+    // A save of the whole video has no steps to read. What it took out and put back is read from the versions either side.
+    const saved = (named || unnamed) && !rippled && !built && read ? { before: read(change.fromVersion), after: read(change.toVersion) } : undefined;
+    const sides = saved?.before && saved.after ? { before: saved.before, after: saved.after } : undefined;
+    const lost = sides && removedJoins(sides.before, sides.after, fps);
+    // A save made of steps is read so only when they took footage out and left the video shorter: its edits are
+    // otherwise read from the steps. Steps that slide a picture a few frames to sit with its sound took nothing out.
+    const shorter = sides && timelineDuration(sides.after) < timelineDuration(sides.before) - 0.5 / fps;
+    const found = sides && (!change.ops?.length || (lost!.length && shorter)) ? sides : undefined;
     // What the change says it did is about the footage it placed ("Kept the complete opening"), so a stretch it left
     // out and named nothing for goes by what it is.
-    const taken = (found ? removedJoins(found.before, found.after, fps) : built?.joins)?.map((join): Cut => ({ label: built ? LEFT_OUT : change.description,
+    const taken = (found ? lost : built?.joins)?.map((join): Cut => ({ label: built || unnamed ? LEFT_OUT : change.description,
       range: { start: join.at, end: join.at }, removed: join.removed, replaces: undefined }));
     const returned = taken && found ? removedJoins(found.after, found.before, fps).map(join => join.removed) : undefined;
     const cuts = rippled ?? taken;
@@ -348,7 +362,7 @@ export function savedEdits(thread: Pick<Thread, "changes"> & Partial<Pick<Thread
     const kindRows = change.appliedReview && reviewKindRows(change, change.appliedReview.joins);
     const cutNotes = appliedCutNotes(change);
     const approved = approvedNotes(change, applied);
-    const entries = named ?? applied.ranges.map((range, index) => {
+    const entries = named ?? (whole && built ? [] : applied.ranges).map((range, index) => {
       const plannedReasons = reasons?.[index];
       const planned = plannedReasons?.join(" · ");
       const reason = planned && (change.cutReasons || planned !== change.description) ? planned : undefined;
