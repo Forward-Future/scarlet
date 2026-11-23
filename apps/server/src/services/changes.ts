@@ -6,18 +6,16 @@ export {
   applyChoicesWhenDone,
   changeDiff,
   prepareCutReview,
-  nextWaitingCall,
-  prepareFirstDecision,
   prepareNextDecision,
-  recordPlayableDecision,
   saveCutAssessments,
   saveCutChoices,
 } from "./changes/cutReview.js";
 export { cutRevisionReference, reviseChange } from "./changes/cutRevisionPrompts.js";
-export { reviseStagedCut, submitDialogueCuts, type DialogueCutsAdjustments } from "./changes/dialoguePass.js";
+export { submitDialogueCuts } from "./changes/dialoguePass.js";
 export { flagEdit, keepEdits, keptEdits, unkeepEdits } from "./changes/editReviews.js";
 export { foldStrandedPasses, recordLeftOutFootage, retireLeftoverPasses, retireStaleSaves } from "./changes/leftOutAndRepairs.js";
 export { approveChange, rejectChange, reopenChange, unapproveChange, wireChangeRenderCompletion } from "./changes/lifecycle.js";
-export { proposeChange, type ProposeResult } from "./changes/propose.js";
+export { proposeChange } from "./changes/propose.js";
 export { scheduleSpotCheck, withSpotCapability } from "./changes/spotChecks.js";
-export { callSentBack, passToRevise, requireUnscopedEdit } from "./changes/stagedCutLineage.js";
+export { callSentBack, passToRevise } from "./changes/stagedCutLineage.js";
+export { reviseStagedCut } from "./changes/stagedCutRevision.js";
