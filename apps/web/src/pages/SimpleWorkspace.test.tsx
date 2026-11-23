@@ -679,11 +679,12 @@ it("keeps a reframe's card open, on the side it was on, when → or a press on t
   // It plays from two seconds ahead of the edit, as a cut does. Before holds the frame as it was framed before the edit.
   await click(compareButton(editPanel()!));
   expect([sideShown(), usePlayerStore.getState().time]).toEqual(["Before", 0]);
-  // → skips 5 seconds, then 1 second three times with Shift, past the end of the passage at 0:07. The card stays up on
+  // → skips 1 second eight times, then 1 frame three times with Shift, past the end of the passage at 0:07. The card stays up on
   // Before and the timeline stays on the edit.
-  await press("ArrowRight");
+  for (let i = 0; i < 8; i++) await press("ArrowRight");
   for (let i = 0; i < 3; i++) await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true })); });
-  expect([openTitle(), sideShown(), usePlayerStore.getState().time]).toEqual(["Camera full screen", "Before", 8]);
+  expect([openTitle(), sideShown()]).toEqual(["Camera full screen", "Before"]);
+  expect(usePlayerStore.getState().time).toBeCloseTo(243 / 30, 10);
   expect(container.querySelector(".simple-timeline-band")).not.toBeNull();
   // So does a press on the timeline ahead of the passage, at the left edge of the zoomed view.
   const slider = container.querySelector<HTMLElement>(".timeline-slider")!;
@@ -764,13 +765,14 @@ it("keeps an edit that isn't a cut on Before through a skip or a press inside it
   // in whole seconds: not the clip's range to the millisecond.
   await beforePlayedTo(0.5);
   expect([playhead(), monitorClock()]).toEqual([2.5, "0:02 / 0:16"]);
-  // → skips 5 seconds on in the clip and ← 5 back, or 1 second with Shift. The edit stays on Before and plays on.
+  // → skips 1 second on in the clip and ← 1 back, or 1 frame with Shift. The edit stays on Before and plays on.
   await skipKey("ArrowRight");
-  expect([sideShown(), playhead(), monitorClock(), beforeClip().paused]).toEqual(["Before", 7.5, "0:07 / 0:16", false]);
+  expect([sideShown(), playhead(), monitorClock(), beforeClip().paused]).toEqual(["Before", 3.5, "0:03 / 0:16", false]);
   await skipKey("ArrowLeft");
   expect([sideShown(), playhead()]).toEqual(["Before", 2.5]);
   await skipKey("ArrowRight", true);
-  expect([sideShown(), playhead(), beforeClip().paused]).toEqual(["Before", 3.5, false]);
+  expect([sideShown(), playhead(), beforeClip().paused]).toEqual(["Before", 2.53, false]);
+  expect(usePlayerStore.getState().time).toBeCloseTo(76 / 30, 10);
   // A press on the timeline inside the passage holds the clip while the pointer is down, then it plays on from there.
   let held: boolean | undefined;
   await pressTimeline(8, () => { held = beforeClip().paused; });
@@ -811,20 +813,20 @@ it("goes to After at a point picked outside the passage on Before, where Before 
   expect(down).toEqual(["After", true]);
   expect([openTitle(), sideShown(), playhead(), video.paused]).toEqual(["captions", "After", 1.5, false]);
   expect(beforeClip()).toBeNull();
-  // Before has played to 0:10.5. → lands at 0:15.5, past the passage's end: After again, playing on from that point.
+  // Before has played to 0:12.5. → lands at 0:13.5, past the passage's end: After again, playing on from that point.
   await click(compareButton(editPanel()!));
   await act(async () => {});
   await beforeStarts();
-  await beforePlayedTo(8.5);
+  await beforePlayedTo(10.5);
   await skipKey("ArrowRight");
-  expect([openTitle(), sideShown(), playhead(), video.paused]).toEqual(["captions", "After", 15.5, false]);
+  expect([openTitle(), sideShown(), playhead(), video.paused]).toEqual(["captions", "After", 13.5, false]);
   // Paused on Before, a skip out of the passage leaves After paused at that point.
   await click(compareButton(editPanel()!));
   await act(async () => {});
   await beforeStarts();
   await press(" ");
   await skipKey("ArrowLeft");
-  expect([sideShown(), playhead(), video.paused]).toEqual(["After", 0, true]);
+  expect([sideShown(), playhead(), video.paused]).toEqual(["After", 1, true]);
   // And a press on the timeline outside it, once the pointer is up.
   await click(compareButton(editPanel()!));
   await act(async () => {});
@@ -855,13 +857,13 @@ it("aims a new edit at a pick on Before and After once the editor has taken the 
   await act(async () => composer.props!.onClearTarget!());
   await pressTimeline(8.5);
   expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 8.5, ["At 0:08", true]]);
-  await skipKey("ArrowLeft", true);
+  await skipKey("ArrowLeft");
   expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 7.5, ["At 0:07", true]]);
   await click(compareButton(editPanel()!));
   await act(async () => {});
   // Space pauses After there, which writes the time into the box; the skip then moves the time written in.
   await press(" ");
-  await skipKey("ArrowRight", true);
+  await skipKey("ArrowRight");
   expect([sideShown(), playhead(), pointTag(), useUiStore.getState().agentDraft]).toEqual(["After", 3, [undefined, false], "0:03 "]);
 });
 
@@ -876,7 +878,7 @@ it("goes to After at the point picked while Before is still opening, since there
   await act(async () => {});
   expect([sideShown(), container.querySelector('.watch-monitor [role="status"]:not(.simple-on-video)')?.textContent]).toEqual(["Before", "Opening Before…"]);
   await skipKey("ArrowRight");
-  expect([openTitle(), sideShown(), playhead()]).toEqual(["captions", "After", 7]);
+  expect([openTitle(), sideShown(), playhead()]).toEqual(["captions", "After", 3]);
 });
 
 it("leaves the playhead to the Before clip while it shows, stops it with the video, and takes the video to where it got to", async () => {
@@ -5701,7 +5703,7 @@ it("keeps a moment the video plays through while the pass's list is open, and ne
   expect(listRows()[0]!.className).toBe("");
 });
 
-it("does not keep an unflagged cut skipped with Shift+ArrowRight while playing", async () => {
+it("does not keep an unflagged cut skipped with ArrowRight while playing", async () => {
   const later = appliedPass(false);
   (later.lists[later.earlier] as object[]).splice(0, Infinity,
     { changeId: "chg_approved_2", spot: 0, label: "First pause", range: { start: 2.5, end: 5.5 }, at: 4, beforeCut: { version: "ver_1", removed: { start: 4, end: 5 } }, previous: [], kind: "cut" },
@@ -5713,10 +5715,10 @@ it("does not keep an unflagged cut skipped with Shift+ArrowRight while playing",
   await act(async () => {});
   expect(listRows().map(rowText)).toEqual(["First pause", "Second pause", "Third pause"]);
   const plays = (time: number, playing = true) => act(async () => { usePlayerStore.setState({ time, playing, duration: 17 }); });
-  // Play up to 3.4 s, then skip 1 s ahead across the 4 s cut with Shift+ArrowRight.
+  // Play up to 3.4 s, then skip 1 s ahead across the 4 s cut with ArrowRight.
   await plays(2.5, false);
   for (let t = 2.5; t <= 3.4; t += 0.3) await plays(t);
-  await skipKey("ArrowRight", true);
+  await skipKey("ArrowRight");
   expect(usePlayerStore.getState().time).toBeCloseTo(4.4, 2);
   await plays(4.8);
   expect(listRows()[0]!.className).toBe("");
@@ -9352,11 +9354,11 @@ it("aims a new edit at the latest manual seek at once, with no second press", as
   await show();
   expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
   await press("ArrowRight");
-  expect(pointTag()).toEqual(["At 0:05", true]);
-  expect(useUiStore.getState().agentContext).toMatchObject({ time: 5 });
+  expect(pointTag()).toEqual(["At 0:01", true]);
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 1 });
   const slider = container.querySelector<HTMLElement>(".timeline-slider")!;
   await act(async () => { slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })); });
-  expect(pointTag()).toEqual(["At 0:10", true]);
+  expect(pointTag()).toEqual(["At 0:02", true]);
   // Playback lets go of an empty box's moment, and a pause the app makes picks none of its own.
   await act(async () => usePlayerStore.setState({ playing: true }));
   expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
@@ -9412,15 +9414,15 @@ it("writes the time the editor pauses on into an empty box, as if they had typed
   expect(box()).toEqual(["0:11 ", undefined]);
   // A seek moves it while the box holds only the time.
   await press("ArrowLeft");
-  expect(box()).toEqual(["0:06 ", undefined]);
+  expect(box()).toEqual(["0:10 ", undefined]);
   // Words written after it are the editor's: playing on and pausing again leave the message as it is.
-  await act(async () => useUiStore.getState().setAgentDraft("0:06 zoom in here"));
+  await act(async () => useUiStore.getState().setAgentDraft("0:10 zoom in here"));
   await press(" ");
   await act(async () => usePlayerStore.setState({ playing: true, time: 18 }));
   await press(" ");
   await act(async () => usePlayerStore.setState({ playing: false }));
-  expect(box()).toEqual(["0:06 zoom in here", undefined]);
-  expect(useUiStore.getState().agentContext).toMatchObject({ time: 6, fromMessage: true });
+  expect(box()).toEqual(["0:10 zoom in here", undefined]);
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 10, fromMessage: true });
 });
 
 it("shows the time the editor pauses on in an open edit's tag, and the message stays the edit's", async () => {
@@ -9443,7 +9445,7 @@ it("shows the time the editor pauses on in an open edit's tag, and the message s
   expect(box()).toEqual(["", tag, aim, 7]);
   // A seek moves it.
   await press("ArrowLeft");
-  expect(box()).toEqual(["", tag, aim, 2]);
+  expect(box()).toEqual(["", tag, aim, 6]);
   // Playing on takes it off, back to the edit's own time.
   await press(" ");
   await act(async () => usePlayerStore.setState({ playing: true, time: 9 }));
@@ -9465,7 +9467,7 @@ it("moves an empty box's point to the next manual seek, and releases it on playb
   await press("n");
   expect(pointTag()).toEqual(["At 0:00", true]);
   await press("ArrowRight");
-  expect(pointTag()).toEqual(["At 0:05", true]);
+  expect(pointTag()).toEqual(["At 0:01", true]);
   await act(async () => usePlayerStore.setState({ playing: true }));
   await act(async () => usePlayerStore.setState({ playing: false, time: 0 }));
   expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
@@ -9540,7 +9542,7 @@ it("keeps a message being written about the whole video so through a seek, thoug
   expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
   // N still takes the current time.
   await press("n");
-  expect(pointTag()).toEqual(["At 0:05", true]);
+  expect(pointTag()).toEqual(["At 0:01", true]);
 });
 
 it("doesn't bring back a point picked in an earlier visit on an empty box, and keeps one with its message", async () => {
@@ -9572,7 +9574,7 @@ it("keeps explicitly chosen transcript words through timeline seeks before and w
   expect(boxNow()).toEqual(["Tighten this", chosenWords(), JSON.stringify([PRJ, null])]);
   await act(async () => useUiStore.getState().setAgentDraft(""));
   await press("n");
-  expect(pointTag()).toEqual(["At 0:10", true]);
+  expect(pointTag()).toEqual(["At 0:02", true]);
   await act(async () => composer.props!.onClearTarget!());
   expect(boxTag()).toBeUndefined();
 });
@@ -11195,10 +11197,10 @@ it("keeps a cut's card open while the version before it loads: ← → and the t
   await act(async () => {});
   expect(editPanel()).not.toBeNull();
   expect(audition).not.toHaveBeenCalled();
-  // → skips five seconds while the version before the cut is on its way. The card stays open.
+  // → skips one second while the version before the cut is on its way. The card stays open.
   seek.mockClear();
   await press("ArrowRight");
-  expect(seek).toHaveBeenCalledWith(5, true);
+  expect(seek).toHaveBeenCalledWith(1, true);
   expect(editPanel()).not.toBeNull();
   // A press on the timeline moves the player, and the card stays open too.
   seek.mockClear();
@@ -12077,18 +12079,18 @@ it("keeps the playhead where a skip put it through a reload of its edit's marker
   await act(async () => {});
   expect(openTitle()).toBe("captions");
   expect(passages).toHaveBeenLastCalledWith({ start: 0, end: 5.4 }, expect.any(Number), undefined, false);
-  // Skipping five seconds from the start is a plain seek: the passage stays as it was, and lets the playhead go.
+  // Skipping one second from the start is a plain seek: the passage stays as it was, and lets the playhead go.
   await act(async () => { player.pause(); });
   passages.mockClear();
   await press("ArrowRight");
-  expect([passages.mock.calls.length, playhead()]).toEqual([0, 5]);
+  expect([passages.mock.calls.length, playhead()]).toEqual([0, 1]);
   // The working cut moves on, and the edit is where it was. Its passage is taken up again, with the playhead where it was.
   later.hold(later.earlier);
   await headMoves("ver_moved");
   await later.release();
   expect(openTitle()).toBe("captions");
   expect(passages.mock.calls.at(-1)).toMatchObject([{ start: 0, end: 5.4 }, expect.any(Number), undefined, true]);
-  expect(playhead()).toBe(5);
+  expect(playhead()).toBe(1);
   // It moves on again, and this time the edit comes back shorter: it was revised. Its new passage is taken up, still as
   // the edit it was, not as one newly chosen.
   passages.mockClear();
@@ -12098,7 +12100,7 @@ it("keeps the playhead where a skip put it through a reload of its edit's marker
   await later.release();
   expect(openTitle()).toBe("captions");
   expect(passages.mock.calls.at(-1)).toMatchObject([{ start: 0, end: 4.8 }, expect.any(Number), undefined, true]);
-  expect(playhead()).toBe(5);
+  expect(playhead()).toBe(1);
 });
 
 it("leaves full screen when Revise hands the keyboard to the message box, which full screen hides", async () => {

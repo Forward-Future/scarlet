@@ -524,7 +524,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       e.preventDefault();
       if (!playable || duration <= 0) return;
-      const target = Math.max(0, Math.min(lastFrame, arrowSeekTime(usePlayerStore.getState().time, e.key, e.shiftKey)));
+      const target = Math.max(0, Math.min(lastFrame, arrowSeekTime(usePlayerStore.getState().time, e.key, e.shiftKey, fps)));
       seekFull(target);
       selectTime(target);
     } else if (e.key.toLowerCase() === "m" && simple.onPick && !e.metaKey && !e.ctrlKey && !e.altKey) {
