@@ -12599,6 +12599,15 @@ it("keeps one list of every edit open at a time, and puts a request's edits on t
   await act(async () => {});
   expect(band("chg_later").classList.contains("is-marked")).toBe(true);
   expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2"]);
+  // A press anywhere else in the chat lets go too (2026-11-23), and a press on the band picks it again.
+  await click(container.querySelector<HTMLElement>(".simple-chat")!);
+  await act(async () => {});
+  expect(container.querySelectorAll(".unit-msg.is-marked")).toHaveLength(0);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "1", "2", "2", "3"]);
+  await click(band("chg_later"));
+  await act(async () => {});
+  expect(band("chg_later").classList.contains("is-marked")).toBe(true);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2"]);
   // Opening one request's list of every edit closes another's, so two lit See all tabs never stand for one timeline.
   const toggle = (changeId: string) => seeAll(turnFor(changeId))!;
   await click(toggle("chg_approved_2"));
