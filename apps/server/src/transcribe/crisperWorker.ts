@@ -30,9 +30,15 @@ export interface CrisperRequest {
 
 type Worker = { key: string; child: ChildProcess; args: string[]; errors: string; failure?: string; kill?: ReturnType<typeof setTimeout> };
 type Job = { id: number; request: CrisperRequest; resolve(): void; reject(error: unknown): void; worker?: Worker;
-  cancel?: () => void; background?: StillBackground };
+  cancel?: () => void; background?: StillBackground; replied?: boolean; stderrEnded?: boolean };
 
 const IDLE_MS = 60_000;
+/**
+ * The line an adapter writes on stderr, after everything else it wrote for a request and before its reply, when the
+ * reply says `stderr_end`. Stdout and stderr are read separately (on Windows the reply often comes first), so a request
+ * is done only once both have arrived: its last stderr lines are its own, not dropped or given to the next request.
+ */
+const STDERR_END = /^scarlet-crisper-end (-?\d+)$/;
 let worker: Worker | undefined;
 let current: Job | undefined;
 let idle: ReturnType<typeof setTimeout> | undefined;
@@ -69,17 +75,27 @@ function start(request: CrisperRequest, key: string): Worker {
     child.once("error", release);
   }
   lines(child.stderr!, line => {
+    const end = STDERR_END.exec(line);
+    if (end) {
+      const job = current;
+      if (job?.worker !== started || Number(end[1]) !== job.id) return;
+      job.stderrEnded = true;
+      if (job.replied) finish(job, () => job.resolve());
+      return;
+    }
     started.errors = (started.errors + line + "\n").slice(-16000);
     if (current?.worker === started) current.request.onStderrLine?.(line);
   });
   lines(child.stdout!, line => {
     const job = current;
     if (!line || job?.worker !== started) return;
-    let reply: { id?: number; ok?: boolean; error?: string };
+    let reply: { id?: number; ok?: boolean; error?: string; stderr_end?: boolean };
     try { reply = JSON.parse(line); } catch { return; }
     if (reply.id !== job.id) return;
     if (reply.ok) {
-      finish(job, () => job.resolve());
+      // An adapter from before the marker says nothing about its stderr, and its reply is the end of the request.
+      job.replied = true;
+      if (!reply.stderr_end || job.stderrEnded) finish(job, () => job.resolve());
       return;
     }
     // The worker exits after an error reply. Detach it now so nothing queued is sent to it, and wait for close so

@@ -1,6 +1,6 @@
 /**
  * Footage the timeline shows that the playing side doesn't have: another cut in the same pass took it out.
- * A skipped gap greys out, names its edit on hover, and hands a click to `onGap`. Otherwise it's only outlined.
+ * A skipped gap greys out and hands a click to `onGap`. On Before it's outlined and a click opens its edit.
  */
 export interface TimelineGap {
   start: number;
@@ -13,6 +13,35 @@ export interface TimelineGap {
   title: string;
   summary?: string;
   skipped: boolean;
+  /** Opens the edit that made this cut. On Before, clicking a dotted cut opens it instead of scrubbing. */
+  open?(): void;
+}
+
+/** Minimum clickable width, in pixels, so a narrow sliver cut can still be aimed at and clicked. */
+export const MIN_GAP_HIT = 16;
+
+/**
+ * The visible gap under pointer position `x` (pixels from the track's left edge).
+ * Prefers a gap that strictly contains `x` (choosing the narrowest when two touch or overlap so a small sliver beside
+ * a wider cut still wins), then falls back to the nearest narrow gap within `MIN_GAP_HIT`.
+ */
+export function gapAt(gaps: readonly TimelineGap[], from: number, span: number, width: number, x: number): TimelineGap | undefined {
+  if (!gaps.length || span <= 0 || width <= 0) return undefined;
+  let inside: { gap: TimelineGap; w: number; dist: number } | undefined;
+  let near: { gap: TimelineGap; dist: number } | undefined;
+  for (const gap of gaps) {
+    const left = Math.max(0, (gap.start - from) / span) * width;
+    const right = Math.min(1, (gap.end - from) / span) * width;
+    if (right <= 0 || left >= width || right <= left) continue;
+    const w = right - left;
+    const dist = Math.abs(x - (left + right) / 2);
+    if (x >= left && x <= right) {
+      if (!inside || w < inside.w - 0.5 || (Math.abs(w - inside.w) <= 0.5 && dist < inside.dist)) inside = { gap, w, dist };
+    } else if (w < MIN_GAP_HIT && dist <= MIN_GAP_HIT / 2) {
+      if (!near || dist < near.dist) near = { gap, dist };
+    }
+  }
+  return inside?.gap ?? near?.gap;
 }
 
 /** A gap's tag is 10.5 px text with 6 px of padding each side, 3 px in from the gap's edges. */

@@ -7674,6 +7674,18 @@ it("shades and steps over what a later batch of the pass took out, since the vid
   // After plays as the video runs now: over the later cut as well as this one, on the working edit's own media.
   expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 8.5, end: 9.5, removed: true }, { start: 10, end: 12.4, removed: true }] }, expect.any(Number));
   expect(player.mediaTime(13)).toBeCloseTo(9.6, 6);
+  // On Before, the other cut is only outlined; clicking it opens that edit instead of scrubbing.
+  await click(container.querySelector<HTMLElement>('.edit-card button[aria-label="Before"]')!);
+  await act(async () => {});
+  const dotted = container.querySelector<HTMLElement>(".simple-timeline-gap")!;
+  expect(dotted.classList.contains("is-skipped")).toBe(false);
+  expect(dotted.classList.contains("is-clickable")).toBe(true);
+  await act(async () => {
+    dotted.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, isPrimary: true, pointerId: 1 }));
+    dotted.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, isPrimary: true, pointerId: 1 }));
+  });
+  await act(async () => {});
+  expect(container.querySelector(".edit-card")?.textContent).toContain("Drop the long pause");
 });
 
 it("opens a cut on the version before an earlier batch's cut beside it, so that cut shows as a gap too", async () => {
