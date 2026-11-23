@@ -87,7 +87,7 @@ it("reads Gemini ACP session choices, configOptions efforts, and API-key authent
           {
             id: "thought_level",
             category: "thought_level",
-            currentValue: "medium",
+            currentValue: "high",
             options: [
               { value: "low", name: "Low", description: "Fast thinking" },
               { value: "medium", name: "Medium" },

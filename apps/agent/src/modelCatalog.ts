@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { z } from "zod/v3";
 import { AgentOptionId, type AgentAvailability, type ModelOptions } from "@scarlet/shared";
 import { hasApiKey } from "./detect.js";
-import { findAcpEffortOption, findAcpModelOption, isAcpAuthError } from "./runners/acp.js";
+import { DEFAULT_GEMINI_EFFORT, findAcpEffortOption, findAcpModelOption, isAcpAuthError } from "./runners/acp.js";
 import { spawnLines } from "./runners/spawn.js";
 
 export type CliAgent = "claude" | "codex" | "gemini";
@@ -176,14 +176,17 @@ export async function discoverModels(agent: CliAgent, file: string, env: NodeJS.
           const configs = session.data.configOptions ?? [];
           const modelConfig = findAcpModelOption(configs);
           const thoughtConfig = findAcpEffortOption(configs);
+          const thoughtOptions = flattenAcpOptions(thoughtConfig?.options);
           const sharedOptions: ModelOptions = {
-            efforts: flattenAcpOptions(thoughtConfig?.options).map(o => ({
+            efforts: thoughtOptions.map(o => ({
               id: o.value,
               ...(o.name ? { label: o.name } : {}),
               ...(o.description ? { description: o.description } : {}),
             })),
             speeds: [],
-            defaultEffort: thoughtConfig?.currentValue,
+            defaultEffort: thoughtOptions.some(o => o.value === DEFAULT_GEMINI_EFFORT)
+              ? DEFAULT_GEMINI_EFFORT
+              : thoughtConfig?.currentValue,
           };
           const tier = session.data._meta?.antigravity?.tier;
           const tierName = typeof tier === "string" ? tier : tier?.name;

@@ -21,7 +21,7 @@ import {
   type RunnerEvent,
   workspaceEnv,
 } from "./types.js";
-import { findAcpEffortOption, findAcpModelOption, isAcpAuthError, type AcpConfigOption } from "./acp.js";
+import { acpConfigHasValue, DEFAULT_GEMINI_EFFORT, findAcpEffortOption, findAcpModelOption, isAcpAuthError, type AcpConfigOption } from "./acp.js";
 import { asRecord, earlyResult, exitError, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
 import { addUsage, createUsageReporter, geminiTranscriptStepUsage, geminiUsage, usageWithModel } from "./usage.js";
 import { SCARLET_TOOL_NAMES, type AgentUsage, type PlanStep } from "@scarlet/shared";
@@ -591,14 +591,16 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
   };
 
   const maybeSetEffortThenPrompt = () => {
-    if (opts.effort) {
-      const thoughtOpt = findAcpEffortOption(configOptions);
-      const configId = thoughtOpt ? configOptionId(thoughtOpt) : undefined;
-      if (configId) {
-        step = "set_effort";
-        sendRequest("session/set_config_option", { sessionId: st.sessionId!, configId, value: opts.effort });
-        return;
-      }
+    const thoughtOpt = findAcpEffortOption(configOptions);
+    const configId = thoughtOpt ? configOptionId(thoughtOpt) : undefined;
+    const targetEffort = opts.effort
+      ?? (thoughtOpt && thoughtOpt.currentValue !== DEFAULT_GEMINI_EFFORT && acpConfigHasValue(thoughtOpt, DEFAULT_GEMINI_EFFORT)
+        ? DEFAULT_GEMINI_EFFORT
+        : undefined);
+    if (configId && targetEffort) {
+      step = "set_effort";
+      sendRequest("session/set_config_option", { sessionId: st.sessionId!, configId, value: targetEffort });
+      return;
     }
     sendPrompt();
   };
@@ -779,8 +781,23 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
     params: { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: "scarlet", version: "0.1.4" } },
   });
 
-  const outcome = await handle.done;
-  clearTimeout(stopTimer);
+  // Periodically poll transcript.jsonl while a prompt turn is active so token counts
+  // still update if agy flushes PLANNER_RESPONSE right after tool_call before a slow tool runs.
+  const usagePoll = setInterval(() => {
+    if (step === "prompt") {
+      pollTranscriptUsage();
+      reportUsage();
+    }
+  }, 2_000);
+  usagePoll.unref();
+
+  let outcome;
+  try {
+    outcome = await handle.done;
+  } finally {
+    clearInterval(usagePoll);
+    clearTimeout(stopTimer);
+  }
 
   const remaining: RunnerEvent[] = [];
   flushStreams(st, remaining);

@@ -83,7 +83,9 @@ const KNOWN: Record<string, AgentCapabilities> = {
   // dialogue_apply_cuts among them, so a Gemini pass couldn't save an edit; listed briefly (43 KB) all 51 stayed.
   // Tool wait: agy 1.x ends a tool call at 180 s (two saves on 2026-11-20 failed at 181 s; a 94 s call answered). With
   // no wait set, Gemini's calls waited 45 s less their margin, so a save that needed area checks gave up at once.
-  gemini: { images: true, audio: false, files: false, plan: false, briefTools: true, toolWaitSeconds: 120 },
+  // Result size: agy 1.5 spills MCP text results over ~10,200 chars (~10 KiB) to output.txt (measured 2026-11-22:
+  // 10,134 chars stayed inline, 10,304 chars spilled), forcing extra read_file turns. Leave headroom under that cliff.
+  gemini: { images: true, audio: false, files: false, plan: false, briefTools: true, resultChars: 9_000, toolWaitSeconds: 120 },
 };
 
 // An agent Scarlet didn't launch is someone's own MCP client, such as Claude Code or Claude Desktop pointed at Scarlet,
@@ -99,6 +101,10 @@ const UNKNOWN: AgentCapabilities = { images: true, audio: false, files: false, p
  */
 export function workspaceCapabilities(caps: AgentCapabilities): AgentCapabilities {
   return { ...caps, files: true, shell: true, web: true };
+}
+
+function validResultChars(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 2_000;
 }
 
 export function agentCapabilities(agent: string | undefined, override?: Partial<AgentCapabilities> | string): AgentCapabilities {
@@ -117,7 +123,7 @@ export function agentCapabilities(agent: string | undefined, override?: Partial<
       console.warn('[scarlet] SCARLET_AGENT_CAPS ignored: it must be a JSON object such as {"audio":true}');
     }
   } else if (override && typeof override === "object") extra = override;
-  const resultChars = extra.resultChars;
-  return { ...base, ...extra, resultChars: resultChars !== undefined && Number.isSafeInteger(resultChars) && resultChars >= 2_000
-    ? resultChars : DEFAULT_RESULT_CHARS };
+  const fallbackResultChars = validResultChars(base.resultChars) ? base.resultChars : DEFAULT_RESULT_CHARS;
+  const resultChars = validResultChars(extra.resultChars) ? extra.resultChars : fallbackResultChars;
+  return { ...base, ...extra, resultChars };
 }
