@@ -1,9 +1,10 @@
 /**
  * Shared segment helpers: timeline slicing, ffconcat escaping, atomic temp-file
- * staging/publishing, and bounded parallel batch execution.
+ * staging/publishing, scratch directories, and bounded parallel batch execution.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { clipRange, firstIndex } from "@scarlet/timeline";
 import type { Timeline, TimeRange } from "@scarlet/timeline";
@@ -65,6 +66,16 @@ export async function withStagedFile<T>(target: string, suffix: string, work: (t
     return await work(temp);
   } finally {
     await fs.rm(temp, { force: true });
+  }
+}
+
+/** Run `work` in a new directory named `prefix` plus a random suffix under `parent` (default os.tmpdir()), removed on exit. */
+export async function withTempDir<T>(parent: string | undefined, prefix: string, work: (dir: string) => Promise<T>): Promise<T> {
+  const dir = await fs.mkdtemp(path.join(parent ?? os.tmpdir(), prefix));
+  try {
+    return await work(dir);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
   }
 }
 

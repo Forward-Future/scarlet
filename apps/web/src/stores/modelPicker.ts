@@ -18,7 +18,7 @@ export interface ModelTuning {
   serviceTier?: string;
 }
 
-export function modelKey(agent: AgentId, model?: string): string {
+function modelKey(agent: AgentId, model?: string): string {
   return `${agent}:${model ?? ""}`;
 }
 

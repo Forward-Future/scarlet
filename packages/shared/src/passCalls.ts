@@ -1,6 +1,6 @@
 /** Dialogue-pass call numbering and waiting-call counting. */
 import { isPublishedCall, mergeRanges, rangesOverlap, type Change, type TimeRange } from "@scarlet/timeline";
-import type { Task } from "./api.js";
+import type { Task } from "./tasks.js";
 import { PENDING_STATES } from "./taskQueue.js";
 
 /**

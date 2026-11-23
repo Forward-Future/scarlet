@@ -73,4 +73,4 @@ export const usePictureMarksStore = create<PictureMarksState>((set, get) => ({
 }));
 
 /** How many marks one frame takes, as the engine takes them. */
-export const MAX_MARKS = 20;
+const MAX_MARKS = 20;

@@ -2,7 +2,7 @@
  * Pure read & quote-checking helpers for dialogue joins and staged-cut notes.
  */
 import { normalizeTranscriptToken } from "@scarlet/shared";
-import { clipDuration, sourceToTimeline, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
+import { clipDuration, clipsAt, indexClipsAt, sourceToTimeline, timelineToSource, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 import { audibleClipsByTrack } from "./analysis.js";
 
 /** Every clip of a recording that sounds on this version, in track and clip order. */
@@ -97,4 +97,12 @@ export function quotesAwayFromCut(note: string, heard: ReadonlyArray<{ at: numbe
     return ![tokens, played].some(said => said.some((t, i) => t.at >= range.start - reach && t.at <= range.end + reach &&
       phrase.every((p, k) => said[i + k]?.token === p)));
   });
+}
+
+/** Each audible source instant under the given timeline times. */
+export function audibleSourcePoints(tl: Timeline, times: number[]) {
+  const clips = times.length > 2 ? indexClipsAt(tl) : (time: number) => clipsAt(tl, time);
+  return times.flatMap(at => clips(at).flatMap(({ clip, track }) =>
+    clip.kind === "media" && !track.muted && clip.enabled && clip.volume > 0 && track.kind !== "caption"
+      ? [{ mediaId: clip.mediaId, t: timelineToSource(clip, at) }] : []));
 }

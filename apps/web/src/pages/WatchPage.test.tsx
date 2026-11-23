@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startAppLog, stopAppLog } from "../lib/appLog";
 import { api } from "../lib/client";
 import { enqueueImports } from "../components/media/UploadDropzone";
-import { ImportPreview } from "./WatchPage";
+import { ImportPreview } from "./watch/ImportPreview";
 
 let root: Root;
 let container: HTMLDivElement;

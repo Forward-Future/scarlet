@@ -1,4 +1,5 @@
-import type { MediaClip, TimeRange, TransformKeyframe, VolumeKeyframe } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { MediaClip, TransformKeyframe, VolumeKeyframe } from "./timelineSchema.js";
 import { clipEnd } from "./time.js";
 
 /** Where an eased move is, from 0 to 1, a share `p` of the way through it: the curves a transform keyframe moves on. */
@@ -49,7 +50,7 @@ export interface PlacedDip { start: number; end: number; depth: number }
  * Stretches merged where the level couldn't come back up between them: where the gap is shorter than going up and down
  * again takes, the dip holds through it. Sorted, in timeline seconds.
  */
-export function dipStretches(stretches: readonly TimeRange[], shape: Pick<DipShape, "down" | "up">): TimeRange[] {
+function dipStretches(stretches: readonly TimeRange[], shape: Pick<DipShape, "down" | "up">): TimeRange[] {
   const sorted = stretches.filter(s => s.end > s.start).map(s => ({ ...s })).sort((a, b) => a.start - b.start);
   const out: TimeRange[] = [];
   for (const s of sorted) {

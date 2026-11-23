@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { probeMedia, proxyCheckpoint, TONE_MAP_REVISION } from "@scarlet/render";
+import { heardAudio, heardAudioKey, probeMedia, proxyCheckpoint, TONE_MAP_REVISION } from "@scarlet/render";
 import {
   sha256,
   SOURCE_PREVIEW_SECONDS,
@@ -22,10 +22,13 @@ export async function previewIdentity(mediaRoot: string, asset: MediaAsset) {
   // Old range encodes can contain a duplicate even when their duration and reported rate match.
   // Long recordings without a verified steady clock may contain VFR checkpoints with millisecond-rounded frame offsets.
   // An HDR source's preview is tone-mapped to SDR. One made before that, or by another tone-mapping, isn't its preview.
+  // A preview plays the track the editor chose, or every track mixed: one of another track isn't its preview. The first
+  // track's previews keep the names they always had.
+  const heard = heardAudioKey(heardAudio(asset));
   const clock = (asset.kind === "video" && (asset.duration ?? 0) > 30 && !asset.previewClock ? "proxy-clock-v3:" : "proxy-clock-v2:") +
-    (asset.color?.hdr ? `sdr-v${TONE_MAP_REVISION}:` : "");
+    (asset.color?.hdr ? `sdr-v${TONE_MAP_REVISION}:` : "") + (heard === null ? "" : `audio-${heard}:`);
   return { file, local: sha256(clock + local), shared: shared && sha256(clock + shared),
-    legacyKeys: asset.color?.hdr ? [] : shared ? [shared, local] : [local], present: !!stamp, async check() {
+    legacyKeys: asset.color?.hdr || heard !== null ? [] : shared ? [shared, local] : [local], present: !!stamp, async check() {
     if (await sourceStamp(file) !== stamp) throw new Error("Source changed while preparing its preview.");
   } };
 }

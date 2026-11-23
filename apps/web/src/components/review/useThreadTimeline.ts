@@ -5,7 +5,7 @@ import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
 import { useUiStore, type AgentContext } from "../../stores/ui";
 import { useProjectStore } from "../../stores/project";
 import { takeUpLatest } from "../../stores/shownCut";
-import { editGroups } from "./ThreadEdits";
+import { editGroups } from "./threadEditState";
 import { originalReviewRef } from "../../lib/editReviews";
 import { editMoments } from "./EditReferences";
 import { appliedPassCuts, type FirstCutDelivery } from "../../lib/threads";

@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as ffmpeg from "../render/ffmpeg.js";
+import { FfmpegError } from "../render/ffmpeg.js";
+import { crisperWorker, type CrisperRequest } from "./crisperWorker.js";
 import { decodedRecording } from "../services/recordingAudio.js";
 import { newId } from "@scarlet/timeline";
 import { bundledWhisperOnGpu, parseWhisperJson, WhisperCppProvider, whisperThreads } from "./whispercpp.js";
@@ -97,22 +99,53 @@ it("reports whisper-cli's progress lines for a full recording", async () => {
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-it("logs just the CrisperWhisper device and fallback markers, even for a window without progress", async () => {
+it("reads with the CrisperWhisper worker and logs just its device, fallback and quiet notes, even for a window without progress", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scarlet-crisper-log-"));
   try {
-    vi.spyOn(ffmpeg, "run").mockImplementation(async (_bin, args, opts) => {
-      for (const line of ["crisperwhisper device = mps", "GPU recognition failed: model detail",
-        "crisperwhisper fallback = mps", "crisperwhisper device = cpu", "other decoder output"]) {
-        opts?.onStderrLine?.(line);
+    const requests: CrisperRequest[] = [];
+    vi.spyOn(crisperWorker, "transcribe").mockImplementation(async request => {
+      requests.push(request);
+      for (const line of ["crisperwhisper device = mps", "GPU recognition failed: model detail", "crisperwhisper fallback = mps",
+        "crisperwhisper device = cpu", "crisperwhisper quiet = 412.5 s of 600.0 s not read", "other decoder output"]) {
+        request.onStderrLine?.(line);
       }
+      await writeFile(request.out + ".json", JSON.stringify({ result: { language: "en" }, transcription: [] }));
+    });
+    const run = vi.spyOn(ffmpeg, "run");
+    const log = vi.fn();
+    const provider = new WhisperCppProvider({ binary: "python", model: "model.safetensors", crisperScript: "crisper_cli.py", log });
+    await provider.transcribeWav("sample.wav", dir, undefined, "en", "Um, uh.");
+    expect(log.mock.calls.flat()).toEqual(["[transcribe] crisperwhisper device = mps", "[transcribe] crisperwhisper fallback = mps",
+      "[transcribe] crisperwhisper device = cpu", "[transcribe] crisperwhisper quiet = 412.5 s of 600.0 s not read"]);
+    expect(requests).toMatchObject([{ binary: "python", args: ["-I", "-B", "crisper_cli.py", "--serve", "-m", "model.safetensors", "-t", String(whisperThreads())],
+      wav: "sample.wav", language: "en", progress: false }]);
+    expect(run).not.toHaveBeenCalled();
+    expect(await readdir(dir)).toEqual([]);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+it("runs a standalone CrisperWhisper adapter that can't serve requests once per window, as before", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-crisper-old-"));
+  try {
+    const serve = vi.spyOn(crisperWorker, "transcribe").mockRejectedValue(new FfmpegError("python exited with code 2", [],
+      "usage: crisper_cli.py [-h] -m MODEL_SAFETENSORS -f WAV -of OUTPUT_PREFIX -ojf\ncrisper_cli.py: error: the following arguments are required: -f, -of, -ojf\n"));
+    const calls: string[][] = [];
+    vi.spyOn(ffmpeg, "run").mockImplementation(async (_bin, args) => {
+      calls.push(args);
       await writeFile(args[args.indexOf("-of") + 1] + ".json", JSON.stringify({ result: { language: "en" }, transcription: [] }));
       return Buffer.alloc(0);
     });
-    const log = vi.fn();
-    const provider = new WhisperCppProvider({ binary: "python", crisperScript: "crisper_cli.py", log });
-    await provider.transcribeWav("sample.wav", dir);
-    expect(log.mock.calls.flat()).toEqual(["[transcribe] crisperwhisper device = mps", "[transcribe] crisperwhisper fallback = mps",
-      "[transcribe] crisperwhisper device = cpu"]);
+    const provider = new WhisperCppProvider({ binary: "python", model: "model.safetensors", crisperScript: "old_cli.py" });
+    await provider.transcribeWav("a.wav", dir);
+    await provider.transcribeWav("b.wav", dir);
+    expect(serve).toHaveBeenCalledTimes(1);
+    expect(calls.map(args => args.slice(0, 7))).toEqual([["-I", "-B", "old_cli.py", "-m", "model.safetensors", "-f", "a.wav"],
+      ["-I", "-B", "old_cli.py", "-m", "model.safetensors", "-f", "b.wav"]]);
+    // Any other failure is the reading's own, and is reported.
+    serve.mockRejectedValue(new FfmpegError("python failed: out of memory", [], "RuntimeError: out of memory"));
+    const other = new WhisperCppProvider({ binary: "python", model: "model.safetensors", crisperScript: "crisper_cli.py" });
+    await expect(other.transcribeWav("a.wav", dir)).rejects.toThrow("out of memory");
+    expect(calls).toHaveLength(2);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -402,7 +435,7 @@ it("hands two windows over at the word they share nearest the seam, whatever tim
   expect(apart.through).toBe(116.7);
 });
 
-it("gives the CrisperWhisper adapter, which loads its model in a new Python process each window, ten-minute windows", async () => {
+it("gives the CrisperWhisper adapter, which reads a whole recording in one run, ten-minute windows", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scarlet-crisper-windows-"));
   try {
     const seconds = 700, rate = 16000;

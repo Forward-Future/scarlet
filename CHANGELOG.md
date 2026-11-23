@@ -4,9 +4,32 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
-## November 22, 2026
+## November 23, 2026
 
 - After an update, a request's estimated cost uses the prices that came with the new version instead of an older price list Scarlet fetched before.
+- Recordings with more than one audio track, such as OBS captures or multi-mic podcasts, have an Audio track picker in Media: choose one track or mix them all, and Scarlet listens to, plays and exports that choice, and transcribes the recording again when you change it.
+- Third-party models run through Antigravity (such as Claude Opus 5.5) now use Gemini to listen to cuts instead of receiving audio files they cannot hear, and no longer appear in the Listening model picker.
+- Dialogue passes on an already-assembled recording stay on batched dialogue cuts instead of rebuilding the whole timeline in one pass, and unsure joins during assembly ask to listen or stage for review rather than forcing exact timestamps.
+- Clicking a dotted cut on the Before timeline, even a very narrow one without a label, now opens that edit so you can see which one it is, while dragging across it still scrubs.
+- New installs now transcribe with the bundled Whisper model by default instead of requiring a separate CrisperWhisper setup; existing CrisperWhisper setups keep using it, and you can still switch in Settings › General.
+- A first edit Scarlet builds from the pieces to keep now lists every stretch of the recording it left out as a cut, the talk before your first line and after your last too, and the request says how much came out in all.
+- What a request says it took out now adds up to the footage that is out, however Scarlet saved its edits: a cut made beside or over an earlier one is listed at the join where its footage is missing and counted once.
+- An edit Scarlet made in many places under one name, such as a fade on every dialogue join, is one row with its count of places in a first edit's list, and is counted once.
+- Scarlet can crossfade dialogue joins whose sound pieces sit a millisecond or two apart, instead of lining them up first and settling for fades.
+- L on a to-do's card sets it aside for later instead of changing the playback speed; Shift+L still slows playback.
+- Shift+← and Shift+→ move exactly one frame when the video is paused between two frames, instead of none or two.
+- A Gemini request no longer fails when Gemini turns down the effort level Scarlet picks by default.
+- The player no longer gets stuck on “Rendering clip…” when you open another cut while one is still loading.
+- After you switch models while answering Scarlet's question, the request stays on the model you chose.
+- The glow round the player keeps its softer colours in the installed app.
+- CrisperWhisper transcribes faster: Scarlet keeps the model loaded between parts of a recording and the short passages it reads while editing, instead of loading it again each time.
+- A microphone track that goes silent whenever its speaker isn't talking no longer fills its transcript with the same sentence repeated over the silence, and transcribes much faster.
+- Once your edits are decided and nothing is waiting on you, Export at the top turns white until you export the video, and the export for another editing app is now called “For Resolve, Final Cut or Premiere…”.
+- Scarlet now tells you when Claude Code, Codex or Gemini has a newer version, with a small dot on the model button, and updates it for you with one press from the model menu or Settings › General, the same way you installed it.
+
+## November 22, 2026
+
+- Setup no longer needs a terminal or Node.js: Scarlet now installs FFmpeg inside the app with one click on Mac and Windows, and Claude Code and Codex install directly as standalone apps.
 - The Transcript panel is cleaner and easier to read: timestamps line up in a quiet left column, sparse remarks flow inline with small pause markers instead of breaking onto single-word lines, repeated "Voice unclear" headers are gone, and search now has previous, next, and clear buttons.
 - Scarlet no longer drops a cut it got right because the transcript and the recording spell or time a word differently, so a false start it found isn't left in.
 - A cut placed at the end of a word that runs straight into the next one no longer clips the word's last sound, like the “s” of “complaints”.

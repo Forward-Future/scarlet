@@ -22,8 +22,9 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use super::detect::{api_key_vars, strip_vars};
-use super::spawn::{build_command, resolve_cli, spawn_spec};
-use super::HostManager;
+use super::spawn::command::{build_command, spawn_spec};
+use super::spawn::resolve_cli;
+use super::manager::HostManager;
 use crate::util::{child_env, kill_tree, lossy_lines};
 
 /// How long a sign-in may wait for the browser round-trip.

@@ -127,7 +127,7 @@ export function sameQueuedSource(previousKey: string, currentKey: string | undef
     key === priorAssembly || key === priorSourceKey + `-clock${PROXY_CLOCK_REVISION}`);
 }
 
-export function renderOutputHeight(ctx: Ctx, projectHeight: number, input: RenderInput): number {
+function renderOutputHeight(ctx: Ctx, projectHeight: number, input: RenderInput): number {
   if (input.kind === "export") return Math.min(projectHeight, input.exportOptions?.height ?? projectHeight);
   return input.quality === "delivery" ? projectHeight : Math.min(ctx.settings().render.previewHeight, projectHeight);
 }

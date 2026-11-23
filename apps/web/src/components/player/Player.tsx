@@ -3,7 +3,7 @@ import { fullRenderContext } from "@scarlet/shared";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { isPlayableMedia, type MediaAsset } from "@scarlet/timeline";
-import { canPlayOriginal } from "../../lib/upload";
+import { canPlayOriginal, playsChosenTrack } from "../../lib/upload";
 import { api, IS_MOCK } from "../../lib/client";
 import { CutStream } from "./CutStream";
 import { FramedVideo } from "./FramedVideo";
@@ -52,18 +52,21 @@ export const Player = memo(function Player({ source, autoPlaySource, cut, hidden
   const [streaming, setStreaming] = useState(false);
   const [playingCutFile, setPlayingCutFile] = useState<string>();
   const startStreaming = useCallback(() => setStreaming(true), []);
+  // A recording with several audio tracks plays its preview of the chosen one, never the raw original.
+  const chosenTrack = !!source && playsChosenTrack(source);
   const src = source
-    ? original ? api.mediaFileUrl(source.id) : isPlayableMedia(source) ? api.mediaFileUrl(source.id, true) : undefined
+    ? original ? api.mediaFileUrl(source.id) : isPlayableMedia(source) ? api.mediaFileUrl(source.id, true, chosenTrack ? source.audioTrack ?? 0 : undefined) : undefined
     : playingCutFile ?? (!streaming && render?.state === "done" ? api.renderFileUrl(render.id) : IS_MOCK && shown ? api.renderFileUrl(shown) : undefined);
   const [failedSrc, setFailedSrc] = useState<string>();
   const attach = useCallback((el: HTMLVideoElement | null) => {
     if (el) player.attach(el);
     else player.detach();
   }, []);
-  if (source?.kind === "video" && source.duration && (source.previewMode === "on-demand" ||
+  if (source?.kind === "video" && source.duration && (source.previewMode === "on-demand" || (chosenTrack && isPlayableMedia(source)) ||
     (!startedOnOriginal && isPlayableMedia(source) && canPlayOriginal(source) && source.id !== rejectedOriginal))) {
-    return <SourcePlayer id={source.id} name={source.name} duration={source.duration}
-      autoPlay={autoPlaySource && active && !hidden} hidden={hidden} />;
+    // Another track picked plays from the start of its own preview, not the old track's bytes.
+    return <SourcePlayer key={chosenTrack ? `track-${source.audioTrack ?? 0}` : undefined} id={source.id} name={source.name} duration={source.duration}
+      autoPlay={autoPlaySource && active && !hidden} hidden={hidden} original={chosenTrack ? api.mediaFileUrl(source.id, true) : undefined} />;
   }
   // The monitor's own dark shows round the picture, so the ambient light behind it can glow through.
   if (!src && head && current && timeline) return <div hidden={hidden} className="absolute inset-0">
