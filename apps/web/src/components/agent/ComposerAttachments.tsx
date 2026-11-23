@@ -1,19 +1,12 @@
 import type { PictureMarks, TaskAttachment } from "@scarlet/shared";
 import { api } from "../../lib/client";
-import { clock, playbackClock } from "../../lib/format";
+import { clock } from "../../lib/format";
 import { markedFramePicture } from "../../lib/markedFrame";
 import { rememberMarkedFrame } from "../../lib/markedFramePictures";
 import type { PendingAttachment } from "../../stores/attachments";
 import type { MarkedFrame } from "../../stores/pictureMarks";
-import { usePlayerStore } from "../../stores/player";
 import { MarksDrawing } from "../player/PictureMarks";
 import { Icon } from "../ui/primitives";
-
-/** Where the playhead is, to the millisecond as the timeline's playhead reads. */
-export function PlayheadClock() {
-  const ms = usePlayerStore(s => Math.max(0, Math.round(s.time * 1000)));
-  return <span className="composer-playhead">Playhead {playbackClock(ms / 1000)}</span>;
-}
 
 export const NO_FILES: PendingAttachment[] = [];
 

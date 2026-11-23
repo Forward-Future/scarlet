@@ -135,6 +135,15 @@ export function clockRange(start: number, end: number): string {
 }
 
 /**
+ * A stretch on the clock: whole seconds ("0:42 – 0:51") when the two ends sit in different seconds, and milliseconds
+ * ("13:32.444 – 13:32.478") when both fall inside the same second so tight ranges stay distinct.
+ */
+export function preciseRange(start: number, end: number): string {
+  if (clock(start) !== clock(end)) return `${clock(start)} – ${clock(end)}`;
+  return `${playbackClock(start)} – ${playbackClock(end)}`;
+}
+
+/**
  * A length as people read it: "0.4 s", "12 s", "3:41" from a minute up, and "1:12:15" from an hour, as a clock reads
  * it. One form everywhere a length shows: a cut's row, its mark, the band on the timeline, the sentence that counts
  * the cuts, and a run's steps and summary.

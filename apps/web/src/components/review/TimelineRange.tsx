@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import type { TimeRange } from "@scarlet/timeline";
-import { clockRange, lengthLabel, playbackClock } from "../../lib/format";
+import { lengthLabel, playbackClock, preciseRange } from "../../lib/format";
 import type { ScrubRelease } from "../../lib/player";
+import { DimMs } from "../ui/primitives";
 import { QueuedImg } from "./QueuedImg";
 import { useUiStore } from "../../stores/ui";
 
@@ -282,7 +283,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     layer = <>
       <span aria-hidden="true" className={`timeline-range${live ? " is-live" : ""}${lit ? " is-lit" : ""}`} style={{ left: `${left}%`, width: `${Math.max(0, right - left)}%` }} />
       {live && live.precise === undefined && <span aria-hidden="true" className="timeline-range-time" style={{ left: `${(left + right) / 2}%` }}>
-        {clockRange(live.range.start, live.range.end)} · {lengthLabel(live.range.end - live.range.start)}</span>}
+        <DimMs text={preciseRange(live.range.start, live.range.end)} /> · {lengthLabel(live.range.end - live.range.start)}</span>}
       {handle("start")}{handle("end")}
       {live?.precise !== undefined && edgeTime !== undefined && <RangeLoupe time={edgeTime} at={live.precise} fps={fps} last={Math.max(0, Math.ceil(end * fps - 1e-6) - 1)}
         inside={live.moving === "end" ? "before" : "after"} snapped={live.snapped} edges={edges} frameAt={frameAt} sheet={sheet} pictureAspect={pictureAspect} />}
@@ -325,7 +326,7 @@ function RangeLoupe({ time, at, fps, last, inside, snapped, edges, frameAt, shee
   }
   return <span className="timeline-range-loupe" role="status" data-inside={inside}
     style={{ left: `clamp(var(--loupe-half), ${at}%, calc(100% - var(--loupe-half)))` } as CSSProperties}>
-    <span className="timeline-range-loupe-head"><b>{playbackClock(time)}</b>{snapped && <small>On an edit’s edge</small>}</span>
+    <span className="timeline-range-loupe-head"><b><DimMs text={playbackClock(time)} /></b>{snapped && <small>On an edit’s edge</small>}</span>
     <span className="timeline-range-loupe-row" style={{ "--picture-height": `${heldHeight}px`, "--held-picture": `${loupeWidth(0)}px` } as CSSProperties}>
       <span className="timeline-range-loupe-film">{pictures}</span>
       <i className="timeline-range-loupe-now" />

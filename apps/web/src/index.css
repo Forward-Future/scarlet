@@ -78,6 +78,11 @@ body {
   }
 }
 
+.time-ms {
+  font-size: .85em;
+  opacity: .55;
+}
+
 .tnum {
   font-variant-numeric: tabular-nums;
 }
