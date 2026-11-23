@@ -58,6 +58,8 @@ export interface PromptContext {
   listenCheck?: { mediaId: string; from: number; to: number; voice?: "me" | "other voices"; question: string };
   /** The editor's setting for how many of a pass's cuts they are asked to check. Omitted = balanced. */
   checkIn?: CheckIn;
+  /** The editor's own words, from Settings, on how Scarlet writes to them. Omitted or empty = nothing added. */
+  talkingToYou?: string;
   /** Directory the agent may use for temp files; mentioned in the prompt. */
   workDir?: string;
   /** How long the host lets this run take, in minutes. Omitted when the host doesn't say. */
@@ -84,6 +86,11 @@ function styleGuideSection(guide: NonNullable<PromptContext["styleGuide"]>): str
   if (guide.path) lines.push(`It is in the ${fileKind(guide.mime, guide.path)} at ${guide.path}.`);
   if (guide.text?.trim()) lines.push(guide.path ? `What they wrote with it:\n\n${guide.text.trim()}` : guide.text.trim());
   return lines.join("\n\n");
+}
+
+/** The editor's own words on how Scarlet writes to them, from "Talking to you" in Settings. */
+function talkingToYouSection(words: string): string {
+  return `# How the editor wants you to write to them\n\nThe editor wrote this in Scarlet's settings for everything you write to them: what you say you will do, your updates, the reason on each edit, your questions and your closing sentences. It is about how you say things; where Scarlet shows your words and how long they can be, above, still holds.\n\n${words.trim()}`;
 }
 
 /**
@@ -404,6 +411,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   }
 
   if (ctx.styleGuide) parts.push(styleGuideSection(ctx.styleGuide));
+  if (ctx.talkingToYou?.trim()) parts.push(talkingToYouSection(ctx.talkingToYou));
 
   // Notes
   if (ctx.notes?.length) {

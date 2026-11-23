@@ -136,6 +136,9 @@
  */
 import { z } from "zod/v3";
 import { CheckIn } from "./checkIn.js";
+
+/** The longest "Talking to you" the editor can write: a few short lines of how they like to be spoken to. */
+export const TALKING_TO_YOU_MAX = 2000;
 import {
   Author,
   ChangeState,
@@ -510,6 +513,12 @@ export const ServerSettings = z.object({
   defaultAgent: AgentId.default("claude"),
   /** How many of a pass's cuts, the ones Scarlet thinks most likely to be wrong, the editor is asked to check. */
   checkIn: CheckIn.default("balanced"),
+  /**
+   * How Scarlet writes to the editor, in their own words: in the chat and on its cards, in every project, whichever
+   * model runs the request. Their own instructions for Claude Code, Codex or Gemini are for their own chats and never
+   * reach Scarlet's runs, so this is where they say it for Scarlet. Empty = nothing added.
+   */
+  talkingToYou: z.string().max(TALKING_TO_YOU_MAX).default(""),
   /**
    * Which model listens to cuts for a request whose own model can't hear: "auto" (the best one signed in), "off", or
    * one model as "agent:model" (`chooseListener`).
