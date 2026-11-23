@@ -84,6 +84,10 @@ export const MediaAsset = z.object({
   kind: MediaKind,
   /** Human-facing name, usually the original filename. */
   name: z.string(),
+  /** What the editor says this file is and how to use it, in their own words, for Scarlet. */
+  editorNote: z.string().max(2000).optional(),
+  /** When the file was added to the project. Read from its row, never stored with it. */
+  addedAt: z.string().datetime().optional(),
   /** Storage key relative to the project's media root. */
   path: z.string(),
   /** Content hash (sha256 hex) so renders can be cached by content. */

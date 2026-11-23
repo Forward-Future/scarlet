@@ -299,7 +299,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   }
 
   // Project summary. A long timeline lists only the clips near where the request points, if it points anywhere.
-  const summary = typeof ctx.project === "string" ? ctx.project : summarizeProject(ctx.project.project, ctx.project.timeline, { most: PROMPT_CLIPS, near: requestRange(ctx.task) });
+  const summary = typeof ctx.project === "string" ? ctx.project : summarizeProject(ctx.project.project, ctx.project.timeline, { most: PROMPT_CLIPS, near: requestRange(ctx.task), requestedAt: ctx.task?.createdAt });
   parts.push(`# Project\n\n${summary}`);
 
   // Task
