@@ -10,11 +10,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Forward-Future/scarlet-releases/releases"><strong>Download Early Access (macOS &amp; Windows)</strong></a>
+  <a href="https://github.com/Forward-Future/scarlet/releases/latest"><strong>Download Scarlet (macOS &amp; Windows)</strong></a>
   &nbsp;·&nbsp;
   <a href="https://github.com/Forward-Future/scarlet-releases/releases?q=Ubuntu">Ubuntu 24.04 x86-64 Preview</a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/Forward-Future/scarlet/releases">Stable Releases</a>
+  <a href="https://github.com/Forward-Future/scarlet-releases/releases">Early Access</a>
   &nbsp;·&nbsp;
   <a href="skills/README.md">Editing Workflows</a>
 </p>
