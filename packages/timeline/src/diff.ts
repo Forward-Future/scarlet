@@ -3,7 +3,8 @@
  * re-watch to see every difference. Those ranges drive partial re-renders
  * and the "change clips" in the review UI.
  */
-import type { Clip, Timeline, TimeRange, Track } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { Clip, Timeline, Track } from "./timelineSchema.js";
 import { clipEnd, timelineDuration } from "./time.js";
 import { changedSpots, type ChangedSpot } from "./rebase.js";
 import { sameJson } from "./ids.js";

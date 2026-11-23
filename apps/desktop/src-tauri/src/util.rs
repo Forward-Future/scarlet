@@ -93,12 +93,6 @@ pub fn env_remove_ci(env: &mut HashMap<String, String>, keys: &[&str]) {
     env.retain(|k, _| !keys.iter().any(|name| k.eq_ignore_ascii_case(name)));
 }
 
-/// Replace any case-insensitive variant of `key` with `key = value`.
-pub fn env_set_ci(env: &mut HashMap<String, String>, key: &str, value: String) {
-    env_remove_ci(env, &[key]);
-    env.insert(key.into(), value);
-}
-
 /// Keep only environment entries whose names match `allowed`, ignoring ASCII case.
 pub fn env_filter_allowlist(env: HashMap<String, String>, allowed: &[&str]) -> HashMap<String, String> {
     env.into_iter().filter(|(k, _)| allowed.iter().any(|name| k.eq_ignore_ascii_case(name))).collect()
@@ -130,7 +124,7 @@ pub fn augmented_path(env: &HashMap<String, String>, home: &Path) -> String {
     let mut parts: Vec<String> = current.split(sep).filter(|p| !p.is_empty()).map(String::from).collect();
     let prefix = assistant_prefix(home);
     let assistant_bin = if cfg!(windows) { prefix } else { prefix.join("bin") };
-    let mut extra: Vec<PathBuf> = vec![assistant_bin, home.join(".local/bin"), home.join(".claude").join("local")];
+    let mut extra: Vec<PathBuf> = vec![assistant_bin, home.join(".local/bin"), home.join(".claude").join("local"), home.join(".codex").join("bin")];
     if cfg!(windows) {
         if let Some(appdata) = env_get(env, "APPDATA") {
             extra.push(PathBuf::from(appdata).join("npm"));

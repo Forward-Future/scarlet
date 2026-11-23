@@ -230,6 +230,7 @@ impl HostRuntime {
         self.paths.work_dir.join(TASKS_DIR).join(format!("{:x}", Sha256::digest(scope)))
     }
 
+    #[cfg(test)]
     pub async fn run_task(&self, task: Task, cancel: CancellationToken) {
         self.run_task_attempt(task, cancel, None, None).await
     }

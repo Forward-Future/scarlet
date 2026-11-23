@@ -1,7 +1,10 @@
 import { stableStringify } from "./ids.js";
 import { intervalCandidates } from "./intervals.js";
 import { applyOps } from "./ops.js";
-import type { Change, MediaAsset, MediaClip, Timeline, TimeRange } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { MediaClip, Timeline } from "./timelineSchema.js";
+import type { Change } from "./changeSchema.js";
 import { clock, isGlobalRippleDelete, mergeRanges, snapToFrame, timelineDuration, uniqueId, withHandles } from "./time.js";
 
 /** Both coordinates are immutable: at is on the proposal, removed is on the original. */
@@ -358,20 +361,22 @@ export function cutKindOfRow(row: string) {
   return (Object.keys(KIND_ROWS) as (keyof typeof KIND_ROWS)[]).find(kind => KIND_ROWS[kind] === row);
 }
 
+/** Each review spot's notes read by `read`, joined, where every note there reads as something. */
+function joinedRows(items: NonNullable<Change["cutReasons"]>, cuts: ReviewSpots, read: (note: (typeof items)[number]) => string | undefined) {
+  return reviewNotes(items, cuts).map(notes => {
+    const rows = notes.map(read);
+    if (rows.length && rows.every(Boolean)) return [...new Set(rows)].join(" · ");
+  });
+}
+
 /** Each review spot's row by what kind of footage it took out, for cuts saved without a summary. */
 export function reviewKindRows(change: Pick<Change, "cutReasons">, cuts: ReviewSpots) {
   if (!change.cutReasons?.some(cut => cut.kind)) return cuts.map(() => undefined);
-  return reviewNotes(change.cutReasons, cuts).map(notes => {
-    const rows = notes.map(note => cutKindRow(note.kind));
-    if (rows.length && rows.every(Boolean)) return [...new Set(rows)].join(" · ");
-  });
+  return joinedRows(change.cutReasons, cuts, note => cutKindRow(note.kind));
 }
 
 /** Find the short chat summaries on a review spot's original footage, including coalesced removals. */
 export function reviewCutSummaries(change: Pick<Change, "cutReasons">, cuts: ReviewSpots) {
   if (!change.cutReasons?.some(cut => cut.summary)) return cuts.map(() => undefined);
-  return reviewNotes(change.cutReasons, cuts).map(notes => {
-    const summaries = notes.map(note => note.summary);
-    if (summaries.length && summaries.every(Boolean)) return [...new Set(summaries)].join(" · ");
-  });
+  return joinedRows(change.cutReasons, cuts, note => note.summary);
 }

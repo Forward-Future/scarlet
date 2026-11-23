@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { agentTarget, canRetryTask, isSkillEdit, KeepEditsRequest, reviewItemPath, skillEditTarget, skillTaskTarget, splitAgentTarget, taskNeedsTranscripts, taskRecoveryAction,
-  taskWasStopped, Task } from "./api.js";
+import { reviewItemPath } from "./api.js";
+import { agentTarget, splitAgentTarget } from "./agents.js";
+import { KeepEditsRequest } from "./changes.js";
+import { canRetryTask, isSkillEdit, skillEditTarget, skillTaskTarget, taskNeedsTranscripts, taskRecoveryAction, taskWasStopped, Task } from "./tasks.js";
 
 const task = (fields: Record<string, unknown> = {}): Task => Task.parse({ id: "t1", projectId: "p1", kind: "edit", agent: "claude", instruction: "Tighten the intro",
   state: "failed", createdBy: { type: "human", name: "Editor" }, ...fields });

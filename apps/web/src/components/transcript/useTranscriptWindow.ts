@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef } from "react";
 import { carriesAudio, timelineDuration, type MediaAsset, type Timeline, type Transcript } from "@scarlet/timeline";
 import { api, errorMessage } from "../../lib/client";
 import { mediaClipsFor, speechAssets } from "../../lib/transcriptMap";
 import { usePlayerStore } from "../../stores/player";
 
 const SECONDS = 60;
-const VISIBLE_PAGES = 5;
 type Chunk = { key: string; mediaId: string; from: number; to: number };
 type Page = { data?: Transcript; error?: string; done: Promise<void> };
 
@@ -50,50 +49,17 @@ export function transcriptChunks(source: MediaAsset | undefined, assets: MediaAs
   return [...chunks.values()];
 }
 
-
-export function useTranscriptWindow(source: MediaAsset | undefined, timeline: Timeline | null, media: MediaAsset[], fixedRange?: { start: number; end: number }, audioSources = false) {
+/** The transcript of `range`, read in pages with the page either side of it read ahead. */
+export function useTranscriptWindow(source: MediaAsset | undefined, timeline: Timeline | null, media: MediaAsset[], range: { start: number; end: number }, audioSources = false) {
   // A source with no sound has no transcript to show or to make, like a silent clip in the edit.
   const assets = useMemo(() => source ? [source].filter(carriesAudio) : speechAssets(timeline, media), [source, timeline, media]);
   const clips = useMemo(() => !source && timeline ? mediaClipsFor(timeline) : [], [source, timeline]);
   const duration = useMemo(() => source ? source.duration : timeline ? timelineDuration(timeline) : 0, [source, timeline]);
   const playerDuration = usePlayerStore(s => s.duration);
   const end = duration || playerDuration || SECONDS;
-  const lastPage = Math.max(0, Math.ceil(end / SECONDS) - 1);
-  const [span, setWindow] = useState(() => {
-    const at = Math.min(lastPage, Math.floor(usePlayerStore.getState().time / SECONDS));
-    return { first: at, last: at };
-  });
-  const first = Math.min(span.first, lastPage);
-  const last = Math.min(span.last, lastPage);
-  const from = fixedRange?.start ?? first * SECONDS;
-  // A fixed range is clamped to the footage, so the whole of it can be asked for with an open end.
-  const to = fixedRange ? Math.min(fixedRange.end, end) : Math.min(end, (last + 1) * SECONDS);
-  useEffect(() => {
-    if (fixedRange) return;
-    let timer: number | undefined, pendingPage: number | undefined;
-    const follow = (at: number) => setWindow(w => at >= w.first && at <= w.last ? w : { first: at, last: at });
-    const unsubscribe = usePlayerStore.subscribe((state, previous) => {
-      if (state.time === previous.time && state.scrubGesture === previous.scrubGesture) return;
-      const at = Math.min(lastPage, Math.max(0, Math.floor(state.time / SECONDS)));
-      if (state.scrubGesture) {
-        // A fast drag can cross a minute on every paint. Follow a held position
-        // while dragging, and fetch the final page immediately on release.
-        if (pendingPage !== at) {
-          clearTimeout(timer);
-          pendingPage = at;
-          timer = window.setTimeout(() => follow(at), 100);
-        }
-        return;
-      }
-      if (!previous.scrubGesture && state.playing && Math.floor(previous.time / SECONDS) === at && Math.abs(state.time - previous.time) < 1) return;
-      if (pendingPage !== undefined) {
-        clearTimeout(timer);
-        pendingPage = undefined;
-      }
-      follow(at);
-    });
-    return () => { unsubscribe(); clearTimeout(timer); };
-  }, [lastPage, fixedRange]);
+  const from = range.start;
+  // The range is clamped to the footage, so the whole of it can be asked for with an open end.
+  const to = Math.min(range.end, end);
   const visible = useMemo(() => transcriptChunks(source, assets, clips, from, to), [source, assets, clips, from, to]);
   const adjacent = useMemo(() => [
     ...transcriptChunks(source, assets, clips, Math.max(0, from - SECONDS), from),
@@ -152,15 +118,7 @@ export function useTranscriptWindow(source: MediaAsset | undefined, timeline: Ti
     for (const t of transcripts.values()) t.segments.sort((a, b) => a.start - b.start);
     return { transcripts: [...transcripts.values()], loading, error };
   }, [visible, revision, audioSources]);
-  return { ...result, assets, from, to, earlier: !fixedRange && first > 0, later: !fixedRange && last < lastPage,
-    extend(direction: -1 | 1, keepSelection: boolean) {
-      setWindow(w => {
-        const first = Math.max(0, w.first + Math.min(direction, 0));
-        const last = Math.min(lastPage, w.last + Math.max(direction, 0));
-        if (keepSelection || last - first < VISIBLE_PAGES) return { first, last };
-        return direction < 0 ? { first, last: first + VISIBLE_PAGES - 1 } : { first: last - VISIBLE_PAGES + 1, last };
-      });
-    },
+  return { ...result, assets, from, to,
     retry() { for (const c of visible) if (cache.current.get(c.key)?.error) cache.current.delete(c.key); retry(); },
   };
 }

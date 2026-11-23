@@ -48,6 +48,10 @@ export class Paths {
   get telemetryId() {
     return join(this.root, "telemetry-id");
   }
+  /** An empty marker: this install has reported a finished export. See docs/telemetry.md. */
+  get telemetryExported() {
+    return join(this.root, "telemetry-exported");
+  }
   get skills() {
     return join(this.root, "skills");
   }

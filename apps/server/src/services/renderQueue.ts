@@ -32,8 +32,6 @@ import {
 } from "./renderKeys.js";
 import { prepareSourceProxies } from "./sourcePreviews.js";
 
-export type { RenderInput } from "./renderKeys.js";
-
 const yieldCacheWorker = Symbol("yield cache worker");
 enum Priority { Playback, Requested, Preparation, FullCache }
 

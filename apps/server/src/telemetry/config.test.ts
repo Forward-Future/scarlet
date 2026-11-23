@@ -7,6 +7,7 @@ it("is on by default, with no key and the US host", () => {
     enabled: true,
     posthogKey: undefined,
     posthogHost: "https://us.i.posthog.com",
+    channel: "dev",
     flushBatchSize: 20,
     maxBufferedEvents: 1000,
   });
@@ -25,6 +26,22 @@ it("takes the key from the environment before the built-in one", () => {
   expect(telemetryConfig({ SCARLET_POSTHOG_KEY: "  " }, "phc_default").posthogKey).toBe("phc_default");
   expect(telemetryConfig({}, " phc_default ").posthogKey).toBe("phc_default");
   expect(telemetryConfig({}, "").posthogKey).toBeUndefined();
+});
+
+it("is the release channel only with the built-in key in a package built for a release feed", () => {
+  const packaged = { SCARLET_RELEASE_CHANNEL: "stable" };
+  expect(telemetryConfig(packaged, "phc_default").channel).toBe("release");
+  expect(telemetryConfig({ SCARLET_RELEASE_CHANNEL: "early-access", SCARLET_POSTHOG_KEY: " " }, "phc_default").channel).toBe("release");
+  // A local-main or review package has the key but no release feed.
+  expect(telemetryConfig({}, "phc_default").channel).toBe("dev");
+  expect(telemetryConfig({ SCARLET_RELEASE_CHANNEL: " " }, "phc_default").channel).toBe("dev");
+  // A source build, desktop:dev or any engine given its own key, even the built-in one.
+  expect(telemetryConfig({ ...packaged, SCARLET_POSTHOG_KEY: "phc_mine" }, "phc_default").channel).toBe("dev");
+  expect(telemetryConfig({ ...packaged, SCARLET_POSTHOG_KEY: "phc_default" }, "phc_default").channel).toBe("dev");
+  expect(telemetryConfig(packaged).channel).toBe("dev");
+  // The team can mark a public package as its own.
+  expect(telemetryConfig({ ...packaged, SCARLET_TELEMETRY_CHANNEL: " DEV " }, "phc_default").channel).toBe("dev");
+  expect(telemetryConfig({ SCARLET_TELEMETRY_CHANNEL: "release" }, "phc_default").channel).toBe("dev");
 });
 
 it("drops trailing slashes from the host", () => {

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentAvailability, QuotaBucket, SubscriptionQuota } from "@scarlet/shared";
 import type { CliAgent } from "./modelCatalog.js";
-import { spawnLines } from "./runners/spawn.js";
+import { asRecord, jsonLine, spawnLines } from "./runners/spawn.js";
 
 const PROBE_TIMEOUT_MS = 15_000;
 
@@ -17,10 +17,6 @@ export function isQuotaEligible(agent: Pick<AgentAvailability, "id" | "installed
     && agent.installed
     && agent.loggedIn !== false
     && agent.auth !== "api_key";
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -361,9 +357,7 @@ export async function probeSubscriptionQuota(
           interactive: true,
           onLine(line) {
             if (done) return;
-            let msg: unknown;
-            try { msg = JSON.parse(line); } catch { return; }
-            const rec = asRecord(msg);
+            const rec = jsonLine(line);
             if (rec?.type !== "control_response") return;
             const resp = asRecord(rec.response);
             if (resp?.request_id !== "usage") return;
@@ -400,9 +394,7 @@ export async function probeSubscriptionQuota(
       interactive: true,
       onLine(line) {
         if (done) return;
-        let msg: unknown;
-        try { msg = JSON.parse(line); } catch { return; }
-        const rec = asRecord(msg);
+        const rec = jsonLine(line);
         if (!rec) return;
         if (rec.id === 1) {
           if (rec.error) { finish(); return; }

@@ -2,7 +2,7 @@ import { labelTranscript, speakerAnalysisVersion, speakerTurnCacheVersion } from
 import { createHash, randomUUID } from "node:crypto";
 import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { fileInDirectory, speechActivityOf, speechActivityStart } from "@scarlet/render";
+import { fileInDirectory, heardAudio, heardAudioKey, speechActivityOf, speechActivityStart, type HeardAudio } from "@scarlet/render";
 import type { DialogueDetections, ServerSettings } from "@scarlet/shared";
 import type { MediaAsset, TimeRange } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
@@ -127,6 +127,8 @@ export function dialogueDetector(ctx: Ctx) {
    * work Scarlet does unasked.
    */
   const stops = (projectId: string, edit?: ScanEdit) => edit ? ctx.projectSignal(projectId) : ctx.mediaSignal(projectId);
+  /** What a page hears: the input a pass names for a voice of its own, or else the track the editor chose. */
+  const pageAudio = (media: MediaAsset, stream: number | undefined): HeardAudio => stream ? { audioTrack: stream } : heardAudio(media);
   function sourceFile(projectId: string, media: MediaAsset, to: number) {
     if (media.kind !== "audio" && !media.hasAudio) throw badRequest("no_audio", "Choose a source with dialogue.");
     if (!media.duration || to > media.duration + 0.000001) throw badRequest("outside_media", "Window exceeds source duration.");
@@ -139,7 +141,7 @@ export function dialogueDetector(ctx: Ctx) {
     const language = transcriptLanguage(ctx, projectId, media) || defaultLanguage;
     if (language !== "auto" && !readsEnglishSpeech(language)) return;
     const imported = join(ctx.paths.media(projectId), media.path);
-    for (const path of await emissionStorePaths(ctx, projectId, file, imported, stream)) {
+    for (const path of await emissionStorePaths(ctx, projectId, file, imported, pageAudio(media, stream))) {
       const words = await readAcousticWindow(path, from, to);
       if (words) return { acoustic: [], segments: words.length ? [{
         id: "kept", start: from, end: to, text: words.map(w => w.text).join(" "), words,
@@ -153,11 +155,14 @@ export function dialogueDetector(ctx: Ctx) {
     const runtime = settings.provider === "whispercpp" ? resolveLocalRuntime(ctx, settings) : undefined;
     const model = runtime ? await localModelIdentity(runtime) : ["openai", settings.openaiModel];
     const identity = [await fileStamp(file), ...model];
+    const heard = heardAudioKey(heardAudio(media));
     // The file's path, size and times identify it. Its content hash is finished in the background after import, so a
     // page saved before then would stop matching once it lands and be analyzed again. Pages saved under the hash
     // (`legacy`) still read.
     const print = (hash: string | undefined) => createHash("sha256").update(JSON.stringify([1, PAGE_READING, speakerTurnCacheVersion, speakerAnalysisVersion,
-      identity, hash, media.voiceRoles, settings.language, verbatim, alignmentVersion])).digest("hex");
+      identity, hash, media.voiceRoles, settings.language, verbatim, alignmentVersion,
+      // A page heard on a track the editor chose is that track's. The first track's pages keep the name they had.
+      ...heard === null ? [] : [heard]])).digest("hex");
     const fingerprint = print(undefined);
     const legacy = media.hash ? print(media.hash) : fingerprint;
     return { file, fingerprint, legacy, runtime };
@@ -239,7 +244,7 @@ export function dialogueDetector(ctx: Ctx) {
       const wav = join(ctx.paths.tmp, randomUUID() + ".wav"), heard = join(ctx.paths.tmp, randomUUID() + ".wav");
       // The page's minute, its speech detection and any emissions its alignment lacks all come from one decode of
       // the recording, shared with the pages before and after it.
-      const recording = await recordingWav(ctx, file, signal, stream);
+      const recording = await recordingWav(ctx, file, signal, pageAudio(media, stream));
       try {
         await recording.writeWindow(wav, from, to);
         if (keptSide) {
@@ -264,7 +269,7 @@ export function dialogueDetector(ctx: Ctx) {
           // model's output for this audio is the recording's: what its transcript's alignment has saved is read, and
           // the rest is inferred from the whole recording's decode and saved for the transcript.
           try {
-            const emissions = { file: await emissionStore(ctx, projectId, file), offset: readFrom, duration: readTo - readFrom, wav: async () => recording.wav };
+            const emissions = { file: await emissionStore(ctx, projectId, file, pageAudio(media, stream)), offset: readFrom, duration: readTo - readFrom, wav: async () => recording.wav };
             const words = await alignWords(ctx, heard, speech.value.segments, { language: speech.value.language ?? policy.settings.language, signal, emissions });
             return { acoustic, activity, words, unaligned: false };
           } catch (err) {
@@ -299,7 +304,7 @@ export function dialogueDetector(ctx: Ctx) {
             if (turns.length) {
               // The other voice's minute comes from one decode of its track, shared with the pages before and after it,
               // as the page's own does: cut from the source, each page of a long recording took ffmpeg most of a second.
-              const other = await recordingWav(ctx, file, signal, roles.other - 1);
+              const other = await recordingWav(ctx, file, signal, { audioTrack: roles.other - 1 });
               try { await other.writeWindow(wav, from, to); } finally { other.release(); }
               const isolated = await inWhisperLane(() => transcribeWindow(wav));
               const words = isolated.segments.flatMap(s => s.words);

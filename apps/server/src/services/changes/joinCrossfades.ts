@@ -1,6 +1,7 @@
 import type { JoinCrossfades } from "@scarlet/shared";
-import { crossfadeJoins, type Change, type CutReview, type JoinFades, type Timeline, type TimeRange } from "@scarlet/timeline";
+import { applyReviewRemovals, crossfadeJoins, type Change, type CutReview, type JoinFades, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { Ctx } from "../../context.js";
+import { storeVersion } from "../timeline.js";
 
 export type FadedJoin = { at: number; duration: number };
 export type CutReason = NonNullable<Change["cutReasons"]>[number];
@@ -30,6 +31,13 @@ export function fadeJoins(ctx: Ctx, projectId: string, timeline: Timeline, joins
   const faded = crossfadeJoins(timeline, ctx.repos.projects.assets(projectId, sources), [...durations.keys()], duration, { durations });
   if (!faded.fades.length && !faded.report.plain.length) return { timeline };
   return { timeline: faded.timeline, joinFades: { duration, fades: faded.fades, plain: faded.report.plain } };
+}
+
+/** Store the version a revised cut's preview plays: `source` without `range`, its join faded by `crossfade`. */
+export function storeRevisedCutPreview(ctx: Ctx, projectId: string, source: Timeline, range: TimeRange,
+  { reviewId, crossfade, parent }: { reviewId: string; crossfade: number; parent: string }): string {
+  return storeVersion(ctx, projectId, fadeJoins(ctx, projectId, applyReviewRemovals(source, [range], reviewId), [{ at: range.start, duration: crossfade }]).timeline,
+    { parent, description: "Preview this revised cut" }).version;
 }
 
 /** The chosen cuts as placed on `head`, each join with its cut's crossfade. Placing nothing leaves `head` as it is. */

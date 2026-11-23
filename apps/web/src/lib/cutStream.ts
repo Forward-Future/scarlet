@@ -60,6 +60,12 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
   const ends = ranges.map(range => range.end);
   const indexAt = (time: number) => Math.min(ends.length - 1, firstIndex(ends, end => time < end));
   const position = () => seekState === "landed" && video.readyState >= 1 ? video.currentTime : wanted;
+  /** How many of the sections from `first` to `last` the buffer holds. */
+  const readyIn = (first: number, last: number) => {
+    let done = 0;
+    for (let i = first; i <= last; i++) if (ready.has(i)) done++;
+    return done;
+  };
   const id = logId(source, "s");
   playbackLog("stream open", { id, el: logId(video), sections: ranges.length, duration, start: wanted, loop: loop && [loop.start, loop.end], type });
   /** Which sections the stream holds and waits for, by number. */
@@ -145,8 +151,7 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
       // A short After audition buffers its lead-in and tail before the media clock starts. Rendering
       // the section after the join can take longer than the entire lead-in on a cold project.
       if (preroll) {
-        let done = 0;
-        for (let i = preroll.first; i <= preroll.last; i++) if (ready.has(i)) done++;
+        const done = readyIn(preroll.first, preroll.last);
         const total = preroll.last - preroll.first + 1;
         if (done !== preroll.lastDone) {
           preroll.lastDone = done;
@@ -293,19 +298,21 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
     return new Promise<void>((resolve, reject) => {
       signal.throwIfAborted();
       if (disposed) throw new DOMException("The stream closed.", "AbortError");
+      // One preroll at a time: the one before ends here, and its own late abort can't clear this one.
+      preroll?.finish(new DOMException("Playback cancelled.", "AbortError"));
       const abort = () => finish(new DOMException("Playback cancelled.", "AbortError"));
       const finish = (error?: Error) => {
         signal.removeEventListener("abort", abort);
-        preroll = undefined;
+        if (preroll === entry) preroll = undefined;
         if (error) reject(error);
         else resolve();
       };
       const first = indexAt(start), last = indexAt(Math.max(start, end - SECTION_EDGE));
-      preroll = { first, last, lastDone: -1, onProgress, finish };
+      const entry = { first, last, lastDone: -1, onProgress, finish };
+      preroll = entry;
       if (onProgress && !buffer) {
-        let done = 0;
-        for (let i = first; i <= last; i++) if (ready.has(i)) done++;
-        preroll.lastDone = done;
+        const done = readyIn(first, last);
+        entry.lastDone = done;
         onProgress(done, last - first + 1);
       }
       signal.addEventListener("abort", abort, { once: true });

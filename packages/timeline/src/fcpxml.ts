@@ -7,7 +7,8 @@
 import { exactRate, isDropFrameRate, sourceStartQ, type ExactRate, type HandoffSource } from "./handoff.js";
 import { trackLayers } from "./otio.js";
 import { add, div, fraction, frames, mul, q, seconds, secondsQ, snapQ, sub, type Q } from "./rational.js";
-import type { CaptionClip, Clip, ColorClip, Marker, MediaClip, Project, Timeline, TransformKeyframe } from "./schema.js";
+import type { CaptionClip, Clip, ColorClip, Marker, MediaClip, Timeline, TransformKeyframe } from "./timelineSchema.js";
+import type { Project } from "./projectSchema.js";
 import { clipEnd } from "./time.js";
 import { levelLines } from "./volume.js";
 

@@ -9,11 +9,9 @@
  * The same frames say where the picture has anything in it at all (`detail`): a camera inset laid over a screen sat on
  * the usage rings of a quota page, with nothing there that screen text reads (2026-11-20).
  */
-import { createHash } from "node:crypto";
-import { probeMedia, screenFrameSize } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
-import { pictureGrid, pictureReader, r3, withFrames, type VideoMedia } from "./pictureReading.js";
+import { pictureGrid, pictureReader, r3, readingFrameSize, readingIdentity, withFrames, type VideoMedia } from "./pictureReading.js";
 
 /** Bump when the reading changes: the sampling, the grid or how changes become areas. Kept readings are read again. */
 const MOTION_VERSION = 2;
@@ -97,16 +95,14 @@ export function changedAreas(changed: Uint8Array, cols = COLS, rows = ROWS): Mot
 }
 
 function identity(media: MediaAsset) {
-  return createHash("sha256").update(JSON.stringify([MOTION_VERSION, media.hash ?? media.path, media.duration,
-    MOTION_FPS, MOTION_SIDE, COLS, ROWS, CHANGED, MOTION_WINDOW])).digest("hex");
+  return readingIdentity(MOTION_VERSION, media, MOTION_FPS, MOTION_SIDE, COLS, ROWS, CHANGED, MOTION_WINDOW);
 }
 
 const bitsDiffer = (a: Uint8Array, b: Uint8Array) => { let n = 0; for (let i = 0; i < a.length; i++) { let x = a[i]! ^ b[i]!; while (x) { n += x & 1; x >>= 1; } } return n; };
 
 /** Compare one window's frames, a quarter second apart, and keep the seconds whose picture changed, with the picture's detail once a second where it changed. */
 async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end, unasked }: { start: number; end: number; unasked?: boolean }, signal: AbortSignal): Promise<MotionWindow> {
-  const source = media.width && media.height ? { width: media.width, height: media.height } : await probeMedia(file);
-  const { width, height } = screenFrameSize(source.width, source.height, MOTION_SIDE);
+  const { width, height } = await readingFrameSize(media, file, MOTION_SIDE);
   const seconds = new Map<number, Uint8Array>();
   let last: Float32Array | undefined;
   const detail: DetailFrame[] = [];
