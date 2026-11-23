@@ -519,7 +519,7 @@ export const ServerSettings = z.object({
 export type ServerSettings = z.infer<typeof ServerSettings>;
 
 export function selectedLocalModel(settings: Pick<ServerSettings["transcription"], "localModel" | "whisperCppPath" | "whisperModelPath">): LocalTranscriptionModel {
-  return settings.localModel ?? (settings.whisperCppPath || settings.whisperModelPath ? "custom" : "crisperwhisper");
+  return settings.localModel ?? (settings.whisperCppPath || settings.whisperModelPath ? "custom" : "whispercpp");
 }
 
 export const ApiError = z.object({

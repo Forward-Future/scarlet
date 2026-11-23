@@ -78,7 +78,7 @@ Type `/` in the composer to run one of Scarlet’s built-in editing workflows. E
 
 ### Local media perception & cut safety
 So your agent edits from real measurements instead of guesswork, Scarlet analyzes footage locally on your machine:
-- **Verbatim transcription & tight word alignment:** Uses **CrisperWhisper 2.0 large** by default when installed (or bundled **Whisper large-v3-turbo** out of the box), refined with local wav2vec2 CTC forced alignment and acoustic filler detection. Also supports custom local models and OpenAI Whisper (cloud).
+- **Verbatim transcription & tight word alignment:** Uses bundled **Whisper large-v3-turbo** out of the box, refined with local wav2vec2 CTC forced alignment and acoustic filler detection. Also supports optional **CrisperWhisper 2.0 large**, custom local models, and OpenAI Whisper (cloud).
 - **Audio & join safety:** 16 kHz waveform and room-tone analysis, multi-input voice awareness, optional audio crossfades, and safety gates that keep cut edges out of spoken words.
 - **Visual intelligence:** Local OCR reads text on screen recordings and lines it up with what the speaker reads aloud; local face tracking follows faces and gaze direction for punch-ins and vertical reframing; screen-motion and recording-cut detection keep screen inserts clean.
 
@@ -154,7 +154,7 @@ pnpm desktop:dev
 ## Privacy, Local Models & Telemetry
 
 - **Local by default:** Scarlet stores your projects, transcripts, waveforms, and renders on your computer.
-- **Transcription models:** **CrisperWhisper 2.0 large** is the default local choice once its separately licensed weights are installed. Until then, Scarlet uses bundled **Whisper large-v3-turbo** (downloaded on first use). You can also configure a custom local model or OpenAI Whisper in **Settings → General**. [Transcription model guide →](docs/transcription-models.md)
+- **Transcription models:** Bundled **Whisper large-v3-turbo** is the default (downloaded on first use). You can also switch to **CrisperWhisper 2.0 large** (separately licensed weights), a custom local model, or OpenAI Whisper in **Settings → General**. [Transcription model guide →](docs/transcription-models.md)
 - **AI provider data:** Your connected AI provider receives your editing request and the project context the agent inspects (such as transcript excerpts and video frames).
 - **Optional telemetry:** Packaged releases send anonymous usage, edit review decisions, and task/export outcomes to PostHog. Turn off **Send usage reports** in **Settings → About**, or set `SCARLET_TELEMETRY_ENABLED=false` before launching Scarlet (Early Access versions through 0.1.3 use the environment variable). [See which events Scarlet sends →](docs/telemetry.md)
 
