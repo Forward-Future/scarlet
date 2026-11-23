@@ -797,6 +797,59 @@ it("reflects each selected model's actual available efforts and speeds in the tu
   }
 });
 
+it("keeps keyboard focus on the dock's button while the tuning drawer opens and folds", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const oldHosts = useHostsStore.getState();
+  const oldUi = useUiStore.getState();
+  const savedPick = localStorage.getItem("scarlet.agent");
+  const host = { ...buildDb().hosts[0]!, online: true };
+  useHostsStore.setState({
+    hosts: [{
+      ...host,
+      agents: [{
+        id: "codex", installed: true,
+        models: ["gpt-5.4"],
+        modelLabels: { "gpt-5.4": "GPT-5.4" },
+        modelOptions: {
+          "gpt-5.4": {
+            efforts: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+            defaultEffort: "medium",
+            speeds: [{ id: "priority", label: "Fast" }],
+          },
+        },
+      }],
+    }],
+  });
+  useUiStore.setState({ agent: { agent: "codex", model: "gpt-5.4" } });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(() => root.render(<MemoryRouter><AgentChip /></MemoryRouter>));
+    await act(() => container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!.click());
+
+    const tuneBtn = container.querySelector<HTMLButtonElement>('button[aria-label="Tune GPT-5.4 options"]')!;
+    act(() => tuneBtn.focus());
+    await act(() => tuneBtn.click());
+    const focused = document.activeElement as HTMLElement;
+    expect(focused.tagName).toBe("BUTTON");
+    expect(focused.textContent).toContain("Done");
+    expect(focused.getAttribute("aria-expanded")).toBe("true");
+
+    await act(() => focused.click());
+    expect(document.activeElement).toBe(container.querySelector('button[aria-label="Tune GPT-5.4 options"]'));
+    expect((document.activeElement as HTMLElement).getAttribute("aria-expanded")).toBe("false");
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useUiStore.setState(oldUi, true);
+    useHostsStore.setState(oldHosts, true);
+    if (savedPick === null) localStorage.removeItem("scarlet.agent");
+    else localStorage.setItem("scarlet.agent", savedPick);
+    vi.unstubAllGlobals();
+  }
+});
+
 it("remembers and restores the last effort and speed settings independently for each model", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const oldHosts = useHostsStore.getState();
@@ -1054,4 +1107,40 @@ it("shows Option A subscription quota micro-bars, bottom dock pill, mutually exc
     else localStorage.setItem("scarlet.agent", savedPick);
     vi.unstubAllGlobals();
   }
+});
+
+it("marks the header's model button when a newer Codex is out and updates it from the selector", async () => {
+  const host = modelHost(["gpt-6.1-sol"]);
+  host.agents = [{ ...host.agents[0]!, version: "0.50.0", latestVersion: "0.171.0" }];
+  const { container, root, hostStatus } = setupModelRefresh(host);
+  let finish: (version: string | null) => void = () => {};
+  const update = vi.spyOn(desktop, "agentUpdate").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  await act(() => root.render(<MemoryRouter><AgentChip variant="header" /></MemoryRouter>));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  const trigger = container.querySelector<HTMLButtonElement>(".simple-model")!;
+  // The model's name and dial stay; the amber dot says something needs the editor, and what.
+  expect(trigger.classList.contains("needs-you")).toBe(true);
+  expect(trigger.textContent).toBe("gpt-6.1-sol");
+  expect(trigger.querySelectorAll("svg")).toHaveLength(1);
+  expect(trigger.querySelector('.menu-dot[role="img"]')?.getAttribute("aria-label")).toBe("A newer Codex is available");
+  expect(trigger.getAttribute("aria-description")).toBe("A newer Codex is available");
+
+  await act(() => trigger.click());
+  const row = container.querySelector('[aria-label="Model selector"] [data-agent-update="codex"]')!;
+  expect(row.textContent).toContain("Codex");
+  expect(row.querySelector(".menu-dot")).toBeTruthy();
+  const press = [...row.querySelectorAll("button")].find(b => b.textContent === "Update to 0.171.0")!;
+  expect(press.title).toBe("Codex 0.50.0 is installed");
+  await act(() => press.click());
+  expect(update).toHaveBeenCalledWith("codex");
+  expect(row.textContent).toContain("Updating…");
+  await act(async () => finish("0.171.0"));
+
+  // Once the app has the new version there is nothing to offer: no dot and no row.
+  hostStatus.agents = [{ ...host.agents[0]!, version: "0.171.0", latestVersion: undefined }];
+  await act(() => root.render(<MemoryRouter><AgentChip key="again" variant="header" /></MemoryRouter>));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  const after = container.querySelector<HTMLButtonElement>(".simple-model")!;
+  expect(after.classList.contains("needs-you")).toBe(false);
+  expect(after.querySelector(".menu-dot")).toBeNull();
 });

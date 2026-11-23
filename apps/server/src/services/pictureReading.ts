@@ -4,18 +4,16 @@
  * windows first, then the rest in order, so a later question about the whole video answers at once. Windows nobody
  * asked for are held by a pause of the project's media work.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, openSync, writeSync } from "node:fs";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { fileInDirectory, screenFrames } from "@scarlet/render";
+import { fileInDirectory, probeMedia, screenFrameSize, screenFrames } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { atomicWriteFile, rememberLast, round3 } from "../util.js";
 import { machineBusy, pictureDecoder, pictureLane } from "./pictureWork.js";
 import { previewCopyByTime } from "./previewPictures.js";
-
-export { rememberLast };
 
 export type VideoMedia = MediaAsset & { projectId: string };
 
@@ -28,6 +26,17 @@ export interface PictureReading<W> {
   identity(media: MediaAsset): string;
   /** Read one window, `start`–`end` source seconds. `unasked` when no request asked for it: it is read behind those that were. */
   read(ctx: Ctx, media: VideoMedia, file: string, window: { index: number; start: number; end: number; unasked?: boolean }, signal: AbortSignal): Promise<W>;
+}
+
+/** A kept reading's identity: its version, the recording, and every setting the reading depends on, in order. */
+export function readingIdentity(version: number, media: MediaAsset, ...dependsOn: unknown[]): string {
+  return createHash("sha256").update(JSON.stringify([version, media.hash ?? media.path, media.duration, ...dependsOn])).digest("hex");
+}
+
+/** The size a recording's frames are read at: its own size, from its record or else the file, fit to `maxSide`. */
+export async function readingFrameSize(media: VideoMedia, file: string, maxSide?: number): Promise<{ width: number; height: number }> {
+  const source = media.width && media.height ? { width: media.width, height: media.height } : await probeMedia(file);
+  return screenFrameSize(source.width, source.height, maxSide);
 }
 
 export interface PictureReadResult<W> {

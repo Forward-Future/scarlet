@@ -13,7 +13,7 @@ export interface DetailFrame { at: number; cells: string }
 export const DETAIL_COLS = 64, DETAIL_ROWS = 36;
 
 /** Whether a cell of a detail grid has something in it. */
-export const hasDetail = (cells: Uint8Array, i: number) => ((cells[i >> 3]! >> (i & 7)) & 1) === 1;
+const hasDetail = (cells: Uint8Array, i: number) => ((cells[i >> 3]! >> (i & 7)) & 1) === 1;
 
 /** The share of the cells in `box` (source fractions) that have something in them. */
 export function detailShare(cells: Uint8Array, box: readonly number[]): number {

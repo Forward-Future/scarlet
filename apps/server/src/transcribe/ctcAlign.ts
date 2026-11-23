@@ -3,6 +3,7 @@
  * Pure functions: the worker in wordAlign.ts runs the model and calls these.
  */
 import type { TimeRange, TranscriptSegment, TranscriptWord } from "@scarlet/timeline";
+import { round3 } from "../util.js";
 
 export const SAMPLE_RATE = 16000;
 /** wav2vec2's feature encoder emits one frame per 320 samples (20 ms) from a 400-sample receptive field. */
@@ -622,7 +623,7 @@ export function applyTimings(segments: readonly TranscriptSegment[], timings: Re
   return segments.map(seg => {
     const next = seg.words.map(w => {
       const timing = timings[at], t = times[at++]!;
-      const out = t.start === w.start && t.end === w.end ? w : { ...w, start: round(t.start), end: round(t.end) };
+      const out = t.start === w.start && t.end === w.end ? w : { ...w, start: round3(t.start), end: round3(t.end) };
       if (timing) alignerHeard.set(out, timing.score >= minScore && timing.end >= timing.start);
       return out;
     });
@@ -630,8 +631,6 @@ export function applyTimings(segments: readonly TranscriptSegment[], timings: Re
     return { ...seg, start: Math.min(seg.start, next[0]!.start), end: next.reduce((end, w) => Math.max(end, w.end), seg.end), words: next };
   });
 }
-
-export const round = (seconds: number) => Math.round(seconds * 1000) / 1000;
 
 /**
  * Whether the aligner heard each word it placed or tried, for what runs next in the same process. A word Whisper

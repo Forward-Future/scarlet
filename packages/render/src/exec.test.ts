@@ -293,8 +293,9 @@ describe("what a build offers", () => {
   it("says in plain words what an FFmpeg without text drawing stops and how to install one that has it", () => {
     const mac = missingTextFilterMessage("draw the video’s captions", "darwin");
     expect(mac).toBe("This copy of FFmpeg can’t draw text, so Scarlet can’t draw the video’s captions. "
-      + "Run the FFmpeg setup helper linked in the Scarlet download instructions. Then restart Scarlet and try again.");
-    expect(missingTextFilterMessage("draw the video’s captions", "win32")).toContain("winget install --id Gyan.FFmpeg.Essentials --exact.");
+      + "Click Install FFmpeg on the Projects screen or in Settings > General. Then restart Scarlet and try again.");
+    expect(missingTextFilterMessage("draw the video’s captions", "win32"))
+      .toContain("Click Install FFmpeg on the Projects screen or in Settings > General.");
     expect(missingTextFilterMessage("draw the video’s captions", "linux")).toContain("libfreetype");
   });
 

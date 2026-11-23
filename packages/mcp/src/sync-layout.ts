@@ -32,7 +32,7 @@ function insetPlace(project: Project, aspect: number, size = 1): Pick<Transform,
 }
 
 /** The preset inset: a quarter of the canvas, in its bottom-right corner. */
-export function insetFraming(project: Project, asset: Pick<MediaAsset, "width" | "height">): Pick<Transform, "scale" | "x" | "y"> {
+function insetFraming(project: Project, asset: Pick<MediaAsset, "width" | "height">): Pick<Transform, "scale" | "x" | "y"> {
   const canvas = project.settings.width / project.settings.height;
   return insetPlace(project, asset.width && asset.height ? asset.width / asset.height : canvas);
 }

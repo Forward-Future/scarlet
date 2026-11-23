@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { SourceCacheStatus } from "@scarlet/shared";
-import type { MediaAsset } from "@scarlet/timeline";
+import type { AudioStreamInfo, AudioTrackSelection, MediaAsset } from "@scarlet/timeline";
 import { api, errorMessage, IS_DESKTOP } from "../lib/client";
 import { desktop } from "../lib/desktop";
 import { ACCEPTED_MEDIA, canPreviewMedia, isPreparingMedia, MEDIA_FORMAT_HINT, MEDIA_FORMATS } from "../lib/upload";
@@ -13,6 +13,7 @@ import { ImportProgress, preparationStep } from "../components/media/ImportProgr
 import { MediaStatusLine } from "../components/media/MediaStatusLine";
 import { cacheLabel, cachePercent, useSourceCaches } from "../components/media/sourceCaches";
 import { useMediaProcessing } from "../components/media/useMediaProcessing";
+import { PreferenceSelect } from "../components/ui/PreferenceSelect";
 import { ConfirmDialog, EmptyState, Icon, InlineError } from "../components/ui/primitives";
 
 function Thumb({ m }: { m: MediaAsset }) {
@@ -53,6 +54,56 @@ function SourceCache({ cache, name, paused, onCache }: { cache?: SourceCacheStat
     bar={caching ? { label: `Caching ${name}`, fraction: cache.progress, percent } : undefined}>
     {startable && <button type="button" className="simple-link" onClick={onCache}>{cache.state === "failed" ? "Retry" : "Cache now"}</button>}
   </MediaStatusLine>;
+}
+
+function audioStreamDetail(stream: AudioStreamInfo): string | undefined {
+  const parts: string[] = [];
+  if (stream.title) parts.push(stream.title);
+  else if (stream.language) parts.push(stream.language);
+  if (stream.channels === 1) parts.push("mono");
+  else if (stream.channels === 2) parts.push("stereo");
+  else if (stream.channels) parts.push(`${stream.channels}ch`);
+  return parts.length ? parts.join(" · ") : undefined;
+}
+
+/** Shown only on recordings with multiple audio tracks (e.g. OBS or multi-mic podcasts). */
+function AudioTrackPicker({ media, onError }: { media: MediaAsset; onError(message: string): void }) {
+  const streams = media.audioStreams;
+  const [busy, setBusy] = useState(false);
+  if (!streams || streams.length < 2) return null;
+  const value: AudioTrackSelection = media.audioTrack ?? 0;
+  const options: Array<{ value: AudioTrackSelection; label: string; detail?: string }> = [
+    { value: "all", label: "All tracks (mixed)", detail: `${streams.length} tracks` },
+    ...streams.map((s) => ({
+      value: s.index,
+      label: s.title ? `Track ${s.index + 1} — ${s.title}` : `Track ${s.index + 1}`,
+      detail: audioStreamDetail(s),
+    })),
+  ];
+  const change = async (next: AudioTrackSelection) => {
+    setBusy(true);
+    onError("");
+    try {
+      await useProjectStore.getState().setMediaAudioTrack(media.id, next);
+    } catch (e) {
+      onError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mt-1 flex items-center gap-1.5 text-2xs text-ink-3">
+      <span>Audio</span>
+      <PreferenceSelect
+        compact
+        label={`Audio track for ${media.name}`}
+        value={value}
+        disabled={busy}
+        options={options}
+        onChange={(next) => void change(next)}
+      />
+    </div>
+  );
 }
 
 const KIND_LABEL: Record<MediaAsset["kind"], string> = { video: "Video", audio: "Audio", image: "Image", graphic: "Graphic" };
@@ -148,6 +199,7 @@ export function MediaPage({ uploads, onPlay }: {
                     m.duration ? clock(m.duration) : m.width && m.height ? `${m.width}×${m.height}` : KIND_LABEL[m.kind]
                   )}
                 </div>
+                {m.status !== "failed" && <AudioTrackPicker media={m} onError={setCacheError} />}
               </div>
               <div className="media-jobs">
                 {isPreparingMedia(m) && <Reading m={m} paused={paused} />}

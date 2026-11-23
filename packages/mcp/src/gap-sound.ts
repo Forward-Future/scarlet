@@ -84,12 +84,12 @@ export function quietBuckets(rms: ArrayLike<number>, peaks: ArrayLike<number>, f
   return quietReading(rms, peaks, from, step, voice, quietBelow, words).quiet;
 }
 
-/** A breath the quiet after a word holds: the sound over the room between the word and the quiet, and its loudest level in dBFS. */
-export interface HeldBreath extends TimeRange { db: number }
+/** A breath the quiet beside a word holds: the sound over the room between the word and the quiet, and its loudest level in dBFS. */
+export interface HeldBreath extends TimeRange { db: number; side?: "after" | "before" }
 
 /**
  * quietBuckets, and the breaths that quiet holds. The quiet is the same; the breaths it counted as part of a pause are
- * a measurement too. Whether a cut after the word plays the breath is the model's call (`breath` on a word reference,
+ * a measurement too. Whether a cut beside the word plays the breath is the model's call (`breath` on a word reference,
  * 2026-11-21): with the breath folded into the quiet, the edge padded from the word cut it whatever was asked, and nothing
  * said one was there.
  */
@@ -147,6 +147,29 @@ export function quietReading(rms: ArrayLike<number>, peaks: ArrayLike<number>, f
       let first = -1, last = -1, loudest = 0;
       for (let j = room; j < i; j++) if (!level[j]) { if (first < 0) first = j; last = j; loudest = Math.max(loudest, rms[j]!); }
       if (first >= 0) breaths.push({ start: from + first * step, end: from + (last + 1) * step, db: dbfs(loudest) });
+    }
+    // Symmetric forward pass: from where quiet ends, over an intake breath under speaking level and in no word,
+    // to the latest stretch back at the room level that preceded it before the incoming word starts. Requiring a
+    // return to the room's own level (within LEAD_ABOVE_ROOM, not merely quietBelow) for at least 0.04 s protects
+    // both soft word-initial consonants and end edges padded back by quietMargin (0.02 s) from landing on the breath.
+    const minTail = Math.max(1, Math.round(.04 / step));
+    for (let i = n - 2; i >= 0; i--) {
+      if (!quiet[i] || quiet[i + 1]) continue;
+      let sum = 0, count = 0;
+      for (let r = i; r >= 0 && count < 10 && quiet[r]; r--) if (rms[r]! <= quietBelow) { sum += rms[r]!; count++; }
+      const roomCeiling = count ? Math.min(quietBelow, LEAD_ABOVE_ROOM * sum / count) : quietBelow;
+      let room = i, runRoom = 0, k = i + 1;
+      for (; k < n && !quiet[k] && rms[k]! <= QUIET_RMS && !spoken(k); k++) {
+        if (rms[k]! <= roomCeiling && peaks[k]! <= QUIET_PEAK) {
+          runRoom++;
+          if (runRoom >= minTail) room = k;
+        } else runRoom = 0;
+      }
+      if (k >= n || quiet[k] || room === i) continue;
+      for (let j = i + 1; j <= room; j++) quiet[j] = true;
+      let first = -1, last = -1, loudest = 0;
+      for (let j = i + 1; j <= room; j++) if (rms[j]! > roomCeiling || peaks[j]! > QUIET_PEAK) { if (first < 0) first = j; last = j; loudest = Math.max(loudest, rms[j]!); }
+      if (first >= 0) breaths.push({ start: from + first * step, end: from + (last + 1) * step, db: dbfs(loudest), side: "before" });
     }
   }
   return { quiet, breaths };

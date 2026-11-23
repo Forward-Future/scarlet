@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { TranscriptWord } from "@scarlet/timeline";
-import { partLeftovers } from "./dialogue-leftovers.js";
+import { emptyTimeline, makeMediaClip, type TranscriptWord } from "@scarlet/timeline";
+import { partLeftovers, shortPiecesInPart } from "./dialogue-leftovers.js";
 import type { TimelineWord } from "./timeline-perception.js";
 
 /** A recording played from its start, so timeline and source seconds agree. Each word is 0.3 s long. */
@@ -48,5 +48,43 @@ describe("what a saved part still plays", () => {
     ]);
     // “good. Good” ends one sentence and starts the next. With the first saying cut, nothing repeats.
     expect(partLeftovers(words, [{ start: -1, end: 1.1 }, { start: 2.75, end: 3.55 }], [], transcripts).repeats).toEqual([]);
+  });
+
+  it("still flags a single-word repeat across sentence punctuation when a cut joins the two words", () => {
+    const { words, transcripts } = said([["Yeah.", 1], ["wait", 2], ["Yeah,", 6], ["so", 6.4]]);
+    // A cut removes “wait” and joins “Yeah.” straight into “Yeah,”.
+    const { repeats } = partLeftovers(words, [{ start: 1.35, end: 5.95 }], [], transcripts);
+    expect(repeats).toEqual([
+      { mediaId: "mic", source: 1, text: "Yeah. Yeah,", fromWord: 0, toWord: 0, atJoin: true, pause: .1 },
+    ]);
+  });
+
+  it("finds sub-second pieces stranded between two cuts on the continued timeline", () => {
+    const tl = emptyTimeline("prj_test");
+    // Three segments of m1 with two jump cuts: a 0.6 s reaction (“Look at that.”) stranded between two 3 s cuts,
+    // followed by a 1.5 s segment (not short).
+    tl.tracks[0]!.clips.push(
+      makeMediaClip("m1", 0, 5, 0),
+      makeMediaClip("m1", 8, 8.6, 5),
+      makeMediaClip("m1", 11.6, 13.1, 5.6),
+      makeMediaClip("m1", 16, 20, 7.1),
+    );
+    const transcripts = new Map<string, TranscriptWord[]>([["m1", [
+      { text: "Before.", start: 4.2, end: 4.8 },
+      { text: "Look", start: 8.05, end: 8.2 },
+      { text: "at", start: 8.2, end: 8.32 },
+      { text: "that.", start: 8.32, end: 8.55 },
+      { text: "After", start: 11.7, end: 12.1 },
+      { text: "line.", start: 12.2, end: 12.8 },
+    ]]]);
+    expect(shortPiecesInPart(tl, { start: 0, end: 11 }, transcripts)).toEqual([
+      {
+        from: 5, to: 5.6, seconds: .6, mediaId: "m1", source: { start: 8, end: 8.6 },
+        plays: "Look at that.", fromWord: 1, toWord: 3,
+        before: "Before.", after: "After line.", cutBefore: 3, cutAfter: 3,
+      },
+    ]);
+    // Outside the part's span, nothing is returned.
+    expect(shortPiecesInPart(tl, { start: 6, end: 11 }, transcripts)).toEqual([]);
   });
 });

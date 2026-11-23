@@ -62,7 +62,8 @@ export function arrowSeekTime(time: number, key: SeekArrow, shift: boolean, fps 
   const dir = key === "ArrowLeft" ? -1 : 1;
   if (shift) {
     const rate = fps > 0 && Number.isFinite(fps) ? fps : 30;
-    return (Math.round(time * rate) + dir) / rate;
+    const slack = Math.min(0.1, 1e-3 * rate);
+    return (Math.floor(time * rate + slack) + dir) / rate;
   }
   return (Math.round(time * 1000) + dir * 1000) / 1000;
 }

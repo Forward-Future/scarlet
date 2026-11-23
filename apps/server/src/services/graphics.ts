@@ -241,7 +241,7 @@ async function writeAssets(folder: string, assets: Map<string, Buffer>) {
 const chrome = (ctx: Ctx) => findChrome(undefined, ctx.options.env ?? process.env);
 
 /** A graphic Scarlet drew in this project, and its page. */
-export function graphicMedia(ctx: Ctx, projectId: string, mediaId: string): { media: MediaAsset; page: string } {
+function graphicMedia(ctx: Ctx, projectId: string, mediaId: string): { media: MediaAsset; page: string } {
   const media = ctx.repos.projects.getMedia(mediaId);
   if (!media || media.projectId !== projectId) throw notFound(`media ${mediaId}`);
   if (!media.graphic) throw badRequest("not_a_drawn_graphic", `${quote(media.name)} wasn't drawn by Scarlet from a page, so it has none to revise.`);
@@ -251,7 +251,7 @@ export function graphicMedia(ctx: Ctx, projectId: string, mediaId: string): { me
 }
 
 /** Moments spread through a graphic to check: as it comes in, held, and as it goes. */
-export function defaultCheckTimes(duration: number, fps: number) {
+function defaultCheckTimes(duration: number, fps: number) {
   return [0.15, 0.5, 0.85].map(f => Math.round(duration * f * fps) / fps);
 }
 

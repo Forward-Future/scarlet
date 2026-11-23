@@ -13,6 +13,7 @@ import { jsonBody, optionalNumberParam, requireProject, requireProjectHeader } f
 import { actorFor, logActivity } from "../services/activity.js";
 import { applyChoicesWhenDone } from "../services/changes.js";
 import { buildHandoff } from "../services/handoff.js";
+import { recordExportFinished } from "../telemetry/events.js";
 
 export function timelineRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
@@ -101,6 +102,7 @@ export function timelineRoutes(ctx: Ctx) {
     const project = requireProject(ctx, c.req.param("id"));
     const timeline = resolveTimeline(ctx, project, c.req.param("v"));
     const otio = toOtio(project, timeline, { mediaRoot: ctx.paths.media(project.id) });
+    recordExportFinished(ctx, "otio");
     logActivity(ctx, {
       projectId: project.id,
       actor: actorFor(c.var.user),
@@ -135,6 +137,7 @@ export function timelineRoutes(ctx: Ctx) {
         if (!(err instanceof CaptionExportError)) throw err;
         throw new HttpError(captionExportHttpStatus(err.code), err.code, err.message);
       }
+      recordExportFinished(ctx, format);
       logActivity(ctx, {
         projectId: project.id,
         actor: actorFor(c.var.user),
@@ -158,6 +161,7 @@ export function timelineRoutes(ctx: Ctx) {
     const project = requireProject(ctx, c.req.param("id"));
     const timeline = resolveTimeline(ctx, project, c.req.param("v"));
     const result = await buildHandoff(ctx, project, timeline, body.folder, c.req.raw.signal);
+    recordExportFinished(ctx, "handoff");
     logActivity(ctx, {
       projectId: project.id,
       actor: actorFor(c.var.user),

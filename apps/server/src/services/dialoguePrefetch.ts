@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { fileInDirectoryAsync } from "@scarlet/render";
+import { fileInDirectoryAsync, heardAudio } from "@scarlet/render";
 import { taskRunKind, type Task } from "@scarlet/shared";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
@@ -81,7 +81,7 @@ export function prefetchDialoguePass(ctx: Ctx, task: Task): void {
       const file = await fileInDirectoryAsync(ctx.paths.media(task.projectId), media.path);
       if (!file) return;
       const info = await stat(file);
-      await measuredLoudness(ctx, file, [media.hash, info.size, info.ctimeMs, info.mtimeMs], { projectId: task.projectId, stop });
+      await measuredLoudness(ctx, file, [media.hash, info.size, info.ctimeMs, info.mtimeMs], { projectId: task.projectId, audio: heardAudio(media), stop });
     })().catch(err => {
       if (!stop.aborted) ctx.log(`[media] ${media.id}: loudness ahead of the pass: ${(err as Error).message}`);
     }), task.projectId);

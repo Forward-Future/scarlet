@@ -1,0 +1,2 @@
+# Vendored installer scripts must stay byte-for-byte what was reviewed (their SHA-256 is pinned in host/install.rs).
+* -text

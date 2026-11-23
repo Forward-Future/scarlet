@@ -3,7 +3,7 @@ import { emptyTimeline, makeMediaClip, makeTrack } from "./builders.js";
 import { replayJoinFades } from "./joinCrossfade.js";
 import { applyOps } from "./ops.js";
 import { putBackCut, putBackLooks } from "./putBack.js";
-import type { Timeline } from "./schema.js";
+import type { Timeline } from "./timelineSchema.js";
 import { clipEnd, timelineDuration } from "./time.js";
 
 const FPS = 30;

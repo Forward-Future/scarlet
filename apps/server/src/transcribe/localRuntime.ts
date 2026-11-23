@@ -60,7 +60,8 @@ export function resolveLocalRuntime(ctx: Pick<Ctx, "paths" | "whisperCli" | "whi
   // A release without presets could still use the installer-provided launcher and weights.
   const legacyPreset = !settings.localModel && settings.whisperCppPath && settings.whisperModelPath &&
     resolve(settings.whisperCppPath) === resolve(paths.legacyCli) && resolve(settings.whisperModelPath) === resolve(paths.model);
-  const selected = legacyPreset ? "crisperwhisper" : selectedLocalModel(settings);
+  const existingCrisper = !settings.localModel && !settings.whisperCppPath && !settings.whisperModelPath && crisperInstallation(paths) !== "missing";
+  const selected = legacyPreset || existingCrisper ? "crisperwhisper" : selectedLocalModel(settings);
   const installation = selected === "crisperwhisper" ? crisperInstallation(paths) : undefined;
   if (installation === "ready") {
     // The worker selects the device at runtime. Keep it in the shared audio lane since the aligner

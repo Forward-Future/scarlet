@@ -14,7 +14,7 @@
 import { closesSentence, normalizeTranscriptToken } from "@scarlet/shared";
 
 /** Words either side of a join that count as said there again. */
-export const EDGE_CONTEXT_WORDS = 6;
+const EDGE_CONTEXT_WORDS = 6;
 /** The most words an overshoot takes at the edge that leaves the kept phrase, and at the edge it resumes on. Longer
  *  runs are a passage taken out on purpose, as an aside is. */
 const MOST_TAKEN = { out: 2, in: 3 } as const;
