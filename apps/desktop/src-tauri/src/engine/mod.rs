@@ -409,6 +409,12 @@ impl EngineManager {
         }
         set_chrome_env(&mut env, bundled_chrome(self.paths.resource_dir.as_deref(), tauri::is_dev()).as_deref());
         env.insert("SCARLET_DATA".into(), self.paths.data_dir.to_string_lossy().to_string());
+        // Only the public packages are built for a release feed. The engine reports usage under the `release` channel
+        // only with it, so source, local-main and review builds count as `dev` (docs/telemetry.md).
+        match option_env!("SCARLET_RELEASE_CHANNEL").filter(|channel| !channel.is_empty()) {
+            Some(channel) => { env.insert("SCARLET_RELEASE_CHANNEL".into(), channel.into()); }
+            None => { env.remove("SCARLET_RELEASE_CHANNEL"); }
+        }
         env
     }
 
