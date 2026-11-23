@@ -22,6 +22,14 @@ it("says Scarlet can't reach its engine, not \"Service Unavailable\", when the e
   expect((await shown(api.projects()))[0]).toBe(ENGINE_AWAY);
 });
 
+it("says a request didn't work when the engine gave no reason, never a status line or a code", () => {
+  // A reply that isn't the engine's own refusal: a bare status ("Internal Server Error"), another program's page, or nothing.
+  expect(errorMessage(new ScarletApiError(500, "http_error", ""))).toBe("That didn’t work. Try again.");
+  expect(errorMessage(new ScarletApiError(500, "http_error", "Internal Server Error"))).toBe("That didn’t work. Try again.");
+  expect(errorMessage(new ScarletApiError(502, "http_error", "<html>Bad Gateway</html>"))).toBe("That didn’t work. Try again.");
+  expect(errorMessage(new ScarletApiError(409, "stale_head", ""))).toBe("That didn’t work. Try again.");
+});
+
 it("keeps the engine's own reasons, a request the editor called off and the window's own faults as they are", async () => {
   vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(Response.json({ error: { code: "busy", message: "Scarlet is applying another edit." } }, { status: 503 }));
   expect(await shown(api.projects())).toEqual(["Scarlet is applying another edit.", "Scarlet is applying another edit."]);

@@ -15,7 +15,7 @@ import { markedFrameUrl } from "../../lib/markedFramePictures";
 import { isDialoguePass, isOpenPass, openPass, waitsToPlay } from "../../lib/passCalls";
 import { aboutOne, aimOf, closingReply, notesStillAsked, threadRuns, waitingToStart, type Run } from "../../lib/requestRuns";
 import { runIsActive, spentLabel } from "../../lib/taskRun";
-import { firstCutDeliveries, isRecheck, isRedo, RECHECK_WORDS, requestTarget, revisionTarget, threadConversation, type Thread, type ThreadEntry } from "../../lib/threads";
+import { COULDNT_FINISH, firstCutDeliveries, isRecheck, isRedo, RECHECK_WORDS, requestTarget, revisionTarget, threadConversation, type Thread, type ThreadEntry } from "../../lib/threads";
 import { useNearView } from "../../lib/useNearView";
 import { useProjectStore } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
@@ -373,7 +373,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       }
       else if (e.kind === "system" && e.taskId === task.id) {
         // The card's own row says it stopped or couldn't finish; only a specific reason adds to that.
-        if (!/^(?:Edit stopped\.|Edit resumed\.|I couldn’t finish this edit\.)$/.test(e.text)) said.push(<p key={i} className={`req-say is-note${e.tone === "bad" ? " is-bad" : ""}`}>{e.text}</p>);
+        if (e.text !== "Edit stopped." && e.text !== "Edit resumed." && e.text !== COULDNT_FINISH) said.push(<p key={i} className={`req-say is-note${e.tone === "bad" ? " is-bad" : ""}`}>{e.text}</p>);
         const action = e.action;
         // Asked again since, and done: picking the old one up would do the same work a second time. The same words
         // about another cut or edit were other work, and leave this one to pick up.

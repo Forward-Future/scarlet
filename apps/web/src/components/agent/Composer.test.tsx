@@ -693,6 +693,17 @@ it("pins a reply to the selected individual edit while typing and sends it in th
   expect(useProjectStore.getState().revise).not.toHaveBeenCalled();
 });
 
+it("says the cut or edit a message was aimed at has gone, and what to do, when its request no longer holds it", async () => {
+  const change = current.changes.find(c => c.state === "approved")!;
+  const own = buildThreads({ changes: [change], tasks: [], notes: [] })[0]!;
+  const target = { changeId: change.id, editIndex: 1, version: project.head!, time: 1, end: 3, clipIds: [], label: "Opening caption" };
+  await show({ thread: { ...own, changes: [], flagged: [] }, selectedEdit: target });
+  await type("Fade the caption out sooner");
+  await submit();
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("That cut or edit isn’t there any more. Open it again and resend.");
+  expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
+});
+
 it("sends a revision of an edit another request made from the request that flagged it, in that request", async () => {
   const change = current.changes.find(c => c.state === "approved")!;
   // The request that raised the doubt lists the edit with its own, and the message box there talks to it.
@@ -702,7 +713,7 @@ it("sends a revision of an edit another request made from the request that flagg
   await show({ thread: raiser, selectedEdit: target });
   await type("Fade the caption out sooner");
   await submit();
-  expect(container.textContent).not.toContain("This suggestion is unavailable");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
   expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
     instruction: "Fade the caption out sooner", context: expect.objectContaining({ threadId: "thread_raiser", changeId: change.id, editIndex: 1 }),
   }));
@@ -1315,8 +1326,24 @@ it("dictates for the whole video with no moment picked, including after an aband
   expect(createVoiceNote).not.toHaveBeenCalled();
 });
 
+it("says it is still connecting, not to sign in, when Enter is pressed while Scarlet is still finding its models", async () => {
+  // The list of hosts hasn't arrived: the header's model button says "Connecting…", and nothing is asked of the editor.
+  useHostsStore.setState({ hosts: [], status: "loading" });
+  await show();
+  const field = container.querySelector("textarea")!;
+  const said = () => container.querySelector('[role="alert"]')?.textContent;
+  await type("Tighten the opening");
+  await act(async () => { field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+  expect(said()).toBe("Still connecting. Try again in a moment.");
+  expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
+  expect(field.value).toBe("Tighten the opening");
+  // The list arrived with nothing signed in: now the reason is the one that asks for a sign-in.
+  await act(async () => useHostsStore.setState({ status: "ready" }));
+  expect(said()).toBe(NO_AGENT_REASON);
+});
+
 it("says why Enter did nothing when no agent or model can take the message", async () => {
-  useHostsStore.setState({ hosts: [] });
+  useHostsStore.setState({ hosts: [], status: "ready" });
   await show();
   const field = container.querySelector("textarea")!;
   const enter = () => act(async () => { field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
@@ -1346,7 +1373,7 @@ it("gives the mic a reason only when no agent can take the message, not while on
   let land!: () => void;
   const createTask = vi.fn(() => new Promise<typeof db.tasks[number]>(resolve => { land = () => resolve(db.tasks[0]!); }));
   useProjectStore.setState({ createTask });
-  useHostsStore.setState({ hosts: [] });
+  useHostsStore.setState({ hosts: [], status: "ready" });
   await show();
   expect(micProps).toMatchObject({ disabled: true, disabledReason: NO_AGENT_REASON });
   await act(async () => useHostsStore.setState({ hosts: db.hosts }));

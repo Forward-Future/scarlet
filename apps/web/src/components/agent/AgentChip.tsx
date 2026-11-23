@@ -88,6 +88,22 @@ function stillConnecting(hostsReady: boolean, localHost: HostStatus | null) {
   return !hostsReady || (isDesktop() && !localHost?.agents.length) || (!!localHost && !localHost.connected && !localHost.error);
 }
 
+/** Nothing is signed in and nothing is on its way: the editor has a model to set up. An empty or offline catalog doesn't establish that. */
+function setupNeeded(hostsReady: boolean, localHost: HostStatus | null, hasConfiguredHost: boolean) {
+  const checkingLocalAgents = isDesktop() && !localHost?.agents.length;
+  return hostsReady && !checkingLocalAgents && !hasConfiguredHost && !localHost?.agents.some(isConfiguredAgent);
+}
+
+/** What the message box says to a message sent while the model button reads "Connecting…". */
+export const CONNECTING_REASON = "Still connecting. Try again in a moment.";
+
+/** True while the model button reads "Connecting…": no model is online yet and Scarlet is still finding them. */
+export function useModelsConnecting({ agents, hasConfiguredHost }: Pick<ReturnType<typeof useAgentAvailability>, "agents" | "hasConfiguredHost">) {
+  const hostsReady = useHostsStore(s => s.status === "ready");
+  const localHost = useLocalHost();
+  return !agents.length && !setupNeeded(hostsReady, localHost, hasConfiguredHost) && stillConnecting(hostsReady, localHost);
+}
+
 /**
  * The selected model and effort, with model settings and local sign-in in the menu.
  * `variant="header"` draws it as a quiet header button that marks itself when no model is ready.
@@ -200,9 +216,7 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
     </div>
   ));
 
-  // An empty or offline catalog doesn't establish that the editor needs to sign in.
-  const checkingLocalAgents = isDesktop() && !localHost?.agents.length;
-  const needsSetup = hostsReady && !checkingLocalAgents && !hasConfiguredHost && !localHost?.agents.some(isConfiguredAgent);
+  const needsSetup = setupNeeded(hostsReady, localHost, hasConfiguredHost);
   const inMenu = variant === "menu";
   const inHeader = variant === "header";
   const iconOnly = variant === "icon";

@@ -94,7 +94,7 @@ function resolveRestoredCutsTarget(
   restoredCuts: number[],
 ): ResolvedTarget {
   const { head } = project;
-  if (change.state !== "ready") throw conflict("cut_review_stale", "The edit changed during review. Review a proposal for the current edit.");
+  if (change.state !== "ready") throw conflict("cut_review_stale", "Scarlet is still working on this pass. Try again when it’s done.");
   const unchanged = head === change.fromVersion && !change.cutEdits?.length;
   const { review, draft, joinFades } = prepareCutReview(ctx, change, unchanged ? restoredCuts : undefined);
   if (!review) throw badRequest("cuts_unsupported", "This proposal has no individually restorable cuts.");
@@ -199,18 +199,19 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
     const projectRow = ctx.repos.projects.get(change.projectId);
     if (!projectRow) throw notFound("project");
     if (opts.restoredCuts && [...opts.restoredCuts].sort().join(",") !== change.restoredCuts?.slice().sort().join(",")) {
-      throw conflict("cut_review_decided", "This proposal was already approved with different choices.");
+      throw conflict("cut_review_decided", "This pass already went in with different calls.");
     }
     return { change, project: projectRow, outcome: "applied" };
   }
   if (change.state === "rejected" || change.state === "failed") {
     if (!ctx.repos.projects.header(change.projectId)) throw notFound("project");
-    throw conflict("invalid_state", `cannot approve a ${change.state} change`);
+    throw conflict("invalid_state", change.state === "rejected" ? "This edit was already rejected."
+      : "Scarlet couldn’t prepare this edit, so it can’t go in. Ask for it again.");
   }
   const project = ensureProjectHead(ctx, change.projectId);
   const head = project.head;
   const headTl = resolveTimeline(ctx, project);
-  if (alternativeAlreadyChosen(ctx, change, head)) throw conflict("alternative_chosen", "Undo the chosen alternative before applying another on this branch.");
+  if (alternativeAlreadyChosen(ctx, change, head)) throw conflict("alternative_chosen", "Another version of this edit is already in the video. Reject that one first.");
   // Older assessments recorded the first preview as their only indication that the pass had published a call.
   const reviewTask = change.assessedForReview || change.firstDecisionPreview ? latestAttempt(ctx, change.taskId) : undefined;
   if (change.state === "revising" && change.revisionFrom) {
@@ -219,11 +220,11 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
       return { change, project: ctx.repos.projects.withMedia(project), outcome: "sent_back", task: checking };
   }
   if (reviewTask && ["running", "claimed", "queued"].includes(reviewTask.state))
-    throw conflict("review_in_progress", "Your choices can be staged while Scarlet checks the remaining cuts.");
+    throw conflict("review_in_progress", "Scarlet is still checking this pass’s cuts. Try again when it finishes.");
   if (change.cutAssessments?.length && !opts.restoredCuts) {
     const review = prepareCutReview(ctx, change).review;
     if (!review || opts.spots || change.cutAssessments.length !== review.cuts.length || change.cutAssessments.some(a => a.verdict === "ask"))
-      throw conflict("review_decisions_needed", "Open Needs your call to finish the outstanding decisions.");
+      throw conflict("review_decisions_needed", "Make this pass’s calls in For you first.");
     // The editor's call on a cut stands over Scarlet's verdict, as when the pass is applied once it finishes.
     opts = { ...opts, restoredCuts: keptCuts(change, review) };
   }

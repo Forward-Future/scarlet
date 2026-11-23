@@ -63,6 +63,19 @@ it("logs committed call choices and schedule changes without repeating saved dec
     `[review] schedule ${target} outcome=cleared reason=editor`,
   ]);
   expect(lines.join("\n")).not.toContain("Private reason");
+  // What the editor's own presses are refused with reads as the chat does: pass, calls, the video.
+  const refused = async (response: Promise<Response>) => { const r = await response; return [r.status, (await r.json()).error.message]; };
+  expect(await refused(api("PUT", `/changes/${change!.id}/cut-choices`, { fromVersion: "ver_gone", toVersion: change!.toVersion, choices: [...choices] })))
+    .toEqual([409, "This pass isn’t waiting on your calls any more."]);
+  expect(await refused(api("POST", `/changes/${change!.id}/cut-review?view=draft`, { restoredCuts: [0], ontoVersion: "ver_gone" })))
+    .toEqual([409, "The video changed while this cut was open. Open it again."]);
+});
+
+it("refuses to apply an edit that was rejected in words the editor reads, not the engine's states", async () => {
+  const { change } = await (await api("POST", `/projects/${project.id}/changes`, { description: "Add label", ops: marker })).json();
+  expect((await api("POST", `/changes/${change.id}/reject`, {})).status).toBe(200);
+  const refused = await api("POST", `/changes/${change.id}/approve`);
+  expect([refused.status, (await refused.json()).error]).toEqual([409, { code: "invalid_state", message: "This edit was already rejected." }]);
 });
 
 /** A reframe in four places: too large to check for separable spots while it is proposed, so the engine's worker does. */

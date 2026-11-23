@@ -3337,20 +3337,20 @@ it("keeps a call whose save is still on its way when an earlier save fails, and 
   // The first save fails after the second went out. The second carries both calls and may still land: they stay made.
   await act(async () => saves[0]!.fail("The engine is busy."));
   expect(need()).toBe("1 needs you");
-  // The failure is said on the pass's line and on the open call's card.
-  expect(passCard().querySelector(".simple-error")?.textContent).toBe("The engine is busy.");
-  expect(call().querySelector('[role="alert"]')?.textContent).toBe("The engine is busy.");
+  // The failure is said on the pass's line and on the open call's card: what wasn't saved, why, and what to do.
+  expect(passCard().querySelector(".simple-error")?.textContent).toBe("Couldn’t save this call: The engine is busy. Press Keep or Reject edit again.");
+  expect(call().querySelector('[role="alert"]')?.textContent).toBe("Couldn’t save this call: The engine is busy. Press Keep or Reject edit again.");
   // A save that fails with none sent since gives its calls back to the editor: nothing was saved.
   await act(async () => saves[1]!.fail("Still busy."));
   expect(need()).toBe("3 need you");
-  expect(passCard().querySelector(".simple-error")?.textContent).toBe("Still busy.");
+  expect(passCard().querySelector(".simple-error")?.textContent).toBe("Couldn’t save this call: Still busy. Press Keep or Reject edit again.");
   // Made again, the first save fails once more, and this time the second lands with both calls. Nothing was lost,
   // so the line that said a save failed goes.
   await press("k");
   await press("k");
   expect(saves).toHaveLength(4);
   await act(async () => saves[2]!.fail("Busy again."));
-  expect(passCard().querySelector(".simple-error")?.textContent).toBe("Busy again.");
+  expect(passCard().querySelector(".simple-error")?.textContent).toBe("Couldn’t save this call: Busy again. Press Keep or Reject edit again.");
   await act(async () => saves[3]!.land());
   expect(need()).toBe("1 needs you");
   expect(passCard().querySelector(".simple-error")).toBeNull();
@@ -3564,10 +3564,11 @@ it.each(["saved", "another call", "unchecked part", "failed"] as const)("uses th
   expect(save).toHaveBeenCalledWith("chg_ready", expect.objectContaining({ choices: [{ index: 0, choice: "keep" }] }));
   expect(approve).not.toHaveBeenCalled();
   if (outcome === "failed") {
-    await act(async () => fail(new Error("Couldn’t save this call.")));
+    // The engine gave no reason of its own, so the line has none: never a status line or a code.
+    await act(async () => fail(new ScarletApiError(500, "http_error", "Internal Server Error")));
     expect(approve).not.toHaveBeenCalled();
     expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
-    expect(passCard().querySelector('[role="alert"]')?.textContent).toBe("Couldn’t save this call.");
+    expect(passCard().querySelector('[role="alert"]')?.textContent).toBe("Couldn’t save this call. Press Keep or Reject edit again.");
     return;
   }
   // The call just skipped is now the third. The engine also preserved a different skip on the first cut.
@@ -3605,21 +3606,42 @@ it("keeps the last call's decision made while the pass's cut list loads, and app
   expect(approve.mock.calls).toEqual([["chg_ready", undefined, [0]]]);
 });
 
+it("says how many cuts a pass has ready while they go in, when it made no call for the editor", async () => {
+  flagged();
+  // Scarlet settled every staged cut itself. The pass goes in by itself; until it has, its line counts the cuts.
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: c.cutAssessments!.map(a => ({ ...a, verdict: "cut" as const })) } : c) };
+  useProjectStore.setState({ current: data, approve: vi.fn(() => new Promise<never>(() => {})) });
+  await show();
+  await act(async () => {});
+  expect(passCard().querySelector(".simple-made")?.textContent).toBe("3 cuts ready.");
+});
+
+it("doesn't ask for a call to be made again when its save was refused because the pass has moved on", async () => {
+  const { save } = finishedPass();
+  useProjectStore.setState({ approve: vi.fn().mockResolvedValue({ outcome: "applied" }) });
+  save.mockRejectedValueOnce(new ScarletApiError(409, "cut_review_stale", "This pass isn’t waiting on your calls any more."));
+  await show();
+  await reviewCalls();
+  await press("x");
+  expect(passCard().querySelector('[role="alert"]')?.textContent).toBe("Couldn’t save this call: This pass isn’t waiting on your calls any more.");
+});
+
 it("keeps saying a call's save failed while that call is undecided, though a later call's save lands", async () => {
   const { save } = finishedPass();
   const approve = vi.fn().mockResolvedValue({ outcome: "applied" });
   useProjectStore.setState({ approve });
-  save.mockRejectedValueOnce(new Error("Couldn’t save this call."));
+  save.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  const NOT_SAVED = "Couldn’t save this call: Scarlet can’t reach its engine right now. Press Keep or Reject edit again.";
   await show();
   await reviewCalls();
   const alert = () => passCard().querySelector('[role="alert"]')?.textContent;
   await press("x");
-  expect(alert()).toBe("Couldn’t save this call.");
+  expect(alert()).toBe(NOT_SAVED);
   // The editor goes on to the next call, and its save lands. The skip that didn't reach the engine is back with the
   // editor, and the line saying why stays: the decision doesn't vanish without a word.
   await press("k");
   expect(save.mock.lastCall![1].choices).toEqual([{ index: 1, choice: "cut" }]);
-  expect(alert()).toBe("Couldn’t save this call.");
+  expect(alert()).toBe(NOT_SAVED);
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("2 need you");
   expect(approve).not.toHaveBeenCalled();
   // Made again and saved, the line goes.
@@ -10378,12 +10400,17 @@ it("says a stopped pass's cut wasn't checked, lists a skipped call as Skipped, a
   expect(buttonIn(call(), "Keep")?.getAttribute("aria-pressed")).toBe("false");
   // The last call applies the pass, leaving in what was skipped. The working cut had moved on, so the engine refused
   // it: the card closes and the pass's line says why.
-  const said = () => passCard().querySelector('.simple-error[role="alert"]')?.textContent;
+  const alert = () => passCard().querySelector('.simple-error[role="alert"]');
+  const said = () => alert()?.firstChild?.textContent ?? undefined;
   await press("x");
   await act(async () => {});
   expect(approve).toHaveBeenLastCalledWith("chg_ready", undefined, [1, 2]);
   expect(container.querySelector('[aria-label="Call"]')).toBeNull();
   expect(said()).toBe(MOVED);
+  // Retry is under the reason, after its words, while the list of calls is the one on screen: nothing above it offers it.
+  expect([...alert()!.childNodes].map(node => node.textContent)).toEqual([MOVED, "Retry"]);
+  expect(passCard().querySelector(".simple-pass-list")?.getAttribute("aria-label")).toBe("Calls that need you");
+  expect([...passCard().querySelectorAll("button")].filter(b => b.textContent === "Retry")).toEqual([alert()!.querySelector("button")]);
   // Every call is made, so the pass would go in by itself, but an apply that failed isn't tried again unasked: the line
   // offers Retry. A failure there says the engine's reason, in place of the last one.
   expect(approve).toHaveBeenCalledTimes(1);
@@ -10537,7 +10564,7 @@ it("says the pass's cuts couldn't be loaded instead of applying without them, an
   // Without the list nothing would be put back, so the skipped cut would apply with the rest. It says why it didn't
   // apply, and asks for the list again, so Retry works.
   expect(approve).not.toHaveBeenCalled();
-  expect(passCard().querySelector('[role="alert"]')?.textContent).toBe("Couldn’t load this pass’s cuts: The engine is restarting.");
+  expect([...passCard().querySelector('[role="alert"]')!.childNodes].map(node => node.textContent)).toEqual(["Couldn’t load this pass’s cuts: The engine is restarting.", "Retry"]);
   expect(cuts).toHaveBeenCalledTimes(2);
   await click(buttonIn(passCard(), "Retry")!);
   expect(approve).toHaveBeenCalledWith("chg_ready", undefined, [2]);
@@ -10575,8 +10602,8 @@ it("says under a suggestion's decisions why it couldn't be applied, and leaves i
 });
 
 /** Scarlet's line under a suggestion it is to make again: while the redo waits its turn, then once Scarlet is on it. */
-const REDO_WAITS = "The video changed while this suggestion was waiting. I’ll redo it on the video as it is now.";
-const REDOING = "The video changed while this suggestion was waiting. I’m redoing it on the video as it is now.";
+const REDO_WAITS = "The video changed while this suggestion was waiting. Scarlet will redo it on the video as it is now.";
+const REDOING = "The video changed while this suggestion was waiting. Scarlet is redoing it on the video as it is now.";
 /** The engine's own task for a suggestion it sent back, as `sendBack` makes it: authored by Scarlet, and about the suggestion alone. */
 const redoTask = (changeId: string, over: Partial<ProjectData["tasks"][number]> = {}) => ({ ...data.tasks.find(t => t.id === "task_done")!, id: "task_redo", kind: "revise" as const,
   state: "queued" as const, createdBy: { type: "scarlet" as const, name: "Scarlet" }, changeIds: [], summary: null, question: null,
@@ -10685,7 +10712,7 @@ it("redoes a suggestion a pass left under the pass's own request, as any request
   expect([unit().dataset.run, unit().querySelector('[aria-label^="Stop this edit"]')?.getAttribute("aria-label")]).toEqual(["task_done", `Stop this edit: ${requestTextFor("task_done")}`]);
   expect(units().filter(u => u.dataset.run === "task_redo")).toEqual([]);
   expect(unit().querySelector('.req-stages[aria-label="Stages"]')).toBeNull();
-  expect([...unit().querySelectorAll(".req-say")].map(p => p.textContent)).toEqual(["The video changed while this suggestion was waiting. I’m redoing it on the video as it is now."]);
+  expect([...unit().querySelectorAll(".req-say")].map(p => p.textContent)).toEqual([REDOING]);
   expect(unit().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("3 need you");
   expect(container.querySelector(".simple-thread")!.textContent).not.toMatch(/Redo on the current edit|Sent back/);
 });
@@ -11994,7 +12021,7 @@ it("keeps a revision whose new version couldn't be prepared, since nothing else 
   expect(fix?.textContent).toContain("Make the captions bigger.");
   // Scarlet's words are all it has: no row under them names the edit again or offers to open a version that isn't there.
   expect([...fix!.querySelectorAll(".req > *")].map(row => row.className)).toEqual(["req-said"]);
-  expect(fix!.querySelector(".req-said .said")?.textContent).toBe("I couldn’t prepare the preview for this edit.");
+  expect(fix!.querySelector(".req-said .said")?.textContent).toBe("Scarlet couldn’t prepare the preview for this edit.");
 });
 
 it("moves a request's closing words with its block to the place above the message box, and back", async () => {

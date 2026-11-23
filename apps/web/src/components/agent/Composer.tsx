@@ -19,7 +19,7 @@ import { useProjectStore } from "../../stores/project";
 import { commandSkillIds, enabledSkills, useSkillsStore } from "../../stores/skills";
 import { editTargetAt, markedRangeOf, pointOf, playheadPoints, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
 import { Icon, Spinner, InlineError } from "../ui/primitives";
-import { AgentChip, runChoiceDiffers, useAgentAvailability } from "./AgentChip";
+import { AgentChip, CONNECTING_REASON, runChoiceDiffers, useAgentAvailability, useModelsConnecting } from "./AgentChip";
 import { SkillCommandInput } from "./SkillCommandInput";
 import { MicButton } from "./MicButton";
 import { AimTimecode, ComposerAim, type AimItem } from "./ComposerAim";
@@ -95,7 +95,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const [error, setError] = useState("");
   // Enter was pressed with no agent or model to send to. The line under the box says why for as long as that is so.
   const [refused, setRefused] = useState(false);
-  const { effective, none, unavailableReason } = useAgentAvailability();
+  const availability = useAgentAvailability();
+  const { effective, none } = availability;
+  // While Scarlet is still finding its models the header says "Connecting…", and the box says the same, not "Sign in".
+  const unavailableReason = useModelsConnecting(availability) ? CONNECTING_REASON : availability.unavailableReason;
   const [busy, setBusy] = useState(false);
   const voiceAnchor = useRef<AgentContext | null | undefined>(undefined);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -203,7 +206,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     if (!effective) throw new Error(unavailableReason);
     let context: Parameters<typeof createTask>[1]["context"];
     if (replying) {
-      if (anchor?.changeId && ![...thread.changes, ...thread.flagged ?? []].some(c => c.id === anchor.changeId)) throw new Error("This suggestion is unavailable. Select the edit again.");
+      if (anchor?.changeId && ![...thread.changes, ...thread.flagged ?? []].some(c => c.id === anchor.changeId)) throw new Error("That cut or edit isn’t there any more. Open it again and resend.");
       const position = anchor && { ...requestPosition(anchor), ...stoppedAt() };
       // A revision takes no files, so one that carries some is a request in the thread, as a reply is.
       if (revising && !attachments) {

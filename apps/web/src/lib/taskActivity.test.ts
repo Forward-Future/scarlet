@@ -34,11 +34,12 @@ describe("working row activity", () => {
     expect(taskActivityLabel({ ...read, data: { ...read.data, input: { mediaIds: ["screen", "cam"], from: 0 } } }, pendingMediaWaits([waiting]))).toBe("Waiting for the transcript");
   });
 
-  it("names the cuts a multi-cut inspection checks", () => {
+  it("says a look at flagged cuts without the call's own count, which isn't a call's number or the list's", () => {
     const inspect = (input: object): TaskEvent => ({ type: "tool", text: "", data: { tool: "scarlet.dialogue_review_inspect", input } });
-    expect(latest([inspect({ index: 4 })])).toBe("Checking a suggested cut · Cut 5");
-    expect(latest([inspect({ index: 4, count: 4 })])).toBe("Checking suggested cuts · Cuts 5–8");
-    expect(latest([inspect({ index: 4, count: 4, wholePicture: true })])).toBe("Checking a suggested cut · Cut 5");
+    expect(latest([inspect({ index: 4 })])).toBe("Checking a flagged cut");
+    expect(latest([inspect({ index: 4, count: 4 })])).toBe("Checking flagged cuts");
+    expect(latest([inspect({ index: 4, count: 4, wholePicture: true })])).toBe("Checking a flagged cut");
+    expect(latest([{ type: "tool", text: "", data: { tool: "scarlet.change_review_cut", input: { index: 2 } } }])).toBe("Looking at an edit");
   });
 
   it("shows a dropped model stream as a reconnect", () => {
@@ -48,7 +49,7 @@ describe("working row activity", () => {
 
   it("shows active compaction and hides completed compaction notices", () => {
     expect(taskActivityLabel({ type: "log", text: "Compacting context", data: { kind: "compaction", active: true } }))
-      .toBe("Compacting context");
+      .toBe("Tidying up its notes");
     expect(taskActivityLabel({ type: "log", text: "Compacting context", data: { kind: "compaction", active: false } }))
       .toBeUndefined();
     expect(taskActivityLabel({ type: "log", text: "Context compacted", data: { kind: "compaction" } }))

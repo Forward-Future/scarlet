@@ -60,6 +60,16 @@ it("puts away the new version a call's revision made, and the pass it replaced w
   expect(api.reopenChange).toHaveBeenCalledWith("pass");
 });
 
+it("keeps Scarlet's capital in the reason an undo failed, and starts any other reason small after the colon", async () => {
+  const said = async (error: Error) => {
+    recordUndo({ kind: "revision", word: "Reject", projectId: "prj", version: "ver_1" });
+    await undoLast("prj", { changes: [], tasks: [] }, async () => { throw error; });
+    return useUndoStore.getState().error?.text;
+  };
+  expect(await said(new TypeError("Failed to fetch"))).toBe("Couldn’t undo Reject: Scarlet can’t reach its engine right now.");
+  expect(await said(new Error("The video changed since."))).toBe("Couldn’t undo Reject: the video changed since.");
+});
+
 it("says why a revision can't be taken back once the pass it made went in, and moves on to the step before", async () => {
   recordUndo({ kind: "keep", word: "Keep", projectId: "prj", threadId: "thr", refs: [{ changeId: "chg", spot: 0 }], edit: { changeId: "chg", spot: 0 } });
   recordUndo({ kind: "revision", projectId: "prj", taskId: "task_call" });

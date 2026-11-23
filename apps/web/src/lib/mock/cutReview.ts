@@ -11,7 +11,7 @@ import { notFound } from "./util";
  */
 export function buildCutReview(db: MockDb, change: Change, project: Project, restoredCuts?: number[], ontoVersion?: string) {
   const stale = (reason: string) => new ScarletApiError(409, "cut_review_stale", reason, { currentVersion: project.head });
-  if (ontoVersion !== undefined && ontoVersion !== project.head) throw stale("The working edit changed during review.");
+  if (ontoVersion !== undefined && ontoVersion !== project.head) throw stale("The video changed while this cut was open. Open it again.");
   const base = db.timelines[change.fromVersion], proposed = db.timelines[change.toVersion];
   const review = base && proposed ? planCutReview(base, proposed, db.media[change.projectId] ?? [], change.ops, change.firstCut) : null;
   if (!review) return { review: null };

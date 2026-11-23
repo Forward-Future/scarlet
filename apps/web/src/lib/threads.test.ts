@@ -169,8 +169,8 @@ describe("buildThreads", () => {
     expect(th!.status).toBe("working");
     // One line, Scarlet's, in the request that made the suggestion: not the engine's reason, its name for the task, or
     // "the agent". It says what is true of the redo: waiting its turn, then under way.
-    const waits = "The video changed while this suggestion was waiting. I’ll redo it on the video as it is now.";
-    const redoing = "The video changed while this suggestion was waiting. I’m redoing it on the video as it is now.";
+    const waits = "The video changed while this suggestion was waiting. Scarlet will redo it on the video as it is now.";
+    const redoing = "The video changed while this suggestion was waiting. Scarlet is redoing it on the video as it is now.";
     expect(said([asked, redo("queued")])).toEqual([["agent", "asked", waits]]);
     expect(said([asked, redo("running")])).toEqual([["agent", "asked", redoing]]);
     // In line again after Scarlet began it, after a question, it is still under way.
@@ -322,7 +322,8 @@ it("leaves out a dialogue part's review that the next part of the same pass took
   const [thread] = buildThreads({ tasks: [pass], changes, notes: [] });
   const { entries } = threadConversation(thread!, []);
   expect(entries.flatMap(e => e.kind === "change" ? [e.change.id] : []).sort()).toEqual([id("a", "applied"), id("b", "applied"), id("b", "review")].sort());
-  expect(entries.map(e => "text" in e && e.text)).toContain("Dialogue cuts are pending review.");
+  // Where the pass stands is said in the chat's words, not the engine's ("Dialogue cuts are pending review.").
+  expect(entries.map(e => "text" in e && e.text)).toContain("The pass is waiting on your calls.");
 });
 
 it("names what a sent message revised, in the words the box showed", () => {

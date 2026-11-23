@@ -547,7 +547,14 @@ it("leaves the word for how a run ended to its heading when the block has one, w
   view.unmount();
 });
 
-it("says Done for a finished request whose closing words were commands or its own request said back, never their first words", () => {
+it("says on a paused request's line that Resume picks it up, as its heading's hover does", () => {
+  const view = render(<RunBundle task={{ ...task, state: "queued", summary: null, finishedAt: undefined }} events={[]} changes={[]} paused />);
+  const line = view.host.querySelector("[role=status]");
+  // There is no Continue above the message box: Resume, at the request's right, is what picks it up.
+  expect([line?.textContent, line?.getAttribute("title")]).toEqual(["Paused", "Editing is paused. Resume picks this up where it left off."]);
+});
+
+it("says Nothing changed for a finished request whose closing words were commands or its own request said back, never their first words", () => {
   openProject();
   const row = (summary: string) => {
     const view = render(<RunBundle task={{ ...task, summary }} events={[]} changes={[]} banded />);
@@ -556,8 +563,8 @@ it("says Done for a finished request whose closing words were commands or its ow
     return text;
   };
   // Nothing of such a reply is shown as Scarlet's words, so the request's one row doesn't start with them either.
-  expect(row("Ran `pnpm test` && checked the JSON output.")).toBe("Done");
-  expect(row("Tighten the intro.")).toBe("Done");
+  expect(row("Ran `pnpm test` && checked the JSON output.")).toBe("Nothing changed");
+  expect(row("Tighten the intro.")).toBe("Nothing changed");
   // The words that are Scarlet's own still say what the request came to.
   expect(row("Ran `git status`. Both pauses are under a second, so I left them in.")).toBe("Both pauses are under a second…");
   expect(row("Tightened the intro.")).toBe("Tightened the intro");
@@ -593,7 +600,7 @@ it("names a pass's final check for what it is, and says what it is doing now, no
   ];
   const again: Task = { ...task, state: "running", summary: null, finishedAt: undefined, startedAt: at(4000), repeatAudit: { version: "v2", returns: 1 } };
   const view = render(<RunBundle task={again} events={events} changes={[]} banded />);
-  expect(view.host.querySelector(".req-lead")?.textContent).toBe("Final check of the finished cut");
+  expect(view.host.querySelector(".req-lead")?.textContent).toBe("Closing check for repeats");
   expect(view.host.textContent).not.toContain(FIRST);
-  expect(view.host.querySelector(".req-now [role=status]")?.textContent).toBe("Checking the finished dialogue for repeats");
+  expect(view.host.querySelector(".req-now [role=status]")?.textContent).toBe("Checking the video for repeats");
 });

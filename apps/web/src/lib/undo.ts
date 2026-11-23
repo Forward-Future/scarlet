@@ -141,5 +141,6 @@ async function undoRevision(taskId: string, project: { changes: readonly Change[
 
 function reason(error: unknown) {
   const text = errorMessage(error);
-  return text.charAt(0).toLowerCase() + text.slice(1);
+  // The reason follows a colon, so it starts small. A name keeps its capital.
+  return text.startsWith("Scarlet") ? text : text.charAt(0).toLowerCase() + text.slice(1);
 }
