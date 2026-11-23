@@ -362,6 +362,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     tool, client, projectId: ctx.projectId,
     otherInputWords: async (mediaId, words) => (await session.otherInput(mediaId, words)).other,
     seesFrames: caps.images,
+    resultChars: caps.resultChars,
     peekTimeline: session.peekTimeline,
     getProject: session.getProject,
     readPassage: revision.readPassage,
@@ -398,6 +399,6 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     const parameters = toolParameters.get(name);
     if (parameters && !(await parameters.safeParseAsync(args ?? {})).success) await reportResult(name, "failed", began, 0, result);
   });
-  if (caps.briefTools) listToolsBriefly(server);
+  if (caps.briefTools) listToolsBriefly(server, caps.resultChars);
   return server;
 }

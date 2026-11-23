@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult, Tool, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import { DEFAULT_RESULT_CHARS } from "@scarlet/shared";
 import { z } from "zod/v3";
 import { errorText } from "./tool-result.js";
 
@@ -33,8 +34,10 @@ const CALL_LEAD = "Calls one of Scarlet's tools listed below by its name, with i
 type ListTools = (request: { method: "tools/list"; params?: unknown }, extra: unknown) => Promise<{ tools: Tool[] }>;
 type CallTool = (request: { method: "tools/call"; params: { name: string; arguments?: Record<string, unknown> } }, extra: unknown) => Promise<CallToolResult>;
 
-/** Tools one tool_help call reads in full; the rest of a longer list are named for another call. */
+/** Upper bound on tools one tool_help call reads in full; the rest of a longer list are named for another call. */
 const HELP_AT_ONCE = 8;
+const SEPARATOR = "\n\n---\n\n";
+const notReadTail = (names: readonly string[]) => `Not read in this call, to ask for next: ${names.join(", ")}.`;
 
 /** What every tool `tool_call` reaches may do, so a harness asks about a call through it as it would about the boldest. */
 function unionAnnotations(tools: readonly Tool[]): ToolAnnotations {
@@ -48,10 +51,11 @@ function unionAnnotations(tools: readonly Tool[]): ToolAnnotations {
  * For a harness that keeps only so much of its tools' definitions and drops the rest without a word
  * (`AgentCapabilities.briefTools`): the tools sent whole to Claude Code from the start (`_meta[ALWAYS_LOAD]`) are listed
  * whole, and every other tool by its name and first sentence in `tool_call`'s description, which calls it by name.
- * `tool_help` gives a tool's whole description and parameters. The listing grows by one index line per tool, whatever
- * the tool's size. Called once every tool is registered.
+ * `tool_help` gives a tool's whole description and parameters, budgeted under `maxChars` (`AgentCapabilities.resultChars`)
+ * so the harness keeps replies inline instead of spilling them to a file. The listing grows by one index line per tool,
+ * whatever the tool's size. Called once every tool is registered.
  */
-export function listToolsBriefly(server: McpServer) {
+export function listToolsBriefly(server: McpServer, maxChars = DEFAULT_RESULT_CHARS) {
   // The SDK lists registered tools from this handler. Wrapping it keeps its conversion of each tool's input schema.
   const handlers = (server.server as unknown as { _requestHandlers?: Map<string, ListTools | CallTool> })._requestHandlers;
   const listed = handlers?.get("tools/list") as ListTools | undefined;
@@ -67,23 +71,39 @@ export function listToolsBriefly(server: McpServer) {
   server.registerTool(TOOL_HELP, {
     description: "A Scarlet tool's full description and parameters. Read it before you first call a tool.",
     inputSchema: { name: z.string().optional().describe("The tool's name, such as transcript_get"),
-      names: z.array(z.string()).min(1).optional().describe(`Several tools' names instead, read in one call; up to ${HELP_AT_ONCE} are read, the rest listed for another call`) },
+      names: z.array(z.string()).min(1).optional().describe("Several tools' names instead, read in one call; as many as fit are read, the rest listed for another call") },
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
   }, async ({ name, names }, extra) => {
     if ((name === undefined) === (names === undefined)) return errorText("Give either name, for one tool, or names, for several.");
     const tools = await everyTool(extra);
-    // Full descriptions run 3–5k characters each: a long list is read in part, with the rest named, rather than refused.
+    // A long list is read in part within maxChars (up to HELP_AT_ONCE), with the rest named, rather than refused or spilled.
     const listed = [...new Set(names ?? [name!])];
-    const later = listed.slice(HELP_AT_ONCE);
+    const overflowCount = listed.slice(HELP_AT_ONCE);
     const asked = listed.slice(0, HELP_AT_ONCE).map(given => ({ given, tool: scarletTools(tools).find(t => t.name === scarletName(given)) }));
     const unknown = asked.flatMap(a => a.tool ? [] : [a.given]);
     // An unknown name doesn't cost the model the tools it named right.
     const missing = unknown.length ? unknownName(unknown, tools) : undefined;
     const known = [...new Set(asked.flatMap(a => a.tool ? [a.tool] : []))];
-    if (!known.length && !later.length) return errorText(missing!);
-    const whole = known.map(tool => `${tool.name}\n\n${tool.description ?? ""}\n\nParameters (JSON schema):\n${JSON.stringify(tool.inputSchema, null, 1)}`);
-    const rest = later.length ? `Not read in this call, to ask for next: ${later.join(", ")}.` : undefined;
-    return { content: [{ type: "text" as const, text: [...(missing ? [missing] : []), ...whole, ...(rest ? [rest] : [])].join("\n\n---\n\n") }] };
+    if (!known.length && !overflowCount.length) return errorText(missing!);
+    const whole: string[] = [];
+    const deferred: string[] = [];
+    let used = missing ? missing.length : 0;
+    for (let i = 0; i < known.length; i++) {
+      const tool = known[i]!;
+      const entry = `${tool.name}\n\n${tool.description ?? ""}\n\nParameters (JSON schema):\n${JSON.stringify(tool.inputSchema)}`;
+      const remaining = [...known.slice(i + 1).map(t => t.name), ...overflowCount];
+      const tailLen = remaining.length ? SEPARATOR.length + notReadTail(remaining).length : 0;
+      const added = (used > 0 ? SEPARATOR.length : 0) + entry.length;
+      if (whole.length > 0 && used + added + tailLen > maxChars) {
+        deferred.push(...known.slice(i).map(t => t.name));
+        break;
+      }
+      whole.push(entry);
+      used += added;
+    }
+    const later = [...deferred, ...overflowCount];
+    const rest = later.length ? notReadTail(later) : undefined;
+    return { content: [{ type: "text" as const, text: [...(missing ? [missing] : []), ...whole, ...(rest ? [rest] : [])].join(SEPARATOR) }] };
   });
 
   server.registerTool(TOOL_CALL, {

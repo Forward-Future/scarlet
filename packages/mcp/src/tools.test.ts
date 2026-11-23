@@ -946,6 +946,38 @@ describe("timeline_join_audit", () => {
       expect(textOf(both)).toContain("Give changeId or version, not both.");
     } finally { await c.close(); }
   });
+
+  it("pages timeline_transcript to stay within caps.resultChars", async () => {
+    const words = Array.from({ length: 400 }, (_, i) => ({
+      text: `word_${String(i).padStart(3, "0")}`,
+      start: i * 0.2,
+      end: i * 0.2 + 0.15,
+    }));
+    mock.state.transcripts.m1 = {
+      id: "t-long",
+      mediaId: "m1",
+      segments: [{ id: "s1", start: 0, end: 80, text: words.map(w => w.text).join(" "), words }],
+    };
+    const tl = emptyTimeline("prj_test");
+    tl.version = "long";
+    tl.tracks[1]!.clips = [makeMediaClip("m1", 0, 80, 0)];
+    mock.state.timeline = tl;
+    const c = await connect({
+      agent: "gemini",
+      capabilities: { images: true, audio: false, files: false, plan: false, resultChars: 2_000 },
+    });
+    try {
+      const first = textOf(await ok(c, "timeline_transcript", { detail: "words" }));
+      expect(first.length).toBeLessThanOrEqual(2_000);
+      const next = /Showing (\d+) of 400 words; continue with from=([\d.]+)\./.exec(first);
+      expect(next).not.toBeNull();
+      expect(Number(next![1])).toBeGreaterThan(0);
+      expect(Number(next![1])).toBeLessThan(400);
+      const second = textOf(await ok(c, "timeline_transcript", { detail: "words", from: Number(next![2]) }));
+      expect(second.length).toBeLessThanOrEqual(2_000);
+      expect(second).toContain(`#${next![1]} `);
+    } finally { await c.close(); }
+  });
 });
 
 describe("what goes to stderr when a read fails and the tool answers without it", () => {

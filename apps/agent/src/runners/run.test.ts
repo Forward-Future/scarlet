@@ -84,7 +84,7 @@ let prompts = 0;
 let pendingReply = null;
 const configOptions = [
   { id: "model", category: "model", currentValue: "gemini-2.5-pro", options: [{ value: "gemini-2.5-pro", name: "Gemini 2.5 Pro" }, { value: "gemini-2.5-flash", name: "Gemini 2.5 Flash" }] },
-  { id: "thought_level", category: "thought_level", currentValue: "medium", options: [{ value: "low" }, { value: "medium" }, { value: "high" }] },
+  { id: "thought_level", category: "thought_level", currentValue: process.env.FAKE_ACP_DEFAULT_EFFORT || "medium", options: [{ value: "low" }, { value: "medium" }, { value: "high" }] },
 ];
 const rl = createInterface({ input: process.stdin });
 rl.on("line", line => {
@@ -747,6 +747,16 @@ describe("runGemini", { timeout: 20_000 }, () => {
     expect(result).toMatchObject({ ok: true, summary: "Done." });
     expect(result.stalled).toBeUndefined();
     expect(Date.now() - started).toBeLessThan(6000);
+  });
+
+  it("defaults unset effort to medium when agy starts at high", async () => {
+    const { result, stdin } = await run(runGemini, { acp: true }, { agent: "gemini", env: { FAKE_ACP_DEFAULT_EFFORT: "high" } });
+    expect(result).toMatchObject({ ok: true });
+    const sent = (await stdin()).trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(sent.find((m) => m.method === "session/set_config_option")?.params).toMatchObject({
+      configId: "thought_level",
+      value: "medium",
+    });
   });
 
   it("refuses to run Gemini without Scarlet's instructions when agy doesn't say it takes them", async () => {

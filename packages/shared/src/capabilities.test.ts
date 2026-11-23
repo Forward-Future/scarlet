@@ -8,7 +8,7 @@ describe("agentCapabilities", () => {
     // No harness's to-do tool is on: the chat shows no plan. Gemini's runner reads none.
     expect(agentCapabilities("claude")).toEqual({ images: true, audio: false, files: false, plan: false, resultChars: 40_000, toolPrefix: "mcp__scarlet__", toolWaitSeconds: 240 });
     expect(agentCapabilities("codex")).toEqual({ images: true, audio: false, files: true, plan: false, resultChars: 40_000, toolWaitSeconds: 240 });
-    expect(agentCapabilities("gemini")).toEqual({ images: true, audio: false, files: false, plan: false, briefTools: true, resultChars: 40_000, toolWaitSeconds: 120 });
+    expect(agentCapabilities("gemini")).toEqual({ images: true, audio: false, files: false, plan: false, briefTools: true, resultChars: 9_000, toolWaitSeconds: 120 });
     for (const agent of [undefined, "", "api", "toString", "Claude"]) expect(agentCapabilities(agent), String(agent)).toEqual({ images: true, audio: false, files: false, plan: false, resultChars: 40_000 });
   });
 
@@ -19,6 +19,7 @@ describe("agentCapabilities", () => {
     expect(agentCapabilities("codex", '{"audio":true,"files":false}')).toEqual({ images: true, audio: true, files: false, plan: false, resultChars: 40_000, toolWaitSeconds: 240 });
     expect(agentCapabilities("claude", ' {"images": false, "audio": "yes", "files": 1, "shell": "yes"} ')).toEqual({ images: false, audio: false, files: false, plan: false, resultChars: 40_000, toolPrefix: "mcp__scarlet__", toolWaitSeconds: 240 });
     expect(agentCapabilities("codex", '{"resultChars":8000}').resultChars).toBe(8_000);
+    expect(agentCapabilities("gemini", '{"resultChars":20000}').resultChars).toBe(20_000);
     // A tool wait and brief listing are set the same way, for a harness whose deadline or tool budget differs.
     expect(agentCapabilities("codex", '{"toolWaitSeconds":90,"briefTools":true}')).toMatchObject({ toolWaitSeconds: 90, briefTools: true });
     expect(agentCapabilities("gemini", '{"briefTools":false}').briefTools).toBe(false);
@@ -26,6 +27,7 @@ describe("agentCapabilities", () => {
       expect(agentCapabilities("claude", bad), bad).toMatchObject({ toolWaitSeconds: 240 });
     expect(agentCapabilities("claude", '{"briefTools":"yes"}').briefTools).toBeUndefined();
     expect(agentCapabilities("codex", { resultChars: 200 }).resultChars).toBe(40_000);
+    expect(agentCapabilities("gemini", { resultChars: 200 }).resultChars).toBe(9_000);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     for (const unset of [undefined, "", "   "]) expect(agentCapabilities("codex", unset)).toEqual({ images: true, audio: false, files: true, plan: false, resultChars: 40_000, toolWaitSeconds: 240 });
     expect(agentCapabilities("codex", "{}")).toEqual({ images: true, audio: false, files: true, plan: false, resultChars: 40_000, toolWaitSeconds: 240 });

@@ -127,23 +127,27 @@ describe("brief tools", () => {
       const help = async (args: object) => await gemini.callTool({ name: "tool_help", arguments: args }) as CallToolResult;
       const whole = full.find(t => t.name === "dialogue_apply_cuts")!;
       const cuts = textOf(await help({ name: "mcp_scarlet_dialogue_apply_cuts" }));
-      expect(cuts).toBe(`dialogue_apply_cuts\n\n${whole.description}\n\nParameters (JSON schema):\n${JSON.stringify(whole.inputSchema, null, 1)}`);
-      const at = textOf(await help({ name: "timeline_at" }));
+      expect(cuts).toBe(`dialogue_apply_cuts\n\n${whole.description}\n\nParameters (JSON schema):\n${JSON.stringify(whole.inputSchema)}`);
+      const at = textOf(await help({ name: "timeline_at" })), diff = textOf(await help({ name: "mcp_scarlet_timeline_diff" }));
       const unknown = await help({ name: "timeline_delete" });
       expect(unknown.isError).toBe(true);
       expect(textOf(unknown)).toMatch(/^No Scarlet tool is named timeline_delete\. Its tools: .*timeline_propose/);
       expect(textOf(await help({ names: ["timeline_at"] }))).toBe(at);
-      const some = await help({ names: ["timeline_at", "timeline_delete", "scarlet.dialogue_apply_cuts", "timeline_at"] });
+      const some = await help({ names: ["timeline_at", "timeline_delete", "scarlet.timeline_diff", "timeline_at"] });
       expect(some.isError).toBeFalsy();
-      expect(textOf(some)).toBe([textOf(unknown), at, cuts].join("\n\n---\n\n"));
+      expect(textOf(some)).toBe([textOf(unknown), at, diff].join("\n\n---\n\n"));
       const none = await help({ names: ["timeline_delete", "clip_move"] });
       expect(none.isError).toBe(true);
       expect(textOf(none)).toMatch(/^No Scarlet tool is named timeline_delete or clip_move\. Its tools: .*timeline_propose/);
-      // A long list is read in part, with the rest named for another call, not refused.
-      const tools = full.map(t => t.name);
-      const long = textOf(await help({ names: tools.slice(0, 10) }));
-      expect(long.split("\n\n---\n\n")).toHaveLength(9);
-      expect(long.endsWith(`Not read in this call, to ask for next: ${tools[8]}, ${tools[9]}.`)).toBe(true);
+      // A long list stays under Gemini's resultChars budget (9,000) so agy keeps it inline, naming the rest for next.
+      const batch = full.map(t => t.name).slice(0, 10);
+      const long = textOf(await help({ names: batch }));
+      expect(long.length).toBeLessThanOrEqual(9_000);
+      const parts = long.split("\n\n---\n\n");
+      const returnedCount = parts.length - 1;
+      expect(returnedCount).toBeGreaterThanOrEqual(1);
+      expect(returnedCount).toBeLessThan(batch.length);
+      expect(parts.at(-1)).toBe(`Not read in this call, to ask for next: ${batch.slice(returnedCount).join(", ")}.`);
       const unknownFirst = await help({ names: [...Array.from({ length: 8 }, (_, i) => `nothing_${i}`), "timeline_at"] });
       expect(unknownFirst.isError).toBeFalsy();
       expect(textOf(unknownFirst)).toMatch(/Not read in this call, to ask for next: timeline_at\.$/);
