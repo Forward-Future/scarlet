@@ -134,6 +134,41 @@ export function registerGraphics(deps: GraphicsDeps) {
     },
   );
 
+  // The engine reads and downloads it, as it captures a page: the part asked for lands in the task folder.
+  if (deps.caps.shell) tool(
+    "web_video",
+    "A video on the web (YouTube and most video sites), by the address of its page. Without from and to it downloads nothing and says what the video is: its title, channel, length in seconds, license, chapters and description, then its captions as lines of `seconds words`, from captionsFrom on (20,000 characters a call; captionsNext is where to read on). With from and to, in seconds of that video (up to 10 minutes a call), it saves that part in the task artifact directory, cut on those seconds, as an MP4 up to `height` pixels tall (default 1080), with a picture from its middle beside it. Use it for B-roll from a video: look at the part with your own tools, then bring it in with asset_add and the `source` this returns, so the editor sees where it came from. Only public videos: none that needs a sign-in, none still live. The first call on a machine fetches the downloader, about 40 MB.",
+    {
+      url: z.string().describe("The address of the video's page"),
+      from: z.number().min(0).optional().describe("Where the part to save starts, in seconds of the video"),
+      to: z.number().min(0).optional().describe("Where it ends"),
+      height: z.number().int().min(144).max(4320).optional().describe("The tallest picture to save, in pixels; default 1080"),
+      captionsFrom: z.number().min(0).optional().describe("Read the captions from this second on; default 0"),
+      path: z.string().optional().describe("Where to save the part in the task artifact directory; default video-<host>-<time>.mp4"),
+    },
+    async ({ url, from, to, height, captionsFrom, path }) => {
+      type About = { url: string; title: string; channel?: string; duration?: number; uploaded?: string; license?: string; width?: number; height?: number;
+        chapters?: Array<{ start: number; end: number; title: string }>; description?: string };
+      const read = await deps.client.post<{ video: About; captions?: { language: string; automatic: boolean; text: string; next?: number };
+        part?: { id: string; from: number; to: number; duration: number; width?: number; height?: number; size: number; poster?: string } }>(
+        `/projects/${deps.projectId}/web-videos`, { url, from, to, height, captionsFrom });
+      const { video, captions, part } = read;
+      if (!part) {
+        const about = { ...video, ...(captions ? { captions: { language: captions.language, automatic: captions.automatic, ...(captions.next !== undefined && { captionsNext: captions.next }) } }
+          : { captions: "This video has no captions." }) };
+        return { content: [{ type: "text" as const, text: JSON.stringify(about) }, ...(captions?.text ? [{ type: "text" as const, text: captions.text }] : [])] };
+      }
+      const data = await deps.client.request<Buffer>("GET", `/projects/${deps.projectId}/web-videos/${encodeURIComponent(part.id)}`, undefined, {}, bytes => Buffer.from(bytes));
+      let host = "web";
+      try { host = new URL(video.url).hostname.replace(/^www\./, "").replace(/[^a-z0-9.-]/gi, "") || host; } catch { /* the default name */ }
+      const saved = await deps.writeArtifact(path ?? `video-${host}-${Date.now()}.mp4`, data);
+      const poster = part.poster ? await deps.writeArtifact(saved.replace(/\.[^./\\]+$/, "") + ".jpg", Buffer.from(part.poster, "base64")) : undefined;
+      return json({ path: saved, ...(poster && { picture: poster }), from: part.from, to: part.to, duration: part.duration, width: part.width, height: part.height,
+        title: video.title, channel: video.channel, license: video.license,
+        source: { url: video.url, ...(poster && { capture: poster }), clip: { start: part.from, end: part.to } } });
+    },
+  );
+
   tool(
     "style_guide_save",
     `Save the project's style guide, which the editor gives once for the project: from then on every request in this project is given it. It replaces any guide before it. Give it a name (the file's name, or the guide's own title) and the text the editor pasted, or the attachment it is in${deps.caps.files ? ", or a file in the task artifact directory" : ""}, or both.`,

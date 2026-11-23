@@ -139,7 +139,7 @@ export function registerChangeAndAssetTools(deps: ChangeAndAssetToolsDeps) {
 
   tool(
     "asset_add",
-    `Upload an existing file from this task’s artifact directory (for example an animation, graphic or music bed) into the project's media so it can be placed on the timeline with addClip. \`kind\` is video|audio|image|graphic (guessed from the extension when omitted). \`provenance\` records how it was made (prompt/tool) so others can revise it.${caps.shell ? " For B-roll taken from the web (an article, a post, a clip), \`source\` records the page's address, when it was captured, the page as captured (a PNG, JPEG or WebP in the artifact directory) and the part of that capture in the video (fractions of its width and height); the editor sees it on the card of the edit that lays the file over the picture." : ""} Returns the new mediaId and probed duration. Agents never upload finished videos; Scarlet renders the edit.`,
+    `Upload an existing file from this task’s artifact directory (for example an animation, graphic or music bed) into the project's media so it can be placed on the timeline with addClip. \`kind\` is video|audio|image|graphic (guessed from the extension when omitted). \`provenance\` records how it was made (prompt/tool) so others can revise it.${caps.shell ? " For B-roll taken from the web (an article, a post, a clip), \`source\` records the page's address, when it was captured, the page as captured (a PNG, JPEG or WebP in the artifact directory) and the part of that capture in the video (fractions of its width and height), or for a clip of a video its seconds of that video; the editor sees it on the card of the edit that lays the file over the picture." : ""} Returns the new mediaId and probed duration. Agents never upload finished videos; Scarlet renders the edit.`,
     {
       path: z.string().describe("File inside the task artifact directory (relative or absolute path)"),
       kind: z.enum(["video", "audio", "image", "graphic"]).optional(),
@@ -151,10 +151,11 @@ export function registerChangeAndAssetTools(deps: ChangeAndAssetToolsDeps) {
         capture: z.string().optional().describe("The page as captured, a picture in the task artifact directory"),
         region: z.object({ left: z.number(), top: z.number(), right: z.number(), bottom: z.number() }).optional()
           .describe("The part of the capture in the video, as fractions of its width and height"),
+        clip: z.object({ start: z.number().min(0), end: z.number().min(0) }).optional().describe("For a clip of a video on the web: the part of that video it is, in its seconds"),
       }).optional() } : {}),
     },
     async ({ path, kind, provenance, ...rest }) => {
-      const source = (rest as { source?: { url: string; capturedAt?: string; capture?: string; region?: { left: number; top: number; right: number; bottom: number } } }).source;
+      const source = (rest as { source?: { url: string; capturedAt?: string; capture?: string; region?: { left: number; top: number; right: number; bottom: number }; clip?: { start: number; end: number } } }).source;
       const data = await readArtifact(await artifactDir(), path);
       const name = basename(path);
       const guessed = kind ?? guessKind(name);

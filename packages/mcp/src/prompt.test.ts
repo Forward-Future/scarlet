@@ -277,7 +277,7 @@ describe("an editing prompt", () => {
   it("tells a request what its harness's own tools are for, and that B-roll and graphics are the editor's to ask for", () => {
     const prompt = buildSystemPrompt({ ...base, workDir: "/work/task_1/artifacts", capabilities: { images: true, audio: false, files: true, shell: true, web: true, plan: false } });
     expect(prompt).toContain("Your task artifact directory is: /work/task_1/artifacts\nBeside Scarlet's tools you have your harness's own: a shell, sandboxed to this task's folder, with ffmpeg and ffprobe on its PATH where this machine has them, file tools, and web search.");
-    expect(prompt).toContain("`web_capture` takes the picture of a page on the web, `graphic_render` draws a page you write, and `asset_add` brings a finished file into the project, with `source` for anything taken from the web.");
+    expect(prompt).toContain("`web_capture` takes the picture of a page on the web, `web_video` reads a video on the web and saves a part of it, `graphic_render` draws a page you write, and `asset_add` brings a finished file into the project, with `source` for anything taken from the web.");
     expect(prompt).toContain("B-roll and graphics are made when the editor asked for them, in their words or in a skill of theirs, never on your own initiative.");
     // A run launched with Scarlet's tools only is told nothing of a shell.
     expect(buildSystemPrompt({ ...base, workDir: "/work/task_1/artifacts", capabilities: { images: true, audio: false, files: false, plan: false } })).not.toContain("shell");
