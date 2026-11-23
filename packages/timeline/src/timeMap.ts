@@ -1,5 +1,6 @@
 /** Source-anchored time mapping between timeline versions. */
-import type { MediaClip, Timeline, TimeRange, Track } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { MediaClip, Timeline, Track } from "./timelineSchema.js";
 import { clipEnd, sourceAt, sourceToTimeline, timelineDuration } from "./time.js";
 import { firstIndex, indexBySource, intervalCandidates } from "./intervals.js";
 import { sameJson } from "./ids.js";

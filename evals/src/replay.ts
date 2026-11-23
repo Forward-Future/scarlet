@@ -15,7 +15,7 @@ import { dialogueGate, dialogueScanPage, planDialogueBatch, resolveCutRange, typ
 import type { GateLine } from "../../packages/mcp/src/dialogue-plan-types.ts";
 import { gapSound, speakingLevel, type GapLevels } from "../../packages/mcp/src/gap-sound.ts";
 import { cutAnchorOn } from "../../packages/shared/src/cutScope.ts";
-import { taskDialogueOperation } from "../../packages/shared/src/threads.ts";
+import { taskDialogueOperation } from "../../packages/shared/src/skillCommands.ts";
 import { frameAligned, type Project, type TranscriptWord } from "../../packages/timeline/src/index.ts";
 import { cli, isMain, main } from "./args.ts";
 import { loadCase, type LoadedCase } from "./case.ts";

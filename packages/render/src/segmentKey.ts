@@ -10,7 +10,7 @@ import { fileInDirectory } from "./assetPath.js";
 import { effectKind } from "./effects.js";
 import { TONE_MAP_REVISION } from "./hdr.js";
 import { fnum } from "./exec.js";
-import { clipPlacement, fillsFrames, holdsFrame, holdsSample, proxyHeightForClip, videoClockStart } from "./graph.js";
+import { clipPlacement, fillsFrames, holdsFrame, holdsSample, proxyHeightForClip, videoClockStart } from "./graphTransform.js";
 import { isMovingAsset, isStillAsset } from "./probe.js";
 import { outputSize, type RenderQuality } from "./render.js";
 import { motionsIn, planTransitions, type TransitionMotion } from "./transitions.js";
@@ -135,7 +135,7 @@ export function segmentKey(
   return plannedSegmentKey(project, transitions.timeline, range, typeof quality === "string" ? { quality } : quality, media, transitions, legacyTransitions);
 }
 
-export function plannedSegmentKey(project: Project, timeline: Timeline, range: TimeRange, o: SegmentKeyOptions,
+function plannedSegmentKey(project: Project, timeline: Timeline, range: TimeRange, o: SegmentKeyOptions,
   media: Map<string, MediaAsset>, transitions: TransitionPlan, legacyTransitions = false): string {
   const tracks = timeline.tracks
     .map((t) => {

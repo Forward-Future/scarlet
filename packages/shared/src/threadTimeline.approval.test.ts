@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { Change } from "@scarlet/timeline";
-import { changeEdits } from "./threadTimeline.js";
+import { changeEdits } from "./threadEdits.js";
 
 const partial = Change.parse({ id: "batch", projectId: "project", fromVersion: "base", toVersion: "proposal",
   appliedOnto: "base", appliedVersion: "applied", state: "approved", description: "Tighten the interview",

@@ -1,7 +1,9 @@
 import { detachedAudioClip, makeTrack } from "./builders.js";
 import type { TimelineOp } from "./ops.js";
-import type { MediaAsset, MediaClip, Timeline, Track } from "./schema.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { Timeline, Track } from "./timelineSchema.js";
 import { clipEnd, sourceAt, uniqueId } from "./time.js";
+import { plays, type Placed } from "./audible.js";
 
 /**
  * Put a recording's picture in time with its own sound. Its sound stays where it is, so every cut placed by ear stays
@@ -28,10 +30,6 @@ export interface PictureSyncReport {
   /** Clips shortened because the recording's picture ends (or starts) before the moved clip would: seconds of picture lost and where. */
   shortened: Array<{ clipId: string; seconds: number; at: number }>;
 }
-
-type Placed = { clip: MediaClip; track: Track };
-
-const plays = (track: Track, clip: MediaClip) => !track.muted && track.kind !== "caption" && clip.enabled && clip.volume > 0;
 
 export function pictureSyncOps(timeline: Timeline, media: readonly MediaAsset[], mediaId: string, soundLeads: number): { ops: TimelineOp[]; report: PictureSyncReport } {
   const asset = media.find(m => m.id === mediaId);

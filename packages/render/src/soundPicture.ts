@@ -6,8 +6,9 @@
  * at before it is made.
  */
 import type { TimeRange } from "@scarlet/timeline";
-import { FFMPEG_QUIET_ARGS, LOCAL_MEDIA_INPUT, ffSeconds, requireDrawtext, resolveFfmpeg, runCapture } from "./exec.js";
+import { FFMPEG_QUIET_ARGS, requireDrawtext, resolveFfmpeg, runCapture } from "./exec.js";
 import { drawtextFontArg } from "./fonts.js";
+import { rangeInput } from "./mediaInput.js";
 
 export interface SoundPictureWord { text: string; start: number; end: number }
 export interface SoundPictureOptions {
@@ -129,8 +130,8 @@ export function soundPictureGraph(opts: SoundPictureOptions): { graph: string; l
 export async function soundPicture(file: string, opts: SoundPictureOptions): Promise<{ jpeg: Buffer; layout: SoundPictureLayout }> {
   await requireDrawtext("write the times and words on a sound picture");
   const { graph, layout } = soundPictureGraph(opts);
-  const { stdout } = await runCapture(resolveFfmpeg(), [...FFMPEG_QUIET_ARGS, "-ss", ffSeconds(opts.range.start),
-    "-t", String(opts.range.end - opts.range.start), ...LOCAL_MEDIA_INPUT, "-i", file, "-filter_complex", graph, "-map", "[out]",
+  const { stdout } = await runCapture(resolveFfmpeg(), [...FFMPEG_QUIET_ARGS, ...rangeInput(file, opts.range),
+    "-filter_complex", graph, "-map", "[out]",
     "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "3", "-f", "image2pipe", "-"], { signal: opts.signal, maxStdout: 4 * 1024 * 1024 });
   return { jpeg: stdout, layout };
 }

@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { applyOps } from "./ops.js";
 import { emptyTimeline, makeMediaClip } from "./builders.js";
 import { clipEnd, timelineDuration } from "./time.js";
-import type { Clip, MediaAsset, Timeline } from "./schema.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { Clip, Timeline } from "./timelineSchema.js";
 import { audioCrossfadeOps, crossfadeJoins, replayJoinFades, rippleJoins } from "./joinCrossfade.js";
 
 const EPS = 1e-6;

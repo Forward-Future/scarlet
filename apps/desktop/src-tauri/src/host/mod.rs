@@ -136,12 +136,12 @@ impl RunningTask {
     }
 }
 
-/// A short check beside a request that saves nothing to the video (`isSideCheck` in packages/shared/src/api.ts).
+/// A short check beside a request that saves nothing to the video (`isSideCheck` in packages/shared/src/tasks.ts).
 fn is_side_check(kind: &str) -> bool {
     matches!(kind, "learning_check" | "area_check" | "listen_check")
 }
 
-/// Side checks run at once per runtime beside `max_parallel` requests (`sideCheckSlots` in packages/shared/src/api.ts).
+/// Side checks run at once per runtime beside `max_parallel` requests (`sideCheckSlots` in packages/shared/src/tasks.ts).
 fn side_check_slots(max_parallel: usize) -> usize {
     (2 * max_parallel.max(1)).min(12)
 }
