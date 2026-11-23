@@ -69,6 +69,7 @@ export function pointOf(context: AgentContext | "whole" | null | undefined) {
 const AGENT_KEY = "scarlet.agent";
 const RUN_TOKENS_KEY = "scarlet.runTokens";
 const FIRST_EDIT_HINT_KEY = "scarlet.firstEditHint";
+const SIGN_IN_LATER_KEY = "scarlet.signInLater";
 
 function loadFirstEditHint() {
   try { return localStorage.getItem(FIRST_EDIT_HINT_KEY); } catch { return null; }
@@ -135,6 +136,9 @@ interface UiState {
 
   /** Unset until the first project is created, then its ID until the editor uses the box. */
   firstEditHint: string | null;
+  /** The editor chose to look around before signing in, so the first screen is the library, not sign-in. */
+  signInLater: boolean;
+  setSignInLater(later: boolean): void;
   offerFirstEditHint(projectId: string): void;
   dismissFirstEditHint(): void;
 
@@ -237,6 +241,11 @@ export const useUiStore = create<UiState>((set, get) => ({
   },
   dismissExportStar: () => set({ exportStarNotice: "seen" }),
 
+  signInLater: (() => { try { return localStorage.getItem(SIGN_IN_LATER_KEY) === "1"; } catch { return false; } })(),
+  setSignInLater: later => {
+    try { if (later) localStorage.setItem(SIGN_IN_LATER_KEY, "1"); else localStorage.removeItem(SIGN_IN_LATER_KEY); } catch { /* Keep it for this session. */ }
+    set({ signInLater: later });
+  },
   firstEditHint: loadFirstEditHint(),
   offerFirstEditHint: projectId => {
     if (get().firstEditHint === null) set(saveFirstEditHint(projectId));
