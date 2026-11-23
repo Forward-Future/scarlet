@@ -82,7 +82,7 @@ function releaseWhenReady(ctx: Ctx, change: Change, render: Render, owner: strin
 }
 
 /** Queue the actual edited media the first call will open, including the footage on both sides of the join. */
-export function prepareFirstDecision(ctx: Ctx, change: Change, review: CutReview, index: number): Change["firstDecisionPreview"] {
+function prepareFirstDecision(ctx: Ctx, change: Change, review: CutReview, index: number): Change["firstDecisionPreview"] {
   const owner = newId("prep");
   const render = queueDecisionPlayback(ctx, change, review, index, owner);
   if (!render) return;
@@ -94,7 +94,7 @@ export function prepareFirstDecision(ctx: Ctx, change: Change, review: CutReview
  * The waiting call the editor reaches after deciding `decided`, as Keep moves on For you: the next by number, else
  * the first by number. A call they have decided, or sent back to Scarlet, isn't waiting.
  */
-export function nextWaitingCall(change: Change, decided?: number, sentBack: ReadonlySet<number> = new Set()): number | undefined {
+function nextWaitingCall(change: Change, decided?: number, sentBack: ReadonlySet<number> = new Set()): number | undefined {
   const called = new Set(change.cutChoices?.map(c => c.index));
   const waiting = (change.cutAssessments ?? []).filter(a => isPublishedCall(a) && a.index !== decided && !called.has(a.index) && !sentBack.has(a.index))
     .sort((a, b) => (a.askOrder ?? Infinity) - (b.askOrder ?? Infinity) || a.index - b.index);
@@ -233,7 +233,7 @@ export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number
 }
 
 /** The editor's call on each staged cut, or what Approve does without one: Scarlet's verdict once it has assessed the pass, else cut. */
-export function cutDecision(change: Change, index: number): CutChoice["choice"] {
+function cutDecision(change: Change, index: number): CutChoice["choice"] {
   const chosen = change.cutChoices?.find(c => c.index === index)?.choice;
   if (chosen) return chosen;
   if (!change.cutAssessments?.length) return "cut";

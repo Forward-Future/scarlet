@@ -8,6 +8,7 @@ import type { Ctx } from "../context.js";
 import { acousticWordReader } from "../transcribe/acousticWords.js";
 import { EmissionFile } from "../transcribe/emissions.js";
 import { readsEnglishSpeech, measureRecordingWords } from "../transcribe/wordAlign.js";
+import { round3 } from "../util.js";
 import { transcriptLanguage } from "./transcriptReader.js";
 import { dialogueDetector, sharedDialogueDetector } from "./dialogueDetections.js";
 import { emissionStore, recordingWav, type RecordingAudio } from "./recordingAudio.js";
@@ -17,8 +18,7 @@ interface Placement { track: string; clip: MediaClip; source: TimeRange }
 interface Heard extends Word { mediaId: string; source: number; sourceEnd: number; clip: string; track: string; clipStart: number; clipEnd: number;
   /** The word as written, for showing. `text` is its normalized token. */
   said: string }
-const round = (n: number) => Math.round(n * 1000) / 1000;
-const span = (words: Heard[]) => ({ start: round(words[0]!.start), end: round(words.at(-1)!.end) });
+const span = (words: Heard[]) => ({ start: round3(words[0]!.start), end: round3(words.at(-1)!.end) });
 
 /** One side of a join as heard: a played stretch of a recording, its words read from the sound and its transcript words. */
 export interface JoinSide { mediaId: string; clipId: string; trackId: string; timelineStart: number; timelineEnd: number; source: TimeRange; heard: Word[]; said: Word[];
@@ -39,7 +39,7 @@ const BEYOND = .04;
  */
 export function hearJoin(out: JoinSide, inn: JoinSide): JoinHearing[] {
   const found: JoinHearing[] = [];
-  const at = Math.round(inn.timelineStart * 1000) / 1000;
+  const at = round3(inn.timelineStart);
   const inside = (side: JoinSide, w: Word) => (w.start + w.end) / 2 >= side.source.start && (w.start + w.end) / 2 < side.source.end;
   const check = (side: JoinSide, which: "out" | "in") => {
     const said = side.said.filter(w => inside(side, w) && letters(w.text)).sort((a, b) => a.start - b.start);
@@ -56,12 +56,12 @@ export function hearJoin(out: JoinSide, inn: JoinSide): JoinHearing[] {
         // The kept word beside it plays whole. It was reported as `expected`, and a pass read a sigh before “This” as
         // “This” cut short: it moved the edge out to take in the whole sigh, where the edge goes past it (2026-11-13).
         found.push({ at, mediaId: side.mediaId, side: which, issue: "fragment", heard: edgeWord.text,
-          ...(word && { keptWord: word.text, keptWordAt: Math.round((which === "out" ? word.end : word.start) * 1000) / 1000 }), source: Math.round(edgeWord.start * 1000) / 1000 });
+          ...(word && { keptWord: word.text, keptWordAt: round3(which === "out" ? word.end : word.start) }), source: round3(edgeWord.start) });
       return;
     }
     // The kept word itself, sounding at the edge and heard short: the cut goes through it.
     if (reaches && letters(edgeWord.text) <= .7 * letters(word!.text) && letters(word!.text) - letters(edgeWord.text) >= 2)
-      found.push({ at, mediaId: side.mediaId, side: which, issue: "clipped", heard: edgeWord.text, expected: word!.text, source: Math.round(edgeWord.start * 1000) / 1000 });
+      found.push({ at, mediaId: side.mediaId, side: which, issue: "clipped", heard: edgeWord.text, expected: word!.text, source: round3(edgeWord.start) });
   };
   check(out, "out");
   check(inn, "in");
@@ -136,12 +136,12 @@ function repeatedPhrases(heard: Heard[], acrossTracks = false) {
       if (group.some((w, k, all) => k && (w.start < all[k - 1]!.end - .001 || w.start - all[k - 1]!.end > 3))) continue;
       const before = heard.slice(Math.max(0, i - 5), i);
       const after = heard.slice(i + 2 * n, i + 2 * n + 7);
-      const anchor = [...a, ...b].map(w => [w.track, w.mediaId, round(w.source), w.text]);
+      const anchor = [...a, ...b].map(w => [w.track, w.mediaId, round3(w.source), w.text]);
       const id = createHash("sha256").update(JSON.stringify(anchor)).digest("hex").slice(0, 20);
       found.push({ id, phrase: a.map(w => w.text).join(" "), first, second,
         occurrences: { first: occurrence(a, heard[i - 1], b[0]), second: occurrence(b, a.at(-1), heard[i + 2 * n]) },
         before: before.map(w => w.text).join(" "), after: after.map(w => w.text).join(" "),
-        precedingEnd: before.length ? round(before.at(-1)!.end) : undefined, followingStart: after.length ? round(after[0]!.start) : undefined,
+        precedingEnd: before.length ? round3(before.at(-1)!.end) : undefined, followingStart: after.length ? round3(after[0]!.start) : undefined,
         atJoin: a.at(-1)!.clip !== b[0]!.clip });
       i += n - 1;
       break;
@@ -167,13 +167,13 @@ function restarts(spoken: Heard[]) {
     const again = r.again ?? r.length;
     const attempt = spoken.slice(r.at, r.next), a = spoken.slice(r.at, r.at + r.length), b = spoken.slice(r.next, r.next + again);
     const before = spoken.slice(Math.max(0, r.at - 5), r.at), after = spoken.slice(r.next + again, r.next + again + 7);
-    const anchor = [...a, ...b].map(w => [w.track, w.mediaId, round(w.source), w.text]);
+    const anchor = [...a, ...b].map(w => [w.track, w.mediaId, round3(w.source), w.text]);
     const id = createHash("sha256").update(JSON.stringify(["restart", anchor])).digest("hex").slice(0, 20);
     const between = attempt.slice(r.length).map(w => w.said).join(" ");
     found.push({ id, phrase: a.map(w => w.said).join(" "), first: span(attempt), second: span(b),
       occurrences: { first: occurrence(attempt, spoken[r.at - 1], b[0]), second: occurrence(b, attempt.at(-1), spoken[r.next + again]) },
       before: before.map(w => w.said).join(" "), after: after.map(w => w.said).join(" "),
-      precedingEnd: before.length ? round(before.at(-1)!.end) : undefined, followingStart: after.length ? round(after[0]!.start) : undefined,
+      precedingEnd: before.length ? round3(before.at(-1)!.end) : undefined, followingStart: after.length ? round3(after[0]!.start) : undefined,
       atJoin: attempt.at(-1)!.clip !== b[0]!.clip, restart: true as const, ...(between && { between }) });
   }
   return found;
@@ -185,9 +185,9 @@ function silencesLeft(spoken: Heard[], from: number): SilenceLeft[] {
   let last: Heard | undefined, lastEnd = -Infinity;
   for (const w of spoken) {
     if (last && w.start - lastEnd >= from - 1e-6) {
-      const id = createHash("sha256").update(JSON.stringify(["silence", last.mediaId, round(last.source), w.mediaId, round(w.source)])).digest("hex").slice(0, 20);
-      found.push({ id, start: round(lastEnd), end: round(w.start), seconds: round(w.start - lastEnd), mediaId: last.mediaId,
-        source: round(Math.min(last.sourceEnd, last.source + LONGEST_WORD)), after: last.said, before: w.said, atJoin: last.clip !== w.clip });
+      const id = createHash("sha256").update(JSON.stringify(["silence", last.mediaId, round3(last.source), w.mediaId, round3(w.source)])).digest("hex").slice(0, 20);
+      found.push({ id, start: round3(lastEnd), end: round3(w.start), seconds: round3(w.start - lastEnd), mediaId: last.mediaId,
+        source: round3(Math.min(last.sourceEnd, last.source + LONGEST_WORD)), after: last.said, before: w.said, atJoin: last.clip !== w.clip });
     }
     const end = Math.min(w.end, w.start + LONGEST_WORD);
     if (end > lastEnd) { last = w; lastEnd = end; }
@@ -221,11 +221,11 @@ export function piecesLeft(current: readonly Placement[], scope: ReadonlySet<str
       const before = runs[i - 1], after = runs[i + 1];
       const from = run[0]!.timelineIn, to = clipEnd(run.at(-1)!);
       if (to - from >= under - 1e-6 || !run.some(c => scope.has(c.id)) || !cutBetween(before, run) || !cutBetween(run, after)) return;
-      const mediaId = run[0]!.mediaId, source = { start: round(run[0]!.sourceIn), end: round(run.at(-1)!.sourceOut) };
+      const mediaId = run[0]!.mediaId, source = { start: round3(run[0]!.sourceIn), end: round3(run.at(-1)!.sourceOut) };
       const id = createHash("sha256").update(JSON.stringify(["piece", mediaId, source.start, source.end])).digest("hex").slice(0, 20);
-      found.push({ id, from: round(from), to: round(to), seconds: round(to - from), mediaId, source, plays: said(run).join(" "),
+      found.push({ id, from: round3(from), to: round3(to), seconds: round3(to - from), mediaId, source, plays: said(run).join(" "),
         before: said(before!).slice(-6).join(" "), after: said(after!).slice(0, 6).join(" "),
-        cutBefore: round(run[0]!.sourceIn - before!.at(-1)!.sourceOut), cutAfter: round(after![0]!.sourceIn - run.at(-1)!.sourceOut) });
+        cutBefore: round3(run[0]!.sourceIn - before!.at(-1)!.sourceOut), cutAfter: round3(after![0]!.sourceIn - run.at(-1)!.sourceOut) });
     });
   }
   return found.sort((a, b) => a.from - b.from);
@@ -276,9 +276,9 @@ function dividedSentences(ctx: Ctx, project: Project, parts: Placement[], placed
       const words = wordsOf(a.clip.mediaId);
       const evidence = words && joinFragment(words, a.source.end, b.source.start, a.source.start, b.source.end);
       if (!evidence) continue;
-      const mediaId = a.clip.mediaId, out = round(a.source.end), inn = round(b.source.start);
+      const mediaId = a.clip.mediaId, out = round3(a.source.end), inn = round3(b.source.start);
       found.push({ id: createHash("sha256").update(JSON.stringify(["fragment", a.track, mediaId, out, inn])).digest("hex").slice(0, 20),
-        at: round(aEnd > bStart ? (aEnd + bStart) / 2 : bStart), mediaId, out, in: inn, ...evidence });
+        at: round3(aEnd > bStart ? (aEnd + bStart) / 2 : bStart), mediaId, out, in: inn, ...evidence });
     }
   }
   return found.sort((a, b) => a.at - b.at);
@@ -452,7 +452,7 @@ export async function auditDialogueAudio(ctx: Ctx, project: Project, tl: Timelin
   const unheard = new Map<string, { mediaId: string; reason: string; at: Set<number> }>();
   for (const [a, b] of pairs) {
     // Where timeline_join_audit finds the join: a crossfade at the middle of its overlap.
-    const at = round(a.timelineEnd > b.timelineStart ? (a.timelineEnd + b.timelineStart) / 2 : b.timelineStart);
+    const at = round3(a.timelineEnd > b.timelineStart ? (a.timelineEnd + b.timelineStart) / 2 : b.timelineStart);
     for (const s of [a, b]) if (s.unheard) {
       let entry = unheard.get(s.mediaId);
       if (!entry) unheard.set(s.mediaId, entry = { mediaId: s.mediaId, reason: s.unheard, at: new Set() });
