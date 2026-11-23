@@ -25,13 +25,16 @@ describe("listMoments", () => {
   it("keeps apart edits that only touch, and an edit that runs much longer than another in it", () => {
     expect(listMoments([edit(0, 10, 14), edit(1, 14, 18)]).length).toBe(2);
     // A music bed under the whole video doesn't take every edit in it.
-    expect(listMoments([edit(0, 0, 600), cut(1, 30), edit(2, 31, 33)]).map(m => m.members.length)).toEqual([1, 2]);
+    expect(listMoments([edit(0, 0, 600), cut(1, 30), edit(2, 30, 33)]).map(m => m.members.length)).toEqual([1, 2]);
   });
 
-  it("doesn't chain a run of close cuts into one long moment", () => {
-    const moments = listMoments([0, 2, 4, 6, 8, 10, 12].map((at, spot) => cut(spot, 30 + at)));
-    expect(moments.length).toBeGreaterThan(2);
-    expect(Math.max(...moments.map(m => m.end - m.start))).toBeLessThanOrEqual(4);
+  it("keeps edits in different places apart, however close", () => {
+    // A run of cuts a couple of seconds apart is a row each.
+    expect(listMoments([0, 2, 4, 6, 8, 10, 12].map((at, spot) => cut(spot, 30 + at))).length).toBe(7);
+    // Two cuts a frame apart are the same join; half a second apart they aren't.
+    expect(spots(listMoments([cut(0, 30), cut(1, 30.02), cut(2, 30.5)]))).toEqual([[0, 1], [2]]);
+    // A zoom that starts a second after a cut's join, and two edits side by side, are somewhere else.
+    expect(spots(listMoments([cut(0, 30), edit(1, 31, 34), edit(2, 34.5, 37)]))).toEqual([[0], [1], [2]]);
   });
 
   it("never folds an edit that asks for a look, or a spot marked for the editor, into a moment", () => {
