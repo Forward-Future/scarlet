@@ -9,6 +9,7 @@ import { accessToken } from "../auth.js";
 import { BUNDLED_SKILLS } from "../bundledSkills.js";
 import { Db, migrate } from "../db.js";
 import { migrateQuickActions } from "./migrateQuickActions.js";
+import { exampleSkill } from "./skillSeed.js";
 import { assistantSkills, createSkill, deleteSkill, retireMergedSkills, reviseSkillContent, seedSkillList, skillHistory, updateSkill, versionChange } from "./skills.js";
 import { createTask } from "./tasks.js";
 
@@ -205,6 +206,18 @@ describe("the skills Scarlet comes with", () => {
     } finally {
       await fresh.ctx.close();
     }
+  });
+
+  it("installs an example switched off, and leaves one already installed as it is", () => {
+    const example = (n: number) => `---\nname: someones-style\ndescription: One editor's style.\ncategory: Examples\n---\n\nRelease ${n}.\n`;
+    const style = () => app.ctx.repos.skills.select("name = ?", ["someones-style"])[0]!;
+    expect(seedSkillList(app.ctx, [{ folder: "someones-style", content: example(1) }])).toBe(1);
+    expect(style().enabled).toBe(false);
+    // Switched on by the editor, a later release brings its text and leaves it on.
+    app.ctx.repos.skills.put({ ...style(), enabled: true });
+    expect(seedSkillList(app.ctx, [{ folder: "someones-style", content: example(2) }])).toBe(1);
+    expect(style()).toMatchObject({ enabled: true, content: example(2) });
+    expect(BUNDLED_SKILLS.filter(s => exampleSkill(s.content)).map(s => s.folder)).toEqual(["matt-talking-head"]);
   });
 
   it("gives a copy the editor hasn't edited the text a later release ships", () => {
