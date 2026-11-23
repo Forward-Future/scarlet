@@ -1224,23 +1224,23 @@ it("keeps the engine hearing from a request it runs on its own, through a long t
   srv.taskState = "done";
   const beats = () => srv.server.requests.filter((r) => r.path === "/hosts/host_1/heartbeat").length;
   // The run holds as a long tool call would, until the engine has heard from the host a few times.
-  const { host } = makeHost(srv, async () => {
+  const { host, client } = makeHost(srv, async () => {
     await vi.waitFor(() => expect(beats()).toBeGreaterThanOrEqual(3), { timeout: 2_000, interval: 10 });
     return { ok: true, summary: "Done" };
   }, undefined, { heartbeatMs: 20 });
+  let sent = 0;
+  let answered = 0;
+  const sendHeartbeat = client.heartbeat.bind(client);
+  client.heartbeat = (...args) => {
+    sent++;
+    return sendHeartbeat(...args).finally(() => { answered++; });
+  };
   const ended = await host.runOne("prj_test", { kind: "edit", agent: "claude", instruction: task.instruction });
   expect(ended.state).toBe("done");
   expect(srv.completes).toEqual([expect.objectContaining({ state: "done" })]);
-  // A heartbeat already sent when runOne returns, plus the one tick it held back, can still land after it ends.
-  const atEnd = beats();
-  let after = atEnd;
-  for (;;) {
-    await delay(100);
-    const now = beats();
-    if (now === after || now - atEnd > 2) {
-      expect(now).toBe(after);
-      break;
-    }
-    after = now;
-  }
+  // A heartbeat already on its way when the run ends still lands, with the tick it held back.
+  await vi.waitFor(() => expect(answered).toBe(sent), { timeout: 2_000, interval: 10 });
+  const after = sent;
+  await delay(100);
+  expect(sent).toBe(after);
 });
