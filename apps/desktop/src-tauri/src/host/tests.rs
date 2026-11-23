@@ -3,8 +3,10 @@ use std::path::Path;
 use super::catalog::describe_agents;
 use super::task_runner::{drain_events, log_completion, outcome, stalled_reason, timed_out_reason, Outcome};
 use super::types::{CompleteTaskRequest, RunResult, RunnerEvent};
-use super::workspace::real_path;
+use super::workspace::{claude_config_dir, claude_project_dir, real_path, remove_claude_sessions, remove_control_files};
 use super::*;
+use super::manager::{remember_host_id, run_limits, DEFAULT_STALL_MINUTES};
+use crate::config::AppConfig;
 use crate::util::now_iso;
 
 type EmittedEvents = Arc<StdMutex<Vec<(String, Value)>>>;

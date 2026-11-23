@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::detect;
-use super::is_quota_eligible;
+use super::agents::is_quota_eligible;
 use super::spawn;
 use super::types::{AgentAvailability, McpSpec, SubscriptionQuota};
 use crate::engine::EngineLaunch;
