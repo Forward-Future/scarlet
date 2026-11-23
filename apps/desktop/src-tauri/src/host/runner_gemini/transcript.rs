@@ -3,25 +3,29 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use super::super::usage::{add_usage, gemini_transcript_step_usage, AgentUsage};
 use crate::util::{env_get, home_dir};
 
-/// Path to `agy`'s per-session `transcript.jsonl`, where completed planner steps are written mid-turn.
-pub fn agy_transcript_path(env: &HashMap<String, String>, session_id: &str) -> Option<PathBuf> {
+/// Path to `agy`'s per-session `transcript.jsonl`, where completed planner steps are written mid-turn: in the run's own
+/// Gemini folder (`--gemini-dir`), or the user's `~/.gemini` when the run has none.
+pub fn agy_transcript_path(env: &HashMap<String, String>, gemini_dir: Option<&Path>, session_id: &str) -> Option<PathBuf> {
     if session_id.is_empty() || session_id.contains(['/', '\\']) || session_id.contains("..") {
         return None;
     }
-    let home = env_get(env, "HOME")
-        .filter(|v| !v.is_empty())
-        .or_else(|| env_get(env, "USERPROFILE").filter(|v| !v.is_empty()))
-        .map(PathBuf::from)
-        .unwrap_or_else(home_dir);
+    let gemini_dir = gemini_dir.map(Path::to_path_buf).unwrap_or_else(|| {
+        env_get(env, "HOME")
+            .filter(|v| !v.is_empty())
+            .or_else(|| env_get(env, "USERPROFILE").filter(|v| !v.is_empty()))
+            .map(PathBuf::from)
+            .unwrap_or_else(home_dir)
+            .join(".gemini")
+    });
     Some(
-        home.join(".gemini")
+        gemini_dir
             .join("antigravity-cli")
             .join("brain")
             .join(session_id)
@@ -42,8 +46,8 @@ pub(super) struct TranscriptUsageTailer {
 }
 
 impl TranscriptUsageTailer {
-    pub(super) fn open(&mut self, env: &HashMap<String, String>, session_id: &str, skip_existing: bool) {
-        self.path = agy_transcript_path(env, session_id);
+    pub(super) fn open(&mut self, env: &HashMap<String, String>, gemini_dir: Option<&Path>, session_id: &str, skip_existing: bool) {
+        self.path = agy_transcript_path(env, gemini_dir, session_id);
         self.offset = if skip_existing {
             self.path
                 .as_ref()
