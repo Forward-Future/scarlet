@@ -4,7 +4,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream, readFileSync, statSync, type WriteStream } from "node:fs";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { humanDuration } from "../logText.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 
@@ -131,15 +133,21 @@ export class LocalWhisperModel {
     const started = Date.now();
     const megabytes = Math.max(1, Math.round(this.model.size / 1e6));
     this.log(`[model] ${this.model.name}: ${cached === "invalid" ? "the saved copy is damaged, " : ""}downloading ${megabytes} MB`);
-    await mkdir(this.directory, { recursive: true });
     const partial = `${file}.${randomUUID()}.part`;
     let saving: WriteStream | undefined;
     try {
+      await mkdir(this.directory, { recursive: true });
+      signal.throwIfAborted();
       const response = await fetch(this.model.url, { signal });
+      if (signal.aborted) {
+        await response.body?.cancel().catch(() => {});
+        signal.throwIfAborted();
+      }
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
       const hash = createHash("sha256");
       const expected = this.model.size;
-      await pipeline(response.body, async function* (chunks) {
+      // Wrap the Web stream so pipeline's abort signal cancels a stalled body instead of hanging on reader.read().
+      await pipeline(Readable.fromWeb(response.body as WebReadableStream<Uint8Array>), async function* (chunks) {
         for await (const chunk of chunks) {
           const bytes = chunk as Uint8Array;
           progress.received += bytes.byteLength;
