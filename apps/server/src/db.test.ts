@@ -358,3 +358,21 @@ it("opens and updates a library from a build that still had Make shorts columns"
     expect(next.projects.summaries().map(p => p.id)).toEqual(expect.arrayContaining([long.id, short.id]));
   } finally { reopened.close(); }
 });
+
+it("updates the left-out reread index when opening a library from an earlier LEFT_OUT_READING", async () => {
+  const dataDir = join(directory, "legacy-left-out-reading");
+  const first = createApp({ dataDir, skillsSeedDir: join(directory, "empty-seed"), env: {}, log: () => {} });
+  // Simulate an existing library whose partial index still checks reading < 2.
+  first.ctx.db.exec(`DROP INDEX changes_left_out_reread;
+    CREATE INDEX changes_left_out_reread ON changes(created_at) WHERE state = 'approved'
+      AND json_array_length(json_extract(json, '$.leftOut.joins')) > 0
+      AND coalesce(json_extract(json, '$.leftOut.reading'), 1) < 2;`);
+  await first.ctx.close();
+
+  const second = createApp({ dataDir, skillsSeedDir: join(directory, "empty-seed"), env: {}, log: () => {} });
+  try {
+    expect(() => recordLeftOutFootage(second.ctx)).not.toThrow();
+    const row = second.ctx.db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'changes_left_out_reread'").get() as { sql: string };
+    expect(row.sql).toContain("< 3");
+  } finally { await second.ctx.close(); }
+});
