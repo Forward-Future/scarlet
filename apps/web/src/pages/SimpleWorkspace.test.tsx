@@ -12382,7 +12382,7 @@ it("starts a new edit about a stretch marked on the ruler, and keeps it while th
   expect(container.querySelector(".timeline-range")).toBeNull();
 });
 
-it("takes a marked stretch off on a click anywhere but the message box and the timeline", async () => {
+it("takes a marked stretch off on a click in the chat, and keeps it through clicks on the player and the timeline", async () => {
   idle();
   await show();
   await markOnRuler(11, 16);
@@ -12391,6 +12391,10 @@ it("takes a marked stretch off on a click anywhere but the message box and the t
     el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, isPrimary: true, pointerId: 7, clientX: x, clientY: 5 }));
   });
   const marked = () => (useUiStore.getState().agentContext as AgentContext | null)?.markedRange;
+  // Playing it, pausing it and pressing the picture keep it, so the editor can listen to it and adjust it.
+  await click(container.querySelector(".monitor-playback > button")!);
+  await click(container.querySelector(".simple-stage")!);
+  expect(marked()).toBeDefined();
   // The message box is where the message about it is written: a click there keeps it.
   await click(document.querySelector(".simple-thread") ?? container);
   expect(marked()).toBeUndefined();
@@ -12404,6 +12408,11 @@ it("takes a marked stretch off on a click anywhere but the message box and the t
   });
   expect(marked()).toBeDefined();
   await click(chat);
+  expect(marked()).toBeUndefined();
+  // Esc takes it off too.
+  await markOnRuler(11, 16);
+  expect(marked()).toBeDefined();
+  await press("Escape");
   expect(marked()).toBeUndefined();
 });
 
@@ -12423,11 +12432,14 @@ it("puts a marked stretch on the message beside the edit that's open, which stay
   expect(stretch.start).toBe(10);
   expect(stretch.end).toBeGreaterThan(10);
   expect([openTitle(), boxTag()]).toEqual(["captions", "Edit at 0:04"]);
-  // Closing the edit leaves the stretch: the message is then a new edit about it.
+  // Esc takes the stretch off first, and leaves the edit open.
+  await press("Escape");
+  expect(useUiStore.getState().agentContext).toMatchObject({ changeId: edit.changeId });
+  expect((useUiStore.getState().agentContext as AgentContext).markedRange).toBeUndefined();
+  expect(openTitle()).toBe("captions");
+  // The next Esc closes the edit.
   await press("Escape");
   expect(openTitle()).toBeUndefined();
-  expect(useUiStore.getState().agentContext).toMatchObject({ time: 10, end: stretch.end, markedRange: stretch });
-  expect((useUiStore.getState().agentContext as AgentContext).changeId).toBeUndefined();
 });
 
 it("keeps one list of every edit open at a time, and puts a request's edits on the timeline when its band is pressed", async () => {
