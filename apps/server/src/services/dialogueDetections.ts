@@ -171,7 +171,7 @@ export function dialogueDetector(ctx: Ctx) {
   }
 
   async function openPage(projectId: string, media: MediaAsset, from: number, to: number, edit?: ScanEdit,
-    policy = ctx.repos.settings.transcriptionPolicy(), keptSide?: { audioStream?: number; cachedOnly?: true }) {
+    policy = ctx.repos.settings.transcriptionPolicy(), keptSide?: { audioStream?: number; cachedOnly?: true }): Promise<Page> {
     const signal = AbortSignal.any([stops(projectId, edit), policy.signal]);
     signal.throwIfAborted();
     if (edit && !activeEdit(edit)) throw conflict("edit_inactive", "This edit is no longer running.");
@@ -192,10 +192,18 @@ export function dialogueDetector(ctx: Ctx) {
       return { analyzed: ready, ready };
     }
     // A cancelled edit cannot authorize another edit's upload. Completed pages remain shared. A page an edit asked for
-    // doesn't join one nobody asked for, which the pause would stop under it.
+    // is kept apart from one nobody asked for, which the pause stops.
     const key = JSON.stringify([...params, keptSide, ...(policy.settings.provider === "openai" ? [policy.revision, edit] : [!!edit])]);
     const existing = pending.get(key);
     if (existing) return existing;
+    // A local page read ahead of any pass is the page the pass would read: the pass waits for that one, asking for the
+    // recording's speakers as its own page would, and reads the page itself only if that one stops, as the pause stops it.
+    const ahead = edit && policy.settings.provider !== "openai" ? pending.get(JSON.stringify([...params, keptSide, false])) : undefined;
+    if (ahead) {
+      void ctx.track(ctx.speakers.turns(ctx, projectId, media, undefined, true).catch(() => {}), projectId);
+      const ready = ahead.ready.catch(() => openPage(projectId, media, from, to, edit, policy, keptSide).then(page => page.ready));
+      return { analyzed: ready, ready, work: ahead.work };
+    }
     const provider = getTranscriptionProvider(ctx, undefined, policy, runtime);
     if (!provider) throw conflict("transcription_unavailable", policy.settings.provider === "openai"
       ? "Set OPENAI_API_KEY to use OpenAI for dialogue scans." : "The local Whisper runtime is unavailable.");

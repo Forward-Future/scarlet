@@ -177,3 +177,78 @@ it("reads a recording's pages before any pass asks, saves them for the pass, and
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+it("reads the page the read-ahead is on once when a pass claims the recording, and reads it for the pass if the pause stops the read-ahead", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-dialogue-ahead-pass-"));
+  const app = createApp({ dataDir: dir, skillsSeedDir: dir, env: {}, log: () => {} });
+  let release = () => {};
+  try {
+    const { ctx } = app;
+    const project = ctx.repos.projects.insert(createProject("A pass meets the read-ahead"));
+    ctx.paths.ensureProject(project.id);
+    const media = ctx.repos.projects.putMedia(project.id, { id: "mic", name: "mic", kind: "audio", path: "mic.wav", duration: 180, hasAudio: true }, "ready");
+    ctx.repos.transcripts.put({ id: "trs_mic", projectId: project.id, mediaId: "mic",
+      segments: [{ id: "s", start: 1, end: 2, text: "hello", words: [{ text: "hello", start: 1, end: 2 }] }] });
+    ctx.repos.projects.putMedia(project.id, { ...media, transcriptId: "trs_mic" }, "ready");
+    await writeFile(join(ctx.paths.media(project.id), "mic.wav"), "mic");
+    const version = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "mic", [{ start: 0, end: 180 }]), { parent: null });
+    ctx.repos.projects.update(project.id, { head: version.version });
+    expect(passRecordings(ctx, project.id).map(m => m.id)).toEqual(["mic"]);
+    ctx.repos.settings.update({ transcription: { provider: "whispercpp", whisperCppPath: process.execPath } });
+    const turns = vi.spyOn(ctx.speakers, "turns").mockResolvedValue([]);
+    vi.spyOn(UhmDetector.prototype, "detect").mockResolvedValue([]);
+    // The read-ahead's first page is held until the test lets it go. Like the real program, it stops when its signal does.
+    const result = { language: "en", segments: [] };
+    let gate = Promise.resolve();
+    const whisper = vi.spyOn(WhisperCppProvider.prototype, "transcribeWav").mockImplementation(async (_wav, _tmp, signal) => {
+      if (whisper.mock.calls.length === 1) await new Promise<void>((resolve, reject) => {
+        void gate.then(resolve);
+        signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+      });
+      return result;
+    });
+    const pages = () => ctx.db.prepare("SELECT start, end FROM dialogue_scan_pages ORDER BY start").all();
+    const settle = async () => { while (ctx.pending.size) await Promise.allSettled([...ctx.pending]); };
+    const create = () => createTask(ctx, { projectId: project.id, kind: "edit", agent: "api", instruction: "First cut",
+      state: "running", context: { dialogueOperation: "first-cut" }, createdBy: { type: "scarlet", name: "Scarlet" } });
+    /** The read-ahead is on the recording's first page when a pass is claimed, and the pass's scan reaches that page. */
+    const claimWhileReadingAhead = async () => {
+      gate = new Promise<void>(resolve => { release = resolve; });
+      scanAheadOfPasses(ctx, project.id);
+      await vi.waitFor(() => expect(whisper).toHaveBeenCalledTimes(1));
+      const pass = create();
+      prefetchDialoguePass(ctx, pass);
+      // The pass's scan has reached that page, and asked for the recording's speakers as a pass does.
+      await vi.waitFor(() => expect(turns).toHaveBeenCalledWith(ctx, project.id, expect.objectContaining({ id: "mic" }), undefined, true));
+      return pass;
+    };
+
+    // The pass waits for the page the read-ahead is on instead of reading it again: one reading for each page.
+    const pass = await claimWhileReadingAhead();
+    release();
+    await settle();
+    expect(pages()).toEqual([{ start: 0, end: 60 }, { start: 58, end: 118 }, { start: 116, end: 176 }, { start: 174, end: 180 }]);
+    expect(whisper).toHaveBeenCalledTimes(4);
+    cancelTask(ctx, pass);
+    await settle();
+
+    // The pause stops the read-ahead's page under the pass, and the pass, which the editor asked for, reads it itself.
+    ctx.db.prepare("DELETE FROM dialogue_scan_pages").run();
+    whisper.mockClear();
+    turns.mockClear();
+    const later = await claimWhileReadingAhead();
+    const paused = await app.app.request(`/api/projects/${project.id}`, { method: "PATCH",
+      headers: { Authorization: `Bearer ${accessToken(ctx)}`, "Content-Type": "application/json" }, body: JSON.stringify({ mediaPaused: true }) });
+    expect(paused.ok).toBe(true);
+    await settle();
+    expect(pages()).toHaveLength(4);
+    expect(whisper).toHaveBeenCalledTimes(5);
+    cancelTask(ctx, later);
+    await settle();
+  } finally {
+    release();
+    await app.ctx.close();
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
