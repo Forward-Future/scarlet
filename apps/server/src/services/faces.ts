@@ -183,13 +183,15 @@ function identity(media: MediaAsset) {
 
 /**
  * Find the faces in one window: decode it in one pass, four frames a second at 640 on its longer side, and hand the
- * frames to the detector ten seconds at a time while the rest decode.
+ * frames to the detector ten seconds at a time while the rest decode. The frames come from the original: from a 4K
+ * camera's 720p preview copy the boxes were the same to a hundredth, but how far the eyes look down moved by up to 0.5
+ * and crossed the middle on 14 of 279 frames (2026-11-22).
  */
-async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end }: { start: number; end: number }, signal: AbortSignal): Promise<FaceSample[]> {
+async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end, unasked }: { start: number; end: number; unasked?: boolean }, signal: AbortSignal): Promise<FaceSample[]> {
   const source = media.width && media.height ? { width: media.width, height: media.height } : await probeMedia(file);
   const { width, height } = screenFrameSize(source.width, source.height, FACE_SIDE);
   const [model, mesh, blendshapes] = await Promise.all([modelFor(ctx).get(signal), modelFor(ctx, EYE_MODELS.mesh).get(signal), modelFor(ctx, EYE_MODELS.blendshapes).get(signal)]);
-  const batches = await withFrames(ctx, media, file, "faces", { start, end, fps: FACES_FPS, width, height, signal, batch: BATCH_FRAMES }, () => true, async (frames, times) => {
+  const batches = await withFrames(ctx, media, file, "faces", { start, end, fps: FACES_FPS, width, height, signal, batch: BATCH_FRAMES, background: unasked }, () => true, async (frames, times) => {
     const found = await audioWorker.request<Array<Face[] | null>>({ kind: "faces", frames, width, height, model, eyes: { mesh, blendshapes } }, { signal });
     return times.flatMap((at, i) => found[i] ? [faceSample(at, found[i]!)] : []);
   });

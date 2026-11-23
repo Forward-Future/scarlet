@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { framePriority, pictureDecoder, PictureLane, pictureLane } from "./pictureWork.js";
+import { framePriority, machineBusy, pictureDecoder, PictureLane, pictureLane } from "./pictureWork.js";
 
 function gate() {
   let open!: () => void;
@@ -54,6 +54,29 @@ describe("picture lane", () => {
     expect(framePriority("timeline")).toBe("timeline");
     expect(framePriority("interactive")).toBe(true);
     expect(framePriority(undefined)).toBe(false);
+  });
+
+  it("reads what nobody asked for behind everything that was", async () => {
+    const lane = new PictureLane(1);
+    const started: string[] = [];
+    const add = (name: string, priority: boolean | "timeline" | "background" = false) => {
+      const g = gate();
+      const done = lane.run(async () => { started.push(name); await g.opened; }, { priority });
+      return { release: g.open, done };
+    };
+    const jobs = [add("rest 1", "background"), add("rest 2", "background"), add("agent 1"), add("still", "timeline"), add("agent 2")];
+    await tick();
+    // The window being read keeps its turn: the next one waits for the agent's frames and the timeline's still.
+    expect(started).toEqual(["rest 1"]);
+    const [rest1, rest2, agent1, still, agent2] = jobs;
+    for (const job of [rest1!, still!, agent1!, agent2!, rest2!]) { job.release(); await job.done; await tick(); }
+    expect(started).toEqual(["rest 1", "still", "agent 1", "agent 2", "rest 2"]);
+  });
+
+  it("calls a machine busy once it has twice as much work as cores", () => {
+    expect(machineBusy(0, 18)).toBe(false);
+    expect(machineBusy(30, 18)).toBe(false);
+    expect(machineBusy(100, 18)).toBe(true);
   });
 
   it("drops a cancelled request and frees its slot after a failure", async () => {

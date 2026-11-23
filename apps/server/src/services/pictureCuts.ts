@@ -79,12 +79,12 @@ function identity(media: MediaAsset) {
 }
 
 /** Compare a window's frames one after another, with a few frames' margin either side, and keep its cuts. */
-async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end }: { start: number; end: number }, signal: AbortSignal): Promise<PictureCut[]> {
+async function readWindow(ctx: Ctx, media: VideoMedia, file: string, { start, end, unasked }: { start: number; end: number; unasked?: boolean }, signal: AbortSignal): Promise<PictureCut[]> {
   const fps = Math.min(CUTS_FPS, media.fps ?? CUTS_FPS);
   const margin = (HOLD + 2) / fps;
   const from = Math.max(0, start - margin), to = Math.min(media.duration ?? end, end + margin);
   const greys: Float32Array[] = [], times: number[] = [];
-  await withFrames(ctx, media, file, "picture-cuts", { start: from, end: to, fps, width: CUT_COLS, height: CUT_ROWS, signal }, (at, rgb) => {
+  await withFrames(ctx, media, file, "picture-cuts", { start: from, end: to, fps, width: CUT_COLS, height: CUT_ROWS, signal, fromCopy: true, background: unasked }, (at, rgb) => {
     const grey = new Float32Array(CUT_COLS * CUT_ROWS);
     for (let i = 0; i < grey.length; i++) grey[i] = (rgb[i * 3]! * 3 + rgb[i * 3 + 1]! * 6 + rgb[i * 3 + 2]!) / 10;
     greys.push(grey);

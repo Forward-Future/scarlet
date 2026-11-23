@@ -12,7 +12,8 @@ import { fileInDirectory, screenFrames } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { atomicWriteFile, rememberLast, round3 } from "../util.js";
-import { pictureDecoder, pictureLane } from "./pictureWork.js";
+import { machineBusy, pictureDecoder, pictureLane } from "./pictureWork.js";
+import { previewCopyByTime } from "./previewPictures.js";
 
 export { rememberLast };
 
@@ -25,8 +26,8 @@ export interface PictureReading<W> {
   window: number;
   /** What the kept reading depends on. A reading kept under another identity is read again. */
   identity(media: MediaAsset): string;
-  /** Read one window, `start`–`end` source seconds. */
-  read(ctx: Ctx, media: VideoMedia, file: string, window: { index: number; start: number; end: number }, signal: AbortSignal): Promise<W>;
+  /** Read one window, `start`–`end` source seconds. `unasked` when no request asked for it: it is read behind those that were. */
+  read(ctx: Ctx, media: VideoMedia, file: string, window: { index: number; start: number; end: number; unasked?: boolean }, signal: AbortSignal): Promise<W>;
 }
 
 export interface PictureReadResult<W> {
@@ -123,7 +124,7 @@ export function pictureReader<W>(spec: PictureReading<W>) {
         }
         if (!kept.chunks[index]) {
           try {
-            kept.chunks[index] = await spec.read(ctx, media, file, bounds(media, index), signal);
+            kept.chunks[index] = await spec.read(ctx, media, file, { ...bounds(media, index), unasked: !state.asked.has(index) }, signal);
             state.error = undefined;
             await save(ctx, media, kept);
           } catch (error) {
@@ -203,15 +204,23 @@ export function pictureReader<W>(spec: PictureReading<W>) {
  * files of up to `batch` frames, and hand each file with its frames' source seconds to `use` as soon as it is full, while
  * decoding goes on. Returns what `use` returned for each, in order. A long distance between keyframes makes each
  * separate seek decode up to that much again: 8 s on a 4K camera file.
+ *
+ * With `fromCopy`, the frames come from the recording's verified preview copy when it is at least as tall as they are:
+ * a reading of small frames sees in it what it would in the original, and decodes it far sooner. On a machine with
+ * five times as much work as cores, a minute of a 4K recording read for its edges took 93 s from the original and 5 s
+ * from its 720p copy, and the whole 28-minute recording took 22 minutes inside a pass (2026-11-22). `background` reads
+ * behind everything that was asked for.
  */
 export async function withFrames<T>(ctx: Ctx, media: VideoMedia, file: string, name: string,
-  frames: { start: number; end: number; fps: number; width: number; height: number; signal: AbortSignal; batch?: number },
+  frames: { start: number; end: number; fps: number; width: number; height: number; signal: AbortSignal; batch?: number; fromCopy?: boolean; background?: boolean },
   keep: (at: number, rgb: Buffer) => boolean, use: (path: string, times: number[]) => Promise<T>): Promise<T[]> {
-  // CUDA shrinks each frame on the GPU before it comes back to memory. VideoToolbox hands back every 4K frame whole:
-  // ten seconds of a 4K recording took 2.6 s that way and 0.5 s on the CPU (M-series, 2026-11-13).
-  const gpu = await pictureDecoder(ctx.settings().render.hwaccel);
-  const decoder = gpu === "cuda" ? gpu : undefined;
   const { start, end, fps, width, height, signal, batch = Infinity } = frames;
+  const copy = frames.fromCopy ? await previewCopyByTime(ctx.paths.media(media.projectId), media, height, signal).catch(() => undefined) : undefined;
+  // CUDA shrinks each frame on the GPU before it comes back to memory. VideoToolbox hands back every 4K frame whole:
+  // ten seconds of a 4K recording took 2.6 s that way and 0.5 s on the CPU (M-series, 2026-11-13), so it decodes an
+  // original only while the machine is too busy to give the CPU's decoder its cores.
+  const gpu = await pictureDecoder(ctx.settings().render.hwaccel);
+  const decoder = gpu === "cuda" || (gpu === "videotoolbox" && machineBusy()) ? gpu : undefined;
   await mkdir(ctx.paths.tmp, { recursive: true });
   const handed: Array<Promise<T>> = [];
   // Each file is closed once: after the first close the number belongs to whichever file opens next.
@@ -226,19 +235,37 @@ export async function withFrames<T>(ctx: Ctx, media: VideoMedia, file: string, n
     used.catch(() => {});
     handed.push(used);
   };
+  let delivered = 0;
+  const onFrame = (i: number, rgb: Buffer) => {
+    delivered = i + 1;
+    const at = start + i / fps;
+    if (!keep(at, rgb)) return;
+    if (!open) {
+      const path = join(ctx.paths.tmp, `${name}-${randomUUID()}.rgb`);
+      open = { path, fd: openSync(path, "w"), times: [] };
+    }
+    open.times.push(at);
+    writeSync(open.fd, rgb);
+    if (open.times.length >= batch) close();
+  };
+  const onFallback = (reason: string) => ctx.log(`[${name}] ${media.id}: ${reason}`);
+  // The copy's clock runs `copy.start` seconds behind the source; a frame's second stays the source's. The copy is small
+  // enough for the CPU, and an HDR original's is already tone-mapped.
+  const fromCopy = copy && (() => screenFrames(copy.file, { start: start - copy.start, end: end - copy.start }, { fps, width, height, signal, onFallback }, onFrame));
+  const fromOriginal = () => screenFrames(file, { start, end }, { fps, width, height, decoder, hdr: media.color?.hdr, signal, onFallback }, onFrame);
   try {
-    await pictureLane(ctx).run(() => screenFrames(file, { start, end }, { fps, width, height, decoder, hdr: media.color?.hdr, signal,
-      onFallback: reason => ctx.log(`[${name}] ${media.id}: ${reason}`) }, (i, rgb) => {
-      const at = start + i / fps;
-      if (!keep(at, rgb)) return;
-      if (!open) {
-        const path = join(ctx.paths.tmp, `${name}-${randomUUID()}.rgb`);
-        open = { path, fd: openSync(path, "w"), times: [] };
+    await pictureLane(ctx).run(async () => {
+      if (fromCopy) {
+        try { return await fromCopy(); }
+        catch (error) {
+          // Frames already handed over stay handed over: the original is read only when the copy gave none.
+          signal.throwIfAborted();
+          if (delivered) throw error;
+          onFallback(`its preview copy could not be read (${error instanceof Error ? error.message : String(error)}); read the original.`);
+        }
       }
-      open.times.push(at);
-      writeSync(open.fd, rgb);
-      if (open.times.length >= batch) close();
-    }), { signal });
+      return fromOriginal();
+    }, { signal, priority: frames.background ? "background" : false });
     close();
     return await Promise.all(handed);
   } finally {
