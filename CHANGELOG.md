@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- Ask Scarlet for a list of ideas and where they go, such as B-roll to add, and each one lands as a To do at its place on the timeline, listed in For you, instead of a long list in the chat.
 - Clicking anywhere else in the chat lets go of the purple request, just like pressing Esc.
 - When Scarlet tries to cut in the middle of a word you're still saying, it's now told exactly where the quiet is on either side, so it fixes the cut in one try instead of measuring again.
 - Each request in the chat has a small arrow at its left that collapses it to one line, and expands it again.
