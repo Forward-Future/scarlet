@@ -1081,7 +1081,7 @@ fn mcp_spec_points_at_the_engine_mcp_subcommand() {
     assert!(!spec.args.contains(&"--model".to_string()));
     assert!(!spec.env.contains_key("SCARLET_TASK"));
     // The generated Claude MCP config embeds exactly this spec.
-    let cfg: Value = serde_json::from_str(&runner_claude::mcp_config_json(&spec)).unwrap();
+    let cfg: Value = serde_json::from_str(&runner_claude::command::mcp_config_json(&spec)).unwrap();
     assert_eq!(cfg["mcpServers"]["scarlet"]["command"], json!("node"));
     assert_eq!(cfg["mcpServers"]["scarlet"]["args"][1], json!("mcp"));
     assert_eq!(cfg["mcpServers"]["scarlet"]["env"]["SCARLET_PROJECT"], json!("p"));
