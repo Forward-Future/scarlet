@@ -288,6 +288,9 @@
 .simple-more.needs-you::after { z-index: 1; }
 /* Caching and exporting share the same motion: a thin line under the button's word, inside its padding. */
 .simple-media, .simple-export { position: relative; }
+/* The video has edits, nothing waits, and this version isn't exported: Export is white, as ⋯ is when it needs the
+   editor, but with no dot, since nothing needs them. */
+.simple-export.ready { color: var(--color-fg); }
 .media-hover { display: flex; align-self: stretch; align-items: center; }
 .media-hover-card { display: none; position: absolute; z-index: 30; top: 100%; right: 8px; padding-top: 6px; }
 .media-hover:not([data-dismissed]):is(:hover, :focus-within) .media-hover-card { display: block; }

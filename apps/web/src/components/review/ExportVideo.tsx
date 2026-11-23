@@ -45,7 +45,7 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
   const previous = busy?.file ?? (job?.phase === "failed" && job.context === context ? job.file : undefined);
   const exported = job?.phase === "done" ? job : undefined;
   const exportedCurrentEdit = exported?.context === context;
-  // Advanced export: the folder for finishing the edit in another app. Otherwise the video or its captions.
+  // For Resolve, Final Cut or Premiere: the folder for finishing the edit in another app. Otherwise the video or its captions.
   const [advanced, setAdvanced] = useState(previous?.format === "folder");
   const [plainFormat, setPlainFormat] = useState<"mp4" | "srt" | "vtt">(previous?.format === "srt" || previous?.format === "vtt" ? previous.format : "mp4");
   const format: ExportFile["format"] = advanced ? "folder" : plainFormat;
@@ -115,9 +115,9 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
     void exportFile(current, { format, name, video, ...(captions && exportTrackId ? { trackId: exportTrackId } : {}) });
   };
   const switchTo = !busy && !exportedCurrentEdit && <button type="button" className="btn-quiet mr-auto" onClick={() => setAdvanced(!advanced)}>
-    {advanced ? "Back" : "Advanced export"}
+    {advanced ? "Back" : "For Resolve, Final Cut or Premiere…"}
   </button>;
-  return <Modal open title={advanced ? "Advanced export" : "Export"} width={600} onClose={onClose} footer={running ? <>
+  return <Modal open title={advanced ? "Export for Resolve, Final Cut or Premiere" : "Export"} width={600} onClose={onClose} footer={running ? <>
     {busy.phase === "rendering" && <button type="button" className="btn-quiet" onClick={busy.cancel}>Cancel export</button>}
     <button type="button" className="btn-primary" onClick={onClose}>Continue editing</button>
   </> : <>

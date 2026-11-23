@@ -1986,6 +1986,14 @@ export function SimpleWorkspace() {
   const queueHint = !editingPaused && queued[0] ? waitHint(queued[0]) : undefined;
   const queueWaitsOn = !editingPaused && queued[0] ? waitsOnEditor(queued[0]) : undefined;
   const nextQueuedId = !editingPaused && queued[0] && !queueWaitsOn ? queued[0].id : undefined;
+  // Exporting is the next step once the video has edits and nothing waits: no question, no pass, no flagged edit the
+  // editor hasn't decided, and no request Scarlet is on or has waiting its turn. The header's Export is white until
+  // this version of the video is exported (the editor approved it on 2026-11-23).
+  const flagsWait = threadTimeline.edits.some(waitingEdit)
+    || passEdits.some(e => !!e.check && !passReviewed(e) && !passDeferred(e) && !passRevising(e))
+    || [...backgroundReview.values()].some(review => review.head === head && review.markers.length > 0);
+  const exportReady = hasCut && changes.some(c => c.state === "approved") && !asking && !pass && !front && !editing
+    && !queued.length && !flagsWait;
   const chatActions: ChatActions = nextQueuedId ? { ...actions, nextQueuedId } : actions;
   // The queued request whose words are in the message box to change, and the words as they stand there. Scarlet
   // doesn't start it meanwhile. A message being written waits, and is in the box again once these words are done.
@@ -2155,7 +2163,8 @@ export function SimpleWorkspace() {
         <ChatRail compact={compact} id="simple-chat" className="simple-rail" label="Chat" storageKey="scarlet.simpleChatWidth" initialWidth={simpleRailWidth} minWidth={SIMPLE_RAIL_MIN}>
           <SimpleHeader projectName={current.project.name} importing={importing} importFailed={importFailed}
             threadInput={replyThread ? replyThread.question ? "answer" : "reply" : undefined} menuSays={menuSays} toLearn={toLearn}
-            transcript={transcript} setTranscript={setTranscript} setPanel={setPanel} openLearnings={() => { setLearnFocus(undefined); setPanel("learnings"); }} />
+            transcript={transcript} setTranscript={setTranscript} setPanel={setPanel} openLearnings={() => { setLearnFocus(undefined); setPanel("learnings"); }}
+            exportReady={exportReady} />
           {panel === "learnings" && <LearningsPanel focus={learnFocus} onOpenDecision={openDecision} onClose={() => { setPanel(null); setLearnFocus(undefined); }} />}
           {/* A pause of caching isn't said here: the editor chose it, and the menu's Resume caching row says it. */}
           {(importFailed || menuError) && <div className="simple-banner" role="status">

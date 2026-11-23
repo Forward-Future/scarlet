@@ -6611,6 +6611,56 @@ it("offers Resume from the Media hover card and More while media processing is p
   expect(updateProject).toHaveBeenCalledExactlyOnceWith({ mediaPaused: false }, PRJ);
 });
 
+it("turns the header's Export white, with no mark, once the video has edits and nothing waits, until this version is exported", async () => {
+  appliedEdits();
+  // Nothing of Scarlet's runs or waits its turn, and no pass or question waits on the editor.
+  const settled = data.tasks.filter(t => t.state === "done" || t.state === "failed" || t.state === "cancelled");
+  data = { ...data, tasks: settled };
+  useProjectStore.setState({ current: data });
+  const file = { name: "Interview.mp4", format: "mp4" as const, video: { kind: "full" as const, quality: "delivery" as const } };
+  const context = fullRenderContext(data.project);
+  const exports = (job: ReturnType<typeof useExports.getState>["jobs"][string]) => act(async () => useExports.setState({ jobs: { [PRJ]: job } }));
+  await show();
+  await act(async () => {});
+  const ready = () => exportButton().classList.contains("ready");
+  const says = () => [ready(), exportButton().getAttribute("aria-description"), exportButton().querySelector(".menu-dot")?.getAttribute("aria-label") ?? null];
+  // A flagged edit waits on the editor in For you: Export stays quiet.
+  const turn = turnFor("chg_approved_2");
+  const need = () => turn.querySelector<HTMLElement>(".simple-pass-need");
+  expect(need()?.getAttribute("title")).toBe("1 needs you");
+  expect(says()).toEqual([false, null, null]);
+  // Kept, nothing waits: Export is white, as ⋯ is when it needs the editor, with no dot and no count.
+  await click(need()!);
+  await act(async () => {});
+  expect(openTitle()).toBe("wrap");
+  await press("k");
+  expect(need()?.getAttribute("title")).toBeNull();
+  expect(says()).toEqual([true, "Not exported since your last edit", null]);
+  expect(exportButton().title).toBe("Not exported since your last edit");
+  expect(exportButton().textContent).toBe("Export");
+  expect(exportButton().classList.contains("needs-you")).toBe(false);
+  expect(moreButton().querySelector(".needs-you")).toBeNull();
+  // While it exports, and once this version is exported, Export says so as before and is quiet.
+  await exports({ file, context, version: data.project.head!, phase: "rendering", progress: 0.42, cancel: () => {} });
+  expect(says()).toEqual([false, "Exporting 42%", null]);
+  await exports({ file, context, version: data.project.head!, phase: "choosing", progress: 0, cancel: () => {} });
+  expect(ready()).toBe(false);
+  await exports({ phase: "done", path: "/Users/me/Movies/Interview.mp4", context });
+  expect(says()).toEqual([false, "Exported · Interview.mp4", null]);
+  // A file exported from an earlier version of the video isn't this one's.
+  await exports({ phase: "done", path: "/Users/me/Movies/Interview.mp4", context: "an earlier video" });
+  expect(says()).toEqual([true, "Not exported since your last edit", null]);
+  // One that stopped is marked as before, amber, not white.
+  await exports({ phase: "failed", error: "Disk full", file, context });
+  expect(says()).toEqual([false, "The export didn’t finish", "The export didn’t finish"]);
+  await exports(undefined);
+  expect(ready()).toBe(true);
+  // While Scarlet works on a request the video is still changing: Export is quiet again.
+  const asked = settled.find(t => t.kind !== "transcribe")!;
+  await act(async () => useProjectStore.setState({ current: { ...data, tasks: [...settled, { ...asked, id: "tsk_busy", state: "running" }] } }));
+  expect(says()).toEqual([false, null, null]);
+});
+
 it("says how an export is going on the header's Export button, and marks it for one that stopped until Export has shown why", async () => {
   const file = { name: "Interview.mp4", format: "mp4" as const, video: { kind: "full" as const, quality: "delivery" as const } };
   const context = fullRenderContext(data.project);
@@ -6704,10 +6754,12 @@ it("continues editing during an export and reopens the original range, quality a
   expect(sheet().querySelector<HTMLInputElement>("#export-end")!.value).toBe(end);
   expect(sheet().querySelector('[role="alert"]')?.textContent ?? "").toBe("");
   expect(choose).toHaveBeenCalledTimes(1);
-  expect(request).toHaveBeenCalledTimes(1);
+  // One export was asked for. The player may ask for its own playback render meanwhile, when the test runs slowly.
+  const exportRequests = request.mock.calls.filter(([, body]) => !!body.export);
+  expect(exportRequests).toHaveLength(1);
   await click(buttonIn(sheet(), "Cancel export")!);
   expect(sheet().querySelector("progress")).toBeNull();
-  expect(release).toHaveBeenCalledWith("custom-export", request.mock.calls[0]![1].owner);
+  expect(release).toHaveBeenCalledWith("custom-export", exportRequests[0]![1].owner);
   expect(exportButton().querySelector("svg")).toBeNull();
 });
 
