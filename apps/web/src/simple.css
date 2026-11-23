@@ -73,27 +73,60 @@
 .simple-header .simple-back + h1 { padding-left: 10px; border-left: 1px solid var(--color-line); }
 .simple-header-sub { font-weight: 400; color: var(--color-muted); }
 .simple-banner { display: flex; align-items: center; gap: 10px; padding: 7px 18px; border-bottom: 1px solid var(--color-line); font-size: 12px; color: var(--color-warn); }
-/* The Transcript: a column on the right of the player, the chat's twin, so the chat stays in view while it is open. Its
-   words are set as the chat's are, with a dim line naming the time (and the voice, where there are several). */
+/* The Transcript: a column on the right of the player, the chat's twin, so the chat stays in view while it is open.
+   A fixed monospace time gutter anchors each turn on the left while spoken text flows cleanly in the reading column. */
 .simple-transcript-rail { position: relative; display: flex; flex-direction: column; flex: none; min-height: 0;
   border-left: 1px solid var(--color-line); background: var(--color-panel); }
-.transcript-words { padding: 4px 18px 16px; }
-.transcript-words .reading-turn { max-width: none; padding: 12px 0 0; }
-.transcript-words .reading-turn-head { gap: 6px; margin-bottom: 3px; }
-.transcript-words .reading-speaker { font-size: 12px; font-weight: 500; color: var(--color-muted); }
-.transcript-words .reading-speaker i { display: none; }
-.transcript-words .reading-speaker:has(+ .reading-time)::after { content: "·"; margin-left: 6px; color: var(--color-dim); }
-.transcript-words .reading-time { margin-left: 0; padding: 0; font: 12px var(--font-sans); color: var(--color-dim); }
-.transcript-words .reading-time:hover, .transcript-words .reading-time:focus-visible { background: none; color: var(--color-fg); }
-.transcript-words .reading-passage { font-size: 13px; line-height: 1.6; }
-.transcript-words .reading-turn > p.mt-2 { margin: 16px 0 0; font-size: 12px; color: var(--color-dim); }
-/* A chosen run of words, and what to do with it, on one quiet line under the heading. */
-.transcript-chosen { display: flex; align-items: baseline; gap: 14px; padding: 8px 18px; border-bottom: 1px solid var(--color-line);
-  font-size: 12.5px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
-.transcript-chosen > span { margin-right: auto; color: var(--color-fg); }
+.simple-transcript { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.transcript-words { --transcript-gutter: 42px; padding: 8px 10px 24px; }
+.transcript-words[data-hours] { --transcript-gutter: 54px; }
+.transcript-source-label { display: flex; align-items: center; gap: 8px; margin: 14px 8px 6px; font-size: 11px; font-weight: 500;
+  color: var(--color-dim); letter-spacing: .01em; }
+.transcript-source-label:first-child { margin-top: 4px; }
+.transcript-source-label::after { content: ""; flex: 1; height: 1px; background: rgba(255, 255, 255, .07); }
+.transcript-words .reading-turn { position: relative; display: grid; grid-template-columns: var(--transcript-gutter) minmax(0, 1fr);
+  column-gap: 12px; align-items: baseline; max-width: none; margin-inline: 0; padding: 5px 8px; border-radius: 7px;
+  transition: background-color .12s ease; }
+.transcript-words .reading-turn + .reading-turn[data-speaker-change] { margin-top: 8px; }
+.transcript-gap-break { display: flex; align-items: center; gap: 8px; margin: 10px 8px 6px;
+  padding-left: calc(var(--transcript-gutter) + 12px); user-select: none; }
+.transcript-gap-break::before { content: attr(data-gap-label); font: 10.5px/1 var(--font-mono); font-variant-numeric: tabular-nums;
+  color: var(--color-dim); white-space: nowrap; }
+.transcript-gap-break::after { content: ""; flex: 1; height: 1px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, .09), rgba(255, 255, 255, .02)); }
+.transcript-words .reading-turn:hover { background: rgba(255, 255, 255, .028); }
+.transcript-words .reading-turn:has([data-current]) { background: rgba(255, 255, 255, .048); box-shadow: inset 2px 0 0 rgba(244, 244, 245, .55); }
+.transcript-words .reading-turn-head { display: flex; justify-content: flex-end; align-items: baseline; gap: 0; margin-bottom: 0; min-width: 0; }
+.transcript-words .reading-turn-body { min-width: 0; }
+.transcript-words .reading-speaker { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 2px; font-size: 11.5px; font-weight: 600;
+  letter-spacing: -.005em; color: var(--color-fg); }
+.transcript-words .reading-speaker[data-known="false"] { color: var(--color-dim); font-weight: 450; }
+.transcript-words .reading-speaker i { display: inline-block; flex: none; }
+.transcript-words .reading-time { margin-left: 0; padding: 1px 4px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px;
+  line-height: 1.5; font-variant-numeric: tabular-nums; color: var(--color-dim); transition: color .12s ease, background-color .12s ease; }
+.transcript-words .reading-turn:hover .reading-time { color: var(--color-muted); }
+.transcript-words .reading-turn:has([data-current]) .reading-time { color: var(--color-fg); }
+.transcript-words .reading-time:hover, .transcript-words .reading-time:focus-visible { background: rgba(255, 255, 255, .09); color: var(--color-fg); }
+.transcript-words .reading-passage { font-size: 13px; line-height: 1.62; }
+.transcript-words .reading-passage + .reading-passage { margin-top: 6px; }
+.transcript-words .reading-pause { display: inline-flex; align-items: center; vertical-align: 1px; padding: 0 4px; margin: 0 2px;
+  border: 1px solid rgba(255, 255, 255, .07); border-radius: 4px; background: rgba(255, 255, 255, .03);
+  font: 10px/15px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--color-dim); user-select: none; }
+.transcript-words .reading-pause::after { content: attr(data-pause); }
+/* A chosen run of words, and what to do with it, pinned cleanly under the search bar. */
+.transcript-chosen { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, .08); background: rgba(255, 255, 255, .035); font-size: 12px; color: var(--color-muted); }
+.transcript-chosen > span { margin-right: auto; font: 11.5px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--color-fg); }
+.transcript-ask-btn { padding: 3px 9px; border: 1px solid rgba(255, 255, 255, .16); border-radius: 6px; background: rgba(255, 255, 255, .08);
+  color: var(--color-fg); font-size: 11.5px; font-weight: 500; cursor: pointer; transition: background-color .12s ease, border-color .12s ease; }
+.transcript-ask-btn:hover { background: rgba(255, 255, 255, .14); border-color: rgba(255, 255, 255, .26); }
+.transcript-clear-btn { padding: 3px 6px; border: 0; border-radius: 5px; background: none; color: var(--color-dim); font-size: 11.5px; cursor: pointer; }
+.transcript-clear-btn:hover { color: var(--color-fg); background: rgba(255, 255, 255, .06); }
+/* Loading, error, or empty transcript state. */
+.transcript-state { display: flex; align-items: center; gap: 8px; padding: 16px 18px; font-size: 12.5px; color: var(--color-muted); }
+.transcript-state.is-error { color: var(--color-bad); }
 /* A file with no transcript yet, after the words. */
-.transcript-missing { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 18px; font-size: 12.5px; color: var(--color-dim); }
-.simple-transcript { flex: 1; min-height: 0; overflow-y: auto; }
+.transcript-missing { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 8px 0; font-size: 12px; color: var(--color-dim); }
 
 /* Names what the player is showing for screen readers. The card or strip under the picture already says it on screen. */
 .simple-on-video { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -833,17 +866,42 @@ button.queue-head:hover { color: var(--color-fg); }
 @media (max-width: 767px) {
   .simple-transcript-rail { order: 2; width: 100%; max-height: 45%; border-left: 0; border-top: 1px solid var(--color-line); }
 }
-/* The search under the Transcript's heading: a plain field, its count, nothing else. */
-.transcript-search { display: flex; align-items: center; gap: 8px; padding: 8px 18px; border-bottom: 1px solid var(--color-line); color: var(--color-dim); font-size: 12.5px; }
-.transcript-search input { flex: 1; min-width: 0; padding: 4px 0; border: 0; outline: none; background: none; color: var(--color-fg); font: 13px var(--font-sans); }
+/* The search under the Transcript's heading: a recessed field with match navigation and clear controls. */
+.transcript-search { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, .07); }
+.transcript-search-field { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 8px 0 10px;
+  border: 1px solid rgba(255, 255, 255, .08); border-radius: 8px; background: rgba(255, 255, 255, .035); color: var(--color-dim);
+  transition: border-color .14s ease, background-color .14s ease; }
+.transcript-search-field:hover { border-color: rgba(255, 255, 255, .13); }
+.transcript-search-field:focus-within { border-color: rgba(255, 255, 255, .24); background: rgba(255, 255, 255, .055); color: var(--color-muted); }
+.transcript-search-field > svg { flex: none; }
+.transcript-search input { flex: 1; min-width: 0; padding: 5px 0; border: 0; outline: none; background: none; color: var(--color-fg);
+  font: 12.5px var(--font-sans); }
+.transcript-search input:focus-visible { border-bottom-color: transparent; }
 .transcript-search input::placeholder { color: var(--color-dim); }
 .transcript-search input::-webkit-search-cancel-button { display: none; }
-.transcript-search-count { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* Words are dim, the sentence the playhead is in is bright, and its word is lit. Matches are underlined; the one in hand is lit. */
-.transcript-words .reading-passage [data-w] { color: var(--color-muted); }
+.transcript-search-count { flex: none; font-size: 11px; color: var(--color-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.transcript-search-count[data-empty] { color: var(--color-dim); }
+.transcript-search-nav { display: inline-flex; align-items: center; gap: 1px; padding-left: 4px;
+  border-left: 1px solid rgba(255, 255, 255, .08); }
+.transcript-search-btn { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0;
+  border-radius: 4px; background: none; color: var(--color-dim); cursor: pointer; transition: background-color .12s ease, color .12s ease; }
+.transcript-search-btn:hover { background: rgba(255, 255, 255, .09); color: var(--color-fg); }
+.transcript-search-nav .transcript-search-btn:first-child svg { transform: rotate(180deg); }
+.transcript-search-options { display: flex; align-items: center; gap: 6px; }
+.transcript-search-options .btn-quiet { height: 24px; padding: 0 9px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 6px;
+  background: transparent; color: var(--color-muted); font-size: 11.5px; transition: border-color .12s ease, background-color .12s ease, color .12s ease; }
+.transcript-search-options .btn-quiet:hover { border-color: rgba(255, 255, 255, .15); color: var(--color-fg); }
+.transcript-search-options .btn-quiet[aria-pressed="true"] { border-color: rgba(255, 255, 255, .24); background: rgba(255, 255, 255, .09); color: var(--color-fg); }
+/* Spoken text reads clearly; the active sentence brightens, search hits tint amber, and the current word highlights cleanly. */
+.transcript-words .reading-passage [data-w] { color: rgba(244, 244, 245, .82); border-radius: 3px; transition: background-color .08s ease, color .08s ease; }
+.transcript-words .reading-passage [data-w]:hover { background: rgba(255, 255, 255, .1); color: var(--color-fg); }
+.transcript-words .reading-passage [data-w][data-cut] { color: var(--color-dim); opacity: .72; }
 .transcript-words .reading-passage [data-near] { color: var(--color-fg); }
-.transcript-words .reading-passage [data-match] { text-decoration: underline; text-decoration-color: var(--color-muted); text-underline-offset: 3px; }
-.transcript-words .reading-passage [data-match="current"] { background: var(--color-raised); color: var(--color-fg); text-decoration-color: var(--color-fg); }
-.transcript-words .reading-passage [data-current] { background: var(--color-fg) !important; color: var(--color-bg) !important; }
+.transcript-words .reading-passage [data-w].bg-hi-dim { background: rgba(184, 154, 218, .22); color: var(--color-fg); }
+.transcript-words .reading-passage [data-match] { background: rgba(237, 194, 133, .16); color: var(--color-fg); text-decoration: none; }
+.transcript-words .reading-passage [data-match="current"] { background: rgba(237, 194, 133, .34); color: var(--color-fg);
+  box-shadow: 0 0 0 1px rgba(237, 194, 133, .55); }
+.transcript-words .reading-passage [data-current] { background: var(--color-fg) !important; color: var(--color-bg) !important; font-weight: 500; }
 
 .simple-pass-list.is-moment > li > .subunit { margin-left: 8px; }
