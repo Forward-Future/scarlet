@@ -289,6 +289,10 @@ function deletedStockSkills(ctx: Ctx): Set<string> {
   return new Set(deletions.map(entry => String(entry.data.stockSkill)));
 }
 
+/** A shipped skill filed under Examples in its header: one editor's own style, to read or copy, not to run by default. */
+export const exampleSkill = (content: string) =>
+  /^category:\s*["']?examples["']?\s*$/im.test(/^---\r?\n([\s\S]*?)\r?\n---/.exec(content)?.[1] ?? "");
+
 /**
  * Add the skills Scarlet comes with (the bundled set compiled into the engine binary). Each is an ordinary skill
  * once added. A copy the editor hasn't edited takes the text this release ships; an edited one is theirs and is
@@ -320,7 +324,9 @@ export function seedSkillList(ctx: Ctx, list: Array<{ folder: string; content: s
             }
           }
           if (!existing) {
-            createSkill(ctx, null, { name, description: fm.description ?? "", content, scope: "team" },
+            // An example shows how one editor's style builds on the shipped guides. It arrives switched off, so it
+            // shapes nobody's edits until they turn it on.
+            createSkill(ctx, null, { name, description: fm.description ?? "", content, scope: "team", enabled: !exampleSkill(content) },
               { source: publicDialogue ? "bundled" : source });
             return 1;
           }
