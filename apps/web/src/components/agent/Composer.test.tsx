@@ -1247,6 +1247,94 @@ it("takes a marked range off on the first Esc in an empty box, and leaves a mess
   expect(onClearTarget).not.toHaveBeenCalled();
 });
 
+it("shows the Range tag for words chosen in the transcript (Ask about this), and lets ×, Backspace, Esc and ⌘Z manage it", async () => {
+  const words: AgentContext = { version: project.head!, time: 42, end: 51.5, clipIds: ["c1"], label: "“three things”" };
+  const clearWords = "Take the range 0:42 – 0:51 off the message";
+  const press = async (key: string, init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+    await act(async () => { aimField().dispatchEvent(event); });
+    return event.defaultPrevented;
+  };
+  await act(async () => useUiStore.getState().setAgentContext(words));
+  await show();
+  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
+  expect(container.querySelector(".composer-aim-icon")).toBeNull();
+  expect(aimName()?.getAttribute("title")).toBeNull();
+  expect(aimClear(clearWords)).not.toBeNull();
+  // Clicking the time toggles exact milliseconds on and off.
+  const rangeBtn = container.querySelector<HTMLButtonElement>(".composer-aim-time")!;
+  await act(async () => rangeBtn.click());
+  expect(aimName()?.textContent).toBe("Range 0:42.000 – 0:51.500");
+  await act(async () => rangeBtn.click());
+  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
+  // × clears the words, focuses the box, and sends a plain whole-video request instead of a note at those words.
+  await act(async () => aimClear(clearWords)!.click());
+  expect(useUiStore.getState().agentContext).toBeNull();
+  expect(aimName()).toBeNull();
+  expect(document.activeElement).toBe(aimField());
+  // ⌘Z in the empty box puts them back.
+  expect(await press("z", { metaKey: true })).toBe(true);
+  expect(useUiStore.getState().agentContext).toEqual(words);
+  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
+  // Backspace in an empty box takes them off, and ⌘Z puts them back.
+  await press("Backspace");
+  expect(useUiStore.getState().agentContext).toBeNull();
+  expect(await press("z", { ctrlKey: true })).toBe(true);
+  expect(useUiStore.getState().agentContext).toEqual(words);
+  // Esc with typed text keeps the words and their range; Esc in an empty box takes the range off.
+  await type("Tighten this");
+  await act(async () => aimField().focus());
+  await press("Escape");
+  expect([useUiStore.getState().agentDraft, useUiStore.getState().agentContext]).toEqual(["Tighten this", words]);
+  await type("");
+  await act(async () => aimField().focus());
+  await press("Escape");
+  expect(useUiStore.getState().agentContext).toBeNull();
+  expect(aimName()).toBeNull();
+  // Sending after taking the range off starts a whole-video request, not a note on those words.
+  await type("Add a title card");
+  await submit();
+  expect(useProjectStore.getState().createNote).not.toHaveBeenCalled();
+  expect(useProjectStore.getState().createTask).toHaveBeenLastCalledWith(PRJ, expect.objectContaining({
+    instruction: "Add a title card", context: { version: project.head },
+  }));
+  // Same-second chosen words automatically show dimmed milliseconds.
+  await act(async () => useUiStore.getState().setAgentContext({ version: project.head!, time: 14.2, end: 14.5, clipIds: [], label: "“is”" }));
+  await show();
+  expect(aimName()?.textContent).toBe("Range 0:14.200 – 0:14.500");
+  expect(Array.from(aimName()!.querySelectorAll(".time-ms")).map(el => el.textContent)).toEqual([".200", ".500"]);
+  // Words chosen inside an open cut still carry the cut's own tag.
+  await act(async () => useUiStore.getState().setAgentContext({ changeId: "chg_1", cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "“I”" }));
+  await show({ targetTag: "Cut 1" });
+  expect(aimName()?.textContent).toBe("Cut 1");
+});
+
+it("answers Scarlet's question with words chosen in the transcript beside Answer, and clears the range before Answer", async () => {
+  const asking = buildThreads(current).find(t => t.question)!;
+  const words: AgentContext = { version: project.head!, time: 42, end: 51.5, clipIds: [], label: "“three things”" };
+  const onClearTarget = vi.fn();
+  await act(async () => useUiStore.getState().setAgentContext(words));
+  await show({ thread: asking, targetTag: "Answer", onClearTarget });
+  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
+  expect(container.querySelector(".composer-tag-name")?.textContent).toBe("Answer");
+  await type("Yes, this part");
+  await submit();
+  expect(useProjectStore.getState().answerTask).toHaveBeenLastCalledWith(
+    asking.question!.id,
+    expect.stringMatching(/^At 0:42.*0:51 — Yes, this part$/),
+    undefined,
+    expect.objectContaining({ agent: "claude" }),
+  );
+  // Backspace in an empty box clears the chosen range first, leaving Answer.
+  await act(async () => useUiStore.getState().setAgentContext(words));
+  await show({ thread: asking, targetTag: "Answer", onClearTarget });
+  await act(async () => { aimField().focus(); aimField().dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true })); });
+  expect(useUiStore.getState().agentContext).toBeNull();
+  expect(aimName()).toBeNull();
+  expect(onClearTarget).not.toHaveBeenCalled();
+  expect(container.querySelector(".composer-tag-name")?.textContent).toBe("Answer");
+});
+
 it("keeps a picked moment, and a whole-video choice, through a time typed in the message", async () => {
   const messageClock = { version: project.head!, duration: 150, timeline: current.timeline, seek: vi.fn() };
   await show({ messageClock });

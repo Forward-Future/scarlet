@@ -10387,7 +10387,7 @@ it("doesn't bring back a point picked in an earlier visit on an empty box, and k
   expect(boxTag()).toBe("At 0:07");
 });
 
-/** Words chosen in the transcript, as its "Ask about this" aims the message box at them. Nothing in the box names them. */
+/** Words chosen in the transcript, as its "Ask about this" aims the message box at them (Composer shows them in its Range tag). */
 const chosenWords = () => ({ version: data.project.head!, time: 4.2, end: 6.8, clipIds: [], label: "“three things”" });
 
 it("keeps explicitly chosen transcript words through timeline seeks before and while writing", async () => {

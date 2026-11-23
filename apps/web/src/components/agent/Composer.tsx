@@ -197,7 +197,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     const carried = attachments && { attachments, ...(drawn && { pictureMarks: drawn }) };
     if (question) {
       const answer = anchor?.editNumber ? `${[`Edit ${anchor.editNumber}`, anchor.label].filter(Boolean).join(" · ")} — ${text}`
-        : anchor ? `At ${anchor.markedRange ? clockRange(anchor.time, anchor.end ?? anchor.time) : clock(anchor.time)}${sourceName ? ` in ${sourceName}` : ""} — ${text}` : text;
+        : anchor ? `At ${anchor.markedRange || anchor.end !== undefined ? clockRange(anchor.time, anchor.end ?? anchor.time) : clock(anchor.time)}${sourceName ? ` in ${sourceName}` : ""} — ${text}` : text;
       if (effective && runChoiceDiffers(question, effective)) await answerTask(question.id, answer, skillIds, effective);
       else await answerTask(question.id, answer, skillIds);
       return false;
@@ -388,9 +388,13 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const newEditInstead = tagAct && `Start a new edit instead of ${lowerFirst(tagAct)}`;
   const tag = rewording ? undefined : targetTag;
   // A stretch marked on the timeline's ruler rides with the message, beside the tag of the cut or edit it is aimed at.
+  // Words chosen in the transcript ("Ask about this") for a new edit show the same Range tag so the box names them and can take them off.
   const marked = rewording ? undefined : markedRangeOf(context);
-  const markedWords = marked ? preciseRange(marked.start, marked.end) : "";
-  const markedPrecise = marked ? `${playbackClock(marked.start)} – ${playbackClock(marked.end)}` : "";
+  const chosenRange = !rewording && !marked && context && context !== "whole" && !context.changeId && context.end !== undefined
+    ? { start: context.time, end: context.end } : undefined;
+  const shownRange = marked ?? chosenRange;
+  const rangeWords = shownRange ? preciseRange(shownRange.start, shownRange.end) : "";
+  const rangePrecise = shownRange ? `${playbackClock(shownRange.start)} – ${playbackClock(shownRange.end)}` : "";
   // "Answer" and "Reply" name who the message goes to. The target label shows the place it is about.
   const wordTag = tag === "Answer" || tag === "Reply" ? tag : undefined;
   const placeTag = wordTag ? undefined : tag;
@@ -398,10 +402,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     if (onClearTarget) onClearTarget(); else setContext("whole");
     inputRef.current?.focus();
   };
-  // The marked range Backspace or its × just took off the box, and what that left the box aimed at. ⌘Z in the empty box
+  // The marked or transcript range Backspace or its × just took off the box, and what that left the box aimed at. ⌘Z in the empty box
   // puts the range back, until the box is aimed again, written in or spoken into.
   const rangeTakenOff = useRef<{ was: AgentContext; left: AgentContext | null }>(undefined);
-  /** Takes the marked range off the message, and says what the box was aimed at and what that leaves. */
+  /** Takes the marked or transcript range off the message, and says what the box was aimed at and what that leaves. */
   const takeOffRange = () => {
     const was = context && context !== "whole" ? context : undefined;
     const left = withMarkedRange(context, undefined);
@@ -448,11 +452,11 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const placeName = placeTag
     ? targetIsPoint ? placeTag.replace(/^At /, "") : stopped ? `${placeTag}, stopped at ${stopped}` : placeTag
     : undefined;
-  const aimItem: AimItem | undefined = marked ? {
-    key: `range:${marked.start}/${marked.end}`,
-    name: `Range ${markedWords}`,
-    displayName: <><span className="composer-aim-verb">Range</span> <AimTimecode key={`range:${marked.start}/${marked.end}`} value={markedWords} precise={markedPrecise} /></>,
-    clearLabel: `Take the marked range ${markedWords} off the message`,
+  const aimItem: AimItem | undefined = shownRange ? {
+    key: `range:${shownRange.start}/${shownRange.end}`,
+    name: `Range ${rangeWords}`,
+    displayName: <><span className="composer-aim-verb">Range</span> <AimTimecode key={`range:${shownRange.start}/${shownRange.end}`} value={rangeWords} precise={rangePrecise} /></>,
+    clearLabel: marked ? `Take the marked range ${rangeWords} off the message` : `Take the range ${rangeWords} off the message`,
     onClear: () => {
       rangeTakenOff.current = takeOffRange();
       inputRef.current?.focus();
@@ -511,9 +515,9 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       <div className={firstEditHint ? "composer-box first-edit-hint" : "composer-box"} onKeyDown={e => {
         if (rewording && e.key === "Escape" && !e.defaultPrevented && !isComposing(e)) rewording.onCancel();
         const emptyBox = !e.defaultPrevented && !isComposing(e) && !recording && !heard && e.target === inputRef.current && !inputRef.current.value;
-        // Esc in an empty box takes a marked range off at once, as Esc anywhere else on the page does. A popover that is
+        // Esc in an empty box takes a range off at once, as Esc anywhere else on the page does. A popover that is
         // open takes its own Esc first.
-        if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && emptyBox && marked && !document.querySelector("[data-escape-owner]")) takeOffRange();
+        if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && emptyBox && shownRange && !document.querySelector("[data-escape-owner]")) takeOffRange();
         if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && (aimItem || wordTag)) {
           e.preventDefault();
           // "Answer" and "Reply" come off as their own × takes them off.
