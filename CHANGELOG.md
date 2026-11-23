@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- After Scarlet restarts, each request's list of edits comes back the way you left it, so a change you asked for on one edit stays under that edit's row.
 - Playing through the video no longer leaves faint vertical dashes along the timeline ruler.
 - During a dialogue pass, cuts Scarlet has checked and is sure of go into the video as it works, instead of waiting until you've answered every For you item, so the video you watch is the edit as it will be.
 - Rejecting an edit Scarlet has to put back itself now stays under that edit's row in the chat while Scarlet finishes, instead of jumping into a block of its own.
