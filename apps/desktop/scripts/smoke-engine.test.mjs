@@ -93,14 +93,17 @@ for (const windows of [false, true]) {
 }
 
 test("the stock skills it expects are the ones in skills/, named by their frontmatter", async (t) => {
-  const { stockSkillNames } = await import("./stock-skills.mjs");
+  const { stockExampleNames, stockSkillNames } = await import("./stock-skills.mjs");
   assert.deepEqual(stockSkillNames(), ["add-captions", "b-roll", "dialogue-pass", "fit-length", "frame-screen", "matt-talking-head", "motion-graphics", "music-under-speech", "punch-in", "speed-through-waits", "split-edits"]);
+  assert.deepEqual(stockExampleNames(), ["matt-talking-head"]);
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "scarlet-skills-test-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  for (const [folder, text] of [["b-folder", "---\nname: \"zoom-in\"\n---\n"], ["a-folder", "no frontmatter"], ["notes", null]]) {
+  for (const [folder, text] of [["b-folder", "---\nname: \"zoom-in\"\n---\n"], ["a-folder", "no frontmatter"], ["notes", null],
+    ["c-folder", "---\nname: someones-style\ncategory: Examples\n---\n\ncategory: Examples\n"]]) {
     mkdirSync(join(dir, folder));
     if (text !== null) writeFileSync(join(dir, folder, "SKILL.md"), text);
   }
   writeFileSync(join(dir, "README.md"), "");
-  assert.deepEqual(stockSkillNames(dir), ["a-folder", "zoom-in"]);
+  assert.deepEqual(stockSkillNames(dir), ["a-folder", "someones-style", "zoom-in"]);
+  assert.deepEqual(stockExampleNames(dir), ["someones-style"]);
 });
