@@ -28,12 +28,23 @@ export function retireOtherVersions(ctx: Ctx, applied: Change): Change[] {
 /**
  * The footage an applied change left out as it built its version, with a version that plays it. A change that only
  * took footage out as cuts says so itself, and nothing is read for it. Never keeps a change from being applied.
+ *
+ * A first cut built on an empty timeline from the pieces to keep is read whole: the start of the recording, every
+ * stretch between two pieces and the end it didn't use. It was once skipped as having nothing to read, and Matt's
+ * 28-minute talking head, cut to 15 that way, listed none of its 104 cuts and said 20 s had come out (2026-11-23).
  */
 export function leftOutOf(ctx: Ctx, project: Omit<Project, "media">, change: Change): Change["leftOut"] {
-  if (!change.ops?.length || change.cutReasons?.length || change.firstCut) return undefined;
-  if (change.ops.every(op => op.op === "rippleDelete")) return undefined;
+  if (change.cutReasons?.length) return undefined;
+  const whole = !!change.firstCut && !change.ops?.length;
+  if (!whole && (!change.ops?.length || change.firstCut)) return undefined;
+  if (change.ops?.length && change.ops.every(op => op.op === "rippleDelete")) return undefined;
   try {
-    const found = leftOutJoins(resolveTimeline(ctx, project, change.fromVersion), resolveTimeline(ctx, project, change.toVersion), project.settings.fps);
+    const before = resolveTimeline(ctx, project, change.fromVersion), after = resolveTimeline(ctx, project, change.toVersion);
+    // A first cut that replaced a video already there is read from the versions either side, as any whole save is.
+    if (whole && before.tracks.some(track => track.clips.length)) return { joins: [] };
+    const sources = new Set(whole ? after.tracks.flatMap(track => track.clips.flatMap(clip => clip.kind === "media" ? [clip.mediaId] : [])) : []);
+    const lengths = new Map(ctx.repos.projects.assets(project.id, sources).flatMap(asset => asset.duration ? [[asset.id, asset.duration] as const] : []));
+    const found = leftOutJoins(before, after, project.settings.fps, whole ? lengths : undefined);
     if (!found) return { joins: [] };
     const original = storeVersion(ctx, project.id, found.original, { parent: change.fromVersion, description: "Footage left out, for review" });
     return { version: original.version, joins: found.joins, reading: LEFT_OUT_READING };
@@ -47,7 +58,8 @@ export function leftOutOf(ctx: Ctx, project: Omit<Project, "media">, change: Cha
  * Read the footage left out by changes an earlier build applied without looking: a video built from the pieces to
  * keep showed none of what it left out as cuts (2026-11-12). Joins an earlier reading found are read again: reading 1
  * took a screen and a camera inset laid over a camera already cut for footage left out (2026-11-20), and reading 2
- * split crossfaded audio joins out of sync when opening them (2026-11-22). Runs once as Scarlet starts.
+ * split crossfaded audio joins out of sync when opening them (2026-11-22), and reading 3 took a join whose sound was a
+ * millisecond off its picture for a new one (2026-11-23). Runs once as Scarlet starts.
  */
 export function recordLeftOutFootage(ctx: Ctx): void {
   const stale = (ctx.db.prepare(`SELECT json FROM changes INDEXED BY changes_left_out_reread_v${LEFT_OUT_READING} WHERE state = 'approved'
@@ -67,11 +79,16 @@ export function recordLeftOutFootage(ctx: Ctx): void {
     AND json_extract(json, '$.leftOut') IS NULL AND json_array_length(coalesce(json_extract(json, '$.ops'), '[]')) > 0
     AND json_array_length(coalesce(json_extract(json, '$.cutReasons'), '[]')) = 0 ORDER BY created_at`).all() as { json: string }[])
     .map(row => ctx.repos.changes.parse(row.json));
-  for (const change of built) {
+  // A first cut saved whole has no steps, and an earlier build read nothing for it (2026-11-23).
+  const first = (ctx.db.prepare(`SELECT json FROM changes INDEXED BY changes_first_cut_unread WHERE state = 'approved'
+    AND json_extract(json, '$.leftOut') IS NULL AND json_extract(json, '$.firstCut') = 1
+    AND json_array_length(coalesce(json_extract(json, '$.cutReasons'), '[]')) = 0 ORDER BY created_at`).all() as { json: string }[])
+    .map(row => ctx.repos.changes.parse(row.json)).filter(change => !change.ops?.length);
+  for (const change of [...built, ...first]) {
     const project = ctx.repos.projects.header(change.projectId);
-    // A first cut, or a change that only rippled footage out, has nothing to read. That is saved as well, so the
-    // change isn't picked again at the next start.
-    const nothing = change.firstCut || change.ops!.every(op => op.op === "rippleDelete");
+    // A first cut made of steps, or a change that only rippled footage out, has nothing to read. That is saved as
+    // well, so the change isn't picked again at the next start.
+    const nothing = !!change.ops?.length && (change.firstCut || change.ops.every(op => op.op === "rippleDelete"));
     const leftOut = nothing ? { joins: [] } : project && leftOutOf(ctx, project, change);
     if (!leftOut) continue;
     ctx.repos.changes.put({ ...change, leftOut });

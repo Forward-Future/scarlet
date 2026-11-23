@@ -45,6 +45,37 @@ describe("leftOutJoins", () => {
     }
   });
 
+  it("reads the end of the recording a whole first cut didn't use, given the recordings' lengths", () => {
+    // Matt's talking head was cut from 28 minutes to 15 from the pieces to keep, and the 1:56 after his last line was
+    // never on a timeline (2026-11-23). A version built in parts has more to come, so only a first cut is read so.
+    const built = screenAndCamera([[10, 20], [25, 40]]);
+    const lengths = new Map([["screen", 100], ["camera", 102]]);
+    const found = leftOutJoins(empty, built, 30, lengths)!;
+    expect(found.joins).toEqual([
+      { at: 0, removed: { start: 0, end: 10 } },
+      { at: 10, removed: { start: 20, end: 25 } },
+      { at: 25, removed: { start: 40, end: 100 } },
+    ]);
+    // The version that plays it all runs to the end of the recording, each track still in sync with itself.
+    expect(timelineDuration(found.original)).toBeCloseTo(100);
+    for (const track of found.original.tracks) for (const clip of track.clips as MediaClip[]) expect(clip.sourceIn - clip.timelineIn).toBeCloseTo(clip.mediaId === "camera" ? 2 : 0);
+    expect(leftOutJoins(empty, built)!.joins).toHaveLength(2);
+    expect(leftOutJoins(built, screenAndCamera([[10, 20], [25, 40], [60, 70]]), 30, lengths)!.joins).toEqual([{ at: 25, removed: { start: 25, end: 45 } }]);
+  });
+
+  it("takes a join whose sound is a millisecond off its picture for the join it already was", () => {
+    // Picture sync moved the picture of Matt's talking head and gave its sound a track of its own, the pieces a
+    // millisecond or two apart or overlapping. Where they no longer met, the picture's join read as footage newly left
+    // out: 5 cuts and 44 s that save never made (2026-11-23).
+    const cut = timelineFromKeepRanges("p", "take", [{ start: 10, end: 20 }, { start: 25, end: 40 }, { start: 50, end: 60 }]);
+    const synced: Timeline = { ...cut, tracks: [
+      { ...cut.tracks[0]!, clips: (cut.tracks[0]!.clips as MediaClip[]).map(c => ({ ...c, sourceIn: c.sourceIn + 0.16, sourceOut: c.sourceOut + 0.16, volume: 0 })) },
+      cut.tracks[1]!,
+      { ...cut.tracks[1]!, id: "v1_dialogue", clips: (cut.tracks[0]!.clips as MediaClip[]).map((c, i) => ({ ...c, id: `${c.id}_audio`, timelineIn: c.timelineIn + [0, 0.0015, -0.0012][i]! })) },
+    ] };
+    expect(leftOutJoins(cut, synced)).toBeNull();
+  });
+
   it("leaves a join an earlier version already had to that version", () => {
     const first = screenAndCamera([[10, 20], [25, 40]]);
     const next = screenAndCamera([[10, 20], [25, 40], [60, 70]]);

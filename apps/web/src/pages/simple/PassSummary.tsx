@@ -153,7 +153,6 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const flagged = useMemo(() => edits.filter(e => e.check && !reviewed(e) && !deferred(e) && !revising(e)), [edits, reviewed, deferred, revising]);
   const openCalls = pass?.calls.filter(c => c.state === "open").length ?? 0;
   const need = openCalls + flagged.length;
-  const totalRows = edits.length + (pass?.calls.length ?? 0);
   // Calls the editor decided before the pass applied stay in For you: approved cuts link to their applied edit row,
   // and skipped calls (or approved keep proposals) stay as decided rows.
   const { decidedCallEditKeys, decidedCallRows } = useMemo(
@@ -172,7 +171,25 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     [rerun, thread.changes]);
   // In the list of every edit, edits that play as one change are one row, a moment. Its own edits open under it on a
   // press of "+ 4 edits", and fold again on the next.
-  const moments = useMemo(() => listMoments(edits), [edits]);
+  // An edit Scarlet made in many places under one name is one row with a count of places, as in any other request's
+  // list: it stands at its first place, apart from the moments. A fade on every dialogue join of Matt's talking head was
+  // 101 rows that all read "Softened every dialogue join" (2026-11-23). A cut, a spot left for the editor and an edit
+  // that asks for a look stay one each.
+  const places = useMemo(() => {
+    const groups = new Map<string, Omit<ThreadEdit, "at">[]>();
+    for (const e of edits) {
+      if (e.beforeCut || e.marker || e.check || e.elsewhere) continue;
+      const name = `${e.changeId}\n${e.label}`;
+      groups.set(name, [...groups.get(name) ?? [], e]);
+    }
+    const of = new Map<string, { first: string; members: Omit<ThreadEdit, "at">[] }>();
+    for (const members of groups.values()) if (members.length > 1) for (const e of members) of.set(editKey(e), { first: editKey(members[0]!), members });
+    return of;
+  }, [edits]);
+  /** The edits as the list has them: each edit made in several places once. */
+  const distinct = useMemo(() => edits.filter(e => (places.get(editKey(e))?.first ?? editKey(e)) === editKey(e)), [edits, places]);
+  const moments = useMemo(() => listMoments(edits.filter(e => !places.has(editKey(e)))), [edits, places]);
+  const totalRows = distinct.length + (pass?.calls.length ?? 0);
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
   const single = !working && !pass?.running && totalRows === 1 ? edits[0] : undefined;
   // A single preview follows the open card. An explicitly opened list keeps the timeline on the whole pass.
@@ -210,6 +227,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       const forYou = isForYouEdit(e);
       // A folded pass only needs rows that can appear in its call or For you list.
       if (!listed && !forYou) return [];
+      const group = places.get(key);
+      if (group && group.first !== key) return [];
       const seen = reviewed(e);
       // A revision on its way: the row says so until the new version lands, whether or not the editor had kept the
       // edit. A cut the pass applied through its calls counts as kept, so a guard on that left its row as it was.
@@ -220,7 +239,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       const needs = !!e.check && !seen && !later && !sent;
       const sentBack = !!e.check && !seen && !!sent;
       // Ticked once the editor has kept it: a flagged edit they reviewed, an approved pass call, or any edit kept.
-      const decided = !needs && !sent && !later && ((!!e.check && seen) || kept.has(reviewKey(e)) || decidedCallEditKeys.has(key));
+      const decided = !needs && !sent && !later && ((!!e.check && seen) || (group ? group.members.every(m => kept.has(reviewKey(m))) : kept.has(reviewKey(e))) || decidedCallEditKeys.has(key));
       const decision = decided ? (e.marker ? "Done" : "Kept") : later ? "Later" : undefined;
       // Where it stands, when it isn't simply waiting: the word a row among the calls ends on. In the list of every edit
       // it follows the row's amount, as in any other request's list, and the amount stays.
@@ -230,12 +249,12 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       // Listed with the calls, it has the number it has among them.
       return [{ key, at, displayAt, mark: displayAt, hover: { threadId: thread.id, editKey: key },
         label: (e.reason && e.summary) || e.label, n: 0, num: editNumber(e),
-        state: word ?? decision, decision, value: later ? "Later" : editRemovedLabel(e) ?? editRowWord(e), word, revised, rejected: false, skipped: false,
+        state: word ?? decision, decision, value: later ? "Later" : group ? `${group.members.length} places` : editRemovedLabel(e) ?? editRowWord(e), word, revised, rejected: false, skipped: false,
         forYou, onlyForYou: false,
         // Scarlet is on that revision now, so its word moves; one still waiting its turn sits still.
         busy: !!sent && isWorking(sent.state), pending: !!sent, needs, sentBack, decided,
         version: e.previous.length ? e.previous.length + 1 : 0, title: revised || e.reason ? undefined : e.check,
-        on: !!showing && matchesEdit(showing, e), open: () => actions.openEdit(thread, e), fresh: fresh.has(e.changeId) }];
+        on: !!showing && (group?.members ?? [e]).some(m => matchesEdit(showing, m)), open: () => actions.openEdit(thread, e), fresh: fresh.has(e.changeId) }];
     }),
     // A call goes by its number, as on its card and on the timeline.
     ...(pass?.calls ?? []).map((c): PassRow => {
@@ -293,7 +312,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   };
   // What it came to, once Scarlet is done, while calls still wait too: what it applied so far, with the link that opens
   // every edit after it. Until its cuts are applied, a pass that finished with no call to make says how many it proposes.
-  const made: SentencePart[] | undefined = edits.length ? working ? undefined : madeSentence(edits, lengthLabel, true)
+  const made: SentencePart[] | undefined = edits.length ? working ? undefined : madeSentence(distinct, lengthLabel, true)
     : calls.length || quiet || decidedCallRows.length || forYouRejected.length ? undefined : [{ strong: plural(count, "cut") }, " proposed."];
   // The list of every edit goes by moments, at the time of the first of its edits. The moment's row stands for all of
   // them: ticked once they're all kept, Revising… while Scarlet is on one (or Up next / Queued while one waits its

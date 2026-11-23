@@ -254,6 +254,9 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
   });
   // Where each reason to look was raised, for a flag whose cut has since left the video (see the end).
   const flaggedAt = new Map<string, NonNullable<SavedEdit["reviewLocation"]>>();
+  const adrift: Omit<ThreadEdit, "at">[] = [];
+  /** Cuts named on a join their save re-made (`resaved`): that save moved a cut already there, and may have taken nothing out. */
+  const reshaped = new Set<ThreadEdit>();
   for (const { version, named, still, resaved, putBack, markerSays: _markerSays, reviewLocation, ...edit } of edits) {
     const map = mapFrom(version);
     if (!map) continue;
@@ -281,9 +284,17 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
     const point = edit.range.end === edit.range.start;
     const right = map(edit.range.start, "right"), left = point || right === null ? map(edit.range.start, "left") : null;
     // Footage put back since on the right of a join moved the frame after it along. The join is where the frame before it ends.
-    const start = point && right !== null && left !== null && left < right - 1e-6 && joinNear(left, 1e-4) !== undefined && joinNear(right, 1e-4) === undefined
+    let start = point && right !== null && left !== null && left < right - 1e-6 && joinNear(left, 1e-4) !== undefined && joinNear(right, 1e-4) === undefined
       ? left : right ?? left;
-    const end = point ? start : map(edit.range.end, "left");
+    const mapped = point ? start : map(edit.range.end, "left");
+    // Nothing plays before a version's start, so a cut there has no frame either side to follow to the working cut: it
+    // is at the start for as long as its footage stays out (`playsAgain`). The talk before Matt's first line, 2:15 of a
+    // 28-minute recording, went unlisted once picture sync had moved the first frame along (2026-11-23).
+    const opening = point && !!edit.beforeCut && start === null && edit.range.start <= 0.5 / fps;
+    const end = opening ? 0 : mapped;
+    if (opening) start = 0;
+    // A cut with no frame left either side of it: later cuts took those out too. Its footage is still out (see `adrift`).
+    if (point && edit.beforeCut && !edit.rejected && start === null) adrift.push(edit);
     if (start === null || end === null || start > end + 1e-6 || start > duration) continue;
     if (edit.range.end > edit.range.start && end <= start) continue;
     const range = { start: Math.max(0, start), end: Math.min(duration, Math.max(start, end)) };
@@ -306,6 +317,7 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
     }
     // A point has no footage of its own to call added. One named where the save re-made a join is an edit at that join.
     if (placed.at !== undefined && placed.kind === "restore") placed.kind = "other";
+    if (resaved) reshaped.add(placed);
     result.push(placed);
   }
   // A cut is in the video while footage it took out is missing from it. A pass can put a cut's footage back with a save
@@ -344,5 +356,131 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
       cut.reviewRange = cut.range;
     }
   }
-  return result.filter(edit => !gone.has(edit)).sort((a, b) => (a.at ?? a.range.start) - (b.at ?? b.range.start));
+  // What the cuts say came out is what the working cut leaves out, counted once. Each cut is read in the clock of its
+  // own version, so nothing ties two of them to the same footage: on Matt's talking head a save that took one flashed
+  // frame from between two cuts read as a 7.3 s cut over footage five earlier cuts had already taken, three cuts
+  // whose neighbours later cuts took out weren't listed at all, and two sat a few frames inside a clip, off the join
+  // their footage is missing at. The request's total was 6 s out against a recording 13:10 shorter (2026-11-23).
+  const listed = result.filter(edit => !gone.has(edit));
+  const savedAt = new Map(thread.changes.map((item, i) => [item.id, i]));
+  const order = (cut: ThreadEdit) => (savedAt.get(cut.changeId) ?? thread.changes.length) * 1e6 + cut.spot;
+  const length = (range: TimeRange) => range.end - range.start;
+  /** A stretch of a recording: what a join skips, or what a cut took out. */
+  type Footage = { mediaId: string; start: number; end: number; from: number };
+  type MediaPiece = { mediaId: string; timelineIn: number; sourceIn: number; sourceOut: number; speed: number; end: number };
+  const piecesOf = (timeline: Timeline) => timeline.tracks.map(track => track.clips.flatMap((clip): MediaPiece[] => {
+    if (clip.kind !== "media" || clip.enabled === false) return [];
+    const speed = clip.speed ?? 1;
+    return [{ mediaId: clip.mediaId, timelineIn: clip.timelineIn, sourceIn: clip.sourceIn, sourceOut: clip.sourceOut, speed, end: clip.timelineIn + (clip.sourceOut - clip.sourceIn) / speed }];
+  }).sort((x, y) => x.timelineIn - y.timelineIn)).filter(track => track.length);
+  // The footage the working cut skips at each place, track by track: before its first piece, between two pieces of one
+  // recording, and after its last. A join in the picture is a few edges, one a track, a millisecond or a frame or two
+  // apart (a crossfade moves the sound's), so the ones within two frames of each other are one place.
+  const skips: Array<{ at: number; gap: Footage }> = [];
+  for (const track of piecesOf(head)) {
+    const first = track[0]!, last = track.at(-1)!;
+    if (first.timelineIn <= 0.5 / fps) skips.push({ at: 0, gap: { mediaId: first.mediaId, start: -Infinity, end: first.sourceIn, from: 0 } });
+    if (last.end >= duration - 2 / fps) skips.push({ at: duration, gap: { mediaId: last.mediaId, start: last.sourceOut, end: Infinity, from: 0 } });
+    for (let i = 1; i < track.length; i++) {
+      const left = track[i - 1]!, right = track[i]!;
+      if (left.mediaId === right.mediaId && right.timelineIn - left.end <= 2 / fps && right.sourceIn - left.sourceOut > 0.5 / fps)
+        skips.push({ at: right.timelineIn, gap: { mediaId: left.mediaId, start: left.sourceOut, end: right.sourceIn, from: 0 } });
+    }
+  }
+  skips.sort((x, y) => x.at - y.at);
+  type Spot = { start: number; end: number; gaps: Footage[] };
+  const spots: Spot[] = [];
+  for (const { at, gap } of skips) {
+    const spot = spots.at(-1);
+    if (spot && at - spot.end <= 2 / fps && at < duration - 0.5 / fps === spot.end < duration - 0.5 / fps && spot.start > 0.5 / fps === at > 0.5 / fps) {
+      spot.end = at;
+      spot.gaps.push(gap);
+    } else spots.push({ start: at, end: at, gaps: [gap] });
+  }
+  const spotAt = (t: number) => spots.find(spot => t >= spot.start - 2 / fps && t <= spot.end + 2 / fps);
+  /** The footage a cut took out, on each track of the version it was cut from. */
+  const taken = new Map<ThreadEdit | Omit<ThreadEdit, "at">, Footage[][]>();
+  const takenBy = (cut: ThreadEdit | Omit<ThreadEdit, "at">) => {
+    if (!taken.has(cut)) {
+      const { version, removed } = cut.beforeCut!, source = read(version);
+      taken.set(cut, !source ? [] : piecesOf(source).map(track => track.flatMap((piece): Footage[] => {
+        const from = Math.max(piece.timelineIn, removed.start), to = Math.min(piece.end, removed.end);
+        return to - from > 1e-6 ? [{ mediaId: piece.mediaId, start: piece.sourceIn + (from - piece.timelineIn) * piece.speed, end: piece.sourceIn + (to - piece.timelineIn) * piece.speed, from }] : [];
+      })));
+    }
+    return taken.get(cut)!;
+  };
+  /**
+   * How much of what a cut took out the working cut still skips at a place, with where that is in the cut's version.
+   * Each track is read against each track of the working cut: a picture moved a few frames to sit with its sound
+   * skips the same seconds a little later in its recording.
+   */
+  const outAt = (cut: ThreadEdit | Omit<ThreadEdit, "at">, spot: Spot) => {
+    let best: { seconds: number; range: TimeRange } | undefined;
+    for (const track of takenBy(cut)) for (const gap of spot.gaps) {
+      let seconds = 0, start = Infinity, end = -Infinity;
+      for (const piece of track) {
+        const from = Math.max(piece.start, gap.start), to = Math.min(piece.end, gap.end);
+        if (piece.mediaId !== gap.mediaId || to - from <= 1e-6) continue;
+        seconds += to - from;
+        start = Math.min(start, piece.from + (from - piece.start));
+        end = Math.max(end, piece.from + (to - piece.start));
+      }
+      if (seconds > (best?.seconds ?? 0.5 / fps)) best = { seconds, range: { start, end } };
+    }
+    return best;
+  };
+  const moveTo = (cut: ThreadEdit, spot: Spot) => {
+    cut.at = spot.start;
+    cut.range = withHandles({ start: cut.at, end: cut.at }, 1.5, duration);
+  };
+  const nearest = (cut: ThreadEdit | Omit<ThreadEdit, "at">, near: Spot[], from?: number) => near.map(spot => ({ spot, seconds: outAt(cut, spot)?.seconds ?? 0 }))
+    .filter(found => found.seconds > 0.5 / fps)
+    .sort((x, y) => y.seconds - x.seconds || (from === undefined ? 0 : Math.abs(x.spot.start - from) - Math.abs(y.spot.start - from)))[0]?.spot;
+  // A cut the working cut has no frame beside, or one that sits inside a clip, is at the join its footage is missing at.
+  for (const cut of adrift) {
+    const spot = nearest(cut, spots);
+    if (!spot) continue;
+    const placed: ThreadEdit = { ...cut, at: spot.start };
+    moveTo(placed, spot);
+    listed.push(placed);
+  }
+  for (const cut of listed) {
+    if (!cut.beforeCut || cut.at === undefined || cut.rejected || spotAt(cut.at)) continue;
+    const spot = nearest(cut, spots, cut.at);
+    if (spot) moveTo(cut, spot);
+  }
+  // The cuts at one join share the footage missing there. Each has what the join still skips of its own, the earliest
+  // save first and a save that only reshaped a cut already there last. One left with nothing took nothing of its own
+  // out: the cut before it takes its sentence and its reason to look.
+  const atJoin = new Map<Spot, ThreadEdit[]>();
+  for (const cut of listed) {
+    const spot = cut.beforeCut && cut.at !== undefined && !cut.rejected ? spotAt(cut.at) : undefined;
+    if (spot) atJoin.set(spot, [...atJoin.get(spot) ?? [], cut]);
+  }
+  const folded = new Set<ThreadEdit>();
+  for (const [spot, cuts] of atJoin) {
+    const skipped = Math.max(...spot.gaps.map(gap => gap.end - gap.start));
+    let left = skipped, last: ThreadEdit | undefined;
+    // Of the saves that reshaped it, one that asks for a look is read last, so its words and its reason stay together.
+    for (const cut of cuts.sort((x, y) => Number(reshaped.has(x)) - Number(reshaped.has(y)) || (reshaped.has(x) ? Number(!!x.check) - Number(!!y.check) : 0) || order(x) - order(y))) {
+      const { removed } = cut.beforeCut!, out = outAt(cut, spot);
+      // A cut whose version doesn't show the join's footage is left as it is, with what it says it took.
+      if (!out) { last = cut; continue; }
+      const take = Math.min(out.seconds, length(removed), left);
+      left -= take;
+      if (take <= 0.5 / fps && last) {
+        note(last, cut);
+        folded.add(cut);
+        continue;
+      }
+      if (take < length(removed) - 0.5 / fps) {
+        // What is still out, where its own version shows it; otherwise that much from where it began.
+        const still = out && Math.abs(length(out.range) - take) <= 1 / fps ? out.range : { start: removed.start, end: removed.start + take };
+        cut.beforeCut = { ...cut.beforeCut!, removed: still };
+      }
+      last = cut;
+    }
+  }
+  return listed.filter(edit => !folded.has(edit)).sort((a, b) => (a.at ?? a.range.start) - (b.at ?? b.range.start));
 }

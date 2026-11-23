@@ -6,6 +6,10 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- A first edit Scarlet builds from the pieces to keep now lists every stretch of the recording it left out as a cut, the talk before your first line and after your last too, and the request says how much came out in all.
+- What a request says it took out now adds up to the footage that is out, however Scarlet saved its edits: a cut made beside or over an earlier one is listed at the join where its footage is missing and counted once.
+- An edit Scarlet made in many places under one name, such as a fade on every dialogue join, is one row with its count of places in a first edit's list, and is counted once.
+- Scarlet can crossfade dialogue joins whose sound pieces sit a millisecond or two apart, instead of lining them up first and settling for fades.
 - L on a to-do's card sets it aside for later instead of changing the playback speed; Shift+L still slows playback.
 - Shift+← and Shift+→ move exactly one frame when the video is paused between two frames, instead of none or two.
 - A Gemini request no longer fails when Gemini turns down the effort level Scarlet picks by default.
