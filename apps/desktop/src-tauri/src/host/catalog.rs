@@ -6,10 +6,17 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::detect;
-use super::is_quota_eligible;
 use super::spawn;
-use super::types::{AgentAvailability, McpSpec, SubscriptionQuota};
+use super::types::{AgentAvailability, McpSpec, SubscriptionQuota, CLI_AGENTS};
 use crate::engine::EngineLaunch;
+
+/// Subscriptions only: omit quota when a provider is signed in via API key or not signed in.
+pub(super) fn is_quota_eligible(agent: &AgentAvailability) -> bool {
+    CLI_AGENTS.contains(&agent.id.as_str())
+        && agent.installed
+        && agent.logged_in != Some(false)
+        && agent.auth.as_deref() != Some("api_key")
+}
 
 /// How long the host waits before each new try at a model list it could not read at launch: 30 seconds after it
 /// registers, then 1, 2 and 5 minutes on.

@@ -43,6 +43,38 @@ pub async fn agent_install(state: State<'_, AppState>, agent: String) -> Result<
     Ok(result)
 }
 
+/// Update an installed agent CLI ("claude", "codex" or "gemini") the way it was installed, then detect it again.
+/// Returns the version it is at afterwards.
+#[tauri::command]
+pub async fn agent_update(state: State<'_, AppState>, agent: String) -> Result<Option<String>, String> {
+    if state.host.is_running(&agent).await {
+        return Err("Scarlet is editing with it right now. Update it once that edit is done.".into());
+    }
+    let version_of = |status: &HostStatus| status.agents.iter().find(|a| a.id == agent).and_then(|a| a.version.clone());
+    let before = version_of(&state.host.status().await);
+    crate::host::update::update(&agent, &state.paths.home).await?;
+    let after = version_of(&state.host.refresh_agents().await);
+    if after == before {
+        crate::host::update::note_unchanged(&agent, after.as_deref());
+    }
+    state.host.check_updates().await;
+    Ok(after)
+}
+
+#[tauri::command]
+pub async fn ffmpeg_status(state: State<'_, AppState>) -> Result<crate::ffmpeg::FfmpegStatus, String> {
+    let home = state.paths.home.clone();
+    let resources = state.paths.resource_dir.clone();
+    tokio::task::spawn_blocking(move || crate::ffmpeg::status(&home, resources.as_deref()))
+        .await
+        .map_err(|e| format!("Could not check FFmpeg status: {e}"))
+}
+
+#[tauri::command]
+pub async fn ffmpeg_install(state: State<'_, AppState>) -> Result<crate::ffmpeg::FfmpegStatus, String> {
+    crate::ffmpeg::install(&state.paths.home, state.paths.resource_dir.as_deref()).await
+}
+
 /// One-click subscription sign-in for an agent CLI ("claude", "codex", or "gemini").
 /// Progress arrives on `agent-login://status`.
 #[tauri::command]

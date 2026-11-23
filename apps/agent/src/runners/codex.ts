@@ -4,211 +4,20 @@
  * The private App Server reports cumulative usage during an ephemeral turn.
  * Keep `exec --json` for CLI versions and authentication modes that cannot use
  * the isolated server. Answers reach a fresh run through the replayed Q&A.
+ *
+ * This module builds both command lines and the run's Codex home; `codexAppServer.ts` drives an App Server turn, and
+ * `codexParse.ts` reads the events both report.
  */
 import { lstat, mkdir, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { hasApiKey, stripVars } from "../detect.js";
-import { parseCodexQuota } from "../quota.js";
+import { hasApiKey } from "../detect.js";
 import { privateDirectory, writePrivateFile } from "../private-files.js";
-import { briefInput, COMPACTED, COMPACTING, DEFAULT_STALL_MS, isQuestionTool, nextPlanEvent, questionText, workspaceEnv, type CodexFallbackReason, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
-import { asRecord, earlyResult, exitError, jsonLine, resolveCli, spawnLines, tailSummary, type SpawnOutcome } from "./spawn.js";
-import { addUsage, codexUsage, createUsageReporter, tokenCount, usageWithModel } from "./usage.js";
-import type { AgentUsage, PlanStep } from "@scarlet/shared";
-
-export interface CodexParseState {
-  texts: string[];
-  lastMessage?: string;
-  question?: string;
-  /** The call that asked `question`. */
-  questionItem?: string;
-  questionPosted: boolean;
-  shouldStop: boolean;
-  failed?: string;
-  /** The latest reconnect notice. Codex recovers from most, so it fails the run only if nothing else explains a failure. */
-  retryNotice?: string;
-  turnCompleted: boolean;
-  usage?: AgentUsage;
-  /** The plan last passed on, so one Codex repeats isn't sent twice. */
-  plan?: string;
-}
-
-/**
- * The steps of a `todo_list` item: Codex's `update_plan`, as `codex exec --json` reports it. Each step is its text and
- * whether it is finished. The stream leaves out which step is under way, so none is "in_progress".
- */
-function codexPlan(items: unknown): PlanStep[] | undefined {
-  if (!Array.isArray(items)) return undefined;
-  return items.flatMap((entry): PlanStep[] => {
-    const { text, completed } = (entry ?? {}) as { text?: unknown; completed?: unknown };
-    return typeof text === "string" && text.trim() ? [{ text: text.trim(), state: completed === true ? "done" : "pending" }] : [];
-  });
-}
-
-/** Codex reports stream retries and its HTTPS fallback as errors, then usually carries on. */
-function isRetryNotice(text: string) {
-  return /^Reconnecting\.{3} \d+\/\d+/.test(text) || /^Falling back from WebSockets/.test(text);
-}
-
-export function newCodexState(): CodexParseState {
-  return { texts: [], questionPosted: false, shouldStop: false, turnCompleted: false };
-}
-
-interface CodexItem {
-  id?: string;
-  type?: string;
-  text?: string;
-  command?: string;
-  aggregated_output?: string;
-  exit_code?: number;
-  status?: string;
-  server?: string;
-  tool?: string;
-  arguments?: unknown;
-  result?: unknown;
-  error?: unknown;
-  changes?: unknown;
-  query?: string;
-  items?: unknown;
-  message?: string;
-}
-
-/** Parse one JSONL line from `codex exec --json`. */
-export function parseCodexLine(line: string, st: CodexParseState): RunnerEvent[] {
-  // Anything that isn't one JSON object (a warning, null, a number, a list) is noise: surface it as a log line.
-  const msg = jsonLine(line);
-  return msg ? parseCodexEvent(msg, st) : [{ type: "log", text: line }];
-}
-
-const string = (value: unknown) => typeof value === "string" ? value : undefined;
-const SERVER_STOP_GRACE_MS = 2000;
-
-function parseCodexEvent(msg: Record<string, unknown>, st: CodexParseState): RunnerEvent[] {
-  const events: RunnerEvent[] = [];
-  const type = msg.type as string | undefined;
-  const item = (msg.item as CodexItem | undefined) ?? undefined;
-  const itemText = typeof item?.text === "string" ? item.text : undefined;
-
-  switch (type) {
-    case "thread.started":
-      events.push({ type: "log", text: `Codex session started${msg.thread_id ? ` (${String(msg.thread_id)})` : ""}`, data: { kind: "init", threadId: msg.thread_id } });
-      break;
-    case "turn.started":
-      break;
-    case "item.started":
-    case "item.updated":
-    case "item.completed": {
-      if (!item) break;
-      const completed = type === "item.completed";
-      switch (item.type) {
-        case "agent_message":
-          if (completed && itemText?.trim()) {
-            st.texts.push(itemText);
-            st.lastMessage = itemText;
-            events.push({ type: "log", text: itemText });
-          }
-          break;
-        case "reasoning":
-          // Summarised reasoning: useful as progress but noisy; keep short.
-          if (completed && itemText?.trim()) events.push({ type: "log", text: `(thinking) ${briefInput(itemText, 200)}`, data: { kind: "reasoning" } });
-          break;
-        case "command_execution":
-          if (type === "item.started") {
-            events.push({ type: "tool", text: `shell ${briefInput(item.command, 200)}`, data: { tool: "command_execution", command: item.command } });
-          } else if (completed && item.exit_code !== undefined && item.exit_code !== 0) {
-            events.push({ type: "error", text: `Command exited ${item.exit_code}: ${briefInput(item.command, 120)}\n${briefInput(item.aggregated_output, 400)}` });
-          }
-          break;
-        case "mcp_tool_call": {
-          const name = `${item.server ?? "mcp"}.${item.tool ?? "?"}`;
-          const text = isQuestionTool(item.tool) ? questionText(item.arguments) : undefined;
-          if (text !== undefined) {
-            // Held from the start, should the CLI stop before its result, and said once the engine has it. The
-            // question is the call that asked it: a later call can't take its place, or clear it when it is refused.
-            if (st.question === undefined || st.questionItem === item.id) {
-              st.question = text;
-              st.questionItem = item.id;
-            }
-            if (completed) {
-              const refused = item.status === "failed" || Boolean(item.error) || asRecord(item.result)?.isError === true;
-              const asked = st.questionItem === item.id;
-              if (asked && !refused) {
-                st.questionPosted = true;
-                st.shouldStop = true;
-                events.push({ type: "question", text: st.question, data: { tool: name, itemId: item.id } });
-              } else {
-                // A question Scarlet refused was never asked: the model hears why and carries on, so the run does too.
-                if (asked) st.question = st.questionItem = undefined;
-                if (refused) events.push({ type: "error", text: `${name} failed: ${briefInput(item.error ?? item.result, 400)}` });
-              }
-            }
-          } else if (type === "item.started") {
-            events.push({ type: "tool", text: `${name} ${briefInput(item.arguments)}`.trim(), data: { tool: name, input: item.arguments, itemId: item.id } });
-          } else if (completed && (item.status === "failed" || item.error)) {
-            events.push({ type: "error", text: `${name} failed: ${briefInput(item.error ?? item.result, 400)}` });
-          }
-          break;
-        }
-        case "file_change":
-          if (completed) events.push({ type: "tool", text: `edited files ${briefInput(item.changes, 200)}`, data: { tool: "file_change" } });
-          break;
-        case "web_search":
-          if (type === "item.started") events.push({ type: "tool", text: `web search ${briefInput(item.query, 120)}`, data: { tool: "web_search" } });
-          break;
-        case "contextCompaction":
-        case "context_compaction":
-          if (type === "item.started") events.push(COMPACTING);
-          else if (completed) events.push(COMPACTED);
-          break;
-        case "todo_list": {
-          // The whole plan each time: when the model first makes it, on every update, and once more as the turn ends.
-          const steps = codexPlan(item.items);
-          const next = steps && nextPlanEvent(steps, st.plan);
-          if (next) {
-            st.plan = next.serialized;
-            events.push(next.event);
-          }
-          break;
-        }
-        case "error": {
-          const text = item.message ?? briefInput(item, 400);
-          events.push(isRetryNotice(text) ? { type: "log", text, data: { kind: "connection" } } : { type: "error", text });
-          break;
-        }
-        default:
-          break;
-      }
-      break;
-    }
-    case "turn.completed":
-      st.turnCompleted = true;
-      st.usage = addUsage(st.usage, codexUsage(msg.usage));
-      events.push({ type: "result", text: st.lastMessage ?? "done", data: { usage: msg.usage } });
-      break;
-    case "turn.failed": {
-      // An empty message says no more than a missing one: show the error as Codex wrote it, or say only that the turn failed.
-      const err = (msg.error as { message?: string } | undefined)?.message || briefInput(msg.error, 400) || "turn failed";
-      st.failed = err;
-      events.push({ type: "error", text: err });
-      break;
-    }
-    case "error": {
-      const err = (msg.message as string | undefined) || briefInput(msg, 400);
-      if (isRetryNotice(err)) {
-        st.retryNotice = err;
-        events.push({ type: "log", text: err, data: { kind: "connection" } });
-      } else {
-        st.failed = err;
-        events.push({ type: "error", text: err });
-      }
-      break;
-    }
-    default:
-      break;
-  }
-  return events;
-}
+import { DEFAULT_STALL_MS, workspaceEnv, type CodexFallbackReason, type RunAgentOptions, type RunAgentResult } from "./types.js";
+import { resolveCli, spawnLines } from "./spawn.js";
+import { codexResult, newCodexState, parseCodexLine } from "./codexParse.js";
+import { runCodexServer } from "./codexAppServer.js";
 
 /** TOML basic string. */
 export function tomlString(s: string): string {
@@ -308,6 +117,14 @@ function codexModelConfig(opts: Pick<RunAgentOptions, "effort" | "serviceTier" |
   ];
 }
 
+/** The `app-server` command line `runCodexServer` launches. */
+function codexServerArgs(opts: RunAgentOptions, executable: string | undefined): string[] {
+  return ["app-server", "--strict-config", ...codexConfig({ mcp: opts.mcp, workspace: opts.workspace }, executable),
+    "-c", "project_root_markers=[]", "-c", 'cli_auth_credentials_store="file"',
+    "-c", `tools.update_plan.enabled=${!!opts.plan}`, "-c", "tools.experimental_request_user_input.enabled=false", "--disable", "goals",
+    ...codexModelConfig({ effort: opts.effort })];
+}
+
 async function isolatedCodexHome(cwd: string, env: NodeJS.ProcessEnv): Promise<{ home: string } | { reason: CodexFallbackReason }> {
   // App Server cannot skip the user's config, rules or MCP servers. Share only
   // file-backed login, with a symlink so Codex can still refresh that login.
@@ -350,262 +167,6 @@ export function codexHomeDir(cwd: string): string {
   return `${cwd.replace(/[\\/]+$/, "")}.codex`;
 }
 
-const serverItemTypes: Record<string, string> = {
-  agentMessage: "agent_message", reasoning: "reasoning", commandExecution: "command_execution",
-  mcpToolCall: "mcp_tool_call", fileChange: "file_change", webSearch: "web_search",
-};
-
-function serverItem(item: Record<string, unknown>): CodexItem {
-  return {
-    ...item,
-    type: serverItemTypes[string(item.type) ?? ""],
-    text: string(item.text) ?? (Array.isArray(item.summary) ? item.summary.filter(part => typeof part === "string").join("\n") : undefined),
-    aggregated_output: string(item.aggregatedOutput),
-    exit_code: typeof item.exitCode === "number" ? item.exitCode : undefined,
-  };
-}
-
-const BREAKDOWN = ["inputTokens", "cachedInputTokens", "cacheWriteInputTokens", "outputTokens", "reasoningOutputTokens"] as const;
-type Breakdown = Record<typeof BREAKDOWN[number], number>;
-
-/** One of App Server's token counts (`total`, the thread's, or `last`, the latest model call's). */
-function breakdown(value: unknown): Breakdown | undefined {
-  const counts = asRecord(value);
-  return counts && Object.fromEntries(BREAKDOWN.map(key => [key, tokenCount(counts[key])])) as Breakdown;
-}
-
-function minus(a: Breakdown, b: Breakdown | undefined): Breakdown {
-  return Object.fromEntries(BREAKDOWN.map(key => [key, Math.max(0, a[key] - (b?.[key] ?? 0))])) as Breakdown;
-}
-
-/**
- * What a thread resumed in this run had counted before it: its total on the first update, less the call that update
- * is about. The engine adds up each claim's report, so the earlier attempt's tokens must not count again here. Zero
- * when Codex starts a resumed thread's count afresh.
- */
-function resumedBaseline(value: unknown): Breakdown | undefined {
-  const total = breakdown(asRecord(value)?.total);
-  return total && minus(total, breakdown(asRecord(value)?.last));
-}
-
-/** The thread's tokens as App Server counts them, less what it had counted before this run. */
-function serverUsage(value: unknown, model?: string, baseline?: Breakdown): AgentUsage | undefined {
-  const all = breakdown(asRecord(value)?.total);
-  const total = all && minus(all, baseline);
-  return total && codexUsage({ input_tokens: total.inputTokens, cached_input_tokens: total.cachedInputTokens,
-    cache_write_input_tokens: total.cacheWriteInputTokens, output_tokens: total.outputTokens, reasoning_output_tokens: total.reasoningOutputTokens }, model);
-}
-
-function serverPlan(value: unknown): PlanStep[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  return value.flatMap((entry): PlanStep[] => {
-    const step = asRecord(entry);
-    const text = string(step?.step)?.trim();
-    const status = step?.status;
-    if (!text) return [];
-    return [{ text, state: status === "completed" ? "done" : status === "inProgress" ? "in_progress" : "pending" }];
-  });
-}
-
-function serverError(value: unknown) {
-  const error = asRecord(value);
-  const message = string(error?.message);
-  const detail = string(error?.additionalDetails);
-  return message && detail ? `${message} (${detail})` : message;
-}
-
-async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, bin: string, home: string): Promise<RunAgentResult | undefined> {
-  const executable = codexExecutable(bin);
-  const args = ["app-server", "--strict-config", ...codexConfig({ mcp: opts.mcp, workspace: opts.workspace }, executable),
-    "-c", "project_root_markers=[]", "-c", 'cli_auth_credentials_store="file"',
-    "-c", `tools.update_plan.enabled=${!!opts.plan}`, "-c", "tools.experimental_request_user_input.enabled=false", "--disable", "goals",
-    ...codexModelConfig({ effort: opts.effort })];
-  const state = newCodexState();
-  const serviceTier = opts.serviceTier ?? (opts.fast ? "fast" : undefined);
-  let threadId: string | undefined;
-  let turnId: string | undefined;
-  let turnRequested = false;
-  let startupFailure: CodexFallbackReason | undefined;
-  let interrupted = false;
-  let completed = false;
-  let model = opts.model;
-  let finalMessage: string | undefined;
-  let planText: string | undefined;
-  let stopTimer: NodeJS.Timeout | undefined;
-  const pendingEvents: [string, Record<string, unknown>][] = [];
-  const send = (message: Record<string, unknown>) => handle.child.stdin?.write(`${JSON.stringify(message)}\n`);
-  const complete = () => {
-    completed = true;
-    handle.child.stdin?.end();
-    stopTimer ??= setTimeout(handle.kill, SERVER_STOP_GRACE_MS).unref();
-  };
-  const interrupt = () => {
-    if (completed || interrupted) return true;
-    if (!threadId || !turnId) return false;
-    interrupted = true;
-    send({ id: 4, method: "turn/interrupt", params: { threadId, turnId } });
-    return true;
-  };
-  const emit = (event: Record<string, unknown>) => {
-    for (const e of parseCodexEvent(event, state)) opts.onEvent(e);
-  };
-
-  let compactionItems = false;
-  let baseline: Breakdown | undefined;
-  const reportUsage = createUsageReporter(opts.onUsage, opts.model);
-  const notify = (method: string, params: Record<string, unknown>) => {
-    const eventTurn = string(params.turnId) ?? string(asRecord(params.turn)?.id);
-    if (completed || !eventTurn || eventTurn !== turnId) return;
-    switch (method) {
-      case "thread/tokenUsage/updated": {
-        if (opts.resumeSession) baseline ??= resumedBaseline(params.tokenUsage);
-        const usage = serverUsage(params.tokenUsage, model, baseline);
-        if (!usage) break;
-        state.usage = usage;
-        reportUsage(usage);
-        break;
-      }
-      // Codex compacted the thread's context. Newer versions report it as an item too, and that one counts.
-      case "thread/compacted":
-        if (!compactionItems) opts.onEvent(COMPACTED);
-        break;
-      case "item/started":
-      case "item/completed": {
-        const item = asRecord(params.item);
-        if (!item) break;
-        if (item.type === "contextCompaction") {
-          compactionItems = true;
-          if (method === "item/started") opts.onEvent(COMPACTING);
-          else if (method === "item/completed") opts.onEvent(COMPACTED);
-          break;
-        }
-        if (method === "item/completed") {
-          const text = string(item.text)?.trim();
-          if (item.type === "agentMessage" && item.phase === "final_answer" && text) finalMessage = text;
-          if (item.type === "plan" && text) planText = text;
-        }
-        emit({ type: method.replace("/", "."), item: serverItem(item) });
-        if (state.shouldStop) {
-          state.shouldStop = false;
-          // Codex can publish a final count while finishing the interrupted turn.
-          interrupt();
-          stopTimer ??= setTimeout(handle.kill, SERVER_STOP_GRACE_MS).unref();
-        }
-        break;
-      }
-      case "turn/plan/updated": {
-        const steps = serverPlan(params.plan);
-        const next = opts.plan && steps ? nextPlanEvent(steps, state.plan) : undefined;
-        if (next) {
-          state.plan = next.serialized;
-          opts.onEvent(next.event);
-        }
-        break;
-      }
-      case "error": {
-        const text = serverError(params.error) ?? "Codex reported an error";
-        if (params.willRetry === true) {
-          state.retryNotice = text;
-          opts.onEvent({ type: "log", text, data: { kind: "connection" } });
-        } else emit({ type: "error", message: text });
-        break;
-      }
-      case "turn/completed": {
-        const turn = asRecord(params.turn);
-        if (!turn || turnId !== turn.id) break;
-        if (turn.status === "completed") {
-          state.lastMessage = finalMessage ?? state.lastMessage ?? planText;
-          emit({ type: "turn.completed" });
-        } else if (!state.question) {
-          emit({ type: "turn.failed", error: { message: serverError(turn.error) ?? state.failed ?? `Codex turn ${turn.status ?? "failed"}` } });
-        }
-        complete();
-        break;
-      }
-    }
-  };
-
-  let pending = 1;
-  const handle = spawnLines(executable ?? bin, args, {
-    cwd: opts.cwd, env: { ...stripVars(env, ["CODEX_HOME", "CODEX_SQLITE_HOME"]), CODEX_HOME: home }, interactive: true, signal: opts.signal,
-    timeoutMs: opts.timeoutMs, stallMs: opts.stallMs ?? DEFAULT_STALL_MS, interrupt,
-    onLine(line) {
-      if (completed) return;
-      const message = jsonLine(line);
-      if (!message) return;
-      const id = message.id;
-      const method = string(message.method);
-      if (method) {
-        if (id !== undefined) {
-          // This client never authorizes Codex's built-in approval or input requests.
-          send({ id, error: { code: -32601, message: "This request is unavailable in Scarlet" } });
-          return;
-        }
-        const params = asRecord(message.params);
-        if (method === "account/rateLimits/updated" && params) {
-          const quota = parseCodexQuota(params);
-          if (quota) opts.onQuota?.(quota);
-          return;
-        }
-        if (!turnRequested || !params || params.threadId !== threadId) return;
-        // A notification can be queued before the turn/start response confirms which turn is ours.
-        if (pending === 3) pendingEvents.push([method, params]);
-        else notify(method, params);
-        return;
-      }
-      if (id !== pending) return;
-      const result = asRecord(message.result);
-      if (id === 1) {
-        if (!result) {
-          startupFailure = "initialize_failed";
-          return complete();
-        }
-        send({ method: "initialized" });
-        pending = 2;
-        // The thread is kept in the run's private Codex home, so a run cut short or paused on a question resumes it.
-        send(opts.resumeSession
-          ? { id: 2, method: "thread/resume", params: { threadId: opts.resumeSession, model, serviceTier } }
-          : { id: 2, method: "thread/start", params: { ephemeral: false, model, serviceTier } });
-      } else if (id === 2) {
-        const thread = asRecord(result?.thread);
-        threadId = string(thread?.id);
-        const profile = result?.activePermissionProfile;
-        const approval = result?.approvalPolicy;
-        if (!threadId || thread?.ephemeral !== false || asRecord(profile)?.id !== "scarlet" || approval !== "never" || (opts.resumeSession && threadId !== opts.resumeSession)) {
-          startupFailure = opts.resumeSession ? "thread_resume_failed" : threadId ? "thread_policy_mismatch" : "thread_start_failed";
-          return complete();
-        }
-        model = string(result?.model) ?? model;
-        // The engine keeps the thread as the run's session, which an answer or a resume after a quit carries on in.
-        opts.onEvent({ type: "log", text: `Codex session started (${threadId})`, data: { kind: "init", threadId, sessionId: threadId } });
-        turnRequested = true;
-        pending = 3;
-        send({ id: 3, method: "turn/start", params: { threadId, input: [{ type: "text", text: opts.instruction, text_elements: [] }] } });
-      } else if (id === 3) {
-        turnId = string(asRecord(result?.turn)?.id);
-        if (!turnId) {
-          emit({ type: "error", message: serverError(message.error) ?? "Codex could not start the turn" });
-          return complete();
-        }
-        pending = 0;
-        for (const [method, params] of pendingEvents.splice(0)) notify(method, params);
-      }
-    },
-  });
-  send({ id: 1, method: "initialize", params: { clientInfo: { name: "scarlet", title: "Scarlet", version: "0.1.0" },
-    capabilities: { experimentalApi: true, requestAttestation: false } } });
-  const outcome = await handle.done;
-  clearTimeout(stopTimer);
-  // Startup can fail on older CLIs. Never retry a turn that may already have edited the project.
-  if (!turnRequested && !outcome.aborted && !outcome.timedOut) {
-    opts.onCodexFallback?.(startupFailure ?? "app_server_unavailable");
-    // A thread that can't be resumed, here or by `codex exec`, which keeps none: the host starts a fresh run.
-    if (opts.resumeSession) return { ok: false, summary: "", resumeFailed: true, error: `Codex could not resume its thread (${startupFailure ?? "app_server_unavailable"})` };
-    return undefined;
-  }
-  return codexResult(state, outcome, state.lastMessage, model, state.turnCompleted, threadId);
-}
-
 export async function runCodex(opts: RunAgentOptions): Promise<RunAgentResult> {
   // Scarlet's server reads its variables from Codex's; the shell never gets them (`shell_environment_policy`).
   const env = { ...workspaceEnv(opts.env ?? process.env, opts.workspace), ...opts.mcp.env };
@@ -613,7 +174,8 @@ export async function runCodex(opts: RunAgentOptions): Promise<RunAgentResult> {
   await writePrivateFile(join(opts.cwd, "AGENTS.md"), opts.systemPrompt);
   const isolation = await isolatedCodexHome(opts.cwd, env).catch(() => ({ reason: "isolation_unavailable" as const }));
   if ("home" in isolation) {
-    const result = await runCodexServer(opts, env, bin, isolation.home);
+    const executable = codexExecutable(bin);
+    const result = await runCodexServer(opts, env, executable ?? bin, codexServerArgs(opts, executable), isolation.home);
     if (result) return result;
   } else {
     opts.onCodexFallback?.(isolation.reason);
@@ -650,21 +212,4 @@ export async function runCodex(opts: RunAgentOptions): Promise<RunAgentResult> {
     /* not written */
   }
   return codexResult(st, outcome, last, opts.model, outcome.code === 0 || st.turnCompleted);
-}
-
-function codexResult(st: CodexParseState, outcome: SpawnOutcome, last: string | undefined, model: string | undefined, completed: boolean, sessionId?: string): RunAgentResult {
-  const usage = usageWithModel(st.usage, model);
-  // A question carries the thread with it, so the answer resumes it.
-  const early = earlyResult(st, outcome, { usage, ...(sessionId && { sessionId }) });
-  if (early) return early;
-  // A failure line fails the run whatever it says, an empty reason included.
-  const ok = st.failed === undefined && completed;
-  return {
-    ok,
-    summary: last ?? tailSummary(st.texts),
-    error: ok ? undefined : st.failed ?? st.retryNotice ?? exitError("codex", outcome),
-    exitCode: outcome.code,
-    usage,
-    ...(sessionId && { sessionId }),
-  };
 }

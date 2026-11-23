@@ -23,7 +23,7 @@ import { approves, checkSpan, letGo, type Listening, type Side } from "./types";
  * Scarlet's note in the card's row: up to two lines, and a longer note opens in full on a click and folds again on the
  * next. A call Scarlet hasn't checked yet says so first.
  */
-export function EditNote({ text, unchecked }: { text: string; unchecked?: boolean }) {
+function EditNote({ text, unchecked }: { text: string; unchecked?: boolean }) {
   const { ref, clipped, open, opens, toggle } = useClippedExpand<HTMLHeadingElement>(text, 0);
   // No button: the pointer changes over a clipped note, and the hover title carries it for anyone not clicking.
   return <h2 ref={ref} className={`edit-card-title${open ? " is-open" : clipped ? " is-clipped" : ""}`}
@@ -36,14 +36,14 @@ export function EditNote({ text, unchecked }: { text: string; unchecked?: boolea
  * The icon on a cut's card that opens its words under the card's row, and folds them again. The words are the cut's
  * own, so they sit with its note and decisions, not in the chat. Hovering names it.
  */
-export function TranscriptLink({ open, toggle, disabled }: { open: boolean; toggle(): void; disabled?: boolean }) {
+function TranscriptLink({ open, toggle, disabled }: { open: boolean; toggle(): void; disabled?: boolean }) {
   const name = open ? "Hide transcript" : "Show transcript";
   return <button type="button" className="edit-card-icon edit-card-words" data-log-control="toggle-transcript" aria-label={name} title={name} aria-expanded={open} disabled={disabled} onClick={letGo(toggle)}>
     <Icon name="diff" size={14} /></button>;
 }
 
 /** Where the decisions were, on a call that's with Scarlet: at work on it, asking about it, or not started yet. */
-export function CallStanding({ run, answer }: { run?: Task; answer?(): void }) {
+function CallStanding({ run, answer }: { run?: Task; answer?(): void }) {
   const state = run?.state;
   return state === "queued" ? <span className="edit-card-status" role="status">Queued</span>
     : state === "waiting_for_user" && answer ? <button type="button" className="simple-link edit-card-status is-ask" aria-label="Answer" onClick={answer}>Needs your answer</button>
@@ -57,7 +57,7 @@ export function CallStanding({ run, answer }: { run?: Task; answer?(): void }) {
  * proposes keeping it, so there Keep keeps it and Reject edit cuts as first staged. Revise (R) aims the message box at this call, so feedback on it goes ahead of
  * requests waiting for the pass.
  */
-export function CallActions({ choice, proposes = "cut", disabled, decide, revise }: { choice?: CutChoice; proposes?: CutChoice; disabled: boolean; decide(choice: CutChoice): void; revise(): void }) {
+function CallActions({ choice, proposes = "cut", disabled, decide, revise }: { choice?: CutChoice; proposes?: CutChoice; disabled: boolean; decide(choice: CutChoice): void; revise(): void }) {
   const skips: CutChoice = proposes === "cut" ? "keep" : "cut";
   useHotkeys(event => {
     if (disabled || event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
@@ -76,6 +76,21 @@ export function CallActions({ choice, proposes = "cut", disabled, decide, revise
     <button type="button" className="edit-card-icon edit-card-skip" data-log-control="skip-call" aria-label="Reject edit" aria-keyshortcuts="X" title="Reject edit (X)" aria-pressed={choice === skips}
       disabled={disabled} onClick={letGo(() => decide(skips))}><Icon name="x" size={12} /></button>
   </div>;
+}
+
+/** Over a card's row while Before plays footage another cut took out: whose it is. */
+function PlayingTakenOut({ at }: { at: string }) {
+  return <div className="edit-card-switched" role="status">
+    <span className="edit-card-switched-side">Before</span>
+    <span className="edit-card-switched-text">The cut at {at} took this part out.</span>
+  </div>;
+}
+
+/** A cut's passage before its words are in: the mark alone, saying they're on their way, or Retry when they couldn't be read. */
+function PassageWaiting({ length, error, retry }: { length: string; error?: string; retry(): void }) {
+  return <div className="edit-passage"><p className="review-spoken"><CutMark length={length} />{" "}
+    {error ? <button type="button" className="btn-quiet" title={error} onClick={retry}>Retry transcript</button>
+      : <span className="edit-passage-wait working-text" role="status">Loading the words…</span>}</p></div>;
 }
 
 /**
@@ -156,10 +171,7 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
 }) {
   return <section className="edit-card" role="region" aria-label="Applied edit">
     {/* Whose footage is playing, and nothing else: the lit icon in the row under it is the way back, and names its key. */}
-    {visiting && <div className="edit-card-switched" role="status">
-      <span className="edit-card-switched-side">Before</span>
-      <span className="edit-card-switched-text">The cut at {visiting.at} took this part out.</span>
-    </div>}
+    {visiting && <PlayingTakenOut at={visiting.at} />}
     <div className="edit-card-bar">
       {/* One the pass still waits on leads with its number, as on its line in the chat and its dot; its place among the
           ones still to check is on hover. Any other flagged edit leads with that place. */}
@@ -182,9 +194,7 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
         way, as a call's does. When it couldn't be read the passage offers to ask again, with why on hover. */}
     {scriptOpen && beforeCut && <div className="thread-passage">{cutBeforeTimeline
       ? <EditPassage key={editKey(reviewingEdit)} timeline={cutBeforeTimeline} media={media} range={beforeCut.removed} length={lengthLabel(removedLength)} others={otherCuts} />
-      : <div className="edit-passage"><p className="review-spoken"><CutMark length={lengthLabel(removedLength)} />{" "}
-        {cutBeforeError ? <button type="button" className="btn-quiet" title={cutBeforeError} onClick={onRetryCutBefore}>Retry transcript</button>
-          : <span className="edit-passage-wait working-text" role="status">Loading the words…</span>}</p></div>}</div>}
+      : <PassageWaiting length={lengthLabel(removedLength)} error={cutBeforeError} retry={onRetryCutBefore} />}</div>}
     {sourceOpen && shownSource && <SourceRow key={sourceKey} file={shownSource} />}
     {/* The controls are a row of their own under the note: Before/After and the transcript at the left, the decisions at
         the right, the same on every card. */}
@@ -249,10 +259,7 @@ export function CallCard({ projectId, pass, openCall, listening, callNum, callAt
 }) {
   return <section className="edit-card is-call" role="region" aria-label="Call">
     {/* A grey gap clicked: whose footage is playing, as on an applied cut's card. The lit icon is the way back. */}
-    {visit?.side === "before" && <div className="edit-card-switched" role="status">
-      <span className="edit-card-switched-side">Before</span>
-      <span className="edit-card-switched-text">The cut at {visit.label} took this part out.</span>
-    </div>}
+    {visit?.side === "before" && <PlayingTakenOut at={visit.label} />}
     {(decideError || pass.error) && <p className="text-bad" role="alert">{decideError || pass.error}</p>}
     <div className="edit-card-bar">
       {/* The call's number, the same as on its line in the chat and its dot on the timeline. */}
@@ -271,9 +278,7 @@ export function CallCard({ projectId, pass, openCall, listening, callNum, callAt
     {callScriptOpen && <div className="thread-passage is-call">{callWords ? <>
       <EditPassage key={callKey} current={conflict} timeline={callWords.timeline} media={media} range={callWords.range} length={callLength} />
       {!conflict && <OtherTakes projectId={projectId} timeline={callWords.timeline} media={media} range={callWords.range} />}
-    </> : <div className="edit-passage"><p className="review-spoken"><CutMark length={callLength} />{" "}
-      {placing && stagedOnError ? <button type="button" className="btn-quiet" title={stagedOnError} onClick={onRetryStagedOn}>Retry transcript</button>
-        : <span className="edit-passage-wait working-text" role="status">Loading the words…</span>}</p></div>}</div>}
+    </> : <PassageWaiting length={callLength} error={placing ? stagedOnError : undefined} retry={onRetryStagedOn} />}</div>}
     <div className="edit-card-controls">
       <span className="edit-card-side">
         {/* Until the cut is placed on the working cut there is nothing to play it on, as with an applied cut. */}

@@ -59,6 +59,8 @@ function telemetry(options: {
   reply?: (call: number) => Reply;
   now?: () => number;
   idFile?: string;
+  /** The key the packaged engine has built in. */
+  defaultKey?: string;
   preference?: () => { enabled: boolean; revision: number };
 } = {}): Telemetry {
   const fakeFetch = async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
@@ -72,7 +74,7 @@ function telemetry(options: {
     return new Response(null, { status: reply });
   };
   return createTelemetry({
-    config: telemetryConfig({ SCARLET_POSTHOG_KEY: "phc_test", ...options.env }),
+    config: telemetryConfig({ SCARLET_POSTHOG_KEY: "phc_test", ...options.env }, options.defaultKey),
     idFile: options.idFile ?? idFile,
     preference: options.preference,
     log: message => logs.push(message),
@@ -179,6 +181,7 @@ describe("what is sent", () => {
       platform: process.platform,
       arch: process.arch,
       scarletVersion: SCARLET_VERSION,
+      channel: "dev",
     };
     expect(sent).toHaveLength(1);
     const request = sent[0]!;
@@ -203,6 +206,19 @@ describe("what is sent", () => {
     ]);
     expect(request.body.batch[0]!.uuid).not.toBe(request.body.batch[1]!.uuid);
     expect(JSON.stringify(request.body)).not.toContain(raw);
+  });
+
+  it("says which build it is: release only for the built-in key in a public package", async () => {
+    const release = telemetry({ env: { SCARLET_POSTHOG_KEY: "", SCARLET_RELEASE_CHANNEL: "stable" }, defaultKey: "phc_default" });
+    release.record("a");
+    await release.flush();
+    const own = telemetry({ env: { SCARLET_RELEASE_CHANNEL: "stable" }, defaultKey: "phc_default" });
+    own.record("a", { channel: "release" });
+    await own.flush();
+    expect(sent.map(request => [request.body.api_key, request.body.batch[0]!.properties.channel])).toEqual([
+      ["phc_default", "release"],
+      ["phc_test", "dev"],
+    ]);
   });
 
   it("posts to the host that is set", async () => {
@@ -234,6 +250,41 @@ describe("what is sent", () => {
     expect(second).toBe(first);
     await first;
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe("exports", () => {
+  const exported = () => sent.flatMap(request => request.body.batch).filter(event => event.event === "export.finished")
+    .map(event => [event.properties.route, event.properties.firstExport]);
+
+  it("says which export was the install's first, across launches", async () => {
+    const first = telemetry();
+    first.recordExport("srt", false);
+    first.recordExport("render", false);
+    await first.close();
+    expect(existsSync(join(dir, "telemetry-exported"))).toBe(true);
+    expect(readFileSync(join(dir, "telemetry-exported"), "utf8")).toBe("");
+    const next = telemetry();
+    next.recordExport("otio", false);
+    await next.close();
+    expect(exported()).toEqual([["srt", true], ["render", false], ["otio", false]]);
+  });
+
+  it("isn't the first when the library exported before the marker was kept", async () => {
+    const t = telemetry();
+    t.recordExport("handoff", true);
+    t.recordExport("vtt", false);
+    await t.close();
+    expect(exported()).toEqual([["handoff", false], ["vtt", false]]);
+    expect(existsSync(join(dir, "telemetry-exported"))).toBe(true);
+  });
+
+  it("keeps no marker while reports are off", async () => {
+    const t = telemetry({ env: { SCARLET_TELEMETRY_ENABLED: "false" } });
+    t.recordExport("render", false);
+    await t.close();
+    expect(sent).toEqual([]);
+    expect(existsSync(join(dir, "telemetry-exported"))).toBe(false);
   });
 });
 

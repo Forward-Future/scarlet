@@ -432,6 +432,11 @@ it("hands off silently when switching models on an answer or on resume-editing, 
   appendTaskEvent(app.ctx, get(first.id), { type: "answer", text: "Yes, keep music bed." });
   saveTask(app.ctx, { ...get(first.id), state: "done", summary: "Removed 4 pauses.", reply: "Left breath pauses around the punchline intact.", finishedAt: ts });
   app.ctx.repos.changes.put({
+    id: "chg_f0", projectId: project.id, taskId: first.id, threadId: first.id,
+    fromVersion: "ver_0", toVersion: "ver_0b", description: "Early draft of opening cut",
+    author: { type: "agent", name: "Claude" }, noteIds: [], timelineEdits: [], ranges: [], state: "rejected", replacedBy: "chg_f1", renders: [], createdAt: "2026-11-22T00:00:00Z", updatedAt: ts,
+  } as unknown as Change);
+  app.ctx.repos.changes.put({
     id: "chg_f1", projectId: project.id, taskId: first.id, threadId: first.id,
     fromVersion: "ver_0", toVersion: "ver_1", description: "Cut opening dead air",
     author: { type: "agent", name: "Claude" }, noteIds: [], timelineEdits: [], ranges: [], state: "approved", renders: [], createdAt: "2026-11-22T00:00:01Z", updatedAt: ts,
@@ -448,7 +453,33 @@ it("hands off silently when switching models on an answer or on resume-editing, 
   expect(followUp.instruction).toContain("Asked editor: Keep music bed?");
   expect(followUp.instruction).toContain("Editor answered: Yes, keep music bed.");
   expect(followUp.instruction).toContain("You replied: Removed 4 pauses.");
-  expect(followUp.instruction).toContain("Editorial note: Left breath pauses around the punchline intact.");
+  expect(followUp.instruction).toContain("Your reply to the editor: Left breath pauses around the punchline intact.");
+  expect(followUp.instruction).toContain('Earlier change: "Early draft of opening cut" (replaced by chg_f1, which holds its cuts now; the editor made no decision on it).');
   expect(followUp.instruction).toContain('Earlier change: "Cut opening dead air" (approved).');
   expect(followUp.instruction).toContain('Latest change: "Cut mid-roll dead air" (ready).');
+  await api("POST", `/tasks/${followUp.id}/cancel`);
+
+  // 4. Late /question callback from the previous model's host cannot reattach its old session after an answer switches models.
+  const raced = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", model: "opus", instruction: "Trim pauses", createdBy: scarlet });
+  const racedStarted = "2026-11-22T01:00:00.000Z";
+  saveTask(app.ctx, { ...get(raced.id), state: "running", startedAt: racedStarted });
+  // MCP asks first without a sessionId.
+  await api("POST", `/tasks/${raced.id}/question`, { startedAt: racedStarted, text: "Keep intro?" });
+  expect(get(raced.id).state).toBe("waiting_for_user");
+  // Editor rejects api agent, then answers while switching to Codex before Claude's host sends its sessionId.
+  expect((await api("POST", `/tasks/${raced.id}/answer`, { text: "Yes", agent: "api" })).status).toBe(400);
+  expect((await api("POST", `/tasks/${raced.id}/answer`, { text: "Yes", agent: "codex", model: "gpt-5.4" })).status).toBe(200);
+  expect(get(raced.id)).toMatchObject({ state: "queued", agent: "codex", model: "gpt-5.4" });
+  expect(get(raced.id).session).toBeUndefined();
+  // Claude's host finishes and posts its sessionId with the old startedAt; it must not be attached to Codex.
+  await api("POST", `/tasks/${raced.id}/question`, { startedAt: racedStarted, text: "Keep intro?", sessionId: "claude-stale-sess" });
+  expect(get(raced.id).session).toBeUndefined();
+  expect((await prompt(raced.id)).resumeSession).toBeUndefined();
+  await api("POST", `/tasks/${raced.id}/cancel`);
+
+  // 5. Resuming a paused project rejects agent "api" without unpausing editing.
+  await api("POST", `/projects/${project.id}/stop-editing`);
+  expect((await api("POST", `/projects/${project.id}/resume-editing`, { agent: "api" })).status).toBe(400);
+  expect(app.ctx.repos.projects.header(project.id)!.editingPaused).toBe(true);
+  expect((await api("POST", `/projects/${project.id}/resume-editing`, {})).status).toBe(200);
 });

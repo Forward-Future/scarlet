@@ -2,7 +2,7 @@ import { normalizeTranscriptToken } from "@scarlet/shared";
 import { clipEnd, rangesOverlap, timelineToSource, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
 import { appendInterval, isTag, round3 } from "./analysis.js";
 import { dialogueAudioStream, dialogueClips, type AudioLevels } from "./dialogue-join.js";
-import type { DialoguePlanSources } from "./dialogue-plan.js";
+import type { DialoguePlanSources } from "./dialogue-cut-resolve.js";
 import { timelineJoins } from "./timeline-perception.js";
 
 const SHORT_PIECE = .5;

@@ -5,6 +5,7 @@ import type { ServerSettings } from "@scarlet/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Ctx } from "../context.js";
 import * as ffmpeg from "../render/ffmpeg.js";
+import { crisperWorker } from "./crisperWorker.js";
 import { effectiveProviderName, getTranscriptionProvider, importTranscriptionPolicy, spokenText } from "./index.js";
 
 it("reads what was said in a short recording, without whisper's labels for silence and sounds", () => {
@@ -56,6 +57,7 @@ describe("choosing a transcription provider", () => {
     return { ctx, policy, shutdown, settings, model };
   }
   /** whisper-cli stands in: it records the program and model it was run with and writes an empty transcript. */
+  const servedArgs: string[][] = [];
   function whisper() {
     const runs: Array<{ binary: string; model: string; language: string }> = [];
     vi.spyOn(ffmpeg, "run").mockImplementation(async (binary, args, opts) => {
@@ -63,6 +65,13 @@ describe("choosing a transcription provider", () => {
       runs.push({ binary, model: args[args.indexOf("-m") + 1]!, language: args[args.indexOf("-l") + 1]! });
       await writeFile(args[args.indexOf("-of") + 1] + ".json", JSON.stringify({ result: { language: "en" }, transcription: [] }));
       return Buffer.alloc(0);
+    });
+    // The CrisperWhisper adapter reads in a worker that keeps its model loaded.
+    vi.spyOn(crisperWorker, "transcribe").mockImplementation(async ({ binary, args, language, out, signal }) => {
+      signal?.throwIfAborted();
+      runs.push({ binary, model: args[args.indexOf("-m") + 1]!, language });
+      servedArgs.push(args);
+      await writeFile(out + ".json", JSON.stringify({ result: { language: "en" }, transcription: [] }));
     });
     return runs;
   }
@@ -162,13 +171,13 @@ describe("choosing a transcription provider", () => {
       expect(provider.separateWhisperLane).toBe(false);
       await provider.transcribe({ path: window, tmpDir: dir, dialogueWindow: {} });
       expect(runs.at(-1)).toMatchObject({ binary, model });
-      expect(vi.mocked(ffmpeg.run).mock.lastCall![1].slice(0, 5)).toEqual(["-I", "-B", releaseScript, "-m", model]);
+      expect(servedArgs.at(-1)!.slice(0, 6)).toEqual(["-I", "-B", releaseScript, "--serve", "-m", model]);
       expect(install.model).not.toHaveBeenCalled();
     }
     // A standalone engine can still use the adapter installed alongside the weights.
     const standalone = getTranscriptionProvider(engine({ provider: "whispercpp" }).ctx)!;
     await standalone.transcribe({ path: window, tmpDir: dir, dialogueWindow: {} });
-    expect(vi.mocked(ffmpeg.run).mock.lastCall![1].slice(0, 5)).toEqual(["-I", "-B", script, "-m", model]);
+    expect(servedArgs.at(-1)!.slice(0, 6)).toEqual(["-I", "-B", script, "--serve", "-m", model]);
     const waiting = getTranscriptionProvider(preset.ctx)!;
     const marker = join(base, ".building-venv");
     await writeFile(marker, "");

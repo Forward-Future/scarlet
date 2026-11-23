@@ -30,6 +30,8 @@ export const runAgent: RunAgentFn = async (opts: RunAgentOptions): Promise<RunAg
 export * from "./types.js";
 export { parseClaudeLine, newClaudeState, buildClaudeCommand, runClaude, claudeRunUsage } from "./claude.js";
 export { addUsage, claudeUsage, codexUsage, geminiUsage, tokenCount } from "./usage.js";
-export { parseCodexLine, newCodexState, buildCodexCommand, runCodex, tomlString, tomlInlineTable } from "./codex.js";
-export { acpMcpServer, buildGeminiCommand, isScarletMcpPermission, newGeminiState, parseGeminiAcpUpdate, parseGeminiLine, permissionOutcome, runGemini } from "./gemini.js";
+export { parseCodexLine, newCodexState } from "./codexParse.js";
+export { buildCodexCommand, runCodex, tomlString, tomlInlineTable } from "./codex.js";
+export { acpMcpServer, buildGeminiCommand, isScarletMcpPermission, newGeminiState, parseGeminiAcpUpdate, parseGeminiLine, permissionOutcome } from "./geminiAcp.js";
+export { runGemini } from "./gemini.js";
 export { resolveMcpCliPath, nodeExecutable, mcpEnv, quoteForCmd, spawnSpec, spawnLines, resolveCli } from "./spawn.js";

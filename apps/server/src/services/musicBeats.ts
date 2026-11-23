@@ -8,7 +8,7 @@
  * up or down and stays there. The sound is decoded by the bundled FFmpeg; the arithmetic is here, with no model.
  */
 import { stat } from "node:fs/promises";
-import { fileInDirectoryAsync, LOCAL_MEDIA_INPUT } from "@scarlet/render";
+import { audioMapArgs, fileInDirectoryAsync, heardAudio, heardAudioKey, LOCAL_MEDIA_INPUT, type HeardAudio } from "@scarlet/render";
 import type { MusicReading, MusicSection } from "@scarlet/shared";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
@@ -332,10 +332,10 @@ export function analyzeMusic(samples: Float32Array, from = 0): MusicReading {
       Math.min(4, Math.max(1, span * HOP_SECONDS * beatsPerBar))), levels };
 }
 
-/** Decode a stretch of a file's first audio stream as mono floats at SAMPLE_RATE. */
-async function decode(file: string, from: number, to: number | undefined, signal: AbortSignal) {
+/** Decode a stretch of a file's heard audio (its chosen track or every track mixed, else its first) as mono floats at SAMPLE_RATE. */
+async function decode(file: string, from: number, to: number | undefined, signal: AbortSignal, audio?: HeardAudio) {
   const pcm = await ffmpeg(["-ss", ffmpegPosition(from), ...LOCAL_MEDIA_INPUT, "-i", file, ...(to !== undefined ? ["-t", String(to - from)] : []),
-    "-vn", "-map", "0:a:0", "-ac", "1", "-ar", String(SAMPLE_RATE), "-f", "f32le", "pipe:1"],
+    "-vn", ...audioMapArgs(audio), "-ac", "1", "-ar", String(SAMPLE_RATE), "-f", "f32le", "pipe:1"],
   { signal, maxStdout: Math.ceil(MAX_MUSIC_SECONDS * SAMPLE_RATE * 4 * 1.01) });
   return new Float32Array(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength - pcm.byteLength % 4));
 }
@@ -355,9 +355,10 @@ export async function musicBeats(ctx: Ctx, media: MediaAsset & { projectId: stri
   const info = await stat(file);
   let cache = readings.get(ctx);
   if (!cache) readings.set(ctx, cache = new AnalysisCache<MusicReading>(r => 400 + r.beats.length * 24 + r.levels.db.length * 16, 8 * 1024 * 1024, 2));
-  const key = JSON.stringify([MUSIC_BEATS_VERSION, file, info.size, info.ctimeMs, info.mtimeMs, from, Number.isFinite(end) ? end : null]);
+  const audio = heardAudio(media);
+  const key = JSON.stringify([MUSIC_BEATS_VERSION, file, info.size, info.ctimeMs, info.mtimeMs, from, Number.isFinite(end) ? end : null, heardAudioKey(audio)]);
   // A reading someone asked for isn't stopped by a pause of the project's media work. Trash and a quit do.
   const stop = ctx.projectSignal(media.projectId);
-  return cache.get(key, async work => analyzeMusic(await decode(file, from, Number.isFinite(end) ? end : undefined, AbortSignal.any([work, stop])), from),
+  return cache.get(key, async work => analyzeMusic(await decode(file, from, Number.isFinite(end) ? end : undefined, AbortSignal.any([work, stop]), audio), from),
     { signal: signal ? AbortSignal.any([signal, stop]) : stop });
 }
