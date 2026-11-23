@@ -4,8 +4,23 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use super::events::flatten_tool_result;
 use crate::host::types::{record_plan, trimmed_str, value_text, PlanStep, RunnerEvent};
+
+pub(super) fn flatten_tool_result(content: Option<&Value>) -> String {
+    match content {
+        None => String::new(),
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|c| match c {
+                Value::Object(o) if o.contains_key("text") => value_text(&o["text"]),
+                _ => String::new(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Some(other) => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
 
 /// The plan as Claude Code's to-do tools have left it, and their calls still waiting for a result.
 #[derive(Debug, Default, Clone)]

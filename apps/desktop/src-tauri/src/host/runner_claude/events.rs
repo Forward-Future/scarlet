@@ -2,27 +2,11 @@
 
 use serde_json::{json, Map, Value};
 
-use super::plan::{plan_call, plan_change, plan_result};
+use super::plan::{flatten_tool_result, plan_call, plan_change, plan_result};
 use super::ClaudeState;
 use crate::host::runner::parse_json_object;
 use crate::host::types::{brief, brief_input, compacting_event, compaction_ended_event, is_question_tool, pretty_tool_name, prune_nulls, question_words, value_text, RunnerEvent};
 use crate::host::usage::claude_usage;
-
-pub(super) fn flatten_tool_result(content: Option<&Value>) -> String {
-    match content {
-        None => String::new(),
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|c| match c {
-                Value::Object(o) if o.contains_key("text") => value_text(&o["text"]),
-                _ => String::new(),
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        Some(other) => serde_json::to_string(other).unwrap_or_default(),
-    }
-}
 
 /// A compaction Claude Code reports once it has happened: what set it off and the context's size before and after.
 fn compaction_event(meta: Option<&Value>) -> RunnerEvent {

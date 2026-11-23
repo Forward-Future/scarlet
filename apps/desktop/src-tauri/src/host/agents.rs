@@ -4,21 +4,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::catalog::{describe_agents, lacks_models, take_catalog};
-use super::types::{AgentAvailability, SubscriptionQuota, CLI_AGENTS};
+use super::catalog::{describe_agents, is_quota_eligible, lacks_models, take_catalog};
+use super::types::{AgentAvailability, SubscriptionQuota};
 use super::{detect, HostRuntime, HostStatus};
 use crate::util::child_env;
 
 /// How long cached subscription quota stays fresh before a non-forced refresh re-probes.
 const QUOTA_TTL: Duration = Duration::from_secs(60);
-
-/// Subscriptions only: omit quota when a provider is signed in via API key or not signed in.
-pub(super) fn is_quota_eligible(agent: &AgentAvailability) -> bool {
-    CLI_AGENTS.contains(&agent.id.as_str())
-        && agent.installed
-        && agent.logged_in != Some(false)
-        && agent.auth.as_deref() != Some("api_key")
-}
 
 impl HostRuntime {
     /// Startup, sign-in and the picker can all request a fresh snapshot.

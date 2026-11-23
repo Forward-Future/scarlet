@@ -10,7 +10,7 @@ use super::find_on_path;
 use crate::util::{env_get, hide_console};
 
 /// True for Windows batch shims that must be run through cmd.exe.
-pub fn needs_cmd_shell(file: &str) -> bool {
+pub(super) fn needs_cmd_shell(file: &str) -> bool {
     if !cfg!(windows) {
         return false;
     }
@@ -19,7 +19,7 @@ pub fn needs_cmd_shell(file: &str) -> bool {
 }
 
 /// Quote one argument for a cmd.exe command string.
-pub fn quote_for_cmd(arg: &str) -> String {
+pub(super) fn quote_for_cmd(arg: &str) -> String {
     if arg.is_empty() {
         return "\"\"".into();
     }
