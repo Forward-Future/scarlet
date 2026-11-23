@@ -72,9 +72,14 @@ describe("the note on an applied edit's card", () => {
       .toBe("Add the other boat renders. Marked “throw it on the screen now” where the boat comparison belongs.");
     expect(editNote(edit({ label: "Boat comparison footage", check: "Add the other boat renders", reason: "You asked for it on screen here.", marker: true })))
       .toBe("Add the other boat renders. You asked for it on screen here.");
-    // Said already, it isn't said twice.
+    // Said already, it isn't said twice — in either order.
     const asked = "Marked where the boat comparison belongs: add the other boat renders.";
     expect(editNote(edit({ label: "Boat comparison footage", check: "Add the other boat renders", summary: asked, marker: true }))).toBe(asked);
+    expect(editNote(edit({ label: "Boat comparison footage", todo: "Show the other boat renders where you mention them.", reason: "Where you mention them", marker: true })))
+      .toBe("Show the other boat renders where you mention them.");
+    // Closing question marks stay intact when a reason follows.
+    expect(editNote(edit({ label: "Aviation timeline", todo: "Show an aviation timeline here?", reason: "Keeps the story moving.", marker: true })))
+      .toBe("Show an aviation timeline here? Keeps the story moving.");
   });
 
   it("keeps leading a revised marker's note with what it asks, not with the word for the revision", () => {
