@@ -707,10 +707,11 @@ it("reflects each selected model's actual available efforts and speeds in the tu
     const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
     await click(trigger);
 
-    // Collapsed dock summarizes the selected model's actual default effort and speed.
+    // Collapsed dock summarizes the selected model's actual default effort and speed (without redundant "Tune" text).
     const tuneBtn = byLabel("Tune GPT-5.4 options");
     expect(tuneBtn.textContent).toContain("Medium");
     expect(tuneBtn.textContent).toContain("Standard");
+    expect(tuneBtn.textContent).not.toContain("Tune");
     expect(container.querySelector('[aria-label="Effort"]')).toBeNull();
 
     // Expanding shows efforts ordered low -> high and the exact speeds offered by GPT-5.4.
@@ -742,7 +743,7 @@ it("reflects each selected model's actual available efforts and speeds in the tu
     await click(byLabel("Claude Code · Haiku"));
     expect(container.querySelector('[aria-label="Effort"]')).toBeNull();
     expect(container.querySelector('[aria-label="Speed"]')).toBeNull();
-    expect(container.textContent).not.toContain("Tune");
+    expect(container.querySelector('[aria-label^="Tune "]')).toBeNull();
 
     // Switching to Gemini (efforts only, no speeds) renders Effort slider without Speed controls.
     await click(byLabel("Gemini"));

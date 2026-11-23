@@ -212,6 +212,7 @@ function EffortSlider({ options, value, visualId, onChange }: {
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const draggedRef = useRef(false);
+  const [dragRatio, setDragRatio] = useState<number | null>(null);
   const activeIndex = options.findIndex(o => o.id === value);
   const visualIndex = activeIndex >= 0 ? activeIndex : options.findIndex(o => o.id === visualId);
 
@@ -226,7 +227,7 @@ function EffortSlider({ options, value, visualId, onChange }: {
           aria-checked={checked}
           title={only.title}
           onClick={() => onChange(only.id)}
-          className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${checked ? "border-fg/40 bg-raised text-fg" : "border-line bg-bg text-muted hover:text-fg"}`}
+          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${checked ? "border-fg/35 bg-raised text-fg" : "border-line bg-bg text-muted hover:text-fg"}`}
         >
           <span className={`size-2 rounded-full ${checked ? "bg-fg" : "bg-muted"}`} aria-hidden />
           {only.label}
@@ -235,15 +236,24 @@ function EffortSlider({ options, value, visualId, onChange }: {
     );
   }
 
-  const ratio = visualIndex > 0 ? visualIndex / (options.length - 1) : 0;
+  const settledRatio = visualIndex > 0 ? visualIndex / (options.length - 1) : 0;
+  const displayRatio = dragRatio ?? settledRatio;
+  const isDragging = dragRatio !== null;
+  const isExplicit = activeIndex >= 0 || isDragging;
+  const alphaLeft = isExplicit ? 0.14 + displayRatio * 0.14 : 0.1;
+  const alphaRight = isExplicit ? 0.24 + displayRatio * 0.24 : 0.18;
+  const shimmerOpacity = isExplicit ? (displayRatio >= 0.95 ? 0.85 : displayRatio >= 0.6 ? 0.35 : 0) : 0;
 
-  function pickAt(clientX: number, lastPicked: { current: string | undefined }) {
+  function ratioFromClientX(clientX: number): number | null {
     const track = trackRef.current;
-    if (!track) return;
+    if (!track) return null;
     const rect = track.getBoundingClientRect();
-    const usable = rect.width - 14;
-    if (usable <= 0) return;
-    const pos = Math.max(0, Math.min(1, (clientX - rect.left - 7) / usable));
+    const usable = rect.width - 26;
+    if (usable <= 0) return null;
+    return Math.max(0, Math.min(1, (clientX - rect.left - 13) / usable));
+  }
+
+  function pickRatio(pos: number, lastPicked: { current: string | undefined }) {
     const picked = options[Math.round(pos * (options.length - 1))];
     if (picked && picked.id !== lastPicked.current) {
       lastPicked.current = picked.id;
@@ -252,91 +262,121 @@ function EffortSlider({ options, value, visualId, onChange }: {
   }
 
   return (
-    <div
-      ref={trackRef}
-      role="radiogroup"
-      aria-label="Effort"
-      className="relative h-[38px] select-none touch-none cursor-pointer"
-      onPointerDown={(e) => {
-        if (e.button !== 0) return;
-        const target = e.currentTarget;
-        const startX = e.clientX;
-        const onButton = !!(e.target as HTMLElement).closest('button[role="radio"]');
-        const lastPicked = { current: value };
-        draggedRef.current = false;
-        if (!onButton) {
+    <div role="radiogroup" aria-label="Effort" className="select-none touch-none">
+      <div
+        ref={trackRef}
+        className="relative h-[26px] cursor-pointer overflow-hidden rounded-full bg-bg shadow-[inset_0_0_0_1px_var(--color-line),inset_0_1px_2px_rgba(0,0,0,0.35)]"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          const target = e.currentTarget;
+          const lastPicked = { current: value };
           draggedRef.current = true;
           target.setPointerCapture?.(e.pointerId);
-          pickAt(e.clientX, lastPicked);
-        }
-        const onMove = (ev: PointerEvent) => {
-          if (!draggedRef.current && Math.abs(ev.clientX - startX) >= 4) {
-            draggedRef.current = true;
-            target.setPointerCapture?.(e.pointerId);
+          const startPos = ratioFromClientX(e.clientX);
+          if (startPos !== null) {
+            setDragRatio(startPos);
+            pickRatio(startPos, lastPicked);
           }
-          if (draggedRef.current) pickAt(ev.clientX, lastPicked);
-        };
-        const onUp = () => {
-          window.removeEventListener("pointermove", onMove);
-          window.removeEventListener("pointerup", onUp);
-          window.removeEventListener("pointercancel", onUp);
-          if (draggedRef.current) setTimeout(() => { draggedRef.current = false; }, 0);
-        };
-        window.addEventListener("pointermove", onMove);
-        window.addEventListener("pointerup", onUp);
-        window.addEventListener("pointercancel", onUp);
-      }}
-    >
-      <div className="pointer-events-none absolute left-[7px] right-[7px] top-[9.5px] h-[3px] rounded-full bg-line" />
-      {visualIndex > 0 && (
+          const onMove = (ev: PointerEvent) => {
+            const pos = ratioFromClientX(ev.clientX);
+            if (pos !== null) {
+              setDragRatio(pos);
+              pickRatio(pos, lastPicked);
+            }
+          };
+          const onUp = () => {
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerup", onUp);
+            window.removeEventListener("pointercancel", onUp);
+            setDragRatio(null);
+            setTimeout(() => { draggedRef.current = false; }, 0);
+          };
+          window.addEventListener("pointermove", onMove);
+          window.addEventListener("pointerup", onUp);
+          window.addEventListener("pointercancel", onUp);
+        }}
+      >
         <div
-          className={`pointer-events-none absolute left-[7px] top-[9.5px] h-[3px] rounded-full transition-[width] duration-150 ${activeIndex >= 0 ? "bg-fg" : "bg-muted/70"}`}
-          style={{ width: `calc((100% - 14px) * ${ratio})` }}
-        />
-      )}
-      {options.map((o, i) => {
-        const stepRatio = i / (options.length - 1);
-        const isFirst = i === 0;
-        const isLast = i === options.length - 1;
-        const isSelected = value === o.id;
-        const isVisual = visualIndex === i;
-        const isPassed = visualIndex >= 0 && i < visualIndex;
-        const posStyle = isFirst ? { left: 0 } : isLast ? { right: 0 } : { left: `calc(7px + (100% - 14px) * ${stepRatio})` };
-        const alignClass = isFirst ? "items-start" : isLast ? "items-end" : "-translate-x-1/2 items-center";
-        return (
-          <button
-            key={o.id}
-            type="button"
-            role="radio"
-            aria-checked={isSelected}
-            title={o.title}
-            style={posStyle}
-            onClick={() => { if (!draggedRef.current) onChange(o.id); }}
-            className={`group/step absolute top-0 z-10 flex flex-col ${alignClass} rounded focus-visible:outline-offset-1`}
-          >
-            <span className="flex h-[22px] w-[14px] items-center justify-center">
-              <span
-                className={`rounded-full transition-all ${
-                  isSelected
-                    ? "size-[11px] border-2 border-panel bg-fg ring-[1.5px] ring-fg"
-                    : isVisual
-                      ? "size-[10px] border-2 border-panel bg-muted ring-1 ring-muted"
-                      : isPassed
-                        ? "size-[7px] border-[1.5px] border-fg bg-fg group-hover/step:scale-125"
-                        : "size-[7px] border-[1.5px] border-muted bg-panel group-hover/step:scale-125 group-hover/step:border-fg"
-                }`}
-              />
-            </span>
+          className={`pointer-events-none absolute inset-y-0 left-0 overflow-hidden rounded-full ${isDragging ? "" : "transition-[width] duration-150 ease-out"}`}
+          style={{
+            width: `calc(26px + (100% - 26px) * ${displayRatio})`,
+            background: `linear-gradient(90deg, rgba(244, 244, 245, ${alphaLeft.toFixed(3)}), rgba(244, 244, 245, ${alphaRight.toFixed(3)}))`,
+          }}
+        >
+          <div
+            className="effort-capsule-shimmer absolute inset-0 rounded-full transition-opacity duration-200"
+            style={{ opacity: shimmerOpacity }}
+            aria-hidden="true"
+          />
+        </div>
+        {options.map((o, i) => {
+          const stepRatio = i / (options.length - 1);
+          const isVisual = visualIndex === i;
+          const isPassed = visualIndex >= 0 && i < visualIndex;
+          return (
             <span
-              className={`text-[10px] leading-4 whitespace-nowrap transition-colors ${
-                isSelected ? "font-semibold text-fg" : isVisual ? "font-medium text-fg/80" : "text-muted group-hover/step:text-fg"
+              key={o.id}
+              aria-hidden="true"
+              style={{ left: `calc(13px + (100% - 26px) * ${stepRatio})` }}
+              className={`pointer-events-none absolute top-1/2 z-10 size-[4px] -translate-x-1/2 -translate-y-1/2 rounded-full transition-opacity duration-150 ${
+                isVisual
+                  ? "opacity-0"
+                  : isPassed
+                    ? "bg-fg opacity-40"
+                    : "bg-muted opacity-40"
+              }`}
+            />
+          );
+        })}
+        <span
+          aria-hidden="true"
+          style={{ left: `calc(13px + (100% - 26px) * ${displayRatio})` }}
+          className={`pointer-events-none absolute top-[3px] z-20 size-[20px] -translate-x-1/2 rounded-full ${
+            isExplicit ? "bg-fg" : "bg-fg/85"
+          } ${
+            isDragging
+              ? "scale-110 shadow-[0_2px_8px_rgba(0,0,0,0.6),0_0_0_2px_rgba(255,255,255,0.22)]"
+              : "shadow-[0_1px_4px_rgba(0,0,0,0.52),0_0_0_1px_rgba(255,255,255,0.14)] transition-[left,transform,box-shadow] duration-150 ease-out"
+          }`}
+        />
+      </div>
+      <div className="relative mt-1.5 h-[18px]">
+        {options.map((o, i) => {
+          const stepRatio = i / (options.length - 1);
+          const isFirst = i === 0;
+          const isLast = i === options.length - 1;
+          const isSelected = value === o.id;
+          const isVisual = visualIndex === i;
+          const posStyle = isFirst
+            ? { left: 0 }
+            : isLast
+              ? { right: 0 }
+              : { left: `calc(13px + (100% - 26px) * ${stepRatio})` };
+          return (
+            <button
+              key={o.id}
+              type="button"
+              role="radio"
+              aria-checked={isSelected}
+              title={o.title}
+              style={posStyle}
+              onClick={() => { if (!draggedRef.current) onChange(o.id); }}
+              className={`absolute top-0 rounded text-[10.5px] leading-[18px] whitespace-nowrap transition-colors focus-visible:outline-offset-2 ${
+                isFirst || isLast ? "" : "-translate-x-1/2"
+              } ${
+                isSelected
+                  ? "font-semibold text-fg"
+                  : isVisual
+                    ? "font-medium text-fg/85"
+                    : "text-muted hover:text-fg"
               }`}
             >
               {o.label}
-            </span>
-          </button>
-        );
-      })}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -981,9 +1021,9 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
                           aria-label={`Tune ${selected?.label ?? "model"} options`}
                           title={efforts.length > 0 ? effortTitle : undefined}
                           onClick={() => { setGearOpen(false); setDrawer("tune"); }}
-                          className="group flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-raised/60"
+                          className="group flex min-w-0 flex-1 items-center gap-1.5 px-3 py-2 text-left transition-colors hover:bg-raised/60"
                         >
-                          <span className="flex min-w-0 flex-1 items-center gap-2 text-[12px]">
+                          <span className="flex min-w-0 items-center gap-2 text-[12px]">
                             {efforts.length > 0 && (
                               <span className="inline-flex min-w-0 items-center gap-1.5 text-fg/90">
                                 <EffortDial level={effortLevel(efforts, dialEffort?.id)} size={13} />
@@ -1000,8 +1040,7 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
                               </span>
                             )}
                           </span>
-                          <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-muted group-hover:text-fg">
-                            Tune
+                          <span className="inline-flex shrink-0 items-center text-muted group-hover:text-fg">
                             <Icon name="down" size={10} />
                           </span>
                         </button>
@@ -1044,6 +1083,9 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
                             <>
                               <EffortDial level={effortLevel(efforts, dialEffort?.id)} size={12} />
                               Effort
+                              <span className="font-sans text-[11.5px] font-semibold normal-case tracking-normal text-fg">
+                                · {effortSummary}
+                              </span>
                             </>
                           ) : (
                             <>
