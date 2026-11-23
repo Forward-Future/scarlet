@@ -170,7 +170,7 @@ it("pages multi-cut dialogue_review_inspect under caps.resultChars and keeps def
   expect(sheets.slice(sheetsBefore).filter(s => s.from >= deferredStart - 3 && s.to <= removed[deferredIdx]!.end + 3)).toEqual([]);
 });
 
-it("writes original and rendered-join WAV files for audioFiles models when includeAudio is requested", async () => {
+it("writes original and rendered-join WAV files by default for audioFiles models, and honors includeAudio: false", async () => {
   const workDir = mkdtempSync(join(tmpdir(), "scarlet-review-audio-"));
   try {
     const server = createScarletMcpServer(new ScarletClient({ baseUrl: mock.url, token: "tok" }), {
@@ -185,16 +185,21 @@ it("writes original and rendered-join WAV files for audioFiles models when inclu
     await gemini.connect(b);
     sessions.push(gemini);
 
-    const res = await gemini.callTool({ name: "dialogue_review_inspect", arguments: { changeId: "pass", index: 3, includeAudio: true } }) as CallToolResult;
+    // Omitting includeAudio still writes original and rendered-join WAV files for audioFiles harnesses.
+    const res = await gemini.callTool({ name: "dialogue_review_inspect", arguments: { changeId: "pass", index: 3 } }) as CallToolResult;
     expect(res.isError).toBeFalsy();
     const items = texts(res);
-    const wavs = items.filter(t => typeof t.listen === "string") as Array<{ listen: string; kind?: string; label?: string }>;
-    // Both original passage audio and Before/After rendered join WAVs are written to disk for the file viewer.
+    const wavs = items.filter(t => typeof t.listen === "string") as Array<{ listen: string; kind?: string; label?: string; how?: string }>;
     expect(wavs.some(w => w.kind === "original")).toBe(true);
-    expect(wavs.some(w => w.label === "After")).toBe(true);
+    expect(wavs.some(w => w.label === "After" && /rendered join/i.test(w.how ?? ""))).toBe(true);
     for (const w of wavs) expect(existsSync(w.listen)).toBe(true);
     expect(res.content.some(c => c.type === "audio")).toBe(false);
     expect(items.at(-1)).toMatchObject({ complete: true });
+
+    // Opting out with includeAudio: false skips WAV delivery.
+    const silent = await gemini.callTool({ name: "dialogue_review_inspect", arguments: { changeId: "pass", index: 2, includeAudio: false } }) as CallToolResult;
+    expect(silent.isError).toBeFalsy();
+    expect(texts(silent).some(t => typeof t.listen === "string")).toBe(false);
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }

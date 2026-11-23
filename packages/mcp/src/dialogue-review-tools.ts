@@ -67,8 +67,9 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
   } = session;
   const { without, unavailableOnce } = errors;
   const listen = listening(caps, !!writeArtifact);
+  const defaultAudio = listen?.by === "file";
   const reviewPictures = caps.images;
-  const audioOption = createAudioOption(!!listen);
+  const audioOption = createAudioOption(!!listen, defaultAudio);
 
   /** Inspections that read every view of a cut, including a measured join (or a cut with no join). */
   const inspections = new Set<string>();
@@ -148,7 +149,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
     return result;
   }
 
-  const reviews = new ReviewInspections(computeInspection);
+  const reviews = new ReviewInspections(computeInspection, { defaultAudio });
   /**
    * How many suggested cuts of a review have a recommendation, so the editor can see how far the checking has come.
    * `looked` also counts the cuts the agent has inspected but not saved yet: recommendations are often saved in one
@@ -181,14 +182,14 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
     "Inspect a staged dialogue cut in its original passage and preview. For each cut returns its first-pass reason, and held: what Scarlet measured when it held the cut, what its join plays and what keeping it plays. It also returns the words around it as [start, end, text, speaker or isolated input], original microphone levels (dBFS), voice activity, and timeline_join_audit's reading of the join or why the cut has none. The surviving speech is checked for a doubled word across the join or at the start or end of its kept take. partialWordRepeat identifies a cut-off word beside a whole occurrence in the saved audio, including faded handles. One call returns up to four consecutive cuts (count). Scarlet prepares the next ones while you read." +
     (reviewPictures ? " Includes synchronized screen and camera sheets and before/after frames for narrowed cuts. A longer removal shows an overview and windows for closer inspection. wholePicture returns activity sheets across all of them." : "") +
     (listen ? (listen.by === "file"
-      ? " Pass includeAudio: true to write WAV files of the original passage and the rendered join to your task folder so you can open them with your file viewer and hear how the cut plays (especially for a same-word join or tight cut where levels alone can't tell)."
+      ? " Writes WAV files of the original passage and the rendered Before/After join to your task folder by default (includeAudio: true) so you can open the After WAV with your file viewer and hear how the cut plays (especially for a same-word join or tight cut where levels alone can't tell); pass includeAudio: false to skip."
       : " Pass includeAudio: true to attach WAV audio of the original passage and the rendered join (especially for a same-word join or tight cut where levels alone can't tell).") : "") +
     " nearbyWords gives the words at both edges in TIMELINE seconds on the inspected original. Use those times in dialogue_revise_cut to move a splice, or save a recommendation for the current range with dialogue_review_save. If later edits conflict with the cut being revised, inspecting it returns its current passage and words for dialogue_revise_cut.",
     { changeId: z.string(), index: z.number().int().nonnegative(),
       // A larger count is not refused: a pass asked for all 14 of its cuts and lost a turn to the limit (2026-11-15).
       count: z.number().int().min(1).max(500).default(1).describe(`Inspect this many consecutive suggestions, starting at index. One call returns ${INSPECT_AT_ONCE} at most and names the index to continue from.`),
       ...(reviewPictures && { wholePicture: z.boolean().default(false).describe("For one longer removal: activity sheets across its whole removed picture in one result.") }),
-      ...audioOption(listen?.by === "file" ? "Write WAV files of the original passage and rendered join to your task folder to open with your file viewer and hear" : "Attach WAV of the original passage and of the join") },
+      ...audioOption(listen?.by === "file" ? "Write WAV files of the original passage and rendered join to your task folder to open with your file viewer and hear (default true)" : "Attach WAV of the original passage and of the join") },
     async ({ changeId, index, count, wholePicture: requestedPicture, includeAudio }) => {
       const wholePicture = reviewPictures && requestedPicture === true;
       if (revision.cutConflict && revision.conflictAt(changeId, index)) {
@@ -209,7 +210,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
       }
       if (!review?.cuts.length) throw new Error(`Change ${changeId} has no individual cuts to inspect; it replaces the whole timeline.`);
       if (index >= review.cuts.length) throw new Error(`Change ${changeId} has ${review.cuts.length} cuts (index 0–${review.cuts.length - 1}).`);
-      const audio = !!listen && includeAudio === true;
+      const audio = !!listen && (includeAudio ?? defaultAudio);
       const end = wholePicture ? index + 1 : Math.min(review.cuts.length, index + Math.min(count, INSPECT_AT_ONCE));
       reviews.ahead(change, end, review.cuts.length);
       const indexes = Array.from({ length: end - index }, (_, k) => index + k);

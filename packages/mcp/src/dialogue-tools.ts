@@ -173,7 +173,8 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
   const { without, unavailableOnce, withoutOnce, together } = errors;
   const { framedOn } = proposePipeline;
   const listen = listening(caps, !!writeArtifact);
-  const audioOption = createAudioOption(!!listen);
+  const defaultAudio = listen?.by === "file";
+  const audioOption = createAudioOption(!!listen, defaultAudio);
 
   const acousticRetakePages = new Map<string, AcousticRetakePage>();
   const joinChecks = new JoinChecks(caps.resultChars);
@@ -592,12 +593,13 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
       cuts: z.array(z.object({ ...WordRef, ...PauseRef, start: z.number().finite().nonnegative().optional(), end: z.number().finite().positive().optional(), resumeWith }))
         .min(1).max(100).optional().describe("Several removals to check in one call, instead of start/end or a word reference"),
       ...audioOption(listen?.by === "file"
-        ? "Write WAV files of about two seconds of the original recording around each edge to your task folder to open with your file viewer, for a single range"
+        ? "Write WAV files of about two seconds of the original recording around each edge to your task folder to open with your file viewer, for a single range (default true)"
         : "Attach about two seconds of the original recording around each edge as WAV, for a single range") },
     async ({ version, includeAudio, resumeWith, cuts, crossfadeFrames = 0, pace, breath, ...cut }) => {
       const tl = await peekTimeline(version);
       const snapshot = tl.version === "draft" ? createHash("sha256").update(JSON.stringify(tl)).digest("hex") : tl.version;
-      const key = JSON.stringify([snapshot, cuts, cut, resumeWith, crossfadeFrames, pace, breath, !!includeAudio]);
+      const wantAudio = !!listen && (includeAudio ?? defaultAudio);
+      const key = JSON.stringify([snapshot, cuts, cut, resumeWith, crossfadeFrames, pace, breath, wantAudio]);
       return joinChecks.collect(key, tl.version, cuts?.length ?? 1, async publish => {
         const { project } = await getProject();
         const resolve = async (c: typeof cut, label: string) => {
@@ -658,7 +660,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
         const { reading: checked, inspected } = await report(resolved, resumeWith);
         publish(0, checked, inspected);
         const result = json({ version: tl.version, ...checked });
-        if (!includeAudio || !listen) return result;
+        if (!wantAudio || !listen) return result;
         for (const edge of checked.audio) {
           const from = Math.max(0, edge.at - 1), to = edge.at + 1;
           try {
