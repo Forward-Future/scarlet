@@ -6,6 +6,12 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- L on a to-do's card sets it aside for later instead of changing the playback speed; Shift+L still slows playback.
+- Shift+← and Shift+→ move exactly one frame when the video is paused between two frames, instead of none or two.
+- A Gemini request no longer fails when Gemini turns down the effort level Scarlet picks by default.
+- The player no longer gets stuck on “Rendering clip…” when you open another cut while one is still loading.
+- After you switch models while answering Scarlet's question, the request stays on the model you chose.
+- The glow round the player keeps its softer colours in the installed app.
 - CrisperWhisper transcribes faster: Scarlet keeps the model loaded between parts of a recording and the short passages it reads while editing, instead of loading it again each time.
 - A microphone track that goes silent whenever its speaker isn't talking no longer fills its transcript with the same sentence repeated over the silence, and transcribes much faster.
 - Once your edits are decided and nothing is waiting on you, Export at the top turns white until you export the video, and the export for another editing app is now called “For Resolve, Final Cut or Premiere…”.

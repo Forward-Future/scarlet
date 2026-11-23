@@ -446,7 +446,7 @@ export function ensureReadIndexes(db: Db): void {
  * Installed by name, as the read indexes are. A partial index holds only the rows its query looks for: the repairs
  * that run as Scarlet starts find nothing to do without reading the edits and requests that were done with long ago.
  */
-const LOOKUP_INDEXES = {
+const LOOKUP_INDEXES: Record<string, string> = {
   changes_by_task: "ON changes(project_id, json_extract(json, '$.taskId'))",
   tasks_by_revised_cut: "ON tasks(project_id, json_extract(json, '$.context.changeId')) WHERE json_extract(json, '$.context.cutIndex') IS NOT NULL",
   tasks_by_resume_root: "ON tasks(json_extract(json, '$.resumeRootId')) WHERE json_extract(json, '$.resumeRootId') IS NOT NULL",
@@ -456,14 +456,15 @@ const LOOKUP_INDEXES = {
     AND json_array_length(coalesce(json_extract(json, '$.ops'), '[]')) > 0
     AND json_array_length(coalesce(json_extract(json, '$.cutReasons'), '[]')) = 0`,
   // Joins an earlier reading of the footage left out found, read again with the current one (LEFT_OUT_READING).
-  changes_left_out_reread: `ON changes(created_at) WHERE state = 'approved' AND json_array_length(json_extract(json, '$.leftOut.joins')) > 0
+  // Named with LEFT_OUT_READING so an older release opening the same library keeps its own partial index intact.
+  [`changes_left_out_reread_v${LEFT_OUT_READING}`]: `ON changes(created_at) WHERE state = 'approved' AND json_array_length(json_extract(json, '$.leftOut.joins')) > 0
     AND coalesce(json_extract(json, '$.leftOut.reading'), 1) < ${LEFT_OUT_READING}`,
   tasks_dialogue_unset: "ON tasks(created_at) WHERE kind IN ('edit','revise','note') AND json_type(json, '$.context.dialogueOperation') IS NULL",
 };
 
 export function ensureLookupIndexes(db: Db): void {
-  const names = Object.keys(LOOKUP_INDEXES) as Array<keyof typeof LOOKUP_INDEXES>;
-  const definition = (name: keyof typeof LOOKUP_INDEXES) => `CREATE INDEX ${name} ${LOOKUP_INDEXES[name]}`;
+  const names = Object.keys(LOOKUP_INDEXES);
+  const definition = (name: string) => `CREATE INDEX ${name} ${LOOKUP_INDEXES[name]}`;
   const stale = () => names.filter(name => {
     const row = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?").get(name) as { sql: string | null } | undefined;
     return row?.sql !== definition(name);

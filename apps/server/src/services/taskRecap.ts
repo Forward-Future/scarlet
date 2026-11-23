@@ -101,20 +101,24 @@ export function recoveryInstruction(ctx: Ctx, task: Task, rootId?: string, curre
   }
   if (!rootId) return lines.join("\n");
   lines.push("", "Resume this interrupted request. Continue only the unfinished work: the saved changes below and their states say what is done. Keep saved proposals and honor the editor’s decisions, including rejected or partially approved edits.");
-  if (task.needsTranscripts?.length) {
-    const ready = task.needsTranscripts.filter(id => hasTranscript(ctx, id));
-    lines.push(`The previous attempt ended without the transcript of ${task.needsTranscripts.join(", ")}.${ready.length ? ` Ready now: ${ready.join(", ")}.` : ""}`);
-  }
-  lines.push(...workRecapLines(ctx, attempts, task, events));
+  lines.push(...transcriptsLacked(ctx, task), ...workRecapLines(ctx, attempts, task, events));
   return lines.join("\n");
+}
+
+/** The transcripts the attempt before ended without, and which of them are saved now. */
+function transcriptsLacked(ctx: Ctx, before?: Task): string[] {
+  if (!before?.needsTranscripts?.length) return [];
+  const ready = before.needsTranscripts.filter(id => hasTranscript(ctx, id));
+  return [`The previous attempt ended without the transcript of ${before.needsTranscripts.join(", ")}.${ready.length ? ` Ready now: ${ready.join(", ")}.` : ""}`];
 }
 
 /**
  * What a fresh session (e.g. after switching models on an answer, or on a non-resumable CLI) is told of work already
  * done on `task` (and any earlier attempts under `task.resumeRootId`) before the editor's answer. `task`'s own Q&A is
- * omitted here because `buildSystemPrompt` renders it in the system prompt's `qa` section.
+ * omitted here because `buildSystemPrompt` renders it in the system prompt's `qa` section. `before`: the attempt this
+ * one resumed, when there is one.
  */
-export function answerHandoffInstruction(ctx: Ctx, task: Task): string {
+export function answerHandoffInstruction(ctx: Ctx, task: Task, before?: Task): string {
   const run = task.resumeRootId && runAttempts(task.projectId, task.resumeRootId);
   const attempts = run ? ctx.repos.tasks.select(run.where, run.params, "created_at, rowid") : [task];
   const events = attempts.flatMap(t => ctx.repos.taskEvents.list(t.id, "conversation"));
@@ -128,9 +132,10 @@ export function answerHandoffInstruction(ctx: Ctx, task: Task): string {
     if (ev.type === "question") lines.push(`Agent asked: ${ev.text}`);
     if (ev.type === "answer") lines.push(`Editor answered: ${ev.text}`);
   }
-  if (work.length) {
-    lines.push("", "Continue this request after the editor’s answer. Continue only the unfinished work: the saved changes below and their states say what is done. Keep saved proposals and honor the editor’s decisions, including rejected or partially approved edits.");
-    lines.push(...work);
-  }
+  // A resumed attempt that asked is still owed what its resume said: the transcripts the attempt before it lacked.
+  const lacked = transcriptsLacked(ctx, before);
+  if (work.length || lacked.length) lines.push("");
+  if (work.length) lines.push("Continue this request after the editor’s answer. Continue only the unfinished work: the saved changes below and their states say what is done. Keep saved proposals and honor the editor’s decisions, including rejected or partially approved edits.");
+  lines.push(...lacked, ...work);
   return lines.join("\n");
 }

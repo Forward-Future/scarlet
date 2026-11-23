@@ -417,3 +417,39 @@ it("reports preroll section progress as sections append", async () => {
     stream.dispose();
   }
 });
+
+it("cancels an earlier preroll when a newer bufferThrough starts, and ignores the earlier abort", async () => {
+  const fixture = mediaFixture();
+  const { video } = fixture;
+  const ranges = Array.from({ length: 4 }, (_, i) => ({ start: i * 4, end: (i + 1) * 4 }));
+  const resolvers = new Map<number, (bytes: ArrayBuffer) => void>();
+  const stream = openCutStream(video, ranges, 1, range => new Promise<ArrayBuffer>(resolve => {
+    resolvers.set(range.start, resolve);
+  }), vi.fn());
+  const firstAbort = new AbortController();
+  const secondAbort = new AbortController();
+  const first = stream.bufferThrough(0, 7, firstAbort.signal);
+  const progress: [number, number][] = [];
+  const second = stream.bufferThrough(8, 15, secondAbort.signal, (done, total) => progress.push([done, total]));
+  second.catch(() => {});
+  try {
+    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    // Aborting the old signal after replacement must not clear the active second preroll.
+    firstAbort.abort();
+    fixture.media.dispatchEvent(new Event("sourceopen"));
+    await vi.advanceTimersByTimeAsync(0);
+    stream.seek(8);
+    video.currentTime = 8;
+    stream.finishSeek();
+    await vi.advanceTimersByTimeAsync(0);
+    resolvers.get(8)!(new ArrayBuffer(1));
+    await vi.advanceTimersByTimeAsync(0);
+    resolvers.get(12)!(new ArrayBuffer(1));
+    await vi.advanceTimersByTimeAsync(0);
+    await second;
+    expect(progress.at(-1)).toEqual([2, 2]);
+  } finally {
+    secondAbort.abort();
+    stream.dispose();
+  }
+});

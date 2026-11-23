@@ -125,7 +125,7 @@ function claimNext(ctx: Ctx, host: AgentHost, taskId?: string, freeAgents?: stri
     ctx.db.prepare("UPDATE tasks SET worker_pid = ?, worker_seen_at = ? WHERE id = ?").run(desktopPid, seenAt, task.id);
     const waited = since(createdAt, Date.parse(seenAt));
     ctx.log(`[task] ${task.id} claimed by ${host.name} (${host.id})${waited ? ` after ${waited} in the queue` : ""}`);
-    return saveTask(ctx, { ...task, createdAt, state: "claimed", hostId: host.id, startedAt, workedMs: pausedWork(ctx, task) ?? 0 });
+    return saveTask(ctx, { ...task, createdAt, state: "claimed", hostId: host.id, startedAt, workedMs: pausedWork(ctx, task) ?? 0, sessionRevokedFor: undefined });
   }
   return null;
 }

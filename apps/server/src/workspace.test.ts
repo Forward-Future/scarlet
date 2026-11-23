@@ -1977,6 +1977,12 @@ it("marks a run that ended without the transcripts it waited for, and resumes it
   expect(resumed).toMatchObject({ state: "queued", resumeRootId: task.id });
   expect(resumed.instruction).toContain("ended without the transcript of camera, screen. Ready now: camera, screen.");
   expect(continueReadyRuns(ctx)).toEqual([]);
+  // An answer to the resumed run's question starts it in a session that never read that: it is told again.
+  appendTaskEvent(ctx, resumed, { type: "question", text: "Keep the cold open?" });
+  appendTaskEvent(ctx, ctx.repos.tasks.get(resumed.id)!, { type: "answer", text: "Yes." });
+  const answered = await (await api("GET", `/tasks/${resumed.id}/prompt`)).json();
+  expect(answered.resumeSession).toBeUndefined();
+  expect(answered.instruction).toContain("ended without the transcript of camera, screen. Ready now: camera, screen.");
   // The finished run no longer offers to wait.
   expect((await api("POST", `/tasks/${task.id}/continue-when-ready`, { on: true })).status).toBe(200);
   expect(ctx.repos.tasks.select("project_id = ? AND kind = 'edit'", [project.id])).toHaveLength(2);

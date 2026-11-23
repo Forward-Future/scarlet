@@ -50,7 +50,7 @@ export function leftOutOf(ctx: Ctx, project: Omit<Project, "media">, change: Cha
  * split crossfaded audio joins out of sync when opening them (2026-11-22). Runs once as Scarlet starts.
  */
 export function recordLeftOutFootage(ctx: Ctx): void {
-  const stale = (ctx.db.prepare(`SELECT json FROM changes INDEXED BY changes_left_out_reread WHERE state = 'approved'
+  const stale = (ctx.db.prepare(`SELECT json FROM changes INDEXED BY changes_left_out_reread_v${LEFT_OUT_READING} WHERE state = 'approved'
     AND json_array_length(json_extract(json, '$.leftOut.joins')) > 0 AND coalesce(json_extract(json, '$.leftOut.reading'), 1) < ${LEFT_OUT_READING}
     ORDER BY created_at`).all() as { json: string }[]).map(row => ctx.repos.changes.parse(row.json));
   for (const change of stale) {

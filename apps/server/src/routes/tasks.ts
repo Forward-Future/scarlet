@@ -189,6 +189,7 @@ export function taskRoutes(ctx: Ctx) {
 
   r.post("/tasks/:taskId/answer", async (c) => {
     const body = await jsonBody(c, RunChoice.extend({ text: z.string().min(1), skillIds: z.array(z.string().min(1)).optional() }));
+    if (body.agent === "api") throw badRequest("agent_unavailable", "Choose Claude, Codex or Gemini to run this request.");
     // The answer, any model switch, the requeue and its activity entry land together, after the state check.
     const updated = ctx.db.transaction(() => {
       const task = requireTask(c.req.param("taskId"));
@@ -201,7 +202,7 @@ export function taskRoutes(ctx: Ctx) {
         effort: body.effort,
         fast: body.fast,
         serviceTier: body.serviceTier,
-        ...(switched && { session: undefined }),
+        ...(switched && { session: undefined, sessionRevokedFor: task.startedAt }),
       } : { ...task };
       if (body.skillIds?.length) prepared.context = { ...prepared.context, skillIds: [...new Set([...(prepared.context.skillIds ?? []), ...body.skillIds])] };
       const { task: updated } = appendTaskEvent(ctx, prepared, { type: "answer", text: body.text });
@@ -223,8 +224,8 @@ export function taskRoutes(ctx: Ctx) {
       if (task.state === "claimed" || task.state === "running") task = appendTaskEvent(ctx, task, { type: "question", text }).task;
       const waiting = task.state === "waiting_for_user";
       // Only the host knows the CLI session that asked; the MCP server's copy leaves it alone.
-      // An answer may already have re-queued this claim.
-      if (sessionId !== undefined && (waiting || task.state === "queued") && task.session?.id !== (sessionId ?? undefined)) {
+      // An answer may already have re-queued this claim, and may have switched models: that attempt's session is not kept.
+      if (sessionId !== undefined && (waiting || task.state === "queued") && (!startedAt || task.sessionRevokedFor !== startedAt) && task.session?.id !== (sessionId ?? undefined)) {
         saveTask(ctx, { ...task, session: sessionId ? { agent: task.agent, id: sessionId } : undefined });
       }
       return waiting;

@@ -620,3 +620,48 @@ done
     assert!(sent.contains(r#""configId":"thought_level""#));
     assert!(sent.contains(r#""value":"medium""#));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn continues_when_default_effort_is_rejected_but_fails_for_explicit_effort() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake-agy-reject-effort");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+  case "$line" in
+    *'"method":"initialize"'*)
+      echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"_meta":{"antigravity":{"systemPrompt":{"append":true}}}}}}'
+      ;;
+    *'"method":"session/new"'*)
+      echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s-eff-err","configOptions":[{"id":"thought_level","category":"thought_level","currentValue":"high","options":[{"value":"low"},{"value":"medium"},{"value":"high"}]}]}}'
+      ;;
+    *'"method":"session/set_config_option"'*)
+      echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32602,\"message\":\"thought level unsupported for model\"}}"
+      ;;
+    *'"method":"session/prompt"'*)
+      echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"stopReason\":\"end_turn\"}}"
+      ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Unset effort: best-effort default falls back and completes the prompt.
+    let (opts, events) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    let res = run_gemini(opts).await;
+    assert!(res.ok, "unexpected error: {:?}", res.error);
+    assert!(events.lock().unwrap().iter().any(|e| e.kind == "log" && e.text.contains("could not apply default effort")));
+
+    // Explicit effort: rejecting it still fails the run clearly.
+    let (mut explicit, _) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    explicit.effort = Some("low".into());
+    let res = run_gemini(explicit).await;
+    assert!(!res.ok);
+    assert_eq!(res.error.as_deref(), Some("Gemini set_effort failed: thought level unsupported for model"));
+}

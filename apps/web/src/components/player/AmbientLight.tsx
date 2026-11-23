@@ -69,9 +69,9 @@ function spread(from: HTMLCanvasElement, to: CanvasRenderingContext2D, r: number
   to.globalAlpha = 1;
 }
 
-/** Boost colour saturation and soften brightness on the coarse output canvas. */
-function tone(context: CanvasRenderingContext2D, width: number, height: number) {
-  if (typeof context.getImageData !== "function" || typeof context.putImageData !== "function") return;
+/** Boost colour saturation and soften brightness on the coarse output canvas. Returns false if cross-origin taint blocks pixel access. */
+function tone(context: CanvasRenderingContext2D, width: number, height: number): boolean {
+  if (typeof context.getImageData !== "function" || typeof context.putImageData !== "function") return false;
   try {
     const image = context.getImageData(0, 0, width, height);
     const data = image.data;
@@ -84,8 +84,10 @@ function tone(context: CanvasRenderingContext2D, width: number, height: number) 
       data[i + 2] = Math.min(255, Math.max(0, lum + (b - lum) * SATURATE)) * BRIGHTNESS;
     }
     context.putImageData(image, 0, 0);
+    return true;
   } catch {
-    // A cross-origin source leaves the blurred glow without the pixel tone pass.
+    // A cross-origin source taints the canvas; fall back to CSS filter tuning on the element.
+    return false;
   }
 }
 
@@ -170,7 +172,9 @@ export function AmbientLight({ stage, monitor }: { stage: RefObject<HTMLElement 
           spread(from, to.context!, r);
           from = to.el;
         });
-        tone(context, el.width, el.height);
+        const toned = tone(context, el.width, el.height);
+        const cssTone = toned ? "false" : "true";
+        if (el.dataset.cssTone !== cssTone) el.dataset.cssTone = cssTone;
         blank = false;
         light(true);
       } catch {
