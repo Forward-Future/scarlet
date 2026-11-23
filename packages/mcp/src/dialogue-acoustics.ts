@@ -35,6 +35,9 @@ export function joinEvidence(words: Word[], wf: Waveform): JoinPage["edges"] {
   if (step > 0.031) return; // A coarse waveform cannot locate an edge between syllables.
   const quiet: TimeRange[] = [], valleys: TimeRange[] = [];
   const quietBelow = quietRms(wf.rms, step);
+  const room = roomRms(wf.rms, step);
+  const valleyRms = quietBelow > QUIET_RMS ? Math.min(quietBelow, room * 1.4) : Math.min(.002, quietBelow);
+  const valleyPeak = quietBelow > QUIET_RMS ? valleyRms * 5 : .012;
   const spoken = words.filter(w => w.end > w.start && w.text.trim() && !isTag(w.text));
   const { quiet: still, breaths } = quietReading(wf.rms, wf.peaks, wf.from, step, wf.speechActivity, quietBelow, spoken);
   for (let i = 0; i < wf.rms.length; i++) {
@@ -43,7 +46,7 @@ export function joinEvidence(words: Word[], wf: Waveform): JoinPage["edges"] {
     // A speech detector can stay active through a real inter-word gap. Offer a deep
     // level trough there for audition, but keep that disagreement explicit.
     // Deep against this recording's floor too: a breath 10 dB over a very quiet room is under any fixed level.
-    if (wf.rms[i]! <= Math.min(.002, quietBelow) && wf.peaks[i]! <= .012) appendInterval(valleys, start, end);
+    if (wf.rms[i]! <= valleyRms && wf.peaks[i]! <= valleyPeak) appendInterval(valleys, start, end);
   }
   const db = wf.rms.map(dbfs), levels = { from: wf.from, step, db };
   return { voice: wf.speechActivity, valleys, words: onTheirSound(spoken, [...quiet, ...valleys.filter(v => v.end - v.start >= silentValley)], levels),
@@ -176,14 +179,46 @@ export const LEAST_VOICE_IN = 0;
 /** Sound this loud is speech or a sound the ear follows: the bar under which quiet runs are measured. */
 export const SPEECH_DBFS = dbfs(QUIET_RMS);
 
+export interface LevelBars { speech: number; dip: number; trough: number; lowPoint: number }
+const DEFAULT_BARS: LevelBars = { speech: SPEECH_DBFS, dip: -55, trough: -48, lowPoint: -44 };
+const barCache = new WeakMap<AudioLevels, LevelBars>();
+
+/**
+ * Acoustic thresholds for a measured page's levels. On quiet studio recordings (room tone well under -40 dBFS) these
+ * match the fixed studio bars exactly; on noisy rooms whose floor sits above -40 dBFS they shift up with the room's
+ * measured quiet ceiling while staying well below speaking level.
+ */
+export function levelBars(levels?: AudioLevels): LevelBars {
+  if (!levels?.db.length) return DEFAULT_BARS;
+  const cached = barCache.get(levels);
+  if (cached) return cached;
+  const rms = levels.db.map(d => 10 ** (d / 20));
+  const quiet = quietRms(rms, levels.step);
+  let bars: LevelBars;
+  if (quiet <= QUIET_RMS) {
+    bars = DEFAULT_BARS;
+  } else {
+    const roomDb = dbfs(roomRms(rms, levels.step));
+    const speechDb = percentile85Db(levels.db);
+    const quietDb = dbfs(quiet);
+    const dip = Math.min(quietDb, roomDb + 3);
+    const trough = Math.max(dip, Math.min(quietDb, speechDb - TROUGH_DEPTH_DB));
+    const lowPoint = Math.max(trough, Math.min(quietDb + 2, speechDb - 8));
+    bars = { speech: quietDb, dip, trough, lowPoint };
+  }
+  barCache.set(levels, bars);
+  return bars;
+}
+
 /** The latest an edge may sit beside the sound that ends quiet run `run`: its end, or a little into a soft start. */
 export function onsetLimit(page: JoinPage["edges"] | undefined, runEnd: number): number {
   const levels = page?.levels;
   if (!levels) return runEnd;
+  const speechBar = levelBars(levels).speech;
   let limit = runEnd;
   for (let i = Math.floor((runEnd - levels.from) / levels.step + 1e-6); i >= 0 && i < levels.db.length; i++) {
     const from = levels.from + i * levels.step;
-    if (from >= runEnd + ONSET_REACH - 1e-9 || levels.db[i]! > SPEECH_DBFS) break;
+    if (from >= runEnd + ONSET_REACH - 1e-9 || levels.db[i]! > speechBar) break;
     limit = Math.min(runEnd + ONSET_REACH, from + levels.step);
   }
   return limit;
@@ -263,14 +298,15 @@ export function soundBesideEdge(pages: JoinPage[], mediaId: string, stream: numb
   const page = pageAt(pages, mediaId, stream, t), levels = page?.levels;
   if (!levels || !pageReaches(page, t)) return;
   const { from, step, db } = levels;
+  const speechBar = levelBars(levels).speech;
   // A bucket is on the side its middle is on: the one the edge falls in holds kept sound as well as removed sound, and
   // is counted as removed only when most of it is.
   if (side === "out") {
     for (let i = Math.max(0, Math.ceil((t - from) / step - .5)); i < db.length && from + i * step < t + limit; i++)
-      if (db[i]! > SPEECH_DBFS) return Math.max(0, from + i * step - t);
+      if (db[i]! > speechBar) return Math.max(0, from + i * step - t);
   } else {
     for (let i = Math.min(db.length - 1, Math.floor((t - from) / step - .5)); i >= 0 && from + (i + 1) * step > t - limit; i--)
-      if (db[i]! > SPEECH_DBFS) return Math.max(0, t - from - (i + 1) * step);
+      if (db[i]! > speechBar) return Math.max(0, t - from - (i + 1) * step);
   }
 }
 
@@ -323,7 +359,7 @@ export function soundingWord(page: JoinPage["edges"] | undefined, kept: Word, ne
   const levels = page?.levels;
   if (!page || !levels?.db.length) return;
   const loud = extremeLevel(page, kept.start, kept.end, "highest");
-  if (!loud || loud.db > SPEECH_DBFS) return;
+  if (!loud || loud.db > levelBars(levels).speech) return;
   const speech = percentile85Db(levels.db), floor = soundFloor(speech, dbfs(roomRms(levels.db.map(d => 10 ** (d / 20)), levels.step)));
   // A run is a syllable once it gets near the level speech sits at. An inhale before the word can pass the floor,
   // as one did at -38 dBFS beside speech at -20, and it stays with the pause.
@@ -397,17 +433,19 @@ export function troughDepth(levels: AudioLevels, i: number) {
 
 /** A level an edge can sit at between words: room tone, or a trough deep under the sound either side. */
 export function isDip(levels: AudioLevels, i: number, bar = TROUGH_DBFS) {
+  const bars = levelBars(levels);
+  const effectiveBar = bar === TROUGH_DBFS ? bars.trough : bar === LOW_POINT_DBFS ? bars.lowPoint : Math.max(bar, bars.trough);
   const db = levels.db[i]!;
-  return db <= DIP_DBFS || db <= bar && troughDepth(levels, i) >= TROUGH_DEPTH_DB;
+  return db <= bars.dip || db <= effectiveBar && troughDepth(levels, i) >= TROUGH_DEPTH_DB;
 }
 
-/** Whether `t` sits in measured quiet/valley or at room tone (`<= DIP_DBFS`), where no word is sounding. */
+/** Whether `t` sits in measured quiet/valley or at room tone (`<= levelBars(levels).dip`), where no word is sounding. */
 export function atRoomTone(page: NonNullable<JoinPage["edges"]>, t: number): boolean {
   if (soundAt(page, t) !== "sound") return true;
   const levels = page.levels;
   if (!levels) return false;
   const i = Math.floor((t - levels.from) / levels.step);
-  return i >= 0 && i < levels.db.length && levels.db[i]! <= DIP_DBFS;
+  return i >= 0 && i < levels.db.length && levels.db[i]! <= levelBars(levels).dip;
 }
 
 /** Whether `t` sits in measured quiet/valley or at a dip (room tone or deep trough) between words. */
@@ -435,7 +473,7 @@ export function extremeLevel(page: NonNullable<JoinPage["edges"]>, from: number,
 /** Peak sound time inside `word`, or `fallback` when the recording is quiet all through the word's timing. */
 export function wordPeakAt(page: NonNullable<JoinPage["edges"]>, word: Word, fallback: number): number {
   const peak = extremeLevel(page, word.start, word.end, "highest");
-  return peak && peak.db > SPEECH_DBFS ? peak.at : fallback;
+  return peak && peak.db > levelBars(page.levels).speech ? peak.at : fallback;
 }
 
 /**
@@ -457,13 +495,14 @@ export function dipBetween(page: NonNullable<JoinPage["edges"]>, from: number, t
   const levels = page.levels, low = extremeLevel(page, from, to, "lowest");
   const at = levels && low ? Math.floor((low.at - levels.from) / levels.step) : -1;
   if (!levels || !low) return low && { ...low, room: undefined, dip: false };
+  const bars = levelBars(levels);
   const centre = (i: number) => levels.from + (i + .5) * levels.step;
   const room = (first: number, last: number) => ({ start: levels.from + first * levels.step, end: levels.from + (last + 1) * levels.step });
   if (beside) {
     // Each stretch at room tone in the window, nearest the kept word first.
     const stretches: Array<[number, number]> = [];
     for (let i = Math.max(0, Math.ceil((from - levels.from) / levels.step - .5)); i < levels.db.length && centre(i) <= to; i++) {
-      if (levels.db[i]! > DIP_DBFS) continue;
+      if (levels.db[i]! > bars.dip) continue;
       const last = stretches.at(-1);
       if (last && last[1] === i - 1) last[1] = i; else stretches.push([i, i]);
     }
@@ -475,7 +514,7 @@ export function dipBetween(page: NonNullable<JoinPage["edges"]>, from: number, t
       return { at: (centre(first) + centre(last)) / 2, db, dip: true, room: room(first, last) };
     }
   }
-  const roomTone = low.db <= DIP_DBFS;
+  const roomTone = low.db <= bars.dip;
   // A trough above room tone is a dip only when its floor is inside the stretch searched: the lowest level at the
   // stretch's end is the wall of a trough beyond it, still in sound. On one pass that edge was saved 70 ms past the
   // trough between “game” and “let”, in “let” (2026-11-16).
@@ -483,7 +522,7 @@ export function dipBetween(page: NonNullable<JoinPage["edges"]>, from: number, t
   const bar = boundary !== undefined && Math.abs(low.at - boundary) <= LOW_POINT_REACH ? LOW_POINT_DBFS : TROUGH_DBFS;
   if (!roomTone && !(inside && isDip(levels, at, bar))) return { ...low, room: undefined, dip: false };
   // The stretch around the lowest level that is still down in it: at room tone, or within a few dB of a trough's floor.
-  const floor = roomTone ? DIP_DBFS : low.db + 6;
+  const floor = roomTone ? bars.dip : low.db + 6;
   let first = at, last = at;
   while (first > 0 && centre(first - 1) >= from && levels.db[first - 1]! <= floor) first--;
   while (last + 1 < levels.db.length && centre(last + 1) <= to && levels.db[last + 1]! <= floor) last++;
@@ -526,10 +565,11 @@ export function breathBetween(page: NonNullable<JoinPage["edges"]>, kept: Word, 
 export function roomToneAfter(page: NonNullable<JoinPage["edges"]>, from: number, until: number): TimeRange | undefined {
   const levels = page.levels;
   if (!levels) return;
+  const dipBar = levelBars(levels).dip;
   const centre = (i: number) => levels.from + (i + .5) * levels.step;
   let first = -1, last = -1;
   for (let i = Math.max(0, Math.ceil((from - levels.from) / levels.step - 1e-6)); i < levels.db.length && centre(i) <= until; i++) {
-    if (levels.db[i]! <= DIP_DBFS) { if (first < 0) first = i; last = i; } else if (first >= 0) break;
+    if (levels.db[i]! <= dipBar) { if (first < 0) first = i; last = i; } else if (first >= 0) break;
   }
   return first < 0 ? undefined : { start: levels.from + first * levels.step, end: levels.from + (last + 1) * levels.step };
 }
@@ -545,10 +585,11 @@ export function roomToneAfter(page: NonNullable<JoinPage["edges"]>, from: number
 export function roomBeforeBreath(page: NonNullable<JoinPage["edges"]>, kept: Word, run: TimeRange): (BreathAfterWord & { room: TimeRange }) | undefined {
   const levels = page.levels;
   if (!levels || run.start <= kept.end) return;
+  const dipBar = levelBars(levels).dip;
   const index = (t: number) => Math.floor((t - levels.from) / levels.step + 1e-6);
   let first = -1, last = -1;
   for (let i = Math.max(0, index(kept.end - keptSlack)); i < Math.min(levels.db.length, index(run.start)); i++) {
-    if (levels.db[i]! <= DIP_DBFS) { if (first < 0) first = i; last = i; } else if (first >= 0) break;
+    if (levels.db[i]! <= dipBar) { if (first < 0) first = i; last = i; } else if (first >= 0) break;
   }
   if (first < 0) return;
   const quiet = { start: levels.from + first * levels.step, end: levels.from + (last + 1) * levels.step };

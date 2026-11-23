@@ -28,8 +28,16 @@ const LOWEST_FLOOR_RMS = 1e-4;
 /** The bucket length the floor is read at, whatever the levels' own. */
 const FLOOR_BUCKET = .02;
 
+/** Noisy-room headroom above the 2nd-percentile room floor (steady HVAC/cafe noise swings ~4–6 dB above its 2nd percentile). */
+const NOISE_HEADROOM_DB = 6;
+/** Only lift the quiet ceiling above QUIET_RMS when speech sits clearly above the room floor and the floor is plausible room noise. */
+const MIN_NOISY_ROOM_SNR_DB = 8;
+const MAX_NOISY_FLOOR_RMS = 0.063; // -24 dBFS
+
 /**
- * The RMS at or under which a bucket of these levels is quiet: QUIET_RMS, or less on a recording with a low floor.
+ * The RMS at or under which a bucket of these levels is quiet: QUIET_RMS on a studio recording, less on a recording
+ * with a very low floor, and up to NOISE_HEADROOM_DB above the room on a noisy recording whose speech sits clearly
+ * above that room (never reaching speaking level, soundFloor).
  * `step` is the levels' bucket length. The floor is read on 20 ms buckets whatever it is: finer buckets catch quieter
  * instants, and at 10 ms the floor read 2 dB lower and a breath's soft tail after a word, quiet before, became sound;
  * the edges moved past it and the joins played a quarter-second longer (2026-11-16).
@@ -37,10 +45,24 @@ const FLOOR_BUCKET = .02;
 export function quietRms(rms: ArrayLike<number>, step = FLOOR_BUCKET): number {
   if (!rms.length) return QUIET_RMS;
   const room = roomRms(rms, step);
+  const speechDb = typicalLevel(Array.from(rms));
+  const roomDb = dbfs(room);
   // Never as loud as sound at speaking level (soundFloor): over a noisy room the fixed QUIET_RMS sat 5 dB under a soft
   // speaker's voice, and the soft ends of words, over the noise, read as quiet a cut could end in (2026-11-22).
-  const speech = 10 ** (soundFloor(typicalLevel(Array.from(rms)), dbfs(room)) / 20);
-  return Math.min(QUIET_RMS, room * 10 ** (QUIET_ABOVE_FLOOR_DB / 20), speech);
+  const speech = 10 ** (soundFloor(speechDb, roomDb) / 20);
+  const noisyHeadroom = room * 10 ** (NOISE_HEADROOM_DB / 20);
+  const ceiling = noisyHeadroom > QUIET_RMS && room <= MAX_NOISY_FLOOR_RMS && speechDb - roomDb >= MIN_NOISY_ROOM_SNR_DB
+    ? noisyHeadroom
+    : QUIET_RMS;
+  return Math.min(ceiling, room * 10 ** (QUIET_ABOVE_FLOOR_DB / 20), speech);
+}
+
+/**
+ * The peak ceiling paired with `quietBelow`: QUIET_PEAK on a quiet studio recording, scaling with the same 14 dB
+ * crest factor when a noisy room lifts `quietBelow` above QUIET_RMS.
+ */
+export function quietPeak(quietBelow: number): number {
+  return Math.max(QUIET_PEAK, quietBelow * (QUIET_PEAK / QUIET_RMS));
 }
 
 /**
@@ -68,7 +90,7 @@ const DETECTOR_LEAD = .75;
 /** Through a detector's early start the level stays within this of the room just before it: 8 dB. A breath or a soft consonant rises past it. */
 const LEAD_ABOVE_ROOM = 2.5;
 /**
- * Which buckets of a reading are quiet: at room level (`quietBelow`, QUIET_PEAK) with no voice detected.
+ * Which buckets of a reading are quiet: at room level (`quietBelow`, quietPeak) with no voice detected.
  * Two things a silence holds do not end it (2026-11-16, a 90-cut pass whose cuts waited up to 0.6 s before the voice):
  * - A tick. After a breath the quiet before a word was split by three ticks into pieces too short to trust, and the
  *   cut went before the breath instead, half a second early.
@@ -95,13 +117,16 @@ export interface HeldBreath extends TimeRange { db: number }
  */
 export function quietReading(rms: ArrayLike<number>, peaks: ArrayLike<number>, from: number, step: number, voice: ReadonlyArray<{ start: number; end: number }>, quietBelow = quietRms(rms, step), words?: ReadonlyArray<TimeRange>): { quiet: boolean[]; breaths: HeldBreath[] } {
   const n = rms.length;
-  const level = Array.from({ length: n }, (_, i) => rms[i]! <= quietBelow && peaks[i]! <= QUIET_PEAK);
+  const peakBelow = quietPeak(quietBelow);
+  const tickCeiling = quietBelow > QUIET_RMS ? quietBelow * 1.25 : TICK_RMS;
+  const breathCeiling = Math.max(QUIET_RMS, quietBelow);
+  const level = Array.from({ length: n }, (_, i) => rms[i]! <= quietBelow && peaks[i]! <= peakBelow);
   // Ticks: a short run above the room, still far under speech, between two buckets at room level.
   const most = Math.max(1, Math.round(TICK_SECONDS / step));
   for (let i = 1; i < n; i++) {
     if (level[i] || !level[i - 1]) continue;
     let k = i;
-    while (k < n && k - i < most && !level[k] && rms[k]! <= TICK_RMS && peaks[k]! <= QUIET_PEAK) k++;
+    while (k < n && k - i < most && !level[k] && rms[k]! <= tickCeiling && peaks[k]! <= peakBelow) k++;
     if (k < n && k > i && level[k]) for (let t = i; t < k; t++) level[t] = true;
   }
   const quiet: boolean[] = [], recent: number[] = [];
@@ -140,7 +165,7 @@ export function quietReading(rms: ArrayLike<number>, peaks: ArrayLike<number>, f
       // Back from the quiet over sound under speaking level, to the earliest bucket at room level: where the word ended.
       // A soft sound between two silences, with no word or speech before it, stays sound: it may be a word nobody timed.
       let room = i, k = i - 1;
-      for (; k >= 0 && !quiet[k] && rms[k]! <= QUIET_RMS && !spoken(k); k--) if (rms[k]! <= quietBelow && peaks[k]! <= QUIET_PEAK) room = k;
+      for (; k >= 0 && !quiet[k] && rms[k]! <= breathCeiling && !spoken(k); k--) if (rms[k]! <= quietBelow && peaks[k]! <= peakBelow) room = k;
       if (k < 0 || quiet[k]) continue;
       for (let j = room; j < i; j++) quiet[j] = true;
       // What rises over the room in that stretch, a tick aside, is the breath the quiet now holds.

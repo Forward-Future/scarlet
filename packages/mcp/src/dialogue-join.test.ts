@@ -730,6 +730,62 @@ describe("native retake boundaries", () => {
   });
 });
 
+describe("noisy rooms with room tone above -40 dBFS", () => {
+  it("places pause cuts, inter-word dips, and edge-sound checks relative to a -34 dBFS room floor", () => {
+    // Simulated noisy room (HVAC / street rumble at -34 dBFS, RMS ~0.02, peaks ~0.07) with clear speech at -16 dBFS.
+    const noisyRms = Array.from({ length: 250 }, (_, i) => {
+      const t = i / 50;
+      return voice.some(v => v.start <= t && t < v.end) ? .16 : .02 * (1 + .15 * Math.sin(i * 1.7));
+    });
+    const noisyPeaks = noisyRms.map(v => v * 3.2);
+    const noisyPage: JoinPage = {
+      mediaId: "mic",
+      start: 0,
+      end: 5,
+      edges: joinEvidence(words, { from: 0, to: 5, peaks: noisyPeaks, rms: noisyRms, speechActivity: voice }),
+    };
+    expect(noisyPage.edges!.quiet.length).toBeGreaterThanOrEqual(2);
+    const { p, tl } = fixture();
+
+    // Pause cut in the noisy room succeeds cleanly without being held as "in sound".
+    const cut = wordCutRange(words, 1, 1, () => noisyPage.edges);
+    expect(cut.problems).toEqual([]);
+    expect(cut.start).toBeCloseTo(1.44 + AIR_AFTER_SPEECH, 1);
+    expect(cut.end).toBeCloseTo(3.4 - AIR_BEFORE_SPEECH, 1);
+    expect(checkDialogueJoin(tl, p, { start: cut.start, end: cut.end }, [noisyPage])).toMatchObject({ status: "unchanged" });
+
+    // Pure -34 dBFS room noise beside the edge is NOT reported as speaking-level sound.
+    expect(soundBesideEdge([noisyPage], "mic", 0, 1.5, "out", .1)).toBeUndefined();
+    // Actual -16 dBFS speech right after the edge IS still caught.
+    expect(soundBesideEdge([noisyPage], "mic", 0, 1.76, "out", .1)).toBeCloseTo(.04, 2);
+
+    // Inter-word dip down to the -34 dBFS room floor between words said in one breath still snaps cleanly.
+    const runOn = [
+      { start: 1, end: 1.3, text: "this" },
+      { start: 1.3, end: 1.56, text: "game" },
+      { start: 1.56, end: 1.7, text: "let" },
+      { start: 1.7, end: 1.8, text: "me" },
+      { start: 1.8, end: 2.1, text: "throw" },
+      { start: 2.1, end: 2.4, text: "them" },
+      { start: 3.6, end: 3.9, text: "next" },
+    ];
+    const talk = [{ start: 1, end: 2.4 }, { start: 3.6, end: 3.9 }];
+    const dipRms = Array.from({ length: 500 }, (_, i) => {
+      if (i >= 149 && i <= 151) return .021; // -33.6 dBFS dip down to the noisy room floor
+      const t = i / 100;
+      return talk.some(v => v.start <= t && t < v.end) ? .16 : .02;
+    });
+    const dipPage: JoinPage = {
+      mediaId: "mic",
+      start: 0,
+      end: 5,
+      edges: joinEvidence(runOn, { from: 0, to: 5, peaks: dipRms.map(v => v * 3), rms: dipRms, speechActivity: talk }),
+    };
+    const snapped = checkDialogueJoin(tl, p, { start: 1.57, end: 3.5 }, [dipPage]);
+    expect(snapped).toMatchObject({ status: "snapped", start: 1.5, end: 3.5 });
+  });
+});
+
 describe("a restart that begins on the word the first take broke off after", () => {
   // “there was a time where would … where you would occasionally see”, with the levels of the recording it came from
   // in 20 ms steps: “time” runs into the first “where” through its “m” (-37 dBFS), and the second “where” starts out of
