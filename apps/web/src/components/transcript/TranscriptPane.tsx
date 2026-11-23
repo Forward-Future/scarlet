@@ -11,11 +11,21 @@ import { useShownCutStore } from "../../stores/shownCut";
 import { useUiStore, type AgentContext } from "../../stores/ui";
 import { EmptyState, Icon, Spinner } from "../ui/primitives";
 
-import { transcriptTurns } from "./transcriptTurns";
+import { SECTION_GAP_SECONDS, transcriptTurns } from "./transcriptTurns";
 import { useTranscriptWindow } from "./useTranscriptWindow";
 
 const emptyMedia: MediaAsset[] = [];
 const WHOLE = { start: 0, end: Infinity };
+const INLINE_PAUSE_SECONDS = 3;
+/** Compact pause label for inline gap pills and silence section dividers. */
+function formatPause(seconds: number): string {
+  const s = Math.round(seconds);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  if (m >= 10 || rem < 5) return `${m}m`;
+  return `${m}m ${rem}s`;
+}
 /** A word as search compares it: lower case, without punctuation. */
 const bare = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
 /** The words searched for, as `findWords` compares them: a run of punctuation alone is no word. */
@@ -41,7 +51,12 @@ const WordParagraph = memo(function WordParagraph({ words, from, to }: {
 }) {
   return <p className="reading-passage">{words.map((w, i) => {
     const key = wordKey(w);
-    return <Fragment key={key}>{i > 0 && " "}<span data-w={w.index} data-word-key={key} role="button" tabIndex={-1}
+    const prev = words[i - 1];
+    const gap = prev && prev.mediaId === w.mediaId && prev.placements[0] && w.placements[0]
+      ? w.placements[0].start - prev.placements[0].end
+      : 0;
+    const pause = gap >= INLINE_PAUSE_SECONDS ? formatPause(gap) : undefined;
+    return <Fragment key={key}>{i > 0 && " "}{pause && <><span className="reading-pause" data-pause={pause} aria-hidden="true" title={`${pause} pause`} />{" "}</>}<span data-w={w.index} data-word-key={key} data-cut={w.cut ? "" : undefined} role="button" tabIndex={-1}
       data-log-label="Transcript word" data-log-control="transcript-word" aria-label={w.cut ? `${w.word.text} (unused in edit)` : w.word.text}
       className={`rounded px-[2px] py-0.5 -mx-px cursor-pointer hover:bg-raised data-[current]:bg-hi data-[current]:text-bg data-[current]:hover:bg-hi ${w.cut ? "line-through text-dim decoration-dim/70" : "text-fg"} ${w.index >= from && w.index <= to ? "bg-hi-dim" : ""}`}
       title={w.cut ? `Unused in edit · source ${clock(w.word.start)}` : `${clock(w.placements[0]!.start)}${w.word.speaker ? ` · ${w.word.speaker}` : ""}`}>
@@ -69,6 +84,7 @@ export function TranscriptPane({ source, draft, onAsk }: { draft?: Timeline; sou
   const anchor = useRef<string | null>(null);
   const moved = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const wordNodes = useRef<NodeListOf<HTMLElement> | undefined>(undefined);
   const keyboardStops = useRef<HTMLElement[] | undefined>(undefined);
   const userScrolledAt = useRef(0);
@@ -92,8 +108,9 @@ export function TranscriptPane({ source, draft, onAsk }: { draft?: Timeline; sou
     }).map((w, index) => ({ ...w, index }));
   }, [transcripts, source, showCut, timeline, from, to]);
   const groups = useMemo(() => transcriptTurns(words), [words]);
-  // Voices are named only where there is more than one to tell apart.
-  const hasVoices = useMemo(() => new Set(groups.map(g => g.voice ?? "")).size > 1, [groups]);
+  // Voices are named only where there are at least two distinct identified voices to tell apart.
+  const hasVoices = useMemo(() => new Set(groups.map(g => g.voice).filter(Boolean)).size > 1, [groups]);
+  const hasHours = (words.at(-1)?.placements[0]?.start ?? 0) >= 3600;
   // Recordings are named only where the words come from more than one.
   const severalRecordings = useMemo(() => !source && new Set(words.map(w => w.mediaId)).size > 1, [source, words]);
   const indices = useMemo(() => new Map(words.map(w => [wordKey(w), w.index])), [words]);
@@ -165,9 +182,9 @@ export function TranscriptPane({ source, draft, onAsk }: { draft?: Timeline; sou
   }, [hits, shownHit, terms, words]);
   // Enter places the playhead on the match in view, then steps on to the next; Space plays from the words found.
   const placed = useRef(false);
-  const goToHit = (step: 1 | -1) => {
+  const goToHit = (step: 1 | -1, advance = false) => {
     if (!hits.length) return;
-    const next = placed.current ? (shownHit + step + hits.length) % hits.length : shownHit;
+    const next = placed.current || advance ? (shownHit + step + hits.length) % hits.length : shownHit;
     placed.current = true;
     setHit(next);
     const word = words[hits[next]!];
@@ -232,29 +249,50 @@ export function TranscriptPane({ source, draft, onAsk }: { draft?: Timeline; sou
     focusComposer();
     setSel(null);
   };
-  const markUnused = source && timeline && <button className="btn-quiet" onClick={() => setShowCut(v => !v)} aria-pressed={showCut}>Mark unused words</button>;
+  const markUnused = source && timeline && <button type="button" className="btn-quiet" onClick={() => setShowCut(v => !v)} aria-pressed={showCut}>Mark unused words</button>;
 
   return (
-    <div className="flex flex-col h-full" onMouseUp={() => (dragging.current = false)} onMouseLeave={() => (dragging.current = false)}>
+    <div className="flex flex-col h-full min-h-0" onMouseUp={() => (dragging.current = false)} onMouseLeave={() => (dragging.current = false)}>
       <div className="transcript-search">
-        <Icon name="search" size={13} />
-        <input type="search" value={query} placeholder="Search the transcript" aria-label="Search the transcript"
-          onChange={e => { setQuery(e.target.value); setHit(0); placed.current = false; }}
-          onKeyDown={e => {
-            if (e.key === "Enter") { e.preventDefault(); goToHit(e.shiftKey ? -1 : 1); }
-            else if (e.key === "Escape" && query) { e.preventDefault(); e.stopPropagation(); setQuery(""); }
-          }} />
-        {query.trim() && <span className="transcript-search-count" title="Enter for the next, Shift + Enter for the one before">
-          {hits.length ? `${shownHit + 1} of ${hits.length}` : "No matches"}</span>}
-        {markUnused}
+        <div className="transcript-search-field">
+          <Icon name="search" size={13} />
+          <input ref={searchInputRef} type="search" value={query} placeholder="Search the transcript" aria-label="Search the transcript"
+            onChange={e => { setQuery(e.target.value); setHit(0); placed.current = false; }}
+            onKeyDown={e => {
+              if (e.key === "Enter") { e.preventDefault(); goToHit(e.shiftKey ? -1 : 1); }
+              else if (e.key === "Escape" && query) { e.preventDefault(); e.stopPropagation(); setQuery(""); }
+            }} />
+          {query.trim() && (
+            <span className="transcript-search-count" data-empty={hits.length ? undefined : ""} title="Enter for the next, Shift + Enter for the one before">
+              {hits.length ? `${shownHit + 1} of ${hits.length}` : "No matches"}
+            </span>
+          )}
+          {query.trim() && hits.length > 1 && (
+            <span className="transcript-search-nav">
+              <button type="button" className="transcript-search-btn" aria-label="Previous match" title="Previous match (Shift + Enter)" onClick={() => goToHit(-1, true)}>
+                <Icon name="down" size={11} />
+              </button>
+              <button type="button" className="transcript-search-btn" aria-label="Next match" title="Next match (Enter)" onClick={() => goToHit(1, true)}>
+                <Icon name="down" size={11} />
+              </button>
+            </span>
+          )}
+          {query && (
+            <button type="button" className="transcript-search-btn" aria-label="Clear search" title="Clear search (Esc)"
+              onClick={() => { setQuery(""); setHit(0); placed.current = false; searchInputRef.current?.focus(); }}>
+              <Icon name="x" size={11} />
+            </button>
+          )}
+        </div>
+        {markUnused && <div className="transcript-search-options">{markUnused}</div>}
       </div>
-      {page.loading && <p role="status" className="px-4"><Spinner /> Loading transcript…</p>}
-      {page.error && <p role="alert" className="px-4">{page.error} <button className="btn-ghost" onClick={page.retry}>Retry transcript</button></p>}
-      {!page.loading && !page.error && !words.length && !status.length && <p className="p-4 text-muted">No spoken words here.</p>}
+      {page.loading && <p role="status" className="transcript-state"><Spinner /> Loading transcript…</p>}
+      {page.error && <p role="alert" className="transcript-state is-error">{page.error} <button className="btn-ghost" onClick={page.retry}>Retry transcript</button></p>}
+      {!page.loading && !page.error && !words.length && !status.length && <p className="transcript-state">No spoken words here.</p>}
       {range && sel && <div className="transcript-chosen">
         <span>{clockRange(range.start, range.end)}</span>
-        <button type="button" className="simple-link" onClick={() => askAboutSelection()}>Ask about this</button>
-        <button type="button" className="simple-link simple-link-quiet" onClick={() => setSel(null)}>Clear</button>
+        <button type="button" className="transcript-ask-btn" onClick={() => askAboutSelection()}>Ask about this</button>
+        <button type="button" className="transcript-clear-btn" onClick={() => setSel(null)}>Clear</button>
       </div>}
       <div ref={listRef} tabIndex={0} role="group" aria-label="Transcript words"
         onMouseDown={e => {
@@ -318,34 +356,53 @@ export function TranscriptPane({ source, draft, onAsk }: { draft?: Timeline; sou
           next.focus();
         }}
         className="reading-scroll transcript-words"
+        data-hours={hasHours ? "" : undefined}
         title="Click a word to place the playhead there · Double-click or drag to choose words · Shift + ← → to select"
         onScroll={() => { userScrolledAt.current = Date.now(); }}>
         {groups.map((g, gi) => {
           const first = g.words[0];
           if (!first) return null;
+          const prev = groups[gi - 1];
+          const prevLast = prev?.words.at(-1);
+          const recordingChanged = !!prev && first.mediaId !== prev.words[0]?.mediaId;
+          const gapSeconds = prevLast && first.placements[0] && prevLast.placements[0] && !recordingChanged
+            ? first.placements[0].start - prevLast.placements[0].end
+            : 0;
+          const longGap = gapSeconds >= SECTION_GAP_SECONDS;
+          const speakerChanged = !prev || recordingChanged || g.voice !== prev.voice;
+          const showSpeaker = hasVoices && (speakerChanged || (longGap && !!g.voice));
           return (
-            <div className="reading-turn" key={wordKey(first)}>
-            {severalRecordings && first.mediaId !== groups[gi - 1]?.words[0]?.mediaId && (
-              <p className="mt-2 mb-1 text-xs text-muted">{assets.find(asset => asset.id === first.mediaId)?.name}</p>
-            )}
-            <div className="reading-turn-head">
-              {hasVoices && <span className="reading-speaker" data-known={!!g.voice}>
-                <i aria-hidden="true" data-tone={g.voice === "me" ? "host" : g.voice ? String((g.tone ?? 0) % 4) : "unknown"} />
-                {g.voice || "Voice unclear"}
-              </span>}
-              {first.placements[0] && (
-                <button tabIndex={-1} className="reading-time" onClick={() => seek(first.placements[0]!.start)} aria-label={`Seek to ${clock(first.placements[0].start)}`}>
-                  {clock(first.placements[0].start)}
-                </button>
+            <Fragment key={wordKey(first)}>
+              {severalRecordings && (gi === 0 || recordingChanged) && (
+                <p className="transcript-source-label">{assets.find(asset => asset.id === first.mediaId)?.name}</p>
               )}
-            </div>
-            {g.paragraphs.map(paragraph => {
-              const first = paragraph[0]!, last = paragraph.at(-1)!;
-              const overlaps = selectedFrom <= last.index && selectedTo >= first.index;
-              return <WordParagraph key={wordKey(first)} words={paragraph}
-                from={overlaps ? Math.max(selectedFrom, first.index) : -1} to={overlaps ? Math.min(selectedTo, last.index) : -1} />;
-            })}
-            </div>
+              {longGap && (
+                <div className="transcript-gap-break" data-gap-label={`${formatPause(gapSeconds)} silence`} aria-hidden="true" />
+              )}
+              <div className="reading-turn" data-speaker-change={showSpeaker && gi > 0 && !recordingChanged && !longGap ? "" : undefined} data-gap={longGap ? "long" : undefined}>
+                <div className="reading-turn-head">
+                  {first.placements[0] && (
+                    <button tabIndex={-1} className="reading-time" onClick={() => seek(first.placements[0]!.start)} aria-label={`Seek to ${clock(first.placements[0].start)}`}>
+                      {clock(first.placements[0].start)}
+                    </button>
+                  )}
+                </div>
+                <div className="reading-turn-body">
+                  {showSpeaker && (
+                    <span className="reading-speaker" data-known={!!g.voice}>
+                      <i aria-hidden="true" data-tone={g.voice === "me" ? "host" : g.voice ? String((g.tone ?? 0) % 4) : "unknown"} />
+                      {g.voice || "Voice unclear"}
+                    </span>
+                  )}
+                  {g.paragraphs.map(paragraph => {
+                    const first = paragraph[0]!, last = paragraph.at(-1)!;
+                    const overlaps = selectedFrom <= last.index && selectedTo >= first.index;
+                    return <WordParagraph key={wordKey(first)} words={paragraph}
+                      from={overlaps ? Math.max(selectedFrom, first.index) : -1} to={overlaps ? Math.min(selectedTo, last.index) : -1} />;
+                  })}
+                </div>
+              </div>
+            </Fragment>
           );
         })}
         {status}
