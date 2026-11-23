@@ -265,6 +265,31 @@ describe("project_get", () => {
     expect(t).not.toContain("\n");
     expect(mock.requests.find(q => q.path === "/projects/prj_test")?.query.get("view")).toBe("workspace");
   });
+
+  it("gives the editor's note on a file and marks a file added after the request, saying it isn't part of it", async () => {
+    const original = mock.state.project.media;
+    mock.state.project.media = [
+      { ...original[0]!, addedAt: "2026-11-23T20:00:00.000Z" },
+      { id: "sponsor", kind: "video", name: "Integration.mp4", path: "sponsor.mp4", duration: 94, addedAt: "2026-11-23T21:00:00.000Z",
+        editorNote: "Finished sponsor read. Insert it whole after the intro." } as never,
+    ];
+    const task = Task.parse({ id: "talk-pass", projectId: "prj_test", kind: "edit", agent: "claude", state: "running", instruction: "/matt-talking-head",
+      context: {}, createdBy: { type: "human", name: "Editor" }, createdAt: "2026-11-23T20:19:38.414Z" });
+    const editor = await connect(task.id, undefined, task);
+    try {
+      const body = JSON.parse(textOf(await editor.callTool({ name: "project_get", arguments: {} }) as CallToolResult).split("\n\n").at(-1)!);
+      expect(body.media[0]).not.toHaveProperty("addedAfterThisRequest");
+      expect(body.media[0]).not.toHaveProperty("editorNote");
+      expect(body.media[1]).toMatchObject({ editorNote: "Finished sponsor read. Insert it whole after the intro.", addedAfterThisRequest: true });
+      expect(body.addedLater).toMatch(/aren't part of it unless the editor's words name them/);
+      // A project whose files were all there when the request was sent reads as it did.
+      mock.state.project.media = [{ ...original[0]!, addedAt: "2026-11-23T20:00:00.000Z" }];
+      expect(JSON.parse(textOf(await editor.callTool({ name: "project_get", arguments: {} }) as CallToolResult).split("\n\n").at(-1)!)).not.toHaveProperty("addedLater");
+    } finally {
+      mock.state.project.media = original;
+      await editor.close();
+    }
+  });
 });
 
 describe("timeline_first_cut", () => {

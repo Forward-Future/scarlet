@@ -128,6 +128,8 @@ interface ProjectState {
   removeMedia(mediaId: string): Promise<void>;
   /** Choose which audio track (or all tracks mixed) Scarlet reads from a multi-track recording. */
   setMediaAudioTrack(mediaId: string, audioTrack: AudioTrackSelection): Promise<void>;
+  /** Save what the editor says a file is and how to use it. An empty note takes it off. */
+  setMediaNote(mediaId: string, note: string): Promise<void>;
   loadActivity(more?: boolean): Promise<void>;
 }
 
@@ -835,6 +837,12 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       await api.removeMedia(projectId, mediaId);
       // The socket says so as well. The row goes without waiting for it.
       patch(projectId, d => ({ media: d.media.filter(m => m.id !== mediaId) }));
+    },
+    async setMediaNote(mediaId, note) {
+      const projectId = get().current?.id;
+      if (!projectId) return;
+      const { media } = await api.setMediaNote(mediaId, note);
+      patch(projectId, d => ({ media: upsert(d.media, media) }));
     },
     async setMediaAudioTrack(mediaId, audioTrack) {
       const projectId = get().current?.id;

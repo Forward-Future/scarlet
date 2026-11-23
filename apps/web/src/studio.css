@@ -329,6 +329,21 @@
 .media-row { flex-wrap: wrap; padding: 10px 14px; }
 .media-file { flex: 1 1 180px; min-width: 0; }
 .media-meta { margin-top: 2px; font-size: 11.5px; color: var(--color-dim); }
+/* The editor's note for Scarlet on a file: a quiet line under its length, and the editor across the row's width. */
+.media-note { margin-top: 4px; font-size: 11.5px; color: var(--color-dim); }
+.media-note .simple-link { margin-left: 0; font-size: inherit; }
+.media-note.is-set {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  padding: 0; border: 0; background: none; text-align: left; cursor: text; white-space: normal;
+}
+.media-note.is-set b { font-weight: 500; color: var(--color-muted); }
+.media-note.is-set:hover, .media-note.is-set:focus-visible { color: var(--color-muted); }
+.media-note-editor { flex-basis: 100%; font-size: 11.5px; color: var(--color-dim); }
+.media-note-label { margin-bottom: 5px; color: var(--color-muted); }
+.media-note-field { width: 100%; font-size: 12.5px; line-height: 1.4; resize: none; }
+.media-note-actions { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+.media-note-actions .simple-link { margin-left: 0; font-size: 12px; }
+.media-note-save { min-height: 26px; padding: 0 10px; font-size: 12px; }
 .media-jobs { flex: 0 0 232px; min-width: 0; display: grid; gap: 5px; }
 .media-jobs:empty { display: none; }
 .media-jobs .media-cache-line { flex-wrap: nowrap; min-width: 0; margin-top: 0; }

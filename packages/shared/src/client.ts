@@ -183,6 +183,10 @@ export class ScarletClient extends ClientTransport {
   removeMedia(projectId: string, mediaId: string) {
     return this.delete<Record<string, never>>(`/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}`);
   }
+  /** Save what the editor says a file is and how to use it. An empty note takes it off. */
+  setMediaNote(mediaId: string, note: string) {
+    return this.put<{ media: MediaAsset }>(`/media/${encodeURIComponent(mediaId)}/note`, { note });
+  }
   /** Choose which audio track (or all tracks mixed) Scarlet reads from a multi-track recording. */
   setMediaAudioTrack(mediaId: string, audioTrack: AudioTrackSelection) {
     return this.put<{ media: MediaAsset }>(`/media/${encodeURIComponent(mediaId)}/audio-track`, { audioTrack });
