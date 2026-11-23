@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- Scarlet now listens to cuts with Claude and Codex too: when Gemini is signed in, it listens for the model you picked, and Settings › Models says which model listens.
 - With Gemini, Scarlet now listens to a restart before deciding where to cut it, so a first try that sounds like a finished line comes out and the first word of the line you kept stays.
 - Scarlet no longer quits on its own if you launched it from a terminal and later close that terminal.
 - Scarlet can now find the beat, the bars and where the energy builds and drops in a music track, so you can ask it to cut to the music.

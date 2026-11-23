@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { buildSystemPrompt } from "@scarlet/mcp/prompt";
-import { agentCapabilities, isAsideTask, isLearningCheck, isSkillEdit, taskRunKind, workspaceCapabilities, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
+import { agentCapabilities, isAsideTask, isLearningCheck, isListenCheck, isSkillEdit, taskRunKind, workspaceCapabilities, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
 import type { Project } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { notFound } from "../errors.js";
@@ -113,6 +113,7 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   // own two, and a skill edit changes no video: none is given the tool or asked, so each runs exactly as it did.
   const plans = task.kind !== "skill_from_change" && !isAsideTask(task) && !taskRunKind(task)
     && agentCapabilities(task.agent, (ctx.options.env ?? process.env).SCARLET_AGENT_CAPS).plan;
+  const listens = isListenCheck(task);
   const told = { ...task, instruction };
   const systemPrompt = buildSystemPrompt({
     project: { project, timeline: !aside && project.head ? resolveTimeline(ctx, project, "head") : null },
@@ -126,17 +127,19 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     editSkill: editSkill ?? undefined,
     learningCheck: isLearningCheck(task) ? learningCheckContext(ctx, task) : undefined,
     areaCheck: task.kind === "area_check" ? task.context.areaCheck : undefined,
+    listenCheck: isListenCheck(task) ? task.context.listenCheck : undefined,
     checkIn: ctx.settings().checkIn,
     workDir: opts.workDir,
     timeLimitMinutes: opts.timeLimitMinutes,
     // A request has its harness's own shell, file and web tools; a run that edits no video has Scarlet's alone.
-    capabilities: { ...(aside ? agentCapabilities(task.agent) : workspaceCapabilities(agentCapabilities(task.agent))), plan: plans },
+    capabilities: { ...(aside && !listens ? agentCapabilities(task.agent) : workspaceCapabilities(agentCapabilities(task.agent, undefined, task.model))), plan: plans },
     ...graphicsContext(ctx, project, task),
   });
   // Whether the host launches the CLI with its own to-do tool on, with its shell, file and web tools (every request:
   // the editor's decision of 2026-11-21 that no rule in Scarlet's code picks which run gets them, so what to use them
   // for is the model's call), and what it says when it refuses a tool.
-  const launch = { ...(plans && { plan: true }), ...(!aside && { workspace: true }), refusedTool: aside ? REFUSED_TOOL : REFUSED_OUTSIDE };
+  // A listen is launched with its harness's own tools as well: Gemini hears a passage only by opening its file there.
+  const launch = { ...(plans && { plan: true }), ...((!aside || listens) && { workspace: true }), refusedTool: aside ? REFUSED_TOOL : REFUSED_OUTSIDE };
   if (resumeSession) {
     const said = answered ? `The editor answered: "${last!.text.trim()}"\nContinue the task with that answer.`
       : `${task.resumesAfterProjectStop ? PAUSED : INTERRUPTED}\n\n${instruction.trim()}`;

@@ -79,7 +79,7 @@ const KNOWN: Record<string, AgentCapabilities> = {
   // claude -p then runs with tool search alone (--tools ToolSearch, no file tools); Claude models take images but not audio.
   // Plan: Claude Code 2.1.316 has TaskCreate and TaskUpdate (TodoWrite before it) only when --tools names them.
   claude: { images: true, audio: false, files: false, plan: false, toolPrefix: "mcp__scarlet__", toolWaitSeconds: 240 },
-  // codex exec has a writable workspace; MCP audio blocks are not forwarded to the model.
+  // codex exec has a writable workspace. It forwards MCP audio blocks, but only some models hear them (`HEARING_MODELS`).
   // Plan: Codex 0.166 has update_plan only with tools.update_plan.enabled, and reports it as `todo_list` items.
   codex: { images: true, audio: false, files: true, plan: false, toolWaitSeconds: 240 },
   // agy acp then runs with Scarlet's permission handler allowing only Scarlet MCP tools (no file tools); audio forwarding from MCP is unverified. Its runner reads no plan.
@@ -115,8 +115,56 @@ function validResultChars(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 2_000;
 }
 
-export function agentCapabilities(agent: string | undefined, override?: Partial<AgentCapabilities> | string): AgentCapabilities {
-  const base = (agent && Object.hasOwn(KNOWN, agent) && KNOWN[agent]) || UNKNOWN;
+/**
+ * Models that hear audio in a tool's result where their harness's other models don't. Checked through Codex on
+ * 2026-11-22 with an MCP audio block: gpt-6-astra-audio wrote out all four slips of a hearing test, as Gemini did;
+ * gpt-6.2-sol heard nothing, and gpt-6.1-terra two of four.
+ */
+const HEARING_MODELS: Record<string, RegExp> = { codex: /-audio\b/i };
+
+/** Whether this model hears audio in a tool's result, though its harness's others don't. */
+export function modelHearsAudio(agent: string | undefined, model: string | undefined): boolean {
+  return !!(agent && model && Object.hasOwn(HEARING_MODELS, agent) && HEARING_MODELS[agent]!.test(model));
+}
+
+/** Whether a run with these capabilities can hear a recording: in a tool's result, or as a file it opens itself. */
+export function canHear(caps: Pick<AgentCapabilities, "audio" | "audioFiles">): boolean {
+  return caps.audio || !!caps.audioFiles;
+}
+
+/** A model that listens for a request whose own model can't hear, on a host that has it. */
+export interface Listener {
+  agent: string;
+  /** The model passed to its CLI; none for the CLI's own default. */
+  model?: string;
+}
+
+/** What a request heard through the model that listens for it (`POST /projects/:id/listen`). */
+export type ListenResult =
+  | { state: "heard"; answer: string; by: Listener }
+  | { state: "listening"; by: Listener }
+  | { state: "failed"; error: string; by: Listener }
+  | { state: "unavailable"; reason: string };
+
+/**
+ * The model that listens for a request whose own model can't hear, among the agents the editor's hosts have signed in:
+ * Gemini first, which caught the most of the editor's own slips (6 of 9 on 40 labelled spots, 2026-11-22), then a Codex
+ * model that hears. None when no host has one.
+ */
+export function listenerAmong(agents: ReadonlyArray<{ id: string; installed: boolean; loggedIn?: boolean; model?: string; models?: string[] }>): Listener | undefined {
+  const usable = agents.filter(a => a.installed && a.loggedIn !== false);
+  const gemini = usable.find(a => a.id === "gemini");
+  if (gemini) return { agent: "gemini", ...(gemini.model && { model: gemini.model }) };
+  for (const a of usable) {
+    const model = [a.model, ...(a.models ?? [])].find(m => modelHearsAudio(a.id, m));
+    if (model) return { agent: a.id, model };
+  }
+  return undefined;
+}
+
+export function agentCapabilities(agent: string | undefined, override?: Partial<AgentCapabilities> | string, model?: string): AgentCapabilities {
+  const known = (agent && Object.hasOwn(KNOWN, agent) && KNOWN[agent]) || UNKNOWN;
+  const base = modelHearsAudio(agent, model) ? { ...known, audio: true } : known;
   let extra: Partial<AgentCapabilities> = {};
   if (typeof override === "string" && override.trim()) {
     try {

@@ -1,5 +1,5 @@
 /** One inventory for Settings and MCP registration. A session is offered the tools its harness can use (its
- * capabilities) and its request calls for: a skill edit, a learning check or an area check gets only its own few
+ * capabilities) and its request calls for: a skill edit or a side check gets only its own few
  * (`tool` in packages/mcp/src/server.ts). */
 export const EDITING_TOOL_GROUPS = [
   { title: "Timeline editing", description: "Read the timeline, trim dialogue, frame the picture and propose changes.",
@@ -18,8 +18,8 @@ export const EDITING_TOOL_GROUPS = [
     tools: ["graphic_render", "graphic_get", "web_capture", "style_guide_save", "attachment_read"] },
   { title: "Frame inspection", description: "Examine a source frame or several moments from an edit together.",
     tools: ["media_frame", "frame_contact_sheet", "frame_contact_sheet_batch", "screen_area"] },
-  { title: "Edit comparison", description: "Listen to source audio or compare both sides of a proposed edit.",
-    tools: ["change_review_cut", "source_audio"] },
+  { title: "Edit comparison", description: "Listen to source audio, or have a model that hears listen for one that can't, and compare both sides of a proposed edit.",
+    tools: ["change_review_cut", "source_audio", "listen"] },
   { title: "Caption generation", description: "Build a caption track from the transcript.",
     tools: ["captions_generate"] },
   { title: "Asset import and timeline export", description: "Bring in new assets and export a timeline to another editor.",

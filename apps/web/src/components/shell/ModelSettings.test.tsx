@@ -6,7 +6,7 @@ import { expect, it, vi } from "vitest";
 import { buildDb } from "../../lib/mock/fixtures";
 import { useHostsStore } from "../../stores/hosts";
 import { useModelPreferences } from "../../stores/modelPicker";
-import { ModelSettings } from "./ModelSettings";
+import { ListeningSettings, ModelSettings } from "./ModelSettings";
 
 it("renders each model on one line and places disabled models below active ones", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -170,5 +170,29 @@ it("shows a scroll cue for hidden models below when the list overflows and lets 
     useHostsStore.setState(oldHosts, true);
     useModelPreferences.setState(oldPrefs, true);
     vi.unstubAllGlobals();
+  }
+});
+
+it("says which model listens to cuts for the models that can't hear, or what to sign in to", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const oldHosts = useHostsStore.getState();
+  const host = buildDb().hosts[0]!;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const show = async (agents: typeof host.agents) => {
+    useHostsStore.setState({ hosts: [{ ...host, online: true, agents }], status: "ready" });
+    await act(() => root.render(<MemoryRouter><ListeningSettings /></MemoryRouter>));
+    return container.querySelector("p")!.textContent;
+  };
+  try {
+    expect(await show([{ id: "claude", installed: true }])).toBe("No model here can hear. Sign in to Gemini so Scarlet listens to cuts instead of only reading the transcript. Manage sign-in");
+    expect(await show([{ id: "claude", installed: true }, { id: "codex", installed: true, models: ["gpt-6.2-sol", "gpt-6-astra-audio"], modelLabels: { "gpt-6-astra-audio": "GPT-6 Astra Audio" } }]))
+      .toBe("GPT-6 Astra Audio listens to cuts for models that can’t hear, so Scarlet catches a stumble or a clipped word the transcript misses.");
+    expect(await show([{ id: "claude", installed: true }, { id: "gemini", installed: true }])).toMatch(/^Gemini listens to cuts/);
+    // Not signed in is not there.
+    expect(await show([{ id: "gemini", installed: true, loggedIn: false }])).toMatch(/^No model here can hear/);
+  } finally {
+    act(() => root.unmount());
+    useHostsStore.setState(oldHosts, true);
   }
 });

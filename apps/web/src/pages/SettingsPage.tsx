@@ -11,7 +11,7 @@ import { api, errorMessage } from "../lib/client";
 import { desktop } from "../lib/desktop";
 import { useBeforeUnloadGuard, useEscapeToLeave } from "../lib/uiHooks";
 import { Link, Navigate, Outlet, useBlocker, useLocation, useMatch, useNavigate } from "react-router-dom";
-import { ModelSettings } from "../components/shell/ModelSettings";
+import { ListeningSettings, ModelSettings } from "../components/shell/ModelSettings";
 import { DesktopAgents, DesktopDiagnostics, ExportLogs } from "../components/shell/DesktopSettings";
 import { EditingToolsSettings } from "../components/shell/EditingToolsSettings";
 import { useUiStore } from "../stores/ui";
@@ -315,7 +315,12 @@ export function SettingsPage() {
             <CheckInSettings />
           </>
         )}
-        {tab === "models" && <ModelSettings />}
+        {tab === "models" && (
+          <>
+            <ModelSettings />
+            <ListeningSettings />
+          </>
+        )}
         {tab === "tools" && (
           <>
             <Outlet />

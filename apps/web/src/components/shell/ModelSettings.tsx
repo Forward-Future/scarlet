@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { AgentId } from "@scarlet/shared";
+import { listenerAmong, type AgentId } from "@scarlet/shared";
 import { ModelProviders } from "../agent/ModelProviders";
 import { Link } from "react-router-dom";
 import { ModelRefreshButton, ModelRefreshFeedback, useModelRefresh } from "../agent/ModelRefresh";
@@ -221,6 +221,28 @@ export function ModelSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
           )}
         </>}
       </div>}
+    </section>
+  );
+}
+
+/**
+ * Which model listens to the recording for the models that can't hear (Claude, most of Codex's), so the editor knows
+ * Scarlet hears cuts as well as reads them, and what to sign in to when nothing here can.
+ */
+export function ListeningSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
+  const { hosts, status } = useHostsStore();
+  if (status === "loading" && !hosts.length) return null;
+  const listener = listenerAmong(hosts.filter(h => h.online).flatMap(h => h.agents));
+  const name = listener && (listener.agent === "gemini" ? "Gemini"
+    : hosts.flatMap(h => h.agents).find(a => a.id === listener.agent)?.modelLabels?.[listener.model ?? ""] ?? listener.model ?? AGENT_LABEL[listener.agent as AgentId]);
+  return (
+    <section className="card p-5" aria-labelledby="listening-heading">
+      <SectionTitle><span id="listening-heading">Listening</span></SectionTitle>
+      {listener
+        ? <p className="text-[13px] text-muted"><span className="text-fg">{name}</span> listens to cuts for models that can’t hear, so Scarlet catches a stumble or a clipped word the transcript misses.</p>
+        : <p className="text-[13px] text-muted">No model here can hear. Sign in to Gemini so Scarlet listens to cuts instead of only reading the transcript. {onSignIn
+          ? <button className="underline" onClick={onSignIn}>Manage sign-in</button>
+          : <Link to="/settings#hosts" className="underline">Manage sign-in</Link>}</p>}
     </section>
   );
 }

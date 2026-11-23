@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod/v3";
 import {
   CutReviewOptions,
+  isProjectEditTask,
   ScarletApiError,
   SheetOptions,
   SheetRequest,
@@ -12,6 +13,7 @@ import {
   toolWait,
   type AgentCapabilities,
   type InspectionResult,
+  type Listener,
   type InspectionWindow,
   type ScarletClient,
   type Task,
@@ -42,6 +44,8 @@ export interface InspectionToolsDeps {
   postEvent(ev: Omit<TaskEvent, "taskId">): Promise<{ posted: boolean; error?: string }>;
   /** Writes a file into the task folder and returns its path, for a model that hears a file it opens there. */
   writeArtifact?(path: string, data: Uint8Array): Promise<string>;
+  /** The model that listens for this request when its own model can't hear (`listen`). */
+  listener?: Listener;
 }
 
 /**
@@ -55,7 +59,7 @@ export function listening(caps: AgentCapabilities, canWrite: boolean): { by: "re
 }
 
 export function registerInspectionTools(deps: InspectionToolsDeps) {
-  const { tool, client, projectId, taskId, task, caps, fetchImpl, session, errors, scanScopes, waitLeft, readPassage, postEvent, writeArtifact } = deps;
+  const { tool, client, projectId, taskId, task, caps, fetchImpl, session, errors, scanScopes, waitLeft, readPassage, postEvent, writeArtifact, listener } = deps;
   const { getProject, getHeader, nextBaseAsk, moveBase, baseTimeline, transcriptWords } = session;
   const { withoutOnce } = errors;
   const hearing = caps.audio;
@@ -224,6 +228,21 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
       const most = listen?.most ?? SOURCE_AUDIO_IN_RESULT;
       if (to - from > most + 1e-6) return text(`Choose a passage of up to ${most} s: ${mediaId} ${from}–${to} is ${(to - from).toFixed(2)} s.`);
       return { content: await heard(mediaId, from, to, voice) };
+    });
+
+  // A request whose model can't hear has another model listen for it, when one that can is signed in.
+  const listenerName = listener && (listener.agent === "gemini" ? "Gemini" : listener.model ?? listener.agent);
+  if (!listen && listener && taskId && task && isProjectEditTask(task)) tool("listen",
+    `Have ${listenerName}, a model that can hear, listen to up to ${SOURCE_AUDIO_MOST} seconds of an original microphone or video for you, in source seconds, and answer your question about it in words. You can't hear, and a transcript misses what an editor hears: a false start that reads as a finished line, a word cut off or slurred, a repeated word the transcript tidied away, a hum or a click. Ask what you need to decide, such as where a restart's abandoned attempt ends and the kept line begins, or whether a word sounds whole; for a restart, give it the stretch from before the first try to the line said through, since the join alone sounds fine. It answers from the sound, with times in source seconds, and says what it is unsure of. A listen takes a minute or so, and several can run at once; asked again with the same passage and question, it returns the answer already given.`,
+    { ...SourceAudioOptions, question: z.string().trim().min(1).max(2000).describe("What to listen for, in plain words") },
+    async ({ mediaId, from, to, voice, question }) => {
+      if (to - from > SOURCE_AUDIO_MOST + 1e-6) return text(`Choose a passage of up to ${SOURCE_AUDIO_MOST} s: ${mediaId} ${from}–${to} is ${(to - from).toFixed(2)} s.`);
+      const heard = await client.listen(projectId, { taskId, mediaId, from, to, ...(voice && { voice }), question }, waitLeft(10));
+      const by = heard.state === "unavailable" ? undefined : heard.by.agent === "gemini" ? "Gemini" : heard.by.model ?? heard.by.agent;
+      if (heard.state === "heard") return json({ mediaId, from, to, heardBy: by, heard: heard.answer });
+      if (heard.state === "listening") return text(`${by} is still listening to ${mediaId} ${from}–${to} s. Call listen again with the same passage and question for its answer.`);
+      if (heard.state === "failed") return text(`${by} couldn't listen to ${mediaId} ${from}–${to} s: ${heard.error}`);
+      return text(`No model that can hear is available now: ${heard.reason}`);
     });
 
   /** One recording's sound picture over a passage: its layout, the picture, and the audio for a model that can hear. */

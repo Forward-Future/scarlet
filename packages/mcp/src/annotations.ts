@@ -17,7 +17,7 @@ const READ_TOOLS = new Set<string>([
   "transcript_get", "transcript_search", "waveform_get", "sound_picture", "media_profile", "music_beats", "audio_sync",
   "dialogue_scan", "dialogue_check_join", "dialogue_review_inspect",
   "change_get", "change_list", "notes_list", "render_status", "skills_list",
-  "media_frame", "frame_contact_sheet", "frame_contact_sheet_batch", "change_review_cut", "source_audio",
+  "media_frame", "frame_contact_sheet", "frame_contact_sheet_batch", "change_review_cut", "source_audio", "listen",
   "screen_text", "screen_reading", "screen_motion", "faces", "lip_sync", "graphic_get", "attachment_read",
 ]);
 

@@ -29,6 +29,9 @@ export function requireProjectEditAttempt(ctx: Ctx, attempt: TaskAttempt | undef
   if (task?.kind === "area_check") {
     throw forbidden("This task says what of a recording viewers may see and cannot change the project.");
   }
+  if (task?.kind === "listen_check") {
+    throw forbidden("This task hears a passage for another request and cannot change the project.");
+  }
   return task;
 }
 

@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { EDITING_TOOL_GROUPS, ScarletApiError, ScarletClient, Task } from "@scarlet/shared";
+import { agentCapabilities, EDITING_TOOL_GROUPS, ScarletApiError, ScarletClient, Task } from "@scarlet/shared";
 import { applyOps, emptyTimeline, makeMediaClip, OpError, timelineDuration, type MediaClip, type Note, type Timeline, type Transcript } from "@scarlet/timeline";
 import { z } from "zod/v3";
 import { toolAnnotations } from "./annotations.js";
@@ -742,6 +742,54 @@ describe("source_audio", () => {
   });
 });
 
+// Claude and most Codex models can't hear: a model that can (Gemini first) listens for them and answers in words (2026-11-22).
+describe("listen", () => {
+  const base = { state: "running", projectId: "prj_test", agent: "claude", hostId: "host_a", createdBy: { type: "human", name: "Editor" } } as const;
+  const edit = Task.parse({ ...base, id: "edit-task", kind: "edit", instruction: "Cut the dialogue", context: {} });
+  it("has a model that can hear listen to a passage for a request whose model can't, and gives its words", async () => {
+    let answer: unknown = { state: "heard", answer: "The first try runs 1075.2–1077.9 s and trails off on “pace”; the kept line starts at 1078.4 s.", by: { agent: "gemini" } };
+    mock.state.extra = (req, res) => req.path === "/projects/prj_test/listen" ? reply(res, answer) : false;
+    const c = await connect({ taskId: edit.id, task: edit, listener: { agent: "gemini" } });
+    try {
+      const names = (await c.listTools()).tools.map(t => t.name);
+      expect(names).toContain("listen");
+      expect(names).not.toContain("source_audio");
+      const r = await ok(c, "listen", { mediaId: "m2", from: 1074.5, to: 1089.75, question: "Where does the abandoned first try end?" });
+      expect(JSON.parse(textOf(r))).toEqual({ mediaId: "m2", from: 1074.5, to: 1089.75, heardBy: "Gemini",
+        heard: "The first try runs 1075.2–1077.9 s and trails off on “pace”; the kept line starts at 1078.4 s." });
+      expect(sent("/projects/prj_test/listen")[0]!.body).toEqual({ taskId: "edit-task", mediaId: "m2", from: 1074.5, to: 1089.75, question: "Where does the abandoned first try end?" });
+      answer = { state: "listening", by: { agent: "gemini" } };
+      expect(textOf(await ok(c, "listen", { mediaId: "m2", from: 1074.5, to: 1089.75, question: "Where does the abandoned first try end?" })))
+        .toBe("Gemini is still listening to m2 1074.5–1089.75 s. Call listen again with the same passage and question for its answer.");
+      const long = await call(c, "listen", { mediaId: "m2", from: 0, to: 25, question: "What is said?" });
+      expect(textOf(long)).toBe("Choose a passage of up to 20 s: m2 0–25 is 25.00 s.");
+      expect(sent("/projects/prj_test/listen")).toHaveLength(2);
+    } finally { await c.close(); }
+  });
+  it("is offered only where it helps: never to a model that hears, nor with no listener signed in", async () => {
+    const codexAudio = Task.parse({ ...edit, agent: "codex", model: "gpt-6-astra-audio" });
+    const sessions = [
+      await connect({ taskId: edit.id, task: edit }),
+      await connect({ agent: "codex", taskId: codexAudio.id, task: codexAudio, capabilities: agentCapabilities("codex", undefined, "gpt-6-astra-audio"), listener: { agent: "gemini" } }),
+    ];
+    try {
+      const [none, hears] = await Promise.all(sessions.map(async c => (await c.listTools()).tools.map(t => t.name)));
+      expect(none).not.toContain("listen");
+      expect(none).not.toContain("source_audio");
+      expect(hears).not.toContain("listen");
+      expect(hears).toContain("source_audio");
+    } finally { await Promise.all(sessions.map(c => c.close())); }
+  });
+  it("gives the run that listens the passage as a file and nothing else", async () => {
+    const check = Task.parse({ ...base, id: "listen-task", agent: "gemini", kind: "listen_check", instruction: "Hear m2",
+      context: { checksTaskId: "edit-task", listenCheck: { mediaId: "m2", from: 1074.5, to: 1089.75, question: "Where does the first try end?" } } });
+    const c = await connect({ agent: "gemini", taskId: check.id, task: check, capabilities: agentCapabilities("gemini"), author: { type: "agent", name: "gemini" } });
+    try {
+      expect((await c.listTools()).tools.map(t => t.name)).toEqual(["source_audio"]);
+    } finally { await c.close(); }
+  });
+});
+
 describe("sound_picture", () => {
   it("shows a passage as waveform and spectrogram with its words, and a model that can hear gets the audio with it", async () => {
     const layout = { width: 1280, height: 768, pixelsPerSecond: 320, rows: [{ shows: "recorded", top: 0, bottom: 384, left: 0, right: 1280, seconds: 4 }] };
@@ -926,11 +974,12 @@ describe("tool annotations", () => {
     const check = Task.parse({ ...task, id: "check-task", kind: "learning_check", context: { checksTaskId: "asked-task" } });
     const edit = Task.parse({ ...task, id: "edit-task", kind: "edit", instruction: "Add B-roll", context: {} });
     const sessions = [await hearing(), await connect({ agent: "codex", taskId: task.id, task }), await connect({ agent: "codex", taskId: check.id, task: check }),
-      await connect({ agent: "codex", taskId: edit.id, task: edit })];
+      await connect({ agent: "codex", taskId: edit.id, task: edit }), await connect({ taskId: edit.id, task: edit, listener: { agent: "gemini" } })];
     try {
       const tools = (await Promise.all(sessions.map(c => c.listTools()))).flatMap(l => l.tools);
       // The hearing session lists every editing tool; the skill request adds the tool that saves its revision, the
-      // check that reads a request the one that offers a rule, and the edit request the one that captures a page.
+      // check that reads a request the one that offers a rule, the edit request the one that captures a page, and a
+      // request whose model can't hear, with a model signed in that can, the one that has it listen.
       expect([...new Set(tools.map(t => t.name))].sort()).toEqual(every.filter(name => name !== "skill_save_from_change").sort());
       for (const t of tools) expect(t.annotations, t.name).toEqual(toolAnnotations(t.name));
     } finally { await Promise.all(sessions.map(c => c.close())); }

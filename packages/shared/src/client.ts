@@ -3,6 +3,7 @@
  * browsers (uses global fetch). Used by the web UI, MCP server and agent host.
  */
 import type { EditReviewRequest } from "./telemetry.js";
+import type { Listener, ListenResult } from "./capabilities.js";
 import type { z } from "zod/v3";
 import { requireSecureEngineUrl } from "./engineTransport.js";
 import type { TranscriptSearchResult } from "./transcriptSearch.js";
@@ -387,6 +388,10 @@ export class ScarletClient {
   sourceAudio(projectId: string, request: z.input<typeof SourceAudioRequest>) {
     return this.post<{ wav: string }>(`/projects/${encodeURIComponent(projectId)}/source-audio`, request);
   }
+  /** Have a model that hears listen to a passage for this run, and wait up to `wait` seconds for what it heard. */
+  listen(projectId: string, request: { taskId: string; mediaId: string; from: number; to: number; voice?: "me" | "other voices"; question: string }, wait: number) {
+    return this.post<ListenResult>(`/projects/${encodeURIComponent(projectId)}/listen?wait=${Math.max(0, Math.round(wait))}`, request);
+  }
   reviewCut(projectId: string, request: z.input<typeof InspectionReviewRequest>) {
     return this.post<InspectionResult>(`/projects/${encodeURIComponent(projectId)}/review-cut`, request);
   }
@@ -706,7 +711,7 @@ export class ScarletClient {
     return this.get<{ tasks: Task[]; conversation?: Record<string, TaskEvent[]> }>(withQuery(`/projects/${projectId}/tasks`, { state: state || undefined, events }));
   }
   task(taskId: string, events: "all" | "conversation" | "none" = "all") {
-    return this.withResource("tasks", taskId, path => this.get<{ task: Task; events: TaskEvent[]; checksTaskAttempts?: true }>(path + (events === "all" ? "" : "?events=" + events)));
+    return this.withResource("tasks", taskId, path => this.get<{ task: Task; events: TaskEvent[]; checksTaskAttempts?: true; listener?: Listener }>(path + (events === "all" ? "" : "?events=" + events)));
   }
   waitForTranscription(taskId: string) {
     return this.withResource("tasks", taskId, path => this.get<{ task: Task; waited?: boolean }>(path + "?wait=transcript"));
