@@ -539,7 +539,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
       useUiStore.getState().focusComposer();
     }
   });
-  // A pause the editor makes writes its time into an empty message box, as if they had typed it.
+  // A pause the editor makes aims an empty message box at that moment in its tag, without writing into the box.
   const pickOnPause = useRef(() => {});
   pickOnPause.current = () => {
     if (simple.onPick && active && playable && duration > 0) selectTime(usePlayerStore.getState().time, "pause");
