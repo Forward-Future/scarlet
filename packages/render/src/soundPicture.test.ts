@@ -39,5 +39,29 @@ describe("a passage as waveform and spectrogram", () => {
       expect(stdout.length).toBe(layout.width * layout.height);
       expect(layout.rows.map(r => r.seconds)).toEqual([3, 2.5]);
     });
+
+    it("draws sound that starts after the picture at its own time on both rows", async () => {
+      // As a phone or camera MP4 often is: the picture from 0, the sound from 0.5 s, a tone over [0.5, 1].
+      const file = join(dir, "late-sound.mp4");
+      await runCapture(resolveFfmpeg(), ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=64x64:r=10:d=2",
+        "-itsoffset", "0.5", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.5,apad=whole_dur=1.5",
+        "-c:v", "mpeg4", "-c:a", "aac", file]);
+      const { jpeg, layout } = await soundPicture(file, { range: { start: 0, end: 2 }, remove: [{ start: 1.2, end: 1.5 }] });
+      const { stdout: px } = await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "image2pipe", "-c:v", "mjpeg", "-i", "-", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+        { stdin: jpeg, maxStdout: 4 * 1024 * 1024 });
+      // The columns where each row's waveform stands tall: the tone, at 640 px a second.
+      const tone = layout.rows.map(r => Array.from({ length: r.right }, (_, x) => x).filter(x => {
+        let tall = 0;
+        for (let y = r.top + 22; y < r.top + 142; y++) if (px[y * layout.width + x]! > 150) tall++;
+        return tall > 12;
+      }));
+      expect(tone).toHaveLength(2);
+      for (const cols of tone) {
+        expect(cols[0]).toBeGreaterThanOrEqual(312);
+        expect(cols[0]).toBeLessThanOrEqual(328);
+        expect(cols.at(-1)).toBeGreaterThanOrEqual(632);
+        expect(cols.at(-1)).toBeLessThanOrEqual(648);
+      }
+    });
   });
 });
