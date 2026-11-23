@@ -122,6 +122,14 @@ async function registerListener(event: string, register: () => Promise<Unlisten>
   }
 }
 
+/** Hear each of the desktop's `event`s. `name` is the listener as the log records it. */
+function listenFor<T>(name: string, event: string, cb: (payload: T) => void) {
+  return registerListener(name, async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<T>(event, e => cb(e.payload));
+  });
+}
+
 export interface StorageSize { bytes: number; files: number; estimated: boolean }
 export interface DeveloperStorage extends StorageSize { kind: "cargo" | "scratch"; path: string }
 
@@ -179,22 +187,13 @@ export const desktop = {
   log: (message: string | string[], level: "info" | "warn" | "error" | "debug" = "info") => invoke<void>("desktop_log", { level, message }).catch(() => undefined),
 
   async onEngineStatus(cb: (s: EngineStatus) => void): Promise<Unlisten> {
-    return registerListener("engine-status", async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      return listen<EngineStatus>("engine://status", e => cb(e.payload));
-    });
+    return listenFor("engine-status", "engine://status", cb);
   },
   async onAgentLogin(cb: (s: AgentLoginStatus) => void): Promise<Unlisten> {
-    return registerListener("agent-login", async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      return listen<AgentLoginStatus>("agent-login://status", e => cb(e.payload));
-    });
+    return listenFor("agent-login", "agent-login://status", cb);
   },
   async onHostStatus(cb: (s: HostStatus) => void): Promise<Unlisten> {
-    return registerListener("host-status", async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      return listen<HostStatus>("host://status", e => cb(e.payload));
-    });
+    return listenFor("host-status", "host://status", cb);
   },
 };
 

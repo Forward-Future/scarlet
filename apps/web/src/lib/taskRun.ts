@@ -31,10 +31,17 @@ function input(event: TaskEvent): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+/** The places a batch call lists, for tools that take a batch. */
+function listed(args: Record<string, unknown>) {
+  const { windows, times, ranges } = args;
+  return [windows, times, ranges].find(Array.isArray) as unknown[] | undefined;
+}
+
 /** How many places one call looked at, for tools that take a batch. */
 function places(event: TaskEvent) {
-  const { windows, times, ranges, count, wholePicture } = input(event);
-  const list = [windows, times, ranges].find(Array.isArray) as unknown[] | undefined;
+  const args = input(event);
+  const { count, wholePicture } = args;
+  const list = listed(args);
   // One inspection can check several consecutive cuts.
   const cuts = toolName(event) === "dialogue_review_inspect" && !wholePicture && typeof count === "number" && Number.isSafeInteger(count) && count > 0 ? count : undefined;
   return list?.length || cuts || 1;
@@ -53,9 +60,8 @@ function spans(event: TaskEvent): TimeRange[] {
     const end = seconds(v.to ?? v.end);
     return { start, end: end !== undefined && end > start ? end : start };
   };
-  const { windows, times, ranges } = input(event);
-  const list = [windows, times, ranges].find(Array.isArray) as unknown[] | undefined;
-  return (list ?? [input(event)]).map(span).filter((s): s is TimeRange => !!s);
+  const args = input(event);
+  return (listed(args) ?? [args]).map(span).filter((s): s is TimeRange => !!s);
 }
 
 /** "at 0:24, 1:33 and 3:05" for a few places, "from 0:00 to 57:44" for many. */
@@ -115,6 +121,9 @@ const toolSteps: Record<string, StepSpec> = {
 /** How each step's verb reads while it's still going: "Read" → "Reading". */
 const ongoing = new Map(Object.values(toolSteps).map(spec => [spec.verb, spec.doing]));
 
+/** Where one sentence of the agent's ends and the next begins. */
+const sentenceBreak = /(?<=[.!?…”"])\s+/u;
+
 const hostLines = /^(?:Starting the editing agent\.?|Edit resumed\.?|warning:|\(thinking\)|Claude Code session started)/i;
 
 /** The agent's own words, kept to a sentence or two and free of tool transcripts. */
@@ -122,7 +131,7 @@ export function noteText(text: string) {
   if (!text.trim() || hostLines.test(text.trim())) return undefined;
   const brief = editConfirmation(text);
   if (!brief) return undefined;
-  const sentences = brief.split(/(?<=[.!?…”"])\s+/u);
+  const sentences = brief.split(sentenceBreak);
   return sentences.slice(0, 2).join(" ");
 }
 
@@ -151,7 +160,7 @@ export function runAim(events: readonly TaskEvent[]): { text: string; note: stri
     if (kind === "editor_progress" && (event.data?.scanPage || typeof event.data?.reviewCounter === "string")) return undefined;
     if (kind && kind !== "editor_progress") continue;
     const note = eventNote(event);
-    if (note) return { text: note.split(/(?<=[.!?…”"])\s+/u)[0]!, note };
+    if (note) return { text: note.split(sentenceBreak)[0]!, note };
   }
   return undefined;
 }
@@ -176,6 +185,11 @@ export function runItems(task: Task, events: readonly TaskEvent[], changes: read
     if (!group) return;
     group.item.detail = group.spec.detail(group.count, group.found, group.first);
     group = undefined;
+  }
+  function addNote(at: string, text: string) {
+    notes.add(text);
+    items.push({ kind: "note", at, text });
+    finishGroup();
   }
   const scans = new Map<string, { item: Extract<RunItem, { kind: "step" }>; start: number; ranges: TimeRange[]; end: number }>();
   const edited = new Set<string>();
@@ -237,13 +251,13 @@ export function runItems(task: Task, events: readonly TaskEvent[], changes: read
       }
       if (typeof event.data.reviewCounter === "string") continue;
       const text = eventNote(event);
-      if (text && !notes.has(text)) { notes.add(text); items.push({ kind: "note", at, text }); finishGroup(); }
+      if (text && !notes.has(text)) addNote(at, text);
       continue;
     }
     if (event.type === "log" && !event.data?.kind) {
       const text = eventNote(event);
       // The agent's last message is the reply under the bundle, not an update inside it.
-      if (text && !notes.has(text) && !(final && event.text.trim() === final) && !(reply && event.text.trim() === reply)) { notes.add(text); items.push({ kind: "note", at, text }); finishGroup(); }
+      if (text && !notes.has(text) && !(final && event.text.trim() === final) && !(reply && event.text.trim() === reply)) addNote(at, text);
       continue;
     }
     if (event.type === "change") {
