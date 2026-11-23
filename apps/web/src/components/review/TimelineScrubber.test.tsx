@@ -77,6 +77,44 @@ it("greys the footage the playing side steps over, tags each gap where its tag f
   expect(released).not.toHaveBeenCalled();
 });
 
+it("opens a dotted cut on click (including a narrow unlabeled sliver) while still letting a drag scrub Before footage", async () => {
+  const opened: string[] = [];
+  const gap = (start: number, end: number, label: string, shortLabel: string): TimelineGap => ({
+    start, end, label, shortLabel, title: label, skipped: false, open: () => opened.push(label),
+  });
+  // Zoomed to 1:40–1:50 (100 px/s): a wide cut (300–500 px) and a 4 px sliver (800–804 px) with no room for a label.
+  await act(async () => root.render(
+    <TimelineScrubber start={0} duration={3000} playhead={100} frameAt={() => undefined} onSeek={t => seeks.push(t)} onSelectTime={t => picks.push(t)} onScrubStart={() => released}
+      highlight={{ view: { start: 100, end: 110 }, band: { start: 102, end: 102.5 } }}
+      gaps={[gap(103, 105, "Cut at 1:43", "1:43"), gap(108, 108.04, "Cut at 1:48", "1:48")]} />));
+  await zoomed();
+  const gaps = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-gap")];
+  expect(gaps().map(g => g.classList.contains("is-clickable"))).toEqual([true, true]);
+  expect(gaps().map(g => g.querySelector(".simple-timeline-gap-label")?.textContent ?? "")).toEqual(["Cut at 1:43", ""]);
+
+  // Hovering near the 4 px sliver (center 802 px, within its 16 px hit zone) highlights it and aims the pointer.
+  await pointer("pointermove", 808);
+  expect(gaps()[1]!.classList.contains("is-hot")).toBe(true);
+  expect(container.querySelector(".timeline-slider")!.classList.contains("is-gap-aimed")).toBe(true);
+
+  // Clicking there opens that cut's edit without seeking or starting a scrub.
+  await pointer("pointerdown", 808);
+  await pointer("pointerup", 808);
+  expect(opened).toEqual(["Cut at 1:48"]);
+  expect(seeks).toEqual([]);
+  expect(picks).toEqual([]);
+  expect(released).not.toHaveBeenCalled();
+
+  // Dragging across the wide dotted cut scrubs Before footage and does not open the cut.
+  await pointer("pointerdown", 400);
+  await pointer("pointermove", 460);
+  await pointer("pointerup", 460);
+  expect(opened).toEqual(["Cut at 1:48"]);
+  expect(seeks.at(-1)).toBeCloseTo(104.6, 5);
+  expect(picks).toEqual([104.6]);
+  expect(released).toHaveBeenCalledTimes(1);
+});
+
 it("follows a drag across the stretch it began in", async () => {
   await show();
   await pointer("pointerdown", 100);

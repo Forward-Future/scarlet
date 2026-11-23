@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
-import { bandLabel, gapLabel, layoutMarks, nearestMark, type TimelineDot } from "./timelineMarkerLayout";
+import { bandLabel, gapAt, gapLabel, layoutMarks, nearestMark, type TimelineDot, type TimelineGap } from "./timelineMarkerLayout";
 
 const dot = (time: number, n: number): TimelineDot => ({ time, n, title: `Edit ${n}` });
 const shapes = (layout: ReturnType<typeof layoutMarks>) => layout.map(m => m.label);
@@ -140,5 +140,29 @@ describe("bandLabel", () => {
     expect(bandLabel("Audio", 20)).toBe("");
     // Before the track is measured there is nothing to fit it to.
     expect(bandLabel("Removed · 1.4 s", 0)).toBe("Removed · 1.4 s");
+  });
+});
+
+describe("gapAt", () => {
+  // 10 s across 1000 px: 1 s is 100 px.
+  const make = (start: number, end: number, label: string): TimelineGap => ({ start, end, label, title: label, skipped: false });
+  const wide = make(101, 102.3, "Cut at 9:50");
+  const touchingSliver = make(102.3, 102.4, "Sliver beside wide");
+  const tiny = make(105, 105.04, "Tiny cut");
+  const offscreen = make(200, 201, "Offscreen");
+  const gaps = [wide, touchingSliver, tiny, offscreen];
+
+  it("picks a gap strictly containing the pointer and prefers the narrower sliver on a shared edge", () => {
+    expect(gapAt(gaps, 100, 10, 1000, 150)?.label).toBe("Cut at 9:50");
+    expect(gapAt(gaps, 100, 10, 1000, 230)?.label).toBe("Sliver beside wide");
+    expect(gapAt(gaps, 100, 10, 1000, 235)?.label).toBe("Sliver beside wide");
+  });
+
+  it("expands a narrow gap's hit zone so a 4 px cut can still be clicked", () => {
+    // `tiny` spans 500–504 px (center 502 px), so its 16 px hit zone covers 494–510 px.
+    expect(gapAt(gaps, 100, 10, 1000, 495)?.label).toBe("Tiny cut");
+    expect(gapAt(gaps, 100, 10, 1000, 509)?.label).toBe("Tiny cut");
+    expect(gapAt(gaps, 100, 10, 1000, 480)).toBeUndefined();
+    expect(gapAt(gaps, 100, 10, 1000, 520)).toBeUndefined();
   });
 });
