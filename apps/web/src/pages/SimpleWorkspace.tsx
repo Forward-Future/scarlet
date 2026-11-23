@@ -71,6 +71,16 @@ function subscribeWidth(update: () => void) {
   narrow.addEventListener("change", update);
   return () => narrow.removeEventListener("change", update);
 }
+/** What ↑ or ↓ opens for an item of a pass's For you list: its call or its edit. */
+function stepTarget(item: PassForYouItem<Call, ThreadEdit> | undefined): { call: Call } | { edit: ThreadEdit } | undefined {
+  return item ? (item.kind === "call" ? { call: item.call } : { edit: item.edit }) : undefined;
+}
+/** A revision of a whole applied edit, aimed at the version it made, from its first place. */
+function wholeEdit(change: Change): AgentContext {
+  const range = change.ranges[0];
+  return { changeId: change.id, version: change.appliedVersion ?? change.toVersion, time: range?.start ?? 0, end: range?.end,
+    clipIds: [], label: "Revision" };
+}
 /** The chat, until the user drags the divider: room for a conversation without crowding the video. */
 const simpleRailWidth = (available: number) => Math.max(380, Math.min(480, available * 0.32));
 /** The narrowest the chat stays usable at. */
@@ -655,16 +665,20 @@ export function SimpleWorkspace() {
     });
     setAimAgain(n => n + 1);
   }
-  function playChange(thread: Thread, change: Change) {
-    // The request's line pressed again while its edit is open plays that edit again as its row does: on the side it
-    // was on, with its words left open. The message box is aimed at it again, as on any press of the line.
-    const first = thread.id === focus?.threadId ? threadTimeline.edits.find(e => belongsTo(e, change)) : undefined;
-    if (first && showing && matchesEdit(showing, first)) { openEdit(thread, first); setAimAgain(n => n + 1); return; }
+  /** Opening an edit takes whatever else had the player: a call, a suggestion, a clip from Media, the last visit's side and words. */
+  function leaveForEdit() {
     startVisit();
     player.pause();
     setSourceChoice({ id: "", play: false });
     setReviewId(undefined);
     setListening(undefined);
+  }
+  function playChange(thread: Thread, change: Change) {
+    // The request's line pressed again while its edit is open plays that edit again as its row does: on the side it
+    // was on, with its words left open. The message box is aimed at it again, as on any press of the line.
+    const first = thread.id === focus?.threadId ? threadTimeline.edits.find(e => belongsTo(e, change)) : undefined;
+    if (first && showing && matchesEdit(showing, first)) { openEdit(thread, first); setAimAgain(n => n + 1); return; }
+    leaveForEdit();
     if (thread.id === focus?.threadId && !threadTimeline.loading) {
       const edit = threadTimeline.edits.find(e => belongsTo(e, change));
       if (edit) { threadTimeline.choose(edit, "chat"); setAimAgain(n => n + 1); return; }
@@ -674,11 +688,7 @@ export function SimpleWorkspace() {
     setFocus({ threadId: thread.id, changeId: change.id });
   }
   function playEdit(edit: ThreadEdit, single?: boolean) {
-    startVisit();
-    player.pause();
-    setSourceChoice({ id: "", play: false });
-    setReviewId(undefined);
-    setListening(undefined);
+    leaveForEdit();
     threadTimeline.choose(edit, "chat", single);
     setAimAgain(n => n + 1);
   }
@@ -697,12 +707,8 @@ export function SimpleWorkspace() {
       setAimAgain(n => n + 1);
       return;
     }
-    startVisit();
     setOpenedFrom(from ? { run: from, ref: { changeId: ref.changeId, spot: ref.spot } } : undefined);
-    player.pause();
-    setSourceChoice({ id: "", play: false });
-    setReviewId(undefined);
-    setListening(undefined);
+    leaveForEdit();
     if (thread.id === focus?.threadId && !threadTimeline.loading) {
       const edit = threadTimeline.edits.find(e => matchesEdit(e, ref)) ?? threadTimeline.rejected.find(e => matchesEdit(e, ref));
       if (edit) { threadTimeline.choose(edit, "chat", single); setAimAgain(n => n + 1); return; }
@@ -748,9 +754,7 @@ export function SimpleWorkspace() {
     const edit = showing && belongsTo(showing, change) ? showing : undefined;
     const target = edit && threadTimeline.selectedTarget;
     if (edit && target) return startRevision(thread, target, `“${edit.label}” at ${clockLabel(edit.at ?? edit.range.start)}`);
-    const range = change.ranges[0];
-    startRevision(thread, { changeId: change.id, version: change.appliedVersion ?? change.toVersion, time: range?.start ?? 0, end: range?.end,
-      clipIds: [], label: "Revision" }, "this whole edit");
+    startRevision(thread, wholeEdit(change), "this whole edit");
   }
   function replyToThread(thread: Thread) {
     // As Revise does, Answer waits for a message being spoken to go out: aiming the box now would drop it.
@@ -1215,6 +1219,10 @@ export function SimpleWorkspace() {
     passByNumber,
   ) : [];
   const steppableInPassForYou = (item: PassForYouItem<Call, ThreadEdit>) => item.kind === "call" || !passRevising(item.edit);
+  /** The item ↑ or ↓ reaches from the one at `at` in the pass's For you list, past the edits being revised. */
+  const forYouBeside = (at: number, delta: number) => delta > 0
+    ? passForYouItems.slice(at + 1).find(steppableInPassForYou)
+    : passForYouItems.slice(0, at).findLast(steppableInPassForYou);
   const inPassForYou = !!pass && passThread?.id === focusThread?.id && !seeAll;
   const { decidedCallEditKeys } = useMemo(
     () => decidedPassCalls(pass && passThread?.id === focusThread?.id ? undefined : focusThread, threadEdits, threadTimeline.rejected),
@@ -1236,20 +1244,16 @@ export function SimpleWorkspace() {
     if (inPassForYou && (reviewingEdit.check || reviewingEdit.wasCheck)) {
       const at = passForYouItems.findIndex(item => item.kind === "edit" && matchesEdit(item.edit, reviewingEdit));
       if (at >= 0) {
-        const next = delta > 0
-          ? passForYouItems.slice(at + 1).find(steppableInPassForYou)
-          : passForYouItems.slice(0, at).findLast(steppableInPassForYou);
-        return next ? (next.kind === "call" ? { call: next.call } : { edit: next.edit }) : undefined;
+        return stepTarget(forYouBeside(at, delta));
       }
       // A rejected For you edit is no longer live: step to the item after or before its position in For you.
       const was = reviewingEdit.at ?? reviewingEdit.range.start;
       const wasNum = passEditNum(reviewingEdit);
       const cmp = (other: PassForYouItem<Call, ThreadEdit>) =>
         passByNumber ? ((other.num ?? Infinity) - (wasNum ?? Infinity) || other.at - was) : (other.at - was);
-      const next = delta > 0
+      return stepTarget(delta > 0
         ? passForYouItems.find(other => steppableInPassForYou(other) && cmp(other) >= 0)
-        : passForYouItems.findLast(other => steppableInPassForYou(other) && cmp(other) < 0);
-      return next ? (next.kind === "call" ? { call: next.call } : { edit: next.edit }) : undefined;
+        : passForYouItems.findLast(other => steppableInPassForYou(other) && cmp(other) < 0));
     }
     // On For you (non-pass thread or applied pass), ↑ and ↓ stay among the For you rows (waiting or kept,
     // skipping revising and unflagged edits), including when stepping from a kept or rejected For you edit.
@@ -1274,14 +1278,15 @@ export function SimpleWorkspace() {
     const row = editsByRow[shownRow + delta];
     return row && { edit: row.find(waitingEdit) ?? row[0]! };
   }
+  // ↑ and ↓ reach the log as a bare key: this says which call they went to.
+  function stepToCall(change: Change, call: Call) {
+    appLog("action", "step", { to: "call", call: callNo.get(call.index), of: allCalls.length, change: change.id, cut: call.index });
+    actions.listen(change, call);
+  }
   function stepEdit(delta: number) {
     const next = editBeside(delta);
     if (!next) return;
-    if ("call" in next && pass) {
-      appLog("action", "step", { to: "call", call: callNo.get(next.call.index), of: allCalls.length, change: pass.id, cut: next.call.index });
-      actions.listen(pass, next.call);
-      return;
-    }
+    if ("call" in next && pass) return stepToCall(pass, next.call);
     if ("edit" in next) {
       // ↑ and ↓ reach the log as a bare key: this says which edit they went to.
       appLog("action", "step", { to: "edit", edit: threadEdits.indexOf(next.edit) + 1, of: threadEdits.length, change: next.edit.changeId });
@@ -1301,11 +1306,9 @@ export function SimpleWorkspace() {
         const allSteppable = passForYouItems.filter(steppableInPassForYou);
         next = delta > 0 ? (waitingItems[0] ?? fallbackItems[0] ?? allSteppable[0]) : (waitingItems.at(-1) ?? fallbackItems.at(-1) ?? allSteppable.at(-1));
       } else {
-        next = delta > 0
-          ? passForYouItems.slice(at + 1).find(steppableInPassForYou)
-          : passForYouItems.slice(0, at).findLast(steppableInPassForYou);
+        next = forYouBeside(at, delta);
       }
-      return next ? (next.kind === "call" ? { call: next.call } : { edit: next.edit }) : undefined;
+      return stepTarget(next);
     }
     if (!allCalls.length) return undefined;
     const at = openCall ? allCalls.indexOf(openCall) : -1;
@@ -1457,6 +1460,13 @@ export function SimpleWorkspace() {
   const nextCutPlayback = usePrepareReviewCuts(shownProject, current.renderSettingsRevision, reviewQueue, draftCache, preparedCandidates,
     openCut && { ...openCut, key: openPlaybackKey });
 
+  // ⌘Z takes a Keep or Later back, and opens this edit again. It goes by the name its tag in the box has.
+  const undoneEdit = (edit: ThreadEdit) => {
+    const target = threadTimeline.selectedTarget;
+    const named = target && (cutName(target) ?? targetName(target));
+    return { edit: { changeId: edit.changeId, spot: edit.spot, ...(threadTimeline.single && { single: true }) },
+      ...(named && { name: threadTimeline.selectedMoment ? `${threadTimeline.selectedMoment.edits.length} edits` : tagOf(named) }) };
+  };
   function keepShown() {
     if (!reviewingEdit || !focusThread) return;
     // K reaches the log as a bare key, and the button as "Keep": this says which edit was kept.
@@ -1465,12 +1475,7 @@ export function SimpleWorkspace() {
     const row = editsByRow[shownRow] ?? [reviewingEdit];
     if (keepEdits(current.id, focusThread.id, row, head ?? undefined)) {
       recordEditReview(current.id, threadTimeline.selectedTarget, "keep");
-      // ⌘Z takes it back, and opens this edit again. It goes by the name its tag in the box has.
-      const target = threadTimeline.selectedTarget;
-      const named = target && (cutName(target) ?? targetName(target));
-      recordUndo({ kind: "keep", word: reviewingEdit.marker ? "Done" : "Keep", projectId: current.id, threadId: focusThread.id, refs: row,
-        edit: { changeId: reviewingEdit.changeId, spot: reviewingEdit.spot, ...(threadTimeline.single && { single: true }) },
-        ...(named && { name: threadTimeline.selectedMoment ? `${threadTimeline.selectedMoment.edits.length} edits` : tagOf(named) }) });
+      recordUndo({ kind: "keep", word: reviewingEdit.marker ? "Done" : "Keep", projectId: current.id, threadId: focusThread.id, refs: row, ...undoneEdit(reviewingEdit) });
     }
     moveOnFromShown();
   }
@@ -1479,11 +1484,7 @@ export function SimpleWorkspace() {
     appLog("action", "defer-todo", { edit: shownIndex + 1, of: threadEdits.length, change: reviewingEdit.changeId });
     const row = editsByRow[shownRow] ?? [reviewingEdit];
     if (deferEdits(current.id, focusThread.id, row)) {
-      const target = threadTimeline.selectedTarget;
-      const named = target && (cutName(target) ?? targetName(target));
-      recordUndo({ kind: "defer", word: "Later", projectId: current.id, threadId: focusThread.id, refs: row,
-        edit: { changeId: reviewingEdit.changeId, spot: reviewingEdit.spot, ...(threadTimeline.single && { single: true }) },
-        ...(named && { name: threadTimeline.selectedMoment ? `${threadTimeline.selectedMoment.edits.length} edits` : tagOf(named) }) });
+      recordUndo({ kind: "defer", word: "Later", projectId: current.id, threadId: focusThread.id, refs: row, ...undoneEdit(reviewingEdit) });
     }
     moveOnFromShown();
   }
@@ -1528,11 +1529,7 @@ export function SimpleWorkspace() {
   function stepCut(delta: number) {
     const next = callBeside(delta);
     if (!next || !pass || !passThread) return;
-    if ("call" in next) {
-      appLog("action", "step", { to: "call", call: callNo.get(next.call.index), of: allCalls.length, change: pass.id, cut: next.call.index });
-      actions.listen(pass, next.call);
-      return;
-    }
+    if ("call" in next) return stepToCall(pass, next.call);
     appLog("action", "step", { to: "edit", edit: passEditList.indexOf(next.edit) + 1, of: passEditList.length, change: next.edit.changeId });
     actions.openEdit(passThread, next.edit);
   }
@@ -1726,9 +1723,7 @@ export function SimpleWorkspace() {
     const target = threadTimeline.selectedTarget;
     const moment = threadTimeline.selectedMoment;
     if (target) return { target, label: `${moment ? `${moment.edits.length} edits` : `“${edit.label}”`} at ${clockLabel(edit.at ?? edit.range.start)}` };
-    const range = change.ranges[0];
-    return { label: "this whole edit", target: { changeId: change.id, version: change.appliedVersion ?? change.toVersion, time: range?.start ?? 0, end: range?.end,
-      clipIds: [], label: "Revision" } };
+    return { label: "this whole edit", target: wholeEdit(change) };
   };
   /**
    * Aim the box at what's open. "moved": something else opened or closed. "sent": a message landed and the box is free.

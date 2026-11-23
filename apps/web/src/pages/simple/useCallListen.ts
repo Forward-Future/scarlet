@@ -23,7 +23,7 @@ import { usePlayerStore } from "../../stores/player";
 import { afterPlayerMount, type JoinedListen, type Listening, type Side } from "./types";
 
 /** A revision of one call that is still at work: the call as the editor sent it back, and where it sits in the pass now. */
-export interface RevisionInput { call: Call; index: number; previous: Change }
+interface RevisionInput { call: Call; index: number; previous: Change }
 
 interface CallListenInputs {
   current: Pick<ProjectData, "id" | "project" | "renderSettingsRevision">;
