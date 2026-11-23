@@ -61,6 +61,7 @@ import { afterPlayerMount, aimedAtChange, approves, belongsTo, firstKey, isWorki
   type ChatActions, type HoveredReviewRow, type JoinedListen, type Listening, type LocatedReview, type OpenList, type OpenPass, type Panel, type PassList, type ReportReviewMarkers, type Side } from "./simple/types";
 import { WorkspaceComposer } from "./simple/SourceProvenance";
 import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError } from "./simple/ReviewCards";
+import { TimelineWorking } from "../components/review/TimelineWorking";
 import { Turn } from "./simple/Turn";
 import { useCallCardShortcuts, useCarryingFootage, useChatAutoFollow, useDraftTimeline, useEditCardShortcuts, useLandingTracker, useOutsideClearMarkedRange, usePassCallNumbers, usePassChoices, useProjectBookmark, useTranscriptEscape, useUndoShortcut, useWatchedMomentAutoKeep } from "./simple/workspaceHooks";
 import "../simple.css";
@@ -2331,8 +2332,11 @@ export function SimpleWorkspace() {
   // A request in the chat that Scarlet has, whose band holds Pause or Resume and Stop. A new one waiting its turn is
   // in the tray instead.
   const editing = tasks.some(task => isProjectEditTask(task) && runIsActive(task) && !(waitingToStart(task) && rootOf(task) === task.id));
-  // Active edit work on the video shown here (not paused, not waiting on an answer, and not previewing a Media clip).
-  const timelineEditing = !editingPaused && !chosenSource && tasks.some(task => isProjectEditTask(task) && isWorking(task.state));
+  // Active edit work on the video shown here (not paused, not waiting on an answer, and not previewing a Media clip),
+  // said under the timeline in the order Scarlet started it.
+  const timelineWork = useMemo(() => editingPaused || chosenSource ? [] : tasks
+    .filter(task => isProjectEditTask(task) && isWorking(task.state))
+    .sort((a, b) => (a.startedAt ?? a.createdAt ?? "").localeCompare(b.startedAt ?? b.createdAt ?? "")), [editingPaused, chosenSource, tasks]);
   const pinned = front ? rootOf(front) : pass && passTask ? rootOf(passTask) : undefined;
   // The requests waiting their turn, in the order Scarlet will run them: a note on a call of the pass that waits goes
   // ahead of a new edit asked before it, which the calls hold back. An interrupted request keeps its place here.
@@ -2592,7 +2596,7 @@ export function SimpleWorkspace() {
         <div className="workspace-stage simple-stage">
           {/* An applied cut plays on the version before it, where the working cut's times don't hold, and a suggestion's
               dots are all its own: neither has dots beside its band. */}
-          <CutPreview simple={{ seekFromMessage, typedTimes, marks: source || beforeCut ? [] : suggestion && lineFocus ? marks : leavingMarks, fit: fitTimeline, focus: leavingNow && lineFocus ? { ...lineFocus, leaving: true } : lineFocus, label: onVideo, compareHost: reviewingEdit ? compareHost : undefined, above: rejectedCard ?? editCard ?? callCard ?? suggestCard, foot: undoFoot,
+          <CutPreview simple={{ seekFromMessage, typedTimes, marks: source || beforeCut ? [] : suggestion && lineFocus ? marks : leavingMarks, fit: fitTimeline, focus: leavingNow && lineFocus ? { ...lineFocus, leaving: true } : lineFocus, label: onVideo, compareHost: reviewingEdit ? compareHost : undefined, above: rejectedCard ?? editCard ?? callCard ?? suggestCard, foot: <><TimelineWorking tasks={timelineWork} />{undoFoot}</>,
             gaps: cutKey ? gaps : callGaps, skippedRanges: joinedPlayer?.clock.removed ?? stepsOver(appliedListen ?? playedAudition),
             nextCutPlayback, cutPlayback: appliedListen && beforeTimeline && cutKey && appliedCut
               ? { key: editPlaybackKey(reviewingEdit!, appliedAfterVersion, cutBase), start: appliedListen.start, side: appliedSide,
@@ -2607,7 +2611,7 @@ export function SimpleWorkspace() {
                 ? { key: callPlaybackKey(listening.index, callTimeline.version), start: audition.start, side: listening.side,
                   beforeWindow: preparedCall?.before.window, afterWindow: preparedCall?.after.window,
                   beforeFile: preparedCall?.before.file, afterFile: preparedCall?.after.file } : undefined,
-            onGap: hearInBefore, onBand, onPick: pickPoint, onRange: markRange, holdPassage: cutWaits, reviewRange, writeRequest, heard: heardPick, quiet: quietOpen, editing: timelineEditing }} threadView={playerView}
+            onGap: hearInBefore, onBand, onPick: pickPoint, onRange: markRange, holdPassage: cutWaits, reviewRange, writeRequest, heard: heardPick, quiet: quietOpen }} threadView={playerView}
             workingCache={workingCache} draftVersion={previewVersion} draft={previewTimeline}
             openingJoin={!source && (appliedCut ? joinPending : openingJoin)} cutLoadError={cutLoadError}
             draftFailed={openingJoin ? !!single.error || (!!single.preview && !listenJoined) : pinnedCallVersion ? !!savedBefore.error : !appliedCut && draftFailed}
