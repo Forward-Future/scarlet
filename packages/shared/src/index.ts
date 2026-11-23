@@ -11,6 +11,16 @@ export * from "./checkIn.js";
 export * from "./telemetry.js";
 export * from "./storage.js";
 export * from "./importFilename.js";
+export {
+  apiPathId,
+  ATTEMPT_HEADER,
+  newRequestId,
+  REQUEST_ID_HEADER,
+  ScarletApiError,
+  TASK_HEADER,
+  type ClientOptions,
+  type TaskAttempt,
+} from "./clientTransport.js";
 export * from "./client.js";
 export * from "./inspection.js";
 export * from "./showArea.js";

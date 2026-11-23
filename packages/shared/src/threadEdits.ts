@@ -1,4 +1,7 @@
-/** The edits a thread's applied changes made, each in the clock of the version that saved it. `threadTimeline` places them on the working cut. */
+/**
+ * The edits a thread's applied changes made, each in the clock of the version that saved it. `threadTimeline` places
+ * them on the working cut.
+ */
 import { appliedReviewChange, cutKindRow, intervalCandidates, removedJoins, reviewCutSummaries, reviewKindRows, reviewReasons, type Change, type CutAssessment, type MediaAsset, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { Thread } from "./threads.js";
 import { classifyEdits, type EditKind } from "./editKind.js";
