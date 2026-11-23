@@ -9146,6 +9146,55 @@ it("keeps the open cut's row in view while the arrows step through a pass's list
   }
 });
 
+it("keeps the selected edit row in view when stepping with Keep and doesn't let change.updated yank the chat to the bottom", async () => {
+  laterRequest("chg_later", false);
+  await scrolledIntoView(async scrolled => {
+    await show();
+    await act(async () => {});
+    const chat = container.querySelector<HTMLElement>(".simple-chat")!;
+    Object.defineProperty(chat, "scrollHeight", { configurable: true, value: 1200 });
+    Object.defineProperty(chat, "clientHeight", { configurable: true, value: 400 });
+    const rows = () => [...turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edit")];
+    await click(rows()[0]!);
+    expect(scrolled.at(-1)?.textContent).toContain("music bed");
+    chat.scrollTop = 120;
+    await press("k");
+    expect(openTitle()).toBe("captions");
+    expect(scrolled.at(-1)?.textContent).toContain("captions");
+    // keepEdits bumps the change's updatedAt on the server: that activity update must not yank .simple-chat to scrollHeight.
+    const later = new Date(Date.now() + 60_000).toISOString();
+    await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_later" ? { ...c, updatedAt: later } : c) }));
+    expect(chat.scrollTop).toBe(120);
+    await press("k");
+    expect(openTitle()).toBe("wrap");
+    expect(scrolled.at(-1)?.textContent).toContain("wrap");
+  });
+});
+
+it("keeps the selected pass row in view across Keep and For you / See all switches", async () => {
+  const { lists } = appliedPass(true);
+  lists[threadWith("chg_approved_2").id] = [
+    { changeId: "chg_approved_2", spot: 0, label: "Cut 1", range: { start: 1, end: 2 }, previous: [], check: CHECK },
+    { changeId: "chg_approved_2", spot: 1, label: "Unflagged", range: { start: 3, end: 4 }, previous: [] },
+    { changeId: "chg_approved_2", spot: 2, label: "Cut 2", range: { start: 5, end: 6 }, previous: [], check: CHECK },
+    { changeId: "chg_approved_2", spot: 3, label: "Cut 3", range: { start: 7, end: 8 }, previous: [], check: CHECK },
+  ];
+  await scrolledIntoView(async scrolled => {
+    await showFolded();
+    await act(async () => {});
+    const pass = turnFor("chg_approved_2").querySelector(".simple-pass")!;
+    await click(pass.querySelector(".simple-pass-need")!);
+    expect(scrolled.at(-1)?.textContent).toContain("Cut 1");
+    await press("k");
+    expect(scrolled.at(-1)?.textContent).toContain("Cut 2");
+    // Switching from For you to See all keeps Cut 2 selected and scrolls it into view in the full list.
+    const beforeSwitch = scrolled.length;
+    await click(seeAll(pass)!);
+    expect(scrolled.length).toBeGreaterThan(beforeSwitch);
+    expect(scrolled.at(-1)?.textContent).toContain("Cut 2");
+  });
+});
+
 it("keeps a request's line as it was while the list for a change that just landed loads", async () => {
   // The engine lists two edits where the saved change names three: one of them is gone from the working cut.
   const later = laterRequest("chg_later", false);

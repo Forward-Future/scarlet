@@ -6,7 +6,7 @@ import { buildThreads, threadEditList, type VersionSummary } from "@scarlet/shar
 import { api } from "../../lib/client";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { useProjectStore, type ProjectData } from "../../stores/project";
-import { rejectInstruction, ThreadAction } from "./ThreadEdits";
+import { rejectInstruction, ThreadAction, ThreadEdits } from "./ThreadEdits";
 import { revisionWord, useThreadEdits } from "./threadEditState";
 import type { Thread, ThreadEdit } from "@scarlet/shared";
 
@@ -148,4 +148,33 @@ it("labels queued revisions Up next when next in line, Queued otherwise, and Rev
   expect(revisionWord({ id: "t1", state: "claimed" }, { nextQueuedId: "t1" })).toBe("Revising…");
   expect(revisionWord({ id: "t1", state: "running" })).toBe("Revising…");
   expect(revisionWord({ id: "t1", state: "running" }, { rejecting: true })).toBe("Rejecting…");
+});
+
+it("scrolls the selected edit row into view across stepping, tab switches, and rejected rows", async () => {
+  const thread = buildThreads(data).find(t => t.changes.some(c => c.id === "chg_approved_2"))!;
+  const base = threadEditList(thread) as ThreadEdit[];
+  const edits: ThreadEdit[] = base.map((e, i) => i === 1 ? { ...e, check: "Check the pacing." } : e);
+  const rejected: ThreadEdit[] = [{ ...edits[0]!, spot: 99, label: "removed cut", range: { start: 10, end: 11 }, rejected: true, wasCheck: true }];
+  useProjectStore.setState({ current: data, status: "ready" });
+  const scrolled: Element[] = [];
+  const orig = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+  Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+  try {
+    await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={edits} rejected={rejected} showing={edits[1]} only={e => !!e.check || !!e.wasCheck} onPlay={() => {}} />));
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled.at(-1)?.textContent).toContain(edits[1]!.label);
+
+    // Switching from For you to See all with the same edit selected scrolls it back into view in the full list.
+    await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={edits} rejected={rejected} showing={edits[1]} onPlay={() => {}} />));
+    expect(scrolled).toHaveLength(2);
+    expect(scrolled.at(-1)?.textContent).toContain(edits[1]!.label);
+
+    // Selecting a rejected row also scrolls that row into view.
+    await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={edits} rejected={rejected} showing={rejected[0]} onPlay={() => {}} />));
+    expect(scrolled).toHaveLength(3);
+    expect(scrolled.at(-1)?.textContent).toContain("removed cut");
+  } finally {
+    if (orig) Object.defineProperty(Element.prototype, "scrollIntoView", orig);
+    else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  }
 });

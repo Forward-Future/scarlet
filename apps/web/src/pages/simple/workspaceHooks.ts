@@ -12,6 +12,7 @@ import { needNumbers } from "../../lib/needNumbers";
 import { savedChoices, type Call, type CutChoice } from "../../lib/passCalls";
 import type { Footage } from "../../lib/carriedCuts";
 import { readTimeline } from "../../lib/timelineCache";
+import { isClippedInScrollAncestors } from "../../lib/uiHooks";
 import { lastStep, useUndoStore } from "../../lib/undo";
 import { usePlayerStore } from "../../stores/player";
 import { useProjectStore } from "../../stores/project";
@@ -385,7 +386,9 @@ export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () 
   }, [hasMarkedRange]);
 }
 
-/** Keeps the chat scrolled to the newest message while `follow` is true, including across container resizes. */
+const SELECTED_REVISION_ROW = '.simple-pass-list [aria-current="true"], .simple-edits [aria-current="true"], button.req-summary[aria-current="true"]';
+
+/** Keeps the chat scrolled to the newest message while `follow` is true, unless a revision row in the chat is selected. */
 export function useChatAutoFollow(
   chat: RefObject<HTMLDivElement | null>,
   follow: RefObject<boolean>,
@@ -393,16 +396,30 @@ export function useChatAutoFollow(
   lastActivity: string | undefined,
   taskCount: number,
 ) {
+  const prevCounts = useRef({ threadCount, taskCount });
   useLayoutEffect(() => {
+    const grew = threadCount > prevCounts.current.threadCount || taskCount > prevCounts.current.taskCount;
+    prevCounts.current = { threadCount, taskCount };
     const pane = chat.current;
-    if (pane && follow.current) pane.scrollTop = pane.scrollHeight;
+    if (!pane || !follow.current) return;
+    // Keeping or deciding an edit bumps `updatedAt` via the engine; never yank the chat away from the selected row
+    // unless a brand-new message or task arrived.
+    if (!grew && pane.querySelector(SELECTED_REVISION_ROW)) return;
+    pane.scrollTop = pane.scrollHeight;
   }, [chat, follow, threadCount, lastActivity, taskCount]);
-  // The spot above the message box grows and shrinks with what it holds, and the chat's room with it. The latest
-  // message stays in view through that too.
+  // The spot above the message box grows and shrinks with what it holds, and the chat's room with it. While a
+  // revision row in the chat is selected, keep that row in view; otherwise keep the latest message in view.
   useEffect(() => {
     const pane = chat.current;
     if (!pane || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => { if (follow.current) pane.scrollTop = pane.scrollHeight; });
+    const observer = new ResizeObserver(() => {
+      const selected = pane.querySelector(SELECTED_REVISION_ROW);
+      if (selected) {
+        if (isClippedInScrollAncestors(selected)) selected.scrollIntoView?.({ block: "nearest" });
+        return;
+      }
+      if (follow.current) pane.scrollTop = pane.scrollHeight;
+    });
     observer.observe(pane);
     return () => observer.disconnect();
   }, [chat, follow]);
