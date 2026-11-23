@@ -1,7 +1,18 @@
 import { expect, it } from "vitest";
 import { runMarkdown, type TrialRow } from "../src/report.ts";
 import { wordDigest } from "../../packages/mcp/src/transcript-digest.ts";
-import { branchName, positiveNumber, scorecardGap, selectTrialSkills, trialTranscripts } from "../src/run.ts";
+import { branchName, DEFAULT_CONFIG, positiveNumber, resolveConfigs, scorecardGap, selectTrialSkills, trialTranscripts } from "../src/run.ts";
+
+it("defaults to Gemini 4 Neon at medium effort when --configs is omitted", () => {
+  expect(DEFAULT_CONFIG).toBe("gemini:gemini-4-neon:medium");
+  expect(resolveConfigs(undefined)).toEqual([{ agent: "gemini", model: "gemini-4-neon", effort: "medium" }]);
+  expect(resolveConfigs(undefined, "fast")).toEqual([{ agent: "gemini", model: "gemini-4-neon", effort: "medium", serviceTier: "fast" }]);
+  expect(resolveConfigs("codex:gpt-6.2-sol:medium,claude:sonnet:high")).toEqual([
+    { agent: "codex", model: "gpt-6.2-sol", effort: "medium" },
+    { agent: "claude", model: "sonnet", effort: "high" },
+  ]);
+  expect(resolveConfigs("")).toEqual([]);
+});
 
 it("gives repeated trials distinct branches even with long case and model names", () => {
   const caseId = "long-project-name-".repeat(5), stamp = "2026-11-15T10-30-00Z";

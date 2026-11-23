@@ -443,12 +443,15 @@ Run `python3 -B evals/compare.py "$EPISODE" --freeze CASE_ID` to hash the privat
 
 ## Run
 
+`--configs` defaults to `gemini:gemini-4-neon:medium` (Gemini 4 Neon, medium effort), the default model for evals and
+benchmarks unless comparing models or asked otherwise.
+
 ```sh
 # Show exactly what would be sent. Nothing is launched without --yes.
-$TSX evals/src/run.ts --cases my-case --configs codex:<model>:medium,claude:<model>:high --trials 3 --dry-run
+$TSX evals/src/run.ts --cases my-case --configs gemini:gemini-4-neon:medium --trials 3 --dry-run
 
 # Launch (billed agent tasks).
-$TSX evals/src/run.ts --cases my-case --configs … --trials 3 --yes
+$TSX evals/src/run.ts --cases my-case --trials 3 --yes
 ```
 
 `--yes` refuses a case with no published video attached (`reference.published`): its scorecard would fill only 2 of 15
