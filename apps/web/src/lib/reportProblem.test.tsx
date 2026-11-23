@@ -7,7 +7,7 @@ import { StartupRecovery } from "../components/shell/StartupRecovery";
 import { api } from "./client";
 import { desktop } from "./desktop";
 import { buildDb } from "./mock/fixtures";
-import { buildProblemReportUrl, SCARLET_ISSUES_URL } from "./reportProblem";
+import { buildProblemReportUrl, PUBLIC_REPORT_NOTICE, SCARLET_ISSUES_URL } from "./reportProblem";
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -37,6 +37,9 @@ it("builds a pre-filled GitHub issue URL with version, OS, detail, and log zip n
   expect(body).toContain("scarlet-logs-2026.zip");
   expect(body).toContain("Scarlet: 0.2.0 (abcdef1)");
   expect(body).toContain("System: macos (aarch64)");
+  // The public warning sits right where the zip gets attached.
+  expect(body).toContain(PUBLIC_REPORT_NOTICE);
+  expect(body.indexOf(PUBLIC_REPORT_NOTICE)).toBeLessThan(body.indexOf("scarlet-logs-2026.zip"));
 });
 
 it("exports logs, reveals the zip, and opens a pre-filled GitHub issue from About", async () => {
@@ -65,6 +68,8 @@ it("exports logs, reveals the zip, and opens a pre-filled GitHub issue from Abou
   const button = (label: string) => [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === label);
   try {
     await act(async () => root.render(<AboutSettings />));
+    // The editor is told reports are public before saving logs.
+    expect(container.querySelector("[data-testid=public-report-notice]")?.textContent).toBe(PUBLIC_REPORT_NOTICE);
     // Cancelled save does not open browser.
     await act(async () => button("Report a problem…")!.click());
     expect(exportLogs).toHaveBeenCalledTimes(1);
@@ -100,6 +105,7 @@ it("offers Report a problem from StartupRecovery with error details pre-filled",
   const root = createRoot(container);
   try {
     await act(async () => root.render(<StartupRecovery title="Scarlet couldn't start" detail="FFmpeg missing" />));
+    expect(container.textContent).toContain("Reports are public on GitHub");
     const btn = [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Report a problem")!;
     await act(async () => btn.click());
     expect(openUrl).toHaveBeenCalledOnce();

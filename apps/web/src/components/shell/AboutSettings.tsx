@@ -4,7 +4,7 @@ import appIcon from "../../../../desktop/src-tauri/icons/128x128@2x.png";
 import { api, errorMessage, IS_MOCK } from "../../lib/client";
 import { desktop, isDesktop } from "../../lib/desktop";
 import { fileBaseName } from "../../lib/format";
-import { exportLogsAndReport, openProblemReport } from "../../lib/reportProblem";
+import { exportLogsAndReport, openProblemReport, PUBLIC_REPORT_NOTICE } from "../../lib/reportProblem";
 import { Icon, InlineError, Loading, Toggle } from "../ui/primitives";
 import { Changelog } from "./Changelog";
 import { UpdateSettings } from "./UpdateSettings";
@@ -98,9 +98,10 @@ function ReportProblemCard() {
       <h2 id="report-problem-heading">Report a problem</h2>
       <p>
         {canExportLogs
-          ? "Save a log zip (no videos, projects or sign-ins) and open a GitHub issue you can drop it into."
+          ? "Save a log zip (no videos or sign-ins) and open a GitHub issue you can drop it into."
           : "Open a GitHub issue with your Scarlet version filled in."}
       </p>
+      <p className="mt-2 text-[12px] text-muted" data-testid="public-report-notice">{PUBLIC_REPORT_NOTICE}</p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {canExportLogs ? (
           <>

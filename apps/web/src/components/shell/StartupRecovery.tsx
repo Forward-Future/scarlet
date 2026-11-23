@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { desktop, isDesktop } from "../../lib/desktop";
-import { exportLogsAndReport, openProblemReport } from "../../lib/reportProblem";
+import { exportLogsAndReport, openProblemReport, PUBLIC_REPORT_NOTICE } from "../../lib/reportProblem";
 
 export function StartupRecovery({ title, detail, showLogs = false }: { title: string; detail: string; showLogs?: boolean }) {
   const [feedback, setFeedback] = useState("");
@@ -54,6 +54,7 @@ export function StartupRecovery({ title, detail, showLogs = false }: { title: st
           {showLogs && <button className="btn-ghost" onClick={openLogs}>Open logs</button>}
           <button className="btn-ghost" onClick={copyDiagnostics}>Copy diagnostics</button>
         </div>
+        <p className="text-[12px] text-muted" data-testid="public-report-notice">{PUBLIC_REPORT_NOTICE}</p>
         {feedback && <p role="status" className="text-muted">{feedback}</p>}
       </section>
     </main>

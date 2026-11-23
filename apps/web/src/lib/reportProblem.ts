@@ -3,6 +3,10 @@ import { fileBaseName } from "./format";
 
 export const SCARLET_ISSUES_URL = "https://github.com/Forward-Future/scarlet/issues/new";
 
+/** Shown before logs are saved and again where they get attached: Scarlet's issues are public. */
+export const PUBLIC_REPORT_NOTICE =
+  "Reports are public on GitHub, so anyone can see them and the log zip. The logs include file names and folder paths, like your project names. Open the zip and remove anything private before you attach it.";
+
 export interface ProblemReportContext {
   version?: string;
   revision?: string;
@@ -29,7 +33,7 @@ export function buildProblemReportUrl(ctx: ProblemReportContext = {}): string {
     ctx.detail?.trim() ? ctx.detail.trim().slice(0, 1200) : "<!-- Briefly describe what you were doing and what went wrong -->",
   ];
   if (ctx.logFileName) {
-    sections.push("", `### Logs`, `<!-- Drag ${ctx.logFileName} into this box to attach it -->`);
+    sections.push("", `### Logs`, `<!-- ${PUBLIC_REPORT_NOTICE} -->`, `<!-- Drag ${ctx.logFileName} into this box to attach it -->`);
   }
   if (envLines.length) {
     sections.push("", "### Environment", ...envLines);
