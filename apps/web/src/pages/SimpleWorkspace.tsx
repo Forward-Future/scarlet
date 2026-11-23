@@ -1632,7 +1632,7 @@ export function SimpleWorkspace() {
   const removedLength = beforeCut ? beforeCut.removed.end - beforeCut.removed.start : 0;
   // Before was reached by a click on the timeline, in this cut's passage or another's.
   const cutSwitched = shownSide?.side === "before" && shownSide.at !== undefined;
-  // A marker left for the editor changed nothing in the video: its card says what it is, and has nothing to compare or undo.
+  // A marker left for the editor changed nothing in the video: its card says what it is, and has nothing to compare or keep.
   const shownMarker = !!reviewingEdit?.marker;
   const shownKind = reviewingEdit && (shownMarker ? "To do" : reviewingEdit.onlyCheck ? (reviewRange ? undefined : "Check") : editKindWord(reviewingEdit));
   // The card's first line says exactly what the edit did: a cut's words, struck, or for any other edit what its steps
@@ -1667,6 +1667,7 @@ export function SimpleWorkspace() {
     if (!appliedTarget?.version || !threadTimeline.located || !reviewingEdit) return;
     return [reviewingEdit].map(e => ({ changeId: e.changeId, spot: e.spot, label: e.label, range: e.range,
       ...(e.previous.length > 0 && { revised: true }),
+      ...(e.marker && { marker: true }),
       ...(e.beforeCut && e.at !== undefined && { at: e.at, before: { version: e.beforeCut.version, removed: e.beforeCut.removed } }) }));
   }, [appliedTarget?.version, threadTimeline.located, reviewingEdit]);
   const editOpen = !!reviewingEdit;
@@ -1723,6 +1724,17 @@ export function SimpleWorkspace() {
         appliedSide={appliedSide} workspaceActive={workspaceActive} cutKey={cutKey} onChooseCutSide={chooseCutSide}
         setCompareHost={setCompareHost} onRevise={() => actions.revise(focusThread, shownChange)}
         onDefer={shownMarker && !reviewed(reviewingEdit) && !deferred(reviewingEdit) ? deferShown : undefined} onKeep={keepShown}
+        // Add asks Scarlet to make or find what the to-do says to add. Its row says Adding… meanwhile, ⌘Z takes the request
+        // back as it does a revision, and the card goes on as Later does, so a run of to-dos is one press each.
+        onSentAdd={shownMarker && !reviewed(reviewingEdit) ? task => {
+          follow.current = true;
+          appLog("action", "add-todo", { edit: shownIndex + 1, of: threadEdits.length, change: reviewingEdit.changeId });
+          const named = rejectTarget && (cutName(rejectTarget) ?? targetName(rejectTarget));
+          recordUndo({ kind: "revision", word: "Add", projectId: current.id, taskId: task.id, threadId: focusThread.id,
+            edit: { changeId: reviewingEdit.changeId, spot: reviewingEdit.spot, ...(threadTimeline.single && { single: true }) },
+            ...(named && { name: tagOf(named) }) });
+          if (openEditNow.current === openEditKey) moveOnFromShown();
+        } : undefined}
         appliedTarget={appliedTarget} rejectTarget={rejectTarget} openEditKey={openEditKey} rejectedEdits={rejectedEdits}
         // From the press, the card holds on the edit as it is: the video without it can land before the engine answers.
         onEngineReject={asked => asked ? threadTimeline.leave() : threadTimeline.stay()}

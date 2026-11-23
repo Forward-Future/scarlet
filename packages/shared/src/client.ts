@@ -282,7 +282,7 @@ export class ScarletClient extends ClientTransport {
   }
   /** Put back what applied edits the editor rejected changed, with no model. Refused (409) where the engine can't. */
   rejectEdits(projectId: string, body: { expectedHead: string; branch: string; threadId: string;
-    edits: { changeId: string; spot: number; label: string; range: TimeRange; revised?: boolean; at?: number; before?: { version: string; removed: TimeRange } }[] }) {
+    edits: { changeId: string; spot: number; label: string; range: TimeRange; revised?: boolean; marker?: boolean; at?: number; before?: { version: string; removed: TimeRange } }[] }) {
     return this.post<{ project: Project; change: Change }>(`/projects/${projectId}/rejected-edits`, body);
   }
   checkout(projectId: string, version: string) {

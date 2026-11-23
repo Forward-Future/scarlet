@@ -1,9 +1,9 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { historyLineage } from "@scarlet/timeline";
-import { matchesEdit, threadRevision, isThreadDone, REJECT_MESSAGE, REVISED_CHECK, ScarletApiError, type EditRef, type Task, type Thread, type ThreadEdit, type VersionSummary } from "@scarlet/shared";
+import { matchesEdit, threadRevision, isThreadDone, ADD_MESSAGE, REJECT_MESSAGE, REVISED_CHECK, ScarletApiError, type EditRef, type Task, type Thread, type ThreadEdit, type VersionSummary } from "@scarlet/shared";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
-import { editGroups, noEdits, revisionWord, useDeferred, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
+import { editGroups, noEdits, revisionWord, useAdding, useDeferred, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
 import { editRemovedLabel } from "../../lib/format";
 import { editRowWord } from "../../lib/editKind";
 import { editKey, keepEdits } from "../../lib/keptEdits";
@@ -88,6 +88,52 @@ export function RejectEdit({ projectId, thread, target, edits, editsOn, onEngine
   </>;
 }
 
+/** What Scarlet is asked to do when the editor presses Add on a to-do: `ask` is what the to-do says to add. */
+export function addInstruction(ask?: string) {
+  return `The editor asked you to add what this to-do asks for${ask?.trim() ? `: “${ask.trim()}”` : ""}. Make or find it, put it in the video at this spot, and mark the to-do resolved.`;
+}
+
+/**
+ * Add on a to-do's card: Scarlet is asked to make or find what the to-do says to add and put it in the video there,
+ * with the same agent and the same target as typing it would. The editor pressed Add and wrote nothing, so the
+ * request reads "Add it" under its to-do's tag, in the chat and in the queue; what Scarlet is told is the instruction.
+ */
+export function AddTodo({ projectId, thread, target, ask, onSent }: { projectId: string; thread: Thread; target: AgentContext;
+  ask?: string; onSent(task: Task): void }) {
+  const { effective, unavailableReason } = useAgentAvailability();
+  const createTask = useProjectStore(s => s.createTask);
+  const head = useProjectStore(s => s.current?.project.head ?? undefined);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function add() {
+    // One request per press: pressed again while the first is on its way, it sends nothing more.
+    if (busy) return;
+    if (!effective) { setError(unavailableReason); return; }
+    setBusy(true);
+    setError("");
+    try {
+      const task = await createTask(projectId, { kind: "edit", ...effective, instruction: addInstruction(ask),
+        context: { version: head, ...requestPosition(target), threadId: thread.id, message: ADD_MESSAGE } });
+      recordEditReview(projectId, target, "revise");
+      onSent(task);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  useHotkeys(event => {
+    if (busy || event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== "a") return;
+    event.preventDefault();
+    void add();
+  });
+  return <>
+    {error && <span className="simple-error" role="alert">{error}</span>}
+    <button type="button" className="btn-primary" data-key="A" data-log-control="add-todo" aria-keyshortcuts="A" aria-busy={busy || undefined}
+      title="Have Scarlet add it (A)" disabled={busy} onClick={e => { blurOnPointerClick(e); void add(); }}>Add</button>
+  </>;
+}
+
 /**
  * The edit's number, as on the timeline; amber while it asks for a look. Once reviewed it fills and widens
  * to carry a check beside the number, so approving even a lone edit reads as a change of shape.
@@ -135,6 +181,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   const deferred = useDeferred(projectId, thread);
   const revising = useRevising(thread);
   const rejecting = useRejecting(thread);
+  const adding = useAdding(thread);
   const list = useRef<HTMLOListElement>(null);
   // A rejected edit that's open is its own row: the edit that took its place in the video's order isn't lit for it.
   const open = showing?.rejected ? -1 : edits.findIndex(edit => !!showing && matchesEdit(showing, edit));
@@ -198,7 +245,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       const isDeferred = !isKept && !isRevising && deferred(edit);
       // Scarlet is on that revision now, so the row's word moves. One waiting its turn sits still.
       const busy = !!revisingNow && isWorkingTask(revisingNow.state);
-      const statusWord = revisionWord(revisingNow, { rejecting: rejecting(edit), nextQueuedId });
+      const statusWord = revisionWord(revisingNow, { rejecting: rejecting(edit), adding: adding(edit), nextQueuedId });
       const version = edit.previous.length ? edit.previous.length + 1 : 0;
       const decided = isKept && !isRevising;
       // In For you, a handled edit says how it was decided (Kept, or Done for a marker) and a parked to-do says Later.

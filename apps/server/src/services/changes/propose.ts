@@ -232,7 +232,7 @@ export function persistProposal(ctx: Ctx, user: User, projectId: string, body: P
   // cost a pass a turn spent guessing the timeline's length.
   const ends = diff.durationAfter;
   // A save that only leaves to-dos for the editor is one edit a to-do, however the model named them: each is the
-  // editor's to mark done. Named none, the save changed no stretch of the video, so the request listed nothing and its
+  // editor's to add, park or reject. Named none, the save changed no stretch of the video, so the request listed nothing and its
   // 27 B-roll ideas could be reached from nowhere in the chat; named once for all 33, they were one row (2026-11-23).
   // A name the model gave one to-do alone stays; any other row is the start of its to-do, and its card says it in full.
   const todos = body.ops?.length ? body.ops.flatMap(op =>

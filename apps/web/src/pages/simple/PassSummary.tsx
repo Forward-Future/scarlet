@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { matchesEdit, REVISED_CHECK, type EditRef, type ThreadEdit } from "@scarlet/shared";
 import { EditBadge, EditVersion, RejectedMark, ThreadAction, ThreadEdits } from "../../components/review/ThreadEdits";
-import { editGroups, revisionWord, useDeferred, useRejecting, useReviewed, useRevising } from "../../components/review/threadEditState";
+import { editGroups, revisionWord, useAdding, useDeferred, useRejecting, useReviewed, useRevising } from "../../components/review/threadEditState";
 import { Icon } from "../../components/ui/primitives";
 import { editKindWord, editRowWord } from "../../lib/editKind";
 import { editPlaces, listMoments, type Moment } from "../../lib/editMoments";
@@ -141,6 +141,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const deferred = useDeferred(projectId, thread);
   const revising = useRevising(thread);
   const rejecting = useRejecting(thread);
+  const adding = useAdding(thread);
   const [open, setOpen] = listState;
   const [host, reveal] = useReveal(open);
   // The list follows the cut or edit that's open, so stepping with arrows or Keep never leaves its row out of sight.
@@ -236,7 +237,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       const decision = decided ? (e.marker ? "Done" : "Kept") : later ? "Later" : undefined;
       // Where it stands, when it isn't simply waiting: the word a row among the calls ends on. In the list of every edit
       // it follows the row's amount, as in any other request's list, and the amount stays.
-      const word = sent ? revisionWord(sent, { rejecting: rejecting(asked), nextQueuedId: actions.nextQueuedId }) : revised ? REVISED_CHECK : undefined;
+      const word = sent ? revisionWord(sent, { rejecting: rejecting(asked), adding: adding(asked), nextQueuedId: actions.nextQueuedId }) : revised ? REVISED_CHECK : undefined;
       const at = (e as ThreadEdit).at ?? e.range.start;
       const displayAt = (!seen && !sent ? e.reviewRange?.start : undefined) ?? at;
       // Listed with the calls, it has the number it has among them. One that came back revised with a reason of

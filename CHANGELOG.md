@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- A To do Scarlet left for you, such as a spot for B-roll, now has Add (A), Later (L) and a × that rejects it: Add has Scarlet make or find what the to-do asks for and put it in the video there, and the × takes the to-do away.
 - Choosing words in the Transcript and pressing “Ask about this” now shows the same `Range` tag above the message box as a stretch marked on the timeline, with its × to take it off before you send.
 - A request that couldn't finish says why under its heading when the model gave a reason, such as a usage limit or a sign-in that ran out, so you know before pressing Retry.
 - A request you pick up again while a dialogue pass waits for your calls says “Waits for your calls” in its block, with the same mark that starts it before them, instead of only “Queued”.
