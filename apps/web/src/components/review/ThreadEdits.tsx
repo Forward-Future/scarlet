@@ -12,6 +12,7 @@ import { useProjectStore } from "../../stores/project";
 import { Dropdown, MenuItem } from "../shell/WorkspaceNavigation";
 import { Icon } from "../ui/primitives";
 import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
+import { useKeepSelectedInView } from "../../lib/uiHooks";
 import { useAgentAvailability } from "../agent/AgentChip";
 import type { AgentContext } from "../../stores/ui";
 
@@ -134,13 +135,9 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   const deferred = useDeferred(projectId, thread);
   const revising = useRevising(thread);
   const rejecting = useRejecting(thread);
-  const opened = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLOListElement>(null);
   // A rejected edit that's open is its own row: the edit that took its place in the video's order isn't lit for it.
   const open = showing?.rejected ? -1 : edits.findIndex(edit => !!showing && matchesEdit(showing, edit));
-  const openKey = open >= 0 ? editKey(edits[open]!) : undefined;
-  // ← → and Keep move to another edit, so keep the open one in view.
-  useEffect(() => { opened.current?.scrollIntoView?.({ block: "nearest" }); }, [openKey]);
-  if (!edits.length && !rejected.length) return null;
   // An edit made in several places is one row. It stands for the place that's open, else the first one asking for a
   // look, else the first.
   const rows = editGroups(edits).filter(({ members }) => !only || members.some(m => only(m.edit))).map(({ members }) => {
@@ -153,6 +150,31 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   });
   // A rejected edit keeps its place in the video's order, in See all and (when it was flagged) in For you.
   const gone = (only ? rejected.filter(only) : [...rejected]).sort((a, b) => a.range.start - b.range.start);
+  // ↑ ↓, Keep, tab switches, and rows arriving above can move the selected edit: always keep it in view.
+  const mode = only ? "need" : "all";
+  let selectedKey: string | undefined;
+  let before = 0;
+  const scanGone = (from: number, to: number) => {
+    for (const e of gone) {
+      if (e.range.start < from || e.range.start >= to) continue;
+      if (showing && (matchesEdit(showing, e) || matchesEdit(e, showing))) {
+        selectedKey = `${mode}:${before}:rejected:${editKey(e)}`;
+        return true;
+      }
+      before += 1;
+    }
+    return false;
+  };
+  if (!scanGone(-Infinity, rows[0]?.edit.range.start ?? Infinity)) {
+    for (let at = 0; at < rows.length; at++) {
+      const { edit, i, nested } = rows[at]!;
+      if (i === open) { selectedKey = `${mode}:${before}:${editKey(edit)}`; break; }
+      before += 1 + nested.length;
+      if (scanGone(edit.range.start, rows[at + 1]?.edit.range.start ?? Infinity)) break;
+    }
+  }
+  useKeepSelectedInView(list, selectedKey);
+  if (!edits.length && !rejected.length) return null;
   // A press shows it again: where it was on the timeline, with its note, over the video as it plays without it.
   const goneAfter = (from: number, to: number) => gone.filter(e => e.range.start >= from && e.range.start < to).map(e => {
     // Lit for the edit it was, too, while that one is still on its card, leaving.
@@ -165,7 +187,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       <span className="simple-edit-value">Rejected</span>
     </button></li>;
   });
-  return <ol className="simple-edits" aria-label={only ? "Edits that need you" : "Edits in this thread"}>
+  return <ol ref={list} className="simple-edits" aria-label={only ? "Edits that need you" : "Edits in this thread"}>
     {goneAfter(-Infinity, rows[0]?.edit.range.start ?? Infinity)}
     {rows.map(({ edit, i, n, places, needs, allKept, nested, took }, at) => {
       const on = i === open;
@@ -189,7 +211,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       // One that came back revised with no reason from Scarlet says so on its row until it is kept: its card has no
       // sentence for that.
       const revised = edit.check === REVISED_CHECK && !reviewed(edit) && !isRevising;
-      return <Fragment key={editKey(edit)}><li><button type="button" ref={on ? opened : undefined} aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
+      return <Fragment key={editKey(edit)}><li><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
         // Clicked, the row lets go of the focus (WebView2 leaves it there), or Space would press the row again and start
         // the edit over, instead of playing the video.
         className={["simple-edit", on && "is-on", !on && only && decided && "is-decided"].filter(Boolean).join(" ")} onClick={e => { blurOnPointerClick(e); onPlay(edit); }}
