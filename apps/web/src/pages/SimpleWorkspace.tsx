@@ -2408,8 +2408,6 @@ export function SimpleWorkspace() {
   // which of its presses do. A drag, a scroll or a press held and moved isn't a click.
   const hasMarkedRange = useUiStore(s => !!markedRangeOf(s.agentContext));
   useOutsideClearMarkedRange(hasMarkedRange, () => markRange(undefined));
-  // The time a pause wrote into the box, while it is all the box holds.
-  const pausedTime = useRef<string | undefined>(undefined);
   // With a cut or an edit open, a pause puts its time in the box's tag instead, and the message stays the cut's or the
   // edit's. It goes when the video plays on with nothing written, and when another cut or edit opens.
   const [pausedAt, setPausedAt] = useState<PausedAt>();
@@ -2419,29 +2417,20 @@ export function SimpleWorkspace() {
     if (!now.playing || was.playing) return;
     const box = useUiStore.getState();
     if (pausedAtRef.current && !box.agentDraft.trim()) setPausedAt(undefined);
-    if (!pausedTime.current) return;
-    if (box.agentDraft === pausedTime.current) {
-      box.setAgentDraft("");
-      box.setAgentContext(null);
-    }
-    pausedTime.current = undefined;
   }), []);
   useLayoutEffect(() => () => setPausedAt(undefined), [replyTo]);
-  // A press, a scrub or a skip on the timeline, or N, aims a new edit at that moment at once: the box shows it as its
-  // edit-point icon. A message aimed at a cut or an edit, or one being written, stays where it was. Words chosen in the
-  // transcript or a stretch marked on the ruler stay through a seek; only N takes their place.
-  // A pause writes its time into an empty box as the start of the message ("0:04 "), as if the editor had typed it.
-  // While the box holds only that, the next pause or seek moves it, and playing on takes it out again.
-  // With a cut or an edit open, a pause into an empty box shows its time in the tag, and the next seek moves it there:
-  // the message stays the cut's or the edit's, and Scarlet is told the frame the editor stopped on besides.
+  // A press, a scrub, a skip on the timeline, a pause, or N aims a new edit at that moment at once in the box's tag,
+  // without writing anything into the input box. A message aimed at a cut or an edit, or one being written, stays where
+  // it was. Words chosen in the transcript or a stretch marked on the ruler stay through a seek or pause; only N takes
+  // their place. With a cut or an edit open, a pause into an empty box shows its time in the tag, and the next seek
+  // moves it there: the message stays the cut's or the edit's, and Scarlet is told the frame the editor stopped on.
   const pickPoint = (picked: AgentContext, how: "seek" | "n" | "pause") => {
     const box = useUiStore.getState();
     if (rewordingItem || box.speaking) return;
-    const onlyPaused = !!pausedTime.current && box.agentDraft === pausedTime.current;
-    const written = onlyPaused ? "" : box.agentDraft.trim();
+    const written = box.agentDraft.trim();
     const target = box.agentContext;
     if (replyTo) {
-      if (!aimedAtChange(target) || box.agentDraft.trim() || how === "n" || (how === "seek" && !pausedAtRef.current)) return;
+      if (!aimedAtChange(target) || written || how === "n" || (how === "seek" && !pausedAtRef.current)) return;
       setPausedAt({ time: picked.time, version: picked.version, ...picked.mediaId && { mediaId: picked.mediaId } });
       return;
     }
@@ -2449,13 +2438,6 @@ export function SimpleWorkspace() {
     // A message being written about the whole video, aimed or not yet, stays so through a seek: the line above the
     // box offers to bring it along.
     if (how !== "n" && (!target || target === "whole" ? written : !pointOf(target))) return;
-    if (how === "pause" || onlyPaused) {
-      const text = `${clockLabel(picked.time)} `;
-      pausedTime.current = text;
-      box.setAgentDraft(text);
-      box.setAgentContext({ ...picked, fromMessage: true });
-      return;
-    }
     playheadPoints.add(picked);
     box.setAgentContext(picked);
   };
