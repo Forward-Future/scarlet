@@ -458,8 +458,9 @@ export class ScarletClient extends ClientTransport {
   renderFileUrl(renderId: string, waitForPlayback = false) {
     return this.fileUrl(`/renders/${renderId}/file`, waitForPlayback ? { wait: "1" } : undefined);
   }
-  mediaFileUrl(mediaId: string, proxy = false) {
-    return this.fileUrl(`/media/${mediaId}/${proxy ? "proxy" : "file"}`);
+  mediaFileUrl(mediaId: string, proxy = false, audioTrack?: AudioTrackSelection) {
+    return this.fileUrl(`/media/${mediaId}/${proxy ? "proxy" : "file"}`,
+      proxy && audioTrack !== undefined ? { track: String(audioTrack) } : undefined);
   }
   sourceCache(mediaId: string, prepare = false) {
     const url = `/media/${encodeURIComponent(mediaId)}/playback-cache`;

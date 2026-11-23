@@ -465,8 +465,8 @@ export class MockClient implements ScarletApi {
   renderFileUrl(renderId: string): string {
     return `/sample.mp4#render=${renderId}`;
   }
-  mediaFileUrl(mediaId: string, proxy = false): string {
-    return `/sample.mp4#media=${mediaId}${proxy ? "&proxy" : ""}`;
+  mediaFileUrl(mediaId: string, proxy = false, audioTrack?: AudioTrackSelection): string {
+    return `/sample.mp4#media=${mediaId}${proxy ? "&proxy" : ""}${proxy && audioTrack !== undefined ? `&track=${audioTrack}` : ""}`;
   }
   async sourceCache(_mediaId: string, _prepare = false): Promise<PlaybackCacheStatus> { return { state: "ready" }; }
   async sourceCaches(projectId: string): Promise<{ caches: SourceCacheStatus[] }> {

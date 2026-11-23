@@ -160,8 +160,45 @@ class SourcePreviews {
   async filesOf(ctx: Ctx, media: SourceMedia): Promise<string[]> {
     const root = ctx.paths.proxies(media.projectId);
     const { local } = await previewIdentity(ctx.paths.media(media.projectId), media);
-    return [join(root, media.id + ".mp4"), join(root, "source-" + local),
+    return [join(root, media.id + ".mp4"), join(root, "audio-" + local + ".mp4"), join(root, "source-" + local),
       ...fullProxyVariants(root, [local], media.height).flatMap(v => [v.file, sourceCheckpointDir(root, local, v.suffix)])];
+  }
+
+  /**
+   * A single-track AAC preview for a sound-only recording with several audio tracks, keyed by the track Scarlet hears
+   * (or all of them mixed) so playback hears the editor's choice instead of whichever track the player picks.
+   */
+  async audioPreview(ctx: Ctx, media: SourceMedia, signal: AbortSignal): Promise<string> {
+    const lifetime = ctx.projectSignal(media.projectId);
+    const root = ctx.paths.proxies(media.projectId);
+    const identity = await previewIdentity(ctx.paths.media(media.projectId), media);
+    const file = join(root, `audio-${identity.shared ?? identity.local}.mp4`);
+    if ((await stat(file).catch(() => null))?.size) return file;
+
+    while (true) {
+      signal.throwIfAborted();
+      lifetime.throwIfAborted();
+      const same = this.encoding.get(file);
+      if (same) { await same; return file; }
+      if (this.encoding.size < 2) break;
+      await Promise.race([...this.encoding.values()].map(job => job.catch(() => {})));
+    }
+    const job = ctx.track((async () => {
+      await mkdir(root, { recursive: true });
+      if ((await stat(file).catch(() => null))?.size) return;
+      const temp = file + "." + randomUUID() + ".part.mp4";
+      try {
+        await ctx.render.makeProxy(identity.file, temp, { audioTrack: media.audioTrack, signal: lifetime });
+        await identity.check();
+        try { await rename(temp, file); }
+        catch (error) { if (!(await stat(file).catch(() => null))?.size) throw error; }
+      } finally {
+        await rm(temp, { force: true }).catch(() => {});
+      }
+    })().finally(() => this.encoding.delete(file)), media.projectId);
+    this.encoding.set(file, job);
+    await job;
+    return file;
   }
 
   async get(ctx: Ctx, media: MediaWithStatus & { projectId: string }, index: number, signal: AbortSignal): Promise<string> {

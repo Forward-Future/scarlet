@@ -52,16 +52,16 @@ export const Player = memo(function Player({ source, autoPlaySource, cut, hidden
   const [streaming, setStreaming] = useState(false);
   const [playingCutFile, setPlayingCutFile] = useState<string>();
   const startStreaming = useCallback(() => setStreaming(true), []);
+  // A recording with several audio tracks plays its preview of the chosen one, never the raw original.
+  const chosenTrack = !!source && playsChosenTrack(source);
   const src = source
-    ? original ? api.mediaFileUrl(source.id) : isPlayableMedia(source) ? api.mediaFileUrl(source.id, true) : undefined
+    ? original ? api.mediaFileUrl(source.id) : isPlayableMedia(source) ? api.mediaFileUrl(source.id, true, chosenTrack ? source.audioTrack ?? 0 : undefined) : undefined
     : playingCutFile ?? (!streaming && render?.state === "done" ? api.renderFileUrl(render.id) : IS_MOCK && shown ? api.renderFileUrl(shown) : undefined);
   const [failedSrc, setFailedSrc] = useState<string>();
   const attach = useCallback((el: HTMLVideoElement | null) => {
     if (el) player.attach(el);
     else player.detach();
   }, []);
-  // A video with several audio tracks plays its preview of the chosen one, and parts made of it until that is ready.
-  const chosenTrack = !!source && playsChosenTrack(source);
   if (source?.kind === "video" && source.duration && (source.previewMode === "on-demand" || (chosenTrack && isPlayableMedia(source)) ||
     (!startedOnOriginal && isPlayableMedia(source) && canPlayOriginal(source) && source.id !== rejectedOriginal))) {
     // Another track picked plays from the start of its own preview, not the old track's bytes.

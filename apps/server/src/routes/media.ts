@@ -140,7 +140,7 @@ export function mediaRoutes(ctx: Ctx) {
     }, "immediate")();
     // What was made from the old track is made again from the new one: its transcript and its previews.
     await ctx.track(afterAudioTrackChange(ctx, media.before, { ...media.saved, projectId: media.before.projectId }), source.projectId);
-    return c.json({ media: media.saved });
+    return c.json({ media: ctx.repos.projects.getMedia(media.saved.id) ?? media.saved });
   });
 
   r.post("/projects/:id/media", async (c) => {
@@ -363,12 +363,21 @@ export function mediaRoutes(ctx: Ctx) {
     const proxy = join(ctx.paths.proxies(media.projectId), `${media.id}.mp4`);
     // ffmpeg creates its output before the MP4 is playable.
     if (!media.previewMode && isPlayableMedia(media) && existsSync(proxy)) return serveFile(c.req.raw, proxy);
-    // A video with several audio tracks would play whichever track the player picks. It plays its playback cache, made
-    // of the chosen track, and until that is ready the parts made of it on demand.
+    // A recording with several audio tracks would play whichever track the player picks. Video plays its playback cache
+    // (or parts made on demand); sound-only plays a single-track AAC preview made of the chosen track.
     if (media.kind === "video" && (media.audioStreams?.length ?? 0) > 1) {
       const cached = await sourcePreviews.fullFile(ctx, media);
       if (cached) return serveFile(c.req.raw, cached);
       throw notFound("preview of the chosen audio track");
+    }
+    if (media.kind === "audio" && (media.audioStreams?.length ?? 0) > 1) {
+      try {
+        const preview = await sourcePreviews.audioPreview(ctx, media, c.req.raw.signal);
+        return serveFile(c.req.raw, preview, { contentType: "audio/mp4" });
+      } catch (error) {
+        if (c.req.raw.signal.aborted) return new Response(null, { status: 499 });
+        throw error;
+      }
     }
     return serveOriginal(c.req.raw, join(ctx.paths.media(media.projectId), media.path));
   });

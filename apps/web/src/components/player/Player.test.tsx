@@ -133,6 +133,20 @@ it("plays a video with several audio tracks from its preview of the chosen track
   expect(opened.mock.calls[2]![1]).toMatchObject({ original: api.mediaFileUrl(clip.id) });
 });
 
+it("plays a sound-only recording with several audio tracks from its chosen-track preview and reloads on track switch", async () => {
+  vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockReturnValue("probably");
+  const audio: MediaAsset = {
+    ...prepared({ kind: "audio", name: "podcast.mka", originalPlaybackType: "audio/mp4", duration: 120 }),
+    audioStreams: [{ index: 0 }, { index: 1 }],
+  };
+  await show({ source: audio });
+  expect(video()?.getAttribute("src")).toBe(api.mediaFileUrl(audio.id, true, 0));
+  await show({ source: { ...audio, audioTrack: 1 } });
+  expect(video()?.getAttribute("src")).toBe(api.mediaFileUrl(audio.id, true, 1));
+  await show({ source: { ...audio, audioTrack: "all" } });
+  expect(video()?.getAttribute("src")).toBe(api.mediaFileUrl(audio.id, true, "all"));
+});
+
 it("plays a long clip section by section, and the edit as a stream until its file is saved", async () => {
   const opened = vi.spyOn(sourcePlayback, "openSourcePlayback").mockReturnValue({ prepare() {}, seek() {}, dispose() {} } as unknown as ReturnType<typeof sourcePlayback.openSourcePlayback>);
   await show({ source: prepared({ previewMode: "on-demand", duration: 600 }) });

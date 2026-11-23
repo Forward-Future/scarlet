@@ -58,21 +58,33 @@ export async function afterAudioTrackChange(ctx: Ctx, before: Media, after: Medi
   const { projectId } = after;
   ctx.log(`[media] ${after.id} hears audio track ${heardKey(after)} instead of ${heardKey(before)}`);
 
-  // The transcript. A run on the old track stops, and one that ran or was saved is made again, as Transcribe in Media
-  // does. Its old words stay readable until the new ones are saved. With nothing to transcribe with, they stay.
+  // The transcript. A run on the old track stops, and the old track's words are cleared so Scarlet never edits or
+  // displays a different track's transcript. If a transcription service is set up, transcribe the new track now.
   const running = ctx.repos.tasks.runningTranscriptions(projectId, after.id);
-  const transcribed = running.length > 0 || hasTranscript(ctx, after.id);
+  const transcribed = running.length > 0 || hasTranscript(ctx, after.id) || !!after.transcriptId;
   for (const task of running) {
     ctx.db.transaction(() => cancelTask(ctx, task), "immediate")();
     await ctx.transcriptions.get(task.id)?.done.catch(() => null);
   }
+  const cleared = transcribed ? ctx.db.transaction(() => {
+    const current = ctx.repos.projects.getMedia(after.id);
+    if (!current || !hearsSameTrack(current, after)) return undefined;
+    ctx.db.prepare("DELETE FROM transcripts WHERE media_id = ?").run(after.id);
+    ctx.db.prepare("DELETE FROM transcription_work WHERE media_id = ?").run(after.id);
+    ctx.db.prepare("DELETE FROM transcription_chunks WHERE media_id = ?").run(after.id);
+    const { status, error, projectId: _p, transcriptId: _t, lastTranscription: _l, ...rest } = current;
+    const saved = ctx.repos.projects.putMedia(current.projectId, rest, status, error);
+    ctx.bus.publish({ type: "media.updated", projectId: current.projectId, media: saved });
+    return saved;
+  }, "immediate")() : undefined;
   if (transcribed && after.hasAudio !== false && getTranscriptionProvider(ctx)) {
-    const { status: _s, error: _e, projectId: _p, ...asset } = after;
+    const { projectId: _p, ...base } = after;
+    const { status: _s, error: _e, transcriptId: _t, lastTranscription: _l, ...asset } = cleared ?? base;
     // While the project's media work is paused this waits, as an interrupted transcript does, for Resume.
     const { done } = startTranscription(ctx, projectId, asset, undefined, "interrupt");
     ctx.track(done.catch(() => null), projectId);
   } else if (transcribed) {
-    ctx.log(`[transcribe] ${after.id} keeps the transcript of its previous audio track: nothing is set up to transcribe it again`);
+    ctx.log(`[transcribe] ${after.id} cleared the transcript of its previous audio track: nothing is set up to transcribe the new track`);
   }
 
   // The previews. Those made from the old track are this file's alone (a copy of the recording under its hash may hear

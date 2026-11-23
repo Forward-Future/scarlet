@@ -210,3 +210,80 @@ it("takes every track's waveform out with a file it couldn't read", async () => 
   expect(kept.filter(path => existsSync(path))).toEqual([]);
   expect(existsSync(other)).toBe(true);
 });
+
+it("clears the old track's transcript when switching tracks with no transcription service set up", async () => {
+  const { ctx } = workspace;
+  const media = await firstTrackSilent();
+  const old = ctx.repos.transcripts.put({
+    id: "trs_old_track",
+    projectId: project.id,
+    mediaId: media.id,
+    language: "en",
+    provider: "openai",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    segments: [{ id: "s1", text: "words from track 1", start: 0, end: 1, words: [] }],
+  });
+  const ready = ctx.repos.projects.getMedia(media.id)!;
+  ctx.repos.projects.putMedia(project.id, {
+    ...ready,
+    transcriptId: old.id,
+    lastTranscription: { completedAt: "2026-01-01T00:00:00.000Z", model: "whisper-1" },
+  }, "ready");
+  expect((await api("GET", `/media/${media.id}/transcript`)).status).toBe(200);
+
+  // Transcription provider is "none" (set in beforeEach): switching tracks clears the stale transcript.
+  const put = await api("PUT", `/media/${media.id}/audio-track`, { audioTrack: 1 });
+  expect(put.status).toBe(200);
+  const { media: updated } = await put.json() as { media: MediaAsset };
+  expect(updated.audioTrack).toBe(1);
+  expect(updated.transcriptId).toBeUndefined();
+  expect(updated.lastTranscription).toBeUndefined();
+  expect(ctx.repos.projects.getMedia(media.id)?.transcriptId).toBeUndefined();
+  expect((await api("GET", `/media/${media.id}/transcript`)).status).toBe(404);
+});
+
+it("plays the chosen track from /proxy for a sound-only recording with several audio tracks", async () => {
+  const src = join(directory, "multi-track.mka");
+  // Track 0: 440 Hz tone 0..1s, silence 1..2s. Track 1: silence 0..1s, 880 Hz tone 1..2s.
+  await ffmpeg([
+    "-y",
+    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1",
+    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono:d=1",
+    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono:d=1",
+    "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000:duration=1",
+    "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[a0];[2:a][3:a]concat=n=2:v=0:a=1[a1]",
+    "-map", "[a0]", "-map", "[a1]",
+    "-c:a", "aac", "-b:a", "96k",
+    src,
+  ]);
+  const { media } = await (await api("POST", `/projects/${project.id}/media/import`, { path: src })).json() as { media: MediaAsset };
+  await settle();
+  expect(media.kind).toBe("audio");
+  expect(media.audioStreams).toHaveLength(2);
+
+  const playRms = async (tag: string) => {
+    const res = await api("GET", `/media/${media.id}/proxy`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("audio/mp4");
+    const out = join(directory, `audio-played-${tag}.mp4`);
+    writeFileSync(out, Buffer.from(await res.arrayBuffer()));
+    return (await extractWaveform(out, { from: 0, to: 2, points: 4 })).rms;
+  };
+
+  // Track 0: loud first half, silent second half.
+  const rms0 = await playRms("0");
+  expect(rms0[0]).toBeGreaterThan(0.05);
+  expect(rms0[3]).toBeLessThan(0.01);
+
+  // Track 1: silent first half, loud second half.
+  expect((await api("PUT", `/media/${media.id}/audio-track`, { audioTrack: 1 })).status).toBe(200);
+  const rms1 = await playRms("1");
+  expect(rms1[0]).toBeLessThan(0.01);
+  expect(rms1[3]).toBeGreaterThan(0.05);
+
+  // All tracks mixed: loud in both halves.
+  expect((await api("PUT", `/media/${media.id}/audio-track`, { audioTrack: "all" })).status).toBe(200);
+  const rmsAll = await playRms("all");
+  expect(rmsAll[0]).toBeGreaterThan(0.05);
+  expect(rmsAll[3]).toBeGreaterThan(0.05);
+});

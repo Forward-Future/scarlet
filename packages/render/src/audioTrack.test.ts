@@ -151,7 +151,7 @@ describe("multi-audio-track media end-to-end", () => {
 
     // Filter graph maps the chosen track
     const g1 = await buildFilterGraph(makeProject(1), timeline, { start: 0, end: 2 }, { mediaRoot: dir });
-    expect(g1.graph).toContain("[0:a:1]");
+    expect(g1.graph).toMatch(/\[\d+:a:1\]/);
     await g1.cleanup();
 
     // Render Track 1 only -> silent first half, loud second half

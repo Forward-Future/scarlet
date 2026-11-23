@@ -85,7 +85,7 @@ export interface RenderAdapter {
     hdr?: "hlg" | "pq";
     /** Only this area of the picture, as fractions of it, and labelled percent lines over it. */
     area?: [number, number, number, number]; grid?: { width: number; height: number } }): Promise<Buffer>;
-  makeProxy(input: string, output: string, opts: { height: number; audioTrack?: MediaAsset["audioTrack"]; checkpointDir?: string; range?: TimeRange; hwaccel?: RenderOptions["hwaccel"]; signal?: AbortSignal; onProgress?: (p: number) => void; onFallback?: (stage: "decode" | "encode") => void }): Promise<void>;
+  makeProxy(input: string, output: string, opts: { height?: number; audioTrack?: MediaAsset["audioTrack"]; checkpointDir?: string; range?: TimeRange; hwaccel?: RenderOptions["hwaccel"]; signal?: AbortSignal; onProgress?: (p: number) => void; onFallback?: (stage: "decode" | "encode") => void }): Promise<void>;
   /** True when footage proxies can be encoded on the GPU. The fallback adapter never can. */
   hardwareProxies?(hwaccel: RenderOptions["hwaccel"]): Promise<boolean>;
   renderRange(project: Project, timeline: Timeline, range: TimeRange, outputPath: string, opts: RenderOptions): Promise<void>;
@@ -211,12 +211,13 @@ async function extractFrame(path: string, t: number, opts: { width: number; sign
 }
 
 async function makeProxy(input: string, output: string, opts: Parameters<RenderAdapter["makeProxy"]>[2]) {
-  const h = Math.max(2, Math.round(opts.height / 2) * 2);
+  const h = Math.max(2, Math.round((opts.height ?? 540) / 2) * 2);
   // The preview plays the track the editor chose, or every track mixed, named by number: left to itself FFmpeg plays
   // the stream with the most channels.
   const probed = await probeMedia(input).catch(() => undefined);
   const duration = probed?.duration;
-  const streams = probed ? [...probed.kind === "audio" ? [] : ["-map", "0:v:0"],
+  const audioOnly = probed?.kind === "audio";
+  const streams = probed ? [...audioOnly ? [] : ["-map", "0:v:0"],
     ...probed.hasAudio ? audioMapArgs({ audioTrack: opts.audioTrack, audioStreamCount: probed.audioStreams?.length }, { channelLayout: "stereo", label: "pa" }) : []] : [];
   await ffmpeg(
     [
@@ -225,9 +226,11 @@ async function makeProxy(input: string, output: string, opts: Parameters<RenderA
       ...LOCAL_MEDIA_INPUT, "-i", input,
       ...(opts.range ? ["-t", String(opts.range.end - opts.range.start)] : []),
       ...streams,
-      "-vf", `scale=-2:'min(${h},ih)'`,
-      "-c:v", "libx264", "-preset", opts.range ? "ultrafast" : "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
-      "-force_key_frames", "expr:gte(t,n_forced*0.5)",
+      ...(audioOnly ? ["-vn"] : [
+        "-vf", `scale=-2:'min(${h},ih)'`,
+        "-c:v", "libx264", "-preset", opts.range ? "ultrafast" : "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
+        "-force_key_frames", "expr:gte(t,n_forced*0.5)",
+      ]),
       "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-y", output,
     ],
     { signal: opts.signal, onProgress: opts.onProgress, duration },

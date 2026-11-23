@@ -95,11 +95,11 @@ export function isPreparingMedia(m: MediaAsset): boolean {
 const nativeSupport = new Map<string, boolean>();
 
 /**
- * A video with several audio tracks plays from its preview, made of the track Scarlet hears (or all of them mixed): its
- * original would play whichever track the player picks.
+ * A recording with several audio tracks plays from its preview, made of the track Scarlet hears (or all of them mixed):
+ * its original would play whichever track the player picks.
  */
 export function playsChosenTrack(media: MediaAsset): boolean {
-  return media.kind === "video" && (media.audioStreams?.length ?? 0) > 1;
+  return (media.kind === "video" || media.kind === "audio") && (media.audioStreams?.length ?? 0) > 1;
 }
 
 export function canPlayOriginal(media: MediaAsset): boolean {
