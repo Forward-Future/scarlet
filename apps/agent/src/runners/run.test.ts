@@ -116,7 +116,9 @@ rl.on("line", line => {
     if (process.env.FAKE_ACP_SCRIPT_TURNS) {
       const turns = JSON.parse(process.env.FAKE_ACP_SCRIPT_TURNS);
       const turn = turns[prompts++] ?? {};
-      const transcriptPath = join(process.env.HOME || process.env.USERPROFILE, ".gemini", "antigravity-cli", "brain", "g1", ".system_generated", "logs", "transcript.jsonl");
+      const geminiDirAt = process.argv.indexOf("--gemini-dir");
+      const geminiDir = geminiDirAt > 0 ? process.argv[geminiDirAt + 1] : join(process.env.HOME || process.env.USERPROFILE, ".gemini");
+      const transcriptPath = join(geminiDir, "antigravity-cli", "brain", "g1", ".system_generated", "logs", "transcript.jsonl");
       mkdirSync(dirname(transcriptPath), { recursive: true });
       const steps = [...(turn.steps ?? [])];
       const runNext = () => {
@@ -715,7 +717,8 @@ describe("runGemini", { timeout: 20_000 }, () => {
       ["result", "Adding captions."],
     ]);
     expect(events[2]!.data).toEqual({ kind: "tool_refused", harnessTool: "bash" });
-    expect(await args()).toEqual(["acp", "--sandbox", "--disable-telemetry"]);
+    // agy keeps its settings in the run's own folder beside the task folder, so the user's personal GEMINI.md stays out.
+    expect(await args()).toEqual(["acp", "--sandbox", "--disable-telemetry", "--gemini-dir", `${cwd}.gemini`]);
     // No GEMINI.md: agy cuts a rule file off at 24,000 bytes. The prompt is the session's own.
     await expect(readFile(join(cwd, "GEMINI.md"), "utf8")).rejects.toThrow();
 
