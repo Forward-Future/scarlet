@@ -54,6 +54,7 @@ export const scarletRenderAdapter: RenderAdapter = {
       width: fields.width,
       height: fields.height,
       hasAudio: probe.hasAudio,
+      ...(fields.audioStreams ? { audioStreams: fields.audioStreams } : {}),
       hasAlpha: probe.hasAlpha,
       color: fields.color,
       kind,
@@ -63,8 +64,13 @@ export const scarletRenderAdapter: RenderAdapter = {
 
   hashFile: R.hashFile,
 
-  extractWaveformFull(path, duration, pointsPerSecond, onProgress, signal) {
-    return R.extractWaveformFull(path, duration, pointsPerSecond, { onProgress, signal });
+  extractWaveformFull(path, duration, pointsPerSecond, onProgress, signal, audio) {
+    return R.extractWaveformFull(path, duration, pointsPerSecond, {
+      onProgress,
+      signal,
+      audioTrack: audio?.audioTrack,
+      audioStreamCount: audio?.audioStreamCount,
+    });
   },
 
   waveformFromCache(cache: WaveformCache, from: number, to: number, points: number): WaveformData {

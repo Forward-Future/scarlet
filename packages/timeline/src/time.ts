@@ -1,4 +1,7 @@
-import type { Clip, MediaAsset, MediaClip, Project, Timeline, TimeRange, Track } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { Clip, MediaClip, Timeline, Track } from "./timelineSchema.js";
+import type { Project } from "./projectSchema.js";
 import { firstIndexBy } from "./intervals.js";
 
 export function clipDuration(clip: Clip): number {
@@ -176,7 +179,7 @@ export function clipsAt(timeline: Timeline, t: number): Array<{ track: Track; cl
 }
 
 /** Whole seconds as hours, minutes and seconds. */
-export function hms(whole: number): { h: number; m: number; s: number } {
+function hms(whole: number): { h: number; m: number; s: number } {
   const t = Math.max(0, Math.floor(whole));
   return { h: Math.floor(t / 3600), m: Math.floor((t % 3600) / 60), s: t % 60 };
 }

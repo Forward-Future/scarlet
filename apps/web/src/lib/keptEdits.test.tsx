@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startAppLog, stopAppLog } from "./appLog";
 import { editKey, keepEdits, reviewKey, unkeepEdits, useKeptEdits } from "./keptEdits";
-import { useReviewed } from "../components/review/ThreadEdits";
+import { useReviewed } from "../components/review/threadEditState";
 import { api } from "./client";
 import type { Thread } from "@scarlet/shared";
 import { act } from "react";

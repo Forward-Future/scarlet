@@ -5,6 +5,9 @@ import { IS_MOCK } from "../../lib/client";
 import { Icon } from "../ui/primitives";
 import { ConnectionStatus } from "./StatusIndicators";
 
+/** A menu's rows the keys can land on. */
+const ENABLED_ITEM = '[role="menuitem"]:not(:disabled)';
+
 /** `description` explains a visual mark. `floating` lets the menu escape a scrolling container. */
 export function Dropdown({ button, children, align = "left", width = 260, label, above = false, description, floating = false }: { button: ReactNode; children: (close: () => void) => ReactNode; align?: "left" | "right"; width?: number; label: string; above?: boolean; description?: string; floating?: boolean }) {
   const [open, setOpen] = useState(false);
@@ -12,6 +15,8 @@ export function Dropdown({ button, children, align = "left", width = 260, label,
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const contains = (target: Node | null) => ref.current?.contains(target) || menu.current?.contains(target);
+  /** On the next frame, once the menu that just opened is drawn, the keyboard starts on its first row. */
+  const focusFirstItem = () => requestAnimationFrame(() => menu.current?.querySelector<HTMLElement>(ENABLED_ITEM)?.focus());
   // Whether the row being chosen was pressed with the pointer: a click carries a count, a key doesn't.
   const pointer = useRef(false);
   useEffect(() => {
@@ -84,12 +89,12 @@ export function Dropdown({ button, children, align = "left", width = 260, label,
       if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key) || e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
       // A panel one of the rows opened, such as the model selector, has its own arrow keys.
       if (menu.current?.querySelector('[role="dialog"]')?.contains(e.target as Node)) return;
-      const items = Array.from(menu.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []);
+      const items = Array.from(menu.current?.querySelectorAll<HTMLElement>(ENABLED_ITEM) ?? []);
       if (!open) {
         if (e.target !== trigger.current || e.key !== "ArrowDown") return;
         e.preventDefault();
         setOpen(true);
-        requestAnimationFrame(() => menu.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus());
+        focusFirstItem();
       } else if (items.length) {
         e.preventDefault();
         e.stopPropagation();
@@ -101,7 +106,7 @@ export function Dropdown({ button, children, align = "left", width = 260, label,
     }}>
       <button ref={trigger} type="button" aria-haspopup="menu" aria-expanded={open} aria-label={label} aria-description={description} onClick={() => {
         setOpen(!open);
-        if (!open && floating) requestAnimationFrame(() => menu.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus());
+        if (!open && floating) focusFirstItem();
       }} className="inline-flex items-center rounded-md hover:bg-raised focus-visible:bg-raised">
         {button}
       </button>

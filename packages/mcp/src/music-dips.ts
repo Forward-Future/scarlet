@@ -33,7 +33,7 @@ export interface DipReport {
  * leave. The dips take the place of the clip's earlier keyframes. Speech closer than `minGap` shares a dip, so the level
  * comes back up only in longer pauses.
  */
-export function dipStep(on: Timeline, step: Duck, words: readonly TimeRange[]): { op: TimelineOp; report: DipReport } {
+function dipStep(on: Timeline, step: Duck, words: readonly TimeRange[]): { op: TimelineOp; report: DipReport } {
   const found = findClipLocation(on, step.clipId);
   if (!found || found.clip.kind !== "media") throw new Error(`duckUnderSpeech: no media clip ${step.clipId} on the timeline.`);
   const clip = found.clip;

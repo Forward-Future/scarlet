@@ -5,12 +5,13 @@ import type { Change } from "@scarlet/timeline";
 import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task } from "@scarlet/shared";
 import { resumeRunChoice, useAgentAvailability } from "../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../components/review/RunBundle";
-import { editGroups, useDeferred, useReviewed, useRevising, useThreadEdits } from "../../components/review/ThreadEdits";
+import { editGroups, useDeferred, useReviewed, useRevising, useThreadEdits } from "../../components/review/threadEditState";
 import { Icon } from "../../components/ui/primitives";
 import { TipButton } from "../../components/ui/TipButton";
 import { errorMessage } from "../../lib/client";
-import { parseTimestamp } from "../../lib/format";
+import { clock as clockLabel, parseTimestamp } from "../../lib/format";
 import { editKey } from "../../lib/keptEdits";
+import { markedFrameUrl } from "../../lib/markedFramePictures";
 import { isDialoguePass, isOpenPass, openPass, waitsToPlay } from "../../lib/passCalls";
 import { aboutOne, aimOf, closingReply, notesStillAsked, threadRuns, waitingToStart, type Run } from "../../lib/requestRuns";
 import { runIsActive, spentLabel } from "../../lib/taskRun";
@@ -20,8 +21,13 @@ import { useProjectStore } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
 import { useUiStore } from "../../stores/ui";
 import { PassSummary, ThreadResult } from "./PassSummary";
-import { MarkedFrameOnRequest } from "./SourceProvenance";
-import { callRowKey, isWorking, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
+import { callRowKey, isWorking, listedBefore, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
+
+/** "Learned for dialogue-pass: ", or what it was learned from first: "Learned from 4 cuts you rejected, for dialogue-pass: ". */
+function learnedLead(learning: Learning, skill: string | undefined): string {
+  const from = learning.learnedFrom?.decisions.length ? `from ${learning.learnedFrom.decisions.length} ${learning.learnedFrom.what}` : "";
+  return from ? `Learned ${from}${skill ? `, for ${skill}` : ""}: ` : skill ? `Learned for ${skill}: ` : "Learned: ";
+}
 
 /**
  * A rule Scarlet picked up from this request, under what the request did: what the editor decided that it came from, if
@@ -29,12 +35,6 @@ import { callRowKey, isWorking, noop, PAUSED_HINT, tagOf, type ChatActions, type
  * then Review, which opens Learnings at it, and Decline, which turns the rule down from here. The line goes once the
  * editor decides, here or in Learnings.
  */
-/** "Learned for dialogue-pass: ", or what it was learned from first: "Learned from 4 cuts you rejected, for dialogue-pass: ". */
-function learnedLead(learning: Learning, skill: string | undefined): string {
-  const from = learning.learnedFrom?.decisions.length ? `from ${learning.learnedFrom.decisions.length} ${learning.learnedFrom.what}` : "";
-  return from ? `Learned ${from}${skill ? `, for ${skill}` : ""}: ` : skill ? `Learned for ${skill}: ` : "Learned: ";
-}
-
 function LearnedLine({ learning, onReview }: { learning: Learning; onReview?(id: string): void }) {
   const skill = useSkillsStore(s => s.skills.find(k => k.id === learning.skillId)?.name);
   // The line names the skill, so the library is read once if nothing has read it yet. A read that failed isn't asked
@@ -59,6 +59,15 @@ function LearnedLine({ learning, onReview }: { learning: Learning; onReview?(id:
         title="Don't learn this">Decline</button>
       {failed && <span className="simple-learned-failed" role="alert"> Couldn't decline. {failed}</span>}</span>
   </p>;
+}
+
+/** The frame the editor drew on for a request, with their marks, before their words in its band. */
+function MarkedFrameOnRequest({ projectId, task }: { projectId: string; task: Task }) {
+  const drawn = task.context.pictureMarks;
+  if (!drawn) return null;
+  const count = drawn.marks.length;
+  return <img className="unit-marked-frame" src={markedFrameUrl(projectId, drawn.attachmentId)} alt=""
+    title={`Marked frame ${clockLabel(drawn.time)} · ${count === 1 ? "1 mark" : `${count} marks`}`} />;
 }
 
 /**
@@ -187,7 +196,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   const owner = runs.find(run => run.attempts.some(t => passTasks.has(t.id)))
     ?? (pendingPass ? runs.find(run => !aboutOne(run) && run.attempts.some(t => t.id === waitingPass?.taskId)) ?? runs.find(run => !aboutOne(run)) : undefined)
     ?? runs[0];
-  const hasForYouRejected = rejected.some(e => !!e.wasCheck || passListed.current.has(editKey(e)) || e.previous.some(p => passListed.current.has(editKey(p))));
+  const hasForYouRejected = rejected.some(e => !!e.wasCheck || listedBefore(passListed.current, e));
   const hasRows = summed ? listed.length > 0 || hasForYouRejected || actions.pass?.threadId === thread.id || hasDecidedCalls : listed.length > 0 || hasForYouRejected;
   // With no line for the pass (it was thrown away), its list is closed: a pass staged again starts folded. A pass that
   // went in leaves the thread's edits, and the list of those still waiting on the editor stays open: their place in

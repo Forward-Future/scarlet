@@ -122,9 +122,24 @@ function validResultChars(value: unknown): value is number {
  */
 const HEARING_MODELS: Record<string, RegExp> = { codex: /-audio\b/i };
 
+/**
+ * Models that hear a WAV file opened through their harness's file viewer, where the harness also exposes third-party
+ * models that don't. `agy` (`agent: "gemini"`) offers Claude and GPT models alongside Gemini; only Gemini models hear
+ * WAV files opened there (2026-11-23: `agy` + `claude-opus-5-5` received `source_audio` WAVs it couldn't hear).
+ */
+const AUDIO_FILE_MODELS: Record<string, RegExp> = { gemini: /(?:^|\/)gemini\b/i };
+
 /** Whether this model hears audio in a tool's result, though its harness's others don't. */
 export function modelHearsAudio(agent: string | undefined, model: string | undefined): boolean {
   return !!(agent && model && Object.hasOwn(HEARING_MODELS, agent) && HEARING_MODELS[agent]!.test(model));
+}
+
+/** Whether this model hears a WAV file opened with its harness's file viewer. Unset model means the harness's default. */
+export function modelHearsAudioFiles(agent: string | undefined, model: string | undefined): boolean {
+  const known = agent && Object.hasOwn(KNOWN, agent) ? KNOWN[agent] : undefined;
+  if (!known?.audioFiles) return false;
+  if (!model) return true;
+  return !Object.hasOwn(AUDIO_FILE_MODELS, agent!) || AUDIO_FILE_MODELS[agent!]!.test(model);
 }
 
 /** Whether a run with these capabilities can hear a recording: in a tool's result, or as a file it opens itself. */
@@ -164,14 +179,18 @@ export function hearingModels(agents: ReadonlyArray<SignedInAgent>): Listener[] 
   const seen = new Set<string>();
   const out: Listener[] = [];
   for (const a of [...usable.filter(a => a.id === "gemini"), ...usable.filter(a => a.id !== "gemini")]) {
-    const models = a.id === "gemini" ? [a.model, ...(a.models ?? [])] : [a.model, ...(a.models ?? [])].filter(m => modelHearsAudio(a.id, m));
+    const listed = [a.model, ...(a.models ?? [])].filter((m): m is string => !!m);
+    const models = listed.filter(m => a.id === "gemini" ? modelHearsAudioFiles(a.id, m) : modelHearsAudio(a.id, m));
     for (const model of models) {
-      if (!model || seen.has(`${a.id}:${model}`)) continue;
+      if (seen.has(`${a.id}:${model}`)) continue;
       seen.add(`${a.id}:${model}`);
       out.push({ agent: a.id, model });
     }
     // Gemini whose CLI lists no models still hears, on its own default.
-    if (a.id === "gemini" && !models.some(Boolean)) out.push({ agent: "gemini" });
+    if (a.id === "gemini" && !listed.length && !seen.has("gemini:")) {
+      seen.add("gemini:");
+      out.push({ agent: "gemini" });
+    }
   }
   return out;
 }
@@ -193,8 +212,15 @@ export function chooseListener(agents: ReadonlyArray<SignedInAgent>, setting: st
  */
 export function listenerAmong(agents: ReadonlyArray<SignedInAgent>): Listener | undefined {
   const usable = agents.filter(a => a.installed && a.loggedIn !== false);
-  const gemini = usable.find(a => a.id === "gemini");
-  if (gemini) return { agent: "gemini", ...(gemini.model && { model: gemini.model }) };
+  for (const gemini of usable.filter(a => a.id === "gemini")) {
+    if (gemini.model) {
+      if (modelHearsAudioFiles("gemini", gemini.model)) return { agent: "gemini", model: gemini.model };
+      const heard = (gemini.models ?? []).find(m => modelHearsAudioFiles("gemini", m));
+      if (heard) return { agent: "gemini", model: heard };
+    } else if (!gemini.models?.length || gemini.models.some(m => modelHearsAudioFiles("gemini", m))) {
+      return { agent: "gemini" };
+    }
+  }
   for (const a of usable) {
     const model = [a.model, ...(a.models ?? [])].find(m => modelHearsAudio(a.id, m));
     if (model) return { agent: a.id, model };
@@ -204,7 +230,8 @@ export function listenerAmong(agents: ReadonlyArray<SignedInAgent>): Listener | 
 
 export function agentCapabilities(agent: string | undefined, override?: Partial<AgentCapabilities> | string, model?: string): AgentCapabilities {
   const known = (agent && Object.hasOwn(KNOWN, agent) && KNOWN[agent]) || UNKNOWN;
-  const base = modelHearsAudio(agent, model) ? { ...known, audio: true } : known;
+  let base = modelHearsAudio(agent, model) ? { ...known, audio: true } : known;
+  if (base.audioFiles && !modelHearsAudioFiles(agent, model)) base = { ...base, audioFiles: false };
   let extra: Partial<AgentCapabilities> = {};
   if (typeof override === "string" && override.trim()) {
     try {

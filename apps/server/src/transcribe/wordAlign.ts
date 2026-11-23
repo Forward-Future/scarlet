@@ -2,16 +2,16 @@ import { randomUUID } from "node:crypto";
 import { open, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { QUIET_PEAK, QUIET_RMS } from "@scarlet/mcp/gap-sound";
-import { speechActivityOf } from "@scarlet/render";
+import { speechActivityOf, type HeardAudio } from "@scarlet/render";
 import type { TimeRange, TranscriptSegment } from "@scarlet/timeline";
 import { humanDuration } from "../logText.js";
 import { extractWav } from "../render/ffmpeg.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 import { audioLane, type AudioLane, type AudioWork } from "../services/audioWork.js";
-import { readWavDataLayout } from "../util.js";
+import { readWavDataLayout, round3 } from "../util.js";
 import {
   alignGroup, applyTimings, alignmentGroups, CTC_LETTERS, SPANISH_CTC_LETTERS, FRAME_SAMPLES, framesFor, groupLabels, logSoftmax, MIN_SCORE,
-  planChunks, round, SAMPLE_RATE, stitchChunks, unplacedGaps, type AlignWord, type Emissions, type SoundIn, type WordTiming,
+  planChunks, SAMPLE_RATE, stitchChunks, unplacedGaps, type AlignWord, type Emissions, type SoundIn, type WordTiming,
 } from "./ctcAlign.js";
 import { audioWorker, type AudioRequest } from "./audioWorker.js";
 import { EmissionFile } from "./emissions.js";
@@ -282,7 +282,7 @@ export function alignWords(ctx: { paths: { root: string } }, wav: string | (() =
  * Keeps the provider's times when the aligner cannot run, and the words it had placed when it fails part way.
  */
 export async function alignTranscript(ctx: { paths: { root: string; tmp: string }; log(message: string): void },
-  input: { source: string; wav?: string; language?: string; segments: TranscriptSegment[]; signal: AbortSignal; work?: AudioWork;
+  input: { source: string; wav?: string; audio?: HeardAudio; language?: string; segments: TranscriptSegment[]; signal: AbortSignal; work?: AudioWork;
     /** Where this recording's emissions are kept, so its scan pages and a later transcript reuse them. */
     emissions?: string; resume?: AlignmentCheckpoint;
     /** Asked before each turn: something this alignment should let finish first, or nothing. */
@@ -299,7 +299,7 @@ export async function alignTranscript(ctx: { paths: { root: string; tmp: string 
   let decoded = !!input.wav;
   const audio = async () => {
     if (!decoded) {
-      await extractWav(source, wav, { signal });
+      await extractWav(source, wav, { signal, audio: input.audio });
       decoded = true;
     }
     return wav;
@@ -492,7 +492,7 @@ function place(em: Emissions, groups: AlignRequest["groups"], indices: number[],
     const timings = alignGroup(em, group.words, Math.max(group.start - MARGIN, previousEnd), group.end + MARGIN, alphabet, group.next);
     timings.forEach((t, i) => {
       if (!t) return;
-      out[g]![i] = { start: round(t.start), end: round(t.end), score: round(t.score) };
+      out[g]![i] = { start: round3(t.start), end: round3(t.end), score: round3(t.score) };
       if (t.score >= MIN_SCORE) previousEnd = Math.max(previousEnd, t.end);
     });
   }

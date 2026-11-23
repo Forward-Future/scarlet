@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Change } from "@scarlet/timeline";
-import { Task, type Render } from "./api.js";
+import type { Render } from "./api.js";
+import { Task } from "./tasks.js";
 import { beginRevision, restoredReviewState } from "./revisionState.js";
 
 const change = (fields: Record<string, unknown> = {}): Change => Change.parse({ id: "chg", projectId: "p", fromVersion: "v0", toVersion: "v1", description: "Cuts",
