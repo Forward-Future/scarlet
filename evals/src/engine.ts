@@ -6,7 +6,7 @@ import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs
 import { join } from "node:path";
 import { requireSecureEngineUrl } from "../../packages/shared/src/engineTransport.ts";
 import type { Change, MediaAsset, Project, Timeline, TimeRange } from "../../packages/timeline/src/index.ts";
-import type { Task } from "../../packages/shared/src/api.ts";
+import type { Task } from "../../packages/shared/src/tasks.ts";
 import type { EventLike, TaskLike } from "./metrics.ts";
 import { appSupportDir } from "./paths.ts";
 

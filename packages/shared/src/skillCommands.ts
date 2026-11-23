@@ -1,5 +1,6 @@
 /** Skill slash-command parsing and dialogue shortcut resolution. */
-import type { Skill, Task } from "./api.js";
+import type { Skill } from "./skills.js";
+import type { Task } from "./tasks.js";
 
 /**
  * What a request is, known when it is sent: a dialogue pass, or a request about one staged cut of a pass. It sets what

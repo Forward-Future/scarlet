@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Change, Note } from "@scarlet/timeline";
-import { Task } from "./api.js";
+import { Task } from "./tasks.js";
 import { aboutChange, buildThreads, callNumbers, countReviewDecisions, noteThread, openDialogueReview, requestText, sameRun, taskRunKind } from "./threads.js";
 import { threadRevision } from "./threadTimeline.js";
 

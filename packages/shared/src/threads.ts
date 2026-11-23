@@ -8,7 +8,7 @@
  * a task with the changes it produced, a revision task with the change it
  * revises, a feedback note with the attempts before and after it.
  */
-import { taskRecoveryAction, type Task } from "./api.js";
+import { taskRecoveryAction, type Task } from "./tasks.js";
 import { cutSummary, isPublishedCall, type Author, type Change, type Note } from "@scarlet/timeline";
 import { editsVideo, openDialogueReview, sameRun } from "./taskQueue.js";
 import { waitingCalls } from "./passCalls.js";

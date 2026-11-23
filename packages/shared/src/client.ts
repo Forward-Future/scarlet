@@ -11,64 +11,14 @@ import type { ThreadEdit } from "./threadTimeline.js";
 import type { StorageCleanup, StorageProject } from "./storage.js";
 import type { AcousticWordsRequest, DialogueRangeRequest, DialogueScanRequest, DialogueWindowRequest, DialogueDetections, SourceAudioRequest, SoundPictureRequest, SoundPictureLayout, SheetRequest, TimelinePicturesRequest, InspectionReviewRequest, InspectionResult, PictureActivityRequest, PictureActivityWindow, RepeatAuditRequest, RepeatAuditResult } from "./inspection.js";
 import type { Author, Change, CutAssessment, CutReview, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript, TranscriptWord } from "@scarlet/timeline";
-import type {
-  ActivityEntry,
-  MusicReading,
-  KeepEditsRequest,
-  UnkeepEditsRequest,
-  KeptEdit,
-  AgentHost,
-  ApproveResponse,
-  TrashedProject,
-  CompleteTaskRequest,
-  CreateNoteRequest,
-  CreateTaskRequest,
-  RewordTaskRequest,
-  FullRenderKeys,
-  PlaybackCacheStatus,
-  SourceCacheStatus,
-  ProjectDetail,
-  ProjectSummary,
-  ProposeChangeRequest,
-  Render,
-  RenderFileInfo,
-  RenderRequest,
-  ReviseRequest,
-  ServerSettings,
-  Skill,
-  SkillVersion,
-  GraphicRenderResponse,
-  SaveStyleGuideRequest,
-  TaskAttachment,
-  RecordTaskUsageRequest,
-  Task,
-  TaskNote,
-  TaskEvent,
-  TaskPrompt,
-  TaskSkillDraft,
-  EditSkillRequest,
-  ApproveLearningRequest,
-  ReviseLearningRequest,
-  RunChoice,
-  Learning,
-  SuggestLearningRequest,
-  UpdateNoteRequest,
-  UsageGroupBy,
-  UsageResponse,
-  UpsertSkillRequest,
-  User,
-  VersionSummary,
-  WaveformResponse,
-  RetakeGroup,
-  DialogueCutsRequest,
-  JoinCrossfades,
-  FlagEditRequest,
-  CutChoicesRequest,
-  StagedCutRevision,
-  LocalModelStatus,
-  TelemetryUnavailable,
-  HandoffResponse,
-} from "./api.js";
+import type { ActivityEntry, MusicReading, TrashedProject, FullRenderKeys, PlaybackCacheStatus, SourceCacheStatus, ProjectDetail, ProjectSummary, Render, RenderFileInfo, RenderRequest, ServerSettings, User, WaveformResponse, RetakeGroup, LocalModelStatus, TelemetryUnavailable, HandoffResponse } from "./api.js";
+import type { AgentHost, RunChoice } from "./agents.js";
+import type { CompleteTaskRequest, CreateTaskRequest, RewordTaskRequest, TaskAttachment, Task, TaskNote, TaskEvent, TaskPrompt, TaskSkillDraft } from "./tasks.js";
+import type { KeepEditsRequest, UnkeepEditsRequest, KeptEdit, ApproveResponse, CreateNoteRequest, ProposeChangeRequest, ReviseRequest, UpdateNoteRequest, VersionSummary, DialogueCutsRequest, JoinCrossfades, FlagEditRequest, CutChoicesRequest, StagedCutRevision } from "./changes.js";
+import type { ApproveLearningRequest, ReviseLearningRequest, Learning, SuggestLearningRequest } from "./learnings.js";
+import type { RecordTaskUsageRequest, UsageGroupBy, UsageResponse } from "./usage.js";
+import type { GraphicRenderResponse, SaveStyleGuideRequest } from "./graphics.js";
+import type { Skill, SkillVersion, EditSkillRequest, UpsertSkillRequest } from "./skills.js";
 
 /**
  * File extension for a recorded clip. Chromium (Windows) records webm/opus;
