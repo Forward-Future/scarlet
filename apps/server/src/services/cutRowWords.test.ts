@@ -22,6 +22,9 @@ it("names a cut saved without a summary by the words beside it, so a pass's rows
     // Scarlet's own summary, and an edit that isn't named by its kind, stay as they are.
     edit("Cut the repeat", 0.9, 2.4, { summary: "Cut the repeat" }),
     edit("Punched in on Matt", 3, 4, { beforeCut: undefined }),
+    // Footage a video built from the pieces to keep left out, which Scarlet named nothing for: by its words, or the ones before it.
+    edit("Cut", 0.95, 2.4),
+    edit("Cut", 4.95, 5),
   ], () => before).map(e => e.label);
   expect(rows).toEqual([
     "Shortened the pause after “okay”",
@@ -29,6 +32,8 @@ it("names a cut saved without a summary by the words beside it, so a pass's rows
     "Shortened the pause after “and it”",
     "Cut the repeat",
     "Punched in on Matt",
+    "Cut “the model the”",
+    "Cut after “and it”",
   ]);
 });
 

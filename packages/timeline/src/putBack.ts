@@ -1,4 +1,5 @@
-import type { Clip, MediaClip, Timeline, TimeRange } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { Clip, MediaClip, Timeline } from "./timelineSchema.js";
 import { shiftClip, straightenCrossfades } from "./ops.js";
 import { clipEnd } from "./time.js";
 

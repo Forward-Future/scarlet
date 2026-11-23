@@ -1,8 +1,6 @@
 import { useEffect, type ComponentProps } from "react";
-import type { Task } from "@scarlet/shared";
 import { Composer } from "../../components/agent/Composer";
 import { clock as clockLabel } from "../../lib/format";
-import { markedFrameUrl } from "../../lib/markedFramePictures";
 import { usePlayerStore } from "../../stores/player";
 import { pointOf, useUiStore } from "../../stores/ui";
 
@@ -33,13 +31,4 @@ export function WorkspaceComposer({ newEdit, playerVersion, mediaId, ...props }:
   }, [point, written, speaking, playerVersion, mediaId]);
   const pointTag = point && !point.fromMessage ? `At ${clockLabel(point.time)}` : undefined;
   return <Composer {...props} targetTag={props.targetTag ?? pointTag} targetIsPoint={!props.targetTag && !!pointTag} />;
-}
-
-/** The frame the editor drew on for a request, with their marks, before their words in its band. */
-export function MarkedFrameOnRequest({ projectId, task }: { projectId: string; task: Task }) {
-  const drawn = task.context.pictureMarks;
-  if (!drawn) return null;
-  const count = drawn.marks.length;
-  return <img className="unit-marked-frame" src={markedFrameUrl(projectId, drawn.attachmentId)} alt=""
-    title={`Marked frame ${clockLabel(drawn.time)} · ${count === 1 ? "1 mark" : `${count} marks`}`} />;
 }

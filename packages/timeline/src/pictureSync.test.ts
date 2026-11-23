@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { applyOps } from "./ops.js";
 import { emptyTimeline, makeMediaClip } from "./builders.js";
-import type { Clip, MediaAsset, MediaClip, Timeline } from "./schema.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { Clip, MediaClip, Timeline } from "./timelineSchema.js";
 import { pictureSyncOps } from "./pictureSync.js";
 
 const media: MediaAsset[] = [

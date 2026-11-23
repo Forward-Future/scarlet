@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import type { MediaAsset, MediaKind } from "@scarlet/timeline";
+import type { AudioStreamInfo, MediaAsset, MediaKind } from "@scarlet/timeline";
 import { LOCAL_MEDIA_INPUT, failureReason, resolveFfprobe, runCapture } from "./exec.js";
 import { pictureColorOf, type PictureColor } from "./hdr.js";
 
@@ -28,6 +28,8 @@ export interface ProbeResult {
   hasVideo: boolean;
   videoStreamCount?: number;
   hasAudio: boolean;
+  /** All audio streams in the container, in stream order (`0:a:0`, `0:a:1`, ...). */
+  audioStreams?: AudioStreamInfo[];
   /** Pixel format carries an alpha plane (png with transparency, ProRes 4444...). */
   hasAlpha: boolean;
   /** True for image2/png_pipe style demuxers or single-frame "video" streams. */
@@ -198,7 +200,21 @@ export async function probeMedia(
   // Ignore cover-art "video" streams in audio files.
   const videoStreams = streams.filter(s => s.codec_type === "video");
   const video = videoStreams.find(s => !s.disposition?.attached_pic);
-  const audio = streams.find((s) => s.codec_type === "audio");
+  const audioList = streams.filter((s) => s.codec_type === "audio");
+  const audio = audioList[0];
+  const audioStreams: AudioStreamInfo[] = audioList.map((s, index) => {
+    const rate = s.sample_rate ? Number(s.sample_rate) : undefined;
+    const lang = s.tags?.language?.trim();
+    const title = s.tags?.title?.trim();
+    return {
+      index,
+      ...(s.codec_name ? { codec: s.codec_name } : {}),
+      ...(s.channels && s.channels > 0 ? { channels: s.channels } : {}),
+      ...(rate && Number.isFinite(rate) && rate > 0 ? { sampleRate: rate } : {}),
+      ...(lang && lang !== "und" ? { language: lang } : {}),
+      ...(title ? { title: title.slice(0, 80) } : {}),
+    };
+  });
 
   let duration = Number(json.format?.duration);
   if (!Number.isFinite(duration)) {
@@ -238,6 +254,7 @@ export async function probeMedia(
     hasVideo: !!video,
     videoStreamCount: videoStreams.length,
     hasAudio: !!audio,
+    ...(audioStreams.length ? { audioStreams } : {}),
     hasAlpha: (!!video?.pix_fmt && ALPHA_PIX_FMTS.test(video.pix_fmt)) ||
       (video?.tags?.alpha_mode ?? video?.tags?.ALPHA_MODE) === "1",
     isStillImage,
@@ -311,6 +328,7 @@ export function probeToAssetFields(probe: ProbeResult) {
     width: probe.width || undefined,
     height: probe.height || undefined,
     hasAudio: probe.hasAudio,
+    ...(probe.audioStreams && probe.audioStreams.length > 1 ? { audioStreams: probe.audioStreams } : {}),
     hasAlpha: probe.hasAlpha,
   };
 }

@@ -11,6 +11,7 @@ import { usePictureWait } from "../components/player/usePictureWait";
 import { TimelineScrubber } from "../components/review/TimelineScrubber";
 import { TimelineWaveform } from "../components/review/TimelineWaveform";
 import { FramingPreview } from "../components/review/FramingPreview";
+import { ReviewActions } from "../components/review/ReviewActions";
 import { WindowActions } from "../components/shell/WorkspaceNavigation";
 import { api } from "../lib/client";
 import { buildDb, mc, PRJ } from "../lib/mock/fixtures";
@@ -1099,6 +1100,40 @@ it("keeps a playing source on its file while preparing the newly selected previe
   } finally { vi.useRealTimers(); }
 });
 
+it("yields plain L to an open Later (L) to-do card while keeping Shift+L and normal L playback speed", async () => {
+  const noop = () => {};
+  const defer = vi.fn(), done = vi.fn();
+  usePlayerStore.setState({ rate: 1 });
+  const pressKey = (key: string, init: KeyboardEventInit = {}) =>
+    act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init })); });
+
+  // CutPreview mounts BEFORE ReviewActions (just like SimpleWorkspace) with playable media.
+  await show(<MemoryRouter>
+    <CutPreview simple={{ marks: [] }} workingCache={{ cache: { state: "ready", url: "/before.mp4" }, startCache: noop }}
+      active hasCut spot={0} autoPlaySource={false} onRetryDraft={noop} onMedia={noop} />
+    <ReviewActions revise={defer} reviseLabel="Later" reviseKey="L" approve={done} approveLabel="Done" approveKey="D" />
+  </MemoryRouter>);
+
+  // Plain L triggers Later without changing playback speed.
+  await pressKey("l");
+  expect(defer).toHaveBeenCalledTimes(1);
+  expect(usePlayerStore.getState().rate).toBe(1);
+
+  // Shift+L still slows playback and does not defer the to-do.
+  await pressKey("L", { shiftKey: true });
+  expect(defer).toHaveBeenCalledTimes(1);
+  expect(usePlayerStore.getState().rate).toBe(0.75);
+
+  // Without a Later (L) to-do card open, plain L speeds up playback as usual.
+  await show(<MemoryRouter>
+    <CutPreview simple={{ marks: [] }} workingCache={{ cache: { state: "ready", url: "/before.mp4" }, startCache: noop }}
+      active hasCut spot={0} autoPlaySource={false} onRetryDraft={noop} onMedia={noop} />
+  </MemoryRouter>);
+  await pressKey("l");
+  expect(usePlayerStore.getState().rate).toBe(1);
+  await show(null);
+});
+
 it("shows an export again after a reload or restart, saves it to the destination chosen before, and releases it", async () => {
   const owner = "5b0f0c52-6d0f-4f0e-9a52-3f1f7a1f0c11";
   const kept: Render = { ...data.renders[0]!, id: "kept-export", version: data.project.head!, kind: "export", quality: "preview", range: { start: 0, end: 4 },
@@ -1252,7 +1287,7 @@ it("labels a saved file from an earlier edit and still exports the current video
   expect(reveal).toHaveBeenCalledWith("/chosen/cut.mp4");
   expect(button("Close")).toBeUndefined();
   expect(button("Cancel")).toBeDefined();
-  expect(button("Advanced export")).toBeDefined();
+  expect(button("For Resolve, Final Cut or Premiere…")).toBeDefined();
   expect(container.querySelector('[role="alert"]')?.textContent ?? "").toBe("");
   // Cancelling the chooser leaves the last successful file available.
   choose.mockResolvedValueOnce(null);
@@ -1303,19 +1338,21 @@ it("asks for the file's name once, in the system's Save dialog, which opens on t
   expect(container.textContent).toContain("Disk full");
   expect(exportButton()!.textContent).toBe("Retry");
   expect(exportButton()!.disabled).toBe(false);
-  // Advanced export saves a folder, named for the project, for finishing the edit in another app.
-  await click(buttonByText("Advanced export")!);
+  // For Resolve, Final Cut or Premiere saves a folder, named for the project, for finishing the edit in another app.
+  await click(buttonByText("For Resolve, Final Cut or Premiere…")!);
   await click(exportButton()!);
   expect(choose).toHaveBeenLastCalledWith(data.project.name);
 });
 
-it("offers a folder for another app under Advanced export, saying what it holds and what doesn't carry over", async () => {
+it("offers a folder for another app under For Resolve, Final Cut or Premiere, saying what it holds and what doesn't carry over", async () => {
   const choose = vi.spyOn(desktop, "chooseVideoExport").mockResolvedValue({ ticket: 7, path: "/Users/me/Exports/Interview" });
   const handoff = vi.spyOn(api, "handoff").mockResolvedValue({ files: [{ path: "Interview.fcpxml", text: "<fcpxml/>" }], mediaBytes: 0 });
   const save = vi.spyOn(desktop, "finishFolderExport").mockResolvedValue("/Users/me/Exports/Interview");
   vi.spyOn(desktop, "discardVideoExport").mockResolvedValue();
   await show(<ExportSheet hasCut onClose={() => {}} />);
-  await click(buttonByText("Advanced export")!);
+  await click(buttonByText("For Resolve, Final Cut or Premiere…")!);
+  // The sheet is named for the apps it is for.
+  expect(container.textContent).toContain("Export for Resolve, Final Cut or Premiere");
   // The video's own settings go; the folder's contents come instead.
   expect(container.querySelector("#export-range")).toBeNull();
   expect(container.querySelector("details")).toBeNull();
@@ -1330,12 +1367,12 @@ it("offers a folder for another app under Advanced export, saying what it holds 
   expect(buttonByText("Show in folder")).toBeTruthy();
 });
 
-it("goes back from Advanced export to the video's settings", async () => {
+it("goes back from the folder for Resolve, Final Cut or Premiere to the video's settings", async () => {
   await show(<ExportSheet hasCut onClose={() => {}} />);
-  await click(buttonByText("Advanced export")!);
+  await click(buttonByText("For Resolve, Final Cut or Premiere…")!);
   await click(buttonByText("Back")!);
   expect(container.querySelector("#export-range")).not.toBeNull();
-  expect(buttonByText("Advanced export")).toBeTruthy();
+  expect(buttonByText("For Resolve, Final Cut or Premiere…")).toBeTruthy();
 });
 
 it("exports captions as a sidecar, keeps the range, and does not start a video render", async () => {

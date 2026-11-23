@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseColor } from "./color.js";
-import { RenderColor } from "./schema.js";
+import { RenderColor } from "./schemaBase.js";
 
 describe("parseColor", () => {
   it("reads a named color in any case, with space around it", () => {

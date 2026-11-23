@@ -5,7 +5,7 @@
 import { clipDuration, sourceToTimeline, timelineToSource, type MediaClip, type Project, type TimeRange, type Timeline } from "@scarlet/timeline";
 import { normalizeTranscriptToken } from "@scarlet/shared";
 import { isTag, round2, round3 } from "./analysis.js";
-import { SPEECH_DBFS, dialogueAudioStream, gaps, pageAt, pageReaches, plain, wordMargin, type JoinPage, type Word } from "./dialogue-acoustics.js";
+import { DIP_DBFS, SPEECH_DBFS, dialogueAudioStream, gaps, pageAt, pageReaches, plain, wordMargin, type JoinPage, type Word } from "./dialogue-acoustics.js";
 import { dialogueClips } from "./dialogue-kept-words.js";
 
 /** Two deliveries of one word match on their sound when their levels follow each other at least this closely (Pearson r). */
@@ -87,11 +87,17 @@ export function sameWordJoin(tl: Timeline, project: Pick<Project, "media" | "set
   while (onset < db.length && centre(onset) < second.end && db[onset]! <= SPEECH_DBFS) onset++;
   // The range ends in that pause, before the second delivery sounds.
   if (onset >= db.length || centre(onset) >= second.end || tE > from + onset * step + 1e-6) return;
-  const length = Math.min(15, Math.max(5, Math.round((second.end - centre(onset)) / step) + 2));
-  const heard = Array.from({ length }, (_, k) => level(onset + k));
+  // Keep the match window inside the second delivery rather than spilling into the next word, where a gap after one
+  // take and not the other can pull the match onto the pause before the next word. For short words (< 5 buckets),
+  // include up to two buckets of the word's rising edge out of room tone.
+  const wordEnd = Math.min(onset + 15, Math.round((second.end - from) / step));
+  let matchStart = onset;
+  while (wordEnd - matchStart < 5 && matchStart > 0 && onset - matchStart < 2 && db[matchStart - 1]! > DIP_DBFS) matchStart--;
+  const length = Math.min(15, Math.max(5, wordEnd - matchStart));
+  const heard = Array.from({ length }, (_, k) => level(matchStart + k));
   if (heard.some(v => v === undefined)) return;
   const correlation = (shift: number) => {
-    const before = heard.map((_, k) => level(onset + k - shift));
+    const before = heard.map((_, k) => level(matchStart + k - shift));
     if (before.some(v => v === undefined)) return -1;
     const mean = (v: number[]) => v.reduce((a, b) => a + b, 0) / v.length;
     const x = before as number[], y = heard as number[], mx = mean(x), my = mean(y);
@@ -113,7 +119,7 @@ export function sameWordJoin(tl: Timeline, project: Pick<Project, "media" | "set
   // On "which is nice you can see the rough, you can see the shadows" that put the cut 0.04 s into the first "you":
   // the editor heard himself start a word before the cut, and picked the frame nearest the matched start by ear. That
   // frame is within the range he called clean on the first line too (2026-11-17). Scarlet still can't hear either.
-  const begins = from + onset * step - lag, fps = project.settings.fps;
+  const begins = from + matchStart * step - lag, fps = project.settings.fps;
   const start = Math.round(sourceToTimeline(out, begins) * fps) / fps, source = timelineToSource(out, start), end = range.end;
   if (source >= middle(first) || source <= out.sourceIn || end - start < 2 / fps) return;
   const span = (clip: MediaClip, w: Word) => ({ start: round3(sourceToTimeline(clip, w.start)), end: round3(sourceToTimeline(clip, w.end)) });

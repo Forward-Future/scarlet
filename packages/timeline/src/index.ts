@@ -1,5 +1,9 @@
 export * from "./color.js";
-export * from "./schema.js";
+export * from "./schemaBase.js";
+export * from "./mediaSchema.js";
+export * from "./timelineSchema.js";
+export * from "./projectSchema.js";
+export * from "./changeSchema.js";
 export * from "./time.js";
 export { firstIndex, firstIndexBy, intervalCandidates } from "./intervals.js";
 export * from "./ids.js";

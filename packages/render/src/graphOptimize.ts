@@ -79,7 +79,7 @@ function fittedSize(iw: number, ih: number, W: number, H: number, scale: number)
  * pixel of this clip: no alpha source, fade, opacity, keyframe, visual effect,
  * crop, rotation or offset, and a picture that fills the canvas.
  */
-export function coversCanvas(clip: Clip, p: Placement, media: Map<string, MediaAsset>, W: number, H: number, picture?: ProbeResult): boolean {
+function coversCanvas(clip: Clip, p: Placement, media: Map<string, MediaAsset>, W: number, H: number, picture?: ProbeResult): boolean {
   if (clip.kind !== "media" && clip.kind !== "color") return false;
   if (clip.opacity < 1 || (clip.kind === "media" && clip.keyframes?.length)) return false;
   const tf = TransformSchema.parse(clip.transform ?? {});

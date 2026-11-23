@@ -43,7 +43,7 @@ export function mergeSinceLoad<T extends { id: string }>(snapshot: T[], base: T[
 }
 
 /** Project revisions order complete engine snapshots across the HTTP and realtime transports. */
-export function olderProject(incoming: Project, held: Project): boolean {
+function olderProject(incoming: Project, held: Project): boolean {
   return incoming.rowRevision !== undefined && held.rowRevision !== undefined && incoming.rowRevision < held.rowRevision;
 }
 
@@ -58,7 +58,7 @@ export function sameVersion(had: Timeline | null | undefined, read: Timeline | n
 /** The waits before the store tries again to read the open project. After the last it stops trying. */
 export const READ_AGAIN_AFTER_MS = [1000, 2000, 4000, 8000];
 
-export interface HeldProject {
+interface HeldProject {
   projectId: string;
   saved: Project;
   shown: Project;

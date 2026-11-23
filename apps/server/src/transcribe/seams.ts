@@ -80,7 +80,7 @@ export function segmentsWithin<W extends Timed>(segments: ReadonlyArray<Segment<
 }
 
 /** Words split by where their middle falls: before `seam` or from it on. */
-export function sideOfSeam<W extends Timed>(segments: ReadonlyArray<Segment<W>>, seam: number) {
+function sideOfSeam<W extends Timed>(segments: ReadonlyArray<Segment<W>>, seam: number) {
   return { before: segmentsWithin(segments, -Infinity, seam), after: segmentsWithin(segments, seam, Infinity) };
 }
 

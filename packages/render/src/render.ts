@@ -190,6 +190,14 @@ export async function renderRange(
     args = ["-y", ...graph.args, ...outputArgs, output];
   }
 
+  /** Render the range again with `changes`, keeping this attempt's notes, and say why. */
+  const retryWith = async (changes: Partial<RenderOptions>, why: string) => {
+    const fallback = await renderRange(project, timeline, range, output, { ...opts, ...changes });
+    // The second try reads the index again and may have said the same of it.
+    fallback.warnings.push(...notes.filter(note => !fallback.warnings.includes(note)), why);
+    return fallback;
+  };
+
   const started = Date.now();
   try {
     for (const file of opts.splits?.map(s => s.output) ?? [output]) await fs.mkdir(path.dirname(path.resolve(file)), { recursive: true });
@@ -212,19 +220,14 @@ export async function renderRange(
       });
     } catch (error) {
       if (!(error instanceof FfmpegError) || opts.signal?.aborted || hardwareEncoderFailure(error, encoder) || !args.includes("-hwaccel")) throw error;
-      const fallback = await renderRange(project, timeline, range, output, { ...opts, softwareDecode: true });
-      // The second try reads the index again and may have said the same of it.
-      fallback.warnings.push(...notes.filter(note => !fallback.warnings.includes(note)),
+      return await retryWith({ softwareDecode: true },
         `Hardware decoding was unavailable for this range (${failureReason(error)}); used software decoding.`);
-      return fallback;
     }
     opts.onProgress?.(1);
   } catch (e) {
     if (proxyUsed && !opts.signal?.aborted && e instanceof FfmpegError && /no such file|invalid data|error opening input/i.test(e.stderr)) {
-      const fallback = await renderRange(project, timeline, range, output, { ...opts, pictureSource: undefined });
-      fallback.warnings.push(...notes.filter(note => !fallback.warnings.includes(note)),
+      return await retryWith({ pictureSource: undefined },
         `A preview copy could not be read for this range (${failureReason(e)}); rendered from the original files.`);
-      return fallback;
     }
     // The graph is the thing you need to debug a failed render; keep it with the error.
     if (e instanceof FfmpegError) e.message += `\n--- filter graph ---\n${graph.graph}`;
