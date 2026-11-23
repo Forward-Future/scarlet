@@ -316,7 +316,7 @@ export function SimpleWorkspace() {
   const cutDuration = useMemo(() => timeline && timelineDuration(timeline), [timeline]);
   // The timeline zooms to the place the player is on, as it does to any edit that opens, with the suggestion's band on it.
   const placeOnScreen = places[shownPlace];
-  const suggestionLine = placeOnScreen && focusAround(placeOnScreen, cutDuration ?? 0);
+  const suggestionLine = placeOnScreen && focusAround(placeOnScreen, cutDuration ?? 0, undefined, { undecided: true });
   const returningCall = revisionInput && listening?.changeId === pass?.id && listening?.index === revisionInput.index ? revisionInput : undefined;
   const priorReview = useCutReview(returningCall?.previous.id);
   const listenReview = returningCall ? priorReview : cutReview;
@@ -1429,23 +1429,29 @@ export function SimpleWorkspace() {
     : shownEdit ? `Showing “${shownEdit.label}” at ${clockLabel(reviewRange?.start ?? shownEdit.at ?? shownEdit.range.start)}`
     : chosenSource && source === chosenSource ? `Showing ${chosenSource.name}` : undefined;
   // A call's passage is shaded where its footage is on the working cut. One that can't be placed there shades nothing.
-  // A call's cut isn't in the video until the editor approves it, so its band is drawn as any cut's with a dashed edge.
+  // Anything still waiting on the editor's decision (an undecided call, suggestion, or flagged edit) gets a dashed edge;
+  // once decided, or for any settled edit, its edge is solid.
+  const callUndecided = !openCall || openCallBack || passChoices[openCall.index] === undefined;
+  const editUndecided = !!shownEdit?.check && !reviewed(shownEdit);
   const callFocus = listening ? callView ? callView.focus : heard && callTimeline && focusAround(heard, callDuration ?? 0, conflict ? "Current passage" : `Removed · ${lengthLabel(heard.end - heard.start)}`) : undefined;
-  const lineFocus = listening ? callFocus ? { ...callFocus, tone: "proposed" as const } : undefined
+  const editLine = shownEdit && !appliedCut && !shownEdit.beforeCut && !shownEdit.rejected && !reviewRange
+    ? threadTimeline.selectedMoment
+      ? editFocus({ ...shownEdit, range: momentRange(threadTimeline.selectedMoment) }, cutDuration ?? 0, `${threadTimeline.selectedMoment.edits.length} edits`)
+      : editFocus(shownEdit, cutDuration ?? 0)
+    : undefined;
+  const lineFocus = listening ? callFocus ? { ...callFocus, ...callUndecided && { undecided: true } } : undefined
     : places.length ? suggestionLine
-    : appliedCut ? focusAround(appliedCut, beforeDuration, `Removed · ${lengthLabel(appliedCut.end - appliedCut.start)}`, { playbackEnd: afterListen?.end })
+    : appliedCut ? focusAround(appliedCut, beforeDuration, `Removed · ${lengthLabel(appliedCut.end - appliedCut.start)}`, { undecided: editUndecided, playbackEnd: afterListen?.end })
     // Until the earlier version arrives, a line marks the join in the working cut and says how much came out there.
     : shownEdit?.beforeCut ? focusAround({ start: shownAt!, end: shownAt! }, cutDuration ?? 0,
-      `Removed · ${lengthLabel(shownEdit.beforeCut.removed.end - shownEdit.beforeCut.removed.start)}`)
+      `Removed · ${lengthLabel(shownEdit.beforeCut.removed.end - shownEdit.beforeCut.removed.start)}`, { undecided: editUndecided })
     // A rejected edit is out of the video: its band is where it was, outlined, over the video as it runs without it.
     : shownEdit?.rejected ? focusAround(shownEdit.at !== undefined ? { start: shownEdit.at, end: shownEdit.at } : shownEdit.range, cutDuration ?? 0, "Rejected", { tone: "kept" })
     // Any other edit is drawn for what it did: a sound fix or a zoom keeps its footage, so After plays it.
     // A doubt Scarlet left is the passage it asks the editor to look at or hear: amber, as what waits on them is.
     : reviewRange ? focusAround(reviewRange, cutDuration ?? 0, "Check", { tone: "check" })
     // A moment is drawn across all of its edits, as it plays.
-    : shownEdit ? threadTimeline.selectedMoment
-      ? editFocus({ ...shownEdit, range: momentRange(threadTimeline.selectedMoment) }, cutDuration ?? 0, `${threadTimeline.selectedMoment.edits.length} edits`)
-      : editFocus(shownEdit, cutDuration ?? 0) : undefined;
+    : editLine ? editUndecided ? { ...editLine, undecided: true } : editLine : undefined;
   const playerView = suggestion || appliedCut ? undefined : !listening && focusThread && !source ? threadTimeline : undefined;
   // Each applied edit's dot names it, says where it sits and how long it runs, and quotes the change it came from.
   const editDot = (thread: Thread, e: ThreadEdit, title: string, at: number): TimelineDot => {

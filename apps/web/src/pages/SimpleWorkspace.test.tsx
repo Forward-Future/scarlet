@@ -3672,7 +3672,7 @@ it("keeps the other calls' dots on the timeline while a call is open, so one pre
   // Waiting calls are dots only, as any cut is: nothing is drawn over the footage they'd take out until one is open.
   expect(container.querySelector(".simple-timeline-band, .simple-timeline-cut")).toBeNull();
   // The open call's dot is lit at the start of its band. The calls still waiting that are in view keep theirs. Its band
-  // is a cut's, with a dashed edge, since its footage is still in the video until it's approved.
+  // has a dashed edge while it still waits on the editor's decision.
   await openCall("Breath before the price.");
   expect(container.querySelector(".simple-timeline-band")?.classList.contains("is-proposed")).toBe(true);
   expect(numbers()).toEqual(["1", "2", "3"]);
@@ -12796,4 +12796,61 @@ it("follows the run to the attempt that carries it on after a quit", async () =>
       { ...running, id: "task_running_2", resumeRootId: "task_running", createdAt: now, startedAt: now }] };
   });
   expect([boxTag(), composer.props!.noteTo]).toEqual(["Note", "task_running_2"]);
+});
+
+it("dashes every undecided For you cut and edit on the timeline, and draws decided or unflagged ones solid", async () => {
+  runningPass();
+  const ready = data.changes.find(c => c.id === "chg_ready")!;
+  const part = { ...ready, id: "chg_part", intent: "requested" as const, state: "approved" as const, cutAssessments: undefined, cutChoices: undefined,
+    createdAt: new Date(Date.parse(ready.createdAt!) - 60_000).toISOString() };
+  data = { ...data, changes: data.changes.flatMap(c => c.id === "chg_ready" ? [part, c] : [c]),
+    tasks: data.tasks.map(t => t.id === "task_done" ? { ...t, changeIds: [part.id, ...t.changeIds] } : t) };
+  useProjectStore.setState({ current: data });
+  const thread = threadWith("chg_ready");
+  vi.spyOn(api, "timeline").mockResolvedValue({ timeline: { ...data.timeline!, version: "ver_1" } } as never);
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== thread.id ? [] : [
+      { changeId: "chg_part", spot: 0, label: "Flagged cut", range: { start: 8, end: 9 }, at: 8.5, kind: "cut" as const,
+        beforeCut: { version: "ver_1", removed: { start: 8, end: 9 } }, previous: [], check: "Check the breath before this line." },
+      { changeId: "chg_part", spot: 1, label: "Settled cut", range: { start: 10, end: 11 }, at: 10.5, kind: "cut" as const,
+        beforeCut: { version: "ver_1", removed: { start: 10, end: 11 } }, previous: [] },
+      { changeId: "chg_part", spot: 2, label: "Flagged zoom", range: { start: 12, end: 14 }, kind: "zoom" as const,
+        previous: [], check: "Check framing." },
+    ] }));
+  const dashed = () => container.querySelector(".simple-timeline-band")?.classList.contains("is-proposed");
+  await show();
+  await act(async () => {});
+  // 1. Waiting call: dashed.
+  await openCall("Breath before the price.");
+  expect(dashed()).toBe(true);
+  // Decide it (Keep), then reopen it from For you: solid now that it's decided.
+  await press("k");
+  await act(async () => {});
+  await openCall("Breath before the price.");
+  expect(dashed()).toBe(false);
+  // 2. Waiting flagged applied cut in For you: dashed, matching waiting calls.
+  await click(passRows().find(r => r.textContent?.includes("Flagged cut"))!);
+  await act(async () => {});
+  expect(dashed()).toBe(true);
+  // Keep it, then reopen it from For you: solid once decided.
+  await press("k");
+  await act(async () => {});
+  await click(passRows().find(r => r.textContent?.includes("Flagged cut"))!);
+  await act(async () => {});
+  expect(dashed()).toBe(false);
+  // 3. Waiting flagged non-cut edit: dashed while waiting, solid once kept.
+  await click(passRows().find(r => r.textContent?.includes("Flagged zoom"))!);
+  await act(async () => {});
+  expect(dashed()).toBe(true);
+  await press("k");
+  await act(async () => {});
+  await click(passRows().find(r => r.textContent?.includes("Flagged zoom"))!);
+  await act(async () => {});
+  expect(dashed()).toBe(false);
+  // 4. Unflagged cut opened from See all: solid.
+  await click(seeAll(passCard())!);
+  await act(async () => {});
+  await click(passRows().find(r => r.textContent?.includes("Settled cut"))!);
+  await act(async () => {});
+  expect(dashed()).toBe(false);
 });
