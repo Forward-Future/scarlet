@@ -3,8 +3,9 @@ import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildClaudeCommand, claudeCanRunBare, claudeRunUsage, newClaudeState, parseClaudeLine } from "./claude.js";
-import { buildCodexCommand, newCodexState, parseCodexLine, tomlInlineTable, tomlString } from "./codex.js";
-import { acpMcpServer, buildGeminiCommand, isScarletMcpPermission, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./gemini.js";
+import { buildCodexCommand, tomlInlineTable, tomlString } from "./codex.js";
+import { newCodexState, parseCodexLine } from "./codexParse.js";
+import { acpMcpServer, buildGeminiCommand, isScarletMcpPermission, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./geminiAcp.js";
 import { quoteForCmd, spawnLines, spawnSpec } from "./spawn.js";
 import { briefInput, isQuestionTool, prettyToolName, workspaceEnv, type RunnerEvent } from "./types.js";
 
