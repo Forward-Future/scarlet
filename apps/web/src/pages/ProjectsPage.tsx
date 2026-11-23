@@ -11,6 +11,7 @@ import { Dropzone, type ImportSource } from "../components/media/UploadDropzone"
 import { useImportTranscription } from "../components/media/TranscriptionAction";
 import { WindowActions } from "../components/shell/WorkspaceNavigation";
 import { TrashButton } from "../components/shell/TrashButton";
+import { FfmpegSetupBanner } from "../components/shell/FfmpegSetup";
 import { ConfirmDialog, EmptyState, ErrorState, Icon, InlineError, Loading, Modal, Spinner } from "../components/ui/primitives";
 import { ProjectCard } from "./projects/ProjectCard";
 import { FirstEditGuide, NewProjectModal } from "./projects/NewProjectModal";
@@ -241,6 +242,7 @@ export function ProjectsPage() {
             {!signIn && !empty && newProject}
             <WindowActions />
           </header>
+          <FfmpegSetupBanner />
           {signIn ? (
             <FirstSignIn adding={adding} later={lookAround} laterLabel={adding ? "Done" : empty ? "Look around first" : "Back to projects"} />
           ) : ((status === "loading" || status === "idle") && !list.length) || (empty && needsSignIn && !hostsKnown && !signInLater) ? (

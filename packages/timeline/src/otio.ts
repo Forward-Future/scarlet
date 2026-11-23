@@ -5,7 +5,9 @@
  * ExternalReference media.
  */
 import { sourceStart, type HandoffSource } from "./handoff.js";
-import type { Clip, MediaAsset, MediaClip, Project, Timeline, Track } from "./schema.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { Clip, MediaClip, Timeline, Track } from "./timelineSchema.js";
+import type { Project } from "./projectSchema.js";
 import { carriesAudio, clipDuration, clipEnd } from "./time.js";
 
 type OtioRationalTime = { OTIO_SCHEMA: "RationalTime.1"; rate: number; value: number };

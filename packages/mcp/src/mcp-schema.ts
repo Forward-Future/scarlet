@@ -11,7 +11,7 @@ import type { ToolResult } from "./tool-result.js";
  * of its own, which a harness may show the model untyped. Eighteen parameters of seven tools read that way, the word
  * references in dialogue_check_join's `cuts` and timelineEdits' reason among them (2026-11-20).
  */
-export function unshared<T extends z.ZodTypeAny>(schema: T): T {
+function unshared<T extends z.ZodTypeAny>(schema: T): T {
   const copy = (value: unknown): unknown => value instanceof z.ZodType ? unshared(value)
     : Array.isArray(value) ? value.map(copy)
     : value instanceof Map ? new Map([...value].map(([key, item]) => [key, copy(item)]))
@@ -54,8 +54,8 @@ export function watchRefusedArguments(server: McpServer, failed: (name: string, 
 
 /** The includeAudio flag exists only for a model that can hear; the type always carries it so handlers stay simple. */
 export type AudioShape = { includeAudio: z.ZodDefault<z.ZodBoolean> };
-export const createAudioOption = (hearing: boolean) => (description: string) =>
-  (hearing ? { includeAudio: z.boolean().default(false).describe(description) } : {}) as AudioShape;
+export const createAudioOption = (hearing: boolean, defaultValue = false) => (description: string) =>
+  (hearing ? { includeAudio: z.boolean().default(defaultValue).describe(description) } : {}) as AudioShape;
 
 /**
  * An area of a picture as [left, top, right, bottom] in percent of it. An array of one item type, not a tuple: Codex

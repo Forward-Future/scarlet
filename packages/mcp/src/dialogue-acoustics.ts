@@ -23,7 +23,7 @@ export function dialogueAudioStream(source: object) {
 }
 
 /** 85th percentile of dBFS buckets, used as the local speaking level. */
-export function percentile85Db(db: readonly number[]): number {
+function percentile85Db(db: readonly number[]): number {
   const sorted = [...db].sort((a, b) => a - b);
   return sorted[Math.floor(sorted.length * .85)]!;
 }
@@ -210,7 +210,7 @@ export const snapLimit = .12;
 /** An edge this close to a frame is on it, as the engine's frame rounding treats it (FRAME_SLACK in @scarlet/timeline). */
 export const FRAME_TOLERANCE = .001;
 /** A shorter quiet run inside a transcript word may be a stop consonant's closure, not a gap between words. */
-export const inWordGap = .1;
+const inWordGap = .1;
 
 /** The instant is inside the word's timing, clear of both its edges. */
 export const inWord = (w: Word, t: number) => w.start + wordMargin < t && t < w.end - wordMargin;
@@ -558,23 +558,49 @@ export function roomBeforeBreath(page: NonNullable<JoinPage["edges"]>, kept: Wor
 }
 
 /**
- * A breath the quiet run `run` after a kept word holds from its start: the quiet after a word begins where the word's
- * sound is back at room level, and what sounds after that, under speaking level and in no word, is part of the pause
- * (quietReading). An edge padded from the run's start cut it, whatever the model asked, and nothing said it was there.
+ * The room right before a kept word's sound, when what precedes it from the quiet run `run` is an intake breath or click:
+ * sound far under the word, in no word. Mirror of roomBeforeBreath on the incoming edge.
  */
-export function breathInRun(page: NonNullable<JoinPage["edges"]>, kept: Word, run: TimeRange): BreathAfterWord | undefined {
-  const held = page.breaths?.find(b => b.start >= run.start - 1e-6 && b.end <= run.end + 1e-6 && b.start >= kept.start);
+export function roomAfterBreath(page: NonNullable<JoinPage["edges"]>, kept: Word, run: TimeRange): (BreathAfterWord & { room: TimeRange }) | undefined {
+  const levels = page.levels;
+  if (!levels || run.end >= kept.start) return;
+  const index = (t: number) => Math.floor((t - levels.from) / levels.step + 1e-6);
+  let first = -1, last = -1;
+  const from = Math.max(0, index(run.end));
+  const to = Math.min(levels.db.length - 1, index(kept.start + keptSlack));
+  for (let i = to; i >= from; i--) {
+    if (levels.db[i]! <= DIP_DBFS) { if (last < 0) last = i; first = i; } else if (last >= 0) break;
+  }
+  if (last < 0) return;
+  const quiet = { start: levels.from + first * levels.step, end: levels.from + (last + 1) * levels.step };
+  if (quiet.end - quiet.start < 2 * quietMargin || quiet.start <= run.end + 1e-6 || keptSoundsPast(page, quiet, kept, "end")) return;
+  const found = breathBetween(page, kept, run, quiet);
+  return found && { ...found, room: quiet };
+}
+
+/**
+ * A breath the quiet run `run` beside a kept word holds: after the outgoing word (`side === "start"`) or before the
+ * incoming word (`side === "end"`).
+ */
+export function breathInRun(page: NonNullable<JoinPage["edges"]>, kept: Word, run: TimeRange, side: "start" | "end" = "start"): BreathAfterWord | undefined {
+  const held = side === "start"
+    ? page.breaths?.find(b => b.side !== "before" && b.start >= run.start - 1e-6 && b.end <= run.end + 1e-6 && b.start >= kept.start)
+    : page.breaths?.findLast(b => b.side === "before" && b.start >= run.start - 1e-6 && b.end <= run.end + 1e-6 && b.end <= kept.end);
   if (!held) return;
   const loudest = extremeLevel(page, kept.start, kept.end, "highest");
   return { breath: { start: held.start, end: held.end }, db: held.db, ...(loudest && { underWord: loudest.db - held.db }) };
 }
 
-/** What a cut's start found after the kept word, and where the start is beside it. `unkept` says why a breath asked to play doesn't. */
-export function breathNote(kept: Word, found: BreathAfterWord, at: number, breath: Breath, unkept?: string) {
+/** What a cut's edge found beside the kept word, and where the edge is beside it. `unkept` says why a breath asked to play doesn't. */
+export function breathNote(kept: Word, found: BreathAfterWord, at: number, breath: Breath, unkept?: string, side: "start" | "end" = "start") {
   const { start, end } = found.breath;
-  const where = at <= start + 1e-6 ? "before it" : at >= end - 1e-6 ? "after it, so it plays" : `${(at - start).toFixed(2)} s into it, so that much of it plays`;
+  const where = side === "start"
+    ? (at <= start + 1e-6 ? "before it" : at >= end - 1e-6 ? "after it, so it plays" : `${(at - start).toFixed(2)} s into it, so that much of it plays`)
+    : (at >= end - 1e-6 ? "after it" : at <= start + 1e-6 ? "before it, so it plays" : `${(end - at).toFixed(2)} s before its end, so that much of it plays`);
   const level = Number.isFinite(found.db) ? ` at up to ${Math.round(found.db)} dBFS${found.underWord === undefined ? "" : ` (${Math.round(found.underWord)} dB under the word)`}` : "";
-  return `A breath follows “${plain(kept)}”: ${(end - start).toFixed(2)} s${level}, in no word; the cut starts ${where}${unkept ? `, ${unkept}` : ""} (breath ${breath}).`;
+  const relation = side === "start" ? "follows" : "precedes";
+  const edge = side === "start" ? "starts" : "ends";
+  return `A breath ${relation} “${plain(kept)}”: ${(end - start).toFixed(2)} s${level}, in no word; the cut ${edge} ${where}${unkept ? `, ${unkept}` : ""} (breath ${breath}).`;
 }
 
 /** Sound this close to a word's loudest, for this long, is the word still speaking. */

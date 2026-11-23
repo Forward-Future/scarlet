@@ -94,9 +94,18 @@ export function isPreparingMedia(m: MediaAsset): boolean {
 
 const nativeSupport = new Map<string, boolean>();
 
+/**
+ * A recording with several audio tracks plays from its preview, made of the track Scarlet hears (or all of them mixed):
+ * its original would play whichever track the player picks.
+ */
+export function playsChosenTrack(media: MediaAsset): boolean {
+  return (media.kind === "video" || media.kind === "audio") && (media.audioStreams?.length ?? 0) > 1;
+}
+
 export function canPlayOriginal(media: MediaAsset): boolean {
   const type = media.originalPlaybackType;
   if ((media.kind !== "video" && media.kind !== "audio") || !type?.startsWith(`${media.kind}/`)) return false;
+  if (playsChosenTrack(media)) return false;
   // An HDR original plays from its preview, tone-mapped to SDR as the video and its export are.
   if (media.color?.hdr) return false;
   let supported = nativeSupport.get(type);

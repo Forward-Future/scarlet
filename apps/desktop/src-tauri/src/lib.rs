@@ -7,6 +7,7 @@ pub mod engine;
 pub mod host;
 pub mod util;
 mod crisper;
+mod ffmpeg;
 mod export;
 #[cfg(windows)]
 mod find_shortcut;
@@ -25,7 +26,7 @@ use tauri::{Manager, RunEvent};
 use config::{AppConfig, Paths};
 use engine::EngineManager;
 use host::login::LoginManager;
-use host::{HostManager, McpLauncher};
+use host::{manager::HostManager, McpLauncher};
 
 pub struct AppState {
     pub paths: Paths,
@@ -156,6 +157,9 @@ pub fn run() {
             commands::host_refresh_agents,
             commands::host_refresh_quota,
             commands::agent_install,
+            commands::agent_update,
+            commands::ffmpeg_status,
+            commands::ffmpeg_install,
             crisper::install_crisper_model,
             commands::agent_login_start,
             commands::agent_login_code,

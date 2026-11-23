@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { ScarletClient } from "@scarlet/shared";
-import { fileInDirectory } from "@scarlet/render";
+import { fileInDirectory, heardAudioKey } from "@scarlet/render";
 import { createProject } from "@scarlet/timeline";
 import { createApp } from "../app.js";
 import { createTask, cancelTask } from "./tasks.js";
@@ -83,7 +83,7 @@ it("reads the selected input's existing acoustic words with transcription off", 
   const info = await stat(imported);
   const legacy = createHash("sha256").update(JSON.stringify([3, [imported, info.size, info.mtimeMs, info.ctimeMs, 1]])).digest("hex");
   const legacyFile = join(ctx.paths.waveforms(project.id), `emissions-${legacy.slice(0, 32)}.bin`);
-  const canonical = await emissionStore(ctx, project.id, file, 1);
+  const canonical = await emissionStore(ctx, project.id, file, { audioTrack: 1 });
   expect(legacyFile).not.toBe(canonical);
   const save = async (path: string, letter: string) => {
     const store = (await EmissionFile.open(path, 3 * SAMPLE_RATE))!;
@@ -97,14 +97,15 @@ it("reads the selected input's existing acoustic words with transcription off", 
   await save(legacyFile, "B");
   expect(await words()).toEqual([[{ text: "a", start: .02, end: .04 }]]);
   expect(await words(1)).toEqual([[{ text: "b", start: .02, end: .04 }]]);
-  expect(await words(0)).toEqual([]);
+  // The first track is what a recording is heard on when none is chosen, read by its number: the same words.
+  expect(await words(0)).toEqual([[{ text: "a", start: .02, end: .04 }]]);
   expect(await kept()).toMatchObject({ segments: [{ id: "kept", words: [{ text: "a", start: .02, end: .04 }] }] });
   expect(await kept(1)).toMatchObject({ segments: [{ id: "kept", words: [{ text: "b" }] }] });
   await expect(stat(canonical)).rejects.toMatchObject({ code: "ENOENT" });
   await save(canonical, "C");
   expect(await words(1)).toEqual([[{ text: "c", start: .02, end: .04 }]]);
   expect(await kept(1)).toMatchObject({ segments: [{ id: "kept", words: [{ text: "c" }] }] });
-  expect(await kept(0)).toEqual(unavailable);
+  expect(await kept(0)).toMatchObject({ segments: [{ id: "kept", words: [{ text: "a" }] }] });
   expect(await kept(undefined, 1, 2)).toEqual({ segments: [], acoustic: [] });
   await expect(kept(undefined, 1, 9.5)).rejects.toMatchObject({ status: 400 });
   await expect(client.dialogueDetections(project.id, { ...request, keptSide: { cachedOnly: true },
@@ -184,7 +185,7 @@ it("sends only extracted dialogue windows to the selected cloud provider and get
     otherVoiceTurns: [{ text: "hello" }], speakerTurns: [{ speaker: 1 }] });
   // The recording is decoded once, whole, and stays on this machine, and so is the other voice's track. The window
   // cut from each is uploaded (a WAV header here, since the fixture's decodes are empty).
-  expect(extract.mock.calls.map(call => call[2])).toEqual([{ audioStream: undefined }, { audioStream: 1 }]);
+  expect(extract.mock.calls.map(call => heardAudioKey(call[2]?.audio))).toEqual([null, 1]);
   expect(sizes).toEqual([44, 44]);
   expect((upload.mock.calls[0]![1]!.body as FormData).get("prompt")).toContain("Um");
   expect((upload.mock.calls[1]![1]!.body as FormData).has("prompt")).toBe(false);
@@ -645,4 +646,21 @@ it("reads the words of overlapping saved pages once each, handing over at a word
   const one = { start: 116, end: 176, words: [t("Opus", 173.6), t("and", 174.1), t("fable", 174.4), t("are", 174.92), t("far", 175.4)] };
   const two = { start: 174, end: 234, words: [t("and", 174.05), t("fable", 174.3), t("are", 174.68), t("far", 175.35), t("superior", 175.7)] };
   expect(wordsFromPages([one, two]).words.map(x => x.text)).toEqual(["Opus", "and", "fable", "are", "far", "superior"]);
+});
+
+it("reads a pass's pages from the track the editor chose, and keeps them under it", async () => {
+  const { ctx, project, media, request } = await cloudScanFixture();
+  const tracks = { ...media, audioStreams: [{ index: 0 }, { index: 1 }] };
+  ctx.repos.projects.putMedia(project.id, { ...tracks, audioTrack: 1 }, "ready");
+  const extract = vi.spyOn(ffmpeg, "extractWav");
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ text: "hello", words: [{ word: "hello", start: 8.1, end: 8.5 }] }));
+  expect((await request("detections", 60)).status).toBe(200);
+  while (ctx.pending.size) await Promise.allSettled([...ctx.pending]);
+  // The recording's one decode, which the page's minute, its pauses and its speech are read from, is of Track 2.
+  expect(extract.mock.calls.map(call => heardAudioKey(call[2]?.audio))).toEqual([1]);
+  const saved = async () => (await (await request("checkpoints", 60)).json()) as unknown[];
+  expect(await saved()).toEqual([{ start: 60, end: 120 }]);
+  // Heard on Track 1 the recording has read no page yet.
+  ctx.repos.projects.putMedia(project.id, tracks, "ready");
+  expect(await saved()).toEqual([]);
 });

@@ -243,6 +243,7 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
     telemetry: createTelemetry({
       config: telemetryConfig(env, options.telemetry?.posthogKey),
       idFile: paths.telemetryId,
+      exportedFile: paths.telemetryExported,
       preference: () => repos.settings.telemetryPreference(),
       log,
       fetch: options.telemetry?.fetch,

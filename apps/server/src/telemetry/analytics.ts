@@ -1,5 +1,7 @@
-import type { EditReviewRequest, TelemetryUnavailable } from "@scarlet/shared";
+import type { EditReviewRequest, ExportRoute, TelemetryUnavailable } from "@scarlet/shared";
 import { createHmac, randomUUID } from "node:crypto";
+import { existsSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { SCARLET_VERSION, type TelemetryConfig } from "./config.js";
 import { anonymousId, installId } from "./identity.js";
 
@@ -14,6 +16,11 @@ export interface Telemetry {
   /** False when nothing is collected or sent: turned off, no project key, or the id file can't be kept. */
   readonly active: boolean;
   recordEditReview(projectId: string, review: EditReviewRequest): void;
+  /**
+   * A successful export. `exportedBefore`: the library already holds a finished export from before this install kept
+   * its marker, so this one isn't the first.
+   */
+  recordExport(route: ExportRoute, exportedBefore: boolean): void;
   /** Queues an event. Never throws and never waits on the network. */
   record(event: string, properties?: TelemetryProperties): void;
   /** Sends what is queued now, whatever the retry delay. */
@@ -29,6 +36,8 @@ export interface TelemetryOptions {
   preference?: () => { enabled: boolean; revision: number };
   /** Where the anonymous id is kept. */
   idFile: string;
+  /** The marker saying this install has exported. Defaults to `telemetry-exported` beside the id. */
+  exportedFile?: string;
   log?: (message: string) => void;
   fetch?: typeof fetch;
   now?: () => number;
@@ -84,6 +93,7 @@ const IDLE: Session = {
   discard() {},
   active: false,
   recordEditReview() {},
+  recordExport() {},
   record() {},
   flush: async () => {},
   start() {},
@@ -130,6 +140,7 @@ export function createTelemetry(options: TelemetryOptions): Telemetry {
     get active() { return current().active; },
     refreshPreference() { current(); },
     recordEditReview(project, review) { current().recordEditReview(project, review); },
+    recordExport(route, exportedBefore) { current().recordExport(route, exportedBefore); },
     record(event, properties) { current().record(event, properties); },
     flush() { return current().flush(); },
     start() { started = true; current().start(); },
@@ -162,6 +173,9 @@ function createSession(options: TelemetryOptions, key: string, refreshPreference
   let flushing: Promise<void> | undefined;
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
+  const exportedFile = options.exportedFile ?? join(dirname(options.idFile), "telemetry-exported");
+  /** This session already reported an export, or wrote the marker. */
+  let exported = false;
 
   async function send(batch: readonly BufferedEvent[]): Promise<{ sent: boolean; status?: number }> {
     try {
@@ -183,6 +197,7 @@ function createSession(options: TelemetryOptions, key: string, refreshPreference
               platform: process.platform,
               arch: process.arch,
               scarletVersion: SCARLET_VERSION,
+              channel: config.channel,
             },
             timestamp: event.capturedAt,
           })),
@@ -245,6 +260,20 @@ function createSession(options: TelemetryOptions, key: string, refreshPreference
     recordEditReview(projectId, { changeId, spot, decision }) {
       const editId = createHmac("sha256", anonymous).update(JSON.stringify(["edit", projectId, changeId, spot])).digest("hex");
       this.record("edit.reviewed", { decision, editId });
+    },
+    recordExport(route, exportedBefore) {
+      if (closed) return;
+      const firstExport = !exported && !exportedBefore && !existsSync(exportedFile);
+      if (!exported) {
+        exported = true;
+        try {
+          // Empty: it says only that this install has exported, nothing about what or where.
+          writeFileSync(exportedFile, "", { flag: "a", mode: 0o600 });
+        } catch {
+          // The next launch may count a first export again. Better that than failing an export over a report.
+        }
+      }
+      this.record("export.finished", { route, firstExport });
     },
     record(event, properties) {
       if (closed) return;

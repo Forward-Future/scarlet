@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { audition, soundPicture, contactSheet, renderTimelineFrame, fileInDirectoryAsync, pictureActivity, PREVIEW_COPY_ACTIVITY_THRESHOLD, reviewWindow, snapRange, type PictureActivity } from "@scarlet/render";
+import { audition, soundPicture, contactSheet, renderTimelineFrame, fileInDirectoryAsync, heardAudio, heardAudioKey, pictureActivity, PREVIEW_COPY_ACTIVITY_THRESHOLD, reviewWindow, snapRange, type HeardAudio, type PictureActivity } from "@scarlet/render";
 import { AcousticWordsRequest, InspectionReviewRequest, PictureActivityRequest, SheetRequest, TimelinePicturesRequest, SourceAudioRequest, SoundPictureRequest, DialogueRangeRequest, DialogueScanRequest, DialogueWindowRequest, type CutEvent, type InspectionResult, type InspectionWindow, type PictureActivityWindow } from "@scarlet/shared";
 import { applyOps, diffTimelines, timelineDuration, TimelineOp, type MediaAsset, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
@@ -82,7 +82,7 @@ export function inspectionRoutes(ctx: Ctx) {
       ?? await previewCopyByTime(root, media, height).catch(() => undefined);
   }
 
-  /** The file to listen to, and which of its audio streams: a confirmed voice's input, or the first. */
+  /** The file to listen to, and what to hear from it: a confirmed voice's input, or the track the editor chose. */
   async function audioSource(projectId: string, { mediaId, to, voice }: { mediaId: string; to: number; voice?: string }) {
     const media = requireMedia(ctx, mediaId, projectId);
     if (media.kind !== "audio" && !media.hasAudio) throw badRequest("no_audio", "Choose a source with audio.");
@@ -90,8 +90,8 @@ export function inspectionRoutes(ctx: Ctx) {
     const file = await fileInDirectoryAsync(ctx.paths.media(projectId), media.path);
     if (!file) throw notFound("source file");
     if (voice && !media.voiceRoles) throw badRequest("voice_roles_missing", "This recording has no confirmed voice inputs.");
-    const stream = voice ? media.voiceRoles![voice === "me" ? "me" : "other"] - 1 : 0;
-    return { file, stream };
+    const audio: HeardAudio = voice ? { audioTrack: media.voiceRoles![voice === "me" ? "me" : "other"] - 1 } : heardAudio(media);
+    return { file, audio };
   }
 
   async function collect(project: Pick<Project, "id" | "settings">, plans: WindowPlan[], options: WindowOptions): Promise<InspectionResult> {
@@ -121,12 +121,12 @@ export function inspectionRoutes(ctx: Ctx) {
       const picture = input.media && !options.review ? await sourcePicture(project, input.media, local, options.mode) : undefined;
       const copy = picture && await stat(picture.file).catch(() => undefined);
       const key = JSON.stringify([project.id, plan.id, file, info.size, info.ctimeMs, info.mtimeMs, picture?.file, picture?.start, copy?.mtimeMs,
-        origin, local, plan.focus, fps, options, input.media?.color?.hdr]);
+        origin, local, plan.focus, fps, options, input.media?.color?.hdr, input.media && heardAudioKey(heardAudio(input.media))]);
       const analysis = await cache.get(key, () => ctx.track((async () => {
         const sheetOptions = { ...options, focus: plan.focus, fps, sourceWidth: input.sourceWidth, signal };
         // Decodes take turns in the engine's picture lane.
         const lane = pictureLane(ctx);
-        if (options.review) return lane.run(() => reviewWindow(file, local, { ...sheetOptions, origin, tempDir: ctx.paths.tmp }), { signal });
+        if (options.review) return lane.run(() => reviewWindow(file, local, { ...sheetOptions, origin, tempDir: ctx.paths.tmp, audio: input.media && heardAudio(input.media) }), { signal });
         // The copy's clock runs `start` seconds behind the source. Timestamps stay in source seconds.
         const fromCopy = picture && copy && await lane.run(() => contactSheet(picture.file, { start: local.start - picture.start, end: local.end - picture.start },
           { ...sheetOptions, origin: origin + picture.start, activityThreshold: PREVIEW_COPY_ACTIVITY_THRESHOLD }), { signal }).catch((err: Error) => {
@@ -254,7 +254,8 @@ export function inspectionRoutes(ctx: Ctx) {
     const file = await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path);
     if (!file) throw notFound("source file");
     const imported = join(ctx.paths.media(media.projectId), media.path);
-    for (const path of await emissionStorePaths(ctx, media.projectId, file, imported, audioStream)) {
+    // A pass names a stream other than the first only for a voice's own input. Otherwise it hears the chosen track.
+    for (const path of await emissionStorePaths(ctx, media.projectId, file, imported, audioStream ? { audioTrack: audioStream } : heardAudio(media))) {
       const runs = await readCachedAcousticWords(path, from, to);
       if (runs.length) return c.json(runs);
     }
@@ -291,15 +292,15 @@ export function inspectionRoutes(ctx: Ctx) {
   r.post("/projects/:id/source-audio", async c => {
     const { mediaId, from, to, voice } = await jsonBody(c, SourceAudioRequest);
     const projectId = c.req.param("id");
-    const { file, stream } = await audioSource(projectId, { mediaId, to, voice });
-    return c.json({ wav: await ctx.track(audition(file, { start: from, end: to }, ctx.projectSignal(projectId), stream), projectId) });
+    const { file, audio } = await audioSource(projectId, { mediaId, to, voice });
+    return c.json({ wav: await ctx.track(audition(file, { start: from, end: to }, ctx.projectSignal(projectId), audio), projectId) });
   });
 
   r.post("/projects/:id/sound-picture", async c => {
     const { mediaId, from, to, remove, voice, words } = await jsonBody(c, SoundPictureRequest);
     const projectId = c.req.param("id");
-    const { file, stream } = await audioSource(projectId, { mediaId, to, voice });
-    const { jpeg, layout } = await ctx.track(soundPicture(file, { range: { start: from, end: to }, remove, words, stream, signal: ctx.projectSignal(projectId) }), projectId);
+    const { file, audio } = await audioSource(projectId, { mediaId, to, voice });
+    const { jpeg, layout } = await ctx.track(soundPicture(file, { range: { start: from, end: to }, remove, words, audio, signal: ctx.projectSignal(projectId) }), projectId);
     return c.json({ jpeg: jpeg.toString("base64"), layout });
   });
 

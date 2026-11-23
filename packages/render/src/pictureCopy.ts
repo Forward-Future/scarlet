@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import type { Project, ProjectSettings, Timeline } from "@scarlet/timeline";
 import { LOCAL_MEDIA_INPUT, resolveFfprobe, runCapture, runFfmpeg } from "./exec.js";
 import { avcConfigurationArgs, sameAvcConfiguration } from "./avcConfiguration.js";
-import { directExportPicture } from "./graph.js";
+import { directExportPicture } from "./graphOptimize.js";
 import { parseRate, probeMedia } from "./probe.js";
 import type { RenderOptions } from "./render.js";
 

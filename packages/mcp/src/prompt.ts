@@ -278,7 +278,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   if (ctx.capabilities?.plan) parts.push(PLAN_STEPS);
 
   // Only a harness with file tools can put anything in the artifact directory.
-  const caps = ctx.capabilities ?? agentCapabilities(ctx.task?.agent);
+  const caps = ctx.capabilities ?? agentCapabilities(ctx.task?.agent, undefined, ctx.task?.model);
   if (ctx.workDir && caps.files && caps.shell) {
     // A request launched with its harness's own tools. What to use them for is the model's call; that B-roll and graphics
     // are the editor's to ask for is the editor's standing word (2026-11-21), said here once.

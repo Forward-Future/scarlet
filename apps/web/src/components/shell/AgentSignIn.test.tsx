@@ -243,3 +243,36 @@ it("follows this app's own agent host: what it last reported, then each report a
   await act(async () => root.render(<Host />));
   expect(container.textContent).toBe("none");
 });
+
+it("offers a newer version of an installed tool, updates it with one press and says how it went", async () => {
+  const { AgentUpdate } = await import("./AgentSignIn");
+  const codex: AgentAvailability = { id: "codex", installed: true, loggedIn: true, auth: "subscription", version: "0.50.0" };
+  const render = (agent: AgentAvailability) => act(async () => root.render(<AgentUpdate agent={agent} />));
+  // Nothing newer, or nothing Scarlet can update in place: the row says nothing.
+  await render(codex);
+  expect(container.textContent).toBe("");
+  let finish: (version: string | null) => void = () => {};
+  const update = vi.spyOn(desktop, "agentUpdate").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  await render({ ...codex, latestVersion: "0.171.0" });
+  expect(container.textContent).toContain("Version 0.171.0 is available");
+  expect(button("Update")?.title).toBe("Codex 0.50.0 is installed");
+  await click("Update");
+  expect(update).toHaveBeenCalledWith("codex");
+  expect(container.textContent).toContain("Updating Codex…");
+  // The app detects it again: the newer version is installed and nothing more is offered.
+  await act(async () => finish("0.171.0"));
+  await render({ ...codex, version: "0.171.0" });
+  expect(container.textContent).toBe("Updated to 0.171.0");
+
+  // An updater that leaves the tool where it was is said plainly, and a failure says why under the offer.
+  await render({ ...codex, latestVersion: "0.172.0" });
+  update.mockResolvedValueOnce("0.50.0");
+  await click("Update");
+  await render(codex);
+  expect(container.textContent).toBe("Already up to date");
+  update.mockRejectedValueOnce(new Error("Scarlet is editing with it right now. Update it once that edit is done."));
+  await render({ ...codex, latestVersion: "0.172.0" });
+  await click("Update");
+  expect(button("Update")).toBeDefined();
+  expect(alert()).toContain("Update it once that edit is done.");
+});

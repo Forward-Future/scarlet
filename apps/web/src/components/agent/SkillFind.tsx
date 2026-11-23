@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Reac
 import { isComposing } from "../../lib/hotkeys";
 import { Icon } from "../ui/primitives";
 
-export interface SkillMatch { start: number; end: number }
+interface SkillMatch { start: number; end: number }
 
 function findMatches(text: string, query: string): SkillMatch[] {
   if (!query) return [];

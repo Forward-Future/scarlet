@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { agentCapabilities, toolWait, workspaceCapabilities } from "./capabilities.js";
+import { agentCapabilities, canHear, chooseListener, hearingModels, listenerAmong, modelHearsAudioFiles, toolWait, workspaceCapabilities } from "./capabilities.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -10,6 +10,23 @@ describe("agentCapabilities", () => {
     expect(agentCapabilities("codex")).toEqual({ images: true, audio: false, files: true, plan: false, resultChars: 40_000, toolWaitSeconds: 240 });
     expect(agentCapabilities("gemini")).toEqual({ images: true, audio: false, audioFiles: true, files: false, plan: false, briefTools: true, resultChars: 9_000, toolWaitSeconds: 120 });
     for (const agent of [undefined, "", "api", "toString", "Claude"]) expect(agentCapabilities(agent), String(agent)).toEqual({ images: true, audio: false, files: false, plan: false, resultChars: 40_000 });
+  });
+
+  it("treats only Gemini models on agy as hearing WAV files, not third-party models hosted there", () => {
+    for (const model of [undefined, "gemini-4-neon", "gemini-3.8-flash", "models/gemini-2.5-pro"]) {
+      const caps = agentCapabilities("gemini", undefined, model);
+      expect(caps.audioFiles, String(model)).toBe(true);
+      expect(canHear(caps), String(model)).toBe(true);
+      expect(modelHearsAudioFiles("gemini", model), String(model)).toBe(true);
+    }
+    for (const model of ["claude-opus-5-5", "claude-sonnet-5-5", "gpt-oss-120b-medium"]) {
+      const caps = agentCapabilities("gemini", undefined, model);
+      expect(caps, model).toEqual({ images: true, audio: false, audioFiles: false, files: false, plan: false, briefTools: true, resultChars: 9_000, toolWaitSeconds: 120 });
+      expect(canHear(caps), model).toBe(false);
+      expect(modelHearsAudioFiles("gemini", model), model).toBe(false);
+    }
+    // An explicit override still wins.
+    expect(agentCapabilities("gemini", { audioFiles: true }, "claude-opus-5-5").audioFiles).toBe(true);
   });
 
   it("applies an override given as an object or as SCARLET_AGENT_CAPS JSON, taking its supported capabilities", () => {
@@ -44,6 +61,24 @@ describe("agentCapabilities", () => {
       expect(warn.mock.calls[0]).toEqual(['[scarlet] SCARLET_AGENT_CAPS ignored: it must be a JSON object such as {"audio":true}']);
       expect(warn.mock.calls[0]![0]).not.toContain(bad);
     }
+  });
+});
+
+describe("listening model selection", () => {
+  it("excludes third-party models exposed by agy from hearingModels, listenerAmong, and chooseListener", () => {
+    const mixed = [{ id: "gemini", installed: true, model: "claude-opus-5-5", models: ["claude-opus-5-5", "gpt-oss-120b-medium", "gemini-4-neon"] }];
+    expect(hearingModels(mixed)).toEqual([{ agent: "gemini", model: "gemini-4-neon" }]);
+    expect(listenerAmong(mixed)).toEqual({ agent: "gemini", model: "gemini-4-neon" });
+    expect(chooseListener(mixed, "gemini:claude-opus-5-5")).toBeUndefined();
+    expect(chooseListener(mixed, "gemini:gemini-4-neon")).toEqual({ agent: "gemini", model: "gemini-4-neon" });
+
+    // If agy lists only non-Gemini models, it cannot listen and falls through to another hearing agent.
+    const noGeminiModels = [
+      { id: "gemini", installed: true, models: ["claude-opus-5-5", "gpt-oss-120b-medium"] },
+      { id: "codex", installed: true, models: ["gpt-6.2-sol", "gpt-6-astra-audio"] },
+    ];
+    expect(hearingModels(noGeminiModels)).toEqual([{ agent: "codex", model: "gpt-6-astra-audio" }]);
+    expect(listenerAmong(noGeminiModels)).toEqual({ agent: "codex", model: "gpt-6-astra-audio" });
   });
 });
 

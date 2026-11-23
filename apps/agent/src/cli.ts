@@ -92,7 +92,7 @@ async function cmdConnect(flags: Record<string, string>): Promise<void> {
 
 
 /** Subscription sign-in commands; each CLI opens the browser or prints a sign-in link. */
-export const SIGN_IN: Record<string, { bin: string; args: string[]; label: string; installHint: string }> = {
+const SIGN_IN: Record<string, { bin: string; args: string[]; label: string; installHint: string }> = {
   claude: { bin: "claude", args: ["auth", "login", "--claudeai"], label: "Claude Pro/Max subscription", installHint: "npm i -g @anthropic-ai/claude-code" },
   codex: { bin: "codex", args: ["login"], label: "ChatGPT plan", installHint: "npm i -g @openai/codex" },
   gemini: { bin: "agy", args: ["acp", "--login"], label: "Google account", installHint: "curl -fsSL https://antigravity.google/cli/install.sh | bash" },
