@@ -6,6 +6,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- Scarlet no longer drops a cut it got right because the transcript and the recording spell or time a word differently, so a false start it found isn't left in.
+- A cut placed at the end of a word that runs straight into the next one no longer clips the word's last sound, like the “s” of “complaints”.
 - The glow over the timeline is gone: under the timeline it now says what Scarlet is doing, and a press on it takes you to that request in the chat.
 - Edits on long 4K recordings are faster: when Scarlet checks what's on screen it reads the small cached copy of a recording instead of the full-size file, and its own requests no longer wait behind background reading of the rest of the recording.
 - The video player no longer shimmers across the picture while a clip is loading.
