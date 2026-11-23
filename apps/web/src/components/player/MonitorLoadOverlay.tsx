@@ -1,6 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { COMPARE_KEY } from "../../lib/hotkeys";
-import { wavePhase } from "../review/laneLoading";
 
 /** Matches `usePictureWait`'s blink threshold so instant cached switches show nothing extra. */
 export const MONITOR_LOAD_GRACE_MS = 180;
@@ -110,7 +109,7 @@ export interface MonitorLoadOverlayProps {
 /**
  * Escalating monitor curtain for slow cut switches and cold renders under heavy CPU load:
  * - 0–180ms: stays invisible on instant switches; briefly holds the outgoing frame during `openingJoin` so cuts don't flash black.
- * - 180ms–1.5s: shows a dimmed lead-in still of the target moment, a warm sheen synced to the timeline's `--wave-phase`, and a bottom hairline bar.
+ * - 180ms–1.5s: shows a dimmed lead-in still of the target moment and a bottom hairline bar.
  * - > 1.5s: fades in a frosted centered status pill naming the active stage (`Preparing cut…`, `Rendering clip · X of Y`).
  * - > 2.5s on After of a review cut: adds a quiet hint that `\` switches to Before while After renders.
  * - On ready: lifts cleanly over 280ms directly into playback (instant with reduced motion).
@@ -129,7 +128,6 @@ export function MonitorLoadOverlay({
   const [extended, setExtended] = useState(false);
   const [hintReady, setHintReady] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const [phase, setPhase] = useState("0s");
   const [stillUrl, setStillUrl] = useState<string>();
   const [stillLoaded, setStillLoaded] = useState(false);
   const [heldVersion, setHeldVersion] = useState(0);
@@ -244,7 +242,6 @@ export function MonitorLoadOverlay({
     if (stillActive) {
       setLeaving(false);
       if (!prev) {
-        setPhase(wavePhase());
         setExtended(false);
         setHintReady(false);
       }
@@ -361,7 +358,6 @@ export function MonitorLoadOverlay({
       data-leaving={leaving || undefined}
       data-stage={chromeVisible ? display.stage : undefined}
       aria-hidden={!active || undefined}
-      style={{ "--wave-phase": phase } as CSSProperties}
     >
       {showHeld && <div ref={heldHost} className="monitor-load-held" data-dimmed={chromeVisible || undefined} aria-hidden="true" />}
       {chromeVisible && stillUrl && (
@@ -378,7 +374,6 @@ export function MonitorLoadOverlay({
         />
       )}
       {chromeVisible && <div className="monitor-load-scrim" aria-hidden="true" />}
-      {chromeVisible && <div className="monitor-load-sheen" aria-hidden="true"><i /></div>}
       {chromeVisible && display.extended && (
         <div className="monitor-load-center">
           <div className="monitor-load-pill" role={active ? "status" : undefined}>

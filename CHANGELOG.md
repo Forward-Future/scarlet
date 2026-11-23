@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 22, 2026
 
+- The video player no longer shimmers across the picture while a clip is loading.
 - Left and right arrow keys now move the playhead one second at a time, and Shift with an arrow key steps frame by frame.
 - Pausing the video now shows the paused time in the tag above the message box instead of typing a timestamp into the input box, so the box stays empty until you write.
 - An open cut now plays your video as it is now, not an older copy with a picture you'd since changed, when it meets a cut made after it.
