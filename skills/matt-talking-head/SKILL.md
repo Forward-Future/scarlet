@@ -32,6 +32,10 @@ Do what a note asks whenever Scarlet can: show the screenshot or the part of the
 
 A note never plays in the finished video. Cut a clear one with its lead-in and the wait around it, and don’t flag it. If you can’t tell whether a line is a note or meant for the viewer, keep it and flag it with the doubt. Where a note runs into narration, cut the note alone and flag the join.
 
+## Things to add later
+
+Sometimes I introduce something for the viewer to see or hear — like “let me show you…”, “take a look at this”, “watch this” or “here’s what he said” — when it clearly isn’t on my screen recording and isn’t in the project’s Media. Keep my line, don’t make or look up a replacement on your own, and leave a To do at that spot saying what needs to be added and quoting my line, plus list it in your reply with where it lands. If I also left a note to Alex for the same insert, cut the note and leave one To do for the spot.
+
 ## My pace
 
 I cut tight, and how tight depends on where the cut falls:
