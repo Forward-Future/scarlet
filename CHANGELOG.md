@@ -29,6 +29,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Backspace in an empty box takes off an Answer tag too, a paused time leaves an open cut's tag once you play on and erase what you wrote, and opening an edit while you change a queued request's words no longer puts those words at risk.
 - After a click on Pause, a suggestion's line or the queue's heading, Space plays the video instead of pressing that control again.
 - At the narrowest chat a stopped request's Resume is no longer cut off, a list of edits above the message box no longer slides sideways, and a tall request there can't push the message box off the window.
+- Ask Scarlet for a list of ideas and where they go, such as B-roll to add, and each one lands as a To do at its place on the timeline, listed in For you, instead of a long list in the chat.
+- Clicking anywhere else in the chat lets go of the purple request, just like pressing Esc.
 - When Scarlet tries to cut in the middle of a word you're still saying, it's now told exactly where the quiet is on either side, so it fixes the cut in one try instead of measuring again.
 - Each request in the chat has a small arrow at its left that collapses it to one line, and expands it again.
 - Purple on a request now means one thing: its edits are the ones on the timeline. Click a request to pick it, running or finished, and click it again or press Esc to let go and see every request's edits on the timeline.

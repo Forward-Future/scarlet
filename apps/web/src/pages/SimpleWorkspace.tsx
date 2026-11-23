@@ -665,6 +665,16 @@ export function SimpleWorkspace() {
     setPicked(null);
     setFocus(undefined);
   }
+  // A press anywhere else in the chat, with nothing open, lets the picked band go too, as Esc does. Presses on the
+  // message box, on a band, and on anything with its own press (links, buttons, menus) keep theirs.
+  function letGoOnChatPress(e: React.MouseEvent<HTMLElement>) {
+    if (e.defaultPrevented || e.button !== 0 || !focusThread || showing || listening || suggestion) return;
+    const target = e.target as Element;
+    if (target.closest('.unit-msg, .composer-dock, button, a, input, textarea, select, label, [role="button"], [role="menu"], [role="menuitem"], [role="dialog"], .said.is-clipped, .said.is-open')) return;
+    if (window.getSelection()?.toString()) return;
+    if (!e.currentTarget.querySelector(".unit-msg.is-marked")) return;
+    letGo(focusThread.id);
+  }
   function markThread(threadId: string) {
     // Pressed again with nothing open, the picked band lets go.
     if (threadId === focusThread?.id && !showing && !listening && !suggestion) return letGo(threadId);
@@ -2279,7 +2289,7 @@ export function SimpleWorkspace() {
             <span>{menuError || "Some files need attention."}</span>
             {importFailed && !menuError && <button type="button" className="simple-link" onClick={() => setPanel("media")}>View media</button>}
           </div>}
-          <div className="simple-thread">
+          <div className="simple-thread" onClick={letGoOnChatPress}>
             <div ref={chat} className="simple-chat" onScroll={e => {
               const pane = e.currentTarget;
               follow.current = pane.scrollHeight - pane.clientHeight - pane.scrollTop < 48;
