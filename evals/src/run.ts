@@ -41,6 +41,11 @@ A case with no published video attached scores only 2 of the scorecard's 15 line
 
 Results go to $SCARLET_EVAL_DATA/results (default: Scarlet's application support folder /evals).`;
 
+/** Passes switch the project's branch and save edits: never in the editor's own library. */
+const OWN_LIBRARY = "Passes don't run in your own Scarlet: they would branch and edit your projects. Build a library from " +
+  "the eval videos (tsx evals/src/store.ts library \"<recording>\" --out <dir> --keep) and run against its engine " +
+  "(--engine with SCARLET_ACCESS_TOKEN, as store.ts prints).";
+
 interface AgentConfig { agent: string; model?: string; effort?: string; serviceTier?: string }
 
 /**
@@ -344,6 +349,7 @@ async function runCli(argv = process.argv.slice(2)) {
   if (values["dry-run"] || !values.yes) {
     let engine: Engine | undefined;
     try { engine = await Engine.connect({ url: values.engine }); } catch (err) { console.log(`(engine not reachable: ${(err as Error).message})`); }
+    if (engine?.desktop) console.log(`Would refuse: ${OWN_LIBRARY}\n`);
     console.log(`Dry run: ${total} agent task(s) = ${cases.length} case(s) × ${configs.length} config(s) × ${trials} trial(s). Results → ${runDir}\n`);
     for (const loaded of cases) {
       publishedGradingInputs(loaded);
@@ -369,6 +375,7 @@ async function runCli(argv = process.argv.slice(2)) {
 
   if (gaps.length && !values["partial-score"]) throw new Error(gaps.join("\n"));
   const engine = await Engine.connect({ url: values.engine });
+  if (engine.desktop) throw new Error(OWN_LIBRARY);
   const rows: TrialRow[] = [];
   for (const loaded of cases) for (const config of configs) for (let t = 1; t <= trials; t++) {
     const dir = join(runDir, loaded.file.id, slug(configLabel(config)), `trial-${t}`);
