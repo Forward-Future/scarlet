@@ -24,6 +24,23 @@ function follow(view: TimeWindow, time: number, start: number, end: number): Tim
   return { ...view, from: clamp(view.from + page * view.span, start, end - view.span) };
 }
 
+/** Inactivity gap before a wheel pan or zoom gesture resets its locked axis. */
+const WHEEL_GESTURE_TIMEOUT_MS = 220;
+/** Brief settle window after a pinch so finger-lift wheel drift doesn't pan or zoom. */
+const PINCH_COOLDOWN_MS = 160;
+/** Minimum horizontal travel (px) to commit a trackpad swipe to panning. */
+const PAN_LOCK_PX = 4;
+/** Minimum vertical travel (px) to commit a plain wheel gesture to zooming. */
+const ZOOM_LOCK_PX = 10;
+/** Minimum vertical-to-horizontal ratio required to enter plain-wheel zoom. */
+const VERTICAL_LOCK_RATIO = 2.5;
+/** Distance (px) at which an ambiguous diagonal swipe defaults to panning instead of zooming. */
+const DIAGONAL_PAN_PX = 16;
+/** Deliberate pinch scale change (ln ratio, ~8%) required to break out of an active pan. */
+const PINCH_BREAKOUT = .08;
+/** Deliberate ctrl+wheel travel (px) required to break out of an active pan. */
+const CTRL_WHEEL_BREAKOUT_PX = 10;
+
 /**
  * `carried` is the stretch the timeline it takes the place of was zoomed to. It starts on the same stretch, within its
  * own length, and stays there until the playhead moves.
@@ -164,39 +181,198 @@ export function useTimelineZoom(track: RefObject<HTMLDivElement | null>, start: 
 
   useLayoutEffect(() => {
     const el = track.current!;
+    type GestureMode = "pending" | "pan" | "zoom" | "pinch";
+    let mode: GestureMode | undefined;
+    let gestureAt = 0;
+    let pendingX = 0;
+    let pendingY = 0;
     let previousScale = 0;
+    let pendingPinchScale = 0;
+    let lastGestureScale = 0;
+    let pendingPinchWheel = 0;
+
+    function clearWheelState() {
+      mode = undefined;
+      pendingX = 0;
+      pendingY = 0;
+      pendingPinchWheel = 0;
+    }
+
+    function expireGesture(now: number) {
+      if (!mode || previousScale) return;
+      const timeout = mode === "pinch" ? PINCH_COOLDOWN_MS : WHEEL_GESTURE_TIMEOUT_MS;
+      if (now - gestureAt > timeout) clearWheelState();
+    }
+
     function fraction(x: number) {
       const rect = el.getBoundingClientRect();
       return rect.width && Number.isFinite(x) ? clamp((x - rect.left) / rect.width, 0, 1) : .5;
     }
+
+    function panBy(deltaPx: number) {
+      if (!deltaPx) return;
+      const view = live.current.view;
+      const delta = deltaPx / Math.max(1, el.clientWidth) * view.span;
+      const next = { ...view, from: clamp(view.from + delta, start, end - view.span) };
+      lookAt(next);
+      move(next, "gesture");
+    }
+
+    function zoomWheel(deltaPx: number, clientX: number, pinch: boolean) {
+      if (!deltaPx) return;
+      const sensitivity = pinch ? .012 : .006;
+      zoomBy(Math.exp(clamp(-deltaPx * sensitivity, -1, 1)), fraction(clientX), true);
+    }
+
     function wheel(event: WheelEvent) {
       if (!total || dragging.current) return;
       event.preventDefault();
       if (previousScale) return;
-      const view = live.current.view;
+      const now = performance.now();
+      expireGesture(now);
+
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? el.clientHeight : 1;
-      const horizontal = !event.ctrlKey && (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY));
-      if (horizontal) {
-        const delta = (event.deltaX || event.deltaY) * unit / Math.max(1, el.clientWidth) * view.span;
-        const next = { ...view, from: clamp(view.from + delta, start, end - view.span) };
-        lookAt(next);
-        move(next, "gesture");
-      } else {
-        const sensitivity = event.ctrlKey ? .012 : .006;
-        zoomBy(Math.exp(clamp(-event.deltaY * unit * sensitivity, -1, 1)), fraction(event.clientX), true);
+      const dx = event.deltaX * unit;
+      const dy = event.deltaY * unit;
+
+      if (event.ctrlKey) {
+        if (mode === "pan") {
+          pendingPinchWheel += dy;
+          if (Math.abs(pendingPinchWheel) < CTRL_WHEEL_BREAKOUT_PX) return;
+          const excess = pendingPinchWheel - Math.sign(pendingPinchWheel) * CTRL_WHEEL_BREAKOUT_PX;
+          mode = "pinch";
+          pendingPinchWheel = 0;
+          gestureAt = now;
+          zoomWheel(excess, event.clientX, true);
+          return;
+        }
+        mode = "pinch";
+        pendingX = 0;
+        pendingY = 0;
+        pendingPinchWheel = 0;
+        gestureAt = now;
+        zoomWheel(dy, event.clientX, true);
+        return;
+      }
+
+      // Keep plain wheel drift out of a pinch and its brief post-pinch settle window.
+      if (mode === "pinch") return;
+
+      if (event.shiftKey) {
+        mode = "pan";
+        pendingX = 0;
+        pendingY = 0;
+        pendingPinchWheel = 0;
+        const delta = dx || dy;
+        if (delta) {
+          gestureAt = now;
+          if (pendingPinchScale && lastGestureScale) pendingPinchScale = lastGestureScale;
+          panBy(delta);
+        }
+        return;
+      }
+
+      if (mode === "pan") {
+        if (dx) {
+          gestureAt = now;
+          pendingPinchWheel = 0;
+          if (pendingPinchScale && lastGestureScale) pendingPinchScale = lastGestureScale;
+          panBy(dx);
+        }
+        return;
+      }
+
+      if (mode === "zoom") {
+        if (dy) {
+          gestureAt = now;
+          zoomWheel(dy, event.clientX, false);
+        }
+        return;
+      }
+
+      if (!dx && !dy) return;
+      mode = "pending";
+      gestureAt = now;
+      pendingX += dx;
+      pendingY += dy;
+      const absX = Math.abs(pendingX);
+      const absY = Math.abs(pendingY);
+
+      if (absX >= PAN_LOCK_PX && absX >= absY) {
+        const delta = pendingX;
+        mode = "pan";
+        pendingX = 0;
+        pendingY = 0;
+        panBy(delta);
+      } else if (absY >= ZOOM_LOCK_PX && absY >= VERTICAL_LOCK_RATIO * absX) {
+        const delta = pendingY;
+        mode = "zoom";
+        pendingX = 0;
+        pendingY = 0;
+        zoomWheel(delta, event.clientX, false);
+      } else if (Math.hypot(absX, absY) >= DIAGONAL_PAN_PX) {
+        const delta = pendingX;
+        mode = "pan";
+        pendingX = 0;
+        pendingY = 0;
+        panBy(delta);
       }
     }
+
     // WKWebView reports trackpad magnification as cumulative gesture scales.
     // WebView2 reports it as Control + wheel, handled above.
     function gesture(event: Event) {
+      const now = performance.now();
       // A pinch that ends during a drag has still ended: the wheel answers again after it.
-      if (event.type === "gestureend") previousScale = 0;
+      if (event.type === "gestureend") {
+        const wasPinch = previousScale > 0;
+        previousScale = 0;
+        pendingPinchScale = 0;
+        lastGestureScale = 0;
+        if (!total || dragging.current) {
+          clearWheelState();
+          return;
+        }
+        event.preventDefault();
+        if (wasPinch) {
+          mode = "pinch";
+          gestureAt = now;
+        }
+        return;
+      }
       if (!total || dragging.current) return;
       event.preventDefault();
+      expireGesture(now);
       const { scale, clientX } = event as Event & { scale: number; clientX: number };
-      if (event.type === "gestureend") return;
-      if (event.type === "gesturestart") previousScale = scale || 1;
-      else if (previousScale && Number.isFinite(scale) && scale > 0) {
+      if (event.type === "gesturestart") {
+        if (mode === "pan") {
+          pendingPinchScale = lastGestureScale = scale || 1;
+          return;
+        }
+        mode = "pinch";
+        pendingX = 0;
+        pendingY = 0;
+        pendingPinchScale = 0;
+        lastGestureScale = 0;
+        pendingPinchWheel = 0;
+        previousScale = scale || 1;
+        gestureAt = now;
+        return;
+      }
+      if (pendingPinchScale && Number.isFinite(scale) && scale > 0) {
+        lastGestureScale = scale;
+        if (mode === "pan" && Math.abs(Math.log(scale / pendingPinchScale)) < PINCH_BREAKOUT) return;
+        mode = "pinch";
+        previousScale = scale;
+        pendingPinchScale = 0;
+        lastGestureScale = 0;
+        pendingPinchWheel = 0;
+        gestureAt = now;
+        return;
+      }
+      if (previousScale && Number.isFinite(scale) && scale > 0) {
+        mode = "pinch";
+        gestureAt = now;
         zoomBy(scale / previousScale, fraction(clientX), true);
         previousScale = scale;
       }
