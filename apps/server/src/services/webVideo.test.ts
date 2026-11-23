@@ -6,7 +6,8 @@ import { resolveFfmpeg } from "@scarlet/render";
 import { createProject, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
-import { captionLines, captionTrack, DOWNLOADERS } from "./webVideo.js";
+import { DOWNLOADERS } from "./videoDownloader.js";
+import { captionLines, captionTrack } from "./webVideo.js";
 
 let directory: string;
 let workspace: ScarletApp;

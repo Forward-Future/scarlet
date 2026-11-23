@@ -3,7 +3,7 @@
  * and the downloading, outside the agent's sandbox as page capture is, and Scarlet's own ffmpeg cuts the part.
  */
 import { randomUUID } from "node:crypto";
-import { access, chmod, constants, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, constants, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { rootCertificates } from "node:tls";
@@ -11,25 +11,8 @@ import { resolveFfmpeg, resolveFfprobe } from "@scarlet/render";
 import type { Ctx } from "../context.js";
 import { badRequest, HttpError, notFound } from "../errors.js";
 import { FfmpegError, run } from "../render/ffmpeg.js";
-import { LocalWhisperModel, type PinnedModel } from "../transcribe/localModel.js";
 import { publicWebAddress } from "./publicWeb.js";
-
-const RELEASE = "2026.10.26";
-const release = (file: string, size: number, sha256: string): PinnedModel =>
-  ({ name: `yt-dlp-${RELEASE}${file.endsWith(".exe") ? ".exe" : ""}`, url: `https://github.com/yt-dlp/yt-dlp/releases/download/${RELEASE}/${file}`, size, sha256 });
-
-/**
- * yt-dlp's own builds, one file each, pinned by size and checksum as the models are and fetched the first time a video
- * is asked for. Sites change what they serve every few weeks and an old yt-dlp then fails: move the pin with them.
- */
-export const DOWNLOADERS: Record<string, PinnedModel> = {
-  "darwin-arm64": release("yt-dlp_macos", 37466304, "0f922c15ccc0b83eefa1c8bc9104e434318c4bf16e408e1ee93b7745a6efe0aa"),
-  "darwin-x64": release("yt-dlp_macos", 37466304, "0f922c15ccc0b83eefa1c8bc9104e434318c4bf16e408e1ee93b7745a6efe0aa"),
-  "win32-x64": release("yt-dlp.exe", 23575744, "f5389d3698ecde4ef06f4e6b1ce0294fe9ac1396228c8990b8d3416d6d177a7d"),
-  "win32-arm64": release("yt-dlp_arm64.exe", 22809590, "0066dbac3c124028e2dcae2a197fccee33cd91f456313d24f7af89fd54590e98"),
-  "linux-x64": release("yt-dlp_linux", 41166968, "767ba9dce7052aa196f8b12652f433d76de128ba168966fa84b6394d5e6c6795"),
-  "linux-arm64": release("yt-dlp_linux_aarch64", 40789792, "e87e9533e89fe5889abaa21f5114dfe7756d6aa6219b83551add04d48b18e483"),
-};
+import { DOWNLOADERS, VideoDownloader } from "./videoDownloader.js";
 
 /** The longest part one call saves: a call is one shot of B-roll, and the whole part is held in memory on its way to the task folder. */
 export const MAX_PART_SECONDS = 600;
@@ -39,23 +22,20 @@ export const CAPTION_CHARS = 20_000;
 const KEEP_MS = 30 * 60_000;
 
 const runnable = (path: string) => access(path, constants.X_OK).then(() => true, () => false);
-const fetched = new Map<string, LocalWhisperModel>();
+const downloaders = new Map<string, Promise<VideoDownloader>>();
 
-/** Where yt-dlp is: `YT_DLP_PATH` when it names a program, else Scarlet's own pinned copy, fetched once. */
-async function downloader(ctx: Ctx, signal: AbortSignal): Promise<string> {
-  const set = (ctx.options.env?.YT_DLP_PATH ?? process.env.YT_DLP_PATH)?.trim();
-  if (set && isAbsolute(set) && await runnable(set)) return set;
-  const pinned = DOWNLOADERS[`${process.platform}-${process.arch}`];
-  if (!pinned) throw new HttpError(501, "no_downloader", "Scarlet has no video downloader for this kind of machine. Set YT_DLP_PATH to a yt-dlp on it.");
+/** This library's yt-dlp: `YT_DLP_PATH` when it names a program, else Scarlet's own copy, which it keeps working. */
+function downloader(ctx: Ctx): Promise<VideoDownloader> {
   const folder = join(ctx.paths.root, "tools");
-  let copy = fetched.get(folder);
-  if (!copy) fetched.set(folder, copy = new LocalWhisperModel(folder, pinned, ctx.log));
-  const file = await copy.get(signal).catch((error: Error) => {
-    if (signal.aborted) throw error;
-    throw new HttpError(502, "no_downloader", `Scarlet couldn't fetch its video downloader (${(error.cause as Error | undefined)?.message ?? error.message}). Try again once the machine is online.`);
-  });
-  if (!await runnable(file)) await chmod(file, 0o755);
-  return file;
+  let tool = downloaders.get(folder);
+  if (!tool) {
+    downloaders.set(folder, tool = (async () => {
+      const set = (ctx.options.env?.YT_DLP_PATH ?? process.env.YT_DLP_PATH)?.trim();
+      return new VideoDownloader({ folder, pinned: DOWNLOADERS[`${process.platform}-${process.arch}`], log: ctx.log,
+        own: set && isAbsolute(set) && await runnable(set) ? set : undefined });
+    })());
+  }
+  return tool;
 }
 
 /**
@@ -126,9 +106,8 @@ function said(error: unknown): string {
 }
 
 async function ytDlp(ctx: Ctx, args: string[], signal: AbortSignal, around?: Awaited<ReturnType<typeof surroundings>>): Promise<Buffer> {
-  const bin = await downloader(ctx, signal);
   const { ffmpegDir, env } = around ?? await surroundings(ctx);
-  return run(bin, ["--ignore-config", "--no-playlist", "--no-warnings", "--no-progress", ...(ffmpegDir ? ["--ffmpeg-location", ffmpegDir] : []), ...args], { signal, env });
+  return (await downloader(ctx)).run(["--ignore-config", "--no-playlist", "--no-warnings", "--no-progress", ...(ffmpegDir ? ["--ffmpeg-location", ffmpegDir] : []), ...args], { signal, env });
 }
 
 const text = (value: unknown, max: number) => typeof value === "string" && value.trim() ? value.trim().slice(0, max) : undefined;
