@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { Change } from "@scarlet/timeline";
-import { queueOrder, queueWait, queueWaits, requestTargetKey } from "./threads.js";
+import { queueOrder, queueWait, queueWaits, requestTargetKey } from "./taskQueue.js";
 import type { Task } from "./tasks.js";
 
 const task = (id: string, state: Task["state"], minute: number, context: Partial<Task["context"]> = {}): Task => ({

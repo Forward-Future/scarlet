@@ -16,7 +16,45 @@ export * from "./inspection.js";
 export * from "./showArea.js";
 export * from "./editingTools.js";
 export * from "./threads.js";
+export {
+  dialogueCommand,
+  dialogueShortcut,
+  extendsDialoguePass,
+  isDialogueGuide,
+  skillCommands,
+  skillExtends,
+  taskDialogueOperation,
+  taskRunKind,
+  type RunKind,
+} from "./skillCommands.js";
+export {
+  aboutChange,
+  openDialogueReview,
+  queueAdmission,
+  queueBlocker,
+  queueOrder,
+  queueWait,
+  queueWaits,
+  requestTargetKey,
+  sameRun,
+  type QueueChange,
+  type QueueTask,
+  type QueueWait,
+} from "./taskQueue.js";
+export { callNumbers } from "./passCalls.js";
 export * from "./cutScope.js";
+export {
+  changeEdits,
+  changeRemovals,
+  isRejectRequest,
+  matchesEdit,
+  namedTimelineEdits,
+  REJECT_MESSAGE,
+  REVISED_CHECK,
+  threadEditList,
+  type EditRef,
+  type ThreadEdit,
+} from "./threadEdits.js";
 export * from "./threadTimeline.js";
 export * from "./revisionState.js";
 export * from "./transcriptSearch.js";

@@ -7,7 +7,7 @@ import type { Listener, ListenResult } from "./capabilities.js";
 import type { z } from "zod/v3";
 import { requireSecureEngineUrl } from "./engineTransport.js";
 import type { TranscriptSearchResult } from "./transcriptSearch.js";
-import type { ThreadEdit } from "./threadTimeline.js";
+import type { ThreadEdit } from "./threadEdits.js";
 import type { StorageCleanup, StorageProject } from "./storage.js";
 import type { AcousticWordsRequest, DialogueRangeRequest, DialogueScanRequest, DialogueWindowRequest, DialogueDetections, SourceAudioRequest, SoundPictureRequest, SoundPictureLayout, SheetRequest, TimelinePicturesRequest, InspectionReviewRequest, InspectionResult, PictureActivityRequest, PictureActivityWindow, RepeatAuditRequest, RepeatAuditResult } from "./inspection.js";
 import type { Author, Change, CutAssessment, CutReview, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript, TranscriptWord } from "@scarlet/timeline";

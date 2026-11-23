@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { Change, emptyTimeline, leftOutJoins, timelineDuration, timelineFromKeepRanges } from "@scarlet/timeline";
 import { buildThreads, type Thread } from "./threads.js";
 import { Task } from "./tasks.js";
-import { changeRemovals, matchesEdit, namedTimelineEdits, REVISED_CHECK, threadEditList, threadTimeline } from "./threadTimeline.js";
+import { changeRemovals, matchesEdit, namedTimelineEdits, REVISED_CHECK, threadEditList } from "./threadEdits.js";
+import { threadTimeline } from "./threadTimeline.js";
 
 const head = { ...timelineFromKeepRanges("project", "interview", [{ start: 0, end: 3468 }]), version: "v2" };
 const earlier = { ...head, version: "v1" };
