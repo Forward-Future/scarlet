@@ -128,6 +128,47 @@ function InstallAgent({ agent }: { agent: SignInAgent }) {
   );
 }
 
+/**
+ * A newer version of an installed agent's command-line tool, and the press that updates it. The app updates it the
+ * way it was installed, in place, and offers nothing for a copy it can't update that way.
+ */
+export function AgentUpdate({ agent }: { agent: AgentAvailability }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState("");
+  const [error, setError] = useState("");
+  if (!isDesktop() || IS_MOCK || !canSignIn(agent.id)) return null;
+  const id = agent.id;
+
+  const update = async () => {
+    setBusy(true);
+    setDone("");
+    setError("");
+    try {
+      const after = await desktop.agentUpdate(id);
+      setDone(after && after !== agent.version ? `Updated to ${after}` : "Already up to date");
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (busy) return <div className="flex items-center gap-2 text-[12px] text-muted" role="status"><Spinner className="size-3" /> Updating {AGENT_LABEL[id]}…</div>;
+  return (
+    <div className="space-y-1 text-[12px]">
+      {agent.latestVersion ? (
+        <div className="flex items-center gap-2">
+          <span className="text-muted">Version {agent.latestVersion} is available</span>
+          <button type="button" className="btn-quiet py-0.5" title={agent.version && `${AGENT_LABEL[id]} ${agent.version} is installed`} onClick={() => void update()}>
+            Update
+          </button>
+        </div>
+      ) : done && <div className="text-muted" role="status">{done}</div>}
+      <InlineError>{error}</InlineError>
+    </div>
+  );
+}
+
 /** A sign-in under way: the browser has the next step. Claude and Gemini can hand back a code to paste instead. */
 function LoginWaiting({ id, login, compact }: { id: SignInAgent; login: ReturnType<typeof useAgentLogin>; compact: boolean }) {
   const [code, setCode] = useState("");

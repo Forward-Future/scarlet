@@ -9,7 +9,7 @@ import { desktop, isDesktop, type EngineStatus } from "../../lib/desktop";
 import { errorMessage, IS_MOCK } from "../../lib/client";
 import { fileBaseName, plural } from "../../lib/format";
 import { AGENT_LABEL, isConfiguredAgent } from "../../stores/hosts";
-import { AgentSignIn, authLabel, canSignIn, useLocalHost } from "./AgentSignIn";
+import { AgentSignIn, AgentUpdate, authLabel, canSignIn, useLocalHost } from "./AgentSignIn";
 import { InlineError, Loading, SectionTitle } from "../ui/primitives";
 
 const ENGINE_LABEL: Record<EngineStatus["state"], string> = {
@@ -72,6 +72,7 @@ export function DesktopAgents({ onConnected }: { onConnected?: () => void }) {
               <div className="flex-1 min-w-0">
                 <div className="text-[13px]">{AGENT_LABEL[a.id]}</div>
                 <div className={`text-[12px] ${isConfiguredAgent(a) ? "text-muted" : "text-dim"}`}>{isConfiguredAgent(a) ? authLabel(a) : a.installed ? "Not signed in" : "Not installed on this computer"}</div>
+                <AgentUpdate agent={a} />
               </div>
               <AgentSignIn agent={a} />
             </li>

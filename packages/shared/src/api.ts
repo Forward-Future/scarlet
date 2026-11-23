@@ -730,6 +730,8 @@ export const AgentAvailability = z.object({
   /** Subscription tier when the CLI reports it (e.g. "max", "pro"). */
   plan: z.string().optional(),
   version: z.string().optional(),
+  /** A newer published version of the CLI that the desktop app can update it to in place. */
+  latestVersion: z.string().optional(),
   /** Model override the host will pass to the CLI (e.g. "opus", "gpt-5-codex"). */
   model: z.string().optional(),
   models: z.array(z.string()).optional(),

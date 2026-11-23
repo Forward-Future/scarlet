@@ -156,6 +156,7 @@ pub fn run() {
             commands::host_refresh_agents,
             commands::host_refresh_quota,
             commands::agent_install,
+            commands::agent_update,
             crisper::install_crisper_model,
             commands::agent_login_start,
             commands::agent_login_code,

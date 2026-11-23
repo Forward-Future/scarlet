@@ -27,6 +27,7 @@ mod task_runner;
 #[cfg(test)]
 mod tests;
 pub mod types;
+pub mod update;
 pub mod usage;
 mod workspace;
 
@@ -262,6 +263,10 @@ impl HostRuntime {
         let mut agents = self.agents.write().await;
         let mut failed = Vec::new();
         for agent in found.iter_mut() {
+            // The update offered for this version stands until the next lookup (`check_updates`).
+            if let Some(old) = agents.iter().find(|a| a.id == agent.id && a.version == agent.version) {
+                agent.latest_version = old.latest_version.clone();
+            }
             if is_quota_eligible(agent) {
                 if let Some(old) = agents.iter().find(|a| a.id == agent.id) {
                     agent.quota = old.quota.clone();
@@ -341,6 +346,42 @@ impl HostRuntime {
             self.emit_status();
         }
         self.full_status().await
+    }
+
+    /// Look up the newest version of each installed CLI and offer the ones Scarlet can update (`update::offers`).
+    async fn check_updates(&self) {
+        let current = self.agents.read().await.clone();
+        let offers = update::offers(&current, &child_env(&self.paths.home)).await;
+        if self.cancel.is_cancelled() {
+            return;
+        }
+        let mut changed = false;
+        {
+            let mut agents = self.agents.write().await;
+            for agent in agents.iter_mut() {
+                // An assistant detected again meanwhile at another version waits for the next lookup.
+                let Some((_, offer)) = offers.iter().find(|(id, _)| *id == agent.id) else { continue };
+                let was = current.iter().find(|a| a.id == agent.id).and_then(|a| a.version.clone());
+                if agent.version == was && agent.latest_version != *offer {
+                    agent.latest_version = offer.clone();
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.emit_status();
+        }
+    }
+
+    /// Look for newer CLIs at start and every few hours while Scarlet stays open.
+    async fn update_check_loop(self: Arc<Self>) {
+        loop {
+            self.check_updates().await;
+            tokio::select! {
+                _ = self.cancel.cancelled() => return,
+                _ = tokio::time::sleep(update::CHECK_EVERY) => {}
+            }
+        }
     }
 
     /// Apply a live quota update streamed during an active run (e.g. Codex `account/rateLimits/updated`).
@@ -698,6 +739,7 @@ impl HostRuntime {
         let env = child_env(&self.paths.home);
         let _ = tokio::join!(self.detect_agents(&env), cleanup);
         self.emit_status();
+        tauri::async_runtime::spawn(self.clone().update_check_loop());
         // Register (retry until it works or we are stopped).
         let mut delay = 2u64;
         loop {
@@ -886,6 +928,8 @@ impl HostManager {
                 tauri::async_runtime::spawn(async move {
                     let _ = bg.refresh_quota(true, None).await;
                 });
+                let bg = rt.clone();
+                tauri::async_runtime::spawn(async move { bg.check_updates().await });
                 let mut status = rt.full_status().await;
                 status.error = status.error.or(catalog_error);
                 status
@@ -902,6 +946,24 @@ impl HostManager {
             status.error = Some("The local agent host is offline. Try again when it connects.".into());
         }
         status
+    }
+
+    /// Whether a run is using `agent` right now. Its CLI isn't updated under it.
+    pub async fn is_running(&self, agent: &str) -> bool {
+        let rt = self.runtime.lock().await.clone();
+        rt.is_some_and(|rt| rt.running.lock().unwrap().values().any(|run| run.agent == agent))
+    }
+
+    /// Look again for newer CLIs now, as after an update.
+    pub async fn check_updates(&self) -> HostStatus {
+        let rt = self.runtime.lock().await.clone();
+        match rt {
+            Some(rt) => {
+                rt.check_updates().await;
+                rt.full_status().await
+            }
+            None => self.status().await,
+        }
     }
 
     /// Refresh subscription quota for eligible providers (non-blocking cache unless `force` is true).

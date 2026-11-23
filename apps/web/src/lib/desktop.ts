@@ -147,6 +147,8 @@ export const desktop = {
   hostRefreshAgents: () => invoke<HostStatus>("host_refresh_agents"),
   hostRefreshQuota: (force = false) => invoke<HostStatus>("host_refresh_quota", { force }),
   agentInstall: (agent: "claude" | "codex" | "gemini") => invoke<"installed" | "needsNode">("agent_install", { agent }),
+  /** Update the installed CLI the way it was installed. Resolves to the version it is at afterwards. */
+  agentUpdate: (agent: "claude" | "codex" | "gemini") => invoke<string | null>("agent_update", { agent }),
   agentLoginStart: (agent: string) => invoke<AgentLoginStatus>("agent_login_start", { agent }),
   agentLoginCode: (agent: string, code: string) => invoke<void>("agent_login_code", { agent, code }),
   agentLoginCancel: (agent: string) => invoke<void>("agent_login_cancel", { agent }),
