@@ -118,7 +118,7 @@ pub const SCARLET_TOOLS: &[&str] = &[
     "task_log", "task_question", "skills_list", "learning_suggest", "skill_save_from_change", "skill_save_edit",
     "web_capture", "graphic_render", "graphic_get", "style_guide_save", "attachment_read",
     "media_frame", "frame_contact_sheet", "frame_contact_sheet_batch", "screen_area",
-    "change_review_cut", "source_audio",
+    "change_review_cut", "source_audio", "listen",
     "captions_generate",
     "asset_add", "export_otio",
     "tool_help", "tool_call",
