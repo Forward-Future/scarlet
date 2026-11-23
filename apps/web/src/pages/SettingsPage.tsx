@@ -14,6 +14,7 @@ import { Link, Navigate, Outlet, useBlocker, useLocation, useMatch, useNavigate 
 import { ListeningSettings } from "../components/shell/ListeningSettings";
 import { ModelSettings } from "../components/shell/ModelSettings";
 import { DesktopAgents, DesktopDiagnostics, ExportLogs } from "../components/shell/DesktopSettings";
+import { FfmpegSetupCard } from "../components/shell/FfmpegSetup";
 import { EditingToolsSettings } from "../components/shell/EditingToolsSettings";
 import { useUiStore } from "../stores/ui";
 import { ErrorState, Field, Icon, InlineError, Loading, Modal, PageHeading, SectionTitle, Spinner, Toggle } from "../components/ui/primitives";
@@ -313,6 +314,7 @@ export function SettingsPage() {
         {tab === "general" && (
           <>
             <DesktopAgents />
+            <FfmpegSetupCard />
             <ServerSettingsForm section="general" />
             <CheckInSettings />
           </>

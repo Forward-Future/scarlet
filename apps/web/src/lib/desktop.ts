@@ -140,6 +140,14 @@ export interface DeveloperStorage extends StorageSize { kind: "cargo" | "scratch
 export interface UpdateBuild { revision: string; done: number; step: number; stepStarted: number; stepSeconds: number }
 export interface UpdateStatus { ready: string | null; building: UpdateBuild | null; source?: UpdateSource | null }
 
+export interface FfmpegStatus {
+  installed: boolean;
+  canInstall: boolean;
+  installDir: string;
+  ffmpegPath: string | null;
+  ffprobePath: string | null;
+}
+
 export const desktop = {
   async onDropFiles(cb: (event: import("@tauri-apps/api/webview").DragDropEvent) => void): Promise<Unlisten> {
     return registerListener("file-drop", async () => {
@@ -155,6 +163,8 @@ export const desktop = {
   hostRefreshAgents: () => invoke<HostStatus>("host_refresh_agents"),
   hostRefreshQuota: (force = false) => invoke<HostStatus>("host_refresh_quota", { force }),
   agentInstall: (agent: "claude" | "codex" | "gemini") => invoke<"installed" | "needsNode">("agent_install", { agent }),
+  ffmpegStatus: () => invoke<FfmpegStatus>("ffmpeg_status"),
+  ffmpegInstall: () => invoke<FfmpegStatus>("ffmpeg_install"),
   agentLoginStart: (agent: string) => invoke<AgentLoginStatus>("agent_login_start", { agent }),
   agentLoginCode: (agent: string, code: string) => invoke<void>("agent_login_code", { agent, code }),
   agentLoginCancel: (agent: string) => invoke<void>("agent_login_cancel", { agent }),

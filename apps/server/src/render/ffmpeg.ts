@@ -95,9 +95,9 @@ export function run(bin: string, args: string[], opts: RunOptions = {}): Promise
 }
 
 export const ffmpeg = (args: string[], opts: RunOptions = {}) =>
-  run(FFMPEG, ["-hide_banner", "-loglevel", "error", "-nostdin", ...args], opts);
+  run(resolveFfmpeg(), ["-hide_banner", "-loglevel", "error", "-nostdin", ...args], opts);
 
-export const ffprobe = (args: string[], opts: RunOptions = {}) => run(FFPROBE, ["-v", "error", ...args], opts);
+export const ffprobe = (args: string[], opts: RunOptions = {}) => run(resolveFfprobe(), ["-v", "error", ...args], opts);
 
 /**
  * A position in seconds as ffmpeg's `-ss`. Arithmetic on times leaves values like 5.5e-17, which String writes with

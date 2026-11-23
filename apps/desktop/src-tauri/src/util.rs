@@ -124,7 +124,7 @@ pub fn augmented_path(env: &HashMap<String, String>, home: &Path) -> String {
     let mut parts: Vec<String> = current.split(sep).filter(|p| !p.is_empty()).map(String::from).collect();
     let prefix = assistant_prefix(home);
     let assistant_bin = if cfg!(windows) { prefix } else { prefix.join("bin") };
-    let mut extra: Vec<PathBuf> = vec![assistant_bin, home.join(".local/bin"), home.join(".claude").join("local")];
+    let mut extra: Vec<PathBuf> = vec![assistant_bin, home.join(".local/bin"), home.join(".claude").join("local"), home.join(".codex").join("bin")];
     if cfg!(windows) {
         if let Some(appdata) = env_get(env, "APPDATA") {
             extra.push(PathBuf::from(appdata).join("npm"));
