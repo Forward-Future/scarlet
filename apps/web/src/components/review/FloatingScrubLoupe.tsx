@@ -1,5 +1,6 @@
 import { useState, type CSSProperties } from "react";
 import { playbackClock } from "../../lib/format";
+import { DimMs } from "../ui/primitives";
 import { LoupePicture, type LoupeSheet } from "./TimelineRange";
 
 export interface ScrubLens { frame: number; at: number }
@@ -28,7 +29,7 @@ export function FloatingScrubLoupe({ lens, first, last, fps, frameAt, sheet, pic
       style={{ transform: `translateX(${(origin - frame - .5) * cell}px)` }}>{cells}</div></div>
     <div className="scrub-loupe-hero">
       <span className="scrub-loupe-picture"><LoupePicture foreground frame={frame} last={last} fps={fps} frameAt={frameAt} sheet={sheet} /></span>
-      <span className="scrub-loupe-time">{playbackClock(frame / fps)}</span>
+      <span className="scrub-loupe-time"><DimMs text={playbackClock(frame / fps)} /></span>
     </div>
   </div>;
 }

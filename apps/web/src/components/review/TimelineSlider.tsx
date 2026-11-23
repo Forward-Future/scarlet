@@ -3,6 +3,7 @@ import type { TimeRange } from "@scarlet/timeline";
 import { clock, playbackClock } from "../../lib/format";
 import { arrowSeekTime } from "../../lib/hotkeys";
 import { usePlayerStore } from "../../stores/player";
+import { DimMs } from "../ui/primitives";
 import { timelinePosition } from "./useTimelineZoom";
 import { GLIDE_FROM_SECONDS, GLIDE_FROM_SHARE, GLIDE_MS } from "./timelineMarkerLayout";
 
@@ -48,7 +49,7 @@ export function TimelineSlider({ playhead, start, end, from, span, width, zoomSp
     {children}
     {position >= from && position <= from + span && <>
       {!loupe && <span aria-hidden="true" className={gliding ? "timeline-playhead-time is-gliding" : "timeline-playhead-time"}
-        style={{ left: `min(${percent}%, calc(100% - ${zoomSpace}px))`, transform: `translateX(-${stampAnchor}%)` }}>{stamp}</span>}
+        style={{ left: `min(${percent}%, calc(100% - ${zoomSpace}px))`, transform: `translateX(-${stampAnchor}%)` }}><DimMs text={stamp} /></span>}
       <div aria-hidden="true" className={gliding ? "timeline-playhead is-gliding" : "timeline-playhead"} style={{ left: `${percent}%` }} />
     </>}
   </div>;

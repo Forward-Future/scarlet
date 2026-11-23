@@ -720,27 +720,31 @@ it("sends words chosen in a call's passage as a revision of that one cut, where 
   expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
 });
 
-it("says where a call's cut is and where the playhead is after its numbered tag", async () => {
+it("shows a call's number and cut time, and clicking the time toggles milliseconds", async () => {
   const ready = buildThreads(current).find(t => t.needs === "decision")!;
   useUiStore.getState().setAgentContext({ changeId: ready.latest!.id, cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "Cut 3" });
   usePlayerStore.setState({ time: 177.4 });
   await show({ thread: ready, targetTag: "Cut 3", aimTime: 167.2, pausedAt: { time: 177.4, version: "ver_before" } });
-  // The tag keeps the call's number, paused or not: the playhead's time is beside it.
-  expect(aimName()?.textContent).toBe("Revising Cut 3");
-  expect(container.querySelector(".composer-aim-when")?.textContent).toBe("at 2:47.200 · Playhead 2:57.400");
-  // The playhead's clock follows the player to the millisecond.
-  await act(async () => usePlayerStore.setState({ time: 181.9 }));
-  expect(container.querySelector(".composer-aim-when")?.textContent).toBe("at 2:47.200 · Playhead 3:01.900");
+  expect(aimName()?.textContent).toBe("Cut 3 · 2:47");
+  expect(container.querySelector(".composer-aim-when")).toBeNull();
+  const timeBtn = container.querySelector<HTMLButtonElement>(".composer-aim-time")!;
+  await act(async () => timeBtn.click());
+  expect(aimName()?.textContent).toBe("Cut 3 · 2:47.200");
+  expect(aimName()?.querySelector(".time-ms")?.textContent).toBe(".200");
+  await act(async () => timeBtn.click());
+  expect(aimName()?.textContent).toBe("Cut 3 · 2:47");
   usePlayerStore.setState({ time: 0 });
 });
 
-it("shows where the editor paused alongside an open cut's header, and sends the message to the cut with that frame", async () => {
+it("shows where the editor paused in an open cut's tag, and sends the message to the cut with that frame", async () => {
   const ready = buildThreads(current).find(t => t.needs === "decision")!;
   useUiStore.getState().setAgentContext({ changeId: ready.latest!.id, cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "Cut at 0:02" });
   await show({ thread: ready, targetTag: "Cut at 0:02", pausedAt: { time: 37.12, version: "ver_before" } });
-  // Shows both the cut being revised and the paused frame carried as context.
-  expect(aimName()?.textContent).toBe("Revising cut at 0:02.300 · paused at 0:37.120");
-  expect(aimName()?.title).toBe("About Cut at 0:02, stopped at 0:37.120");
+  // Shows the paused frame's time alone; the full name on hover still says which cut the message goes to.
+  expect(aimName()?.textContent).toBe("Cut 0:37");
+  expect(aimName()?.title).toBe("About Cut at 0:02, stopped at 0:37");
+  await act(async () => container.querySelector<HTMLButtonElement>(".composer-aim-time")!.click());
+  expect(aimName()?.textContent).toBe("Cut 0:37.120");
   expect(container.querySelector("textarea")!.placeholder).toBe("What should change at this frame?");
   expect(container.querySelector("textarea")!.value).toBe("");
   await type("trim more here");
@@ -753,7 +757,9 @@ it("names the open cut by its own time and sends no stopped frame without a paus
   const ready = buildThreads(current).find(t => t.needs === "decision")!;
   useUiStore.getState().setAgentContext({ changeId: ready.latest!.id, cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "Cut at 0:02" });
   await show({ thread: ready, targetTag: "Cut at 0:02" });
-  expect(aimName()?.textContent).toBe("Revising cut at 0:02.300");
+  expect(aimName()?.textContent).toBe("Cut 0:02");
+  await act(async () => container.querySelector<HTMLButtonElement>(".composer-aim-time")!.click());
+  expect(aimName()?.textContent).toBe("Cut 0:02.300");
   expect(container.querySelector("textarea")!.placeholder).toBe("What should change here?");
   await type("trim more");
   await submit();
@@ -1016,15 +1022,11 @@ it("puts a spoken message that couldn't be sent back with the request it was sai
   expect(useUiStore.getState().agentDraft).toBe("Keep the last word");
 });
 
-const aimButton = () => container.querySelector<HTMLButtonElement>(".composer-aim-line .composer-aim-button");
 const aimName = () => container.querySelector<HTMLElement>(".composer-aim-line .composer-aim-name");
-const aimCard = () => container.querySelector(".composer-aim-card");
-const aimRowLabel = (name: string) => aimCard()?.querySelector(`.composer-aim-row[aria-label="${name}"] > span`);
 const aimField = () => container.querySelector<HTMLTextAreaElement>(".composer-message textarea")!;
-const clickAim = () => act(async () => aimButton()!.click());
 const aimClear = (label: string) => container.querySelector<HTMLButtonElement>(`.composer-aim-clear[aria-label="${label}"]`);
 const clearCut = "Start a new edit instead of revising cut at 2:05";
-const clearRange = "Take the marked range 0:42.000 – 0:51.500 off the message";
+const clearRange = "Take the marked range 0:42 – 0:51 off the message";
 
 it("names and clears the cut beside the draft", async () => {
   await show();
@@ -1034,106 +1036,90 @@ it("names and clears the cut beside the draft", async () => {
   // Where the message goes is a line of its own on top of the box, so the box keeps its width for the words.
   expect(container.querySelector(".composer-aim-line")?.nextElementSibling?.classList.contains("composer-box")).toBe(true);
   expect(container.querySelector(".composer-row .composer-aim")).toBeNull();
-  expect(aimName()?.textContent).toBe("Revising cut at 2:05.342");
-  expect(aimName()?.querySelector(".composer-aim-ms")?.textContent).toBe(".342");
+  expect(aimName()?.textContent).toBe("Cut 2:05");
   expect(aimName()?.title).toBe("About Cut at 2:05");
-  expect(aimButton()).toBeNull();
-  expect(aimCard()).toBeNull();
+  expect(container.querySelector(".composer-aim-button")).toBeNull();
+  expect(container.querySelector(".composer-aim-card")).toBeNull();
+  const timeBtn = container.querySelector<HTMLButtonElement>(".composer-aim-time")!;
+  await act(async () => timeBtn.click());
+  expect(aimName()?.textContent).toBe("Cut 2:05.342");
+  expect(aimName()?.querySelector(".time-ms")?.textContent).toBe(".342");
   await type("Keep the laugh");
   await act(async () => aimClear(clearCut)!.click());
   expect(onClearTarget).toHaveBeenCalledTimes(1);
   expect(useUiStore.getState().agentDraft).toBe("Keep the laugh");
   expect(document.activeElement).toBe(aimField());
-  expect(aimCard()).toBeNull();
   await show({ targetTag: "Reply", thread: buildThreads(current)[0] });
   expect([aimName(), container.querySelector(".composer-tag-name")?.textContent]).toEqual([null, "Reply"]);
 });
 
-it("clears a marked stretch independently of the cut the message is about", async () => {
+it("shows only the chosen range with no tooltip or popover, and clears it independently of an open cut", async () => {
   const cut: AgentContext = { changeId: "chg_1", cutIndex: 0, version: "v1", time: 125, end: 127, clipIds: [], label: "Cut at 2:05" };
   await act(async () => useUiStore.getState().setAgentContext({ ...cut, markedRange: { start: 42, end: 51.5, version: "v2" } }));
   await show({ targetTag: "Cut at 2:05" });
-  expect(aimName()?.textContent).toBe("Revising cut at 2:05.000");
-  expect(aimButton()?.textContent).toContain("+1");
-  expect(aimButton()?.getAttribute("aria-label")).toBe("Show Range 0:42.000 – 0:51.500");
-  await clickAim();
-  expect(aimRowLabel("Range 0:42.000 – 0:51.500")?.textContent).toBe("Range 0:42.000–0:51.500");
-  expect(aimRowLabel("Range 0:42.000 – 0:51.500")?.getAttribute("title")).toBe("Range 0:42.000 – 0:51.500");
-  expect(aimRowLabel("Cut at 2:05")).toBeNull();
-  expect(aimClear(clearCut)).not.toBeNull();
-  expect(aimClear(clearCut)?.closest(".composer-aim-card")).toBeNull();
-  expect(aimCard()?.querySelector(`[aria-label="${clearCut}"]`)).toBeNull();
+  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
+  expect(container.querySelector(".composer-aim-icon")).toBeNull();
+  expect(aimName()?.getAttribute("title")).toBeNull();
+  expect(container.querySelector(".composer-aim-button")).toBeNull();
+  expect(container.querySelector(".composer-aim-card")).toBeNull();
+  expect(aimClear(clearCut)).toBeNull();
+  expect(aimClear(clearRange)).not.toBeNull();
+  const rangeBtn = container.querySelector<HTMLButtonElement>(".composer-aim-time")!;
+  await act(async () => rangeBtn.click());
+  expect(aimName()?.textContent).toBe("Range 0:42.000 – 0:51.500");
+  expect(Array.from(aimName()!.querySelectorAll(".time-ms")).map(el => el.textContent)).toEqual([".000", ".500"]);
+  await act(async () => rangeBtn.click());
+  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
   await act(async () => aimClear(clearRange)!.click());
   expect(useUiStore.getState().agentContext).toEqual(cut);
-  expect(aimName()?.textContent).toBe("Revising cut at 2:05.000");
+  expect(aimName()?.textContent).toBe("Cut 2:05");
   expect(aimName()?.title).toBe("About Cut at 2:05");
-  expect(aimButton()).toBeNull();
-  expect(aimCard()).toBeNull();
   expect(document.activeElement).toBe(aimField());
   // Taking the only target off leaves a new edit about the whole video.
   await act(async () => useUiStore.getState().setAgentContext({ time: 42, end: 51.5, clipIds: [], markedRange: { start: 42, end: 51.5 } }));
   await show();
-  expect(aimName()?.textContent).toBe("Range 0:42.000–0:51.500");
-  expect(aimName()?.title).toBe("About Range 0:42.000 – 0:51.500");
-  expect(aimButton()).toBeNull();
+  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
+  expect(aimName()?.getAttribute("title")).toBeNull();
   await act(async () => aimClear(clearRange)!.click());
   expect(useUiStore.getState().agentContext).toBeNull();
   expect(aimName()).toBeNull();
 });
 
+it("automatically shows dimmed milliseconds when a marked range starts and ends within the same second", async () => {
+  await act(async () => useUiStore.getState().setAgentContext({ time: 812.444, end: 812.478, clipIds: [], markedRange: { start: 812.444, end: 812.478 } }));
+  await show();
+  expect(aimName()?.textContent).toBe("Range 13:32.444 – 13:32.478");
+  expect(Array.from(aimName()!.querySelectorAll(".time-ms")).map(el => el.textContent)).toEqual([".444", ".478"]);
+  expect(aimName()?.getAttribute("title")).toBeNull();
+  await act(async () => aimClear("Take the marked range 13:32.444 – 13:32.478 off the message")!.click());
+  expect(useUiStore.getState().agentContext).toBeNull();
+});
+
 it.each([
-  ["Cut 2", undefined, "Revising Cut 2"],
-  ["Edit at 0:11", undefined, "Revising edit at 0:11"],
-  ["Edit at 0:11", 11.25, "Revising edit at 0:11.250"],
-  ["3 edits at 2:40", 160.342, "Revising 3 edits at 2:40.342"],
+  ["Cut 2", undefined, "Cut 2"],
+  ["Edit at 0:11", undefined, "Edit 0:11"],
+  ["Edit at 0:11", 11.25, "Edit 0:11"],
+  ["3 edits at 2:40", 160.342, "3 edits 2:40"],
 ])("labels %s (time %s) beside the draft as %s", async (targetTag, targetTime, displayName) => {
   await show({ targetTag, targetTime });
   expect(aimName()?.textContent).toBe(displayName);
   expect(aimName()?.title).toBe(`About ${targetTag}`);
   expect(aimClear(`Start a new edit instead of revising ${targetTag.toLowerCase()}`)).not.toBeNull();
-  expect(aimButton()).toBeNull();
-  expect(aimCard()).toBeNull();
+  expect(container.querySelector(".composer-aim-button")).toBeNull();
+  expect(container.querySelector(".composer-aim-card")).toBeNull();
 });
 
-async function showTargetWithRange() {
-  await act(async () => useUiStore.getState().setAgentContext({ time: 42, end: 51.5, clipIds: [], markedRange: { start: 42, end: 51.5 } }));
-  await show({ targetTag: "Cut at 2:05" });
-}
-
-it("toggles the target card from its button and dismisses it with Escape", async () => {
-  await showTargetWithRange();
-  await act(async () => { aimField().focus(); aimField().click(); });
-  expect(aimCard()).toBeNull();
-  expect(document.activeElement).toBe(aimField());
-  await act(async () => aimButton()!.focus());
-  expect(aimButton()?.getAttribute("aria-expanded")).toBe("false");
-  await clickAim();
-  expect(aimButton()?.getAttribute("aria-expanded")).toBe("true");
-  expect(aimButton()?.getAttribute("aria-controls")).toBe(aimCard()?.id);
-  await clickAim();
-  expect(aimCard()).toBeNull();
-  await clickAim();
-  await act(async () => aimClear(clearRange)!.focus());
-  expect(aimCard()).not.toBeNull();
-  const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-  await act(async () => aimClear(clearRange)!.dispatchEvent(escape));
-  expect(escape.defaultPrevented).toBe(true);
-  expect(aimCard()).toBeNull();
-  expect(aimButton()?.getAttribute("aria-expanded")).toBe("false");
-  expect(document.activeElement).toBe(aimButton());
-});
-
-it("dismisses the target card on an outside pointer press or when focus moves to the draft", async () => {
-  await showTargetWithRange();
-  await clickAim();
-  expect(aimCard()).not.toBeNull();
-  await act(async () => aimField().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
-  expect(aimCard()).toBeNull();
-  await clickAim();
-  expect(aimCard()).not.toBeNull();
-  await act(async () => aimButton()!.focus());
-  await act(async () => aimField().focus());
-  expect(aimCard()).toBeNull();
+it("clears a chosen range on Backspace in an empty box before taking off the open cut", async () => {
+  const cut: AgentContext = { changeId: "chg_1", cutIndex: 0, version: "v1", time: 125, end: 127, clipIds: [], label: "Cut at 2:05" };
+  const onClearTarget = vi.fn();
+  await act(async () => useUiStore.getState().setAgentContext({ ...cut, markedRange: { start: 42, end: 51.5 } }));
+  await show({ targetTag: "Cut at 2:05", onClearTarget });
+  await act(async () => { aimField().focus(); aimField().dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true })); });
+  expect(useUiStore.getState().agentContext).toEqual(cut);
+  expect(onClearTarget).not.toHaveBeenCalled();
+  expect(aimName()?.textContent).toBe("Cut 2:05");
+  await act(async () => { aimField().dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true })); });
+  expect(onClearTarget).toHaveBeenCalledTimes(1);
 });
 
 it("keeps a picked moment, and a whole-video choice, through a time typed in the message", async () => {
@@ -1269,10 +1255,13 @@ it("saves a queued request's new words with the skills their /commands name, as 
 
 it("names the moment beside the draft and clears it for a whole-video request", async () => {
   const onClearTarget = vi.fn();
+  await act(async () => useUiStore.getState().setAgentContext({ time: 1108.45, clipIds: [] }));
   await show({ targetTag: "At 18:28", targetIsPoint: true, onClearTarget });
-  expect(aimName()?.textContent).toBe("New edit at 18:28");
+  expect(aimName()?.textContent).toBe("At 18:28");
   expect(aimName()?.title).toBe("About 18:28");
-  expect(aimButton()).toBeNull();
+  await act(async () => container.querySelector<HTMLButtonElement>(".composer-aim-time")!.click());
+  expect(aimName()?.textContent).toBe("At 18:28.450");
+  expect(container.querySelector(".composer-aim-button")).toBeNull();
   await act(async () => aimClear("Take “At 18:28” off: the message is about the whole video")!.click());
   expect(onClearTarget).toHaveBeenCalledTimes(1);
 });

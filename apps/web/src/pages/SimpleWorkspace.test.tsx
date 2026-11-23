@@ -854,9 +854,9 @@ it("aims a new edit at a pick on Before and After once the editor has taken the 
   await press(" ");
   await act(async () => composer.props!.onClearTarget!());
   await pressTimeline(8.5);
-  expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 8.5, ["At 0:08.500", true]]);
+  expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 8.5, ["At 0:08", true]]);
   await skipKey("ArrowLeft", true);
-  expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 7.5, ["At 0:07.500", true]]);
+  expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 7.5, ["At 0:07", true]]);
   await click(compareButton(editPanel()!));
   await act(async () => {});
   // Space pauses After there, which writes the time into the box; the skip then moves the time written in.
@@ -9345,11 +9345,11 @@ it("aims a new edit at the latest manual seek at once, with no second press", as
   await show();
   expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
   await press("ArrowRight");
-  expect(pointTag()).toEqual(["At 0:05.000", true]);
+  expect(pointTag()).toEqual(["At 0:05", true]);
   expect(useUiStore.getState().agentContext).toMatchObject({ time: 5 });
   const slider = container.querySelector<HTMLElement>(".timeline-slider")!;
   await act(async () => { slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })); });
-  expect(pointTag()).toEqual(["At 0:10.000", true]);
+  expect(pointTag()).toEqual(["At 0:10", true]);
   // Playback lets go of an empty box's moment, and a pause the app makes picks none of its own.
   await act(async () => usePlayerStore.setState({ playing: true }));
   expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
@@ -9364,15 +9364,15 @@ it("aims a new edit at the latest manual seek at once, with no second press", as
     slider.dispatchEvent(pointer("pointermove", 8));
     slider.dispatchEvent(pointer("pointerup", 9));
   });
-  expect(pointTag()).toEqual(["At 0:09.000", true]);
+  expect(pointTag()).toEqual(["At 0:09", true]);
   expect(useUiStore.getState().agentContext).toMatchObject({ time: 9 });
   await act(async () => useUiStore.getState().setAgentDraft("Zoom in here"));
   await act(async () => usePlayerStore.setState({ playing: true, time: 12 }));
-  expect(pointTag()).toEqual(["At 0:09.000", true]);
+  expect(pointTag()).toEqual(["At 0:09", true]);
   // Browsing while writing keeps the chosen point with the message.
   await act(async () => usePlayerStore.setState({ playing: false }));
   await press("ArrowRight");
-  expect(pointTag()).toEqual(["At 0:09.000", true]);
+  expect(pointTag()).toEqual(["At 0:09", true]);
   await act(async () => composer.props!.onClearTarget!());
   expect(boxNow()).toEqual(["Zoom in here", "whole", JSON.stringify([PRJ, null])]);
   await press("ArrowLeft");
@@ -9456,9 +9456,9 @@ it("moves an empty box's point to the next manual seek, and releases it on playb
   idle();
   await show();
   await press("n");
-  expect(pointTag()).toEqual(["At 0:00.000", true]);
+  expect(pointTag()).toEqual(["At 0:00", true]);
   await press("ArrowRight");
-  expect(pointTag()).toEqual(["At 0:05.000", true]);
+  expect(pointTag()).toEqual(["At 0:05", true]);
   await act(async () => usePlayerStore.setState({ playing: true }));
   await act(async () => usePlayerStore.setState({ playing: false, time: 0 }));
   expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
@@ -9486,17 +9486,17 @@ it("gives the message box the cursor on N, about the moment the playhead is on, 
   await press("n");
   await act(async () => usePlayerStore.setState({ playing: false }));
   expect(paused).toHaveBeenCalled();
-  expect([cursor(), pointTag()]).toEqual([1, ["At 0:05.000", true]]);
+  expect([cursor(), pointTag()]).toEqual([1, ["At 0:05", true]]);
   expect(useUiStore.getState().notePopover).toBeNull();
   // A message already being written about a moment keeps it: N only brings the cursor back.
   await act(async () => useUiStore.getState().setAgentDraft("Zoom in here"));
   await act(async () => usePlayerStore.setState({ time: 12 }));
   await press("N");
-  expect([cursor(), pointTag()]).toEqual([2, ["At 0:05.000", true]]);
+  expect([cursor(), pointTag()]).toEqual([2, ["At 0:05", true]]);
   // Sent or cleared, the next N is about where the playhead is then.
   await act(async () => useUiStore.getState().setAgentDraft(""));
   await press("n");
-  expect([cursor(), pointTag()]).toEqual([3, ["At 0:12.000", true]]);
+  expect([cursor(), pointTag()]).toEqual([3, ["At 0:12", true]]);
   // With an edit open the box revises that edit, and N gives it the cursor as it is.
   appliedEdits();
   await act(async () => root.render(null));
@@ -9533,7 +9533,7 @@ it("keeps a message being written about the whole video so through a seek, thoug
   expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
   // N still takes the current time.
   await press("n");
-  expect(pointTag()).toEqual(["At 0:05.000", true]);
+  expect(pointTag()).toEqual(["At 0:05", true]);
 });
 
 it("doesn't bring back a point picked in an earlier visit on an empty box, and keeps one with its message", async () => {
@@ -9546,7 +9546,7 @@ it("doesn't bring back a point picked in an earlier visit on an empty box, and k
   root = createRoot(container);
   useUiStore.setState({ agentDraft: "", agentContext: null, draftOwner: null, savedDrafts: { [owner]: { agentDraft: "Cut this", agentContext: { time: 7, clipIds: [] } } } });
   await show();
-  expect(boxTag()).toBe("At 0:07.000");
+  expect(boxTag()).toBe("At 0:07");
 });
 
 /** Words chosen in the transcript, as its "Ask about this" aims the message box at them. Nothing in the box names them. */
@@ -9565,7 +9565,7 @@ it("keeps explicitly chosen transcript words through timeline seeks before and w
   expect(boxNow()).toEqual(["Tighten this", chosenWords(), JSON.stringify([PRJ, null])]);
   await act(async () => useUiStore.getState().setAgentDraft(""));
   await press("n");
-  expect(pointTag()).toEqual(["At 0:10.000", true]);
+  expect(pointTag()).toEqual(["At 0:10", true]);
   await act(async () => composer.props!.onClearTarget!());
   expect(boxTag()).toBeUndefined();
 });

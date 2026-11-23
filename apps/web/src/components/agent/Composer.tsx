@@ -11,19 +11,19 @@ import { usePictureMarksStore } from "../../stores/pictureMarks";
 import { player } from "../../lib/player";
 import { toggleMarking } from "../player/PictureMarks";
 import { isComposing } from "../../lib/hotkeys";
-import { clock, clockRange, playbackClock } from "../../lib/format";
+import { clock, clockRange, playbackClock, preciseRange } from "../../lib/format";
 import type { RecorderResult } from "../../lib/recorder";
 import { useSpeech } from "../../lib/speech";
 import type { Thread } from "../../lib/threads";
 import { useProjectStore } from "../../stores/project";
 import { commandSkillIds, enabledSkills, useSkillsStore } from "../../stores/skills";
 import { editTargetAt, markedRangeOf, pointOf, playheadPoints, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
-import { Icon, Spinner, InlineError, type IconName } from "../ui/primitives";
+import { Icon, Spinner, InlineError } from "../ui/primitives";
 import { AgentChip, runChoiceDiffers, useAgentAvailability } from "./AgentChip";
 import { SkillCommandInput } from "./SkillCommandInput";
 import { MicButton } from "./MicButton";
 import { AimTimecode, ComposerAim, type AimItem } from "./ComposerAim";
-import { AttachedFiles, NO_FILES, PlayheadClock, sendMarks } from "./ComposerAttachments";
+import { AttachedFiles, NO_FILES, sendMarks } from "./ComposerAttachments";
 
 const timestampLabel = (time: number) => playbackClock(time).replace(/\.000$/, "");
 
@@ -65,10 +65,7 @@ interface ComposerProps {
    * that time in place of the cut's or the edit's; the message is still theirs, and Scarlet is told the frame too.
    */
   pausedAt?: PausedAt;
-  /**
-   * Where the cut a call's tag names ("Cut 3") is in the video. The tag's line says it after the tag, with where the
-   * playhead is now: "at 2:47.200 · Playhead 2:57.400".
-   */
+  /** Where the cut a call's tag names ("Cut 3") is in the video, shown after a dot ("Cut 3 · 2:47"). */
   aimTime?: number;
   /** Exact time for a time-based target tag ("Cut at 2:05", "Edit at 0:11"), shown to the millisecond above the box. */
   targetTime?: number;
@@ -390,7 +387,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const tag = rewording ? undefined : targetTag;
   // A stretch marked on the timeline's ruler rides with the message, beside the tag of the cut or edit it is aimed at.
   const marked = rewording ? undefined : markedRangeOf(context);
-  const markedWords = marked ? `${playbackClock(marked.start)} – ${playbackClock(marked.end)}` : "";
+  const markedWords = marked ? preciseRange(marked.start, marked.end) : "";
+  const markedPrecise = marked ? `${playbackClock(marked.start)} – ${playbackClock(marked.end)}` : "";
   // "Answer", "Reply" and "Note" name who the message goes to. The target label shows the place it is about.
   const wordTag = tag === "Answer" || tag === "Reply" || (tag === "Note" && noteTo) ? tag : undefined;
   const placeTag = wordTag ? undefined : tag;
@@ -398,65 +396,54 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     if (onClearTarget) onClearTarget(); else setContext("whole");
     inputRef.current?.focus();
   };
-  // Paused with a cut or an edit open, show the stopped frame alongside the target so the editor sees both which
-  // cut/edit the revision targets and which frame it carries as context.
-  // A call's tag keeps its number: the playhead's time is beside it already.
-  const stopped = replying && !targetIsPoint && pausedAt && aimTime === undefined ? playbackClock(pausedAt.time) : undefined;
+  // Paused with a cut or an edit open, the header shows the one time the editor is looking at: where they stopped.
+  // Its full name on hover still says which cut or edit the message goes to.
+  const stopped = replying && !targetIsPoint && pausedAt && aimTime === undefined ? clock(pausedAt.time) : undefined;
   const exactTime = targetTime !== undefined ? targetTime
     : displayAnchor && placeTag && (placeTag.endsWith(` at ${clock(displayAnchor.time)}`) || placeTag === `At ${clock(displayAnchor.time)}`)
       ? displayAnchor.time : undefined;
-  const expandedPlaceTag = (() => {
-    if (!placeTag) return undefined;
-    if (exactTime === undefined) return placeTag;
-    const whole = clock(exactTime);
-    const full = playbackClock(exactTime);
-    if (placeTag === `At ${whole}`) return `At ${full}`;
-    if (placeTag.endsWith(` at ${whole}`)) return `${placeTag.slice(0, -whole.length)}${full}`;
-    return placeTag;
-  })();
-  const placeIcon: IconName | undefined = !placeTag ? undefined
-    : targetIsPoint ? "point"
-    : /^Cut\b/.test(placeTag) ? "scissors"
-    : "film";
   const placeDisplay: ReactNode = (() => {
-    if (!expandedPlaceTag) return undefined;
-    const pausedSuffix = (targetClock?: string) => stopped && stopped !== targetClock
-      ? <><span className="composer-aim-sep" aria-hidden="true"> · </span><span className="composer-aim-verb">paused at</span> <AimTimecode value={stopped} /></>
-      : null;
+    if (!placeTag) return undefined;
     if (targetIsPoint) {
-      const at = expandedPlaceTag.replace(/^At /, "");
-      return <><span className="composer-aim-verb">New edit at</span> <AimTimecode value={at} /></>;
+      const time = placeTag.replace(/^At /, "");
+      const exact = exactTime !== undefined ? playbackClock(exactTime) : displayAnchor ? playbackClock(displayAnchor.time) : undefined;
+      return <><span className="composer-aim-verb">At</span> <AimTimecode key={`pt:${placeTag}:${exact ?? ""}`} value={time} precise={exact} /></>;
     }
-    const atMatch = expandedPlaceTag.match(/^(Cut|Edit|\d+ edits) at (.+)$/);
-    if (atMatch) {
-      const noun = atMatch[1]!.toLowerCase();
-      const at = atMatch[2]!;
-      return <><span className="composer-aim-verb">Revising {noun} at</span> <AimTimecode value={at} />{pausedSuffix(at)}</>;
+    if (/^(?:Cut|Edit) \d+$/.test(placeTag)) {
+      return aimTime !== undefined
+        ? <><span className="composer-aim-target">{placeTag}</span> <span className="composer-aim-sep" aria-hidden="true">·</span> <AimTimecode key={`call:${placeTag}:${aimTime}`} value={clock(aimTime)} precise={playbackClock(aimTime)} /></>
+        : <span className="composer-aim-target">{placeTag}</span>;
     }
-    if (/^(Cut|Edit) \d+$/.test(expandedPlaceTag)) {
-      return <><span className="composer-aim-verb">Revising</span> <span className="composer-aim-target">{expandedPlaceTag}</span>{pausedSuffix()}</>;
+    const timed = /^(Cut|Edit|\d+ edits) at (.+)$/.exec(placeTag);
+    if (timed) {
+      const noun = timed[1]!;
+      const time = stopped ?? timed[2]!;
+      const exact = stopped && pausedAt ? playbackClock(pausedAt.time) : exactTime !== undefined ? playbackClock(exactTime) : displayAnchor ? playbackClock(displayAnchor.time) : undefined;
+      return <><span className="composer-aim-verb">{noun}</span> <AimTimecode key={`edit:${placeTag}:${exact ?? time}`} value={time} precise={exact} /></>;
     }
-    if (expandedPlaceTag === "Whole edit") {
-      return <><span className="composer-aim-verb">Revising</span> <span className="composer-aim-target">whole edit</span>{pausedSuffix()}</>;
-    }
-    return <><span className="composer-aim-verb">{tagAct ?? expandedPlaceTag}</span>{pausedSuffix()}</>;
+    return <span className="composer-aim-verb">{placeTag}</span>;
   })();
-  const aimItems: AimItem[] = [
-    ...placeTag ? [{ key: `target:${placeTag}`, name: targetIsPoint ? placeTag.replace(/^At /, "") : stopped ? `${placeTag}, stopped at ${stopped}` : placeTag,
-      displayName: placeDisplay,
-      icon: placeIcon,
-      clearLabel: targetIsPoint ? `Take “${placeTag}” off: the message is about the whole video` : `Start a new edit instead of ${tagAct!.charAt(0).toLowerCase()}${tagAct!.slice(1)}`,
-      onClear: takeOffTarget }] : [],
-    ...marked ? [{ key: `range:${marked.start}/${marked.end}`, name: `Range ${markedWords}`,
-      displayName: <><span className="composer-aim-verb">Range</span> <AimTimecode value={markedWords.replace(" – ", "–")} /></>,
-      icon: "trim" as const,
-      clearLabel: `Take the marked range ${markedWords} off the message`, onClear: () => {
-        const was = context && context !== "whole" ? context : undefined;
-        setContext(withMarkedRange(context, undefined), was?.changeId ? was : undefined);
-        inputRef.current?.focus();
-      } }] : [],
-  ];
-  const [primaryAim, ...additionalAims] = aimItems;
+  const placeName = placeTag
+    ? targetIsPoint ? placeTag.replace(/^At /, "") : stopped ? `${placeTag}, stopped at ${stopped}` : placeTag
+    : undefined;
+  const aimItem: AimItem | undefined = marked ? {
+    key: `range:${marked.start}/${marked.end}`,
+    name: `Range ${markedWords}`,
+    displayName: <><span className="composer-aim-verb">Range</span> <AimTimecode key={`range:${marked.start}/${marked.end}`} value={markedWords} precise={markedPrecise} /></>,
+    clearLabel: `Take the marked range ${markedWords} off the message`,
+    onClear: () => {
+      const was = context && context !== "whole" ? context : undefined;
+      setContext(withMarkedRange(context, undefined), was?.changeId ? was : undefined);
+      inputRef.current?.focus();
+    },
+  } : placeTag ? {
+    key: `target:${placeTag}`,
+    name: placeName!,
+    displayName: placeDisplay,
+    title: `About ${placeName}`,
+    clearLabel: targetIsPoint ? `Take “${placeTag}” off: the message is about the whole video` : `Start a new edit instead of ${tagAct!.charAt(0).toLowerCase()}${tagAct!.slice(1)}`,
+    onClear: takeOffTarget,
+  } : undefined;
   const saveLabel = rewording ? "Save the new words" : sendLabel;
   function changeText(text: string) {
     dismissFirstEditHint();
@@ -486,10 +473,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       {tray}
       {/* Where the message goes (a cut, an edit, a moment, a stretch marked on the ruler) is a flush context header
           on top of the box, under the queue's tray, so the box keeps its whole width for the words. */}
-      {primaryAim && <div className="composer-aim-line">
-        <ComposerAim items={[primaryAim, ...additionalAims]}
-          detail={aimTime !== undefined && placeTag ? <span className="composer-aim-when">at {playbackClock(aimTime)} · <PlayheadClock /></span> : undefined}
-          disabled={recording || heard} disabledReason="Waits until what you’re saying is sent" />
+      {aimItem && <div className="composer-aim-line">
+        <ComposerAim item={aimItem} disabled={recording || heard} disabledReason="Waits until what you’re saying is sent" />
       </div>}
       {(attached.length > 0 || markedFrame) && <AttachedFiles files={attached} onRemove={key => { detach(project.id, key); inputRef.current?.focus(); }}
         marked={markedFrame} onOpenMarked={frame => {
@@ -503,9 +488,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       <div className={firstEditHint ? "composer-box first-edit-hint" : "composer-box"} onKeyDown={e => {
         if (rewording && e.key === "Escape" && !e.defaultPrevented && !isComposing(e)) rewording.onCancel();
         const emptyBox = !e.defaultPrevented && !isComposing(e) && !recording && !heard && e.target === inputRef.current && !inputRef.current.value;
-        if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && (placeTag || wordTag === "Note")) {
+        if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && (aimItem || wordTag === "Note")) {
           e.preventDefault();
-          takeOffTarget();
+          if (aimItem) aimItem.onClear();
+          else takeOffTarget();
         }
         if (e.key.toLowerCase() === "z" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && emptyBox && !rewording && onRestoreTarget?.()) {
           e.preventDefault();
