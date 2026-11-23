@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { matchesEdit, REVISED_CHECK, type EditRef, type ThreadEdit } from "@scarlet/shared";
-import { EditBadge, editGroups, EditVersion, RejectedMark, revisionWord, ThreadAction, ThreadEdits, useRejecting, useReviewed, useRevising } from "../../components/review/ThreadEdits";
+import { EditBadge, editGroups, EditVersion, RejectedMark, revisionWord, ThreadAction, ThreadEdits, useDeferred, useRejecting, useReviewed, useRevising } from "../../components/review/ThreadEdits";
 import { Icon } from "../../components/ui/primitives";
 import { editKindWord, editRowWord } from "../../lib/editKind";
 import { listMoments, type Moment } from "../../lib/editMoments";
@@ -103,6 +103,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   rejected?: Omit<ThreadEdit, "at">[];
   actions: ChatActions; aside?: ReactNode; list: PassList; listedNeed: RefObject<Set<string>>; working?: boolean; nests?: readonly Nest[]; spent?: Spent }) {
   const reviewed = useReviewed(projectId, thread);
+  const deferred = useDeferred(projectId, thread);
   const revising = useRevising(thread);
   const rejecting = useRejecting(thread);
   const kept = useKeptEdits(projectId, thread);
@@ -113,8 +114,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const onRow = actions.showing ? editKey(actions.showing) : actions.listening?.key;
   useEffect(() => { list.current?.querySelector('[aria-current="true"]')?.scrollIntoView?.({ block: "nearest" }); }, [onRow, open]);
   const pass = actions.pass?.threadId === thread.id ? actions.pass : undefined;
-  // An edit sent back for revision waits on Scarlet, not on the editor.
-  const flagged = useMemo(() => edits.filter(e => e.check && !reviewed(e) && !revising(e)), [edits, reviewed, revising]);
+  // An edit sent back for revision waits on Scarlet, not on the editor; a to-do parked as Later stays in For you
+  // without holding up the waiting count.
+  const flagged = useMemo(() => edits.filter(e => e.check && !reviewed(e) && !deferred(e) && !revising(e)), [edits, reviewed, deferred, revising]);
   const openCalls = pass?.calls.filter(c => c.state === "open").length ?? 0;
   const need = openCalls + flagged.length;
   const totalRows = edits.length + (pass?.calls.length ?? 0);
@@ -179,13 +181,14 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       // A revision on its way: the row says so until the new version lands, whether or not the editor had kept the
       // edit. A cut the pass applied through its calls counts as kept, so a guard on that left its row as it was.
       const sent = revising(e);
+      const later = !seen && !sent && deferred(e);
       // One that came back revised with no reason from Scarlet says so until it is kept, as any other list's row does.
       const revised = e.check === REVISED_CHECK && !seen && !sent;
-      const needs = !!e.check && !seen && !sent;
+      const needs = !!e.check && !seen && !later && !sent;
       const sentBack = !!e.check && !seen && !!sent;
       // Ticked once the editor has kept it: a flagged edit they reviewed, an approved pass call, or any edit kept.
-      const decided = !needs && !sent && ((!!e.check && seen) || kept.has(reviewKey(e)) || decidedCallEditKeys.has(key));
-      const decision = decided ? (e.marker ? "Done" : "Kept") : undefined;
+      const decided = !needs && !sent && !later && ((!!e.check && seen) || kept.has(reviewKey(e)) || decidedCallEditKeys.has(key));
+      const decision = decided ? (e.marker ? "Done" : "Kept") : later ? "Later" : undefined;
       // Where it stands, when it isn't simply waiting: the word a row among the calls ends on. In the list of every edit
       // it follows the row's amount, as in any other request's list, and the amount stays.
       const word = sent ? revisionWord(sent, { rejecting: rejecting(e), nextQueuedId: actions.nextQueuedId }) : revised ? REVISED_CHECK : undefined;
@@ -194,7 +197,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       // Listed with the calls, it has the number it has among them.
       return [{ key, at, displayAt, mark: displayAt as number | undefined, hover: { threadId: thread.id, editKey: key } as { threadId: string; editKey?: string; call?: number } | undefined,
         label: (e.reason && e.summary) || e.label, n: 0, num: editNumber(e),
-        state: word ?? decision, decision, value: editRemovedLabel(e) ?? editRowWord(e), word, revised, rejected: false, skipped: false,
+        state: word ?? decision, decision, value: later ? "Later" : editRemovedLabel(e) ?? editRowWord(e), word, revised, rejected: false, skipped: false,
         forYou, onlyForYou: false,
         // Scarlet is on that revision now, so its word moves; one still waiting its turn sits still.
         busy: !!sent && isWorking(sent.state), pending: !!sent, needs, sentBack, decided,
@@ -379,6 +382,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
    *  nor turn into the list of every edit. `wasShowing` is whether one of the edits was open when the block last drew. */
   list: PassList; listedNeed: RefObject<Set<string>>; wasShowing?: RefObject<boolean> }) {
   const reviewed = useReviewed(projectId, thread);
+  const deferred = useDeferred(projectId, thread);
   const revising = useRevising(thread);
   const [open, setOpen] = list;
   const [host, reveal] = useReveal(open);
@@ -389,7 +393,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   // For any other edit it is every edit.
   const showing = actions.showing;
   const shownEdit = showing && edits.find(e => matchesEdit(showing, e));
-  const flagged = useMemo(() => edits.filter(e => e.check && !reviewed(e) && !revising(e)), [edits, reviewed, revising]);
+  const flagged = useMemo(() => edits.filter(e => e.check && !reviewed(e) && !deferred(e) && !revising(e)), [edits, reviewed, deferred, revising]);
   // An edit made in several places is one edit, on one row of the list: For you counts the rows that wait.
   const groups = useMemo(() => editGroups(edits), [edits]);
   const need = useMemo(() => groups.filter(group => group.members.some(m => flagged.includes(m.edit))).length, [groups, flagged]);

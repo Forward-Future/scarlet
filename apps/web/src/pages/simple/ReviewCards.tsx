@@ -109,7 +109,7 @@ export function RejectedEditCard({ edit }: { edit: ThreadEdit }) {
 export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPassNo, editPlace, flaggedCount, editDid, selectedMoment,
   shownKind, shownMarker, reviewRange, onPlayCheck, visiting, beforeCut, cutBeforeTimeline, cutBeforeError, onRetryCutBefore,
   media, removedLength, otherCuts, scriptKey, scriptOpen, onToggleScript, shownSource, sourceKey, sourceOpen, onToggleSource, cutSwitched, cutTake, appliedSide, workspaceActive,
-  cutKey, onChooseCutSide, setCompareHost, onRevise, onKeep, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject }: {
+  cutKey, onChooseCutSide, setCompareHost, onRevise, onDefer, onKeep, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject }: {
   projectId: string;
   focusThread: Thread;
   reviewingEdit: ThreadEdit;
@@ -145,6 +145,7 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
   onChooseCutSide(side: Side): void;
   setCompareHost: (el: HTMLElement | null) => void;
   onRevise(): void;
+  onDefer?: () => void;
   onKeep(): void;
   appliedTarget?: AgentContext;
   rejectTarget?: AgentContext;
@@ -198,8 +199,10 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
         {sourceKey && <SourceLink open={sourceOpen} toggle={onToggleSource} />}
       </span>
       <span className="edit-card-acts">
-        <ReviewActions revise={onRevise} approve={onKeep}
-          approveLabel={shownMarker ? "Done" : "Keep"} approveKey={shownMarker ? "D" : "K"} />
+        {/* A to-do marker changed nothing in the video, so there is nothing to revise: offer Later (L) when still waiting, and Done (D). */}
+        <ReviewActions revise={shownMarker ? onDefer : onRevise}
+          reviseLabel={shownMarker ? "Later" : "Revise"} reviseKey={shownMarker ? "L" : "R"}
+          approve={onKeep} approveLabel={shownMarker ? "Done" : "Keep"} approveKey={shownMarker ? "D" : "K"} />
         {/* Reject edit is a small × after Keep, as on a call's card: it puts back just this edit, also on
             a moment's card. The edit leaves the timeline where it is and the card stays, saying Rejected. A spot marked for the editor changed nothing, so
             it has none. Each edit has its own: one on its way for the edit before doesn't hold this one's back. */}
