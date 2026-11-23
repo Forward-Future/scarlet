@@ -79,3 +79,24 @@ it("does not count an inspection when its edge readings were left out of the res
   expect(body(result)).toEqual({ version: "v1", joins: [{ status: "review" }], evidenceLeftOut: [0] });
   expect(inspected).not.toHaveBeenCalled();
 });
+
+it("respects a tighter maxChars budget by shedding prose fields on unchanged joins first", async () => {
+  const checks = new JoinChecks(1_000);
+  const big = "word ".repeat(60);
+  const result = await checks.collect("tight", "v1", 4, async publish => {
+    publish(0, { status: "review", start: 1, end: 2, reason: "kept reason", removes: big, plays: big, audio: [{ edge: "start" }] });
+    publish(1, { status: "unchanged", start: 3, end: 4, reason: big, removes: big, plays: big, notes: [big], audio: [{ edge: "start" }] });
+    publish(2, { status: "unchanged", start: 5, end: 6, reason: big, removes: big, plays: big, notes: [big], audio: [{ edge: "start" }] });
+    publish(3, { status: "snapped", start: 7, end: 8, reason: "snapped reason", removes: big, plays: big, audio: [{ edge: "start" }] });
+  }, 5);
+  const text = (result.content[0] as { text: string }).text;
+  expect(text.length).toBeLessThanOrEqual(1_000);
+  const parsed = JSON.parse(text);
+  expect(parsed.joins).toHaveLength(4);
+  // Every join retains its status and range; review join keeps its reason while unchanged joins shed theirs.
+  expect(parsed.joins[0]).toMatchObject({ status: "review", start: 1, end: 2, reason: "kept reason" });
+  expect(parsed.joins[1]).toMatchObject({ status: "unchanged", start: 3, end: 4 });
+  expect(parsed.joins[1]).not.toHaveProperty("reason");
+  expect(parsed.joins[1]).not.toHaveProperty("removes");
+  expect(parsed.evidenceLeftOut).toEqual(expect.arrayContaining([1, 2]));
+});

@@ -1063,6 +1063,43 @@ describe("timeline_join_audit", () => {
       expect(second).toContain(`#${next![1]} `);
     } finally { await c.close(); }
   });
+
+  it("pages timeline_join_audit and timeline_get to stay within caps.resultChars", async () => {
+    const tl = emptyTimeline("prj_test");
+    tl.version = "many_joins";
+    for (let i = 0; i < 36; i++) {
+      tl.tracks[1]!.clips.push(makeMediaClip("m1", i * 4, i * 4 + 2, i * 2, { id: `c_${i}` }));
+    }
+    mock.state.timeline = tl;
+    mock.state.waveform = (mediaId, from, to, points) => ({
+      mediaId, from, to, peaks: Array(points).fill(0.001), rms: Array(points).fill(0.001), speechActivity: [],
+    });
+    const c = await connect({
+      agent: "gemini",
+      capabilities: { images: true, audio: false, files: false, plan: false, resultChars: 1_500 },
+    });
+    try {
+      const firstAuditText = textOf(await ok(c, "timeline_join_audit"));
+      expect(firstAuditText.length).toBeLessThanOrEqual(1_500);
+      const firstAudit = JSON.parse(firstAuditText) as { audits: Array<{ at: number }>; next?: string };
+      expect(firstAudit.audits.length).toBeGreaterThan(0);
+      expect(firstAudit.audits.length).toBeLessThan(35);
+      const nextFrom = /from=([\d.]+)/.exec(firstAudit.next ?? "");
+      expect(nextFrom).not.toBeNull();
+      const secondAuditText = textOf(await ok(c, "timeline_join_audit", { from: Number(nextFrom![1]) }));
+      expect(secondAuditText.length).toBeLessThanOrEqual(1_500);
+      const secondAudit = JSON.parse(secondAuditText) as { audits: Array<{ at: number }> };
+      expect(secondAudit.audits[0]!.at).toBeGreaterThan(firstAudit.audits.at(-1)!.at);
+
+      const firstTl = textOf(await ok(c, "timeline_get", { format: "summary" }));
+      expect(firstTl.length).toBeLessThanOrEqual(1_500);
+      const tlNext = /call timeline_get with from=([\d.]+)/.exec(firstTl);
+      expect(tlNext).not.toBeNull();
+      const secondTl = textOf(await ok(c, "timeline_get", { format: "summary", from: Number(tlNext![1]) }));
+      expect(secondTl.length).toBeLessThanOrEqual(1_500);
+      expect(secondTl).toContain("c_35 ");
+    } finally { await c.close(); }
+  });
 });
 
 describe("what goes to stderr when a read fails and the tool answers without it", () => {

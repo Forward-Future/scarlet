@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Transcript } from "@scarlet/timeline";
-import { makeMediaClip } from "@scarlet/timeline";
+import { emptyTimeline, makeMediaClip } from "@scarlet/timeline";
 import { flattenWords, searchTranscript } from "@scarlet/shared";
 import {
   colorEvidence,
   summarizeProject,
+  summarizeTimeline,
+  summarizeTimelinePage,
   captionWordMapper,
   dedupeWords,
   detectSilences,
@@ -203,5 +205,41 @@ describe("colorEvidence", () => {
     const lines = summarizeProject(project, null).split("\n");
     expect(lines.find(line => line.includes("phone"))).toContain("HDR PQ, shown, read and exported tone-mapped to SDR BT.709");
     expect(lines.find(line => line.includes("Cam.mp4"))).not.toMatch(/HDR|Log|colour/);
+  });
+});
+
+describe("summarizeTimelinePage", () => {
+  it("returns summarizeTimeline verbatim when within maxChars and pages clips by start time when over", () => {
+    const tl = emptyTimeline("prj");
+    tl.version = "v_many";
+    for (let i = 0; i < 30; i++) {
+      tl.tracks[0]!.clips.push(makeMediaClip("m1", i * 5, i * 5 + 4, i * 4, { id: `v_${i}` }));
+      tl.tracks[1]!.clips.push(makeMediaClip("m1", i * 5, i * 5 + 4, i * 4, { id: `a_${i}` }));
+    }
+    const full = summarizeTimeline(tl, 30);
+    expect(summarizeTimelinePage(tl, 30, { maxChars: full.length + 100 })).toBe(full);
+
+    const limit = 1_200;
+    const seen = new Set<string>();
+    let from: number | undefined;
+    let pages = 0;
+    while (pages < 20) {
+      const page = summarizeTimelinePage(tl, 30, { from, maxChars: limit });
+      expect(page.length).toBeLessThanOrEqual(limit);
+      for (const m of page.matchAll(/\b([va]_\d+)\b/g)) seen.add(m[1]!);
+      pages++;
+      const next = /call timeline_get with from=([\d.]+)/.exec(page);
+      if (!next) break;
+      from = Number(next[1]);
+    }
+    expect(pages).toBeGreaterThan(1);
+    expect(seen.size).toBe(60);
+
+    const slice = summarizeTimelinePage(tl, 30, { from: 20, to: 32, maxChars: 10_000 });
+    expect(slice).toContain("v_5 ");
+    expect(slice).toContain("v_7 ");
+    expect(slice).not.toContain("v_4 ");
+    expect(slice).not.toContain("v_8 ");
+    expect(slice).toContain("Showing 6 clips in 20.00–32.00 s (of 60 total).");
   });
 });

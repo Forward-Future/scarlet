@@ -121,3 +121,40 @@ it("prepares the following cuts while the agent reads, and hands each over once"
   await inspect({ index: 3 });
   expect(sheets.slice(before).filter(s => s.from >= 398)).toHaveLength(1);
 });
+
+it("pages multi-cut dialogue_review_inspect under caps.resultChars and keeps deferred cuts warm", async () => {
+  const server = createScarletMcpServer(new ScarletClient({ baseUrl: mock.url, token: "tok" }), {
+    projectId: "prj_test", taskId: "review-task", taskStartedAt: "2026-04-01T12:00:00.000Z", agent: "gemini",
+    capabilities: { images: true, audio: false, files: false, plan: false, resultChars: 1_200 },
+    author: { type: "agent", id: "gemini", name: "gemini" },
+  });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(a);
+  const gemini = new Client({ name: "test-gemini", version: "0" });
+  await gemini.connect(b);
+  sessions.push(gemini);
+
+  const first = await gemini.callTool({ name: "dialogue_review_inspect", arguments: { changeId: "pass", index: 0, count: 4 } }) as CallToolResult;
+  expect(first.isError).toBeFalsy();
+  const firstItems = texts(first);
+  const delivered = firstItems.filter(t => "firstPass" in t).map(t => t.index as number);
+  expect(delivered.length).toBeGreaterThanOrEqual(1);
+  expect(delivered.length).toBeLessThan(4);
+  const cont = firstItems.at(-1) as { returned?: [number, number]; next?: string };
+  expect(cont.returned).toEqual([0, delivered.length - 1]);
+  expect(cont.next).toContain(`index ${delivered.length}`);
+
+  // A cut deferred to the next call was not delivered yet, so saving it is not marked inspected.
+  const deferredIdx = delivered.length;
+  await gemini.callTool({ name: "dialogue_review_save", arguments: { changeId: "pass", fromVersion: "v1", toVersion: "v2",
+    assessments: [{ index: deferredIdx, ...removed[deferredIdx]!, verdict: "cut", reason: "Clean pause." }] } });
+  const savedDeferred = mock.requests.findLast(r => r.path.endsWith("/cut-assessments"));
+  expect((savedDeferred?.body as { assessments: { inspected: boolean }[] }).assessments[0]!.inspected).toBe(false);
+
+  // Following the continuation returns the deferred cut from the warm cache without re-decoding its sheet.
+  const sheetsBefore = sheets.length;
+  const second = await gemini.callTool({ name: "dialogue_review_inspect", arguments: { changeId: "pass", index: deferredIdx, count: 1 } }) as CallToolResult;
+  expect(texts(second).filter(t => "firstPass" in t).map(t => t.index)).toEqual([deferredIdx]);
+  const deferredStart = removed[deferredIdx]!.start;
+  expect(sheets.slice(sheetsBefore).filter(s => s.from >= deferredStart - 3 && s.to <= removed[deferredIdx]!.end + 3)).toEqual([]);
+});

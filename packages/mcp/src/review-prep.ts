@@ -76,6 +76,12 @@ export class ReviewInspections {
     finally { if (this.prepared.get(key)?.job === job) this.prepared.delete(key); }
   }
 
+  /** Drop a prepared entry once its inspection has been delivered to the agent. */
+  consume(change: Change, request: InspectionRequest, job: Promise<DialogueInspection>) {
+    const key = this.key(change, request);
+    if (this.prepared.get(key)?.job === job) this.prepared.delete(key);
+  }
+
   /** Keep the cuts from `reached` on prepared, a few at a time. */
   ahead(change: Change, reached: number, total: number) {
     if (this.closed) return;

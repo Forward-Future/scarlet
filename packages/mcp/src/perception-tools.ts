@@ -264,7 +264,7 @@ export function registerPerception(deps: PerceptionDeps) {
     const allHeard = await heardOnly(tl, transcripts, shown);
     const render = (slice: TimelineWord[]) => {
       const sliceJoins = joins.filter(j => !slice.length || j.at <= slice.at(-1)!.end + 1e-3 || slice.length === words.length);
-      const sliceHeard = slice.length === shown.length ? allHeard : allHeard.filter(h => h.start <= slice.at(-1)!.end + 1e-3);
+      const sliceHeard = slice.length === words.length ? allHeard : allHeard.filter(h => h.start <= slice.at(-1)!.end + 1e-3);
       const body = formatTimelineTranscript(slice, sliceJoins,
         { detail, fps: project.settings.fps, all, removed: join => joinTook(join, transcripts), heard: sliceHeard });
       const more = words.length > slice.length ? `\nShowing ${slice.length} of ${words.length} words; continue with from=${(slice.at(-1)!.end + 0.001).toFixed(3)}.` : "";
@@ -315,10 +315,17 @@ export function registerPerception(deps: PerceptionDeps) {
       if (!joins.length) return text(`No ${changeId ? "new " : ""}joins on version ${tl.version}${at ? " at those times" : ""}.`);
       const page = joins.slice(0, MAX_AUDITS);
       const audits = await auditJoins(tl, project, page, all);
-      const clean = audits.filter(a => a.verdict === "clean").length;
-      return json({ version: tl.version, ...(changeId && { changeId }), joins: joins.length, clean, audits,
-        // `from` takes a join up to a millisecond before it, so the next page starts two past the last one audited.
-        ...(joins.length > page.length && { next: `Call again with from=${page.at(-1)!.at + .002}` }) });
+      const budget = deps.resultChars ?? DEFAULT_RESULT_CHARS;
+      const buildAudit = (count: number) => {
+        const slice = audits.slice(0, count);
+        const clean = slice.filter(a => a.verdict === "clean").length;
+        return { version: tl.version, ...(changeId && { changeId }), joins: joins.length, clean, audits: slice,
+          // `from` takes a join up to a millisecond before it, so the next page starts two past the last one audited.
+          ...(joins.length > slice.length && { next: `Call again with from=${page[slice.length - 1]!.at + .002}` }) };
+      };
+      let count = audits.length;
+      while (count > 1 && JSON.stringify(buildAudit(count)).length > budget) count--;
+      return json(buildAudit(count));
     });
 
   tool("timeline_diff",
