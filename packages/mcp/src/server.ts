@@ -31,7 +31,7 @@ import { toolAnnotations } from "./annotations.js";
 import { ALWAYS_LOAD, listToolsBriefly } from "./brief-tools.js";
 import { DialogueEvidence } from "./dialogue-decisions.js";
 import { registerDialogueReviewTools } from "./dialogue-review-tools.js";
-import { registerDialogueTools, type StagedReviewState } from "./dialogue-tools.js";
+import { registerDialogueTools } from "./dialogue-tools.js";
 import { keptEditsNote } from "./editor-kept.js";
 import { registerGraphics } from "./graphics-tools.js";
 import { listening, registerInspectionTools } from "./inspection-tools.js";
@@ -41,6 +41,7 @@ import { createMediaSession } from "./media-session.js";
 import { createRevisionTracker, createSessionErrorHelpers } from "./media-state.js";
 import { registerPerception } from "./perception-tools.js";
 import { createProposePipeline } from "./propose-pipeline.js";
+import type { StagedReviewState } from "./staged-review.js";
 import { registerTimelineTools } from "./timeline-tools.js";
 import {
   describeError,
