@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- When Scarlet tries to cut in the middle of a word you're still saying, it's now told exactly where the quiet is on either side, so it fixes the cut in one try instead of measuring again.
 - Each request in the chat has a small arrow at its left that collapses it to one line, and expands it again.
 - Purple on a request now means one thing: its edits are the ones on the timeline. Click a request to pick it, running or finished, and click it again or press Esc to let go and see every request's edits on the timeline.
 - Edit-number pills near the start or end of the timeline no longer overlap the pill beside them.

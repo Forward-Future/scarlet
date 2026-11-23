@@ -4848,6 +4848,8 @@ it("refuses a ripple through a sounding word in the general edit tool and points
     expect(through.isError).toBe(true);
     expect(textOf(through)).toContain("falls inside “back”");
     expect(textOf(through)).toContain("dialogue_apply_cuts");
+    // It says where the recording is quiet either side, in timeline seconds, so the next try can land there.
+    expect(textOf(through)).toMatch(/“back”, which is sounding there \(the recording is quiet at \d+\.\d\d s(?: and at \d+\.\d\d s)?\) \[dBFS in 20 ms steps: /);
     // The same removal from the quiet after the word goes ahead.
     expect((await propose(2.0, 3.4)).isError).toBeFalsy();
     // 4.54 s is quiet before “the” (4.55–4.7 s), but the removal starts on the next whole frame, 4.5667 s, inside it.
