@@ -1,11 +1,22 @@
 import { useEffect, useState } from "react";
+import { create } from "zustand";
 import { desktop, isDesktop, type FfmpegStatus } from "../../lib/desktop";
 import { errorMessage, IS_MOCK } from "../../lib/client";
 import { InlineError, Spinner } from "../ui/primitives";
 
+/** What Scarlet last learned about FFmpeg, shared so the banner, Settings and the sample project agree. */
+const useFfmpegStatus = create<{ status: FfmpegStatus | null }>(() => ({ status: null }));
+const setStatus = (status: FfmpegStatus) => useFfmpegStatus.setState({ status });
+
+/** FFmpeg is missing on this desktop, as far as Scarlet has checked. False before the check and off the desktop. */
+export function useFfmpegMissing(): boolean {
+  const status = useFfmpegStatus(s => s.status);
+  return isDesktop() && !IS_MOCK && !!status && !status.installed;
+}
+
 function useFfmpegSetup() {
   const active = isDesktop() && !IS_MOCK;
-  const [status, setStatus] = useState<FfmpegStatus | null>(null);
+  const status = useFfmpegStatus(s => s.status);
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState("");
 

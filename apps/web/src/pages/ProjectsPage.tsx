@@ -12,7 +12,7 @@ import { Dropzone, type ImportSource } from "../components/media/UploadDropzone"
 import { useImportTranscription } from "../components/media/TranscriptionAction";
 import { WindowActions } from "../components/shell/WorkspaceNavigation";
 import { TrashButton } from "../components/shell/TrashButton";
-import { FfmpegSetupBanner } from "../components/shell/FfmpegSetup";
+import { FfmpegSetupBanner, useFfmpegMissing } from "../components/shell/FfmpegSetup";
 import { ConfirmDialog, EmptyState, ErrorState, Icon, InlineError, Loading, Modal, Spinner } from "../components/ui/primitives";
 import { ProjectCard } from "./projects/ProjectCard";
 import { FirstEditGuide, NewProjectModal } from "./projects/NewProjectModal";
@@ -218,6 +218,8 @@ export function ProjectsPage() {
   const createSampleProject = useProjectStore(s => s.createSampleProject);
   const [creatingSample, setCreatingSample] = useState(false);
   const [sampleError, setSampleError] = useState("");
+  // The sample clip is made with FFmpeg: until it is installed, the banner above asks for it and the button waits.
+  const ffmpegMissing = useFfmpegMissing();
   const openSampleProject = async () => {
     if (creatingSample) return;
     setCreatingSample(true);
@@ -282,7 +284,7 @@ export function ProjectsPage() {
               <p>Drop your footage here, then tell Scarlet what you’d like to change.</p>
               {signedIn.some(id => SIGN_IN_ORDER.includes(id)) && <p className="first-signed-in">✓ Signed in with {providerList(signedIn)}
                 {canAddPlan && <> · <button type="button" className="first-edit-link" onClick={() => askSignIn("add")}>Add another</button></>}</p>}
-              <div className="first-edit-actions">{newProject}{sampleProject}{quickStart}</div>
+              <div className="first-edit-actions">{newProject}{!ffmpegMissing && sampleProject}{quickStart}</div>
               {sampleError && <InlineError>{sampleError}</InlineError>}
             </section>
           ) : (
