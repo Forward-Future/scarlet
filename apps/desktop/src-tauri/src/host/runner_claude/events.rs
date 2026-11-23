@@ -5,7 +5,7 @@ use serde_json::{json, Map, Value};
 use super::plan::{plan_call, plan_change, plan_result};
 use super::ClaudeState;
 use crate::host::runner::parse_json_object;
-use crate::host::types::{brief, brief_input, is_question_tool, pretty_tool_name, prune_nulls, question_words, value_text, RunnerEvent};
+use crate::host::types::{brief, brief_input, compacting_event, compaction_ended_event, is_question_tool, pretty_tool_name, prune_nulls, question_words, value_text, RunnerEvent};
 use crate::host::usage::claude_usage;
 
 pub(super) fn flatten_tool_result(content: Option<&Value>) -> String {
@@ -85,11 +85,11 @@ pub fn parse_claude_line(line: &str, st: &mut ClaudeState) -> Vec<RunnerEvent> {
             if msg.get("status").and_then(Value::as_str) == Some("compacting") {
                 if !st.compacting {
                     st.compacting = true;
-                    events.push(RunnerEvent::with("log", "Compacting context", json!({"kind":"compaction","active":true})));
+                    events.push(compacting_event());
                 }
             } else if st.compacting {
                 st.compacting = false;
-                events.push(RunnerEvent::with("log", "Compacting context", json!({"kind":"compaction","active":false})));
+                events.push(compaction_ended_event());
             }
         } else if msg.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
             // Claude Code compacted the session's context. The engine logs it and keeps it out of the chat.

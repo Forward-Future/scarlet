@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 use super::CodexState;
 use crate::host::runner::parse_json_object;
-use crate::host::types::{brief, brief_input, is_question_tool, prune_nulls, question_words, record_plan, trimmed_str, truthy, value_text, PlanStep, RunnerEvent};
+use crate::host::types::{brief, brief_input, compacted_event, compacting_event, is_question_tool, prune_nulls, question_words, record_plan, trimmed_str, truthy, value_text, PlanStep, RunnerEvent};
 use crate::host::usage::{add_usage, codex_app_server_usage, codex_usage};
 
 /// The steps of a `todo_list` item: Codex's `update_plan`, as `codex exec --json` reports it. Each step is its text and
@@ -117,6 +117,10 @@ fn codex_events(kind: &str, msg: &Value, st: &mut CodexState) -> Vec<RunnerEvent
                     let arguments = item.get("arguments");
                     let status = item.get("status").and_then(Value::as_str);
                     let has_error = truthy(item.get("error"));
+                    let failure = |name: &str| {
+                        let detail = if has_error { item.get("error") } else { item.get("result") };
+                        RunnerEvent::new("error", format!("{name} failed: {}", brief_input(detail, 400)))
+                    };
                     if is_question_tool(tool.as_deref()) {
                         // Only a call with words to ask is a question. App Server may withhold the arguments until the
                         // tool finishes, so the words can first come with its result.
@@ -146,8 +150,7 @@ fn codex_events(kind: &str, msg: &Value, st: &mut CodexState) -> Vec<RunnerEvent
                                     st.question_item = None;
                                 }
                                 if refused {
-                                    let detail = if has_error { item.get("error") } else { item.get("result") };
-                                    events.push(RunnerEvent::new("error", format!("{name} failed: {}", brief_input(detail, 400))));
+                                    events.push(failure(&name));
                                 }
                             }
                         }
@@ -161,8 +164,7 @@ fn codex_events(kind: &str, msg: &Value, st: &mut CodexState) -> Vec<RunnerEvent
                         }
                         events.push(RunnerEvent::with("tool", text, prune_nulls(data)));
                     } else if completed && (status == Some("failed") || has_error) {
-                        let detail = if has_error { item.get("error") } else { item.get("result") };
-                        events.push(RunnerEvent::new("error", format!("{name} failed: {}", brief_input(detail, 400))));
+                        events.push(failure(&name));
                     }
                 }
                 "file_change" | "fileChange" => {
@@ -178,9 +180,9 @@ fn codex_events(kind: &str, msg: &Value, st: &mut CodexState) -> Vec<RunnerEvent
                 "contextCompaction" | "context_compaction" => {
                     st.compaction_items = true;
                     if started {
-                        events.push(RunnerEvent::with("log", "Compacting context", json!({"kind":"compaction","active":true})));
+                        events.push(compacting_event());
                     } else if completed {
-                        events.push(RunnerEvent::with("log", "Context compacted", json!({"kind":"compaction"})));
+                        events.push(compacted_event());
                     }
                 }
                 "todo_list" => {
@@ -288,7 +290,7 @@ pub(super) fn app_server_events(method: &str, params: &Value, st: &mut CodexStat
             events
         }
         // Codex compacted the thread's context. Newer versions report it as an item too, and that one counts.
-        "thread/compacted" if !st.compaction_items => vec![RunnerEvent::with("log", "Context compacted", json!({"kind":"compaction"}))],
+        "thread/compacted" if !st.compaction_items => vec![compacted_event()],
         "item/started" => codex_events("item.started", params, st),
         "item/updated" => codex_events("item.updated", params, st),
         "item/completed" => codex_events("item.completed", params, st),

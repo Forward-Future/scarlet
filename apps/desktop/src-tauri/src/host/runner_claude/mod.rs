@@ -10,7 +10,7 @@ mod tests;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use super::runner::{cut_short, exit_error, write_files, RunOptions};
+use super::runner::{cut_short, exit_error, report_usage, write_files, RunOptions};
 use super::spawn::spawn_lines;
 use super::usage::{add_usage, AgentUsage};
 use super::types::{tail_summary, RunResult, CONTROL_DIR};
@@ -82,12 +82,9 @@ pub async fn run_claude(opts: RunOptions) -> RunResult {
             }
             on_event(ev);
         }
-        super::runner::report_usage(&on_usage, &mut sent_usage, claude_run_usage(&s, model.as_deref()));
-        if s.should_stop {
-            s.should_stop = false;
-            return true; // the question is posted, or there are no tools; stop the agent instead of letting it ramble.
-        }
-        false
+        report_usage(&on_usage, &mut sent_usage, claude_run_usage(&s, model.as_deref()));
+        // The question is posted, or there are no tools: stop the agent instead of letting it ramble.
+        std::mem::take(&mut s.should_stop)
     });
     let mut spawn = opts.spawn_options(cmd.stdin);
     spawn.env = with_tool_timeout(&opts.env);
