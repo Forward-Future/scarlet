@@ -44,8 +44,6 @@ import { MAX_RATE, MIN_RATE, PlaybackSpeed, RATE_STEP, stepPlaybackRate } from "
 import { ImportPreview } from "./watch/ImportPreview";
 import { CutSide, SelectedCutFrame } from "./watch/SelectedCutFrame";
 
-export { ImportPreview };
-
 const noop = () => {};
 const documentVisible = () => !document.hidden;
 const onVisibility = (read: () => void) => {

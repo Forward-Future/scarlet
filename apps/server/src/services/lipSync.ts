@@ -4,7 +4,7 @@
  * a drifting one as answers that grow. Each stretch is measured once and kept beside the waveform. This is evidence
  * for the model, never a verdict: whether and how far to shift the sound is its call.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { curvePeak, fileInDirectory, lipSyncStretch, type CropBox, type LipSyncReading } from "@scarlet/render";
@@ -12,7 +12,7 @@ import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { atomicWriteFile, rememberLast } from "../util.js";
 import { faceSamples, type FaceSample } from "./faces.js";
-import { r3 } from "./pictureReading.js";
+import { r3, readingIdentity, type VideoMedia } from "./pictureReading.js";
 import { pictureDecoder, pictureLane } from "./pictureWork.js";
 
 /** Bump when the measurement changes. Kept stretches are measured again. */
@@ -22,8 +22,6 @@ const MAX_SHIFT = 1.5;
 /** Stretches measured by default, and their length: six of 30 s found the same 0.65 s on a 35-minute recording, each 0.6-0.7 s. */
 export const LIP_SYNC_STRETCHES = 6;
 export const LIP_SYNC_SECONDS = 30;
-
-type VideoMedia = MediaAsset & { projectId: string };
 
 export interface LipSyncStretch {
   /** Source seconds measured. */
@@ -106,7 +104,7 @@ const STILL_FINDING = "The faces in this stretch are still being found: ask agai
 const STILL_MEASURING = "Still being measured: ask again.";
 
 function identity(media: MediaAsset) {
-  return createHash("sha256").update(JSON.stringify([LIP_SYNC_VERSION, media.hash ?? media.path, media.duration, MAX_SHIFT])).digest("hex");
+  return readingIdentity(LIP_SYNC_VERSION, media, MAX_SHIFT);
 }
 
 /** Measure each stretch of a recording not measured yet, waiting up to `waitMs` for the answers; the rest carry on and are kept. */

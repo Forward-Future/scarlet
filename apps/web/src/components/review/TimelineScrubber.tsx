@@ -10,13 +10,13 @@ import { ScrubPreview, type HoverVideo } from "../player/ScrubPreview";
 import { TimelineRuler } from "./TimelineRuler";
 import { useTimelineZoom } from "./useTimelineZoom";
 import { FloatingScrubLoupe, type ScrubLens } from "./FloatingScrubLoupe";
-import { LOUPE_PX_PER_FRAME, rangeEdges, useRangeSelect } from "./TimelineRange";
+import { LOUPE_PX_PER_FRAME, lastFrameBefore, rangeEdges, useRangeSelect } from "./TimelineRange";
 import type { ProgressFocus } from "../player/SimpleProgress";
 import { HeldStillsContext, MediaLanes, stripUrl, type FrameAt, type HeldStills, type PreviewStrip } from "./TimelineFilmstrip";
 import { bandLabel, dotState, gapLabel, isPill, LANDING_PLAYS, layoutMarks, MARK_GAP, nearestMark, ZOOM_STEPS, type MarkLayout, type TimelineDot, type TimelineGap } from "./timelineMarkerLayout";
 import { TimelineClock, TimelineSlider } from "./TimelineSlider";
 
-export { bandLabel, gapLabel, layoutMarks, nearestMark, type TimelineDot, type TimelineGap };
+export type { TimelineDot, TimelineGap };
 
 /** Hovering a chat row lights its marker without re-rendering the workspace. */
 export const EditHoverContext = createContext(createStore<number | undefined>(() => undefined));
@@ -133,7 +133,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
     time?: number; x: number; x0: number; y0: number; paint?: number;
     fine?: { x: number; frame: number };
   } | null>(null);
-  const lastFrame = Math.max(0, Math.ceil(end * fps - 1e-6) - 1);
+  const lastFrame = lastFrameBefore(end, fps);
   const firstFrame = Math.min(lastFrame, Math.max(0, Math.ceil(start * fps - 1e-6)));
   useLayoutEffect(() => () => {
     // A new working cut builds the timeline again. A drag held just then ends with the timeline it was on: the video
@@ -185,11 +185,16 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
     ? [samples, target] : [samples];
   const to = from + span;
   const percent = (t: number) => span ? (t - from) / span * 100 : 0;
+  /** The time a press on the slider points to, kept inside `within`. */
+  const pressedTimeIn = (clientX: number, within: TimeRange) => {
+    const rect = slider.current!.getBoundingClientRect();
+    const at = rect.width > 0 ? from + span * (clientX - rect.left) / rect.width : within.start;
+    return Math.max(within.start, Math.min(within.end, at));
+  };
   const bandText = highlight?.band && highlight.bandLabel
     ? bandLabel(highlight.bandLabel, (Math.min(100, percent(highlight.band.end)) - Math.max(0, percent(highlight.band.start))) * width / 100) : undefined;
   // A zoom on its way works out its runs for where it is going, so its pills don't change on the way there.
-  const groupSpan = target?.span ?? span;
-  const markLayout = useMemo(() => marks ? layoutMarks(marks, from, span, width, groupSpan) : [], [marks, from, span, width, groupSpan]);
+  const markLayout = useMemo(() => marks ? layoutMarks(marks, from, span, width, shownSpan) : [], [marks, from, span, width, shownSpan]);
   const [hotMark, setHotMark] = useState<string>();
   // An edit's arrival plays once. Markers are drawn again as the cut's timeline settles, a pill takes in a newer edit
   // or the view moves, and each would start the moment over, so a marker drawn again picks it up where it is, and one
@@ -252,9 +257,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
         if (e.button !== 0 || !e.isPrimary || drag.current) return;
         // This side would land past the gap, so a click goes to the caller instead of starting a scrub.
         e.stopPropagation();
-        const rect = slider.current!.getBoundingClientRect();
-        const at = rect.width > 0 ? from + span * (e.clientX - rect.left) / rect.width : gap.start;
-        onGap!(gap, Math.max(gap.start, Math.min(gap.end, at)));
+        onGap!(gap, pressedTimeIn(e.clientX, gap));
       } : undefined}>
       {label && <span className="simple-timeline-gap-label">{label}</span>}
     </span>;
@@ -293,7 +296,6 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
     setAimed(false);
     open();
   };
-  const intendedSpan = target?.span ?? span;
   const zoomPercent = span ? Math.round(total / span * 100) : 100;
   const handleZoomKey = (e: KeyboardEvent) => {
     if (!total || ignorePageShortcut(e, track.current)) return;
@@ -353,13 +355,13 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
     onScrubStart, onPress: selectPosition, beforeGesture: stopZoom });
   // The slider runs from the whole video, at its left, to the closest zoom, on a log scale so each step looks the same.
   const zoomRange = total > 0 && minSpan < total ? Math.log(total / minSpan) : 0;
-  const zoomValue = zoomRange && intendedSpan > 0 ? Math.round(Math.max(0, Math.min(1, Math.log(total / intendedSpan) / zoomRange)) * ZOOM_STEPS) : 0;
+  const zoomValue = zoomRange && shownSpan > 0 ? Math.round(Math.max(0, Math.min(1, Math.log(total / shownSpan) / zoomRange)) * ZOOM_STEPS) : 0;
   const zoomFoot = <div className="timeline-foot">
     <TimelineClock playhead={playhead} start={start} end={end} total={total} />
     {foot}
     <div className="timeline-zoom-row" role="group" aria-label="Timeline zoom" title="Scroll or pinch over the timeline to zoom">
       <button type="button" className="timeline-zoom-step" aria-label="Zoom out" aria-keyshortcuts="-" title="Zoom out (−)"
-        disabled={intendedSpan >= total} onClick={() => zoomBy(.5)}>−</button>
+        disabled={shownSpan >= total} onClick={() => zoomBy(.5)}>−</button>
       <input type="range" className="timeline-zoom-slider" aria-label="Zoom" aria-keyshortcuts="0" title="Zoom (0 to fit)"
         min={0} max={ZOOM_STEPS} step={1} value={zoomValue} disabled={!zoomRange} aria-valuetext={`${zoomPercent}%`}
         style={{ "--zoom-at": `${zoomValue / ZOOM_STEPS * 100}%` } as CSSProperties}
@@ -368,7 +370,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
           if (next > 0 && span > 0) zoomBy(span / next, undefined, true);
         }} />
       <button type="button" className="timeline-zoom-step" aria-label="Zoom in" aria-keyshortcuts="plus =" title="Zoom in (+)"
-        disabled={intendedSpan <= minSpan} onClick={() => zoomBy(2)}>+</button>
+        disabled={shownSpan <= minSpan} onClick={() => zoomBy(2)}>+</button>
       <output className="timeline-zoom-level" aria-label={`${zoomPercent}% zoom`}>{zoomPercent}%</output>
     </div>
   </div>;
@@ -428,9 +430,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
               if (e.button !== 0 || !e.isPrimary || drag.current) return;
               // The playing side steps over this footage, so a click goes to the caller instead of starting a scrub.
               e.stopPropagation();
-              const rect = slider.current!.getBoundingClientRect(), band = highlight.band!;
-              const at = rect.width > 0 ? from + span * (e.clientX - rect.left) / rect.width : band.start;
-              onBand(Math.max(band.start, Math.min(band.end, at)));
+              onBand(pressedTimeIn(e.clientX, highlight.band!));
             } : undefined}>
             {bandText && <span>{bandText}</span>}</span>
         : highlight.band.start >= from && highlight.band.start <= to &&

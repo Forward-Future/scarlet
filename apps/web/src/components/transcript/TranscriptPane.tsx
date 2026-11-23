@@ -11,6 +11,7 @@ import { useShownCutStore } from "../../stores/shownCut";
 import { useUiStore, type AgentContext } from "../../stores/ui";
 import { EmptyState, Icon, Spinner } from "../ui/primitives";
 
+import { findWords, searchTerms } from "./transcriptSearch";
 import { SECTION_GAP_SECONDS, transcriptTurns } from "./transcriptTurns";
 import { useTranscriptWindow } from "./useTranscriptWindow";
 
@@ -25,22 +26,6 @@ function formatPause(seconds: number): string {
   const rem = s % 60;
   if (m >= 10 || rem < 5) return `${m}m`;
   return `${m}m ${rem}s`;
-}
-/** A word as search compares it: lower case, without punctuation. */
-const bare = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
-/** The words searched for, as `findWords` compares them: a run of punctuation alone is no word. */
-export const searchTerms = (query: string) => query.split(/\s+/).map(bare).filter(Boolean);
-/** Where the searched words start, each a run of `terms.length` words: every word but the last matched whole, the last from its start. */
-export function findWords(words: { word: { text: string } }[], query: string | string[]) {
-  const terms = typeof query === "string" ? searchTerms(query) : query;
-  if (!terms.length) return [];
-  const texts = words.map(w => bare(w.word.text));
-  const found: number[] = [];
-  for (let i = 0; i + terms.length <= texts.length; i++) {
-    if (terms.every((term, j) => j === terms.length - 1 ? texts[i + j]!.startsWith(term) : texts[i + j] === term)
-      || (terms.length === 1 && texts[i]!.includes(terms[0]!))) found.push(i);
-  }
-  return found;
 }
 
 const wordKey = (w: MappedWord) => JSON.stringify([w.mediaId, w.segmentId, w.indexInSegment]);

@@ -1,12 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useMatch } from "react-router-dom";
-import type { AgentId, ModelOptions, RunChoice, SubscriptionQuota, Task } from "@scarlet/shared";
+import type { RunChoice, Task } from "@scarlet/shared";
 import { isDesktop, type HostStatus } from "../../lib/desktop";
-import { AGENT_LABEL, isConfiguredAgent, onlineAgents, useHostsStore, type OnlineAgent } from "../../stores/hosts";
+import { AGENT_LABEL, isConfiguredAgent, onlineAgents, useHostsStore } from "../../stores/hosts";
 import { modelChoices, selectVisibleModel, useModelPreferences } from "../../stores/modelPicker";
 import { ProviderIcon, type ModelScope } from "./ModelProviders";
 import { ModelRefreshButton, ModelRefreshFeedback, useModelRefresh } from "./ModelRefresh";
 import { FavoriteButton } from "./FavoriteButton";
+import { QuotaDetails } from "./QuotaDetails";
+import { moveSelectorFocus, placeModelSelector } from "./modelSelectorLayout";
+import { BoltIcon, EffortDial, GaugeIcon, TuneDrawer } from "./ModelControls";
+import { STANDARD_SPEEDS, defaultSpeedTitle, effortLevel, normalizeSpeedTier, optionLabel, orderEfforts, pickerOptions, supportedOptions } from "./modelOptions";
+import {
+  LOW_QUOTA_THRESHOLD, QUOTA_STALE_MS, formatPercent, isSubscriptionProvider, minRemainingPercent, providerShortName, type QuotaAgent,
+} from "./subscriptionQuota";
 import { useUiStore } from "../../stores/ui";
 import { AgentSignIn, AgentUpdate, canSignIn, useLocalHost } from "../shell/AgentSignIn";
 import { Icon } from "../ui/primitives";
@@ -29,141 +36,6 @@ export function runChoiceDiffers(task: Pick<Task, "agent" | "model" | "effort" |
 export function resumeRunChoice(tasks: readonly Pick<Task, "state" | "resumesAfterProjectStop" | "startedAt" | "agent" | "model" | "effort" | "fast" | "serviceTier">[],
   choice: RunChoice | null | undefined): RunChoice | undefined {
   return choice && tasks.some(t => t.state === "queued" && t.resumesAfterProjectStop && !t.startedAt && runChoiceDiffers(t, choice)) ? choice : undefined;
-}
-
-const LOW_QUOTA_THRESHOLD = 20;
-const QUOTA_STALE_MS = 60_000;
-
-function isSubscriptionProvider(agent: Pick<OnlineAgent, "id" | "auth">): boolean {
-  return (agent.id === "claude" || agent.id === "codex" || agent.id === "gemini") && agent.auth !== "api_key";
-}
-
-function minRemainingPercent(quota?: SubscriptionQuota): number | undefined {
-  if (!quota) return undefined;
-  if (quota.buckets.length > 0) return Math.min(...quota.buckets.map((b) => b.remainingPercent));
-  return quota.unlimited ? 100 : undefined;
-}
-
-function formatPercent(pct: number): string {
-  return `${Math.round(pct)}%`;
-}
-
-function formatResetCountdown(resetsAt?: string, nowMs = Date.now()): string | undefined {
-  if (!resetsAt) return undefined;
-  const ms = Date.parse(resetsAt);
-  if (!Number.isFinite(ms)) return undefined;
-  const diffMins = Math.round((ms - nowMs) / 60_000);
-  if (diffMins <= 0) return "soon";
-  if (diffMins < 60) return `${diffMins}m`;
-  if (diffMins < 24 * 60) {
-    const h = Math.floor(diffMins / 60);
-    const m = diffMins % 60;
-    return m ? `${h}h ${m}m` : `${h}h`;
-  }
-  const d = Math.floor(diffMins / 1440);
-  const h = Math.floor((diffMins % 1440) / 60);
-  return h ? `${d}d ${h}h` : `${d}d`;
-}
-
-function formatRelativeAge(iso?: string, nowMs = Date.now()): string | undefined {
-  if (!iso) return undefined;
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return undefined;
-  const diffSec = Math.max(0, Math.round((nowMs - ms) / 1000));
-  if (diffSec < 45) return "just now";
-  if (diffSec < 3600) return `${Math.max(1, Math.round(diffSec / 60))}m ago`;
-  if (diffSec < 86_400) return `${Math.round(diffSec / 3600)}h ago`;
-  return `${Math.round(diffSec / 86_400)}d ago`;
-}
-
-function providerShortName(id: AgentId): string {
-  return AGENT_LABEL[id]?.replace(/ (Code|CLI)$/, "") ?? id;
-}
-
-// A provider on two hosts can offer different settings for the same model.
-function supportedOptions(profiles: ModelOptions[], effort?: string, serviceTier?: string, preferSpeed = false) {
-  const withEffort = profiles.filter(p => p.efforts.some(o => o.id === effort));
-  const withSpeed = profiles.filter(p => p.speeds.some(o => o.id === serviceTier));
-  if (withEffort.some(p => withSpeed.includes(p))) return { effort, serviceTier };
-  if (withEffort.length && !(preferSpeed && withSpeed.length)) return { effort, serviceTier: undefined };
-  return { effort: undefined, serviceTier: withSpeed.length ? serviceTier : undefined };
-}
-
-function pickerOptions(profiles: ModelOptions[], key: "efforts" | "speeds") {
-  return [...new Map(profiles.flatMap(p => p[key]).map(o => [o.id, o])).values()];
-}
-
-function normalizeSpeedTier(agent: AgentId, profiles: ModelOptions[], tier?: string): string | undefined {
-  // Older profiles saved Codex Fast as a boolean. Modern catalogs call the tier "priority".
-  if (tier === "fast" && agent === "codex") {
-    const speeds = pickerOptions(profiles, "speeds");
-    if (!speeds.some(o => o.id === "fast") && speeds.some(o => o.id === "priority")) return "priority";
-  }
-  return tier;
-}
-
-function defaultSpeedTitle(profiles: ModelOptions[]) {
-  const value = profiles[0]?.defaultSpeed;
-  return value && profiles.every(p => p.defaultSpeed === value) ? `Provider default (${value})` : "Use provider default";
-}
-
-const STANDARD_SPEEDS = new Set(["standard", "default", "auto"]);
-
-function optionLabel(option: { id: string; label?: string }) {
-  return option.label ?? option.id.charAt(0).toUpperCase() + option.id.slice(1);
-}
-
-const effortRanks = ["off", "none", "minimal", "low", "medium", "high", "xhigh", "extra", "max", "ultra"];
-
-function orderEfforts<T extends { id: string }>(efforts: T[]) {
-  const rank = (id: string) => effortRanks.indexOf(id.toLowerCase());
-  return efforts.every(o => rank(o.id) >= 0) ? [...efforts].sort((a, b) => rank(a.id) - rank(b.id)) : efforts;
-}
-
-/** How far up the model's own effort scale an effort sits, from 0 (lowest offered) to 1 (highest). */
-function effortLevel(efforts: { id: string }[], effort?: string) {
-  if (!effort) return undefined;
-  const ordered = orderEfforts(efforts);
-  const index = ordered.findIndex(o => o.id === effort);
-  if (index < 0) return undefined;
-  return ordered.length > 1 ? index / (ordered.length - 1) : 1;
-}
-
-const DIAL_SWEEP = 125;
-function dialPoint(degrees: number) {
-  const radians = (degrees * Math.PI) / 180;
-  return `${(8 + 6 * Math.sin(radians)).toFixed(2)} ${(9 - 6 * Math.cos(radians)).toFixed(2)}`;
-}
-
-function EffortDial({ level, size = 14 }: { level?: number; size?: number }) {
-  const start = -DIAL_SWEEP;
-  const end = level === undefined ? undefined : start + 2 * DIAL_SWEEP * level;
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" className="shrink-0" aria-hidden="true">
-      <path d={`M${dialPoint(start)}A6 6 0 1 1 ${dialPoint(DIAL_SWEEP)}`} opacity="0.3" />
-      {end !== undefined && end > start && <path d={`M${dialPoint(start)}A6 6 0 ${end - start > 180 ? 1 : 0} 1 ${dialPoint(end)}`} />}
-      {end !== undefined && <path d="M8 9V4.5" strokeWidth="1.5" transform={`rotate(${end.toFixed(1)} 8 9)`} />}
-      <circle cx="8" cy="9" r="1.1" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
-function BoltIcon() {
-  return (
-    <svg width="11.5" height="11.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="shrink-0" aria-hidden="true">
-      <path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8l1-5.5z" />
-    </svg>
-  );
-}
-
-function GaugeIcon({ size = 12 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="shrink-0" aria-hidden="true">
-      <path d="M2.5 11.5a6 6 0 1 1 11 0" />
-      <path d="M8 9l2.6-2.8" />
-      <circle cx="8" cy="9.5" r="1" fill="currentColor" stroke="none" />
-    </svg>
-  );
 }
 
 /** Which agent, model, effort and speed the next instruction goes to, resolved against what is online. */
@@ -198,219 +70,14 @@ export function useAgentAvailability() {
   return { agents, choices, selected, effective, none: !effective, unavailableReason, hasCatalog: available.length > 0, hasConfiguredHost };
 }
 
-/** Short label like "Claude · opus". */
-function agentShort(agent: string, model?: string): string {
-  const name = (AGENT_LABEL as Record<string, string>)[agent]?.replace(/ (Code|CLI)$/, "") ?? agent;
-  return model ? `${name} · ${model}` : name;
-}
-
-function EffortSlider({ options, value, visualId, onChange }: {
-  options: Array<{ id: string; label: string; title?: string }>;
-  value?: string;
-  visualId?: string;
-  onChange: (v: string) => void;
-}) {
-  const trackRef = useRef<HTMLDivElement>(null);
-  const draggedRef = useRef(false);
-  const [dragRatio, setDragRatio] = useState<number | null>(null);
-  const activeIndex = options.findIndex(o => o.id === value);
-  const visualIndex = activeIndex >= 0 ? activeIndex : options.findIndex(o => o.id === visualId);
-
-  if (options.length === 1) {
-    const only = options[0]!;
-    const checked = value === only.id;
-    return (
-      <div role="radiogroup" aria-label="Effort" className="flex items-center">
-        <button
-          type="button"
-          role="radio"
-          aria-checked={checked}
-          title={only.title}
-          onClick={() => onChange(only.id)}
-          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${checked ? "border-fg/35 bg-raised text-fg" : "border-line bg-bg text-muted hover:text-fg"}`}
-        >
-          <span className={`size-2 rounded-full ${checked ? "bg-fg" : "bg-muted"}`} aria-hidden />
-          {only.label}
-        </button>
-      </div>
-    );
-  }
-
-  const settledRatio = visualIndex > 0 ? visualIndex / (options.length - 1) : 0;
-  const displayRatio = dragRatio ?? settledRatio;
-  const isDragging = dragRatio !== null;
-  const isExplicit = activeIndex >= 0 || isDragging;
-  const alphaLeft = isExplicit ? 0.14 + displayRatio * 0.14 : 0.1;
-  const alphaRight = isExplicit ? 0.24 + displayRatio * 0.24 : 0.18;
-  const shimmerOpacity = isExplicit ? (displayRatio >= 0.95 ? 0.85 : displayRatio >= 0.6 ? 0.35 : 0) : 0;
-
-  function ratioFromClientX(clientX: number): number | null {
-    const track = trackRef.current;
-    if (!track) return null;
-    const rect = track.getBoundingClientRect();
-    const usable = rect.width - 26;
-    if (usable <= 0) return null;
-    return Math.max(0, Math.min(1, (clientX - rect.left - 13) / usable));
-  }
-
-  function pickRatio(pos: number, lastPicked: { current: string | undefined }) {
-    const picked = options[Math.round(pos * (options.length - 1))];
-    if (picked && picked.id !== lastPicked.current) {
-      lastPicked.current = picked.id;
-      onChange(picked.id);
-    }
-  }
-
-  return (
-    <div role="radiogroup" aria-label="Effort" className="select-none touch-none">
-      <div
-        ref={trackRef}
-        className="relative h-[26px] cursor-pointer overflow-hidden rounded-full bg-bg shadow-[inset_0_0_0_1px_var(--color-line),inset_0_1px_2px_rgba(0,0,0,0.35)]"
-        onPointerDown={(e) => {
-          if (e.button !== 0) return;
-          e.preventDefault();
-          const target = e.currentTarget;
-          const lastPicked = { current: value };
-          draggedRef.current = true;
-          target.setPointerCapture?.(e.pointerId);
-          const startPos = ratioFromClientX(e.clientX);
-          if (startPos !== null) {
-            setDragRatio(startPos);
-            pickRatio(startPos, lastPicked);
-          }
-          const onMove = (ev: PointerEvent) => {
-            const pos = ratioFromClientX(ev.clientX);
-            if (pos !== null) {
-              setDragRatio(pos);
-              pickRatio(pos, lastPicked);
-            }
-          };
-          const onUp = () => {
-            window.removeEventListener("pointermove", onMove);
-            window.removeEventListener("pointerup", onUp);
-            window.removeEventListener("pointercancel", onUp);
-            setDragRatio(null);
-            setTimeout(() => { draggedRef.current = false; }, 0);
-          };
-          window.addEventListener("pointermove", onMove);
-          window.addEventListener("pointerup", onUp);
-          window.addEventListener("pointercancel", onUp);
-        }}
-      >
-        <div
-          className={`pointer-events-none absolute inset-y-0 left-0 overflow-hidden rounded-full ${isDragging ? "" : "transition-[width] duration-150 ease-out"}`}
-          style={{
-            width: `calc(26px + (100% - 26px) * ${displayRatio})`,
-            background: `linear-gradient(90deg, rgba(244, 244, 245, ${alphaLeft.toFixed(3)}), rgba(244, 244, 245, ${alphaRight.toFixed(3)}))`,
-          }}
-        >
-          <div
-            className="effort-capsule-shimmer absolute inset-0 rounded-full transition-opacity duration-200"
-            style={{ opacity: shimmerOpacity }}
-            aria-hidden="true"
-          />
-        </div>
-        {options.map((o, i) => {
-          const stepRatio = i / (options.length - 1);
-          const isVisual = visualIndex === i;
-          const isPassed = visualIndex >= 0 && i < visualIndex;
-          return (
-            <span
-              key={o.id}
-              aria-hidden="true"
-              style={{ left: `calc(13px + (100% - 26px) * ${stepRatio})` }}
-              className={`pointer-events-none absolute top-1/2 z-10 size-[4px] -translate-x-1/2 -translate-y-1/2 rounded-full transition-opacity duration-150 ${
-                isVisual
-                  ? "opacity-0"
-                  : isPassed
-                    ? "bg-fg opacity-40"
-                    : "bg-muted opacity-40"
-              }`}
-            />
-          );
-        })}
-        <span
-          aria-hidden="true"
-          style={{ left: `calc(13px + (100% - 26px) * ${displayRatio})` }}
-          className={`pointer-events-none absolute top-[3px] z-20 size-[20px] -translate-x-1/2 rounded-full ${
-            isExplicit ? "bg-fg" : "bg-fg/85"
-          } ${
-            isDragging
-              ? "scale-110 shadow-[0_2px_8px_rgba(0,0,0,0.6),0_0_0_2px_rgba(255,255,255,0.22)]"
-              : "shadow-[0_1px_4px_rgba(0,0,0,0.52),0_0_0_1px_rgba(255,255,255,0.14)] transition-[left,transform,box-shadow] duration-150 ease-out"
-          }`}
-        />
-      </div>
-      <div className="relative mt-1.5 h-[18px]">
-        {options.map((o, i) => {
-          const stepRatio = i / (options.length - 1);
-          const isFirst = i === 0;
-          const isLast = i === options.length - 1;
-          const isSelected = value === o.id;
-          const isVisual = visualIndex === i;
-          const posStyle = isFirst
-            ? { left: 0 }
-            : isLast
-              ? { right: 0 }
-              : { left: `calc(13px + (100% - 26px) * ${stepRatio})` };
-          return (
-            <button
-              key={o.id}
-              type="button"
-              role="radio"
-              aria-checked={isSelected}
-              title={o.title}
-              style={posStyle}
-              onClick={() => { if (!draggedRef.current) onChange(o.id); }}
-              className={`absolute top-0 rounded text-[10.5px] leading-[18px] whitespace-nowrap transition-colors focus-visible:outline-offset-2 ${
-                isFirst || isLast ? "" : "-translate-x-1/2"
-              } ${
-                isSelected
-                  ? "font-semibold text-fg"
-                  : isVisual
-                    ? "font-medium text-fg/85"
-                    : "text-muted hover:text-fg"
-              }`}
-            >
-              {o.label}
-            </button>
-          );
-        })}
-      </div>
+/** A grid, so that why a sign-in failed, which AgentSignIn draws after its button, is a row under the name and the button. */
+function SignInRows({ agents }: { agents: HostStatus["agents"] }) {
+  return agents.map((a) => (
+    <div key={a.id} className="px-3 py-2 grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1 border-t border-line/60">
+      <span className="text-[13px] text-muted">{AGENT_LABEL[a.id]}</span>
+      <AgentSignIn agent={a} compact />
     </div>
-  );
-}
-
-function SpeedSegmented({ options, value, onChange, inline = false }: {
-  options: Array<{ id: string; label: string; title?: string }>;
-  value: string;
-  onChange: (v: string) => void;
-  inline?: boolean;
-}) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label="Speed"
-      className={`flex gap-0.5 rounded-md border border-line bg-bg p-0.5 ${inline ? "min-w-0 flex-1 max-w-[14rem]" : "w-full"}`}
-    >
-      {options.map((o) => {
-        const active = value === o.id;
-        return (
-          <button
-            key={o.id || "__default"}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            title={o.title}
-            onClick={() => onChange(o.id)}
-            className={`min-w-0 flex-1 truncate rounded-[4px] px-2 py-[3px] text-center text-[11px] font-medium transition-colors ${active ? "bg-raised text-fg shadow-xs" : "text-muted hover:text-fg"}`}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
+  ));
 }
 
 /**
@@ -462,28 +129,7 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
     if (!open || !panel.current || !trigger.current) return;
     const menu = panel.current;
     const anchor = trigger.current;
-    function place() {
-      const rect = anchor.getBoundingClientRect();
-      // A menu's row opens the selector beside the menu, level with the row, so it covers none of the menu's rows:
-      // on the side that has room for it. A window too narrow for either side opens it under the row.
-      const rows = variant === "menu" ? anchor.closest('[role="menu"]')?.getBoundingClientRect() : undefined;
-      const width = menu.offsetWidth;
-      const beside = !rows ? undefined : window.innerWidth - rows.right - 14 >= width ? rows.right + 6 : rows.left - 14 >= width ? rows.left - width - 6 : undefined;
-      if (beside !== undefined) {
-        menu.style.maxHeight = `${window.innerHeight - 16}px`;
-        menu.style.left = `${beside}px`;
-        menu.style.top = `${Math.max(8, Math.min(rect.top, window.innerHeight - menu.offsetHeight - 8))}px`;
-        menu.style.right = "auto";
-        return;
-      }
-      const above = rect.top - 12;
-      const below = window.innerHeight - rect.bottom - 12;
-      const up = direction === "up" ? above >= Math.min(300, below) : below < Math.min(300, above);
-      menu.style.maxHeight = `${Math.max(80, up ? above : below)}px`;
-      menu.style.left = `${Math.max(8, Math.min(rect.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8))}px`;
-      menu.style.top = `${up ? Math.max(8, rect.top - menu.offsetHeight - 6) : rect.bottom + 6}px`;
-      menu.style.right = "auto";
-    }
+    const place = () => placeModelSelector(menu, anchor, direction, variant === "menu");
     place();
     (searchField.current ?? menu).focus();
     const observer = new ResizeObserver(place);
@@ -648,13 +294,13 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
   const speed = speeds.find(o => o.id === effective?.serviceTier);
   const speedSummary = (speedOptions.find(o => o.id === activeSpeedId) ?? speedOptions[0])?.label ?? "Standard";
   const label = selected?.name ?? (emptyCatalog ? "Refresh models" : "Sign in to start");
-  const details = effective ? `${agentShort(effective.agent)} · ${label}. ${effortTitle}${speed ? `, speed: ${optionLabel(speed)}` : ""}` : label;
+  const details = effective ? `${providerShortName(effective.agent)} · ${label}. ${effortTitle}${speed ? `, speed: ${optionLabel(speed)}` : ""}` : label;
 
   // Subscription quota (strictly omitted for API-key providers).
   const subscriptionAgents = agents.filter(isSubscriptionProvider);
-  const quotaProviders = subscriptionAgents.filter((a): a is OnlineAgent & { quota: SubscriptionQuota } => Boolean(a.quota));
+  const quotaProviders = subscriptionAgents.filter((a): a is QuotaAgent => Boolean(a.quota));
   const activeQuotaProvider = quotaProviders.find((a) => a.id === selected?.agent)
-    ?? quotaProviders.reduce<(OnlineAgent & { quota: SubscriptionQuota }) | undefined>((lowest, cur) => {
+    ?? quotaProviders.reduce<QuotaAgent | undefined>((lowest, cur) => {
       const curMin = minRemainingPercent(cur.quota) ?? 100;
       const lowMin = lowest ? (minRemainingPercent(lowest.quota) ?? 100) : Infinity;
       return curMin < lowMin ? cur : lowest;
@@ -666,9 +312,6 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
     : activeQuotaMin !== undefined
       ? formatPercent(activeQuotaMin)
       : undefined;
-  const latestQuotaFetchedAt = quotaProviders
-    .map((a) => a.quota.fetchedAt)
-    .sort((a, b) => Date.parse(b) - Date.parse(a))[0];
   const hasDock = Boolean((effective && hasOptions) || quotaProviders.length > 0);
 
   const query = search.trim().toLowerCase();
@@ -778,47 +421,14 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
               setSearch(event.key);
               return;
             }
-            if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-              const horizGroup = target.closest('[aria-label="Providers"], [aria-label="Effort"], [aria-label="Speed"]');
-              if (!horizGroup) return;
-              const selector = horizGroup.getAttribute("role") === "radiogroup" ? 'button[role="radio"]' : "button";
-              const buttons = Array.from(horizGroup.querySelectorAll<HTMLButtonElement>(selector));
-              if (!buttons.length) return;
-              event.preventDefault();
-              const index = buttons.indexOf(target as HTMLButtonElement);
-              const delta = event.key === "ArrowRight" ? 1 : -1;
-              const next = index < 0 ? 0 : (index + delta + buttons.length) % buttons.length;
-              buttons[next]?.focus();
-              return;
-            }
-            if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-            const group = target === panel.current || target === searchField.current
-              ? panel.current?.querySelector('[aria-label="Models"]')
-              : target.closest('[role="radiogroup"], [aria-label="Providers"], [role="menu"]');
-            const selector = group?.getAttribute("role") === "radiogroup"
-              ? 'button[role="radio"]'
-              : group?.getAttribute("role") === "menu"
-                ? 'button:not(:disabled), a'
-                : "button";
-            const buttons = Array.from(group?.querySelectorAll<HTMLElement>(selector) ?? []);
-            if (!buttons.length) return;
-            event.preventDefault();
-            const index = buttons.indexOf(target);
-            const next = index < 0 ? (event.key === "ArrowDown" ? 0 : buttons.length - 1) : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
-            buttons[next]?.focus();
+            moveSelectorFocus(event, panel.current, searchField.current);
           }}
           className="fixed z-50 w-[22rem] !max-w-[calc(100vw-16px)] overflow-auto card shadow-2xl outline-none"
         >
           {!choices.length ? (
             <>
               <p className="px-3 py-3 text-[13px] text-muted">{unavailableReason}</p>
-              {/* A grid, so that why a sign-in failed, which AgentSignIn draws after its button, is a row under the name and the button. */}
-              {needsSignIn.map((a) => (
-                <div key={a.id} className="px-3 py-2 grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1 border-t border-line/60">
-                  <span className="text-[13px] text-muted">{AGENT_LABEL[a.id]}</span>
-                  <AgentSignIn agent={a} compact />
-                </div>
-              ))}
+              <SignInRows agents={needsSignIn} />
               {updateRows}
               <div className="border-t border-line/60 px-3 py-1.5">
                 <div className="flex flex-wrap items-center justify-between gap-x-3">
@@ -1084,188 +694,31 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
                       )}
                     </div>
                   ) : drawer === "tune" && effective && hasOptions ? (
-                    <div>
-                      <button
-                        type="button"
-                        aria-expanded={true}
-                        onClick={() => setDrawer("none")}
-                        className="flex w-full items-center justify-between px-3 py-2 text-left transition-colors hover:bg-raised/40"
-                      >
-                        <span className="inline-flex items-center gap-1.5 eyebrow text-muted">
-                          {efforts.length > 0 ? (
-                            <>
-                              <EffortDial level={effortLevel(efforts, dialEffort?.id)} size={12} />
-                              Effort
-                              <span className="font-sans text-[11.5px] font-semibold normal-case tracking-normal text-fg">
-                                · {effortSummary}
-                              </span>
-                            </>
-                          ) : (
-                            <>
-                              <BoltIcon />
-                              Speed
-                            </>
-                          )}
-                        </span>
-                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-fg">
-                          Done
-                          <span className="inline-flex rotate-180">
-                            <Icon name="down" size={10} />
-                          </span>
-                        </span>
-                      </button>
-                      <div className="px-3 pb-2.5">
-                        {efforts.length > 0 && (
-                          <EffortSlider
-                            options={efforts.map(e => ({ id: e.id, label: optionLabel(e), title: e.description }))}
-                            value={effective.effort}
-                            visualId={dialEffort?.id}
-                            onChange={(effort) => choose({ effort })}
-                          />
-                        )}
-                        {speedOptions.length > 0 && (
-                          efforts.length > 0 ? (
-                            <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-line/60 pt-2.5">
-                              <span className="inline-flex shrink-0 items-center gap-1 eyebrow text-muted">
-                                <BoltIcon />
-                                Speed
-                              </span>
-                              <SpeedSegmented
-                                inline
-                                options={speedOptions}
-                                value={activeSpeedId}
-                                onChange={(v) => choose({ serviceTier: v || undefined })}
-                              />
-                            </div>
-                          ) : (
-                            <SpeedSegmented
-                              options={speedOptions}
-                              value={activeSpeedId}
-                              onChange={(v) => choose({ serviceTier: v || undefined })}
-                            />
-                          )
-                        )}
-                      </div>
-                    </div>
+                    // Called, not mounted: the drawer's <div> and its Done button must stay the same elements as the
+                    // dock's <div> and Tune button, so React keeps the focused button and only flips aria-expanded.
+                    TuneDrawer({
+                      efforts,
+                      dialEffort,
+                      effortSummary,
+                      effortValue: effective.effort,
+                      speedOptions,
+                      activeSpeedId,
+                      onEffortChange: (effort) => choose({ effort }),
+                      onSpeedChange: (v) => choose({ serviceTier: v || undefined }),
+                      onDone: () => setDrawer("none"),
+                    })
                   ) : quotaProviders.length > 0 ? (
-                    <div aria-label="Subscription quota details">
-                      <div className="flex items-center justify-between gap-2 px-3 py-2">
-                        <div className="flex min-w-0 items-center gap-1.5">
-                          <span className="inline-flex items-center gap-1.5 eyebrow text-muted">
-                            <GaugeIcon size={12} />
-                            Subscription quota
-                          </span>
-                          {latestQuotaFetchedAt && (
-                            <span className="truncate text-[10.5px] text-dim">
-                              {formatRelativeAge(latestQuotaFetchedAt)}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <button
-                            type="button"
-                            aria-label="Refresh subscription quota"
-                            title="Refresh subscription quota"
-                            disabled={refreshingQuota}
-                            onClick={() => void refreshQuota({ force: true })}
-                            className="flex size-5 items-center justify-center rounded text-muted transition-colors hover:bg-raised hover:text-fg disabled:opacity-50"
-                          >
-                            <span className={refreshingQuota ? "inline-flex animate-spin" : "inline-flex"}>
-                              <Icon name="refresh" size={11} />
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            aria-expanded={true}
-                            onClick={() => setDrawer("none")}
-                            className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[11px] font-medium text-fg transition-colors hover:bg-raised/60"
-                          >
-                            Done
-                            <span className="inline-flex rotate-180">
-                              <Icon name="down" size={10} />
-                            </span>
-                          </button>
-                        </div>
-                      </div>
-                      <div className="space-y-2 px-3 pb-2.5">
-                        {quotaProviders.map((agent) => {
-                          const minPct = minRemainingPercent(agent.quota);
-                          const isLow = minPct !== undefined && minPct < LOW_QUOTA_THRESHOLD;
-                          const planBadge = agent.quota.plan ?? agent.plan;
-                          return (
-                            <div
-                              key={agent.id}
-                              data-quota-card={agent.id}
-                              data-low={isLow ? "true" : "false"}
-                              className={`rounded-md border px-2.5 py-2 ${
-                                isLow ? "border-warn/35 bg-warn/[0.05]" : "border-line/70 bg-panel/60"
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex min-w-0 items-center gap-1.5">
-                                  <ProviderIcon id={agent.id} size={13} />
-                                  <span className="truncate text-[12px] font-medium text-fg">
-                                    {providerShortName(agent.id)}
-                                  </span>
-                                  {planBadge && (
-                                    <span className="shrink-0 rounded bg-raised px-1.5 py-[1px] text-[10px] font-medium text-muted">
-                                      {planBadge}
-                                    </span>
-                                  )}
-                                </div>
-                                {isLow && (
-                                  <span className="shrink-0 text-[10.5px] font-medium text-warn">Low</span>
-                                )}
-                              </div>
-                              {agent.quota.buckets.length > 0 ? (
-                                <div className="mt-1.5 space-y-1.5">
-                                  {agent.quota.buckets.map((bucket) => {
-                                    const bucketLow = bucket.remainingPercent < LOW_QUOTA_THRESHOLD;
-                                    const countdown = formatResetCountdown(bucket.resetsAt);
-                                    return (
-                                      <div key={bucket.id}>
-                                        <div className="flex items-center justify-between gap-2 text-[11px]">
-                                          <span className="truncate text-muted">{bucket.label}</span>
-                                          <span className="flex shrink-0 items-center gap-1.5 tabular-nums">
-                                            <span className={`font-medium ${bucketLow ? "text-warn" : "text-fg"}`}>
-                                              {formatPercent(bucket.remainingPercent)}
-                                            </span>
-                                            {countdown && (
-                                              <span className="text-[10.5px] text-dim" title={`Resets in ${countdown}`}>
-                                                {countdown}
-                                              </span>
-                                            )}
-                                          </span>
-                                        </div>
-                                        <div className="mt-1 h-[3px] w-full overflow-hidden rounded-full bg-line/70" aria-hidden="true">
-                                          <div
-                                            className={`h-full rounded-full transition-[width] duration-150 ${bucketLow ? "bg-warn" : "bg-fg/65"}`}
-                                            style={{ width: `${Math.max(2, Math.min(100, bucket.remainingPercent))}%` }}
-                                          />
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              ) : agent.quota.unlimited ? (
-                                <p className="mt-1 text-[11px] text-muted">Unlimited credits</p>
-                              ) : null}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
+                    QuotaDetails({
+                      quotaProviders,
+                      refreshingQuota,
+                      onRefresh: () => void refreshQuota({ force: true }),
+                      onDone: () => setDrawer("none"),
+                    })
                   ) : null}
                 </div>
               )}
 
-              {/* A grid, so that why a sign-in failed, which AgentSignIn draws after its button, is a row under the name and the button. */}
-              {needsSignIn.map((a) => (
-                <div key={a.id} className="px-3 py-2 grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1 border-t border-line/60">
-                  <span className="text-[13px] text-muted">{AGENT_LABEL[a.id]}</span>
-                  <AgentSignIn agent={a} compact />
-                </div>
-              ))}
+              <SignInRows agents={needsSignIn} />
               {updateRows}
 
               {modelRefresh.result !== null && (

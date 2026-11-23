@@ -7,7 +7,8 @@ import { buildDb } from "../../lib/mock/fixtures";
 import { useHostsStore } from "../../stores/hosts";
 import { useModelPreferences } from "../../stores/modelPicker";
 import { api } from "../../lib/client";
-import { ListeningSettings, ModelSettings } from "./ModelSettings";
+import { ListeningSettings } from "./ListeningSettings";
+import { ModelSettings } from "./ModelSettings";
 
 it("renders each model on one line and places disabled models below active ones", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

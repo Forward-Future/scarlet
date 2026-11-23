@@ -4,17 +4,17 @@ import { randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { TimeRange } from "@scarlet/timeline";
-import { FFMPEG_QUIET_ARGS, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, even, failureReason, ffSeconds, hasDrawtext, resolveFfmpeg, runCapture } from "./exec.js";
+import { FFMPEG_QUIET_ARGS, SOURCE_AUDIO_CLOCK, even, failureReason, hasDrawtext, resolveFfmpeg, runCapture } from "./exec.js";
 import { drawtextFontArg } from "./fonts.js";
+import { CUDA_FRAMES_INPUT, rangeInput } from "./mediaInput.js";
 import { withDecoderFallback } from "./probe.js";
 import { toneMapFilters, type HdrTransfer } from "./hdr.js";
 import { waveformFromPcm } from "./waveform.js";
 
 function input(file: string, range: TimeRange, decoder?: SheetOptions["decoder"]) {
   // CUDA frames stay on the GPU until `shrinkFirst` scales them. VideoToolbox frames come back to memory.
-  const hardware = decoder === "cuda" ? ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] : decoder ? ["-hwaccel", decoder] : [];
-  return [...FFMPEG_QUIET_ARGS, ...hardware, "-ss", ffSeconds(range.start),
-    "-t", String(range.end - range.start), ...LOCAL_MEDIA_INPUT, "-i", file];
+  const hardware = decoder === "cuda" ? CUDA_FRAMES_INPUT : decoder ? ["-hwaccel", decoder] : [];
+  return [...FFMPEG_QUIET_ARGS, ...hardware, ...rangeInput(file, range)];
 }
 
 /**

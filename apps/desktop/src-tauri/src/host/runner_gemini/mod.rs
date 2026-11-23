@@ -11,10 +11,9 @@ mod transcript;
 mod tests;
 
 pub use acp_parse::{
-    acp_mcp_server, build_gemini_command, is_scarlet_mcp_permission, parse_gemini_acp_update, parse_gemini_line,
-    permission_outcome, system_prompt_meta, workspace_permission, GeminiState, SCARLET_TOOLS,
+    acp_mcp_server, build_gemini_command, is_scarlet_mcp_permission, parse_gemini_acp_update, permission_outcome,
+    system_prompt_meta, workspace_permission, GeminiState,
 };
-pub use transcript::agy_transcript_path;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

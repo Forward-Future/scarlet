@@ -1,4 +1,4 @@
-import type { MediaClip } from "./schema.js";
+import type { MediaClip } from "./timelineSchema.js";
 
 /** Return the first index that satisfies a monotone predicate, or the array length. */
 export function firstIndexBy<T>(items: readonly T[], matches: (item: T) => boolean): number {

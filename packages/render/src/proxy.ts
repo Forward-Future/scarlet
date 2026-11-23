@@ -7,9 +7,13 @@ import { mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_PREVIEW_HEIGHT } from "@scarlet/timeline";
 import { FfmpegError, LOCAL_MEDIA_INPUT, even, failureReason, runFfmpeg, threadedAvcPreview } from "./exec.js";
+import { CUDA_FRAMES_INPUT } from "./mediaInput.js";
 import { probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
 import { toneMapFilters } from "./hdr.js";
 import { PROXY_AUDIO_BITRATE, resolveEncoding, softwareEncoder, type HwAccel, type VideoEncoder } from "./encoder.js";
+
+/** A preview copy's sound: stereo AAC at the proxy bitrate. */
+const PROXY_AUDIO = ["-c:a", "aac", "-b:a", PROXY_AUDIO_BITRATE, "-ac", "2"];
 
 export interface ProxyOptions {
   /** Directory keyed by source identity and proxy format. */
@@ -89,7 +93,7 @@ function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, o
     ...(encoder === "h264_nvenc" ? ["-forced-idr", "1"] : encoder === "h264_qsv" ? ["-forced_idr", "1"] : []), "-profile:v", "high"];
   // Keep 4K pictures on the GPU from decode to encode; only the small proxy is written out.
   if (hardwareDecode && encoder === "h264_nvenc" && nativeCodec && upright && !probe.hasAlpha && !toneMap.length) {
-    return { input: ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+    return { input: [...CUDA_FRAMES_INPUT],
       output: ["-vf", `scale_cuda=${scale}:format=yuv420p:interp_algo=bicubic`, ...encode] };
   }
   const threaded = opts.hwaccel === "auto" && threadedAvcPreview && probe.videoCodec === "h264";
@@ -176,8 +180,7 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
         "file " + name, "inpoint 0", "duration " + ((parts[i + 1]?.start ?? pictureDuration) - start).toFixed(9),
       ]);
       await writeFile(manifest, list.join("\n") + "\n");
-      const audio = probe.hasAudio ? [...LOCAL_MEDIA_INPUT, "-i", input, "-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac",
-        "-b:a", PROXY_AUDIO_BITRATE, "-ac", "2"] : ["-map", "0:v:0", "-an"];
+      const audio = probe.hasAudio ? [...LOCAL_MEDIA_INPUT, "-i", input, "-map", "0:v:0", "-map", "1:a:0", ...PROXY_AUDIO] : ["-map", "0:v:0", "-an"];
       await runFfmpeg(["-y", "-f", "concat", "-safe", "1", "-i", manifest, ...audio,
         "-c:v", "copy", "-movflags", "+faststart", output], { signal: opts.signal, ffmpegPath: opts.ffmpegPath,
         onProgress: opts.onProgress && (t => opts.onProgress!(PARTS + (1 - PARTS) * Math.min(1, t / Math.max(probe.duration, pictureDuration)))) });
@@ -192,7 +195,7 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
   if (video) args.push("-map", "0:v:0", ...video.output);
   else args.push("-vn");
   if (probe.hasAudio) {
-    args.push("-map", "0:a:0", "-c:a", "aac", "-b:a", PROXY_AUDIO_BITRATE, "-ac", "2");
+    args.push("-map", "0:a:0", ...PROXY_AUDIO);
   } else {
     args.push("-an");
   }

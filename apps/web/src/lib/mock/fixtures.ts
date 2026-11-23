@@ -13,6 +13,7 @@ import type {
   Skill,
   SkillVersion,
   Task,
+  TaskAttachment,
   TaskEvent,
   User,
   VersionSummary,
@@ -48,14 +49,12 @@ export interface MockDb {
   taskEvents: Record<string, TaskEvent[]>;
   hosts: AgentHost[];
   skills: Skill[];
-  /** Graphics saved to reuse, picked with $name in the message box. Library-wide, like skills. */
   /** Files dropped on the message box, by project. */
-  attachments: Record<string, { id: string; name: string; size: number; mime?: string }[]>;
+  attachments: Record<string, TaskAttachment[]>;
   /** Rules Scarlet picked up from requests, waiting for the editor. */
   learnings: Learning[];
   skillVersions: Record<string, SkillVersion[]>;
   settings: ServerSettings;
-  invites: string[];
 }
 
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
@@ -728,7 +727,6 @@ export function buildDb(chatLayouts = false): MockDb {
     learnings,
     skillVersions,
     settings,
-    invites: [],
   };
 }
 

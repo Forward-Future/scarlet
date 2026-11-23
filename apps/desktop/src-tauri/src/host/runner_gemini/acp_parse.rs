@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{json, Value};
 
-use super::super::runner::{parse_json_object, RunnerCommand};
+use super::super::runner::RunnerCommand;
 use super::super::types::{
     brief, brief_input, is_question_tool, non_empty_str, pretty_tool_name, question_words, record_plan, trimmed_str,
     McpSpec, PlanStep, RunnerEvent,
@@ -445,19 +445,6 @@ pub fn parse_gemini_acp_update(update: &Value, st: &mut GeminiState) -> Vec<Runn
     }
 
     events
-}
-
-/// Parse one JSON-RPC notification line from `agy acp` (or non-JSON output as a log line).
-pub fn parse_gemini_line(line: &str, st: &mut GeminiState) -> Vec<RunnerEvent> {
-    let Some(msg) = parse_json_object(line) else {
-        return vec![RunnerEvent::new("log", line)];
-    };
-    if msg.get("method").and_then(Value::as_str) == Some("session/update") {
-        if let Some(update) = msg.pointer("/params/update") {
-            return parse_gemini_acp_update(update, st);
-        }
-    }
-    Vec::new()
 }
 
 /// Convert Scarlet's `McpSpec` to an ACP stdio MCP server entry.

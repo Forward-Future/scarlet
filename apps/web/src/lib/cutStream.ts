@@ -60,6 +60,12 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
   const ends = ranges.map(range => range.end);
   const indexAt = (time: number) => Math.min(ends.length - 1, firstIndex(ends, end => time < end));
   const position = () => seekState === "landed" && video.readyState >= 1 ? video.currentTime : wanted;
+  /** How many of the sections from `first` to `last` the buffer holds. */
+  const readyIn = (first: number, last: number) => {
+    let done = 0;
+    for (let i = first; i <= last; i++) if (ready.has(i)) done++;
+    return done;
+  };
   const id = logId(source, "s");
   playbackLog("stream open", { id, el: logId(video), sections: ranges.length, duration, start: wanted, loop: loop && [loop.start, loop.end], type });
   /** Which sections the stream holds and waits for, by number. */
@@ -145,8 +151,7 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
       // A short After audition buffers its lead-in and tail before the media clock starts. Rendering
       // the section after the join can take longer than the entire lead-in on a cold project.
       if (preroll) {
-        let done = 0;
-        for (let i = preroll.first; i <= preroll.last; i++) if (ready.has(i)) done++;
+        const done = readyIn(preroll.first, preroll.last);
         const total = preroll.last - preroll.first + 1;
         if (done !== preroll.lastDone) {
           preroll.lastDone = done;
@@ -303,8 +308,7 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
       const first = indexAt(start), last = indexAt(Math.max(start, end - SECTION_EDGE));
       preroll = { first, last, lastDone: -1, onProgress, finish };
       if (onProgress && !buffer) {
-        let done = 0;
-        for (let i = first; i <= last; i++) if (ready.has(i)) done++;
+        const done = readyIn(first, last);
         preroll.lastDone = done;
         onProgress(done, last - first + 1);
       }
