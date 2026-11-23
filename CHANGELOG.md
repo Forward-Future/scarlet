@@ -6,7 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
-- Settings › General now tells you when Claude Code, Codex or Gemini has a newer version, and updates it for you with one press, the same way you installed it.
+- Scarlet now tells you when Claude Code, Codex or Gemini has a newer version, with a small dot on the model button, and updates it for you with one press from the model menu or Settings › General, the same way you installed it.
 
 ## November 22, 2026
 

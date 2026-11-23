@@ -130,9 +130,10 @@ function InstallAgent({ agent }: { agent: SignInAgent }) {
 
 /**
  * A newer version of an installed agent's command-line tool, and the press that updates it. The app updates it the
- * way it was installed, in place, and offers nothing for a copy it can't update that way.
+ * way it was installed, in place, and offers nothing for a copy it can't update that way. `compact` is the model
+ * selector's row: the button, its progress and why it failed, as a grid row under the agent's name and the button.
  */
-export function AgentUpdate({ agent }: { agent: AgentAvailability }) {
+export function AgentUpdate({ agent, compact = false }: { agent: AgentAvailability; compact?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState("");
   const [error, setError] = useState("");
@@ -153,13 +154,22 @@ export function AgentUpdate({ agent }: { agent: AgentAvailability }) {
     }
   };
 
+  const title = agent.version && `${AGENT_LABEL[id]} ${agent.version} is installed`;
+  if (compact) {
+    const control = busy
+      ? <span className="flex items-center gap-1.5 text-[12px] text-muted" role="status"><Spinner className="size-3" /> Updating…</span>
+      : agent.latestVersion
+        ? <button type="button" className="btn-quiet py-0.5" title={title} onClick={() => void update()}>Update to {agent.latestVersion}</button>
+        : <span className="text-[12px] text-muted" role="status">{done}</span>;
+    return <>{control}{error && <div className="col-span-full min-w-0 wrap-anywhere"><InlineError>{error}</InlineError></div>}</>;
+  }
   if (busy) return <div className="flex items-center gap-2 text-[12px] text-muted" role="status"><Spinner className="size-3" /> Updating {AGENT_LABEL[id]}…</div>;
   return (
     <div className="space-y-1 text-[12px]">
       {agent.latestVersion ? (
         <div className="flex items-center gap-2">
           <span className="text-muted">Version {agent.latestVersion} is available</span>
-          <button type="button" className="btn-quiet py-0.5" title={agent.version && `${AGENT_LABEL[id]} ${agent.version} is installed`} onClick={() => void update()}>
+          <button type="button" className="btn-quiet py-0.5" title={title} onClick={() => void update()}>
             Update
           </button>
         </div>
