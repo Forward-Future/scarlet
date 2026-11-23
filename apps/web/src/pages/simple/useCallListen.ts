@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { makeTimeMap, mapStagedCut, timelineDuration, type Change, type TimeRange, type Timeline } from "@scarlet/timeline";
 import type { Task, ThreadEdit } from "@scarlet/shared";
-import { useThreadEdits } from "../../components/review/ThreadEdits";
+import { useThreadEdits } from "../../components/review/threadEditState";
 import { usePlaybackCache } from "../../components/player/usePlaybackCache";
 import { focusAround } from "../../components/player/SimpleProgress";
 import { useCutReview, useSingleCutDraft, type SingleCutDrafts } from "../../components/review/useCutReview";

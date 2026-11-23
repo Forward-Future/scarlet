@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
-import { bandLabel, gapLabel, layoutMarks, nearestMark, type TimelineDot } from "./TimelineScrubber";
+import { bandLabel, gapLabel, layoutMarks, nearestMark, type TimelineDot } from "./timelineMarkerLayout";
 
 const dot = (time: number, n: number): TimelineDot => ({ time, n, title: `Edit ${n}` });
 const shapes = (layout: ReturnType<typeof layoutMarks>) => layout.map(m => m.label);

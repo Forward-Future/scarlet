@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { matchesEdit, REVISED_CHECK, type EditRef, type ThreadEdit } from "@scarlet/shared";
-import { EditBadge, editGroups, EditVersion, RejectedMark, revisionWord, ThreadAction, ThreadEdits, useDeferred, useRejecting, useReviewed, useRevising } from "../../components/review/ThreadEdits";
+import { EditBadge, EditVersion, RejectedMark, ThreadAction, ThreadEdits } from "../../components/review/ThreadEdits";
+import { editGroups, revisionWord, useDeferred, useRejecting, useReviewed, useRevising } from "../../components/review/threadEditState";
 import { Icon } from "../../components/ui/primitives";
 import { editKindWord, editRowWord } from "../../lib/editKind";
 import { listMoments, type Moment } from "../../lib/editMoments";

@@ -797,6 +797,59 @@ it("reflects each selected model's actual available efforts and speeds in the tu
   }
 });
 
+it("keeps keyboard focus on the dock's button while the tuning drawer opens and folds", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const oldHosts = useHostsStore.getState();
+  const oldUi = useUiStore.getState();
+  const savedPick = localStorage.getItem("scarlet.agent");
+  const host = { ...buildDb().hosts[0]!, online: true };
+  useHostsStore.setState({
+    hosts: [{
+      ...host,
+      agents: [{
+        id: "codex", installed: true,
+        models: ["gpt-5.4"],
+        modelLabels: { "gpt-5.4": "GPT-5.4" },
+        modelOptions: {
+          "gpt-5.4": {
+            efforts: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+            defaultEffort: "medium",
+            speeds: [{ id: "priority", label: "Fast" }],
+          },
+        },
+      }],
+    }],
+  });
+  useUiStore.setState({ agent: { agent: "codex", model: "gpt-5.4" } });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(() => root.render(<MemoryRouter><AgentChip /></MemoryRouter>));
+    await act(() => container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!.click());
+
+    const tuneBtn = container.querySelector<HTMLButtonElement>('button[aria-label="Tune GPT-5.4 options"]')!;
+    act(() => tuneBtn.focus());
+    await act(() => tuneBtn.click());
+    const focused = document.activeElement as HTMLElement;
+    expect(focused.tagName).toBe("BUTTON");
+    expect(focused.textContent).toContain("Done");
+    expect(focused.getAttribute("aria-expanded")).toBe("true");
+
+    await act(() => focused.click());
+    expect(document.activeElement).toBe(container.querySelector('button[aria-label="Tune GPT-5.4 options"]'));
+    expect((document.activeElement as HTMLElement).getAttribute("aria-expanded")).toBe("false");
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useUiStore.setState(oldUi, true);
+    useHostsStore.setState(oldHosts, true);
+    if (savedPick === null) localStorage.removeItem("scarlet.agent");
+    else localStorage.setItem("scarlet.agent", savedPick);
+    vi.unstubAllGlobals();
+  }
+});
+
 it("remembers and restores the last effort and speed settings independently for each model", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const oldHosts = useHostsStore.getState();

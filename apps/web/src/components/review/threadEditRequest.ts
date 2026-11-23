@@ -3,7 +3,7 @@ import type { Thread } from "@scarlet/shared";
 import { api } from "../../lib/client";
 
 /** Names one read of a request's edits on one working cut. Reads under the same name share one request. */
-export function threadEditKey(projectId: string, head: string | null, thread?: Thread) {
+function threadEditKey(projectId: string, head: string | null, thread?: Thread) {
   // A review flag can change the edit list without changing the working cut or saving a new version.
   const changeKey = (change: Thread["changes"][number]) => [change.id, change.state, change.appliedVersion, change.toVersion, change.flags];
   return JSON.stringify([projectId, head, thread?.id, thread?.changes.map(changeKey), thread?.flagged?.map(changeKey)]);

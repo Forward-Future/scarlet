@@ -5,7 +5,7 @@ import type { Change } from "@scarlet/timeline";
 import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task } from "@scarlet/shared";
 import { resumeRunChoice, useAgentAvailability } from "../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../components/review/RunBundle";
-import { editGroups, useDeferred, useReviewed, useRevising, useThreadEdits } from "../../components/review/ThreadEdits";
+import { editGroups, useDeferred, useReviewed, useRevising, useThreadEdits } from "../../components/review/threadEditState";
 import { Icon } from "../../components/ui/primitives";
 import { TipButton } from "../../components/ui/TipButton";
 import { errorMessage } from "../../lib/client";

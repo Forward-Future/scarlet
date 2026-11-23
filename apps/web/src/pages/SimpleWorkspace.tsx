@@ -5,7 +5,7 @@ import { useSearchParams } from "react-router-dom";
 import { ChatRail } from "../components/shell/ChatRail";
 import { appliedReviewChange, timelineDuration, type Change, type CutAssessment, type TimeRange } from "@scarlet/timeline";
 import { isAsideTask, fullRenderContext, isProjectEditTask, matchesEdit, queueOrder, queueWaits, requestText, threadEditList, type EditRef, type LearningDecision, type Task, type ThreadEdit } from "@scarlet/shared";
-import { editGroups, useDeferred, useReviewed, useRevising } from "../components/review/ThreadEdits";
+import { editGroups, useDeferred, useReviewed, useRevising } from "../components/review/threadEditState";
 import { QueueTray, useRewordingHold, type QueuedRequest } from "../components/chat/QueueTray";
 import { recordEditReview } from "../lib/editReviews";
 import { recordUndo, undoLast } from "../lib/undo";
@@ -43,8 +43,9 @@ import type { JoinClock } from "../lib/joinClock";
 import { buildThreads, firstCutDeliveries, isRedo, revisionTarget, stagedCuts, type Thread } from "../lib/threads";
 import { runIsActive } from "../lib/taskRun";
 import { lastAttempt, laterAttempts, notesStillAsked, redoWords, requestRoots, stagingTask, takenFromQueue, waitingToStart } from "../lib/requestRuns";
-import { callGoesTo, callNow, callRevisions, carriedCall, carryingVersions, decidedPassCalls, isOpenPass, keepGoesTo, nextWaitingInForYou, noRevisions, openPass, passForYouOrder, passRevision, reviewCalls, revisedCall, revisedFrom, revisionCut, savedChoices,
+import { callGoesTo, callRevisions, decidedPassCalls, isOpenPass, keepGoesTo, nextWaitingInForYou, noRevisions, openPass, passForYouOrder, passRevision, reviewCalls, revisedFrom, revisionCut, savedChoices,
   type Call, type CutChoice, type PassForYouItem } from "../lib/passCalls";
+import { callNow, carriedCall, carryingVersions, revisedCall } from "../lib/carriedCuts";
 import { canPreviewMedia } from "../lib/upload";
 import { showingWorkingCut, useShownCut } from "../stores/shownCut";
 import { useProjectStore } from "../stores/project";
