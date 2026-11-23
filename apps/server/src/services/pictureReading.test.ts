@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Ctx } from "../context.js";
 import { ffmpeg } from "../render/ffmpeg.js";
-import { pictureReader, rememberLast, withFrames, type VideoMedia } from "./pictureReading.js";
+import { rememberLast } from "../util.js";
+import { pictureReader, withFrames, type VideoMedia } from "./pictureReading.js";
 import { fullProxyVariants, previewIdentity } from "./previewPictures.js";
 
 let root: string;

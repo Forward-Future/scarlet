@@ -4,7 +4,6 @@
  * holds still costs one reading. Each line of text becomes a span from the first frame that shows it to the first
  * that doesn't. This is evidence for the model, never a decision.
  */
-import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { probeMedia, screenFrameSize } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
@@ -12,7 +11,7 @@ import type { Ctx } from "../context.js";
 import { audioWorker } from "../transcribe/audioWorker.js";
 import { LocalWhisperModel } from "../transcribe/localModel.js";
 import { SCREEN_TEXT_MODELS, type ScreenLine } from "../transcribe/screenTextModel.js";
-import { pictureGrid, pictureReader, r3, withFrames, type VideoMedia } from "./pictureReading.js";
+import { pictureGrid, pictureReader, r3, readingIdentity, withFrames, type VideoMedia } from "./pictureReading.js";
 
 /** Bump when the reading changes: the models, the sampling or how lines become spans. Kept readings are read again. */
 const SCREEN_TEXT_VERSION = 2;
@@ -134,8 +133,7 @@ function modelsFor(ctx: Ctx) {
 }
 
 function identity(media: MediaAsset) {
-  return createHash("sha256").update(JSON.stringify([SCREEN_TEXT_VERSION, media.hash ?? media.path, media.duration,
-    Object.values(SCREEN_TEXT_MODELS).map(m => m.sha256), SCREEN_TEXT_FPS, SCREEN_TEXT_CHUNK])).digest("hex");
+  return readingIdentity(SCREEN_TEXT_VERSION, media, Object.values(SCREEN_TEXT_MODELS).map(m => m.sha256), SCREEN_TEXT_FPS, SCREEN_TEXT_CHUNK);
 }
 
 /**

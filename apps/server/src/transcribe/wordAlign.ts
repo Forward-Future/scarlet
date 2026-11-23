@@ -8,10 +8,10 @@ import { humanDuration } from "../logText.js";
 import { extractWav } from "../render/ffmpeg.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 import { audioLane, type AudioLane, type AudioWork } from "../services/audioWork.js";
-import { readWavDataLayout } from "../util.js";
+import { readWavDataLayout, round3 } from "../util.js";
 import {
   alignGroup, applyTimings, alignmentGroups, CTC_LETTERS, SPANISH_CTC_LETTERS, FRAME_SAMPLES, framesFor, groupLabels, logSoftmax, MIN_SCORE,
-  planChunks, round, SAMPLE_RATE, stitchChunks, unplacedGaps, type AlignWord, type Emissions, type SoundIn, type WordTiming,
+  planChunks, SAMPLE_RATE, stitchChunks, unplacedGaps, type AlignWord, type Emissions, type SoundIn, type WordTiming,
 } from "./ctcAlign.js";
 import { audioWorker, type AudioRequest } from "./audioWorker.js";
 import { EmissionFile } from "./emissions.js";
@@ -492,7 +492,7 @@ function place(em: Emissions, groups: AlignRequest["groups"], indices: number[],
     const timings = alignGroup(em, group.words, Math.max(group.start - MARGIN, previousEnd), group.end + MARGIN, alphabet, group.next);
     timings.forEach((t, i) => {
       if (!t) return;
-      out[g]![i] = { start: round(t.start), end: round(t.end), score: round(t.score) };
+      out[g]![i] = { start: round3(t.start), end: round3(t.end), score: round3(t.score) };
       if (t.score >= MIN_SCORE) previousEnd = Math.max(previousEnd, t.end);
     });
   }

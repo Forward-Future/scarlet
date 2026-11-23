@@ -5,7 +5,6 @@
  * which its box barely moves, so a long talking head comes back as a few dozen spans. This is evidence for the model:
  * the framing is its call.
  */
-import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { probeMedia, screenFrameSize } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
@@ -13,7 +12,8 @@ import type { Ctx } from "../context.js";
 import { audioWorker } from "../transcribe/audioWorker.js";
 import { EYE_MODELS, FACE_MODEL, FACE_SIDE, iou, type Face } from "../transcribe/faceModel.js";
 import { LocalWhisperModel, type PinnedModel } from "../transcribe/localModel.js";
-import { pictureReader, r3, rememberLast, withFrames, type VideoMedia } from "./pictureReading.js";
+import { rememberLast } from "../util.js";
+import { pictureReader, r3, readingIdentity, withFrames, type VideoMedia } from "./pictureReading.js";
 
 /** Bump when the reading changes: the model, the sampling or what a frame keeps. Kept readings are read again. 2: the eyes. 3: where they look, up and down. */
 const FACES_VERSION = 3;
@@ -177,8 +177,7 @@ function modelFor(ctx: Ctx, pinned: PinnedModel = FACE_MODEL) {
 }
 
 function identity(media: MediaAsset) {
-  return createHash("sha256").update(JSON.stringify([FACES_VERSION, media.hash ?? media.path, media.duration,
-    FACE_MODEL.sha256, EYE_MODELS.mesh.sha256, EYE_MODELS.blendshapes.sha256, FACES_FPS, FACES_WINDOW])).digest("hex");
+  return readingIdentity(FACES_VERSION, media, FACE_MODEL.sha256, EYE_MODELS.mesh.sha256, EYE_MODELS.blendshapes.sha256, FACES_FPS, FACES_WINDOW);
 }
 
 /**
