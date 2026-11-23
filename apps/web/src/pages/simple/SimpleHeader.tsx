@@ -12,7 +12,7 @@ import { useUiStore } from "../../stores/ui";
 import type { Panel } from "./types";
 
 /** The chat's header: the way back to every project, the project's name, and its tools. */
-export function SimpleHeader({ projectName, importing, importFailed, threadInput, menuSays, toLearn, transcript, setTranscript, setPanel, openLearnings }: {
+export function SimpleHeader({ projectName, importing, importFailed, threadInput, menuSays, toLearn, transcript, setTranscript, setPanel, openLearnings, exportReady }: {
   projectName: string;
   importing: number;
   importFailed: boolean;
@@ -24,6 +24,8 @@ export function SimpleHeader({ projectName, importing, importFailed, threadInput
   setTranscript: Dispatch<SetStateAction<boolean>>;
   setPanel: (panel: Panel) => void;
   openLearnings: () => void;
+  /** The video has edits and nothing waits on the editor or on Scarlet: Export is the next step. */
+  exportReady: boolean;
 }) {
   return <header className="simple-header">
     <Link to="/" className="simple-back" onClick={() => player.pause()} title="All projects" aria-label="All projects">
@@ -34,7 +36,7 @@ export function SimpleHeader({ projectName, importing, importFailed, threadInput
         same mark. Media, Export and Model mark their own header buttons. */}
     <div className="simple-tools">
       <MediaButton importing={importing} importFailed={importFailed} onOpen={() => setPanel("media")} />
-      <ExportButton onOpen={() => setPanel("export")} />
+      <ExportButton ready={exportReady} onOpen={() => setPanel("export")} />
       <AgentChip variant="header" direction="down" threadInput={threadInput} />
       <Dropdown label="More" align="right" width={240} description={menuSays || undefined}
         button={<span className={`btn-icon simple-more${menuSays ? " needs-you" : ""}`} title={menuSays || "More"}>
