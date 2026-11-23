@@ -14,7 +14,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { smokeEnvironment, startSmokeEngine } from "./smoke-engine-startup.mjs";
 import { registerStorage } from "./register-storage.mjs";
-import { stockSkillNames } from "./stock-skills.mjs";
+import { stockExampleNames, stockSkillNames } from "./stock-skills.mjs";
 import { createRequire } from "node:module";
 
 const dir = resolve(process.argv[2] ?? "");
@@ -100,11 +100,12 @@ try {
   const { skills } = await api("GET", `/skills?projectId=${project.id}`);
   // Read from skills/ like the engine's own bundling, so adding a stock skill can't fail every install's check.
   const workflows = stockSkillNames();
+  const examples = new Set(stockExampleNames());
   for (const name of workflows) {
     const skill = skills.find(s => s.name === name && s.scope === "team");
     // The stock skills carry no upstream marker in their frontmatter any more, so the check is that each one is there
-    // with its text, on for every agent.
-    if (!skill?.enabled || skill.agents.length || !skill.content.trim()) {
+    // with its text, for every agent: on, or off for an example of one editor's style.
+    if (!skill || skill.enabled === examples.has(name) || skill.agents.length || !skill.content.trim()) {
       fail(`bundled editing skill unavailable to agents: ${name}`);
     }
   }

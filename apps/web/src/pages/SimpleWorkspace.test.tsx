@@ -999,7 +999,7 @@ it("counts and steps through a flagged edit made in several places as one edit, 
   expect([openTitle(), cardCount(), need()]).toEqual(["wrap", "1 of 1", "1 needs you"]);
 });
 
-it("takes back the last Keep with ⌘Z, then the one before, and says in the timeline's bottom row what the next ⌘Z takes back", async () => {
+it("takes back the last Keep with ⌘Z, then the one before, with no undo display in the timeline's bottom row", async () => {
   appliedEdits().mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
       { changeId: "chg_approved_2", spot: 0, label: "captions", range: { start: 0.2, end: 2.4 }, previous: [], check: "The first line runs long" },
@@ -1007,26 +1007,24 @@ it("takes back the last Keep with ⌘Z, then the one before, and says in the tim
       { changeId: "chg_approved_2", spot: 2, label: "wrap", range: { start: 11.5, end: 16 }, previous: [], check: CHECK, summary: SUMMARY },
     ] }));
   const unkeep = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined);
-  vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
   const undoKey = (target: EventTarget = window) => act(async () => {
     target.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true }));
   });
-  const label = () => container.querySelector<HTMLButtonElement>(".timeline-foot .timeline-undo-button");
+  const undoDisplay = () => container.querySelector(".timeline-foot .timeline-undo");
   await showFolded();
   const turn = turnFor("chg_approved_2");
   const need = () => turn.querySelector(".simple-pass-need")?.getAttribute("title");
   await click(turn.querySelector(".simple-pass-need")!);
   await act(async () => {});
-  // Nothing to take back yet: the bottom row is the clock and the zoom.
-  expect(label()).toBeNull();
+  expect(undoDisplay()).toBeNull();
   await undoKey();
   expect([openTitle(), need()]).toEqual(["captions", "2 need you"]);
 
   await press("k");
   await act(async () => {});
   expect([openTitle(), need()]).toEqual(["wrap", "1 needs you"]);
-  // The label says what ⌘Z takes back, with its key beside it, and names the edit on hover.
-  expect([label()?.textContent, label()?.dataset.key, label()?.title]).toEqual(["Undo Keep", "⌘Z", "Undo Keep of Edit at 0:00 (⌘Z)"]);
+  // No undo button or label is shown in the timeline's bottom row.
+  expect(undoDisplay()).toBeNull();
   await press("k");
   await act(async () => {});
   expect(need()).toBeNull();
@@ -1036,7 +1034,7 @@ it("takes back the last Keep with ⌘Z, then the one before, and says in the tim
   await act(async () => {});
   expect([openTitle(), cardCount(), need()]).toEqual(["wrap", "1 of 1", "1 needs you"]);
   expect(unkeep.mock.calls).toEqual([[PRJ, { threadId: threadWith("chg_approved_2").id, edits: [{ changeId: "chg_approved_2", spot: 2 }] }]]);
-  expect(label()?.textContent).toBe("Undo Keep");
+  expect(undoDisplay()).toBeNull();
   // Words being written keep their own ⌘Z.
   const typing = document.createElement("textarea");
   typing.value = "Lower the";
@@ -1044,11 +1042,11 @@ it("takes back the last Keep with ⌘Z, then the one before, and says in the tim
   await undoKey(typing);
   expect(need()).toBe("1 needs you");
   typing.remove();
-  // The label does what ⌘Z does: the captions' Keep goes too, and nothing is left to take back.
-  await click(label()!);
+  // Another ⌘Z takes back the captions' Keep too.
+  await undoKey();
   await act(async () => {});
   expect([openTitle(), need()]).toEqual(["captions", "2 need you"]);
-  expect(label()).toBeNull();
+  expect(undoDisplay()).toBeNull();
 });
 
 it("steps ↓ from a flagged edit sent back for revision to the next one that waits, not to the settled edit beside it", async () => {
@@ -2081,15 +2079,14 @@ it("rejects one applied edit with the × after Keep, asking Scarlet to put back 
   expect(openTitle()).toBe("wrap");
   expect(localStorage.getItem(`scarlet.kept-edits.v1/${PRJ}/${threadWith("chg_approved_2").id}`) ?? "").not.toContain("chg_approved_2/1");
   // ⌘Z takes the rejection back as it would a revision: the request stops, and the card goes back to the edit.
-  const undo = container.querySelector<HTMLButtonElement>(".timeline-foot .timeline-undo-button")!;
-  expect(undo.textContent).toBe("Undo Reject");
+  expect(container.querySelector(".timeline-foot .timeline-undo")).toBeNull();
   const cancel = vi.spyOn(api, "cancelTask").mockResolvedValue({ task: { id: "task_reject" } as never });
   await event(d => ({ ...d, tasks: [...d.tasks, { ...d.tasks.find(t => t.id === "task_done")!, id: "task_reject", state: "queued" as const }] }));
   await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); });
   await act(async () => {});
   expect(cancel.mock.calls).toEqual([["task_reject", false, true]]);
   expect(openTitle()).toBe("captions");
-  expect(container.querySelector(".timeline-foot .timeline-undo-button")).toBeNull();
+  expect(container.querySelector(".timeline-foot .timeline-undo")).toBeNull();
 });
 
 it("leaves the edit the editor stepped to open when a rejection sent from the edit before lands", async () => {
@@ -2165,7 +2162,7 @@ it("puts a rejected cut back on the engine at once, with no request to Scarlet, 
     vi.useRealTimers();
   }
   expect([rejectedSays(), !!leavingBand()]).toEqual([["Rejected", 0], true]);
-  expect(container.querySelector(".timeline-foot .timeline-undo-button")!.textContent).toBe("Undo Reject");
+  expect(container.querySelector(".timeline-foot .timeline-undo")).toBeNull();
   // ↓ is the editor going on, to the edit after where it was.
   await press("ArrowDown");
   expect([openTitle(), leavingBand(), rejectedCard()]).toEqual(["wrap", null, null]);

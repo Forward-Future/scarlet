@@ -109,7 +109,7 @@ interface PreviewProps {
     /** Changes each time the editor asks to see the whole timeline. */
     fit?: number;
     focus?: ProgressFocus; label?: string; compareHost?: HTMLElement | null; above?: ReactNode;
-    /** In the timeline's bottom row: what ⌘Z takes back. */
+    /** In the timeline's bottom row: why the last ⌘Z couldn't take its step back. */
     foot?: ReactNode;
     gaps?: TimelineGap[]; skippedRanges?: TimeRange[]; onGap?(gap: TimelineGap, time: number): void;
     /** A click inside the shaded passage, when the playing side steps over it. */
