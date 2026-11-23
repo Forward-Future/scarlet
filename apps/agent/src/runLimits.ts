@@ -1,4 +1,4 @@
-/** A run's optional time cap and stall limit, in the words the prompt and the task error use for them. */
+// A run's optional time cap and stall limit, in the words the prompt and the task error use for them.
 
 function minutes(ms: number): string {
   const m = Math.max(1, Math.ceil(ms / 60_000));

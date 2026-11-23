@@ -2,7 +2,8 @@
  * Codex's event stream, as `codex exec --json` writes it and the App Server's notifications are turned into it, and
  * the result a Codex run ends with.
  */
-import { briefInput, COMPACTED, COMPACTING, holdQuestion, isQuestionTool, nextPlanEvent, questionText, settleQuestion, type QuestionCallState, type RunAgentResult, type RunnerEvent } from "./types.js";
+import { briefInput, COMPACTED, COMPACTING, isQuestionTool, nextPlanEvent, questionText, type RunAgentResult, type RunnerEvent } from "./types.js";
+import { holdQuestion, settleQuestion, type QuestionCallState } from "./questionCalls.js";
 import { asRecord, earlyResult, exitError, jsonLine, tailSummary, type SpawnOutcome } from "./spawn.js";
 import { addUsage, codexUsage, usageWithModel } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";

@@ -7,7 +7,8 @@ import { buildCodexCommand, tomlInlineTable, tomlString } from "./codex.js";
 import { newCodexState, parseCodexLine } from "./codexParse.js";
 import { acpMcpServer, buildGeminiCommand, isScarletMcpPermission, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./geminiAcp.js";
 import { quoteForCmd, spawnLines, spawnSpec } from "./spawn.js";
-import { briefInput, holdQuestion, isQuestionTool, prettyToolName, settleQuestion, workspaceEnv, type QuestionCallState, type RunnerEvent } from "./types.js";
+import { briefInput, isQuestionTool, prettyToolName, workspaceEnv, type RunnerEvent } from "./types.js";
+import { holdQuestion, settleQuestion, type QuestionCallState } from "./questionCalls.js";
 
 function feed<S>(lines: string[], st: S, parse: (l: string, s: S) => RunnerEvent[]): RunnerEvent[] {
   const out: RunnerEvent[] = [];

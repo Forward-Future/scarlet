@@ -5,17 +5,15 @@
 import { resolve as resolvePath } from "node:path";
 import {
   briefInput,
-  holdQuestion,
   isQuestionTool,
   nextPlanEvent,
   prettyToolName,
   questionText,
-  settleQuestion,
   type McpSpec,
-  type QuestionCallState,
   type RunnerEvent,
 } from "./types.js";
-import { asRecord, jsonLine } from "./spawn.js";
+import { holdQuestion, settleQuestion, type QuestionCallState } from "./questionCalls.js";
+import { asRecord, asString, jsonLine } from "./spawn.js";
 import { addUsage, geminiUsage } from "./usage.js";
 import { SCARLET_TOOL_NAMES, type AgentUsage, type PlanStep } from "@scarlet/shared";
 
@@ -53,10 +51,6 @@ export function newGeminiState(): GeminiParseState {
     shouldStop: false,
     completed: false,
   };
-}
-
-export function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function contentText(content: unknown): string {

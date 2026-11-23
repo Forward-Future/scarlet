@@ -12,7 +12,6 @@ import { briefInput, DEFAULT_STALL_MS, workspaceEnv, type RunAgentOptions, type 
 import { acpConfigHasValue, DEFAULT_GEMINI_EFFORT, findAcpEffortOption, findAcpModelOption, isAcpAuthError, type AcpConfigOption } from "./acp.js";
 import {
   acpMcpServer,
-  asString,
   buildGeminiCommand,
   extractToolName,
   flushStreams,
@@ -26,7 +25,7 @@ import {
   workspacePermission,
 } from "./geminiAcp.js";
 import { TranscriptUsageTailer } from "./geminiTranscript.js";
-import { asRecord, earlyResult, exitError, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
+import { asRecord, asString, earlyResult, exitError, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
 import { addUsage, createUsageReporter, geminiUsage, usageWithModel } from "./usage.js";
 
 /** How long agy has to exit on its own once Scarlet has closed its input. It can stay up, and the run would stall. */
