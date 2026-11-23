@@ -35,7 +35,6 @@ import {
 } from "./dialogue-join.js";
 import { PAUSE_FLOOR_SECONDS } from "./dialogue-leftovers.js";
 import {
-  audibleSourcePoints,
   cutReading,
   cutsReach,
   dialogueGate,
@@ -43,6 +42,7 @@ import {
   resolveCutRange,
   SPEECH_BESIDE_EDGE,
 } from "./dialogue-plan.js";
+import { audibleSourcePoints } from "./dialogue-reading.js";
 import { acousticRetakeJoin } from "./dialogue-retake-join.js";
 import { FIRST_CUT_BATCH_SIZE } from "./dialogue-scan-batch.js";
 import type { GapSound } from "./gap-sound.js";
