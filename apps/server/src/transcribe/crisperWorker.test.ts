@@ -7,22 +7,31 @@ import { crisperWorker, type CrisperRequest } from "./crisperWorker.js";
 
 /** Answers as the adapter's --serve does: one JSON line a request, its stderr as it reads, and an exit after a failure. */
 const FAKE_ADAPTER = `
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync, writeSync } from "node:fs";
 import { createInterface } from "node:readline";
 let served = 0;
 createInterface({ input: process.stdin }).on("line", line => {
   const request = JSON.parse(line);
   served++;
-  process.stderr.write("crisperwhisper device = mps\\n");
-  if (request.progress) process.stderr.write("progress = 50%\\n");
+  writeSync(2, "crisperwhisper device = mps\\n");
+  if (request.progress) writeSync(2, "progress = 50%\\n");
   if (request.wav.endsWith("broken.wav")) {
-    process.stderr.write("Traceback: the decoder broke\\n");
-    process.stdout.write(JSON.stringify({ id: request.id, error: "the decoder broke" }) + "\\n");
+    writeSync(2, "Traceback: the decoder broke\\n");
+    writeSync(1, JSON.stringify({ id: request.id, error: "the decoder broke" }) + "\\n");
     process.exit(1);
   }
   if (request.wav.endsWith("long.wav")) return;
-  writeFileSync(request.out + ".json", JSON.stringify({ pid: process.pid, served, language: request.language }));
-  process.stdout.write("not a reply\\n" + JSON.stringify({ id: request.id, ok: true }) + "\\n");
+  const finish = () => {
+    writeFileSync(request.out + ".json", JSON.stringify({ pid: process.pid, served, language: request.language }));
+    writeSync(1, "not a reply\\n" + JSON.stringify({ id: request.id, ok: true }) + "\\n");
+  };
+  if (!existsSync(request.out + ".wait")) return finish();
+  const deadline = Date.now() + 2_000;
+  const poll = setInterval(() => {
+    if (!existsSync(request.out + ".ack") && Date.now() < deadline) return;
+    clearInterval(poll);
+    finish();
+  }, 5);
 });
 `;
 
@@ -38,7 +47,7 @@ afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
 
 let outputs = 0;
 async function read(wav: string, extra: Partial<CrisperRequest> = {}) {
-  const out = join(dir, `out${outputs++}`);
+  const out = extra.out ?? join(dir, `out${outputs++}`);
   await crisperWorker.transcribe({ binary: process.execPath, args: [adapter], wav: join(dir, wav), out, language: "en", progress: false, ...extra });
   return JSON.parse(await readFile(out + ".json", "utf8")) as { pid: number; served: number; language: string };
 }
@@ -53,8 +62,26 @@ const exited = async (pid: number) => {
 
 it("reads every request in one worker, which keeps its model, and gives each its own stderr lines", async () => {
   const lines: string[][] = [[], []];
-  const first = await read("a.wav", { progress: true, onStderrLine: line => lines[0]!.push(line) });
-  const second = await read("b.wav", { language: "fr", onStderrLine: line => lines[1]!.push(line) });
+  const firstOut = join(dir, `out${outputs++}`);
+  const secondOut = join(dir, `out${outputs++}`);
+  await writeFile(firstOut + ".wait", "");
+  await writeFile(secondOut + ".wait", "");
+  const first = await read("a.wav", {
+    out: firstOut,
+    progress: true,
+    onStderrLine: line => {
+      lines[0]!.push(line);
+      if (lines[0]!.length === 2) void writeFile(firstOut + ".ack", "");
+    },
+  });
+  const second = await read("b.wav", {
+    out: secondOut,
+    language: "fr",
+    onStderrLine: line => {
+      lines[1]!.push(line);
+      if (lines[1]!.length === 1) void writeFile(secondOut + ".ack", "");
+    },
+  });
   expect(second).toEqual({ pid: first.pid, served: 2, language: "fr" });
   expect(lines).toEqual([["crisperwhisper device = mps", "progress = 50%"], ["crisperwhisper device = mps"]]);
   // Requests made together are read one after another, by the same worker.
@@ -65,10 +92,11 @@ it("reads every request in one worker, which keeps its model, and gives each its
 it("reports a reading that fails with the adapter's reason, and starts the next request in a new worker", async () => {
   const before = await read("a.wav");
   const failed = crisperWorker.transcribe({ binary: process.execPath, args: [adapter], wav: join(dir, "broken.wav"), out: join(dir, "broken"), language: "en", progress: false });
+  const queued = read("a.wav");
   await expect(failed).rejects.toThrow(FfmpegError);
   await expect(failed).rejects.toThrow(/failed: the decoder broke\ncrisperwhisper device = mps\nTraceback: the decoder broke$/);
   expect(await exited(before.pid)).toBe(true);
-  const after = await read("a.wav");
+  const after = await queued;
   expect(after.pid).not.toBe(before.pid);
   expect(after.served).toBe(1);
 });

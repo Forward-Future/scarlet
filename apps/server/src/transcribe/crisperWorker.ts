@@ -28,7 +28,7 @@ export interface CrisperRequest {
   onStderrLine?: (line: string) => void;
 }
 
-type Worker = { key: string; child: ChildProcess; args: string[]; errors: string };
+type Worker = { key: string; child: ChildProcess; args: string[]; errors: string; failure?: string; kill?: ReturnType<typeof setTimeout> };
 type Job = { id: number; request: CrisperRequest; resolve(): void; reject(error: unknown): void; worker?: Worker;
   cancel?: () => void; background?: StillBackground };
 
@@ -48,6 +48,11 @@ function lines(stream: Readable, each: (line: string) => void) {
       each(rest.slice(0, nl).trim());
       rest = rest.slice(nl + 1);
     }
+  });
+  stream.on("end", () => {
+    const final = rest.trim();
+    rest = "";
+    if (final) each(final);
   });
 }
 
@@ -73,12 +78,22 @@ function start(request: CrisperRequest, key: string): Worker {
     let reply: { id?: number; ok?: boolean; error?: string };
     try { reply = JSON.parse(line); } catch { return; }
     if (reply.id !== job.id) return;
-    finish(job, () => reply.ok ? job.resolve()
-      : job.reject(new FfmpegError(`${binary} failed: ${reply.error ?? "no reason given"}\n${tail(started.errors)}`, args, started.errors)));
+    if (reply.ok) {
+      finish(job, () => job.resolve());
+      return;
+    }
+    // The worker exits after an error reply. Detach it now so nothing queued is sent to it, and wait for close so
+    // stderr's traceback has finished arriving before we report the failure.
+    if (worker === started) worker = undefined;
+    started.failure = reply.error ?? "no reason given";
+    child.stdin?.end();
+    started.kill = setTimeout(() => child.kill("SIGKILL"), 1_000);
+    started.kill.unref?.();
   });
   // Writing to a worker that has just exited fails; its close says why.
   child.stdin!.on("error", () => {});
   const stopped = (why: () => Error) => {
+    clearTimeout(started.kill);
     if (worker === started) worker = undefined;
     const job = current;
     if (job?.worker !== started) return;
@@ -87,8 +102,9 @@ function start(request: CrisperRequest, key: string): Worker {
   };
   child.on("error", error => stopped(() =>
     new FfmpegError(mediaToolLaunchError(binary, error, `${binary} failed to start: ${error.message}`), args, started.errors)));
-  child.on("close", (code, signal) => stopped(() =>
-    new FfmpegError(`${binary} exited with ${signal ? `signal ${signal}` : `code ${code}`}: ${tail(started.errors)}`, args, started.errors)));
+  child.on("close", (code, signal) => stopped(() => started.failure !== undefined
+    ? new FfmpegError(`${binary} failed: ${started.failure}\n${tail(started.errors)}`, args, started.errors)
+    : new FfmpegError(`${binary} exited with ${signal ? `signal ${signal}` : `code ${code}`}: ${tail(started.errors)}`, args, started.errors)));
   return started;
 }
 

@@ -466,6 +466,7 @@ def serve(model, threads, requests=sys.stdin):
     cache, torch, load_audio = prepare_runtime(model, threads)
 
     def reply(**fields):
+        sys.stderr.flush()
         replies.write(json.dumps(fields, ensure_ascii=False) + "\n")
         replies.flush()
 
