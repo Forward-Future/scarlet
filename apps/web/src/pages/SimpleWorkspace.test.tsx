@@ -9384,7 +9384,7 @@ it("aims a new edit at the latest manual seek at once, with no second press", as
   expect(useUiStore.getState().agentContext).toBe("whole");
 });
 
-it("writes the time the editor pauses on into an empty box, as if they had typed it", async () => {
+it("aims an empty box at the paused time in its tag without writing into the input box", async () => {
   idle();
   await show();
   // The picture is playing at 0:07.
@@ -9392,32 +9392,33 @@ it("writes the time the editor pauses on into an empty box, as if they had typed
   vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(() => !playing);
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => { playing = false; });
   vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(async () => { playing = true; });
-  const box = () => [useUiStore.getState().agentDraft, boxTag()];
+  const box = () => [useUiStore.getState().agentDraft, pointTag()];
   await act(async () => usePlayerStore.setState({ playing: true, time: 7 }));
-  expect([...box(), useUiStore.getState().agentContext]).toEqual(["", undefined, null]);
-  // Space pauses it, and the box starts with the time, with no tag.
+  expect([useUiStore.getState().agentDraft, boxTag(), useUiStore.getState().agentContext]).toEqual(["", undefined, null]);
+  // Space pauses it: the header tag takes the moment and the input box stays empty.
   await press(" ");
   await act(async () => usePlayerStore.setState({ playing: false }));
-  expect(box()).toEqual(["0:07 ", undefined]);
-  expect(useUiStore.getState().agentContext).toMatchObject({ time: 7, fromMessage: true });
-  // Playing on takes it out while it's all the box holds, and the next pause writes the new time.
+  expect(box()).toEqual(["", ["At 0:07", true]]);
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 7 });
+  expect(useUiStore.getState().agentContext).not.toMatchObject({ fromMessage: true });
+  // Playing on clears the empty box's tag, and the next pause aims at the new time.
   await press(" ");
   await act(async () => usePlayerStore.setState({ playing: true, time: 11 }));
-  expect([...box(), useUiStore.getState().agentContext]).toEqual(["", undefined, null]);
+  expect([useUiStore.getState().agentDraft, boxTag(), useUiStore.getState().agentContext]).toEqual(["", undefined, null]);
   await press(" ");
   await act(async () => usePlayerStore.setState({ playing: false }));
-  expect(box()).toEqual(["0:11 ", undefined]);
-  // A seek moves it while the box holds only the time.
+  expect(box()).toEqual(["", ["At 0:11", true]]);
+  // A seek moves the tag while the box is empty.
   await press("ArrowLeft");
-  expect(box()).toEqual(["0:06 ", undefined]);
-  // Words written after it are the editor's: playing on and pausing again leave the message as it is.
-  await act(async () => useUiStore.getState().setAgentDraft("0:06 zoom in here"));
+  expect(box()).toEqual(["", ["At 0:06", true]]);
+  // Words written keep the aimed moment through playing on and pausing again, without writing another timestamp.
+  await act(async () => useUiStore.getState().setAgentDraft("zoom in here"));
   await press(" ");
   await act(async () => usePlayerStore.setState({ playing: true, time: 18 }));
   await press(" ");
   await act(async () => usePlayerStore.setState({ playing: false }));
-  expect(box()).toEqual(["0:06 zoom in here", undefined]);
-  expect(useUiStore.getState().agentContext).toMatchObject({ time: 6, fromMessage: true });
+  expect(box()).toEqual(["zoom in here", ["At 0:06", true]]);
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 6 });
 });
 
 it("shows the time the editor pauses on in an open edit's tag, and the message stays the edit's", async () => {

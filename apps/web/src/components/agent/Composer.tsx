@@ -368,13 +368,13 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const duration = inputClock?.duration ?? 0;
   const times = useMemo(() => messageTimestamps(value, duration), [value, duration]);
   const firstTime = times[0]?.time;
-  // A time alone, as a pause writes it, says where but not what: there is nothing to send until words follow it.
+  // A time alone says where but not what: there is nothing to send until words follow it.
   const onlyTime = !rewording && times.length === 1 && value.trim() === times[0]!.text;
   useLayoutEffect(() => {
     if (rewording || replying || !aimsByText) return;
     if (typedPoint && !sameClock && messageTimestamps(value, Infinity).some(t => t.time === typedPoint.time)) return;
     if (inputClock && firstTime !== undefined) {
-      // A clock in whole seconds covers the moment it names to the frame, such as the one a pause wrote in.
+      // A clock in whole seconds covers the moment it names to the frame.
       if (sameClock && typedPoint && (firstTime === typedPoint.time || (!times[0]!.text.includes(".") && Math.floor(typedPoint.time) === firstTime))) return;
       setContext({ ...editTargetAt(firstTime, inputClock.version, inputClock.timeline, inputClock.mediaId), fromMessage: true });
     } else if (typedPoint) setContext(null);
