@@ -768,16 +768,20 @@ describe("listen", () => {
   });
   it("is offered only where it helps: never to a model that hears, nor with no listener signed in", async () => {
     const codexAudio = Task.parse({ ...edit, agent: "codex", model: "gpt-6-astra-audio" });
+    const agyClaude = Task.parse({ ...edit, agent: "gemini", model: "claude-opus-5-5" });
     const sessions = [
       await connect({ taskId: edit.id, task: edit }),
       await connect({ agent: "codex", taskId: codexAudio.id, task: codexAudio, capabilities: agentCapabilities("codex", undefined, "gpt-6-astra-audio"), listener: { agent: "gemini" } }),
+      await connect({ agent: "gemini", taskId: agyClaude.id, task: agyClaude, capabilities: { ...agentCapabilities("gemini", undefined, "claude-opus-5-5"), files: true, briefTools: false }, listener: { agent: "gemini" } }),
     ];
     try {
-      const [none, hears] = await Promise.all(sessions.map(async c => (await c.listTools()).tools.map(t => t.name)));
+      const [none, hears, agyThirdParty] = await Promise.all(sessions.map(async c => (await c.listTools()).tools.map(t => t.name)));
       expect(none).not.toContain("listen");
       expect(none).not.toContain("source_audio");
       expect(hears).not.toContain("listen");
       expect(hears).toContain("source_audio");
+      expect(agyThirdParty).toContain("listen");
+      expect(agyThirdParty).not.toContain("source_audio");
     } finally { await Promise.all(sessions.map(c => c.close())); }
   });
   it("gives the run that listens the passage as a file and nothing else", async () => {

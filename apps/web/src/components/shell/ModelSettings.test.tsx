@@ -192,7 +192,7 @@ it("lets the editor pick which model listens, or turn listening off, and says wh
     await act(async () => {});
   };
   const claude = { id: "claude" as const, installed: true };
-  const gemini = { id: "gemini" as const, installed: true, models: ["gemini-4-neon"], modelLabels: { "gemini-4-neon": "Gemini 4 Neon" } };
+  const gemini = { id: "gemini" as const, installed: true, models: ["gemini-4-neon", "claude-opus-5-5"], modelLabels: { "gemini-4-neon": "Gemini 4 Neon", "claude-opus-5-5": "Opus 5.5" } };
   const codex = { id: "codex" as const, installed: true, models: ["gpt-6.2-sol", "gpt-6-astra-audio"], modelLabels: { "gpt-6-astra-audio": "GPT-6 Astra Audio" } };
   try {
     await show([claude]);
