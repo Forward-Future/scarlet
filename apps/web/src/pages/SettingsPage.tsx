@@ -36,8 +36,8 @@ function typedNumber(text: string | undefined, was: number) {
 }
 
 const transcriptionModels: { value: LocalTranscriptionModel | "openai"; label: string }[] = [
-  { value: "crisperwhisper", label: "CrisperWhisper 2.0 (default)" },
-  { value: "whispercpp", label: "Whisper large-v3-turbo (bundled)" },
+  { value: "whispercpp", label: "Whisper large-v3-turbo (default)" },
+  { value: "crisperwhisper", label: "CrisperWhisper 2.0" },
   { value: "custom", label: "Custom local model" },
   { value: "openai", label: "OpenAI Whisper (cloud)" },
 ];
