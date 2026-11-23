@@ -7,6 +7,10 @@
  * receives the token through the engine startup handshake.
  * All bodies are JSON. Errors are `{ error: { code, message } }` with 4xx/5xx.
  *
+ * This file holds the project, media, render, activity and settings shapes. The others named below have modules of
+ * their own: agents and hosts (agents.ts), requests (tasks.ts), versions, changes and notes (changes.ts), learnings,
+ * token usage, graphics, skills, and WebSocket events (wsEvents.ts).
+ *
  * Routes (method path → request body → response):
  *
  *  Auth
