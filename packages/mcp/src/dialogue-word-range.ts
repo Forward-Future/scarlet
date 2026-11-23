@@ -82,7 +82,7 @@ function betweenWords(page: NonNullable<JoinPage["edges"]>, kept: Word, removed:
 }
 
 /** Two words the transcript times this close are said as one: their edge goes where it parts them. */
-const RUN_ON_GAP = .06;
+export const RUN_ON_GAP = .06;
 
 /**
  * The source range that removes words[from..to] (indices into one transcript, sorted by start).

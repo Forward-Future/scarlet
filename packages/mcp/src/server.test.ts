@@ -3641,14 +3641,14 @@ it("exposes cross-page attempts and lets the agent choose whether to check the n
     const wrong = JSON.parse(await call("dialogue_check_join", { version: tl.version, start: cut.start, end: cut.end, resumeWith }));
     expect(wrong).toMatchObject({ status: "unchanged", resumeAtOriginalEnd: "different" });
     expect(wrong.nearbyWords.end[0].words).toContainEqual([7, expect.closeTo(7.1), "the"]);
-    expect(JSON.parse(await apply([cut]))).toMatchObject({ needsRevision: true, disputedEdges: [{ start: 5, end: 7.125, cuts: [0] }] });
-    expect(mock.requests.some(r => r.path.endsWith("/dialogue-cuts"))).toBe(false);
-    // A dispute sets aside only the cuts that make it: the rest of the batch saves, and the result says what didn't.
-    const other = { start: 1, end: 1.5, decision: "cut", kind: "retake", reason: "Drop a false start." };
-    const partial = JSON.parse(await apply([other, cut]));
-    expect(partial.needsRevision).toBeUndefined();
-    expect(partial.notSaved).toMatchObject({ cuts: [1], disputedEdges: [{ start: 5, end: 7.125 }], next: expect.stringContaining("Resubmit only these") });
-    expect(mock.requests.filter(r => r.path.endsWith("/dialogue-cuts")).map(r => r.body)).toEqual([expect.objectContaining({ cuts: [expect.objectContaining({ start: 1, end: 1.5 })] })]);
+    // A resume quote the scan reads differently is reported on its cut, which saves as placed: the scan is one
+    // reading of the recording and the transcript the quote came from another.
+    const quoted = JSON.parse(await apply([cut]));
+    expect(quoted.needsRevision).toBeUndefined();
+    expect(quoted.notSaved).toBeUndefined();
+    expect(quoted.gate.decisions).toContainEqual(expect.objectContaining({ cut: 0, outcome: "cut",
+      evidence: expect.stringContaining(`After this cut the scan reads “new model from DeepSeek flew under the radar.”, where your resumeWith quote says “${resumeWith}”. Saved as you placed it.`) }));
+    expect(mock.requests.filter(r => r.path.endsWith("/dialogue-cuts")).map(r => r.body)).toEqual([expect.objectContaining({ cuts: [expect.objectContaining({ start: 5, end: 7.125 })] })]);
     mock.requests.length = 0;
     const cleanEnd = 7; // Source 60, before the only delivery that reaches "flew under the radar".
     expect(JSON.parse(await call("dialogue_check_join", { version: tl.version, start: cut.start, end: cleanEnd, resumeWith })))
@@ -3667,6 +3667,14 @@ it("exposes cross-page attempts and lets the agent choose whether to check the n
     const before = saves();
     expect(JSON.parse(await apply([doubled]))).toMatchObject({ needsRevision: true, disputedEdges: [{ repeat }] });
     expect(saves()).toBe(before);
+    // A dispute sets aside only the cuts that make it: the rest of the batch saves, and the result says what didn't.
+    const other = { start: 1, end: 1.5, decision: "cut", kind: "retake", reason: "Drop a false start." };
+    const partial = JSON.parse(await apply([other, doubled]));
+    expect(partial.needsRevision).toBeUndefined();
+    expect(partial.notSaved).toMatchObject({ cuts: [1], disputedEdges: [{ repeat }], next: expect.stringContaining("Resubmit only these") });
+    expect(mock.requests.filter(r => r.path.endsWith("/dialogue-cuts")).at(-1)?.body).toMatchObject({ cuts: [{ start: 1, end: 1.5 }] });
+    expect(saves()).toBe(before + 1);
+    mock.requests.splice(mock.requests.findLastIndex(r => r.path.endsWith("/dialogue-cuts")), 1);
     await apply([{ ...doubled, keepRepeat: repeat.words }]);
     expect(saves()).toBe(before + 1);
     // Finishing a production cut before both takes leaves a restart wholly in the kept recording.

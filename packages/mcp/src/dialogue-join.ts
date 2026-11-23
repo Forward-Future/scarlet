@@ -24,6 +24,7 @@ import {
   inWord,
   isDip,
   joinEvidence,
+  keptSoundsPast,
   levelStrip,
   onWordOnset,
   padEdge,
@@ -48,9 +49,9 @@ import {
   type SourceEdge,
 } from "./dialogue-acoustics.js";
 import { clipEdgeSound } from "./dialogue-clip-edge.js";
-import { NoCachedSpeech, checkKeptWords, checkResumeQuote, dialogueClips, dialogueCutPreview, dialogueJoinWords, type ReadKeptWords } from "./dialogue-kept-words.js";
+import { NoCachedSpeech, checkKeptWords, checkResumeQuote, dialogueClips, dialogueCutPreview, dialogueJoinWords, readResumeQuote, type ReadKeptWords } from "./dialogue-kept-words.js";
 import { SAME_WORD_UNHEARD, sameWordJoin, type SameWordJoin } from "./dialogue-same-word.js";
-import { pauseCutRange, wordCutRange } from "./dialogue-word-range.js";
+import { RUN_ON_GAP, pauseCutRange, wordCutRange } from "./dialogue-word-range.js";
 
 export {
   AIR_AFTER_SPEECH,
@@ -79,6 +80,7 @@ export {
   pageReaches,
   pauseCutRange,
   quietFrameNote,
+  readResumeQuote,
   sameWordJoin,
   soundBesideEdge,
   splitLeave,
@@ -121,6 +123,28 @@ interface Edge {
   gaveBack?: boolean;
 }
 
+/** A trough an edge was not moved to, because it lies inside the kept word beside the edge and the word sounds on past it. */
+interface InsideKeptWord { word: SourceEdge["page"]["words"][number]; source: SourceEdge; move: number; db: number }
+
+/**
+ * An edge given in seconds where the transcript parts two words said straight through, whose only trough is inside
+ * the kept word: it stays there and applies, as an edge between named words does (wordCutRange). The published
+ * editor's cuts in running speech sat 13–35 ms from that boundary, and here the editor's own was 6 ms from it.
+ */
+function runOnBoundary(found: InsideKeptWord, at: number, direction: 1 | -1): Edge | undefined {
+  const { word: kept, source: s, move, db } = found;
+  const beside = direction === 1 ? kept.end : kept.start;
+  if (Math.abs(s.at - beside) > wordMargin) return;
+  const removed = direction === 1
+    ? s.page.words.find(w => w.start >= kept.end - 1e-6 && w.start - kept.end <= RUN_ON_GAP && w !== kept)
+    : s.page.words.findLast(w => w.end <= kept.start + 1e-6 && kept.start - w.end <= RUN_ON_GAP && w !== kept);
+  if (!removed) return;
+  const side = direction === 1 ? "start" : "end";
+  return { at, dip: true, snapped: true,
+    note: `${side} stays where the transcript parts “${plain(direction === 1 ? kept : removed)}” and “${plain(direction === 1 ? removed : kept)}”, said straight through: ` +
+      `the low point ${move.toFixed(2)} s ${direction === 1 ? "earlier" : "later"} (${Math.round(db)} dBFS) is inside “${plain(kept)}”, which sounds on ${direction === 1 ? "after" : "before"} it` };
+}
+
 /**
  * What an editor does with words said in one breath: cut at the trough the waveform shows between them, wherever the
  * transcript's timings put the words. At a restart those timings are often tens of milliseconds off, and the
@@ -135,6 +159,7 @@ function findTrough(
   fps: number,
   namedEdge: number | undefined,
   crossesClip: (a: number, b: number) => boolean,
+  insideKept?: InsideKeptWord[],
 ): Edge | undefined {
   const sounding = sources.filter(s => soundAt(s.page, s.at) !== "quiet");
   if (sounding.length !== 1) return;
@@ -174,6 +199,15 @@ function findTrough(
     // between “asked” and “it”, a fifth of a second earlier, and would have left “it” playing twice (2026-11-16).
     const landed = timelineToSource(s.clip, best), from = Math.min(s.at, landed), to = Math.max(s.at, landed);
     if (s.page.words.some(w => { const middle = (w.start + w.end) / 2; return from < middle && middle < to; })) continue;
+    // Nor is a trough the place two words part when the kept one sounds on past it: the stop before a final consonant
+    // falls as low as the gap between words. An edge typed where “complaints” ends went 0.11 s back onto the closure
+    // of its “t”, at -59 dBFS, and the cut took the “s”; the editor asked for those frames back, twice (2026-11-22).
+    // A word reference's edge is held to the same test (keptSoundsPast in dipBetween).
+    const taking = (landed - s.at) * direction < 0;
+    const dip = { start: levels.from + first * levels.step, end: levels.from + (last + 1) * levels.step };
+    const cutShort = taking ? s.page.words.find(w => w.start < landed && landed < w.end &&
+      keptSoundsPast(s.page, dip, w, direction === 1 ? "start" : "end")) : undefined;
+    if (cutShort) { insideKept?.push({ word: cutShort, source: s, move: Math.abs(best - at), db: db[i]! }); continue; }
     const move = Math.abs(best - at), side = direction === 1 ? "start" : "end";
     return { at: best, dip: true, snapped: move <= snapLimit + 1e-7,
       note: side + (move < 1e-6 ? " stays" : " moved " + move.toFixed(2) + " s " + (best > at ? "later" : "earlier")) +
@@ -344,8 +378,13 @@ function checkEdge(at: number, direction: 1 | -1, nearby: MediaClip[], pages: Jo
   }
   if (dip) return dip;
   if (fallback) return fallback;
-  const onTrough = findTrough(sources, at, direction, fps, namedEdge, crossesClip);
+  const insideKept: InsideKeptWord[] = [];
+  const onTrough = findTrough(sources, at, direction, fps, namedEdge, crossesClip, insideKept);
   if (onTrough) return onTrough;
+  // Only for an edge given in seconds: where named words part is wordCutRange's to place, and a restart that begins
+  // on the word the first take broke off on stays held for its join (sameWordJoin).
+  const runOn = namedEdge === undefined && insideKept[0] ? runOnBoundary(insideKept[0], at, direction) : undefined;
+  if (runOn) return runOn;
   return { ...fail(inSoundEvidence(sources, at, direction) ?? "The recording has speech at this edge and no quiet point within "+reach+" s."), inSound: true,
     ...(clippedLabel && { inWord: true }) };
 }
