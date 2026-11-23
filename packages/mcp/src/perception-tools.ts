@@ -150,7 +150,11 @@ export function registerPerception(deps: PerceptionDeps) {
       wordsFor(tl, project).catch(() => new Map<string, TranscriptWord[]>()),
       // Where the speaker looks, in the picture of the recording heard beside each stretch: its face seen longest there.
       readPictures<{ tracks: Array<{ track: number; seconds: number }>; spans: Array<{ track: number; start: number; end: number; eyesDown?: number; box: number[] }> }>(
-        "faces", clocks.filter(c => videos.has(c.id)), wait).catch(() => ({ reads: [], unread: [] })),
+        "faces", clocks.filter(c => videos.has(c.id)), wait).then(({ reads, unread }) => ({ unread,
+        spans: reads.map(({ id, read }) => {
+          const main = [...read.tracks].sort((a, b) => b.seconds - a.seconds)[0]?.track;
+          return [id, read.spans.filter(s => s.track === main)] as const;
+        }) })).catch(() => ({ spans: [], unread: [] })),
     ]);
     return {
       evidence: {
@@ -160,10 +164,7 @@ export function registerPerception(deps: PerceptionDeps) {
         detail: new Map(motion.reads.map(({ id, read }) => [id, read.detail ?? []])),
         cuts: new Map(cuts.reads.map(({ id, read }) => [id, read.cuts])),
         words: transcripts.size ? timelineWords(tl, transcripts, range) : [],
-        eyes: new Map(eyes.reads.map(({ id, read }) => {
-          const main = [...read.tracks].sort((a, b) => b.seconds - a.seconds)[0]?.track;
-          return [id, read.spans.filter(s => s.track === main)];
-        })),
+        eyes: new Map(eyes.spans),
       },
       unread: [...text.unread, ...motion.unread, ...cuts.unread, ...eyes.unread],
     };
