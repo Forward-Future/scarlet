@@ -3,8 +3,8 @@
  * same first-cut request the app sends, wait, score, and write JSON + Markdown outside the repository.
  *
  *   tsx evals/src/run.ts --evaluate-task tsk_… [--case id] [--reference-version v] [--kept-side]
- *   tsx evals/src/run.ts --cases a,b --configs codex:model:medium,claude:model:high --trials 3 --dry-run
- *   tsx evals/src/run.ts --cases a,b --configs … --trials 3 --yes      (launches agent tasks: billed)
+ *   tsx evals/src/run.ts --cases a,b [--configs gemini:gemini-4-neon:medium] --trials 3 --dry-run
+ *   tsx evals/src/run.ts --cases a,b [--configs …] --trials 3 --yes   (launches agent tasks: billed)
  *   tsx evals/src/run.ts --summarize <results/runs/…>
  */
 import { wordDigest } from "../../packages/mcp/src/transcript-digest.ts";
@@ -27,12 +27,15 @@ import { checkedPath, dataDir, fileComponent, readJson, REPO_ROOT, resultsDir, t
 import { evaluationMarkdown, runMarkdown, type TrialRow } from "./report.ts";
 import { card, configSlug as slug, eligibleTrials, readTrial, scorecardMarkdown } from "./scorecard.ts";
 
+export const DEFAULT_CONFIG = "gemini:gemini-4-neon:medium";
+
 const USAGE = `Usage:
   run.ts --evaluate-task <taskId> [--case <id>] [--reference-version <v>] [--kept-side] [--refresh] [--engine <url>]
   run.ts --evaluate-case <id> [--kept-side]           (re-score the run a case was built from, offline)
-  run.ts (--cases <a,b> | --suite capability|regression) --configs <agent:model:effort,...> [--service-tier ID] [--trials N] [--skills name,... | --add-skills name,...] [--timeout-min M] [--partial-score] (--dry-run | --yes)
+  run.ts (--cases <a,b> | --suite capability|regression) [--configs <agent:model:effort,...>] [--service-tier ID] [--trials N] [--skills name,... | --add-skills name,...] [--timeout-min M] [--partial-score] (--dry-run | --yes)
   run.ts --summarize <run dir>
 
+--configs defaults to ${DEFAULT_CONFIG}.
 A case with no published video attached scores only 2 of the scorecard's 15 lines, so --yes refuses it unless
 --partial-score says that is what you want.
 
@@ -80,6 +83,10 @@ function parseConfig(spec: string): AgentConfig {
   if (parts.length === 1) return { agent: parts[0]! };
   if (parts.length === 2) return { agent: parts[0]!, model: parts[1] || undefined };
   return { agent: parts[0]!, model: parts.slice(1, -1).join(":") || undefined, effort: parts.at(-1) || undefined };
+}
+export function resolveConfigs(raw: string | undefined, serviceTier?: string): AgentConfig[] {
+  const specs = raw === undefined ? [DEFAULT_CONFIG] : list(raw);
+  return specs.map(parseConfig).map(c => serviceTier ? { ...c, serviceTier } : c);
 }
 const configLabel = (c: AgentConfig) => [c.agent, c.model ?? "default", c.effort ?? "default", ...(c.serviceTier ? [c.serviceTier] : [])].join(":");
 
@@ -318,10 +325,10 @@ async function runCli(argv = process.argv.slice(2)) {
   }
 
   const caseIds = values.cases ? list(values.cases) : values.suite ? listCases().filter(c => c.suite === values.suite).map(c => c.id) : [];
-  const configs = list(values.configs).map(parseConfig).map(c => values["service-tier"] ? { ...c, serviceTier: values["service-tier"] } : c);
+  const configs = resolveConfigs(values.configs, values["service-tier"]);
   const trials = Math.max(1, Math.floor(positiveNumber("--trials", values.trials, 3)));
   const timeoutMs = positiveNumber("--timeout-min", values["timeout-min"], 120) * 60_000;
-  if (!caseIds.length || !configs.length) throw new Error("Choose --cases or --suite, and --configs.\n\n" + USAGE);
+  if (!caseIds.length || !configs.length) throw new Error("Choose --cases or --suite (and a non-empty --configs if set).\n\n" + USAGE);
   if (values.skills !== undefined && values["add-skills"] !== undefined) throw new Error("Choose --skills or --add-skills.");
   const selection: SkillSelection = { add: list(values["add-skills"]), exact: values.skills === undefined ? undefined : list(values.skills) };
   if (selection.exact && !selection.exact.length) throw new Error("--skills needs at least one installed skill name.");
