@@ -3,7 +3,9 @@
  * times, the footage's own timecode, the captions as a SubRip file, and the list of what another editor's app won't
  * show as Scarlet does.
  */
-import type { CaptionClip, Clip, MediaAsset, MediaClip, Project, Timeline, Track } from "./schema.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { CaptionClip, Clip, MediaClip, Timeline, Track } from "./timelineSchema.js";
+import type { Project } from "./projectSchema.js";
 import { frames, q, seconds, type Q } from "./rational.js";
 import { captionExportHasCues } from "./captions.js";
 import { clock } from "./time.js";

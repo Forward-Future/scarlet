@@ -1,5 +1,5 @@
 /** Project edit queue ordering, admission policy, and wait-reason computation. */
-import { isAsideTask, type Task } from "./api.js";
+import { isAsideTask, type Task } from "./tasks.js";
 import type { Change } from "@scarlet/timeline";
 
 export const IN_PROGRESS_STATES = new Set<string>(["claimed", "running", "waiting_for_user"]);

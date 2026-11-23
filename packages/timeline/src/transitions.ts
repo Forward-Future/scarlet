@@ -11,7 +11,7 @@
  */
 import { firstIndexBy } from "./intervals.js";
 import { clipEnd, JOIN_SLACK, meets } from "./time.js";
-import type { Clip, ColorClip, MediaClip, Timeline, Transition, TransitionDirection, TransitionType } from "./schema.js";
+import type { Clip, ColorClip, MediaClip, Timeline, Transition, TransitionDirection, TransitionType } from "./timelineSchema.js";
 
 /** A clip's movement across one transition, in timeline seconds. */
 export interface TransitionMotion {

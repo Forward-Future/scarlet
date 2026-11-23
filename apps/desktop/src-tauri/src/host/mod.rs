@@ -12,11 +12,13 @@
 //! The engine builds the prompt (`GET /tasks/:id/prompt`); this host only runs it.
 
 pub mod api;
+mod agents;
 mod catalog;
 mod codex_app_server;
 pub mod detect;
 pub mod install;
 pub mod login;
+pub mod manager;
 mod process_guard;
 pub mod runner;
 pub mod runner_claude;
@@ -31,10 +33,6 @@ pub mod usage;
 mod workspace;
 
 pub use catalog::McpLauncher;
-pub use workspace::{
-    claude_config_dir, claude_project_dir, prune_task_dirs, remove_claude_sessions, remove_control_files,
-    remove_token_file,
-};
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -45,31 +43,19 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{AppConfig, Paths};
-use crate::util::{child_env, human_duration};
+use crate::config::Paths;
+use crate::util::child_env;
 use api::Api;
-use catalog::{describe_agents, lacks_models, take_catalog, CATALOG_RETRY_WAITS};
+use catalog::CATALOG_RETRY_WAITS;
 use task_runner::log_completion;
-use types::{AgentAvailability, CompleteTaskRequest, SubscriptionQuota, Task, CLI_AGENTS};
-use workspace::TASKS_DIR;
-
-/// How long cached subscription quota stays fresh before a non-forced refresh re-probes.
-const QUOTA_TTL: Duration = Duration::from_secs(60);
+use types::{AgentAvailability, CompleteTaskRequest, Task, CLI_AGENTS};
+use workspace::{prune_task_dirs, TASKS_DIR};
 
 /// How often the host sends a heartbeat to the engine.
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
-
-/// Subscriptions only: omit quota when a provider is signed in via API key or not signed in.
-fn is_quota_eligible(agent: &AgentAvailability) -> bool {
-    CLI_AGENTS.contains(&agent.id.as_str())
-        && agent.installed
-        && agent.logged_in != Some(false)
-        && agent.auth.as_deref() != Some("api_key")
-}
 
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -87,11 +73,6 @@ pub struct HostStatus {
 
 fn platform_string() -> String {
     format!("{} {} (Scarlet desktop)", std::env::consts::OS, std::env::consts::ARCH)
-}
-
-fn host_name() -> String {
-    let h = hostname::get().map(|h| h.to_string_lossy().to_string()).unwrap_or_else(|_| "scarlet-desktop".into());
-    format!("{h} (desktop)")
 }
 
 /// Persists the host id the server assigned for a given server URL.
@@ -155,12 +136,12 @@ impl RunningTask {
     }
 }
 
-/// A short check beside a request that saves nothing to the video (`isSideCheck` in packages/shared/src/api.ts).
+/// A short check beside a request that saves nothing to the video (`isSideCheck` in packages/shared/src/tasks.ts).
 fn is_side_check(kind: &str) -> bool {
     matches!(kind, "learning_check" | "area_check" | "listen_check")
 }
 
-/// Side checks run at once per runtime beside `max_parallel` requests (`sideCheckSlots` in packages/shared/src/api.ts).
+/// Side checks run at once per runtime beside `max_parallel` requests (`sideCheckSlots` in packages/shared/src/tasks.ts).
 fn side_check_slots(max_parallel: usize) -> usize {
     (2 * max_parallel.max(1)).min(12)
 }
@@ -253,122 +234,6 @@ impl HostRuntime {
         }
     }
 
-    /// Startup, sign-in and the picker can all request a fresh snapshot.
-    async fn detect_agents(&self, env: &HashMap<String, String>) -> Option<String> {
-        let _detecting = self.detecting.lock().await;
-        let mut found = detect::detect(env, &self.paths.home, &self.models).await;
-        self.mcp.load_catalogs(&mut found, env, &self.paths.custom_claude_models(), &self.paths.custom_gemini_models()).await;
-        log::info!("assistants: {}", describe_agents(&found));
-        let mut agents = self.agents.write().await;
-        let mut failed = Vec::new();
-        for agent in found.iter_mut() {
-            if is_quota_eligible(agent) {
-                if let Some(old) = agents.iter().find(|a| a.id == agent.id) {
-                    agent.quota = old.quota.clone();
-                    if agent.plan.is_none() {
-                        agent.plan = old.plan.clone();
-                    }
-                }
-            } else {
-                agent.quota = None;
-            }
-            if lacks_models(agent) {
-                // A successful empty list replaces the old one. A failed probe keeps the last catalog the editor could use.
-                if let Some(old) = agents.iter().find(|a| a.id == agent.id && a.models.is_some()) {
-                    take_catalog(agent, old.model.clone(), old.model_options.clone(), old.models.clone(), old.model_labels.clone());
-                }
-                failed.push(match agent.id.as_str() {
-                    "claude" => "Claude Code", "codex" => "Codex", "gemini" => "Gemini", id => id,
-                });
-            }
-        }
-        let error = (!failed.is_empty()).then(|| format!("Couldn't refresh models for {}. Try again.", failed.join(", ")));
-        *agents = found;
-        error
-    }
-
-    /// Probe subscription quota for eligible providers (cached with a 60 s TTL unless `force` is true).
-    async fn refresh_quota(&self, force: bool, only: Option<&[&str]>) -> HostStatus {
-        let _refreshing = self.quota_refreshing.lock().await;
-        if self.cancel.is_cancelled() {
-            return self.full_status().await;
-        }
-        let current = self.agents.read().await.clone();
-        let targets: Vec<AgentAvailability> = current
-            .iter()
-            .filter(|a| is_quota_eligible(a) && only.is_none_or(|ids| ids.contains(&a.id.as_str())))
-            .cloned()
-            .collect();
-        if !force && only.is_none() {
-            let fresh = self.last_quota_at.lock().unwrap().is_some_and(|at| at.elapsed() < QUOTA_TTL);
-            let all_loaded = targets.iter().all(|a| a.quota.is_some());
-            if fresh && all_loaded {
-                return self.full_status().await;
-            }
-        }
-        if targets.is_empty() {
-            return self.full_status().await;
-        }
-        let env = child_env(&self.paths.home);
-        let results = self.mcp.load_quotas(&targets, &env).await;
-        if self.cancel.is_cancelled() {
-            return self.full_status().await;
-        }
-        let mut changed = false;
-        {
-            let mut agents = self.agents.write().await;
-            for agent in agents.iter_mut() {
-                if !is_quota_eligible(agent) {
-                    if agent.quota.take().is_some() {
-                        changed = true;
-                    }
-                    continue;
-                }
-                if let Some((_, quota)) = results.iter().find(|(id, _)| id == &agent.id) {
-                    if agent.plan.is_none() {
-                        agent.plan = quota.plan.clone();
-                    }
-                    agent.quota = Some(quota.clone());
-                    changed = true;
-                }
-            }
-        }
-        if only.is_none() {
-            *self.last_quota_at.lock().unwrap() = Some(std::time::Instant::now());
-        }
-        if changed {
-            self.heartbeat().await;
-            self.emit_status();
-        }
-        self.full_status().await
-    }
-
-    /// Apply a live quota update streamed during an active run (e.g. Codex `account/rateLimits/updated`).
-    fn apply_live_quota(self: &Arc<Self>, agent_id: &str, quota: SubscriptionQuota) {
-        let me = self.clone();
-        let id = agent_id.to_string();
-        tauri::async_runtime::spawn(async move {
-            if me.cancel.is_cancelled() {
-                return;
-            }
-            let updated = {
-                let mut agents = me.agents.write().await;
-                let Some(agent) = agents.iter_mut().find(|a| a.id == id && is_quota_eligible(a)) else {
-                    return;
-                };
-                if agent.plan.is_none() {
-                    agent.plan = quota.plan.clone();
-                }
-                agent.quota = Some(quota);
-                true
-            };
-            if updated {
-                me.heartbeat().await;
-                me.emit_status();
-            }
-        });
-    }
-
     // -- registration & heartbeat -------------------------------------------
 
     async fn register(&self) -> Result<(), api::ApiError> {
@@ -449,50 +314,6 @@ impl HostRuntime {
         }
     }
 
-    /// Ask again for the model list of each assistant that has none. True while one is still without.
-    async fn load_missing_catalogs(&self) -> bool {
-        let mut asked: Vec<AgentAvailability> = self.agents.read().await.iter().filter(|a| lacks_models(a)).cloned().collect();
-        if asked.is_empty() {
-            return false;
-        }
-        self.mcp.load_catalogs(&mut asked, &child_env(&self.paths.home), &self.paths.custom_claude_models(), &self.paths.custom_gemini_models()).await;
-        let (read, left, assistants) = {
-            let mut agents = self.agents.write().await;
-            let mut read = false;
-            for found in asked.into_iter().filter(|a| a.models.is_some()) {
-                // A refresh or a sign-in that finished meanwhile has the newer answer. Only an assistant still
-                // without a list takes this one.
-                let Some(agent) = agents.iter_mut().find(|a| a.id == found.id && lacks_models(a)) else { continue };
-                take_catalog(agent, found.model, found.model_options, found.models, found.model_labels);
-                read = true;
-            }
-            (read, agents.iter().any(lacks_models), describe_agents(&agents))
-        };
-        // A host that has stopped tells nobody: its engine may be gone, and the window shows the host after it.
-        if read && !self.cancel.is_cancelled() {
-            log::info!("model list read on a later try; assistants: {assistants}");
-            self.heartbeat().await;
-            self.wake.notify_one();
-            self.emit_status();
-        }
-        left
-    }
-
-    /// A model list that could not be read at launch is asked for again after each of `waits`. With none, the
-    /// picker offers no model for the assistant, and nothing can be sent to it until Refresh models or a restart.
-    /// Ends once no assistant is without a list, or when the host stops.
-    async fn catalog_loop(self: Arc<Self>, waits: &'static [Duration]) {
-        for wait in waits {
-            tokio::select! {
-                _ = self.cancel.cancelled() => return,
-                _ = tokio::time::sleep(*wait) => {}
-            }
-            if !self.load_missing_catalogs().await {
-                return;
-            }
-        }
-    }
-
     // -- websocket wake-ups ---------------------------------------------------
 
     async fn ws_loop(self: Arc<Self>) {
@@ -523,35 +344,7 @@ impl HostRuntime {
                             _ = self.subscriptions_changed.notified() => refresh = true,
                             msg = ws.next() => {
                                 match msg {
-                                    Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t))) => {
-                                        if let Ok(v) = serde_json::from_str::<Value>(t.as_ref()) {
-                                            let kind = v.get("type").and_then(Value::as_str);
-                                            if kind == Some("project.subscribed") {
-                                                // The subscription is live. Recover any cancellation that preceded it.
-                                                self.heartbeat().await;
-                                            } else if kind == Some("host.quota_refresh") {
-                                                let force = v.get("force").and_then(Value::as_bool).unwrap_or(false);
-                                                let me = self.clone();
-                                                tauri::async_runtime::spawn(async move {
-                                                    let _ = me.refresh_quota(force, None).await;
-                                                });
-                                            } else if kind == Some("task.updated") {
-                                                let task = v.get("task");
-                                                let state = task.and_then(|t| t.get("state")).and_then(Value::as_str);
-                                                let id = task.and_then(|t| t.get("id")).and_then(Value::as_str);
-                                                match state {
-                                                    Some("queued") => self.wake.notify_one(),
-                                                    // Cancelled from the UI while running here: stop the CLI (completes as cancelled).
-                                                    Some("cancelled") => {
-                                                        if let Some(id) = id {
-                                                            if let Some(run) = self.running.lock().unwrap().get(id) { run.cancel.cancel(); }
-                                                        }
-                                                    }
-                                                    _ => {}
-                                                }
-                                            }
-                                        }
-                                    }
+                                    Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t))) => self.on_ws_message(t.as_ref()).await,
                                     Some(Ok(_)) => {}
                                     Some(Err(e)) => { log::warn!("host ws error: {e}"); break; }
                                     None => break,
@@ -567,6 +360,38 @@ impl HostRuntime {
                 _ = self.cancel.cancelled() => return,
                 _ = tokio::time::sleep(Duration::from_secs(5)) => {}
             }
+        }
+    }
+
+    /// One message from the engine's WebSocket.
+    async fn on_ws_message(self: &Arc<Self>, text: &str) {
+        let Ok(v) = serde_json::from_str::<Value>(text) else { return };
+        match v.get("type").and_then(Value::as_str) {
+            // The subscription is live. Recover any cancellation that preceded it.
+            Some("project.subscribed") => self.heartbeat().await,
+            Some("host.quota_refresh") => {
+                let force = v.get("force").and_then(Value::as_bool).unwrap_or(false);
+                let me = self.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = me.refresh_quota(force, None).await;
+                });
+            }
+            Some("task.updated") => {
+                let task = v.get("task");
+                let state = task.and_then(|t| t.get("state")).and_then(Value::as_str);
+                let id = task.and_then(|t| t.get("id")).and_then(Value::as_str);
+                match state {
+                    Some("queued") => self.wake.notify_one(),
+                    // Cancelled from the UI while running here: stop the CLI (completes as cancelled).
+                    Some("cancelled") => {
+                        if let Some(id) = id {
+                            if let Some(run) = self.running.lock().unwrap().get(id) { run.cancel.cancel(); }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
         }
     }
 
@@ -749,188 +574,4 @@ impl HostRuntime {
         let _ = tokio::task::spawn_blocking(spawn::kill_stopped_now).await;
         self.connected.store(false, Ordering::SeqCst);
     }
-}
-
-/// Owns the current runtime; `configure` swaps it when the server/token change.
-pub struct HostManager {
-    app: AppHandle,
-    paths: Paths,
-    config: Arc<StdMutex<AppConfig>>,
-    mcp: StdMutex<Option<McpLauncher>>,
-    runtime: Mutex<Option<Arc<HostRuntime>>>,
-    undelivered: Arc<Undelivered>,
-}
-
-impl HostManager {
-    pub fn new(app: AppHandle, paths: Paths, config: Arc<StdMutex<AppConfig>>, mcp: Option<McpLauncher>) -> Self {
-        HostManager { app, paths, config, mcp: StdMutex::new(mcp), runtime: Mutex::new(None), undelivered: Arc::default() }
-    }
-
-    pub async fn status(&self) -> HostStatus {
-        match self.runtime.lock().await.as_ref() {
-            Some(rt) => rt.full_status().await,
-            None => HostStatus { mcp_command: self.mcp.lock().unwrap().as_ref().map(|m| m.describe()), ..Default::default() },
-        }
-    }
-
-    /// Start (or restart) the host against the local engine at `server` with its access `token`.
-    pub async fn configure(&self, server: &str, token: &str) {
-        let server = server.trim_end_matches('/').to_string();
-        let token = token.to_string();
-        {
-            let guard = self.runtime.lock().await;
-            if let Some(rt) = guard.as_ref() {
-                if rt.server == server && rt.api.token() == Some(token.as_str()) && !rt.cancel.is_cancelled() {
-                    return; // unchanged
-                }
-            }
-        }
-        self.stop().await;
-        let Some(mcp) = self.mcp.lock().unwrap().clone() else {
-            log::error!("host not started: no MCP launcher (engine binary missing)");
-            let _ = self.app.emit("host://status", &HostStatus { error: Some("engine binary missing; agent host disabled".into()), ..Default::default() });
-            return;
-        };
-        let (models, (timeout, stall), max_parallel) = {
-            let cfg = self.config.lock().unwrap();
-            (cfg.models.clone(), run_limits(&cfg), cfg.max_parallel.unwrap_or(4).clamp(1, 8))
-        };
-        let config = self.config.clone();
-        let cfg_path = self.paths.config_file.clone();
-        let on_host_id: HostIdSink = Arc::new(move |server: &str, id: &str| {
-            let mut cfg = config.lock().unwrap();
-            if remember_host_id(&mut cfg, server, id) {
-                if let Err(e) = cfg.save(&cfg_path) {
-                    log::warn!("could not save {}: {e:#}", cfg_path.display());
-                }
-            }
-        });
-        let app = self.app.clone();
-        let emit: Emit = Arc::new(move |event, payload| {
-            let _ = app.emit(event, payload);
-        });
-        let rt = Arc::new(HostRuntime {
-            emit,
-            api: Api::new(&server, Some(&token)),
-            server: server.clone(),
-            name: host_name(),
-            cancel: CancellationToken::new(),
-            engine_lost: AtomicBool::new(false),
-            agents: RwLock::new(Vec::new()),
-            detecting: Mutex::new(()),
-            quota_refreshing: Mutex::new(()),
-            last_quota_at: StdMutex::new(None),
-            running: StdMutex::new(HashMap::new()),
-            host_id: StdMutex::new(None),
-            connected: AtomicBool::new(false),
-            wake: Notify::new(),
-            subscriptions_changed: Notify::new(),
-            paths: self.paths.clone(),
-            claude_dir: claude_config_dir(&crate::util::env_map(), &self.paths.home),
-            mcp,
-            models,
-            timeout,
-            stall,
-            max_parallel,
-            last_error: StdMutex::new(None),
-            on_host_id,
-            undelivered: self.undelivered.clone(),
-        });
-        let limit = |d: Option<Duration>| d.map(human_duration).unwrap_or_else(|| "off".into());
-        log::info!("agent host starting for {server} ({max_parallel} at once per assistant; stall limit {}; run limit {})", limit(stall), limit(timeout));
-        *self.runtime.lock().await = Some(rt.clone());
-        rt.emit_status();
-        tauri::async_runtime::spawn(rt.run());
-    }
-
-    pub async fn stop(&self) {
-        self.stop_as(false).await
-    }
-
-    /// Stop because the engine went away by itself. A run cut short by that counts as a lost worker: an engine back
-    /// before the run's CLI has stopped would otherwise take it for a quit, and a run whose own work brings the
-    /// engine down would carry on without end.
-    pub async fn stop_for_lost_engine(&self) {
-        self.stop_as(true).await
-    }
-
-    async fn stop_as(&self, engine_lost: bool) {
-        let rt = self.runtime.lock().await.take();
-        if let Some(rt) = rt {
-            rt.engine_lost.store(engine_lost, Ordering::SeqCst);
-            rt.stop().await;
-            // A host started for the next engine while this one wound down has already said how it stands.
-            if self.runtime.lock().await.is_none() {
-                let _ = self.app.emit("host://status", &HostStatus { mcp_command: Some(rt.mcp.describe()), ..Default::default() });
-            }
-        }
-    }
-
-    pub fn stop_blocking(&self) {
-        tauri::async_runtime::block_on(async {
-            let _ = tokio::time::timeout(Duration::from_secs(20), self.stop()).await;
-        });
-    }
-
-    /// Re-detect installed CLIs and push the result to the server.
-    pub async fn refresh_agents(&self) -> HostStatus {
-        let rt = self.runtime.lock().await.clone();
-        let env = child_env(&self.paths.home);
-        let mut status = match rt {
-            Some(rt) => {
-                let catalog_error = rt.detect_agents(&env).await;
-                rt.heartbeat().await;
-                rt.wake.notify_one();
-                rt.emit_status();
-                let bg = rt.clone();
-                tauri::async_runtime::spawn(async move {
-                    let _ = bg.refresh_quota(true, None).await;
-                });
-                let mut status = rt.full_status().await;
-                status.error = status.error.or(catalog_error);
-                status
-            }
-            None => {
-                let models = self.config.lock().unwrap().models.clone();
-                let mut agents = detect::detect(&env, &self.paths.home, &models).await;
-                let mcp = self.mcp.lock().unwrap().clone();
-                if let Some(launcher) = &mcp { launcher.load_catalogs(&mut agents, &env, &self.paths.custom_claude_models(), &self.paths.custom_gemini_models()).await; }
-                HostStatus { agents, mcp_command: mcp.as_ref().map(|m| m.describe()), ..Default::default() }
-            }
-        };
-        if !status.connected && status.error.is_none() {
-            status.error = Some("The local agent host is offline. Try again when it connects.".into());
-        }
-        status
-    }
-
-    /// Refresh subscription quota for eligible providers (non-blocking cache unless `force` is true).
-    pub async fn refresh_quota(&self, force: bool) -> HostStatus {
-        let rt = self.runtime.lock().await.clone();
-        match rt {
-            Some(rt) => rt.refresh_quota(force, None).await,
-            None => self.status().await,
-        }
-    }
-}
-
-/// Five times the longest silence measured across real editing runs (1.9 minutes).
-const DEFAULT_STALL_MINUTES: u64 = 10;
-
-/// The run limit and the stall limit from desktop.json (`timeoutMinutes`, `stallMinutes`).
-/// 0 turns a limit off, as it does in the standalone host.
-fn run_limits(cfg: &AppConfig) -> (Option<Duration>, Option<Duration>) {
-    let minutes = |m: u64| (m > 0).then(|| Duration::from_secs(m.saturating_mul(60)));
-    (cfg.timeout_minutes.and_then(minutes), minutes(cfg.stall_minutes.unwrap_or(DEFAULT_STALL_MINUTES)))
-}
-
-/// Note the host id the engine assigned. True when desktop.json has to be saved.
-/// The engine takes a new port at each launch, so an id filed under another address is never asked for again.
-fn remember_host_id(cfg: &mut AppConfig, server: &str, id: &str) -> bool {
-    if cfg.host_ids.len() == 1 && cfg.host_ids.get(server).map(String::as_str) == Some(id) {
-        return false;
-    }
-    cfg.host_ids.clear();
-    cfg.host_ids.insert(server.to_string(), id.to_string());
-    true
 }

@@ -15,7 +15,7 @@ const clock = (seconds: number) => {
 };
 
 /** The clip each join leads into, from its id or the time of its join. */
-export function findJoin(timeline: Timeline, join: TransitionJoinInput, fps: number): { clip: MediaClip; trackId: string } {
+function findJoin(timeline: Timeline, join: TransitionJoinInput, fps: number): { clip: MediaClip; trackId: string } {
   if (join.clipId) {
     for (const track of timeline.tracks) {
       const clip = track.clips.find(c => c.id === join.clipId);

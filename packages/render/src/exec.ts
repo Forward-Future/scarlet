@@ -416,10 +416,13 @@ function cachedPerBinary<T>(run: (bin: string) => Promise<T>): (ffmpegPath?: str
   };
 }
 
+/** The first line a media tool prints for `-version`. */
+function versionLine(bin: string): Promise<string> {
+  return runCapture(bin, ["-version"]).then((r) => r.stdout.toString("utf8").split(/\r?\n/)[0] ?? "");
+}
+
 /** `ffmpeg -version` first line, e.g. "ffmpeg version 9.0.2-full_build ...". Cached per binary. */
-export const ffmpegVersion = cachedPerBinary((bin) =>
-  runCapture(bin, ["-version"]).then((r) => r.stdout.toString("utf8").split(/\r?\n/)[0] ?? ""),
-);
+export const ffmpegVersion = cachedPerBinary(versionLine);
 
 /** Major version number parsed from `ffmpegVersion()`, or undefined for git builds without one. */
 export async function ffmpegMajor(ffmpegPath?: string): Promise<number | undefined> {
@@ -472,6 +475,37 @@ export async function hasDrawtext(ffmpegPath?: string): Promise<boolean> {
 /** Throw `MissingFilterError` before any work when this ffmpeg can't draw text that `need` requires. */
 export async function requireDrawtext(need: string, ffmpegPath?: string): Promise<void> {
   if (!await hasDrawtext(ffmpegPath)) throw new MissingFilterError("drawtext", missingTextFilterMessage(need));
+}
+
+export interface FfmpegCheck {
+  ok: boolean;
+  ffmpeg: { path: string; version?: string; error?: string };
+  ffprobe: { path: string; version?: string; error?: string };
+  /** Hardware H.264 encoders this build lists (presence, not necessarily usability). */
+  hwEncoders: string[];
+}
+
+/** Verify ffmpeg and ffprobe start, and report what the build offers. */
+export async function checkFfmpeg(paths: ToolPaths = {}): Promise<FfmpegCheck> {
+  const ffmpegPath = resolveFfmpeg(paths.ffmpegPath);
+  const ffprobePath = resolveFfprobe(paths.ffprobePath);
+  const out: FfmpegCheck = { ok: false, ffmpeg: { path: ffmpegPath }, ffprobe: { path: ffprobePath }, hwEncoders: [] };
+  try {
+    out.ffmpeg.version = await ffmpegVersion(ffmpegPath);
+  } catch (e) {
+    out.ffmpeg.error = (e as Error).message;
+  }
+  try {
+    out.ffprobe.version = await versionLine(ffprobePath);
+  } catch (e) {
+    out.ffprobe.error = (e as Error).message;
+  }
+  if (!out.ffmpeg.error) {
+    const enc = await ffmpegEncoders(ffmpegPath).catch(() => new Set<string>());
+    out.hwEncoders = ["h264_nvenc", "h264_qsv", "h264_amf", "h264_videotoolbox", "h264_mf", "h264_vaapi"].filter((e) => enc.has(e));
+  }
+  out.ok = !out.ffmpeg.error && !out.ffprobe.error;
+  return out;
 }
 
 /** Format a number for ffmpeg expressions/options: fixed precision, no exponent notation. */
