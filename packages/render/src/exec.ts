@@ -6,8 +6,8 @@
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { availableParallelism, homedir } from "node:os";
-import { isSea } from "node:sea";
 import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
+import { isSea } from "node:sea";
 
 /** Quiet banner/stdin/error flags shared across ffmpeg invocations. */
 export const FFMPEG_BASE_ARGS = ["-hide_banner", "-nostdin", "-loglevel", "error"] as const;
@@ -75,34 +75,33 @@ const binaryCache = new Map<string, string | null>();
  */
 function findBinary(name: string): string | null {
   const cached = binaryCache.get(name);
-  if (cached !== undefined) return cached;
+  if (cached) return cached;
   const dirs = [process.env.SCARLET_BIN_DIR, dirname(process.execPath)].filter((d): d is string => !!d);
-  // The Mac setup helper puts its caption-capable build here. A GUI login PATH can
-  // put a different Homebrew FFmpeg first. Only a packaged engine uses the helper.
-  if (process.platform === "darwin" && isSea()) dirs.push(join(homedir(), ".local", "bin"));
+  // Scarlet's in-app installer (and the Mac setup helper) places verified ffmpeg/ffprobe in ~/.local/bin.
+  if ((process.platform === "darwin" && isSea()) || process.platform === "win32") {
+    dirs.push(join(homedir(), ".local", "bin"));
+  }
   // On Windows spawn("ffmpeg") finds the empty Tauri dev placeholder in the
   // working directory before PATH. Choose a real executable by absolute path.
   if (process.platform === "win32") {
     dirs.push(...(process.env.PATH ?? "").split(delimiter).map(dir => dir.replace(/^"|"$/g, "")).filter(isAbsolute));
   }
-  let found: string | null = null;
   for (const dir of dirs) {
     const candidate = join(dir, name + EXE);
     try {
       const info = statSync(candidate);
       if (!info.isFile() || !info.size) continue;
       accessSync(candidate, constants.X_OK);
-      found = candidate;
-      break;
+      binaryCache.set(name, candidate);
+      return candidate;
     } catch {
       // A missing or unusable candidate leaves this tool to the next directory.
     }
   }
-  binaryCache.set(name, found);
-  return found;
+  return null;
 }
 
-/** Explicit arguments and environment overrides precede local binaries, the Mac helper and PATH. */
+/** Explicit arguments and environment overrides precede local binaries, Scarlet's ~/.local/bin install and PATH. */
 export function resolveFfmpeg(explicit?: string): string {
   return explicit ?? process.env.SCARLET_FFMPEG ?? process.env.FFMPEG_PATH ?? findBinary("ffmpeg") ?? "ffmpeg";
 }
@@ -113,11 +112,9 @@ export function resolveFfprobe(explicit?: string): string {
 
 /** How to install the FFmpeg Scarlet supports on this platform, as one sentence. */
 function installFfmpeg(platform: NodeJS.Platform = process.platform): string {
-  return platform === "win32"
-    ? "In PowerShell, run winget install --id Gyan.FFmpeg.Essentials --exact."
-    : platform === "darwin"
-      ? "Run the FFmpeg setup helper linked in the Scarlet download instructions."
-      : "Install the FFmpeg package from your system’s package manager.";
+  return platform === "win32" || platform === "darwin"
+    ? "Click Install FFmpeg on the Projects screen or in Settings > General."
+    : "Install the FFmpeg package from your system’s package manager.";
 }
 
 /** Show the prerequisite at the import or render that needs it. Other launch errors keep their diagnostics. */

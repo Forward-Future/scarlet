@@ -9,8 +9,32 @@ use super::detect::cli_binary;
 use super::spawn::{find_on_path, spawn_lines, SpawnLinesOptions};
 use crate::util::{assistant_prefix, child_env};
 
-const AGY_INSTALL_SH_URL: &str = "https://antigravity.google/cli/install.sh";
-const AGY_INSTALL_PS1_URL: &str = "https://antigravity.google/cli/install.ps1";
+struct NativeInstaller {
+    label: &'static str,
+    sh_url: &'static str,
+    ps1_url: &'static str,
+}
+
+fn native_installer(agent: &str) -> Option<NativeInstaller> {
+    match agent {
+        "claude" => Some(NativeInstaller {
+            label: "Claude Code",
+            sh_url: "https://claude.ai/install.sh",
+            ps1_url: "https://claude.ai/install.ps1",
+        }),
+        "codex" => Some(NativeInstaller {
+            label: "Codex",
+            sh_url: "https://chatgpt.com/codex/install.sh",
+            ps1_url: "https://chatgpt.com/codex/install.ps1",
+        }),
+        "gemini" => Some(NativeInstaller {
+            label: "Gemini",
+            sh_url: "https://antigravity.google/cli/install.sh",
+            ps1_url: "https://antigravity.google/cli/install.ps1",
+        }),
+        _ => None,
+    }
+}
 
 // Serialize assistant installs so shared directories/prefixes are never raced.
 static INSTALL_LOCK: Mutex<()> = Mutex::const_new(());
@@ -23,8 +47,9 @@ fn npm_package(agent: &str) -> Option<&'static str> {
     }
 }
 
+#[cfg(test)]
 fn is_supported(agent: &str) -> bool {
-    matches!(agent, "claude" | "codex" | "gemini")
+    native_installer(agent).is_some()
 }
 
 #[derive(serde::Serialize)]
@@ -35,9 +60,9 @@ pub enum InstallResult {
 }
 
 pub async fn install(agent: &str, home: &Path) -> Result<InstallResult, String> {
-    if !is_supported(agent) {
+    let Some(native) = native_installer(agent) else {
         return Err("This assistant cannot be installed by Scarlet.".into());
-    }
+    };
     let _guard = INSTALL_LOCK.lock().await;
     let env = child_env(home);
     let binary = cli_binary(agent);
@@ -45,15 +70,31 @@ pub async fn install(agent: &str, home: &Path) -> Result<InstallResult, String> 
         log::info!("{agent} ({binary}) is already installed");
         return Ok(InstallResult::Installed);
     }
-    if agent == "gemini" {
-        return install_antigravity_cli(home, env).await;
+    match install_via_script(agent, binary, native, home, env.clone()).await {
+        Ok(result) => return Ok(result),
+        Err(native_err) => {
+            // Claude Code and Codex ship standalone native binaries, so non-developers don't need Node.js.
+            // If the standalone install fails on a machine that already has npm, try the npm package as a fallback.
+            if let Some(package) = npm_package(agent) {
+                let npm_name = if cfg!(windows) { "npm.cmd" } else { "npm" };
+                if let Some(npm) = find_on_path(npm_name, &env) {
+                    log::warn!("{agent} standalone install failed ({native_err}); falling back to npm ({package})");
+                    return install_via_npm(agent, binary, package, &npm, home, env).await;
+                }
+            }
+            Err(native_err)
+        }
     }
-    let package = npm_package(agent).ok_or_else(|| "This assistant cannot be installed by Scarlet.".to_string())?;
-    let npm_name = if cfg!(windows) { "npm.cmd" } else { "npm" };
-    let Some(npm) = find_on_path(npm_name, &env) else {
-        log::warn!("cannot install {agent}: npm is not on PATH");
-        return Ok(InstallResult::NeedsNode);
-    };
+}
+
+async fn install_via_npm(
+    agent: &str,
+    binary: &str,
+    package: &str,
+    npm: &str,
+    home: &Path,
+    env: HashMap<String, String>,
+) -> Result<InstallResult, String> {
     let prefix = assistant_prefix(home);
     tokio::fs::create_dir_all(&prefix).await.map_err(|e| {
         log::warn!("cannot install {agent}: could not create {}: {e}", prefix.display());
@@ -64,7 +105,7 @@ pub async fn install(agent: &str, home: &Path) -> Result<InstallResult, String> 
     let install_env = install_env(env, &prefix);
     let args = ["install", "--global", "--registry=https://registry.npmjs.org", "--no-fund", "--no-audit", package].map(String::from);
     let options = install_spawn_options(prefix, install_env, None);
-    let outcome = spawn_lines(&npm, &args, options, Box::new(|_| false)).await.map_err(|e| {
+    let outcome = spawn_lines(npm, &args, options, Box::new(|_| false)).await.map_err(|e| {
         log::warn!("cannot install {agent}: npm did not start: {e:#}");
         "Could not start npm. Check your Node.js installation and try again.".to_string()
     })?;
@@ -74,45 +115,51 @@ pub async fn install(agent: &str, home: &Path) -> Result<InstallResult, String> 
         log::warn!("{agent} install failed (npm exit code {:?}; {binary} {} on PATH)", outcome.code, if found { "is" } else { "is not" });
         return Err(failure_reason(&outcome).into());
     }
-    log::info!("{agent} installed");
+    log::info!("{agent} installed via npm");
     Ok(InstallResult::Installed)
 }
 
-/// Install Antigravity CLI (`agy`) via its official HTTPS installer script.
-/// `agy` is a standalone native binary and does not require Node.js.
-async fn install_antigravity_cli(home: &Path, env: HashMap<String, String>) -> Result<InstallResult, String> {
-    let url = if cfg!(windows) { AGY_INSTALL_PS1_URL } else { AGY_INSTALL_SH_URL };
-    log::info!("installing gemini (Antigravity CLI) from {url}");
+/// Install a standalone native assistant CLI via its official HTTPS installer script (no Node.js required).
+async fn install_via_script(
+    agent: &str,
+    binary: &str,
+    installer: NativeInstaller,
+    home: &Path,
+    env: HashMap<String, String>,
+) -> Result<InstallResult, String> {
+    let url = if cfg!(windows) { installer.ps1_url } else { installer.sh_url };
+    let label = installer.label;
+    log::info!("installing {agent} ({label}) from {url}");
     let client = reqwest::Client::builder()
         .https_only(true)
         .timeout(Duration::from_secs(60))
         .build()
         .map_err(|e| {
-            log::warn!("cannot install gemini: HTTP client error: {e}");
+            log::warn!("cannot install {agent}: HTTP client error: {e}");
             "Installation did not finish. Check your connection and try again.".to_string()
         })?;
     let response = client.get(url).send().await.map_err(|e| {
-        log::warn!("cannot install gemini: failed to download installer: {e}");
-        "Could not download the Gemini installer. Check your connection and try again.".to_string()
+        log::warn!("cannot install {agent}: failed to download installer: {e}");
+        format!("Could not download the {label} installer. Check your connection and try again.")
     })?;
     if !response.status().is_success() {
-        log::warn!("cannot install gemini: installer download returned {}", response.status());
-        return Err("Could not download the Gemini installer. Check your connection and try again.".into());
+        log::warn!("cannot install {agent}: installer download returned {}", response.status());
+        return Err(format!("Could not download the {label} installer. Check your connection and try again."));
     }
     let script = response.text().await.map_err(|e| {
-        log::warn!("cannot install gemini: failed to read installer script: {e}");
-        "Could not download the Gemini installer. Check your connection and try again.".to_string()
+        log::warn!("cannot install {agent}: failed to read installer script: {e}");
+        format!("Could not download the {label} installer. Check your connection and try again.")
     })?;
     let prefix = assistant_prefix(home);
     let restricted_env = install_env(env, &prefix);
 
     let outcome = if cfg!(windows) {
         let mut tmp = tempfile::Builder::new().suffix(".ps1").tempfile().map_err(|e| {
-            log::warn!("cannot install gemini: failed to create temp script: {e}");
+            log::warn!("cannot install {agent}: failed to create temp script: {e}");
             "Scarlet could not write the assistant files. Check your folder permissions and try again.".to_string()
         })?;
         std::io::Write::write_all(&mut tmp, script.as_bytes()).map_err(|e| {
-            log::warn!("cannot install gemini: failed to write temp script: {e}");
+            log::warn!("cannot install {agent}: failed to write temp script: {e}");
             "Scarlet could not write the assistant files. Check your folder permissions and try again.".to_string()
         })?;
         let script_path = tmp.path().to_string_lossy().into_owned();
@@ -134,20 +181,20 @@ async fn install_antigravity_cli(home: &Path, env: HashMap<String, String>) -> R
         spawn_lines(&shell, &args, options, Box::new(|_| false)).await
     }
     .map_err(|e| {
-        log::warn!("cannot install gemini: installer did not start: {e:#}");
-        "Could not start the Gemini installer. Try again.".to_string()
+        log::warn!("cannot install {agent}: installer did not start: {e:#}");
+        format!("Could not start the {label} installer. Try again.")
     })?;
 
-    let found = find_on_path("agy", &child_env(home)).is_some();
+    let found = find_on_path(binary, &child_env(home)).is_some();
     if outcome.code != Some(0) || !found {
         log::warn!(
-            "gemini install failed (exit code {:?}; agy {} on PATH)",
+            "{agent} install failed (exit code {:?}; {binary} {} on PATH)",
             outcome.code,
             if found { "is" } else { "is not" }
         );
-        return Err(gemini_failure_reason(&outcome).into());
+        return Err(native_failure_reason(&outcome).into());
     }
-    log::info!("gemini (agy) installed");
+    log::info!("{agent} ({binary}) installed");
     Ok(InstallResult::Installed)
 }
 
@@ -192,8 +239,8 @@ fn failure_reason(outcome: &super::spawn::SpawnOutcome) -> &'static str {
     install_failure_reason(outcome, "Installation did not finish. Check your connection and Node.js installation, then try again.")
 }
 
-/// What to tell the editor when the Antigravity CLI install did not finish.
-fn gemini_failure_reason(outcome: &super::spawn::SpawnOutcome) -> &'static str {
+/// What to tell the editor when a standalone native installer did not finish.
+fn native_failure_reason(outcome: &super::spawn::SpawnOutcome) -> &'static str {
     install_failure_reason(outcome, "Installation did not finish. Check your connection and try again.")
 }
 
@@ -210,6 +257,11 @@ mod tests {
         assert_eq!(npm_package("codex"), Some("@openai/codex"));
         assert_eq!(npm_package("claude"), Some("@anthropic-ai/claude-code"));
         assert_eq!(npm_package("gemini"), None);
+        for agent in ["claude", "codex", "gemini"] {
+            let native = native_installer(agent).expect("all supported assistants have standalone native installers");
+            assert!(native.sh_url.starts_with("https://"), "{agent} sh_url must be https");
+            assert!(native.ps1_url.starts_with("https://"), "{agent} ps1_url must be https");
+        }
     }
 
     #[test]

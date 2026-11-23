@@ -7,6 +7,7 @@ pub mod engine;
 pub mod host;
 pub mod util;
 mod crisper;
+mod ffmpeg;
 mod export;
 #[cfg(windows)]
 mod find_shortcut;
@@ -156,6 +157,8 @@ pub fn run() {
             commands::host_refresh_agents,
             commands::host_refresh_quota,
             commands::agent_install,
+            commands::ffmpeg_status,
+            commands::ffmpeg_install,
             crisper::install_crisper_model,
             commands::agent_login_start,
             commands::agent_login_code,
