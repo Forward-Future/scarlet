@@ -1572,6 +1572,11 @@ export const ServerSettings = z.object({
   defaultAgent: AgentId.default("claude"),
   /** How many of a pass's cuts, the ones Scarlet thinks most likely to be wrong, the editor is asked to check. */
   checkIn: CheckIn.default("balanced"),
+  /**
+   * Which model listens to cuts for a request whose own model can't hear: "auto" (the best one signed in), "off", or
+   * one model as "agent:model" (`chooseListener`).
+   */
+  listening: z.string().regex(/^(auto|off|[a-z]+:[^\s]+)$/).default("auto"),
 });
 export type ServerSettings = z.infer<typeof ServerSettings>;
 

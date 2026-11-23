@@ -1,4 +1,4 @@
-import { agentCapabilities, canHear, isProjectEditTask, listenerAmong, workspaceCapabilities, type AgentId, type Listener, type ListenResult, type Task } from "@scarlet/shared";
+import { agentCapabilities, canHear, isProjectEditTask, chooseListener, workspaceCapabilities, type AgentId, type Listener, type ListenResult, type Task } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { badRequest } from "../errors.js";
 import { FINISHED_TASK, createTask } from "./tasks.js";
@@ -24,7 +24,7 @@ export function listenerFor(ctx: Ctx, task: Task): Listener | undefined {
   const env = (ctx.options.env ?? process.env).SCARLET_AGENT_CAPS;
   if (canHear(workspaceCapabilities(agentCapabilities(task.agent, env, task.model)))) return undefined;
   const online = ctx.repos.hosts.select().filter(h => h.lastSeenAt && Date.now() - Date.parse(h.lastSeenAt) < HOST_ONLINE_MS);
-  return listenerAmong(online.flatMap(h => h.agents));
+  return chooseListener(online.flatMap(h => h.agents), ctx.settings().listening);
 }
 
 const sameAsk = (a: ListenAsk, b: ListenAsk) => a.mediaId === b.mediaId && Math.abs(a.from - b.from) < 0.0005 && Math.abs(a.to - b.to) < 0.0005
@@ -43,7 +43,8 @@ export async function listenFor(ctx: Ctx, askerId: string, ask: ListenAsk, waitM
   if (!media || media.projectId !== asker.projectId) throw badRequest("invalid_media", `Media ${ask.mediaId} is not in this project.`);
   if (media.hasAudio === false) throw badRequest("no_audio", `Media ${ask.mediaId} has no sound.`);
   const listener = listenerFor(ctx, asker);
-  if (!listener) return { state: "unavailable", reason: "No model that can hear is signed in on this computer." };
+  if (!listener) return { state: "unavailable", reason: ctx.settings().listening === "off" ? "The editor turned listening off."
+    : "No model that can hear is signed in on this computer." };
   const earlier = ctx.repos.tasks.select("project_id = ? AND kind = 'listen_check' AND json_extract(json, '$.context.checksTaskId') = ?", [asker.projectId, asker.id], "created_at DESC, rowid DESC")
     .filter(task => task.context.listenCheck && sameAsk(task.context.listenCheck, ask) && task.state !== "cancelled");
   // A listen that failed is asked again; one heard or under way serves this call.

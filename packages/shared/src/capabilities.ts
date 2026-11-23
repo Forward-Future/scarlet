@@ -146,12 +146,52 @@ export type ListenResult =
   | { state: "failed"; error: string; by: Listener }
   | { state: "unavailable"; reason: string };
 
+/** What the listening setting needs to know of a host's agent. */
+type SignedInAgent = { id: string; installed: boolean; loggedIn?: boolean; model?: string; models?: string[] };
+
+/**
+ * The editor's listening setting: "auto" for the best model signed in that can hear (`listenerAmong`), "off" for none,
+ * or one model as "agent:model" ("gemini:gemini-4-neon", "codex:gpt-6-astra-audio").
+ */
+export type ListeningSetting = "auto" | "off" | `${string}:${string}`;
+
+/** The setting's value for one model: "agent:model", or "agent:default" for its CLI's own default model. */
+export const listenerKey = (listener: Listener): ListeningSetting => `${listener.agent}:${listener.model ?? "default"}`;
+
+/** Every model signed in on these agents that can hear, Gemini's first, for the editor to pick from. */
+export function hearingModels(agents: ReadonlyArray<SignedInAgent>): Listener[] {
+  const usable = agents.filter(a => a.installed && a.loggedIn !== false);
+  const seen = new Set<string>();
+  const out: Listener[] = [];
+  for (const a of [...usable.filter(a => a.id === "gemini"), ...usable.filter(a => a.id !== "gemini")]) {
+    const models = a.id === "gemini" ? [a.model, ...(a.models ?? [])] : [a.model, ...(a.models ?? [])].filter(m => modelHearsAudio(a.id, m));
+    for (const model of models) {
+      if (!model || seen.has(`${a.id}:${model}`)) continue;
+      seen.add(`${a.id}:${model}`);
+      out.push({ agent: a.id, model });
+    }
+    // Gemini whose CLI lists no models still hears, on its own default.
+    if (a.id === "gemini" && !models.some(Boolean)) out.push({ agent: "gemini" });
+  }
+  return out;
+}
+
+/**
+ * The model that listens under the editor's setting. A model they picked that isn't signed in now listens for nobody:
+ * Scarlet doesn't swap in another behind their back, and Settings says so.
+ */
+export function chooseListener(agents: ReadonlyArray<SignedInAgent>, setting: string = "auto"): Listener | undefined {
+  if (setting === "off") return undefined;
+  if (setting === "auto") return listenerAmong(agents);
+  return hearingModels(agents).find(l => listenerKey(l) === setting);
+}
+
 /**
  * The model that listens for a request whose own model can't hear, among the agents the editor's hosts have signed in:
  * Gemini first, which caught the most of the editor's own slips (6 of 9 on 40 labelled spots, 2026-11-22), then a Codex
  * model that hears. None when no host has one.
  */
-export function listenerAmong(agents: ReadonlyArray<{ id: string; installed: boolean; loggedIn?: boolean; model?: string; models?: string[] }>): Listener | undefined {
+export function listenerAmong(agents: ReadonlyArray<SignedInAgent>): Listener | undefined {
   const usable = agents.filter(a => a.installed && a.loggedIn !== false);
   const gemini = usable.find(a => a.id === "gemini");
   if (gemini) return { agent: "gemini", ...(gemini.model && { model: gemini.model }) };
