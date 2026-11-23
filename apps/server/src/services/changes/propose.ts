@@ -231,6 +231,23 @@ export function persistProposal(ctx: Ctx, user: User, projectId: string, body: P
   // A range says where to look. One that starts on the timeline and runs past its end means "to the end"; refusing it
   // cost a pass a turn spent guessing the timeline's length.
   const ends = diff.durationAfter;
+  // A save that only leaves to-dos for the editor is one edit a to-do, however the model named them: each is the
+  // editor's to mark done. Named none, the save changed no stretch of the video, so the request listed nothing and its
+  // 27 B-roll ideas could be reached from nowhere in the chat; named once for all 33, they were one row (2026-11-23).
+  // A name the model gave one to-do alone stays; any other row is the start of its to-do, and its card says it in full.
+  const todos = body.ops?.length ? body.ops.flatMap(op =>
+    op.op === "addMarker" && op.marker.kind === "todo" && !op.marker.resolved && op.marker.text.trim() ? [op.marker] : []) : [];
+  if (todos.length && todos.length === body.ops?.length) {
+    const named = body.timelineEdits ?? [];
+    const holds = (edit: (typeof named)[number], time: number) => edit.range.start - 1e-6 <= time && time <= edit.range.end + 1e-6;
+    const own = todos.map(marker => {
+      const on = named.filter(edit => holds(edit, marker.time));
+      return on.length === 1 && todos.filter(other => holds(on[0]!, other.time)).length === 1 ? on[0] : undefined;
+    });
+    if (named.length !== todos.length || own.some(edit => !edit)) {
+      body = { ...body, timelineEdits: todos.map((marker, i) => own[i] ?? { label: rowWords(marker.text), range: { start: marker.time, end: marker.time } }) };
+    }
+  }
   if (body.timelineEdits?.some(({ range }) => range.end > ends + 1e-6 && range.start < ends)) {
     body = { ...body, timelineEdits: body.timelineEdits.map(e => e.range.end > ends && e.range.start < ends ? { ...e, range: { ...e.range, end: ends } } : e) };
   }
@@ -347,4 +364,12 @@ export function notifyReady(ctx: Ctx, change: Change) {
     projectId: change.projectId,
     link: reviewItemPath(change.projectId, change.id),
   });
+}
+
+/** A to-do's words as its row's: whole when they fit on a row's two lines in the chat, else up to the last word that does. */
+function rowWords(text: string, max = 72): string {
+  const words = text.trim().replace(/\s+/g, " ");
+  if (words.length <= max) return words;
+  const cut = words.slice(0, max - 1);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), max >> 1)).replace(/[\s,;:.]+$/, "")}…`;
 }
