@@ -91,7 +91,7 @@ export interface RenderAdapter {
   renderRange(project: Project, timeline: Timeline, range: TimeRange, outputPath: string, opts: RenderOptions): Promise<void>;
   renderPlaybackSegment: typeof renderPlaybackSegment;
   renderFullCached(project: Project, timeline: Timeline, cacheDir: string, outputPath: string,
-    opts: RenderOptions & { onCachedRanges?(ranges: TimeRange[]): void }): Promise<RenderEncoding | void>;
+    opts: RenderOptions & { onCachedRanges?(ranges: TimeRange[]): void; onReused?(reused: { seconds: number; progress: number }): void }): Promise<RenderEncoding | void>;
 }
 
 // ---------------------------------------------------------------------------

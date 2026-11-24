@@ -68,9 +68,14 @@ export function Progress({ value, className = "" }: { value: number; className?:
   );
 }
 
-export function ActivityProgress({ label, value, children }: { label: string; value?: number; children: ReactNode }) {
+/** `reused`: the part of `value` that was already done before this run began, drawn striped at the bar's start. */
+export function ActivityProgress({ label, value, reused, children }: { label: string; value?: number; reused?: number; children: ReactNode }) {
+  const bar = <progress aria-label={label} className="activity-progress" value={value} max={1} />;
   return <>
-    <progress aria-label={label} className="activity-progress" value={value} max={1} />
+    {reused && value !== undefined ? <div className="activity-progress-track">
+      {bar}
+      <span className="activity-progress-reused" style={{ width: `${Math.min(reused, value) * 100}%` }} aria-hidden="true" />
+    </div> : bar}
     <div role="status" className="mt-1.5 text-xs text-muted tnum">{children}</div>
   </>;
 }
