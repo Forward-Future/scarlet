@@ -15,6 +15,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - A voice cleaned up with voice cleanup now plays to the very end of each cut, instead of going silent for its last moment.
 - A J or L cut Scarlet makes now shows the right time in the list: one at 3 seconds could read 0:02, and one past an hour read 62:05 instead of 1:02:05.
 - A cut whose clean edge would reach outside the part of the video you selected, or into footage you marked to keep, now always waits for you, even when Scarlet was told to apply joins it isn't sure of.
+- A cut's row in a request's list now quotes the words beside it as the transcript has them, even when the row was first shown while Scarlet was still placing the transcript's words.
 
 ## November 23, 2026
 
