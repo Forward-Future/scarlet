@@ -4,6 +4,10 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 24, 2026
+
+- When Scarlet moves a clip's voice to the dialogue track, for a crossfade, a J or L cut or to line up its picture, the voice keeps the audio track you chose and its volume changes, such as music dipping under speech, instead of going back to the first track at a flat level.
+
 ## November 23, 2026
 
 - A request's list no longer shows Scarlet's small finishing touches as edits of their own: a two-frame fade on a join or a voice moved to the dialogue track goes with the edit it finishes, and anything Scarlet wants you to check about it shows on that edit.
