@@ -14166,42 +14166,6 @@ it("keeps on through the optional edits and then what waits, on a pass with its 
   expect(container.querySelector('[aria-label="Call"]')).toBeNull();
   expect(editPanel()).toBeNull();
 });
-  DBG(passCard(), "t29 a");
-  const what = () => cardTitle() ?? container.querySelector('[aria-label="Call"] .edit-card-count')?.textContent ?? null;
-  await click(passRow("intro trim"));
-  await act(async () => {});
-  const seq = [what()];
-  for (let i = 0; i < 8; i++) { await press("k"); await act(async () => {}); seq.push(what()); }
-  console.log("DBG", "t29 seq", JSON.stringify(seq), JSON.stringify(save.mock.calls.at(-1)));
-  DBG(passCard(), "t29 end");
-  expect(cardTitle()).toBe("intro trim!");
-  // Keep intro trim -> goes to Cut 1 (For you call).
-  await press("k");
-  expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 1");
-  // Approve Cut 1 on See all -> goes to mid trim (non-For-you edit), NOT skipping to Cut 2 or mid check!
-  await press("k");
-  await act(async () => {});
-  expect(container.querySelector('[aria-label="Call"]')).toBeNull();
-  expect(cardTitle()).toBe("mid trim");
-  // Keep mid trim -> goes to mid check (flagged For you edit).
-  await press("k");
-  expect(cardTitle()).toBe(SUMMARY);
-  // Keep mid check on See all -> goes to late trim (non-For-you edit), NOT skipping to Cut 2!
-  await press("k");
-  expect(cardTitle()).toBe("late trim");
-  // Keep late trim -> goes to Cut 2 (next in See all).
-  await press("k");
-  expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 2");
-  // Approve Cut 2 (last waiting call) on See all -> schedules the pass and moves to outro trim instead of closing!
-  await press("k");
-  await act(async () => {});
-  expect(save).toHaveBeenLastCalledWith("chg_ready", expect.objectContaining({ applyWhenDone: true }));
-  expect(container.querySelector('[aria-label="Call"]')).toBeNull();
-  expect(cardTitle()).toBe("outro trim");
-  // Keep outro trim -> every item in See all is done, so the card closes.
-  await press("k");
-  expect(editPanel()).toBeNull();
-});
 
 it("steps ↑ and ↓ through For you as its list goes while a pass waits, from its optional edits to its calls and back", async () => {
   runningPass(STAGED.slice(0, 2)); // calls at 0:02 (Cut 1) and 0:06 (Cut 2)
@@ -14238,21 +14202,6 @@ it("steps ↑ and ↓ through For you as its list goes while a pass waits, from 
   const back = [];
   for (let i = 0; i < 5; i++) { await press("ArrowUp"); await act(async () => {}); back.push(open()); }
   expect(back).toEqual(["mid trim", "intro trim", "Cut 2", "Cut 1", "Cut 1"]);
-});
-  DBG(passCard(), "t30 a");
-  const openNow = () => editPanel()?.querySelector(".edit-card-title")?.textContent ?? container.querySelector('[aria-label="Call"] .edit-card-count')?.textContent;
-  { await click(passRow("intro trim")); await act(async () => {}); const s = [openNow()]; for (let i = 0; i < 6; i++) { await press("ArrowDown"); await act(async () => {}); s.push(openNow()); } console.log("DBG t30 down", JSON.stringify(s)); const b = []; for (let i = 0; i < 6; i++) { await press("ArrowUp"); await act(async () => {}); b.push(openNow()); } console.log("DBG t30 up", JSON.stringify(b)); }
-  expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual(["intro trim", STAGED[0]!.reason, "mid trim", STAGED[1]!.reason, "outro trim"]);
-  await click(passRow("intro trim"));
-  await act(async () => {});
-  // ↓ goes down the list a row at a time, edit or call, and stops at its end.
-  const seen = [open()];
-  for (let i = 0; i < 5; i++) { await press("ArrowDown"); await act(async () => {}); seen.push(open()); }
-  expect(seen).toEqual(["intro trim", "Cut 1", "mid trim", "Cut 2", "outro trim", "outro trim"]);
-  // ↑ goes back up it the same way.
-  const back = [];
-  for (let i = 0; i < 4; i++) { await press("ArrowUp"); await act(async () => {}); back.push(open()); }
-  expect(back).toEqual(["Cut 2", "mid trim", "Cut 1", "intro trim"]);
 });
 
 it("keeps advancing through the optional edits from one of them, then goes to what waits", async () => {
