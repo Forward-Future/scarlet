@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFfmpeg, resolveFfprobe } from "@scarlet/render";
 import { createProject, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
@@ -159,9 +159,11 @@ describe("videos from the web", () => {
     await aboutWebVideo(workspace.ctx, url, new AbortController().signal);
     const quitter = new AbortController();
     const first = webVideoCaptions(workspace.ctx, url, 0, quitter.signal);
-    const second = webVideoCaptions(workspace.ctx, url, 0, new AbortController().signal);
     first.catch(() => {});
-    await new Promise(resolve => setTimeout(resolve, 300));
+    // The first caller's read of the captions is under way, and the second joins it.
+    await vi.waitFor(() => expect(calls().some(args => args.includes("--skip-download"))).toBe(true), { timeout: 5000 });
+    const second = webVideoCaptions(workspace.ctx, url, 0, new AbortController().signal);
+    await new Promise(resolve => setTimeout(resolve, 50));
     quitter.abort();
     await expect(first).rejects.toThrow();
     expect((await second)?.text.split("\n")[0]).toBe("1.2 Here is the agent");
