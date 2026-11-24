@@ -752,6 +752,36 @@ async fn side_checks_run_in_slots_of_their_own() {
     assert_eq!(rt.check_agents().await, (vec!["gemini".to_string()], false));
 }
 
+#[tokio::test]
+async fn a_local_model_server_runs_one_request_and_one_check_at_a_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut rt, _) = runtime("http://127.0.0.1:1", dir.path());
+    Arc::get_mut(&mut rt).unwrap().max_parallel = 4;
+    let ready = |id: &str| AgentAvailability {
+        id: id.into(),
+        installed: true,
+        logged_in: Some(true),
+        models: Some(vec!["m".into()]),
+        ..Default::default()
+    };
+    // A provider that isn't reachable, has no tool models, or had its key refused takes no work.
+    let off = AgentAvailability { id: "lmstudio".into(), ..Default::default() };
+    let empty = AgentAvailability { models: Some(vec![]), ..ready("lmstudio") };
+    let refused = AgentAvailability { logged_in: Some(false), ..ready("openrouter") };
+    *rt.agents.write().await = vec![ready("claude"), ready("ollama"), off, empty, refused.clone()];
+    assert_eq!(rt.idle_agents().await, (vec!["claude".to_string(), "ollama".to_string()], false));
+    *rt.agents.write().await = vec![ready("ollama"), ready("openrouter")];
+    let run = |agent: &str, check: bool| Arc::new(RunningTask::new("prj_1".into(), agent.into(), CancellationToken::new(), PathBuf::new()).side_check(check));
+    // One request on Ollama fills it: the computer has one GPU. OpenRouter takes four as the CLIs do.
+    rt.running.lock().unwrap().insert("tsk_1".into(), run("ollama", false));
+    rt.running.lock().unwrap().insert("tsk_2".into(), run("openrouter", false));
+    assert_eq!(rt.idle_agents().await, (vec!["openrouter".to_string()], true));
+    // Its own side check still has a slot, so the request never waits behind itself. A second doesn't.
+    assert_eq!(rt.check_agents().await, (vec!["ollama".to_string(), "openrouter".to_string()], false));
+    rt.running.lock().unwrap().insert("chk_1".into(), run("ollama", true));
+    assert_eq!(rt.check_agents().await, (vec!["openrouter".to_string()], true));
+}
+
 #[test]
 fn side_check_kinds_and_slots_match_the_engine() {
     assert!(is_side_check("area_check") && is_side_check("learning_check"));

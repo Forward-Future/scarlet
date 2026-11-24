@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- Scarlet can now edit with models running on your own computer through Ollama or LM Studio, or with hosted models through OpenRouter. Set them up under Other providers in Settings › Models: each shows up in the model selector only once it has models ready, and OpenRouter's models stay out of the selector until you turn on the ones you want.
 - After you click the timeline's zoom slider, its − or +, "Scarlet is editing", or Check or Show source on a card, Space plays and pauses and ← → skip again, instead of going to the control you clicked.
 - Pressing "Scarlet is editing" under the timeline now shows and lights the request also when it is folded to its heading, or sitting in the beta edits column.
 - With the Transcript (or the beta edits column) open, the chat and Transcript can no longer be dragged so wide that the player has no room between them.

@@ -15,6 +15,7 @@ import { useBeforeUnloadGuard, useEscapeToLeave } from "../lib/uiHooks";
 import { Link, Navigate, Outlet, useBlocker, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { ListeningSettings } from "../components/shell/ListeningSettings";
 import { ModelSettings } from "../components/shell/ModelSettings";
+import { ProviderSettings } from "../components/shell/ProviderSettings";
 import { TaskModelsSettings } from "../components/shell/TaskModelsSettings";
 import { DesktopAgents, DesktopDiagnostics, ExportLogs } from "../components/shell/DesktopSettings";
 import { FfmpegSetupCard } from "../components/shell/FfmpegSetup";
@@ -329,6 +330,7 @@ export function SettingsPage() {
             <ModelSettings />
             <ListeningSettings />
             <TaskModelsSettings />
+            <ProviderSettings />
           </>
         )}
         {tab === "tools" && (

@@ -46,6 +46,14 @@ pub fn can_run_bare(env: &std::collections::HashMap<String, String>) -> bool {
     ["ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"].iter().any(|k| env.get(*k).is_some_and(|v| !v.is_empty()))
 }
 
+/// Put `env` in the command's `--settings`, where it wins over the editor's own Claude Code settings.
+pub fn add_settings_env(cmd: &mut RunnerCommand, env: &BTreeMap<String, String>) {
+    let Some(at) = cmd.args.iter().position(|a| a == "--settings").map(|i| i + 1) else { return };
+    let Some(mut settings) = cmd.args.get(at).and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()) else { return };
+    settings["env"] = json!(env);
+    cmd.args[at] = settings.to_string();
+}
+
 /// Build the exact command line (pure, for tests and for reporting).
 #[allow(clippy::too_many_arguments)]
 pub fn build_claude_command(model: Option<&str>, effort: Option<&str>, service_tier: Option<&str>, system_prompt: &str, instruction: &str, resume_session: Option<&str>, bare: bool, plan: bool, workspace: Option<&Workspace>, mcp: &McpSpec, bin: &str, tmp_dir: &Path) -> RunnerCommand {
