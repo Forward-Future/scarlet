@@ -74,7 +74,7 @@ const TOOLS: { tool: PictureMarkKind; label: string; key: string; description: s
 
 const UNDO_KEY = typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh") ? "⌘Z" : "Ctrl+Z";
 const ACTIONS: Record<"undo" | "clear", MarkToolTip> = {
-  undo: { id: "undo", label: "Undo", key: UNDO_KEY, description: "Remove the last mark from this frame." },
+  undo: { id: "undo", label: "Undo", key: UNDO_KEY, description: "Take back the last mark, or put a moved mark back." },
   clear: { id: "clear", label: "Clear marks", description: "Remove all marks from this frame." },
 };
 
@@ -141,6 +141,8 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
     const key = (e: KeyboardEvent) => {
       if (isInEditableElement(e.target) || e.isComposing) return;
       const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+      // A menu or a popover open over the picture closes on its own Esc first, and the marking stays.
+      if (e.key === "Escape" && plain && !dragging.current && document.querySelector('[role="menu"], [data-escape-owner], dialog[open], [role="dialog"]')) return;
       if (e.key === "Escape" && plain) {
         if (dragging.current) {
           dragging.current = undefined;

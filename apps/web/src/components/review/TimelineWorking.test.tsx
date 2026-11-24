@@ -77,7 +77,45 @@ it("brings a request that was picked up again into view, by the block it began i
     await act(async () => root.render(<TimelineWorking tasks={[resumed]} />));
     await act(async () => container.querySelector<HTMLButtonElement>(".timeline-working")!.click());
     expect(scrolled).toEqual(["a-now", "b-now", "a-now"]);
+    // Folded to its band, a request has nothing else in view: its band comes into the middle and lights.
+    const folded = chat.querySelector<HTMLElement>('[data-run="a"]')!;
+    folded.classList.add("is-collapsed");
+    folded.insertAdjacentHTML("afterbegin", '<div class="unit-msg" id="a-band"></div>');
+    await act(async () => container.querySelector<HTMLButtonElement>(".timeline-working")!.click());
+    expect(scrolled.at(-1)).toBe("a-band");
+    expect(chat.querySelector("#a-band")!.hasAttribute("data-flash")).toBe(true);
   } finally {
     chat.remove();
+  }
+});
+
+it("finds and lights revisions inside the beta edits rail, open or folded, and drops focus on pointer click", async () => {
+  const layout = document.createElement("main");
+  layout.setAttribute("data-new-layout", "");
+  layout.innerHTML = `<aside id="simple-review-rail" class="review-rail">
+    <button type="button" class="review-sec" id="working-head">Working</button>
+    <div class="review-sec-body" id="working-body">
+      <ol class="simple-edits"><li id="rev-row"><div class="subunit" data-run="rev"><div class="req"><div class="req-now" id="rev-now"></div></div></div></li></ol>
+    </div>
+  </aside>`;
+  document.body.append(layout);
+  const scrolled: string[] = [];
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value(this: HTMLElement) { scrolled.push(this.id); } });
+  try {
+    await act(async () => root.render(<TimelineWorking tasks={[task("rev")]} />));
+    const status = container.querySelector<HTMLButtonElement>(".timeline-working")!;
+    // Open in beta one-row style: scrolls and flashes the visible <li>, not the visually hidden .req-now.
+    status.focus();
+    await act(async () => status.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+    expect(scrolled.at(-1)).toBe("rev-row");
+    expect(layout.querySelector("#rev-row")!.hasAttribute("data-flash")).toBe(true);
+    expect(document.activeElement).not.toBe(status);
+    // Folded Working section: scrolls and flashes the visible Working header.
+    layout.querySelector<HTMLElement>("#working-body")!.hidden = true;
+    await act(async () => status.click());
+    expect(scrolled.at(-1)).toBe("working-head");
+    expect(layout.querySelector("#working-head")!.hasAttribute("data-flash")).toBe(true);
+  } finally {
+    layout.remove();
   }
 });

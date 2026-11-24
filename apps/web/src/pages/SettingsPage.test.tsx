@@ -92,6 +92,24 @@ it("saves how Scarlet talks to the editor when they leave the field, in their ow
   expect(save).toHaveBeenCalledOnce();
 });
 
+it("keeps what the editor wrote about how Scarlet talks when the save fails, to be saved again", async () => {
+  const save = vi.spyOn(api, "updateSettings").mockRejectedValueOnce(new Error("The engine is offline."))
+    .mockImplementation(async patch => ({ settings: { ...settings, ...patch } }));
+  await open("/settings");
+  const field = el.querySelector<HTMLTextAreaElement>(".talking-to-you-field")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, "Keep notes short.");
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => { field.focus(); field.blur(); });
+  expect(el.querySelector(".talking-to-you")?.textContent).toContain("The engine is offline.");
+  expect(field.value).toBe("Keep notes short.");
+  await act(async () => { field.focus(); field.blur(); });
+  expect(save).toHaveBeenCalledTimes(2);
+  expect(field.value).toBe("Keep notes short.");
+  expect(el.querySelector(".talking-to-you")?.textContent).not.toContain("The engine is offline.");
+});
+
 it("leaves Settings on Esc when nothing is unsaved", async () => {
   await open("/settings#advanced");
   expect(saveButton().disabled).toBe(true);

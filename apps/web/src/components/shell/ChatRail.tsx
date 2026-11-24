@@ -18,6 +18,10 @@ type RailProps = {
   minWidth?: number;
   /** The widest the rail can be dragged, given the room available. */
   maxWidth?: (available: number) => number;
+  /** The id (or ids) of other rails in the same row: their widths come out of the room this one can be dragged into. */
+  beside?: string | readonly string[];
+  /** Extra horizontal room to keep free beyond the player's 360px minimum (for example another rail's min width). */
+  reserve?: number;
   /** Which side of the workspace the rail sits on: its divider is on the other edge, toward the player. */
   side?: "left" | "right";
   /** What the divider resizes, for its name and hover. */
@@ -25,15 +29,17 @@ type RailProps = {
 };
 
 export function ChatRail({ compact, children, id = "edit-chat", className = "workspace-rail requests-panel", label = "Edits",
-  storageKey = "scarlet.chatWidth", initialWidth = available => available * 0.4, minWidth = MIN_WIDTH, maxWidth, side = "left", resizes = "chat" }: RailProps) {
+  storageKey = "scarlet.chatWidth", initialWidth = available => available * 0.4, minWidth = MIN_WIDTH, maxWidth, beside, reserve = 0, side = "left", resizes = "chat" }: RailProps) {
   // Dragging toward the player widens the rail, whichever side it is on.
   const toward = side === "left" ? 1 : -1;
   const rail = useRef<HTMLElement>(null);
   const drag = useRef<{ pointer: number; x: number; width: number } | null>(null);
   const [available, setAvailable] = useState(window.innerWidth);
   const [preferred, setPreferred] = useState(() => {
-    const saved = Number(localStorage.getItem(storageKey));
-    return Number.isFinite(saved) && saved >= minWidth ? saved : undefined;
+    try {
+      const saved = Number(localStorage.getItem(storageKey));
+      return Number.isFinite(saved) && saved >= minWidth ? saved : undefined;
+    } catch { return undefined; }
   });
   useLayoutEffect(() => {
     const container = rail.current?.parentElement;
@@ -43,12 +49,32 @@ export function ChatRail({ compact, children, id = "edit-chat", className = "wor
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, []);
-  const max = Math.max(minWidth, Math.min(available - 360, maxWidth?.(available) ?? Infinity));
+  // Other rails' widths as they stand, so all rails together always leave the player its room.
+  const besideKey = typeof beside === "string" ? beside : beside ? beside.join(",") : "";
+  const [taken, setTaken] = useState(0);
+  useLayoutEffect(() => {
+    const ids = besideKey ? besideKey.split(",") : [];
+    const others = !compact ? ids.map(otherId => document.getElementById(otherId)).filter((el): el is HTMLElement => !!el) : [];
+    if (!others.length) return setTaken(0);
+    const read = () => setTaken(others.reduce((sum, el) => sum + (el.hidden ? 0 : el.getBoundingClientRect().width), 0));
+    read();
+    const resize = typeof ResizeObserver !== "undefined" ? new ResizeObserver(read) : undefined;
+    const attrs = typeof MutationObserver !== "undefined" ? new MutationObserver(read) : undefined;
+    for (const el of others) {
+      resize?.observe(el);
+      attrs?.observe(el, { attributes: true, attributeFilter: ["hidden"] });
+    }
+    return () => {
+      resize?.disconnect();
+      attrs?.disconnect();
+    };
+  }, [besideKey, compact]);
+  const max = Math.max(minWidth, Math.min(available - taken - 360 - reserve, maxWidth?.(available) ?? Infinity));
   const clamp = (value: number) => Math.round(Math.max(minWidth, Math.min(max, value)));
   const width = clamp(preferred ?? initialWidth(available));
   function save(value: number) {
     setPreferred(value);
-    localStorage.setItem(storageKey, String(value));
+    try { localStorage.setItem(storageKey, String(value)); } catch { /* ignore storage errors */ }
   }
 
   // Dragged near its narrowest, a rail says so, so its header can give the room it has to what matters most there.

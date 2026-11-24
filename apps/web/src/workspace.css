@@ -334,9 +334,9 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
 .timeline-working-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .timeline-working-text > span { color: #8a867f; }
 .timeline-working:hover .timeline-working-text > span, .timeline-working:focus-visible .timeline-working-text > span { color: #b9b5ac; }
-#simple-chat [data-flash] { border-radius: 8px; box-shadow: 0 0 0 6px rgba(244, 241, 233, .065), inset 0 0 0 999px rgba(244, 241, 233, .065); }
+:is(#simple-chat, .review-rail) [data-flash] { border-radius: 8px; box-shadow: 0 0 0 6px rgba(244, 241, 233, .065), inset 0 0 0 999px rgba(244, 241, 233, .065); }
 @media (prefers-reduced-motion: no-preference) {
-  #simple-chat [data-flash] { animation: chat-flash 1.2s ease-out forwards; }
+  :is(#simple-chat, .review-rail) [data-flash] { animation: chat-flash 1.2s ease-out forwards; }
 }
 @keyframes chat-flash { 0%, 45% { box-shadow: 0 0 0 6px rgba(244, 241, 233, .075), inset 0 0 0 999px rgba(244, 241, 233, .075); }
   100% { box-shadow: 0 0 0 6px transparent, inset 0 0 0 999px transparent; } }

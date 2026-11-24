@@ -7146,6 +7146,33 @@ it("says when the chat is dragged near its narrowest, so its header can give its
     expect([loneRail().style.width, loneRail().getAttribute("data-narrow")]).toEqual(["320px", ""]);
     await lone(true);
     expect([loneRail().style.width, loneRail().hasAttribute("data-narrow")]).toEqual(["", false]);
+    // Two columns either side of the player, both dragged as wide as they went: the second gives way to the first, and
+    // the first leaves the second its narrowest, so the player keeps its 360px between them.
+    await act(async () => root.render(null));
+    localStorage.setItem("scarlet.simpleChatWidth", "5000");
+    localStorage.setItem("scarlet.pairWidth", "5000");
+    const room = window.innerWidth;
+    const measured = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return { width: parseFloat(this.style.width) || 0 } as DOMRect;
+    });
+    try {
+      await act(async () => root.render(<>
+        <ChatRail compact={false} id="pair-chat" storageKey="scarlet.simpleChatWidth" minWidth={320} reserve={260}>Chat</ChatRail>
+        <ChatRail compact={false} id="pair-words" storageKey="scarlet.pairWidth" minWidth={260} maxWidth={available => available * 0.4} beside="pair-chat" side="right">Words</ChatRail>
+      </>));
+      const widths = ["#pair-chat", "#pair-words"].map(id => parseFloat(container.querySelector<HTMLElement>(id)!.style.width));
+      expect(widths).toEqual([room - 620, 260]);
+      expect(room - widths[0]! - widths[1]!).toBe(360);
+      // Beta three-column layout with Transcript open too: chat and Transcript both leave room for the edits column and the player.
+      await act(async () => root.render(null));
+      await act(async () => root.render(<>
+        <ChatRail compact={false} id="pair-chat" storageKey="scarlet.simpleChatWidth" minWidth={320} beside="pair-review" reserve={260}>Chat</ChatRail>
+        <aside id="pair-review" style={{ width: "260px" }}>Edits</aside>
+        <ChatRail compact={false} id="pair-words" storageKey="scarlet.pairWidth" minWidth={260} maxWidth={available => available * 0.4} beside={["pair-chat", "pair-review"]} side="right">Words</ChatRail>
+      </>));
+      const three = ["#pair-chat", "#pair-words"].map(id => parseFloat(container.querySelector<HTMLElement>(id)!.style.width));
+      expect(three[0]! + 260 + three[1]!).toBeLessThanOrEqual(Math.max(room - 360, 320 + 260 + 260));
+    } finally { measured.mockRestore(); localStorage.removeItem("scarlet.pairWidth"); }
   } finally { localStorage.removeItem("scarlet.simpleChatWidth"); }
 });
 
@@ -9034,6 +9061,15 @@ it("puts the tag taken off an empty box back on ⌘Z, until the box is aimed aga
   // Only once: a second ⌘Z has nothing to put back.
   await act(async () => { restored = composer.props!.onRestoreTarget!(); });
   expect(restored).toBe(false);
+  // Words written before the tag came off keep their own ⌘Z too, also once the editor has deleted them: it brings the
+  // words back, and never puts the tag back in their place.
+  await act(async () => useUiStore.getState().setAgentDraft("Tighter"));
+  await act(async () => composer.props!.onClearTarget!());
+  expect(boxTag()).toBeUndefined();
+  await act(async () => useUiStore.getState().setAgentDraft(""));
+  await act(async () => { restored = composer.props!.onRestoreTarget!(); });
+  expect(restored).toBe(false);
+  expect(boxTag()).toBeUndefined();
   // Words typed since the tag came off are the message: ⌘Z is theirs.
   await act(async () => composer.props!.onClearTarget!());
   await act(async () => useUiStore.getState().setAgentDraft("Bigger"));

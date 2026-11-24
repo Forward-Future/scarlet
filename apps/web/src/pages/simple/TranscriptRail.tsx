@@ -2,26 +2,31 @@ import { lazy, Suspense } from "react";
 import { ChatRail } from "../../components/shell/ChatRail";
 import { Icon, Loading } from "../../components/ui/primitives";
 
-/** The Transcript's column beside the player: wide enough for a few lines of words, never more of the window than the chat. */
+/**
+ * The Transcript's column beside the player: wide enough for a few lines of words, never more of the window than the
+ * chat. It gives way to the chat: it can be dragged only into the room the chat and the player leave.
+ */
 const transcriptRailWidth = (available: number) => Math.max(300, Math.min(400, available * 0.26));
-const TRANSCRIPT_RAIL_MIN = 260;
+export const TRANSCRIPT_RAIL_MIN = 260;
 
 const TranscriptPane = lazy(async () => ({ default: (await import("../../components/transcript/TranscriptPane")).TranscriptPane }));
 
 type TranscriptPaneProps = Parameters<typeof TranscriptPane>[0];
 
 /** The Transcript is its own column on the right of the player, so the chat stays in view beside it. */
-export function TranscriptRail({ compact, paneKey, draft, source, onAsk, onClose }: {
+export function TranscriptRail({ compact, paneKey, draft, source, beside = "simple-chat", onAsk, onClose }: {
   compact: boolean;
   /** The version the words are read from: a new one opens a new pane. */
   paneKey: string | null | undefined;
   draft: TranscriptPaneProps["draft"];
   source: TranscriptPaneProps["source"];
+  /** Other rails sharing the row whose widths count against the room this one can be dragged into. */
+  beside?: string | readonly string[];
   onAsk: TranscriptPaneProps["onAsk"];
   onClose: () => void;
 }) {
   return <ChatRail compact={compact} id="simple-transcript" className="simple-transcript-rail" label="Transcript" side="right" resizes="transcript"
-    storageKey="scarlet.simpleTranscriptWidth" initialWidth={transcriptRailWidth} minWidth={TRANSCRIPT_RAIL_MIN} maxWidth={available => available * 0.4}>
+    storageKey="scarlet.simpleTranscriptWidth" initialWidth={transcriptRailWidth} minWidth={TRANSCRIPT_RAIL_MIN} maxWidth={available => available * 0.4} beside={beside}>
     {/* Headed as the chat is: its name, and the × that closes it. */}
     <header className="simple-header"><h1 title={source?.name}>Transcript{source && <span className="simple-header-sub"> · {source.name}</span>}</h1>
       <button type="button" className="btn-icon" aria-label="Close transcript" title="Close transcript (Esc)"

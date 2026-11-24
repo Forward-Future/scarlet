@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { createStore, useStore } from "zustand";
 import type { TimeRange } from "@scarlet/timeline";
 import { useUiStore } from "../../stores/ui";
-import { ignorePageShortcut, useHotkeys } from "../../lib/hotkeys";
+import { blurOnPointerClick, ignorePageShortcut, useHotkeys } from "../../lib/hotkeys";
 import { playbackLog } from "../../lib/playbackLog";
 import type { ScrubRelease } from "../../lib/player";
 import type { WaveformMedia } from "./TimelineWaveform";
@@ -397,16 +397,18 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
     {foot}
     <div className="timeline-zoom-row" role="group" aria-label="Timeline zoom" title="Scroll or pinch over the timeline to zoom">
       <button type="button" className="timeline-zoom-step" aria-label="Zoom out" aria-keyshortcuts="-" title="Zoom out (−)"
-        disabled={shownSpan >= total} onClick={() => zoomBy(.5)}>−</button>
+        disabled={shownSpan >= total} onClick={e => { blurOnPointerClick(e); zoomBy(.5); }}>−</button>
       <input type="range" className="timeline-zoom-slider" aria-label="Zoom" aria-keyshortcuts="0" title="Zoom (0 to fit)"
         min={0} max={ZOOM_STEPS} step={1} value={zoomValue} disabled={!zoomRange} aria-valuetext={`${zoomPercent}%`}
         style={{ "--zoom-at": `${zoomValue / ZOOM_STEPS * 100}%` } as CSSProperties}
         onChange={e => {
           const next = total / Math.exp(Number(e.currentTarget.value) / ZOOM_STEPS * zoomRange);
           if (next > 0 && span > 0) zoomBy(span / next, undefined, true);
-        }} />
+        }}
+        // Let go of after a drag, the slider gives Space and ← → back to the player. Reached by Tab, it keeps them.
+        onPointerUp={e => e.currentTarget.blur()} />
       <button type="button" className="timeline-zoom-step" aria-label="Zoom in" aria-keyshortcuts="plus =" title="Zoom in (+)"
-        disabled={shownSpan <= minSpan} onClick={() => zoomBy(2)}>+</button>
+        disabled={shownSpan <= minSpan} onClick={e => { blurOnPointerClick(e); zoomBy(2); }}>+</button>
       <output className="timeline-zoom-level" aria-label={`${zoomPercent}% zoom`}>{zoomPercent}%</output>
     </div>
   </div>;

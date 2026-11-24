@@ -6,6 +6,17 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- After you click the timeline's zoom slider, its − or +, "Scarlet is editing", or Check or Show source on a card, Space plays and pauses and ← → skip again, instead of going to the control you clicked.
+- Pressing "Scarlet is editing" under the timeline now shows and lights the request also when it is folded to its heading, or sitting in the beta edits column.
+- With the Transcript (or the beta edits column) open, the chat and Transcript can no longer be dragged so wide that the player has no room between them.
+- Words you write in Settings › Talking to you stay in the field when they couldn't be saved, so you can save them again.
+- In Settings › Task models, adding or deleting a task right after renaming one no longer makes a row blink away.
+- Taking the tag off the message box, deleting what you wrote and pressing ⌘Z now brings your words back, instead of the tag.
+- On a marked frame, Undo now puts a mark you moved back where it was. Esc closes an open menu first and leaves your marks.
+- A link Scarlet writes to an address with brackets in it, such as a Wikipedia page, now opens the right page, and an address Scarlet doesn't open says itself whole on hover.
+- When FFmpeg is missing, its notice no longer fills the middle of the first screen, and an install you started still says Installing in Settings.
+- Settings › Listening names a model that is signed out by its name, instead of "default".
+- The Audio label beside a file's track picker in Media now matches the text around it.
 - Settings › General now has a "New workspace layout (Beta)" switch (off by default) to try the three-column edits panel, Low Risk Edits with Mark all done, chat bubbles, question panel over the message box, and one-row revisions, and switch back any time.
 - Low risk edits in For you are now a small switch, and turning it on or off no longer moves the chat: their rows open in place among the ones that wait and Scarlet's reply stays put. Their rows open and close with a smooth, staggered animation. Every row in For you now leads with its time, so the list no longer swaps numbers for times, and ↑ ↓ step down it in that order.
 - Settings › Models has Task models: choose which model does each kind of work, such as Cutting or Motion graphics, or add your own. The chat's model hands that work to the model you chose, and each edit made that way says which model made it on its card.

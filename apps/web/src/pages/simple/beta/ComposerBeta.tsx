@@ -505,7 +505,9 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     displayName: <><span className="composer-aim-verb">Range</span> <AimTimecode key={`range:${shownRange.start}/${shownRange.end}`} value={rangeWords} precise={rangePrecise} /></>,
     clearLabel: marked ? `Take the marked range ${rangeWords} off the message` : `Take the range ${rangeWords} off the message`,
     onClear: () => {
-      rangeTakenOff.current = takeOffRange();
+      const taken = takeOffRange();
+      // Taken off a box with words in it, the range isn't ⌘Z's to put back: the words keep their own ⌘Z.
+      rangeTakenOff.current = draft.trim() ? undefined : taken;
       inputRef.current?.focus();
     },
   } : placeTag ? {
