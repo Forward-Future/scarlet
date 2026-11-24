@@ -14855,3 +14855,80 @@ it("dashes every undecided For you cut and edit on the timeline, and draws decid
   await act(async () => {});
   expect(dashed()).toBe(false);
 });
+
+/** The rows of the column of edits beside the chat that wait on the editor, top to bottom, as the editor reads them. */
+const forYouRows = () => [...container.querySelectorAll<HTMLButtonElement>(".review-rail-list .simple-edit, .review-rail-list .simple-pass-list > li > button")];
+const rowWords = (row: Element) => row.querySelector(".simple-edit-title, .simple-pass-label")?.textContent;
+
+it("lists what waits on the editor for the whole video in one column beside the chat, and none of it in the chat", async () => {
+  appliedEdits();
+  flagged();
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  await act(async () => {});
+  const rail = container.querySelector<HTMLElement>(".review-rail")!;
+  // The column is the chat's left neighbour: the latest request's rows first, then the earlier request's.
+  expect([rail.nextElementSibling?.id, rail.hidden]).toEqual(["simple-chat", false]);
+  expect(forYouRows().map(rowWords)).toEqual(["Breath before the price.", "The corrected image-input take belongs here.", "wrap"]);
+  // Its heading counts all of them, and New edit is lit while nothing is open.
+  expect([rail.querySelector(".review-rail-head h2")?.textContent, rail.querySelector(".review-new")?.getAttribute("aria-pressed")]).toEqual(["For you3", "true"]);
+  // Working and Done are one line each at its foot: Working is open, Done opens on a press.
+  expect([...rail.querySelectorAll(".review-sec")].map(line => [line.textContent?.replace(/\d+$/, ""), line.getAttribute("aria-expanded")])).toEqual([["Working", "true"], ["Done", "false"]]);
+  // The chat has no list of edits and no tabs: a request with something waiting says so in one link.
+  expect(container.querySelector(".simple-chat :is(.simple-edits, .simple-pass-list, .simple-review-tabs), .simple-pin :is(.simple-edits, .simple-pass-list, .simple-review-tabs)")).toBeNull();
+  expect([...container.querySelectorAll(".simple-thread .simple-need-link")].map(link => link.textContent).sort()).toEqual(["For you1", "For you2"]);
+});
+
+it("gives the middle column to the cut or edit that's open, and back to the conversation on New edit", async () => {
+  appliedEdits();
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  await act(async () => {});
+  const thread = () => container.querySelector<HTMLElement>(".simple-thread")!;
+  expect([thread().classList.contains("has-page"), container.querySelector(".edit-page")]).toEqual([false, null]);
+  await click(forYouRows()[0]!);
+  await act(async () => {});
+  // The page says what the edit is, the request it came from, and where its one version stands.
+  const page = container.querySelector<HTMLElement>(".edit-page")!;
+  expect([thread().classList.contains("has-page"), page.querySelector(".edit-page-title")?.textContent, page.querySelector(".edit-page-from")?.textContent?.startsWith("From “")])
+    .toEqual([true, editPanel()!.querySelector(".edit-card-title")?.textContent, true]);
+  expect([...page.querySelectorAll(".edit-page-versions > li")].map(li => [li.querySelector(".edit-page-v")?.textContent, li.querySelector(".edit-page-said")?.textContent, li.querySelector(".edit-page-state")?.textContent, li.className]))
+    .toEqual([["v1", "Made by Scarlet", "Waits on you", "is-now"]]);
+  // The conversation stays mounted under it, so nothing in it is lost.
+  expect(thread().querySelector(".simple-chat")).not.toBeNull();
+  expect(container.querySelector(".review-new")?.getAttribute("aria-pressed")).toBe("false");
+  // New edit lets go of the edit: its card closes and the conversation has the column again.
+  await click(container.querySelector(".review-new")!);
+  await act(async () => {});
+  expect([editPanel(), container.querySelector(".edit-page"), thread().classList.contains("has-page"), container.querySelector(".review-new")?.getAttribute("aria-pressed")]).toEqual([null, null, false, "true"]);
+});
+
+it("goes on with Keep from one request's last row that waits to the next request's first", async () => {
+  appliedEdits();
+  flagged();
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  await act(async () => {});
+  // "wrap" is the earlier request's only row that waits, and the last row of the column.
+  await click(forYouRows().at(-1)!);
+  await act(async () => {});
+  expect(openTitle()).toBe("wrap");
+  // Kept, the list goes round to the first row that waits: the first call of the other request.
+  await press("k");
+  await act(async () => {});
+  expect(call()?.querySelector(".edit-card-count")?.textContent).toBe("Cut 1");
+  expect(container.querySelector(".review-rail-head h2")?.textContent).toBe("For you2");
+});
+
+it("lists a request waiting its turn under Working, in the column of edits, with no tray on the message box", async () => {
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  data = { ...data, tasks: [...data.tasks, { ...base, id: "task_waiting", kind: "edit" as const, state: "queued" as const, startedAt: undefined, finishedAt: undefined, hostId: null, summary: null, changeIds: [],
+    instruction: "Add a lower third with my name.", createdAt: new Date(Date.now() + 1000).toISOString(), context: { threadId: "task_waiting", message: "Add a lower third with my name." } }] };
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  await act(async () => {});
+  const working = container.querySelector<HTMLElement>('.review-sec-body[aria-label="Working"]')!;
+  expect(working.querySelector(".queue-tray .queue-text")?.textContent).toBe("Add a lower third with my name.");
+  expect(composer.props?.tray).toBeUndefined();
+  expect(container.querySelector(".composer-dock .queue-tray, .simple-thread .queue-tray")).toBeNull();
+});
