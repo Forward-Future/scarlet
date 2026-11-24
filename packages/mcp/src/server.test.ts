@@ -1864,6 +1864,11 @@ describe("task events", () => {
       ["log", textOf(long)],
       ["question", "Keep the intro?"],
     ]);
+    // A question with a few clear answers hands them over too, for the editor to pick with one press.
+    await client.callTool({ name: "task_question", arguments: { text: "Keep the cold open?", choices: ["Keep it", "Cut it"] } });
+    expect(mock.state.events.at(-1)).toMatchObject({ type: "question", text: "Keep the cold open?", data: { choices: ["Keep it", "Cut it"] } });
+    const one = await client.callTool({ name: "task_question", arguments: { text: "Keep it?", choices: ["Yes"] } }) as CallToolResult;
+    expect(one.isError).toBe(true);
   });
   it("reads a save that asks for revision as a refusal, and a save as none", async () => {
     expect(toolRefusal({ content: [{ type: "text", text: JSON.stringify({ needsRevision: true, disputedEdges: [{ start: 1, end: 2 }], next: "Nothing was saved. Check the edge." }) }] }))

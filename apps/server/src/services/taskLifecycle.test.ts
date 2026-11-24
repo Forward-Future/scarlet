@@ -263,6 +263,27 @@ it("ends the looks a request asked for with it: stopped, paused or finished, and
   expect([get(early.id).state, get(later.id).state]).toEqual(["claimed", "cancelled"]);
 });
 
+it("keeps the answers a question offers until it is answered, from whichever process hands it over first", async () => {
+  const task = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Tighten the intro", createdBy: editor });
+  const asking = (await claim(task.id))!;
+  const choices = ["Keep the cold open", "Cut it"];
+  // The MCP process hands it over with the answers to pick; the host's copy after it changes nothing.
+  await api("POST", `/tasks/${task.id}/question`, { startedAt: asking.startedAt, text: "Keep the cold open?", choices });
+  await api("POST", `/tasks/${task.id}/question`, { startedAt: asking.startedAt, text: "Keep the cold open?", sessionId: "s1" });
+  expect(get(task.id)).toMatchObject({ state: "waiting_for_user", question: "Keep the cold open?", questionChoices: choices });
+  // Answered, the question goes with its answers.
+  await api("POST", `/tasks/${task.id}/answer`, { text: "Cut it" });
+  expect([get(task.id).question, get(task.id).questionChoices]).toEqual([null, undefined]);
+  // The host hands the next one over first, without them: the MCP process's copy adds them.
+  const again = (await claim(task.id))!;
+  await api("POST", `/tasks/${task.id}/question`, { startedAt: again.startedAt, text: "Which take?", sessionId: "s1" });
+  expect(get(task.id).questionChoices).toBeUndefined();
+  await api("POST", `/tasks/${task.id}/question`, { startedAt: again.startedAt, text: "Which take?", choices: ["The first", "The second"] });
+  expect(get(task.id).questionChoices).toEqual(["The first", "The second"]);
+  // One answer alone, or more than four, isn't a choice: the question is refused as it came.
+  expect((await api("POST", `/tasks/${task.id}/question`, { startedAt: again.startedAt, text: "Which take?", choices: ["The first"] })).status).toBe(400);
+});
+
 it("tells a resumed attempt where its run stands when it starts, not when it was put back in line", async () => {
   const task = await request("Mark the chapters");
   const ts = new Date().toISOString();

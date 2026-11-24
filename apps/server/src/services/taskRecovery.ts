@@ -1,5 +1,5 @@
 import os from "node:os";
-import { beginRevision, planText, taskNeedsTranscripts, taskPlan, taskRecoveryAction, type RunChoice, type Task } from "@scarlet/shared";
+import { beginRevision, planText, questionChoicesOf, taskNeedsTranscripts, taskPlan, taskRecoveryAction, type RunChoice, type Task } from "@scarlet/shared";
 import { processIsAlive, type Ctx } from "../context.js";
 import { now } from "../db.js";
 import { badRequest, conflict, notFound } from "../errors.js";
@@ -166,15 +166,16 @@ function settleTask(ctx: Ctx, task: Task, unstarted: boolean, lastSeen?: string 
   }
 
   const changeIds = savedChanges(ctx, [task]).map(c => c.id);
-  const lastEvent = ctx.db.prepare(`SELECT json_extract(json, '$.type') AS type, json_extract(json, '$.text') AS text, at
+  const lastEvent = ctx.db.prepare(`SELECT json_extract(json, '$.type') AS type, json_extract(json, '$.text') AS text, at,
+    json_extract(json, '$.data.choices') AS choices
     FROM task_events WHERE task_id = ? ORDER BY at DESC, rowid DESC LIMIT 1`)
-    .get(task.id) as { type: string; text: string; at: string } | undefined;
+    .get(task.id) as { type: string; text: string; at: string; choices: string | null } | undefined;
   // An interrupt reported by a live worker stops now. A lost worker is measured through its latest activity.
   const observed = [task.startedAt, lastSeen, lastEvent?.at].filter((at): at is string => !!at && at <= finishedAt).sort().at(-1);
   const { workedMs } = recordWorkThrough(task, lastSeen === undefined ? finishedAt : observed ?? finishedAt);
   if (task.resultSkillId) return finish({ state: "done", changeIds, workedMs, summary: "The skill was saved before the interruption." });
   if (lastEvent?.type === "question") return saveTask(ctx, { ...recordWorkThrough(task, lastEvent.at),
-    changeIds, state: "waiting_for_user", question: lastEvent.text, hostId: null });
+    changeIds, state: "waiting_for_user", question: lastEvent.text, questionChoices: lastEvent.choices ? questionChoicesOf({ choices: JSON.parse(lastEvent.choices) }) : undefined, hostId: null });
   // Preserve the answer and task workspace of requests stranded by the old host protocol.
   const pendingAnswer = task.state === "running" && lastEvent?.type === "answer" && lastEvent.at >= (task.startedAt ?? "");
   if ((unstarted && !changeIds.length) || pendingAnswer) {

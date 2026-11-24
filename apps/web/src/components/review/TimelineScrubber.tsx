@@ -65,6 +65,8 @@ interface TimelineScrubberProps {
    * still moves the playhead; without it the ruler scrubs like the rest of the timeline.
    */
   onRange?(range: TimeRange | undefined, byKey?: boolean): void;
+  /** Shift + click anywhere on the timeline: that moment's time goes into the message being written. */
+  onAddTime?(time: number): void;
   /** The video's frame rate: a marked range's ends sit on frames. */
   fps?: number;
 }
@@ -108,7 +110,7 @@ export function TimelineScrubber(props: TimelineScrubberProps) {
 }
 
 function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, subject, kept, foot,
-  pictureAspect = 16 / 9, frameAt, previewStrip, hoverVideo, onSeek, onSelectTime, onScrubStart, highlight, marks, typedTimes, gaps, skippedRanges, onGap, onBand, fit, range, onRange, fps = 30 }:
+  pictureAspect = 16 / 9, frameAt, previewStrip, hoverVideo, onSeek, onSelectTime, onScrubStart, highlight, marks, typedTimes, gaps, skippedRanges, onGap, onBand, fit, range, onRange, onAddTime, fps = 30 }:
   TimelineScrubberProps & { subject: string; kept: RefObject<KeptView | undefined> }) {
   const litMark = useStore(useContext(EditHoverContext));
   // The message box's icon is open: the passage the message is about lights up.
@@ -247,6 +249,18 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
   const hotDots = hotMark === undefined ? undefined : markLayout.find(mark => mark.key === hotMark)?.dots;
   const waiting = hotDots?.find(dot => dot.state === "check" && dot.need);
   const markNote = waiting && <span className="simple-timeline-need">{waiting.need} needs you</span>;
+  // With Shift held, a click adds the time under the pointer to the message being written, and the hover says so.
+  const [shiftHeld, setShiftHeld] = useState(false);
+  useEffect(() => {
+    if (!onAddTime) return;
+    const key = (e: KeyboardEvent) => setShiftHeld(e.shiftKey);
+    const off = () => setShiftHeld(false);
+    window.addEventListener("keydown", key);
+    window.addEventListener("keyup", key);
+    window.addEventListener("blur", off);
+    return () => { window.removeEventListener("keydown", key); window.removeEventListener("keyup", key); window.removeEventListener("blur", off); };
+  }, [!!onAddTime]); // eslint-disable-line react-hooks/exhaustive-deps
+  const addNote = shiftHeld && onAddTime && <span className="simple-timeline-add">Click to add this time · drag for a stretch</span>;
   // Skipped footage can be heard: a press hands it to the caller. On Before, clicking a dotted cut opens its edit.
   const [hotGap, setHotGap] = useState<string>();
   const pressedGap = useRef<TimelineGap | undefined>(undefined);
@@ -374,7 +388,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
   // The close-up's strip loads a run of frames per request from the same cache as the filmstrip.
   const sheet = useMemo(() => previewStrip ? { fps: previewStrip.fps, url: (frames: number[]) => stripUrl(previewStrip, frames) } : undefined, [previewStrip]);
   const marking = useRangeSelect({ slider, drag, from, span, start, end, fps, edges, frameAt, sheet, pictureAspect, range, onRange: onRange ?? noRange, onSeek,
-    onScrubStart, onPress: selectPosition, beforeGesture: stopZoom });
+    onScrubStart, onPress: selectPosition, onShiftPress: onAddTime, beforeGesture: stopZoom });
   // The slider runs from the whole video, at its left, to the closest zoom, on a log scale so each step looks the same.
   const zoomRange = total > 0 && minSpan < total ? Math.log(total / minSpan) : 0;
   const zoomValue = zoomRange && shownSpan > 0 ? Math.round(Math.max(0, Math.min(1, Math.log(total / shownSpan) / zoomRange)) * ZOOM_STEPS) : 0;
@@ -398,7 +412,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
   </div>;
 
   return <div className="timeline-panel" onKeyDown={e => handleZoomKey(e.nativeEvent)}>
-    <div ref={track} className={marking.marking ? "timeline-track is-marking" : "timeline-track"}><ScrubPreview suspended={!!lens} start={from} duration={span} pictureAspect={pictureAspect} frameAt={frameAt} hoverVideo={hoverVideo} note={markNote || undefined} pin={waiting?.time}>
+    <div ref={track} className={marking.marking ? "timeline-track is-marking" : "timeline-track"}><ScrubPreview suspended={!!lens} start={from} duration={span} pictureAspect={pictureAspect} frameAt={frameAt} hoverVideo={hoverVideo} note={markNote || addNote || undefined} pin={waiting?.time}>
     <TimelineSlider ref={slider} className={hotGap ? "timeline-slider is-gap-aimed" : "timeline-slider"} playhead={playhead} start={start} end={end} from={from} span={span}
       width={width} zoomSpace={zoomSpace} drag={drag} skippedRanges={skippedRanges} loupe={!!lens} fps={fps} selectPosition={selectPosition} tabIndex={total ? 0 : -1} aria-disabled={!total}
       aria-label="Position in the video" aria-description="Drag up from the picture or waveform to scrub one frame at a time."
@@ -410,7 +424,8 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
         const box = e.currentTarget.getBoundingClientRect();
         const ruler = e.currentTarget.querySelector<HTMLElement>(".timeline-lanes")?.offsetTop ?? 0;
         const onRuler = !!(e.target as Element).closest(".timeline-range-zone") || (ruler > 0 && box.height > 0 && e.clientY - box.top < ruler);
-        if (onRange && onRuler && marking.begin(e)) return;
+        // Shift held, a drag anywhere on the timeline marks a stretch as a drag along the ruler does, and a click adds its time.
+        if (onRange && (onRuler || e.shiftKey) && marking.begin(e)) return;
         const hitGap = !onRuler && interactiveGaps.length
           ? (box.width > 0 ? gapAt(interactiveGaps, from, span, box.width, e.clientX - box.left) : undefined) ?? directGap : undefined;
         if (hitGap?.skipped && onGap) {
@@ -464,7 +479,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
       onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish}>
       <TimelineRuler start={from} duration={span} width={width} endInset={zoomSpace} />
       {onRange && total > 0 && <div aria-hidden="true" className="timeline-range-zone"
-        title={range ? "Drag to mark a new range · double-click to clear" : "Drag to mark a range for your message"}
+        title={range ? "Drag to mark a new range · double-click to clear" : "Drag to mark a range for your message (or Shift + drag anywhere)"}
         onDoubleClick={e => {
           if (!range) return;
           e.stopPropagation();

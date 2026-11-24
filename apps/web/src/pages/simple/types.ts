@@ -139,7 +139,7 @@ export interface ChatActions {
   /** Light the timeline's marker at this time, or none: the pointer is over that edit's row in the chat. */
   lightMark(time?: number, target?: HoveredReviewRow): void;
   reply(thread: Thread): void;
-  /** The question the message box is answering now, by its task: its Answer link in the chat would only say so again. */
+  /** The question the message box is answering now, by its task: the question is over the box, so Answer on its band would only say so again. */
   answering?: string;
   revise(thread: Thread, change: Change): void;
   /**
@@ -157,8 +157,8 @@ export interface ChatActions {
 /**
  * Which of a request's lists is open. A request with nothing for the editor to review has one list, every edit
  * ("all"). One with review rows has three tabs: For you ("need", or none: it is the one shown until another is
- * pressed), Working and Done. There "all" is For you with low risk edits included, the edits Scarlet didn't flag listed
- * among the ones that wait, each in its place in the video: the timeline shows them as it does for a list of every edit.
+ * pressed), Working and Done. There "all" is For you with its optional line open, the edits Scarlet didn't flag listed
+ * under the ones that wait: the timeline shows them as it does for a list of every edit.
  */
 export type OpenList = "all" | "need" | "working" | "done" | undefined;
 export type PassList = [open: OpenList, setOpen: Dispatch<SetStateAction<OpenList>>];

@@ -6,9 +6,13 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
-- Low risk edits in For you are now a small switch, and turning it on or off no longer moves the chat: their rows open in place among the ones that wait and Scarlet's reply stays put. Their rows open and close with a smooth, staggered animation. Every row in For you now leads with its time, so the list no longer swaps numbers for times, and ↑ ↓ step down it in that order.
+- An edit being revised is now one row everywhere — while it leaves For you or Low Risk Edits and while it runs in Working: the ring round its number turns while Scarlet works on it, and Stop shows when you point at it.
+- A double tick on the Low Risk Edits heading marks them all done at once; ⌘Z takes it back.
+- The edits Scarlet didn't flag are now listed right away under For you, in one quieter list headed "Low Risk Edits (5)", instead of behind an "optional" line you had to open. ↑ ↓ and Keep go on from what needs you into them.
+- When Scarlet asks you something, the question now sits on top of the message box instead of in the chat, and when it has a few clear answers you can pick one with a single click or type your own.
+- Your messages are grey bubbles on the right of the chat, and Scarlet's replies are plain text on the left.
+- Requests waiting their turn show in the chat as bubbles above the message box, marked Up next or Queued.
 - Settings › Models has Task models: choose which model does each kind of work, such as Cutting or Motion graphics, or add your own. The chat's model hands that work to the model you chose, and each edit made that way says which model made it on its card.
-- A request's list of edits now has more room under its For you, Working and Done tabs, so the first row no longer sits right against them.
 - When Claude Code, Codex or Gemini is installed in a way Scarlet can't start, Scarlet now uses another copy it can start, or shows it as not installed, instead of failing every request at once. A request that can't start now says why.
 - A transcript fix on words that run from one speaker's line into the next keeps each word with the speaker who said it.
 - A transcript fix that adds a word, such as Claude to Claude Code, no longer doubles the word where the transcript already said it right (“Claude Code Code”), and making the fix again changes nothing.
@@ -41,6 +45,10 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- The edits now have a column of their own between the chat and the video: what waits on you fills it for the whole video, Working at its foot lists the edits Scarlet is revising, and Done is one line that opens. The chat is just the conversation.
+- The message box now names the edit it talks to as its row does, with the same number as on the timeline, in place of "Edit 5:10".
+- Shift + click on the timeline, or N, puts that time into your message where the cursor is, and Shift + drag puts a stretch. A plain click or a pause only moves the video and no longer aims the message box.
+- Keep and ↑ ↓ now carry on from one request's last edit that waits to the next request's.
 - A request's list no longer shows Scarlet's small finishing touches as edits of their own: a two-frame fade on a join or a voice moved to the dialogue track goes with the edit it finishes, and anything Scarlet wants you to check about it shows on that edit.
 - Two cuts at the same spot in the video are now one cut, which plays and shows all the footage that came out there.
 - A to-do Scarlet leaves inside a zoom or a crop now says To do, with Add, instead of Zoom.

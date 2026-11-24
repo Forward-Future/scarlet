@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { checkAttachments } from "../services/graphics.js";
 import { z } from "zod/v3";
-import { CompleteTaskRequest, CreateTaskRequest, EDITING_TOOL_GROUPS, PictureMarks, queueWaits, RecordTaskUsageRequest, RepeatAuditRequest, RewordTaskRequest, RunChoice, TaskAttachment, TaskEvent, TaskState, UsageGroupBy, type Task } from "@scarlet/shared";
+import { CompleteTaskRequest, CreateTaskRequest, QuestionChoices, questionChoicesOf, EDITING_TOOL_GROUPS, PictureMarks, queueWaits, RecordTaskUsageRequest, RepeatAuditRequest, RewordTaskRequest, RunChoice, TaskAttachment, TaskEvent, TaskState, UsageGroupBy, type Task } from "@scarlet/shared";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest, conflict } from "../errors.js";
@@ -237,13 +237,15 @@ export function taskRoutes(ctx: Ctx) {
 
   // Called by agent hosts
   r.on("POST", ["/tasks/:taskId/question", "/projects/:projectId/tasks/:taskId/question"], async (c) => {
-    const { startedAt, text, sessionId } = await jsonBody(c, z.object({ startedAt: z.string().datetime().optional(), text: z.string().min(1),
-      sessionId: z.string().min(1).max(200).nullable().optional() }));
+    const { startedAt, text, sessionId, choices } = await jsonBody(c, z.object({ startedAt: z.string().datetime().optional(), text: z.string().min(1),
+      sessionId: z.string().min(1).max(200).nullable().optional(), choices: QuestionChoices.optional() }));
     const waiting = ctx.db.transaction(() => {
       let task = requireTask(c.req.param("taskId"), c.req.param("projectId"));
       // A lost response may be retried by the MCP process or its host, even after an answer and a new claim.
       if (task.startedAt !== startedAt) return false;
-      if (task.state === "claimed" || task.state === "running") task = appendTaskEvent(ctx, task, { type: "question", text }).task;
+      if (task.state === "claimed" || task.state === "running") task = appendTaskEvent(ctx, task, { type: "question", text, ...(choices && { data: { choices } }) }).task;
+      // The host may hand the question over before the MCP process does, without the answers it offers: they join it.
+      else if (choices && task.state === "waiting_for_user" && task.question === text && !task.questionChoices) task = saveTask(ctx, { ...task, questionChoices: questionChoicesOf({ choices }) });
       const waiting = task.state === "waiting_for_user";
       // Only the host knows the CLI session that asked; the MCP server's copy leaves it alone.
       // An answer may already have re-queued this claim, and may have switched models: that attempt's session is not kept.

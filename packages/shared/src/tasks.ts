@@ -247,6 +247,8 @@ export const Task = z.object({
   sessionRevokedFor: z.string().datetime().optional(),
   /** Pending question from the agent, if waiting_for_user. */
   question: z.string().nullable().default(null),
+  /** The short answers Scarlet offered with that question, when it has a few clear ones: one press sends one. */
+  questionChoices: z.array(z.string()).optional(),
   /** Where the editor can hear the updated passage while answering a question about a staged cut. */
   cutConflict: z.object({ version: Id, range: TimeRange.optional(), changeId: Id.optional(), index: z.number().int().nonnegative().optional(),
     answered: z.literal(true).optional(), retried: z.literal(true).optional(),
@@ -417,6 +419,15 @@ export const DialogueScanPage = z.object({
   to: z.number().finite().optional(),
 }).refine(p => p.from < p.end && (p.to === undefined || (p.to > p.from && p.to <= p.end)));
 export type DialogueScanPage = z.infer<typeof DialogueScanPage>;
+
+/** The answers a question can offer the editor to pick with one press: two to four, each a few words. */
+export const QuestionChoices = z.array(z.string().trim().min(1).max(80)).min(2).max(4);
+
+/** The answers a `question` event offered, when it offered a well-formed set. */
+export function questionChoicesOf(data: Record<string, unknown> | undefined): string[] | undefined {
+  const parsed = QuestionChoices.safeParse(data?.choices);
+  return parsed.success ? parsed.data : undefined;
+}
 
 export const TaskEvent = z.object({
   id: Id.optional(),
