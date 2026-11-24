@@ -23,6 +23,7 @@ import { useProjectStore } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
 import { useUiStore } from "../../stores/ui";
 import { PassSummary, ThreadResult } from "./PassSummary";
+import { useReviewRail } from "./railStore";
 import { callRowKey, isWorking, letGo, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
 
 /** What the chat says of how a run ended that a request's block doesn't read out: its heading says it stopped or couldn't finish. */
@@ -105,6 +106,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   reportEvery?: boolean;
   /** Which of this request's lists is open. */
   list: PassList }) {
+  const rail = useReviewRail();
   const notes = useProjectStore(s => s.current?.notes ?? []);
   // Only this thread's runs: every streamed event replaces the project's map, and this thread rebuilds only for its own.
   const events = useProjectStore(useShallow(s => Object.fromEntries(thread.tasks.flatMap(t => {
@@ -388,7 +390,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const closed = entries.some(e => e.kind === "agent" && !e.onNote && ids.has((e.taskId ?? e.replyTo)!));
     // While every edit is listed, the list takes the place of Scarlet's reply; putting it away brings the reply back. The
     // short list of what needs the editor, shown without a click, leaves the reply where it is.
-    const listing = run === owner && hasRows && passList[0] === "all";
+    // In the column of edits the list is never in the chat, so the reply stays where it is.
+    const listing = !rail && run === owner && hasRows && passList[0] === "all";
     // Scarlet's recheck of a cut the editor approved, under that cut's row: its reason is its heading, not a line under its work.
     const autoHeading = inside && isRecheck(task);
     mine.forEach((e, i) => {

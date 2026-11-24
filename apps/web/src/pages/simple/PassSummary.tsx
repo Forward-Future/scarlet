@@ -24,13 +24,15 @@ import { callRowKey, isWorking, letGo, listedBefore, noNests, noRejected, noSpen
  * Working and Done sit when there is something to review (`place` "tab"), and the tab pressed again closes it. Each
  * place draws only its own. The word counts the rows the list opens (`rows`), a rejected edit's too: See both is for two.
  */
-function EditResultLink({ thread, actions, single, rows, count, soFar, list: [open, setOpen], reveal, place }: {
+function EditResultLink({ thread, actions, single, rows, count, soFar, list: [open, setOpen], reveal, place, column }: {
   thread: Thread; actions: ChatActions; single?: EditRef; rows: number; count: number; soFar?: boolean; list: PassList; reveal(): void; place: "inline" | "tab";
+  /** The rows are in the column of edits, not under this link: a request's one edit keeps its link whatever is open there. */
+  column?: boolean;
 }) {
   const expanded = open === "all";
   const current = !!single && !!actions.showing && matchesEdit(actions.showing, single);
-  const one = !!single && (!expanded || current);
-  const tab = expanded && !one && !soFar;
+  const one = !!single && (column || !expanded || current);
+  const tab = !column && expanded && !one && !soFar;
   if (tab !== (place === "tab")) return null;
   const label = rows === 2 ? "See both" : "See all";
   if (tab) return <div className="simple-review-tabs" role="group" aria-label="Edit lists">
@@ -334,7 +336,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         version: c.version > 1 ? c.version : 0, title: c.earlier && `v${c.version - 1}: ${c.earlier.reason ?? "Scarlet’s earlier version."}${c.earlier.note ? `\nYou: “${c.earlier.note}”` : ""}`,
         on: listening?.changeId === pass!.change.id && listening.index === c.index, word: undefined, revised: false, rejected: false,
         forYou: true, onlyForYou: false, fresh: false,
-        open: c.state === "revising" ? undefined : () => pass!.openCall(c.index) };
+        // In the column of edits a call sent back opens from its row in Working, as an edit sent back does: its card
+        // says where its revision stands, and ↑ ↓ then step through Working's rows.
+        open: c.state === "revising" && !rail ? undefined : () => pass!.openCall(c.index) };
     }),
     // An edit the editor rejected is out of the video. Its row stays, in Done or where it was in the list of every
     // edit, with a × where a kept one has its tick and "Rejected" where it said how much it took.
@@ -548,7 +552,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   // The full list includes the pass's calls. A pass with no applied edits has only the calls to show.
   const soFar = (!!working || !!pass?.running) && !made;
   const canSeeAll = edits.length > 0;
-  const seeProps = { thread, actions, single, rows: totalRows + rejected.length, count: totalRows, soFar, list: listState, reveal };
+  const seeProps = { thread, actions, single, rows: totalRows + rejected.length, count: totalRows, soFar, list: listState, reveal, column: !!rail };
   const seeEvery = (rail ? !!single : !tabbed) && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
   const seeTab = !rail && !tabbed && canSeeAll && <EditResultLink {...seeProps} place="tab" />;
   const tabs = tabbed && <ReviewListTabs need={need} working={inPlace("working").length} done={inPlace("done").length} list={listState} reveal={reveal} showNeeded={showNeeded} />;
@@ -720,7 +724,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   // request whose row is under any of them is drawn there and nowhere else; with one list, every row it shows counts.
   const listed = new Set(tabbed ? rowOf.keys() : showsList ? [...edits, ...gone].map(editKey) : []);
   const canSeeAll = open === "all" || edits.length > 0;
-  const seeProps = { thread, actions, single, rows: groups.length + gone.length, count: groups.length, soFar: working && !made, list, reveal };
+  const seeProps = { thread, actions, single, rows: groups.length + gone.length, count: groups.length, soFar: working && !made, list, reveal, column: !!rail };
   const seeEvery = (rail ? !!single : !tabbed) && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
   const seeTab = !rail && !tabbed && canSeeAll && <EditResultLink {...seeProps} place="tab" />;
   const showNeeded = () => {
