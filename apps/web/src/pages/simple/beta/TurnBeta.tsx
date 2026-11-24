@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import type { Change } from "@scarlet/timeline";
 import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task, type ThreadEdit } from "@scarlet/shared";
-import { resumeRunChoice, useAgentAvailability } from "../../../components/agent/AgentChip";
+import { useAgentAvailability } from "../../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../../components/review/RunBundle";
 import { editGroups, listPlaces, useReviewed, useRevising, useThreadEdits, waitingPassRows, waitingRows } from "../../../components/review/threadEditState";
 import { Icon } from "../../../components/ui/primitives";
@@ -12,7 +12,6 @@ import { errorMessage } from "../../../lib/client";
 import { clock as clockLabel, parseTimestamp } from "../../../lib/format";
 import { editKey } from "../../../lib/keptEdits";
 import { markedFrameUrl } from "../../../lib/markedFramePictures";
-import { usePauseOn, type PauseOffer } from "../../../lib/pauseControl";
 import { decidedPassCalls, isDialoguePass, isOpenPass, openPass, waitsToPlay } from "../../../lib/passCalls";
 import { ReviewLinger } from "./reviewTabsBeta";
 import { aboutOne, aimOf, closingReply, notesStillAsked, threadRuns, waitingToStart, type Run } from "../../../lib/requestRuns";
@@ -100,12 +99,14 @@ function ChangeReply({ thread, entry, actions }: { thread: Thread; entry: Extrac
  * `pinHost`, and takes its place in the chat when it's done. A request still waiting its turn isn't here at all; it's in
  * the tray on the message box.
  */
-export function Turn({ projectId, thread, actions, pinned, pinHost, list: passList, reportReviewMarkers, reportEvery }: { projectId: string; thread: Thread; actions: ChatActions; pinned?: string; pinHost: HTMLElement | null;
+export function Turn({ projectId, thread, actions, pinned, pinHost, list: passList, reportReviewMarkers, reportEvery, askingRowKey }: { projectId: string; thread: Thread; actions: ChatActions; pinned?: string; pinHost: HTMLElement | null;
   reportReviewMarkers?: ReportReviewMarkers;
   /** With no request picked the timeline marks every request's edits, so this one reports them all, not only the ones that wait. */
   reportEvery?: boolean;
   /** Which of this request's lists is open. */
-  list: PassList }) {
+  list: PassList;
+  /** The row key whose question is currently displayed over the message box, so it lights up. */
+  askingRowKey?: string }) {
   const rail = useReviewRail();
   const notes = useProjectStore(s => s.current?.notes ?? []);
   // Only this thread's runs: every streamed event replaces the project's map, and this thread rebuilds only for its own.
@@ -118,8 +119,6 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   const loadTaskEvents = useProjectStore(s => s.loadTaskEvents);
   const cancelTask = useProjectStore(s => s.cancelTask);
   const editingPaused = useProjectStore(s => s.current?.id === projectId && s.current.project.editingPaused);
-  const stopEditing = useProjectStore(s => s.stopEditing);
-  const resumeEditing = useProjectStore(s => s.resumeEditing);
   const retryRun = useProjectStore(s => s.retryTask);
   // Retry and Resume run on the model picked now, which may not be the one that failed.
   const { effective } = useAgentAvailability();
@@ -152,7 +151,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   const inView = useNearView(section, ".simple-chat");
   const asksForALook = useRef(false);
   const { listed, rejected, located, head } = useThreadEdits(projectId, thread, inView || !!passList[0] || actions.marked === thread.id
-    || (!!pinned && thread.tasks.some(t => t.id === pinned)) || (!!reportReviewMarkers && (!!reportEvery || asksForALook.current)));
+    || (!!pinned && thread.tasks.some(t => t.id === pinned)) || (!!reportReviewMarkers && (!!reportEvery || asksForALook.current || !!rail)));
   asksForALook.current = listed.some(edit => !!edit.check);
   const reviewed = useReviewed(projectId, thread);
   const revising = useRevising(thread);
@@ -161,14 +160,18 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const waits = (edit: ThreadEdit) => !!edit.check && !reviewed(edit) && !revising(edit);
     const reported = reportEvery ? located : located.filter(waits);
     if (!reported.length) return;
-    // Each dot has the number its row has in the chat, which an edit keeps when another is rejected.
+    // Each dot has the number its row has in the rail (or chat), which an edit keeps when another is rejected.
     const order = listPlaces(thread, located, rejected);
-    const numbers = new Map(editGroups(located).flatMap(({ members }) => members.map(({ edit }) => [edit, order.number(members[0]!.edit)!] as const)));
+    const numbers = new Map(editGroups(located).flatMap(({ members }) => {
+      const first = members[0]!.edit;
+      const num = rail ? rail.numberOf(thread.id, editKey(first.previous[0] ?? first)) ?? order.number(first)! : order.number(first)!;
+      return members.map(({ edit }) => [edit, num] as const);
+    }));
     const markers = reported.map(edit => ({ edit, number: numbers.get(edit)!, total: order.total,
       state: reviewed(edit) ? "kept" as const : waits(edit) ? "check" as const : undefined }));
     reportReviewMarkers(thread.id, { head, markers });
     return () => reportReviewMarkers(thread.id);
-  }, [thread.id, head, located, rejected, reviewed, revising, reportReviewMarkers, reportEvery]);
+  }, [thread.id, head, located, rejected, reviewed, revising, reportReviewMarkers, reportEvery, rail]);
   // A thread with a dialogue pass sums it up on one line instead of listing every cut.
   const waitingPass = openPass(thread, allTasks);
   const pendingPass = !!waitingPass;
@@ -354,10 +357,6 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
 
   // Whether Scarlet has this request and it can be stopped: such a request has Stop at its heading's right.
   const stoppable = (r: Run) => runIsActive(r.task) && !(waitingToStart(r.task) && r.root === r.task.id);
-  // Pause holds all editing in the project, so one band in the whole chat draws it: this thread says which of its
-  // bands could, as they are drawn below, and reads which one does.
-  const pauseOffer: PauseOffer = { bands: [], under: [] };
-  const pauseOn = usePauseOn(thread.id, section, pauseOffer);
   // How many of the request's calls and flagged edits still wait on the editor: the number its For you tab shows,
   // counted as the tab counts it (`waitingPassRows`, `waitingRows`). Only a folded request's band says it, so it is
   // counted only then.
@@ -438,8 +437,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const below = !inside && run === owner ? [...nested].map(([root, key]) => ({ key, run: runs.find(r => r.root === root)! })) : [];
     const nests: Nest[] = below.map(({ key, run: about }) => ({ key, node: unit(about, true), needs: about.task.state === "waiting_for_user" || !runIsActive(about.task) }));
     const rows = run === owner && hasRows ? (aside: ReactNode) => summed
-      ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} list={passList} listedNeed={passListed} working={runIsActive(task)} nests={nests} spent={spent} linger={linger} lastOpen={lastOpen} listLoaded={!!located} />
-      : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} working={runIsActive(task)} nests={nests} spent={spent} list={passList} listedNeed={passListed} wasShowing={wasShowing} linger={linger} lastOpen={lastOpen} listLoaded={!!located} /> : undefined;
+      ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} list={passList} listedNeed={passListed} working={runIsActive(task)} nests={nests} spent={spent} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} />
+      : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} working={runIsActive(task)} nests={nests} spent={spent} list={passList} listedNeed={passListed} wasShowing={wasShowing} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} /> : undefined;
     // A request about one cut or edit says what it did there, and its row opens that cut or edit on the timeline.
     const target = targets.get(run.root);
     const pass = actions.pass?.threadId === thread.id ? actions.pass : undefined;
@@ -477,34 +476,16 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       ? <button type="button" className="simple-link is-warn unit-answer" onClick={() => actions.reply(thread)}>Answer</button> : null;
     const standing = stands ?? (among ? <span className="unit-word is-at-once" title={`Scarlet is working on ${atOnce} cuts or edits at the same time.`}>Working on {atOnce} at once</span> : null);
     const stop = stoppable(run) ? () => attempt(run.root, cancelTask(task.id)) : undefined;
-    // A request that edits the video has Stop at the band's right for as long as Scarlet has it, which ends just this
-    // one, paused or not. One band in the whole chat has Pause too, which holds all editing in the project, then Resume
-    // once it is paused, which picks the paused work up first. Each is an icon alone, named the moment the pointer
-    // rests on it.
-    const hold = editingPaused
-      ? () => { const runWith = resumeRunChoice(allTasks, effective); return attempt(run.root, runWith ? resumeEditing(projectId, runWith) : resumeEditing(projectId)); }
-      : () => attempt(run.root, stopEditing(projectId));
     // Scarlet has a request under one of this block's rows: the band reads as the one it works on, on two lines.
     const worksUnder = !inside && !!request && run === owner && runs.some(r => nested.has(r.root) && isProjectEditTask(r.task) && stoppable(r));
-    // Pause is the project's, so the chat draws it on one band only (`usePauseOn`): this one says whether it could.
-    // A request under a row never draws it, and has Stop alone: with no band of its own at work, its block's band
-    // holds Pause for as long as Scarlet has a request under its rows, also once the band's own request is done.
+    // Project-wide Pause lives beside "Scarlet is editing" under the timeline. Stop stays on the message since it only
+    // stops this request.
     const stops = editsProject && !!stop;
-    if (!inside && (stops || worksUnder)) {
-      (stops ? pauseOffer.bands : pauseOffer.under).push(run.root);
-      if (isPinned) pauseOffer.pinned = run.root;
-    }
-    const pause = !inside && pauseOn === run.root && <TipButton className="unit-pause-edit" tip={editingPaused ? "Resume editing" : "Pause editing"}
-      aria-description={editingPaused ? "Paused work picks up first, where it left off."
-        : "All editing in this project stops. Nothing new starts, and edits already made stay."}
-      // Pause becomes Resume in place: clicked, it lets go of the focus, so Space plays and can't press Resume.
-      onClick={letGo(hold)}><Icon name={editingPaused ? "play" : "pause"} size={13} /></TipButton>;
     const editActions = stops ?
       <div className="unit-actions">
-        {pause}
         <TipButton className="unit-stop-edit" tip="Stop this edit" aria-label={request ? `Stop this edit: ${request.text}` : "Stop this edit"}
           aria-description="What it already changed stays, and the next request can start." onClick={stop}><Icon name="stop" size={13} /></TipButton></div>
-      : pause ? <div className="unit-actions">{pause}</div> : undefined;
+      : undefined;
     const requestControl = editActions ?? (!editsProject && stop && <button type="button" className="simple-link unit-stop" onClick={stop}>Stop</button>);
     // The request Scarlet is working on keeps its time and tokens in view, where they count up. Any other (finished,
     // stopped, waiting on the editor or its turn) and one under a row show them when the pointer rests on the heading:
@@ -575,7 +556,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
           <span className="unit-state">{standing}</span>
           {answerHere}
           {asksUnder && <span className="unit-state"><span className="unit-dot" aria-hidden /></span>}
-          {need > 0 && <span className="unit-need" title={`${need} ${need === 1 ? "needs" : "need"} you`}>For you<span className="unit-need-count">{need}</span></span>}
+          {!rail && need > 0 && <span className="unit-need" title={`${need} ${need === 1 ? "needs" : "need"} you`}>For you<span className="unit-need-count">{need}</span></span>}
           {headingEnd}</div></div>}
       {bundle}
       {learnedIn(run).map(l => <LearnedLine key={l.id} learning={l} onReview={actions.reviewLearning} />)}
@@ -613,8 +594,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   for (const run of runs) if (!placed.has(run.root) && !settled(run) && !nested.has(run.root)) nodes.push(unit(run));
   // Edits with no request behind them, such as an older change, still list in a card of their own.
   if (!owner && hasRows) nodes.push(<div key="edits" className="req">{summed
-    ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} listLoaded={!!located} />
-    : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} listLoaded={!!located} />}</div>);
+    ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} />
+    : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} />}</div>);
   return <section ref={section} className="simple-turn" data-log-label="Edit thread" aria-label={thread.title} data-thread={thread.id}>
     {nodes}
   </section>;

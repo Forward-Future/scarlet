@@ -2,6 +2,7 @@ import { useRef } from "react";
 import type { Task } from "@scarlet/shared";
 import { blurOnPointerClick } from "../../lib/hotkeys";
 import { useWorkingLines } from "../../lib/workingLines";
+import { Icon } from "../ui/primitives";
 import { StepMark } from "./RunBundle";
 
 const FLASH_MS = 1200;
@@ -34,12 +35,25 @@ function chatRowOf(taskId: string): { scroll: HTMLElement; flash: HTMLElement } 
  * is doing, in the chat's own words. A press brings that request into the middle of the chat and lights it for a
  * moment; with several at work, each press goes on to the next.
  */
-export function TimelineWorking({ tasks, rootOf = task => task.resumeRootId ?? task.id }: { tasks: readonly Task[];
+export function TimelineWorking({ tasks, rootOf = task => task.resumeRootId ?? task.id, pause }: { tasks: readonly Task[];
   /** The request an attempt belongs to, by its first attempt (`requestRoots`): the chat names a request's block for it. */
-  rootOf?(task: Task): string }) {
+  rootOf?(task: Task): string;
+  /** Project-wide Pause / Resume button beside the status (beta layout). */
+  pause?: { paused: boolean; onToggle(): void };
+}) {
   const lines = useWorkingLines();
   const next = useRef(0);
-  if (!tasks.length) return null;
+  if (!tasks.length && !pause?.paused) return null;
+  if (!tasks.length && pause?.paused) {
+    return <span className="timeline-working-group is-paused">
+      <span className="timeline-working-paused">Editing paused</span>
+      <button type="button" className="timeline-working-pause is-resume" aria-label="Resume editing"
+        title="Resume editing. Paused work picks up first, where it left off."
+        onClick={e => { blurOnPointerClick(e); pause.onToggle(); }}>
+        <Icon name="play" size={11} /><span>Resume</span>
+      </button>
+    </span>;
+  }
   const words = tasks.length > 1 ? `Working on ${tasks.length} at once` : lines[tasks[0]!.id];
   const show = () => {
     const task = tasks[next.current % tasks.length]!;
@@ -59,9 +73,18 @@ export function TimelineWorking({ tasks, rootOf = task => task.resumeRootId ?? t
       flashTimers.delete(row.flash);
     }, FLASH_MS));
   };
-  return <button type="button" className="timeline-working" title="Show in the chat"
+  const status = <button type="button" className="timeline-working" title="Show in the chat"
     aria-label={`Scarlet is editing${words ? `: ${words}` : ""}. Show in the chat`} onClick={e => { blurOnPointerClick(e); show(); }}>
     <StepMark state="working" />
     <span className="timeline-working-text">Scarlet is editing{words && <span> · {words}</span>}</span>
   </button>;
+  if (!pause) return status;
+  return <span className="timeline-working-group">
+    {status}
+    <button type="button" className="timeline-working-pause" aria-label="Pause editing"
+      title="Pause all editing in this project. Nothing new starts, and edits already made stay."
+      onClick={e => { blurOnPointerClick(e); pause.onToggle(); }}>
+      <Icon name="pause" size={11} /><span>Pause</span>
+    </button>
+  </span>;
 }

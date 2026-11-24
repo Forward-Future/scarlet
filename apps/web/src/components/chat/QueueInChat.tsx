@@ -32,7 +32,8 @@ export function QueueInChat({ items, hint, waits, rewording, onRemove, onReword,
   const row = (item: QueuedRequest, first: boolean) => {
     const editing = rewording === item.id;
     const reword = onReword && !item.fixed ? () => onReword(item.id) : undefined;
-    const marker = first && waits ? <span className="queue-next is-waiting">{waits}</span>
+    const marker = isPaused ? null
+      : first && waits ? <span className="queue-next is-waiting">{waits}</span>
       : <span className="queue-next">{first ? "Up next" : "Queued"}</span>;
     return <div key={item.id} className={editing ? "queue-row is-rewording" : "queue-row"}>
       <p className="queue-bubble" title={item.text}>

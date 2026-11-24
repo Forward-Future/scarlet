@@ -222,14 +222,22 @@ export function layoutMarks(marks: TimelineDot[], from: number, span: number, wi
   }
   // A marker sits at the middle of its run, moved along if it had to be, and never past the track's ends. Clamping at
   // either end pushes crowded neighbours aside rather than letting the clamped pill land on top of the one beside it.
+  // Near 0:00, leave a small margin clear of the playhead stem so a dot or pill at the start never sits on top of it.
+  const startInset = 4;
   const placeRow = (row: ReturnType<typeof marker>[]) => {
     if (width <= 0) return row.map(({ layout }) => layout);
     const natural = row.map(({ layout }) => (mid(layout) - from) / span * width);
     const xs = row.map(({ layout }, i) => natural[i]! + (shift.get(layout) ?? 0));
-    const keepInside = (i: number) => row[i]!.layout.times.length > 1 || shift.has(row[i]!.layout) || xs[i] !== natural[i];
+    const minLeft = (half: number) => Math.min(width - half, half + startInset);
+    const keepInside = (i: number) => {
+      const m = row[i]!.layout;
+      const half = m.width / 2;
+      return m.times.length > 1 || m.dots.length > 1 || shift.has(m) || xs[i] !== natural[i]
+        || (!!m.label && (natural[i]! < minLeft(half) || natural[i]! > width - half));
+    };
     for (let i = 0; i < row.length; i++) {
       const half = row[i]!.layout.width / 2;
-      if (keepInside(i) && xs[i]! < half) xs[i] = half;
+      if (keepInside(i) && xs[i]! < minLeft(half)) xs[i] = minLeft(half);
       if (i > 0 && groupSpan >= span) {
         const clear = row[i - 1]!.layout.width / 2 + half + MARK_GAP;
         if (xs[i]! < xs[i - 1]! + clear) xs[i] = xs[i - 1]! + clear;
@@ -245,11 +253,34 @@ export function layoutMarks(marks: TimelineDot[], from: number, span: number, wi
     }
     for (let i = 0; i < row.length; i++) {
       const half = row[i]!.layout.width / 2;
-      if (keepInside(i) && xs[i]! < half) xs[i] = half;
+      if (keepInside(i) && xs[i]! < minLeft(half)) xs[i] = minLeft(half);
     }
     return row.map(({ layout }, i) => ({ ...layout, at: xs[i]! / width * 100 }));
   };
-  return [...circles.values()].flatMap(placeRow).sort((a, b) => a.at - b.at);
+  const placed = [...circles.values()].flatMap(placeRow).sort((a, b) => a.at - b.at);
+  // Markers from different groups never merge into one pill, and still must not draw on top of each other.
+  if (width > 0 && groupSpan >= span && circles.size > 1 && placed.length > 1) {
+    const xs = placed.map(m => m.at / 100 * width);
+    for (let i = 1; i < placed.length; i++) {
+      const clear = placed[i - 1]!.width / 2 + placed[i]!.width / 2 + MARK_GAP;
+      if (xs[i]! < xs[i - 1]! + clear) xs[i] = xs[i - 1]! + clear;
+    }
+    for (let i = placed.length - 1; i >= 0; i--) {
+      const half = placed[i]!.width / 2;
+      if (xs[i]! > width - half) xs[i] = width - half;
+      if (i < placed.length - 1) {
+        const clear = half + placed[i + 1]!.width / 2 + MARK_GAP;
+        if (xs[i]! > xs[i + 1]! - clear) xs[i] = xs[i + 1]! - clear;
+      }
+    }
+    for (let i = 0; i < placed.length; i++) {
+      const half = placed[i]!.width / 2;
+      const minX = Math.min(width - half, half + startInset);
+      if (xs[i]! < minX) xs[i] = minX;
+    }
+    return placed.map((m, i) => ({ ...m, at: xs[i]! / width * 100 }));
+  }
+  return placed;
 }
 
 /** A hit prefers the visible marker: the open edit, then a pill drawn over another group's circle. */

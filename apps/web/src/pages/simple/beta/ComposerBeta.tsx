@@ -24,6 +24,7 @@ import { SkillCommandInput } from "../../../components/agent/SkillCommandInput";
 import { MicButton } from "../../../components/agent/MicButton";
 import { AimTimecode, ComposerAim, type AimItem } from "../../../components/agent/ComposerAim";
 import { AttachedFiles, NO_FILES, sendMarks } from "../../../components/agent/ComposerAttachments";
+import { EditBadge } from "../../../components/review/ThreadEdits";
 
 const timestampLabel = (time: number) => playbackClock(time).replace(/\.000$/, "");
 const lowerFirst = (text: string) => `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
@@ -83,9 +84,13 @@ interface ComposerProps {
   chipClock?: { duration: number; seek(time: number): void };
   /** Opens the cut Scarlet's question is about, from the question over the box, when that cut isn't open. */
   onOpenAsked?(): void;
+  /** The specific cut or edit Scarlet's question is about, named right in the question panel header. */
+  askedSubject?: { number?: number; time?: string; label: string };
+  /** Specific waiting question task to display/answer when a thread has multiple open questions. */
+  askedTask?: Task;
   selectedEdit?: AgentContext; onClearSelectedEdit?(): void; thread?: Thread; onCreated?(task: Task): void; onSent?(): void; modelPicker?: boolean }
 
-function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime, aimSlot, chipClock, onOpenAsked }: ComposerProps & { project: Project }) {
+function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime, aimSlot, chipClock, onOpenAsked, askedSubject, askedTask }: ComposerProps & { project: Project }) {
   const media = useProjectStore(s => s.current?.media);
   const createTask = useProjectStore((s) => s.createTask);
   const createNote = useProjectStore((s) => s.createNote);
@@ -178,7 +183,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const head = project.head ?? undefined;
   const displayAnchor = context === "whole" ? null : context ?? selectedEdit ?? null;
   const replying = !!thread;
-  const question = replying && (!displayAnchor?.changeId || selectedEdit) ? thread.question : undefined;
+  const question = replying && (!displayAnchor?.changeId || selectedEdit) ? (askedTask ?? thread.question) : undefined;
   // An answer goes to the agent that asked. Anything else needs an agent and a model to send to.
   const unavailable = !question && none;
   const pinnedChange = displayAnchor?.changeId && thread?.changes.find(c => c.id === displayAnchor.changeId);
@@ -499,6 +504,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const placeName = placeTag
     ? targetIsPoint ? placeTag.replace(/^At /, "") : stopped ? `${placeTag}, stopped at ${stopped}` : placeTag
     : undefined;
+  const rowClockAt = aimTime ?? exactTime ?? displayAnchor?.time;
+  const aimRowTime = rowClockAt !== undefined
+    ? <AimTimecode key={`rowtime:${placeTag ?? ""}:${rowClockAt}`} value={clock(rowClockAt)} precise={playbackClock(rowClockAt)} />
+    : undefined;
   const aimItem: AimItem | undefined = shownRange ? {
     key: `range:${shownRange.start}/${shownRange.end}`,
     name: `Range ${rangeWords}`,
@@ -516,7 +525,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     // Keyed, so the row's place is never reused for the tag's own words when the row goes: its copy of the row is
     // drawn into it from outside, and a reused place would wipe that copy out from under it (a crash on the next
     // call opened from For you).
-    displayName: aimSlot ? <><span key="aim-row" className="composer-aim-row" ref={aimSlot} /><span key="aim-plain" className="composer-aim-plain">{placeDisplay}</span></> : placeDisplay,
+    displayName: aimSlot ? <span className="composer-aim-wrap"><span key="aim-row" className="composer-aim-row" ref={aimSlot} /><span key="aim-plain" className="composer-aim-plain">{placeDisplay}</span>{aimRowTime && <span key="aim-row-time" className="composer-aim-row-time">{aimRowTime}</span>}</span> : placeDisplay,
     title: `About ${placeName}`,
     clearLabel: targetIsPoint ? `Take “${placeTag}” off: the message is about the whole video` : newEditInstead!,
     onClear: takeOffTarget,
@@ -575,7 +584,13 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       {asked && <div className="composer-ask" role="group" aria-label="Scarlet’s question">
         <div className="composer-ask-head">
           <span className="composer-ask-dot" aria-hidden />
-          <span className="composer-ask-label">Scarlet asks{answerNote && <span className="composer-ask-count"> · {answerNote}</span>}</span>
+          <span className="composer-ask-label">
+            {askedSubject ? <>Scarlet asks about <span className="composer-ask-subject">
+              {askedSubject.number !== undefined ? <EditBadge n={askedSubject.number} check /> : askedSubject.time && <span className="composer-ask-time">{askedSubject.time}</span>}
+              <span className="composer-ask-subject-words">{askedSubject.label}</span>
+            </span></> : "Scarlet asks"}
+            {answerNote && <span className="composer-ask-count"> · {answerNote}</span>}
+          </span>
           {onOpenAsked && <button type="button" className="simple-link composer-ask-open" onClick={onOpenAsked}>Open cut</button>}
           {/* A spoken message stays where it was said until it is out: aiming the box elsewhere would drop it. */}
           <button type="button" className="composer-ask-clear" disabled={recording || heard} aria-label={newEditInstead}

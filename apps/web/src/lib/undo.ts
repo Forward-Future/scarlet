@@ -36,9 +36,9 @@ export type UndoStep = {
   threadId?: string;
   edit?: EditRef & { single?: boolean };
 } | {
-  /** Mark all done: Keep on every low-risk edit of the column at once, which may be several requests'. One ⌘Z takes it all back. */
+  /** Mark all done / Keep all: Keep on every low-risk edit of the column at once, which may be several requests'. One ⌘Z takes it all back. */
   kind: "keepAll";
-  word: "Mark all done";
+  word: "Mark all done" | "Keep all";
   parts: { threadId: string; refs: KeptRef[] }[];
 } | {
   /** Keep or Reject edit on a call of a pass that waits on the editor. */
