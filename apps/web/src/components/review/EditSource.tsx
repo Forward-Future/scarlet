@@ -3,6 +3,7 @@ import { clipRange, type MediaAsset, type Timeline, type TimeRange } from "@scar
 import type { ThreadEdit } from "@scarlet/shared";
 import { api } from "../../lib/client";
 import { desktop } from "../../lib/desktop";
+import { clockRange } from "../../lib/format";
 import { Icon } from "../ui/primitives";
 
 /**
@@ -42,7 +43,8 @@ const capturedOn = (at: string | undefined) => {
 
 /**
  * The card's second row for B-roll from the web: the page as Scarlet captured it, with the part in the video lit, its
- * address, which opens the page, and when it was captured.
+ * address, which opens the page, and when it was captured. A clip of a video on the web has a picture from the clip
+ * there, and says which part of that video it is.
  */
 export function SourceRow({ file }: { file: MediaAsset }) {
   const source = file.source!;
@@ -50,6 +52,7 @@ export function SourceRow({ file }: { file: MediaAsset }) {
   const [error, setError] = useState<string>();
   const on = capturedOn(source.capturedAt);
   const region = source.region;
+  const clip = source.clip && source.clip.end > source.clip.start ? source.clip : undefined;
   const opens = /^https:\/\//i.test(source.url);
   const open = () => void desktop.openUrl(source.url).then(() => setError(undefined), () => setError("Couldn’t open the page."));
   return <div className="thread-passage edit-source">
@@ -61,8 +64,8 @@ export function SourceRow({ file }: { file: MediaAsset }) {
     <span className="edit-source-text">
       {opens ? <button type="button" className="simple-link edit-source-url" title="Open the page" onClick={open}>{source.url}</button>
         : <span className="edit-source-url">{source.url}</span>}
-      {(on || pictured) && <span className="edit-source-said">
-        {[on && `Captured ${on}.`, pictured && region && "The lit part is what’s in the video."].filter(Boolean).join(" ")}</span>}
+      {(on || pictured || clip) && <span className="edit-source-said">
+        {[on && `Captured ${on}.`, clip ? `Taken from ${clockRange(clip.start, clip.end)}.` : pictured && region && "The lit part is what’s in the video."].filter(Boolean).join(" ")}</span>}
       {error && <span className="simple-error" role="alert">{error}</span>}
     </span>
   </div>;

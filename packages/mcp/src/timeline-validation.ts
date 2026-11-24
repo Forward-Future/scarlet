@@ -87,7 +87,7 @@ export const OPS_DOC = `Op types (all times are seconds; timeline times are posi
 - addTrack: {"op":"addTrack","track":{"id":"v2","kind":"video","name":"B-roll","clips":[]}} — kinds: video | audio | caption.
 - removeTrack: {"op":"removeTrack","trackId":"v2"}
 - updateTrack: {"op":"updateTrack","trackId":"a1","patch":{"muted":true}}
-- addMarker: {"op":"addMarker","marker":{"id":"mk1","time":12.0,"kind":"todo","text":"needs b-roll"}} — a note on the timeline; it changes nothing the editor sees or hears. An edit that only leaves "todo" markers waits on the editor, its card asking what their text says, until they mark it done.
+- addMarker: {"op":"addMarker","marker":{"id":"mk1","time":12.0,"kind":"todo","text":"Show a screen recording of the agent running a task."}} — a note on the timeline; it changes nothing the editor sees or hears. An edit that only leaves "todo" markers waits on the editor, its card asking what their text says, until they mark it done: each marker is listed for them as an edit of its own. Name each in \`timelineEdits\`, at its time, with the few words its row in the list shows ("Tao's 2050 clip"); the marker's text is what its card says — write it as one short, simple sentence in plain English (no timestamps, durations, "Covers ..." quotes, parenthetical tags, arrows, or beat-by-beat specs). One you don't name alone is listed by the start of its text.
 - removeMarker: {"op":"removeMarker","markerId":"mk1"}
 - updateMarker: {"op":"updateMarker","markerId":"mk1","patch":{"resolved":true}}
 - setTimeline: {"op":"setTimeline","patch":{"name":"Short v2","background":"#000000","captionStyle":{"fontSize":0.06}}}

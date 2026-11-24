@@ -80,7 +80,7 @@ export function changeRoutes(ctx: Ctx) {
     const body = await jsonBody(c, DialogueCutsRequest);
     const attempt = requestAttempt(c.req.raw), projectId = c.req.param("id");
     body.taskId ??= attempt?.taskId;
-    const { changes, carriedForward, editorDecided, heldForReview, alreadyRemoved, joinCrossfades, stagedForEditor, onFrames, droppedFromReview, heldCutsStay } = submitDialogueCuts(ctx, c.var.user, projectId, body,
+    const { changes, carriedForward, editorDecided, heldForReview, alreadyRemoved, joinCrossfades, stagedForEditor, onFrames, droppedFromReview, heldCutsStay, settledApplied } = submitDialogueCuts(ctx, c.var.user, projectId, body,
       { checkAttempt: () => requireProjectEditAttempt(ctx, attempt, projectId, body.taskId) });
     return c.json({ changes: changes.map(change => {
       const { id, state, fromVersion, toVersion, description, intent } = change;
@@ -95,6 +95,8 @@ export function changeRoutes(ctx: Ctx) {
       ...(stagedForEditor && { stagedForEditor }), ...(onFrames && { onFrames }), ...(droppedFromReview && { droppedFromReview }),
       // Cuts left out because they would have swapped a held staged cut for other edges Scarlet couldn't place either.
       ...(heldCutsStay && { heldCutsStay }),
+      // Staged cuts Scarlet checked and settled as cuts, never asked about, that went into the video with this save.
+      ...(settledApplied && { settledApplied }),
       // The version to build on next: where the confident cuts left the edit.
       head: ctx.repos.projects.header(c.req.param("id"))?.head }, 201);
   });

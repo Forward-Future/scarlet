@@ -43,6 +43,17 @@ const OVERLAY_KEYS = new Set(["opacity", "videoFadeIn", "videoFadeOut", "color"]
 const NEUTRAL_KEYS = new Set(["sourceIn", "sourceOut", "timelineIn", "timelineOut", "label", "enabled"]);
 /** A change this close to the old length kept it. */
 const SAME_LENGTH = 0.02;
+/** A keyed level that goes this far under the clip's own and never over it ducks the clip: a dip. */
+const DIP_DEPTH_DB = -6;
+/**
+ * Whether volume keyframes dip a clip under something, as music is under speech, or only even its level out. A sponsor
+ * read keyed 1.5 dB down at its start and 0.9 dB up at its end to match the video round it was named a music dip on its
+ * card (2026-11-23).
+ */
+const dips = (keys: unknown) => {
+  const dbs = Array.isArray(keys) ? (keys as { db?: unknown }[]).map(k => k?.db).filter((db): db is number => typeof db === "number") : [];
+  return dbs.length > 0 && Math.max(...dbs) <= 0 && Math.min(...dbs) <= DIP_DEPTH_DB;
+};
 /** Two stretches that share less than this only touch: an agent's times and a clip's edge differ by rounding. */
 const TOUCH = 0.05;
 
@@ -178,7 +189,7 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
           if (key === "splitEdit") return found?.clip.kind === "media"
             ? splitAt(found.clip, patch.splitEdit as SplitRecord, patch).map(range => ({ facet: "split" as const, range })) : [{ facet: "split" as const, range: at }];
           if (AUDIO_KEYS.has(key)) return { facet: "audio" as const, range: at };
-          if (key === "volumeKeyframes") return { facet: "dip" as const, range: at };
+          if (key === "volumeKeyframes") return { facet: dips(patch.volumeKeyframes) ? "dip" as const : "audio" as const, range: at };
           if (FRAMING_KEYS.has(key)) return { facet: "framing" as const, range: at };
           if (TEXT_KEYS.has(key)) return { facet: "text" as const, range: at };
           if (OVERLAY_KEYS.has(key)) return { facet: found && found.track.id !== baseVideo ? laid(found.clip) : "overlay" as const, range: at };

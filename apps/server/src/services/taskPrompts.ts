@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import { buildSystemPrompt } from "@scarlet/mcp/prompt";
-import { agentCapabilities, isAsideTask, isLearningCheck, isListenCheck, isSkillEdit, taskRunKind, workspaceCapabilities, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
+import { buildSystemPrompt, type EarlierRequest } from "@scarlet/mcp/prompt";
+import { agentCapabilities, isAsideTask, isLearningCheck, isListenCheck, isProjectEditTask, isSkillEdit, PROJECT_EDIT_TASK_KINDS, taskRunKind, workspaceCapabilities, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
 import type { Project } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { notFound } from "../errors.js";
@@ -9,15 +9,18 @@ import { changeDiff, cutRevisionReference, passToRevise } from "./changes.js";
 import { mimeFor, styleGuidePath } from "./graphics.js";
 import { learningCheckContext } from "./learnings.js";
 import { assistantSkills } from "./skills.js";
-import { answerHandoffInstruction, recoveryInstruction } from "./taskRecap.js";
+import { runAttempts, runRoot } from "./runAttempts.js";
+import { answerHandoffInstruction, recoveryInstruction, savedChanges } from "./taskRecap.js";
 import { resolveTimeline } from "./timeline.js";
 
 /**
  * CLIs whose sessions Scarlet resumes after an answer, a quit or a pause of the project's editing. A Codex run keeps
  * its thread in a private Codex home beside its task folder, out of the user's own Codex thread list. Started afresh, a
- * pass resumed after a quit spent 120 more turns and 13.7M tokens finding its place again (2026-11-18).
+ * pass resumed after a quit spent 120 more turns and 13.7M tokens finding its place again (2026-11-18). agy keeps a
+ * Gemini session across its process (`session/resume`): two revisions restarted afresh after a quit measured their
+ * edges all over again, four more minutes each (2026-11-23).
  */
-export const RESUMABLE = new Set<string>(["claude", "codex"]);
+export const RESUMABLE = new Set<string>(["claude", "codex", "gemini"]);
 
 /** What a run hears when it carries on in its own CLI session after Scarlet closed on it. */
 const INTERRUPTED = "Scarlet closed while you were working on this request, and it is open again. Carry on from where you stopped. " +
@@ -113,12 +116,15 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     replacedPass: now && named?.id,
     // A resumed session already holds the earlier questions and answers.
     qa: resumeSession ? undefined : pairQuestionsAndAnswers(events),
+    earlier: earlierRequests(ctx, task),
     skills: aside ? [] : assistantSkills(ctx.repos.skills.select("1=1", [], "name ASC"), c.skillIds, true),
     editSkill: editSkill ?? undefined,
     learningCheck: isLearningCheck(task) ? learningCheckContext(ctx, task) : undefined,
     areaCheck: task.kind === "area_check" ? task.context.areaCheck : undefined,
     listenCheck: isListenCheck(task) ? task.context.listenCheck : undefined,
     checkIn: ctx.settings().checkIn,
+    // A run that edits no video writes nothing the editor reads as Scarlet talking to them.
+    talkingToYou: aside ? undefined : ctx.settings().talkingToYou,
     workDir: opts.workDir,
     timeLimitMinutes: opts.timeLimitMinutes,
     // A request has its harness's own shell, file and web tools; a run that edits no video has Scarlet's alone.
@@ -163,6 +169,67 @@ function firstMessage(instruction: string) {
 }
 
 /**
+ * How much of the chat a request is told: its latest requests, and of each what fits on a screen. A pass can post
+ * hundreds of updates and save dozens of parts, and the newest say where it ended.
+ */
+const CHAT = { requests: 6, chars: 6000, asked: 600, told: 3, message: 800, edits: 3 };
+
+const clipped = (text: string, max: number) => (text.trim().length > max ? `${text.trim().slice(0, max).trimEnd()}…` : text.trim());
+
+/** The latest things Scarlet showed the editor while it worked on a request, over all its attempts, each said once. */
+function toldEditor(ctx: Ctx, attempts: Task[]): string[] {
+  const said = attempts.flatMap(t => ctx.repos.taskEvents.list(t.id, "conversation")).filter(e => e.type === "log").map(e => clipped(e.text, CHAT.message));
+  return said.filter((text, i) => text && text !== said[i - 1]).slice(-CHAT.told);
+}
+
+/**
+ * The project's chat before `task`, oldest first: what the editor asked in its latest earlier requests and what
+ * Scarlet told them. The requests of the task's own thread are left out: its words carry them (`followUpInstruction`).
+ * A run that edits no video is told none of it.
+ */
+export function earlierRequests(ctx: Ctx, task: Task): EarlierRequest[] {
+  if (!isProjectEditTask(task)) return [];
+  const root = runRoot(task);
+  const thread = task.context.threadId ?? root;
+  // A resumed attempt is told the chat as it stood when its request was first sent.
+  const since = (task.resumeRootId && ctx.repos.tasks.get(task.resumeRootId)?.createdAt) || task.createdAt;
+  const before = ctx.repos.tasks.select("project_id = ? AND created_at < ? AND kind IN (SELECT value FROM json_each(?))",
+    [task.projectId, since, JSON.stringify(PROJECT_EDIT_TASK_KINDS)], "created_at DESC, rowid DESC LIMIT 60");
+  const roots = [...new Set(before.filter(t => runRoot(t) !== root && (t.context.threadId ?? runRoot(t)) !== thread).map(runRoot))];
+  const out: EarlierRequest[] = [];
+  let chars = 0;
+  for (const id of roots) {
+    if (out.length === CHAT.requests) break;
+    const run = runAttempts(task.projectId, id);
+    const attempts = ctx.repos.tasks.select(run.where, run.params, "created_at, rowid");
+    const first = attempts[0], last = attempts.at(-1);
+    // A request the editor had Scarlet try again is said once, by the try that took its place.
+    if (!first || !last || last.retryTaskId) continue;
+    const told = toldEditor(ctx, attempts);
+    const answers = attempts.flatMap(t => pairQuestionsAndAnswers(ctx.repos.taskEvents.list(t.id, "questionsAndAnswers"))).slice(-2)
+      .map(p => ({ question: clipped(p.question, CHAT.message), answer: clipped(p.answer, CHAT.message) }));
+    const replied = clipped(last.summary?.trim() || last.reply?.trim() || "", CHAT.message);
+    // A proposal a later part or a revision took over is closed by Scarlet: what replaced it is listed instead.
+    const saved = savedChanges(ctx, attempts).filter(c => !(c.state === "rejected" && c.replacedBy));
+    const edits = saved.slice(-CHAT.edits).map(c => `"${clipped(c.description, 200)}" (change ${c.id}, ${c.state})`);
+    if (saved.length > edits.length) edits.unshift(`${saved.length - edits.length} earlier`);
+    const request: EarlierRequest = {
+      asked: clipped(first.context.asked ?? first.context.message ?? first.instruction, CHAT.asked),
+      ...(told.length && { told }),
+      ...(answers.length && { answers }),
+      ...(replied && { replied }),
+      ...(edits.length && { edits }),
+      ...(last.state === "failed" || last.state === "cancelled" ? { standing: "It stopped before it finished." }
+        : last.state !== "done" && { standing: "It hasn’t finished yet." }),
+    };
+    chars += JSON.stringify(request).length;
+    if (out.length && chars > CHAT.chars) break;
+    out.unshift(request);
+  }
+  return out;
+}
+
+/**
  * A follow-up in a thread that already has history: give the agent the gist of
  * what happened so far, keep what the person said in context.message. An earlier request the app worded for the
  * person reads as what it asked: its name in the chat, "Undo", doesn't say which edit was put back.
@@ -188,8 +255,12 @@ export function followUpInstruction(ctx: Ctx, projectId: string, threadId: strin
     qaByTask.set(t.id, kept);
     qaTotal += kept.length;
   }
+  // What Scarlet showed the editor while it worked on the latest of them: its closing words can point back at it
+  // ("I shared the links above"), and the editor's next words can too.
+  const recent = new Set(tasks.slice(-CHAT.told).map(t => t.id));
   for (const t of tasks) {
     lines.push(`- Asked: ${t.context.asked ?? t.context.message ?? t.instruction}`);
+    if (recent.has(t.id)) for (const told of toldEditor(ctx, [t])) lines.push(`  You told the editor: ${told.replace(/\n+/g, "\n  ")}`);
     for (const { question, answer } of qaByTask.get(t.id) ?? []) {
       lines.push(`  Asked editor: ${question}`);
       lines.push(`  Editor answered: ${answer}`);

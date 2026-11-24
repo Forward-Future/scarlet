@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -23,6 +23,7 @@ if [ "$1" = "acp" ] && [ -n "$FAKE_ACP" ]; then
   exec "$FAKE_NODE_BIN" "$FAKE_ACP_SCRIPT" "$@"
 fi
 printf '%s\\n' "$@" > "$FAKE_DIR/args"
+printf '%s' "$CODEX_HOME" > "$FAKE_DIR/exec-home"
 cat > "$FAKE_DIR/stdin"
 printf '%s' "$SCARLET_SERVER" > "$FAKE_DIR/server"
 printf '%s' "$MCP_TOOL_TIMEOUT" > "$FAKE_DIR/tool-timeout"
@@ -116,7 +117,9 @@ rl.on("line", line => {
     if (process.env.FAKE_ACP_SCRIPT_TURNS) {
       const turns = JSON.parse(process.env.FAKE_ACP_SCRIPT_TURNS);
       const turn = turns[prompts++] ?? {};
-      const transcriptPath = join(process.env.HOME || process.env.USERPROFILE, ".gemini", "antigravity-cli", "brain", "g1", ".system_generated", "logs", "transcript.jsonl");
+      const geminiDirAt = process.argv.indexOf("--gemini-dir");
+      const geminiDir = geminiDirAt > 0 ? process.argv[geminiDirAt + 1] : join(process.env.HOME || process.env.USERPROFILE, ".gemini");
+      const transcriptPath = join(geminiDir, "antigravity-cli", "brain", "g1", ".system_generated", "logs", "transcript.jsonl");
       mkdirSync(dirname(transcriptPath), { recursive: true });
       const steps = [...(turn.steps ?? [])];
       const runNext = () => {
@@ -158,6 +161,7 @@ if (args[0] === "acp" && process.env.FAKE_ACP) {
   createRequire(import.meta.url)(process.env.FAKE_ACP_SCRIPT);
 } else {
 writeFileSync(dir + "/args", args.map(a => a + NL).join(""));
+writeFileSync(dir + "/exec-home", process.env.CODEX_HOME ?? "");
 const input = [];
 for await (const chunk of process.stdin) input.push(chunk);
 writeFileSync(dir + "/stdin", Buffer.concat(input));
@@ -580,6 +584,9 @@ describe.skipIf(process.platform === "win32")("runCodex App Server", { timeout: 
     const old = await run(runCodex, { appServer: "unsupported", lines: [message("Old CLI finished."), completed] }, { onCodexFallback: fallback });
     expect(old.result).toMatchObject({ ok: true, summary: "Old CLI finished." });
     expect((await old.args())[0]).toBe("exec");
+    // `codex exec` reads the user's own AGENTS.md from their home, so it gets the run's own, with their login linked.
+    expect(await old.read("exec-home")).toBe(codexHomeDir(old.cwd));
+    expect(await readlink(join(codexHomeDir(old.cwd), "auth.json"))).toMatch(/codex-home\/auth\.json$/);
     expect(fallback).toHaveBeenCalledExactlyOnceWith("app_server_unavailable");
     fallback.mockClear();
     const rejected = await run(runCodex, { appServer: "reject-turn" }, { onCodexFallback: fallback });
@@ -595,12 +602,14 @@ describe("runCodex", { timeout: 20_000 }, () => {
   const completed = '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":5}}';
 
   it("puts the system prompt in AGENTS.md, passes the MCP variables by environment and prefers the last-message file", async () => {
-    const { result, cwd, args, stdin, server } = await run(runCodex, { lines: ['{"type":"thread.started","thread_id":"t1"}', message("Proposed chg_2."), completed], last: "Proposed chg_2, with notes.\n" }, { model: "gpt-5" });
+    const { result, cwd, args, stdin, server, read } = await run(runCodex, { lines: ['{"type":"thread.started","thread_id":"t1"}', message("Proposed chg_2."), completed], last: "Proposed chg_2, with notes.\n" }, { model: "gpt-5" });
     expect(result).toEqual({
       ok: true, summary: "Proposed chg_2, with notes.", error: undefined, exitCode: 0,
       usage: { model: "gpt-5", inputTokens: 6, outputTokens: 5, cacheReadTokens: 4, cacheWriteTokens: 0, reasoningTokens: 0 },
     });
     expect(await readFile(join(cwd, "AGENTS.md"), "utf8")).toBe("SYS");
+    // With no API key and no login file to link, the run keeps the user's Codex home, so it still signs in.
+    expect(await read("exec-home")).toMatch(/codex-home$/);
     expect(await stdin()).toBe("Make the first cut");
     expect(await server()).toBe("http://localhost:4000");
     // Only the names of the MCP variables are on the command line.
@@ -715,7 +724,8 @@ describe("runGemini", { timeout: 20_000 }, () => {
       ["result", "Adding captions."],
     ]);
     expect(events[2]!.data).toEqual({ kind: "tool_refused", harnessTool: "bash" });
-    expect(await args()).toEqual(["acp", "--sandbox", "--disable-telemetry"]);
+    // agy keeps its settings in the run's own folder beside the task folder, so the user's personal GEMINI.md stays out.
+    expect(await args()).toEqual(["acp", "--sandbox", "--disable-telemetry", "--gemini-dir", `${cwd}.gemini`]);
     // No GEMINI.md: agy cuts a rule file off at 24,000 bytes. The prompt is the session's own.
     await expect(readFile(join(cwd, "GEMINI.md"), "utf8")).rejects.toThrow();
 

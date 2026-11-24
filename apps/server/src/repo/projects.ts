@@ -234,7 +234,7 @@ export class ProjectsRepo {
   // -- media -----------------------------------------------------------------
 
   private rowToMedia(r: MediaRow): MediaWithStatus {
-    return { ...MediaAsset.parse(JSON.parse(r.json)), status: r.status, error: r.error ?? undefined };
+    return { ...MediaAsset.parse(JSON.parse(r.json)), addedAt: r.created_at, status: r.status, error: r.error ?? undefined };
   }
 
   listMedia(projectId: string): MediaWithStatus[] {
@@ -273,7 +273,8 @@ export class ProjectsRepo {
 
   /** Adding a file to the project is an edit and moves "Last edited". Its import, transcript and labels being saved are not. */
   putMedia(projectId: string, asset: MediaAsset, status: MediaStatus, error?: string): MediaWithStatus {
-    const parsed = MediaAsset.parse(asset);
+    // When it was added is its row's, so the stored file never carries an old copy of it.
+    const { addedAt: _addedAt, ...parsed } = MediaAsset.parse(asset);
     const added = !this.db.prepare("SELECT 1 FROM media WHERE id = ?").get(parsed.id);
     this.db
       .prepare(
@@ -283,7 +284,8 @@ export class ProjectsRepo {
       )
       .run(parsed.id, projectId, status, error ?? null, JSON.stringify(parsed), now(), status === "ingesting" ? process.pid : null);
     if (added) this.touch(projectId);
-    return { ...parsed, status, error };
+    const row = this.db.prepare("SELECT created_at FROM media WHERE id = ?").get(parsed.id) as { created_at: string };
+    return { ...parsed, addedAt: row.created_at, status, error };
   }
 
   /** Take a file out of its project. Its scan pages and its cache request go with the row; its files are the caller's. */

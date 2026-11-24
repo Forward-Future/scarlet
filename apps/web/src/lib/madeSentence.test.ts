@@ -97,3 +97,12 @@ it("says footage put back as what was done to it, never as something made", () =
   expect(say([cut(0, 60), cut(100, 171), back, { ...back, label: "Restored the pause" }])).toBe("Took out 2:11 in 2 cuts and put back 2 passages.");
   expect(say([back, ...["A", "B", "C", "D"].map(label => ({ label, kind: "zoom" as const }))])).toBe("Put back 1 passage and made 4 zooms.");
 });
+
+it("leaves the edits' names to the rows while the open list has one for each of them", () => {
+  const edits = [{ label: "music bed", kind: "audio" as const }, { label: "captions", kind: "text" as const }, { label: "wrap" }];
+  const open = (list: Parameters<typeof madeSentence>[0]) => sentenceText(madeSentence(list, length, false, true));
+  expect(open(edits)).toBe("Made 3 edits.");
+  expect(open([...edits.slice(0, 1), { label: "B-roll here", marker: true }, { label: "A chart here", marker: true }])).toBe("Made 1 edit, and marked 2 spots for you.");
+  // The one edit a request made is still said in Scarlet's words: its link opens it, and no list repeats it.
+  expect(open([{ label: "wrap", summary: "Tightened the wrap" }])).toBe("Tightened the wrap.");
+});

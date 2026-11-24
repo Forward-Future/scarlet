@@ -326,6 +326,15 @@ export function PictureMarkTools({ projectId, enabled, onStart }: { projectId: s
   </div>;
 }
 
+/**
+ * Whether this Esc is the marking's: it ends the marking, or puts back a mark being dragged, and nothing behind the
+ * picture closes on the same press. An edit's card and a marked stretch listen for Esc ahead of the marking, so they ask.
+ */
+export function marksTakeEscape(e: KeyboardEvent) {
+  if (isInEditableElement(e.target) || e.isComposing) return false;
+  return usePictureMarksStore.getState().marking !== null || !!document.querySelector(".picture-marks[data-dragging]");
+}
+
 /** Mark the frame under the playhead, or go back to the frame already marked. M, or a tool over the picture. */
 export function toggleMarking(projectId: string, at: Omit<MarkedFrame, "marks">) {
   const store = usePictureMarksStore.getState();

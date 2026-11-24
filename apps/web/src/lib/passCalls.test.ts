@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { expect, it } from "vitest";
 import type { ThreadEdit } from "@scarlet/shared";
-import { decidedPassCalls, nextWaitingInForYou, passForYouOrder } from "./passCalls";
+import { decidedPassCalls, nextWaitingInForYou, passForYouOrder, rejectedCallEdits, rejectedCallIndex, rejectedCallRef, seeAllOrder } from "./passCalls";
 
 const edit = (spot: number, at: number, label = `edit ${spot}`): ThreadEdit => ({
   changeId: "chg_part",
@@ -79,6 +79,13 @@ it("advances to the next waiting For you item in list order and wraps around", (
   expect(nextWaitingInForYou(onlyOne, 2)).toBeUndefined();
 });
 
+it("orders a waiting pass's list of every edit as the chat lists it: rows and calls by time, an edit ahead of a call at its time", () => {
+  const first = [edit(0, 1)], moment = [edit(2, 6), edit(1, 4)], last = [edit(3, 9)];
+  const list = seeAllOrder([first, moment, last], [{ call: "cut 2", at: 6 }, { call: "cut 1", at: 2 }, { call: "cut 3", at: 9 }]);
+  // A moment sits at its first edit's time, wherever the edit it is named for comes.
+  expect(list).toEqual([{ row: first }, { call: "cut 1" }, { row: moment }, { call: "cut 2" }, { row: last }, { call: "cut 3" }]);
+});
+
 it("maps approved pass calls to their applied edit keys and keeps skipped calls as decided rows", () => {
   const applied = { ...edit(0, 5, "cut 1"), changeId: "chg_pass", check: undefined };
   const thread = {
@@ -98,7 +105,27 @@ it("maps approved pass calls to their applied edit keys and keeps skipped calls 
   } as Parameters<typeof decidedPassCalls>[0];
   const { decidedCallEditKeys, decidedCallRows } = decidedPassCalls(thread, [applied]);
   expect([...decidedCallEditKeys]).toEqual(["chg_pass/0"]);
-  expect(decidedCallRows).toEqual([{ key: "choice/chg_pass/1", at: 10, label: "Aside", approved: false }]);
+  // The call left out sits where its footage is now: a second earlier, by the cut the pass applied ahead of it.
+  expect(decidedCallRows).toEqual([{ key: "choice/chg_pass/1", changeId: "chg_pass", index: 1, at: 9, length: 1, label: "Aside", note: "Aside.", approved: false }]);
+  // A press on its row opens it as a rejected edit's row does. It made no edit, so it stands in as one that isn't in
+  // the video, under a spot no edit has: where its footage plays now, with Scarlet's note, and For you's to step from.
+  const calls = rejectedCallEdits(thread, [applied]);
+  expect(calls).toEqual([{ changeId: "chg_pass", spot: -2, label: "Aside", range: { start: 9, end: 10 }, previous: [], rejected: true, wasCheck: true, reason: "Aside." }]);
+  expect([rejectedCallRef("chg_pass", 1), rejectedCallIndex(calls[0]!), rejectedCallIndex(applied)]).toEqual([{ changeId: "chg_pass", spot: -2 }, 1, undefined]);
+  // Listed with the rejected edits, it is no edit a call could have made: the rows stay as they were.
+  expect(decidedPassCalls(thread, [applied], calls).decidedCallRows.map(row => row.key)).toEqual(["choice/chg_pass/1"]);
+});
+
+it("has no stand-in for a call the editor kept: only a rejected call's row opens", () => {
+  const thread = {
+    changes: [{
+      id: "chg_pass", state: "approved",
+      cutChoices: [{ index: 0, choice: "keep" as const, start: 5 }],
+      cutAssessments: [{ index: 0, start: 5, end: 6, verdict: "ask" as const, proposes: "keep" as const, reason: "The pause reads as a beat.", summary: "Beat" }],
+    }],
+  } as Parameters<typeof decidedPassCalls>[0];
+  expect(decidedPassCalls(thread, []).decidedCallRows.map(row => [row.label, row.approved])).toEqual([["Beat", true]]);
+  expect(rejectedCallEdits(thread, [])).toEqual([]);
 });
 
 it("links each approved call to its applied edit when the pass's joins carry no review index", () => {
@@ -123,5 +150,5 @@ it("links each approved call to its applied edit when the pass's joins carry no 
   } as Parameters<typeof decidedPassCalls>[0];
   const { decidedCallEditKeys, decidedCallRows } = decidedPassCalls(thread, [cut(0, 5), cut(1, 9)]);
   expect([...decidedCallEditKeys]).toEqual(["chg_pass/0", "chg_pass/1"]);
-  expect(decidedCallRows).toEqual([{ key: "choice/chg_pass/2", at: 20, label: "Aside", approved: false }]);
+  expect(decidedCallRows).toEqual([{ key: "choice/chg_pass/2", changeId: "chg_pass", index: 2, at: 18, length: 1, label: "Aside", note: "Aside.", approved: false }]);
 });

@@ -1,5 +1,6 @@
 import { AboutSettings } from "../components/shell/AboutSettings";
 import { CheckInSettings } from "../components/shell/CheckInSettings";
+import { TalkingToYouSettings } from "../components/shell/TalkingToYouSettings";
 import { LocalModelNotice, TranscriptionGuide, useLocalModelStatus, useNeedsCrisperSetup } from "../components/shell/LocalModelNotice";
 import { PreferenceSelect } from "../components/ui/PreferenceSelect";
 import { StorageSettings } from "../components/shell/StorageSettings";
@@ -317,6 +318,7 @@ export function SettingsPage() {
             <FfmpegSetupCard />
             <ServerSettingsForm section="general" />
             <CheckInSettings />
+            <TalkingToYouSettings />
           </>
         )}
         {tab === "models" && (

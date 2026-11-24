@@ -164,14 +164,17 @@ function useTranscriptionStatus(): { active: boolean; queued: boolean; progress?
   }, [tasks, media]);
 }
 
-/** Keep the same action in the workspace's More menu while there is work to pause, or while it is paused. */
+/**
+ * Keep the same action in the workspace's More menu while there is work to pause, or while it is paused. The row says
+ * what it pauses: the chat's own Pause holds editing, and this one is two rows from it.
+ */
 export function CachingMenuItem({ close }: { close(): void }) {
   const processing = useMediaProcessing();
 
   if (!processing.available) return null;
-  return <MenuItem disabled={processing.busy} title={processing.description} onClick={async () => {
+  return <MenuItem disabled={processing.busy} onClick={async () => {
     if (await processing.toggle()) close();
   }}>
-    <Icon name={processing.icon} />{processing.error || processing.label}
+    <Icon name={processing.icon} />{processing.error || processing.description}
   </MenuItem>;
 }

@@ -109,7 +109,8 @@ export function skillFromChange(store: MockStore, changeId: string, name: string
 function pendingLearning(store: MockStore, projectId: string, learningId: string): Learning {
   const learning = store.db.learnings.find(l => l.id === learningId && l.projectId === projectId);
   if (!learning) throw notFound("Learning");
-  if (learning.state !== "suggested") throw new ScarletApiError(409, "learning_settled", `this learning is already ${learning.state}`);
+  if (learning.state !== "suggested") throw new ScarletApiError(409, "learning_settled", learning.state === "saving" ? "This rule is already being saved."
+    : learning.state === "saved" ? "This rule was already approved." : "This rule was already declined.");
   return learning;
 }
 
