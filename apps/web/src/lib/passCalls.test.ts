@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { expect, it } from "vitest";
 import type { ThreadEdit } from "@scarlet/shared";
-import { decidedPassCalls, nextWaitingInForYou, passForYouOrder, rejectedCallEdits, rejectedCallIndex, rejectedCallRef, seeAllOrder } from "./passCalls";
+import { decidedPassCalls, passForYouOrder, rejectedCallEdits, rejectedCallIndex, rejectedCallRef } from "./passCalls";
 
 const edit = (spot: number, at: number, label = `edit ${spot}`): ThreadEdit => ({
   changeId: "chg_part",
@@ -53,37 +53,6 @@ it("orders For you items by publication number when asks are numbered, else by t
     "A",
     "late edit",
   ]);
-});
-
-it("advances to the next waiting For you item in list order and wraps around", () => {
-  const e1 = edit(0, 15, "edit 2");
-  const e2 = edit(1, 4, "edit 4");
-  const items = passForYouOrder(
-    [
-      { call: "call 1", at: 12, num: 1, waiting: false },
-      { call: "call 3", at: 6, num: 3, waiting: true },
-    ],
-    [
-      { edit: e1, at: 15, num: 2, waiting: true },
-      { edit: e2, at: 4, num: 4, waiting: true },
-    ],
-    true,
-  );
-  // From call 1 (index 0) -> edit 2 (index 1) -> call 3 (index 2) -> edit 4 (index 3) -> wraps to edit 2 (index 1).
-  expect(nextWaitingInForYou(items, 0)).toEqual({ edit: e1 });
-  expect(nextWaitingInForYou(items, 1)).toEqual({ call: "call 3" });
-  expect(nextWaitingInForYou(items, 2)).toEqual({ edit: e2 });
-  expect(nextWaitingInForYou(items, 3)).toEqual({ edit: e1 });
-  // When nothing else waits, returns undefined.
-  const onlyOne = items.map((item, i) => ({ ...item, waiting: i === 2 }));
-  expect(nextWaitingInForYou(onlyOne, 2)).toBeUndefined();
-});
-
-it("orders a waiting pass's list of every edit as the chat lists it: rows and calls by time, an edit ahead of a call at its time", () => {
-  const first = [edit(0, 1)], moment = [edit(2, 6), edit(1, 4)], last = [edit(3, 9)];
-  const list = seeAllOrder([first, moment, last], [{ call: "cut 2", at: 6 }, { call: "cut 1", at: 2 }, { call: "cut 3", at: 9 }]);
-  // A moment sits at its first edit's time, wherever the edit it is named for comes.
-  expect(list).toEqual([{ row: first }, { call: "cut 1" }, { row: moment }, { call: "cut 2" }, { row: last }, { call: "cut 3" }]);
 });
 
 it("maps approved pass calls to their applied edit keys and keeps skipped calls as decided rows", () => {

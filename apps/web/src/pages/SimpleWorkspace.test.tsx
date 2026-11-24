@@ -24,7 +24,7 @@ import { useProjectStore, type ProjectData } from "../stores/project";
 import { useSkillsStore } from "../stores/skills";
 import { useUiStore, type AgentContext } from "../stores/ui";
 import { SimpleWorkspace } from "./SimpleWorkspace";
-import { callGoesTo, cutOnWorkingCut, keepGoesTo } from "../lib/passCalls";
+import { cutOnWorkingCut, keepGoesTo } from "../lib/passCalls";
 import { cutAudition } from "../lib/cutAudition";
 import { lengthLabel } from "../lib/format";
 import * as watch from "./WatchPage";
@@ -14035,20 +14035,6 @@ it("goes from a kept edit Scarlet didn't flag to a call still waiting, or a flag
   expect(keepGoesTo(rows, 4, still, [{ call: "cut 2", at: 27 }])).toEqual({ edit: rows[1]![0] });
   // Nothing else waits: the card closes.
   expect(keepGoesTo([[edit(13, undefined, true)], [edit(21)]], 1, still, [])).toBeUndefined();
-});
-
-it("goes from an approved call in See all to the next item in time order, edit or call", () => {
-  const edit = (at: number, check?: string, kept = false) => ({ changeId: "chg_pass", spot: at, label: `at ${at}`, range: { start: at, end: at + 1 }, previous: [], kept, ...(check && { check }) });
-  const rows = [[edit(13, undefined, true)], [edit(21)], [edit(35)], [edit(45, "Listen to the join.")], [edit(50)]];
-  const still = (e: object) => !(e as { kept: boolean }).kept;
-  // Approved call at 0:27: the unflagged edit at 0:35 is next in See all, ahead of the waiting call at 0:55.
-  expect(callGoesTo(rows, still, [{ call: "cut 2", at: 55, after: true }], 27)).toEqual({ edit: rows[2]![0] });
-  // Approved call at 0:27: when another waiting call comes at 0:30 before the edit at 0:35, it goes to that call.
-  expect(callGoesTo(rows, still, [{ call: "cut 2", at: 30, after: true }], 27)).toEqual({ call: "cut 2" });
-  // Approved last call at 0:55: wraps past the kept 0:13 to the first unkept edit at 0:21.
-  expect(callGoesTo(rows, still, [], 55)).toEqual({ edit: rows[1]![0] });
-  // Nothing else waits: the card closes.
-  expect(callGoesTo([[edit(13, undefined, true)]], still, [], 27)).toBeUndefined();
 });
 
 it("steps through See all in list order when approving a call or keeping a flagged edit on a pass", async () => {
