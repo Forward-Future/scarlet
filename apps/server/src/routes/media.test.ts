@@ -212,6 +212,22 @@ it("shows the last frame for a time past the end of a video, not an engine error
   expect(lines.filter(line => line.startsWith("[error]"))).toEqual([]);
 });
 
+it("says why a file can't be read without the path of Scarlet's library, and logs the path", async () => {
+  const { ctx } = workspace;
+  const lines: string[] = [];
+  ctx.log = line => lines.push(line);
+  const source = join(directory, "Broken interview.mp4");
+  writeFileSync(source, "not a video at all");
+  const res = await api("POST", `/projects/${project.id}/media/import`, { path: source });
+  const { error } = await res.json() as { error: { code: string; message: string } };
+  expect([res.status, error.code]).toEqual([400, "probe_failed"]);
+  expect(error.message).toMatch(/^ffprobe could not read the file: [\s\S]*Invalid data found/);
+  expect(error.message).toContain("Broken interview.mp4");
+  for (const folder of [ctx.paths.media(project.id), realpathSync(directory), directory]) expect(error.message).not.toContain(folder);
+  expect(error.message).not.toMatch(/[\\/]ffprobe(\.exe)? exited/);
+  expect(lines.some(line => line.includes("probe_failed") && line.includes(ctx.paths.media(project.id)))).toBe(true);
+});
+
 it("saves which input is the editor's voice only once the recording shows two isolated inputs and their mix", async () => {
   const { ctx } = workspace;
   ctx.paths.ensureProject(project.id);

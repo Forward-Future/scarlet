@@ -28,6 +28,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - M, or a marking tool, pressed while the video plays now pauses it and starts marking that frame, instead of only pausing.
 - Saving a timeline or captions file while Scarlet's engine restarts is tried again, instead of failing at once with "Export destination expired".
 - Loudness checks on a recording no longer keep failing after Scarlet was closed while saving one: Scarlet measures it again.
+- A file Scarlet can't read now says so by its own name, without the full path of Scarlet's library folder.
 
 ## November 23, 2026
 
