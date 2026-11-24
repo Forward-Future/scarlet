@@ -1,11 +1,13 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { clipEnd, timelineToSource, type MediaAsset, type Timeline } from "@scarlet/timeline";
+import { clipEnd, timelineToSource, volumeDbAt, type MediaAsset, type Timeline, type VolumeKeyframe } from "@scarlet/timeline";
 import type { WaveformResponse } from "@scarlet/shared";
 import { originalClipAt } from "./thumbs";
 import { api } from "../../lib/client";
 import { useArrival, wavePhase } from "./laneLoading";
 
-type Span = { id: string; start: number; end: number; sourceIn: number; speed: number; gain: number; fadeIn: number; fadeOut: number; ingesting?: boolean };
+/** `levels`: the clip's volume keyframes, in seconds from `start`, on top of `gain`, as the render plays them. */
+type Span = { id: string; start: number; end: number; sourceIn: number; speed: number; gain: number; fadeIn: number; fadeOut: number;
+  levels?: readonly VolumeKeyframe[]; ingesting?: boolean };
 /**
  * scaleWith: another version on the same clock, such as the other side of a Before/After comparison.
  * Both share one scale, so a level change shows as a change in height instead of being normalized away.
@@ -48,7 +50,8 @@ function audioSpans({ source, timeline, media, original }: WaveformMedia, start:
       const out = clipEnd(clip);
       if (!asset || clip.timelineIn >= end || out <= start) continue;
       spans.push({ id: clip.mediaId, start: clip.timelineIn, end: out, sourceIn: clip.sourceIn,
-        speed: clip.speed, gain: clip.volume, fadeIn: clip.audioFadeIn, fadeOut: clip.audioFadeOut, ingesting: asset.status === "ingesting" });
+        speed: clip.speed, gain: clip.volume, fadeIn: clip.audioFadeIn, fadeOut: clip.audioFadeOut,
+        ...(clip.volumeKeyframes?.length && { levels: clip.volumeKeyframes }), ingesting: asset.status === "ingesting" });
     }
   }
   return spans;
@@ -152,7 +155,8 @@ export function waveformBars(spans: Span[], waves: Map<string, WaveformResponse>
       }
       const mid = (a + b) / 2;
       const fade = Math.min(1, span.fadeIn ? (mid - span.start) / span.fadeIn : 1, span.fadeOut ? (span.end - mid) / span.fadeOut : 1);
-      const gain = span.gain * fade;
+      const keyed = span.levels ? Math.pow(10, volumeDbAt(span.levels, mid - span.start) / 20) : 1;
+      const gain = span.gain * keyed * fade;
       const amplitude = peak * gain;
       if (a > start + i * step || b < start + (i + 1) * step) {
         // Two clips meeting inside one pixel are consecutive, not twice as loud.
@@ -171,8 +175,17 @@ export function waveformBars(spans: Span[], waves: Map<string, WaveformResponse>
     }
     peaks[i] = Math.min(1, peaks[i]! + max);
   }
-  return { peaks, rms: energy.map((value, i) => Math.min(peaks[i]!, Math.sqrt(value))) };
+  const rms = energy.map((value, i) => Math.min(peaks[i]!, Math.sqrt(value)));
+  return { peaks, rms, body: rms.map((value, i) => Math.min(peaks[i]!, value * SPEECH_CREST)) };
 }
+
+/**
+ * How far above its RMS level speech peaks, typically: 10 dB. The solid body of each bar is its RMS lifted by this, so
+ * it stands about where speech of that loudness peaks, and two sounds that play as loud draw as tall. Peaks alone don't:
+ * a sponsor read that was mastered peaks some 3 dB under the raw camera sound it was matched to by loudness, and drew a
+ * third shorter at the join although the two sounded the same (2026-11-23). The peaks stay, fainter, around the body.
+ */
+const SPEECH_CREST = Math.pow(10, 10 / 20);
 
 /**
  * Bar height per unit of level. Use the lane height for quiet recordings while leaving near-silence quiet.
@@ -221,10 +234,10 @@ export const TimelineWaveform = memo(function TimelineWaveform({ timeline, sourc
   }, [spans, shown, preparing, start, duration, mediaPaused]);
   const paths = useMemo(() => {
     if (!count || loaded?.spans !== spans) return;
-    const { peaks, rms } = waveformBars(shown, loaded.waves, start, duration, count);
+    const { peaks, body } = waveformBars(shown, loaded.waves, start, duration, count);
     const other = reference.length ? waveformBars(reference, loaded.waves, start, duration, count).peaks : undefined;
     const scale = waveformScale(peaks, other);
-    return { peak: barsPath(peaks, scale), rms: rms.some(sample => sample > 0) ? barsPath(rms, scale) : undefined };
+    return { peak: barsPath(peaks, scale), body: body.some(sample => sample > 0) ? barsPath(body, scale) : undefined };
   }, [loaded, spans, shown, reference, count, start, duration]);
   const loading = duration > 0 && shown.length > 0 && loaded?.spans !== spans && !(preparing && mediaPaused);
   useLayoutEffect(() => onLoading?.(loading), [onLoading, loading]);
@@ -240,8 +253,8 @@ export const TimelineWaveform = memo(function TimelineWaveform({ timeline, sourc
     {waiting ? <div className="waveform-ripple" style={{ "--wave-phase": phase } as CSSProperties} /> :
       // After a wait the bars grow out of the line the ripple ran along.
       <svg className={arriving ? "is-arriving" : undefined} width="100%" height="100%" viewBox={`${x} 0 ${(count || 1) * scale} 100`} preserveAspectRatio="none">
-        <path d={paths?.peak} stroke="currentColor" strokeWidth={0.7 * scale} opacity={paths?.rms ? ".83" : "1"} />
-        {paths?.rms && <path d={paths.rms} stroke="currentColor" strokeWidth={0.7 * scale} />}
+        <path d={paths?.peak} stroke="currentColor" strokeWidth={0.7 * scale} opacity={paths?.body ? ".38" : "1"} />
+        {paths?.body && <path d={paths.body} stroke="currentColor" strokeWidth={0.7 * scale} />}
         <line x2={count} y1="50" y2="50" stroke="currentColor" opacity=".3" vectorEffect="non-scaling-stroke" />
       </svg>}
   </div>;

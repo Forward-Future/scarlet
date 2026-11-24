@@ -356,9 +356,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
     if (e.type === "pointerup") gesture.x = e.clientX;
     seek();
     if (e.type === "pointerup" && gesture.time !== undefined) onSelectTime?.(gesture.time);
-    // A click away from the marked range, not a scrub, takes it off.
-    if (e.type === "pointerup" && !gesture.fine && range && onRange && gesture.time !== undefined && Math.abs(gesture.x - gesture.x0) <= 3
-      && (gesture.time < range.start || gesture.time > range.end)) onRange(undefined);
+    // A click away from the marked range moves the playhead and keeps the range, so the editor can play into it and adjust it.
     drag.current = null;
     if (gesture.fine) setLens(undefined);
     gesture.lifetime.abort();

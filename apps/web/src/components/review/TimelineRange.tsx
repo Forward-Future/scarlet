@@ -106,7 +106,7 @@ interface RangeSelect {
   onRange(range: TimeRange | undefined, byKey?: boolean): void;
   onSeek(time: number): void;
   onScrubStart?(gesture: AbortSignal): ((release?: ScrubRelease) => void) | undefined;
-  /** A press on the ruler that never became a range. It takes off the range there was. */
+  /** A press on the ruler that never became a range. It moves the playhead and keeps the range there was. */
   onPress(time: number): void;
   beforeGesture(): void;
 }
@@ -137,7 +137,7 @@ export function LoupePicture({ frame, last, fps, frameAt, sheet, foreground }: {
  * video follows the end that moves. Each end has a handle the height of the timeline: dragged, it lands on the edge of a
  * cut or an edit it comes near; held still, it opens a close-up where the end moves a frame at a time. A press held
  * still on the ruler opens the same close-up, to draw a range by frames from there, and so does a drag that stops and
- * holds still: the end it was moving carries on by frames. A click on the ruler takes the range off.
+ * holds still: the end it was moving carries on by frames. A click on the ruler moves the playhead and keeps the range.
  */
 export function useRangeSelect({ slider, drag, from, span, start, end, fps, edges, frameAt, sheet, pictureAspect = 16 / 9, range, onRange, onSeek, onScrubStart, onPress, beforeGesture }: RangeSelect) {
   const [live, setLive] = useState<{ range: TimeRange; moving: "start" | "end"; at: number; snapped: boolean; precise?: number }>();
@@ -217,7 +217,6 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       setLive(undefined);
       if (drawn && g.last) now.current.onRange(g.last);
       else if (!cancelled && !edge) {
-        if (range) now.current.onRange(undefined);
         now.current.onPress(clampTime(pressed, now.current.start, now.current.end));
       }
     };

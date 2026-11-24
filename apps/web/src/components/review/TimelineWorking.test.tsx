@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Task } from "@scarlet/shared";
+import { requestRoots } from "../../lib/requestRuns";
 import { useWorkingLines } from "../../lib/workingLines";
 import { TimelineWorking } from "./TimelineWorking";
 
@@ -48,6 +49,34 @@ it("counts several requests at work and goes on to the next one in the chat with
     // Nothing at work, nothing under the timeline.
     await act(async () => root.render(<TimelineWorking tasks={[]} />));
     expect(container.querySelector(".timeline-working")).toBeNull();
+  } finally {
+    chat.remove();
+  }
+});
+
+it("brings a request that was picked up again into view, by the block it began in", async () => {
+  const chat = document.createElement("aside");
+  chat.id = "simple-chat";
+  // The chat keeps a request's one block, named for its first attempt. After a pause or a restart Scarlet works on it
+  // under a later attempt, and after Retry under one that only the failed attempt names.
+  chat.innerHTML = `<div class="unit" data-run="a"><div class="req"><div class="req-now" id="a-now"></div></div></div>
+    <div class="unit" data-run="b"><div class="req"><div class="req-now" id="b-now"></div></div></div>`;
+  document.body.append(chat);
+  const scrolled: string[] = [];
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value(this: HTMLElement) { scrolled.push(this.id); } });
+  const resumed = { id: "a_again", resumeRootId: "a" } as Task;
+  const retried = [{ id: "b", retryTaskId: "b_again" }, { id: "b_again" }] as Task[];
+  try {
+    await act(async () => root.render(<TimelineWorking tasks={[resumed, retried[1]!]} rootOf={requestRoots([resumed, ...retried])} />));
+    const status = container.querySelector<HTMLButtonElement>(".timeline-working")!;
+    await act(async () => status.click());
+    await act(async () => status.click());
+    expect(scrolled).toEqual(["a-now", "b-now"]);
+    expect(chat.querySelector("#b-now")!.hasAttribute("data-flash")).toBe(true);
+    // With nothing to say which request an attempt belongs to, one that was resumed still names it.
+    await act(async () => root.render(<TimelineWorking tasks={[resumed]} />));
+    await act(async () => container.querySelector<HTMLButtonElement>(".timeline-working")!.click());
+    expect(scrolled).toEqual(["a-now", "b-now", "a-now"]);
   } finally {
     chat.remove();
   }

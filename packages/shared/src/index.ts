@@ -61,6 +61,8 @@ export {
   matchesEdit,
   namedTimelineEdits,
   REJECT_MESSAGE,
+  ADD_MESSAGE,
+  isAddRequest,
   REVISED_CHECK,
   threadEditList,
   type EditRef,

@@ -72,6 +72,26 @@ it("shows reporting locked off by the environment even with a saved opt-in", asy
   expect(el.textContent).toContain("turned off by the engine environment");
 });
 
+it("saves how Scarlet talks to the editor when they leave the field, in their own words", async () => {
+  const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } }));
+  await open("/settings");
+  const field = el.querySelector<HTMLTextAreaElement>(".talking-to-you-field")!;
+  expect(el.querySelector("#talking-to-you-heading")?.textContent).toBe("Talking to you");
+  expect(field.value).toBe("");
+  const type = (text: string) => act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, text);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await type("  Say times as 1:05, not 65 seconds.\n");
+  expect(save).not.toHaveBeenCalled();
+  await act(async () => { field.focus(); field.blur(); });
+  expect(save).toHaveBeenCalledExactlyOnceWith({ talkingToYou: "Say times as 1:05, not 65 seconds." });
+  expect(field.value).toBe("Say times as 1:05, not 65 seconds.");
+  // Leaving the field again with nothing changed saves nothing.
+  await act(async () => { field.focus(); field.blur(); });
+  expect(save).toHaveBeenCalledOnce();
+});
+
 it("leaves Settings on Esc when nothing is unsaved", async () => {
   await open("/settings#advanced");
   expect(saveButton().disabled).toBe(true);

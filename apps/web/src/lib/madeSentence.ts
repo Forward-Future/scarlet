@@ -22,9 +22,10 @@ const NAMED = 3;
  * request's edits, so the sentence is right whatever the request was: cuts say how much came out, and anything else
  * is counted by what it did. A few edits that aren't cuts are named instead of counted. A request that made one edit
  * says what Scarlet said about that edit. An edit made in several places is one edit, unless the list under the
- * sentence has a row for each place (`eachPlace`): then the sentence counts what that list shows.
+ * sentence has a row for each place (`eachPlace`): then the sentence counts what that list shows. While the list open
+ * under the sentence has a row for every edit it would name (`rowsName`), it counts them and leaves their names to the rows.
  */
-export function madeSentence(listed: readonly Listed[], length: (seconds: number) => string, eachPlace = false): SentencePart[] {
+export function madeSentence(listed: readonly Listed[], length: (seconds: number) => string, eachPlace = false, rowsName = false): SentencePart[] {
   // An edit another request made is listed for a doubt this one raised about it. This request didn't make it.
   // A marker changed nothing in the video: it is a spot left for the editor, counted on its own.
   const cuts: Listed[] = [];
@@ -53,7 +54,7 @@ export function madeSentence(listed: readonly Listed[], length: (seconds: number
   if (others.length) {
     // Graphics are counted however few: their names are the words on them, which say little in a sentence.
     if (!cuts.length && others.length <= NAMED && !others.every(o => o.edit.kind === "graphic")) {
-      parts.push("Made ", { strong: String(others.length) }, ` ${others.length === 1 ? "edit" : "edits"}: ${others.map(o => o.edit.label.replace(/[.!?]+$/, "")).join(", ")}`);
+      parts.push("Made ", { strong: String(others.length) }, ` ${others.length === 1 ? "edit" : "edits"}${rowsName ? "" : `: ${others.map(o => o.edit.label.replace(/[.!?]+$/, "")).join(", ")}`}`);
     } else {
       // Counted by what they did, in the order each kind first appears.
       const counts = new Map<string, { n: number; noun: [string, string] }>();

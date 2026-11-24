@@ -9,7 +9,8 @@ import { editGroups } from "./threadEditState";
 import { originalReviewRef } from "../../lib/editReviews";
 import { editMoments } from "./EditReferences";
 import { appliedPassCuts, type FirstCutDelivery } from "../../lib/threads";
-import { listMoments, type Moment } from "../../lib/editMoments";
+import { passRows, type Moment } from "../../lib/editMoments";
+import { rejectedCallEdits, rejectedCallIndex } from "../../lib/passCalls";
 
 const empty: ThreadEdit[] = [];
 /** Only project/thread/version-matched markers can start playback. Ignore replies from a previous view. */
@@ -49,9 +50,15 @@ export function useThreadTimeline(projectId: string, head: string | null, thread
   // blink out and come back, and its listen isn't played again. A list that failed to load shows nothing.
   const last = useRef<{ owner: string; edits: ThreadEdit[]; rejected: ThreadEdit[] }>(undefined);
   const edits = current?.edits ?? (!current && !!head && last.current?.owner === owner ? last.current.edits : empty);
-  const rejected = current?.rejected ?? (!current && !!head && last.current?.owner === owner ? last.current.rejected : empty);
-  if (current?.edits) last.current = { owner, edits, rejected };
+  const listedRejected = current?.rejected ?? (!current && !!head && last.current?.owner === owner ? last.current.rejected : empty);
+  if (current?.edits) last.current = { owner, edits, rejected: listedRejected };
   else if (current?.error) last.current = undefined;
+  // A call the editor rejected before its pass went in made no edit, so the engine lists none for it. Its row in the
+  // chat opens it as a rejected edit's row does, so it stands with them here.
+  const rejected = useMemo(() => {
+    const calls = rejectedCallEdits(thread, edits, listedRejected);
+    return calls.length ? [...listedRejected, ...calls] : listedRejected;
+  }, [thread, edits, listedRejected]);
   const found = picked?.owner === owner ? edits.find(e => matchesEdit(e, picked.ref)) ?? rejected.find(e => matchesEdit(e, picked.ref)) : undefined;
   // One that is leaving stays the edit it was when the editor rejected it, on the version it was on: the list that
   // comes in without it, a moment later, doesn't close its card or move the timeline under it.
@@ -82,8 +89,9 @@ export function useThreadTimeline(projectId: string, head: string | null, thread
   const rows = useMemo(() => passFocused ? edits.map(edit => [edit]) : editGroups(edits).map(g => g.members.map(m => m.edit)), [edits, passFocused]);
   // A pass's list shows its edits as moments: edits that overlap so much they play as one change are one row, named for
   // its main edit, which is the one chosen when the moment is. One of its edits picked on its own is just that edit.
-  const moments = useMemo(() => passFocused ? listMoments(edits) : undefined, [edits, passFocused]);
-  const momentOf = (edit: ThreadEdit) => moments?.find(m => m.edits.includes(edit));
+  // An edit made in many places is one row too, as the chat lists it, but no moment: any place of it opens alone.
+  const moments = useMemo(() => passFocused ? passRows(edits) : undefined, [edits, passFocused]);
+  const momentOf = (edit: ThreadEdit) => moments?.find(m => !m.places && m.edits.includes(edit));
   const single = !!picked?.single;
   const shownMoment = selected && !single ? momentOf(selected) : undefined;
   const selectedMoment: Moment<ThreadEdit> | undefined = shownMoment && shownMoment.edits.length > 1 && shownMoment.main === selected ? shownMoment : undefined;
@@ -95,7 +103,10 @@ export function useThreadTimeline(projectId: string, head: string | null, thread
     }
     return refs;
   }, [rows]);
-  const replyTarget = (edit: ThreadEdit, moment?: Moment<ThreadEdit>): AgentContext => ({
+  const replyTarget = (edit: ThreadEdit, moment?: Moment<ThreadEdit>): AgentContext => rejectedCallIndex(edit) !== undefined ? {
+    // A rejected call is no edit of the engine's: a message about it names its cut of the pass, as a note on a call does.
+    changeId: edit.changeId, cutIndex: rejectedCallIndex(edit), version: head ?? undefined, time: edit.range.start, end: edit.range.end, clipIds: [], label: edit.label,
+  } : ({
     changeId: edit.changeId, editIndex: edit.spot, reviewRef: reviewRefs.get(edit), editNumber: edits.indexOf(edit) + 1,
     version: head ?? undefined, time: edit.range.start, end: edit.range.end, clipIds: [], label: edit.label,
     // A moment is about all of its edits: its stretch is theirs, and Scarlet is told the others.

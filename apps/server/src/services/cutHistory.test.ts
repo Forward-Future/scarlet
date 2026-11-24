@@ -174,6 +174,34 @@ it("undoes a request whose only edit is rejected, whatever it changed", () => {
   expect(ctx.repos.versions.get(project.id, after.head!)!.timeline.markers).toEqual([]);
 });
 
+it("takes a rejected to-do's marker off with no model and leaves the change's other edits as they were", () => {
+  const { ctx } = app;
+  const user = localUser(ctx);
+  ctx.repos.projects.putMedia(project.id, { id: "camera", name: "interview.mov", kind: "video", path: "camera.mov" }, "ready");
+  const first = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 30 }, { start: 30, end: 60 }]), { parent: null });
+  const clip = first.tracks.find(t => t.kind === "video")!.clips[1]!;
+  // One request punched in and marked two spots for B-roll.
+  const ops = [{ op: "updateClip" as const, clipId: clip.id, patch: { transform: { x: 0, y: 0, scale: 1.1, rotation: 0 } } },
+    { op: "addMarker" as const, marker: { id: "boats", time: 9, kind: "todo" as const, text: "Add B-roll of the boats" } },
+    { op: "addMarker" as const, marker: { id: "harbour", time: 20, kind: "todo" as const, text: "Add B-roll of the harbour" } }];
+  const marked = storeVersion(ctx, project.id, applyOps(first, ops), { parent: first.version, changeId: "chg_broll" });
+  ctx.repos.changes.put({ id: "chg_broll", projectId: project.id, description: "Punched in and marked B-roll", author: { type: "agent", id: "codex", name: "codex" }, state: "approved", noteIds: [], renders: [], ranges: [],
+    fromVersion: first.version, toVersion: marked.version, appliedOnto: first.version, appliedVersion: marked.version, ops,
+    timelineEdits: [{ label: "Punch in", range: { start: 30, end: 60 } }, { label: "Boats B-roll", range: { start: 8, end: 11 } }, { label: "Harbour B-roll", range: { start: 19, end: 22 } }],
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  ctx.repos.projects.update(project.id, { head: marked.version });
+  const branch = ctx.repos.projects.get(project.id)!.branch ?? "main";
+  const boats = { changeId: "chg_broll", spot: 1, label: "Boats B-roll", range: { start: 8, end: 11 }, marker: true };
+  const reject = () => rejectEdits(ctx, user, project.id, "thread", [boats], ctx.repos.projects.get(project.id)!.head!, branch);
+  const { project: after, change } = reject();
+  expect(change).toMatchObject({ rejects: true, description: "Rejected · Boats B-roll", timelineEdits: [{ label: "Boats B-roll", replaces: { changeId: "chg_broll", spot: 1 } }] });
+  const now = ctx.repos.versions.get(project.id, after.head!)!.timeline;
+  expect(now.markers.map(m => m.id)).toEqual(["harbour"]);
+  expect(now.tracks.find(t => t.kind === "video")!.clips.map(c => c.kind === "media" && c.transform?.scale)).toEqual([undefined, 1.1]);
+  // Rejected again, its marker is gone: Scarlet is asked.
+  expect(reject).toThrow("This edit can’t be put back as it was.");
+});
+
 it("keeps the cuts a built video left out when its one named edit is rejected", () => {
   const { ctx } = app;
   const user = localUser(ctx);

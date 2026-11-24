@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { player } from "../../lib/player";
 import { usePictureMarksStore } from "../../stores/pictureMarks";
 import { usePlayerStore } from "../../stores/player";
-import { PictureMarkTools, PictureMarks, toggleMarking } from "./PictureMarks";
+import { PictureMarkTools, PictureMarks, marksTakeEscape, toggleMarking } from "./PictureMarks";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -237,5 +237,29 @@ it("ends marking when seeking away while paused and drops any mid-draw stroke on
   await act(async () => usePlayerStore.setState({ time: 10 }));
   expect(usePictureMarksStore.getState().marking).toBeNull();
   expect(container.querySelector(".picture-marks")).toBeNull();
+});
+
+it("says Esc is the marking's while a frame is marked or a mark is dragged, so nothing behind the picture closes with it", async () => {
+  await show();
+  const esc = (target: EventTarget = window) => {
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true });
+    Object.defineProperty(event, "target", { value: target });
+    return event;
+  };
+  expect(marksTakeEscape(esc())).toBe(false);
+  await act(async () => toggleMarking("prj", { time: 7, version: "v1" }));
+  expect(marksTakeEscape(esc())).toBe(true);
+  // Words being written keep their own Esc: the marking doesn't end on it, so it isn't the marking's.
+  const box = document.createElement("textarea");
+  container.append(box);
+  expect(marksTakeEscape(esc(box))).toBe(false);
+  // Once marking is over, a mark held mid-drag still takes Esc, which puts it back.
+  await press("pointerdown", 200, 100);
+  await press("pointerup", 200, 100);
+  await act(async () => usePictureMarksStore.getState().stop());
+  expect(marksTakeEscape(esc())).toBe(false);
+  const point = container.querySelector('.picture-mark-point[data-mark-index="0"]')!;
+  await act(async () => { point.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 200, clientY: 100, pointerId: 2, button: 0 })); });
+  expect(marksTakeEscape(esc())).toBe(true);
 });
 
