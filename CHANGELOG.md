@@ -6,6 +6,14 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- A row in a list of edits is one line, so a long list reads at a glance: the row that's open reads in full, and its card has the whole note.
+- A row ends on one word: an edit sent back says Revising… where its amount was, and one that came back says Revised there in amber, instead of on a second line.
+- A request under a cut's or edit's row is just your words, Stop, and what Scarlet is doing: Scarlet's opening sentence, the time and the tokens no longer repeat there.
+- Pause shows once, on the request's band, while Scarlet works on cuts or edits under it, instead of beside every Stop.
+- A request's time and tokens stay in view only while Scarlet works on it; rest the pointer on any other request's heading to see them.
+- Requests you folded sit together as one list, with no gap between them.
+- A rule Scarlet learned is one line in the chat, cut short when long; rest the pointer on it or open Learnings to read all of it.
+- The rows of a pass's For you list start on one edge.
 - When a pass can't go in, Retry now sits right after the reason, instead of above it.
 - The line under a working request says what Scarlet is doing in plainer words, such as "Looking over the change", "Asking you a question" and "Tidying up its notes", and no longer ends in a number that didn't match your list of edits.
 - The check Scarlet runs at the end of a pass has one name everywhere: the closing check for repeats.

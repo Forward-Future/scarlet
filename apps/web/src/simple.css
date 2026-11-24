@@ -225,7 +225,7 @@
 .simple-edit-value { grid-column: 3; }
 /* Sent back or come back revised, a row ends on that word (Revising…, Up next, Revised), where its amount was: one
    word a row, on the row's own line. Amber once it is back and waits on the editor. */
-.simple-edit-check, .simple-pass-check { grid-column: 3; justify-self: end; font-size: 12px; color: var(--color-warn); white-space: nowrap; }
+.simple-edit-check, .simple-pass-check { grid-column: 3; font-size: 12px; color: var(--color-warn); white-space: nowrap; }
 .simple-edit-check.is-kept, .simple-pass-check.is-kept { color: var(--color-muted); }
 /* The edit's number; amber while it asks for a look. Kept: filled, widened to a pill with a check beside the number. */
 .edit-badge { justify-self: start; display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; border: 1.2px solid var(--color-muted);
@@ -860,7 +860,7 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .simple-pass-list.is-short > li > * { grid-column: 1 / -1; }
 .simple-pass-list.is-short > li > button { grid-template-columns: subgrid; align-items: center; }
 .simple-pass-list.is-short > li > .subunit { justify-self: stretch; contain: inline-size; }
-.simple-pass-list.is-short .simple-pass-value { justify-self: end; }
+.simple-pass-list.is-short :is(.simple-pass-value, .simple-pass-check) { justify-self: end; }
 .simple-pass-list > li > button:is(.is-decided, .is-rejected, :disabled) .edit-badge,
 .simple-edit.is-decided .edit-badge { border-color: var(--color-line); color: var(--color-dim); }
 .simple-pass-list > li > button.is-decided .edit-badge.is-kept,
