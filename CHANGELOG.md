@@ -7,6 +7,27 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 24, 2026
 
 - When Claude Code, Codex or Gemini is installed in a way Scarlet can't start, Scarlet now uses another copy it can start, or shows it as not installed, instead of failing every request at once. A request that can't start now says why.
+- A transcript fix on words that run from one speaker's line into the next keeps each word with the speaker who said it.
+- A transcript fix that adds a word, such as Claude to Claude Code, no longer doubles the word where the transcript already said it right (“Claude Code Code”), and making the fix again changes nothing.
+- When Scarlet moves a clip's voice to the dialogue track, for a crossfade, a J or L cut or to line up its picture, the voice keeps the audio track you chose and its volume changes, such as music dipping under speech, instead of going back to the first track at a flat level.
+- A picture or logo held on the timeline now shows its frame at any point of its clip, in hover previews and marked frames, instead of failing after its first two seconds.
+- A HEIC photo from an iPhone, or an AVIF picture, now plays and exports in the video instead of stopping the render.
+- An EQ on a clip with a frequency below zero or far above hearing no longer stops the video from rendering.
+- A voice cleaned up with voice cleanup now plays to the very end of each cut, instead of going silent for its last moment.
+- A J or L cut Scarlet makes now shows the right time in the list: one at 3 seconds could read 0:02, and one past an hour read 62:05 instead of 1:02:05.
+- A cut whose clean edge would reach outside the part of the video you selected, or into footage you marked to keep, now always waits for you, even when Scarlet was told to apply joins it isn't sure of.
+- A cut's row in a request's list now quotes the words beside it as the transcript has them, even when the row was first shown while Scarlet was still placing the transcript's words.
+- With OpenAI transcription, a voice message or note that the recorder saved without its length is now transcribed in full, not just its first second.
+- With note cleanup on, a spoken note whose tidied-up version got cut off partway now keeps your own words, instead of sending Scarlet half a request.
+- Media and its link in the header now show each video's playback cache again after you leave a project and come straight back, instead of showing nothing until a file changed.
+- An undo or a rejected edit that went through no longer says it failed, or leaves the old cut on screen, when the new timeline takes a moment to load: Scarlet loads it again by itself.
+- ⌘Z on a revision whose version you've applied since no longer stops Scarlet's work on it while saying it couldn't undo it.
+- A project's card in the library now flips through its footage on hover after its video finishes importing, and after Scarlet's engine restarts, instead of staying on its poster until Scarlet is reopened.
+- Rewording a rule in Learnings with a Japanese, Chinese or Korean keyboard no longer throws away what you wrote when you press Esc or Enter to finish a word.
+- Typing a note in Media with a Japanese, Chinese or Korean keyboard no longer saves it, or closes it, when you press Enter or Esc to finish a word.
+- Moving the end of a marked range with → near the end of the video no longer pushes it past the end, where its handle disappeared and the arrows stopped working.
+- M, or a marking tool, pressed while the video plays now pauses it and starts marking that frame, instead of only pausing.
+- Saving a timeline or captions file while Scarlet's engine restarts is tried again, instead of failing at once with "Export destination expired".
 
 ## November 23, 2026
 

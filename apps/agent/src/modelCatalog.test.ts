@@ -124,6 +124,25 @@ it("reads Gemini ACP session choices, configOptions efforts, and API-key authent
 });
 
 
+it("stops a CLI that stays up once its model list is read", async () => {
+  // agy can keep running after its input closes: only a stop ends it.
+  vi.mocked(spawnLines).mockImplementation((_file, _args, opts) => {
+    let finish!: () => void;
+    const done = new Promise<void>((resolve) => { finish = resolve; });
+    const stdin = {
+      write(line: string) {
+        const { id, method } = JSON.parse(line);
+        const result = method === "initialize" ? {} : { models: { availableModels: [{ modelId: "flash", name: "Flash" }] } };
+        queueMicrotask(() => opts.onLine(JSON.stringify({ id, result })));
+      },
+      end: () => undefined,
+    };
+    return { child: { stdin }, done, kill: finish } as unknown as SpawnHandle;
+  });
+  const waited = new Promise((resolve) => setTimeout(() => resolve("still waiting"), 1000));
+  expect(await Promise.race([discoverModels("gemini", "agy", {}), waited])).toEqual({ models: ["flash"], modelLabels: { flash: "Flash" }, modelOptions: { flash: { efforts: [], speeds: [] } } });
+});
+
 it("reports a failed or malformed later page without exposing its contents", async () => {
   peer(({ id }) => id === 1 ? { id, result: {} } : id === 2
     ? { id, result: { data: [], nextCursor: "again" } }

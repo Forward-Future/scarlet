@@ -229,3 +229,24 @@ describe("handing a split edit to another editor", () => {
     expect(xml).toContain('offset="2s" name="Host" start="2s" duration="94/25s" srcEnable="audio"');
   });
 });
+
+describe("split edit sound keeps its levels and stream", () => {
+  it("keeps the audio stream and keeps level changes on the same footage when the sound leads its picture", () => {
+    const before = conversation();
+    const answer = before.tracks[0]!.clips[1] as MediaClip;
+    answer.audioTrack = 1;
+    // 1 s into the shot, timeline 5 s.
+    answer.volumeKeyframes = [{ time: 1, db: -10, ease: "linear" }];
+    const { ops } = splitJoinOps(before, media, FPS, [{ at: 4, shift: -0.24 }, { at: 8, shift: 0.4 }]);
+    const after = applyOps(before, ops);
+    const guest = sounds(after).find(c => c.mediaId === "guest")!;
+    close(guest.timelineIn, 3.76);
+    expect(guest.audioTrack).toBe(1);
+    close(guest.timelineIn + guest.volumeKeyframes![0]!.time, 5);
+    // Putting back the J cut alone leaves the copy with the L cut, its level change still at 5 s.
+    const back = putBackSplit(after, before, after, ops as never, { start: 3.76, end: 4 })!;
+    const kept = sounds(back).find(c => c.mediaId === "guest")!;
+    close(kept.timelineIn, 4);
+    close(kept.timelineIn + kept.volumeKeyframes![0]!.time, 5);
+  });
+});

@@ -324,6 +324,7 @@ export function putBackSplit(head: Timeline, before: Timeline, after: Timeline, 
     if (back.in) {
       Object.assign(clip, { timelineIn: origin.timelineIn, sourceIn: origin.sourceIn });
       if (origin.keyframes) clip.keyframes = structuredClone(origin.keyframes); else delete clip.keyframes;
+      if (origin.volumeKeyframes) clip.volumeKeyframes = structuredClone(origin.volumeKeyframes); else delete clip.volumeKeyframes;
       if (origin.splitEdit?.leads !== undefined && !added.has(id)) record.leads = origin.splitEdit.leads; else delete record.leads;
     }
     if (back.out) {

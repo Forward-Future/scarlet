@@ -138,14 +138,15 @@ async function undoRevision(taskId: string, project: { changes: readonly Change[
     task = next;
   }
   const latest = lastAttempt(first, project.tasks) ?? first;
-  // Taken back, the request's words are withdrawn: the check reading them for a rule stops too, which Stop doesn't do.
-  if (isActiveTask(latest.state)) await api.cancelTask(latest.id, false, true);
   const made = project.changes.filter(c => c.taskId && attempts.has(c.taskId))
     .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
   // A revision of a pass or a suggestion made a new version of it. Once that went into the video it carries the whole
-  // pass with it: taking it out would take every cut of the pass out, not the one revision.
+  // pass with it: taking it out would take every cut of the pass out, not the one revision. Refused, nothing is touched:
+  // a run still at work on it carries on.
   const named = first.context.changeId ? project.changes.find(c => c.id === first.context.changeId) : undefined;
   if (named && named.state !== "approved" && made.some(c => c.state === "approved")) throw new Error("the version it made has been applied since.");
+  // Taken back, the request's words are withdrawn: the check reading them for a rule stops too, which Stop doesn't do.
+  if (isActiveTask(latest.state)) await api.cancelTask(latest.id, false, true);
   // Newest first, so each revert lands on the version it was made on.
   for (const change of made) {
     if (change.state === "approved") await revert(change.appliedVersion ?? change.toVersion);

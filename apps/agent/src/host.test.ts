@@ -207,6 +207,38 @@ it("records the engine's resulting state and a question that no longer pauses th
   expect(lines.join("\n")).not.toContain("Private");
 });
 
+it("stays stopped when it is stopped while it is still starting", async () => {
+  const sent: string[] = [];
+  const client = new ScarletClient({
+    baseUrl: "https://fixture.test",
+    fetch: async (input) => {
+      const { pathname } = new URL(String(input));
+      sent.push(pathname);
+      if (pathname.endsWith("/hosts/register")) return Response.json({ host: { id: "host_1", userId: "u1", name: "one", platform: "test", agents: [], online: true } });
+      if (pathname.endsWith("/claim")) return Response.json({ task: null });
+      return Response.json({});
+    },
+  });
+  let detected!: () => void;
+  const detecting = new Promise<void>((resolve) => { detected = resolve; });
+  const host = new AgentHost({
+    client, config: { server: "https://fixture.test", token: "fixture" }, workRoot, mcpCliPath: "fixture-mcp",
+    runner: async () => ({ ok: true, summary: "" }), ws: false, heartbeatMs: 10, idlePollMs: 10, log: () => undefined,
+    detect: async () => {
+      await detecting;
+      return [{ id: "claude", installed: true, loggedIn: true, version: "2.1.0", models: ["opus"] }];
+    },
+  });
+  const started = host.start();
+  // Detecting the assistants takes seconds. Quit meanwhile.
+  await host.stop();
+  detected();
+  await started;
+  await delay(80);
+  // Nothing goes on behind the quit: no registration, no heartbeat, no claim.
+  expect(sent).toEqual([]);
+});
+
 it("names a run started with runOne in its heartbeats, and stops it when a heartbeat's reply says it was cancelled", async () => {
   const beats: string[][] = [];
   let state: Task["state"] = "queued";

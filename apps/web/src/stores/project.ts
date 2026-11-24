@@ -652,7 +652,8 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const { project, change } = await api.historyEdit(cur.id, version, action, cur.project.head, cur.project.branch ?? "main");
       replaceChange(change);
       showRewritten(cur.id, project);
-      await get().refreshHead(cur.id);
+      // The undo went through. A timeline that can't be read at once is read again, as after an approval.
+      await get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
     },
     async rejectEdits(threadId, head, edits) {
       const cur = get().current;
@@ -660,7 +661,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const { project, change } = await api.rejectEdits(cur.id, { expectedHead: head, branch: cur.project.branch ?? "main", threadId, edits });
       replaceChange(change);
       showRewritten(cur.id, project);
-      void get().refreshHead(cur.id).catch(() => {});
+      void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
       return change.appliedVersion ?? change.toVersion;
     },
     async revise(changeId, body) {
