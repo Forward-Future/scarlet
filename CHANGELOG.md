@@ -176,6 +176,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Opened from the Dock, Finder or the Start menu, Scarlet can now use the FFmpeg that Setup installed in the commands it runs while editing.
 - When Scarlet checks where a long screen recording's picture changes around one moment, it reads that moment first instead of working through the whole recording from the start, so the answer comes back in seconds.
 - When an update fails to download, Scarlet waits longer before downloading it again instead of starting over every few minutes, and Check for updates in Settings still tries again right away.
+- A first cut asked for while Scarlet is still reading a new recording ahead of time no longer reads the same minute of it twice, so it gets through the recording sooner.
 
 ## November 22, 2026
 
