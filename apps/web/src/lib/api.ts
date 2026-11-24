@@ -29,6 +29,7 @@ export type ScarletApi = Pick<
   | "importMedia"
   | "removeMedia"
   | "setMediaAudioTrack"
+  | "setMediaNote"
   | "transcript"
   | "retakes"
   | "transcribe"

@@ -13,7 +13,7 @@ import type { AcousticWordsRequest, DialogueRangeRequest, DialogueScanRequest, D
 import type { AudioTrackSelection, Author, Change, CutAssessment, CutReview, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript, TranscriptWord } from "@scarlet/timeline";
 import type { ActivityEntry, MusicReading, TrashedProject, FullRenderKeys, PlaybackCacheStatus, SourceCacheStatus, ProjectDetail, ProjectSummary, Render, RenderFileInfo, RenderRequest, ServerSettings, User, WaveformResponse, RetakeGroup, LocalModelStatus, TelemetryUnavailable, HandoffResponse } from "./api.js";
 import type { AgentHost, RunChoice } from "./agents.js";
-import type { CompleteTaskRequest, CreateTaskRequest, RewordTaskRequest, TaskAttachment, Task, TaskEvent, TaskPrompt, TaskSkillDraft } from "./tasks.js";
+import type { CompleteTaskRequest, CreateTaskRequest, PictureMarks, RewordTaskRequest, TaskAttachment, Task, TaskEvent, TaskPrompt, TaskSkillDraft } from "./tasks.js";
 import type { KeepEditsRequest, UnkeepEditsRequest, KeptEdit, ApproveResponse, CreateNoteRequest, ProposeChangeRequest, ReviseRequest, UpdateNoteRequest, VersionSummary, DialogueCutsRequest, JoinCrossfades, FlagEditRequest, CutChoicesRequest, StagedCutRevision } from "./changes.js";
 import type { ApproveLearningRequest, ReviseLearningRequest, Learning, SuggestLearningRequest } from "./learnings.js";
 import type { RecordTaskUsageRequest, UsageGroupBy, UsageResponse } from "./usage.js";
@@ -183,6 +183,10 @@ export class ScarletClient extends ClientTransport {
   removeMedia(projectId: string, mediaId: string) {
     return this.delete<Record<string, never>>(`/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}`);
   }
+  /** Save what the editor says a file is and how to use it. An empty note takes it off. */
+  setMediaNote(mediaId: string, note: string) {
+    return this.put<{ media: MediaAsset }>(`/media/${encodeURIComponent(mediaId)}/note`, { note });
+  }
   /** Choose which audio track (or all tracks mixed) Scarlet reads from a multi-track recording. */
   setMediaAudioTrack(mediaId: string, audioTrack: AudioTrackSelection) {
     return this.put<{ media: MediaAsset }>(`/media/${encodeURIComponent(mediaId)}/audio-track`, { audioTrack });
@@ -278,7 +282,7 @@ export class ScarletClient extends ClientTransport {
   }
   /** Put back what applied edits the editor rejected changed, with no model. Refused (409) where the engine can't. */
   rejectEdits(projectId: string, body: { expectedHead: string; branch: string; threadId: string;
-    edits: { changeId: string; spot: number; label: string; range: TimeRange; revised?: boolean; at?: number; before?: { version: string; removed: TimeRange } }[] }) {
+    edits: { changeId: string; spot: number; label: string; range: TimeRange; revised?: boolean; marker?: boolean; at?: number; before?: { version: string; removed: TimeRange } }[] }) {
     return this.post<{ project: Project; change: Change }>(`/projects/${projectId}/rejected-edits`, body);
   }
   checkout(projectId: string, version: string) {
@@ -318,6 +322,8 @@ export class ScarletClient extends ClientTransport {
       droppedFromReview?: Array<{ changeId: string; version: string; start: number; end: number; why: string }>;
       /** Cuts left out because they would have swapped a held staged cut for other edges Scarlet couldn't place either. */
       heldCutsStay?: Array<{ asked: TimeRange; staged: TimeRange; why: string }>;
+      /** Earlier staged cuts Scarlet checked and settled as cuts, never asked about, that went into the video with this save. */
+      settledApplied?: { cuts: number; why: string };
       /** The project head after this submission. Older engines omit it. */
       head?: string }>(
       `/projects/${encodeURIComponent(projectId)}/dialogue-cuts`, body);
@@ -506,8 +512,9 @@ export class ScarletClient extends ClientTransport {
   continueWhenReady(taskId: string, on: boolean) {
     return this.post<{ task: Task; resumed?: Task }>(`/tasks/${taskId}/continue-when-ready`, { on });
   }
-  answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice) {
-    return this.post<{ task: Task }>(`/tasks/${taskId}/answer`, { ...runWith, text, skillIds });
+  /** Answer Scarlet's question. Files attached to the answer are kept with the request, as its own are. */
+  answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice, files?: { attachments: TaskAttachment[]; pictureMarks?: PictureMarks }) {
+    return this.post<{ task: Task }>(`/tasks/${taskId}/answer`, { ...runWith, text, skillIds, ...files });
   }
   /** Keep a queued request from starting while the editor changes its words, or let it go. Renew it to keep holding. */
   holdForRewording(taskId: string, on: boolean) {

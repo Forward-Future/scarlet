@@ -34,11 +34,12 @@ describe("working row activity", () => {
     expect(taskActivityLabel({ ...read, data: { ...read.data, input: { mediaIds: ["screen", "cam"], from: 0 } } }, pendingMediaWaits([waiting]))).toBe("Waiting for the transcript");
   });
 
-  it("names the cuts a multi-cut inspection checks", () => {
+  it("says a look at flagged cuts without the call's own count, which isn't a call's number or the list's", () => {
     const inspect = (input: object): TaskEvent => ({ type: "tool", text: "", data: { tool: "scarlet.dialogue_review_inspect", input } });
-    expect(latest([inspect({ index: 4 })])).toBe("Checking a suggested cut · Cut 5");
-    expect(latest([inspect({ index: 4, count: 4 })])).toBe("Checking suggested cuts · Cuts 5–8");
-    expect(latest([inspect({ index: 4, count: 4, wholePicture: true })])).toBe("Checking a suggested cut · Cut 5");
+    expect(latest([inspect({ index: 4 })])).toBe("Checking a flagged cut");
+    expect(latest([inspect({ index: 4, count: 4 })])).toBe("Checking flagged cuts");
+    expect(latest([inspect({ index: 4, count: 4, wholePicture: true })])).toBe("Checking a flagged cut");
+    expect(latest([{ type: "tool", text: "", data: { tool: "scarlet.change_review_cut", input: { index: 2 } } }])).toBe("Looking at an edit");
   });
 
   it("shows a dropped model stream as a reconnect", () => {
@@ -48,7 +49,7 @@ describe("working row activity", () => {
 
   it("shows active compaction and hides completed compaction notices", () => {
     expect(taskActivityLabel({ type: "log", text: "Compacting context", data: { kind: "compaction", active: true } }))
-      .toBe("Compacting context");
+      .toBe("Tidying up its notes");
     expect(taskActivityLabel({ type: "log", text: "Compacting context", data: { kind: "compaction", active: false } }))
       .toBeUndefined();
     expect(taskActivityLabel({ type: "log", text: "Context compacted", data: { kind: "compaction" } }))
@@ -72,6 +73,10 @@ describe("working row activity", () => {
     expect(editConfirmation([request, "$ ls -la", "Created `chg_123`.", "```sh\necho internal data\n```", result, "Done."].join("\n"), request)).toBe(result);
     expect(editConfirmation("From 0:00 to 29:39, the screen recording fills the frame with your face in the bottom right.")).toContain("your face in the bottom right.");
     expect(editConfirmation("git status\nffmpeg -i movie.mp4")).toBeUndefined();
+    // A web address is part of what Scarlet says; a command that fetches one is still left out.
+    const link = "The Kontorovich clip starts at 8:28: https://www.youtube.com/watch?v=zqzk43bSdDI&t=508s";
+    expect(editConfirmation(`Found both clips in your doc. ${link}`)).toBe(`Found both clips in your doc. ${link}.`);
+    expect(editConfirmation("curl https://example.com/export_html")).toBeUndefined();
     // "<1 s" and "> 3 s" are prose. A tag or an arrow is a transcript of the tools.
     expect(editConfirmation("I left both pauses. The one at 2:05 is <1 s, so cutting it would clip the breath. The one at 2:31 runs > 1 s."))
       .toBe("I left both pauses. The one at 2:05 is <1 s, so cutting it would clip the breath. The one at 2:31 runs > 1 s.");

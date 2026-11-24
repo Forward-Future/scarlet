@@ -88,6 +88,23 @@ describe("editDetail", () => {
       { kind: "split", range: { start: 14, end: 14 } }, { timeline, media })).toBe("Sound cuts with the picture");
   });
 
+  it("says only what a framing save did to its own edit, not to the clip that starts where that edit ends", () => {
+    // A camera inset over 0–10 s and a punch-in on the full-screen clip from 10 s, framed in one save as two edits.
+    const framed = { ...timeline, tracks: [
+      { id: "trk_v1", kind: "video", name: "Main", clips: [
+        { id: "a", kind: "media", mediaId: "med_main", timelineIn: 0, sourceIn: 0, sourceOut: 10, speed: 1 },
+        { id: "b", kind: "media", mediaId: "med_main", timelineIn: 10, sourceIn: 10, sourceOut: 20, speed: 1 }] },
+      { id: "trk_v2", kind: "video", name: "Camera inset", clips: [
+        { id: "inset", kind: "media", mediaId: "med_main", timelineIn: 0, sourceIn: 0, sourceOut: 10, speed: 1 }] },
+    ] } as unknown as Timeline;
+    const save = change([
+      { op: "updateClip", clipId: "inset", patch: { transform: { scale: 0.3, cropLeft: 0.2, cropRight: 0.2 } } },
+      { op: "updateClip", clipId: "b", patch: { transform: { scale: 1.3 } } },
+    ]);
+    expect(editDetail(save, { kind: "reframe", range: { start: 0, end: 10 } }, { timeline: framed, media })).toBe("Inset at 30%");
+    expect(editDetail(save, { kind: "zoom", range: { start: 10, end: 20 } }, { timeline: framed, media })).toBe("Zoom to 130%");
+  });
+
   it("names a transition and a speed", () => {
     expect(editDetail(change([{ op: "updateClip", clipId: "clp_main", patch: { transitionIn: { type: "push", duration: 0.4, direction: "right" } } }]),
       { kind: "transition", range: at }, { timeline, media })).toBe("Push right, 0.4 s");

@@ -120,10 +120,16 @@ export function connectDesktopEngine(url: string, token: string) {
   markDesktop(url);
 }
 
+/**
+ * What the editor reads when a request failed and the engine gave no reason of its own: a status line ("Internal
+ * Server Error"), a page that isn't the engine's, or nothing. The request, its status and its code are in the app log.
+ */
+export const UNEXPLAINED = "That didn’t work. Try again.";
+
 /** Normalise any thrown value into a user-facing message. */
 export function errorMessage(err: unknown): string {
   // A 503 with nothing in it is the engine turning requests away as it shuts down. Its own refusals carry a reason.
-  if (err instanceof ScarletApiError) return err.status === 503 && err.code === "http_error" ? ENGINE_UNREACHABLE : err.message || `${err.code} (${err.status})`;
+  if (err instanceof ScarletApiError) return err.code === "http_error" ? err.status === 503 ? ENGINE_UNREACHABLE : UNEXPLAINED : err.message || UNEXPLAINED;
   if (unanswered(err)) return ENGINE_UNREACHABLE;
   if (err instanceof Error) return err.message;
   return String(err);

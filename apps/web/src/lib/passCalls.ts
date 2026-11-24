@@ -105,6 +105,18 @@ export function callGoesTo<C>(rows: readonly (readonly ThreadEdit[])[], still: (
   ], from);
 }
 
+/**
+ * The full ("See all") list of a pass that waits, as ↑ and ↓ step through it: its edits' rows and its calls together,
+ * in time order as the chat lists them. An edit and a call at the same time list the edit first.
+ */
+export function seeAllOrder<C>(rows: readonly (readonly ThreadEdit[])[], calls: readonly { call: C; at: number }[]): ({ row: readonly ThreadEdit[] } | { call: C })[] {
+  const stops: { at: number; stop: { row: readonly ThreadEdit[] } | { call: C } }[] = [
+    ...rows.map(row => ({ at: rowAt(row), stop: { row } })),
+    ...calls.map(c => ({ at: c.at, stop: { call: c.call } })),
+  ];
+  return stops.sort((a, b) => a.at - b.at).map(s => s.stop);
+}
+
 export type PassForYouItem<C, E extends Omit<ThreadEdit, "at"> = ThreadEdit> =
   | { kind: "call"; call: C; at: number; num?: number; waiting: boolean }
   | { kind: "edit"; edit: E; at: number; num?: number; waiting: boolean };
@@ -142,17 +154,42 @@ export function nextWaitingInForYou<C, E extends Omit<ThreadEdit, "at">>(
 }
 
 /**
+ * A call the editor rejected before its pass went in made no edit, so the engine's list has no row for it. Its row in
+ * the chat opens it as a rejected edit's does, under a spot no edit has: below zero, by its call.
+ */
+export const rejectedCallRef = (changeId: string, index: number) => ({ changeId, spot: -1 - index });
+/** Which call of its pass a rejected call's stand-in edit is, or none for an edit of the engine's list. */
+export const rejectedCallIndex = (edit: { spot: number }) => edit.spot < 0 ? -1 - edit.spot : undefined;
+
+/** A call decided before its pass went in that made no edit: where it was, Scarlet's words for it, and what was decided. */
+export interface DecidedCallRow {
+  key: string;
+  changeId: string;
+  /** Its index among the pass's cuts. */
+  index: number;
+  at: number;
+  /** How much footage the cut would have taken out, when the footage stayed in the video. */
+  length?: number;
+  label: string;
+  /** Scarlet's note on the cut, for its card. */
+  note?: string;
+  approved: boolean;
+}
+
+/**
  * Calls the editor decided before a dialogue pass applied: approved cuts linked to their applied edit keys,
  * and skipped calls (or approved keep proposals) that produced no applied edit.
  */
 export function decidedPassCalls(
   thread: Pick<Thread, "changes"> | undefined,
   edits: readonly Omit<ThreadEdit, "at">[],
-  rejected: readonly Omit<ThreadEdit, "at">[] = [],
+  listedRejected: readonly Omit<ThreadEdit, "at">[] = [],
 ) {
   const decidedCallEditKeys = new Set<string>();
-  const decidedCallRows: { key: string; at: number; label: string; approved: boolean }[] = [];
+  const decidedCallRows: DecidedCallRow[] = [];
   if (!thread) return { decidedCallEditKeys, decidedCallRows };
+  // A rejected call's stand-in is no edit a call could have made.
+  const rejected = listedRejected.filter(e => rejectedCallIndex(e) === undefined);
   for (const change of thread.changes) {
     if (change.state !== "approved" || !change.cutChoices?.length) continue;
     const joins = change.appliedReview?.joins;
@@ -182,15 +219,37 @@ export function decidedPassCalls(
         continue;
       }
       const cutReason = change.cutReasons?.[choice.index];
+      // Its time is on the video before the pass. The list is on the video as it is now, so the row moves earlier by
+      // the footage the pass took out ahead of it, as the pass's applied cuts did.
+      const before = assessment?.start ?? choice.start ?? cutReason?.start ?? 0;
+      const gone = (joins ?? []).reduce((sum, j) => j.removed.end <= before + 0.05 ? sum + (j.removed.end - j.removed.start) : sum, 0);
+      const span = assessment ?? cutReason;
       decidedCallRows.push({
         key: `choice/${change.id}/${choice.index}`,
-        at: assessment?.start ?? choice.start ?? cutReason?.start ?? 0,
+        changeId: change.id,
+        index: choice.index,
+        at: Math.max(0, before - gone),
+        // Left in the video, its footage still plays there.
+        ...(choice.choice === "keep" && span && span.end > span.start && { length: span.end - span.start }),
         label: assessment?.summary || assessment?.reason || cutReason?.summary || cutReason?.reason || "Cut",
+        note: assessment?.reason || cutReason?.reason,
         approved,
       });
     }
   }
   return { decidedCallEditKeys, decidedCallRows };
+}
+
+/**
+ * The calls the editor rejected before their pass went in, each as an edit that isn't in the video, so a press on its
+ * row shows it as a rejected edit's row does: lit, on the timeline where it was, with Scarlet's note and Rejected. Its
+ * place is the row's: the call's time moved earlier by what the pass took out ahead of it.
+ */
+export function rejectedCallEdits(thread: Pick<Thread, "changes"> | undefined, edits: readonly Omit<ThreadEdit, "at">[], rejected: readonly Omit<ThreadEdit, "at">[] = []): ThreadEdit[] {
+  return decidedPassCalls(thread, edits, rejected).decidedCallRows.flatMap((row): ThreadEdit[] => row.approved ? [] : [{
+    ...rejectedCallRef(row.changeId, row.index), label: row.label, range: { start: row.at, end: row.at + (row.length ?? 0) }, previous: [],
+    rejected: true, wasCheck: true, ...(row.note && { reason: row.note }),
+  }]);
 }
 
 export type Revision = { reason?: string; note?: string };
