@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- A To do now has Add (A), Revise (R) and the × that rejects it: Revise lets you tell Scarlet how to change what it proposed, and Later is gone, so L always speeds up playback.
 - When a pass can't go in, Retry now sits right after the reason, instead of above it.
 - The line under a working request says what Scarlet is doing in plainer words, such as "Looking over the change", "Asking you a question" and "Tidying up its notes", and no longer ends in a number that didn't match your list of edits.
 - The check Scarlet runs at the end of a pass has one name everywhere: the closing check for repeats.

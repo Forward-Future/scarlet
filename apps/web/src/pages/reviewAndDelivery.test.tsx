@@ -1100,9 +1100,9 @@ it("keeps a playing source on its file while preparing the newly selected previe
   } finally { vi.useRealTimers(); }
 });
 
-it("yields plain L to an open Later (L) to-do card while keeping Shift+L and normal L playback speed", async () => {
+it("keeps plain L and Shift+L for playback speed with a to-do card open: the card has no Later", async () => {
   const noop = () => {};
-  const defer = vi.fn(), done = vi.fn();
+  const add = vi.fn(), revise = vi.fn();
   usePlayerStore.setState({ rate: 1 });
   const pressKey = (key: string, init: KeyboardEventInit = {}) =>
     act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init })); });
@@ -1111,26 +1111,15 @@ it("yields plain L to an open Later (L) to-do card while keeping Shift+L and nor
   await show(<MemoryRouter>
     <CutPreview simple={{ marks: [] }} workingCache={{ cache: { state: "ready", url: "/before.mp4" }, startCache: noop }}
       active hasCut spot={0} autoPlaySource={false} onRetryDraft={noop} onMedia={noop} />
-    <ReviewActions revise={defer} reviseLabel="Later" reviseKey="L" approve={done} approveLabel="Done" approveKey="D" />
+    <ReviewActions lead={<button type="button" data-key="A" onClick={add}>Add</button>} revise={revise} />
   </MemoryRouter>);
 
-  // Plain L triggers Later without changing playback speed.
   await pressKey("l");
-  expect(defer).toHaveBeenCalledTimes(1);
-  expect(usePlayerStore.getState().rate).toBe(1);
-
-  // Shift+L still slows playback and does not defer the to-do.
+  const faster = usePlayerStore.getState().rate;
+  expect(faster).toBeGreaterThan(1);
+  expect(revise).not.toHaveBeenCalled();
   await pressKey("L", { shiftKey: true });
-  expect(defer).toHaveBeenCalledTimes(1);
-  expect(usePlayerStore.getState().rate).toBe(0.75);
-
-  // Without a Later (L) to-do card open, plain L speeds up playback as usual.
-  await show(<MemoryRouter>
-    <CutPreview simple={{ marks: [] }} workingCache={{ cache: { state: "ready", url: "/before.mp4" }, startCache: noop }}
-      active hasCut spot={0} autoPlaySource={false} onRetryDraft={noop} onMedia={noop} />
-  </MemoryRouter>);
-  await pressKey("l");
-  expect(usePlayerStore.getState().rate).toBe(1);
+  expect(usePlayerStore.getState().rate).toBeLessThan(faster);
   await show(null);
 });
 
