@@ -511,7 +511,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   } : placeTag ? {
     key: `target:${placeTag}`,
     name: placeName!,
-    displayName: aimSlot ? <><span className="composer-aim-row" ref={aimSlot} /><span className="composer-aim-plain">{placeDisplay}</span></> : placeDisplay,
+    // Keyed, so the row's place is never reused for the tag's own words when the row goes: its copy of the row is
+    // drawn into it from outside, and a reused place would wipe that copy out from under it (a crash on the next
+    // call opened from For you).
+    displayName: aimSlot ? <><span key="aim-row" className="composer-aim-row" ref={aimSlot} /><span key="aim-plain" className="composer-aim-plain">{placeDisplay}</span></> : placeDisplay,
     title: `About ${placeName}`,
     clearLabel: targetIsPoint ? `Take “${placeTag}” off: the message is about the whole video` : newEditInstead!,
     onClear: takeOffTarget,

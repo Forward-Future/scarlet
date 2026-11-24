@@ -856,9 +856,14 @@ it("gives the open row a place on the line over the box, with the tag's words be
   await show({ targetTag: "Cut at 2:05", aimSlot: el => { slot = el; } });
   expect(slot).toBe(container.querySelector(".composer-aim-line .composer-aim-row"));
   expect(container.querySelector(".composer-aim-row + .composer-aim-plain")?.textContent).toBe("Cut 2:05");
-  // Without a row to draw, the line is the tag's words alone.
+  // The open row draws a copy of itself into that place from outside the box.
+  const copy = document.createElement("span"), host = slot!;
+  host.append(copy);
+  // Without a row to draw, the line is the tag's words alone, in a place of their own: the row's place isn't reused
+  // for them, so the copy drawn into it is still there to take out (reusing it crashed the app).
   await show({ targetTag: "Cut at 2:05" });
   expect([container.querySelector(".composer-aim-row"), aimName()?.textContent]).toEqual([null, "Cut 2:05"]);
+  expect([copy.parentNode === host, host.isConnected, container.contains(copy)]).toEqual([true, false, false]);
 });
 
 it("names the open cut by its own time and sends no stopped frame without a pause", async () => {
