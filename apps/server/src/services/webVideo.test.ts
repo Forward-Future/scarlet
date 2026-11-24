@@ -7,7 +7,7 @@ import { createProject, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { DOWNLOADERS } from "./videoDownloader.js";
-import { captionLines, captionTrack } from "./webVideo.js";
+import { aboutWebVideo, captionLines, captionTrack, webVideoCaptions } from "./webVideo.js";
 
 let directory: string;
 let workspace: ScarletApp;
@@ -29,11 +29,12 @@ if (args.includes("-J")) {
   if (url.includes("list")) { console.log(JSON.stringify({ _type: "playlist", entries: [] })); process.exit(0); }
   if (url.includes("inside")) { console.log(JSON.stringify({ title: "Inside", webpage_url: url, formats: [{ url: "http://192.168.1.20/video.mp4" }] })); process.exit(0); }
   console.log(JSON.stringify({ title: "Agents at work", channel: "The Ledger", duration: url.includes("long") ? 7200 : 90, upload_date: "20261102", license: "Creative Commons Attribution license (reuse allowed)",
-    webpage_url: "https://example.com/watch?v=agents", width: 1920, height: 1080, language: "en", is_live: url.includes("live"),
+    webpage_url: url.includes("slow") ? url : "https://example.com/watch?v=agents", width: 1920, height: 1080, language: "en", is_live: url.includes("live"),
     chapters: [{ start_time: 0, end_time: 30, title: "Intro" }, { start_time: 30, end_time: 90, title: "The demo" }], description: "A demo of agents.",
     subtitles: url.includes("silent") ? {} : { en: [{ ext: "json3", url: "https://example.com/captions" }] }, formats: [{ url: "https://example.com/video.mp4" }] }));
 } else if (args.includes("--skip-download")) {
-  JSON.parse(readFileSync(after("--load-info-json"), "utf8"));
+  const info = JSON.parse(readFileSync(after("--load-info-json"), "utf8"));
+  if (info.webpage_url.includes("slow")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
   writeFileSync(after("-o") + ".en.json3", JSON.stringify({ events: [{ tStartMs: 1200, segs: [{ utf8: "Here is the agent" }] }, { tStartMs: 1300, segs: [{ utf8: "\\n" }] },
     ...Array.from({ length: 2000 }, (_, i) => ({ tStartMs: 5000 + i * 1000, segs: [{ utf8: "running a task, line " + i }] }))] }));
 } else if (args.includes("--download-sections")) {
@@ -151,6 +152,19 @@ describe("videos from the web", () => {
     expect(await said({ url: "https://example.com/watch?v=agents", from: 100, to: 120 })).toEqual([400, "bad_range", "That part is past the video's end: it is 90 seconds long."]);
     expect(await said({ url: "https://example.com/watch?v=agents", from: 10 })).toEqual([400, "bad_range", "Give both `from` and `to`, in seconds of the video."]);
     expect(await said({ url: "https://example.com/watch?v=long", from: 0, to: 700 })).toEqual([400, "bad_range", "One call saves up to 10 minutes. Ask for a shorter part, or for the parts one at a time."]);
+  });
+
+  it.skipIf(process.platform === "win32" || !!process.env.SCARLET_TEST_WEB_VIDEO)("reads the captions for one caller when another who asked at the same time gives up", async () => {
+    const url = "https://example.com/watch?v=slow";
+    await aboutWebVideo(workspace.ctx, url, new AbortController().signal);
+    const quitter = new AbortController();
+    const first = webVideoCaptions(workspace.ctx, url, 0, quitter.signal);
+    const second = webVideoCaptions(workspace.ctx, url, 0, new AbortController().signal);
+    first.catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 300));
+    quitter.abort();
+    await expect(first).rejects.toThrow();
+    expect((await second)?.text.split("\n")[0]).toBe("1.2 Here is the agent");
   });
 
   it.skipIf(!process.env.SCARLET_TEST_WEB_VIDEO)("takes ten seconds of a real video with the real downloader", async () => {

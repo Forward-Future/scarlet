@@ -88,7 +88,9 @@ export interface WebVideoAbout {
 
 interface CaptionLine { start: number; text: string }
 interface Captions { language: string; automatic: boolean; lines: CaptionLine[] }
-interface Reading { folder: string; info: string; about: WebVideoAbout; raw: Record<string, unknown>; at: number; captions?: Promise<Captions | undefined> }
+interface Reading { folder: string; info: string; about: WebVideoAbout; raw: Record<string, unknown>; at: number;
+  /** The captions being read or read, and the signal of the caller whose read it is. */
+  captions?: { read: Promise<Captions | undefined>; signal: AbortSignal } }
 
 const readings = new Map<string, Promise<Reading>>();
 const parts = new Map<string, { folder: string; file: string; projectId: string }>();
@@ -241,14 +243,32 @@ async function readCaptions(ctx: Ctx, reading: Reading, signal: AbortSignal): Pr
 }
 
 /**
+ * A video's captions, read once for everyone who asks at the same time. The read runs for the caller who started it,
+ * so one that caller gave up on is read again for a caller who still wants it, as a shared reading of the page is.
+ */
+async function captionsOf(ctx: Ctx, reading: Reading, signal: AbortSignal): Promise<Captions | undefined> {
+  for (;;) {
+    const shared = reading.captions ?? { read: readCaptions(ctx, reading, signal), signal };
+    if (!reading.captions) {
+      reading.captions = shared;
+      shared.read.catch(() => { if (reading.captions === shared) reading.captions = undefined; });
+    }
+    try {
+      return await shared.read;
+    } catch (error) {
+      if (shared.signal === signal || signal.aborted || !shared.signal.aborted) throw error;
+      if (reading.captions === shared) reading.captions = undefined;
+    }
+  }
+}
+
+/**
  * What is said in a video, from a second on: the site's captions as lines of `seconds words`, as much as one call
  * holds, and where to read on when there is more. None for a video the site has no captions for.
  */
 export async function webVideoCaptions(ctx: Ctx, raw: string, from: number, signal: AbortSignal) {
   const reading = await read(ctx, await publicWebAddress(raw), signal);
-  const pending = reading.captions ??= readCaptions(ctx, reading, signal);
-  pending.catch(() => { if (reading.captions === pending) reading.captions = undefined; });
-  const captions = await pending;
+  const captions = await captionsOf(ctx, reading, signal);
   if (!captions) return;
   const rest = captions.lines.filter(line => line.start >= from);
   let size = 0;
